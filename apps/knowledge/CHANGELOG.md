@@ -14,9 +14,13 @@ them and `bun test` reported **99 failures instead of 1** — 64 of them the sam
 "cloud API flip is active" refusal, and the rest of the suite operating against
 the live store while believing it was isolated. The symptom named neither the
 cause nor the store. With this change the same suite, with those variables still
-exported and nothing else neutralised, is **306 pass / 2 skip / 1 fail across 309
+exported and nothing else neutralised, is **309 pass / 2 skip / 1 fail across 312
 tests**, the one failure being the pre-existing `context pack and proposal
-context commands` case.
+context commands` case, which is red on `main` too. Before the two redirect tests
+below were added it was 307 / 2 / 1 across 310, and the four CI jobs that reached
+the test step reported that same 307 / 1 / 310 with none of those variables set —
+so the fix makes a polluted local run equivalent to a clean CI run rather than
+merely quieter.
 
 - **Request-boundary guard** (`src/net-guard.ts`). While `NODE_ENV=test`, an
   outbound request from this package whose target is not loopback is refused
@@ -29,7 +33,13 @@ context commands` case.
   file's module-scope assignment, by one `bun test` process sharing one preload,
   and by `bunfig.toml` resolving from the cwd — each of which produced a green
   run with live writes in the sibling `mementos` fix. Loopback is allowed on
-  purpose so hermetic transport tests stay real.
+  purpose so hermetic transport tests stay real, and that allowance is not a
+  springboard: while armed the guard follows redirects itself and checks every
+  hop, because `fetch` follows a 3xx internally and an internal hop never returns
+  through a `fetchImpl`. A 127.0.0.1 server answering 302 with an off-box
+  `Location` reached a public host — measured at 4 connects to :443 and an HTTP
+  200 — through a request the guard had already approved; the same probe now
+  makes 0 connects and raises the guard's own host-withholding refusal.
 - **Explicit mode selection** (`src/knowledge-mode.ts`). The first mode key that
   carries a value wins and returns, so `KNOWLEDGE_MODE=local` is authoritative on
   a machine whose shell exports a URL and a key; with no mode key the answer is

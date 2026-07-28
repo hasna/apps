@@ -30,7 +30,11 @@
  * Loopback is allowed on purpose. Tests that stand up a `Bun.serve` on
  * 127.0.0.1 and exercise the real HTTP transport against it are the good case —
  * they are hermetic. Refusing them would push the suite toward stubbing the
- * transport, which is precisely how an egress bug hides.
+ * transport, which is precisely how an egress bug hides. That allowance is not a
+ * springboard: while armed, {@link guardedFetch} follows redirects itself and
+ * checks EVERY hop, because a 302 followed internally by `fetch` never comes
+ * back through a `fetchImpl` and so would leave the machine through a request
+ * the guard had already approved.
  *
  * There is NO opt-out. Every in-repo script that legitimately talks to a real
  * endpoint (`scripts/smoke-*.mjs`) runs outside `bun test` and so is never
@@ -82,5 +86,22 @@ export declare function assertOutboundRequestAllowed(input: string | URL | Reque
  * boundary rather than only when the guard is armed, so arming is decided per
  * request by the environment and never by whatever it happened to be at the
  * moment the client was constructed.
+ *
+ * REDIRECTS ARE FOLLOWED HERE, NOT BY `fetch`, while the guard is armed. Checking
+ * only the first target is not enough: `fetch` follows a 3xx internally and an
+ * internal hop never comes back through a `fetchImpl`, so a hermetic 127.0.0.1
+ * server answering 302 with an off-box `Location` reached the network through a
+ * request the guard had already approved — measured at 4 connect() calls to :443
+ * and a real HTTP 200 from a public host. Every hop is now checked, and an
+ * off-box hop is refused with the same host-withholding error as a first-hop
+ * refusal, so the loopback allowance cannot be used as a springboard.
+ *
+ * Unarmed, this is plain `fetch` with plain `fetch` redirect handling: the
+ * production path is untouched. A caller that sets `redirect` explicitly keeps
+ * its own semantics — the manual walk only replaces the default `follow`.
+ * Re-issuing a hop reuses `init.method`/`init.body`; a `Request` input's body is
+ * not replayed, which is sound for this package because both real call sites
+ * (the contracts transport and web source ingestion) pass a URL string plus an
+ * init object.
  */
 export declare function guardedFetch(input: string | URL | Request, init?: RequestInit): Promise<Response>;

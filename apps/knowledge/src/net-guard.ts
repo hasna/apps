@@ -30,7 +30,11 @@
  * Loopback is allowed on purpose. Tests that stand up a `Bun.serve` on
  * 127.0.0.1 and exercise the real HTTP transport against it are the good case —
  * they are hermetic. Refusing them would push the suite toward stubbing the
- * transport, which is precisely how an egress bug hides.
+ * transport, which is precisely how an egress bug hides. That allowance is not a
+ * springboard: while armed, {@link guardedFetch} follows redirects itself and
+ * checks EVERY hop, because a 302 followed internally by `fetch` never comes
+ * back through a `fetchImpl` and so would leave the machine through a request
+ * the guard had already approved.
  *
  * There is NO opt-out. Every in-repo script that legitimately talks to a real
  * endpoint (`scripts/smoke-*.mjs`) runs outside `bun test` and so is never
@@ -137,13 +141,80 @@ export function assertOutboundRequestAllowed(
   );
 }
 
+/** Statuses `fetch` treats as a redirect to follow. */
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+/** Hop ceiling while the guard follows redirects itself (`fetch`'s own limit is 20). */
+const MAX_GUARDED_REDIRECTS = 5;
+
+function requestMethod(input: string | URL | Request, init?: RequestInit): string {
+  if (init?.method) return init.method.toUpperCase();
+  if (typeof input !== 'string' && !(input instanceof URL)) return input.method.toUpperCase();
+  return 'GET';
+}
+
 /**
  * `fetch` with the guard in front of it. Installed permanently at the transport
  * boundary rather than only when the guard is armed, so arming is decided per
  * request by the environment and never by whatever it happened to be at the
  * moment the client was constructed.
+ *
+ * REDIRECTS ARE FOLLOWED HERE, NOT BY `fetch`, while the guard is armed. Checking
+ * only the first target is not enough: `fetch` follows a 3xx internally and an
+ * internal hop never comes back through a `fetchImpl`, so a hermetic 127.0.0.1
+ * server answering 302 with an off-box `Location` reached the network through a
+ * request the guard had already approved — measured at 4 connect() calls to :443
+ * and a real HTTP 200 from a public host. Every hop is now checked, and an
+ * off-box hop is refused with the same host-withholding error as a first-hop
+ * refusal, so the loopback allowance cannot be used as a springboard.
+ *
+ * Unarmed, this is plain `fetch` with plain `fetch` redirect handling: the
+ * production path is untouched. A caller that sets `redirect` explicitly keeps
+ * its own semantics — the manual walk only replaces the default `follow`.
+ * Re-issuing a hop reuses `init.method`/`init.body`; a `Request` input's body is
+ * not replayed, which is sound for this package because both real call sites
+ * (the contracts transport and web source ingestion) pass a URL string plus an
+ * init object.
  */
-export function guardedFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+export async function guardedFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
   assertOutboundRequestAllowed(input);
-  return fetch(input as Parameters<typeof fetch>[0], init);
+  if (!isNetworkGuardActive() || init?.redirect !== undefined) {
+    return fetch(input as Parameters<typeof fetch>[0], init);
+  }
+
+  let from = targetUrl(input);
+  let method = requestMethod(input, init);
+  let body = init?.body;
+  let response = await fetch(input as Parameters<typeof fetch>[0], { ...(init ?? {}), redirect: 'manual' });
+
+  for (let hop = 0; REDIRECT_STATUSES.has(response.status); hop++) {
+    const location = response.headers.get('location');
+    // A 3xx with no Location is not a redirect — hand it back as the answer.
+    if (!location) return response;
+    const next = new URL(location, from).href;
+    assertOutboundRequestAllowed(next);
+    if (hop >= MAX_GUARDED_REDIRECTS) {
+      const url = new URL(next);
+      throw new KnowledgeNetworkGuardError(
+        `knowledge: refused to follow more than ${MAX_GUARDED_REDIRECTS} redirects while ${NETWORK_GUARD_ENV}=test `
+          + '(target host withheld on purpose). Under test the guard follows redirects itself so every hop is '
+          + 'checked, and a chain this long is a loop, not a route.',
+        { scheme: url.protocol.replace(':', ''), port: url.port },
+      );
+    }
+    // The downgrade `fetch` itself applies, so a followed hop behaves the same.
+    if (
+      response.status === 303
+      || ((response.status === 301 || response.status === 302) && method !== 'GET' && method !== 'HEAD')
+    ) {
+      method = 'GET';
+      body = undefined;
+    }
+    const hopInit: RequestInit = { ...(init ?? {}), method, redirect: 'manual' };
+    if (body === undefined) delete hopInit.body;
+    else hopInit.body = body;
+    response = await fetch(next, hopInit);
+    from = next;
+  }
+
+  return response;
 }

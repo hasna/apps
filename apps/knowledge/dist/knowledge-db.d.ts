@@ -1,11 +1,11 @@
 import { Database } from 'bun:sqlite';
 /**
- * The single choke point for every client-side sqlite catalog open. In
- * self_hosted/cloud mode (HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY) the
- * on-box knowledge.db is NOT the source of truth — writing to it would be the
- * split-brain the mission forbids. Rather than silently touch local sqlite, we
- * refuse loudly. Knowledge items (notes) still flow to the shared cloud via the
- * ApiStore; the local catalog subsystem is first-class in local mode only.
+ * The single choke point for every client-side sqlite catalog open. In cloud mode
+ * — selected explicitly, see knowledge-mode.ts — the on-box knowledge.db is NOT
+ * the source of truth, and writing to it would be the split-brain the mission
+ * forbids. Rather than silently touch local sqlite, we refuse loudly. Knowledge
+ * items (notes) still flow to the shared cloud via the ApiStore; the local
+ * catalog subsystem is first-class in local mode only.
  * The HTTP server (src/serve) never calls this — it reads the cloud Postgres
  * directly — so this guard applies to CLI/MCP/SDK clients only.
  */

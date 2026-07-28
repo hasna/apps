@@ -27801,9 +27801,47 @@ function assertOutboundRequestAllowed(input, env = process.env) {
     return;
   throw new KnowledgeNetworkGuardError(`knowledge: refused a non-loopback ${url2.protocol.replace(":", "")} request while ${NETWORK_GUARD_ENV}=test ` + "(target host withheld on purpose). This process resolved to the cloud backend under test, which means a " + "read or write was about to leave the machine and reach the live store. Select the mode explicitly " + `(${"HASNA_KNOWLEDGE_STORAGE_MODE"}=local) or point the API URL at 127.0.0.1 for a hermetic test.`, { scheme: url2.protocol.replace(":", ""), port: url2.port });
 }
-function guardedFetch(input, init) {
+var REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+var MAX_GUARDED_REDIRECTS = 5;
+function requestMethod(input, init) {
+  if (init?.method)
+    return init.method.toUpperCase();
+  if (typeof input !== "string" && !(input instanceof URL))
+    return input.method.toUpperCase();
+  return "GET";
+}
+async function guardedFetch(input, init) {
   assertOutboundRequestAllowed(input);
-  return fetch(input, init);
+  if (!isNetworkGuardActive() || init?.redirect !== undefined) {
+    return fetch(input, init);
+  }
+  let from = targetUrl(input);
+  let method = requestMethod(input, init);
+  let body = init?.body;
+  let response = await fetch(input, { ...init ?? {}, redirect: "manual" });
+  for (let hop = 0;REDIRECT_STATUSES.has(response.status); hop++) {
+    const location = response.headers.get("location");
+    if (!location)
+      return response;
+    const next = new URL(location, from).href;
+    assertOutboundRequestAllowed(next);
+    if (hop >= MAX_GUARDED_REDIRECTS) {
+      const url2 = new URL(next);
+      throw new KnowledgeNetworkGuardError(`knowledge: refused to follow more than ${MAX_GUARDED_REDIRECTS} redirects while ${NETWORK_GUARD_ENV}=test ` + "(target host withheld on purpose). Under test the guard follows redirects itself so every hop is " + "checked, and a chain this long is a loop, not a route.", { scheme: url2.protocol.replace(":", ""), port: url2.port });
+    }
+    if (response.status === 303 || (response.status === 301 || response.status === 302) && method !== "GET" && method !== "HEAD") {
+      method = "GET";
+      body = undefined;
+    }
+    const hopInit = { ...init ?? {}, method, redirect: "manual" };
+    if (body === undefined)
+      delete hopInit.body;
+    else
+      hopInit.body = body;
+    response = await fetch(next, hopInit);
+    from = next;
+  }
+  return response;
 }
 
 // src/knowledge-mode.ts
@@ -27962,7 +28000,8 @@ async function fetchAllCloudItems(store) {
 // src/knowledge-db.ts
 function assertLocalCatalogMode(operation = "catalog") {
   if (isKnowledgeApiMode()) {
-    throw new Error(`knowledge: ${operation} builds/reads the on-box sqlite RAG catalog (source ingestion, chunk embeddings, ` + `wiki compilation, cross-machine sync, machine registry). That local indexing pipeline is not available while ` + `the cloud API flip is active (HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY set). In cloud mode the shared ` + `corpus is the cloud knowledge-items: 'add/list/get/update/delete' item commands AND 'search/ask/build/context' ` + `over that shared corpus all route to the cloud. Unset the API env to use the full local catalog pipeline.`);
+    const modeKey = KNOWLEDGE_MODE_ENV_KEYS[0];
+    throw new Error(`knowledge: ${operation} builds/reads the on-box sqlite RAG catalog (source ingestion, chunk embeddings, ` + `wiki compilation, cross-machine sync, machine registry). That local indexing pipeline is not available in ` + `cloud mode. In cloud mode the shared corpus is the cloud knowledge-items: 'add/list/get/update/delete' item ` + `commands AND 'search/ask/build/context' over that shared corpus all route to the cloud. Set ${modeKey}=local ` + `(or unset it \u2014 local is the default) to use the full local catalog pipeline; run 'knowledge mode' to see ` + `which variable selected the current backend.`);
   }
 }
 var CHUNKS_FTS_TOKENIZE = "porter unicode61 remove_diacritics 2";

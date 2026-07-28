@@ -932,10 +932,11 @@ async function run(argv: string[]): Promise<void> {
     ensureStore(storePath);
   }
 
-  // Single knowledge-item Store abstraction. When the client-flip resolves to
-  // the cloud HTTP transport (HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY,
-  // and/or *_STORAGE_MODE) ALL item reads/writes go to the configured API's /v1
-  // with the bearer key; otherwise the on-box JSON store. An explicit --store
+  // Single knowledge-item Store abstraction. When the mode is EXPLICITLY cloud
+  // (HASNA_KNOWLEDGE_STORAGE_MODE and its aliases — the API URL and key are
+  // pointers and never a selection, see knowledge-mode.ts) ALL item reads/writes
+  // go to the configured API's /v1 with the bearer key; otherwise the on-box JSON
+  // store, which is also what a pointer-only environment resolves to. An explicit --store
   // override always pins to the local transport (fully reversible). Every item
   // command below routes through `itemStore` — never the JSON file or HTTP
   // client directly.

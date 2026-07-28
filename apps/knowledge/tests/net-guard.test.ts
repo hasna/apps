@@ -28,6 +28,7 @@ import {
   KnowledgeNetworkGuardError,
   NETWORK_GUARD_ENV,
   assertOutboundRequestAllowed,
+  guardedFetch,
   isLoopbackHostname,
   isNetworkGuardActive,
 } from '../src/net-guard';
@@ -183,6 +184,63 @@ describe('the guard covers web source-ref ingestion too', () => {
     }
     expect(caught).toBeInstanceOf(KnowledgeNetworkGuardError);
     expect(String(caught)).not.toContain('knowledge.invalid');
+  });
+});
+
+describe('a redirect cannot walk the guard off the machine', () => {
+  /**
+   * The loopback allowance is checked against the FIRST target only, and `fetch`
+   * follows redirects internally — an internal hop never comes back through a
+   * `fetchImpl`. So a hermetic 127.0.0.1 server answering 302 with an off-box
+   * `Location` used to egress through a request the guard had already approved:
+   * measured, before this was closed, at 4 connect() calls to :443 and an HTTP
+   * 200 from a public host. That is the loopback allowance being abused to reach
+   * an address that is not loopback at all.
+   */
+  test('a loopback response redirecting to a non-loopback host is refused, not followed', async () => {
+    const hops: string[] = [];
+    const server = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      fetch(req) {
+        hops.push(new URL(req.url).pathname);
+        return new Response(null, { status: 302, headers: { location: `${NON_LOOPBACK}/elsewhere` } });
+      },
+    });
+    let caught: unknown = null;
+    try {
+      await guardedFetch(`http://127.0.0.1:${server.port}/hop`);
+    } catch (error) {
+      caught = error;
+    } finally {
+      server.stop();
+    }
+    expect(caught).toBeInstanceOf(KnowledgeNetworkGuardError);
+    // Still withholds the host, exactly as a first-hop refusal does.
+    expect(String(caught)).not.toContain('knowledge.invalid');
+    // The loopback hop was real; the off-box hop never happened.
+    expect(hops).toEqual(['/hop']);
+  });
+
+  test('a loopback -> loopback redirect is still followed', async () => {
+    // The allowance has to keep working, or the fix would just push hermetic
+    // tests toward stubbing the transport again.
+    const server = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      fetch(req) {
+        const { pathname } = new URL(req.url);
+        if (pathname === '/a') return new Response(null, { status: 302, headers: { location: '/b' } });
+        return new Response('arrived', { status: 200 });
+      },
+    });
+    try {
+      const response = await guardedFetch(`http://127.0.0.1:${server.port}/a`);
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe('arrived');
+    } finally {
+      server.stop();
+    }
   });
 });
 

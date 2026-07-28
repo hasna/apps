@@ -1,25 +1,34 @@
 import { Database } from 'bun:sqlite';
 import { ensureParentDir } from './workspace';
 import { isKnowledgeApiMode } from './cloud-store';
+import { KNOWLEDGE_MODE_ENV_KEYS } from './knowledge-mode.js';
 
 /**
- * The single choke point for every client-side sqlite catalog open. In
- * self_hosted/cloud mode (HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY) the
- * on-box knowledge.db is NOT the source of truth — writing to it would be the
- * split-brain the mission forbids. Rather than silently touch local sqlite, we
- * refuse loudly. Knowledge items (notes) still flow to the shared cloud via the
- * ApiStore; the local catalog subsystem is first-class in local mode only.
+ * The single choke point for every client-side sqlite catalog open. In cloud mode
+ * — selected explicitly, see knowledge-mode.ts — the on-box knowledge.db is NOT
+ * the source of truth, and writing to it would be the split-brain the mission
+ * forbids. Rather than silently touch local sqlite, we refuse loudly. Knowledge
+ * items (notes) still flow to the shared cloud via the ApiStore; the local
+ * catalog subsystem is first-class in local mode only.
  * The HTTP server (src/serve) never calls this — it reads the cloud Postgres
  * directly — so this guard applies to CLI/MCP/SDK clients only.
  */
 export function assertLocalCatalogMode(operation = 'catalog'): void {
   if (isKnowledgeApiMode()) {
+    // Names the ONE variable to change. It used to say "unset the API env",
+    // which was the right advice only while presence of a URL + key selected the
+    // backend; now unsetting the pointers does not restore local mode and, with
+    // the mode var still set to cloud, produces a misconfiguration error instead.
+    // This is the message an operator actually hits, so it is also the message
+    // that has to name the current selector rather than the deleted one.
+    const modeKey = KNOWLEDGE_MODE_ENV_KEYS[0];
     throw new Error(
       `knowledge: ${operation} builds/reads the on-box sqlite RAG catalog (source ingestion, chunk embeddings, `
-        + `wiki compilation, cross-machine sync, machine registry). That local indexing pipeline is not available while `
-        + `the cloud API flip is active (HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY set). In cloud mode the shared `
-        + `corpus is the cloud knowledge-items: 'add/list/get/update/delete' item commands AND 'search/ask/build/context' `
-        + `over that shared corpus all route to the cloud. Unset the API env to use the full local catalog pipeline.`,
+        + `wiki compilation, cross-machine sync, machine registry). That local indexing pipeline is not available in `
+        + `cloud mode. In cloud mode the shared corpus is the cloud knowledge-items: 'add/list/get/update/delete' item `
+        + `commands AND 'search/ask/build/context' over that shared corpus all route to the cloud. Set ${modeKey}=local `
+        + `(or unset it — local is the default) to use the full local catalog pipeline; run 'knowledge mode' to see `
+        + `which variable selected the current backend.`,
     );
   }
 }
