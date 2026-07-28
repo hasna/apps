@@ -192,6 +192,7 @@ function validateAccount(input: unknown): Account {
     [
       "providerSubjectRef",
       "providerSubjectCandidateRef",
+      "providerSubjectRefRedacted",
       "providerDisplayHint",
       "ownershipEvidenceRef",
       "ownershipEvidenceIssuerRef",
@@ -211,6 +212,19 @@ function validateAccount(input: unknown): Account {
   if (value.providerSubjectCandidateRef !== undefined) {
     reference(value.providerSubjectCandidateRef, "providerSubjectCandidateRef");
   }
+  // The reader projection (redactEntity) removes both subject references and
+  // leaves this marker behind, so the one projection every read surface serves
+  // stays readable by the one validator. The marker is a presence bit, never a
+  // subject value: it may only appear once both references are gone, and
+  // cloneEntity refuses it so a projection can never re-enter the write path.
+  const subjectRedacted = value.providerSubjectRefRedacted !== undefined;
+  if (subjectRedacted) {
+    if (value.providerSubjectRefRedacted !== true) throw invalid("providerSubjectRefRedacted");
+    if (value.providerSubjectRef !== undefined || value.providerSubjectCandidateRef !== undefined) {
+      throw invalid("providerSubjectRefRedacted");
+    }
+  }
+  const subjectPresent = value.providerSubjectRef !== undefined || subjectRedacted;
   const ownershipFields = [
     "ownershipEvidenceRef",
     "ownershipEvidenceIssuerRef",
@@ -224,7 +238,7 @@ function validateAccount(input: unknown): Account {
   if (status === "pending") {
     if (value.providerSubjectRef !== undefined || ownershipCount !== 0) throw invalid("ownershipEvidenceRef");
   } else if (status === "active" || status === "suspended") {
-    if (value.providerSubjectRef === undefined || ownershipCount !== ownershipFields.length) {
+    if (!subjectPresent || ownershipCount !== ownershipFields.length) {
       throw invalid("ownershipEvidenceRef");
     }
   } else if (ownershipCount !== 0 && ownershipCount !== ownershipFields.length) {
@@ -240,7 +254,7 @@ function validateAccount(input: unknown): Account {
     ordered(value.ownershipEvidenceIssuedAt, value.ownershipEvidenceExpiresAt, "ownershipEvidenceExpiresAt");
     const generation = parseCounter(value.ownershipGeneration, "ownershipGeneration");
     if (generation === "0") throw invalid("ownershipGeneration");
-    if (value.providerSubjectRef === undefined || value.providerSubjectCandidateRef !== undefined) {
+    if (!subjectPresent || value.providerSubjectCandidateRef !== undefined) {
       throw invalid("providerSubjectRef");
     }
   }

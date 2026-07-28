@@ -430,6 +430,32 @@ describe("packed capacity CLI", () => {
     });
   });
 
+  test("exposes the CLI entry point to installed consumers", async () => {
+    const paths = pack.files.map(({ path }) => path);
+    expect(paths).toContain("dist/cli.d.ts");
+
+    const manifestFile = npmArchiveFiles.get("package/package.json");
+    if (manifestFile === undefined) throw new Error("packed package.json is missing");
+    const manifest = (await manifestFile.json()) as Record<string, unknown>;
+    expect(manifest.exports).toMatchObject({
+      "./cli": { types: "./dist/cli.d.ts", import: "./dist/cli.js" },
+    });
+
+    // Without a reachable entry point no consumer can inject the resolver the
+    // self-hosted CLI path requires, so the api mode would ship unreachable.
+    const probePath = join(NPM_INSTALL_ROOT, "cli-entry-probe.mjs");
+    writeFileSync(
+      probePath,
+      [
+        'const cli = await import("@hasna/capacity/cli");',
+        "Bun.stdout.write(typeof cli.runAccountsCli);",
+      ].join("\n"),
+      { mode: 0o700 },
+    );
+    const probe = await run([process.execPath, probePath], { cwd: NPM_INSTALL_ROOT });
+    expect([probe.exitCode, probe.stdout]).toEqual([0, "function"]);
+  });
+
   test("keeps npm and Bun package payload contracts aligned", async () => {
     const npmArchivePaths = pack.files.map(({ path }) => path).sort();
     expect(bunArchivePaths).toEqual(npmArchivePaths);

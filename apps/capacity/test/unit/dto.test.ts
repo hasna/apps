@@ -8,6 +8,7 @@ import {
   encodeRecordEnvelope,
   parseClosedJson,
   parseClosedJsonBytes,
+  redactEntity,
   serializeRecordEnvelope,
   validateEntity,
   newCredentialBindingId,
@@ -17,6 +18,7 @@ import {
   validateSlotEligibility,
   type EntityKind,
 } from "../../src/index";
+import { cloneEntity } from "../../src/storage/shared";
 import { C0, C1, makeFixtureGraph, NOW, digest } from "../fixtures";
 
 describe("closed versioned record DTOs", () => {
@@ -232,6 +234,40 @@ describe("closed versioned record DTOs", () => {
     expect(error.message).toBe("The request is invalid");
     expect(envelope.error.message).toBe("The request is invalid");
     expect(canonicalJson(envelope)).not.toContain("caller-controlled");
+  });
+
+  test("the reader projection round-trips through the record validator", () => {
+    for (const account of [graph.account, graph.activeAccount]) {
+      const projected = redactEntity("account", account);
+      const envelope = { schemaVersion: "accounts.capacity.v1", kind: "account", data: projected };
+      expect(decodeRecordEnvelope(envelope).kind).toBe("account");
+      expect(canonicalJson(projected)).not.toContain("providerSubjectRef\"");
+    }
+    expect(redactEntity("account", graph.activeAccount).providerSubjectRefRedacted).toBe(true);
+  });
+
+  test("the redaction marker is a presence bit and never a stored subject", () => {
+    const projected = redactEntity("account", graph.activeAccount) as Record<string, unknown>;
+    for (const marker of [false, "true", 1, null]) {
+      expect(() =>
+        validateEntity("account", { ...projected, providerSubjectRefRedacted: marker }),
+      ).toThrow(expect.objectContaining({ code: "VALIDATION_FAILED" }));
+    }
+    expect(() =>
+      validateEntity("account", {
+        ...projected,
+        providerSubjectRef: graph.activeAccount.providerSubjectRef,
+      }),
+    ).toThrow(expect.objectContaining({ code: "VALIDATION_FAILED" }));
+    expect(() =>
+      validateEntity("account", { ...projected, providerSubjectCandidateRef: "subject:candidate" }),
+    ).toThrow(expect.objectContaining({ code: "VALIDATION_FAILED" }));
+
+    // Reading stays readable; writing a projection back does not.
+    expect(() => cloneEntity("account", projected as never)).toThrow(
+      expect.objectContaining({ code: "VALIDATION_FAILED" }),
+    );
+    expect(cloneEntity("account", graph.activeAccount)).toEqual(graph.activeAccount);
   });
 
   test("all fixture envelope kinds are explicit", () => {

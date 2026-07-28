@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { randomUUID } from "node:crypto";
+import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 
@@ -55,9 +56,22 @@ const NOUNS: Readonly<Record<string, EntityKind>> = {
 const SELF_HOSTED_AUTH_REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$/;
 
 /**
+ * Names the deployment's Secrets resolver executable. It carries a command
+ * path, never credential material: the command is run with the credential
+ * reference as its only argument and returns the audienced credential on
+ * stdout, so the packaged binary reaches the API without this package ever
+ * bundling, storing, or logging a credential.
+ */
+const CREDENTIAL_COMMAND_VARIABLE = "HASNA_ACCOUNTS_CAPACITY_CREDENTIAL_COMMAND";
+
+/** Bounds the resolver command's stdout before it reaches the auth provider. */
+const MAX_CREDENTIAL_BYTES = 4096;
+
+/**
  * Resolving the capacity client credential reference is a deployment-owned
- * Secrets capability. This package ships no resolver, so an embedder supplies
- * one; without it the self-hosted CLI refuses before any request is built.
+ * Secrets capability. This package ships no resolver: an embedder injects one,
+ * or the deployment names one through HASNA_ACCOUNTS_CAPACITY_CREDENTIAL_COMMAND.
+ * With neither, the self-hosted CLI refuses before any request is built.
  */
 export interface AccountsCliOptions {
   readonly credentialResolver?: AccountsCapacityCredentialResolver;
@@ -183,13 +197,7 @@ function createCliCatalog(options: AccountsCliOptions): CliCatalog {
     if (authRef === undefined || !SELF_HOSTED_AUTH_REF_PATTERN.test(authRef)) {
       throw usageError("HASNA_ACCOUNTS_CAPACITY_AUTH_REF is required for self_hosted");
     }
-    if (options.credentialResolver === undefined) {
-      throw new AccountsError(
-        "DEPENDENCY_UNAVAILABLE",
-        "Capacity client credential resolution is unavailable",
-      );
-    }
-    return createSelfHostedCliCatalog(apiUrl, authRef, options.credentialResolver);
+    return createSelfHostedCliCatalog(apiUrl, authRef, credentialResolver(options));
   }
   if (deployment !== "local") {
     throw usageError("HASNA_ACCOUNTS_DEPLOYMENT must be local or self_hosted");
@@ -219,11 +227,93 @@ function createCliCatalog(options: AccountsCliOptions): CliCatalog {
 function createSelfHostedCliCatalog(
   baseUrl: string,
   authRef: string,
-  credentialResolver: AccountsCapacityCredentialResolver,
+  resolver: AccountsCapacityCredentialResolver,
 ): CliCatalog {
-  const authProvider = createReferenceAuthProvider(authRef, credentialResolver);
+  const authProvider = createReferenceAuthProvider(authRef, resolver);
   const client = createAccountsCapacity({ mode: "self_hosted", baseUrl, authProvider });
   return new SelfHostedCliCatalog(baseUrl, client);
+}
+
+/**
+ * An embedder-supplied resolver wins; otherwise the deployment names its own
+ * Secrets command. Neither present is still a refusal, so the packaged binary
+ * never invents a credential source.
+ */
+function credentialResolver(options: AccountsCliOptions): AccountsCapacityCredentialResolver {
+  if (options.credentialResolver !== undefined) return options.credentialResolver;
+  const command = Bun.env[CREDENTIAL_COMMAND_VARIABLE];
+  if (command === undefined || command.length === 0) {
+    throw new AccountsError(
+      "DEPENDENCY_UNAVAILABLE",
+      "Capacity client credential resolution is unavailable",
+    );
+  }
+  if (!isAbsolute(command)) {
+    throw usageError(`${CREDENTIAL_COMMAND_VARIABLE} must be an absolute path`);
+  }
+  assertTrustedCredentialCommand(command);
+  return createCommandCredentialResolver(command);
+}
+
+/**
+ * Mirrors the launcher's artifact check. A resolver another local account can
+ * rewrite is a credential-exfiltration path, so it is refused before it runs
+ * rather than after it has been handed the reference.
+ */
+function assertTrustedCredentialCommand(command: string): void {
+  let mode: number;
+  let isFile: boolean;
+  try {
+    const status = statSync(command);
+    mode = status.mode;
+    isFile = status.isFile();
+  } catch {
+    throw new AccountsError("DEPENDENCY_UNAVAILABLE", "Capacity credential command is unavailable");
+  }
+  if (!isFile || (process.platform !== "win32" && (mode & 0o022) !== 0)) {
+    throw new AccountsError("POLICY_DENIED", "Capacity credential command is not trusted", {
+      details: { field: "credentialCommand" },
+    });
+  }
+}
+
+function createCommandCredentialResolver(command: string): AccountsCapacityCredentialResolver {
+  return Object.freeze({
+    resolve: async (reference: string, signal?: AbortSignal): Promise<string> => {
+      try {
+        const child = Bun.spawn([command, reference], {
+          stdin: "ignore",
+          stdout: "pipe",
+          // Resolver diagnostics can echo credential material, so stderr is
+          // never captured, printed, or attached to an error.
+          stderr: "ignore",
+          ...(signal === undefined ? {} : { signal }),
+        });
+        const [stdout, exitCode] = await Promise.all([
+          new Response(child.stdout).text(),
+          child.exited,
+        ]);
+        if (exitCode !== 0 || stdout.length > MAX_CREDENTIAL_BYTES) {
+          throw credentialCommandFailed();
+        }
+        // createReferenceAuthProvider holds the result to the credential shape
+        // and rejects an echoed reference, so this only removes the trailing
+        // newline a well-behaved command writes.
+        return stdout.trim();
+      } catch (error) {
+        if (error instanceof AccountsError) throw error;
+        throw credentialCommandFailed();
+      }
+    },
+  });
+}
+
+function credentialCommandFailed(): AccountsError {
+  return new AccountsError(
+    "DEPENDENCY_UNAVAILABLE",
+    "Capacity client credential resolution failed",
+    { retryable: true },
+  );
 }
 
 class SelfHostedCliCatalog implements CliCatalog {

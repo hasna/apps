@@ -107,19 +107,41 @@ mode and normal output and `--json` stay on the same redactor.
 credential *reference*. It is not a bearer token, and Accounts never puts it on
 the wire — resolving it into the separately audienced credential is a
 deployment-owned Secrets capability. This package ships no resolver, so the
-packaged `capacity` binary refuses `self_hosted` commands with
-`DEPENDENCY_UNAVAILABLE` (exit 6) before any request is built:
+deployment names its own through
+`HASNA_ACCOUNTS_CAPACITY_CREDENTIAL_COMMAND`: an absolute path to an executable
+that receives the reference as its only argument and writes the audienced
+credential to stdout. The variable holds a command path, never credential
+material, and the command's stderr is never captured or printed:
 
 ```sh
 HASNA_ACCOUNTS_DEPLOYMENT=self_hosted \
 HASNA_ACCOUNTS_CAPACITY_API_URL=https://accounts.capacity.example \
 HASNA_ACCOUNTS_CAPACITY_AUTH_REF=capacity-client-reference \
+HASNA_ACCOUNTS_CAPACITY_CREDENTIAL_COMMAND=/opt/hasna/bin/capacity-credential \
   capacity list access-methods --json
-# DEPENDENCY_UNAVAILABLE: A required dependency is unavailable
 ```
 
-Self-hosted reads are reached through the SDK, which takes the resolver the
-deployment owns and uses the same HTTPS Accounts Capacity API routes:
+The command is held to the same artifact rule as the launcher payload: a
+regular file that is not group- or world-writable, or the CLI refuses with
+`POLICY_DENIED` (exit 7) before the reference is handed over. Without a
+resolver command the packaged binary refuses `self_hosted` commands with
+`DEPENDENCY_UNAVAILABLE` (exit 6) before any request is built — it never
+invents a credential source.
+
+Embedders that already hold a Secrets client can inject the resolver directly
+instead of shelling out, through the same CLI entry point the packaged binary
+runs:
+
+```ts
+import { runAccountsCli } from "@hasna/capacity/cli";
+
+const exitCode = await runAccountsCli(process.argv.slice(2), {
+  credentialResolver: secretsResolver,
+});
+```
+
+Self-hosted reads are also reachable through the SDK, which takes the same
+deployment-owned resolver and uses the same HTTPS Accounts Capacity API routes:
 
 ```ts
 import { createAccountsCapacity, createReferenceAuthProvider } from "@hasna/capacity";
@@ -134,3 +156,8 @@ const capacity = createAccountsCapacity({
 `createReferenceAuthProvider` fails closed when the resolver returns the
 reference itself or a value that is not a usable credential. Local database
 configuration is refused in `self_hosted` mode.
+
+Every read surface — local CLI, packaged CLI in `self_hosted` mode, and the
+HTTP API — emits the same redacted account projection, and `capacity validate`
+accepts it, so `capacity get accounts <id> | capacity validate -` round-trips
+in both deployment modes.

@@ -1,5 +1,5 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -41,6 +41,7 @@ const CLI_ENV_KEYS = [
   "HASNA_ACCOUNTS_DATABASE_PATH",
   "HASNA_ACCOUNTS_CAPACITY_API_URL",
   "HASNA_ACCOUNTS_CAPACITY_AUTH_REF",
+  "HASNA_ACCOUNTS_CAPACITY_CREDENTIAL_COMMAND",
 ] as const;
 
 afterAll(() => {
@@ -135,6 +136,29 @@ function apiEnvironment(): Record<string, string> {
     HASNA_ACCOUNTS_CAPACITY_API_URL: "https://capacity.test",
     HASNA_ACCOUNTS_CAPACITY_AUTH_REF: AUTH_REFERENCE,
   };
+}
+
+/**
+ * Stands in for the deployment-owned Secrets command the packaged binary runs
+ * when no embedder injected a resolver.
+ */
+function writeCredentialCommand(body: string, mode = 0o700): string {
+  const directory = mkdtempSync(join(TEMP_ROOT, "credential-command-"));
+  cleanup.push(directory);
+  const command = join(directory, "resolve-capacity-credential.sh");
+  writeFileSync(command, `#!/bin/sh\n${body}\n`, { mode });
+  chmodSync(command, mode);
+  return command;
+}
+
+/** Records the authorization header the transport puts on the wire. */
+function captureAuthorization(authorizations: string[]): void {
+  const served = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const header = new Headers(init?.headers).get("authorization");
+    if (header !== null) authorizations.push(header);
+    return served(input as never, init as never);
+  }) as unknown as typeof fetch;
 }
 
 /** Stands in for the deployment-owned Secrets resolver the CLI never bundles. */
@@ -416,6 +440,91 @@ describe("accounts CLI", () => {
     expect(calls).toEqual([]);
   });
 
+  test("reaches the api with the credential the deployment-named command resolves", async () => {
+    const directory = mkdtempSync(join(TEMP_ROOT, "credential-command-api-"));
+    cleanup.push(directory);
+    const served = serveCatalog(join(directory, "accounts.db"));
+    const authorizations: string[] = [];
+    captureAuthorization(authorizations);
+    try {
+      // No injected resolver: this is the path the packaged binary takes.
+      const result = await runCliInProcess(["list", "access-methods", "--json"], {
+        ...apiEnvironment(),
+        HASNA_ACCOUNTS_CAPACITY_CREDENTIAL_COMMAND: writeCredentialCommand(
+          `printf '%s\\n' '${AUTH_CREDENTIAL}'`,
+        ),
+      });
+      expect([result.exitCode, result.stderr]).toEqual([0, ""]);
+      expect(JSON.parse(result.stdout).data).toEqual({ kind: "access_method", records: [] });
+      expect(authorizations).toEqual([`Bearer ${AUTH_CREDENTIAL}`]);
+      expect(authorizations).not.toContain(`Bearer ${AUTH_REFERENCE}`);
+    } finally {
+      await served.close();
+    }
+  });
+
+  test("refuses a credential command another local account can rewrite", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+      calls.push(String(input));
+      return jsonResponse({ schemaVersion: "accounts.health.v1", status: "ok" });
+    }) as unknown as typeof fetch;
+
+    const result = await runCliInProcess(["list", "access-methods", "--json"], {
+      ...apiEnvironment(),
+      HASNA_ACCOUNTS_CAPACITY_CREDENTIAL_COMMAND: writeCredentialCommand(
+        `printf '%s\\n' '${AUTH_CREDENTIAL}'`,
+        0o777,
+      ),
+    });
+    expect(result.exitCode).toBe(7);
+    expect(JSON.parse(result.stderr).error).toMatchObject({
+      code: "POLICY_DENIED",
+      details: { field: "credentialCommand" },
+    });
+    expect(calls).toEqual([]);
+
+    const relative = await runCliInProcess(["list", "access-methods", "--json"], {
+      ...apiEnvironment(),
+      HASNA_ACCOUNTS_CAPACITY_CREDENTIAL_COMMAND: "resolve-capacity-credential.sh",
+    });
+    expect(relative.exitCode).toBe(2);
+    expect(JSON.parse(relative.stderr).error.code).toBe("VALIDATION_FAILED");
+    expect(calls).toEqual([]);
+  });
+
+  test("keeps a failing credential command's diagnostics off every surface", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+      calls.push(String(input));
+      return jsonResponse({ schemaVersion: "accounts.health.v1", status: "ok" });
+    }) as unknown as typeof fetch;
+
+    const directory = mkdtempSync(join(TEMP_ROOT, "credential-command-failure-"));
+    cleanup.push(directory);
+    const invoked = join(directory, "invoked");
+    const result = await runCliInProcess(["list", "access-methods", "--json"], {
+      ...apiEnvironment(),
+      HASNA_ACCOUNTS_CAPACITY_CREDENTIAL_COMMAND: writeCredentialCommand(
+        [
+          `printf '%s' "$1" > '${invoked}'`,
+          `printf '%s\\n' 'resolver-diagnostic-${AUTH_CREDENTIAL}' >&2`,
+          "exit 1",
+        ].join("\n"),
+      ),
+    });
+    // The command ran and failed; this is not the no-resolver refusal.
+    expect(existsSync(invoked)).toBe(true);
+    expect(await Bun.file(invoked).text()).toBe(AUTH_REFERENCE);
+    expect(result.exitCode).toBe(6);
+    expect(JSON.parse(result.stderr).error.code).toBe("DEPENDENCY_UNAVAILABLE");
+    expect(result.stdout).toBe("");
+    expect(result.stderr).not.toContain("resolver-diagnostic");
+    expect(result.stderr).not.toContain(AUTH_CREDENTIAL);
+    expect(result.stderr).not.toContain(AUTH_REFERENCE);
+    expect(calls).toEqual([]);
+  });
+
   test("local and api mode emit one redacted record schema for every noun", async () => {
     const directory = mkdtempSync(join(TEMP_ROOT, "parity-"));
     cleanup.push(directory);
@@ -477,6 +586,55 @@ describe("accounts CLI", () => {
     expect(Object.hasOwn(account, "providerSubjectCandidateRef")).toBe(false);
     expect(account.providerSubjectRefRedacted).toBe(true);
     expect(canonicalJson([...local.values()])).not.toContain(graph.activeAccount.providerSubjectRef!);
+  });
+
+  test("round-trips a read account through the validate command in both modes", async () => {
+    const directory = mkdtempSync(join(TEMP_ROOT, "round-trip-"));
+    cleanup.push(directory);
+    const filename = join(directory, "accounts.db");
+    const graph = makeFixtureGraph();
+    const repository = new SQLiteAccountsRepository(filename, {
+      credentialVerifier: TEST_CREDENTIAL_VERIFIER,
+      recoveryLedger: makeTestRecoveryLedger(),
+      catalogIncarnation: CATALOG_INCARNATION,
+      credentialUseAuthorizer: TEST_CREDENTIAL_USE_AUTHORIZER,
+    });
+    const seeding = new AccountsCatalog(repository, clock, TEST_AUTHORITY_POLICY);
+    await seedActiveCatalog(seeding, graph, "cli-round-trip");
+    await seeding.close();
+
+    const local = await runCliInProcess(["get", "accounts", graph.activeAccount.id], {
+      HASNA_ACCOUNTS_DEPLOYMENT: "local",
+      HASNA_ACCOUNTS_DATABASE_PATH: filename,
+    });
+    expect([local.exitCode, local.stderr]).toEqual([0, ""]);
+
+    const served = serveCatalog(filename);
+    let api: { readonly stdout: string; readonly stderr: string; readonly exitCode: number };
+    try {
+      api = await runCliInProcess(
+        ["get", "accounts", graph.activeAccount.id],
+        apiEnvironment(),
+        resolverOptions(),
+      );
+    } finally {
+      await served.close();
+    }
+    expect([api.exitCode, api.stderr]).toEqual([0, ""]);
+    expect(api.stdout).toBe(local.stdout);
+
+    const record = JSON.parse(local.stdout).data as Record<string, unknown>;
+    expect(record.status).toBe("active");
+    expect(Object.hasOwn(record, "providerSubjectRef")).toBe(false);
+    expect(record.providerSubjectRefRedacted).toBe(true);
+
+    for (const [mode, document] of [["local", local.stdout], ["api", api.stdout]] as const) {
+      const documentPath = join(directory, `${mode}-account.json`);
+      await Bun.write(documentPath, document);
+      const validated = await runCli(["validate", documentPath, "--json"]);
+      expect([mode, validated.exitCode, validated.stderr]).toEqual([mode, 0, ""]);
+      expect(JSON.parse(validated.stdout).data).toEqual({ valid: true, documentKind: "account" });
+    }
   });
 
   test("validates a closed record DTO without database configuration", async () => {
