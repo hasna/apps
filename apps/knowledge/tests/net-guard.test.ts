@@ -20,6 +20,10 @@
  * transport, and a stub proves nothing about egress.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { ingestSourceRef } from '../src/source-ingest';
 import {
   KnowledgeNetworkGuardError,
   NETWORK_GUARD_ENV,
@@ -158,6 +162,27 @@ describe('the guard sits at the cloud transport boundary', () => {
       caught = error;
     }
     expect(caught).toBeInstanceOf(KnowledgeNetworkGuardError);
+  });
+});
+
+describe('the guard covers web source-ref ingestion too', () => {
+  test('ingesting a non-loopback web source ref is refused before a request', async () => {
+    // The package's second outbound path. No test in the suite ingests a web ref
+    // today, which is precisely why it would have stayed unguarded: the cloud
+    // transport was the visible hole, this one was not.
+    const dir = mkdtempSync(join(tmpdir(), 'ok-net-guard-'));
+    let caught: unknown = null;
+    try {
+      await ingestSourceRef({
+        dbPath: join(dir, 'knowledge.db'),
+        sourceRef: `${NON_LOOPBACK}/handbook.md`,
+        purpose: 'knowledge_index',
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(KnowledgeNetworkGuardError);
+    expect(String(caught)).not.toContain('knowledge.invalid');
   });
 });
 

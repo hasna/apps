@@ -4,8 +4,17 @@
  * Licensed under the Apache License, Version 2.0
  *
  * THE control that keeps a test run off the live store: while `NODE_ENV=test`,
- * every knowledge-owned outbound HTTP request whose target is not loopback is
- * refused before a socket is opened.
+ * an outbound HTTP request made through this package's own `fetch` call sites
+ * whose target is not loopback is refused before a socket is opened.
+ *
+ * SCOPE, stated precisely because a guard people believe covers more than it
+ * does is worse than a narrow one. Covered: the cloud item transport
+ * (cloud-store.ts, via the contracts client's `fetchImpl`) and web source-ref
+ * ingestion (source-ingest.ts). NOT covered: third-party SDK transports that
+ * carry their own HTTP stacks — `@aws-sdk/client-s3` and the `ai` provider
+ * clients. Those are credential-gated and the suite drives them with `--fake`,
+ * so they are not the live-write path this defends; guarding them would mean
+ * injecting a fetch into each SDK and is deliberately left out of this change.
  *
  * It guards the EGRESS, not the environment, and that distinction is the whole
  * design. Clearing the selector variables at startup — a preload, a

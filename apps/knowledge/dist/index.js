@@ -32130,7 +32130,7 @@ async function readS3Text2(uri, config, safetyPolicy) {
 async function readWebText(uri, safetyPolicy) {
   if (safetyPolicy)
     assertWebSearchAllowed(safetyPolicy);
-  const response = await fetch(uri, {
+  const response = await guardedFetch(uri, {
     headers: {
       accept: "text/markdown,text/plain,text/html,application/json;q=0.8,*/*;q=0.5",
       "user-agent": "@hasna/knowledge source-ingest"
