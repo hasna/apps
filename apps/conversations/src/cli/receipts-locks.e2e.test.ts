@@ -66,7 +66,7 @@ describe("receipts + locks CLI (e2e)", () => {
     expect(other.exitCode).toBe(0);
     const wrongChannel = runCli(["receipts", String(messageId), "--channel", "receipt-other-ch", "--json"], "alice");
     expect(wrongChannel.exitCode).toBe(1);
-    expect(wrongChannel.stderr).toContain("does not belong");
+    expect(JSON.parse(wrongChannel.stdout).error).toContain("does not belong");
   });
 
   test("receipts matches mixed-case channel members against normalized read receipts", () => {
@@ -94,7 +94,7 @@ describe("receipts + locks CLI (e2e)", () => {
   test("receipts errors on unknown message or channel", () => {
     const missing = runCli(["receipts", "999999", "--json"], "alice");
     expect(missing.exitCode).toBe(1);
-    expect(missing.stderr).toContain("not found");
+    expect(JSON.parse(missing.stdout).error).toContain("not found");
 
     const badId = runCli(["receipts", "not-a-number"], "alice");
     expect(badId.exitCode).toBe(1);

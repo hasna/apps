@@ -3,7 +3,8 @@
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod";
+import { z } from "zod/v3";
+import { registerMcpTool } from "../tool-compat.js";
 import { getStore } from "../../lib/store/index.js";
 import { identityFor } from "../identity.js";
 import { compactWindowedProjects, jsonText } from "../compact.js";
@@ -12,7 +13,7 @@ export function registerProjectTools(server: McpServer): void {
   // Bound to this connection: see ../identity.ts.
   const resolveIdentity = identityFor(server);
 
-  server.registerTool("create_project", {
+  registerMcpTool(server, "create_project", {
     description: "Create a project for agent collaboration.",
     inputSchema: {
       name: z.string(),
@@ -94,7 +95,7 @@ export function registerProjectTools(server: McpServer): void {
     }
   });
 
-  server.registerTool("list_projects", {
+  registerMcpTool(server, "list_projects", {
     description: "List all projects.",
     inputSchema: {
       status: z.string().optional(),
@@ -112,7 +113,7 @@ export function registerProjectTools(server: McpServer): void {
     };
   });
 
-  server.registerTool("get_project", {
+  registerMcpTool(server, "get_project", {
     description: "Get a project by ID or name.",
     inputSchema: {
       id: z.string(),
@@ -137,7 +138,7 @@ export function registerProjectTools(server: McpServer): void {
     };
   });
 
-  server.registerTool("update_project", {
+  registerMcpTool(server, "update_project", {
     description: "Update project fields by ID.",
     inputSchema: {
       id: z.string(),
@@ -204,7 +205,7 @@ export function registerProjectTools(server: McpServer): void {
     }
   });
 
-  server.registerTool("delete_project", {
+  registerMcpTool(server, "delete_project", {
     description: "Delete a project permanently.",
     inputSchema: {
       id: z.string(),

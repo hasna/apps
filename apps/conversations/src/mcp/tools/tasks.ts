@@ -4,7 +4,8 @@
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod";
+import { z } from "zod/v3";
+import { registerMcpTool } from "../tool-compat.js";
 import { getStore } from "../../lib/store/index.js";
 import { identityFor } from "../identity.js";
 import { previewText, summarizeTask } from "../../lib/compact-output.js";
@@ -37,7 +38,7 @@ export function registerTaskTools(server: McpServer): void {
   const resolveIdentity = identityFor(server);
 
   // ---- Create Task ----
-  server.registerTool("create_task", {
+  registerMcpTool(server, "create_task", {
     description: "Create a new task with optional assignee, priority, parent (subtask), dependencies, tags, and metadata.",
     inputSchema: {
       subject: z.string(),
@@ -75,7 +76,7 @@ export function registerTaskTools(server: McpServer): void {
   });
 
   // ---- Get Task ----
-  server.registerTool("get_task", {
+  registerMcpTool(server, "get_task", {
     description: "Get a task by id or uuid. Returns enriched TaskInfo with subtask count, comment count, dependency count, and blocker info.",
     inputSchema: {
       id: z.coerce.number().optional(),
@@ -90,7 +91,7 @@ export function registerTaskTools(server: McpServer): void {
   });
 
   // ---- List Tasks ----
-  server.registerTool("list_tasks", {
+  registerMcpTool(server, "list_tasks", {
     description: "List tasks with optional filters. Default: 50 tasks, sorted by priority then date. Use 'tags' for AND-matching multiple tags. Use 'metadata' to filter by metadata key/value pairs.",
     inputSchema: {
       status: z.enum(["pending", "in_progress", "completed", "cancelled", "blocked"]).optional(),
@@ -126,7 +127,7 @@ export function registerTaskTools(server: McpServer): void {
   });
 
   // ---- Start Task ----
-  server.registerTool("start_task", {
+  registerMcpTool(server, "start_task", {
     description: "Mark a task as in_progress. Fails if any dependency is not completed.",
     inputSchema: {
       id: z.coerce.number(),
@@ -140,7 +141,7 @@ export function registerTaskTools(server: McpServer): void {
   });
 
   // ---- Complete Task ----
-  server.registerTool("complete_task", {
+  registerMcpTool(server, "complete_task", {
     description: "Mark a task as completed. Auto-unblocks any dependent tasks that now have all dependencies completed.",
     inputSchema: {
       id: z.coerce.number(),
@@ -155,7 +156,7 @@ export function registerTaskTools(server: McpServer): void {
   });
 
   // ---- Cancel Task ----
-  server.registerTool("cancel_task", {
+  registerMcpTool(server, "cancel_task", {
     description: "Cancel a task with optional reason.",
     inputSchema: {
       id: z.coerce.number(),
@@ -170,7 +171,7 @@ export function registerTaskTools(server: McpServer): void {
   });
 
   // ---- Block Task ----
-  server.registerTool("block_task", {
+  registerMcpTool(server, "block_task", {
     description: "Manually block a task with optional reason.",
     inputSchema: {
       id: z.coerce.number(),
@@ -185,7 +186,7 @@ export function registerTaskTools(server: McpServer): void {
   });
 
   // ---- Unblock Task ----
-  server.registerTool("unblock_task", {
+  registerMcpTool(server, "unblock_task", {
     description: "Unblock a task. Sets to 'pending' if all dependencies are completed, otherwise stays 'blocked'.",
     inputSchema: {
       id: z.coerce.number(),
@@ -199,7 +200,7 @@ export function registerTaskTools(server: McpServer): void {
   });
 
   // ---- Reopen Task ----
-  server.registerTool("reopen_task", {
+  registerMcpTool(server, "reopen_task", {
     description: "Reopen a completed or cancelled task back to pending. Re-checks dependencies.",
     inputSchema: {
       id: z.coerce.number(),
@@ -213,7 +214,7 @@ export function registerTaskTools(server: McpServer): void {
   });
 
   // ---- Assign Task ----
-  server.registerTool("assign_task", {
+  registerMcpTool(server, "assign_task", {
     description: "Assign a task to an agent.",
     inputSchema: {
       id: z.coerce.number(),
@@ -228,7 +229,7 @@ export function registerTaskTools(server: McpServer): void {
   });
 
   // ---- Set Task Priority ----
-  server.registerTool("set_task_priority", {
+  registerMcpTool(server, "set_task_priority", {
     description: "Change a task's priority: low, medium, high, critical.",
     inputSchema: {
       id: z.coerce.number(),
@@ -243,7 +244,7 @@ export function registerTaskTools(server: McpServer): void {
   });
 
   // ---- Delete Task ----
-  server.registerTool("delete_task", {
+  registerMcpTool(server, "delete_task", {
     description: "Delete a task. Fails if subtasks still reference it.",
     inputSchema: {
       id: z.coerce.number(),
@@ -256,7 +257,7 @@ export function registerTaskTools(server: McpServer): void {
   });
 
   // ---- Add Comment ----
-  server.registerTool("add_comment", {
+  registerMcpTool(server, "add_comment", {
     description: "Add a comment to a task.",
     inputSchema: {
       task_id: z.coerce.number(),
@@ -270,7 +271,7 @@ export function registerTaskTools(server: McpServer): void {
   });
 
   // ---- Get Comments ----
-  server.registerTool("get_comments", {
+  registerMcpTool(server, "get_comments", {
     description: "Get all comments on a task, ordered by creation time.",
     inputSchema: {
       task_id: z.coerce.number(),
@@ -303,7 +304,7 @@ export function registerTaskTools(server: McpServer): void {
   });
 
   // ---- Get Subtasks ----
-  server.registerTool("get_subtasks", {
+  registerMcpTool(server, "get_subtasks", {
     description: "Get direct children (subtasks) of a parent task.",
     inputSchema: {
       parent_id: z.coerce.number(),
@@ -314,7 +315,7 @@ export function registerTaskTools(server: McpServer): void {
   });
 
   // ---- Get Task Tree ----
-  server.registerTool("get_task_tree", {
+  registerMcpTool(server, "get_task_tree", {
     description: "Get a task with its full subtask tree (recursive, max depth 5).",
     inputSchema: {
       parent_id: z.coerce.number(),
@@ -336,7 +337,7 @@ export function registerTaskTools(server: McpServer): void {
   });
 
   // ---- Add Dependency ----
-  server.registerTool("add_dependency", {
+  registerMcpTool(server, "add_dependency", {
     description: "Add a dependency: task_id depends on depends_on_id. Prevents circular dependencies. Auto-blocks if dependency not completed.",
     inputSchema: {
       task_id: z.coerce.number(),
@@ -348,7 +349,7 @@ export function registerTaskTools(server: McpServer): void {
   });
 
   // ---- Remove Dependency ----
-  server.registerTool("remove_dependency", {
+  registerMcpTool(server, "remove_dependency", {
     description: "Remove a dependency between two tasks.",
     inputSchema: {
       task_id: z.coerce.number(),
@@ -360,7 +361,7 @@ export function registerTaskTools(server: McpServer): void {
   });
 
   // ---- Get Dependencies ----
-  server.registerTool("get_dependencies", {
+  registerMcpTool(server, "get_dependencies", {
     description: "Get tasks that this task depends on (what must be completed first).",
     inputSchema: {
       task_id: z.coerce.number(),
@@ -371,7 +372,7 @@ export function registerTaskTools(server: McpServer): void {
   });
 
   // ---- Get Dependents ----
-  server.registerTool("get_dependents", {
+  registerMcpTool(server, "get_dependents", {
     description: "Get tasks that depend on this task (what is blocked by this).",
     inputSchema: {
       task_id: z.coerce.number(),
@@ -382,7 +383,7 @@ export function registerTaskTools(server: McpServer): void {
   });
 
   // ---- Get Task Activity ----
-  server.registerTool("get_task_activity", {
+  registerMcpTool(server, "get_task_activity", {
     description: "Get activity log for a task: status changes, comments, dependency changes.",
     inputSchema: {
       task_id: z.coerce.number(),
@@ -394,7 +395,7 @@ export function registerTaskTools(server: McpServer): void {
   });
 
   // ---- Get Due Tasks ----
-  server.registerTool("get_due_tasks", {
+  registerMcpTool(server, "get_due_tasks", {
     description: "Get tasks with approaching or past due dates. Returns tasks that are overdue, due today, or due within the specified window (default 24h). Ordered by due_at ascending. Excludes completed and cancelled tasks.",
     inputSchema: {
       window_hours: z.coerce.number().optional(),
@@ -405,7 +406,7 @@ export function registerTaskTools(server: McpServer): void {
   });
 
   // ---- Get Task Summary ----
-  server.registerTool("get_task_summary", {
+  registerMcpTool(server, "get_task_summary", {
     description: "Get a structured summary of a task including progress metrics, recent activity, blockers, and dependents. Returns subtask progress, dependency progress, completion percentage, and recent activity log.",
     inputSchema: {
       id: z.coerce.number().optional(),
@@ -420,7 +421,7 @@ export function registerTaskTools(server: McpServer): void {
   });
 
   // ---- Search Tasks ----
-  server.registerTool("search_tasks", {
+  registerMcpTool(server, "search_tasks", {
     description: "Search tasks using full-text search on subject, description, and tags. Supports phrase queries (quoted) and prefix matching. Optional filters: status, assignee, project_id, channel, priority. Use sort='relevance' (default) or 'recent'.",
     inputSchema: {
       query: z.string(),

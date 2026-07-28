@@ -4,7 +4,8 @@
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod";
+import { z } from "zod/v3";
+import { registerMcpTool } from "../tool-compat.js";
 import { getStore } from "../../lib/store/index.js";
 import { updateCachedAutoName, readPersistedIdentity, isSelfRename } from "../../lib/identity.js";
 import { identityFor } from "../identity.js";
@@ -20,7 +21,7 @@ export function registerAgentTools(
   // Bound to this connection: see ../identity.ts.
   const resolveIdentity = identityFor(server);
 
-  server.registerTool("register_agent", {
+  registerMcpTool(server, "register_agent", {
     description: "Register an agent. Just provide the name — session_id is auto-detected.",
     inputSchema: {
       name: z.string().optional().describe("Agent name"),
@@ -69,7 +70,7 @@ export function registerAgentTools(
     }
   });
 
-  server.registerTool("heartbeat", {
+  registerMcpTool(server, "heartbeat", {
     description: "Send presence heartbeat. Use 'from' or 'name' to set agent identity.",
     inputSchema: {
       from: z.string().optional().describe("Agent name"),
@@ -88,7 +89,7 @@ export function registerAgentTools(
     };
   });
 
-  server.registerTool("list_agents", {
+  registerMcpTool(server, "list_agents", {
     description: "List agents with presence status.",
     inputSchema: {
       online_only: z.coerce.boolean().optional(),
@@ -105,7 +106,7 @@ export function registerAgentTools(
     };
   });
 
-  server.registerTool("remove_agent", {
+  registerMcpTool(server, "remove_agent", {
     description: "Remove an agent from presence.",
     inputSchema: {
       from: z.string().optional(),
@@ -129,7 +130,7 @@ export function registerAgentTools(
     };
   });
 
-  server.registerTool("rename_agent", {
+  registerMcpTool(server, "rename_agent", {
     description: "Rename your agent in presence.",
     inputSchema: {
       new_name: z.string(),
@@ -192,7 +193,7 @@ export function registerAgentTools(
     }
   });
 
-  server.registerTool("set_focus", {
+  registerMcpTool(server, "set_focus", {
     description: "Set agent focus to a project. All read-heavy tools will default to this project scope. Stores in MCP session memory AND updates agent_presence.project_id in DB.",
     inputSchema: {
       project_id: z.string(),
@@ -211,7 +212,7 @@ export function registerAgentTools(
     };
   });
 
-  server.registerTool("get_focus", {
+  registerMcpTool(server, "get_focus", {
     description: "Get the current focus state for an agent. Returns session focus, DB project_id, and effective project_id used for filtering.",
     inputSchema: {
       from: z.string().optional(),
@@ -235,7 +236,7 @@ export function registerAgentTools(
     };
   });
 
-  server.registerTool("unfocus", {
+  registerMcpTool(server, "unfocus", {
     description: "Clear agent focus. Removes session focus and clears agent_presence.project_id in DB.",
     inputSchema: {
       from: z.string().optional(),
@@ -252,7 +253,7 @@ export function registerAgentTools(
     };
   });
 
-  server.registerTool("get_session_activity", {
+  registerMcpTool(server, "get_session_activity", {
     description: "Get activity metrics for a session: message velocity, unique agents, reply ratio, reaction count, trending status.",
     inputSchema: {
       session_id: z.string(),
@@ -265,7 +266,7 @@ export function registerAgentTools(
     return { content: [{ type: "text", text: JSON.stringify(activity) }] };
   });
 
-  server.registerTool("get_blockers", {
+  registerMcpTool(server, "get_blockers", {
     description: "Check for unread blocking messages.",
     inputSchema: {
       from: z.string().optional(),

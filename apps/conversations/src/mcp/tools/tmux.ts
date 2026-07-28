@@ -6,7 +6,8 @@
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod";
+import { z } from "zod/v3";
+import { registerMcpTool } from "../tool-compat.js";
 import { tmuxSend } from "../../cli/commands/tmux.js";
 
 function sleep(ms: number): Promise<void> {
@@ -26,7 +27,7 @@ export function normalizeTmuxTargets(rawTargets: unknown[]): string[] {
 }
 
 export function registerTmuxTools(server: McpServer): void {
-  server.registerTool("tmux_send", {
+  registerMcpTool(server, "tmux_send", {
     description:
       "Send a message to a tmux window (e.g. another agent's Claude Code session). " +
       "Pastes the text literally, waits for the pane to be idle, hits Enter, then verifies the message was submitted. " +
@@ -65,7 +66,7 @@ export function registerTmuxTools(server: McpServer): void {
     }
   });
 
-  server.registerTool("tmux_broadcast", {
+  registerMcpTool(server, "tmux_broadcast", {
     description:
       "Send the same message to multiple tmux windows simultaneously. " +
       "Useful for broadcasting instructions to several agent sessions at once. " +

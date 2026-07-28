@@ -4,7 +4,8 @@
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod";
+import { z } from "zod/v3";
+import { registerMcpTool } from "../tool-compat.js";
 import { getStore } from "../../lib/store/index.js";
 // Writes (auto-DMs) route to the cloud API in self_hosted mode so a flipped
 // fleet sees them; falls through to the local store otherwise. Read-only tools
@@ -19,7 +20,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
 
   // ---- Read Receipts ----
 
-  server.registerTool("read_receipts", {
+  registerMcpTool(server, "read_receipts", {
     description: "Get per-agent read receipts for a message. Shows who has read it and (for channel messages) who hasn't.",
     inputSchema: {
       message_id: z.coerce.number(),
@@ -34,7 +35,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     return { content: [{ type: "text", text: JSON.stringify({ receipts, count: receipts.length }) }] };
   });
 
-  server.registerTool("mark_read_receipt", {
+  registerMcpTool(server, "mark_read_receipt", {
     description: "Manually record that an agent has read a specific message.",
     inputSchema: {
       message_id: z.coerce.number(),
@@ -47,7 +48,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
 
   // ---- Reaction aliases + tools ----
 
-  server.registerTool("react", {
+  registerMcpTool(server, "react", {
     description: "Add an emoji reaction (alias for add_reaction). Quick acknowledgment without a full reply.",
     inputSchema: { message_id: z.coerce.number(), emoji: z.string(), from: z.string().optional() },
   }, async (args: Record<string, any>) => {
@@ -56,7 +57,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     return { content: [{ type: "text", text: JSON.stringify(reaction) }] };
   });
 
-  server.registerTool("unreact", {
+  registerMcpTool(server, "unreact", {
     description: "Remove an emoji reaction (alias for remove_reaction).",
     inputSchema: { message_id: z.coerce.number(), emoji: z.string(), from: z.string().optional() },
   }, async (args: Record<string, any>) => {
@@ -65,7 +66,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     return { content: [{ type: "text", text: JSON.stringify({ removed }) }] };
   });
 
-  server.registerTool("add_reaction", {
+  registerMcpTool(server, "add_reaction", {
     description: "Add an emoji reaction to a message.",
     inputSchema: {
       message_id: z.coerce.number(),
@@ -79,7 +80,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     return { content: [{ type: "text", text: JSON.stringify(reaction) }] };
   });
 
-  server.registerTool("remove_reaction", {
+  registerMcpTool(server, "remove_reaction", {
     description: "Remove an emoji reaction from a message.",
     inputSchema: {
       message_id: z.coerce.number(),
@@ -93,7 +94,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     return { content: [{ type: "text", text: JSON.stringify({ removed }) }] };
   });
 
-  server.registerTool("get_reactions", {
+  registerMcpTool(server, "get_reactions", {
     description: "Get all reactions for a message.",
     inputSchema: {
       message_id: z.coerce.number(),
@@ -103,7 +104,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     return { content: [{ type: "text", text: JSON.stringify(reactions) }] };
   });
 
-  server.registerTool("get_reaction_summary", {
+  registerMcpTool(server, "get_reaction_summary", {
     description: "Get emoji reaction counts and agent lists for a message.",
     inputSchema: {
       message_id: z.coerce.number(),
@@ -115,7 +116,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
 
   // ---- Unread Counts & Mentions ----
 
-  server.registerTool("list_unread_counts", {
+  registerMcpTool(server, "list_unread_counts", {
     description: "Get unread message counts per channel without fetching message content. Use this at session start to triage which channels need attention before calling read_messages.",
     inputSchema: {
       agent: z.string().optional().describe("Filter to channels the agent is a member of or has received messages in. Omit for global unread counts."),
@@ -130,7 +131,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     return { content: [{ type: "text", text: JSON.stringify(counts) }] };
   });
 
-  server.registerTool("get_mentions", {
+  registerMcpTool(server, "get_mentions", {
     description: "Get messages that @mention a specific agent. Useful for catching up on missed pings.",
     inputSchema: {
       agent: z.string().describe("Agent name to find mentions for"),
@@ -167,7 +168,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     };
   });
 
-  server.registerTool("mark_mentions_read", {
+  registerMcpTool(server, "mark_mentions_read", {
     description: "Mark @mentions as seen for an agent. Clears unread mention counts.",
     inputSchema: {
       agent: z.string().describe("Agent name"),
@@ -180,7 +181,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
 
   // ---- Graph Tools ----
 
-  server.registerTool("build_graph", {
+  registerMcpTool(server, "build_graph", {
     description: "Build/rebuild the knowledge graph from messages, channels, and projects. Creates relationship edges between agents, channels, and projects.",
     inputSchema: {},
   }, async () => {
@@ -188,7 +189,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     return { content: [{ type: "text", text: JSON.stringify(result) }] };
   });
 
-  server.registerTool("get_related", {
+  registerMcpTool(server, "get_related", {
     description: "Find all entities related to a given entity in the knowledge graph.",
     inputSchema: {
       entity_type: z.string(),
@@ -199,7 +200,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     return { content: [{ type: "text", text: JSON.stringify(related) }] };
   });
 
-  server.registerTool("get_agent_network", {
+  registerMcpTool(server, "get_agent_network", {
     description: "Get an agent's communication network: who they talk to, channels, projects.",
     inputSchema: {
       agent: z.string(),
@@ -209,7 +210,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     return { content: [{ type: "text", text: JSON.stringify(network) }] };
   });
 
-  server.registerTool("graph_stats", {
+  registerMcpTool(server, "graph_stats", {
     description: "Get knowledge graph statistics: total edges and counts by relation type.",
     inputSchema: {},
   }, async () => {
@@ -219,7 +220,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
 
   // ---- Summary Tools ----
 
-  server.registerTool("get_summary", {
+  registerMcpTool(server, "get_summary", {
     description: "Get a structured summary of a conversation (session or channel): participants, topics, key messages, blockers, activity.",
     inputSchema: {
       session_id: z.string().optional(),
@@ -236,7 +237,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
 
   // ---- Topic Tools ----
 
-  server.registerTool("get_topics", {
+  registerMcpTool(server, "get_topics", {
     description: "Extract topics from a channel or session. Returns weighted keyword list.",
     inputSchema: {
       channel: z.string().optional(),
@@ -252,7 +253,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     return { content: [{ type: "text", text: JSON.stringify(topics) }] };
   });
 
-  server.registerTool("trending_topics", {
+  registerMcpTool(server, "trending_topics", {
     description: "Get trending topics across all messages in the last N hours.",
     inputSchema: {
       hours: z.coerce.number().optional(),
@@ -266,7 +267,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
 
   // ---- Hot Conversations ----
 
-  server.registerTool("hot_sessions", {
+  registerMcpTool(server, "hot_sessions", {
     description: "List conversations ranked by activity hotness (message velocity, reactions, replies, priority, blockers).",
     inputSchema: {
       limit: z.coerce.number().optional(),
@@ -289,7 +290,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
 
   // ---- Lock Tools ----
 
-  server.registerTool("acquire_lock", {
+  registerMcpTool(server, "acquire_lock", {
     description: "Acquire an advisory or exclusive lock on a resource. Returns conflict info if another agent holds the lock. On conflict, auto-DMs the holding agent.",
     inputSchema: {
       resource_type: z.string(),
@@ -320,7 +321,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     return { content: [{ type: "text", text: JSON.stringify(result) }] };
   });
 
-  server.registerTool("release_lock", {
+  registerMcpTool(server, "release_lock", {
     description: "Release a lock held by the agent on a resource.",
     inputSchema: {
       resource_type: z.string(),
@@ -334,7 +335,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     return { content: [{ type: "text", text: JSON.stringify({ released }) }] };
   });
 
-  server.registerTool("check_lock", {
+  registerMcpTool(server, "check_lock", {
     description: "Check if a resource is currently locked and who holds it.",
     inputSchema: {
       resource_type: z.string(),
@@ -345,7 +346,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     return { content: [{ type: "text", text: JSON.stringify(lock ?? { locked: false }) }] };
   });
 
-  server.registerTool("list_locks", {
+  registerMcpTool(server, "list_locks", {
     description: "List all active (non-expired) locks enriched with agent presence details (status, online, last_seen_at) and time context (locked_seconds_ago, expires_in_seconds). Filter by resource_type or agent.",
     inputSchema: {
       resource_type: z.string().optional(),
@@ -360,7 +361,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     return { content: [{ type: "text", text: jsonText({ locks: page.items, count: page.count, total: page.total, next_cursor: page.nextCursor, has_more: page.hasMore }) }] };
   });
 
-  server.registerTool("bulk_acquire_lock", {
+  registerMcpTool(server, "bulk_acquire_lock", {
     description: "Atomically acquire multiple locks at once. All-or-nothing: if any lock is held by another agent, none are acquired. Returns blocked_by info on conflict.",
     inputSchema: {
       resources: z.array(z.object({
@@ -392,7 +393,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     return { content: [{ type: "text", text: JSON.stringify(result) }] };
   });
 
-  server.registerTool("clean_expired_locks", {
+  registerMcpTool(server, "clean_expired_locks", {
     description: "Clean up expired locks and auto-release locks held by agents whose heartbeat has been stale for >30 minutes. Returns counts of removed locks.",
     inputSchema: {},
   }, async () => {
@@ -403,7 +404,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
 
   // ---- Thread Tools ----
 
-  server.registerTool("get_thread_replies", {
+  registerMcpTool(server, "get_thread_replies", {
     description: "Get all replies in a thread for a given parent message ID. Also accessible as read_thread.",
     inputSchema: {
       message_id: z.coerce.number(),
@@ -426,7 +427,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     return { content: [{ type: "text", text: jsonText(payload) }] };
   });
 
-  server.registerTool("read_thread", {
+  registerMcpTool(server, "read_thread", {
     description: "Alias for get_thread_replies. Read all replies to a specific message, forming a thread view.",
     inputSchema: {
       message_id: z.coerce.number(),
@@ -451,7 +452,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
 
   // ---- Meta Tools ----
 
-  server.registerTool("search_tools", {
+  registerMcpTool(server, "search_tools", {
     description: "List tool names by keyword.",
     inputSchema: {
       query: z.string().optional(),
@@ -488,12 +489,13 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     return { content: [{ type: "text" as const, text: matches.join(", ") }] };
   });
 
-  server.registerTool("describe_tools", {
+  registerMcpTool(server, "describe_tools", {
     description: "Get descriptions for tools by name.",
     inputSchema: {
       names: z.array(z.string()),
     },
-  }, async ({ names }) => {
+  }, async (args: Record<string, any>) => {
+    const names = Array.isArray(args.names) ? args.names.map((name: unknown) => String(name)) : [];
     const descriptions: Record<string, string> = {
       // DM tools
       send_message: "Send DM to agent. Required: to, content. Optional: from?, priority?(low|normal|high|urgent), blocking?",
@@ -602,16 +604,19 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
       get_dependents: "Get tasks that depend on this task (blocked by this). Required: task_id",
       get_task_activity: "Get activity log: status changes, comments, dep changes. Required: task_id. Optional: limit?(default 50)",
     };
-    const result = names.map(n => `${n}: ${descriptions[n] || "See tool schema"}`).join("\n");
+    const result = names.map((n: string) => `${n}: ${descriptions[n] || "See tool schema"}`).join("\n");
     return { content: [{ type: "text" as const, text: result }] };
   });
 
   // ---- send_feedback tool ----
-  server.tool(
-    "send_feedback",
-    "Send feedback about this service",
-    { message: z.string(), email: z.string().optional(), category: z.enum(["bug", "feature", "general"]).optional() },
-    async (params) => {
+  registerMcpTool(server, "send_feedback", {
+    description: "Send feedback about this service",
+    inputSchema: {
+      message: z.string(),
+      email: z.string().optional(),
+      category: z.enum(["bug", "feature", "general"]).optional(),
+    },
+  }, async (params: Record<string, any>) => {
       try {
         const { saveFeedback } = await import("../../lib/feedback.js");
         saveFeedback(params.message, params.email || undefined);
@@ -619,6 +624,5 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
       } catch (e) {
         return { content: [{ type: "text" as const, text: String(e) }], isError: true };
       }
-    }
-  );
+    });
 }

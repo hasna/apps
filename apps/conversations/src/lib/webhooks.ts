@@ -18,11 +18,19 @@ interface ConversationsConfig {
 let cachedConfig: ConversationsConfig | null = null;
 let configLoadedAt = 0;
 const CONFIG_CACHE_MS = 10000;
+type DnsLookup = (hostname: string) => Promise<Array<{ address: string }>>;
+const defaultDnsLookup: DnsLookup = (hostname) => dns.promises.lookup(hostname, { all: true });
+let webhookDnsLookup = defaultDnsLookup;
 
 /** @internal — exposed only for testing. Resets the config cache. */
 export function _resetConfigCache(): void {
   cachedConfig = null;
   configLoadedAt = 0;
+}
+
+/** @internal — exposed only for testing. Keeps webhook SSRF checks deterministic. */
+export function _setWebhookDnsLookupForTest(lookup: DnsLookup | null): void {
+  webhookDnsLookup = lookup ?? defaultDnsLookup;
 }
 
 function getConfigPath(): string {
@@ -118,7 +126,7 @@ async function validateWebhookUrl(urlStr: string): Promise<boolean> {
     if (hostname === "localhost" || hostname === "0.0.0.0" || hostname === "127.0.0.1" || hostname === "::1") return false;
 
     // Resolve hostname and check all returned IPs
-    const addresses = await dns.promises.lookup(hostname, { all: true });
+    const addresses = await webhookDnsLookup(hostname);
     if (!Array.isArray(addresses)) return false;
     return !addresses.some((a: { address: string }) => isPrivateIP(a.address));
   } catch {

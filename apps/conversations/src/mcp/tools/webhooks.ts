@@ -4,7 +4,8 @@
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod";
+import { z } from "zod/v3";
+import { registerMcpTool } from "../tool-compat.js";
 import {
   listWebhooks,
   addWebhook,
@@ -14,7 +15,7 @@ import {
 export function registerWebhookTools(server: McpServer): void {
 
   // ---- List Webhooks ----
-  server.registerTool("get_webhooks", {
+  registerMcpTool(server, "get_webhooks", {
     description: "List all configured webhooks with their URLs, events, and optional agent scoping.",
     inputSchema: {},
   }, async () => {
@@ -30,7 +31,7 @@ export function registerWebhookTools(server: McpServer): void {
   });
 
   // ---- Add Webhook ----
-  server.registerTool("add_webhook", {
+  registerMcpTool(server, "add_webhook", {
     description: "Add a new webhook. Validates URL (must be HTTPS, not private IP) and events. Valid events: dm, blocker, channel, mention, task.",
     inputSchema: {
       url: z.string(),
@@ -50,7 +51,7 @@ export function registerWebhookTools(server: McpServer): void {
   });
 
   // ---- Remove Webhook ----
-  server.registerTool("remove_webhook", {
+  registerMcpTool(server, "remove_webhook", {
     description: "Remove a webhook by its index (0-based). Use get_webhooks first to find the index.",
     inputSchema: {
       index: z.coerce.number(),

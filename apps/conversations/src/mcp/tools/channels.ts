@@ -10,7 +10,8 @@
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod";
+import { z } from "zod/v3";
+import { registerMcpTool } from "../tool-compat.js";
 import { getStore } from "../../lib/store/index.js";
 import { identityFor } from "../identity.js";
 import { assertNoSensitiveContent, redactSensitiveText } from "../../lib/content-safety.js";
@@ -27,7 +28,7 @@ export function registerChannelTools(server: McpServer): void {
   // Bound to this connection: see ../identity.ts.
   const resolveIdentity = identityFor(server);
 
-  server.registerTool("create_channel", {
+  registerMcpTool(server, "create_channel", {
     description: "Create a channel and auto-join.",
     inputSchema: {
       name: z.string(),
@@ -68,7 +69,7 @@ export function registerChannelTools(server: McpServer): void {
     }
   });
 
-  server.registerTool("list_channels", {
+  registerMcpTool(server, "list_channels", {
     description: "List channels with counts.",
     inputSchema: {
       project_id: z.string().optional(),
@@ -91,7 +92,7 @@ export function registerChannelTools(server: McpServer): void {
     };
   });
 
-  server.registerTool("send_to_channel", {
+  registerMcpTool(server, "send_to_channel", {
     description: "Post a message to a channel.",
     inputSchema: {
       channel: z.string(),
@@ -139,7 +140,7 @@ export function registerChannelTools(server: McpServer): void {
     };
   });
 
-  server.registerTool("read_channel", {
+  registerMcpTool(server, "read_channel", {
     description: "Read messages from a channel.",
     inputSchema: {
       channel: z.string(),
@@ -187,7 +188,7 @@ export function registerChannelTools(server: McpServer): void {
     };
   });
 
-  server.registerTool("join_channel", {
+  registerMcpTool(server, "join_channel", {
     description: "Join a channel as a member.",
     inputSchema: {
       channel: z.string(),
@@ -211,7 +212,7 @@ export function registerChannelTools(server: McpServer): void {
     };
   });
 
-  server.registerTool("leave_channel", {
+  registerMcpTool(server, "leave_channel", {
     description: "Leave a channel.",
     inputSchema: {
       channel: z.string(),
@@ -228,7 +229,7 @@ export function registerChannelTools(server: McpServer): void {
     };
   });
 
-  server.registerTool("subscribe_channel_notifications", {
+  registerMcpTool(server, "subscribe_channel_notifications", {
     description: "Subscribe an agent to preview-only notifications for a channel.",
     inputSchema: {
       channel: z.string(),
@@ -246,7 +247,7 @@ export function registerChannelTools(server: McpServer): void {
     }
   });
 
-  server.registerTool("unsubscribe_channel_notifications", {
+  registerMcpTool(server, "unsubscribe_channel_notifications", {
     description: "Stop preview-only notifications for a channel.",
     inputSchema: {
       channel: z.string(),
@@ -259,7 +260,7 @@ export function registerChannelTools(server: McpServer): void {
     return { content: [{ type: "text", text: JSON.stringify({ channel: args.channel, agent, unsubscribed }) }] };
   });
 
-  server.registerTool("list_channel_subscriptions", {
+  registerMcpTool(server, "list_channel_subscriptions", {
     description: "List an agent's preview-only channel notification subscriptions.",
     inputSchema: {
       from: z.string().optional(),
@@ -273,7 +274,7 @@ export function registerChannelTools(server: McpServer): void {
     return { content: [{ type: "text", text: JSON.stringify(subscriptions) }] };
   });
 
-  server.registerTool("read_channel_notifications", {
+  registerMcpTool(server, "read_channel_notifications", {
     description: "Read preview-only notifications for an agent's subscribed channels. Returns blurbs, not full message bodies.",
     inputSchema: {
       from: z.string().optional(),
@@ -297,7 +298,7 @@ export function registerChannelTools(server: McpServer): void {
     return { content: [{ type: "text", text: JSON.stringify({ notifications, count: notifications.length }) }] };
   });
 
-  server.registerTool("mark_channel_notifications_read", {
+  registerMcpTool(server, "mark_channel_notifications_read", {
     description: "Mark preview-only channel notifications as read for an agent.",
     inputSchema: {
       from: z.string().optional(),
@@ -320,7 +321,7 @@ export function registerChannelTools(server: McpServer): void {
     return { content: [{ type: "text", text: JSON.stringify({ marked_read: marked }) }] };
   });
 
-  server.registerTool("update_channel", {
+  registerMcpTool(server, "update_channel", {
     description: "Update channel name (rename), description, topic, or project. Pass new_name to rename while preserving messages, members, and history.",
     inputSchema: {
       name: z.string(),
@@ -351,7 +352,7 @@ export function registerChannelTools(server: McpServer): void {
     }
   });
 
-  server.registerTool("rename_channel", {
+  registerMcpTool(server, "rename_channel", {
     description: "Rename a channel, preserving its messages, members, subscriptions, and history.",
     inputSchema: {
       name: z.string().describe("Current channel name"),
@@ -372,7 +373,7 @@ export function registerChannelTools(server: McpServer): void {
     }
   });
 
-  server.registerTool("archive_channel", {
+  registerMcpTool(server, "archive_channel", {
     description: "Archive a channel.",
     inputSchema: {
       name: z.string(),
@@ -392,7 +393,7 @@ export function registerChannelTools(server: McpServer): void {
     }
   });
 
-  server.registerTool("unarchive_channel", {
+  registerMcpTool(server, "unarchive_channel", {
     description: "Unarchive a channel.",
     inputSchema: {
       name: z.string(),
@@ -412,7 +413,7 @@ export function registerChannelTools(server: McpServer): void {
     }
   });
 
-  server.registerTool("set_channel_topic", {
+  registerMcpTool(server, "set_channel_topic", {
     description: "Set the current topic/status of a channel. Separate from the static description — use this for live status like '🔴 blocked on auth' or '✅ shipping v2'.",
     inputSchema: {
       channel: z.string().describe("Channel name"),
@@ -428,7 +429,7 @@ export function registerChannelTools(server: McpServer): void {
     return { content: [{ type: "text", text: args.topic ? `Topic set: ${args.topic}` : "Topic cleared" }] };
   });
 
-  server.registerTool("get_channel_topic", {
+  registerMcpTool(server, "get_channel_topic", {
     description: "Get the current topic/status of a channel.",
     inputSchema: { channel: z.string() },
   }, async (args: Record<string, any>) => {
@@ -438,7 +439,7 @@ export function registerChannelTools(server: McpServer): void {
     return { content: [{ type: "text", text: JSON.stringify({ channel: args.channel, topic: row.topic }) }] };
   });
 
-  server.registerTool("summarize_channel", {
+  registerMcpTool(server, "summarize_channel", {
     description: "Get a structured catch-up summary of a channel for a time window — participants, topics, key messages, blockers, activity counts. No LLM required.",
     inputSchema: {
       channel: z.string().describe("Channel name"),

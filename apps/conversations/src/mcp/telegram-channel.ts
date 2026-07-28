@@ -11,7 +11,8 @@
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod";
+import { z } from "zod/v3";
+import { registerMcpTool } from "./tool-compat.js";
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -53,7 +54,7 @@ export function registerTelegramChannel(server: McpServer): void {
   }).catch(() => {});
 
   // Register send tool
-  server.registerTool("telegram_send", {
+  registerMcpTool(server, "telegram_send", {
     description: "Send a message to a Telegram chat. Use this to reply to Telegram messages received via the channel bridge.",
     inputSchema: {
       chat_id: z.coerce.number().describe("Telegram chat ID to send to (from the incoming message's chat_id meta)"),

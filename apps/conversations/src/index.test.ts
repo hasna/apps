@@ -33,7 +33,7 @@ describe("public API exports", () => {
   });
 
   test("every read/write goes through a Store instance", () => {
-    const store = index.getStore();
+    const store = index.getStore({});
     expect(store.transport).toBe("local");
     expect(typeof store.sendMessage).toBe("function");
     expect(typeof store.readMessages).toBe("function");

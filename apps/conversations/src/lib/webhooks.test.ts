@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { fireWebhooks, fireTaskWebhooks, _resetConfigCache } from "./webhooks";
+import { fireWebhooks, fireTaskWebhooks, _resetConfigCache, _setWebhookDnsLookupForTest } from "./webhooks";
 import { writeFileSync, mkdirSync, unlinkSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -47,12 +47,16 @@ async function waitFor(condition: () => boolean, timeoutMs = 2000): Promise<void
 beforeEach(() => {
   mkdirSync(TEST_CONFIG_DIR, { recursive: true });
   process.env.CONVERSATIONS_CONFIG_PATH = TEST_CONFIG_PATH;
+  _setWebhookDnsLookupForTest(async (hostname) => [
+    { address: hostname === "192.168.1.100" ? "192.168.1.100" : "93.184.216.34" },
+  ]);
   _resetConfigCache();
 });
 
 afterEach(() => {
   globalThis.fetch = ORIGINAL_FETCH;
   console.warn = ORIGINAL_WARN;
+  _setWebhookDnsLookupForTest(null);
   delete process.env.CONVERSATIONS_CONFIG_PATH;
   _resetConfigCache();
   try { rmSync(TEST_CONFIG_DIR, { recursive: true }); } catch {}

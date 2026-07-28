@@ -6,7 +6,8 @@
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod";
+import { z } from "zod/v3";
+import { registerMcpTool } from "../tool-compat.js";
 import { getStore } from "../../lib/store/index.js";
 // Reads/writes route through getStore(): ApiStore when HASNA_CONVERSATIONS_API_URL
 // + _API_KEY are set (self_hosted/cloud), else LocalStore.
@@ -30,7 +31,7 @@ export function registerMessagingTools(
   // Per-(sender, session) rate limiter for session-targeted injections
   const _sessionInjectRate = new Map<string, { count: number; start: number }>();
 
-  server.registerTool("send_message", {
+  registerMcpTool(server, "send_message", {
     description: "Send a DM to an agent by name, or to a specific agent-claude session by ID. When target_session_id is provided, the message is routed to that exact session and auto-injected into its conversation.",
     inputSchema: {
       to: z.string().describe("Agent name to send to, OR use target_session_id instead for session targeting"),
@@ -67,7 +68,7 @@ export function registerMessagingTools(
   });
 
   // Send a message targeted at a specific agent-claude session ID
-  server.registerTool("send_to_session", {
+  registerMcpTool(server, "send_to_session", {
     description: "Send a message to a specific agent-claude session by its session ID. The message will be auto-injected into that session's conversation via the channel bridge.",
     inputSchema: {
       target_session_id: z.string().describe("The agent-claude session ID (UUID) to send the message to"),
@@ -116,7 +117,7 @@ export function registerMessagingTools(
     };
   });
 
-  server.registerTool("read_messages", {
+  registerMcpTool(server, "read_messages", {
     description: "Read DMs with optional filters.",
     inputSchema: {
       session_id: z.string().optional(),
@@ -161,7 +162,7 @@ export function registerMessagingTools(
     };
   });
 
-  server.registerTool("get_message", {
+  registerMcpTool(server, "get_message", {
     description: "Get the full content of a message by numeric ID. Use this to inspect a full channel message after receiving a preview-only notification blurb.",
     inputSchema: {
       id: z.coerce.number().describe("Numeric message ID to fetch"),
@@ -180,7 +181,7 @@ export function registerMessagingTools(
     };
   });
 
-  server.registerTool("list_sessions", {
+  registerMcpTool(server, "list_sessions", {
     description: "List all sessions by agent.",
     inputSchema: {
       agent: z.string().optional(),
@@ -197,7 +198,7 @@ export function registerMessagingTools(
     };
   });
 
-  server.registerTool("reply", {
+  registerMcpTool(server, "reply", {
     description: "Reply to a specific message by its numeric ID, creating a thread. Use read_messages first to find the message ID.",
     inputSchema: {
       message_id: z.coerce.number().describe("Numeric message ID (integer) to reply to. Use read_messages to find IDs."),
@@ -239,7 +240,7 @@ export function registerMessagingTools(
     };
   });
 
-  server.registerTool("mark_read", {
+  registerMcpTool(server, "mark_read", {
     description: "Mark messages read by IDs or all.",
     inputSchema: {
       from: z.string().optional(),
@@ -267,7 +268,7 @@ export function registerMessagingTools(
     };
   });
 
-  server.registerTool("mark_unread", {
+  registerMcpTool(server, "mark_unread", {
     description: "Re-flag a message (or messages) as unread so it re-appears in read_messages(unread_only:true). Useful for bookmarking messages to action later.",
     inputSchema: {
       message_id: z.coerce.number().optional().describe("Single message ID"),
@@ -282,7 +283,7 @@ export function registerMessagingTools(
     return { content: [{ type: "text", text: JSON.stringify({ marked_unread: count }) }] };
   });
 
-  server.registerTool("mark_channel_read", {
+  registerMcpTool(server, "mark_channel_read", {
     description: "Mark ALL messages in a channel as read without fetching them. Use this on busy channels (200+ messages) where read_messages would overflow tokens.",
     inputSchema: {
       channel: z.string().describe("Channel name"),
@@ -296,7 +297,7 @@ export function registerMessagingTools(
     };
   });
 
-  server.registerTool("search_messages", {
+  registerMcpTool(server, "search_messages", {
     description: "Full-text search across messages. Uses FTS5 with BM25 ranking if available, falls back to LIKE. Returns messages with snippet and relevance_score.",
     inputSchema: {
       query: z.string().describe("Search query. Wrap in quotes for exact phrase: '\"BUG-005\"'"),
@@ -334,7 +335,7 @@ export function registerMessagingTools(
     };
   });
 
-  server.registerTool("export_messages", {
+  registerMcpTool(server, "export_messages", {
     description: "Export messages as JSON or CSV.",
     inputSchema: {
       channel: z.string().optional(),
@@ -353,7 +354,7 @@ export function registerMessagingTools(
     };
   });
 
-  server.registerTool("read_digest", {
+  registerMcpTool(server, "read_digest", {
     description: "Cursored byte-capped channel digest. Returns preview-only snippets plus digest_id, message_ids, and next_cursor; use on busy channels instead of replaying read_messages.",
     inputSchema: {
       channel: z.string().optional(),
@@ -403,7 +404,7 @@ export function registerMessagingTools(
     };
   });
 
-  server.registerTool("delete_message", {
+  registerMcpTool(server, "delete_message", {
     description: "Delete a message (sender only).",
     inputSchema: {
       id: z.coerce.number(),
@@ -426,7 +427,7 @@ export function registerMessagingTools(
     };
   });
 
-  server.registerTool("edit_message", {
+  registerMcpTool(server, "edit_message", {
     description: "Edit message content (sender only).",
     inputSchema: {
       id: z.coerce.number(),
@@ -455,7 +456,7 @@ export function registerMessagingTools(
     };
   });
 
-  server.registerTool("pin_message", {
+  registerMcpTool(server, "pin_message", {
     description: "Pin a message.",
     inputSchema: {
       id: z.coerce.number(),
@@ -475,7 +476,7 @@ export function registerMessagingTools(
     };
   });
 
-  server.registerTool("unpin_message", {
+  registerMcpTool(server, "unpin_message", {
     description: "Unpin a message.",
     inputSchema: {
       id: z.coerce.number(),
@@ -495,7 +496,7 @@ export function registerMessagingTools(
     };
   });
 
-  server.registerTool("get_pinned_messages", {
+  registerMcpTool(server, "get_pinned_messages", {
     description: "Get pinned messages by channel or session.",
     inputSchema: {
       channel: z.string().optional(),
@@ -521,7 +522,7 @@ export function registerMessagingTools(
     };
   });
 
-  server.registerTool("broadcast", {
+  registerMcpTool(server, "broadcast", {
     description: "Send the same message to multiple channels at once. Useful for status updates, bug reports, or announcements that need to go to several channels.",
     inputSchema: {
       channels: z.array(z.string()).describe("List of channel names to send to"),
