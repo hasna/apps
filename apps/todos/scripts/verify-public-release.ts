@@ -44,6 +44,17 @@ const root = resolve(import.meta.dir, "..");
 const rawArgs = process.argv.slice(2);
 const args = new Set(rawArgs);
 
+// Wall-clock budget for each serve probe. The refusal/startup print is nearly
+// instant on an idle machine, but a publish often runs on a loaded station
+// where bun's cold start alone measured 3.1s — a 3s budget then kills the
+// process BEFORE its (correct) refusal prints, and the empty capture is
+// indistinguishable from "started without refusing". Same flake class as the
+// Stage-A remote-entrypoint budget (a18a8b7); the check's semantics are
+// unchanged — only the deadline moved. Declared BEFORE the top-level main()
+// call: a later const sits in the temporal dead zone when main() runs at
+// import time (#103 shipped exactly that ReferenceError).
+const SERVE_PROBE_TIMEOUT_SECONDS = "15";
+
 main();
 
 function main(): void {
@@ -333,15 +344,6 @@ function installSmoke(tarball: string): void {
     rmSync(installRoot, { recursive: true, force: true });
   }
 }
-
-// Wall-clock budget for each serve probe. The refusal/startup print is nearly
-// instant on an idle machine, but a publish often runs on a loaded station
-// where bun's cold start alone measured 3.1s — a 3s budget then kills the
-// process BEFORE its (correct) refusal prints, and the empty capture is
-// indistinguishable from "started without refusing". Same flake class as the
-// Stage-A remote-entrypoint budget (a18a8b7); the check's semantics are
-// unchanged — only the deadline moved.
-const SERVE_PROBE_TIMEOUT_SECONDS = "15";
 
 function expectServeStartup(command: string, env: NodeJS.ProcessEnv): void {
   // 1. FAIL CLOSED: with no credential the packed binary must refuse to start
