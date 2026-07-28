@@ -52,10 +52,9 @@ align package metadata in a focused implementation task.
 
 ## CLI Bin Surface
 
-The package currently exposes three bins:
+The package currently exposes two bins:
 
 - `automations`: primary operator CLI.
-- `hasna-automations`: alias for the same CLI.
 - `automations-daemon`: daemon CLI.
 
 The `automations` CLI should remain the stable local operator surface for:

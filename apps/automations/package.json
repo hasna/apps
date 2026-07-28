@@ -7,7 +7,6 @@
   "types": "./dist/index.d.ts",
   "bin": {
     "automations": "dist/cli/index.js",
-    "hasna-automations": "dist/cli/hasna-automations.js",
     "automations-daemon": "dist/daemon/index.js"
   },
   "exports": {
@@ -46,6 +45,7 @@
   },
   "files": [
     "dist",
+    "hasna.contract.json",
     "README.md",
     "CHANGELOG.md",
     "LICENSE",
@@ -53,12 +53,15 @@
     "CONTRIBUTING.md"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/cli/index.ts src/cli/hasna-automations.ts src/daemon/index.ts src/index.ts src/types.ts src/lib/store.ts src/lib/paths.ts src/lib/runtime.ts src/lib/contracts.ts src/recipes/launch-followup.ts --root src --outdir dist --target bun --packages external && chmod +x dist/cli/index.js dist/cli/hasna-automations.js dist/daemon/index.js && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
+    "build": "rm -rf dist && bun build src/cli/index.ts src/daemon/index.ts src/index.ts src/types.ts src/lib/store.ts src/lib/paths.ts src/lib/runtime.ts src/lib/contracts.ts src/recipes/launch-followup.ts --root src --outdir dist --target bun --packages external && chmod +x dist/cli/index.js dist/daemon/index.js && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
     "smoke:webhook-release": "bun run scripts/release-webhook-smoke.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
-    "contracts:conformance": "contracts conformance examples",
-    "prepublishOnly": "bun run test && bun run build"
+    "contracts:conformance": "contracts conformance examples && contracts repo-conformance .",
+    "conformance": "bun run contracts:conformance",
+    "scan:artifact": "bun scripts/scan-artifact.ts",
+    "prepack": "bun run build && bun run scan:artifact",
+    "prepublishOnly": "bun run test && bun run contracts:conformance && bun run prepack"
   },
   "keywords": [
     "automations",
@@ -85,7 +88,7 @@
   "author": "Hasna",
   "license": "Apache-2.0",
   "dependencies": {
-    "@hasna/contracts": "^0.2.2"
+    "@hasna/contracts": "^0.8.1"
   },
   "peerDependencies": {
     "@hasna/actions": "^0.1.4"

@@ -5,7 +5,7 @@
     "": {
       "name": "@hasna/automations",
       "dependencies": {
-        "@hasna/contracts": "^0.2.2",
+        "@hasna/contracts": "^0.8.1",
       },
       "devDependencies": {
         "@hasna/actions": "^0.1.4",
@@ -20,7 +20,9 @@
   "packages": {
     "@hasna/actions": ["@hasna/actions@0.1.5", "", { "dependencies": { "@hasna/contracts": "^0.2.2", "@modelcontextprotocol/sdk": "^1.26.0", "commander": "^13.1.0", "zod": "^3.24.2" }, "bin": { "actions": "dist/cli/index.js", "actions-mcp": "dist/mcp/index.js" } }, "sha512-8nTOcQaVYd/KLbrQzuY3pFvNks8qtPRLWnduXXSEb5LqlC+DykJKJ/BetPbbHPnNiZ8P5Jl53GPj6g1PNuOqGQ=="],
 
-    "@hasna/contracts": ["@hasna/contracts@0.2.2", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/index.js" } }, "sha512-xpOkF8NIH1+P6kSkb7LiOMfb+yLR2iVvtP1SR93G4f6puGx6YSSj/JgpzaAN4lG0WbpftG5w7xqTsk3Dl/27Rw=="],
+    "@hasna/actions/@hasna/contracts": ["@hasna/contracts@0.2.2", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/index.js" } }, "sha512-xpOkF8NIH1+P6kSkb7LiOMfb+yLR2iVvtP1SR93G4f6puGx6YSSj/JgpzaAN4lG0WbpftG5w7xqTsk3Dl/27Rw=="],
+
+    "@hasna/contracts": ["@hasna/contracts@0.8.1", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-cocuXS4XfEly3GMOhDesYFNZs2rMhEkJlw+Kb5SzvEIuFpahE+jkAChGx1Gov3pSGZqq/RSM8EMtQQJbuOU4xQ=="],
 
     "@hono/node-server": ["@hono/node-server@1.19.14", "", { "peerDependencies": { "hono": "^4" } }, "sha512-GwtvgtXxnWsucXvbQXkRgqksiH2Qed37H9xHZocE5sA3N8O8O8/8FA3uclQXxXVzc9XBZuEOMK7+r02FmSpHtw=="],
 

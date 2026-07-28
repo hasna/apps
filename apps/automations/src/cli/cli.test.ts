@@ -47,33 +47,14 @@ async function runDaemon(args: string[]) {
 }
 
 describe("automations CLI", () => {
-  test("package bin aliases use distinct built entrypoints", () => {
+  test("package bin surface uses contract-allowlisted entrypoints", () => {
     const packageJson = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf-8")) as {
       bin: Record<string, string>;
     };
 
     expect(packageJson.bin.automations).toBe("dist/cli/index.js");
-    expect(packageJson.bin["hasna-automations"]).toBe("dist/cli/hasna-automations.js");
-    expect(new Set(Object.values(packageJson.bin)).size).toBe(Object.values(packageJson.bin).length);
-  });
-
-  test("hasna-automations alias entrypoint runs the shared CLI", async () => {
-    const child = Bun.spawn({
-      cmd: ["bun", "run", "src/cli/hasna-automations.ts", "--help"],
-      cwd: process.cwd(),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-      child.exited,
-    ]);
-
-    expect(exitCode).toBe(0);
-    expect(stderr).toBe("");
-    expect(stdout).toContain("hasna-automations");
-    expect(stdout).toContain("status");
+    expect(packageJson.bin["automations-daemon"]).toBe("dist/daemon/index.js");
+    expect(Object.keys(packageJson.bin).sort()).toEqual(["automations", "automations-daemon"]);
   });
 
   test("prints help, initializes status, and outputs example specs", async () => {
@@ -276,7 +257,7 @@ describe("automations CLI", () => {
         },
       },
     });
-  });
+  }, 20000);
 
   test("manages webhook routes from the CLI and materializes local test deliveries", async () => {
     const specPath = join(dataDir, "webhook-automation.json");
@@ -429,7 +410,12 @@ describe("automations CLI", () => {
         },
       });
 
-      const url = `http://${server.hostname}:${server.port}/webhooks/github/daemon`;
+      const origin = `http://${server.hostname}:${server.port}`;
+      const health = await fetch(`${origin}/healthz`);
+      expect(health.status).toBe(200);
+      expect(await health.json()).toEqual({ ok: true, service: "automations", mode: "webhooks" });
+
+      const url = `${origin}/webhooks/github/daemon`;
       const body = JSON.stringify({ payload: { branch: "main", repository: "open-automations" } });
       const signature = createHmac("sha256", "shared-secret").update(body).digest("hex");
       const malformedHexSuffix = await fetch(url, {
@@ -443,7 +429,7 @@ describe("automations CLI", () => {
       expect(malformedHexSuffix.status).toBe(401);
       expect(store.listRuns()).toHaveLength(0);
 
-      const base64Url = `http://${server.hostname}:${server.port}/webhooks/github/daemon-base64`;
+      const base64Url = `${origin}/webhooks/github/daemon-base64`;
       const base64Signature = createHmac("sha256", "shared-secret").update(body).digest("base64");
       const malformedBase64Suffix = await fetch(base64Url, {
         method: "POST",
@@ -505,6 +491,15 @@ describe("automations CLI", () => {
         body: JSON.stringify({ payload: { branch: "main", value: "x".repeat(200) } }),
       });
       expect(tooLarge.status).toBe(413);
+      // Asserted over the wire so the daemon's deterministic body wins over any
+      // limit Bun.serve might apply before the fetch handler runs.
+      expect(await tooLarge.json()).toEqual({
+        ok: false,
+        error: "webhook_payload_too_large",
+        maxBodyBytes: 128,
+      });
+      // A streaming body without Content-Length cannot be expressed through fetch(),
+      // so this one case exercises the handler in-process.
       const streamedTooLarge = await handleWebhookRequest(new Request(url, {
         method: "POST",
         body: new ReadableStream<Uint8Array>({

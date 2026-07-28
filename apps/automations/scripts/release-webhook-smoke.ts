@@ -10,8 +10,8 @@ const ROUTE_PATH = "/webhooks/release-smoke";
 const AUTOMATION_ID = "release.webhook-smoke";
 const RUNNER_ID = "open-loops:release-smoke";
 const SECRET_ENV_KEY = "HASNA_AUTOMATIONS_WEBHOOK_SECRET_RELEASE_SMOKE";
-const DEFAULT_PEERS = ["@hasna/actions@^0.1.0", "@hasna/cloud@^0.1.41"];
-const RELEASE_0_1_1_PEERS = ["@hasna/actions@0.1.0", "@hasna/cloud@0.1.41"];
+const DEFAULT_PEERS = ["@hasna/actions@^0.1.0"];
+const RELEASE_0_1_1_PEERS = ["@hasna/actions@0.1.0"];
 
 interface SmokeArgs {
   packageSpec: string;
@@ -536,7 +536,7 @@ Usage:
 Options:
   --package <spec>       Package spec to install. Default: @hasna/automations@<package.json version>
   --peer <spec>          Additional peer package spec. Repeatable.
-  --no-default-peers     Do not install default @hasna/actions and @hasna/cloud peer specs.
+  --no-default-peers     Do not install default @hasna/actions peer specs.
   --install-dir <path>   Reuse an install directory instead of creating a temp directory.
   --data-dir <path>      Reuse an automations data directory instead of creating a temp directory.
   --bin-dir <path>       Directory containing automations and automations-daemon bins.
@@ -547,11 +547,11 @@ Options:
 
 Examples:
   bun run smoke:webhook-release -- --package @hasna/automations@0.1.1
-  bun run smoke:webhook-release -- --package file:$PWD --no-default-peers --peer file:/path/to/open-actions --peer file:/path/to/open-cloud
+  bun run smoke:webhook-release -- --package file:$PWD --no-default-peers --peer file:/path/to/open-actions
 
 Notes:
   The @hasna/automations@0.1.1 replay uses the known compatible peer set
-  @hasna/actions@0.1.0 and @hasna/cloud@0.1.41 unless --no-default-peers is passed.
+  @hasna/actions@0.1.0 unless --no-default-peers is passed.
 `);
 }
 

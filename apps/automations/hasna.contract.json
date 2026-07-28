@@ -1,0 +1,70 @@
+{
+  "$schema": "https://github.com/hasna/contracts/schema/hasna.service_contract.v1.json",
+  "schema": "hasna.service_contract.v1",
+  "name": "automations",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "0.8.1",
+  "description": "Deterministic automation control plane and daemon for Hasna open-source apps. It owns local automation specs, trigger materialization, deterministic run/action queue state, replay requests, daemon leases, and signed webhook materialization.",
+  "bins": [
+    "automations",
+    "automations-daemon"
+  ],
+  "hosting": [
+    "user-hosted"
+  ],
+  "deploymentModes": [
+    "local",
+    "self_hosted"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "operator-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "automations",
+      "authMode": "local-only",
+      "deploymentModes": [
+        "local",
+        "self_hosted"
+      ]
+    },
+    {
+      "name": "daemon-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "automations-daemon",
+      "authMode": "local-only",
+      "deploymentModes": [
+        "local",
+        "self_hosted"
+      ]
+    }
+  ],
+  "storage": {
+    "mode": "local",
+    "engines": [
+      "sqlite"
+    ],
+    "envPrefix": "HASNA_AUTOMATIONS_",
+    "aliasEnvPrefix": "AUTOMATIONS_",
+    "sqlitePath": "~/.hasna/automations/automations.db"
+  },
+  "metadata": {
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
+    },
+    "conformance": {
+      "waivedStorageEngines": [
+        {
+          "engine": "postgres",
+          "reason": "Local automation daemon currently ships Bun SQLite only; PostgreSQL storage adoption needs a dedicated storage implementation task.",
+          "reviewedBy": "contracts-alignment",
+          "expiresAt": "2027-01-01T00:00:00.000Z"
+        }
+      ]
+    }
+  }
+}

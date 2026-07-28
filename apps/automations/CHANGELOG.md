@@ -5,6 +5,21 @@ All notable changes to `@hasna/automations` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Removed (BREAKING)
+- The `hasna-automations` bin alias is removed from the published package; use
+  `automations` instead. `@hasna/contracts` repo-conformance (`bins_allowlisted`)
+  only permits `automations` and `automations-daemon`. Anything resolving
+  `^0.2.0` that invokes `hasna-automations` will fail with
+  `command not found` after upgrading, so this must be released as a **minor
+  bump (0.3.0)**, not a patch (#10).
+
+### Added
+- `hasna.contract.json` manifest, `contracts repo-conformance` wired into
+  `contracts:conformance`, and a published-artifact scan (`scan:artifact`)
+  wired into `prepack`/`prepublishOnly` (#10).
+
 ## [0.2.0] - 2026-07-24
 
 Release cutting the work merged to `main` after `0.1.3` (PR-drain).
