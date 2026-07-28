@@ -3,58 +3,52 @@
  * Copyright 2026 Hasna Inc.
  * Licensed under the Apache License, Version 2.0
  *
- * This is the client-side piece that makes `mode=self_hosted` real for the
- * knowledge CLI/MCP. When the client-flip contract resolves to `cloud-http`
- * (i.e. HASNA_KNOWLEDGE_STORAGE_MODE=self_hosted AND HASNA_KNOWLEDGE_API_URL +
- * HASNA_KNOWLEDGE_API_KEY are set), ALL knowledge-item reads and writes are
- * routed to the app's cloud HTTP API (`https://knowledge.md/v1/notes`)
- * with the bearer key — NOT the local db.json store, NOT a raw DSN.
+ * This is the client-side piece that makes `mode=cloud` real for the knowledge
+ * CLI/MCP. When the mode resolves to cloud, ALL knowledge-item reads and writes
+ * are routed to the app's HTTP API (`/v1/notes`) with the bearer key — NOT the
+ * local db.json store, NOT a raw DSN. Otherwise this returns `null` and the CLI
+ * uses its local db.json store (fully reversible: set the mode back to local).
  *
- * When the flip does not resolve to cloud, this returns `null` and the CLI uses
- * its local db.json store exactly as before (fully reversible: unset the env
- * vars -> local).
+ * MODE SELECTION LIVES IN knowledge-mode.ts AND IS EXPLICIT-ONLY. The presence
+ * of `HASNA_KNOWLEDGE_API_URL` / `HASNA_KNOWLEDGE_API_KEY` does NOT select the
+ * cloud backend — those two are pointers, and treating them as a selector is
+ * what let an ambient pair of exported shell variables route a test suite's
+ * writes to the live store. Every entry point below resolves the mode first and
+ * hands the contracts resolver a mode-PINNED env, so the presence-inference
+ * inside @hasna/contracts cannot pick a backend behind us either.
  *
  * SAFETY: never logs, returns, or embeds the API key. The key lives only inside
- * the HTTP transport created by @hasna/contracts.
+ * the HTTP transport created by @hasna/contracts. Every transport this module
+ * builds has the outbound request guard in front of its fetch, so a cloud
+ * request that somehow resolves under `NODE_ENV=test` is refused at the socket
+ * boundary instead of reaching the live store.
  */
 import { resolveStorageClient, type HasnaStorageClient } from '@hasna/contracts/client/storage';
 import type { KnowledgeItem } from './store';
+import {
+  KNOWLEDGE_APP_SLUG,
+  pinnedTransportEnv,
+  resolveKnowledgeModeSelection,
+} from './knowledge-mode.js';
+import { guardedFetch, isNetworkGuardActive } from './net-guard.js';
 
-/** App slug used for the client-flip env keys (HASNA_KNOWLEDGE_*). */
-export const KNOWLEDGE_APP_SLUG = 'knowledge';
-
-/**
- * Storage-mode env keys the contracts client-flip inspects, in priority order.
- * Mirrors `clientTransportEnvKeys('knowledge')` in @hasna/contracts.
- */
-const MODE_ENV_KEYS = [
-  'HASNA_KNOWLEDGE_STORAGE_MODE',
-  'HASNA_KNOWLEDGE_MODE',
-  'KNOWLEDGE_STORAGE_MODE',
-  'KNOWLEDGE_MODE',
-] as const;
-const API_URL_ENV_KEYS = ['HASNA_KNOWLEDGE_API_URL', 'KNOWLEDGE_API_URL'] as const;
-const API_KEY_ENV_KEYS = ['HASNA_KNOWLEDGE_API_KEY', 'KNOWLEDGE_API_KEY'] as const;
-
-function hasAnyEnv(env: NodeJS.ProcessEnv, keys: readonly string[]): boolean {
-  return keys.some((k) => (env[k] ?? '').trim().length > 0);
-}
+export { KNOWLEDGE_APP_SLUG };
 
 /**
- * The fleet flip writes exactly two vars per app —
- * `HASNA_KNOWLEDGE_API_URL` + `HASNA_KNOWLEDGE_API_KEY` — and no STORAGE_MODE.
- * Presence of BOTH is the self_hosted trigger. When no explicit storage-mode
- * var is present we infer `cloud` so the contracts resolver routes every
- * read/write to the HTTP client. An explicit storage-mode var always wins
- * (e.g. `...STORAGE_MODE=local` pins local), so the cloud flip stays fully
- * reversible: unset either the API URL or the API key -> local db.json.
+ * Transport overrides applied to every cloud client this module builds.
+ *
+ * `fetchImpl` is the request-boundary guard and is installed unconditionally —
+ * it decides per request, so a client constructed before `NODE_ENV` is set is
+ * still guarded. `retry: false` only while the guard is armed: a refusal is not
+ * a transient network error, and the contracts transport treats a thrown
+ * fetch error as retryable, so without this each refused request would sleep
+ * through two pointless backoffs before surfacing the same failure.
  */
-function withInferredCloudMode(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  if (hasAnyEnv(env, MODE_ENV_KEYS)) return env; // explicit mode wins
-  if (hasAnyEnv(env, API_URL_ENV_KEYS) && hasAnyEnv(env, API_KEY_ENV_KEYS)) {
-    return { ...env, HASNA_KNOWLEDGE_STORAGE_MODE: 'cloud' };
-  }
-  return env;
+function transportOverrides(env: NodeJS.ProcessEnv) {
+  return {
+    fetchImpl: guardedFetch,
+    ...(isNetworkGuardActive(env) ? { retry: false as const } : {}),
+  };
 }
 
 /** Cloud resource path served under /v1 by knowledge-serve. */
@@ -173,25 +167,34 @@ function isNotFound(error: unknown): boolean {
 
 /**
  * Resolve the cloud knowledge store from the environment. Returns a ready
- * {@link KnowledgeCloudStore} when the client-flip resolves to cloud-http, else
- * `null` so the caller uses the local db.json store. Throws if cloud was
- * requested but misconfigured (never silent local drift).
+ * {@link KnowledgeCloudStore} when the mode is explicitly cloud, else `null` so
+ * the caller uses the local db.json store. Throws if cloud was requested but
+ * misconfigured (never silent local drift).
+ *
+ * On the local path the contracts resolver is not called at all: no transport is
+ * built, no key is read, and there is nothing for a second layer to infer from.
  */
 export function resolveKnowledgeCloudStore(env: NodeJS.ProcessEnv = process.env): KnowledgeCloudStore | null {
-  const resolved = resolveStorageClient(KNOWLEDGE_APP_SLUG, withInferredCloudMode(env));
+  if (resolveKnowledgeModeSelection(env).mode !== 'cloud') return null;
+  const resolved = resolveStorageClient(KNOWLEDGE_APP_SLUG, pinnedTransportEnv(env, 'cloud'), transportOverrides(env));
   if (resolved.transport !== 'cloud-http') return null;
   return wrap(resolved.client);
 }
 
 /**
- * True when the client-flip resolves to the cloud HTTP transport (self_hosted /
- * cloud). This is the single mode signal the whole client uses: item commands
- * route to the ApiStore, and the local sqlite catalog is refused (never a silent
- * split-brain write). Local mode (default) returns false. Throws only when cloud
- * was requested but misconfigured — matching the item Store, never silent drift.
+ * True when this process routes knowledge items to the cloud HTTP transport.
+ * The single mode signal the whole client uses: item commands route to the
+ * ApiStore, and the local sqlite catalog is refused (never a silent split-brain
+ * write). Local — the default, and the answer whenever no mode var says
+ * otherwise — returns false. Throws only when cloud was explicitly requested
+ * but misconfigured, matching the item Store: never silent drift.
  */
 export function isKnowledgeApiMode(env: NodeJS.ProcessEnv = process.env): boolean {
-  return resolveStorageClient(KNOWLEDGE_APP_SLUG, withInferredCloudMode(env)).transport === 'cloud-http';
+  if (resolveKnowledgeModeSelection(env).mode !== 'cloud') return false;
+  return (
+    resolveStorageClient(KNOWLEDGE_APP_SLUG, pinnedTransportEnv(env, 'cloud'), transportOverrides(env)).transport
+    === 'cloud-http'
+  );
 }
 
 /**

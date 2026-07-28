@@ -36,7 +36,11 @@ beforeAll(() => {
   for (const k of ['HASNA_KNOWLEDGE_API_URL', 'HASNA_KNOWLEDGE_API_KEY', 'HASNA_KNOWLEDGE_STORAGE_MODE']) savedEnv[k] = process.env[k];
   process.env.HASNA_KNOWLEDGE_API_URL = `http://127.0.0.1:${server.port}`;
   process.env.HASNA_KNOWLEDGE_API_KEY = 'k_fake_test_key';
-  delete process.env.HASNA_KNOWLEDGE_STORAGE_MODE;
+  // Explicit, because presence of the URL + key no longer selects a backend.
+  // The endpoint is 127.0.0.1, so the outbound guard permits these requests —
+  // this test doubles as the positive control that hermetic cloud-mode traffic
+  // still flows while the guard is armed.
+  process.env.HASNA_KNOWLEDGE_STORAGE_MODE = 'cloud';
 });
 
 afterAll(() => {

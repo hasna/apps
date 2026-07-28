@@ -1,5 +1,53 @@
 # Changelog
 
+## Unreleased — the backend is chosen explicitly, and test egress is refused
+
+**BREAKING for the fleet flip.** `HASNA_KNOWLEDGE_API_URL` +
+`HASNA_KNOWLEDGE_API_KEY` no longer select the cloud backend on their own. A flip
+that writes only those two variables now leaves the CLI reading the on-box store;
+it must also write `HASNA_KNOWLEDGE_STORAGE_MODE=cloud`. Nothing about reaching
+the cloud got harder — it has to be asked for.
+
+Why the old behaviour had to go, measured on this machine: both variables were
+exported in a login shell, the tmux server carried them, so every pane inherited
+them and `bun test` reported **99 failures instead of 1** — 64 of them the same
+"cloud API flip is active" refusal, and the rest of the suite operating against
+the live store while believing it was isolated. The symptom named neither the
+cause nor the store. With this change the same suite, with those variables still
+exported and nothing else neutralised, is **306 pass / 2 skip / 1 fail across 309
+tests**, the one failure being the pre-existing `context pack and proposal
+context commands` case.
+
+- **Request-boundary guard** (`src/net-guard.ts`). While `NODE_ENV=test`, an
+  outbound request from this package whose target is not loopback is refused
+  before a socket is opened; refusals never name the target host. Verified
+  against the real configured endpoint under explicit cloud mode with **0
+  connect() syscalls, 0 AF_INET/AF_INET6 sockets and 0 connects to :443**, and
+  positive-controlled by the same command with the guard disarmed, which made 4
+  connects to :443. This is the primary control, not the environment clearing:
+  a preload or `beforeAll` that clears the selector vars is defeated by a later
+  file's module-scope assignment, by one `bun test` process sharing one preload,
+  and by `bunfig.toml` resolving from the cwd — each of which produced a green
+  run with live writes in the sibling `mementos` fix. Loopback is allowed on
+  purpose so hermetic transport tests stay real.
+- **Explicit mode selection** (`src/knowledge-mode.ts`). The first mode key that
+  carries a value wins and returns, so `KNOWLEDGE_MODE=local` is authoritative on
+  a machine whose shell exports a URL and a key; with no mode key the answer is
+  `local`. Callers hand `@hasna/contracts` a mode-**pinned** environment, in both
+  directions, so its own presence-inference
+  (`resolveClientTransport`: url + key ⇒ cloud) can no longer pick a backend
+  behind this package. Two layers were inferring; both are closed.
+- **`knowledge mode`** reports the resolved backend, the env var that selected
+  it, pointer vars that are present but ignored, and whether the outbound guard
+  is armed. It reads the environment only — no store open, no config read, no
+  request — verified byte-identical file trees in an isolated `HOME` and cwd
+  across six invocations. Env var **names** only, never values.
+- Test isolation, as defence in depth: `tests/cli.test.ts` no longer hands the
+  ambient pointer vars to spawned CLI children. `auth whoami` reports
+  `authenticated: true` from the mere presence of an API key, so the hosted-auth
+  contract test had been measuring the developer's shell instead of the temp auth
+  dir it created.
+
 ## Unreleased — documentation corrections to the multi-tag work
 
 Wording-only corrections to claims landed by #34/#35. No behaviour change: the

@@ -8,11 +8,15 @@
  *   - ApiItemStore    -> HTTP `/v1` + bearer key (self_hosted / cloud) via
  *                        @hasna/contracts client transport.
  *
- * Mode resolver: presence of HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY
- * (and/or a *_STORAGE_MODE var) => api transport; otherwise local. `self_hosted`
- * and `cloud` BOTH use ApiItemStore (identical client code; only URL/key differ —
- * that distinction is server-side tenancy, not client). An explicit `--store`
- * path override always pins to the local transport (fully reversible).
+ * Mode resolver: an EXPLICIT mode var (`HASNA_KNOWLEDGE_STORAGE_MODE=cloud` and
+ * its aliases, see knowledge-mode.ts) selects the api transport; everything else
+ * — including a machine whose shell exports HASNA_KNOWLEDGE_API_URL and
+ * HASNA_KNOWLEDGE_API_KEY — is local. Presence of a URL or key is a pointer, not
+ * a selection: it says where the cloud is, not that this process should write to
+ * it. `self_hosted` normalizes to `cloud` and uses ApiItemStore (identical
+ * client code; only URL/key differ — that distinction is server-side tenancy,
+ * not client). An explicit `--store` path override always pins to the local
+ * transport (fully reversible).
  *
  * EVERY knowledge-item CLI command routes through this Store. No item command
  * touches the JSON file or the HTTP client directly — that is the split-brain
@@ -226,9 +230,9 @@ export interface ResolveItemStoreOptions {
 
 /**
  * Resolve the single item Store for this invocation. Returns the ApiItemStore
- * when the client-flip resolves to the cloud HTTP transport, otherwise the
- * LocalItemStore. An explicit `--store` override always yields the local
- * transport so the flip stays fully reversible.
+ * only when the mode is explicitly cloud, otherwise the LocalItemStore. An
+ * explicit `--store` override always yields the local transport so the flip
+ * stays fully reversible.
  */
 export function resolveItemStore(options: ResolveItemStoreOptions): ItemStore {
   const cloud = options.storePathOverridden ? null : resolveKnowledgeCloudStore(options.env ?? process.env);

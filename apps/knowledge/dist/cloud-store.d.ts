@@ -1,6 +1,6 @@
 import type { KnowledgeItem } from './store';
-/** App slug used for the client-flip env keys (HASNA_KNOWLEDGE_*). */
-export declare const KNOWLEDGE_APP_SLUG = "knowledge";
+import { KNOWLEDGE_APP_SLUG } from './knowledge-mode.js';
+export { KNOWLEDGE_APP_SLUG };
 /** Cloud resource path served under /v1 by knowledge-serve. */
 export declare const KNOWLEDGE_RESOURCE = "notes";
 export interface KnowledgeCloudListOptions {
@@ -47,17 +47,21 @@ export interface KnowledgeCloudStore {
 }
 /**
  * Resolve the cloud knowledge store from the environment. Returns a ready
- * {@link KnowledgeCloudStore} when the client-flip resolves to cloud-http, else
- * `null` so the caller uses the local db.json store. Throws if cloud was
- * requested but misconfigured (never silent local drift).
+ * {@link KnowledgeCloudStore} when the mode is explicitly cloud, else `null` so
+ * the caller uses the local db.json store. Throws if cloud was requested but
+ * misconfigured (never silent local drift).
+ *
+ * On the local path the contracts resolver is not called at all: no transport is
+ * built, no key is read, and there is nothing for a second layer to infer from.
  */
 export declare function resolveKnowledgeCloudStore(env?: NodeJS.ProcessEnv): KnowledgeCloudStore | null;
 /**
- * True when the client-flip resolves to the cloud HTTP transport (self_hosted /
- * cloud). This is the single mode signal the whole client uses: item commands
- * route to the ApiStore, and the local sqlite catalog is refused (never a silent
- * split-brain write). Local mode (default) returns false. Throws only when cloud
- * was requested but misconfigured — matching the item Store, never silent drift.
+ * True when this process routes knowledge items to the cloud HTTP transport.
+ * The single mode signal the whole client uses: item commands route to the
+ * ApiStore, and the local sqlite catalog is refused (never a silent split-brain
+ * write). Local — the default, and the answer whenever no mode var says
+ * otherwise — returns false. Throws only when cloud was explicitly requested
+ * but misconfigured, matching the item Store: never silent drift.
  */
 export declare function isKnowledgeApiMode(env?: NodeJS.ProcessEnv): boolean;
 /**

@@ -45,12 +45,28 @@ describe('knowledge cloud-store resolver (self_hosted client flip)', () => {
     expect(store!.baseUrl).toBe('https://knowledge.md/v1');
   });
 
-  test('routes to cloud when ONLY API url+key are set (fleet-flip writes no STORAGE_MODE)', () => {
-    // Regression: the machines flip writes exactly two vars per app
-    // (HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY) and no STORAGE_MODE.
-    // Presence of both must trigger the cloud-http client, else the installed
-    // CLI silently keeps reading the local db.json even with the flip applied.
+  test('stays local when ONLY API url+key are set — presence is not a selection', () => {
+    // INVERTED, deliberately. This case used to route to cloud so that a fleet
+    // flip writing only the two pointer vars would take effect. That made the
+    // backend a function of ambient environment: those two variables exported in
+    // a login shell are inherited by every pane from the tmux server, so a test
+    // run believing it was isolated wrote to the live store, and it surfaced as
+    // 99 unrelated test failures rather than as "you are pointed at production".
+    //
+    // The flip must now write an explicit mode as well. That is a coordination
+    // cost paid once, against a class of silent production writes.
     const store = resolveKnowledgeCloudStore({
+      HASNA_KNOWLEDGE_API_URL: 'https://knowledge.md',
+      HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
+    } as NodeJS.ProcessEnv);
+    expect(store).toBeNull();
+  });
+
+  test('the same pointers WITH an explicit cloud mode do route to cloud', () => {
+    // The other half of the inverted case above: nothing about reaching the
+    // cloud got harder, it just has to be asked for.
+    const store = resolveKnowledgeCloudStore({
+      HASNA_KNOWLEDGE_STORAGE_MODE: 'cloud',
       HASNA_KNOWLEDGE_API_URL: 'https://knowledge.md',
       HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
     } as NodeJS.ProcessEnv);

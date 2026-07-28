@@ -48,8 +48,8 @@ export interface ResolveItemStoreOptions {
 }
 /**
  * Resolve the single item Store for this invocation. Returns the ApiItemStore
- * when the client-flip resolves to the cloud HTTP transport, otherwise the
- * LocalItemStore. An explicit `--store` override always yields the local
- * transport so the flip stays fully reversible.
+ * only when the mode is explicitly cloud, otherwise the LocalItemStore. An
+ * explicit `--store` override always yields the local transport so the flip
+ * stays fully reversible.
  */
 export declare function resolveItemStore(options: ResolveItemStoreOptions): ItemStore;
