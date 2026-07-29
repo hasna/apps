@@ -220,8 +220,6 @@ describe("remote CLI entrypoint authority boundary", () => {
       ["--unknown-leading", "--help"],
       ["storage", "--project", "fixture", "status", "extra"],
       ["config", "--get", "--help"],
-      ["list", "--tags", "one"],
-      ["list", "--tag=one"],
       ["list", "--recurring"],
       ["claim", "fixture-agent", "--stale-minutes", "30"],
       ["claim", "fixture-agent", "--steal-stale"],
@@ -250,6 +248,8 @@ describe("remote CLI entrypoint authority boundary", () => {
       ["unlock", "11111111-1111-4111-8111-111111111111"],
       ["active"],
       ["timeline"],
+      ["list", "--tags", "one"],
+      ["list", "--tag=one"],
       ["--project=fixture", "lists"],
       ["lists", "--project", "fixture", "--json"],
       ["storage", "--project=fixture", "status"],
@@ -352,7 +352,6 @@ describe("remote CLI entrypoint authority boundary", () => {
         ["config", "--get", "--help"],
         ["projects", "--add", "/workspace/example", "--dry-run"],
         ["projects", "--update", "example", "--name", "changed", "--dry-run"],
-        ["list", "--tags", "fixture"],
         ["list", "--recurring"],
         ["claim", "fixture-agent", "--stale-minutes", "30"],
         ["claim", "fixture-agent", "--steal-stale"],
@@ -1022,6 +1021,10 @@ describe("remote CLI entrypoint authority boundary", () => {
               const value = url.searchParams.get(key);
               if (value) items = items.filter((item) => value.split(",").includes(String(item[key])));
             }
+            const tags = url.searchParams.get("tags")?.split(",").filter(Boolean) ?? [];
+            if (tags.length) {
+              items = items.filter((item) => tags.every((tag) => (item.tags as string[]).includes(tag)));
+            }
             const total = items.length;
             const limit = Number(url.searchParams.get("limit") ?? items.length);
             items = items.slice(0, Number.isFinite(limit) ? limit : items.length);
@@ -1119,9 +1122,10 @@ describe("remote CLI entrypoint authority boundary", () => {
         ["--json", "health"],
         // `doctor` is asserted separately below: it is the one read-only command
         // whose exit code is a VERDICT, not just "the call succeeded".
-        ["--json", "add", "Remote task", "--project", PROJECT_ID, "--list", LIST_ID, "--plan", PLAN_ID],
+        ["--json", "add", "Remote task", "--project", PROJECT_ID, "--list", LIST_ID, "--plan", PLAN_ID, "--tags", "knowledge"],
         ["--json", "task", "upsert", "--fingerprint", "incident-593127", "--title", "Upserted task", "--project", PROJECT_ID, "--list", LIST_ID],
         ["--project", PROJECT_ID, "--json", "list", "--list", LIST_ID],
+        ["--project", PROJECT_ID, "--json", "list", "--tags", "knowledge"],
         ["--json", "show", "REMOTE-1"],
         ["--json", "inspect", "REMOTE-1"],
         ["--json", "update", "REMOTE-1", "--title", "Moved task", "--list", LIST_ID, "--plan", PLAN_ID],
@@ -1216,6 +1220,7 @@ describe("remote CLI entrypoint authority boundary", () => {
       expect(requests.some((request) => request.startsWith("GET /v1/task-lists?project_id="))).toBe(true);
       expect(requests.some((request) => request.startsWith("GET /v1/plans?project_id="))).toBe(true);
       expect(requests.some((request) => request.startsWith("POST /v1/tasks/upsert"))).toBe(true);
+      expect(requests).toContain(`GET /v1/tasks?status=pending%2Cin_progress&project_id=${PROJECT_ID}&tags=knowledge`);
       expect(requests.some((request) => request.startsWith("POST /v1/tasks/next/claim"))).toBe(true);
       expectNoLocalDatabase(root, localDbPath);
 

@@ -1023,17 +1023,19 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
       .rejects.toThrow('Project reference is ambiguous: "aaaaaaaa"');
   });
 
-  test("list forwards task-list, parent, and multi-status filters", async () => {
+  test("list forwards task-list, parent, multi-status, and tag filters", async () => {
     const calls = installFetch(() => ({ body: { tasks: [] } }));
     const client = getTodosCloudClient(CLOUD_ENV)!;
     await cloudListTasks(client, {
       task_list_id: "list-1",
       parent_id: "parent-1",
       status: ["pending", "in_progress"],
+      tags: ["bug", "security"],
     });
     expect(calls[0]!.url).toContain("task_list_id=list-1");
     expect(calls[0]!.url).toContain("parent_id=parent-1");
     expect(calls[0]!.url).toContain("status=pending%2Cin_progress");
+    expect(calls[0]!.url).toContain("tags=bug%2Csecurity");
   });
 
   test("task-list create/delete and slug/prefix resolution use /v1/task-lists", async () => {

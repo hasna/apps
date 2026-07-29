@@ -222,6 +222,17 @@ describe("/v1 task-list cloud parity", () => {
     expect(body.tasks.every((task) => task.task_list_id === listA.id)).toBe(true);
   });
 
+  test("tag filtering returns only tasks carrying the requested tag", async () => {
+    const matching = await store.tasks.create({ title: "tagged", tags: ["bug", "security"] });
+    await store.tasks.create({ title: "other", tags: ["conversations"] });
+
+    const response = await request("/v1/tasks?tags=security");
+    expect(response?.status).toBe(200);
+    const body = await response!.json() as { tasks: Array<{ id: string }>; count: number; total: number };
+    expect(body).toMatchObject({ count: 1, total: 1 });
+    expect(body.tasks.map((task) => task.id)).toEqual([matching.id]);
+  });
+
   test("returns a stable 409 for duplicate task-list create and update", async () => {
     const project = await store.projects.create({ name: "Open Emails", path: "/tmp/open-emails" });
     const first = await store.taskLists.create({ name: "Inbox", slug: "inbox", project_id: project.id });

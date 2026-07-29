@@ -458,6 +458,7 @@ function toListQuery(filter: TaskFilter = {}): Record<string, string | number> {
   if (filter.task_list_id) query["task_list_id"] = filter.task_list_id;
   if (filter.assigned_to) query["assigned_to"] = filter.assigned_to;
   if (filter.agent_id) query["agent_id"] = filter.agent_id;
+  if (filter.tags?.length) query["tags"] = filter.tags.join(",");
   if (typeof filter.limit === "number") query["limit"] = filter.limit;
   if (typeof filter.offset === "number") query["offset"] = filter.offset;
   return query;

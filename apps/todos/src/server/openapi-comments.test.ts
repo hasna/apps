@@ -76,6 +76,7 @@ describe("task list and completion OpenAPI contract", () => {
       "task_list_id",
       "assigned_to",
       "agent_id",
+      "tags",
       "limit",
       "offset",
     ]);
@@ -113,12 +114,13 @@ describe("task list and completion OpenAPI contract", () => {
       task_list_id: "list",
       assigned_to: "assignee",
       agent_id: "agent",
+      tags: "bug,security",
       limit: 1,
       offset: 6,
     });
     expect(result.total).toBe(7);
     expect(new URL(calls[0]!).searchParams.toString()).toBe(
-      "status=pending&priority=high&project_id=project&parent_id=parent&include_subtasks=true&plan_id=plan&task_list_id=list&assigned_to=assignee&agent_id=agent&limit=1&offset=6",
+      "status=pending&priority=high&project_id=project&parent_id=parent&include_subtasks=true&plan_id=plan&task_list_id=list&assigned_to=assignee&agent_id=agent&tags=bug%2Csecurity&limit=1&offset=6",
     );
   });
 });

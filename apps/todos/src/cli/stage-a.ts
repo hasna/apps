@@ -235,7 +235,7 @@ function commandSupportsRemote(invocation: ParsedInvocation): boolean {
     case "plans":
       return !hasOption(args, "--artifact") && !hasOption(args, "--write-artifacts");
     case "list":
-      return !hasOption(args, "--tags") && !hasOption(args, "--tag") && !hasOption(args, "--recurring");
+      return !hasOption(args, "--recurring");
     case "claim":
       return !invocation.globalOptions.has("--project") && !hasOption(args, "--project") &&
         !hasOption(args, "--stale-minutes") && !hasOption(args, "--steal-stale");

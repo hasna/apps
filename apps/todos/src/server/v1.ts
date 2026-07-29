@@ -508,6 +508,9 @@ export async function handleV1Request(
             ...(url.searchParams.get("task_list_id") ? { task_list_id: url.searchParams.get("task_list_id")! } : {}),
             ...(url.searchParams.get("assigned_to") ? { assigned_to: url.searchParams.get("assigned_to")! } : {}),
             ...(url.searchParams.get("agent_id") ? { agent_id: url.searchParams.get("agent_id")! } : {}),
+            ...(url.searchParams.get("tags") ? {
+              tags: url.searchParams.get("tags")!.split(",").map((tag) => tag.trim()).filter(Boolean),
+            } : {}),
             ...(url.searchParams.get("limit") ? { limit: Number(url.searchParams.get("limit")) } : {}),
             ...(url.searchParams.get("offset") ? { offset: Number(url.searchParams.get("offset")) } : {}),
           };
