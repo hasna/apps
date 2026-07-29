@@ -63,21 +63,6 @@ function firstPositionalArg(argv: string[]): string | undefined {
   return undefined;
 }
 
-function hasAnyFlag(argv: string[], flags: string[]): boolean {
-  return argv.slice(2).some((arg) => flags.includes(arg));
-}
-
-function shouldRouteToCommand(firstArg: string, argv: string[]): boolean {
-  if (argv.includes("--")) return false;
-  // Help/version requests must reach commander so it prints usage for the
-  // subcommand instead of being treated as a natural-language prompt.
-  if (hasAnyFlag(argv, ["--help", "-h", "--version", "-V"])) return true;
-  if (firstArg === "oss" && argv[3] === "matrix") return true;
-  if (hasAnyFlag(argv, ["--yes", "--model", "--max-steps", "--no-tmux"])) return false;
-  if (firstArg === "create" && !hasAnyFlag(argv, ["--name"])) return false;
-  return true;
-}
-
 function preparePromptFlags(): void {
   const firstArg = firstPositionalArg(process.argv);
   if (!firstArg) return;
@@ -87,7 +72,7 @@ function preparePromptFlags(): void {
     commandNames.add(command.name());
     for (const alias of command.aliases()) commandNames.add(alias);
   }
-  if (commandNames.has(firstArg) && shouldRouteToCommand(firstArg, process.argv)) return;
+  if (commandNames.has(firstArg)) return;
 
   const nextArgv = process.argv.slice(0, 2);
   const promptStartsWithCommand = commandNames.has(firstArg);

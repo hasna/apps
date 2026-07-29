@@ -163,6 +163,67 @@ describe("project-first CLI surface", () => {
     }
   });
 
+  test("prompt-only flags cannot divert an explicit delete command to the prompt agent", () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-delete-dispatch-"));
+    const dbPath = join(root, "projects.db");
+    const env = {
+      HASNA_PROJECTS_DB_PATH: dbPath,
+      WORKSPACES_AGENT_MOCK: "1",
+    };
+
+    try {
+      const created = runProjects([
+        "create",
+        "--name",
+        "Dispatch Guard",
+        "--slug",
+        "dispatch-guard",
+        "--json",
+      ], env);
+      expect(created.exitCode).toBe(0);
+
+      for (const promptFlags of [
+        ["--yes"],
+        ["--model", "openai/gpt-4o-mini"],
+        ["--max-steps", "1"],
+        ["--no-tmux"],
+      ]) {
+        const result = runProjects(["delete", "--hard", ...promptFlags, "dispatch-guard"], env);
+        expect(result.exitCode).toBe(1);
+        expect(text(result.stderr)).toContain(`unknown option '${promptFlags[0]}'`);
+      }
+
+      const delimited = runProjects(["delete", "--hard", "--yes", "dispatch-guard", "--"], env);
+      expect(delimited.exitCode).toBe(1);
+      expect(text(delimited.stderr)).toContain("unknown option '--yes'");
+
+      const db = new Database(dbPath);
+      const project = db.query("SELECT status FROM workspaces WHERE slug = ?").get("dispatch-guard") as { status: string } | null;
+      const agentRuns = db.query("SELECT COUNT(*) AS count FROM agent_runs").get() as { count: number };
+      db.close();
+
+      expect(project?.status).toBe("active");
+      expect(agentRuns.count).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("delete requires an explicit project target", () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-delete-target-"));
+    try {
+      const result = runProjects(["delete", "--hard"], {
+        HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
+        WORKSPACES_AGENT_MOCK: "1",
+      });
+
+      expect(result.exitCode).toBe(1);
+      expect(text(result.stderr)).toContain("missing required argument 'id-or-slug'");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("dashboard validate emits structured JSON errors for malformed input", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-dashboard-invalid-"));
     const invalidFile = join(root, "invalid.json");

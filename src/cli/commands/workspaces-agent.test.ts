@@ -216,10 +216,7 @@ describe("project agent CLI", () => {
       "--recipe",
       "docs-recipe",
       "--no-tmux",
-      "create",
-      "\"Flagged Workspace\"",
-      "with",
-      "tmux",
+      "create \"Flagged Workspace\" with tmux",
     ], env);
     expect(res.exitCode).toBe(0);
     const payload = JSON.parse(text(res.stdout)) as {
