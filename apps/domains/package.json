@@ -46,6 +46,7 @@
   },
   "files": [
     "dist",
+    "hasna.contract.json",
     "LICENSE",
     "README.md"
   ],
@@ -56,10 +57,12 @@
     "test": "bun test",
     "sdk:gen": "bun run scripts/gen-sdk.ts",
     "kit:check": "contracts vendor-kit --check",
+    "contract:check": "contracts conformance",
+    "artifact:scan": "contracts artifact-scan",
     "dev:cli": "bun run src/cli/index.ts",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
-    "prepublishOnly": "bun run build",
+    "prepack": "bun run build && contracts artifact-scan",
     "postinstall": "mkdir -p ${XDG_DATA_HOME:-$HOME/.local/share}/open-domains ${XDG_CONFIG_HOME:-$HOME/.config}/open-domains 2>/dev/null || true"
   },
   "keywords": [
