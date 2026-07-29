@@ -37,7 +37,7 @@ describe("release compatibility checks", () => {
     expect(JSON.stringify(report.install_plan)).not.toContain("bun add");
   });
 
-  test("simulates recent migration levels into the current schema", () => {
+  test("checks fresh/current schemas and routes historical levels offline", () => {
     const report = createReleaseCompatibilityReport({
       root: process.cwd(),
       simulated_levels: [0, 1, 50],
@@ -47,8 +47,8 @@ describe("release compatibility checks", () => {
     expect(report.checks.filter((check) => check.id.startsWith("migration-level-"))).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: "migration-level-0", status: "passed" }),
-        expect.objectContaining({ id: "migration-level-1", status: "passed" }),
-        expect.objectContaining({ id: "migration-level-50", status: "passed" }),
+        expect.objectContaining({ id: "migration-level-1", status: "warning" }),
+        expect.objectContaining({ id: "migration-level-50", status: "warning" }),
       ]),
     );
   });

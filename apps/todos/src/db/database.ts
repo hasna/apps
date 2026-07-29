@@ -1,9 +1,13 @@
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { runMigrations, backfillTaskTags } from "./schema.js";
-import { backfillMachineId } from "./machines.js";
-import { ensureAgentIdentitySchema } from "./identity-mapping.js";
+import {
+  AmbiguousSchemaStateError,
+  assertCurrentSchema,
+  createCurrentSchema,
+  inspectLocalSchema,
+  SchemaUpgradeRequiredError,
+} from "./current-schema.js";
 import { IdentityAliasAmbiguousError } from "../types/index.js";
 
 export const LOCK_EXPIRY_MINUTES = 30;
@@ -83,6 +87,21 @@ let _dbPath: string | null = null;
 function openDatabase(path: string): Database {
   ensureDir(path);
 
+  // Probe existing file-backed stores read-only. Historical or ambiguous
+  // schemas must be rejected before WAL mode, DDL, backfills, or any other
+  // mutating compatibility path can touch them.
+  if (!isInMemoryDb(path) && existsSync(path)) {
+    const probe = new Database(path, { readonly: true });
+    try {
+      probe.run("PRAGMA busy_timeout = 5000");
+      const state = inspectLocalSchema(probe);
+      if (state.kind === "historical") throw new SchemaUpgradeRequiredError(state.migration_level);
+      if (state.kind === "ambiguous") throw new AmbiguousSchemaStateError(state.reason);
+    } finally {
+      probe.close();
+    }
+  }
+
   const db = new Database(path);
 
   // busy_timeout MUST be set before any pragma that takes a lock. Switching the
@@ -91,15 +110,14 @@ function openDatabase(path: string): Database {
   // another connection held the database — the ordinary case of a `todos serve`
   // starting while a CLI process still has the same file open. Now it waits.
   db.run("PRAGMA busy_timeout = 5000");
+
+  const state = inspectLocalSchema(db);
+  if (state.kind === "empty") createCurrentSchema(db);
+  else assertCurrentSchema(db);
+
   // Enable WAL mode for concurrent access
   db.run("PRAGMA journal_mode = WAL");
   db.run("PRAGMA foreign_keys = ON");
-
-  // Run migrations
-  runMigrations(db);
-  ensureAgentIdentitySchema(db);
-  backfillTaskTags(db);
-  backfillMachineId(db);
 
   // Durable dual-write shadow (sanctioned Amendment A1 exception): when
   // HASNA_TODOS_SHADOW=1, install capture triggers so EVERY local write path

@@ -6,7 +6,12 @@ import { existsSync, copyFileSync, mkdirSync, readFileSync, renameSync, statSync
 import { dirname, join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
 import { getDatabase, closeDatabase } from "../db/database.js";
-import { MIGRATIONS } from "../db/migrations.js";
+import {
+  AmbiguousSchemaStateError,
+  CURRENT_SCHEMA_VERSION,
+  inspectLocalSchema,
+  SchemaUpgradeRequiredError,
+} from "../db/current-schema.js";
 
 export const DB_BACKUP_SCHEMA = "todos.db_backup.v1";
 
@@ -208,27 +213,17 @@ export function migrationDryRun(dbPath?: string): MigrationDryRunResult {
   const path = dbPath ? resolve(dbPath) : resolveDbPath();
   const db = new Database(path, { readonly: true });
 
-  let current = 0;
-  try {
-    const row = db.query("SELECT MAX(id) as id FROM _migrations").get() as { id: number | null };
-    current = row.id ?? 0;
-  } catch {
-    current = 0;
-  }
-
-  const pending: number[] = [];
-  for (let i = 0; i < MIGRATIONS.length; i++) {
-    const id = i + 1;
-    if (id > current) pending.push(id);
-  }
-
+  const state = inspectLocalSchema(db);
   db.close();
+  if (state.kind === "historical") throw new SchemaUpgradeRequiredError(state.migration_level);
+  if (state.kind === "ambiguous") throw new AmbiguousSchemaStateError(state.reason);
+  if (state.kind === "empty") throw new AmbiguousSchemaStateError("empty database has no installed schema");
 
   return {
     schema_version: DB_BACKUP_SCHEMA,
-    current_version: current,
-    pending_migrations: pending,
-    would_apply: pending.length,
+    current_version: CURRENT_SCHEMA_VERSION,
+    pending_migrations: [],
+    would_apply: 0,
   };
 }
 

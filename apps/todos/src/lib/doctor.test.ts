@@ -145,14 +145,14 @@ describe("local doctor diagnostics and repair", () => {
     expect(result.repairs.some((repair) => repair.type === "database_permissions" && repair.applied)).toBe(true);
   });
 
-  test("repairs missing core schema tables through the migration safety net", () => {
+  test("reports missing core schema tables without historical schema repair", () => {
     const db = getDatabase();
     db.run("DROP TABLE task_dependencies");
 
     const result = runTodosDoctor({ db, dbPath, apply: true });
 
-    expect(result.ok).toBe(true);
-    expect(result.repairs.map((repair) => repair.type)).toContain("schema_repair");
-    expect(db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='task_dependencies'").get()).toBeTruthy();
+    expect(result.ok).toBe(false);
+    expect(result.repairs.map((repair) => repair.type)).not.toContain("schema_repair");
+    expect(db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='task_dependencies'").get()).toBeNull();
   });
 });

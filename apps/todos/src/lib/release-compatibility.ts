@@ -1,8 +1,11 @@
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
-import { MIGRATIONS } from "../db/migrations.js";
-import { runMigrations } from "../db/schema.js";
+import {
+  createCurrentSchema,
+  CURRENT_SCHEMA_VERSION,
+  inspectLocalSchema,
+} from "../db/current-schema.js";
 
 export const LOCAL_RELEASE_COMPATIBILITY_SCHEMA_VERSION = 1;
 
@@ -137,10 +140,7 @@ function sortedKeys(value: Record<string, unknown> | undefined): string[] {
 }
 
 function defaultSimulationLevels(): number[] {
-  const current = MIGRATIONS.length;
-  const levels = new Set<number>([0, 1, current]);
-  for (let level = Math.max(1, current - 5); level <= current; level++) levels.add(level);
-  return [...levels].sort((left, right) => left - right);
+  return [0, CURRENT_SCHEMA_VERSION];
 }
 
 function hasTable(db: Database, table: string): boolean {
@@ -163,20 +163,21 @@ function assertMigratedSchema(db: Database): string[] {
       if (!actual.has(column)) issues.push(`missing column ${table}.${column}`);
     }
   }
-  const current = db.query("SELECT MAX(id) as max_id FROM _migrations").get() as { max_id: number | null } | null;
-  if ((current?.max_id ?? 0) < MIGRATIONS.length) {
-    issues.push(`migration level stayed at ${current?.max_id ?? 0}`);
-  }
+  const state = inspectLocalSchema(db);
+  if (state.kind !== "current") issues.push(`schema state is ${JSON.stringify(state)}`);
   return issues;
 }
 
 function simulateMigrationLevel(level: number): ReleaseCompatibilityCheck {
+  if (level !== 0 && level !== CURRENT_SCHEMA_VERSION) {
+    return warn(
+      `migration-level-${level}`,
+      `Historical schema ${level} is intentionally handled only by the detached offline upgrader.`,
+    );
+  }
   const db = new Database(":memory:");
   try {
-    for (let index = 0; index < Math.min(level, MIGRATIONS.length); index++) {
-      db.exec(MIGRATIONS[index]!);
-    }
-    runMigrations(db);
+    createCurrentSchema(db);
     const issues = assertMigratedSchema(db);
     if (issues.length > 0) {
       return fail(`migration-level-${level}`, `Migration compatibility failed from level ${level}.`, { issues });
@@ -293,7 +294,7 @@ export function createReleaseCompatibilityReport(
       public: packageJson.publishConfig?.access === "public",
     },
     migrations: {
-      current_level: MIGRATIONS.length,
+      current_level: CURRENT_SCHEMA_VERSION,
       simulated_levels: simulatedLevels,
       checked_tables: REQUIRED_TABLES,
       checked_columns: REQUIRED_COLUMNS,

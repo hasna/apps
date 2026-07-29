@@ -2,9 +2,8 @@ import type { Database } from "bun:sqlite";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { getDatabase, getDatabasePath, now } from "../db/database.js";
+import { CURRENT_SCHEMA_VERSION } from "../db/current-schema.js";
 import { scanSqliteIntegrity } from "../db/integrity.js";
-import { MIGRATIONS } from "../db/migrations.js";
-import { ensureSchema, runMigrations } from "../db/schema.js";
 import type { IntegrityReport } from "./integrity.js";
 import { isValidRecurrenceRule } from "./recurrence.js";
 
@@ -91,6 +90,7 @@ interface DuplicateIndex {
 }
 
 const REQUIRED_TABLES = [
+  "_todos_schema",
   "_migrations",
   "projects",
   "tasks",
@@ -341,13 +341,13 @@ export function runTodosDoctor(options: RunTodosDoctorOptions = {}): DoctorResul
   const repairs: DoctorRepair[] = [];
 
   const migrationCurrent = getMigrationLevel(db);
-  const migrationExpected = MIGRATIONS.length;
+  const migrationExpected = CURRENT_SCHEMA_VERSION;
   if (migrationCurrent < migrationExpected) {
     addCheck(checks, {
       severity: "error",
       type: "migration_level",
       message: `Migration level ${migrationCurrent}; expected ${migrationExpected}`,
-      repairable: true,
+      repairable: false,
     });
   } else {
     addCheck(checks, {
@@ -364,7 +364,7 @@ export function runTodosDoctor(options: RunTodosDoctorOptions = {}): DoctorResul
       type: "missing_schema_tables",
       message: `Missing schema tables: ${missingTables.join(", ")}`,
       count: missingTables.length,
-      repairable: true,
+      repairable: false,
     });
   }
 
@@ -442,7 +442,7 @@ export function runTodosDoctor(options: RunTodosDoctorOptions = {}): DoctorResul
       type: "duplicate_indexes",
       message: `${duplicateIndexes.length} duplicate index definitions found`,
       count: duplicateIndexes.length,
-      repairable: true,
+      repairable: false,
     });
   }
 
@@ -478,12 +478,6 @@ export function runTodosDoctor(options: RunTodosDoctorOptions = {}): DoctorResul
     if (backup) pushRepair(repairs, "backup_created", `Created backup at ${backup.path}`, true, backup.files.length);
     else pushRepair(repairs, "backup_created", "Backup skipped for in-memory or missing database path", false, 0);
 
-    if (migrationCurrent < migrationExpected || missingTables.length > 0) {
-      runMigrations(db);
-      ensureSchema(db);
-      pushRepair(repairs, "schema_repair", "Ran migration and schema safety net", true);
-    }
-
     if (orphanedParents > 0) {
       db.run("UPDATE tasks SET parent_id = NULL WHERE parent_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM tasks p WHERE p.id = tasks.parent_id)");
       pushRepair(repairs, "orphaned_task_parents", "Cleared missing parent references", true, orphanedParents);
@@ -505,15 +499,6 @@ export function runTodosDoctor(options: RunTodosDoctorOptions = {}): DoctorResul
         db.run(`UPDATE ${quoteIdent(cell.table)} SET ${quoteIdent(cell.column)} = '{}' WHERE rowid = ?`, [cell.rowid]);
       }
       pushRepair(repairs, "corrupt_json_metadata", "Reset invalid metadata JSON values to {}", true, corruptJson.length);
-    }
-
-    if (duplicateIndexes.length > 0) {
-      let dropped = 0;
-      for (const duplicate of duplicateIndexes) {
-        db.run(`DROP INDEX IF EXISTS ${quoteIdent(duplicate.duplicate)}`);
-        dropped++;
-      }
-      pushRepair(repairs, "duplicate_indexes", "Dropped duplicate non-primary indexes", true, dropped);
     }
 
     if (unsafePermissions) {

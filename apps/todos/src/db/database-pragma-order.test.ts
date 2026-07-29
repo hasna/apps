@@ -70,6 +70,13 @@ afterEach(() => {
 
 describe("openDatabase pragma order", () => {
   test("waits for a held write lock instead of failing instantly with SQLITE_BUSY", async () => {
+    // Seed the one current schema before the holder takes its lock. A non-empty
+    // unmarked file is intentionally rejected as ambiguous by normal startup.
+    process.env["TODOS_DB_PATH"] = dbPath;
+    getDatabase();
+    closeDatabase();
+    resetDatabase();
+
     const holder = Bun.spawn({
       cmd: ["bun", "run", "src/test/sqlite-lock-holder.ts", dbPath, String(HOLD_MS)],
       cwd: REPO_ROOT,
@@ -94,8 +101,6 @@ describe("openDatabase pragma order", () => {
       // If the fixture failed to establish DELETE mode the database would already
       // be WAL, where the pragma order is a no-op and this test proves nothing.
       expect(heldInDeleteMode, `holder did not hold in delete mode: ${holderOut}`).toBe(true);
-
-      process.env["TODOS_DB_PATH"] = dbPath;
 
       const startedAt = Date.now();
       // With the pragmas in the wrong order this throws SQLITE_BUSY immediately.
