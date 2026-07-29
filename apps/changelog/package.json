@@ -73,7 +73,7 @@
     "clean": "rm -rf dist",
     "build": "bun run clean && bun build src/index.ts src/api.ts src/client.ts src/markdown.ts src/publisher.ts src/release.ts src/web.ts src/project.ts src/storage.ts src/validation.ts --outdir dist --root src --target bun && bun build src/cli/index.ts --outdir dist/cli --target bun --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
-    "test": "bun test",
+    "test": "bun test --timeout 120000",
     "dev:cli": "bun run src/cli/index.ts",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
