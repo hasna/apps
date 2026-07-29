@@ -1,20 +1,19 @@
 # Hasna Gateway Docs
 
-Read these documents before implementation:
+Use these pages as the current operator and API reference:
 
-1. [Product requirements](product-requirements.md)
-2. [Architecture](architecture.md)
+1. [CLI reference](cli.md)
+2. [Configuration reference](configuration.md)
 3. [API contract](api-contract.md)
-4. [Provider adapters](provider-adapters.md)
-5. [2026 provider references](provider-references.md)
-6. [Routing and policy](routing-and-policy.md)
-7. [Gateway MCP server](mcp.md)
-8. [Open-core boundary](open-core-boundary.md)
+4. [Architecture](architecture.md)
+5. [Provider adapters](provider-adapters.md)
+6. [2026 provider references](provider-references.md)
+7. [Routing and policy](routing-and-policy.md)
+8. [Gateway MCP server](mcp.md)
 9. [Security and compliance](security-compliance.md)
-10. [Implementation plan](implementation-plan.md)
-11. [Publishing and release](publishing-and-release.md)
-12. [Hasna app migration plan](migration-plan.md)
-13. [Codewith handoff prompt](handoff-prompt.md)
+10. [Open-core boundary](open-core-boundary.md)
+
+The [product requirements](product-requirements.md), [implementation plan](implementation-plan.md), [publishing and release checklist](publishing-and-release.md), [Hasna app migration plan](migration-plan.md), and [agent handoff prompt](handoff-prompt.md) record product intent and project history. When they describe future work, the current reference pages and implementation take precedence.
 
 ## Current Decision
 
@@ -22,12 +21,13 @@ The gateway should be open source as a self-hostable core. The commercial Hasna 
 
 ## Build Contract
 
-The first implementation should prioritize a small working gateway over broad incomplete abstractions:
+The implemented gateway surface includes:
 
 - A working CLI server.
 - A stdio MCP server for safe local gateway inspection, route explanation, budget maintenance, and ledger summaries.
 - OpenAI-compatible chat completions.
-- OpenAI-compatible provider adapter.
+- OpenAI-compatible embeddings.
+- OpenAI-compatible and Anthropic provider adapters.
 - Config validation.
 - Model aliases.
 - Fallback routing.
@@ -35,6 +35,8 @@ The first implementation should prioritize a small working gateway over broad in
 - Explicit provider policy.
 - Config-driven provider auth and headers.
 - Streaming.
+- Optional in-memory response caching and per-key rate limits.
+- Hard and soft budgets backed by local JSONL, SQLite, or Postgres usage storage.
 - Usage normalization.
 - Tests.
 

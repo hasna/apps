@@ -114,18 +114,20 @@ function help(): string {
   return `Hasna Gateway ${gatewayVersion}
 
 Usage:
+  gateway --help
+  gateway --version
   gateway serve --config gateway.config.json [--host 127.0.0.1] [--port 8787]
   gateway validate --config gateway.config.json
   gateway smoke --config gateway.config.json [--model fast]
   gateway smoke --config gateway.config.json --all
-  gateway budget-add --config gateway.config.json --id daily --window daily [--tenant acme] [--model coding] [--max-usd 1] [--max-total-tokens 100000]
+  gateway budget-add --config gateway.config.json --id daily [--window daily] [--mode hard] [--gateway-key fingerprint] [--tenant acme] [--model coding] [--max-usd 1] [--max-input-tokens 50000] [--max-output-tokens 50000] [--max-total-tokens 100000] [--warning-threshold 0.8] [--json]
   gateway budget-list --config gateway.config.json [--json]
-  gateway budget-remaining --config gateway.config.json [--id daily] [--json] [--contract]
-  gateway budget-reset --config gateway.config.json --id daily
-  gateway route --config gateway.config.json --model coding [--json] [--contract]
+  gateway budget-remaining --config gateway.config.json [--id daily] [--tenant acme] [--model coding] [--json] [--contract]
+  gateway budget-reset --config gateway.config.json --id daily [--json]
+  gateway route --config gateway.config.json --model coding [--stream] [--json] [--contract]
   gateway routes --config gateway.config.json [--json] [--contract]
-  gateway uninstall --config gateway.config.json --yes
-  gateway remove --config gateway.config.json --all --yes
+  gateway uninstall --config gateway.config.json --yes [--json]
+  gateway remove --config gateway.config.json --all --yes [--json]
   gateway help
 `;
 }
@@ -134,8 +136,13 @@ export async function runCli(argv = process.argv.slice(2)): Promise<void> {
   const parsed = parseArgs(argv);
   const configPath = flagString(parsed.flags, "config", "gateway.config.json");
 
-  if (parsed.command === "help" || parsed.flags.help) {
+  if (parsed.command === "help" || parsed.command === "--help" || parsed.flags.help) {
     console.log(help());
+    return;
+  }
+
+  if (parsed.command === "--version") {
+    console.log(gatewayVersion);
     return;
   }
 

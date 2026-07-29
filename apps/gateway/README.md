@@ -6,7 +6,7 @@ The open-source package is useful on its own. Anyone can run it locally or on th
 
 ## Product Shape
 
-- OpenAI-compatible HTTP API first, starting with `/v1/chat/completions`.
+- OpenAI-compatible chat completions and embeddings APIs.
 - One gateway key for clients, many provider keys behind the gateway.
 - Bring-your-own-key mode for self-hosted users.
 - Routing by model alias, provider allowlist/blocklist, region policy, price ceilings, fallback, capability, and smart cost/quality/latency hints.
@@ -72,8 +72,9 @@ gateway-mcp --config gateway.config.json
 ```
 
 `gateway-serve` is the package-level service binary for local and self-hosted
-HTTP runtime smoke checks. It exposes `GET /health`, authenticated `GET /ready`,
-`GET /version`, `GET /v1/models`, and `POST /v1/chat/completions`.
+HTTP runtime smoke checks. It exposes public `GET /health` and `GET /version`,
+plus `GET /ready`, `GET /v1/models`, `POST /v1/chat/completions`, and
+`POST /v1/embeddings`. The latter endpoints enforce gateway auth when required.
 
 `gateway-mcp` is a stdio MCP server for local agents. It validates and inspects config, explains route choices without provider calls, manages budget definitions, checks remaining budgets, and summarizes the configured usage ledger. Long-running `serve` and live `smoke` checks stay CLI-only. See [Gateway MCP server](docs/mcp.md).
 
@@ -86,7 +87,7 @@ Required config examples:
 - `gateway.config.no-china.example.json`: OpenAI/OpenRouter-only policy with `cn` blocked.
 - `gateway.config.china.example.json`: Chinese provider routes with explicit `cn`/`sg` allowance.
 
-Provider keys are loaded from environment variables only. Do not put provider secrets in config files.
+Built-in provider credentials are loaded from environment variables. Custom static headers can contain arbitrary values, but provider secrets should not be stored in config files.
 
 Providers can use `baseUrl`, `baseUrlEnv`, `apiKeyEnv`, custom `auth`, and static or env-derived `headers`. This keeps OpenAI-compatible gateways on the generic adapter instead of adding hardcoded adapter forks. The built-in presets include:
 
@@ -94,6 +95,8 @@ Providers can use `baseUrl`, `baseUrlEnv`, `apiKeyEnv`, custom `auth`, and stati
 - Gateway presets: `vercel-ai-gateway`, `litellm-proxy`, `portkey`, `cloudflare-ai-gateway`, `helicone-ai-gateway`, `kong-ai-gateway`.
 
 Smart routing is available with route mode `smart` or request `gateway.routing: "smart"`. It filters by policy first, then scores eligible candidates using configured prices, context, capabilities, quality/latency/success/throughput hints, and deterministic fallback ordering when metrics are missing.
+
+Optional non-streaming chat response caching is configured under `server.responseCache`. Cache entries are in-memory and process-local, only successful responses are cached, and clients can bypass lookup with the configured `bypassHeader`. Streaming and embeddings requests are never cached. A cache hit still runs the budget preflight check and still consumes the per-gateway-key request rate limit, but it does not append a usage ledger record and does not consume budget or token rate limit quota.
 
 ```json
 {
@@ -131,6 +134,8 @@ The companion `open-router` repo is currently documented as the future extractio
 
 ## Documentation
 
+- [CLI reference](docs/cli.md)
+- [Configuration reference](docs/configuration.md)
 - [Product requirements](docs/product-requirements.md)
 - [Architecture](docs/architecture.md)
 - [API contract](docs/api-contract.md)
@@ -147,6 +152,6 @@ The companion `open-router` repo is currently documented as the future extractio
 
 ## Status
 
-The gateway core is implemented and locally verified for the first release surface: CLI server, MCP server, health/models/chat endpoints, OpenAI-compatible provider adapter, provider presets, routing policy, fallbacks, streaming, usage normalization, optional local ledger, examples, tests, build, and package dry-run.
+The gateway core is implemented and locally verified for the current release surface: CLI and standalone HTTP servers, MCP server, health/readiness/version/models/chat/embeddings endpoints, OpenAI-compatible and Anthropic adapters, provider presets, routing policy, fallbacks, streaming, response caching, rate limits, budgets, usage normalization, local and cloud ledgers, examples, tests, build, and package dry-run.
 
 Publication is gated on a passing live smoke check with valid provider credentials.
