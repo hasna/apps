@@ -1,13 +1,12 @@
 /**
  * Authenticated `/v1` routing for the open Todos CLI.
  *
- * Local mode remains SQLite-backed. An explicit remote/self-hosted mode instead
- * requires the canonical API URL and API key, validates the authority before a
- * local-capable command module can run, and never falls back to SQLite. This is
- * the repo-owned self-hosted REST contract; it has no dependency on a private
- * SaaS API or database connection string.
+ * One canonical authority is resolved before command handlers load. Embedded
+ * local mode uses SQLite; a customer server and the Hasna cloud platform use
+ * the same authenticated `/v1` transport without ever opening a second store.
  */
-import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
+import { createHasnaStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
+import { createHasnaHttpTransport } from "@hasna/contracts/client";
 import { resolve as resolvePath } from "node:path";
 import type { Agent, CreatePlanInput, CreateTaskListInput, CreateTemplateInput, Plan, Project, RegisterAgentInput, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList, TaskTemplate, TemplateWithTasks, UpdatePlanInput, UpdateTaskListInput } from "../types/index.js";
 import { isBlockingDependencyStatus } from "../types/index.js";
@@ -16,11 +15,14 @@ import { redactEvidenceText } from "../lib/redaction.js";
 import type { IntegrityReport, IntegrityTaskRow } from "../lib/integrity.js";
 import type { PrGroupEventListOptions, PrGroupEventPage, PrGroupStateView } from "../pr-groups/types.js";
 import { parsePrGroupEventPage, parsePrGroupStateView } from "../pr-groups/http-client.js";
+import {
+  fetchTodosAuthorityHandshake,
+  resolveTodosAuthority,
+  type ResolvedTodosAuthority,
+} from "../authority.js";
 
 type Env = Record<string, string | undefined>;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const CLOUD_MODES = new Set(["self_hosted", "cloud", "remote", "hybrid"]);
-const VALID_STORAGE_MODES = new Set(["local", ...CLOUD_MODES]);
 const COMPLETION_EVIDENCE_FIELDS = [
   "attachment_ids",
   "files_changed",
@@ -42,197 +44,51 @@ export interface CloudTaskCompletionInput {
 
 const completionCapabilityCache = new Map<string, Promise<ReadonlySet<string>>>();
 
-export interface TodosRemoteAuthorityConfigStatus {
+export interface TodosAuthorityConfigStatus {
   selected: boolean;
   ok: boolean;
   mode: string;
+  topology: string;
+  owner: string | null;
   api_url_configured: boolean;
   api_key_configured: boolean;
   v1_base_url: string | null;
   issues: string[];
-  local_fallback: false;
+  fallback: false;
 }
 
-export interface TodosCliStorageModeResolution {
-  mode: string;
-  selected: boolean;
-  source: "HASNA_TODOS_STORAGE_MODE" | "TODOS_STORAGE_MODE" | "default";
-}
-
-function cleanMode(value: string | undefined): string | null {
-  const normalized = value?.trim().toLowerCase();
-  return normalized || null;
-}
-
-function modeRole(mode: string): "local" | "remote" {
-  return mode === "local" ? "local" : "remote";
-}
-
-/**
- * Resolve the CLI storage selector without allowing an invalid or conflicting
- * environment to drift into SQLite. Empty canonical values do not mask the
- * legacy fallback; explicit canonical/fallback disagreement is rejected.
- */
-export function resolveTodosCliStorageMode(env: Env = process.env as Env): TodosCliStorageModeResolution {
-  for (const source of ["HASNA_TODOS_STORAGE_MODE", "TODOS_STORAGE_MODE"] as const) {
-    if (env[source] !== undefined && env[source]!.trim() === "") {
-      throw new Error(
-        `REMOTE_STORAGE_MODE_INVALID: ${source} must not be blank; local SQLite fallback is disabled for invalid routing state`,
-      );
-    }
-  }
-  const canonical = cleanMode(env.HASNA_TODOS_STORAGE_MODE);
-  const fallback = cleanMode(env.TODOS_STORAGE_MODE);
-
-  for (const [source, value] of [
-    ["HASNA_TODOS_STORAGE_MODE", canonical],
-    ["TODOS_STORAGE_MODE", fallback],
-  ] as const) {
-    if (value && !VALID_STORAGE_MODES.has(value)) {
-      throw new Error(
-        `REMOTE_STORAGE_MODE_INVALID: ${source}=${value} must be local, remote, self_hosted, cloud, or hybrid; ` +
-          "local SQLite fallback is disabled for invalid routing state",
-      );
-    }
-  }
-
-  if (canonical && fallback && modeRole(canonical) !== modeRole(fallback)) {
-    throw new Error(
-      `REMOTE_STORAGE_MODE_CONFLICT: HASNA_TODOS_STORAGE_MODE=${canonical} conflicts with ` +
-        `TODOS_STORAGE_MODE=${fallback}; local SQLite fallback is disabled`,
-    );
-  }
-
-  const mode = canonical ?? fallback ?? "local";
-  return {
-    mode,
-    selected: CLOUD_MODES.has(mode),
-    source: canonical
-      ? "HASNA_TODOS_STORAGE_MODE"
-      : fallback
-        ? "TODOS_STORAGE_MODE"
-        : "default",
-  };
-}
-
-function requestedStorageMode(env: Env): string {
-  return resolveTodosCliStorageMode(env).mode;
-}
-
-function normalizeRemoteAuthorityUrl(value: string | undefined): string | null {
-  const trimmed = value?.trim();
-  if (!trimmed) return null;
-  let url: URL;
-  try {
-    url = new URL(trimmed);
-  } catch {
-    throw new Error(
-      "REMOTE_API_URL_INVALID: HASNA_TODOS_API_URL must be an absolute http(s) URL; local SQLite fallback is disabled",
-    );
-  }
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error(
-      "REMOTE_API_URL_INVALID: HASNA_TODOS_API_URL must be an absolute http(s) URL; local SQLite fallback is disabled",
-    );
-  }
-  if (url.username || url.password) {
-    throw new Error(
-      "REMOTE_API_URL_INVALID: HASNA_TODOS_API_URL must not contain userinfo; local SQLite fallback is disabled",
-    );
-  }
-  if (url.search || url.hash) {
-    throw new Error(
-      "REMOTE_API_URL_INVALID: HASNA_TODOS_API_URL must not contain a query or fragment; local SQLite fallback is disabled",
-    );
-  }
-  if (url.pathname !== "/" && url.pathname !== "/v1" && url.pathname !== "/v1/") {
-    throw new Error(
-      "REMOTE_API_URL_INVALID: HASNA_TODOS_API_URL must be an authority root or end in /v1, not /api/v1 or another path; " +
-        "local SQLite fallback is disabled",
-    );
-  }
-  const hostname = url.hostname.toLowerCase();
-  const loopback = hostname === "localhost" || hostname === "::1" || hostname === "[::1]" || /^127(?:\.\d{1,3}){3}$/.test(hostname);
-  if (url.protocol === "http:" && !loopback) {
-    throw new Error(
-      "REMOTE_API_URL_INVALID: plaintext HTTP is allowed only for loopback Todos authorities; local SQLite fallback is disabled",
-    );
-  }
-  return url.origin;
-}
-
-export function getTodosRemoteAuthorityConfigStatus(
+export function getTodosAuthorityConfigStatus(
   env: Env = process.env as Env,
-): TodosRemoteAuthorityConfigStatus {
-  let resolution: TodosCliStorageModeResolution;
+): TodosAuthorityConfigStatus {
+  let authority: ResolvedTodosAuthority;
   try {
-    resolution = resolveTodosCliStorageMode(env);
+    authority = resolveTodosAuthority(env);
   } catch (error) {
     const issue = error instanceof Error ? error.message : String(error);
     return {
       selected: true,
       ok: false,
-      mode: cleanMode(env.HASNA_TODOS_STORAGE_MODE) ?? cleanMode(env.TODOS_STORAGE_MODE) ?? "invalid",
+      mode: env.HASNA_TODOS_MODE ?? "invalid",
+      topology: env.HASNA_TODOS_TOPOLOGY ?? "invalid",
+      owner: null,
       api_url_configured: Boolean(env.HASNA_TODOS_API_URL?.trim()),
       api_key_configured: Boolean(env.HASNA_TODOS_API_KEY?.trim()),
       v1_base_url: null,
       issues: [issue],
-      local_fallback: false,
+      fallback: false,
     };
   }
-  const { mode, selected } = resolution;
-  if (!selected) {
-    return {
-      selected: false,
-      ok: true,
-      mode: mode || "local",
-      api_url_configured: false,
-      api_key_configured: false,
-      v1_base_url: null,
-      issues: [],
-      local_fallback: false,
-    };
-  }
-
-  const issues: string[] = [];
-  let apiUrl: string | null = null;
-  try {
-    apiUrl = normalizeRemoteAuthorityUrl(env.HASNA_TODOS_API_URL);
-  } catch (error) {
-    issues.push(error instanceof Error ? error.message : String(error));
-  }
-  const apiKeyConfigured = Boolean(env.HASNA_TODOS_API_KEY?.trim());
-  if (!apiUrl && issues.length === 0) {
-    issues.push(
-      "REMOTE_API_URL_MISSING: remote Todos storage requires HASNA_TODOS_API_URL; local SQLite fallback is disabled",
-    );
-  }
-  if (!apiKeyConfigured) {
-    issues.push(
-      "REMOTE_API_KEY_MISSING: remote Todos storage requires HASNA_TODOS_API_KEY; local SQLite fallback is disabled",
-    );
-  }
-
   return {
-    selected: true,
-    ok: issues.length === 0,
-    mode,
-    api_url_configured: apiUrl !== null,
-    api_key_configured: apiKeyConfigured,
-    v1_base_url: apiUrl ? `${apiUrl}/v1` : null,
-    issues,
-    local_fallback: false,
-  };
-}
-
-function requireTodosRemoteAuthorityEnv(env: Env): Env {
-  const status = getTodosRemoteAuthorityConfigStatus(env);
-  if (!status.ok) throw new Error(status.issues[0]);
-  return {
-    ...env,
-    HASNA_TODOS_STORAGE_MODE: "cloud",
-    HASNA_TODOS_API_URL: status.v1_base_url!.replace(/\/v1$/, ""),
-    HASNA_TODOS_API_KEY: env.HASNA_TODOS_API_KEY!.trim(),
+    selected: authority.transport === "http",
+    ok: true,
+    mode: authority.mode,
+    topology: authority.topology,
+    owner: authority.owner,
+    api_url_configured: authority.apiBaseUrl !== null,
+    api_key_configured: authority.apiKey !== null,
+    v1_base_url: authority.apiBaseUrl,
+    issues: [],
+    fallback: false,
   };
 }
 
@@ -344,28 +200,35 @@ async function requiredRemoteRoute<T>(
 }
 
 /**
- * Resolve the Todos HTTP storage client from the environment. Returns a ready
- * client for an explicit remote mode, or `null` for local mode. A selected
- * remote mode with a missing or invalid URL/key always throws.
+ * Resolve the one configured Todos authority. Embedded local mode returns null;
+ * customer-server local mode and platform cloud mode return an HTTP client.
  */
-export function getTodosCloudClient(env: Env = process.env as Env): HasnaStorageClient | null {
-  // Never route over HTTP from URL/key presence alone. The mode is the explicit
-  // authority selector; an absent selector preserves the local default.
-  const mode = requestedStorageMode(env);
-  if (!CLOUD_MODES.has(mode)) return null;
-  const resolved = resolveStorageClient("todos", requireTodosRemoteAuthorityEnv(env), {
+export function getTodosAuthorityClient(env: Env = process.env as Env): HasnaStorageClient | null {
+  const authority = resolveTodosAuthority(env);
+  if (authority.transport === "sqlite") return null;
+  const transport = createHasnaHttpTransport({
+    name: "todos",
+    baseUrl: authority.apiBaseUrl!,
+    apiKey: authority.apiKey!,
     fetchImpl: (input, init) => globalThis.fetch(input, { ...init, redirect: "manual" }),
   });
-  return resolved.transport === "cloud-http" ? protectRemoteClient(resolved.client) : null;
+  return protectRemoteClient(createHasnaStorageClient("todos", transport));
 }
 
-/** True when the CLI should route task reads/writes to the cloud API. */
-export function isCloudRouting(env: Env = process.env as Env): boolean {
-  return getTodosCloudClient(env) !== null;
+export async function verifyTodosAuthority(
+  env: Env = process.env as Env,
+  fetchImpl: typeof fetch = globalThis.fetch,
+): Promise<void> {
+  const authority = resolveTodosAuthority(env);
+  if (authority.transport === "http") await fetchTodosAuthorityHandshake(authority, fetchImpl);
 }
 
-/** Backward-compatible test hook; authority clients are never process-cached. */
-export function resetTodosCloudClient(): void {
+/** True when the resolved authority is reached over HTTP. */
+export function isHttpAuthorityRouting(env: Env = process.env as Env): boolean {
+  return getTodosAuthorityClient(env) !== null;
+}
+
+export function resetTodosAuthorityClient(): void {
   // Only protocol capabilities are cached, keyed by authority rather than credentials.
   completionCapabilityCache.clear();
 }

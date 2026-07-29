@@ -5,7 +5,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "n
 import { dirname, join } from "node:path";
 import { createTask } from "../../db/tasks.js";
 import { autoProject, output, resolveTaskId, resolveTaskIdForCommand, handleError } from "../helpers.js";
-import { getTodosCloudClient, cloudRecordVerification, cloudLinkCommit, cloudFindCommit, cloudLinkRef, cloudFindRefs } from "../cloud-router.js";
+import { getTodosAuthorityClient, cloudRecordVerification, cloudLinkCommit, cloudFindCommit, cloudLinkRef, cloudFindRefs } from "../cloud-router.js";
 
 const HOME = process.env["HOME"] || process.env["USERPROFILE"] || "~";
 
@@ -350,7 +350,7 @@ exit 0
     .option("--files <list>", "Comma-separated list of changed files")
     .action(async (taskId: string, sha: string, opts: { message?: string; author?: string; files?: string }) => {
       const globalOpts = program.opts();
-      const cloud = getTodosCloudClient();
+      const cloud = getTodosAuthorityClient();
       const resolvedId = await resolveTaskIdForCommand(taskId, cloud);
       const files = opts.files ? opts.files.split(",").filter(Boolean) : undefined;
       try {
@@ -385,7 +385,7 @@ exit 0
       const globalOpts = program.opts();
       try {
         // self_hosted cloud routing: search the SHARED commit-link dataset.
-        const cloud = getTodosCloudClient();
+        const cloud = getTodosAuthorityClient();
         if (cloud) {
           const commit = await cloudFindCommit(cloud, sha);
           if (globalOpts.json) { output(commit ? { task_id: commit.task_id, commit } : null, true); return; }
@@ -423,7 +423,7 @@ exit 0
     .option("--metadata <json>", "Additional JSON metadata")
     .action(async (taskId: string, ref: string, opts: { type?: string; url?: string; provider?: string; metadata?: string }) => {
       const globalOpts = program.opts();
-      const cloud = getTodosCloudClient();
+      const cloud = getTodosAuthorityClient();
       const resolvedId = await resolveTaskIdForCommand(taskId, cloud);
       const refType = opts.type === "pr" ? "pull_request" : opts.type;
       if (refType !== "branch" && refType !== "pull_request") {
@@ -471,7 +471,7 @@ exit 0
       const globalOpts = program.opts();
       try {
         // self_hosted cloud routing: search the SHARED ref-link dataset.
-        const cloud = getTodosCloudClient();
+        const cloud = getTodosAuthorityClient();
         if (cloud) {
           const refs = await cloudFindRefs(cloud, ref);
           if (globalOpts.json) { output(refs, true); return; }
@@ -561,7 +561,7 @@ exit 0
         // self_hosted cloud routing: attach the verification to the REAL cloud task.
         // The local path wrote the row to this machine's sqlite where the cloud task
         // does not exist, tripping a FOREIGN KEY constraint.
-        const cloud = getTodosCloudClient();
+        const cloud = getTodosAuthorityClient();
         const resolvedTaskId = await resolveTaskIdForCommand(taskId, cloud);
         const verification = cloud
           ? await cloudRecordVerification(cloud, resolvedTaskId, {

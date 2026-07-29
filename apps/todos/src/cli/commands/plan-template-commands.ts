@@ -21,7 +21,7 @@ import {
 import { inspectPlanArtifact, readPlanArtifact, writePlanArtifact } from "../../lib/plan-artifacts.js";
 import { formatTaskLine, autoProject, handleError, output } from "../helpers.js";
 import {
-  getTodosCloudClient,
+  getTodosAuthorityClient,
   cloudCreatePlan,
   cloudCreateTask,
   cloudCreateTemplate,
@@ -256,7 +256,7 @@ export function registerPlanTemplateCommands(program: Command) {
     .option("--complete <id>", "Mark a plan as completed")
     .action(async (opts) => {
       const globalOpts = program.opts();
-      const cloud = getTodosCloudClient();
+      const cloud = getTodosAuthorityClient();
       const projectId = cloud
         ? (globalOpts.project ? await cloudResolveProjectRef(cloud, globalOpts.project) : undefined)
         : autoProject(globalOpts);
@@ -494,7 +494,7 @@ export function registerPlanTemplateCommands(program: Command) {
     .option("--var <vars...>", "Variable substitutions: key=value (e.g. --var feature=login)")
     .action(async (opts) => {
       const globalOpts = program.opts();
-      const cloud = getTodosCloudClient();
+      const cloud = getTodosAuthorityClient();
       if (cloud) {
         try {
           const projectId = globalOpts.project ? await cloudResolveProjectRef(cloud, globalOpts.project) : undefined;
@@ -768,7 +768,7 @@ export function registerPlanTemplateCommands(program: Command) {
       }
 
       try {
-        const cloud = getTodosCloudClient();
+        const cloud = getTodosAuthorityClient();
         let result: TemplatePreview;
         if (cloud) {
           const template = await cloudGetTemplate(cloud, id);
@@ -807,7 +807,7 @@ export function registerPlanTemplateCommands(program: Command) {
     .description("Export a template as JSON to stdout")
     .action(async (id: string) => {
       try {
-        const cloud = getTodosCloudClient();
+        const cloud = getTodosAuthorityClient();
         const template = cloud
           ? await cloudGetTemplate(cloud, id)
           : null;
@@ -835,7 +835,7 @@ export function registerPlanTemplateCommands(program: Command) {
         if (!filePath) { handleError(new Error("Provide a file path: todos template-import <file> or --file <path>")); }
         const content = readFileSync(filePath, "utf-8");
         const json = JSON.parse(content);
-        const cloud = getTodosCloudClient();
+        const cloud = getTodosAuthorityClient();
         const template = cloud
           ? await cloudCreateTemplate(cloud, json)
           : (await import("../../db/templates.js")).importTemplate(json);

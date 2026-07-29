@@ -1,18 +1,19 @@
 import { Command, Help } from "commander";
 import {
-  getTodosCloudClient,
-  getTodosRemoteAuthorityConfigStatus,
-  resolveTodosCliStorageMode,
+  getTodosAuthorityClient,
+  getTodosAuthorityConfigStatus,
+  verifyTodosAuthority,
 } from "./cloud-router.js";
+import { resolveTodosAuthority } from "../authority.js";
 
 type Env = Record<string, string | undefined>;
 
 export type TodosCliAuthorityInitialization =
-  | { route: "local"; v1_base_url: null }
-  | { route: "remote-diagnostic"; v1_base_url: string | null }
-  | { route: "remote-http"; v1_base_url: string };
+  | { route: "embedded"; mode: "local"; v1_base_url: null }
+  | { route: "http-diagnostic"; mode: "local" | "cloud"; v1_base_url: string | null }
+  | { route: "http"; mode: "local" | "cloud"; v1_base_url: string };
 
-export type TodosCliCommandOwner = "diagnostic" | "remote-http" | "local-only";
+export type TodosCliCommandOwner = "diagnostic" | "http" | "embedded-only";
 
 const REGISTERED_CANONICAL_COMMANDS = [
   "active", "add", "agent", "agent-runs", "agent-update", "agents", "agents-normalize", "api-keys",
@@ -72,10 +73,10 @@ const REMOTE_COMMANDS = new Set([
 ]);
 
 const COMMAND_CAPABILITY_MATRIX = new Map<string, TodosCliCommandOwner>();
-for (const command of REGISTERED_CANONICAL_COMMANDS) COMMAND_CAPABILITY_MATRIX.set(command, "local-only");
+for (const command of REGISTERED_CANONICAL_COMMANDS) COMMAND_CAPABILITY_MATRIX.set(command, "embedded-only");
 COMMAND_CAPABILITY_MATRIX.set("help", "diagnostic");
 for (const command of DIAGNOSTIC_COMMANDS) COMMAND_CAPABILITY_MATRIX.set(command, "diagnostic");
-for (const command of REMOTE_COMMANDS) COMMAND_CAPABILITY_MATRIX.set(command, "remote-http");
+for (const command of REMOTE_COMMANDS) COMMAND_CAPABILITY_MATRIX.set(command, "http");
 for (const [canonical, aliases] of Object.entries(TODOS_CLI_COMMAND_ALIASES)) {
   const owner = COMMAND_CAPABILITY_MATRIX.get(canonical);
   if (!owner) throw new Error(`Missing capability owner for ${canonical}`);
@@ -98,10 +99,10 @@ export function isTodosCliCommandVisibleForRoute(
   command: string,
   route: TodosCliAuthorityInitialization["route"],
 ): boolean {
-  if (route === "local") return true;
+  if (route === "embedded") return true;
   const owner = COMMAND_CAPABILITY_MATRIX.get(command);
   if (!owner) return true;
-  return owner !== "local-only";
+  return owner !== "embedded-only";
 }
 
 /**
@@ -111,7 +112,7 @@ export function isTodosCliCommandVisibleForRoute(
  * execution gating and error messaging.
  */
 export function applyTodosCliHelpVisibility(program: Command, route: TodosCliAuthorityInitialization["route"]): void {
-  if (route === "local") return;
+  if (route === "embedded") return;
   program.configureHelp({
     visibleCommands(this: Help, command: Command): Command[] {
       return Help.prototype.visibleCommands
@@ -223,7 +224,7 @@ function isMetadataInvocation(args: string[], invocation: ParsedInvocation): boo
 
 function commandSupportsRemote(invocation: ParsedInvocation): boolean {
   const command = invocation.command;
-  if (!command || COMMAND_CAPABILITY_MATRIX.get(command) !== "remote-http") return false;
+  if (!command || COMMAND_CAPABILITY_MATRIX.get(command) !== "http") return false;
   const args = invocation.commandArgs;
   switch (command) {
     case "task":
@@ -266,8 +267,7 @@ function commandSupportsRemote(invocation: ParsedInvocation): boolean {
 function assertRemoteCommandSupported(invocation: ParsedInvocation): void {
   if (invocation.invalidGlobalOption || invocation.unknownLeadingOption || !commandSupportsRemote(invocation)) {
     throw new Error(
-      `REMOTE_COMMAND_UNSUPPORTED: ${invocationLabel(invocation)} is not supported by the Todos /v1 CLI; ` +
-        "local SQLite fallback is disabled",
+      `TODOS_OPERATION_UNSUPPORTED: ${invocationLabel(invocation)} is not supported by the Todos /v1 CLI`,
     );
   }
 }
@@ -277,23 +277,24 @@ function assertRemoteCommandSupported(invocation: ParsedInvocation): void {
  * native Postgres adapters. It validates the complete mode state, gates the
  * remote command surface, then constructs only the authenticated HTTP client.
  */
-export function initializeTodosCliAuthority(
+export async function initializeTodosCliAuthority(
   args: string[] = process.argv.slice(2),
   env: Env = process.env as Env,
-): TodosCliAuthorityInitialization {
-  const mode = resolveTodosCliStorageMode(env);
-  if (!mode.selected) return { route: "local", v1_base_url: null };
+): Promise<TodosCliAuthorityInitialization> {
+  const authority = resolveTodosAuthority(env);
+  if (authority.transport === "sqlite") return { route: "embedded", mode: "local", v1_base_url: null };
 
   const invocation = parseInvocation(args);
   if (isMetadataInvocation(args, invocation)) {
-    const status = getTodosRemoteAuthorityConfigStatus(env);
-    return { route: "remote-diagnostic", v1_base_url: status.v1_base_url };
+    const status = getTodosAuthorityConfigStatus(env);
+    return { route: "http-diagnostic", mode: authority.mode, v1_base_url: status.v1_base_url };
   }
 
   assertRemoteCommandSupported(invocation);
-  const client = getTodosCloudClient(env);
+  await verifyTodosAuthority(env);
+  const client = getTodosAuthorityClient(env);
   if (!client) {
-    throw new Error("REMOTE_API_UNAVAILABLE: remote mode did not resolve an HTTP client; local SQLite fallback is disabled");
+    throw new Error("TODOS_AUTHORITY_UNAVAILABLE: configured authority did not resolve an HTTP client");
   }
-  return { route: "remote-http", v1_base_url: client.baseUrl };
+  return { route: "http", mode: authority.mode, v1_base_url: client.baseUrl };
 }

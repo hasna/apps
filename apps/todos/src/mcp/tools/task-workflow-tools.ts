@@ -9,7 +9,7 @@ import { z } from "zod";
 import type { Task } from "../../types/index.js";
 import { TaskNotFoundError, VersionConflictError } from "../../types/index.js";
 import { compactHandoff, compactJson, compactStatus, compactTask } from "../token-utils.js";
-import { getTodosCloudClient, cloudTaskAction, cloudListTasks, cloudGetStats, cloudCountTasks } from "../../cli/cloud-router.js";
+import { getTodosAuthorityClient, cloudTaskAction, cloudListTasks, cloudGetStats, cloudCountTasks } from "../../cli/cloud-router.js";
 
 interface TaskWorkflowContext {
   shouldRegisterTool: (name: string) => boolean;
@@ -75,7 +75,7 @@ export function registerTaskWorkflowTools(server: McpServer, ctx: TaskWorkflowCo
       },
       async ({ task_id, reason, agent_id, version }) => {
         try {
-          const cloud = getTodosCloudClient();
+          const cloud = getTodosAuthorityClient();
           if (cloud) {
             const body: Record<string, unknown> = {};
             if (reason !== undefined) body.reason = reason;
@@ -113,7 +113,7 @@ export function registerTaskWorkflowTools(server: McpServer, ctx: TaskWorkflowCo
           const focus = ctx.getAgentFocus(agent_id || "");
           const effectiveAgentId = focus ? focus.agent_id : agent_id || "";
           const effectiveProjectId = focus?.project_id || project_id;
-          const cloud = getTodosCloudClient();
+          const cloud = getTodosAuthorityClient();
           if (cloud) {
             const q: Record<string, unknown> = { assigned_to: effectiveAgentId, limit: limit || 50 };
             if (status) q.status = status;
@@ -152,7 +152,7 @@ export function registerTaskWorkflowTools(server: McpServer, ctx: TaskWorkflowCo
       },
       async ({ agent_id, project_id, task_list_id, plan_id, tags }) => {
         try {
-          const cloud = getTodosCloudClient();
+          const cloud = getTodosAuthorityClient();
           if (cloud) {
             // No dedicated cloud next endpoint: the /v1 list is priority-ordered,
             // so the first pending task IS the next task.
@@ -194,7 +194,7 @@ export function registerTaskWorkflowTools(server: McpServer, ctx: TaskWorkflowCo
       },
       async ({ agent_id, project_id, task_list_id, plan_id, tags, steal_stale, stale_minutes }) => {
         try {
-          const cloud = getTodosCloudClient();
+          const cloud = getTodosAuthorityClient();
           if (cloud) {
             // /v1/tasks/:id/claim claims the next available task server-side
             // (the :id segment is a required-but-ignored placeholder).
@@ -265,7 +265,7 @@ export function registerTaskWorkflowTools(server: McpServer, ctx: TaskWorkflowCo
           // self_hosted cloud routing: assemble session context from the shared
           // cloud dataset (queue counts + active/next lists). Overdue and handoff
           // graphs are local-only concepts and default to empty in cloud mode.
-          const cloud = getTodosCloudClient();
+          const cloud = getTodosAuthorityClient();
           if (cloud) {
             const baseFilter: Record<string, unknown> = {};
             if (project_id) baseFilter.project_id = project_id;

@@ -111,7 +111,7 @@ program
 // packaged remote invocations hit the native adapter containment first.
 let authority: TodosCliAuthorityInitialization;
 try {
-  authority = initializeTodosCliAuthority();
+  authority = await initializeTodosCliAuthority();
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);

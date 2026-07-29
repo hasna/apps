@@ -7,7 +7,7 @@ import { createTaskList, getTaskList, listTaskLists, updateTaskList, deleteTaskL
 import { listTasks } from "../../db/tasks.js";
 import { getPackageVersion, handleError, autoProject, output } from "../helpers.js";
 import {
-  getTodosCloudClient,
+  getTodosAuthorityClient,
   cloudCreateTaskList,
   cloudDeleteTaskList,
   cloudGetTaskList,
@@ -35,7 +35,7 @@ export function registerAgentCommands(program: Command) {
         // agent identity lives in /v1/agents (not this machine's local sqlite).
         // This is the agent-identity misroute fix — a flipped machine's `init`
         // used to write the agent locally only, invisible to the cloud fleet.
-        const cloud = getTodosCloudClient();
+        const cloud = getTodosAuthorityClient();
         const result = cloud
           ? await cloudRegisterAgent(cloud, { name, description: opts.description })
           : (await import("../../db/agents.js")).registerAgent({ name, description: opts.description });
@@ -69,7 +69,7 @@ export function registerAgentCommands(program: Command) {
         // self_hosted cloud routing: heartbeat the SHARED cloud roster so a flipped
         // machine refreshes the same agent every other agent sees. The local path
         // 404'd cloud-only agents ("Agent not found").
-        const cloud = getTodosCloudClient();
+        const cloud = getTodosAuthorityClient();
         if (cloud) {
           const a = await cloudHeartbeatAgent(cloud, agentId);
           if (!a) { handleError(new Error(`Agent not found: ${agentId}`)); }
@@ -100,7 +100,7 @@ export function registerAgentCommands(program: Command) {
       try {
         // self_hosted cloud routing: release in the SHARED cloud roster so the name
         // frees up for every agent. The local path 404'd cloud-only agents.
-        const cloud = getTodosCloudClient();
+        const cloud = getTodosAuthorityClient();
         if (cloud) {
           const result = await cloudReleaseAgent(cloud, agentId, opts?.sessionId);
           if (!result.agent) { handleError(new Error(`Agent not found: ${agentId}`)); }
@@ -161,7 +161,7 @@ export function registerAgentCommands(program: Command) {
     .action(async () => {
       const globalOpts = program.opts();
       try {
-        const cloud = getTodosCloudClient();
+        const cloud = getTodosAuthorityClient();
         const agents = cloud ? await cloudListAgents(cloud) : listAgents();
         if (globalOpts.json) {
           output(agents, true);
@@ -246,7 +246,7 @@ export function registerAgentCommands(program: Command) {
     .option("-j, --json", "Output as JSON")
     .action(async (name: string, opts) => {
       const globalOpts = program.opts();
-      const cloud = getTodosCloudClient();
+      const cloud = getTodosAuthorityClient();
       const { getAgentByName: findByName } = await import("../../db/agents.js");
       // In cloud mode resolve the agent from the SHARED /v1/agents roster (a
       // cloud-only agent is invisible to this box's local sqlite), then read that
@@ -388,7 +388,7 @@ export function registerAgentCommands(program: Command) {
     .action(async (opts) => {
       try {
         const globalOpts = program.opts();
-        const cloud = getTodosCloudClient();
+        const cloud = getTodosAuthorityClient();
         const projectId = cloud
           ? (globalOpts.project ? await cloudResolveProjectRef(cloud, globalOpts.project) : undefined)
           : autoProject(globalOpts);

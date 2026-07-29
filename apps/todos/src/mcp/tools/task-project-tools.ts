@@ -24,7 +24,7 @@ import {
   createPlan, listPlans, getPlan, updatePlan, deletePlan,
 } from "../../db/plans.js";
 import {
-  getTodosCloudClient,
+  getTodosAuthorityClient,
   cloudTaskAction,
   cloudUpdateTask,
   cloudAddComment,
@@ -1105,7 +1105,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ task_id, version }) => {
         try {
-          const cloud = getTodosCloudClient();
+          const cloud = getTodosAuthorityClient();
           if (cloud) {
             const task = await cloudTaskAction(cloud, task_id, "start", version !== undefined ? { version } : {});
             return { content: [{ type: "text" as const, text: formatTask(task) }] };
@@ -1194,7 +1194,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ task_id, confidence, completed_at, version }) => {
         try {
-          const cloud = getTodosCloudClient();
+          const cloud = getTodosAuthorityClient();
           if (cloud) {
             const body: Record<string, unknown> = {};
             if (confidence !== undefined) body.confidence = confidence;
@@ -1226,7 +1226,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ task_id, version }) => {
         try {
-          const cloud = getTodosCloudClient();
+          const cloud = getTodosAuthorityClient();
           if (cloud) {
             const patch: Record<string, unknown> = { status: "cancelled" };
             if (version !== undefined) patch.version = version;
@@ -1256,7 +1256,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ task_id, new_assignee, version }) => {
         try {
-          const cloud = getTodosCloudClient();
+          const cloud = getTodosAuthorityClient();
           if (cloud) {
             const patch: Record<string, unknown> = { assigned_to: new_assignee };
             if (version !== undefined) patch.version = version;
@@ -1294,7 +1294,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
           if (to_list && clear_list) {
             throw new Error("Use either to_list or clear_list, not both.");
           }
-          const cloud = getTodosCloudClient();
+          const cloud = getTodosAuthorityClient();
           if (cloud) {
             const current = await cloudGetTask(cloud, task_id);
             if (!current) throw new Error(`Task not found: ${task_id}`);
@@ -2720,7 +2720,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
           // self_hosted cloud routing: comment straight against <app-host>/v1
           // (skip local id-resolution which 404s cloud-only tasks). Server 404s a
           // genuinely missing task, surfaced as isError below.
-          const cloud = getTodosCloudClient();
+          const cloud = getTodosAuthorityClient();
           if (cloud) {
             await cloudAddComment(cloud, task_id, { content: body, agent_id: author });
             return { content: [{ type: "text" as const, text: `Comment added to ${task_id.slice(0,8)}: ${body.slice(0, 50)}${body.length > 50 ? "..." : ""}` }] };

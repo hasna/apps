@@ -8,7 +8,7 @@ import {
   initializeTodosCliAuthority,
   type TodosCliAuthorityInitialization,
 } from "./stage-a.js";
-import { resetTodosCloudClient } from "./cloud-router.js";
+import { resetTodosAuthorityClient } from "./cloud-router.js";
 import { builtCliSpawnBudgetMs } from "../test/spawn-budget.js";
 
 const REPO_ROOT = join(import.meta.dir, "../..");
@@ -142,11 +142,11 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  resetTodosCloudClient();
+  resetTodosAuthorityClient();
 });
 
 afterEach(() => {
-  resetTodosCloudClient();
+  resetTodosAuthorityClient();
   for (const root of tempRoots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
   }

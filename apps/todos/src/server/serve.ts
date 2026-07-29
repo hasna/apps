@@ -21,6 +21,7 @@ import {
 import type { Task } from "../types/index.js";
 import type { RouteContext, FilteredClient } from "./routes.js";
 import * as handlers from "./routes.js";
+import { getTodosServerBackend } from "../storage/config.js";
 
 // Resolve the dashboard dist directory — check multiple locations
 function resolveDashboardDir(): string {
@@ -251,10 +252,11 @@ export interface StartServerOptions {
 
 export async function startServer(port: number, options?: StartServerOptions): Promise<void> {
   const shouldOpen = options?.open ?? true;
-  const apiKey = options?.apiKey || process.env.TODOS_API_KEY || null;
+  const apiKey = options?.apiKey || process.env.HASNA_TODOS_API_KEY || null;
+  const backend = getTodosServerBackend();
 
-  // Initialize database
-  const db = getDatabase();
+  // A customer Postgres server must never open a second SQLite authority.
+  const db = backend === "sqlite" ? getDatabase() : null;
 
   // ── Auth posture (fail closed) ───────────────────────────────────────────────
   // Resolved BEFORE the socket is bound so an unconfigured server never accepts a
@@ -262,9 +264,10 @@ export async function startServer(port: number, options?: StartServerOptions): P
   // remaining option would be to expose /api/* + /mcp off-box.
   const authPosture = resolveAuthPosture({
     apiKey,
-    hasGeneratedKeys: hasActiveApiKeys(),
+    hasGeneratedKeys: db ? hasActiveApiKeys(db) : false,
     host: options?.host,
     allowAnonymous: options?.allowAnonymous === true || isAnonymousOptInEnv(),
+    localPlaneDisabled: backend === "postgres",
   });
   if (authPosture.mode === "anonymous-loopback") {
     console.error(
@@ -276,13 +279,6 @@ export async function startServer(port: number, options?: StartServerOptions): P
   } else {
     console.log(describeAuthPosture(authPosture));
   }
-
-  // Durable dual-write shadow: capture triggers are installed at getDatabase();
-  // this long-running server also drains the outbox to cloud Postgres.
-  try {
-    const { startRuntimeShadowDrain } = await import("../storage/shadow-runtime.js");
-    startRuntimeShadowDrain(db);
-  } catch { /* shadow disabled or unavailable — local writes stay durable */ }
 
   // SSE event stream — clients subscribe to /api/events
   const sseClients = new Set<ReadableStreamDefaultController>();
@@ -379,26 +375,24 @@ export async function startServer(port: number, options?: StartServerOptions): P
       // ── Service surface probes (unauthenticated): /health /ready /version ──
       if ((path === "/health" || path === "/ready" || path === "/version") && method === "GET") {
         const { getPackageVersion } = await import("../lib/package-version.js");
-        const { isCloudModeEnabled, pingCloud } = await import("./cloud.js");
-        const mode = isCloudModeEnabled() ? "remote" : "local";
+        const { pingLocalAuthority } = await import("./local-authority.js");
+        const mode = "local" as const;
         const version = getPackageVersion();
         if (path === "/version") {
-          return Response.json({ status: "ok", version, mode, name: "todos" });
+          return Response.json({ status: "ok", version, mode, topology: backend, name: "todos" });
         }
         if (path === "/ready") {
-          if (mode === "remote") {
-            try {
-              await pingCloud();
-            } catch (e) {
-              return Response.json(
-                { status: "unavailable", version, mode, error: (e as Error).message },
-                { status: 503 },
-              );
-            }
+          try {
+            await pingLocalAuthority();
+          } catch (e) {
+            return Response.json(
+              { status: "unavailable", version, mode, topology: backend, error: (e as Error).message },
+              { status: 503 },
+            );
           }
-          return Response.json({ status: "ready", version, mode });
+          return Response.json({ status: "ready", version, mode, topology: backend });
         }
-        return Response.json({ status: "ok", version, mode, name: "todos" });
+        return Response.json({ status: "ok", version, mode, topology: backend, name: "todos" });
       }
 
       // ── OpenAPI document (unauthenticated; source of truth for the SDK) ──
@@ -440,7 +434,7 @@ export async function startServer(port: number, options?: StartServerOptions): P
         const response = await handlePrGroupHttpRequest(
           req,
           url,
-          createLocalPrGroupLedger(db),
+          createLocalPrGroupLedger(db!),
           "/api/pr-groups",
         );
         if (response) return response;

@@ -4,7 +4,7 @@ import { handleError, output } from "../helpers.js";
 import type { NativeStorageStatus, NativeStorageSyncPlan } from "../../lib/native-storage-status.js";
 import type { ShadowStatusReport } from "../../lib/shadow-status.js";
 import type { TodosRunArtifactSyncPlan, TodosRunArtifactSyncResult } from "../../storage/index.js";
-import { getTodosRemoteAuthorityConfigStatus } from "../cloud-router.js";
+import { getTodosAuthorityConfigStatus } from "../cloud-router.js";
 
 function globalOptions(program: Command): Record<string, any> {
   const command = program as Command & { optsWithGlobals?: () => Record<string, any> };
@@ -161,7 +161,7 @@ export function registerStorageCommands(program: Command) {
         const globalOpts = globalOptions(program);
         const { getNativeStorageStatus } = await import("../../lib/native-storage-status.js");
         const nativeStatus = getNativeStorageStatus();
-        const remoteAuthority = getTodosRemoteAuthorityConfigStatus();
+        const remoteAuthority = getTodosAuthorityConfigStatus();
         const status = remoteAuthority.selected
           ? {
               ...nativeStatus,

@@ -11,7 +11,7 @@ import { createTask, listTasks, getTask, updateTask, upsertTaskByFingerprint, de
 import { TaskNotFoundError, VersionConflictError } from "../../types/index.js";
 import { compactJson, compactTask, truncateText } from "../token-utils.js";
 import {
-  getTodosCloudClient,
+  getTodosAuthorityClient,
   cloudCreateTask,
   cloudListTasks,
   cloudGetTask,
@@ -87,7 +87,7 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
           // self_hosted cloud routing: create straight against <app-host>/v1.
           // Skip local id-resolution (it hits local SQLite); pass ids through so the
           // cloud dataset is authoritative. Reversible: unset the flip env -> local.
-          const cloud = getTodosCloudClient();
+          const cloud = getTodosAuthorityClient();
           if (cloud) {
             const payload: Record<string, unknown> = { ...rest };
             if (assigned_to) payload.assigned_to = assigned_to;
@@ -196,7 +196,7 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
       async (params) => {
         try {
           // self_hosted cloud routing: list from <app-host>/v1 (no local id-resolve).
-          const cloud = getTodosCloudClient();
+          const cloud = getTodosAuthorityClient();
           if (cloud) {
             const tasks = await cloudListTasks(cloud, params as any);
             if (tasks.length === 0) return { content: [{ type: "text" as const, text: "No tasks found." }] };
@@ -232,7 +232,7 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
       async ({ task_id, detail, max_description_chars, include_metadata }) => {
         try {
           // self_hosted cloud routing: fetch the task from <app-host>/v1.
-          const cloud = getTodosCloudClient();
+          const cloud = getTodosAuthorityClient();
           const task = cloud ? await cloudGetTask(cloud, task_id) : getTask(resolveId(task_id));
           if (!task) throw new TaskNotFoundError(task_id);
           const focus = ctx.getAgentFocus(task.assigned_to || "");
@@ -307,7 +307,7 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
       },
       async (params) => {
         try {
-          const cloud = getTodosCloudClient();
+          const cloud = getTodosAuthorityClient();
           if (cloud) {
             // self_hosted cloud routing: PATCH straight against <app-host>/v1.
             const { task_id, version, estimate, deadline, ...updates } = params;
@@ -370,7 +370,7 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
       },
       async ({ task_id, force }) => {
         try {
-          const cloud = getTodosCloudClient();
+          const cloud = getTodosAuthorityClient();
           if (cloud) {
             await cloudDeleteTask(cloud, task_id);
             return { content: [{ type: "text" as const, text: `Task ${task_id.slice(0, 8)} deleted.` }] };

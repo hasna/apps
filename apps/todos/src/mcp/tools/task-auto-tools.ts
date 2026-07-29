@@ -7,7 +7,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Task } from "../../types/index.js";
-import { getTodosCloudClient, cloudGetStats, cloudCountTasks, cloudListProjects, cloudListAgents } from "../../cli/cloud-router.js";
+import { getTodosAuthorityClient, cloudGetStats, cloudCountTasks, cloudListProjects, cloudListAgents } from "../../cli/cloud-router.js";
 
 interface TaskAutoContext {
   shouldRegisterTool: (name: string) => boolean;
@@ -325,7 +325,7 @@ export function registerTaskAutoTools(server: McpServer, ctx: TaskAutoContext) {
       async () => {
         try {
           // self_hosted cloud routing: report health from the shared cloud dataset.
-          const cloud = getTodosCloudClient();
+          const cloud = getTodosAuthorityClient();
           if (cloud) {
             const [stats, pending, inProgress, completed, cancelled, projects, agents] = await Promise.all([
               cloudGetStats(cloud),

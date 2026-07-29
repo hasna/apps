@@ -18,7 +18,7 @@ import {
 } from "../../db/tasks.js";
 import { getTaskList, getTaskListBySlug } from "../../db/task-lists.js";
 import {
-  getTodosCloudClient,
+  getTodosAuthorityClient,
   cloudListTasks,
   cloudGetTask,
   cloudListComments,
@@ -265,7 +265,7 @@ interface ReparentPatch {
  * the project detaches the task from its old list unless a new one is named.
  */
 async function computeCloudReparent(
-  cloud: NonNullable<ReturnType<typeof getTodosCloudClient>>,
+  cloud: NonNullable<ReturnType<typeof getTodosAuthorityClient>>,
   current: { project_id: string | null },
   opts: ReparentOptions,
 ): Promise<ReparentPatch> {
@@ -332,7 +332,7 @@ export function registerTaskCommands(program: Command) {
       opts.list = opts.list || opts.taskList;
 
       // self_hosted cloud routing: create straight against <app-host>/v1.
-      const cloud = getTodosCloudClient();
+      const cloud = getTodosAuthorityClient();
       if (cloud) {
         let task;
         try {
@@ -473,7 +473,7 @@ export function registerTaskCommands(program: Command) {
       // self_hosted cloud routing: dedupe-and-upsert on the SHARED dataset. The
       // local path wrote the task to this machine's sqlite by fingerprint, so on a
       // flipped machine the row never reached the cloud /v1 API (a split-brain write).
-      const cloud = getTodosCloudClient();
+      const cloud = getTodosAuthorityClient();
       if (cloud) {
         let cloudResult;
         try {
@@ -659,7 +659,7 @@ export function registerTaskCommands(program: Command) {
       opts.list = opts.list || opts.taskList;
       // self_hosted cloud routing: skip local-store detection and resolve explicit
       // project/list filters against the shared API before listing tasks.
-      const cloud = getTodosCloudClient();
+      const cloud = getTodosAuthorityClient();
       const cloudProjectRef = globalOpts.project || opts.projectName;
       const projectId = cloud && cloudProjectRef
         ? await cloudResolveProjectRef(cloud, cloudProjectRef)
@@ -787,7 +787,7 @@ export function registerTaskCommands(program: Command) {
     .description("Show task count by status")
     .action(async () => {
       const globalOpts = program.opts();
-      const cloud = getTodosCloudClient();
+      const cloud = getTodosAuthorityClient();
       const projectId = cloud
         ? (globalOpts.project ? await cloudResolveProjectRef(cloud, globalOpts.project) : undefined)
         : autoProject(globalOpts);
@@ -818,7 +818,7 @@ export function registerTaskCommands(program: Command) {
     .description("Show full task details")
     .action(async (id: string) => {
       const globalOpts = program.opts();
-      const cloud = getTodosCloudClient();
+      const cloud = getTodosAuthorityClient();
       let task: any;
       if (cloud) {
         const remote = await cloudGetTask(cloud, await resolveTaskIdForCommand(id, cloud));
@@ -932,7 +932,7 @@ export function registerTaskCommands(program: Command) {
     .description("Full orientation for a task — details, description, dependencies, blocker, files, commits, comments. If no ID given, shows current in-progress task for --agent.")
     .action(async (id?: string) => {
       const globalOpts = program.opts();
-      const cloud = getTodosCloudClient();
+      const cloud = getTodosAuthorityClient();
       let resolvedId = id ? await resolveTaskIdForCommand(id, cloud) : null;
 
       if (!resolvedId && globalOpts.agent && !cloud) {
@@ -1099,7 +1099,7 @@ export function registerTaskCommands(program: Command) {
       const globalOpts = program.opts();
       // self_hosted cloud routing: read the SHARED audit trail. The local path read
       // this machine's sqlite and reported "No history" for a cloud task.
-      const cloud = getTodosCloudClient();
+      const cloud = getTodosAuthorityClient();
       const resolvedId = await resolveTaskIdForCommand(id, cloud);
       let history;
       if (cloud) {
@@ -1177,7 +1177,7 @@ export function registerTaskCommands(program: Command) {
       }
 
       // self_hosted cloud routing: PATCH straight against <app-host>/v1.
-      const cloud = getTodosCloudClient();
+      const cloud = getTodosAuthorityClient();
       if (cloud) {
         let task;
         try {
@@ -1282,7 +1282,7 @@ export function registerTaskCommands(program: Command) {
         handleError(new Error("Use either --to-list or --clear-list, not both."));
       }
 
-      const cloud = getTodosCloudClient();
+      const cloud = getTodosAuthorityClient();
       if (cloud) {
         let task;
         try {
@@ -1362,7 +1362,7 @@ export function registerTaskCommands(program: Command) {
         ...(opts.notes !== undefined ? { notes: opts.notes } : {}),
         ...(confidence !== undefined ? { confidence } : {}),
       };
-      const cloud = getTodosCloudClient();
+      const cloud = getTodosAuthorityClient();
       if (cloud) {
         let task;
         try {
@@ -1408,7 +1408,7 @@ export function registerTaskCommands(program: Command) {
         // self_hosted cloud routing: resolve and approve the task on the SHARED
         // dataset. The local path read this machine's sqlite and 404'd
         // ("Task not found") a task that lives only in the cloud.
-        const cloud = getTodosCloudClient();
+        const cloud = getTodosAuthorityClient();
         if (cloud) {
           const cloudId = await resolveTaskIdForCommand(id, cloud);
           const task = await cloudGetTask(cloud, cloudId);
@@ -1456,7 +1456,7 @@ export function registerTaskCommands(program: Command) {
     .action(async (id: string) => {
       const globalOpts = program.opts();
       const agentId = globalOpts.agent || "cli";
-      const cloud = getTodosCloudClient();
+      const cloud = getTodosAuthorityClient();
       let task;
       if (cloud) {
         try {
@@ -1494,7 +1494,7 @@ export function registerTaskCommands(program: Command) {
     .action(async (id: string) => {
       const globalOpts = program.opts();
       const agentId = globalOpts.agent || "cli";
-      const cloud = getTodosCloudClient();
+      const cloud = getTodosAuthorityClient();
       const resolvedId = cloud ? await resolveTaskIdForCommand(id, cloud) : resolveTaskId(id);
       let result;
       try {
@@ -1520,7 +1520,7 @@ export function registerTaskCommands(program: Command) {
     .description("Release lock on a task")
     .action(async (id: string) => {
       const globalOpts = program.opts();
-      const cloud = getTodosCloudClient();
+      const cloud = getTodosAuthorityClient();
       const resolvedId = cloud ? await resolveTaskIdForCommand(id, cloud) : resolveTaskId(id);
       try {
         if (cloud) await cloudUnlockTask(cloud, resolvedId, globalOpts.agent, !globalOpts.agent);
@@ -1542,7 +1542,7 @@ export function registerTaskCommands(program: Command) {
     .description("Delete a task")
     .action(async (id: string) => {
       const globalOpts = program.opts();
-      const cloud = getTodosCloudClient();
+      const cloud = getTodosAuthorityClient();
       const deleted = cloud ? await cloudDeleteTask(cloud, await resolveTaskIdForCommand(id, cloud)) : deleteTask(resolveTaskId(id));
 
       if (globalOpts.json) {
@@ -1561,7 +1561,7 @@ export function registerTaskCommands(program: Command) {
     .description("Remove/delete a task (alias for delete)")
     .action(async (id: string) => {
       const globalOpts = program.opts();
-      const cloud = getTodosCloudClient();
+      const cloud = getTodosAuthorityClient();
       if (cloud) {
         const deleted = await cloudDeleteTask(cloud, await resolveTaskIdForCommand(id, cloud));
         if (globalOpts.json) {
@@ -1594,7 +1594,7 @@ export function registerTaskCommands(program: Command) {
     .action(async (action: string, ids: string[], opts: { plan?: string; clearPlan?: boolean }) => {
       const globalOpts = program.opts();
       const results: { id: string; success: boolean; error?: string }[] = [];
-      const cloud = getTodosCloudClient();
+      const cloud = getTodosAuthorityClient();
       const isPlanAction = action === "plan" || action === "move-plan";
       if (isPlanAction && Boolean(opts.plan) === Boolean(opts.clearPlan)) {
         handleError(new Error("Use exactly one of --plan or --clear-plan with bulk plan."));

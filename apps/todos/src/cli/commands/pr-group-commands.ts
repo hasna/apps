@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import chalk from "chalk";
 import { getDatabase } from "../../db/database.js";
 import { createLocalPrGroupLedger } from "../../pr-groups/index.js";
-import { cloudGetPrGroup, cloudPrGroupEvents, getTodosCloudClient } from "../cloud-router.js";
+import { cloudGetPrGroup, cloudPrGroupEvents, getTodosAuthorityClient } from "../cloud-router.js";
 import { handleError, output } from "../helpers.js";
 
 function globalOptions(program: Command): Record<string, unknown> {
@@ -32,7 +32,7 @@ export function registerPrGroupCommands(program: Command): void {
     .option("-j, --json", "Output as JSON")
     .action(async (groupId: string, opts: { json?: boolean }) => {
       try {
-        const remote = getTodosCloudClient();
+        const remote = getTodosAuthorityClient();
         const view = remote
           ? await cloudGetPrGroup(remote, groupId)
           : await createLocalPrGroupLedger(getDatabase()).get(groupId);
@@ -59,7 +59,7 @@ export function registerPrGroupCommands(program: Command): void {
           limit: parseInteger(opts.limit, "--limit", 1, 500),
           after_sequence: parseInteger(opts.afterSequence, "--after-sequence", 0, Number.MAX_SAFE_INTEGER),
         };
-        const remote = getTodosCloudClient();
+        const remote = getTodosAuthorityClient();
         const history = remote
           ? await cloudPrGroupEvents(remote, groupId, options)
           : await createLocalPrGroupLedger(getDatabase()).events(groupId, options);

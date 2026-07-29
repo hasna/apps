@@ -1,25 +1,30 @@
 /**
- * Versioned `/v1` HTTP API for `todos-serve` (A1 pure-remote).
+ * Versioned `/v1` HTTP API for a customer-operated `todos-serve` authority.
  *
- * Every handler goes through the repo-native Postgres storage adapter
- * (`getCloudStorageAdapter`) which reads/writes the shared RDS directly. Auth is
- * enforced by the contracts API-key verifier: reads require `todos:read`, writes
- * require `todos:write` (a `todos:*` key satisfies both). This is a real wrapper
- * over the core storage lib — there are NO stubs; unimplemented routes 404.
+ * SQLite and customer-operated Postgres are both local topology. The Hasna
+ * cloud authority is not implemented by this package; cloud callers use the
+ * platform HTTPS client.
  */
 import { LockError, ProjectNotFoundError, ResourceConflictError } from "../types/index.js";
 import type { CreatePlanInput, CreateProjectInput, CreateTaskInput, CreateTaskListInput, CreateTemplateInput, RenameProjectInput, TaskComment, TemplateTaskInput, UpdateTaskInput, UpdateTaskListInput } from "../types/index.js";
 import type { TodosStorageContext, TodosStorageSnapshot, TodosTaskCompletionOptions, UpdateTemplateInput } from "../storage/interfaces.js";
-import { getCloudPrGroupLedger, getCloudStorageAdapter, getCloudVerifier, ensureCloudSchema } from "./cloud.js";
+import {
+  ensureLocalAuthoritySchema,
+  getLocalAuthorityHandshake,
+  getLocalAuthorityPrGroupLedger,
+  getLocalAuthorityStorageAdapter,
+  getLocalAuthorityVerifier,
+} from "./local-authority.js";
 import { handlePrGroupHttpRequest } from "./pr-groups.js";
 import { redactEvidenceText } from "../lib/redaction.js";
 import { isCanonicalSlug, normalizeSlug } from "../lib/slugs.js";
 
 export interface V1RequestDependencies {
-  getVerifier?: typeof getCloudVerifier;
-  ensureSchema?: typeof ensureCloudSchema;
-  getStorageAdapter?: typeof getCloudStorageAdapter;
-  getPrGroupLedger?: typeof getCloudPrGroupLedger;
+  getVerifier?: typeof getLocalAuthorityVerifier;
+  ensureSchema?: typeof ensureLocalAuthoritySchema;
+  getStorageAdapter?: typeof getLocalAuthorityStorageAdapter;
+  getPrGroupLedger?: typeof getLocalAuthorityPrGroupLedger;
+  getAuthorityHandshake?: typeof getLocalAuthorityHandshake;
 }
 
 const JSON_HEADERS = { "Content-Type": "application/json" } as const;
@@ -371,7 +376,7 @@ export async function handleV1Request(
   // ── Auth (contracts API-key verifier) ──
   let verifier;
   try {
-    verifier = (dependencies.getVerifier ?? getCloudVerifier)();
+    verifier = (dependencies.getVerifier ?? getLocalAuthorityVerifier)();
   } catch (e) {
     return error(503, (e as Error).message);
   }
@@ -382,17 +387,21 @@ export async function handleV1Request(
   const principal = decision.principal;
 
   // Schema is idempotently ensured on the first authenticated request.
-  await (dependencies.ensureSchema ?? ensureCloudSchema)();
+  if (path === "/v1/authority" && method === "GET") {
+    return json((dependencies.getAuthorityHandshake ?? getLocalAuthorityHandshake)());
+  }
+
+  await (dependencies.ensureSchema ?? ensureLocalAuthoritySchema)();
   if (path === "/v1/pr-groups" || path.startsWith("/v1/pr-groups/")) {
     return handlePrGroupHttpRequest(
       req,
       url,
-      (dependencies.getPrGroupLedger ?? getCloudPrGroupLedger)(),
+      (dependencies.getPrGroupLedger ?? getLocalAuthorityPrGroupLedger)(),
       "/v1/pr-groups",
       { actor_id: principal.agent, actor_run_id: principal.kid },
     );
   }
-  const store = (dependencies.getStorageAdapter ?? getCloudStorageAdapter)();
+  const store = (dependencies.getStorageAdapter ?? getLocalAuthorityStorageAdapter)();
 
   const segments = path.split("/").filter(Boolean); // ["v1", resource, id?, action?, subId?]
   const resource = segments[1];

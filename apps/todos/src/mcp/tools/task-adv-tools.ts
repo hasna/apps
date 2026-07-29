@@ -8,7 +8,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Task } from "../../types/index.js";
 import { compactJson, compactStatus, compactTask, truncateText } from "../token-utils.js";
-import { getTodosCloudClient, cloudGetStats, cloudGetTask, cloudCountTasks, cloudAddComment } from "../../cli/cloud-router.js";
+import { getTodosAuthorityClient, cloudGetStats, cloudGetTask, cloudCountTasks, cloudAddComment } from "../../cli/cloud-router.js";
 
 interface TaskAdvContext {
   shouldRegisterTool: (name: string) => boolean;
@@ -61,7 +61,7 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
       },
       async ({ task_id, project_id, task_list_id, agent_id, explain_blocked, detail, comment_limit, file_limit }) => {
         try {
-          const cloud = getTodosCloudClient();
+          const cloud = getTodosAuthorityClient();
           if (!task_id) {
             if (cloud) {
               // self_hosted cloud routing: queue summary from <app-host>/v1.
@@ -576,7 +576,7 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
           // Skip local id-resolution (it hits local SQLite and 404s cloud-only
           // tasks); pass the id through so the cloud dataset is authoritative. The
           // server 404s a genuinely missing task, surfaced as isError below.
-          const cloud = getTodosCloudClient();
+          const cloud = getTodosAuthorityClient();
           if (cloud) {
             await cloudAddComment(cloud, task_id, { content: body, agent_id: author });
             return { content: [{ type: "text" as const, text: `Comment added to ${task_id.slice(0,8)}` }] };

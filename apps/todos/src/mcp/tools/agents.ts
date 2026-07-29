@@ -3,7 +3,7 @@ import { z } from "zod";
 import { registerAgent, isAgentConflict, releaseAgent, getAgent, getAgentByName, listAgents, updateAgent, updateAgentActivity, archiveAgent, unarchiveAgent, getAvailableNamesFromPool } from "../../db/agents.js";
 import { getAgentPoolForProject } from "../../lib/config.js";
 import { getDatabase } from "../../db/database.js";
-import { getTodosCloudClient, cloudListAgents, cloudRegisterAgent, cloudHeartbeatAgent, cloudReleaseAgent } from "../../cli/cloud-router.js";
+import { getTodosAuthorityClient, cloudListAgents, cloudRegisterAgent, cloudHeartbeatAgent, cloudReleaseAgent } from "../../cli/cloud-router.js";
 
 interface AgentFocus {
   agent_id: string;
@@ -112,7 +112,7 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
           // agent lands in /v1/agents (not this machine's local sqlite island),
           // fixing the identity misroute where list_agents/tasks read cloud but the
           // agent existed only locally.
-          const cloud = getTodosCloudClient();
+          const cloud = getTodosAuthorityClient();
           if (cloud) {
             const agent = await cloudRegisterAgent(cloud, {
               name, description, role, title, level, permissions, capabilities, session_id, working_dir, force,
@@ -211,7 +211,7 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
         try {
           // self_hosted cloud routing: list agents from the shared <app-host>/v1
           // dataset rather than this machine's local SQLite island.
-          const cloud = getTodosCloudClient();
+          const cloud = getTodosAuthorityClient();
           const agents = cloud
             ? await cloudListAgents(cloud)
             : listAgents({ include_archived: include_archived ?? false });
@@ -434,7 +434,7 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
           // self_hosted cloud routing: heartbeat the SHARED cloud roster so a
           // flipped machine refreshes the same agent every other agent sees. The
           // local path 404'd cloud-only agents ("Agent not found").
-          const cloud = getTodosCloudClient();
+          const cloud = getTodosAuthorityClient();
           if (cloud) {
             const a = await cloudHeartbeatAgent(cloud, agent_id);
             if (!a) {
@@ -478,7 +478,7 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
         try {
           // self_hosted cloud routing: release in the SHARED cloud roster so the
           // name frees up for every agent. The local path 404'd cloud-only agents.
-          const cloud = getTodosCloudClient();
+          const cloud = getTodosAuthorityClient();
           if (cloud) {
             const result = await cloudReleaseAgent(cloud, agent_id, session_id);
             if (!result.agent) {

@@ -25,12 +25,12 @@
  * starting wide open.
  */
 
-import { isCloudModeEnabled } from "./cloud.js";
+import { getTodosServerBackend } from "../storage/config.js";
 
 /** Env var that configures the static server credential for `/api/*` + `/mcp`. */
-export const AUTH_ENV_VAR = "TODOS_API_KEY";
+export const AUTH_ENV_VAR = "HASNA_TODOS_API_KEY";
 /** Env var that opts a loopback-bound server into the anonymous local plane. */
-export const ALLOW_ANONYMOUS_ENV_VAR = "TODOS_ALLOW_ANONYMOUS";
+export const ALLOW_ANONYMOUS_ENV_VAR = "HASNA_TODOS_ALLOW_ANONYMOUS";
 
 export type AuthPostureMode = "enforce" | "local-plane-disabled" | "anonymous-loopback";
 
@@ -99,7 +99,7 @@ export interface AuthPostureInput {
    * Whether this process serves the hosted, self-authenticating `/v1` plane
    * (a cloud DSN is configured). Defaults to the live env.
    */
-  hosted?: boolean;
+  localPlaneDisabled?: boolean;
 }
 
 /** Actionable, credential-free startup error text. */
@@ -125,8 +125,15 @@ export function authNotConfiguredMessage(host: string | undefined): string {
  * only remaining option would be to serve data anonymously off-box.
  */
 export function resolveAuthPosture(input: AuthPostureInput): AuthPosture {
-  const hosted = input.hosted ?? isCloudModeEnabled();
+  const localPlaneDisabled = input.localPlaneDisabled ?? getTodosServerBackend() === "postgres";
   const hasCredentialSource = Boolean(input.apiKey) || input.hasGeneratedKeys;
+
+  if (localPlaneDisabled) {
+    return {
+      mode: "local-plane-disabled",
+      reason: "customer-operated Postgres backend exposes only the authenticated /v1 data plane",
+    };
+  }
 
   if (hasCredentialSource) {
     return {
@@ -134,16 +141,6 @@ export function resolveAuthPosture(input: AuthPostureInput): AuthPosture {
       reason: input.apiKey
         ? `credential from ${AUTH_ENV_VAR}/--api-key`
         : "at least one active generated API key",
-    };
-  }
-
-  // Hosted: `/v1` authenticates itself against cloud Postgres and does NOT need
-  // TODOS_API_KEY. Drop the local-only planes instead of failing the whole
-  // service, so closing the hole cannot cause an outage on redeploy.
-  if (hosted) {
-    return {
-      mode: "local-plane-disabled",
-      reason: `hosted deployment with no ${AUTH_ENV_VAR}: /api/* and /mcp are not served`,
     };
   }
 

@@ -8,6 +8,7 @@
 
 import { getPackageVersion } from "../lib/package-version.js";
 import { DEFAULT_PORT, coercePort, findFreePort, refuseInvalidPort } from "./port.js";
+import { resolveTodosAuthority } from "../authority.js";
 
 function hasVersionFlag(): boolean {
   return process.argv.includes("--version") || process.argv.includes("-V");
@@ -24,23 +25,18 @@ Start the @hasna/todos dashboard server.
 
 Commands:
   migrate                 Apply idempotent schema migrations
-  redact-comments         Preview historical comment redaction (dry-run by default)
 
 Options:
   --port <port>     HTTP port to bind. Defaults to ${DEFAULT_PORT}
   --host <host>     Hostname to bind. Defaults to 127.0.0.1
   --api-key <key>   Require this API key for dashboard/API requests
   --no-open         Do not open the dashboard in a browser
-  --batch-size <n>  redact-comments batch size, 1-500 (default: 100)
-  --apply           Apply redact-comments changes (default is dry-run)
-  --confirm <value> Explicit confirmation required with --apply
-  --json            Emit redact-comments aggregate JSON
   -V, --version     output the version number
   -h, --help        display help for command
 
 Environment:
-  TODOS_NO_OPEN=true       Do not open the dashboard in a browser
-  TODOS_API_KEY=<key>      Require this API key for dashboard/API requests`);
+  HASNA_TODOS_NO_OPEN=true  Do not open the dashboard in a browser
+  HASNA_TODOS_API_KEY=<key> Require this API key for dashboard/API requests`);
 }
 
 function parsePort(): number {
@@ -67,93 +63,14 @@ function parseStringArg(name: string): string | undefined {
 
 
 async function runMigrate(): Promise<void> {
-  const {
-    ensureCloudSchema,
-    ensureCloudCommentCursorIndex,
-    ensureCloudTaskShortIdIndex,
-    ensureCloudTaskObjectIdIndex,
-    ensureCloudScopedSlugUniqueIndexes,
-    normalizeCloudPayloads,
-    pingCloud,
-    resolveCloudDatabaseUrl,
-    closeCloud,
-  } =
-    await import("./cloud.js");
-  if (!resolveCloudDatabaseUrl()) {
-    console.error("migrate: no database URL (HASNA_TODOS_DATABASE_URL / TODOS_DATABASE_URL / DATABASE_URL)");
-    process.exit(2);
-  }
-  console.log("migrate: connecting…");
-  await pingCloud();
-  console.log("migrate: applying schema (sync tables + api_keys)…");
-  await ensureCloudSchema();
-  console.log("migrate: normalizing legacy double-encoded jsonb payloads…");
-  const normalized = await normalizeCloudPayloads();
-  console.log(`migrate: normalized ${normalized} payload row(s)`);
-  console.log("migrate: prebuilding comment cursor index concurrently…");
-  await ensureCloudCommentCursorIndex();
-  console.log("migrate: prebuilding task short_id resolution index concurrently…");
-  await ensureCloudTaskShortIdIndex();
-  console.log("migrate: prebuilding task object_id (COLLATE C) prefix index concurrently…");
-  await ensureCloudTaskObjectIdIndex();
-  console.log("migrate: auditing scoped slug duplicates and building unique indexes concurrently…");
-  await ensureCloudScopedSlugUniqueIndexes();
+  const { ensureLocalAuthoritySchema, pingLocalAuthority, closeLocalAuthority } =
+    await import("./local-authority.js");
+  console.log("migrate: validating customer authority…");
+  await pingLocalAuthority();
+  await ensureLocalAuthoritySchema();
   console.log("migrate: done");
-  await closeCloud();
+  await closeLocalAuthority();
   process.exit(0);
-}
-
-async function runCommentRedactionBackfill(): Promise<void> {
-  const {
-    backfillCloudCommentRedaction,
-    resolveCloudDatabaseUrl,
-    closeCloud,
-  } = await import("./cloud.js");
-  const {
-    COMMENT_REDACTION_BACKFILL_CONFIRMATION,
-    isCommentRedactionBackfillComplete,
-  } = await import("../storage/comment-redaction-backfill.js");
-  if (!resolveCloudDatabaseUrl()) {
-    console.error("redact-comments: no database URL (HASNA_TODOS_DATABASE_URL / TODOS_DATABASE_URL / DATABASE_URL)");
-    process.exit(2);
-  }
-
-  const apply = process.argv.includes("--apply");
-  const rawBatchSize = parseStringArg("--batch-size");
-  try {
-    const report = await backfillCloudCommentRedaction({
-      apply,
-      confirmation: parseStringArg("--confirm"),
-      batchSize: rawBatchSize === undefined ? 100 : Number(rawBatchSize),
-    });
-    if (process.argv.includes("--json")) {
-      console.log(JSON.stringify(report));
-    } else {
-      console.log(
-        `redact-comments: ${report.dry_run ? "dry-run" : "applied"}; ` +
-        `scanned=${report.scanned} candidates=${report.candidates} updated=${report.updated} ` +
-        `conflicts=${report.conflicts} remaining=${report.remaining_candidates} batches=${report.batches}`,
-      );
-      if (report.dry_run && report.candidates > 0) {
-        console.log(
-          `redact-comments: obtain approval before using ` +
-          `--apply --confirm=${COMMENT_REDACTION_BACKFILL_CONFIRMATION}`,
-        );
-      }
-    }
-    if (apply && !isCommentRedactionBackfillComplete(report)) {
-      console.error(
-        "redact-comments: incomplete apply; resolve conflicts and rerun until conflicts=0 and remaining=0",
-      );
-      process.exitCode = 1;
-    }
-  } catch (error) {
-    const message = (error as Error).message.replace(/postgres(?:ql)?:\/\/[^@\s]+@/gi, "postgresql://[REDACTED]@");
-    console.error(`redact-comments: failed: ${message}`);
-    process.exitCode = 1;
-  } finally {
-    await closeCloud();
-  }
 }
 
 async function main() {
@@ -165,14 +82,13 @@ async function main() {
     printHelp();
     return;
   }
-  // One-shot schema migration (used by the ECS migration task):
-  //   todos-serve migrate
+  const authority = resolveTodosAuthority();
+  if (authority.mode !== "local") {
+    throw new Error("TODOS_AUTHORITY_MISMATCH: todos-serve is a customer-operated local authority; cloud is client-only");
+  }
+
   if (process.argv.includes("migrate")) {
     await runMigrate();
-    return;
-  }
-  if (process.argv.includes("redact-comments")) {
-    await runCommentRedactionBackfill();
     return;
   }
   // When PORT is set (container/service deployment) bind it EXACTLY — never scan
@@ -192,7 +108,7 @@ async function main() {
   if (port !== requestedPort) {
     console.log(`Port ${requestedPort} in use, using ${port}`);
   }
-  const noOpen = process.argv.includes("--no-open") || process.env["TODOS_NO_OPEN"] === "true" || Boolean(envPort);
+  const noOpen = process.argv.includes("--no-open") || process.env["HASNA_TODOS_NO_OPEN"] === "true" || Boolean(envPort);
   const { startServer } = await import("./serve.js");
   try {
     await startServer(port, {

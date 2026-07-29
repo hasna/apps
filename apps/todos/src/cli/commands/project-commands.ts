@@ -11,7 +11,7 @@ import {
   updateProject,
 } from "../../db/projects.js";
 import { addComment } from "../../db/comments.js";
-import { getTodosCloudClient, cloudAddComment, cloudCreateProject, cloudListProjects, cloudListTasks, cloudResolveProject, cloudResolveProjectRef, cloudUpdateProject, cloudAddDependency, cloudRemoveDependency, cloudGetDependencies, cloudGetTaskRelations, cloudRenameProject } from "../cloud-router.js";
+import { getTodosAuthorityClient, cloudAddComment, cloudCreateProject, cloudListProjects, cloudListTasks, cloudResolveProject, cloudResolveProjectRef, cloudUpdateProject, cloudAddDependency, cloudRemoveDependency, cloudGetDependencies, cloudGetTaskRelations, cloudRenameProject } from "../cloud-router.js";
 import {
   buildProjectDependencyGraph,
   buildTaskDependencyEdges,
@@ -42,7 +42,7 @@ function collectOption(value: string, previous: string[] = []): string[] {
 }
 
 /** The resolved cloud/self-hosted client, when a remote authority is selected. */
-type CloudClient = NonNullable<ReturnType<typeof getTodosCloudClient>>;
+type CloudClient = NonNullable<ReturnType<typeof getTodosAuthorityClient>>;
 
 /** Bounded concurrency for per-task edge reads while assembling a cloud graph. */
 const CLOUD_GRAPH_EDGE_CONCURRENCY = 6;
@@ -281,7 +281,7 @@ export function registerProjectCommands(program: Command) {
     .option("--pct <percent>", "Progress percentage (0-100) to record alongside the note")
     .action(async (id: string, text: string, opts: { pct?: string }) => {
       const globalOpts = program.opts();
-      const cloud = getTodosCloudClient();
+      const cloud = getTodosAuthorityClient();
       const resolvedId = await resolveTaskIdForCommand(id, cloud);
       let content = text;
       let progressPct: number | undefined;
@@ -354,7 +354,7 @@ export function registerProjectCommands(program: Command) {
         // the local SQLite file, which is empty on a cloud/self-hosted deployment.
         // Route task search through the shared `/v1/tasks?q=` API so it runs the
         // Postgres tsvector/trigram path instead of returning nothing.
-        const cloud = getTodosCloudClient();
+        const cloud = getTodosAuthorityClient();
         const projectId = opts.allProjects
           ? undefined
           : cloud
@@ -564,7 +564,7 @@ export function registerProjectCommands(program: Command) {
     .option("--project <ref>", "With no id: read the whole-project graph (project id, slug, name, or path)")
     .action(async (id: string | undefined, opts) => {
       const globalOpts = program.opts();
-      const cloud = getTodosCloudClient();
+      const cloud = getTodosAuthorityClient();
 
       // Whole-project dependency graph in one read — `todos deps --project <ref>
       // --json` (or, inside a registered repo, `todos deps` against the
@@ -748,7 +748,7 @@ export function registerProjectCommands(program: Command) {
     .option("--task-list-id <id>", "Custom task list ID (with --add)")
     .action(async (opts) => {
       const globalOpts = program.opts();
-      const cloud = getTodosCloudClient();
+      const cloud = getTodosAuthorityClient();
 
       if (opts.show) {
         const project = cloud ? await cloudResolveProject(cloud, opts.show) : resolveExplicitProject(opts.show);
@@ -910,7 +910,7 @@ export function registerProjectCommands(program: Command) {
       const globalOpts = program.opts();
       const useJson = opts.json || globalOpts.json;
       try {
-        const cloud = getTodosCloudClient();
+        const cloud = getTodosAuthorityClient();
         let result;
         if (cloud) {
           result = await cloudRenameProject(cloud, idOrSlug, newSlug, opts.name);
