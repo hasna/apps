@@ -30,6 +30,7 @@
     "dist",
     "docs",
     "scripts/smoke-mercury-live.ts",
+    "hasna.contract.json",
     "README.md",
     "CHANGELOG.md",
     "LICENSE",
@@ -45,11 +46,13 @@
     "smoke:mcp": "bun run src/mcp/index.ts --help",
     "smoke:dist": "bun scripts/smoke-dist.ts",
     "smoke:mercury:live": "bun scripts/smoke-mercury-live.ts",
+    "contracts:check": "bunx @hasna/contracts@0.8.5 repo-conformance .",
+    "artifact-scan": "bun pm pack --ignore-scripts --quiet --filename banking-artifact-scan.tgz && bunx @hasna/contracts@0.8.5 artifact-scan banking-artifact-scan.tgz && rm -f banking-artifact-scan.tgz",
     "pack:check": "bun pm pack --dry-run --ignore-scripts",
     "verify:release": "bun run typecheck && bun test && bun run build && bun run smoke:dist && bun run pack:check",
     "dev:cli": "bun run src/cli/index.ts",
     "dev:mcp": "bun run src/mcp/index.ts",
-    "prepack": "bun run verify:release",
+    "prepack": "bun run verify:release && bun run artifact-scan",
     "prepublishOnly": "bun run verify:release"
   },
   "keywords": [

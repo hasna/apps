@@ -45,6 +45,12 @@ jobs:
       - name: Verify release build
         run: bun run verify:release
 
+      - name: Check repository contract conformance
+        run: bun run contracts:check
+
+      - name: Scan the packed artifact
+        run: bun run artifact-scan
+
       - name: Smoke CLI and MCP entrypoints
         run: |
           bun run smoke:cli

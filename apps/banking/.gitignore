@@ -6,3 +6,4 @@ dist
 .secrets
 .connect
 *.log
+banking-artifact-scan.tgz
