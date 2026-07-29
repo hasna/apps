@@ -22,8 +22,10 @@ import {
 } from "./project-resolver.js";
 import {
   ensureProjectChannel,
+  notifyProjectAgentOnline,
   shouldEnsureProjectChannel,
   type ConversationsChannelRunner,
+  type ProjectAgentOnlineNotificationResult,
   type ProjectChannelEnsureResult,
 } from "./project-channel.js";
 import { importWorkspace, planWorkspaceImport, type WorkspaceImportPreview } from "./workspace-import.js";
@@ -60,6 +62,8 @@ export interface ProjectStartOptions {
   auditCommand?: string;
   /** Ensure the project's conversations channel exists on start; defaults to shouldEnsureProjectChannel(). */
   ensureChannel?: boolean;
+  /** Announce newly started coding agents in the project channel; enabled by default. */
+  notifyAgentOnline?: boolean;
   /** Conversations CLI runner override (used by tests). */
   channelRunner?: ConversationsChannelRunner;
   db?: Database;
@@ -89,6 +93,7 @@ export interface ProjectStartResult {
   };
   tmux: WorkspaceTmuxResult;
   channel: ProjectChannelEnsureResult | null;
+  online_notification: ProjectAgentOnlineNotificationResult;
   attached: boolean;
   render: JsonObject;
 }
@@ -502,6 +507,16 @@ export async function startProject(
       : await store.updateProject(project.id, patch);
   }
 
+  const onlineNotification = notifyProjectAgentOnline(startedProject, {
+    agentTool,
+    sessionName: tmux.session_name,
+    agentStarted: tmux.success && tmux.session_action === "created",
+    hasAgentCommand: options.requestedWindows === undefined && Boolean(command),
+    enabled: options.notifyAgentOnline,
+    dryRun: options.dryRun,
+    runner: options.channelRunner,
+  });
+
   let attached = false;
   if (options.attach && !options.dryRun && tmux.success) {
     attachSession(tmux.session_name);
@@ -529,6 +544,7 @@ export async function startProject(
         session_policy: sessionPolicy,
         tmux,
         channel,
+        online_notification: onlineNotification,
         attached,
       } as unknown as JsonObject,
     };
@@ -570,6 +586,7 @@ export async function startProject(
     },
     tmux,
     channel,
+    online_notification: onlineNotification,
     attached,
   };
   return {
