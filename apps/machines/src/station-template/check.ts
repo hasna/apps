@@ -105,15 +105,35 @@ function parseSystemdSeconds(value: string): number | null {
   return total;
 }
 
+/** Directive assignments from one section, in unit-file-then-drop-in order. */
+function sectionDirectiveAssignments(contents: string[], section: string, name: string): string[] {
+  const assignments: string[] = [];
+  const directivePattern = new RegExp(`^\\s*${name}\\s*=[ \\t]*(.*)$`);
+  for (const content of contents) {
+    let currentSection: string | null = null;
+    for (const line of content.split(/\r?\n/)) {
+      const sectionMatch = /^\s*\[([^\]]+)\]\s*$/.exec(line);
+      if (sectionMatch) {
+        currentSection = sectionMatch[1]!;
+        continue;
+      }
+      if (currentSection !== section) continue;
+      const directiveMatch = directivePattern.exec(line);
+      if (directiveMatch) assignments.push(directiveMatch[1]!.trim());
+    }
+  }
+  return assignments;
+}
+
 /**
  * Effective value of a scalar directive across unit file + drop-ins: systemd
- * takes the last assignment, and an empty assignment resets it to the default
- * — which, for a directive we require to be declared, means unset.
+ * takes the last assignment in the directive's section, and an empty
+ * assignment resets it to the default — which, for a directive we require to
+ * be declared, means unset.
  */
-function effectiveScalarDirective(content: string, name: string): string | null {
+function effectiveScalarDirective(contents: string[], section: string, name: string): string | null {
   let value: string | null = null;
-  for (const match of content.matchAll(new RegExp(`^\\s*${name}\\s*=[ \\t]*(.*)$`, "gm"))) {
-    const raw = match[1]!.trim();
+  for (const raw of sectionDirectiveAssignments(contents, section, name)) {
     value = raw.length === 0 ? null : raw;
   }
   return value;
@@ -124,10 +144,9 @@ function effectiveScalarDirective(content: string, name: string): string | null 
  * and its drop-ins, and an empty assignment resets the list — the same rule
  * already applied to ExecStart.
  */
-function effectiveListDirective(content: string, name: string): string[] {
+function effectiveListDirective(contents: string[], section: string, name: string): string[] {
   let values: string[] = [];
-  for (const match of content.matchAll(new RegExp(`^\\s*${name}\\s*=[ \\t]*(.*)$`, "gm"))) {
-    const raw = match[1]!.trim();
+  for (const raw of sectionDirectiveAssignments(contents, section, name)) {
     if (raw.length === 0) {
       values = [];
     } else {
@@ -285,9 +304,9 @@ export function checkStationTemplate(effective: EffectiveTemplate, options: Chec
       if (!existsSync(unitDir)) continue;
       for (const entry of readdirSync(unitDir)) {
         if (!entry.endsWith(".service") || !pattern.test(entry)) continue;
-        let content = "";
+        let contents: string[];
         try {
-          content = readFileSync(join(unitDir, entry), "utf8");
+          contents = [readFileSync(join(unitDir, entry), "utf8")];
         } catch {
           continue;
         }
@@ -295,7 +314,7 @@ export function checkStationTemplate(effective: EffectiveTemplate, options: Chec
         if (existsSync(dropinDir)) {
           for (const dropin of readdirSync(dropinDir).filter((name) => name.endsWith(".conf"))) {
             try {
-              content += `\n${readFileSync(join(dropinDir, dropin), "utf8")}`;
+              contents.push(readFileSync(join(dropinDir, dropin), "utf8"));
             } catch {
               /* unreadable drop-in: judged on the unit file alone */
             }
@@ -306,20 +325,20 @@ export function checkStationTemplate(effective: EffectiveTemplate, options: Chec
         // carries the systemd default 10s/5 window is the exact shape that
         // looped ~290k restarts on 2026-07-28, and an OnFailure pointing at a
         // unit we do not ship means no failure notification ever fires.
-        const intervalRaw = effectiveScalarDirective(content, "StartLimitIntervalSec");
+        const intervalRaw = effectiveScalarDirective(contents, "Unit", "StartLimitIntervalSec");
         if (intervalRaw === null) {
           problems.push("missing StartLimitIntervalSec");
         } else if (parseSystemdSeconds(intervalRaw) !== conventions.startLimitIntervalSec) {
           problems.push(`StartLimitIntervalSec=${intervalRaw}, convention is ${conventions.startLimitIntervalSec}`);
         }
-        const burstRaw = effectiveScalarDirective(content, "StartLimitBurst");
+        const burstRaw = effectiveScalarDirective(contents, "Unit", "StartLimitBurst");
         if (burstRaw === null) {
           problems.push("missing StartLimitBurst");
         } else if (Number(burstRaw) !== conventions.startLimitBurst) {
           problems.push(`StartLimitBurst=${burstRaw}, convention is ${conventions.startLimitBurst}`);
         }
         // OnFailure is a list with systemd reset semantics, like ExecStart.
-        const onFailure = effectiveListDirective(content, "OnFailure");
+        const onFailure = effectiveListDirective(contents, "Unit", "OnFailure");
         if (onFailure.length === 0) {
           problems.push("missing OnFailure");
         } else if (!onFailure.includes(conventions.onFailureUnit)) {
@@ -330,15 +349,16 @@ export function checkStationTemplate(effective: EffectiveTemplate, options: Chec
           // drop-in can replace a bare ExecStart with an absolute one. Judge
           // only the effective list, in unit-file-then-drop-ins order.
           let effectiveExecStarts: string[] = [];
-          for (const match of content.matchAll(/^\s*ExecStart\s*=[ \t]*(.*)$/gm)) {
-            const value = match[1]!.trim();
+          for (const value of sectionDirectiveAssignments(contents, "Service", "ExecStart")) {
             if (value.length === 0) {
               effectiveExecStarts = [];
             } else {
               effectiveExecStarts.push(value);
             }
           }
-          if (effectiveExecStarts.some((value) => !value.replace(/^[-@:+!]+/, "").startsWith("/"))) {
+          if (effectiveExecStarts.length === 0) {
+            problems.push("missing ExecStart");
+          } else if (effectiveExecStarts.some((value) => !value.replace(/^[-@:+!]+/, "").startsWith("/"))) {
             problems.push("ExecStart is not an absolute path (203/EXEC class)");
           }
         }
