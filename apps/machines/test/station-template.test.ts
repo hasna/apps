@@ -370,6 +370,23 @@ describe("drift check", () => {
     expect(result.verdict).toBe("drift");
   });
 
+  test("POSITIVE CONTROL: unit directives in the wrong systemd sections are flagged", () => {
+    const { root, home, effective } = buildCleanFixture();
+    const unitDir = join(home, ".config/systemd/user");
+    mkdirSync(unitDir, { recursive: true });
+    writeFileSync(
+      join(unitDir, "hasna-wrong-sections.service"),
+      "[Unit]\nExecStart=/bin/true\n[Service]\nStartLimitIntervalSec=300\nStartLimitBurst=5\nOnFailure=hasna-unit-failure-notify@%n.service\n"
+    );
+    const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: null });
+    const item = result.items.find((candidate) => candidate.id === "unit:hasna-wrong-sections.service");
+    expect(item?.status).toBe("violation");
+    expect(item?.detail).toContain("missing StartLimitIntervalSec");
+    expect(item?.detail).toContain("missing StartLimitBurst");
+    expect(item?.detail).toContain("missing OnFailure");
+    expect(item?.detail).toContain("missing ExecStart");
+  });
+
   test("unit conventions accept equivalent systemd time spellings but not equivalent-looking wrong ones", () => {
     const { root, home, effective } = buildCleanFixture();
     const unitDir = join(home, ".config/systemd/user");
