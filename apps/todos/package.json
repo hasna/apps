@@ -58,8 +58,9 @@
     "dev:cli": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
+    "contracts:conformance": "contracts conformance examples",
     "verify:release": "bun run scripts/verify-public-release.ts --mode=review",
-    "prepublishOnly": "bun run scripts/verify-public-release.ts --mode=publish",
+    "prepublishOnly": "bun run contracts:conformance && contracts no-cloud-scan . && bun run scripts/verify-public-release.ts --mode=publish",
     "postinstall": "mkdir -p $HOME/.hasna/todos $HOME/.hasna/todos/training 2>/dev/null || true"
   },
   "keywords": [

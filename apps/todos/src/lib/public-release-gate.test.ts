@@ -77,7 +77,7 @@ const rootPackage: PackageJson = {
   packageManager: "bun@1.3.14",
   scripts: {
     "verify:release": "bun run scripts/verify-public-release.ts --mode=review",
-    prepublishOnly: "bun run scripts/verify-public-release.ts --mode=publish",
+    prepublishOnly: "bun run contracts:conformance && contracts no-cloud-scan . && bun run scripts/verify-public-release.ts --mode=publish",
   },
 };
 

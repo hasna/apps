@@ -1,0 +1,140 @@
+{
+  "schema": "hasna.project_panel.v1",
+  "id": "todos_panel_e85521bf-5b5a-42d6-ab6d-c02df3a049c9",
+  "createdAt": "2026-07-29T14:26:53.855Z",
+  "projectId": "empty-project",
+  "provider": {
+    "kind": "todos",
+    "id": "todos_empty-project",
+    "name": "Todos",
+    "sourcePackage": "@hasna/todos",
+    "externalId": "e85521bf-5b5a-42d6-ab6d-c02df3a049c9"
+  },
+  "kind": "tasks",
+  "title": "Todos",
+  "summary": "No tracked todos for this project.",
+  "state": "empty",
+  "generatedAt": "2026-07-29T14:26:53.855Z",
+  "freshness": "fresh",
+  "metrics": [
+    {
+      "id": "total_tasks",
+      "label": "Total tasks",
+      "value": 0,
+      "status": "unknown",
+      "resourceRefs": []
+    },
+    {
+      "id": "pending_tasks",
+      "label": "Pending",
+      "value": 0,
+      "status": "good",
+      "resourceRefs": []
+    },
+    {
+      "id": "in_progress_tasks",
+      "label": "In progress",
+      "value": 0,
+      "status": "unknown",
+      "resourceRefs": []
+    },
+    {
+      "id": "completed_tasks",
+      "label": "Completed",
+      "value": 0,
+      "status": "good",
+      "resourceRefs": []
+    },
+    {
+      "id": "failed_tasks",
+      "label": "Failed",
+      "value": 0,
+      "status": "good",
+      "resourceRefs": []
+    },
+    {
+      "id": "blocked_tasks",
+      "label": "Blocked",
+      "value": 0,
+      "status": "good",
+      "resourceRefs": []
+    },
+    {
+      "id": "overdue_tasks",
+      "label": "Overdue",
+      "value": 0,
+      "status": "good",
+      "resourceRefs": []
+    },
+    {
+      "id": "active_plans",
+      "label": "Active plans",
+      "value": 0,
+      "status": "unknown",
+      "resourceRefs": []
+    },
+    {
+      "id": "completion_rate",
+      "label": "Completion",
+      "value": 0,
+      "unit": "%",
+      "status": "warning",
+      "resourceRefs": []
+    },
+    {
+      "id": "critical_priority",
+      "label": "Critical priority",
+      "value": 0,
+      "status": "good",
+      "resourceRefs": []
+    }
+  ],
+  "items": [],
+  "actions": [
+    {
+      "kind": "action",
+      "id": "todos:create-task",
+      "name": "Create task",
+      "externalId": "create-task",
+      "sourcePackage": "@hasna/todos",
+      "tags": []
+    },
+    {
+      "kind": "action",
+      "id": "todos:list-tasks",
+      "name": "List tasks",
+      "externalId": "list-tasks",
+      "sourcePackage": "@hasna/todos",
+      "tags": []
+    }
+  ],
+  "resourceRefs": [
+    {
+      "kind": "project",
+      "id": "empty-project",
+      "name": "Empty Project",
+      "uri": "project://empty-project",
+      "externalId": "e85521bf-5b5a-42d6-ab6d-c02df3a049c9",
+      "sourcePackage": "@hasna/todos",
+      "tags": []
+    }
+  ],
+  "evidenceRefs": [],
+  "renderFragment": {
+    "renderer": "json_render",
+    "title": "Todos",
+    "imports": [],
+    "spec": {
+      "component": "project.tasks.summary",
+      "metrics": [
+        "pending_tasks",
+        "in_progress_tasks",
+        "blocked_tasks",
+        "overdue_tasks",
+        "completion_rate"
+      ],
+      "itemLimit": 20
+    }
+  },
+  "warnings": []
+}

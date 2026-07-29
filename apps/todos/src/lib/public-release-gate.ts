@@ -615,9 +615,9 @@ export function validatePackLifecycleScripts(packageJson: PackageJson): ReleaseG
   );
   addIf(
     failures,
-    packageJson.scripts?.prepublishOnly !== "bun run scripts/verify-public-release.ts --mode=publish",
+    packageJson.scripts?.prepublishOnly !== "bun run contracts:conformance && contracts no-cloud-scan . && bun run scripts/verify-public-release.ts --mode=publish",
     "release-publish-script",
-    "prepublishOnly must invoke strict publish mode",
+    "prepublishOnly must run contract conformance, no-cloud scan, and strict publish mode",
   );
   return failures;
 }
