@@ -2,6 +2,9 @@
 
 Open Feedback is designed for Hasna-coded apps that need a consistent way to capture user reports, product ideas, and agent-generated feedback.
 
+For complete surface details, see the [HTTP API](http-api.md), [CLI](cli.md),
+[MCP](mcp.md), and [distribution events](events.md) references.
+
 ## Recommended App Fields
 
 Send at least:
@@ -84,7 +87,11 @@ export function FeedbackButton() {
 }
 ```
 
-If the deployed API uses `FEEDBACK_API_TOKEN`, route browser submissions through your app backend and add the token server-side instead of shipping it to the browser.
+If the deployed API requires `FEEDBACK_API_TOKEN` or
+`FEEDBACK_SUBMIT_TOKEN`, route browser submissions through your app backend and
+add the token server-side instead of shipping it to the browser. Alternatively,
+enable `FEEDBACK_PUBLIC_SUBMIT=1` at the feedback service boundary while keeping
+read, triage, and export scopes protected.
 
 ## Server Apps
 
@@ -142,7 +149,7 @@ your-app-server
 
 Cloud mode is readiness-safe: it requires the host runtime to pass a `FeedbackStore` adapter into `createFeedbackHandler`, `startFeedbackServer`, or the MCP server builder. The package does not provision databases, run migrations, create secrets, apply Terraform, send notifications, or move private feedback data. If cloud mode is selected without an injected adapter, the runtime fails closed and `feedback doctor` reports a blocker.
 
-When `FEEDBACK_API_TOKEN` is set, clients must send:
+When a legacy or scoped token protects a feedback route, clients must send:
 
 ```http
 Authorization: Bearer <token>
@@ -168,13 +175,20 @@ feedback submit "Search results need date filters" --app my-app --kind idea --ta
 feedback submit "Billing export fails on custom ranges" --app my-app --kind bug --severity high
 ```
 
-Use `--api-url` and `--token` when slash commands should write to a shared cloud-backed API. Do not put `FEEDBACK_API_TOKEN` in browser-side environment variables.
+Use `--api-url` and `--token` when slash commands should write to a shared
+cloud-backed API. When `--token` is omitted, the CLI reads
+`FEEDBACK_API_TOKEN`. Do not put feedback tokens in browser-side environment
+variables.
 
 ## MCP Collection
 
 Agents can run `feedback-mcp` and call `submit_feedback` with the same shape as the HTTP API. This gives coding agents a standard place to file product feedback discovered during implementation or verification.
 
 The `feedback_diagnostics` MCP tool returns redacted runtime diagnostics. It reports local versus cloud mode, local data file path in local mode, whether cloud settings are present, and any readiness blockers without exposing token, DSN, ARN, or secret values.
+
+The standalone MCP binary can use local storage without host setup. A host that
+selects cloud mode must inject its `FeedbackStore` when constructing the MCP
+server; the standalone binary reports storage as unavailable in that mode.
 
 ## Data Handling
 

@@ -26,13 +26,19 @@ Start the API:
 feedback serve --host 127.0.0.1 --port 8787
 ```
 
-Set `FEEDBACK_API_TOKEN` to require bearer-token auth for every API request.
-Shared deployments should use scoped tokens instead of one broad token:
+Set `FEEDBACK_API_TOKEN` as the legacy bearer credential for every protected
+feedback scope. `GET /health` and CORS preflight requests remain public. Shared
+deployments should use scoped tokens instead of one broad token:
 
-- submit: accepts browser or app-server submissions.
-- read: lists feedback, reads one item, and reads stats.
-- triage: updates status.
-- export: streams JSONL exports.
+- `FEEDBACK_SUBMIT_TOKEN`: accepts browser or app-server submissions.
+- `FEEDBACK_READ_TOKEN`: lists feedback, reads one item, and reads stats.
+- `FEEDBACK_TRIAGE_TOKEN`: updates status.
+- `FEEDBACK_EXPORT_TOKEN`: streams JSONL exports.
+
+Clients can send a scoped or legacy token as `Authorization: Bearer <token>` or
+`X-Feedback-Token: <token>`. Set `FEEDBACK_PUBLIC_SUBMIT=1` only when unauthenticated
+submissions are intentional. Set `FEEDBACK_DEPLOYMENT_MODE` to any value other
+than `local` to make missing scoped tokens fail closed.
 
 For public collection, enable public submit only at the app backend or feedback
 service boundary and keep read, triage, and export scoped. In shared deployment
@@ -62,6 +68,13 @@ Useful endpoints:
 - `PATCH /v1/feedback/:id` with `{ "status": "triaged" }`
 - `GET /v1/stats`
 - `GET /v1/export.jsonl`
+
+List and export accept `appId`, `status`, `tag`, `search`, `since`, `until`, and
+`limit` query parameters. Limits are clamped to 500; list defaults to 50 and
+export defaults to 500. Status values are `new`, `triaged`, `shipped`, and
+`closed`. The API allows 20 submissions per client per minute by default and
+rejects duplicate or spam-like submissions before writing them. Configure the
+CORS response origin with `FEEDBACK_CORS_ORIGIN`.
 
 ## SDK
 
@@ -113,6 +126,7 @@ await store.createFeedback({
 ```bash
 feedback init
 feedback doctor
+feedback serve --host 127.0.0.1 --port 8787
 feedback submit "Add export history" --app my-app --kind idea --tag reports --route /reports --app-version 1.2.3 --env production
 feedback list --app my-app --search export --since 2026-01-01 --limit 20
 feedback show <id>
@@ -122,13 +136,22 @@ feedback stats
 feedback export --format jsonl --until 2026-12-31
 ```
 
-Use `--api-url` and `--token` to target a remote Open Feedback API instead of local JSONL storage. This is the CLI path for a shared production deployment; the CLI does not open database connections or create cloud resources itself.
+Use `--api-url` and `--token` on `submit`, `list`, `show`, `status`, `stats`, and
+`export` to target a remote Open Feedback API instead of local JSONL storage.
+When `--token` is omitted, remote commands use `FEEDBACK_API_TOKEN`. This is the
+CLI path for a shared production deployment; the CLI does not open database
+connections or create cloud resources itself.
 
 `feedback shipped <id> --changelog-ref <ref>` marks feedback as shipped, records the changelog-entry linkage (`changelogRef`, `shippedAt`), and emits the `feedback.triaged` notification event with disposition `shipped`. **Local store only for now**: the remote API has no shipped endpoint yet, so the command takes no `--api-url`/`--token`. Against a remote API, `feedback status <id> shipped` moves the status (without recording a `changelogRef`); a remote shipped endpoint is a follow-up.
 
 ### Distribution events
 
-Feedback stores emit `feedback.created` and `feedback.triaged` event envelopes (distribution event catalog, contract `hasna.feedback.v1`) through `@hasna/events` on the create/triage paths. Pass `eventSink: null` to `LocalFeedbackStore` to disable emission, or provide your own `FeedbackEventSink`. The default sink respects `HASNA_EVENTS_DIR`.
+Feedback stores emit `feedback.created` and `feedback.triaged` event envelopes
+(distribution event catalog, contract `hasna.feedback.v1`) through
+`@hasna/events` after creation and non-`new` status updates. Event delivery is
+best effort and never fails the storage operation. Pass `eventSink: null` to
+`LocalFeedbackStore` to disable emission, or provide your own
+`FeedbackEventSink`. The default sink respects `HASNA_EVENTS_DIR`.
 
 `feedback doctor` checks the package version, selected storage runtime, local data file path and permissions when local mode is active, token configuration, cloud configuration presence, and whether the expected binaries are on `PATH`. Diagnostics only report whether sensitive settings are configured; they do not print token, DSN, ARN, or secret values.
 
@@ -164,6 +187,10 @@ Available tools:
 - `export_feedback`
 - `feedback_diagnostics`
 
+The MCP server uses the selected local JSONL runtime by default. In cloud mode,
+the host must construct the server with an injected `FeedbackStore`; otherwise
+diagnostics report the blocker and storage tools return errors.
+
 ## Storage
 
 By default, Open Feedback runs in local JSONL mode and writes to:
@@ -188,9 +215,13 @@ const handler = createFeedbackHandler({
 
 `@hasna/feedback` does not create databases, run migrations, provision AWS/RDS resources, create secrets, or send notifications. Without an injected adapter, cloud mode fails closed with a clear diagnostic blocker. Optional readiness settings such as `FEEDBACK_CLOUD_PROVIDER`, `FEEDBACK_CLOUD_DATABASE_URL`, `FEEDBACK_CLOUD_RESOURCE_ARN`, `FEEDBACK_CLOUD_SECRET_ARN`, and `FEEDBACK_CLOUD_TABLE` are reported as configured/not configured only.
 
-## App Integration
+## Documentation
 
-See [docs/app-integration.md](docs/app-integration.md) for browser, server, CLI, and MCP integration examples.
+- [App integration](docs/app-integration.md): browser, server, CLI, and MCP examples
+- [CLI reference](docs/cli.md): every command, option, default, and binary
+- [HTTP API reference](docs/http-api.md): routes, fields, auth scopes, limits, and errors
+- [MCP reference](docs/mcp.md): tool schemas, outputs, and storage readiness
+- [Distribution events](docs/events.md): event payloads, timing, and sink configuration
 
 ## Development
 
