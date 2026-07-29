@@ -19,61 +19,58 @@ struct MenuBarStatusLabel: View {
     }
 }
 
+/// Glanceable menu-bar surface: one status line, one primary button, three plain rows.
+/// The popover hangs off the app's own status item, so it carries no icon or app-name
+/// header — the status text and the button are the whole story.
 struct MenuBarStatusView: View {
     @ObservedObject var store: RecordingsStore
     let openRecordings: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                Image(systemName: presentation.iconName)
-                    .foregroundStyle(statusColor)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Recordings")
-                        .font(.headline)
-                    Text(presentation.statusText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-            }
+        VStack(alignment: .leading, spacing: 10) {
+            Text(presentation.statusText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel(presentation.accessibilityLabel)
 
             Button(action: toggleRecording) {
                 Label(recordButtonTitle, systemImage: recordButtonIcon)
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
+            .controlSize(.large)
             .tint(store.engine.isRecording ? .red : .accentColor)
             .disabled(!presentation.primaryActionEnabled)
 
             Divider()
 
             Button(action: openRecordings) {
-                Label("Open Recordings", systemImage: "macwindow")
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                rowLabel("Open Recordings")
             }
             .buttonStyle(.plain)
 
             SettingsLink {
-                Label("Settings", systemImage: "gearshape")
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                rowLabel("Settings…")
             }
             .buttonStyle(.plain)
 
             Button {
                 NSApplication.shared.terminate(nil)
             } label: {
-                Label("Quit Recordings", systemImage: "power")
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                rowLabel("Quit")
             }
             .buttonStyle(.plain)
         }
-        .padding(14)
-        .frame(width: 260)
+        .padding(12)
+        .frame(width: 240)
     }
 
-    private var statusColor: Color {
-        store.engine.isRecording ? .red : .accentColor
+    /// Full-width, comfortably tappable text row.
+    private func rowLabel(_ title: String) -> some View {
+        Text(title)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
+            .contentShape(.rect)
     }
 
     private var presentation: MenuBarPresentation {
@@ -85,7 +82,7 @@ struct MenuBarStatusView: View {
     }
 
     private var recordButtonTitle: String {
-        store.engine.isRecording ? "Stop and Transcribe" : "Start Recording"
+        store.engine.isRecording ? "Stop & Transcribe" : "Record"
     }
 
     private var recordButtonIcon: String {

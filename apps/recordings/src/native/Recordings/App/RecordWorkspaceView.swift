@@ -2,13 +2,13 @@ import SwiftUI
 import RecordingsLib
 @preconcurrency import KeyboardShortcuts
 
-/// The Recordings workspace — the app's first screen. One Liquid-Glass hero drives the whole
-/// flow: speak, and the app types it, answers a question, or edits the selection. There is no
-/// mode selector; the phase (idle → listening → finalizing → processing → ready/error) is the
-/// only state the page renders.
+/// The Recordings workspace — the app's first screen. One quiet Liquid-Glass hero drives the
+/// whole flow: speak, and the app types it, answers a question, or edits the selection. There
+/// is no mode selector; the phase (idle → listening → finalizing → processing → ready/error)
+/// is the only state the page renders. Everything below the hero sits directly on the canvas —
+/// no boxed panels, one accent color, and meaning always carried by text, never color alone.
 struct RecordWorkspaceView: View {
     @ObservedObject var store: RecordingsStore
-    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Namespace private var glass
@@ -18,7 +18,7 @@ struct RecordWorkspaceView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 22) {
+            VStack(spacing: 24) {
                 GlassEffectContainer(spacing: 12) {
                     hero
                         .frame(maxWidth: 560)
@@ -26,7 +26,7 @@ struct RecordWorkspaceView: View {
                 .padding(.top, 28)
 
                 if let reply = engine.conversationReply {
-                    replyCard(reply)
+                    replyBlock(reply)
                 }
 
                 activeProjectRow
@@ -90,13 +90,12 @@ struct RecordWorkspaceView: View {
         }
     }
 
+    /// One calm, untinted glass in every phase — the phase is told through text and symbols,
+    /// not by recoloring the surface.
     private var heroGlass: Glass {
         switch phase {
         case .idle: return .regular.interactive()
-        case .listening: return .regular.tint(Theme.recordRed.opacity(0.18))
-        case .finalizing, .processing: return .regular.tint(.orange.opacity(0.12))
-        case .ready: return .regular.tint(.green.opacity(0.10))
-        case .failed: return .regular.tint(.orange.opacity(0.16))
+        default: return .regular
         }
     }
 
@@ -176,15 +175,10 @@ struct RecordWorkspaceView: View {
             .disabled(!presentation.isEnabled)
             .accessibilityLabel(presentation.accessibilityLabel)
 
-            Text("Speak — Recordings types what you say, answers questions, and edits selected text.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .multilineTextAlignment(.center)
-
             if engine.statusMessage != "Ready" {
-                Text(engine.statusMessage)
+                Label(engine.statusMessage, systemImage: "exclamationmark.circle")
                     .font(.caption)
-                    .foregroundStyle(Color.orange)
+                    .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
         }
@@ -345,13 +339,14 @@ struct RecordWorkspaceView: View {
 
     // MARK: - Conversation reply
 
-    /// Content surface, deliberately not glass: answers must stay highly readable.
-    private func replyCard(_ reply: ConversationReply) -> some View {
+    /// Plain text on the canvas, deliberately unboxed: the question in secondary type,
+    /// the answer in body type, one Copy affordance.
+    private func replyBlock(_ reply: ConversationReply) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Label("You asked", systemImage: "questionmark.bubble")
-                    .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                Spacer()
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(reply.question)
+                    .font(.callout).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 Button {
                     engine.copyToClipboard(reply.answer)
                 } label: {
@@ -361,28 +356,22 @@ struct RecordWorkspaceView: View {
                 .help("Copy the answer")
                 .accessibilityLabel("Copy answer")
             }
-            Text(reply.question)
-                .font(.callout).foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Divider().opacity(0.4)
             Text(reply.answer)
                 .font(.body)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(14)
-        .background(.quaternary.opacity(0.5), in: .rect(cornerRadius: Theme.cornerMedium))
         .frame(maxWidth: 560)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Answer: \(reply.answer)")
     }
 
+    // MARK: - Active project
+
     @ViewBuilder
     private var activeProjectRow: some View {
         if !store.projects.isEmpty {
-            HStack(spacing: 8) {
-                Image(systemName: "folder.fill")
-                    .foregroundStyle(store.projectStore.activeProject != nil ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+            HStack {
                 Menu {
                     Button("None") { selectProject(nil) }
                     Divider()
@@ -396,14 +385,15 @@ struct RecordWorkspaceView: View {
                         }
                     }
                 } label: {
-                    Text(store.projectStore.activeProject?.name ?? "No project")
+                    Label(store.projectStore.activeProject?.name ?? "No project", systemImage: "folder")
                 }
                 .menuStyle(.borderlessButton).fixedSize()
                 .disabled(!store.projectStore.canMutateProjects)
-                Text("· transcripts are tagged to this project").font(.caption).foregroundStyle(.tertiary)
+                .help("New transcripts are tagged to this project")
+                .accessibilityLabel("Project: \(store.projectStore.activeProject?.name ?? "None")")
                 Spacer()
             }
-            .font(.system(.callout, design: .rounded))
+            .font(.callout)
             .tint(Theme.accent)
             .frame(maxWidth: 560)
         }
@@ -438,26 +428,31 @@ struct RecordWorkspaceView: View {
 
     private var recentStrip: some View {
         let items = Array(engine.recentTranscriptions.prefix(3))
-        return VStack(alignment: .leading, spacing: 6) {
-            Text("JUST NOW").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+        return VStack(alignment: .leading, spacing: 2) {
+            Text("Recent")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.bottom, 4)
             ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "text.alignleft").font(.caption).foregroundStyle(.tertiary).padding(.top, 2)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(item.displayText).font(.callout).lineLimit(2)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     Button {
                         engine.pasteIntoFrontApp(item.displayText)
-                    } label: { Image(systemName: "arrow.up.right.square") }
-                    .buttonStyle(.plain).foregroundStyle(.secondary).help("Paste into front app")
+                    } label: {
+                        Image(systemName: "arrow.up.right.square")
+                            .frame(width: 24, height: 24)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain).foregroundStyle(.secondary)
+                    .help("Paste into front app")
                     .accessibilityLabel("Paste transcript into front app")
                 }
                 .padding(.vertical, 4)
-                if i < items.count - 1 { Divider().opacity(0.3) }
+                if i < items.count - 1 { Divider() }
             }
         }
         .frame(maxWidth: 560)
-        .padding(14)
-        .background(.quaternary.opacity(0.5), in: .rect(cornerRadius: Theme.cornerMedium))
     }
 
     private func fmt(_ t: TimeInterval) -> String {
