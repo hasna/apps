@@ -746,6 +746,7 @@ describe("storage adapter contracts", () => {
       metadata: { source: "postgres" },
     });
     const started = await adapter.tasks.start(task.id, "remote-agent");
+    const startedHistory = await adapter.audit.getTaskHistory(task.id);
     const active = await adapter.tasks.getActiveWork({ project_id: project.id });
     const completed = await adapter.tasks.complete(task.id, "remote-agent", {
       confidence: 0.92,
@@ -775,6 +776,16 @@ describe("storage adapter contracts", () => {
     ]);
     expect(updated).toMatchObject({ priority: "high", metadata: { source: "postgres" } });
     expect(started.status).toBe("in_progress");
+    expect(startedHistory).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        task_id: task.id,
+        action: "start",
+        field: "status",
+        old_value: "pending",
+        new_value: "in_progress",
+        agent_id: "remote-agent",
+      }),
+    ]));
     expect(active).toEqual([expect.objectContaining({ id: task.id, locked_by: "remote-agent" })]);
     expect(completed).toMatchObject({
       status: "completed",

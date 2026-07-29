@@ -1167,7 +1167,7 @@ async function startTask(id: string, agentId: string, store: PostgresJsonRecordS
   if (task.status !== "pending" && task.status !== "in_progress") {
     throw new Error(`Task is ${task.status} and cannot be started by ${agentId}`);
   }
-  return patchTask(task, {
+  const started = await patchTask(task, {
     status: "in_progress",
     assigned_to: task.assigned_to ?? agentId,
     agent_id: task.agent_id ?? agentId,
@@ -1175,6 +1175,8 @@ async function startTask(id: string, agentId: string, store: PostgresJsonRecordS
     locked_at: new Date().toISOString(),
     started_at: task.started_at ?? new Date().toISOString(),
   }, store);
+  await logTaskChange(task.id, "start", "status", task.status, "in_progress", agentId, store);
+  return started;
 }
 
 async function completeTask(
