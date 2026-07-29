@@ -62,8 +62,10 @@ import {
   getRecentActivity,
 } from "../db/audit.js";
 import { addComment, listComments } from "../db/comments.js";
+import { addTaskVerification, getTaskVerifications } from "../db/task-commits.js";
 import { getDatabase } from "../db/database.js";
 import { scanSqliteIntegrity } from "../db/integrity.js";
+import { taskMutationRecordId } from "../lib/mutation-idempotency.js";
 import type { TodosStorageAdapter } from "./interfaces.js";
 import {
   exportSqliteTodosStorageSnapshot,
@@ -243,7 +245,11 @@ export function createLocalSqliteTodosStorageAdapter(
     audit: {
       logTaskChange: (taskId, action, field, oldValue, newValue, agentId) =>
         logTaskChange(taskId, action, field, oldValue, newValue, agentId, database()),
-      addComment: (input) => addComment(input, database()),
+      addComment: (input, context) => addComment(
+        input,
+        database(),
+        taskMutationRecordId("comment", input.task_id, context?.requestId),
+      ),
       getComments: (taskId) => listComments(taskId, database()),
       getCommentsPage: (taskId, options) => {
         if (options?.limit !== undefined &&
@@ -264,6 +270,19 @@ export function createLocalSqliteTodosStorageAdapter(
       },
       getTaskHistory: (taskId) => getTaskHistory(taskId, database()),
       getRecentActivity: (limit) => getRecentActivity(limit, database()),
+    },
+    verifications: {
+      add: (input, context) => addTaskVerification(
+        {
+          ...input,
+          output_summary: input.output_summary ?? undefined,
+          artifact_path: input.artifact_path ?? undefined,
+          agent_id: input.agent_id ?? undefined,
+        },
+        database(),
+        taskMutationRecordId("verification", input.task_id, context?.requestId),
+      ),
+      list: (taskId) => getTaskVerifications(taskId, database()),
     },
     sync: {
       getTasksChangedSince: (since, filters) => getTasksChangedSince(since, filters, database()),

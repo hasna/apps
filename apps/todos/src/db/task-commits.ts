@@ -305,9 +305,13 @@ export interface AddTaskVerificationInput {
   run_at?: string;
 }
 
-export function addTaskVerification(input: AddTaskVerificationInput, db?: Database): TaskVerification {
+export function addTaskVerification(input: AddTaskVerificationInput, db?: Database, recordId?: string): TaskVerification {
   const d = db || getDatabase();
-  const id = uuid();
+  const id = recordId ?? uuid();
+  if (recordId) {
+    const existing = d.query("SELECT * FROM task_verifications WHERE id = ?").get(recordId) as TaskVerificationRow | null;
+    if (existing) return rowToVerification(existing);
+  }
   const runAt = input.run_at || now();
   const command = sanitizePreWriteText(input.command, "verification.command");
   const outputSummary = input.output_summary ? sanitizePreWriteText(input.output_summary, "verification.output_summary") : null;

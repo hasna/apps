@@ -26,6 +26,7 @@ import type {
   UpdateTaskInput,
   UpdateTaskListInput,
 } from "../types/index.js";
+import { taskMutationRecordId } from "../lib/mutation-idempotency.js";
 import type {
   ActiveWorkItem,
   TodosActiveWorkFilter,
@@ -1328,9 +1329,14 @@ async function addVerification(
   context?: TodosStorageContext,
 ): Promise<TodosTaskVerification> {
   if (!(await store.get<Task>("tasks", input.task_id))) throw new Error(`Task not found: ${input.task_id}`);
+  const id = taskMutationRecordId("verification", input.task_id, context?.requestId) ?? randomUUID();
+  const existing = context?.requestId
+    ? await store.get<TodosTaskVerification>("verifications", id)
+    : null;
+  if (existing) return existing;
   const timestamp = new Date().toISOString();
   const verification: TodosTaskVerification = {
-    id: randomUUID(),
+    id,
     task_id: input.task_id,
     command: input.command,
     status: input.status ?? "unknown",
@@ -1341,7 +1347,9 @@ async function addVerification(
     created_at: timestamp,
   };
   await store.upsert("verifications", { ...verification, updated_at: timestamp }, context);
-  return verification;
+  const persisted = await store.get<TodosTaskVerification>("verifications", id);
+  if (!persisted) throw new Error("Verification write was not readable from the authoritative store");
+  return persisted;
 }
 
 /** List verifications recorded for a task, newest first. */
@@ -1791,8 +1799,11 @@ async function logTaskChange(
 }
 
 async function addComment(input: CreateCommentInput, store: PostgresJsonRecordStore, context?: TodosStorageContext): Promise<TaskComment> {
+  const id = taskMutationRecordId("comment", input.task_id, context?.requestId) ?? randomUUID();
+  const existing = context?.requestId ? await store.get<TaskComment>("comments", id) : null;
+  if (existing) return redactComment(existing);
   const comment: TaskComment = {
-    id: randomUUID(),
+    id,
     task_id: input.task_id,
     agent_id: input.agent_id ?? context?.agentId ?? null,
     session_id: input.session_id ?? context?.sessionId ?? null,
@@ -1801,7 +1812,10 @@ async function addComment(input: CreateCommentInput, store: PostgresJsonRecordSt
     progress_pct: input.progress_pct ?? null,
     created_at: new Date().toISOString(),
   };
-  return store.upsert("comments", comment, context);
+  await store.upsert("comments", comment, context);
+  const persisted = await store.get<TaskComment>("comments", id);
+  if (!persisted) throw new Error("Comment write was not readable from the authoritative store");
+  return redactComment(persisted);
 }
 
 function redactComment(comment: TaskComment): TaskComment {

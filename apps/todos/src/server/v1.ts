@@ -277,9 +277,17 @@ async function readOptionalJson(req: Request): Promise<{ ok: true; value: unknow
   }
 }
 
-function contextFromPrincipal(principal: { agent: string | null }, body?: { agent_id?: string }): TodosStorageContext {
+function contextFromPrincipal(
+  principal: { agent: string | null },
+  body?: { agent_id?: string },
+  req?: Request,
+): TodosStorageContext {
   const agentId = body?.agent_id || principal.agent || undefined;
-  return agentId ? { agentId } : {};
+  const requestId = req?.headers.get("idempotency-key")?.trim() || undefined;
+  return {
+    ...(agentId ? { agentId } : {}),
+    ...(requestId ? { requestId } : {}),
+  };
 }
 
 function redactComment(comment: TaskComment): TaskComment {
@@ -615,7 +623,7 @@ export async function handleV1Request(
                 type: body.type,
                 progress_pct: body.progress_pct,
               },
-              contextFromPrincipal(principal, body),
+              contextFromPrincipal(principal, body, req),
             );
             return json({ comment: redactComment(comment) }, 201);
           }
@@ -718,7 +726,7 @@ export async function handleV1Request(
                   artifact_path: body.artifact_path,
                   agent_id: body.agent_id,
                 },
-                contextFromPrincipal(principal, body),
+                contextFromPrincipal(principal, body, req),
               );
               return json({ verification }, 201);
             } catch (e) {

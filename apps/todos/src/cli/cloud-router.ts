@@ -1568,6 +1568,46 @@ export interface CloudTaskVerification {
   created_at: string;
 }
 
+function normalizeCloudTaskVerification(value: unknown): CloudTaskVerification | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const verification = value as Record<string, unknown>;
+  if (typeof verification["id"] !== "string" ||
+      typeof verification["task_id"] !== "string" ||
+      typeof verification["command"] !== "string" ||
+      (verification["status"] !== "passed" && verification["status"] !== "failed" && verification["status"] !== "unknown") ||
+      (verification["output_summary"] !== null && typeof verification["output_summary"] !== "string") ||
+      (verification["artifact_path"] !== null && typeof verification["artifact_path"] !== "string") ||
+      (verification["agent_id"] !== null && typeof verification["agent_id"] !== "string") ||
+      typeof verification["run_at"] !== "string" ||
+      typeof verification["created_at"] !== "string") {
+    return null;
+  }
+  return verification as unknown as CloudTaskVerification;
+}
+
+/** List persisted verification evidence for one cloud task. */
+export async function cloudListVerifications(
+  client: HasnaStorageClient,
+  id: string,
+): Promise<CloudTaskVerification[]> {
+  const raw = await client.transport.get<unknown>(`/tasks/${encodeURIComponent(id)}/verifications`);
+  const envelope = raw && typeof raw === "object" && !Array.isArray(raw)
+    ? raw as { verifications?: unknown; count?: unknown }
+    : null;
+  if (!envelope || !Array.isArray(envelope.verifications)) {
+    throw new Error("Invalid cloud verifications response");
+  }
+  const verifications = envelope.verifications.map((item) => {
+    const verification = normalizeCloudTaskVerification(item);
+    if (!verification) throw new Error("Invalid cloud verifications response");
+    return verification;
+  });
+  if (envelope.count !== undefined && envelope.count !== verifications.length) {
+    throw new Error("Invalid cloud verifications response count");
+  }
+  return verifications;
+}
+
 /**
  * Record a verification command + result against a cloud task
  * (`POST /v1/tasks/:id/verifications`). The previous local path wrote the row to
@@ -1580,10 +1620,12 @@ export async function cloudRecordVerification(
   input: { command: string; status?: string; output_summary?: string; artifact_path?: string; agent_id?: string },
 ): Promise<CloudTaskVerification> {
   const raw = await client.transport.post<unknown>(`/tasks/${encodeURIComponent(id)}/verifications`, input);
-  if (raw && typeof raw === "object" && "verification" in (raw as Record<string, unknown>)) {
-    return (raw as { verification: CloudTaskVerification }).verification;
-  }
-  return raw as CloudTaskVerification;
+  const candidate = raw && typeof raw === "object" && "verification" in (raw as Record<string, unknown>)
+    ? (raw as { verification: unknown }).verification
+    : raw;
+  const verification = normalizeCloudTaskVerification(candidate);
+  if (!verification) throw new Error("Invalid cloud verification response");
+  return verification;
 }
 
 // ───────────────────────────────────────────────────────────────────────────

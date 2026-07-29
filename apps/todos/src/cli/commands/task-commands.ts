@@ -22,6 +22,7 @@ import {
   cloudListTasks,
   cloudGetTask,
   cloudListComments,
+  cloudListVerifications,
   cloudGetTaskRelations,
   cloudCreateTask,
   cloudUpdateTask,
@@ -90,6 +91,24 @@ async function cloudDetailRelations(
       console.error(chalk.dim(`Warning: could not load task dependencies: ${e instanceof Error ? e.message : String(e)}`));
     }
     return { dependencies: [], blocked_by: [], blocks: [] };
+  }
+}
+
+/**
+ * Pre-verification-route servers may still serve task details. Treat only that
+ * explicit compatibility gap as empty evidence; malformed responses and live
+ * server failures must propagate so inspect never reports a false clean read.
+ */
+async function cloudDetailVerifications(
+  cloud: Parameters<typeof cloudListVerifications>[0],
+  id: string,
+): Promise<Awaited<ReturnType<typeof cloudListVerifications>>> {
+  try {
+    return await cloudListVerifications(cloud, id);
+  } catch (e) {
+    const status = (e as { status?: unknown } | null)?.status;
+    if (status === 404 || status === 501) return [];
+    throw e;
   }
 }
 
@@ -822,12 +841,17 @@ export function registerTaskCommands(program: Command) {
       let task: any;
       if (cloud) {
         const remote = await cloudGetTask(cloud, await resolveTaskIdForCommand(id, cloud));
-        const commentPage = remote ? await cloudListComments(cloud, remote.id) : null;
+        const [commentPage, verifications, relations] = remote
+          ? await Promise.all([
+              cloudListComments(cloud, remote.id),
+              cloudDetailVerifications(cloud, remote.id),
+              cloudDetailRelations(cloud, remote.id),
+            ])
+          : [null, null, null];
         // The /v1 API returns the task row without relation graphs, so the
         // dependency edges are read separately and hydrated into task rows —
         // otherwise remote detail views claim a task has no dependencies while
         // `deps <id>` lists them (issue #58).
-        const relations = remote ? await cloudDetailRelations(cloud, remote.id) : null;
         task = remote
           ? {
               subtasks: [], ...remote, tags: remote.tags ?? [],
@@ -835,6 +859,7 @@ export function registerTaskCommands(program: Command) {
               blocked_by: relations!.blocked_by,
               blocks: relations!.blocks,
               comments: commentPage!.comments,
+              verifications: verifications!,
               comments_page: {
                 count: commentPage!.count,
                 limit: commentPage!.limit,
@@ -847,6 +872,10 @@ export function registerTaskCommands(program: Command) {
       } else {
         const resolvedId = resolveTaskId(id);
         task = getTaskWithRelations(resolvedId);
+        if (task) {
+          const { getTaskVerifications } = await import("../../db/task-commits.js");
+          task = { ...task, verifications: getTaskVerifications(task.id) };
+        }
       }
 
       if (!task) {
@@ -951,12 +980,17 @@ export function registerTaskCommands(program: Command) {
       let task: any;
       if (cloud) {
         const remote = await cloudGetTask(cloud, resolvedId);
-        const commentPage = remote ? await cloudListComments(cloud, remote.id) : null;
+        const [commentPage, verifications, relations] = remote
+          ? await Promise.all([
+              cloudListComments(cloud, remote.id),
+              cloudDetailVerifications(cloud, remote.id),
+              cloudDetailRelations(cloud, remote.id),
+            ])
+          : [null, null, null];
         // The /v1 API returns the task row without relation graphs, so the
         // dependency edges are read separately and hydrated into task rows —
         // otherwise `inspect` never prints the BLOCKED warning for a remote
         // task whose upstream work is unfinished (issue #58).
-        const relations = remote ? await cloudDetailRelations(cloud, remote.id) : null;
         task = remote
           ? {
               subtasks: [], checklist: [], ...remote, tags: remote.tags ?? [],
@@ -964,6 +998,7 @@ export function registerTaskCommands(program: Command) {
               blocked_by: relations!.blocked_by,
               blocks: relations!.blocks,
               comments: commentPage!.comments,
+              verifications: verifications!,
               comments_page: {
                 count: commentPage!.count,
                 limit: commentPage!.limit,
@@ -980,9 +1015,10 @@ export function registerTaskCommands(program: Command) {
 
       if (globalOpts.json && !cloud) {
         const { listTaskFiles } = await import("../../db/task-files.js");
-        const { getTaskCommits } = await import("../../db/task-commits.js");
+        const { getTaskCommits, getTaskVerifications } = await import("../../db/task-commits.js");
         try { (task as any).files = listTaskFiles(task.id); } catch (e) { console.error(chalk.dim(`Warning: could not load task files: ${e instanceof Error ? e.message : String(e)}`)); }
         try { (task as any).commits = getTaskCommits(task.id); } catch (e) { console.error(chalk.dim(`Warning: could not load task commits: ${e instanceof Error ? e.message : String(e)}`)); }
+        try { (task as any).verifications = getTaskVerifications(task.id); } catch (e) { console.error(chalk.dim(`Warning: could not load task verifications: ${e instanceof Error ? e.message : String(e)}`)); }
         output(task, true);
         return;
       }

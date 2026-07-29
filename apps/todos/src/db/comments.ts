@@ -8,6 +8,7 @@ import { sanitizePreWriteText } from "../lib/prewrite-secrets.js";
 export function addComment(
   input: CreateCommentInput,
   db?: Database,
+  recordId?: string,
 ): TaskComment {
   const d = db || getDatabase();
 
@@ -16,7 +17,9 @@ export function addComment(
     throw new TaskNotFoundError(input.task_id);
   }
 
-  const id = uuid();
+  const id = recordId ?? uuid();
+  const existing = recordId ? getComment(recordId, d) : null;
+  if (existing) return existing;
   const timestamp = now();
 
   d.run(
