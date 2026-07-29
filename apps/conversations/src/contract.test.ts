@@ -34,7 +34,7 @@ describe("Cursor MCP discovery", () => {
   test("registers the conversations MCP server from this checkout", () => {
     expect(cursorMcp.mcpServers.conversations).toEqual({
       command: "bun",
-      args: ["run", "src/mcp/index.ts"],
+      args: ["run", "src/mcp/index.ts", "--stdio"],
     });
   });
 });

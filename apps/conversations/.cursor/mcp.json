@@ -2,7 +2,7 @@
   "mcpServers": {
     "conversations": {
       "command": "bun",
-      "args": ["run", "src/mcp/index.ts"]
+      "args": ["run", "src/mcp/index.ts", "--stdio"]
     }
   }
 }
