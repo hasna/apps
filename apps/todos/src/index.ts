@@ -2182,6 +2182,38 @@ export type {
   LocalActivityTimelineSource,
 } from "./lib/activity-timeline.js";
 export { runTodosDoctor } from "./lib/doctor.js";
+export {
+  INTEGRITY_CONDITIONS,
+  OPEN_TASK_STATUSES,
+  adoptRemoteIntegrityReport,
+  TODOS_INTEGRITY_SCHEMA_VERSION,
+  buildIntegrityReport,
+  buildPostgresIntegritySql,
+  buildSqliteIntegritySql,
+  formatIntegrityMessage,
+  integrityCondition,
+  measureIntegrityRows,
+  measuredCondition,
+  resolveIntegritySeverity,
+  summarizeIntegrity,
+  unverifiedCondition,
+} from "./lib/integrity.js";
+export type {
+  IntegrityCondition,
+  IntegrityConditionSpec,
+  IntegrityEntity,
+  IntegrityMeasurement,
+  IntegrityReferenceKind,
+  IntegrityReport,
+  IntegrityRowSets,
+  IntegritySeverity,
+  IntegritySource,
+  IntegritySummary,
+  IntegrityTarget,
+  IntegrityTaskListRow,
+  IntegrityTaskRow,
+} from "./lib/integrity.js";
+export { scanSqliteIntegrity } from "./db/integrity.js";
 export type {
   DoctorBackup,
   DoctorCheck,

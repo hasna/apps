@@ -13,6 +13,7 @@ import type { Agent, CreatePlanInput, CreateTaskListInput, CreateTemplateInput, 
 import { isBlockingDependencyStatus } from "../types/index.js";
 import type { UpdateTemplateInput } from "../storage/interfaces.js";
 import { redactEvidenceText } from "../lib/redaction.js";
+import type { IntegrityReport, IntegrityTaskRow } from "../lib/integrity.js";
 import type { PrGroupEventListOptions, PrGroupEventPage, PrGroupStateView } from "../pr-groups/types.js";
 import { parsePrGroupEventPage, parsePrGroupStateView } from "../pr-groups/http-client.js";
 
@@ -698,6 +699,118 @@ export async function cloudGetStats(client: HasnaStorageClient): Promise<CloudSt
   const raw = await requiredRemoteRoute(client, "/v1/stats", () =>
     client.transport.get<unknown>("/stats"));
   return (raw ?? {}) as CloudStats;
+}
+
+/**
+ * HTTP status of an error that means "this authority does not expose the route"
+ * (404) or "the backing store cannot answer it" (501), unwrapping the classified
+ * wrapper `protectRemoteClient` puts around transport errors. Anything else is a
+ * real failure and must keep propagating — a diagnostic that swallowed errors
+ * would be the same lie in a new place.
+ */
+function remoteRouteMissingStatus(error: unknown): number | null {
+  for (let current: unknown = error, depth = 0; current && depth < 3; depth++) {
+    const status = typeof current === "object" ? (current as { status?: unknown }).status : undefined;
+    if (status === 404 || status === 501) return status;
+    if (current instanceof Error && /HTTP (404|501)\b/.test(current.message)) {
+      return Number(/HTTP (404|501)\b/.exec(current.message)![1]);
+    }
+    current = typeof current === "object" ? (current as { cause?: unknown }).cause : undefined;
+  }
+  return null;
+}
+
+/**
+ * Referential-integrity report from the authority (`GET /v1/integrity`).
+ *
+ * Returns `null` — NOT an empty/clean report — when the authority predates the
+ * route (404) or its storage backend cannot answer it (501), so the caller reports
+ * those conditions as UNVERIFIED instead of healthy.
+ */
+export async function cloudGetIntegrityReport(client: HasnaStorageClient): Promise<IntegrityReport | null> {
+  try {
+    const raw = await client.transport.get<unknown>("/integrity");
+    const envelope = (raw ?? {}) as { integrity?: IntegrityReport };
+    const report = envelope.integrity ?? (raw as IntegrityReport | null);
+    if (!report || typeof report !== "object" || !Array.isArray((report as IntegrityReport).conditions)) {
+      throw new Error(
+        "REMOTE_API_INCOMPATIBLE: GET /v1/integrity did not return a condition breakdown; " +
+          "local SQLite fallback is disabled",
+      );
+    }
+    return report;
+  } catch (error) {
+    if (remoteRouteMissingStatus(error) !== null) return null;
+    throw error;
+  }
+}
+
+/** Outcome of a paged client-side task scan over `/v1/tasks`. */
+export interface CloudTaskScan {
+  /** True only when every task row the authority reported was seen. */
+  complete: boolean;
+  reason?: string;
+  scanned: number;
+  total: number | null;
+  pages: number;
+  rows: IntegrityTaskRow[];
+}
+
+/**
+ * Page every task over `/v1/tasks` and project each row down to the fields the
+ * integrity conditions need.
+ *
+ * This is the TRANSITIONAL path for an authority that has no `/v1/integrity`
+ * aggregate: `/v1/tasks` cannot express `project_id IS NULL` (the filter only
+ * binds when truthy), so the only honest client-side alternative to a server-side
+ * COUNT is to look at every row. It is opt-in (`doctor --scan-tasks`) because it
+ * costs one request per page, and it is READ-ONLY.
+ *
+ * Bounded and never optimistic: rows are deduped by id (the list order is
+ * priority/recency, so a concurrent write can shift a row between pages), a short
+ * page ends the walk, and finishing with fewer rows than the authority's own
+ * `total` marks the scan INCOMPLETE rather than reporting a partial count as truth.
+ */
+export async function cloudScanTaskRows(
+  client: HasnaStorageClient,
+  options: { pageSize?: number; maxPages?: number } = {},
+): Promise<CloudTaskScan> {
+  const pageSize = Math.max(1, Math.min(1_000, options.pageSize ?? 1_000));
+  const maxPages = Math.max(1, options.maxPages ?? 2_000);
+  const seen = new Set<string>();
+  const rows: IntegrityTaskRow[] = [];
+  let total: number | null = null;
+  let pages = 0;
+  let offset = 0;
+  let reason: string | undefined;
+
+  while (pages < maxPages) {
+    const res = await requiredRemoteRoute(client, "/v1/tasks", () =>
+      client.list<Task>("tasks", { query: { limit: pageSize, offset, include_subtasks: "true" } }));
+    const envelope = res.raw as { tasks?: Task[]; total?: number } | undefined;
+    const page = Array.isArray(envelope?.tasks) ? envelope!.tasks : res.items;
+    if (typeof envelope?.total === "number") total = envelope.total;
+    pages++;
+    for (const task of page) {
+      const id = typeof task?.id === "string" ? task.id : null;
+      if (id !== null) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+      }
+      rows.push({
+        project_id: task?.project_id ?? null,
+        task_list_id: task?.task_list_id ?? null,
+        status: task?.status ?? null,
+      });
+    }
+    if (page.length < pageSize) break;
+    offset += page.length;
+  }
+  if (pages >= maxPages) reason = `scan stopped at the ${maxPages}-page cap`;
+  else if (total !== null && rows.length < total) {
+    reason = `scan saw ${rows.length} of ${total} tasks the authority reported (the dataset changed mid-scan)`;
+  }
+  return { complete: reason === undefined, ...(reason ? { reason } : {}), scanned: rows.length, total, pages, rows };
 }
 
 /** List registered agents from the cloud (`GET /v1/agents`). */

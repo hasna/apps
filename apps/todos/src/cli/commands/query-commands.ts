@@ -83,6 +83,13 @@ import {
   cloudListPlans,
   cloudListTaskLists,
 } from "../cloud-router.js";
+import {
+  buildRemoteIntegrityReport,
+  doctorExitCode,
+  printDoctorVerdict,
+  printIntegrityReport,
+  resolveDoctorVerdict,
+} from "../doctor-integrity.js";
 import { TASK_STATUSES } from "../../types/index.js";
 
 function parseJsonObjectOption(value: string | undefined, label: string): Record<string, unknown> | undefined {
@@ -880,14 +887,24 @@ export function registerQueryCommands(program: Command) {
   // doctor
   const doctor = program
     .command("doctor")
-    .description("Diagnose and optionally repair local task data issues")
-    .option("--apply", "Apply safe repairs. Defaults to dry-run.")
+    .description("Diagnose task data issues — schema, referential integrity (orphans, dangling references), and local hygiene")
+    .option("--apply", "Apply safe SCHEMA repairs. Defaults to dry-run. NEVER repairs integrity findings.")
     .option("--fix", "Alias for --apply")
+    .option(
+      "--scan-tasks",
+      "Remote mode only: derive task-level integrity counts by paging /v1/tasks when the authority exposes no /v1/integrity aggregate. Read-only, one request per page.",
+    )
+    .option(
+      "--no-fail-on-findings",
+      "Exit 0 even when doctor finds orphans or dangling references (for a legacy consumer that gates on the exit code). Findings are still reported.",
+    )
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
       const globalOpts = program.opts();
+      const jsonMode = Boolean(opts.json || globalOpts.json);
       const cloud = getTodosCloudClient();
       if (cloud) {
+        // Guarded before any request: --apply must never reach a shared authority.
         if (opts.apply || opts.fix) {
           handleError(new Error(
             "REMOTE_COMMAND_UNSUPPORTED: doctor --apply cannot repair a remote /v1 authority; local SQLite fallback is disabled",
@@ -899,9 +916,25 @@ export function registerQueryCommands(program: Command) {
           cloudListTaskLists(cloud),
           cloudListPlans(cloud),
         ]);
+        const { integrity, scan } = await buildRemoteIntegrityReport(cloud, {
+          projects,
+          taskLists,
+          scanTasks: Boolean(opts.scanTasks),
+        });
+        const verdict = resolveDoctorVerdict(doctorExitCode({
+          errors: integrity.summary.errors,
+          findings: integrity.summary.findings,
+          incomplete: !integrity.summary.complete,
+        }), opts.failOnFindings !== false);
         const result = {
           schema_version: "todos.remote-doctor.v1",
-          ok: true,
+          // Honest verdict: derived from the very condition rows printed below.
+          ok: integrity.summary.ok,
+          // `exit_code` is the status the process RETURNS; `verdict_exit_code` is
+          // what the rows imply. They differ only under --no-fail-on-findings.
+          exit_code: verdict.effective,
+          verdict_exit_code: verdict.verdict,
+          fail_on_findings: verdict.fail_on_findings,
           dry_run: true,
           mode: "remote-http",
           authority: { v1_base_url: cloud.baseUrl, local_fallback: false },
@@ -912,34 +945,62 @@ export function registerQueryCommands(program: Command) {
             plans: plans.length,
             tasks: stats.tasks,
           },
+          integrity,
+          ...(scan ? { scan: { complete: scan.complete, scanned: scan.scanned, total: scan.total, pages: scan.pages, ...(scan.reason ? { reason: scan.reason } : {}) } } : {}),
         };
-        if (opts.json || globalOpts.json) console.log(JSON.stringify(result));
+        if (jsonMode) console.log(JSON.stringify(result));
         else {
           console.log(chalk.bold("todos doctor (remote)\n"));
           console.log(`  ${chalk.green("✓")} Authenticated /v1 authority: ${cloud.baseUrl}`);
           console.log(`  ${chalk.green("✓")} Required coordination routes are available`);
           console.log("  Local fallback: disabled");
+          printIntegrityReport(integrity);
+          if (scan && !scan.complete) console.log(chalk.yellow(`  ! task scan incomplete: ${scan.reason}`));
+          printDoctorVerdict(verdict, integrity.summary, {
+            hint: integrity.conditions.some((condition) => !condition.verified) && !opts.scanTasks
+              ? "Re-run with --scan-tasks to derive the unverified task counts from /v1/tasks, or deploy an authority that exposes GET /v1/integrity."
+              : undefined,
+          });
         }
+        process.exitCode = verdict.effective;
         return;
       }
       const { runTodosDoctor } = await import("../../lib/doctor.js");
       const result = runTodosDoctor({ apply: Boolean(opts.apply || opts.fix) });
+      const verdict = resolveDoctorVerdict(doctorExitCode({
+        errors: result.summary.errors,
+        findings: result.summary.integrity_findings,
+        incomplete: result.summary.integrity_unverified > 0,
+      }), opts.failOnFindings !== false);
 
-      if (opts.json || globalOpts.json) {
-        console.log(JSON.stringify(result));
+      if (jsonMode) {
+        console.log(JSON.stringify({
+          ...result,
+          exit_code: verdict.effective,
+          verdict_exit_code: verdict.verdict,
+          fail_on_findings: verdict.fail_on_findings,
+        }));
+        process.exitCode = verdict.effective;
         return;
       }
 
       console.log(chalk.bold("todos doctor\n"));
+      // Never let a flag be silently ignored — that is a smaller version of the
+      // same defect this command was fixed for.
+      if (opts.scanTasks) {
+        console.log(chalk.dim("  Note: --scan-tasks applies to a remote authority only; local SQL counts every condition directly."));
+      }
       console.log(`  ${chalk.dim("Mode:")} ${result.dry_run ? "dry-run" : "apply"}`);
       console.log(`  ${chalk.dim("Database:")} ${result.database_path}`);
       if (result.backup) console.log(`  ${chalk.dim("Backup:")} ${result.backup.path}`);
       console.log("");
-      for (const check of result.checks) {
+      // Integrity findings render in their own per-condition breakdown below.
+      for (const check of result.checks.filter((entry) => !entry.integrity)) {
         const icon = check.severity === "error" ? chalk.red("x") : check.severity === "warn" ? chalk.yellow("!") : chalk.green("✓");
         const count = check.count === undefined ? "" : ` (${check.count})`;
         console.log(`  ${icon} ${check.message}${count}`);
       }
+      printIntegrityReport(result.integrity);
       if (result.repairs.length > 0) {
         console.log(chalk.bold("\nRepairs"));
         for (const repair of result.repairs) {
@@ -949,9 +1010,16 @@ export function registerQueryCommands(program: Command) {
         }
       }
       const { errors, warnings } = result.summary;
-      if (errors === 0 && warnings === 0) console.log(chalk.green("\n  All clear."));
-      else if (result.dry_run) console.log(chalk[errors > 0 ? "red" : "yellow"](`\n  ${errors} error(s), ${warnings} warning(s). Run with --apply to apply safe repairs after reviewing the dry-run.`));
-      else console.log(chalk[errors > 0 ? "red" : "yellow"](`\n  ${errors} error(s), ${warnings} warning(s) remain after repair.`));
+      if (verdict.verdict === 0 && errors === 0 && warnings === 0) console.log(chalk.green("\n  All clear."));
+      else {
+        printDoctorVerdict(verdict, result.integrity.summary, {
+          hint: result.summary.repairable > 0 && result.dry_run
+            ? "Run with --apply to apply safe SCHEMA repairs after reviewing the dry-run."
+            : undefined,
+        });
+        console.log(chalk.dim(`  ${errors} error(s), ${warnings} warning(s) across all checks.`));
+      }
+      process.exitCode = verdict.effective;
     });
 
   // doctor routing — deterministic routing-metadata drift detection + safe repair

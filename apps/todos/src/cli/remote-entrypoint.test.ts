@@ -1117,7 +1117,8 @@ describe("remote CLI entrypoint authority boundary", () => {
         ["--project", PROJECT_ID, "--json", "plans", "--complete", PLAN_ID],
         ["--project", PROJECT_ID, "--json", "status"],
         ["--json", "health"],
-        ["--json", "doctor"],
+        // `doctor` is asserted separately below: it is the one read-only command
+        // whose exit code is a VERDICT, not just "the call succeeded".
         ["--json", "add", "Remote task", "--project", PROJECT_ID, "--list", LIST_ID, "--plan", PLAN_ID],
         ["--json", "task", "upsert", "--fingerprint", "incident-593127", "--title", "Upserted task", "--project", PROJECT_ID, "--list", LIST_ID],
         ["--project", PROJECT_ID, "--json", "list", "--list", LIST_ID],
@@ -1156,6 +1157,23 @@ describe("remote CLI entrypoint authority boundary", () => {
       for (const invocation of invocations) {
         await runRemoteOk(invocation);
       }
+
+      // `doctor` must NOT report a clean bill of health it did not establish.
+      // This fixture authority exposes no GET /v1/integrity aggregate, so the four
+      // task-level referential conditions cannot be counted: doctor reports them as
+      // NOT CHECKED and exits 2 (incomplete). It used to return a hardcoded
+      // `ok: true` and exit 0 here, which is how a dataset carrying five figures of
+      // orphaned rows passed as healthy.
+      const doctorIncomplete = await runCli(executable, ["--json", "doctor"], env, cwd);
+      expect({ exitCode: doctorIncomplete.exitCode, stderr: doctorIncomplete.stderr }).toEqual({ exitCode: 2, stderr: "" });
+      const doctorReport = JSON.parse(doctorIncomplete.stdout) as {
+        ok: boolean;
+        exit_code: number;
+        integrity: { summary: { ok: boolean; findings: number; unverified: number; complete: boolean } };
+      };
+      expect(doctorReport).toMatchObject({ ok: false, exit_code: 2 });
+      expect(doctorReport.integrity.summary).toMatchObject({ ok: false, findings: 0, unverified: 4, complete: false });
+      expectNoLocalDatabase(root, localDbPath);
 
       // `bulk plan|move-plan` must reassign plans through the shared dataset:
       // the plan ref is resolved remotely (no local sqlite) and each task is

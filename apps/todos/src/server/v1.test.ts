@@ -624,3 +624,50 @@ describe("/v1 short task reference resolution", () => {
     expect((await request("/v1/tasks/dddddddd"))?.status).toBe(409);
   });
 });
+
+describe("/v1/integrity", () => {
+  test("GET reports every referential condition from the backing store (SQLite half of the duality gate)", async () => {
+    const created = await request("/v1/projects", "POST", { name: "Integrity", path: "/workspace/integrity" });
+    const project = (await created!.json() as { project: { id: string } }).project;
+    const listResponse = await request("/v1/task-lists", "POST", { name: "Bound list", slug: "bound-list", project_id: project.id });
+    const list = (await listResponse!.json() as { task_list: { id: string } }).task_list;
+    await request("/v1/tasks", "POST", { title: "healthy", project_id: project.id, task_list_id: list.id });
+
+    const clean = await request("/v1/integrity");
+    expect(clean?.status).toBe(200);
+    const cleanBody = await clean!.json() as {
+      integrity: { schema_version: string; source: string; summary: { ok: boolean; findings: number }; conditions: Array<{ id: string; count: number }> };
+    };
+    expect(cleanBody.integrity.schema_version).toBe("todos.integrity.v1");
+    expect(cleanBody.integrity.summary).toMatchObject({ ok: true, findings: 0 });
+    expect(cleanBody.integrity.conditions).toHaveLength(6);
+
+    // An unrouted OPEN task and an unbound list must both surface as findings.
+    await request("/v1/tasks", "POST", { title: "unrouted" });
+    await request("/v1/task-lists", "POST", { name: "Unbound list", slug: "unbound-list" });
+
+    const dirty = await request("/v1/integrity");
+    const dirtyBody = await dirty!.json() as {
+      integrity: {
+        summary: { ok: boolean; findings: number; rows: number; errors: number; unverified: number };
+        conditions: Array<{ id: string; count: number; open_count: number | null; severity: string | null }>;
+      };
+    };
+    const byId = new Map(dirtyBody.integrity.conditions.map((condition) => [condition.id, condition]));
+    expect(byId.get("tasks_without_project")).toMatchObject({ count: 1, open_count: 1, severity: "error" });
+    expect(byId.get("tasks_without_task_list")).toMatchObject({ count: 1, open_count: 1, severity: "error" });
+    expect(byId.get("task_lists_without_project")).toMatchObject({ count: 1, severity: "warn" });
+    expect(dirtyBody.integrity.summary).toMatchObject({ ok: false, findings: 3, rows: 3, unverified: 0 });
+  });
+
+  test("rejects a write method and 501s a backend that cannot answer it", async () => {
+    expect((await request("/v1/integrity", "POST", {}))?.status).toBe(405);
+
+    const withoutIntegrity = { ...store } as typeof store & { integrity?: unknown };
+    delete withoutIntegrity.integrity;
+    const url = new URL("https://todos.example.test/v1/integrity");
+    const response = await handleV1Request(new Request(url), url, { ...dependencies, getStorageAdapter: () => withoutIntegrity });
+    expect(response?.status).toBe(501);
+    expect(await response!.json()).toMatchObject({ error: expect.stringContaining("not supported") });
+  });
+});

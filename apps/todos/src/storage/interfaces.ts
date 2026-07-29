@@ -25,6 +25,7 @@ import type {
   UpdateTaskInput,
   UpdateTaskListInput,
 } from "../types/index.js";
+import type { IntegrityReport } from "../lib/integrity.js";
 
 export type MaybePromise<T> = T | Promise<T>;
 
@@ -70,7 +71,27 @@ export interface TodosStorageAdapter {
   readonly commits?: TodosCommitStore;
   /** Git branch/PR ref links (optional; present on the Postgres adapter). */
   readonly gitRefs?: TodosGitRefStore;
+  /**
+   * Referential-integrity counts (orphaned and dangling project / task-list
+   * references) computed SQL-side by the backing engine.
+   *
+   * Implemented by BOTH the SQLite and the Postgres adapters: a check that exists
+   * for only one engine reports healthy on the other, which is exactly how five
+   * figures of orphaned rows stayed invisible. Optional on the interface only so a
+   * third-party adapter is not broken by the addition — `GET /v1/integrity`
+   * answers 501 when it is absent, and doctor reports the conditions as
+   * UNVERIFIED rather than clean.
+   */
+  readonly integrity?: TodosIntegrityStore;
   transaction?<T>(fn: (adapter: TodosStorageAdapter) => MaybePromise<T>, context?: TodosStorageContext): MaybePromise<T>;
+}
+
+export interface TodosIntegrityStore {
+  /**
+   * Count every condition in `INTEGRITY_CONDITIONS` against the backing store.
+   * Report-only: it must never repair, delete or rewrite a row.
+   */
+  report(context?: TodosStorageContext): MaybePromise<IntegrityReport>;
 }
 
 export interface TodosTaskCommitRecord {

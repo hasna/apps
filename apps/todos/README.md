@@ -1373,29 +1373,93 @@ Name`, checkbox items, optional `priority: high`, `comment: ...`, `depends_on:
 Other task title`, `run: completed smoke`, `#tags`, and `@agent` markers to
 migrate older files without a hosted service.
 
-## Local Doctor and Repair
+## Doctor: referential integrity and the exit-code contract
 
-`todos doctor` audits the local SQLite database without calling hosted services.
-By default it is a dry-run and reports schema/migration drift, orphaned rows,
-duplicate indexes, invalid JSON metadata, missing project roots, and unsafe
-database file permissions:
+`todos doctor` reports schema/migration drift, referential integrity, duplicate
+indexes, invalid JSON metadata, missing project roots, and unsafe database file
+permissions. In local mode it audits SQLite without calling hosted services; in
+remote mode it audits the configured `/v1` authority.
 
 ```bash
 todos doctor
 todos doctor --json
 ```
 
-Safe repairs require explicit apply mode. Before any mutation, the command
-creates a local backup next to the database when the database is file-backed:
+### Exit codes
+
+| code | meaning |
+| --- | --- |
+| `0` | CLEAN — every referential condition was measured and every count is zero. |
+| `1` | FINDINGS — at least one orphaned/dangling reference, or an error-severity schema check. |
+| `2` | INCOMPLETE — no findings, but a condition could not be measured, so health was **not** established. |
+
+Advisory warnings (stale `in_progress` tasks, project paths missing on this
+machine, duplicate indexes) are reported but do **not** change the exit code.
+Findings dominate an incomplete report: a run with both exits `1` and says how
+many conditions went unchecked.
+
+`--no-fail-on-findings` forces exit `0` for a legacy consumer that gates on the
+exit code. The findings are still printed, and the suppression is stated rather
+than hidden — the printed code is always the one the process returns:
+
+```
+6 integrity condition(s) FAILED — 6 row(s) affected (5 error, 1 warning). (exit 0 — findings gate suppressed by --no-fail-on-findings; the verdict is 1)
+```
+
+`--json` therefore carries both numbers, and they must never be conflated:
+
+| field | meaning |
+| --- | --- |
+| `exit_code` | the status the process **returns** (what a caller observes) |
+| `verdict_exit_code` | the status the reported rows **imply**, ignoring suppression |
+| `fail_on_findings` | `false` when the gate was opted out of |
+
+### Referential conditions
+
+Doctor counts each condition separately and prints every one of them —
+including the zeroes — so "measured and clean" and "never measured" are visually
+distinct:
+
+| condition | severity |
+| --- | --- |
+| `tasks_without_project` | warn, **error** when it hides open work |
+| `tasks_without_task_list` | warn, **error** when it hides open work |
+| `tasks_with_unregistered_project` | error |
+| `tasks_with_unregistered_task_list` | error |
+| `task_lists_without_project` | warn |
+| `task_lists_with_unregistered_project` | error |
+
+Counts come from the backing engine, one aggregate query per condition, for
+**both** storage engines (SQLite tables and the Postgres JSONB record store,
+which has no foreign keys and is therefore where these rows accumulate). A
+self-hosted authority exposes them at `GET /v1/integrity`; a backend that cannot
+answer returns `501` rather than a false clean.
+
+In remote mode doctor prefers that aggregate. When the authority does not expose
+it, the task-list conditions are still derived exactly from the collections
+doctor already fetches, and the task-level conditions are reported as
+`NOT CHECKED` unless you opt into a read-only paged walk of `/v1/tasks`:
+
+```bash
+todos doctor --scan-tasks     # remote only; one GET per page, no writes
+```
+
+### Repair
+
+Integrity findings are **report-only**: `--apply` never rewrites, deletes or
+re-points an orphaned row, because deciding what happens to existing orphans is
+an owner decision, not a diagnostic's. Safe repairs require explicit apply mode
+and, when the database is file-backed, a local backup is created first:
 
 ```bash
 todos doctor --apply
 ```
 
-Repairs are limited to local integrity fixes such as running the migration
-safety net, clearing missing parent references, pruning orphaned dependency/run
-rows, resetting invalid metadata JSON to `{}`, dropping duplicate non-primary
-indexes, and tightening database file permissions.
+Repairs are limited to local schema/hygiene fixes: running the migration safety
+net, clearing missing parent references, pruning orphaned dependency/run rows,
+resetting invalid metadata JSON to `{}`, dropping duplicate non-primary indexes,
+and tightening database file permissions. `--apply` is refused outright against
+a remote authority.
 
 ## MCP Server
 

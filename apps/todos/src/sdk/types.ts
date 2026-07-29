@@ -212,7 +212,18 @@ export interface DoctorIssue {
 }
 
 export interface DoctorResponse {
+  /**
+   * False when an error-severity check failed, a referential-integrity condition
+   * has matching rows, OR a condition could not be measured. It is NOT a
+   * "the request succeeded" flag.
+   */
   ok: boolean;
+  /** Status the `doctor` process RETURNS (0 clean, 1 findings, 2 incomplete). */
+  exit_code?: 0 | 1 | 2;
+  /** Status the reported rows IMPLY, ignoring `--no-fail-on-findings`. */
+  verdict_exit_code?: 0 | 1 | 2;
+  /** False when the findings gate was opted out of, making `exit_code` 0 regardless. */
+  fail_on_findings?: boolean;
   dry_run?: boolean;
   database_path?: string;
   migration?: { current: number; expected: number };
@@ -220,7 +231,44 @@ export interface DoctorResponse {
   checks?: DoctorIssue[];
   repairs?: Array<{ type: string; message: string; applied: boolean; count?: number }>;
   backup?: { path: string; files: string[] };
-  summary?: { errors: number; warnings: number; infos: number; repairable: number; applied: number };
+  summary?: {
+    errors: number;
+    warnings: number;
+    infos: number;
+    repairable: number;
+    applied: number;
+    integrity_findings?: number;
+    integrity_rows?: number;
+    integrity_unverified?: number;
+  };
+  /**
+   * Per-condition referential-integrity breakdown (`todos.integrity.v1`). A
+   * condition with `count: null` was NOT measured — it is never a zero.
+   */
+  integrity?: {
+    schema_version: string;
+    generated_at: string;
+    source: string;
+    conditions: Array<{
+      id: string;
+      count: number | null;
+      open_count: number | null;
+      severity: "warn" | "error" | null;
+      verified: boolean;
+      unverified_reason?: string;
+      message: string;
+      impact: string;
+    }>;
+    summary: {
+      ok: boolean;
+      findings: number;
+      rows: number;
+      errors: number;
+      warnings: number;
+      unverified: number;
+      complete: boolean;
+    };
+  };
 }
 
 // ── SSE Event ────────────────────────────────────────────────────────────────

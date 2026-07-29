@@ -58,6 +58,15 @@ import {
   type TodosPostgresQueryClient,
   type TodosPostgresSyncRecordType,
 } from "./postgres-sync.js";
+import {
+  buildIntegrityReport,
+  buildPostgresIntegritySql,
+  INTEGRITY_CONDITIONS,
+  measuredCondition,
+  unverifiedCondition,
+  type IntegrityCondition,
+  type IntegrityReport,
+} from "../lib/integrity.js";
 import { redactEvidenceText } from "../lib/redaction.js";
 import {
   isCanonicalSlug,
@@ -240,6 +249,9 @@ export function createPostgresTodosStorageAdapter(
       getTasksChangedSince: (since, filters) => getChangedSince(since, filters, store),
       exportSnapshot: () => exportSnapshot(store),
       importSnapshot: (snapshot, context) => importSnapshot(snapshot, store, context),
+    },
+    integrity: {
+      report: () => store.integrityReport(),
     },
     transaction: (fn) => fn(adapter),
   };
@@ -511,6 +523,39 @@ class PostgresJsonRecordStore {
     const sql = `/* todos:count-tasks */ SELECT COUNT(*)::int AS count FROM ${this.tableName} WHERE ${where}`;
     const result = await this.options.client.query<{ count: number | string }>(sql, params);
     return Number(result.rows[0]?.count ?? 0);
+  }
+
+  /**
+   * Referential-integrity counts, one aggregate query per condition, rendered from
+   * the SHARED condition list so a self-hosted Postgres deployment measures exactly
+   * what a local SQLite database measures. This backend has NO foreign keys (every
+   * entity is a jsonb payload in one record table), so the orphan classes SQLite
+   * forbids structurally are the ones that actually accumulate here.
+   *
+   * Read-only by construction: COUNT queries only.
+   */
+  async integrityReport(): Promise<IntegrityReport> {
+    await this.ensureSchema();
+    const conditions: IntegrityCondition[] = [];
+    for (const spec of INTEGRITY_CONDITIONS) {
+      const { sql, params } = buildPostgresIntegritySql(spec, { table: this.tableName, service: this.service });
+      try {
+        const result = await this.options.client.query<{ count: number | string | null; open_count: number | string | null }>(sql, params);
+        const row = result.rows[0];
+        conditions.push(measuredCondition(
+          spec,
+          {
+            count: Number(row?.count ?? 0),
+            open_count: spec.entity === "task" ? Number(row?.open_count ?? 0) : null,
+          },
+          "postgres",
+        ));
+      } catch (error) {
+        // A condition that could not be counted is UNVERIFIED, never clean.
+        conditions.push(unverifiedCondition(spec, error instanceof Error ? error.message : String(error)));
+      }
+    }
+    return buildIntegrityReport(conditions, new Date().toISOString());
   }
 
   async listTombstones(): Promise<TodosStorageTombstone[]> {

@@ -494,11 +494,20 @@ describe("CLI QoL commands", () => {
   });
 
   it("doctor --json should report local dry-run diagnostics", () => {
-    const out = run("--json doctor");
+    // This suite's tasks are created with TODOS_AUTO_PROJECT=false, so the store
+    // legitimately carries unrouted tasks and `doctor` exits 1 on findings. `run`
+    // shells out with execSync (which throws on a non-zero exit), so this shape
+    // check uses the documented opt-out; the exit-code contract itself is asserted
+    // in src/cli/doctor-exit-code.test.ts.
+    const out = run("--json doctor --no-fail-on-findings");
     const result = JSON.parse(out);
     expect(result.dry_run).toBe(true);
     expect(result.checks.some((check: { type: string }) => check.type === "migration_level")).toBe(true);
     expect(result.checks.some((check: { type: string }) => check.type === "database_permissions")).toBe(true);
+    // The referential breakdown is part of the local contract, not just remote.
+    expect(result.integrity.schema_version).toBe("todos.integrity.v1");
+    expect(result.integrity.conditions).toHaveLength(6);
+    expect(result.integrity.summary.complete).toBe(true);
   });
 
   it("list --sort priority should sort tasks by priority", () => {

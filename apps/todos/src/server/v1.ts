@@ -1207,6 +1207,21 @@ export async function handleV1Request(
       return json({ tasks, tasks_all: tasksAll, subtasks: tasksAll - tasks, projects: projects.length });
     }
 
+    // ── /v1/integrity — referential-integrity counts for `todos doctor` ──
+    // The remote doctor path used to validate auth + route availability and print
+    // three green check marks, so a dataset carrying five figures of orphaned rows
+    // reported healthy. This route is the aggregate the CLI needs to be honest: one
+    // SQL COUNT per condition, computed by the backing engine (Postgres or SQLite),
+    // never a client-side sample. Read-only — it counts, it never repairs.
+    if (resource === "integrity" && !id) {
+      if (method !== "GET") return error(405, `method ${method} not allowed on /v1/integrity`);
+      if (typeof store.integrity?.report !== "function") {
+        return error(501, "referential-integrity reporting is not supported by this storage backend");
+      }
+      const integrity = await store.integrity.report();
+      return json({ integrity });
+    }
+
     // ── /v1/import (bulk snapshot ingest / backfill) ──
     // Accepts a full or partial TodosStorageSnapshot and upserts every record by
     // primary key via the storage adapter. Idempotent: re-posting the same rows

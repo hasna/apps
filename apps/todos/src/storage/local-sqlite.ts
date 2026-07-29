@@ -63,6 +63,7 @@ import {
 } from "../db/audit.js";
 import { addComment, listComments } from "../db/comments.js";
 import { getDatabase } from "../db/database.js";
+import { scanSqliteIntegrity } from "../db/integrity.js";
 import type { TodosStorageAdapter } from "./interfaces.js";
 import {
   exportSqliteTodosStorageSnapshot,
@@ -268,6 +269,9 @@ export function createLocalSqliteTodosStorageAdapter(
       getTasksChangedSince: (since, filters) => getTasksChangedSince(since, filters, database()),
       exportSnapshot: () => exportSqliteTodosStorageSnapshot(database()),
       importSnapshot: (snapshot) => importSqliteTodosStorageSnapshot(snapshot, database()),
+    },
+    integrity: {
+      report: () => scanSqliteIntegrity(database()),
     },
     transaction: (fn) => {
       const tx = database().transaction(() => fn(adapter));

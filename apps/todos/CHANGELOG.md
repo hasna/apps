@@ -5,6 +5,58 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`todos doctor` no longer reports healthy on a dataset full of orphaned rows.** In remote
+  mode it returned a HARDCODED `ok: true` after checking only authentication and route
+  availability, printed three green check marks and exited `0` — on the live authority that
+  meant 10,176 orphaned tasks (4,735 of them still open) and 45 unbound task lists passed as
+  healthy, which is why nothing else in that dataset was caught either. It already fetched
+  every task list and every project and reduced them to `.length`, so the rows it needed were
+  in hand and discarded. Neither mode ever counted a null or dangling `project_id` /
+  `task_list_id`, and the local path never set a non-zero exit code even for an
+  error-severity check.
+- **The verdict is now derived from the counts that are printed.** Doctor counts six
+  referential conditions (`tasks_without_project`, `tasks_without_task_list`,
+  `tasks_with_unregistered_project`, `tasks_with_unregistered_task_list`,
+  `task_lists_without_project`, `task_lists_with_unregistered_project`), one aggregate query
+  each, and `ok` / the exit code are a pure function of those rows. A dangling reference is
+  always an error; a null one escalates from warning to error once it hides OPEN work.
+- **A condition that cannot be measured is never folded into "all clear".** It is reported as
+  `NOT CHECKED` with the reason, and the report is INCOMPLETE.
+
+### Added
+
+- **`GET /v1/integrity`** — per-condition referential-integrity counts computed by the backing
+  storage engine, for **both** SQLite and the Postgres JSONB record store (which has no
+  foreign keys and is therefore where these rows actually accumulate). A backend that cannot
+  answer returns `501` rather than a false clean. `TodosStorageAdapter.integrity` is
+  implemented by both adapters.
+- **`todos doctor --scan-tasks`** — remote-only, read-only paged walk of `/v1/tasks` that
+  derives the task-level conditions when the authority predates the aggregate route
+  (`/v1/tasks` filters cannot express `IS NULL`). A walk that cannot complete marks the
+  conditions unverified instead of reporting a partial count as truth.
+
+### Changed
+
+- **BREAKING (exit code): `todos doctor` exit codes are now a verdict.** `0` clean · `1`
+  findings (any orphan/dangling reference, or an error-severity check) · `2` incomplete (no
+  findings, but a condition could not be measured). Advisory warnings (stale `in_progress`
+  tasks, project paths missing on this machine, duplicate indexes) do not change the exit
+  code. `--no-fail-on-findings` is the explicit opt-out for a consumer that gates on exit `0`;
+  findings are still reported, and the printed exit code is always the one the process
+  returns — a suppressed run prints `(exit 0 — findings gate suppressed by
+  --no-fail-on-findings; the verdict is 1)` rather than a `(exit 1)` the process never
+  used. `doctor --json` gains an `integrity` block (`schema_version:
+  "todos.integrity.v1"`) plus `exit_code` (the status the process RETURNS),
+  `verdict_exit_code` (the status the rows IMPLY) and `fail_on_findings`; `ok` keeps its
+  name and finally means what it says.
+- **Integrity findings are report-only.** `doctor --apply` repairs schema/hygiene only and
+  never rewrites, deletes or re-points an orphaned row; `--apply` remains refused outright
+  against a remote authority.
+
 ## [0.13.2] - 2026-07-28
 
 ### Fixed

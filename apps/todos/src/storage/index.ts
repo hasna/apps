@@ -8,6 +8,7 @@ export type {
   TodosCommentListOptions,
   TodosPlanStore,
   TodosProjectStore,
+  TodosIntegrityStore,
   TodosStorageAdapter,
   TodosStorageCapabilities,
   TodosStorageContext,

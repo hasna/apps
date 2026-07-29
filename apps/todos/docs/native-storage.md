@@ -55,6 +55,17 @@ the disabled local fallback without opening a database or making a network
 request. `todos health` and `todos doctor` authenticate against the required
 remote routes.
 
+`todos doctor` additionally audits REFERENTIAL INTEGRITY against the authority
+and its exit code is a verdict, not a "the call succeeded" flag: `0` clean, `1`
+findings (orphaned or dangling project / task-list references), `2` incomplete
+(a condition could not be measured, so health was not established). It prefers
+the server-side aggregate `GET /v1/integrity`, which the storage adapter computes
+with one SQL COUNT per condition on Postgres and SQLite alike; an authority that
+does not expose it leaves the task-level conditions `NOT CHECKED` unless
+`--scan-tasks` completes a read-only paged walk of `/v1/tasks`. Findings are
+report-only — `doctor --apply` remains refused outright in remote mode and never
+repairs an integrity finding in any mode.
+
 ## Native AWS Configuration
 
 - `HASNA_TODOS_DATABASE_URL`: Postgres connection string for RDS-backed task

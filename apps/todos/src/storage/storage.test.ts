@@ -13,6 +13,7 @@ import {
   verifyTaskRunArtifacts,
 } from "../db/task-runs.js";
 import { artifactStorePath } from "../lib/artifact-store.js";
+import { INTEGRITY_CONDITIONS } from "../lib/integrity.js";
 import {
   CANONICAL_TODOS_RDS_CLUSTER_ENV,
   CANONICAL_TODOS_RDS_DATABASE,
@@ -126,6 +127,24 @@ describe("storage adapter contracts", () => {
     expectStore(adapter, "templates", ["create", "get", "list", "update", "delete", "getWithTasks"]);
     expectStore(adapter, "audit", ["logTaskChange", "addComment", "getTaskHistory", "getRecentActivity"]);
     expectStore(adapter, "sync", ["getTasksChangedSince", "exportSnapshot", "importSnapshot"]);
+    expectStore(adapter, "integrity", ["report"]);
+  });
+
+  test("exposes the referential-integrity store on BOTH storage engines", async () => {
+    // Storage duality gate. `todos doctor` reported healthy on a Postgres-backed
+    // authority full of orphans; a diagnostic implemented for one engine only
+    // reproduces exactly that. Postgres mode has no foreign keys at all, so it is
+    // the engine where these rows actually accumulate — it must never be the one
+    // without the check.
+    const sqlite = createLocalSqliteTodosStorageAdapter({ db });
+    const postgres = createPostgresTodosStorageAdapter({ client: createMemoryPostgresClient().client });
+    expectStore(sqlite, "integrity", ["report"]);
+    expectStore(postgres, "integrity", ["report"]);
+
+    // The SQLite report must cover every declared condition, verified, with counts.
+    const report = await sqlite.integrity!.report();
+    expect(report.conditions.map((condition) => condition.id)).toEqual(INTEGRITY_CONDITIONS.map((spec) => spec.id));
+    expect(report.conditions.every((condition) => condition.verified)).toBe(true);
   });
 
   test("tasks.list/count route a free-text query through FTS on the local adapter", async () => {
