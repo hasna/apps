@@ -8,6 +8,9 @@ const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
   name: string;
   bin: Record<string, string>;
   exports: Record<string, { import: string }>;
+  license: string;
+  publishConfig: { access: string; provenance: boolean };
+  repository: { type: string; url: string };
 };
 
 function jsonRequest(url: string, method: string, body: unknown, headers: Record<string, string> = {}): Request {
@@ -344,6 +347,50 @@ test("built API enforces probe-bound hosted adapter behavior", async () => {
   }
 });
 
+test("public OSS release decision stays fail-closed while visibility and provenance are unresolved", async () => {
+  const gate = await import(join(root, "scripts/oss-release-gate.mjs")) as Record<string, any>;
+  const audit = gate.auditStaticRepository(root);
+  const decision = audit.decision;
+  const result = gate.evaluateReleaseDecision({
+    decision,
+    package: audit.package,
+    staticErrors: audit.errors,
+    online: {
+      githubVisibility: "PRIVATE",
+      githubPrivate: true,
+      npm: {
+        version: decision.releaseVersion,
+        repository: { type: "git", url: decision.observed.npmRepositoryUrl },
+        gitHead: null,
+        dist: {
+          integrity: decision.provenance.registryIntegrity,
+          signatures: [{ keyid: "registry-key", sig: "registry-signature" }],
+        },
+      },
+    },
+    commit: "0123456789012345678901234567890123456789",
+    clean: true,
+    secretFindings: [],
+  });
+
+  expect(audit.errors).toEqual([]);
+  expect(pkg.license).toBe("Apache-2.0");
+  expect(pkg.repository.url).toBe("git+https://github.com/hasna/uptime.git");
+  expect(pkg.publishConfig).toEqual({ access: "public", provenance: true });
+  expect(decision).toMatchObject({
+    decision: "HOLD",
+    explicitPublicApproval: false,
+    releaseCandidateCommit: null,
+    observed: { githubVisibility: "PRIVATE" },
+    provenance: { status: "MISSING", npmAttestations: false, alternateEvidence: null },
+  });
+  expect(result.auditErrors).toEqual([]);
+  expect(result.releaseAllowed).toBe(false);
+  expect(result.blockers).toContain("explicit repository-public approval is absent");
+  expect(result.blockers).toContain("GitHub repository is not public, so public package metadata is unresolved");
+  expect(result.blockers).toContain("npm provenance or approved alternate source evidence is not verified");
+});
+
 test("package dry-run includes release artifacts and excludes source-only files", () => {
   const result = Bun.spawnSync({
     cmd: ["bun", "pm", "pack", "--dry-run"],
@@ -372,6 +419,8 @@ test("package dry-run includes release artifacts and excludes source-only files"
     "docs/deployment-metadata.example.json",
     "docs/monitoring-product-contract.md",
     "docs/operational-tracking.md",
+    "docs/oss-release-decision.json",
+    "docs/oss-release-readiness.md",
     "infra/aws/main.tf",
     "infra/aws/variables.tf",
     "infra/aws/terraform.tfvars.example",
@@ -380,6 +429,7 @@ test("package dry-run includes release artifacts and excludes source-only files"
     "LICENSE",
     "NOTICE",
     "SECURITY.md",
+    "THIRD_PARTY_NOTICES.md",
   ]) {
     expect(files).toContain(expected);
   }

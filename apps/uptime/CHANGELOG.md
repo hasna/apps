@@ -6,6 +6,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Added a fail-closed public OSS release gate with a machine-readable `HOLD`
+  decision, online GitHub/npm state checks, runtime dependency notice and
+  license verification, full-history credential scanning, and an explicit
+  approval/provenance requirement.
+
+### Security
+
+- Configured npm publication to request provenance and made the OSS gate run
+  before the existing build, typecheck, and test prepublish checks.
+
 ## [0.1.69] - 2026-06-30
 
 ### Added
