@@ -10,7 +10,10 @@ import type {
   FeedbackStats,
   FeedbackStatus,
   FeedbackStore,
+  FeedbackSyncTasksResult,
 } from "./types.js";
+import { createTaskSink } from "./tasks.js";
+import type { FeedbackTaskSink } from "./tasks.js";
 import { feedbackKinds, feedbackStatuses, parseFeedbackInput, parseStoredFeedbackItem } from "./validation.js";
 import {
   buildFeedbackCreatedEvent,
@@ -32,6 +35,12 @@ export interface LocalFeedbackStoreOptions {
    * `@hasna/events`; pass `null` to disable emission.
    */
   eventSink?: FeedbackEventSink | null;
+  /**
+   * Sink that turns new feedback into a task an executor can pick up. Defaults
+   * to the environment-resolved sink (`todos` when its CLI is present); pass
+   * `null` to disable task creation.
+   */
+  taskSink?: FeedbackTaskSink | null;
 }
 
 export type FeedbackStoreRuntimeMode = "local" | "cloud";
@@ -252,11 +261,13 @@ async function withFileLock<T>(filePath: string, run: () => Promise<T>): Promise
 export class LocalFeedbackStore implements FeedbackStore {
   readonly filePath: string;
   private readonly eventSink: FeedbackEventSink | null;
+  private readonly taskSink: FeedbackTaskSink | null;
 
   constructor(options: LocalFeedbackStoreOptions = {}) {
     this.filePath = resolveFeedbackFilePath(options);
     ensureParentDir(this.filePath);
     this.eventSink = options.eventSink === null ? null : options.eventSink ?? createDefaultFeedbackEventSink();
+    this.taskSink = options.taskSink === null ? null : options.taskSink ?? createTaskSink();
   }
 
   async createFeedback(input: FeedbackInput, options: FeedbackCreateOptions = {}): Promise<FeedbackItem> {
@@ -272,11 +283,75 @@ export class LocalFeedbackStore implements FeedbackStore {
       kind: parsed.kind ?? "other",
       tags: parsed.tags ?? [],
     };
+    // Durability first: the report is on disk before anything downstream runs,
+    // so a failing task sink can never cost us the feedback itself.
     await withFileLock(this.filePath, async () => {
       await appendFile(this.filePath, `${JSON.stringify(item)}\n`, "utf8");
     });
     if (this.eventSink) await emitFeedbackEvent(buildFeedbackCreatedEvent(item), this.eventSink);
-    return item;
+    return this.attachTask(item);
+  }
+
+  /**
+   * Create the task for a feedback item and record the outcome on the item.
+   * Runs outside the file lock because task creation spawns a process; the
+   * result is written back under a fresh lock.
+   */
+  private async attachTask(item: FeedbackItem): Promise<FeedbackItem> {
+    if (!this.taskSink) return item;
+    let patch: Partial<FeedbackItem>;
+    try {
+      patch = { taskRef: await this.taskSink.createTask(item), taskError: undefined };
+    } catch (error) {
+      patch = { taskError: error instanceof Error ? error.message : String(error) };
+    }
+    return (await this.patchItem(item.id, patch)) ?? { ...item, ...patch };
+  }
+
+  private async patchItem(id: string, patch: Partial<FeedbackItem>): Promise<FeedbackItem | null> {
+    return withFileLock(this.filePath, async () => {
+      const items = await this.readAll();
+      const index = items.findIndex((entry) => entry.id === id);
+      if (index === -1) return null;
+      const next: FeedbackItem = { ...items[index]!, ...patch };
+      items[index] = next;
+      await this.writeAll(items);
+      return next;
+    });
+  }
+
+  /**
+   * Retry task creation for every item that has no task yet. This is the
+   * repair path for feedback captured while the task sink was down or
+   * unconfigured — without it, an outage would silently leave the loop open.
+   */
+  async syncTasks(options: { limit?: number } = {}): Promise<FeedbackSyncTasksResult> {
+    const result: FeedbackSyncTasksResult = {
+      sinkConfigured: Boolean(this.taskSink),
+      created: 0,
+      failed: 0,
+      skipped: 0,
+      errors: [],
+    };
+    if (!this.taskSink) return result;
+
+    const items = await this.readAll();
+    const pending = items.filter((item) => !item.taskRef);
+    result.skipped = items.length - pending.length;
+
+    for (const item of pending.slice(0, options.limit ?? pending.length)) {
+      try {
+        const taskRef = await this.taskSink.createTask(item);
+        await this.patchItem(item.id, { taskRef, taskError: undefined });
+        result.created += 1;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await this.patchItem(item.id, { taskError: message });
+        result.failed += 1;
+        result.errors.push(`${item.id}: ${message}`);
+      }
+    }
+    return result;
   }
 
   async listFeedback(filter: FeedbackListFilter = {}): Promise<FeedbackItem[]> {

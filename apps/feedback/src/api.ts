@@ -217,8 +217,27 @@ export function createFeedbackHandler(options: FeedbackApiOptions = {}): (reques
         const denied = authorize(request, "triage", auth);
         if (denied) return withCors(denied, corsOrigin);
         const id = decodeURIComponent(pathname.slice("/v1/feedback/".length));
-        const body = (await request.json()) as { status?: FeedbackStatus };
-        const item = await store.updateFeedbackStatus(id, parseFeedbackStatus(body.status));
+        const body = (await request.json()) as { status?: FeedbackStatus; changelogRef?: string };
+        const status = parseFeedbackStatus(body.status);
+
+        // `changelogRef` carries the feedback → changelog receipt. Routing it
+        // through the existing PATCH keeps the hosted path able to record what
+        // shipped a report, which `updateFeedbackStatus` alone cannot.
+        if (body.changelogRef !== undefined) {
+          if (status !== "shipped") {
+            return withCors(errorResponse(400, "changelogRef is only valid with status \"shipped\""), corsOrigin);
+          }
+          if (!store.markFeedbackShipped) {
+            return withCors(errorResponse(501, "This store cannot record changelog linkage"), corsOrigin);
+          }
+          if (!body.changelogRef.trim()) {
+            return withCors(errorResponse(400, "changelogRef must not be empty"), corsOrigin);
+          }
+          const shipped = await store.markFeedbackShipped(id, body.changelogRef);
+          return withCors(shipped ? jsonResponse(shipped) : errorResponse(404, "Feedback not found"), corsOrigin);
+        }
+
+        const item = await store.updateFeedbackStatus(id, status);
         return withCors(item ? jsonResponse(item) : errorResponse(404, "Feedback not found"), corsOrigin);
       }
 

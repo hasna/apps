@@ -65,6 +65,21 @@ export class FeedbackClient {
     );
   }
 
+  /**
+   * Mark feedback shipped and record the changelog entry that shipped it.
+   * `changelogRef` is the only field linking a report to the thing that
+   * resolved it, so the remote path has to carry it too — `updateStatus(id,
+   * "shipped")` records the status but loses the receipt.
+   */
+  async markShipped(id: string, changelogRef: string): Promise<FeedbackItem> {
+    return readJson<FeedbackItem>(
+      await this.request(`v1/feedback/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: "shipped", changelogRef }),
+      }),
+    );
+  }
+
   async stats(): Promise<FeedbackStats> {
     return readJson<FeedbackStats>(await this.request("v1/stats"));
   }

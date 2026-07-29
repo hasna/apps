@@ -168,7 +168,9 @@ feedback submit "Search results need date filters" --app my-app --kind idea --ta
 feedback submit "Billing export fails on custom ranges" --app my-app --kind bug --severity high
 ```
 
-Use `--api-url` and `--token` when slash commands should write to a shared cloud-backed API. Do not put `FEEDBACK_API_TOKEN` in browser-side environment variables.
+Use `--api-url` and `--token` when slash commands should write to a shared cloud-backed API, or set `FEEDBACK_API_URL` and `FEEDBACK_API_TOKEN` in the agent's environment once so every invocation targets it. Do not put `FEEDBACK_API_TOKEN` in browser-side environment variables.
+
+Feedback submitted this way also files a task (see the task-sink section of the README), so a slash-command report lands somewhere an executor will actually see it.
 
 ## MCP Collection
 

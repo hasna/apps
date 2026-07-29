@@ -45,6 +45,14 @@ export const feedbackInputSchema = z.object({
 
 export const feedbackStatusSchema = z.enum(feedbackStatuses);
 
+export const feedbackTaskRefSchema = z.object({
+  provider: z.string().trim().min(1).max(128),
+  taskId: z.string().trim().min(1).max(256),
+  shortId: z.string().trim().min(1).max(128).optional(),
+  project: z.string().trim().min(1).max(256).optional(),
+  createdAt: z.string().datetime(),
+});
+
 export const feedbackItemSchema = feedbackInputSchema.extend({
   id: z.string().min(1),
   createdAt: z.string().datetime(),
@@ -53,6 +61,8 @@ export const feedbackItemSchema = feedbackInputSchema.extend({
   source: z.enum(["api", "cli", "sdk", "mcp", "server"]),
   changelogRef: z.string().trim().min(1).max(2048).optional(),
   shippedAt: z.string().datetime().optional(),
+  taskRef: feedbackTaskRefSchema.optional(),
+  taskError: z.string().trim().min(1).max(4096).optional(),
 });
 
 const sensitiveKeyPattern = /(?:api[_-]?key|authorization|cookie|password|secret|token|refresh[_-]?token|access[_-]?token|private[_-]?key)/i;
