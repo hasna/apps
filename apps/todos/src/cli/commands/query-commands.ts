@@ -2307,7 +2307,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .option("--verifications <n>", "Verification records to include", "10")
     .option("--runs <n>", "Run ledgers to include", "3")
     .option("--dependencies <n>", "Dependencies per direction to include", "12")
-    .option("--plan-tasks <n>", "Plan sibling tasks to include", "20")
+    .option("--plan-tasks <n>", "Plan sibling tasks to include (max 24)", "24")
     .option("--max-text <n>", "Max characters for long text fields", "6000")
     .option("--summary-chars <n>", "Max characters for local omission summaries", "480")
     .option("--token-budget <n>", "Approximate token budget for compacting context locally")

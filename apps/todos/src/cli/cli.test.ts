@@ -3320,6 +3320,7 @@ describe("CLI integration", () => {
     const pack = JSON.parse(json.stdout);
     expect(pack.profile).toBe("codex");
     expect(pack.task.title).toBe("Context pack task");
+    expect(pack.limits.plan_task_limit).toBe(24);
     expect(pack.comments.recent[0].content).toContain("[REDACTED]");
     expect(pack.traceability.verifications[0].command).toBe("bun test");
 
