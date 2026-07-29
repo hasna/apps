@@ -416,6 +416,55 @@ The vault database lives at `~/.hasna/secrets/vault.db`. Key material lives in
 - Never paste secret values into commits, logs, issues, PRs, or chat messages.
 - Keep `.env`, `.env.local`, `.secrets/`, and `.connect/` out of git.
 
+## Running the tests
+
+A test process cannot reach a real vault. This is enforced by the code, not by
+convention, because convention already failed: the suite wrote fixtures into a
+hosted production vault on four separate runs, because a machine's shell
+environment exports `HASNA_SECRETS_STORAGE_MODE` / `_API_URL` / `_API_KEY` and
+`getStore()` reads them.
+
+```bash
+bun test
+```
+
+What holds, and where:
+
+| Guarantee | Enforced in |
+| --- | --- |
+| A test process may only reach a **loopback** vault. Any other host throws `SecretsTestIsolationError`. | `src/test-isolation.ts`, applied at the one HTTP egress point (`createHasnaHttpTransport`) and at ambient-env store resolution (`getStore()`). |
+| A test that configures nothing still never opens the operator's `~/.hasna/secrets` vault or key. It gets a throwaway per-process one. | `src/db.ts`, `src/crypto.ts` |
+| The hosted-vault selectors are stripped from the environment before any test file runs. | `bunfig.toml` → `tests/setup/isolate-vault.ts` |
+
+Notes:
+
+- The preload is a convenience, not the guarantee. Delete `bunfig.toml` and the
+  suite fails loudly with `SecretsTestIsolationError` rather than writing to a
+  hosted vault.
+- There is **no environment variable that turns the guard off**. The only env key
+  it reads, `HASNA_SECRETS_TEST_ISOLATION=1`, can force it on.
+- Test context is detected from the runner (the preload marker, `NODE_ENV=test`)
+  and from a `*.test.ts` entrypoint — never from something a test author must
+  remember to write.
+- Two thresholds, because the two guards fail differently:
+
+  | Signal | Loud guards — hosted-vault egress, explicit-path refusal | Silent guard — redirect vault files to a throwaway |
+  | --- | --- | --- |
+  | preload marker `HASNA_SECRETS_TEST_ISOLATION=1` | yes | yes |
+  | `*.test.ts` entrypoint (what `bun test` sets) | yes | yes |
+  | bare `NODE_ENV=test` | yes | **no** |
+
+  So running the shipped CLI with `NODE_ENV=test` in the environment — which every
+  JS test runner exports across its whole process tree — reads and writes your
+  **real local vault**, normally. It does not silently swap in an empty throwaway;
+  that would make `secrets get` report a live credential as missing and `secrets
+  set` print `✓ Stored` for a value it discarded, both at exit code 0. What
+  `NODE_ENV=test` *does* still do is bar the **hosted** vault: resolution throws
+  `SecretsTestIsolationError` and exits non-zero. Refusal, loudly, rather than a
+  quiet wrong answer.
+- A test that genuinely needs to exercise the hosted transport should inject a
+  fake `fetchImpl`, not point a real one at a remote host.
+
 ## Cloud service (`self_hosted`)
 
 Beyond the local vault, `@hasna/secrets` ships a deployable HTTP service and a

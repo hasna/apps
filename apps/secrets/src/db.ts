@@ -2,11 +2,27 @@ import { Database } from "bun:sqlite";
 import { dirname, join } from "path";
 import { homedir } from "os";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
+import { assertTestVaultPathAllowed, isTestVaultRedirectContext, testVaultPath } from "./test-isolation.js";
 
 function getDbPath(): string {
   // Support env var overrides
   const envPath = process.env.HASNA_SECRETS_DB_PATH ?? process.env.OPEN_SECRETS_DB;
-  if (envPath) return envPath;
+  if (envPath) {
+    // An EXPLICIT path aimed at the operator's own vault is refused (HC-00304).
+    assertTestVaultPathAllowed(envPath);
+    return envPath;
+  }
+
+  // A test process that configured nothing gets a throwaway vault rather than the
+  // operator's. Isolation must not depend on every test author remembering to set
+  // a path — that is the convention which already failed four times.
+  //
+  // Gated on the NARROW predicate. Swapping the path is silent, so it must only fire
+  // for a process that really is a test run (preload marker, or a `*.test.ts`
+  // entrypoint — `bun test` sets both). Keying this on bare NODE_ENV made the shipped
+  // CLI discard writes and return empty reads at exit code 0 for anything running
+  // under a foreign test runner.
+  if (isTestVaultRedirectContext()) return testVaultPath();
 
   const home = homedir();
   migrateLegacyDotfile("secrets");

@@ -4,6 +4,12 @@ describe("CLI docs", () => {
   it("prints the built-in usage guide", async () => {
     const proc = Bun.spawn({
       cmd: ["bun", "src/index.ts", "docs"],
+      // Explicit env, not the default. A child spawned without `env:` gets this
+      // process's INITIAL environment snapshot, so it would miss the preload's
+      // selector scrub and its isolation marker and run pointed at the hosted
+      // production vault with a production key. Spreading the CURRENT process.env
+      // is what carries both across the boundary.
+      env: { ...process.env },
       stdout: "pipe",
       stderr: "pipe",
     });

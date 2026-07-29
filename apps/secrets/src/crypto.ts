@@ -18,6 +18,7 @@ import { randomBytes, createCipheriv, createDecipheriv } from "crypto";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
+import { assertTestVaultPathAllowed, isTestVaultRedirectContext, testKeyDir } from "./test-isolation.js";
 
 const ALGO = "aes-256-gcm";
 const KEY_BYTES = 32;
@@ -27,7 +28,23 @@ const PREFIX = "enc:v1:";
 let _cachedKey: Buffer | null = null;
 
 function getKeyDir(): string {
-  const dir = process.env.HASNA_SECRETS_KEY_DIR ?? join(homedir(), ".hasna", "secrets");
+  const envDir = process.env.HASNA_SECRETS_KEY_DIR;
+  if (envDir) {
+    // Symmetry with src/db.ts, which has always checked its explicit path. Without
+    // this, a test setting HASNA_SECRETS_KEY_DIR=~/.hasna/secrets read the operator's
+    // real vault key while only the DEFAULT was redirected — precisely the outcome
+    // the comment below claims to prevent.
+    assertTestVaultPathAllowed(envDir);
+    if (!existsSync(envDir)) mkdirSync(envDir, { recursive: true, mode: 0o700 });
+    return envDir;
+  }
+
+  // A test process that configured nothing gets a throwaway key dir, never the
+  // operator's — otherwise a test run reads the real vault key, and a first run on
+  // a fresh box would MINT the operator's key from test material (HC-00304).
+  // Narrow predicate: see the note in src/db.ts on why a silent path swap must not
+  // fire on bare NODE_ENV.
+  const dir = isTestVaultRedirectContext() ? testKeyDir() : join(homedir(), ".hasna", "secrets");
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
   return dir;
 }

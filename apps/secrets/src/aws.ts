@@ -11,6 +11,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import { getStore } from "./store/index.js";
+import { SecretsTestIsolationError } from "./test-isolation.js";
 import type { AwsConfig, AwsCredentialMode, SecretMetadata } from "./types.js";
 
 type AwsClient = Pick<SecretsManagerClient, "send">;
@@ -104,8 +105,38 @@ export function saveAwsConfig(config: AwsConfig): void {
   writeFileSync(path, JSON.stringify(config, null, 2), { mode: 0o600 });
 }
 
+/**
+ * The production factory. Exported so a caller that genuinely wants the real AWS
+ * client back after a test has to name it, rather than reaching it by omission.
+ */
+export const defaultAwsClientFactory: AwsClientFactory = (config) => makeDefaultClient(config);
+
+/**
+ * A factory that refuses. This is what {@link setAwsClientFactoryForTests} installs
+ * when called with no argument, so "reset" means "no AWS client at all" rather than
+ * "the real one".
+ */
+const refusingAwsClientFactory: AwsClientFactory = () => {
+  throw new SecretsTestIsolationError(
+    "Test isolation: no AWS client is installed. setAwsClientFactoryForTests() with no " +
+      "argument resets to a REFUSING factory, not the real AWS SDK client — a test that " +
+      "reaches AWS must install its own fake, and a test that forgot must fail rather " +
+      "than call out. Pass defaultAwsClientFactory explicitly if a real client is wanted.",
+  );
+};
+
+/**
+ * Swap the AWS client used by pushSecret/syncAll.
+ *
+ * WITH NO ARGUMENT THIS DOES NOT RESTORE THE REAL CLIENT. It installs a refusing
+ * factory. The previous behaviour — reset-to-real — meant every `beforeEach` in the
+ * suite re-armed a live AWS client and the suite stayed offline only because all four
+ * call sites happened to install a fake before using one. That is convention holding
+ * the line, one forgotten line from a real API call, and convention is the exact
+ * thing HC-00304 proved does not hold.
+ */
 export function setAwsClientFactoryForTests(factory?: AwsClientFactory): void {
-  clientFactory = factory ?? ((config) => makeDefaultClient(config));
+  clientFactory = factory ?? refusingAwsClientFactory;
 }
 
 export function resolveAwsConfig(

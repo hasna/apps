@@ -32,8 +32,15 @@
 //
 // SAFETY: this module never returns, logs, or embeds the API key value. Callers
 // receive only presence flags and env-key names.
+//
+// DELIBERATE DEVIATION FROM THE VENDORED COPY (HC-00304): the default fetch in
+// `createHasnaHttpTransport` is `guardedFetch` from ../../test-isolation.js rather
+// than bare `fetch`. This is the app's single network egress point, and a test
+// process must be structurally unable to reach a vault that is not on this machine.
+// Keep this deviation when re-syncing from open-contracts.
 
 import { normalizeStorageMode, envToken, type Env, type StorageMode } from "./mode.js";
+import { guardedFetch } from "../../test-isolation.js";
 
 /** Default cloud host template. `<app>` is the app slug. */
 export function defaultCloudBaseUrl(name: string): string {
@@ -341,9 +348,15 @@ const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(r
  * Retry safety: idempotent methods (GET/HEAD/PUT/DELETE/OPTIONS) are always
  * retried on transient failure; POST/PATCH are retried ONLY when an
  * `Idempotency-Key` is supplied, so replays can't create duplicates.
+ *
+ * Test isolation: the DEFAULT fetch is `guardedFetch`, which refuses a non-loopback
+ * target from a test process (HC-00304). This is the single egress point for both
+ * the ApiStore and the SDK client, so guarding it here covers every caller. A caller
+ * that injects its own `fetchImpl` is not routed through it — that one performs no
+ * real network I/O by definition.
  */
 export function createHasnaHttpTransport(options: HasnaHttpTransportOptions): HasnaHttpTransport {
-  const fetchImpl: FetchLike = options.fetchImpl ?? ((input, init) => fetch(input, init));
+  const fetchImpl: FetchLike = options.fetchImpl ?? guardedFetch;
   const base = options.baseUrl.replace(/\/+$/, "");
   const timeoutMs = options.timeoutMs ?? 30_000;
   const sleep = options.sleepImpl ?? defaultSleep;
