@@ -1044,6 +1044,13 @@ export class SQLiteAccountsRepository implements AccountsRepository {
           .run(
             SQLITE_SCHEMA_VERSION.toString(10),
             `sha256:${ACCOUNTS_V1_CONTRACT_SHA256}`,
+            // RETIREMENT-EXEMPT: these bytes are the preimage of the persisted
+            // configuration_attestation_digest. Renaming the key or the value
+            // changes the digest, so a database written by an earlier build would
+            // no longer attest to the same configuration. The retired vocabulary
+            // survives here as frozen digest input, not as a live switch — it
+            // selects no behaviour. Moving it needs a schema migration that
+            // rewrites the stored digest; see the deployment_mode note below.
             canonicalSha256({ deploymentMode: "local", identityRealm: "hasna" }),
             catalogIncarnation,
             BigInt(initialFrontier.sequence),

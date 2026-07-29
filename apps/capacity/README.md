@@ -12,21 +12,22 @@
 > this branch is provenance only, not approval.
 
 Accounts is the fail-closed provider-capacity metadata boundary for Hasna
-`local` and `self_hosted` deployments. It models provider accounts,
+deployments. Storage is chosen explicitly: a SQLite-or-HTTP client, and a server
+that holds its own state in SQLite or PostgreSQL. It models provider accounts,
 entitlements, capacity pools, account lanes, credential bindings, native
 AuthCapsule metadata, signed authority evidence, and non-reservational slot
 eligibility.
 
 Implemented adapters and surfaces:
 
-- deterministic in-memory and owner-only SQLite repositories for local use;
-- RLS-isolated PostgreSQL for Hasna-owned AWS self-hosting;
+- deterministic in-memory and owner-only SQLite repositories;
+- RLS-isolated PostgreSQL as a server data backend;
 - persistent signed recovery and credential-effect journals outside the
   restorable catalog;
 - closed Ed25519 authority evidence and online generation-check receipts;
-- local/self-hosted SDK selection with no fallback;
+- explicit SQLite-or-HTTP SDK store selection with no fallback;
 - authenticated HTTP handlers and generated OpenAPI 3.1;
-- a safe local read/diagnostic CLI.
+- a safe read/diagnostic CLI over the SQLite store.
 
 Accounts does not issue Infinity resource leases, schedule work, run provider
 calls, return raw credential handles, launch processes, or provide SaaS tenant,
@@ -76,23 +77,29 @@ ACCOUNTS_TEST_POSTGRES_URL='postgresql://user@127.0.0.1/accounts_test?sslmode=di
 ```
 
 Plaintext PostgreSQL is accepted only by this explicit loopback test path.
-Self-hosted connections require `sslmode=verify-full`.
+Networked connections require `sslmode=verify-full`.
 
-## Local CLI
+## CLI
 
 ```sh
-HASNA_ACCOUNTS_DEPLOYMENT=local capacity doctor --json
+HASNA_ACCOUNTS_STORE=sqlite capacity doctor --json
 capacity validate ./record.json --json
-HASNA_ACCOUNTS_DEPLOYMENT=local capacity list access-methods --json
-HASNA_ACCOUNTS_DEPLOYMENT=local capacity get access-methods <uuidv7> --json
-HASNA_ACCOUNTS_DEPLOYMENT=local capacity eligibility <account-lane-uuidv7> \
+HASNA_ACCOUNTS_STORE=sqlite capacity list access-methods --json
+HASNA_ACCOUNTS_STORE=sqlite capacity get access-methods <uuidv7> --json
+HASNA_ACCOUNTS_STORE=sqlite capacity eligibility <account-lane-uuidv7> \
   --operation responses.create \
   --model model.example \
   --data-classification internal \
   --json
 ```
 
-Positive local evaluation requires an explicitly configured, owner-only signed
+Store selection is explicit and never inferred. `HASNA_ACCOUNTS_STORE=sqlite`
+selects the on-disk SQLite store; `http` reaches a server. The retired
+`HASNA_ACCOUNTS_DEPLOYMENT` variable and the retired `local`, `self_hosted`,
+`self-hosted`, `cloud`, `remote`, and `hybrid` values are rejected with a message
+naming the replacement — they are never normalized to a default.
+
+Positive evaluation requires an explicitly configured, owner-only signed
 recovery ledger through the SDK/factory. Without it, readiness and eligibility
 stay on recovery hold. CLI output is local diagnostic evidence only and never a
 reservation or production Infinity authority.

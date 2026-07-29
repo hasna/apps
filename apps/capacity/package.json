@@ -1,7 +1,7 @@
 {
   "name": "@hasna/capacity",
   "version": "0.1.1",
-  "description": "Fail-closed provider account capacity metadata for local and self-hosted Hasna deployments",
+  "description": "Fail-closed provider account capacity metadata for Hasna deployments, with explicit SQLite-or-HTTP client and SQLite-or-PostgreSQL server storage",
   "type": "module",
   "license": "Apache-2.0",
   "repository": {

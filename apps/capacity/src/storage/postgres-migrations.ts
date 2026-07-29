@@ -117,6 +117,24 @@ GRANT SELECT, INSERT ON TABLE
 TO accounts_runtime;
 `;
 
+/**
+ * NOTE ON RETIRED VOCABULARY — do not "clean up" the `deployment_mode` column or
+ * the `accounts-self-hosted` audience literals below.
+ *
+ * Deployment modes are removed from every live switch in this package, but both
+ * are frozen into already-shipped schema, and for two different reasons:
+ *
+ * - The SQL text below is hashed into `POSTGRES_MIGRATION_V1_CHECKSUM`, verified
+ *   by `postgres-migrator.ts` and `postgres.ts`. Editing a single byte — including
+ *   adding a comment inside this template literal — raises
+ *   `SCHEMA_CHECKSUM_MISMATCH` against every existing database.
+ * - `audience` values are signed fields inside credential-handle and
+ *   authority-evidence envelopes. Renaming them invalidates the signature over
+ *   every already-issued credential, so they are data, not vocabulary.
+ *
+ * Neither selects behaviour. Renaming `deployment_mode` needs a V2 migration;
+ * renaming an audience needs a credential re-issue, which is a separate decision.
+ */
 export const POSTGRES_MIGRATION_V1 = `
 CREATE SCHEMA IF NOT EXISTS accounts;
 

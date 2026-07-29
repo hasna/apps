@@ -115,7 +115,7 @@ function handlerFor(
 ) {
   return createAccountsHttpHandler({
     deployment: {
-      mode: "self_hosted",
+      dataBackend: "postgresql",
       identityRealm: "hasna",
       organizationRef: "organization:hasna",
       publicAudience: "accounts-capacity-public",

@@ -31,15 +31,22 @@ export interface LocalRecoveryConfiguration {
   readonly signingKey: Uint8Array;
 }
 
+/**
+ * Client store selection. The OSS client is SQLite-or-HTTP: it never opens
+ * PostgreSQL directly, so there is no `postgresql` variant here. A server's own
+ * internal storage is a separate axis — see `ServerDataBackend`.
+ *
+ * This replaces the retired three-way deployment switch.
+ */
 export type AccountsDeployment =
   | {
-      readonly mode: "local";
+      readonly store: "sqlite";
       readonly sqlitePath?: string;
       readonly actorRef: string;
       readonly recovery?: LocalRecoveryConfiguration;
     }
   | {
-      readonly mode: "self_hosted";
+      readonly store: "http";
       readonly baseUrl: string;
       readonly authProvider: AccountsAuthProvider;
     };
