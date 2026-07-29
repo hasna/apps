@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { getDatabase, closeDatabase, resetDatabase } from "../db/database.js";
@@ -212,6 +212,36 @@ describe("CLI integration", () => {
         expect(stderr).not.toContain("MCP server error");
       }
     }
+  });
+
+  it("registers and unregisters todos in Cursor's global MCP catalog", async () => {
+    const dbPath = join(testRoot, "cursor-registration.db");
+    const configPath = join(testRoot, "home", ".cursor", "mcp.json");
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, JSON.stringify({
+      mcpServers: { existing: { url: "https://example.test/mcp" } },
+      preserved: true,
+    }));
+
+    const registered = await runCli(["mcp", "--register", "cursor", "--global"], dbPath);
+    expect(registered.exitCode).toBe(0);
+    expect(registered.stdout).toContain("Cursor (user): registered");
+
+    const config = JSON.parse(readFileSync(configPath, "utf-8"));
+    expect(config.preserved).toBe(true);
+    expect(config.mcpServers.existing).toEqual({ url: "https://example.test/mcp" });
+    expect(config.mcpServers.todos).toEqual({
+      command: expect.any(String),
+      args: ["--stdio"],
+    });
+
+    const unregistered = await runCli(["mcp", "--unregister", "cursor", "--global"], dbPath);
+    expect(unregistered.exitCode).toBe(0);
+    expect(unregistered.stdout).toContain("Cursor (user): unregistered");
+
+    const cleaned = JSON.parse(readFileSync(configPath, "utf-8"));
+    expect(cleaned.preserved).toBe(true);
+    expect(cleaned.mcpServers).toEqual({ existing: { url: "https://example.test/mcp" } });
   });
 
   it("should show events and webhooks commands in help", async () => {

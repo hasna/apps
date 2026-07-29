@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Cursor MCP registration now adds `todos` to the Cursor catalog.**
+  `todos mcp --register cursor` writes the project `.cursor/mcp.json`, while
+  `--global` writes `~/.cursor/mcp.json`; unregister and `all` cover Cursor too.
 - **`todos doctor` no longer reports healthy on a dataset full of orphaned rows.** In remote
   mode it returned a HARDCODED `ok: true` after checking only authentication and route
   availability, printed three green check marks and exited `0` — on the live authority that

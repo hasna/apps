@@ -173,29 +173,65 @@ function unregisterGemini(): void {
   console.log(chalk.green(`Gemini CLI: unregistered from ${configPath}`));
 }
 
+// --- Cursor: project .cursor/mcp.json or global ~/.cursor/mcp.json ---
+
+function cursorConfigPath(global?: boolean): string {
+  return join(global ? HOME : process.cwd(), ".cursor", "mcp.json");
+}
+
+function registerCursor(binPath: string, global?: boolean): void {
+  const configPath = cursorConfigPath(global);
+  const config = readJsonFile(configPath);
+  if (!config["mcpServers"]) {
+    config["mcpServers"] = {};
+  }
+  const servers = config["mcpServers"] as Record<string, unknown>;
+  servers["todos"] = {
+    command: binPath,
+    args: ["--stdio"] as string[],
+  };
+  writeJsonFile(configPath, config);
+  console.log(chalk.green(`Cursor (${global ? "user" : "project"}): registered in ${configPath}`));
+}
+
+function unregisterCursor(global?: boolean): void {
+  const configPath = cursorConfigPath(global);
+  const config = readJsonFile(configPath);
+  const servers = config["mcpServers"] as Record<string, unknown> | undefined;
+  if (!servers || !("todos" in servers)) {
+    console.log(chalk.dim(`Cursor: todos not found in ${configPath}`));
+    return;
+  }
+  delete servers["todos"];
+  writeJsonFile(configPath, config);
+  console.log(chalk.green(`Cursor (${global ? "user" : "project"}): unregistered from ${configPath}`));
+}
+
 // --- Main register/unregister ---
 
 function registerMcp(agent: string, global?: boolean): void {
-  const agents = agent === "all" ? ["claude", "codex", "gemini"] : [agent];
+  const agents = agent === "all" ? ["claude", "codex", "gemini", "cursor"] : [agent];
   const binPath = getMcpBinaryPath();
   for (const a of agents) {
     switch (a) {
       case "claude": registerClaude(binPath, global); break;
       case "codex": registerCodex(binPath); break;
       case "gemini": registerGemini(binPath); break;
-      default: console.error(chalk.red(`Unknown agent: ${a}. Use: claude, codex, gemini, all`));
+      case "cursor": registerCursor(binPath, global); break;
+      default: console.error(chalk.red(`Unknown agent: ${a}. Use: claude, codex, gemini, cursor, all`));
     }
   }
 }
 
 function unregisterMcp(agent: string, global?: boolean): void {
-  const agents = agent === "all" ? ["claude", "codex", "gemini"] : [agent];
+  const agents = agent === "all" ? ["claude", "codex", "gemini", "cursor"] : [agent];
   for (const a of agents) {
     switch (a) {
       case "claude": unregisterClaude(global); break;
       case "codex": unregisterCodex(); break;
       case "gemini": unregisterGemini(); break;
-      default: console.error(chalk.red(`Unknown agent: ${a}. Use: claude, codex, gemini, all`));
+      case "cursor": unregisterCursor(global); break;
+      default: console.error(chalk.red(`Unknown agent: ${a}. Use: claude, codex, gemini, cursor, all`));
     }
   }
 }
@@ -285,8 +321,8 @@ exit 0
   program
     .command("mcp")
     .description("Start MCP server (stdio)")
-    .option("--register <agent>", "Register MCP server with an agent (claude, codex, gemini, all)")
-    .option("--unregister <agent>", "Unregister MCP server from an agent (claude, codex, gemini, all)")
+    .option("--register <agent>", "Register MCP server with an agent (claude, codex, gemini, cursor, all)")
+    .option("--unregister <agent>", "Unregister MCP server from an agent (claude, codex, gemini, cursor, all)")
     .option("-g, --global", "Register/unregister globally (user-level) instead of project-level")
     .action(async (opts) => {
       if (opts.register) {
