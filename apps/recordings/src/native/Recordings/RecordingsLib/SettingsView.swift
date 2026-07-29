@@ -1,11 +1,19 @@
 import SwiftUI
 @preconcurrency import KeyboardShortcuts
 
+/// App settings in the native macOS Settings idiom: a tabbed window of grouped
+/// forms. This view is presentation only — every control reads and writes the
+/// same stored values, under the same keys, as before.
 public struct SettingsView: View {
     @ObservedObject public var engine: RecordingEngine
     @ObservedObject public var shortcuts: VoiceShortcuts
     @ObservedObject public var projectStore: ProjectStore
     @AppStorage("openAIAPIKey") private var openAIAPIKey = ""
+
+    @State private var newProjectName = ""
+    @State private var editingProject: RecProject?
+    @State private var newTrigger = ""
+    @State private var newContent = ""
 
     public init(engine: RecordingEngine, shortcuts: VoiceShortcuts, projectStore: ProjectStore) {
         self.engine = engine
@@ -34,9 +42,11 @@ public struct SettingsView: View {
 
     private var generalTab: some View {
         Form {
-            Section("OpenAI") {
-                SecureField("API key", text: $openAIAPIKey)
-                    .textFieldStyle(.roundedBorder)
+            // Transcription owns everything about turning speech into text.
+            // Future realtime accuracy controls — context prompt, keywords,
+            // expected languages, latency/accuracy — belong in this section.
+            Section("Transcription") {
+                SecureField("OpenAI API Key", text: $openAIAPIKey)
                     .onChange(of: openAIAPIKey) {
                         // Keep the CLI config in sync — final transcription shells out to it.
                         try? OpenAIAPIKeyStore.save(key: openAIAPIKey, homePath: engine.home)
@@ -45,60 +55,11 @@ public struct SettingsView: View {
                     Text("English").tag("en")
                     Text("Auto Detect").tag("auto")
                 }
-                Text("Used for live transcription and the final paste. Stored in ~/.hasna/recordings/config.json.")
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("Intent") {
                 Toggle("Detect questions and edit commands", isOn: $engine.intentDetectionEnabled)
-                Text("When on, Recordings infers whether you dictated, asked a question, or asked it to edit the selected text. Anything uncertain is typed out literally. When off, every recording is typed out.")
-                    .foregroundStyle(.secondary)
+                footnote("When on, Recordings infers whether you dictated, asked a question, or asked for an edit; anything uncertain is typed out literally. Stored in ~/.hasna/recordings/config.json.")
             }
 
-            Section("Recording Shortcut") {
-                HStack {
-                    Text("Shortcut")
-                    Spacer()
-                    KeyboardShortcuts.Recorder(for: .toggleRecording) { _ in
-                        engine.updateStatus()
-                    }
-                    Button("Reset to F5") {
-                        KeyboardShortcuts.setShortcut(.init(.f5), for: .toggleRecording)
-                        engine.updateStatus()
-                    }
-                }
-                Toggle("Use fn/Globe as recording key", isOn: $engine.useFnKey)
-                Text("Hold to record, release to transcribe and paste.")
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("Permissions") {
-                HStack {
-                    Text("Microphone")
-                    Spacer()
-                    Text(engine.microphonePermissionLabel)
-                        .foregroundStyle(.secondary)
-                }
-                Button("Request Microphone") {
-                    engine.requestMicrophonePermission()
-                }
-                HStack {
-                    Text("Accessibility")
-                    Spacer()
-                    Text(engine.accessibilityPermissionLabel)
-                        .foregroundStyle(.secondary)
-                }
-                HStack {
-                    Button("Request Accessibility") {
-                        engine.requestAccessibilityPermission()
-                    }
-                    Button("Open Accessibility Settings") {
-                        engine.openAccessibilitySettings()
-                    }
-                }
-            }
-
-            Section("Transcription Cleanup") {
+            Section("Cleanup") {
                 Picker("Mode", selection: $projectStore.settings.postProcessingMode) {
                     ForEach(PostProcessingMode.allCases) { mode in
                         Text(mode.label).tag(mode.rawValue)
@@ -109,57 +70,79 @@ public struct SettingsView: View {
                     try? projectStore.save()
                 }
                 TextEditor(text: $projectStore.settings.globalSystemPrompt)
-                    .frame(height: 80)
+                    .frame(height: 72)
+                    .accessibilityLabel("Cleanup instructions")
                     .onChange(of: projectStore.settings.globalSystemPrompt) {
                         try? projectStore.save()
                     }
-                Text("Instructions for post-transcription cleanup and formatting.")
-                    .foregroundStyle(.secondary)
+                footnote("Instructions for post-transcription cleanup and formatting.")
             }
             .disabled(!projectStore.canMutateProjects)
+
+            Section("Recording") {
+                LabeledContent("Shortcut") {
+                    HStack(spacing: 8) {
+                        KeyboardShortcuts.Recorder(for: .toggleRecording) { _ in
+                            engine.updateStatus()
+                        }
+                        Button("Reset to F5") {
+                            KeyboardShortcuts.setShortcut(.init(.f5), for: .toggleRecording)
+                            engine.updateStatus()
+                        }
+                    }
+                }
+                Toggle("Use fn/Globe as recording key", isOn: $engine.useFnKey)
+                footnote("Hold to record, release to transcribe and paste.")
+            }
+
+            Section("Permissions") {
+                LabeledContent("Microphone") {
+                    HStack(spacing: 8) {
+                        Text(engine.microphonePermissionLabel).foregroundStyle(.secondary)
+                        Button("Request…") { engine.requestMicrophonePermission() }
+                            .accessibilityLabel("Request microphone access")
+                    }
+                }
+                LabeledContent("Accessibility") {
+                    HStack(spacing: 8) {
+                        Text(engine.accessibilityPermissionLabel).foregroundStyle(.secondary)
+                        Button("Request…") { engine.requestAccessibilityPermission() }
+                            .accessibilityLabel("Request accessibility access")
+                        Button("Open Settings…") { engine.openAccessibilitySettings() }
+                            .accessibilityLabel("Open Accessibility settings")
+                    }
+                }
+            }
         }
-        .formStyle(.grouped).padding()
+        .formStyle(.grouped)
     }
 
     // MARK: - Projects
-
-    @State private var newProjectName = ""
-    @State private var editingProject: RecProject?
 
     private var projectsTab: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 TextField("New project name", text: $newProjectName)
                     .textFieldStyle(.roundedBorder)
-                Button("Add") {
-                    guard !newProjectName.isEmpty else { return }
-                    let name = newProjectName
-                    Task {
-                        do {
-                            try await projectStore.addProject(name: name)
-                            newProjectName = ""
-                        } catch {}
-                    }
-                }
-                .disabled(newProjectName.isEmpty)
+                    .onSubmit(addProject)
+                Button("Add", action: addProject)
+                    .disabled(newProjectName.isEmpty)
             }
             .padding()
 
             Divider()
 
             if projectStore.settings.projects.isEmpty {
-                Spacer()
-                VStack(spacing: 8) {
-                    Image(systemName: "folder").font(.largeTitle).foregroundStyle(.quaternary)
-                    Text("No projects yet").foregroundStyle(.secondary)
-                }
-                Spacer()
+                ContentUnavailableView(
+                    "No Projects",
+                    systemImage: "folder",
+                    description: Text("Add a project to give its recordings their own cleanup instructions.")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List {
                     ForEach(projectStore.settings.projects) { project in
-                        ProjectRow(project: project) {
-                            editingProject = project
-                        }
+                        ProjectRow(project: project) { editingProject = project }
                     }
                     .onDelete { indexSet in
                         for i in indexSet {
@@ -171,22 +154,30 @@ public struct SettingsView: View {
         }
         .disabled(!projectStore.canMutateProjects)
         .sheet(item: $editingProject) { project in
-            ProjectEditView(project: project, store: projectStore) {
-                editingProject = nil
-            }
+            ProjectEditView(project: project, store: projectStore) { editingProject = nil }
+        }
+    }
+
+    private func addProject() {
+        guard !newProjectName.isEmpty else { return }
+        let name = newProjectName
+        Task {
+            do {
+                try await projectStore.addProject(name: name)
+                newProjectName = ""
+            } catch {}
         }
     }
 
     // MARK: - Voice Shortcuts
 
-    @State private var newTrigger = ""
-    @State private var newContent = ""
-
     private var shortcutsTab: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                TextField("Trigger phrase", text: $newTrigger).textFieldStyle(.roundedBorder)
-                TextField("Text to insert", text: $newContent).textFieldStyle(.roundedBorder)
+                TextField("Trigger phrase", text: $newTrigger)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Text to insert", text: $newContent)
+                    .textFieldStyle(.roundedBorder)
                 Button("Add") {
                     guard !newTrigger.isEmpty, !newContent.isEmpty else { return }
                     shortcuts.add(trigger: newTrigger, content: newContent)
@@ -199,16 +190,16 @@ public struct SettingsView: View {
             Divider()
 
             if shortcuts.shortcuts.isEmpty {
-                Spacer()
-                VStack(spacing: 8) {
-                    Image(systemName: "text.badge.star").font(.largeTitle).foregroundStyle(.quaternary)
-                    Text("No voice shortcuts yet").foregroundStyle(.secondary)
-                }
-                Spacer()
+                ContentUnavailableView(
+                    "No Voice Shortcuts",
+                    systemImage: "text.badge.star",
+                    description: Text("Add a trigger phrase and the text it inserts when spoken.")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List {
                     ForEach(shortcuts.shortcuts) { s in
-                        VStack(alignment: .leading) {
+                        VStack(alignment: .leading, spacing: 2) {
                             Text(s.trigger).bold()
                             Text(s.content).foregroundStyle(.secondary).lineLimit(2)
                         }
@@ -217,6 +208,12 @@ public struct SettingsView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Furniture
+
+    private func footnote(_ text: String) -> some View {
+        Text(text).font(.callout).foregroundStyle(.secondary)
     }
 }
 
@@ -237,6 +234,7 @@ struct ProjectRow: View {
             Spacer()
             Button("Edit") { onEdit() }
                 .controlSize(.small)
+                .accessibilityLabel("Edit \(project.name)")
         }
     }
 }
@@ -257,7 +255,6 @@ struct ProjectEditView: View {
                         get: { project.path ?? "" },
                         set: { project.path = $0.isEmpty ? nil : $0 }
                     ))
-                    .textFieldStyle(.roundedBorder)
                 }
 
                 Section("Transcriber Instructions") {
@@ -266,7 +263,9 @@ struct ProjectEditView: View {
                         set: { project.systemPrompt = $0.isEmpty ? nil : $0 }
                     ))
                     .frame(height: 100)
+                    .accessibilityLabel("Transcriber instructions")
                     Text("Project-specific cleanup and formatting instructions.")
+                        .font(.callout)
                         .foregroundStyle(.secondary)
                 }
             }

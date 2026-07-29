@@ -51,7 +51,7 @@ private struct HeaderBar: View {
     @ObservedObject var store: RecordingsStore
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: Theme.spacingS) {
             Text("\(store.library.count) recording\(store.library.count == 1 ? "" : "s")")
             if let updated = store.lastUpdated {
                 Text("·")
@@ -64,6 +64,7 @@ private struct HeaderBar: View {
             }
             .buttonStyle(.plain)
             .help("Refresh library")
+            .accessibilityLabel("Refresh library")
 
             Button {
                 store.pane = .record
@@ -73,11 +74,12 @@ private struct HeaderBar: View {
             .buttonStyle(.plain)
             .foregroundStyle(Theme.accent)
             .help("New recording")
+            .accessibilityLabel("New recording")
         }
-        .font(.system(.subheadline, design: .rounded))
+        .font(Theme.labelFont)
         .foregroundStyle(.secondary)
-        .padding(.horizontal, 18)
-        .padding(.top, 20)
-        .padding(.bottom, 10)
+        .padding(.horizontal, Theme.spacingM)
+        .padding(.top, Theme.spacingM)
+        .padding(.bottom, Theme.spacingS)
     }
 }
