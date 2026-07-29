@@ -6,7 +6,6 @@ import { render } from "ink";
 import React from "react";
 import { resolveIdentity } from "../lib/identity.js";
 import { isCloudStore } from "../lib/store/index.js";
-import { HasnaHttpError } from "../lib/contracts-client/index.js";
 import { App } from "./components/App.js";
 import { registerBrainsCommand } from "./brains.js";
 import { registerMessagingCommands } from "./commands/messaging.js";
@@ -98,12 +97,33 @@ registerEventsCommands(program, { source: "conversations" });
 // Commander actions are async; `program.parse()` returns before they settle, so a
 // rejected action would otherwise surface as an unhandled rejection with a raw
 // (minified) stack trace. Route every failure through one clean formatter instead.
+type HttpFailure = {
+  name: "HasnaHttpError";
+  status: number;
+  method: string;
+  path: string;
+  body: unknown;
+};
+
+function isHttpFailure(err: unknown): err is HttpFailure {
+  if (!err || typeof err !== "object") return false;
+  const candidate = err as Partial<HttpFailure>;
+  return candidate.name === "HasnaHttpError"
+    && typeof candidate.status === "number"
+    && typeof candidate.method === "string"
+    && typeof candidate.path === "string";
+}
+
 function reportCliError(err: unknown): never {
-  if (err instanceof HasnaHttpError) {
-    const body = err.body as { error?: string; message?: string } | undefined;
-    const detail = body?.error || body?.message;
+  if (isHttpFailure(err)) {
+    const body = err.body && typeof err.body === "object"
+      ? err.body as { error?: string; message?: string; reason?: string; hint?: string }
+      : undefined;
+    const detail = body?.error || body?.message || (typeof err.body === "string" ? err.body : undefined);
     console.error(chalk.red(`Request failed: ${err.method} ${err.path} -> ${err.status}`));
     if (detail) console.error(chalk.dim(detail));
+    if (body?.reason && body.reason !== detail) console.error(chalk.dim(body.reason));
+    if (body?.hint) console.error(chalk.dim(`Hint: ${body.hint}`));
     if (err.status === 404) {
       console.error(
         chalk.dim("The cloud API did not recognize this route. Ensure the server is up to date."),
