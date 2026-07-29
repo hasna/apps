@@ -11,6 +11,18 @@ export interface FindDuplicateTasksOptions {
   include_archived?: boolean;
 }
 
+export interface TaskDuplicateProbe {
+  title: string;
+  description?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface TaskDuplicateMatch {
+  task: Task;
+  score: number;
+  reasons: string[];
+}
+
 export interface DuplicateTaskCandidate {
   primary_task: Task;
   duplicate_task: Task;
@@ -50,14 +62,17 @@ export interface TaskMergeResult {
   moved: TaskMergeMovedCounts;
 }
 
-interface TaskFingerprint {
-  task: Task;
+interface TaskFingerprintContent {
   title: string;
   body: string;
   text: string;
   tokens: Set<string>;
   sourceKeys: Set<string>;
   stackKeys: Set<string>;
+}
+
+interface TaskFingerprint extends TaskFingerprintContent {
+  task: Task;
 }
 
 const DEFAULT_THRESHOLD = 0.74;
@@ -138,7 +153,7 @@ function addSourceKeys(keys: Set<string>, value: unknown): void {
   if (raw.startsWith("github:")) keys.add(raw.toLowerCase());
 }
 
-function sourceKeysFor(task: Task): Set<string> {
+function sourceKeysFor(task: TaskDuplicateProbe): Set<string> {
   const keys = new Set<string>();
   const metadata = asObject(task.metadata);
   for (const key of [
@@ -162,7 +177,7 @@ function sourceKeysFor(task: Task): Set<string> {
   return keys;
 }
 
-function stackKeysFor(task: Task): Set<string> {
+function stackKeysFor(task: TaskDuplicateProbe): Set<string> {
   const keys = new Set<string>();
   const lines = `${task.title}\n${task.description || ""}`.split(/\r?\n/);
   let errorLine: string | null = null;
@@ -202,11 +217,10 @@ function normalizeStackLocation(value: string): string {
     .trim();
 }
 
-function fingerprint(task: Task): TaskFingerprint {
+function fingerprintContent(task: TaskDuplicateProbe): TaskFingerprintContent {
   const body = task.description || "";
   const text = `${task.title}\n${body}`;
   return {
-    task,
     title: normalizeText(task.title),
     body: normalizeText(body),
     text: normalizeText(text),
@@ -214,6 +228,10 @@ function fingerprint(task: Task): TaskFingerprint {
     sourceKeys: sourceKeysFor(task),
     stackKeys: stackKeysFor(task),
   };
+}
+
+function fingerprint(task: Task): TaskFingerprint {
+  return { task, ...fingerprintContent(task) };
 }
 
 function intersects(left: Set<string>, right: Set<string>): boolean {
@@ -228,7 +246,7 @@ function jaccard(left: Set<string>, right: Set<string>): number {
   return intersection / (left.size + right.size - intersection);
 }
 
-function scorePair(left: TaskFingerprint, right: TaskFingerprint): { score: number; reasons: string[] } {
+function scorePair(left: TaskFingerprintContent, right: TaskFingerprintContent): { score: number; reasons: string[] } {
   const scores: number[] = [];
   const reasons: string[] = [];
 
@@ -282,6 +300,30 @@ export function findDuplicateTasks(options: FindDuplicateTasksOptions = {}, db?:
   }
 
   return candidates.sort((a, b) => b.score - a.score || a.primary_task.created_at.localeCompare(b.primary_task.created_at) || a.duplicate_task.id.localeCompare(b.duplicate_task.id));
+}
+
+/**
+ * Score a prospective task against local tasks without inserting a temporary
+ * row. Producer previews use this to report likely duplicates before apply.
+ */
+export function findDuplicateTasksForInput(
+  input: TaskDuplicateProbe,
+  options: FindDuplicateTasksOptions = {},
+  db?: Database,
+): TaskDuplicateMatch[] {
+  const d = db || getDatabase();
+  const threshold = options.threshold ?? DEFAULT_THRESHOLD;
+  const probe = fingerprintContent(input);
+  return listTasks({
+    include_archived: Boolean(options.include_archived),
+    limit: options.limit ?? 1000,
+  }, d)
+    .map((task) => {
+      const { score, reasons } = scorePair(probe, fingerprint(task));
+      return { task, score, reasons };
+    })
+    .filter((candidate) => candidate.score >= threshold && candidate.reasons.length > 0)
+    .sort((left, right) => right.score - left.score || left.task.created_at.localeCompare(right.task.created_at) || left.task.id.localeCompare(right.task.id));
 }
 
 function updateRows(db: Database, table: string, column: string, fromId: string, toId: string): number {
