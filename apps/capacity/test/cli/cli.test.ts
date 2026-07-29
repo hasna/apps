@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, mock, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -787,6 +787,62 @@ describe("self-hosted CLI through the shipped entry point", () => {
       processEnvironment({ HASNA_ACCOUNTS_CAPACITY_RESOLVER_MODULE: writable }),
     );
     expect(result.exitCode).toBe(7);
+    expect(JSON.parse(result.stderr).error.code).toBe("POLICY_DENIED");
+    expect(existsSync(sentinel)).toBe(false);
+  });
+
+  /**
+   * The file-permission check alone reads through a symlink, so an operator-owned
+   * entry in a directory another account can write is that account's route to
+   * running code with the operator's authority. The sentinel proves refusal
+   * happened before evaluation, not after.
+   */
+  test("refuses a symlinked resolver module before evaluating its target", async () => {
+    const sentinel = join(resolverDirectory, "symlink-resolver-sentinel");
+    const target = writeCredentialResolverModule(
+      join(resolverDirectory, "symlink-target"),
+      [
+        `await Bun.write(${JSON.stringify(sentinel)}, "evaluated");`,
+        'export async function resolve() { return "unused"; }',
+      ].join("\n"),
+    );
+    const linkDirectory = join(resolverDirectory, "symlink-link");
+    mkdirSync(linkDirectory, { recursive: true, mode: 0o700 });
+    const link = join(linkDirectory, "capacity-credential-resolver.mjs");
+    symlinkSync(target, link);
+
+    const result = await runCli(
+      ["doctor", "--json"],
+      processEnvironment({ HASNA_ACCOUNTS_CAPACITY_RESOLVER_MODULE: link }),
+    );
+    expect(result.exitCode).toBe(7);
+    expect(result.stdout).toBe("");
+    expect(JSON.parse(result.stderr).error.code).toBe("POLICY_DENIED");
+    expect(existsSync(sentinel)).toBe(false);
+  });
+
+  /**
+   * An owner-only module is only as safe as the directory holding it: a group
+   * member who can write that directory can unlink the entry and leave its own.
+   */
+  test("refuses an owner-only resolver module inside a group-writable directory", async () => {
+    const sentinel = join(resolverDirectory, "ancestor-resolver-sentinel");
+    const shared = join(resolverDirectory, "group-writable");
+    const module = writeCredentialResolverModule(
+      shared,
+      [
+        `await Bun.write(${JSON.stringify(sentinel)}, "evaluated");`,
+        'export async function resolve() { return "unused"; }',
+      ].join("\n"),
+    );
+    chmodSync(shared, 0o775);
+
+    const result = await runCli(
+      ["doctor", "--json"],
+      processEnvironment({ HASNA_ACCOUNTS_CAPACITY_RESOLVER_MODULE: module }),
+    );
+    expect(result.exitCode).toBe(7);
+    expect(result.stdout).toBe("");
     expect(JSON.parse(result.stderr).error.code).toBe("POLICY_DENIED");
     expect(existsSync(sentinel)).toBe(false);
   });
