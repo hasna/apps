@@ -4,14 +4,16 @@ import SwiftUI
 /// App settings in the native macOS Settings idiom: a tabbed window of grouped
 /// forms. This view is presentation only — every control reads and writes the
 /// same stored values, under the same keys, as before.
+///
+/// `projectStore` survives here purely as the settings persistence layer
+/// (`settings.postProcessingMode`, `settings.globalSystemPrompt`, `save()`);
+/// the retired projects feature has no UI in Settings.
 public struct SettingsView: View {
     @ObservedObject public var engine: RecordingEngine
     @ObservedObject public var shortcuts: VoiceShortcuts
     @ObservedObject public var projectStore: ProjectStore
     @AppStorage("openAIAPIKey") private var openAIAPIKey = ""
 
-    @State private var newProjectName = ""
-    @State private var editingProject: RecProject?
     @State private var newTrigger = ""
     @State private var newContent = ""
 
@@ -24,17 +26,16 @@ public struct SettingsView: View {
     public var body: some View {
         TabView {
             generalTab.tabItem { Label("General", systemImage: "gear") }
-            projectsTab.tabItem { Label("Projects", systemImage: "folder") }
             shortcutsTab.tabItem { Label("Voice Shortcuts", systemImage: "text.badge.star") }
         }
         .frame(width: 520, height: 500)
-        .alert("Project Settings Error", isPresented: Binding(
+        .alert("Settings Error", isPresented: Binding(
             get: { projectStore.persistenceError != nil },
             set: { if !$0 { projectStore.clearPersistenceError() } }
         )) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text(projectStore.persistenceError ?? "The project settings could not be saved.")
+            Text(projectStore.persistenceError ?? "The settings could not be saved.")
         }
     }
 
@@ -77,7 +78,6 @@ public struct SettingsView: View {
                     }
                 footnote("Instructions for post-transcription cleanup and formatting.")
             }
-            .disabled(!projectStore.canMutateProjects)
 
             Section("Recording") {
                 LabeledContent("Shortcut") {
@@ -115,58 +115,6 @@ public struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-    }
-
-    // MARK: - Projects
-
-    private var projectsTab: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                TextField("New project name", text: $newProjectName)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit(addProject)
-                Button("Add", action: addProject)
-                    .disabled(newProjectName.isEmpty)
-            }
-            .padding()
-
-            Divider()
-
-            if projectStore.settings.projects.isEmpty {
-                ContentUnavailableView(
-                    "No Projects",
-                    systemImage: "folder",
-                    description: Text("Add a project to give its recordings their own cleanup instructions.")
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                List {
-                    ForEach(projectStore.settings.projects) { project in
-                        ProjectRow(project: project) { editingProject = project }
-                    }
-                    .onDelete { indexSet in
-                        for i in indexSet {
-                            try? projectStore.removeProject(id: projectStore.settings.projects[i].id)
-                        }
-                    }
-                }
-            }
-        }
-        .disabled(!projectStore.canMutateProjects)
-        .sheet(item: $editingProject) { project in
-            ProjectEditView(project: project, store: projectStore) { editingProject = nil }
-        }
-    }
-
-    private func addProject() {
-        guard !newProjectName.isEmpty else { return }
-        let name = newProjectName
-        Task {
-            do {
-                try await projectStore.addProject(name: name)
-                newProjectName = ""
-            } catch {}
-        }
     }
 
     // MARK: - Voice Shortcuts
@@ -214,77 +162,5 @@ public struct SettingsView: View {
 
     private func footnote(_ text: String) -> some View {
         Text(text).font(.callout).foregroundStyle(.secondary)
-    }
-}
-
-// MARK: - Project Row
-
-struct ProjectRow: View {
-    let project: RecProject
-    let onEdit: () -> Void
-
-    var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(project.name)
-                if let path = project.path, !path.isEmpty {
-                    Text(path).foregroundStyle(.secondary).lineLimit(1)
-                }
-            }
-            Spacer()
-            Button("Edit") { onEdit() }
-                .controlSize(.small)
-                .accessibilityLabel("Edit \(project.name)")
-        }
-    }
-}
-
-// MARK: - Project Edit
-
-struct ProjectEditView: View {
-    @State var project: RecProject
-    let store: ProjectStore
-    let onDismiss: () -> Void
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Form {
-                Section("Project") {
-                    TextField("Name", text: $project.name)
-                    TextField("Path", text: Binding(
-                        get: { project.path ?? "" },
-                        set: { project.path = $0.isEmpty ? nil : $0 }
-                    ))
-                }
-
-                Section("Transcriber Instructions") {
-                    TextEditor(text: Binding(
-                        get: { project.systemPrompt ?? "" },
-                        set: { project.systemPrompt = $0.isEmpty ? nil : $0 }
-                    ))
-                    .frame(height: 100)
-                    .accessibilityLabel("Transcriber instructions")
-                    Text("Project-specific cleanup and formatting instructions.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .formStyle(.grouped)
-            .disabled(!store.canMutateProjects)
-
-            HStack {
-                Spacer()
-                Button("Cancel") { onDismiss() }
-                Button("Save") {
-                    do {
-                        try store.updateProject(project)
-                        onDismiss()
-                    } catch {}
-                }
-                .disabled(!store.canMutateProjects)
-            }
-            .padding()
-        }
-        .frame(width: 420, height: 340)
     }
 }
