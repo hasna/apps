@@ -347,6 +347,49 @@ describe("routeTodosTaskEvent dedupe re-admission", () => {
     }
   });
 
+  test("flags sourceUnavailable when the source exits 0 with no output at all", () => {
+    // Regression for #152: `JSON.parse(stdout || "{}")` manufactured a well-formed
+    // empty record out of SILENCE, and the no-id branch then treated it as the
+    // source answering — a benign exit-0 skip that @hasna/events filed as a
+    // successful delivery. Strictly less information (nothing at all vs one space)
+    // must never be classified as MORE definitive than whitespace.
+    for (const stdout of ["", " ", "\n"]) {
+      const fakeTodos = withFakeTodosInspect(env.dataDir, stdout, { status: 0 });
+      try {
+        const result = routeTodosTaskEvent(pendingTaskEvent(), { ...ROUTE_OPTS, todosProject: "/tmp/source-todos" });
+        expect(result.kind).toBe("skipped");
+        expect(result.value.sourceUnavailable).toBe(true);
+        expect(String(result.value.reason)).toContain("could not ask the active todos source");
+        expect(result.value.sourceTaskResolution).toMatchObject({ checked: true, resolved: false, sourceUnavailable: true });
+        expect(loopCount()).toBe(0);
+      } finally {
+        fakeTodos.restore();
+      }
+    }
+  });
+
+  test("flags sourceUnavailable when the source exits 0 with a record that has no readable id", () => {
+    // Regression for #152 (second branch): `{}`, `{"ok":true}`, and a data-wrapped
+    // task all parse to a record with no id we can read — the source has told us
+    // nothing about the requested task. The data-wrapped row is the alarming one:
+    // an ordinary upstream envelope change (todosTaskRecord unwraps only `.task`)
+    // would otherwise turn EVERY task event into an exit-0 silent drop. Definitive
+    // outcomes are reserved for a readable id (see the mismatch test above).
+    for (const stdout of [{}, { ok: true }, { data: { id: TASK_ID, status: "pending" } }]) {
+      const fakeTodos = withFakeTodosInspect(env.dataDir, stdout, { status: 0 });
+      try {
+        const result = routeTodosTaskEvent(pendingTaskEvent(), { ...ROUTE_OPTS, todosProject: "/tmp/source-todos" });
+        expect(result.kind).toBe("skipped");
+        expect(result.value.sourceUnavailable).toBe(true);
+        expect(result.value.sourceTaskResolution).toMatchObject({ checked: true, resolved: false, sourceUnavailable: true });
+        expect(String((result.value.sourceTaskResolution as { error?: string }).error)).toContain("no readable task id");
+        expect(loopCount()).toBe(0);
+      } finally {
+        fakeTodos.restore();
+      }
+    }
+  });
+
   test("an in-flight (admitted) work item still dedupes", () => {
     routeTodosTaskEvent(pendingTaskEvent(), ROUTE_OPTS);
     const result = routeTodosTaskEvent(pendingTaskEvent(), ROUTE_OPTS);

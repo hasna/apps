@@ -407,9 +407,25 @@ function inspectSourceTodosTask(todosProjectPath: string, taskId: string): Sourc
       ),
     };
   }
+  // Exit 0 with empty stdout is the source saying NOTHING, not an empty record.
+  // `JSON.parse(result.stdout || "{}")` used to manufacture a well-formed `{}`
+  // out of silence, which the no-id branch below then read as the source
+  // answering — so a wrong/stub `todos` on a router's PATH dropped every event
+  // while exiting 0, and the events transport filed each drop as a successful
+  // delivery (#152).
+  if (!result.stdout.trim()) {
+    return {
+      checked: true,
+      resolved: false,
+      taskId,
+      todosProjectPath,
+      sourceUnavailable: true,
+      error: redact("todos inspect exited 0 with no output", 320),
+    };
+  }
   let task: Record<string, unknown> | undefined;
   try {
-    task = todosTaskRecord(JSON.parse(result.stdout || "{}"));
+    task = todosTaskRecord(JSON.parse(result.stdout));
   } catch (error) {
     // The source exited 0 but emitted something we cannot parse, so we still do
     // not know whether the task exists. Unintelligible success is an unavailable
@@ -435,20 +451,27 @@ function inspectSourceTodosTask(todosProjectPath: string, taskId: string): Sourc
     };
   }
   const inspectedId = taskEventField(task, ["id", "task_id", "taskId"]);
-  // An id we can read is the source ANSWERING, so these two are definitive
-  // outcomes and must never be reported as an unreachable source — doing so
-  // failed runs for tasks that demonstrably exist and sent operators hunting a
-  // PATH/connectivity fault that was not there.
   if (!inspectedId) {
+    // A record with no readable id is the source telling us NOTHING about the
+    // requested task — indistinguishable from a wrong binary answering, or an
+    // upstream envelope change (e.g. wrapping the task in `data`, which
+    // todosTaskRecord does not unwrap). Definitive outcomes require an id we can
+    // read: only the mismatch below and the resolved return prove the source
+    // answered about a task (#152).
     return {
       checked: true,
       resolved: false,
       taskId,
       todosProjectPath,
-      error: redact("todos inspect returned a task without an id", 320),
+      sourceUnavailable: true,
+      error: redact("todos inspect returned no readable task id", 320),
     };
   }
   if (!todosIdentifiesRequestedTask(inspectedId, taskId)) {
+    // An id we can read is the source ANSWERING — about a different task. That is
+    // a definitive outcome and must never be reported as an unreachable source:
+    // doing so failed runs for tasks that demonstrably exist and sent operators
+    // hunting a PATH/connectivity fault that was not there (#147).
     return {
       checked: true,
       resolved: false,
