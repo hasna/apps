@@ -1,0 +1,29 @@
+{
+  "$schema": "hasna.service_contract.v1",
+  "class": "service",
+  "kitVersion": "0.8.0",
+  "name": "@hasna/sandboxes",
+  "bins": [
+    "sandboxes",
+    "sandboxes-mcp"
+  ],
+  "serviceSurfaces": [
+    "http",
+    "cli",
+    "mcp"
+  ],
+  "storage": {
+    "engines": [
+      "sqlite",
+      "postgres"
+    ]
+  },
+  "hosting": {
+    "model": "systemd",
+    "entrypoint": "sandboxes-mcp",
+    "transport": "http",
+    "host": "127.0.0.1",
+    "port": 8875,
+    "path": "/mcp"
+  }
+}
