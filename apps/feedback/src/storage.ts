@@ -14,7 +14,13 @@ import type {
 } from "./types.js";
 import { createTaskSink } from "./tasks.js";
 import type { FeedbackTaskSink } from "./tasks.js";
-import { feedbackKinds, feedbackStatuses, parseFeedbackInput, parseStoredFeedbackItem } from "./validation.js";
+import {
+  feedbackKinds,
+  feedbackStatuses,
+  parseFeedbackInput,
+  parseStoredFeedbackItem,
+  truncateTaskError,
+} from "./validation.js";
 import {
   buildFeedbackCreatedEvent,
   buildFeedbackTriagedEvent,
@@ -228,6 +234,19 @@ function applyFilter(items: FeedbackItem[], filter: FeedbackListFilter = {}): Fe
     .slice(0, limit);
 }
 
+/**
+ * Raised when the data lock could not be acquired. Typed so callers can tell
+ * "server is busy, retry" from "your request was bad" — an HTTP 400 tells a
+ * client not to retry, which is exactly wrong for contention.
+ */
+export class FeedbackStoreBusyError extends Error {
+  readonly code = "FEEDBACK_STORE_BUSY";
+  constructor(message: string) {
+    super(message);
+    this.name = "FeedbackStoreBusyError";
+  }
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -252,7 +271,7 @@ async function withFileLock<T>(filePath: string, run: () => Promise<T>): Promise
       } catch {
         // Lock disappeared between attempts.
       }
-      if (Date.now() > deadline) throw new Error(`Timed out waiting for feedback data lock: ${lockPath}`);
+      if (Date.now() > deadline) throw new FeedbackStoreBusyError(`Timed out waiting for feedback data lock: ${lockPath}`);
       await delay(50);
     }
   }
@@ -285,68 +304,108 @@ export class LocalFeedbackStore implements FeedbackStore {
     };
     // Durability first: the report is on disk before anything downstream runs,
     // so a failing task sink can never cost us the feedback itself.
+    //
+    // The attempt marker goes in this SAME first write. Without it, a crash
+    // between "task created" and "link recorded" is indistinguishable from
+    // "never attempted", and the repair path files a duplicate task.
+    const stored: FeedbackItem = this.taskSink
+      ? { ...item, taskAttempt: { startedAt: now, attempts: 1 } }
+      : item;
+    await this.appendItem(stored);
+    if (this.eventSink) await emitFeedbackEvent(buildFeedbackCreatedEvent(item), this.eventSink);
+    return this.attachTask(stored);
+  }
+
+  /**
+   * Append one record. The create path must stay append-only: rewriting the
+   * whole file under the lock is O(n) and, under concurrency, blew the lock
+   * deadline and dropped reports outright.
+   */
+  private async appendItem(item: FeedbackItem): Promise<void> {
     await withFileLock(this.filePath, async () => {
       await appendFile(this.filePath, `${JSON.stringify(item)}\n`, "utf8");
     });
-    if (this.eventSink) await emitFeedbackEvent(buildFeedbackCreatedEvent(item), this.eventSink);
-    return this.attachTask(item);
   }
 
   /**
-   * Create the task for a feedback item and record the outcome on the item.
-   * Runs outside the file lock because task creation spawns a process; the
-   * result is written back under a fresh lock.
+   * Create the task for a feedback item and record the outcome by appending an
+   * updated record. Runs outside the file lock because task creation spawns a
+   * process.
+   *
+   * This never rejects once the report is stored. Rejecting here would drop
+   * the caller's only copy of the feedback id while the report sat on disk.
    */
   private async attachTask(item: FeedbackItem): Promise<FeedbackItem> {
     if (!this.taskSink) return item;
-    let patch: Partial<FeedbackItem>;
+    let next: FeedbackItem;
     try {
-      patch = { taskRef: await this.taskSink.createTask(item), taskError: undefined };
+      next = { ...item, taskRef: await this.taskSink.createTask(item), taskError: undefined };
     } catch (error) {
-      patch = { taskError: error instanceof Error ? error.message : String(error) };
+      next = { ...item, taskError: truncateTaskError(error instanceof Error ? error.message : String(error)) };
     }
-    return (await this.patchItem(item.id, patch)) ?? { ...item, ...patch };
-  }
-
-  private async patchItem(id: string, patch: Partial<FeedbackItem>): Promise<FeedbackItem | null> {
-    return withFileLock(this.filePath, async () => {
-      const items = await this.readAll();
-      const index = items.findIndex((entry) => entry.id === id);
-      if (index === -1) return null;
-      const next: FeedbackItem = { ...items[index]!, ...patch };
-      items[index] = next;
-      await this.writeAll(items);
-      return next;
-    });
+    try {
+      await this.appendItem(next);
+    } catch {
+      // The linkage record could not be written. The report itself is already
+      // durable, and its attempt marker is on disk, so `sync-tasks` will
+      // report it as uncertain rather than silently duplicating the task.
+    }
+    return next;
   }
 
   /**
-   * Retry task creation for every item that has no task yet. This is the
-   * repair path for feedback captured while the task sink was down or
-   * unconfigured — without it, an outage would silently leave the loop open.
+   * Retry task creation for feedback that has no task yet. This is the repair
+   * path for feedback captured while the task sink was down or unconfigured —
+   * without it, an outage would silently leave the loop open.
+   *
+   * Items whose previous attempt recorded no outcome are reported as
+   * `uncertain` and skipped: a task may already exist for them, and filing a
+   * second one is worse than leaving a human to check.
    */
-  async syncTasks(options: { limit?: number } = {}): Promise<FeedbackSyncTasksResult> {
+  async syncTasks(options: { limit?: number; retryUncertain?: boolean } = {}): Promise<FeedbackSyncTasksResult> {
     const result: FeedbackSyncTasksResult = {
       sinkConfigured: Boolean(this.taskSink),
       created: 0,
       failed: 0,
       skipped: 0,
+      uncertain: 0,
+      remaining: 0,
       errors: [],
     };
     if (!this.taskSink) return result;
 
     const items = await this.readAll();
-    const pending = items.filter((item) => !item.taskRef);
-    result.skipped = items.length - pending.length;
+    const unlinked = items.filter((item) => !item.taskRef);
+    result.skipped = items.length - unlinked.length;
 
-    for (const item of pending.slice(0, options.limit ?? pending.length)) {
+    // A recorded taskError means we KNOW the attempt failed, so retrying is
+    // safe. An attempt marker with no recorded outcome means we do not know.
+    const uncertain = unlinked.filter((item) => item.taskAttempt && !item.taskError);
+    const safe = unlinked.filter((item) => !(item.taskAttempt && !item.taskError));
+    const queue = options.retryUncertain ? [...safe, ...uncertain] : safe;
+    if (!options.retryUncertain) result.uncertain = uncertain.length;
+
+    const batch = queue.slice(0, options.limit ?? queue.length);
+    result.remaining = queue.length - batch.length;
+
+    for (const item of batch) {
+      const attempts = (item.taskAttempt?.attempts ?? 0) + 1;
+      const attempted: FeedbackItem = {
+        ...item,
+        taskAttempt: { startedAt: new Date().toISOString(), attempts },
+      };
+      try {
+        await this.appendItem(attempted);
+      } catch {
+        // Best effort: a missing marker only costs us duplicate-detection.
+      }
       try {
         const taskRef = await this.taskSink.createTask(item);
-        await this.patchItem(item.id, { taskRef, taskError: undefined });
+        await this.appendItem({ ...attempted, taskRef, taskError: undefined });
         result.created += 1;
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        await this.patchItem(item.id, { taskError: message });
+        const message = truncateTaskError(error instanceof Error ? error.message : String(error));
+        await this.appendItem({ ...attempted, taskError: message }).catch(() => {});
         result.failed += 1;
         result.errors.push(`${item.id}: ${message}`);
       }
@@ -431,14 +490,23 @@ export class LocalFeedbackStore implements FeedbackStore {
     return items.map((item) => JSON.stringify(item)).join("\n") + (items.length ? "\n" : "");
   }
 
+  /**
+   * The file is an append-only log: a feedback item may appear more than once,
+   * with later records superseding earlier ones (that is how task linkage is
+   * recorded without rewriting the file). Fold by id, last record wins.
+   * `writeAll` compacts the log back to one record per item.
+   */
   async readAll(): Promise<FeedbackItem[]> {
     if (!existsSync(this.filePath)) return [];
     const raw = await readFile(this.filePath, "utf8");
-    return raw
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line) => parseStoredFeedbackItem(JSON.parse(line)));
+    const byId = new Map<string, FeedbackItem>();
+    for (const line of raw.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const item = parseStoredFeedbackItem(JSON.parse(trimmed));
+      byId.set(item.id, item);
+    }
+    return [...byId.values()];
   }
 
   private async writeAll(items: FeedbackItem[]): Promise<void> {

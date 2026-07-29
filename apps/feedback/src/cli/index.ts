@@ -112,6 +112,8 @@ export interface FeedbackDoctorReport {
   runtime: ReturnType<typeof describeFeedbackStoreRuntime>;
   /** The wire that turns feedback into a task an executor can pick up. */
   taskSink: ReturnType<typeof describeTaskSinkRuntime>;
+  /** Which store the CLI will actually read and write with this environment. */
+  target: "local" | "remote";
   dataFile?: string;
   dataDirWritable: boolean | null;
   dataFileReadable: boolean | null;
@@ -123,11 +125,16 @@ export interface FeedbackDoctorReport {
 
 export async function buildDoctorReport(env: Record<string, string | undefined> = process.env): Promise<FeedbackDoctorReport> {
   const runtime = describeFeedbackStoreRuntime({ env });
+  const apiUrl = env["FEEDBACK_API_URL"]?.trim() || null;
+  // With a remote configured, every verb talks to the service. Probing and
+  // reporting a local data file the CLI will never touch made doctor gate the
+  // wrong store.
+  const target: "local" | "remote" = apiUrl ? "remote" : "local";
   const filePath = runtime.local?.dataFile ?? resolveFeedbackFilePath({ dataDir: env["FEEDBACK_DATA_DIR"] });
   let dataDirWritable: boolean | null = null;
   let dataFileReadable: boolean | null = null;
 
-  if (runtime.mode === "local") {
+  if (target === "local" && runtime.mode === "local") {
     const dataDir = dirname(filePath);
     mkdirSync(dataDir, { recursive: true });
     const tmpPath = join(dataDir, `.feedback-doctor-${process.pid}.tmp`);
@@ -156,16 +163,18 @@ export async function buildDoctorReport(env: Record<string, string | undefined> 
     "feedback-serve": findBinaryOnPath("feedback-serve", env["PATH"]),
   };
   const taskSink = describeTaskSinkRuntime({ env });
-  const localStorageOk = runtime.mode !== "local" || (dataDirWritable === true && dataFileReadable === true);
+  const localStorageOk =
+    target === "remote" || runtime.mode !== "local" || (dataDirWritable === true && dataFileReadable === true);
   return {
     ok: runtime.ok && localStorageOk && taskSink.ok,
     version: VERSION,
     runtime,
     taskSink,
-    dataFile: runtime.mode === "local" ? filePath : undefined,
+    target,
+    dataFile: target === "local" && runtime.mode === "local" ? filePath : undefined,
     dataDirWritable,
     dataFileReadable,
-    apiUrl: env["FEEDBACK_API_URL"]?.trim() || null,
+    apiUrl,
     apiTokenConfigured: Boolean(env["FEEDBACK_API_TOKEN"]),
     bins,
   };
@@ -354,7 +363,20 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .command("sync-tasks")
     .description("Create tasks for feedback that has none yet (repair path for a task sink that was down or unconfigured)")
     .option("--limit <n>", "Maximum number of items to process")
-    .action(async (options: { limit?: string }) => {
+    .option("--retry-uncertain", "Also retry items whose previous attempt recorded no outcome (may duplicate a task)")
+    .action(async (options: { limit?: string; retryUncertain?: boolean }) => {
+      // Against a remote service this would silently sync the (usually empty)
+      // local store and report all-clear, which is worse than refusing.
+      const target = resolveApiTarget({});
+      if (target) {
+        console.error(
+          "sync-tasks operates on the local store, but FEEDBACK_API_URL points at a remote service. " +
+            "Task linkage for a hosted deployment is created server-side. " +
+            "Unset FEEDBACK_API_URL to repair a local store.",
+        );
+        process.exitCode = 1;
+        return;
+      }
       const store = localStore();
       if (!store.syncTasks) {
         console.error("This store does not support task syncing");
@@ -363,6 +385,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       }
       const result = await store.syncTasks({
         limit: options.limit ? Number.parseInt(options.limit, 10) : undefined,
+        retryUncertain: options.retryUncertain,
       });
       printJson(result);
       if (!result.sinkConfigured) {
@@ -372,6 +395,12 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         );
         process.exitCode = 1;
         return;
+      }
+      if (result.uncertain > 0) {
+        console.error(
+          `${result.uncertain} item(s) have an attempt with no recorded outcome and may already have a task. ` +
+            "They were NOT re-filed. Check them, then re-run with --retry-uncertain to force.",
+        );
       }
       if (result.failed > 0) process.exitCode = 1;
     });

@@ -25,7 +25,14 @@ export interface CommandResult {
   stderr: string;
 }
 
-export type CommandRunner = (command: string, args: string[], options?: { input?: string }) => Promise<CommandResult>;
+export type CommandRunner = (
+  command: string,
+  args: string[],
+  options?: { input?: string; timeoutMs?: number },
+) => Promise<CommandResult>;
+
+/** Upper bound on how long task creation may block the capture path. */
+export const DEFAULT_TASK_TIMEOUT_MS = 15_000;
 
 export interface FeedbackTaskDraft {
   title: string;
@@ -49,6 +56,7 @@ export interface FeedbackTaskSinkConfig {
   command: string[] | null;
   tags: string[];
   priorityMap: Record<string, string>;
+  timeoutMs: number;
   blockers: string[];
   projectFor(appId: string): string | undefined;
 }
@@ -138,6 +146,16 @@ function parseCommandEnv(raw: string | undefined, blockers: string[]): string[] 
   return parts.length ? parts : null;
 }
 
+function parseTimeoutEnv(raw: string | undefined, blockers: string[]): number {
+  if (!raw?.trim()) return DEFAULT_TASK_TIMEOUT_MS;
+  const parsed = Number.parseInt(raw.trim(), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    blockers.push("FEEDBACK_TASK_TIMEOUT_MS must be a positive integer number of milliseconds.");
+    return DEFAULT_TASK_TIMEOUT_MS;
+  }
+  return parsed;
+}
+
 function parseListEnv(raw: string | undefined): string[] {
   return (raw ?? "")
     .split(",")
@@ -172,6 +190,7 @@ export function resolveTaskSinkConfig(options: ResolveTaskSinkOptions = {}): Fee
   const tags = parseListEnv(env["FEEDBACK_TASK_TAGS"]);
   const command = parseCommandEnv(env["FEEDBACK_TASK_COMMAND"], blockers);
   const binaryName = env["FEEDBACK_TASK_BIN"]?.trim() || DEFAULT_TODOS_BINARY;
+  const timeoutMs = parseTimeoutEnv(env["FEEDBACK_TASK_TIMEOUT_MS"], blockers);
 
   const projectFor = (appId: string): string | undefined => projectMap[appId] ?? defaultProject;
 
@@ -179,16 +198,16 @@ export function resolveTaskSinkConfig(options: ResolveTaskSinkOptions = {}): Fee
     // Deliberately does not echo the configured value: doctor output is
     // pasted into tasks and channels, and env values can carry credentials.
     blockers.push('Unsupported FEEDBACK_TASK_SINK value. Use "auto", "todos", "command", or "none".');
-    return { requested: "auto", kind: "invalid", binary: null, command, tags, priorityMap, blockers, projectFor };
+    return { requested: "auto", kind: "invalid", binary: null, command, tags, priorityMap, timeoutMs, blockers, projectFor };
   }
 
   if (request === "none") {
-    return { requested: request, kind: "none", binary: null, command, tags, priorityMap, blockers, projectFor };
+    return { requested: request, kind: "none", binary: null, command, tags, priorityMap, timeoutMs, blockers, projectFor };
   }
 
   if (request === "command") {
     if (!command) blockers.push("FEEDBACK_TASK_SINK=command requires FEEDBACK_TASK_COMMAND.");
-    return { requested: request, kind: "command", binary: null, command, tags, priorityMap, blockers, projectFor };
+    return { requested: request, kind: "command", binary: null, command, tags, priorityMap, timeoutMs, blockers, projectFor };
   }
 
   const binary = findBinary(binaryName);
@@ -199,7 +218,7 @@ export function resolveTaskSinkConfig(options: ResolveTaskSinkOptions = {}): Fee
         `FEEDBACK_TASK_SINK=todos but the ${JSON.stringify(binaryName)} binary was not found on PATH.`,
       );
     }
-    return { requested: request, kind: "todos", binary, command, tags, priorityMap, blockers, projectFor };
+    return { requested: request, kind: "todos", binary, command, tags, priorityMap, timeoutMs, blockers, projectFor };
   }
 
   // auto: use todos when it is genuinely available, otherwise stay out of the
@@ -211,6 +230,7 @@ export function resolveTaskSinkConfig(options: ResolveTaskSinkOptions = {}): Fee
     command,
     tags,
     priorityMap,
+    timeoutMs,
     blockers,
     projectFor,
   };
@@ -270,17 +290,57 @@ export function buildTaskDraft(item: FeedbackItem, config: FeedbackTaskSinkConfi
 
 export const defaultCommandRunner: CommandRunner = (command, args, options = {}) =>
   new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
+    // `detached` puts the child in its own process group so a timeout can kill
+    // the WHOLE tree. Killing only the direct child leaves grandchildren alive
+    // holding the inherited stdio pipes, which keeps our own event loop open —
+    // measured: the timeout fired at 1s but the process still exited at 61s.
+    const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"], detached: true });
     let stdout = "";
     let stderr = "";
+    let settled = false;
+
+    const killTree = (): void => {
+      try {
+        if (child.pid) process.kill(-child.pid, "SIGKILL");
+      } catch {
+        child.kill("SIGKILL");
+      }
+      // Release the pipes so nothing an orphan still holds keeps us alive.
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      child.stdin?.destroy();
+      child.unref();
+    };
+
+    // Capturing feedback must never be held hostage by a task tracker that
+    // hangs. Without this the subprocess can block `submit` — and, because the
+    // same path runs inside the HTTP handler, a hosted request — forever.
+    const timeoutMs = options.timeoutMs ?? DEFAULT_TASK_TIMEOUT_MS;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      killTree();
+      reject(new Error(`${command} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    timer.unref?.();
+
+    const finish = (run: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      run();
+    };
+
     child.stdout.on("data", (chunk) => {
       stdout += String(chunk);
     });
     child.stderr.on("data", (chunk) => {
       stderr += String(chunk);
     });
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ code: code ?? 0, stdout, stderr }));
+    child.on("error", (error) => finish(() => reject(error)));
+    child.on("close", (code) => finish(() => resolve({ code: code ?? 0, stdout, stderr })));
+
+    // Always close stdin: a child that prompts gets EOF instead of blocking.
     if (options.input !== undefined) child.stdin.write(options.input);
     child.stdin.end();
   });
@@ -342,7 +402,10 @@ export function createTaskSink(options: CreateTaskSinkOptions = {}): FeedbackTas
       provider: command!,
       createTask: async (item) => {
         const draft = buildTaskDraft(item, config);
-        const result = await run(command!, args, { input: JSON.stringify({ feedback: item, task: draft }) });
+        const result = await run(command!, args, {
+          input: JSON.stringify({ feedback: item, task: draft }),
+          timeoutMs: config.timeoutMs,
+        });
         if (result.code !== 0) {
           throw new Error(`${command} exited ${result.code}: ${result.stderr.trim() || result.stdout.trim()}`);
         }
@@ -362,7 +425,7 @@ export function createTaskSink(options: CreateTaskSinkOptions = {}): FeedbackTas
     provider: "todos",
     createTask: async (item) => {
       const draft = buildTaskDraft(item, config);
-      const result = await run(config.binary!, todosArgs(draft));
+      const result = await run(config.binary!, todosArgs(draft), { timeoutMs: config.timeoutMs });
       if (result.code !== 0) {
         throw new Error(`todos exited ${result.code}: ${result.stderr.trim() || result.stdout.trim()}`);
       }

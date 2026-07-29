@@ -59,3 +59,25 @@ describe("doctor reports the task sink so an open loop is visible", () => {
     expect(JSON.stringify(report)).not.toContain("super-secret-token");
   });
 });
+
+describe("doctor must describe the store the CLI will actually use", () => {
+  test("with a remote configured it reports the remote as the target, not a local file", async () => {
+    const report = await buildDoctorReport({
+      PATH: "",
+      FEEDBACK_TASK_SINK: "none",
+      FEEDBACK_API_URL: "https://feedback.example.test/",
+    });
+    expect(report.target).toBe("remote");
+    // Claiming a local data file the CLI will never write to is what made
+    // doctor gate the wrong thing.
+    expect(report.dataFile).toBeUndefined();
+    expect(report.dataDirWritable).toBeNull();
+    expect(report.dataFileReadable).toBeNull();
+  });
+
+  test("with no remote it reports local", async () => {
+    const report = await buildDoctorReport({ PATH: "", FEEDBACK_TASK_SINK: "none" });
+    expect(report.target).toBe("local");
+    expect(report.dataFile).toBeTruthy();
+  });
+});

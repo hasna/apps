@@ -1,4 +1,4 @@
-import { createFeedbackStore } from "./storage.js";
+import { createFeedbackStore, FeedbackStoreBusyError } from "./storage.js";
 import type { FeedbackListFilter, FeedbackStatus, FeedbackStore } from "./types.js";
 import { parseFeedbackInput, parseFeedbackStatus, validationErrorMessage } from "./validation.js";
 import { VERSION } from "./version.js";
@@ -255,6 +255,12 @@ export function createFeedbackHandler(options: FeedbackApiOptions = {}): (reques
 
       return withCors(errorResponse(404, "Not found"), corsOrigin);
     } catch (error) {
+      // Contention is a server-side, retryable condition — not a bad request.
+      if (error instanceof FeedbackStoreBusyError) {
+        const response = errorResponse(503, "Feedback store is busy, retry shortly");
+        response.headers.set("retry-after", "1");
+        return withCors(response, corsOrigin);
+      }
       return withCors(errorResponse(400, validationErrorMessage(error)), corsOrigin);
     }
   };

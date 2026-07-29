@@ -69,8 +69,18 @@ export interface FeedbackItem extends FeedbackInput {
   /**
    * Why task creation failed, when it did. Recorded rather than swallowed so
    * `feedback sync-tasks` can retry it and operators can see an open loop.
+   * Truncated on write to the schema bound — see `truncateTaskError`.
    */
   taskError?: string;
+  /**
+   * Written BEFORE task creation is attempted. Its presence without a
+   * `taskRef` or a `taskError` means the outcome is unknown — a task may
+   * already exist — so the repair path must not blindly file another one.
+   */
+  taskAttempt?: {
+    startedAt: string;
+    attempts: number;
+  };
 }
 
 export interface FeedbackListFilter {
@@ -104,6 +114,14 @@ export interface FeedbackSyncTasksResult {
   failed: number;
   /** Items that already had a task and were left alone. */
   skipped: number;
+  /**
+   * Items whose previous attempt recorded no outcome. A task may already exist
+   * for them, so re-filing blindly would duplicate it. Skipped unless
+   * `retryUncertain` is set.
+   */
+  uncertain: number;
+  /** Items left unprocessed because `limit` was reached. */
+  remaining: number;
   errors: string[];
 }
 
@@ -115,7 +133,7 @@ export interface FeedbackStore {
   /** Mark feedback shipped and link it to the changelog entry that shipped it. */
   markFeedbackShipped?(id: string, changelogRef: string): Promise<FeedbackItem | null>;
   /** Retry task creation for feedback that has no task yet. */
-  syncTasks?(options?: { limit?: number }): Promise<FeedbackSyncTasksResult>;
+  syncTasks?(options?: { limit?: number; retryUncertain?: boolean }): Promise<FeedbackSyncTasksResult>;
   stats(): Promise<FeedbackStats>;
   exportJsonl(filter?: FeedbackListFilter): Promise<string>;
 }

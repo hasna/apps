@@ -151,15 +151,27 @@ This runs in-process rather than through an out-of-process event subscriber on p
 | `FEEDBACK_TASK_PRIORITY_MAP` | severity→same name | JSON overriding the severity→priority mapping |
 | `FEEDBACK_TASK_TAGS` | — | comma-separated extra tags |
 | `FEEDBACK_TASK_BIN` | `todos` | task CLI name or path |
+| `FEEDBACK_TASK_TIMEOUT_MS` | `15000` | how long task creation may block capture before it is killed and recorded as a failure |
 | `FEEDBACK_TASK_COMMAND` | — | with `FEEDBACK_TASK_SINK=command`, the command to run; it receives `{"feedback":…,"task":…}` on stdin and must print JSON containing an `id` |
 
 `auto` is deliberately quiet: an install without a task CLI writes feedback and creates nothing, rather than failing every submit.
 
-Task creation never costs you the feedback. The report is written to storage first; if filing the task then fails, the error is recorded on the item as `taskError`, `submit` warns and exits non-zero, and `feedback sync-tasks` retries every item that still has no task:
+**Capture is never held hostage by the tracker.** The report is written to storage first, and task creation runs after it with a timeout — a tracker that is down, slow, or hung costs you a task, never a report. If filing fails, the error is recorded on the item as `taskError` (truncated to the schema bound), `submit` warns and exits non-zero, and `feedback sync-tasks` retries:
 
 ```bash
-feedback sync-tasks           # -> {"sinkConfigured":true,"created":2,"failed":0,"skipped":11,"errors":[]}
+feedback sync-tasks   # -> {"sinkConfigured":true,"created":2,"failed":0,"skipped":11,"uncertain":0,"remaining":0,"errors":[]}
 ```
+
+`sync-tasks` distinguishes two kinds of unlinked feedback, because they are not equally safe to retry:
+
+- a recorded `taskError` means the attempt is **known** to have failed, so it is retried automatically;
+- an attempt with no recorded outcome (a crash or timeout between "task created" and "link written") is reported as **`uncertain`** and skipped, because a task may already exist and re-filing would duplicate it. Use `--retry-uncertain` to force it after checking.
+
+`--limit` reports what it did not get to as `remaining`, so a partial run never reads as a complete one.
+
+### Storage shape
+
+The JSONL file is an **append-only log**: an item may appear more than once, and the last record for an id wins. Task linkage is recorded by appending, never by rewriting the file — rewriting it on the create path is O(n) under the data lock and, under concurrency, drops writes. `feedback status` and `feedback shipped` compact the log back to one record per item.
 
 ### Distribution events
 
