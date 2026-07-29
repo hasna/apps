@@ -132,6 +132,44 @@ class QuerylessMigrationSessionClient implements PostgresClientV1 {
   async close(): Promise<void> {}
 }
 
+const CALLABLE_MIGRATION_REACHED = "callable port session reached the migration body"
+
+function taggedTemplateBase(): () => never {
+  return () => {
+    throw new Error("tagged-template access is not part of the port")
+  }
+}
+
+/**
+ * A Bun `SQL` instance is callable — `typeof new SQL({ url }) === "function"` — so the
+ * adaptation the port docstring invites (`Object.assign(sql, { query, transaction, close })`)
+ * is a function carrying the port methods, and `transaction` hands back a callable session
+ * the same way. Both ports must accept it rather than fail closed on `typeof !== "object"`.
+ */
+function callablePortClient(kind: "journal" | "witness"): {
+  readonly client: PostgresClientV1
+  readonly state: { transactions: number; session_statements: string[] }
+} {
+  const identity = new QuerylessMigrationSessionClient(kind)
+  const state = { transactions: 0, session_statements: [] as string[] }
+  const session: PostgresSessionV1 = Object.assign(taggedTemplateBase(), {
+    query: async <Row extends Record<string, unknown>>(statement: string): Promise<Row[]> => {
+      state.session_statements.push(statement)
+      throw new Error(CALLABLE_MIGRATION_REACHED)
+    },
+  })
+  const client: PostgresClientV1 = Object.assign(taggedTemplateBase(), {
+    query: <Row extends Record<string, unknown>>(statement: string): Promise<Row[]> =>
+      identity.query<Row>(statement),
+    transaction: async <T>(fn: (session: PostgresSessionV1) => Promise<T>): Promise<T> => {
+      state.transactions += 1
+      return await fn(session)
+    },
+    close: async (): Promise<void> => {},
+  })
+  return { client, state }
+}
+
 test("checked native journal migrations load with their exact published digests", () => {
   expect(digest(loadPostgresDisposableTaskJournalMigrationSourceV1()))
     .toBe(POSTGRES_DISPOSABLE_TASK_JOURNAL_MIGRATION_V1.checksum_sha256)
@@ -392,4 +430,62 @@ test("self-hosted migrations reject an unusable client identically on both journ
       message: "postgres database initialization failed: disposable task journal migration did not provide a transaction-capable client",
       retryable: true,
     })
+})
+
+test("self-hosted migrations accept a callable client and callable transaction session", async () => {
+  const keys = generateKeyPairSync("ed25519")
+  const journalCrypto = createEd25519DisposableTaskJournalCryptoV1({
+    signer_principal: "service:sandboxes-journal",
+    signing_key_id: "journal-key-v1",
+    private_key: keys.privateKey,
+    public_key: keys.publicKey,
+  })
+  const witnessCrypto = createEd25519DurableJournalWitnessCryptoV1({
+    signer_principal: "service:sandboxes-witness",
+    signing_key_id: "witness-key-v1",
+    private_key: keys.privateKey,
+    public_key: keys.publicKey,
+  })
+  const sha = (seed: string) =>
+    `sha256:${createHash("sha256").update(seed).digest("hex")}` as const
+  const journal = callablePortClient("journal")
+  const witness = callablePortClient("witness")
+
+  await expect(applyPostgresDisposableTaskJournalMigrationV2(journal.client, {
+    expected_migration_role: "journal_migration",
+    expected_database: "journal",
+    expected_journal_cluster_system_identifier: "100",
+    runtime_role: "journal_runtime",
+    witness_acknowledgement_role: "journal_witness_ack",
+    journal_identity_sha256: sha("journal"),
+    restore_domain_sha256: sha("journal-restore"),
+    external_head_witness_sha256: sha("witness"),
+    witness_verification_key_sha256: witnessCrypto.signer.verification_key_sha256,
+    signer_principal: journalCrypto.signer.signer_principal,
+    signing_key_id: journalCrypto.signer.signing_key_id,
+    verification_key_sha256: journalCrypto.signer.verification_key_sha256,
+    encrypted_at_rest: true,
+  })).rejects.toThrow(CALLABLE_MIGRATION_REACHED)
+
+  await expect(applyPostgresDurableJournalWitnessMigrationV1(witness.client, {
+    expected_migration_role: "witness_migration",
+    reader_role: "witness_reader",
+    witness_acknowledgement_role: "witness_ack",
+    expected_database: "witness",
+    protected_journal_cluster_system_identifier: "100",
+    expected_witness_cluster_system_identifier: "200",
+    encrypted_at_rest: true,
+    restore_domain_sha256: sha("witness-restore"),
+    witness_identity_sha256: sha("witness-identity"),
+    signer_principal: witnessCrypto.signer.signer_principal,
+    signing_key_id: witnessCrypto.signer.signing_key_id,
+    verification_key_sha256: witnessCrypto.signer.verification_key_sha256,
+  })).rejects.toThrow(CALLABLE_MIGRATION_REACHED)
+
+  // The callable client cleared `assertPostgresClientV1`, the callable session cleared
+  // `assertPostgresSessionV1`, and the migration body ran its first statement.
+  expect(journal.state.transactions).toBe(1)
+  expect(witness.state.transactions).toBe(1)
+  expect(journal.state.session_statements[0]).toContain("pg_advisory_xact_lock")
+  expect(witness.state.session_statements[0]).toContain("pg_advisory_xact_lock")
 })
