@@ -105,8 +105,9 @@ export function registerChannelCommands(program: Command): void {
           console.error(chalk.red(`Channel #${channelName} already exists.`));
           process.exit(1);
         }
-        console.error(chalk.red(e.message));
-        process.exit(1);
+        // Let the CLI's shared handler render cloud response details such as the
+        // rejected field, validation reason, and remediation hint.
+        throw e;
       }
       closeDb();
     });

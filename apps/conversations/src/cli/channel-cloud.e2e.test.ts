@@ -129,4 +129,27 @@ describe("cloud CLI channel create (e2e)", () => {
       metadata: { channel_schema: { class: "loop-lane" } },
     });
   });
+
+  test("channel create shows actionable validation details for an unknown project", async () => {
+    const result = await runCli([
+      "channel",
+      "create",
+      "catalog",
+      "--description",
+      "Coordination for the catalog repository",
+      "--topic",
+      "Catalog repository development and maintenance",
+      "--project",
+      "6b06d5e6",
+      "--from",
+      "cato",
+    ], env);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("Request failed: POST /channels -> 400");
+    expect(result.stderr).toContain("Validation failed");
+    expect(result.stderr).toContain("project_id: No conversations project exists with that id.");
+    expect(result.stderr).toContain("Hint: Create or resolve the conversations project first");
+  });
 });

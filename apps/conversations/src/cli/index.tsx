@@ -100,10 +100,22 @@ registerEventsCommands(program, { source: "conversations" });
 // (minified) stack trace. Route every failure through one clean formatter instead.
 function reportCliError(err: unknown): never {
   if (err instanceof HasnaHttpError) {
-    const body = err.body as { error?: string; message?: string } | undefined;
-    const detail = body?.error || body?.message;
+    const body = err.body as {
+      error?: string;
+      message?: string;
+      field?: string;
+      reason?: string;
+      hint?: string;
+    } | string | undefined;
+    const detail = typeof body === "string" ? body : body?.error || body?.message;
     console.error(chalk.red(`Request failed: ${err.method} ${err.path} -> ${err.status}`));
     if (detail) console.error(chalk.dim(detail));
+    if (typeof body === "object" && body?.reason) {
+      console.error(chalk.dim(`${body.field ? `${body.field}: ` : ""}${body.reason}`));
+    }
+    if (typeof body === "object" && body?.hint) {
+      console.error(chalk.dim(`Hint: ${body.hint}`));
+    }
     if (err.status === 404) {
       console.error(
         chalk.dim("The cloud API did not recognize this route. Ensure the server is up to date."),
