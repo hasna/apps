@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Generic `ValidationPlan` and `ProofBundle` SDK outputs backed by the canonical
+  `@hasna/contracts` schemas and validators. Eval-specific metadata records
+  deterministic assertions, LLM judge details, artifact references, per-case
+  verdicts, residual risks, verifier identity, and freshness without copying
+  provider API keys or judge reasoning.
+
 ## [0.2.0] - 2026-07-27
 
 ### Removed

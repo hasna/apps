@@ -58,6 +58,48 @@ See [Datasets and assertions](datasets.md) for supported assertion fields and ju
 | `printDiffReport` | Print a compact or verbose terminal diff |
 | `parseDisplayLimit` / `truncateDisplayText` | Apply reporter display defaults |
 
+## Validation plans and proof bundles
+
+The SDK maps eval cases and runs to the generic `hasna.validation_plan.v1` and
+`hasna.proof_bundle.v1` contracts from `@hasna/contracts`:
+
+```ts
+import {
+  createProofBundle,
+  createValidationPlan,
+  runEvals,
+  validateProofBundle,
+} from "@hasna/evals";
+
+const plan = createValidationPlan(cases, {
+  dataset: "datasets/smoke.jsonl",
+  objective: "Verify the release candidate",
+});
+
+const run = await runEvals(cases, options);
+const proof = createProofBundle(run, plan, {
+  verifier: { kind: "agent", id: "release-verifier" },
+  artifactRefs: [{
+    id: "ci-log",
+    kind: "log",
+    uri: "artifact://ci/run-123/log",
+  }],
+  residualRisks: ["Live provider behavior was not exercised"],
+  freshness: "fresh",
+});
+
+if (!validateProofBundle(proof).success) throw new Error("Invalid proof bundle");
+```
+
+Plans expose required checks; bundles expose executed checks, verdict, artifact
+evidence, residual risks, verifier identity, and freshness. Assertion definitions
+and results plus LLM judge model/provider/usage metadata are stored under the
+`@hasna/evals` metadata key. Judge API keys and reasoning text are not copied.
+`createProofBundle` returns an inconclusive bundle when a required plan check was
+not executed. `validateValidationPlan` and `validateProofBundle` use the canonical
+`@hasna/contracts` validators; the corresponding schemas and TypeScript types are
+also exported.
+
 ## Dataset loading
 
 `loadDataset(pathOrGlob, options?)` returns `{ cases, warnings, totalLines, skipped }`. `LoadOptions` supports `strict` and `tags`. `streamDataset(path, options?)` yields valid JSONL cases one at a time and silently skips invalid lines unless `strict` is true.
@@ -68,6 +110,6 @@ The package exports `getDatabase`, `closeDatabase`, `saveRun`, `getRun`, `listRu
 
 ## Public types
 
-Public types include `Verdict`, all six adapter configs and `AdapterConfig`, assertion types/results, judge types, `ConversationTurn`, `EvalCase`, `EvalResult`, `EvalRunStats`, `EvalRun`, `RunOptions`, and `CiOptions`.
+Public types include `Verdict`, all six adapter configs and `AdapterConfig`, assertion types/results, judge types, `ConversationTurn`, `EvalCase`, `EvalResult`, `EvalRunStats`, `EvalRun`, `RunOptions`, `CiOptions`, `ValidationPlan`, and `ProofBundle`.
 
 Adapter call functions themselves are internal modules and are not exported from the package root.
