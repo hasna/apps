@@ -490,7 +490,7 @@ program
   .option("--description <desc>", "Description")
   .option("--status <status>", "New status")
   .option("--project <id>", "Project ID")
-  .option("--metadata <json>", "Replace server metadata with a JSON object")
+  .option("--metadata <json>", "Merge a JSON object into server metadata")
   .option("--tailscale-hostname <name>", "Set Tailscale machine name for URL output")
   .option("--tailscale-port <port>", "Set port for Tailscale URL output")
   .action(async (idOrSlug, opts) => {
@@ -1568,7 +1568,7 @@ program
   .option("--lock-timeout <ms>", "How long to wait for another lifecycle lock")
   .option("--wait-lock", "Wait for another agent's lifecycle lock")
   .option("--no-wait", "Do not wait for process exit")
-  .option("--force", "Send SIGKILL if graceful stop times out")
+  .option("--force", "Accepted for parity; verified stop already escalates to SIGKILL")
   .option("--json", "Output as JSON")
   .action(async (idOrSlug, opts) => {
     const db = initDb(opts);
@@ -1762,7 +1762,7 @@ program
 
 program
   .command("agent:release")
-  .description("Release an agent's locks")
+  .description("Release an agent's session")
   .argument("<name>", "Agent name")
   .action(async (name, opts) => {
     const db = initDb(opts);
@@ -1781,7 +1781,7 @@ program
 
 program
   .command("operation:update")
-  .description("Update an operation's status, error, or results")
+  .description("Update an operation's status or error")
   .argument("<id>", "Operation ID")
   .option("--status <status>", "New status (pending, running, completed, failed, cancelled)")
   .option("--error <message>", "Error message")
@@ -1947,7 +1947,7 @@ program
 
 program
   .command("export")
-  .description("Export the entire database as JSON")
+  .description("Export registry entities as JSON")
   .option("--output <path>", "Output file path")
   .action(async (opts) => {
     const { writeFileSync } = await import("fs");

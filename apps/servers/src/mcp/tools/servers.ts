@@ -61,7 +61,7 @@ export function registerServerTools(server: McpServer, { shouldRegisterTool, for
     server.tool(
       "get_server",
       "Get a server by ID or slug.",
-      { id_or_slug: z.string().describe("Server UUID (or prefix) or slug") },
+      { id_or_slug: z.string().describe("Full server UUID or slug") },
       async ({ id_or_slug }) => {
         try {
           let s = getServer(id_or_slug);

@@ -4,7 +4,7 @@ Server management for AI coding agents — CLI + MCP server.
 
 ## Overview
 
-Manage servers, agents, operations, webhooks, and audit trails across repositories. Built on SQLite with per-project database discovery.
+Manage servers, local app processes, agents, operations, projects, webhooks, locks, and audit trails across repositories. Built on SQLite with global defaults and nearest-project database discovery.
 
 ## Features
 
@@ -14,11 +14,20 @@ Manage servers, agents, operations, webhooks, and audit trails across repositori
 - **Operations**: state machine (pending → running → completed/failed/cancelled)
 - **Webhooks**: HTTPS-only with SSRF prevention, HMAC signing, retry with exponential backoff
 - **Audit trails**: trace events by server, operation, or agent
-- **Per-project DB**: `.servers/servers.db` auto-discovered from repo root
-- **MCP server**: stdio transport with modular tool registration
+- **Database discovery**: explicit path, nearest existing `.servers/servers.db`, optional git-root project scope, then a user-global default
+- **MCP server**: stdio by default or stateless Streamable HTTP bound to localhost
 - **CLI**: Commander.js interface with colored output
 
+## Documentation
+
+- [CLI reference](docs/cli.md) — global options, all local commands, aliases, and output behavior
+- [MCP reference](docs/mcp.md) — transports, endpoints, and all tools
+- [Local runtime](docs/runtime.md) — detection, metadata, readiness, locking, and process safety
+- [Database](docs/database.md) — path precedence, schema behavior, and concurrency
+
 ## CLI
+
+See the [CLI reference](docs/cli.md) for the complete command and option surface.
 
 ```bash
 # List servers
@@ -69,6 +78,8 @@ Existing JSON shapes are preserved. For unbounded entity lists such as `servers 
 ### Local App Server Lifecycle
 
 Agents should use the lifecycle commands for long-running dev/app servers instead of starting processes directly. The commands create operations, write traces, claim a `server-runtime` lock, wait for readiness, and record PID/log metadata.
+
+See [Local runtime](docs/runtime.md) for auto-detection order, readiness fallbacks, defaults, and stop/restart safety behavior.
 
 ```bash
 # Detect or register the current repo's app server
@@ -128,6 +139,8 @@ const metadata = runtimeMetadataFromConvention(runtime);
 
 ## MCP
 
+See the [MCP reference](docs/mcp.md) for all 46 tools and their behavior.
+
 Run as MCP server with stdio transport (default):
 
 ```bash
@@ -149,7 +162,7 @@ servers-mcp --http --port 8834
 Endpoints (bound to `127.0.0.1` only):
 
 - `GET /health` → `{"status":"ok","name":"servers"}`
-- `POST /mcp` — MCP Streamable HTTP endpoint
+- `GET /mcp` and `POST /mcp` — MCP Streamable HTTP endpoint
 
 Lifecycle MCP tools:
 
@@ -183,8 +196,11 @@ await stopLocalServer(server.id, { agentId: agent.id, reason: "verification comp
 
 SQLite via `bun:sqlite` with WAL mode. Database location:
 1. `SERVERS_DB_PATH` env var
-2. Nearest `.servers/servers.db` walking up from cwd
-3. `~/.hasna/servers/servers.db` (default)
+2. Nearest existing `.servers/servers.db` walking up from cwd
+3. `<git-root>/.servers/servers.db` when `SERVERS_DB_SCOPE=project`
+4. `~/.hasna/servers/servers.db` (default; `USERPROFILE` is used when `HOME` is unavailable)
+
+See [Database](docs/database.md) for initialization and concurrency details.
 
 ## Install
 
