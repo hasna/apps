@@ -267,6 +267,21 @@ export class CalendarPgStore {
 
   // ── Calendars ──
   async createCalendar(input: CreateCalendarInput): Promise<Calendar> {
+    // Validate every caller-supplied TEXT column before the first query. The
+    // route only checks truthiness (`!body.name`), so `name: 42` reaches
+    // `slugify()` and throws `name.toLowerCase is not a function` — an uncaught
+    // TypeError mapDomainError re-throws, which escapes Bun.serve's fetch as a
+    // 500. A truthy non-string `slug` skips `slugify()` and is bound into the
+    // TEXT column untyped. RangeError is what mapDomainError turns into a 400.
+    if (typeof input.org_id !== "string" || !input.org_id.trim()) {
+      throw new RangeError("org_id is required");
+    }
+    if (typeof input.name !== "string" || !input.name.trim()) {
+      throw new RangeError("name is required");
+    }
+    if (input.slug && typeof input.slug !== "string") {
+      throw new RangeError("slug must be a string");
+    }
     const id = newId();
     const slug = input.slug || slugify(input.name);
     try {
@@ -404,6 +419,9 @@ export class CalendarPgStore {
 
   // ── Attendees ──
   async createAttendee(input: CreateAttendeeInput): Promise<EventAttendee> {
+    if (typeof input.event_id !== "string" || !input.event_id.trim()) {
+      throw new RangeError("event_id is required");
+    }
     const id = newId();
     await this.client.query(
       `INSERT INTO event_attendees (id, event_id, agent_id, display_name, email, status, required)
