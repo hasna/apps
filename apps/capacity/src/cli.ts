@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
 
 import { randomUUID } from "node:crypto";
-import { statSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, type Stats } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { isAbsolute, join, parse, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   AccountsError,
@@ -40,6 +40,9 @@ import {
   type SlotEligibilityMetadata,
   type NativeSubscriptionBindingSnapshot,
 } from "./index";
+// The ownership floor the SQLite path check already enforces, reused so the
+// resolver module and the database agree on what an unsafe path component is.
+import { sqlitePathComponentViolation } from "./storage/sqlite";
 
 const CLI_SCHEMA_VERSION = "accounts.cli.v1" as const;
 /** Largest page the capacity API accepts, and the bound on pages a list may walk. */
@@ -262,16 +265,20 @@ function requiredEnvironment(name: string): string {
 async function loadConfiguredCredentialResolver(): Promise<CapacityClientCredentialResolver | undefined> {
   const specifier = Bun.env[CREDENTIAL_RESOLVER_MODULE_ENVIRONMENT];
   if (specifier === undefined || specifier.length === 0) return undefined;
-  const path = credentialResolverModulePath(specifier);
-  requireOwnerOnlyModule(path);
+  const source = readOwnerOnlyModule(credentialResolverModulePath(specifier));
+  // Importing the verified bytes rather than the path keeps the module that was
+  // checked and the module that runs the same one, with no window in between.
+  const moduleUrl = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
   let loaded: Record<string, unknown>;
   try {
-    loaded = (await import(pathToFileURL(path).href)) as Record<string, unknown>;
+    loaded = (await import(moduleUrl)) as Record<string, unknown>;
   } catch {
     throw new AccountsError(
       "DEPENDENCY_UNAVAILABLE",
       "Capacity client credential resolver module could not be loaded",
     );
+  } finally {
+    URL.revokeObjectURL(moduleUrl);
   }
   const exported = loaded.resolve;
   if (typeof exported !== "function") {
@@ -314,28 +321,97 @@ function resolverModuleUsageError(): AccountsError {
   return usageError(`${CREDENTIAL_RESOLVER_MODULE_ENVIRONMENT} must be an absolute path or file: URL`);
 }
 
+const RESOLVER_MODULE_UNREADABLE =
+  "Capacity client credential resolver module is missing or unreadable";
+const RESOLVER_MODULE_UNSAFE =
+  "Capacity client credential resolver module must be a regular non-symlink file, owned by the caller or root, that no other account can replace";
+
 /**
- * Mirrors the packaged launcher's payload check: a resolver module any other
- * account can rewrite is arbitrary code running with the operator's authority.
+ * Reads the resolver module the way the packaged launcher reads its own CLI
+ * payload, because both are arbitrary code that runs with the operator's
+ * authority: the descriptor is opened without following a symlink, the checks
+ * run against that descriptor, and the bytes returned are the bytes that were
+ * checked. A path re-read between check and import would reopen the window the
+ * descriptor closes.
  */
-function requireOwnerOnlyModule(path: string): void {
-  let mode: number;
-  let isFile: boolean;
+function readOwnerOnlyModule(path: string): Uint8Array<ArrayBuffer> {
+  const uid = process.getuid?.();
+  requireOwnerOnlyAncestors(path, uid);
+  let descriptor: number;
   try {
-    const status = statSync(path);
-    mode = status.mode;
-    isFile = status.isFile();
-  } catch {
-    throw new AccountsError(
-      "DEPENDENCY_UNAVAILABLE",
-      "Capacity client credential resolver module is missing or unreadable",
-    );
+    descriptor = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  } catch (error) {
+    // O_NOFOLLOW reports a symlinked module as ELOOP. Something stands where the
+    // deployment named a file, which is a refusal rather than an absence.
+    if ((error as NodeJS.ErrnoException | undefined)?.code === "ELOOP") {
+      throw new AccountsError("POLICY_DENIED", RESOLVER_MODULE_UNSAFE);
+    }
+    throw new AccountsError("DEPENDENCY_UNAVAILABLE", RESOLVER_MODULE_UNREADABLE);
   }
-  if (!isFile || (process.platform !== "win32" && (mode & 0o022) !== 0)) {
-    throw new AccountsError(
-      "POLICY_DENIED",
-      "Capacity client credential resolver module must be a regular file that is not group- or world-writable",
-    );
+  try {
+    const status = fstatSync(descriptor);
+    if (!status.isFile() || !ownerOnlyEntry(status, uid)) {
+      throw new AccountsError("POLICY_DENIED", RESOLVER_MODULE_UNSAFE);
+    }
+    return new Uint8Array(readFileSync(descriptor));
+  } catch (error) {
+    if (error instanceof AccountsError) throw error;
+    throw new AccountsError("DEPENDENCY_UNAVAILABLE", RESOLVER_MODULE_UNREADABLE);
+  } finally {
+    try {
+      closeSync(descriptor);
+    } catch {
+      // The descriptor is already gone; the bytes were read or the read failed.
+    }
+  }
+}
+
+/**
+ * Only the caller or root may own an entry that becomes in-process code, and no
+ * other account may write it. Windows carries neither uid nor these mode bits,
+ * so there the regular-file check the caller applies is the whole floor.
+ */
+function ownerOnlyEntry(status: Stats, uid: number | undefined): boolean {
+  if (process.platform === "win32" || uid === undefined) return true;
+  if (status.uid !== uid && status.uid !== 0) return false;
+  return (status.mode & 0o022) === 0;
+}
+
+/**
+ * An owner-only file inside a directory another account can write is still
+ * swappable: that account can unlink the entry and put its own file there. So
+ * every ancestor directory has to clear the same floor the SQLite path check
+ * applies, plus a refusal of any writable directory the caller owns — the
+ * shared floor allows that one, and for a database it is the caller's own risk,
+ * but here it is a group member's route to executing code as the operator. A
+ * root-owned sticky directory stays acceptable: its sticky bit is what stops
+ * one account renaming another's entry.
+ */
+function requireOwnerOnlyAncestors(path: string, uid: number | undefined): void {
+  if (process.platform === "win32" || uid === undefined) return;
+  const absolute = resolve(path);
+  const root = parse(absolute).root;
+  const components = absolute.slice(root.length).split("/").filter(Boolean);
+  // The module itself is checked through its own descriptor, not by path.
+  components.pop();
+  let current = root;
+  for (const component of components) {
+    current = join(current, component);
+    let status: Stats;
+    try {
+      status = lstatSync(current);
+    } catch {
+      throw new AccountsError("DEPENDENCY_UNAVAILABLE", RESOLVER_MODULE_UNREADABLE);
+    }
+    const rootStickyDirectory = status.uid === 0 && (status.mode & 0o1000) !== 0;
+    if (
+      status.isSymbolicLink() ||
+      !status.isDirectory() ||
+      sqlitePathComponentViolation(status, uid) !== undefined ||
+      ((status.mode & 0o022) !== 0 && !rootStickyDirectory)
+    ) {
+      throw new AccountsError("POLICY_DENIED", RESOLVER_MODULE_UNSAFE);
+    }
   }
 }
 

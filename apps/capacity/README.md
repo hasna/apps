@@ -114,8 +114,17 @@ the separately audienced client credential.
 
 `HASNA_ACCOUNTS_CAPACITY_RESOLVER_MODULE` is the absolute path (or `file:` URL)
 of that resolver module. The CLI imports it and calls its `resolve` export. The
-module runs with the operator's authority, so it is refused unless it is a
-regular file that is not group- or world-writable:
+module runs in-process with the operator's authority, so it is loaded the way
+the packaged launcher loads its own CLI payload — opened without following a
+symlink, checked on that descriptor, and evaluated from the bytes read through
+it. It is refused unless it is a regular non-symlink file owned by the caller or
+root, is not group- or world-writable, and every ancestor directory clears the
+same floor (a root-owned sticky directory such as `/tmp` is still accepted).
+
+Because the verified bytes are the bytes that run, the module is evaluated
+without a file location: Node builtins and installed packages import normally,
+but relative imports such as `./helper.mjs` do not resolve. Keep the resolver a
+single self-contained file:
 
 ```js
 // /opt/hasna/capacity-credential-resolver.mjs
