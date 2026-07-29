@@ -36,6 +36,7 @@
     "scripts",
     "Sources",
     "Package.swift",
+    "hasna.contract.json",
     "LICENSE",
     "README.md",
     "SECURITY.md",
@@ -59,7 +60,8 @@
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
     "check:macos": "bash scripts/check_macos_sources.sh",
-    "prepack": "bun run build",
+    "artifact-scan": "contracts artifact-scan .",
+    "prepack": "bun run build && bun run artifact-scan",
     "prepublishOnly": "bun run check",
     "postinstall": "mkdir -p $HOME/.hasna/clip $HOME/.hasna/clip/artifacts 2>/dev/null || true"
   },

@@ -1,0 +1,14 @@
+{
+  "schema": "hasna.contract.v1",
+  "name": "@hasna/clip",
+  "version": "0.2.0",
+  "description": "Local and self-hosted screenshot and clipboard sharing with CLI, SDK, MCP, HTTP API, and a macOS menu bar app",
+  "license": "Apache-2.0",
+  "repository": "https://github.com/hasna/clip",
+  "waivers": {
+    "storage": {
+      "scope": "$HOME/.hasna/clip",
+      "reason": "Clip is a local-first application that intentionally persists user-created clips, metadata, and configuration on the user's filesystem."
+    }
+  }
+}
