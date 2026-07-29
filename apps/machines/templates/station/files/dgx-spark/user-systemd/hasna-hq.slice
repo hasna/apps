@@ -1,0 +1,9 @@
+# hasna station template v1 (dgx-spark overlay).
+[Unit]
+Description=Hasna protected hq session slice
+
+[Slice]
+MemoryAccounting=yes
+MemoryLow=2G
+TasksAccounting=yes
+TasksMax=4096

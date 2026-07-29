@@ -1,0 +1,9 @@
+# hasna station template v1 (ec2 overlay).
+[Unit]
+Description=Hasna protected hq session slice
+
+[Slice]
+MemoryAccounting=yes
+MemoryLow=1G
+TasksAccounting=yes
+TasksMax=4096

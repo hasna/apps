@@ -1,0 +1,134 @@
+{
+  "$schema": "hasna.station_template.v1",
+  "name": "station",
+  "version": "1.0.0",
+  "description": "Hasna station contract v1. Every item traces to a measured 2026-07-28 failure on station01 (designs/station-contract-design.md §8). Layers: base + dgx-spark (121G physical Spark) + ec2 (32G Graviton cloud station).",
+  "base": {
+    "files": [
+      {
+        "id": "sysctl-reclaim",
+        "source": "files/base/etc/sysctl.d/99-zz-hasna-station.conf",
+        "target": "/etc/sysctl.d/99-zz-hasna-station.conf",
+        "mode": "0644",
+        "kind": "sysctl",
+        "lesson": "2026-07-28 kernel panic: vm.swappiness=1 in vendor 99-dgx-spark.conf caused direct-reclaim livelock; the fix had to be renamed 99-zz-* to win lexicographic ordering."
+      },
+      {
+        "id": "tmpfiles-mglru",
+        "source": "files/base/etc/tmpfiles.d/99-zz-hasna-station-mglru.conf",
+        "target": "/etc/tmpfiles.d/99-zz-hasna-station-mglru.conf",
+        "mode": "0644",
+        "kind": "tmpfiles",
+        "lesson": "2026-07-28: MGLRU min_ttl_ms=1000 was runtime-only and would have died on reboot; tmpfiles rule is the persistence."
+      },
+      {
+        "id": "earlyoom-dropin",
+        "source": "files/base/etc/systemd/system/earlyoom.service.d/50-hasna-station.conf",
+        "target": "/etc/systemd/system/earlyoom.service.d/50-hasna-station.conf",
+        "mode": "0644",
+        "kind": "systemd-dropin",
+        "lesson": "2026-07-28: the userspace memory guard computed swap depth and ignored it, printing healthy 3.5 minutes before the panic; earlyoom trips on the swap condition. Kill-drill proven on station02 2026-07-28."
+      }
+    ],
+    "packages": {
+      "apt": ["earlyoom", "git", "curl", "unzip", "build-essential", "tmux", "sqlite3", "jq"],
+      "bun": [
+        "@hasna/machines",
+        "@hasna/todos",
+        "@hasna/conversations",
+        "@hasna/mementos",
+        "@hasna/secrets",
+        "@hasna/monitor",
+        "@hasna/loops",
+        "@hasna/repos",
+        "@hasna/projects",
+        "@hasna/snapshots",
+        "@hasna/accounts",
+        "@hasna/knowledge"
+      ]
+    },
+    "services": [
+      { "name": "earlyoom", "scope": "system", "expectEnabled": true, "expectActive": true },
+      { "name": "tailscaled", "scope": "system", "expectEnabled": true, "expectActive": true }
+    ],
+    "sysctls": {
+      "vm.swappiness": "60",
+      "vm.min_free_kbytes": "1048576",
+      "vm.watermark_scale_factor": "150",
+      "kernel.panic": "10"
+    },
+    "runtimeValues": [
+      {
+        "path": "/sys/kernel/mm/lru_gen/min_ttl_ms",
+        "value": "1000",
+        "lesson": "2026-07-28: MGLRU anti-thrash knob must survive reboot; checked live, not just as a file."
+      }
+    ],
+    "unitConventions": {
+      "match": "hasna-*.service",
+      "startLimitIntervalSec": 300,
+      "startLimitBurst": 5,
+      "onFailureUnit": "hasna-unit-failure-notify@%n.service",
+      "requireAbsoluteExecStart": true,
+      "lesson": "2026-07-28: bare ExecStart PATH bug caused 203/EXEC (snapshots-agent); 0/40 hasna units had StartLimit keys; a missing-binary unit looped ~290k restarts because the default 10s/5 window resets at >2s spacing."
+    },
+    "tailscale": {
+      "join": true,
+      "authKeySecretName": "stations/prod/tailscale/authkey",
+      "hostnameFromStation": true,
+      "ssh": true
+    },
+    "secretsBootstrap": {
+      "envSecretName": "stations/prod/station-env",
+      "optional": true
+    },
+    "swap": { "sizeGb": 0 }
+  },
+  "overlays": {
+    "dgx-spark": {
+      "files": [
+        {
+          "id": "slice-agents",
+          "source": "files/dgx-spark/user-systemd/hasna-agents.slice",
+          "target": "~/.config/systemd/user/hasna-agents.slice",
+          "mode": "0644",
+          "kind": "systemd-user-unit",
+          "lesson": "2026-07-28: the slice existed but agents ran in the session scope, so MemoryHigh/Max were decoration; the reconciler launches into this slice."
+        },
+        {
+          "id": "slice-hq",
+          "source": "files/dgx-spark/user-systemd/hasna-hq.slice",
+          "target": "~/.config/systemd/user/hasna-hq.slice",
+          "mode": "0644",
+          "kind": "systemd-user-unit",
+          "lesson": "2026-07-28: hq/coordinator seats need MemoryLow protection when agent load spikes."
+        }
+      ]
+    },
+    "ec2": {
+      "files": [
+        {
+          "id": "slice-agents",
+          "source": "files/ec2/user-systemd/hasna-agents.slice",
+          "target": "~/.config/systemd/user/hasna-agents.slice",
+          "mode": "0644",
+          "kind": "systemd-user-unit",
+          "lesson": "Scaled from dgx-spark 54G/60G-on-121G to 20G/24G-on-32G; a 32G station only works if agent memory is actually bounded."
+        },
+        {
+          "id": "slice-hq",
+          "source": "files/ec2/user-systemd/hasna-hq.slice",
+          "target": "~/.config/systemd/user/hasna-hq.slice",
+          "mode": "0644",
+          "kind": "systemd-user-unit",
+          "lesson": "hq seat protection on the 32G class."
+        }
+      ],
+      "packages": {
+        "apt": ["awscli"],
+        "bun": []
+      },
+      "swap": { "sizeGb": 8 }
+    }
+  }
+}

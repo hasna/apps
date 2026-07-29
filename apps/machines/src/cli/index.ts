@@ -15,6 +15,7 @@ import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import chalk from "chalk";
 import { getPackageVersion } from "../version.js";
+import { getLocalMachineId } from "../db.js";
 import { resolveMachineRegistryStore } from "../cloud/registry.js";
 import { runMigrations } from "../server/migrate.js";
 import {
@@ -33,6 +34,13 @@ import {
   setMachineFriendlyNameMutationArgs,
 } from "../commands/manifest.js";
 import { buildSetupPlan, runSetupPlan } from "../commands/setup.js";
+import {
+  buildStationTemplateSteps,
+  checkStationTemplate,
+  parseTemplateSpec,
+  renderCloudInit,
+  resolveStationTemplate,
+} from "../station-template/index.js";
 import { buildBackupPlan, resolveBackupTarget, runBackup } from "../commands/backup.js";
 import { buildCertPlan, runCertPlan } from "../commands/cert.js";
 import { addDomainMapping, listDomainMappings, renderDomainMapping } from "../commands/dns.js";
@@ -1663,16 +1671,64 @@ appsCommand
 
 program
   .command("setup")
-  .description("Prepare a machine from the fleet manifest")
+  .description("Prepare a machine from the fleet manifest (optionally against a station template)")
   .option("--machine <id>", "Machine identifier")
+  .option("--template <spec>", "Station template layers, e.g. 'station' or 'station,ec2' or 'station,dgx-spark'")
+  .option("--station <name>", "Station identity for template renders (hostname/tailscale name, e.g. station17)")
+  .option("--check", "Report LOCAL template drift as JSON without mutating anything (requires --template)", false)
+  .option("--render <target>", "Render the template for a target ('cloud-init') instead of executing (requires --template)")
   .option("--apply", "Execute provisioning commands instead of previewing the plan", false)
   .option("--yes", "Confirm execution when using --apply", false)
   .option("--approval-token <token>", "Scoped mutation approval token")
   .option("-j, --json", "Print JSON output", false)
-  .action((options: { machine?: string; apply?: boolean; yes?: boolean; approvalToken?: string; json?: boolean }) => {
+  .action((options: {
+    machine?: string;
+    template?: string;
+    station?: string;
+    check?: boolean;
+    render?: string;
+    apply?: boolean;
+    yes?: boolean;
+    approvalToken?: string;
+    json?: boolean;
+  }) => {
+    if ((options.check || options.render) && !options.template) {
+      throw new Error("--check and --render require --template <spec>.");
+    }
+    let templateSteps: ReturnType<typeof buildStationTemplateSteps> = [];
+    if (options.template) {
+      const spec = parseTemplateSpec(options.template);
+      const effective = resolveStationTemplate(spec.overlays, { name: spec.name });
+      if (options.render) {
+        if (options.render !== "cloud-init") {
+          throw new Error(`Unknown render target: ${options.render} (supported: cloud-init)`);
+        }
+        process.stdout.write(renderCloudInit(effective, { station: options.station }));
+        return;
+      }
+      if (options.check) {
+        // --check reads THIS box's filesystem. Accepting --machine for another
+        // host would report the local state under a remote name, so a fleet
+        // sweep would see the coordinator's own box N times and call it
+        // converged. Reject the combination instead of answering wrongly.
+        const localMachineId = getLocalMachineId();
+        const requested = options.machine?.trim();
+        if (requested && requested !== "local" && requested !== "localhost" && requested !== localMachineId) {
+          throw new Error(
+            `--check inspects the local box (${localMachineId}) and cannot target --machine ${requested}. Run it over SSH on that machine instead.`
+          );
+        }
+        const result = checkStationTemplate(effective, { machineId: localMachineId });
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      templateSteps = buildStationTemplateSteps(effective, { station: options.station });
+    }
     if (options.apply) {
       const resolvedMachineId = cliMachineId(options.machine);
-      const plan = buildSetupPlan(options.machine);
+      const basePlan = buildSetupPlan(options.machine);
+      const plan = { ...basePlan, steps: [...basePlan.steps, ...templateSteps] };
+      plan.planDigest = mutationPlanDigest(plan);
       requireCliMutation("setup_apply", options.approvalToken, {
         machineId: resolvedMachineId,
         resourceId: cliPlanResourceId("setup_apply", resolvedMachineId, plan),
@@ -1682,7 +1738,9 @@ program
       console.log(JSON.stringify(result, null, 2));
       return;
     }
-    const result = buildSetupPlan(options.machine);
+    const basePlan = buildSetupPlan(options.machine);
+    const result = { ...basePlan, steps: [...basePlan.steps, ...templateSteps] };
+    result.planDigest = mutationPlanDigest(result);
     console.log(JSON.stringify(result, null, 2));
   });
 
