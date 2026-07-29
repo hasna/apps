@@ -36,6 +36,26 @@ export const templatePackagesSchema = z.object({
   bun: z.array(z.string().min(1)).default([]),
 });
 
+/**
+ * A binary the station must be able to resolve on PATH, plus the idempotent
+ * shell that provides it.
+ *
+ * This exists because "apt package" is NOT a general way to say "this command
+ * must be present": the ec2 overlay declared apt `awscli`, which has no
+ * installation candidate on Ubuntu 24.04 (noble dropped the deb), so the
+ * requirement could never be satisfied and could never be converged away.
+ * Express the requirement as the command, and carry the install alongside it.
+ */
+export const templateCommandSchema = z.object({
+  id: z.string().min(1),
+  /** Binary that must resolve on PATH. */
+  command: z.string().min(1),
+  /** Idempotent shell that installs it. Runs only when the command is absent. */
+  install: z.string().min(1),
+  /** Which measured failure this command exists to prevent. */
+  lesson: z.string().min(1),
+});
+
 export const templateServiceSchema = z.object({
   name: z.string().min(1),
   scope: z.enum(["system", "user"]).default("system"),
@@ -82,6 +102,8 @@ export const swapSchema = z.object({
 export const templateLayerSchema = z.object({
   files: z.array(templateFileSchema).default([]),
   packages: templatePackagesSchema.default({ apt: [], bun: [] }),
+  /** Binaries that must resolve on PATH, with their idempotent installers. */
+  commands: z.array(templateCommandSchema).default([]),
   services: z.array(templateServiceSchema).default([]),
   /** Runtime sysctl expectations (key → value), checked via /proc/sys. */
   sysctls: z.record(z.string()).default({}),
@@ -105,6 +127,7 @@ export type TemplateFile = z.infer<typeof templateFileSchema>;
 export type TemplateLayer = z.infer<typeof templateLayerSchema>;
 export type StationTemplate = z.infer<typeof stationTemplateSchema>;
 export type TemplateService = z.infer<typeof templateServiceSchema>;
+export type TemplateCommand = z.infer<typeof templateCommandSchema>;
 export type UnitConventions = z.infer<typeof unitConventionsSchema>;
 
 /** A template file with its content loaded from disk. */
@@ -122,6 +145,7 @@ export interface EffectiveTemplate {
   layers: string[];
   files: LoadedTemplateFile[];
   packages: { apt: string[]; bun: string[] };
+  commands: TemplateCommand[];
   services: TemplateService[];
   sysctls: Record<string, string>;
   runtimeValues: z.infer<typeof runtimeValueSchema>[];

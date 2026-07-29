@@ -98,6 +98,14 @@ function mergeLayer(effective: EffectiveTemplate, layer: TemplateLayer, template
   }
   effective.packages.apt = [...new Set([...effective.packages.apt, ...layer.packages.apt])];
   effective.packages.bun = [...new Set([...effective.packages.bun, ...layer.packages.bun])];
+  for (const command of layer.commands) {
+    const existingIndex = effective.commands.findIndex((candidate) => candidate.command === command.command);
+    if (existingIndex >= 0) {
+      effective.commands[existingIndex] = command;
+    } else {
+      effective.commands.push(command);
+    }
+  }
   for (const service of layer.services) {
     const existingIndex = effective.services.findIndex((candidate) => candidate.name === service.name);
     if (existingIndex >= 0) {
@@ -137,6 +145,7 @@ export function resolveStationTemplate(
     layers: ["base", ...overlays],
     files: [],
     packages: { apt: [], bun: [] },
+    commands: [],
     services: [],
     sysctls: {},
     runtimeValues: [],

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, cpSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, cpSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { hostname, tmpdir } from "node:os";
 import {
@@ -11,6 +11,7 @@ import {
   parseTemplateSpec,
   renderCloudInit,
   resolveStationTemplate,
+  type CommandProbe,
 } from "../src/station-template/index.js";
 
 const SHIPPED = defaultTemplatesDir();
@@ -45,7 +46,21 @@ function buildCleanFixture() {
     mkdirSync(join(target, ".."), { recursive: true });
     writeFileSync(target, `${runtime.value}\n`);
   }
+  for (const pkg of effective.packages.bun) {
+    const dir = join(home, ".bun/install/global/node_modules", pkg);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: pkg, version: "9.9.9" }));
+  }
+  writeSwap(root, effective.swap.sizeGb);
   return { root, home, effective };
+}
+
+/** /proc/swaps as the kernel formats it: header line, then Size in KB. */
+function writeSwap(root: string, sizeGb: number) {
+  const procSwaps = join(root, "proc/swaps");
+  mkdirSync(join(procSwaps, ".."), { recursive: true });
+  const kb = Math.round(sizeGb * 1024 * 1024) - 4;
+  writeFileSync(procSwaps, `Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n/swapfile\tfile\t${kb}\t0\t-2\n`);
 }
 
 describe("station template loading", () => {
@@ -97,14 +112,28 @@ describe("station template loading", () => {
 });
 
 describe("overlay merge", () => {
-  test("ec2 overlay swaps slice values and adds swapfile + awscli", () => {
+  test("ec2 overlay swaps slice values and adds swapfile + the aws CLI requirement", () => {
     const effective = effectiveFor(["ec2"]);
     const agentsSlice = effective.files.find((file) => file.target.endsWith("hasna-agents.slice"));
     expect(agentsSlice?.content).toContain("MemoryHigh=20G");
     expect(agentsSlice?.content).toContain("MemoryMax=24G");
     expect(effective.swap.sizeGb).toBe(8);
-    expect(effective.packages.apt).toContain("awscli");
     expect(effective.layers).toEqual(["base", "ec2"]);
+    // REGRESSION (station17, 2026-07-29): this used to be apt package "awscli",
+    // which has no installation candidate on Ubuntu 24.04. The requirement is a
+    // command, and it must never travel as an apt name again.
+    expect(effective.packages.apt).not.toContain("awscli");
+    const aws = effective.commands.find((command) => command.command === "aws");
+    expect(aws).toBeDefined();
+    expect(aws!.install).toContain("awscli.amazonaws.com");
+  });
+
+  test("REGRESSION: no layer may declare an apt package that noble does not ship", () => {
+    // Narrow and literal on purpose: the general "is this package in the
+    // archive" question needs network. This pins the one name that burned us.
+    for (const overlay of ["ec2", "dgx-spark"]) {
+      expect(effectiveFor([overlay]).packages.apt).not.toContain("awscli");
+    }
   });
 
   test("dgx-spark overlay keeps the measured 121G-class slice values", () => {
@@ -157,6 +186,113 @@ describe("drift check", () => {
     const failed = result.items.filter((item) => item.status === "drift" || item.status === "violation");
     expect(failed).toEqual([]);
     expect(result.verdict).toBe("clean");
+  });
+
+  test("POSITIVE CONTROL: a missing bun global is detected (12 CLIs were checked by nothing)", () => {
+    const { root, home, effective } = buildCleanFixture();
+    rmSync(join(home, ".bun/install/global/node_modules/@hasna/machines"), { recursive: true, force: true });
+    const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: null });
+    expect(result.verdict).toBe("drift");
+    const item = result.items.find((candidate) => candidate.id === "package:bun:@hasna/machines");
+    expect(item?.status).toBe("drift");
+    expect(item?.detail).toContain("not installed globally");
+  });
+
+  test("bun globals are reported with the version actually on disk", () => {
+    const { root, home, effective } = buildCleanFixture();
+    const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: null });
+    const item = result.items.find((candidate) => candidate.id === "package:bun:@hasna/todos");
+    expect(item?.status).toBe("ok");
+    expect(item?.detail).toContain("@9.9.9");
+  });
+
+  test("POSITIVE CONTROL: swap smaller than the overlay asks for is detected", () => {
+    const { root, home, effective } = buildCleanFixture();
+    writeSwap(root, 2);
+    const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: null });
+    expect(result.verdict).toBe("drift");
+    const item = result.items.find((candidate) => candidate.id === "swap:size");
+    expect(item?.status).toBe("drift");
+    expect(item?.detail).toContain("expected 8G");
+  });
+
+  test("swap check tolerates the swapfile header shortfall rather than flapping", () => {
+    const { root, home, effective } = buildCleanFixture();
+    const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: null });
+    expect(result.items.find((candidate) => candidate.id === "swap:size")?.status).toBe("ok");
+  });
+
+  test("POSITIVE CONTROL: tailscaled active+enabled but logged out is drift, not ok (station17)", () => {
+    const { root, home, effective } = buildCleanFixture();
+    // Exactly what station17 returned on 2026-07-29: the daemon is healthy and
+    // the node holds no key. Note the real CLI EXITS 0 here — ok:true is
+    // faithful, and only BackendState may decide.
+    const probe: CommandProbe = (command, args) => {
+      if (command === "systemctl") {
+        return { ok: true, stdout: args.includes("is-active") ? "active\n" : "enabled\n" };
+      }
+      if (command === "tailscale") {
+        return { ok: true, stdout: JSON.stringify({ BackendState: "NeedsLogin", Self: { HostName: "station17" } }) };
+      }
+      return { ok: true, stdout: "install ok installed" };
+    };
+    const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: probe });
+    expect(result.items.find((candidate) => candidate.id === "service:tailscaled")?.status).toBe("ok");
+    const join1 = result.items.find((candidate) => candidate.id === "tailscale:join");
+    expect(join1?.status).toBe("drift");
+    expect(join1?.detail).toContain("BackendState=NeedsLogin");
+    expect(result.verdict).toBe("drift");
+  });
+
+  test("tailscale join reports ok only when the backend is actually Running", () => {
+    const { root, home, effective } = buildCleanFixture();
+    const probe: CommandProbe = (command, args) => {
+      if (command === "systemctl") {
+        return { ok: true, stdout: args.includes("is-active") ? "active\n" : "enabled\n" };
+      }
+      if (command === "tailscale") {
+        return { ok: true, stdout: JSON.stringify({ BackendState: "Running", Self: { HostName: "station17" } }) };
+      }
+      if (command === "sh") return { ok: true, stdout: "/usr/local/bin/aws\n" };
+      return { ok: true, stdout: "install ok installed" };
+    };
+    const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: probe });
+    const join1 = result.items.find((candidate) => candidate.id === "tailscale:join");
+    expect(join1?.status).toBe("ok");
+    expect(join1?.detail).toContain("station17");
+    expect(result.verdict).toBe("clean");
+  });
+
+  test("POSITIVE CONTROL: a required command missing from PATH is detected", () => {
+    const { root, home, effective } = buildCleanFixture();
+    const probe: CommandProbe = (command) => {
+      if (command === "sh") return { ok: false, stdout: "" };
+      if (command === "tailscale") return { ok: true, stdout: JSON.stringify({ BackendState: "Running" }) };
+      if (command === "systemctl") return { ok: true, stdout: "active\n" };
+      return { ok: true, stdout: "install ok installed" };
+    };
+    const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: probe });
+    const item = result.items.find((candidate) => candidate.id === "command:aws-cli");
+    expect(item?.status).toBe("drift");
+    expect(item?.detail).toContain("aws not on PATH");
+  });
+
+  test("bun global probe never reads the coordinator's own tree during a fixture check", () => {
+    const { root, home, effective } = buildCleanFixture();
+    rmSync(join(home, ".bun"), { recursive: true, force: true });
+    const previous = process.env["BUN_INSTALL"];
+    process.env["BUN_INSTALL"] = join(repoRoot, "node_modules", "..");
+    try {
+      const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: null });
+      // Every bun package must be drift: the fixture has none, and the ambient
+      // BUN_INSTALL must not be allowed to answer for it.
+      for (const pkg of effective.packages.bun) {
+        expect(result.items.find((candidate) => candidate.id === `package:bun:${pkg}`)?.status).toBe("drift");
+      }
+    } finally {
+      if (previous === undefined) delete process.env["BUN_INSTALL"];
+      else process.env["BUN_INSTALL"] = previous;
+    }
   });
 
   test("POSITIVE CONTROL: planted content drift is detected and named", () => {

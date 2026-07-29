@@ -6,6 +6,7 @@ export {
   type StationTemplate,
   type TemplateFile,
   type TemplateLayer,
+  type TemplateCommand,
   type LoadedTemplateFile,
   type EffectiveTemplate,
 } from "./schema.js";

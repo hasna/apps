@@ -47,6 +47,19 @@ export function buildStationTemplateSteps(effective: EffectiveTemplate, options:
     });
   }
 
+  // Required binaries come BEFORE tailscale: the join step shells out to a
+  // credential fetch, and on 2026-07-29 station17 ran that step with no aws on
+  // PATH and silently stayed off the tailnet.
+  for (const command of effective.commands) {
+    steps.push({
+      id: `template-command-${command.id}`,
+      title: `Ensure ${command.command} is on PATH`,
+      command: `command -v -- ${command.command} >/dev/null 2>&1 || sudo sh -c ${quote(command.install)}`,
+      manager: "custom",
+      privileged: true,
+    });
+  }
+
   for (const file of effective.files) {
     steps.push({
       id: `template-file-${file.id}`,

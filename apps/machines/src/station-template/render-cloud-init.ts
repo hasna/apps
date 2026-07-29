@@ -67,6 +67,12 @@ export function renderCloudInit(effective: EffectiveTemplate, options: CloudInit
   }
 
   const runcmd: string[] = [];
+  // Required binaries first: the tailscale join below fetches the auth key with
+  // `aws secretsmanager`, and on station17 (2026-07-29) that ran with no aws on
+  // PATH — the join failed and the box never reached the tailnet.
+  for (const command of effective.commands) {
+    runcmd.push(`command -v -- ${command.command} >/dev/null 2>&1 || sh -c '${command.install.replace(/'/g, `'\\''`)}'`);
+  }
   if (effective.files.some((file) => file.kind === "sysctl")) {
     runcmd.push("sysctl --system");
   }

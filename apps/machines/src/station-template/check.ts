@@ -11,7 +11,17 @@ export type CheckStatus = "ok" | "drift" | "violation" | "skipped";
 
 export interface TemplateCheckItem {
   id: string;
-  kind: "file" | "ordering" | "sysctl" | "runtime-value" | "package" | "service" | "unit-convention";
+  kind:
+    | "file"
+    | "ordering"
+    | "sysctl"
+    | "runtime-value"
+    | "package"
+    | "command"
+    | "service"
+    | "unit-convention"
+    | "tailscale"
+    | "swap";
   status: CheckStatus;
   detail: string;
 }
@@ -49,6 +59,11 @@ export interface CheckOptions {
   commandProbe?: CommandProbe | null;
   /** Additional systemd unit dirs to scan for unit conventions. */
   unitDirs?: string[];
+  /**
+   * Root of bun's global install tree. Defaults to $BUN_INSTALL or ~/.bun,
+   * matching bun's own resolution, so `bun install -g` results are checkable.
+   */
+  bunInstallDir?: string;
   /** Identity stamped into the result. Defaults to the local machine id. */
   machineId?: string;
 }
@@ -255,6 +270,48 @@ export function checkStationTemplate(effective: EffectiveTemplate, options: Chec
     );
   }
 
+  // Binaries the template requires on PATH. An apt name cannot express this:
+  // the ec2 overlay's `awscli` had no installation candidate on noble, so the
+  // requirement was permanently unsatisfiable AND the box that DID have AWS
+  // CLI v2 at /usr/local/bin/aws still reported drift.
+  for (const command of effective.commands) {
+    if (!probe) {
+      items.push({ id: `command:${command.id}`, kind: "command", status: "skipped", detail: "no command probe" });
+      continue;
+    }
+    const result = probe("sh", ["-c", `command -v -- ${command.command}`]);
+    const resolved = result.stdout.trim();
+    items.push(
+      result.ok && resolved.length > 0
+        ? { id: `command:${command.id}`, kind: "command", status: "ok", detail: `${command.command} -> ${resolved}` }
+        : { id: `command:${command.id}`, kind: "command", status: "drift", detail: `${command.command} not on PATH` }
+    );
+  }
+
+  // Bun globals were declared by the template from day one and checked by
+  // nothing: the shipped station lists 12 hasna CLIs, and a station missing
+  // every one of them still reported clean on this axis.
+  // $BUN_INSTALL is honoured only for a real check. Letting the ambient env win
+  // during a fixture check would point the probe at the coordinator's own bun
+  // tree — the same mis-attribution the machineId field exists to prevent.
+  const bunRoot =
+    options.bunInstallDir ??
+    (rootDir === "/" ? process.env["BUN_INSTALL"] ?? join(homeDir, ".bun") : join(homeDir, ".bun"));
+  for (const pkg of effective.packages.bun) {
+    const manifest = join(bunRoot, "install/global/node_modules", pkg, "package.json");
+    if (!existsSync(manifest)) {
+      items.push({ id: `package:bun:${pkg}`, kind: "package", status: "drift", detail: `${pkg} not installed globally (${manifest} missing)` });
+      continue;
+    }
+    let version = "unknown";
+    try {
+      version = (JSON.parse(readFileSync(manifest, "utf8")) as { version?: string }).version ?? "unknown";
+    } catch {
+      /* unreadable manifest: presence is still the contract */
+    }
+    items.push({ id: `package:bun:${pkg}`, kind: "package", status: "ok", detail: `${pkg}@${version} installed globally` });
+  }
+
   for (const service of effective.services) {
     if (!probe) {
       items.push({ id: `service:${service.name}`, kind: "service", status: "skipped", detail: "no command probe" });
@@ -275,6 +332,65 @@ export function checkStationTemplate(effective: EffectiveTemplate, options: Chec
             detail: `${service.name} expected active=${service.expectActive} enabled=${service.expectEnabled}, found ${active.stdout.trim() || "unknown"}/${enabled.stdout.trim() || "unknown"}`,
           }
     );
+  }
+
+  // `tailscaled active/enabled` is NOT tailnet membership. station17 reported
+  // service:tailscaled ok on 2026-07-29 while `tailscale status` said "Logged
+  // out" — the daemon runs fine with no node key, so the service check alone
+  // says clean about a station nothing can reach. Note also that
+  // `tailscale status --json` EXITS 0 when logged out: only BackendState is
+  // the verdict.
+  if (effective.tailscale?.join) {
+    if (!probe) {
+      items.push({ id: "tailscale:join", kind: "tailscale", status: "skipped", detail: "no command probe" });
+    } else {
+      const result = probe("tailscale", ["status", "--json"]);
+      let backendState: string | null = null;
+      let selfName: string | null = null;
+      try {
+        const parsed = JSON.parse(result.stdout) as { BackendState?: string; Self?: { HostName?: string } };
+        backendState = parsed.BackendState ?? null;
+        selfName = parsed.Self?.HostName ?? null;
+      } catch {
+        backendState = null;
+      }
+      if (backendState === null) {
+        items.push({ id: "tailscale:join", kind: "tailscale", status: "drift", detail: "tailscale status --json unreadable (is tailscale installed?)" });
+      } else if (backendState === "Running") {
+        items.push({ id: "tailscale:join", kind: "tailscale", status: "ok", detail: `joined tailnet as ${selfName ?? "unknown"} (BackendState=Running)` });
+      } else {
+        items.push({
+          id: "tailscale:join",
+          kind: "tailscale",
+          status: "drift",
+          detail: `not on the tailnet: BackendState=${backendState} (tailscaled can be active+enabled and still hold no node key)`,
+        });
+      }
+    }
+  }
+
+  // The ec2 overlay asks for an 8G swapfile because earlyoom's SIGTERM
+  // condition is MemAvailable AND free-swap; with no swap the backstop the
+  // template exists to provide never trips on the axis that killed station01.
+  if (effective.swap.sizeGb > 0) {
+    const swapsPath = join(rootDir, "proc/swaps");
+    if (!existsSync(swapsPath)) {
+      items.push({ id: "swap:size", kind: "swap", status: "skipped", detail: `${swapsPath} not readable` });
+    } else {
+      let totalKb = 0;
+      for (const line of readFileSync(swapsPath, "utf8").split("\n").slice(1)) {
+        const size = line.trim().split(/\s+/)[2];
+        if (size && /^\d+$/.test(size)) totalKb += Number(size);
+      }
+      const totalGb = totalKb / 1024 / 1024;
+      // fallocate -l 8G yields slightly under 8 GiB of usable swap once the
+      // header is taken out, so require 95% rather than an exact match.
+      items.push(
+        totalGb >= effective.swap.sizeGb * 0.95
+          ? { id: "swap:size", kind: "swap", status: "ok", detail: `${totalGb.toFixed(2)}G swap active (expected ${effective.swap.sizeGb}G)` }
+          : { id: "swap:size", kind: "swap", status: "drift", detail: `expected ${effective.swap.sizeGb}G swap, found ${totalGb.toFixed(2)}G` }
+      );
+    }
   }
 
   if (effective.unitConventions) {

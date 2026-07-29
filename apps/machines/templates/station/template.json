@@ -125,9 +125,17 @@
         }
       ],
       "packages": {
-        "apt": ["awscli"],
+        "apt": [],
         "bun": []
       },
+      "commands": [
+        {
+          "id": "aws-cli",
+          "command": "aws",
+          "install": "curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip -o /tmp/awscliv2.zip && unzip -q -o /tmp/awscliv2.zip -d /tmp && /tmp/aws/install --update && rm -rf /tmp/aws /tmp/awscliv2.zip",
+          "lesson": "2026-07-29 station17: the ec2 overlay declared apt package 'awscli', which has NO installation candidate on Ubuntu 24.04 — noble dropped the deb (apt-cache policy awscli -> Candidate: (none), while htop resolves from the same sources, so it is the package and not the apt config). Two measured consequences: cloud-init's package_update_upgrade_install module FAILED on every launch (cloud-init status: error), and the tailscale-join runcmd — which shells out to 'aws secretsmanager get-secret-value' — ran with no aws on PATH and left station17 off the tailnet. AWS CLI v2 ships only as the official installer, never as a distro package, so the requirement has to be expressed as a command, not an apt name."
+        }
+      ],
       "swap": { "sizeGb": 8 }
     }
   }
