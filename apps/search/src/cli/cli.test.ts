@@ -56,7 +56,7 @@ describe("CLI", () => {
     expect(output).toContain("history");
     expect(output).toContain("providers");
     expect(output).toContain("profiles");
-    expect(output).toContain("webhooks");
+    expect(output).toContain("channels");
   });
 
   it("should show version with --version", async () => {
