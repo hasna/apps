@@ -11,7 +11,7 @@ import {
   updateProject,
 } from "../../db/projects.js";
 import { addComment } from "../../db/comments.js";
-import { getTodosCloudClient, cloudAddComment, cloudCreateProject, cloudListProjects, cloudListTasks, cloudResolveProject, cloudResolveProjectRef, cloudUpdateProject, cloudAddDependency, cloudRemoveDependency, cloudGetDependencies, cloudGetTaskRelations, cloudRenameProject } from "../cloud-router.js";
+import { getTodosCloudClient, cloudAddComment, cloudCreateProject, cloudDeleteProject, cloudListProjects, cloudListTasks, cloudResolveProject, cloudResolveProjectRef, cloudUpdateProject, cloudAddDependency, cloudRemoveDependency, cloudGetDependencies, cloudGetTaskRelations, cloudRenameProject } from "../cloud-router.js";
 import {
   buildProjectDependencyGraph,
   buildTaskDependencyEdges,
@@ -774,11 +774,16 @@ export function registerProjectCommands(program: Command) {
       }
 
       if (opts.deregister) {
-        if (cloud) {
-          handleError(new Error("REMOTE_COMMAND_UNSUPPORTED: projects --deregister has no safe /v1 equivalent; local SQLite fallback is disabled"));
-        }
-        const project = resolveExplicitProject(opts.deregister);
-        const counts = countProjectTasks(project.id);
+        const project = cloud ? await cloudResolveProject(cloud, opts.deregister) : resolveExplicitProject(opts.deregister);
+        const remoteTasks = cloud
+          ? await cloudListTasks(cloud, { project_id: project.id, include_subtasks: true })
+          : null;
+        const counts = remoteTasks
+          ? {
+              total: remoteTasks.length,
+              incomplete: remoteTasks.filter((task) => task.status !== "completed" && task.status !== "cancelled").length,
+            }
+          : countProjectTasks(project.id);
 
         if (opts.pathPrefix && !pathIsWithinPrefix(project.path, opts.pathPrefix)) {
           handleError(new Error(`Refusing to deregister ${project.name}: path ${project.path} is not within ${opts.pathPrefix}`));
@@ -799,7 +804,12 @@ export function registerProjectCommands(program: Command) {
         };
 
         if (!opts.dryRun) {
-          deleteProject(project.id);
+          if (cloud) {
+            const deleted = await cloudDeleteProject(cloud, project.id);
+            if (!deleted) handleError(new Error(`Project not found: ${opts.deregister}`));
+          } else {
+            deleteProject(project.id);
+          }
         }
 
         if (globalOpts.json) {

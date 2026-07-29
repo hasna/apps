@@ -226,7 +226,6 @@ describe("remote CLI entrypoint authority boundary", () => {
       ["status", "--agent", "fixture-agent"],
       ["bulk", "unknown", TASK_FIXTURE_ID],
       ["bulk", "done", TASK_FIXTURE_ID, "--plan", "fixture-plan"],
-      ["projects", "--path-prefix", "/tmp", "--deregister", "fixture"],
       ["plans", "--write-artifacts"],
     ]) {
       expect(() => initializeTodosCliAuthority(args, {
@@ -260,6 +259,8 @@ describe("remote CLI entrypoint authority boundary", () => {
       ["bulk", "plan", TASK_FIXTURE_ID, "--plan", "fixture-plan"],
       ["bulk", "move-plan", TASK_FIXTURE_ID, "--plan", "fixture-plan"],
       ["bulk", "plan", TASK_FIXTURE_ID, "--clear-plan"],
+      ["projects", "--path-prefix", "/tmp", "--deregister", "fixture"],
+      ["projects", "--deregister=fixture", "--dry-run"],
       ["deps", TASK_FIXTURE_ID, "--needs", OTHER_TASK_FIXTURE_ID],
       // `deps <id>` works remotely, so its presentation-only flags must stay
       // supported too: `--graph`/`--direction` degrade to the same flat edges
@@ -357,7 +358,6 @@ describe("remote CLI entrypoint authority boundary", () => {
         ["--agent", "fixture", "status"],
         ["bulk", "unknown", TASK_FIXTURE_ID],
         ["bulk", "done", TASK_FIXTURE_ID, "--plan", "fixture-plan"],
-        ["projects", "--deregister", "fixture", "--path-prefix", "/tmp"],
         ["plans", "--write-artifacts"],
         ["agents-normalize"],
       ]) {
@@ -935,6 +935,13 @@ describe("remote CLI entrypoint authority boundary", () => {
             Object.assign(project, body, { updated_at: now });
             return Response.json({ project });
           }
+          if (request.method === "DELETE") {
+            remove(projects, String(project.id));
+            for (const task of tasks) {
+              if (task.project_id === project.id) task.project_id = null;
+            }
+            return Response.json({ deleted: true, id: project.id });
+          }
         }
 
         if (url.pathname === "/v1/task-lists") {
@@ -1131,13 +1138,6 @@ describe("remote CLI entrypoint authority boundary", () => {
         ["--project", PROJECT_ID, "--json", "next"],
         ["--json", "claim", "fixture-worker"],
       ];
-      const teardownInvocations: string[][] = [
-        ["--json", "delete", "REMOTE-1"],
-        ["--json", "remove", "REMOTE-2"],
-        ["--project", PROJECT_ID, "--json", "plans", "--delete", PLAN_ID],
-        ["--project", PROJECT_ID, "--json", "lists", "--delete", LIST_ID],
-      ];
-
       const runRemoteOk = async (invocation: string[]): Promise<string> => {
         const result = await runCli(executable, invocation, env, cwd);
         expect({ invocation, exitCode: result.exitCode, stderr: result.stderr }).toEqual({
@@ -1205,15 +1205,41 @@ describe("remote CLI entrypoint authority boundary", () => {
       expectNoLocalDatabase(root, localDbPath);
       await runRemoteOk(["--json", "delete", bulkTaskId]);
 
-      for (const invocation of teardownInvocations) {
-        await runRemoteOk(invocation);
-      }
+      const refusedDeregister = await runCli(
+        executable,
+        ["--json", "projects", "--deregister", PROJECT_ID, "--path-prefix", "/workspace"],
+        env,
+        cwd,
+      );
+      expect(refusedDeregister.exitCode).toBe(1);
+      expect(refusedDeregister.stderr).toContain("incomplete task(s) remain");
+      expect(requests.some((request) => request.startsWith("DELETE /v1/projects/"))).toBe(false);
+
+      await runRemoteOk(["--json", "remove", "REMOTE-2"]);
+      await runRemoteOk(["--project", PROJECT_ID, "--json", "plans", "--delete", PLAN_ID]);
+      await runRemoteOk(["--project", PROJECT_ID, "--json", "lists", "--delete", LIST_ID]);
+      const deregistered = JSON.parse(await runRemoteOk([
+        "--json", "projects", `--deregister=${PROJECT_ID}`, "--path-prefix", "/workspace",
+      ]));
+      expect(deregistered).toMatchObject({
+        action: "deregistered",
+        project_id: PROJECT_ID,
+        total_tasks: 1,
+        incomplete_tasks: 0,
+        tasks_preserved: true,
+      });
+      expect(JSON.parse(await runRemoteOk(["--json", "show", "REMOTE-1"]))).toMatchObject({
+        project_id: null,
+        status: "completed",
+      });
+      await runRemoteOk(["--json", "delete", "REMOTE-1"]);
 
       expect(requests.some((request) => request.startsWith("GET /v1/projects"))).toBe(true);
       expect(requests.some((request) => request.startsWith("GET /v1/task-lists?project_id="))).toBe(true);
       expect(requests.some((request) => request.startsWith("GET /v1/plans?project_id="))).toBe(true);
       expect(requests.some((request) => request.startsWith("POST /v1/tasks/upsert"))).toBe(true);
       expect(requests.some((request) => request.startsWith("POST /v1/tasks/next/claim"))).toBe(true);
+      expect(requests.some((request) => request.startsWith("DELETE /v1/projects/"))).toBe(true);
       expectNoLocalDatabase(root, localDbPath);
 
       const invalidMode = await runCli(executable, ["--json", "projects"], {
@@ -1243,8 +1269,6 @@ describe("remote CLI entrypoint authority boundary", () => {
       expectNoLocalDatabase(root, localDbPath);
 
       for (const unsupported of [
-        ["--json", "projects", "--deregister", PROJECT_ID],
-        ["--json", "projects", `--deregister=${PROJECT_ID}`],
         ["--json", "doctor", "--apply"],
         ["--project", PROJECT_ID, "--json", "plans", "--artifact", PLAN_ID],
         [`--project=${PROJECT_ID}`, "--json", "plans", `--artifact=${PLAN_ID}`],

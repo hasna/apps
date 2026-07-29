@@ -246,8 +246,10 @@ function commandSupportsRemote(invocation: ParsedInvocation): boolean {
       return positionalArgs(args)[0] === "upsert";
     case "doctor":
       return positionalArgs(args)[0] !== "routing" && !hasOption(args, "--apply") && !hasOption(args, "--fix");
-    case "projects":
-      return !hasOption(args, "--deregister") && !hasOption(args, "--path-prefix") && !hasOption(args, "--dry-run");
+    case "projects": {
+      const deregister = hasOption(args, "--deregister");
+      return deregister || (!hasOption(args, "--path-prefix") && !hasOption(args, "--dry-run"));
+    }
     case "plans":
       return !hasOption(args, "--artifact") && !hasOption(args, "--write-artifacts");
     // `list --tags/--tag` is serviced remotely: the /v1 list route filters by

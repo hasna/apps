@@ -993,6 +993,17 @@ export async function cloudUpdateProject(
   return raw as Project;
 }
 
+/** Delete one cloud project (`DELETE /v1/projects/:id`). */
+export async function cloudDeleteProject(client: HasnaStorageClient, id: string): Promise<boolean> {
+  try {
+    await client.transport.del<unknown>(`/projects/${encodeURIComponent(id)}`);
+  } catch (error) {
+    if (error && typeof error === "object" && (error as { status?: unknown }).status === 404) return false;
+    throw error;
+  }
+  return true;
+}
+
 /** List plans from the cloud (`GET /v1/plans`), optionally scoped to a project. */
 export async function cloudListPlans(client: HasnaStorageClient, projectId?: string): Promise<Plan[]> {
   const query = projectId ? { project_id: projectId } : {};
