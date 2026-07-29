@@ -6,6 +6,7 @@ import {
   POSTGRES_DISPOSABLE_TASK_JOURNAL_EFFECT_TRANSITIONS_MIGRATION_V2,
   POSTGRES_DISPOSABLE_TASK_JOURNAL_MIGRATION_V1,
   POSTGRES_DISPOSABLE_TASK_JOURNAL_MIGRATION_V2,
+  applyPostgresDisposableTaskJournalMigrationV1,
   applyPostgresDisposableTaskJournalMigrationV2,
   applyPostgresDurableJournalWitnessMigrationV1,
   createEd25519DisposableTaskJournalCryptoV1,
@@ -308,4 +309,87 @@ test("self-hosted migrations surface a database initialization failure before qu
 
   expect(journal.transactions).toBe(1)
   expect(witness.transactions).toBe(1)
+})
+
+test("self-hosted migrations reject an unusable client identically on both journal and witness entry points", async () => {
+  const keys = generateKeyPairSync("ed25519")
+  const journalCrypto = createEd25519DisposableTaskJournalCryptoV1({
+    signer_principal: "service:sandboxes-journal",
+    signing_key_id: "journal-key-v1",
+    private_key: keys.privateKey,
+    public_key: keys.publicKey,
+  })
+  const witnessCrypto = createEd25519DurableJournalWitnessCryptoV1({
+    signer_principal: "service:sandboxes-witness",
+    signing_key_id: "witness-key-v1",
+    private_key: keys.privateKey,
+    public_key: keys.publicKey,
+  })
+  const sha = (seed: string) =>
+    `sha256:${createHash("sha256").update(seed).digest("hex")}` as const
+  const journalOptions = {
+    expected_migration_role: "journal_migration",
+    expected_database: "journal",
+    expected_journal_cluster_system_identifier: "100",
+    runtime_role: "journal_runtime",
+    witness_acknowledgement_role: "journal_witness_ack",
+    journal_identity_sha256: sha("journal"),
+    restore_domain_sha256: sha("journal-restore"),
+    external_head_witness_sha256: sha("witness"),
+    witness_verification_key_sha256: witnessCrypto.signer.verification_key_sha256,
+    signer_principal: journalCrypto.signer.signer_principal,
+    signing_key_id: journalCrypto.signer.signing_key_id,
+    verification_key_sha256: journalCrypto.signer.verification_key_sha256,
+    encrypted_at_rest: true,
+  } as const
+  const witnessOptions = {
+    expected_migration_role: "witness_migration",
+    reader_role: "witness_reader",
+    witness_acknowledgement_role: "witness_ack",
+    expected_database: "witness",
+    protected_journal_cluster_system_identifier: "100",
+    expected_witness_cluster_system_identifier: "200",
+    encrypted_at_rest: true,
+    restore_domain_sha256: sha("witness-restore"),
+    witness_identity_sha256: sha("witness-identity"),
+    signer_principal: witnessCrypto.signer.signer_principal,
+    signing_key_id: witnessCrypto.signer.signing_key_id,
+    verification_key_sha256: witnessCrypto.signer.verification_key_sha256,
+  } as const
+
+  // A half-initialized database module surfaces here either as a missing value or
+  // as a plain object without the port methods; neither may reach a raw TypeError.
+  for (const unusable of [undefined, null, {}]) {
+    const client = unusable as unknown as PostgresClientV1
+    await expect(applyPostgresDisposableTaskJournalMigrationV1(client, journalOptions))
+      .rejects.toMatchObject({
+        code: "dependency_unavailable",
+        message: "postgres database initialization failed: disposable task journal migration did not provide a query-capable client",
+        retryable: true,
+      })
+    await expect(applyPostgresDisposableTaskJournalMigrationV2(client, journalOptions))
+      .rejects.toMatchObject({
+        code: "dependency_unavailable",
+        message: "postgres database initialization failed: disposable task journal migration did not provide a query-capable client",
+        retryable: true,
+      })
+    await expect(applyPostgresDurableJournalWitnessMigrationV1(client, witnessOptions))
+      .rejects.toMatchObject({
+        code: "dependency_unavailable",
+        message: "postgres database initialization failed: durable journal witness identity check did not provide a query-capable client",
+        retryable: true,
+      })
+  }
+
+  const queries = new QuerylessMigrationSessionClient("journal")
+  const transactionless = {
+    query: <Row extends Record<string, unknown>>(statement: string): Promise<Row[]> =>
+      queries.query<Row>(statement),
+  } as unknown as PostgresClientV1
+  await expect(applyPostgresDisposableTaskJournalMigrationV1(transactionless, journalOptions))
+    .rejects.toMatchObject({
+      code: "dependency_unavailable",
+      message: "postgres database initialization failed: disposable task journal migration did not provide a transaction-capable client",
+      retryable: true,
+    })
 })

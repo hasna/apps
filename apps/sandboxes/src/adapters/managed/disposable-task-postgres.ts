@@ -636,6 +636,7 @@ async function applyPostgresDisposableTaskJournalMigrationTarget(
     options.verification_key_sha256]) assertDigest(value)
   assertText(options.signer_principal)
   assertText(options.signing_key_id)
+  assertPostgresClientV1(client, "disposable task journal migration")
   const identity = await client.query<{
     session_user: string
     current_user: string
