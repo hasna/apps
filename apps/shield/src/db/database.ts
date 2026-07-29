@@ -47,6 +47,17 @@ function getDbPath(): string {
   return dbPath;
 }
 
+/**
+ * Resolves — and prepares, exactly as `getDb()` would — the SQLite file this
+ * store lives in, without opening a connection or touching the singleton.
+ * `hasna.contract.json` declares that location to fleet tooling, so the
+ * contract test asserts the declaration against this resolver instead of a
+ * hardcoded string that could silently drift from `getDbPath()`.
+ */
+export function resolveDbPath(): string {
+  return getDbPath();
+}
+
 let _postInitCallbacks: Array<() => void> = [];
 let _initialized = false;
 
