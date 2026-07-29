@@ -6,7 +6,45 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-07-29
+
+### Added
+
+- **Station template v1 (`hasna.station_template.v1`)** — a versioned, layered
+  station contract (`templates/station/template.json`) with two renderers over
+  one source: `machines setup --template station,dgx-spark` for physical boxes
+  and `machines setup --template station,ec2 --render cloud-init --station
+  <name>` for EC2 user-data. Every template item carries a `lesson` field naming
+  the measured 2026-07-28 station01 failure it exists to prevent.
+- **Read-only drift check** — `machines setup --template <spec> --check` emits a
+  JSON verdict (`clean` / `drift`) without mutating anything: file sha256,
+  `/proc/sys` runtime values, MGLRU runtime value, apt packages, services, unit
+  conventions (StartLimit values, `OnFailure` target, absolute `ExecStart`, with
+  systemd drop-in reset semantics honoured), and the ordering rule — a managed
+  sysctl file must sort last among the files defining its keys, which is the
+  exact bug that shipped on 2026-07-28. `--check` refuses `--machine <other>`
+  rather than reporting the local box under a remote name.
+- Release gate now asserts the station template ships in the tarball, so
+  `templates/` cannot silently fall out of the published package.
+
+### Changed
+
+- **BREAKING: retired deployment-mode vocabulary is rejected, not remapped.**
+  `self_hosted`, `self-hosted`, `remote` and `hybrid` now throw with an error
+  naming the fix. `HASNA_MACHINES_STORAGE_MODE` / `MACHINES_STORAGE_MODE` accept
+  exactly `local` or `cloud`; `machines flip --mode` accepts `api` or `local`
+  (`FlipMode` is `api | local`); `hasna.contract.json` no longer declares a
+  client `mode`. `getStorageMode()` no longer infers `hybrid` from the presence
+  of a `DATABASE_URL` — a DSN is a pointer, not a mode, and the default is now
+  `local`. Sync push/pull was always gated on the DSN rather than the mode, so
+  no sync behaviour changes; only the `mode` field of `machines storage status`
+  moves.
+
 ### Fixed
+
+- `buildFlipScript` no longer discards stderr on both attempts of its
+  `secrets get` fallback, so cross-machine key provisioning failures are visible
+  on the remote box where they happen.
 
 - **BrowserPlan `app_install_update` no longer depends on a git checkout.** The
   hook's `command_template` was
