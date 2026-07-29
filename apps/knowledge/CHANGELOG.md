@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — type-checking is enforced in CI
+
+- Added a `typecheck` package script and run it in the pull-request gate before
+  the test suite, preventing type errors from reaching the default branch.
+
 ## Unreleased — the backend is chosen explicitly, and test egress is refused
 
 **BREAKING for the fleet flip.** `HASNA_KNOWLEDGE_API_URL` +

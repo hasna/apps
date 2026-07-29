@@ -133,6 +133,17 @@ describe('generated artifact verification', () => {
     expect(workflow).toContain('bun run verify:generated');
   });
 
+  test('CI runs the package type-check before the test suite', () => {
+    expect(packageJson.scripts.typecheck).toBe('tsc --noEmit');
+
+    const workflow = readFileSync(join(repoRoot, '.github', 'workflows', 'ci.yml'), 'utf8');
+    const typecheckStep = workflow.indexOf('bun run typecheck');
+    const testStep = workflow.indexOf('bun test');
+    expect(typecheckStep).toBeGreaterThan(-1);
+    expect(testStep).toBeGreaterThan(-1);
+    expect(typecheckStep).toBeLessThan(testStep);
+  });
+
   // Regression test for a defect found in adversarial review of this PR. `Verify generated
   // artifacts` rebuilds bin/ and dist/ and compares BYTE-FOR-BYTE, so it passes only when CI's
   // bun equals the bun that built the committed bundles. Measured at this commit: the committed

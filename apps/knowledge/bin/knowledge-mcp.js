@@ -15044,6 +15044,7 @@ var package_default = {
   ],
   scripts: {
     test: "bun test",
+    typecheck: "tsc --noEmit",
     "test:cli": "bun test tests/cli.test.ts",
     "test:package": "bun test tests/package-release.test.ts",
     "release:pack:check": "node scripts/validate-public-package.mjs",
@@ -15100,7 +15101,8 @@ var package_default = {
     "@electric-sql/pglite": "^0.5.4",
     "@hasna/contracts": "0.5.2",
     "@types/bun": "^1.3.14",
-    "@types/pg": "^8.15.6"
+    "@types/pg": "^8.15.6",
+    typescript: "^7.0.2"
   }
 };
 
