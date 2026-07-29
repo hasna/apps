@@ -1,0 +1,190 @@
+{
+  "schema": "hasna.project_panel.v1",
+  "id": "knowledge_panel_contract-fixture",
+  "createdAt": "2026-07-29T14:25:23.369Z",
+  "metadata": {
+    "scope": "project",
+    "home": "/tmp/knowledge-contract-fixture-boundary-ope53-00028/.hasna/knowledge",
+    "json_store_exists": true,
+    "latest_activity_at": "2026-07-28T12:30:00.000Z"
+  },
+  "projectId": "contract-fixture",
+  "provider": {
+    "kind": "knowledge",
+    "id": "knowledge_contract-fixture",
+    "name": "Knowledge",
+    "sourcePackage": "@hasna/knowledge",
+    "externalId": "/tmp/knowledge-contract-fixture-boundary-ope53-00028/.hasna/knowledge"
+  },
+  "kind": "knowledge",
+  "title": "Knowledge",
+  "summary": "1 active note(s), 0 source(s), 0 chunk(s), and 0 wiki page(s).",
+  "state": "ready",
+  "generatedAt": "2026-07-29T14:25:23.369Z",
+  "freshness": "fresh",
+  "metrics": [
+    {
+      "id": "active_items",
+      "label": "Active notes",
+      "value": 1,
+      "status": "good",
+      "resourceRefs": []
+    },
+    {
+      "id": "sources",
+      "label": "Sources",
+      "value": 0,
+      "status": "unknown",
+      "resourceRefs": []
+    },
+    {
+      "id": "chunks",
+      "label": "Chunks",
+      "value": 0,
+      "status": "unknown",
+      "resourceRefs": []
+    },
+    {
+      "id": "wiki_pages",
+      "label": "Wiki pages",
+      "value": 0,
+      "status": "unknown",
+      "resourceRefs": []
+    },
+    {
+      "id": "artifacts",
+      "label": "Artifacts",
+      "value": 0,
+      "status": "unknown",
+      "resourceRefs": []
+    },
+    {
+      "id": "vector_entries",
+      "label": "Vector entries",
+      "value": 0,
+      "status": "unknown",
+      "resourceRefs": []
+    },
+    {
+      "id": "unresolved",
+      "label": "Unresolved",
+      "value": 0,
+      "status": "good",
+      "resourceRefs": []
+    }
+  ],
+  "items": [
+    {
+      "id": "item_k_contract_fixture",
+      "title": "Knowledge Contract Fixture",
+      "summary": "A real package-owned note used to exercise the project panel contract boundary.",
+      "status": "active",
+      "priority": "medium",
+      "timestamp": "2026-07-28T12:30:00.000Z",
+      "resourceRefs": [
+        {
+          "kind": "knowledge",
+          "id": "k_contract_fixture",
+          "name": "Knowledge Contract Fixture",
+          "uri": "knowledge://item/k_contract_fixture",
+          "externalId": "k_contract_fixture",
+          "sourcePackage": "@hasna/knowledge",
+          "tags": [
+            "contracts",
+            "knowledge"
+          ]
+        }
+      ],
+      "evidenceRefs": [
+        {
+          "id": "url_k_contract_fixture",
+          "kind": "url",
+          "uri": "https://example.com/knowledge/contract-fixture",
+          "summary": "Source URL for this knowledge item."
+        }
+      ],
+      "metadata": {
+        "source": "legacy_store",
+        "archived": false,
+        "tags": [
+          "contracts",
+          "knowledge"
+        ],
+        "url": "https://example.com/knowledge/contract-fixture"
+      }
+    }
+  ],
+  "actions": [
+    {
+      "kind": "action",
+      "id": "knowledge:inventory",
+      "name": "Inspect knowledge inventory",
+      "externalId": "knowledge:inventory",
+      "sourcePackage": "@hasna/knowledge",
+      "tags": []
+    },
+    {
+      "kind": "action",
+      "id": "knowledge:context-pack",
+      "name": "Build cited context pack",
+      "externalId": "knowledge:context-pack",
+      "sourcePackage": "@hasna/knowledge",
+      "tags": []
+    },
+    {
+      "kind": "action",
+      "id": "knowledge:ingest",
+      "name": "Ingest project source",
+      "externalId": "knowledge:ingest",
+      "sourcePackage": "@hasna/knowledge",
+      "tags": []
+    }
+  ],
+  "resourceRefs": [
+    {
+      "kind": "project",
+      "id": "contract-fixture",
+      "name": "Contract Fixture",
+      "uri": "project://contract-fixture",
+      "externalId": "contract-fixture",
+      "sourcePackage": "@hasna/knowledge",
+      "tags": []
+    },
+    {
+      "kind": "knowledge",
+      "id": "home_contract-fixture",
+      "name": "Knowledge workspace",
+      "uri": "knowledge://workspace/contract-fixture",
+      "externalId": "home_contract-fixture",
+      "sourcePackage": "@hasna/knowledge",
+      "tags": []
+    },
+    {
+      "kind": "artifact",
+      "id": "db_contract-fixture",
+      "name": "Knowledge database",
+      "uri": "knowledge://db/contract-fixture",
+      "externalId": "db_contract-fixture",
+      "sourcePackage": "@hasna/knowledge",
+      "tags": []
+    }
+  ],
+  "evidenceRefs": [],
+  "renderFragment": {
+    "renderer": "json_render",
+    "title": "Knowledge",
+    "imports": [],
+    "spec": {
+      "component": "project.knowledge.summary",
+      "metrics": [
+        "active_items",
+        "sources",
+        "chunks",
+        "wiki_pages",
+        "unresolved"
+      ],
+      "itemLimit": 5
+    }
+  },
+  "warnings": []
+}
