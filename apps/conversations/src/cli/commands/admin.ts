@@ -4,6 +4,7 @@ import { readFileSync } from "fs";
 import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { redactMessagesById } from "../../lib/admin-redaction.js";
+import { printJson } from "../stdout.js";
 
 function parseMessageIds(values: string[], idsFile?: string): number[] {
   const tokens = [...values];
@@ -83,7 +84,7 @@ export function registerAdminCommands(program: Command): void {
         });
 
         if (opts.json) {
-          console.log(JSON.stringify(result, null, 2));
+          printJson(result);
         } else {
           printRedactionSummary(result);
         }

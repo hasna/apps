@@ -5,6 +5,7 @@ import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { windowItems } from "../../lib/compact-output.js";
 import { getCliWindow, printCompactFooter } from "../compact.js";
+import { printJson, printJsonLine } from "../stdout.js";
 
 const DEFAULT_RESOURCE_TYPE = "resource";
 
@@ -74,7 +75,7 @@ export function registerLockCommands(program: Command): void {
       }
 
       if (opts.json) {
-        console.log(JSON.stringify(result, null, 2));
+        printJson(result);
       } else if (result.acquired && result.lock) {
         console.log(chalk.green(`Lock acquired: ${resourceType}/${resourceId}`) + chalk.dim(` by ${agent} (${lockType}, expires ${result.lock.expires_at})`));
       } else {
@@ -104,7 +105,7 @@ export function registerLockCommands(program: Command): void {
       const released = await getStore().releaseLock(resourceType, resourceId, agent);
 
       if (opts.json) {
-        console.log(JSON.stringify({ released }));
+        printJsonLine({ released });
       } else if (released) {
         console.log(chalk.green(`Lock released: ${resourceType}/${resourceId}`));
       } else {
@@ -126,7 +127,7 @@ export function registerLockCommands(program: Command): void {
       const lock = await getStore().checkLock(resourceType, resourceId);
 
       if (opts.json) {
-        console.log(JSON.stringify(lock ? { locked: true, ...lock } : { locked: false }, null, 2));
+        printJson(lock ? { locked: true, ...lock } : { locked: false });
       } else if (lock) {
         console.log(chalk.yellow(`Locked: ${resourceType}/${resourceId}`) + chalk.dim(` by ${lock.agent_id} (${lock.lock_type}, expires ${lock.expires_at})`));
       } else {
@@ -155,13 +156,13 @@ export function registerLockCommands(program: Command): void {
       const page = windowItems(locksList, window);
 
       if (opts.json) {
-        console.log(JSON.stringify({
+        printJson({
           locks: page.items,
           count: page.count,
           total: page.total,
           next_cursor: page.nextCursor,
           has_more: page.hasMore,
-        }, null, 2));
+        });
       } else if (locksList.length === 0) {
         console.log(chalk.dim("No active locks."));
       } else {
@@ -190,7 +191,7 @@ export function registerLockCommands(program: Command): void {
       const total = released_stale_agent + released_expired;
 
       if (opts.json) {
-        console.log(JSON.stringify({ released_stale_agent, released_expired, total }));
+        printJsonLine({ released_stale_agent, released_expired, total });
       } else {
         console.log(chalk.green(`Cleaned ${total} lock(s)`) + chalk.dim(` (${released_expired} expired, ${released_stale_agent} stale-agent)`));
       }

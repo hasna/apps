@@ -6,6 +6,7 @@ import { spawnSync } from "child_process";
 import { gatherTrainingData } from "../lib/gatherer.js";
 import { getActiveModel, setActiveModel, clearActiveModel, DEFAULT_MODEL } from "../lib/model-config.js";
 import { getDataDir } from "../lib/db.js";
+import { printJsonLine } from "./stdout.js";
 
 export function registerBrainsCommand(program: Command): void {
   const brains = program
@@ -35,7 +36,7 @@ export function registerBrainsCommand(program: Command): void {
         writeFileSync(outputPath, jsonl, "utf-8");
 
         if (opts.json) {
-          console.log(JSON.stringify({ path: outputPath, count: result.count, source: result.source }));
+          printJsonLine({ path: outputPath, count: result.count, source: result.source });
         } else {
           console.log(chalk.green(`Gathered ${result.count} training examples`));
           console.log(chalk.dim(`  Written to: ${outputPath}`));

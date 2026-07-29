@@ -1,4 +1,5 @@
 import chalk from "chalk";
+import { printJsonLine } from "./stdout.js";
 
 /**
  * Emit a CLI error while respecting the `--json` output contract, then exit(1).
@@ -17,7 +18,7 @@ export function emitCliError(
   extra: Record<string, unknown> = {},
 ): never {
   if (opts.json || opts.contract) {
-    console.log(JSON.stringify({ error: message, ...extra }));
+    printJsonLine({ error: message, ...extra });
   } else {
     console.error(chalk.red(message));
   }

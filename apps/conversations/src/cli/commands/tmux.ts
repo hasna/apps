@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import chalk from "chalk";
 import { execSync } from "child_process";
+import { printJsonLine } from "../stdout.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -111,7 +112,7 @@ export function registerTmuxCommands(program: Command): void {
         });
 
         if (opts.json) {
-          console.log(JSON.stringify({ target, result }));
+          printJsonLine({ target, result });
         } else if (result.success) {
           console.log(
             chalk.green(`Sent to ${target}`) +
@@ -127,7 +128,7 @@ export function registerTmuxCommands(program: Command): void {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         if (opts.json) {
-          console.log(JSON.stringify({ target, error: msg }));
+          printJsonLine({ target, error: msg });
         } else {
           console.error(chalk.red(`tmux error: ${msg}`));
         }
@@ -195,7 +196,7 @@ export function registerTmuxCommands(program: Command): void {
       const failed = results.length - succeeded;
 
       if (opts.json) {
-        console.log(JSON.stringify({ results, succeeded, failed, total: results.length }));
+        printJsonLine({ results, succeeded, failed, total: results.length });
       } else {
         console.log(chalk.dim(`\nBroadcast complete: ${chalk.green(succeeded)} succeeded, ${failed > 0 ? chalk.red(failed) : chalk.dim(failed)} failed`));
       }

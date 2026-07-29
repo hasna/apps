@@ -6,6 +6,7 @@ import { resolveIdentity, readPersistedIdentity, updateCachedAutoName, isSelfRen
 import { isAgentConflict, normalizeAgentName } from "../../lib/presence.js";
 import { windowItems } from "../../lib/compact-output.js";
 import { getCliWindow, printCompactFooter } from "../compact.js";
+import { printJson, printJsonLine } from "../stdout.js";
 
 type PresenceView = {
   online: boolean;
@@ -72,7 +73,7 @@ export function registerAgentCommands(program: Command): void {
       const page = windowItems(agentsList, window);
 
       if (opts.json) {
-        console.log(JSON.stringify(agentsList, null, 2));
+        printJson(agentsList);
       } else {
         if (agentsList.length === 0) {
           console.log(chalk.dim("No agents found."));
@@ -111,7 +112,7 @@ export function registerAgentCommands(program: Command): void {
       const removed = await getStore().removePresence(agentName);
 
       if (opts.json) {
-        console.log(JSON.stringify({ agent: agentName, removed }));
+        printJsonLine({ agent: agentName, removed });
       } else {
         if (removed) {
           console.log(chalk.green(`Agent "${agentName}" removed.`));
@@ -157,13 +158,13 @@ export function registerAgentCommands(program: Command): void {
         const identityWriteFailed = isSelf && !identityAdopted;
 
         if (opts.json) {
-          console.log(JSON.stringify({
+          printJsonLine({
             old_name: old,
             new_name: renamed,
             renamed: true,
             identity_adopted: identityAdopted,
             identity_write_failed: identityWriteFailed,
-          }));
+          });
         } else {
           console.log(chalk.green(`Agent "${old}" renamed to "${renamed}".`));
           if (identityAdopted) {
@@ -203,7 +204,7 @@ export function registerAgentCommands(program: Command): void {
 
       if (isAgentConflict(result)) {
         if (opts.json) {
-          console.log(JSON.stringify(result));
+          printJsonLine(result);
         } else {
           console.error(chalk.red(`Conflict: agent "${agentName}" is already active (last seen: ${result.last_seen_at}).`));
           console.error(chalk.dim("Use --force or wait 30 minutes for the session to expire."));
@@ -230,12 +231,12 @@ export function registerAgentCommands(program: Command): void {
       const envOverride = process.env.CONVERSATIONS_AGENT_ID?.trim() || null;
 
       if (opts.json) {
-        console.log(JSON.stringify({
+        printJsonLine({
           ...result,
           identity_adopted: identityAdopted,
           identity_write_failed: identityWriteFailed,
           identity_env_override: envOverride,
-        }));
+        });
       } else {
         const action = result.took_over ? chalk.yellow("took over") : result.created ? chalk.green("registered") : chalk.cyan("updated");
         console.log(`  ${action}  ${chalk.bold(registeredName)}  session: ${chalk.dim(sessionId)}`);
@@ -269,7 +270,7 @@ export function registerAgentCommands(program: Command): void {
       await getStore().heartbeat(agent, status);
 
       if (opts.json) {
-        console.log(JSON.stringify({ agent, status, heartbeat: true }));
+        printJsonLine({ agent, status, heartbeat: true });
       } else {
         console.log(`  ${chalk.green("♥")}  ${chalk.cyan(agent)}  ${chalk.dim(status)}`);
       }
@@ -297,7 +298,7 @@ export function registerAgentCommands(program: Command): void {
       await getStore().setPresenceProject(agent, project.id);
 
       if (opts.json) {
-        console.log(JSON.stringify({ agent, project_id: project.id, project_name: project.name, focused: true }));
+        printJsonLine({ agent, project_id: project.id, project_name: project.name, focused: true });
       } else {
         console.log(`  ${chalk.green("focused")}  ${chalk.cyan(agent)}  →  ${chalk.bold(project.name)}  ${chalk.dim(`(${project.id})`)}`);
       }
@@ -314,7 +315,7 @@ export function registerAgentCommands(program: Command): void {
       await getStore().setPresenceProject(agent, null);
 
       if (opts.json) {
-        console.log(JSON.stringify({ agent, project_id: null, focused: false }));
+        printJsonLine({ agent, project_id: null, focused: false });
       } else {
         console.log(`  ${chalk.yellow("unfocused")}  ${chalk.cyan(agent)}`);
       }
@@ -333,7 +334,7 @@ export function registerAgentCommands(program: Command): void {
       const project = projectId ? (await getStore().getProject(projectId) || null) : null;
 
       if (opts.json) {
-        console.log(JSON.stringify({ agent, project_id: projectId, project_name: project?.name ?? null }));
+        printJsonLine({ agent, project_id: projectId, project_name: project?.name ?? null });
       } else {
         if (projectId) {
           const name = project?.name ?? chalk.dim("(unknown)");
@@ -371,7 +372,7 @@ export function registerAgentCommands(program: Command): void {
       const presence = await getStore().getPresence(agent);
       const payload = buildWhoamiPayload(agent, source, presence);
       if (opts.json) {
-        console.log(JSON.stringify(payload, null, 2));
+        printJson(payload);
         closeDb();
         return;
       }

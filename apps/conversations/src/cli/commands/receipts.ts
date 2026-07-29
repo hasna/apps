@@ -4,6 +4,7 @@ import chalk from "chalk";
 import { closeDb } from "../../lib/db.js";
 import { normalizeChannelName } from "../../lib/channel-names.js";
 import { emitCliError } from "../cli-error.js";
+import { printJson } from "../stdout.js";
 
 export function registerReceiptCommands(program: Command): void {
   program
@@ -38,7 +39,7 @@ export function registerReceiptCommands(program: Command): void {
         }
         const status = await getStore().getMessageReadStatus(id, channelArg);
         if (opts.json) {
-          console.log(JSON.stringify({ message_id: id, channel: channelArg, ...status, read_count: status.receipts.length, unread_count: status.unread_by.length }, null, 2));
+          printJson({ message_id: id, channel: channelArg, ...status, read_count: status.receipts.length, unread_count: status.unread_by.length });
         } else {
           console.log(chalk.bold(`Message #${id}`) + chalk.dim(` in ${chalk.magenta(`#${channelArg}`)} — read by ${status.receipts.length}, unread by ${status.unread_by.length}`));
           for (const r of status.receipts) {
@@ -51,7 +52,7 @@ export function registerReceiptCommands(program: Command): void {
       } else {
         const receipts = await getStore().getReadReceipts(id);
         if (opts.json) {
-          console.log(JSON.stringify({ message_id: id, receipts, count: receipts.length }, null, 2));
+          printJson({ message_id: id, receipts, count: receipts.length });
         } else if (receipts.length === 0) {
           console.log(chalk.dim(`No read receipts for message #${id}.`));
         } else {

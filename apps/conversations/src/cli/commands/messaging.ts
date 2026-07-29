@@ -13,6 +13,7 @@ import { printMessageEntry } from "../message-output.js";
 import { checkForUpdate } from "../../lib/version-check.js";
 import { emitCliError } from "../cli-error.js";
 import type { DigestResult } from "../../lib/messages.js";
+import { printJson, printJsonLine } from "../stdout.js";
 
 function quoteDigestCommandArg(value: string): string {
   return /^[A-Za-z0-9._:/@=-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
@@ -102,7 +103,7 @@ export function registerMessagingCommands(program: Command): void {
       }
 
       if (opts.json) {
-        console.log(JSON.stringify(msg, null, 2));
+        printJson(msg);
       } else if (channel) {
         console.log(chalk.green(`Message sent to #${channel}`) + chalk.dim(` (id: ${msg.id})`));
       } else {
@@ -149,7 +150,7 @@ export function registerMessagingCommands(program: Command): void {
       }
 
       if (opts.json) {
-        console.log(JSON.stringify(messages, null, 2));
+        printJson(messages);
       } else {
         if (messages.length === 0) {
           console.log(chalk.dim("No messages found."));
@@ -185,7 +186,7 @@ export function registerMessagingCommands(program: Command): void {
       }
 
       if (opts.json) {
-        console.log(JSON.stringify(msg, null, 2));
+        printJson(msg);
       } else {
         const time = chalk.dim(msg.created_at.slice(0, 19).replace("T", " "));
         const destination = msg.channel ? chalk.magenta(`#${msg.channel}`) : chalk.yellow(msg.to_agent);
@@ -245,7 +246,7 @@ export function registerMessagingCommands(program: Command): void {
       }
 
       if (opts.json) {
-        console.log(JSON.stringify(result));
+        printJsonLine(result);
       } else {
         const target = result.channel ? `#${result.channel}` : result.session_id ?? result.to ?? "messages";
         console.log(chalk.bold(`Digest ${result.digest_id} ${chalk.dim(`(${target})`)}`));
@@ -302,7 +303,7 @@ export function registerMessagingCommands(program: Command): void {
         : pageFromQuery(messages, window);
 
       if (opts.json) {
-        console.log(JSON.stringify(messages, null, 2));
+        printJson(messages);
       } else {
         if (messages.length === 0) {
           console.log(chalk.dim("No messages found."));
@@ -353,7 +354,7 @@ export function registerMessagingCommands(program: Command): void {
         : pageFromQuery(messages, window);
 
       if (opts.json) {
-        console.log(JSON.stringify(messages, null, 2));
+        printJson(messages);
       } else {
         if (messages.length === 0) {
           console.log(chalk.dim(`No activity in the last ${duration}.`));
@@ -441,7 +442,7 @@ export function registerMessagingCommands(program: Command): void {
       }
 
       if (opts.json) {
-        console.log(JSON.stringify(msg, null, 2));
+        printJson(msg);
       } else {
         console.log(chalk.green(`Reply sent`) + chalk.dim(` (id: ${msg.id}, session: ${msg.session_id})`));
       }
@@ -475,7 +476,7 @@ export function registerMessagingCommands(program: Command): void {
       }
 
       if (opts.json) {
-        console.log(JSON.stringify({ marked_read: count }));
+        printJsonLine({ marked_read: count });
       } else {
         console.log(chalk.green(`Marked ${count} message(s) as read.`));
       }
@@ -532,7 +533,7 @@ export function registerMessagingCommands(program: Command): void {
       }
 
       if (opts.json) {
-        console.log(JSON.stringify(msg, null, 2));
+        printJson(msg);
       } else {
         if (msg) {
           console.log(chalk.green(`Message #${id} edited.`));
@@ -560,7 +561,7 @@ export function registerMessagingCommands(program: Command): void {
       const result = await await getStore().deleteMessage(id, agent);
 
       if (opts.json) {
-        console.log(JSON.stringify({ id, deleted: result }));
+        printJsonLine({ id, deleted: result });
       } else {
         if (result) {
           console.log(chalk.green(`Message #${id} deleted.`));
@@ -582,7 +583,7 @@ export function registerMessagingCommands(program: Command): void {
       const msg = await await getStore().pinMessage(id);
 
       if (opts.json) {
-        console.log(JSON.stringify(msg, null, 2));
+        printJson(msg);
       } else {
         if (msg) {
           console.log(chalk.green(`Message #${id} pinned.`));
@@ -604,7 +605,7 @@ export function registerMessagingCommands(program: Command): void {
       const msg = await await getStore().unpinMessage(id);
 
       if (opts.json) {
-        console.log(JSON.stringify(msg, null, 2));
+        printJson(msg);
       } else {
         if (msg) {
           console.log(chalk.green(`Message #${id} unpinned.`));
@@ -638,7 +639,7 @@ export function registerMessagingCommands(program: Command): void {
         ? { items: messages, count: messages.length, total: messages.length, hasMore: false, nextCursor: null }
         : pageFromQuery(messages, window);
       if (opts.json) {
-        console.log(JSON.stringify(messages, null, 2));
+        printJson(messages);
       } else {
         if (messages.length === 0) {
           console.log(chalk.dim("No pinned messages."));
@@ -675,7 +676,7 @@ export function registerMessagingCommands(program: Command): void {
         : pageFromQuery(blockers, window);
 
       if (opts.json) {
-        console.log(JSON.stringify(blockers, null, 2));
+        printJson(blockers);
       } else {
         if (blockers.length === 0) {
           console.log(chalk.dim("No blocking messages."));
@@ -714,7 +715,7 @@ export function registerMessagingCommands(program: Command): void {
       if (opts.clear) {
         const cleared = await getStore().markAllChannelNotificationsRead(agent, opts.channel);
         if (opts.json) {
-          console.log(JSON.stringify({ cleared, agent, channel: opts.channel || null }, null, 2));
+          printJson({ cleared, agent, channel: opts.channel || null });
         } else {
           console.log(chalk.green(`Cleared ${cleared} notification(s).`));
         }
@@ -732,7 +733,7 @@ export function registerMessagingCommands(program: Command): void {
       });
 
       if (opts.json) {
-        console.log(JSON.stringify(notifications, null, 2));
+        printJson(notifications);
       } else if (notifications.length === 0) {
         console.log(chalk.dim("No channel notifications."));
       } else {
@@ -946,7 +947,7 @@ export function registerMessagingCommands(program: Command): void {
       const info = await checkForUpdate();
       if (info.latest === null) {
         if (opts.json) {
-          console.log(JSON.stringify({ error: "Failed to check npm registry" }));
+          printJsonLine({ error: "Failed to check npm registry" });
         } else {
           console.error(chalk.red("Failed to check npm registry for updates."));
         }
@@ -957,7 +958,7 @@ export function registerMessagingCommands(program: Command): void {
 
       if (opts.check || !updateAvailable) {
         if (opts.json) {
-          console.log(JSON.stringify({ current, latest, updateAvailable }));
+          printJsonLine({ current, latest, updateAvailable });
         } else if (updateAvailable) {
           console.log(`Current version: ${chalk.yellow(current)}`);
           console.log(`Latest version:  ${chalk.green(latest)}`);
@@ -970,7 +971,7 @@ export function registerMessagingCommands(program: Command): void {
 
       // Install update
       if (opts.json) {
-        console.log(JSON.stringify({ current, latest, updateAvailable, status: "updating" }));
+        printJsonLine({ current, latest, updateAvailable, status: "updating" });
       } else {
         console.log(`Updating from ${chalk.yellow(current)} to ${chalk.green(latest)}...`);
       }
@@ -987,7 +988,7 @@ export function registerMessagingCommands(program: Command): void {
         }
       } else {
         if (opts.json) {
-          console.log(JSON.stringify({ error: "Update failed", exitCode }));
+          printJsonLine({ error: "Update failed", exitCode });
         } else {
           console.error(chalk.red(`\nUpdate failed (exit code ${exitCode})`));
         }

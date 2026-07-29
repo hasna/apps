@@ -8,6 +8,7 @@ import { previewText, windowItems } from "../../lib/compact-output.js";
 import { assertNoSensitiveContent } from "../../lib/content-safety.js";
 import { getCliWindow, pageFromQuery, printCompactFooter, queryLimitFor } from "../compact.js";
 import { printMessageEntry } from "../message-output.js";
+import { printJson, printJsonLine } from "../stdout.js";
 
 /**
  * Merge a channel class into existing channel metadata at `metadata.channel_schema.class`,
@@ -95,7 +96,7 @@ export function registerChannelCommands(program: Command): void {
           metadata: channelClass ? mergeChannelClassMetadata(null, channelClass) ?? undefined : undefined,
         });
         if (opts.json) {
-          console.log(JSON.stringify(sp, null, 2));
+          printJson(sp);
         } else {
           const clsLabel = channelClassOf(sp.metadata);
           console.log(chalk.green(`Channel #${sp.name} created`) + (clsLabel ? chalk.cyan(` [${clsLabel}]`) : "") + (sp.description ? chalk.dim(` — ${sp.description}`) : ""));
@@ -129,7 +130,7 @@ export function registerChannelCommands(program: Command): void {
       const page = windowItems(channels, window);
 
       if (opts.json) {
-        console.log(JSON.stringify(channels, null, 2));
+        printJson(channels);
       } else {
         if (channels.length === 0) {
           console.log(chalk.dim("No channels found."));
@@ -196,7 +197,7 @@ export function registerChannelCommands(program: Command): void {
       try {
         const sp = await getStore().updateChannel(channelName, updates);
         if (opts.json) {
-          console.log(JSON.stringify(sp, null, 2));
+          printJson(sp);
         } else {
           console.log(chalk.green(`Channel #${sp.name} updated.`));
         }
@@ -228,7 +229,7 @@ export function registerChannelCommands(program: Command): void {
       try {
         const sp = await getStore().renameChannel(channelName, target);
         if (opts.json) {
-          console.log(JSON.stringify(sp, null, 2));
+          printJson(sp);
         } else {
           console.log(chalk.green(`Channel renamed to #${sp.name}.`));
         }
@@ -254,7 +255,7 @@ export function registerChannelCommands(program: Command): void {
       try {
         const sp = await getStore().archiveChannel(channelName);
         if (opts.json) {
-          console.log(JSON.stringify(sp, null, 2));
+          printJson(sp);
         } else {
           console.log(chalk.green(`Channel #${sp.name} archived.`));
         }
@@ -280,7 +281,7 @@ export function registerChannelCommands(program: Command): void {
       try {
         const sp = await getStore().unarchiveChannel(channelName);
         if (opts.json) {
-          console.log(JSON.stringify(sp, null, 2));
+          printJson(sp);
         } else {
           console.log(chalk.green(`Channel #${sp.name} unarchived.`));
         }
@@ -344,7 +345,7 @@ export function registerChannelCommands(program: Command): void {
       }
 
       if (opts.json) {
-        console.log(JSON.stringify(msg, null, 2));
+        printJson(msg);
       } else {
         console.log(chalk.green(`Message sent to #${channelArg}`) + chalk.dim(` (id: ${msg.id})`));
       }
@@ -389,7 +390,7 @@ export function registerChannelCommands(program: Command): void {
       }
 
       if (opts.json) {
-        console.log(JSON.stringify(messages, null, 2));
+        printJson(messages);
       } else {
         if (messages.length === 0) {
           console.log(chalk.dim(`No messages in #${channelArg}.`));
@@ -434,7 +435,7 @@ export function registerChannelCommands(program: Command): void {
       }
 
       if (opts.json) {
-        console.log(JSON.stringify({ channel: channelArg, agent, joined: true }));
+        printJsonLine({ channel: channelArg, agent, joined: true });
       } else {
         console.log(chalk.green(`${agent} joined #${channelArg}`));
       }
@@ -463,7 +464,7 @@ export function registerChannelCommands(program: Command): void {
       const ok = await getStore().leaveChannel(channelArg, agent);
 
       if (opts.json) {
-        console.log(JSON.stringify({ channel: channelArg, agent, left: ok }));
+        printJsonLine({ channel: channelArg, agent, left: ok });
       } else {
         if (ok) {
           console.log(chalk.green(`${agent} left #${channelArg}`));
@@ -497,7 +498,7 @@ export function registerChannelCommands(program: Command): void {
       try {
         const subscription = await getStore().subscribeToChannelNotifications(channelArg, agent, { preview_chars: opts.previewChars });
         if (opts.json) {
-          console.log(JSON.stringify(subscription, null, 2));
+          printJson(subscription);
         } else {
           console.log(chalk.green(`${agent} subscribed to #${channelArg} notifications`) + chalk.dim(` (${subscription.preview_chars} chars)`));
         }
@@ -529,7 +530,7 @@ export function registerChannelCommands(program: Command): void {
 
       const unsubscribed = await getStore().unsubscribeFromChannelNotifications(channelArg, agent);
       if (opts.json) {
-        console.log(JSON.stringify({ channel: channelArg, agent, unsubscribed }));
+        printJsonLine({ channel: channelArg, agent, unsubscribed });
       } else if (unsubscribed) {
         console.log(chalk.green(`${agent} unsubscribed from #${channelArg} notifications`));
       } else {
@@ -561,7 +562,7 @@ export function registerChannelCommands(program: Command): void {
       const page = windowItems(subscriptions, window);
 
       if (opts.json) {
-        console.log(JSON.stringify(subscriptions, null, 2));
+        printJson(subscriptions);
       } else if (subscriptions.length === 0) {
         console.log(chalk.dim(`No notification subscriptions for ${agent}.`));
       } else {
@@ -598,7 +599,7 @@ export function registerChannelCommands(program: Command): void {
       const page = windowItems(members, window);
 
       if (opts.json) {
-        console.log(JSON.stringify(members, null, 2));
+        printJson(members);
       } else {
         if (members.length === 0) {
           console.log(chalk.dim(`No members in #${channelArg}.`));
