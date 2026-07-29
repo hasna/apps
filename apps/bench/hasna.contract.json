@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "package": "@hasna/bench",
+  "contracts": {
+    "emits": [
+      "hasna.cost_estimate.v1",
+      "hasna.evidence_ref.v1",
+      "hasna.proof_bundle.v1",
+      "hasna.validation_plan.v1",
+      "hasna.work_run.v1"
+    ]
+  },
+  "storage": {
+    "mode": "local",
+    "paths": [
+      "~/.hasna/bench"
+    ],
+    "waiver": {
+      "reason": "Benchmark runs, result segments, and artifact metadata require local persistence for offline CLI workflows."
+    }
+  }
+}
