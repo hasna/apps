@@ -21,6 +21,7 @@ describe("registerMessagingCommands", () => {
     expect(read).toBeDefined();
     expect(read?.options.some((o) => o.long === "--session")).toBe(true);
     expect(read?.options.some((o) => o.long === "--unread")).toBe(true);
+    expect(read?.options.some((o) => o.long === "--unread-only")).toBe(true);
   });
 
   test("registers show command", () => {

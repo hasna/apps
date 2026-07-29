@@ -65,7 +65,7 @@ describe("compact CLI output", () => {
     const marked = runCli(["read", "--to", "mark-target", "--limit", "1", "--mark-read"], "mark-target");
     expect(marked.exitCode).toBe(0);
 
-    const unread = runCli(["read", "--to", "mark-target", "--unread", "--json"], "mark-target");
+    const unread = runCli(["read", "--to", "mark-target", "--unread-only", "--json"], "mark-target");
     expect(unread.exitCode).toBe(0);
     const messages = JSON.parse(unread.stdout);
     expect(messages).toHaveLength(1);
