@@ -27,6 +27,8 @@ export type {
   RevisionMutationOptions,
 } from "./types";
 export { createLocalAccountsCapacityFromCatalog } from "./local";
+export { createReferenceAuthProvider } from "./auth";
+export type { AccountsCapacityCredentialResolver } from "./auth";
 
 /**
  * Deployment choice is explicit and immutable. A self-hosted error is returned

@@ -192,6 +192,7 @@ function validateAccount(input: unknown): Account {
     [
       "providerSubjectRef",
       "providerSubjectCandidateRef",
+      "providerSubjectRefRedacted",
       "providerDisplayHint",
       "ownershipEvidenceRef",
       "ownershipEvidenceIssuerRef",
@@ -211,6 +212,19 @@ function validateAccount(input: unknown): Account {
   if (value.providerSubjectCandidateRef !== undefined) {
     reference(value.providerSubjectCandidateRef, "providerSubjectCandidateRef");
   }
+  // The reader projection (redactEntity) removes both subject references and
+  // leaves this marker behind, so the one projection every read surface serves
+  // stays readable by the one validator. The marker is a presence bit, never a
+  // subject value: it may only appear once both references are gone, and
+  // cloneEntity refuses it so a projection can never re-enter the write path.
+  const subjectRedacted = value.providerSubjectRefRedacted !== undefined;
+  if (subjectRedacted) {
+    if (value.providerSubjectRefRedacted !== true) throw invalid("providerSubjectRefRedacted");
+    if (value.providerSubjectRef !== undefined || value.providerSubjectCandidateRef !== undefined) {
+      throw invalid("providerSubjectRefRedacted");
+    }
+  }
+  const subjectPresent = value.providerSubjectRef !== undefined || subjectRedacted;
   const ownershipFields = [
     "ownershipEvidenceRef",
     "ownershipEvidenceIssuerRef",
@@ -224,7 +238,7 @@ function validateAccount(input: unknown): Account {
   if (status === "pending") {
     if (value.providerSubjectRef !== undefined || ownershipCount !== 0) throw invalid("ownershipEvidenceRef");
   } else if (status === "active" || status === "suspended") {
-    if (value.providerSubjectRef === undefined || ownershipCount !== ownershipFields.length) {
+    if (!subjectPresent || ownershipCount !== ownershipFields.length) {
       throw invalid("ownershipEvidenceRef");
     }
   } else if (ownershipCount !== 0 && ownershipCount !== ownershipFields.length) {
@@ -240,7 +254,7 @@ function validateAccount(input: unknown): Account {
     ordered(value.ownershipEvidenceIssuedAt, value.ownershipEvidenceExpiresAt, "ownershipEvidenceExpiresAt");
     const generation = parseCounter(value.ownershipGeneration, "ownershipGeneration");
     if (generation === "0") throw invalid("ownershipGeneration");
-    if (value.providerSubjectRef === undefined || value.providerSubjectCandidateRef !== undefined) {
+    if (!subjectPresent || value.providerSubjectCandidateRef !== undefined) {
       throw invalid("providerSubjectRef");
     }
   }
@@ -720,6 +734,27 @@ export function validateEntity<K extends EntityKind>(kind: K, input: unknown): E
     case "credential_binding":
       return validateCredentialBinding(input) as EntityMap[K];
   }
+}
+
+/**
+ * The single reader projection for catalog records. Every read surface — HTTP,
+ * SDK, and CLI, in normal and --json output — serves this exact shape so a
+ * local and a self_hosted deployment emit the same record schema and neither
+ * discloses a provider subject value.
+ */
+export function redactEntity<K extends EntityKind>(
+  kind: K,
+  record: EntityMap[K],
+): Readonly<Record<string, unknown>> {
+  const safe = { ...(record as unknown as Record<string, unknown>) };
+  if (kind === "account") {
+    const hadSubject = safe.providerSubjectRef !== undefined || safe.providerSubjectCandidateRef !== undefined;
+    delete safe.providerSubjectRef;
+    delete safe.providerSubjectCandidateRef;
+    if (hadSubject) safe.providerSubjectRefRedacted = true;
+  }
+  assertNoSensitiveFields(safe);
+  return Object.freeze(safe);
 }
 
 export function validateEligibilityRequest(input: unknown): EligibilityRequest {

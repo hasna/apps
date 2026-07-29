@@ -183,6 +183,18 @@ export async function buildCredentialHandleExpectedClaims(
 }
 
 export function cloneEntity<K extends EntityKind>(kind: K, record: EntityMap[K]): EntityMap[K] {
+  // Every write funnels through here. The DTO validator accepts the reader
+  // projection's redaction marker so a read round-trips through the one
+  // validator; a marked record has lost its subject reference and must never be
+  // stored as though it still carried one.
+  if (
+    kind === "account" &&
+    Object.hasOwn(record as unknown as Record<string, unknown>, "providerSubjectRefRedacted")
+  ) {
+    throw new AccountsError("VALIDATION_FAILED", "A redacted account projection cannot be stored", {
+      details: { field: "providerSubjectRefRedacted" },
+    });
+  }
   const envelope = deserializeRecordEnvelope(serializeRecordEnvelope(kind, record));
   return envelope.data as EntityMap[K];
 }
