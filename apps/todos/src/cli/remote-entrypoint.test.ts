@@ -747,7 +747,7 @@ describe("remote CLI entrypoint authority boundary", () => {
     }
   }, 45_000);
 
-  test("built remote done persists every evidence field and rejects invalid confidence before requests", async () => {
+  test("built remote done/complete persists every evidence field and rejects invalid confidence before requests", async () => {
     const TASK_ID = "33333333-3333-4333-8333-333333333333";
     const requests: Array<{ method: string; path: string; body: Record<string, unknown> }> = [];
     let advertiseEvidence = false;
@@ -831,7 +831,7 @@ describe("remote CLI entrypoint authority boundary", () => {
       advertiseEvidence = true;
       requests.length = 0;
       const done = await runCli(executable, [
-        "--agent", "fixture-agent", "--json", "done", TASK_ID,
+        "--agent", "fixture-agent", "--json", "complete", TASK_ID,
         "--attach-ids", "attachment-one,attachment-two",
         "--files-changed", "src/a.ts,src/b.ts",
         "--test-results", "12 passed",
