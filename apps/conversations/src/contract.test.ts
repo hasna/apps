@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { validateServiceContractManifest } from "@hasna/contracts/service-contract";
 import contract from "../hasna.contract.json";
+import cursorMcp from "../.cursor/mcp.json";
 
 describe("hasna.contract.json", () => {
   test("is a valid service contract manifest", () => {
@@ -13,6 +14,12 @@ describe("hasna.contract.json", () => {
 
   test("declares the three service bins", () => {
     expect(contract.bins).toEqual(["conversations", "conversations-mcp", "conversations-serve"]);
+  });
+
+  test("registers the conversations MCP server with Cursor", () => {
+    expect(cursorMcp.mcpServers.conversations).toEqual({
+      command: "conversations-mcp",
+    });
   });
 
   test("pins the vendored storage kit version", () => {
