@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Removed the unused `@types/ws` runtime dependency and declared the supported
+  Bun and Node.js engine versions.
+
 ## 1.1.0 - 2026-07-24
 
 ### Added

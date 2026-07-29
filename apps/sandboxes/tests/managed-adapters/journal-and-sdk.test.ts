@@ -69,6 +69,7 @@ describe("managed package boundary", () => {
       scripts?: Record<string, unknown>
       types?: unknown
       dependencies?: Record<string, unknown>
+      engines?: Record<string, unknown>
     }
     expect(manifest.types).toBe("./dist/types/index.d.ts")
     // Canonical hasna/sandboxes publishes the reviewed managed-adapter root plus
@@ -107,7 +108,8 @@ describe("managed package boundary", () => {
       "migrations/disposable-task-journal",
       "migrations/durable-journal-witness",
     ])
-    expect(manifest.dependencies?.["@types/ws"]).toBe("8.18.1")
+    expect(manifest.dependencies?.["@types/ws"]).toBeUndefined()
+    expect(manifest.engines).toEqual({ bun: ">=1.1.7", node: ">=18" })
     expect(manifest.scripts?.prepack).toBe("bun run build")
     expect(managedPublicApi.DAYTONA_GUEST_BROKER_PTY_ID).toBe("hasna-sandboxes-broker-v1")
     expect(MANAGED_GUEST_BROKER_MAX_FRAME_BYTES).toBe(16 * 1024 * 1024)
