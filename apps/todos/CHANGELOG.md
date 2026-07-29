@@ -41,6 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **TypeScript control-flow checks are stricter.** Builds now enable
+  `noImplicitReturns` and `noFallthroughCasesInSwitch`.
 - **BREAKING (exit code): `todos doctor` exit codes are now a verdict.** `0` clean · `1`
   findings (any orphan/dangling reference, or an error-severity check) · `2` incomplete (no
   findings, but a condition could not be measured). Advisory warnings (stale `in_progress`
