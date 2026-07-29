@@ -17,10 +17,13 @@ import type { FeedbackTaskSink } from "./tasks.js";
 import {
   feedbackKinds,
   feedbackStatuses,
+  isFeedbackLinkageDelta,
   parseFeedbackInput,
+  parseFeedbackLinkageDelta,
   parseStoredFeedbackItem,
   truncateTaskError,
 } from "./validation.js";
+import type { FeedbackLinkageDelta } from "./validation.js";
 import {
   buildFeedbackCreatedEvent,
   buildFeedbackTriagedEvent,
@@ -179,6 +182,24 @@ export function createFeedbackStore(options: FeedbackStoreRuntimeOptions = {}): 
   throw new Error(runtime.blockers.join(" "));
 }
 
+/** Merge a field-level linkage patch onto an item. `null` clears a field. */
+function applyLinkageDelta(item: FeedbackItem, delta: FeedbackLinkageDelta): FeedbackItem {
+  const next: FeedbackItem = { ...item };
+  if (delta.taskRef !== undefined) {
+    if (delta.taskRef === null) delete next.taskRef;
+    else next.taskRef = delta.taskRef;
+  }
+  if (delta.taskError !== undefined) {
+    if (delta.taskError === null) delete next.taskError;
+    else next.taskError = delta.taskError;
+  }
+  if (delta.taskAttempt !== undefined) {
+    if (delta.taskAttempt === null) delete next.taskAttempt;
+    else next.taskAttempt = delta.taskAttempt;
+  }
+  return next;
+}
+
 function ensureParentDir(filePath: string): void {
   mkdirSync(dirname(filePath), { recursive: true });
 }
@@ -322,8 +343,21 @@ export class LocalFeedbackStore implements FeedbackStore {
    * deadline and dropped reports outright.
    */
   private async appendItem(item: FeedbackItem): Promise<void> {
+    await this.appendRecord(item);
+  }
+
+  /**
+   * Record task linkage as a field-level patch. Never append a whole-item
+   * snapshot for this: the snapshot predates task creation, and folding it as
+   * a full record would revert any status change that landed meanwhile.
+   */
+  private async appendDelta(delta: FeedbackLinkageDelta): Promise<void> {
+    await this.appendRecord(delta);
+  }
+
+  private async appendRecord(record: FeedbackItem | FeedbackLinkageDelta): Promise<void> {
     await withFileLock(this.filePath, async () => {
-      await appendFile(this.filePath, `${JSON.stringify(item)}\n`, "utf8");
+      await appendFile(this.filePath, `${JSON.stringify(record)}\n`, "utf8");
     });
   }
 
@@ -337,20 +371,33 @@ export class LocalFeedbackStore implements FeedbackStore {
    */
   private async attachTask(item: FeedbackItem): Promise<FeedbackItem> {
     if (!this.taskSink) return item;
-    let next: FeedbackItem;
+    let taskRef: FeedbackItem["taskRef"];
+    let taskError: string | undefined;
     try {
-      next = { ...item, taskRef: await this.taskSink.createTask(item), taskError: undefined };
+      taskRef = await this.taskSink.createTask(item);
     } catch (error) {
-      next = { ...item, taskError: truncateTaskError(error instanceof Error ? error.message : String(error)) };
+      taskError = truncateTaskError(error instanceof Error ? error.message : String(error));
     }
+
+    const delta: FeedbackLinkageDelta = taskRef
+      ? { patch: "task", id: item.id, taskRef, taskError: null }
+      : { patch: "task", id: item.id, taskError: taskError! };
+
     try {
-      await this.appendItem(next);
-    } catch {
-      // The linkage record could not be written. The report itself is already
-      // durable, and its attempt marker is on disk, so `sync-tasks` will
-      // report it as uncertain rather than silently duplicating the task.
+      await this.appendDelta(delta);
+    } catch (error) {
+      // The linkage record could not be written. Report what is actually on
+      // disk — claiming a taskRef we failed to persist would assert a
+      // durability we do not have. `sync-tasks` sees the attempt marker and
+      // reports it as uncertain rather than duplicating the task.
+      const detail = taskRef
+        ? `task ${taskRef.taskId} was created but its link could not be stored`
+        : "task creation failed and the failure could not be stored";
+      const message = error instanceof Error ? error.message : String(error);
+      return { ...item, taskRef: undefined, taskError: truncateTaskError(`${detail}: ${message}`) };
     }
-    return next;
+
+    return taskRef ? { ...item, taskRef, taskError: undefined } : { ...item, taskError };
   }
 
   /**
@@ -390,22 +437,19 @@ export class LocalFeedbackStore implements FeedbackStore {
 
     for (const item of batch) {
       const attempts = (item.taskAttempt?.attempts ?? 0) + 1;
-      const attempted: FeedbackItem = {
-        ...item,
-        taskAttempt: { startedAt: new Date().toISOString(), attempts },
-      };
+      const attempt = { startedAt: new Date().toISOString(), attempts };
       try {
-        await this.appendItem(attempted);
+        await this.appendDelta({ patch: "task", id: item.id, taskAttempt: attempt });
       } catch {
         // Best effort: a missing marker only costs us duplicate-detection.
       }
       try {
         const taskRef = await this.taskSink.createTask(item);
-        await this.appendItem({ ...attempted, taskRef, taskError: undefined });
+        await this.appendDelta({ patch: "task", id: item.id, taskRef, taskError: null });
         result.created += 1;
       } catch (error) {
         const message = truncateTaskError(error instanceof Error ? error.message : String(error));
-        await this.appendItem({ ...attempted, taskError: message }).catch(() => {});
+        await this.appendDelta({ patch: "task", id: item.id, taskError: message }).catch(() => {});
         result.failed += 1;
         result.errors.push(`${item.id}: ${message}`);
       }
@@ -503,7 +547,15 @@ export class LocalFeedbackStore implements FeedbackStore {
     for (const line of raw.split("\n")) {
       const trimmed = line.trim();
       if (!trimmed) continue;
-      const item = parseStoredFeedbackItem(JSON.parse(trimmed));
+      const record: unknown = JSON.parse(trimmed);
+      if (isFeedbackLinkageDelta(record)) {
+        const delta = parseFeedbackLinkageDelta(record);
+        const existing = byId.get(delta.id);
+        // A patch for an item we have not seen has nothing to merge onto.
+        if (existing) byId.set(delta.id, applyLinkageDelta(existing, delta));
+        continue;
+      }
+      const item = parseStoredFeedbackItem(record);
       byId.set(item.id, item);
     }
     return [...byId.values()];

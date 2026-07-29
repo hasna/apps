@@ -79,12 +79,39 @@ export function truncateTaskError(message: string): string {
  * written by an older or buggy version stays readable instead of taking the
  * whole file down with it.
  */
-const storedTaskErrorSchema = z
-  .preprocess(
-    (value) => (typeof value === "string" ? truncateTaskError(value) : value),
-    z.string().trim().min(1).max(FEEDBACK_TASK_ERROR_MAX_LENGTH),
-  )
-  .optional();
+const clampedTaskErrorSchema = z.preprocess(
+  (value) => (typeof value === "string" ? truncateTaskError(value) : value),
+  z.string().trim().min(1).max(FEEDBACK_TASK_ERROR_MAX_LENGTH),
+);
+
+const storedTaskErrorSchema = clampedTaskErrorSchema.optional();
+
+/**
+ * A field-level patch appended to the log to record task linkage.
+ *
+ * Linkage must NOT be written as a whole-item snapshot: the snapshot is taken
+ * before task creation, and with last-record-wins folding it would resurrect
+ * the stale status — silently erasing a `shipped` (and its `changelogRef`)
+ * that landed while the task was being created. A delta touches only the
+ * fields it names. `null` means "clear this field".
+ */
+export const feedbackLinkageDeltaSchema = z.object({
+  patch: z.literal("task"),
+  id: z.string().min(1),
+  taskRef: feedbackTaskRefSchema.nullable().optional(),
+  taskError: clampedTaskErrorSchema.nullable().optional(),
+  taskAttempt: feedbackTaskAttemptSchema.nullable().optional(),
+});
+
+export type FeedbackLinkageDelta = z.infer<typeof feedbackLinkageDeltaSchema>;
+
+export function isFeedbackLinkageDelta(value: unknown): boolean {
+  return Boolean(value && typeof value === "object" && (value as { patch?: unknown }).patch === "task");
+}
+
+export function parseFeedbackLinkageDelta(input: unknown): FeedbackLinkageDelta {
+  return feedbackLinkageDeltaSchema.parse(input);
+}
 
 export const feedbackItemSchema = feedbackInputSchema.extend({
   id: z.string().min(1),

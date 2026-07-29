@@ -15,13 +15,15 @@ async function tempDir(): Promise<string> {
  * exercises a lost LINKAGE write rather than a store that cannot write at all.
  */
 function failLinkageWriteOnly(store: LocalFeedbackStore): void {
-  const target = store as unknown as { appendItem: (item: unknown) => Promise<void> };
-  const real = target.appendItem.bind(store);
-  let appends = 0;
-  target.appendItem = async (item: unknown) => {
-    appends += 1;
-    if (appends > 1) throw new Error("disk full");
-    return real(item);
+  // Patch the shared low-level writer: the first record is the durable item,
+  // every later one is a linkage delta.
+  const target = store as unknown as { appendRecord: (record: unknown) => Promise<void> };
+  const real = target.appendRecord.bind(store);
+  let writes = 0;
+  target.appendRecord = async (record: unknown) => {
+    writes += 1;
+    if (writes > 1) throw new Error("disk full");
+    return real(record);
   };
 }
 
@@ -262,5 +264,87 @@ describe("append-only linkage log", () => {
     expect(await store.listFeedback()).toHaveLength(1); // ...but one logical item
     expect((await store.getFeedback(item.id))!.taskRef?.taskId).toBe("folded");
     expect(await store.stats()).toMatchObject({ total: 1 });
+  });
+});
+
+/**
+ * Regression of the P0-2 fix itself: appending a whole-item snapshot taken
+ * BEFORE task creation meant last-record-wins resurrected the stale status,
+ * silently erasing a concurrent `shipped` — including `changelogRef`, the one
+ * field that links a report to the thing that resolved it. Linkage must be
+ * written as a field-level delta, not a whole-record replacement.
+ */
+describe("regression: linkage must not revert a concurrent status change", () => {
+  test("a ship landing during task creation survives the linkage write", async () => {
+    const dataDir = await tempDir();
+    let store!: LocalFeedbackStore;
+    const sink: FeedbackTaskSink = {
+      provider: "todos",
+      async createTask(item): Promise<FeedbackTaskRef> {
+        // A triage/ship sweep landing mid-spawn — the reachable window.
+        await store.markFeedbackShipped(item.id, "v2.0.0#the-fix");
+        return { provider: "todos", taskId: "t-1", createdAt: new Date().toISOString() };
+      },
+    };
+    store = new LocalFeedbackStore({ dataDir, eventSink: null, taskSink: sink });
+    const item = await store.createFeedback({ appId: "app-a", message: "ship me" });
+
+    const fresh = new LocalFeedbackStore({ dataDir, eventSink: null, taskSink: null });
+    const reread = await fresh.getFeedback(item.id);
+    expect(reread?.status).toBe("shipped");
+    expect(reread?.changelogRef).toBe("v2.0.0#the-fix");
+    expect(reread?.shippedAt).toBeTruthy();
+    // ...and the task link still landed.
+    expect(reread?.taskRef?.taskId).toBe("t-1");
+  });
+
+  test("syncTasks does not revert status changes made during its sweep", async () => {
+    const dataDir = await tempDir();
+    const seed = new LocalFeedbackStore({ dataDir, eventSink: null, taskSink: null });
+    const a = await seed.createFeedback({ appId: "app-a", message: "one" });
+    await seed.createFeedback({ appId: "app-a", message: "two" });
+
+    let repair!: LocalFeedbackStore;
+    let shipped = false;
+    repair = new LocalFeedbackStore({
+      dataDir,
+      eventSink: null,
+      taskSink: {
+        provider: "todos",
+        async createTask(): Promise<FeedbackTaskRef> {
+          if (!shipped) {
+            shipped = true;
+            await repair.markFeedbackShipped(a.id, "v3.0.0#mid-sweep");
+          }
+          return { provider: "todos", taskId: "t", createdAt: new Date().toISOString() };
+        },
+      },
+    });
+    const result = await repair.syncTasks();
+    expect(result.created).toBe(2);
+
+    const reread = await new LocalFeedbackStore({ dataDir, eventSink: null, taskSink: null }).getFeedback(a.id);
+    expect(reread?.status).toBe("shipped");
+    expect(reread?.changelogRef).toBe("v3.0.0#mid-sweep");
+    expect(reread?.taskRef).toBeTruthy();
+  });
+
+  test("submit must not report a taskRef it failed to persist", async () => {
+    const dataDir = await tempDir();
+    const store = new LocalFeedbackStore({
+      dataDir,
+      eventSink: null,
+      taskSink: {
+        provider: "todos",
+        createTask: async () => ({ provider: "todos", taskId: "unpersisted", createdAt: new Date().toISOString() }),
+      },
+    });
+    failLinkageWriteOnly(store);
+    const item = await store.createFeedback({ appId: "app-a", message: "claims nothing false" });
+
+    // The returned value must not assert a durability it does not have.
+    expect(item.taskRef).toBeUndefined();
+    expect(item.taskError).toBeTruthy();
+    expect(item.taskError).toContain("unpersisted");
   });
 });

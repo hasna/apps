@@ -171,7 +171,16 @@ feedback sync-tasks   # -> {"sinkConfigured":true,"created":2,"failed":0,"skippe
 
 ### Storage shape
 
-The JSONL file is an **append-only log**: an item may appear more than once, and the last record for an id wins. Task linkage is recorded by appending, never by rewriting the file — rewriting it on the create path is O(n) under the data lock and, under concurrency, drops writes. `feedback status` and `feedback shipped` compact the log back to one record per item.
+The JSONL file is an **append-only log** with two kinds of record:
+
+- a **full item** — the whole feedback object, written once when it is submitted (and again when the log is compacted);
+- a **linkage patch** — `{"patch":"task","id":…,"taskRef":…}`, carrying only the task fields, where `null` clears a field.
+
+Reading folds the log by id: a full record replaces, a patch **merges field by field**. Task linkage is written as a patch rather than as a fresh snapshot of the whole item, and that distinction is load-bearing: the snapshot would be taken *before* task creation, so replaying it would resurrect the pre-task status and silently erase a `shipped` (and its `changelogRef`) that landed while the task was being created.
+
+Linkage is never written by rewriting the file. Rewriting on the create path is O(n) under the data lock and, under concurrency, drops writes outright. `feedback status` and `feedback shipped` compact the log back to one full record per item.
+
+A patch is small, but an untriaged store still carries roughly one extra record per item until something compacts it, and reads scale with records rather than items. That is fine at the scale this is built for; it is worth knowing before pointing it at a very large backlog.
 
 ### Distribution events
 
