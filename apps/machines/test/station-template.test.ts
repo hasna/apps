@@ -410,6 +410,26 @@ describe("drift check", () => {
     expect(item?.detail).toContain("StartLimitIntervalSec=10, convention is 300");
   });
 
+  test("drop-ins use systemd's lexicographic order when later assignments restore compliance", () => {
+    const { root, home, effective } = buildCleanFixture();
+    const unitDir = join(home, ".config/systemd/user");
+    const dropinDir = join(unitDir, "hasna-dropin-order.service.d");
+    mkdirSync(dropinDir, { recursive: true });
+    writeFileSync(
+      join(unitDir, "hasna-dropin-order.service"),
+      "[Unit]\nStartLimitIntervalSec=300\nStartLimitBurst=5\nOnFailure=hasna-unit-failure-notify@%n.service\n[Service]\nExecStart=/bin/true\n"
+    );
+    // Create these opposite to their systemd order. The 10- drop-in makes the
+    // unit noncompliant, then the lexicographically later 90- drop-in fixes it.
+    // Reading them in creation/readdir order would reverse the verdict.
+    writeFileSync(join(dropinDir, "90-restore.conf"), "[Unit]\nStartLimitIntervalSec=300\n");
+    writeFileSync(join(dropinDir, "10-lower.conf"), "[Unit]\nStartLimitIntervalSec=10\n");
+
+    const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: null });
+    expect(result.items.find((candidate) => candidate.id === "unit:hasna-dropin-order.service")?.status).toBe("ok");
+    expect(result.verdict).toBe("clean");
+  });
+
   test("OnFailure= reset in a drop-in drops the convention target (systemd list semantics)", () => {
     const { root, home, effective } = buildCleanFixture();
     const unitDir = join(home, ".config/systemd/user");
