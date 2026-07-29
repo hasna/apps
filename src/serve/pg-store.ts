@@ -30,6 +30,7 @@ import type {
   WorkspaceEventRow,
   WorkspaceIntegrations,
   WorkspaceKind,
+  WorkspaceLocation,
   WorkspaceRow,
   WorkspaceStatus,
 } from "../types/workspace.js";
@@ -125,6 +126,21 @@ function rowToWorkspace(row: WorkspaceRow): Workspace {
     status: row.status as WorkspaceStatus,
     tags: parseJson<string[]>(row.tags, []),
     integrations: parseJson<WorkspaceIntegrations>(row.integrations, {}),
+    metadata: parseJson<JsonObject>(row.metadata, {}),
+  };
+}
+
+type PgWorkspaceLocationRow = Omit<WorkspaceLocation, "is_primary" | "exists_at_create" | "metadata"> & {
+  is_primary: boolean;
+  exists_at_create: boolean;
+  metadata: string;
+};
+
+function rowToWorkspaceLocation(row: PgWorkspaceLocationRow): WorkspaceLocation {
+  return {
+    ...row,
+    is_primary: Boolean(row.is_primary),
+    exists_at_create: Boolean(row.exists_at_create),
     metadata: parseJson<JsonObject>(row.metadata, {}),
   };
 }
@@ -486,6 +502,7 @@ export class ProjectsPgStore {
     if (input.status !== undefined) set("status", input.status);
     if (input.root_id !== undefined) set("root_id", input.root_id ? root!.id : null);
     if (input.recipe_id !== undefined) set("recipe_id", input.recipe_id ? recipe!.id : null);
+    if (input.canonical_machine !== undefined) set("canonical_machine", input.canonical_machine);
     if (input.primary_path !== undefined) set("primary_path", input.primary_path ?? null);
     if (input.git_remote !== undefined) set("git_remote", input.git_remote);
     if (input.s3_bucket !== undefined) set("s3_bucket", input.s3_bucket);
@@ -551,6 +568,14 @@ export class ProjectsPgStore {
       [workspaceId, Math.min(Math.max(limit, 1), 1000)],
     );
     return rows.map(rowToEvent);
+  }
+
+  async listWorkspaceLocations(workspaceId: string): Promise<WorkspaceLocation[]> {
+    const rows = await this.db.many<PgWorkspaceLocationRow>(
+      "SELECT * FROM workspace_locations WHERE workspace_id = $1 ORDER BY is_primary DESC, created_at ASC",
+      [workspaceId],
+    );
+    return rows.map(rowToWorkspaceLocation);
   }
 
   async recordEvent(input: RecordWorkspaceEventInput): Promise<WorkspaceEvent> {

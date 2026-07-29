@@ -793,6 +793,141 @@ describe("project-first CLI surface", () => {
     expect(showText).toContain("tool calls (1):");
   });
 
+  test("where reports the canonical machine/path and every registered mirror", () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-where-"));
+    const dbPath = join(root, "projects.db");
+    const projectPath = join(root, "hasna-mailery-2");
+    const mirrorPath = join(root, "mirror", "hasna-mailery-2");
+    const env = { HASNA_PROJECTS_DB_PATH: dbPath };
+    const db = new Database(dbPath);
+    db.run("PRAGMA foreign_keys=ON");
+    runMigrations(db);
+    const project = createWorkspace({
+      name: "Hasna Mailery 2",
+      slug: "hasna-mailery-2",
+      primary_path: projectPath,
+    }, db);
+    db.run("UPDATE workspaces SET canonical_machine = ? WHERE id = ?", ["spark02", project.id]);
+    db.run("DELETE FROM workspace_locations WHERE workspace_id = ?", [project.id]);
+    db.run(
+      `INSERT INTO workspace_locations
+        (id, workspace_id, path, machine_id, label, kind, is_primary, exists_at_create, metadata, created_at)
+       VALUES (?, ?, ?, ?, ?, 'local', 1, 1, '{}', datetime('now')),
+              (?, ?, ?, ?, ?, 'local', 0, 1, '{}', datetime('now'))`,
+      [
+        "loc_where_canonical", project.id, projectPath, "spark02", "main",
+        "loc_where_mirror", project.id, mirrorPath, "spark01", "mirror",
+      ],
+    );
+    db.close();
+
+    try {
+      const jsonResult = runProjects(["where", "hasna-mailery-2", "--json"], env);
+      expect(jsonResult.exitCode).toBe(0);
+      const payload = JSON.parse(text(jsonResult.stdout)) as {
+        canonical_machine: string;
+        canonical_path: string;
+        mirrors: Array<{ machine: string; path: string; label: string }>;
+        locations: Array<{ machine: string; path: string; label: string; role: string }>;
+      };
+      expect(payload.canonical_machine).toBe("spark02");
+      expect(payload.canonical_path).toBe(projectPath);
+      expect(payload.mirrors).toEqual([{ machine: "spark01", path: mirrorPath, label: "mirror" }]);
+      expect(payload.locations).toEqual([
+        { machine: "spark02", path: projectPath, label: "canonical", role: "canonical" },
+        { machine: "spark01", path: mirrorPath, label: "mirror", role: "mirror" },
+      ]);
+
+      const human = runProjects(["where", "hasna-mailery-2"], env);
+      expect(human.exitCode).toBe(0);
+      expect(text(human.stdout)).toContain(`canonical\tspark02\t${projectPath}`);
+      expect(text(human.stdout)).toContain(`mirror\tspark01\t${mirrorPath}\tmirror`);
+
+      const agent = runProjects(["where", "hasna-mailery-2", "--for-agent"], env);
+      expect(agent.exitCode).toBe(0);
+      expect(text(agent.stdout)).toContain("canonical_machine: spark02");
+      expect(text(agent.stdout)).toContain(`machine=spark01 path=${mirrorPath} label=mirror`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("assign-machines balances active projects, uses activity, and preserves pins", () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-assign-machines-"));
+    const dbPath = join(root, "projects.db");
+    const env = { HASNA_PROJECTS_DB_PATH: dbPath };
+    const db = new Database(dbPath);
+    db.run("PRAGMA foreign_keys=ON");
+    runMigrations(db);
+    const projects = Array.from({ length: 9 }, (_, index) => createWorkspace({
+      name: `Machine Fixture ${index}`,
+      slug: `machine-fixture-${index}`,
+      primary_path: join(root, `project-${index}`),
+    }, db));
+    db.run("UPDATE workspaces SET canonical_machine = 'alpha' WHERE id = ?", [projects[0]!.id]);
+    db.run("UPDATE workspaces SET canonical_machine = 'spark02' WHERE id = ?", [projects[1]!.id]);
+    db.run("UPDATE workspaces SET last_opened_at = '2026-07-29 12:00:00' WHERE id = ?", [projects[8]!.id]);
+    db.run(
+      `INSERT INTO agent_runs
+        (id, workspace_id, prompt, status, tool_calls_json, metadata, started_at)
+       VALUES ('run_machine_fixture', ?, 'fixture', 'completed', '[]', '{}', '2026-07-29 12:01:00')`,
+      [projects[8]!.id],
+    );
+    db.close();
+
+    try {
+      const dryRun = runProjects(["assign-machines", "--pool", "alpha,beta,gamma", "--dry-run", "--json"], env);
+      expect(dryRun.exitCode).toBe(0);
+      const plan = JSON.parse(text(dryRun.stdout)) as {
+        dry_run: boolean;
+        pool_counts: Record<string, number>;
+        assignments: Array<{
+          slug: string;
+          previous_machine: string | null;
+          canonical_machine: string;
+          pinned: boolean;
+          activity: { run_count: number; last_opened_at: string | null };
+        }>;
+      };
+      expect(plan.dry_run).toBe(true);
+      expect(plan.assignments.find((item) => item.slug === "machine-fixture-0")).toMatchObject({
+        previous_machine: "alpha",
+        canonical_machine: "alpha",
+        pinned: true,
+      });
+      expect(plan.assignments.find((item) => item.slug === "machine-fixture-1")).toMatchObject({
+        previous_machine: "spark02",
+        canonical_machine: "spark02",
+        pinned: true,
+      });
+      expect(plan.assignments.find((item) => item.slug === "machine-fixture-8")?.activity).toMatchObject({
+        run_count: 1,
+        last_opened_at: "2026-07-29 12:00:00",
+      });
+      const plannedCounts = Object.values(plan.pool_counts);
+      expect(Math.max(...plannedCounts) - Math.min(...plannedCounts)).toBeLessThanOrEqual(1);
+
+      const afterDryRun = new Database(dbPath);
+      expect((afterDryRun.query("SELECT canonical_machine FROM workspaces WHERE id = ?").get(projects[8]!.id) as { canonical_machine: string | null }).canonical_machine).toBeNull();
+      afterDryRun.close();
+
+      const apply = runProjects(["assign-machines", "--pool", "alpha,beta,gamma", "--json"], env);
+      expect(apply.exitCode).toBe(0);
+      expect((JSON.parse(text(apply.stdout)) as { dry_run: boolean }).dry_run).toBe(false);
+
+      const afterApply = new Database(dbPath);
+      const rows = afterApply.query("SELECT slug, canonical_machine FROM workspaces ORDER BY slug").all() as Array<{ slug: string; canonical_machine: string | null }>;
+      afterApply.close();
+      expect(rows.find((row) => row.slug === "machine-fixture-0")?.canonical_machine).toBe("alpha");
+      expect(rows.find((row) => row.slug === "machine-fixture-1")?.canonical_machine).toBe("spark02");
+      expect(rows.filter((row) => row.slug !== "machine-fixture-1").every((row) => ["alpha", "beta", "gamma"].includes(row.canonical_machine ?? ""))).toBe(true);
+      const appliedCounts = ["alpha", "beta", "gamma"].map((machine) => rows.filter((row) => row.canonical_machine === machine).length);
+      expect(Math.max(...appliedCounts) - Math.min(...appliedCounts)).toBeLessThanOrEqual(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("top-level create, list, and show use project-first JSON", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-surface-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };

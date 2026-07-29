@@ -296,6 +296,14 @@ export const MIGRATIONS: string[] = [
 
   INSERT OR IGNORE INTO _migrations (id) VALUES (6);
   `,
+
+  // Migration 7: Canonical machine assignment for project placement
+  `
+  ALTER TABLE workspaces ADD COLUMN canonical_machine TEXT;
+  CREATE INDEX IF NOT EXISTS idx_workspaces_canonical_machine ON workspaces(canonical_machine);
+
+  INSERT OR IGNORE INTO _migrations (id) VALUES (7);
+  `,
 ];
 
 export function runMigrations(db: Database): void {

@@ -843,6 +843,7 @@ export function updateWorkspace(id: string, input: UpdateWorkspaceInput, db?: Da
   if (input.status !== undefined) set("status", input.status);
   if (input.root_id !== undefined) set("root_id", input.root_id);
   if (input.recipe_id !== undefined) set("recipe_id", input.recipe_id);
+  if (input.canonical_machine !== undefined) set("canonical_machine", input.canonical_machine);
   if (input.primary_path !== undefined) set("primary_path", input.primary_path ? resolve(input.primary_path) : null);
   if (input.git_remote !== undefined) set("git_remote", input.git_remote);
   if (input.s3_bucket !== undefined) set("s3_bucket", input.s3_bucket);

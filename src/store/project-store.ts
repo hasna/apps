@@ -262,10 +262,7 @@ export interface ProjectStore {
   getProjectAgents(id: string): Promise<WorkspaceAgentAssignment[]>;
   /** Assign a registered agent to a project role. Local-only (throws in api mode). */
   assignAgent(idOrSlug: string, input: AssignAgentInput): Promise<WorkspaceAgentAssignment>;
-  /**
-   * Per-project registered locations. On-box sub-resource; the api transport
-   * does not model it server-side and returns an empty list.
-   */
+  /** Per-project registered locations. Readable from both registry transports. */
   getProjectLocations(id: string): Promise<WorkspaceLocation[]>;
   /** Register another on-disk location for a project. Local-only (throws in api mode). */
   addLocation(idOrSlug: string, input: AddLocationInput): Promise<AddLocationResult>;
@@ -819,8 +816,8 @@ class ApiProjectStore implements ProjectStore {
     return (raw as { event?: WorkspaceEvent }).event ?? (raw as WorkspaceEvent);
   }
 
-  // Per-project agents/locations are on-box sub-resources that the projects
-  // API server does not model; the cloud detail view omits them by design.
+  // Per-project agent assignments remain on-box. Registered locations are
+  // registry data and have a read endpoint so placement queries work remotely.
   async getProjectAgents(): Promise<WorkspaceAgentAssignment[]> {
     return [];
   }
@@ -829,8 +826,11 @@ class ApiProjectStore implements ProjectStore {
     throw new LocalOnlyOperationError("assign agent to project");
   }
 
-  async getProjectLocations(): Promise<WorkspaceLocation[]> {
-    return [];
+  async getProjectLocations(id: string): Promise<WorkspaceLocation[]> {
+    const raw = await this.client.transport.get<{ locations?: WorkspaceLocation[] }>(
+      `/projects/${encodeURIComponent(id)}/locations`,
+    );
+    return raw.locations ?? [];
   }
 
   async addLocation(): Promise<AddLocationResult> {

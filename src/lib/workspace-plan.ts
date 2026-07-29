@@ -220,6 +220,7 @@ function plannedWorkspace(input: WorkspaceCreationPlanInput, db?: Database): {
     status: "active" as const,
     root_id: root?.id ?? null,
     recipe_id: recipe?.id ?? null,
+    canonical_machine: null,
     primary_path: primaryPath,
     git_remote: input.git_remote ?? null,
     s3_bucket: input.s3_bucket ?? null,

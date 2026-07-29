@@ -16,6 +16,7 @@ function fakeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
     status: "active",
     root_id: null,
     recipe_id: null,
+    canonical_machine: null,
     primary_path: null,
     git_remote: null,
     s3_bucket: null,

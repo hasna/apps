@@ -13,6 +13,7 @@ function workspace(slug = "runtime-project"): Workspace {
     status: "active",
     root_id: null,
     recipe_id: null,
+    canonical_machine: null,
     primary_path: "/tmp/runtime-project",
     git_remote: null,
     s3_bucket: null,

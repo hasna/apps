@@ -212,6 +212,7 @@ export interface Workspace {
   status: WorkspaceStatus;
   root_id: string | null;
   recipe_id: string | null;
+  canonical_machine: string | null;
   primary_path: string | null;
   git_remote: string | null;
   s3_bucket: string | null;
@@ -234,6 +235,7 @@ export interface WorkspaceRow {
   status: string;
   root_id: string | null;
   recipe_id: string | null;
+  canonical_machine: string | null;
   primary_path: string | null;
   git_remote: string | null;
   s3_bucket: string | null;
@@ -276,6 +278,7 @@ export interface UpdateWorkspaceInput {
   status?: WorkspaceStatus;
   root_id?: string | null;
   recipe_id?: string | null;
+  canonical_machine?: string | null;
   primary_path?: string | null;
   git_remote?: string | null;
   s3_bucket?: string | null;

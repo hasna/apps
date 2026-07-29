@@ -136,6 +136,7 @@ function previewToWorkspace(preview: WorkspaceImportPreview): Workspace {
     status: "active",
     root_id: preview.root_id ?? null,
     recipe_id: null,
+    canonical_machine: null,
     primary_path: preview.path,
     git_remote: preview.git_remote ?? null,
     s3_bucket: null,

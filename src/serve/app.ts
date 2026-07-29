@@ -176,6 +176,11 @@ async function route(
       const events = await store.listWorkspaceEvents(ws.id, limit ? Number(limit) : undefined);
       return jsonResponse({ events, count: events.length });
     }
+    if (sub === "locations" && method === "GET") {
+      const ws = await store.requireWorkspace(id);
+      const locations = await store.listWorkspaceLocations(ws.id);
+      return jsonResponse({ locations, count: locations.length });
+    }
     if (sub === "events" && method === "POST") {
       const ws = await store.requireWorkspace(id);
       const body = await readJsonBody(req);
