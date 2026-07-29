@@ -187,6 +187,105 @@ describe("agent adapters", () => {
     }
   });
 
+  test("retries transient fast codewith agent start exits inside one run", async () => {
+    const binDir = mkdtempSync(join(tmpdir(), "loops-codewith-start-retry-"));
+    const invocationsFile = join(binDir, "invocations");
+    const attemptsFile = join(binDir, "attempts");
+    const fake = join(binDir, "codewith");
+    await Bun.write(
+      fake,
+      [
+        "#!/usr/bin/env bash",
+        "printf '%s\\0' \"$@\" >> \"$OPENLOOPS_FAKE_CODEWITH_INVOCATIONS\"",
+        "printf '\\n' >> \"$OPENLOOPS_FAKE_CODEWITH_INVOCATIONS\"",
+        "if [[ \" $* \" == *\" exec \"* ]]; then",
+        "  attempt=0",
+        "  if [[ -f \"$OPENLOOPS_FAKE_CODEWITH_ATTEMPTS\" ]]; then attempt=\"$(cat \"$OPENLOOPS_FAKE_CODEWITH_ATTEMPTS\")\"; fi",
+        "  attempt=$((attempt + 1))",
+        "  printf '%s' \"$attempt\" > \"$OPENLOOPS_FAKE_CODEWITH_ATTEMPTS\"",
+        "  if [[ \"$attempt\" -lt 3 ]]; then",
+        "    echo 'codewith agent start exited with code 1' >&2",
+        "    exit 1",
+        "  fi",
+        "  printf '%s\\n' '{\"type\":\"task_complete\"}'",
+        "  printf 'stdin:'",
+        "  cat",
+        "  exit 0",
+        "fi",
+        "printf 'unexpected codewith invocation: %s\\n' \"$*\" >&2",
+        "exit 64",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(fake, 0o755);
+
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "codewith-start-retry-agent",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "agent",
+          provider: "codewith",
+          prompt: "say ok",
+          cwd: ".",
+          configIsolation: "safe",
+        },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, {
+        env: {
+          ...process.env,
+          PATH: `${binDir}:${process.env.PATH}`,
+          OPENLOOPS_FAKE_CODEWITH_ATTEMPTS: attemptsFile,
+          OPENLOOPS_FAKE_CODEWITH_INVOCATIONS: invocationsFile,
+        },
+      });
+      expect(result.status).toBe("succeeded");
+      expect(result.stdout).toContain("task_complete");
+      const execInvocations = codewithInvocations(invocationsFile).filter((args) => args.includes("exec"));
+      expect(execInvocations).toHaveLength(3);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("does not retry ordinary codewith exec failures", async () => {
+    const binDir = mkdtempSync(join(tmpdir(), "loops-codewith-no-retry-"));
+    const invocationsFile = join(binDir, "invocations");
+    await fakeCodewith(binDir, invocationsFile, {
+      execExitCode: 1,
+      execStdout: "ordinary provider failure",
+    });
+
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "codewith-ordinary-failure",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "agent",
+          provider: "codewith",
+          prompt: "say ok",
+          cwd: ".",
+          configIsolation: "safe",
+        },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, {
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, OPENLOOPS_FAKE_CODEWITH_INVOCATIONS: invocationsFile },
+      });
+      expect(result.status).toBe("failed");
+      expect(result.error).toContain("process exited with code 1");
+      const execInvocations = codewithInvocations(invocationsFile).filter((args) => args.includes("exec"));
+      expect(execInvocations).toHaveLength(1);
+    } finally {
+      store.close();
+    }
+  });
+
   test("reconciles failed codewith exec status when jsonl later emits task_complete", async () => {
     const binDir = mkdtempSync(join(tmpdir(), "loops-codewith-reconcile-"));
     const invocationsFile = join(binDir, "invocations");

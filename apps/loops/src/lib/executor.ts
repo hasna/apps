@@ -31,14 +31,16 @@ const DEFAULT_MAX_OUTPUT_BYTES = 256 * 1024;
 const DEFAULT_AGENT_IDLE_TIMEOUT_MS = 30 * 60_000;
 /**
  * Providers whose CLIs emit no incremental output (claude/opencode/aicopilot
- * print a single JSON document on completion) or whose progress fingerprint
- * can legitimately stay constant during long work (codewith durable agents).
+ * print a single JSON document on completion) or whose JSONL output can stay
+ * quiet for long stretches (codewith exec).
  * Output-idle is a weak progress signal there, so the default watchdog gets a
  * much larger budget; it still reaps genuinely hung processes eventually.
  */
 const BUFFERED_OUTPUT_PROVIDERS: ReadonlySet<AgentProvider> = new Set(["claude", "codewith", "opencode", "aicopilot"]);
 const DEFAULT_BUFFERED_AGENT_IDLE_TIMEOUT_MS = 4 * 60 * 60_000;
 const WORKTREE_GIT_TIMEOUT_MS = 5 * 60_000;
+const CODEWITH_START_FAST_FAILURE_MAX_MS = 2_000;
+const CODEWITH_START_RETRY_DELAYS_MS = [250, 750] as const;
 
 export interface SpawnedProcessInfo {
   pid: number;
@@ -218,6 +220,48 @@ function codewithJsonlHasTerminalSuccess(stdout: string): boolean {
 
 function codewithJsonlReconciledSuccess(spec: CommandSpec, fields: ResultFields): boolean {
   return spec.agentProvider === "codewith" && codewithJsonlHasTerminalSuccess(fields.stdout ?? "");
+}
+
+function codewithStartFailureLooksTransient(detail: string): boolean {
+  const normalized = detail.trim();
+  if (!normalized) return false;
+  return /(?:codewith\s+agent\s+start\s+exited\s+with\s+code\s+1|agent\s+start\s+exited\s+with\s+code\s+1|SQLITE_BUSY|database is locked|Resource temporarily unavailable)/i.test(
+    normalized,
+  );
+}
+
+function shouldRetryCodewithStartFailure(
+  spec: CommandSpec,
+  fields: ResultFields,
+  error: string | undefined,
+  attemptStartedAt: string,
+  attemptFinishedAt: string,
+  attemptIndex: number,
+): boolean {
+  if (attemptIndex >= CODEWITH_START_RETRY_DELAYS_MS.length) return false;
+  if (spec.agentProvider !== "codewith") return false;
+  if (error || fields.exitCode !== 1) return false;
+  if (codewithJsonlHasTerminalSuccess(fields.stdout ?? "")) return false;
+  const durationMs = new Date(attemptFinishedAt).getTime() - new Date(attemptStartedAt).getTime();
+  if (!Number.isFinite(durationMs) || durationMs > CODEWITH_START_FAST_FAILURE_MAX_MS) return false;
+  return codewithStartFailureLooksTransient(`${fields.stderr ?? ""}\n${fields.stdout ?? ""}`);
+}
+
+async function waitForRetryDelay(delayMs: number, signal: AbortSignal | undefined): Promise<boolean> {
+  if (signal?.aborted) return false;
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, delayMs);
+    timer.unref();
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true },
+    );
+  });
+  return !signal?.aborted;
 }
 
 function notifySpawn(pid: number | undefined, opts: ExecuteOptions): void {
@@ -1048,8 +1092,7 @@ async function enterWorktree(
  * Rebuilds an agent command spec against the original checkout after an
  * auto-mode worktree fallback. Mutating `spec.cwd` alone is not enough:
  * codewith/codex/opencode/aicopilot bake the worktree cwd into argv
- * (`--cd`/`--cwd`/`--dir`), and codewith durable agents rebuild their
- * start/control args from the recorded target.
+ * (`--cd`/`--cwd`/`--dir`).
  */
 function worktreeFallbackSpec(spec: CommandSpec, fallbackCwd: string): CommandSpec | undefined {
   const invocation = spec.invocationForCwd?.(fallbackCwd);
@@ -1098,12 +1141,6 @@ async function executeRemoteSpec(
 ): Promise<ExecutorResult> {
   const maxOutputBytes = opts.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
   const startedAt = nowIso();
-  const stdout = new BoundedOutputBuffer(maxOutputBytes);
-  const stderr = new BoundedOutputBuffer(maxOutputBytes);
-  let timedOut = false;
-  let idleTimedOut = false;
-  let exitCode: number | undefined;
-  let error: string | undefined;
   let plan: MachineCommandPlan;
   let script: string;
 
@@ -1114,85 +1151,101 @@ async function executeRemoteSpec(
     return failureResult(startedAt, err instanceof Error ? err.message : String(err));
   }
 
-  const child = spawn(plan.command, plan.args, {
-    env: transportEnv(opts),
-    detached: true,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-  notifySpawn(child.pid, opts);
+  for (let attemptIndex = 0; ; attemptIndex += 1) {
+    const attemptStartedAt = attemptIndex === 0 ? startedAt : nowIso();
+    const stdout = new BoundedOutputBuffer(maxOutputBytes);
+    const stderr = new BoundedOutputBuffer(maxOutputBytes);
+    let timedOut = false;
+    let idleTimedOut = false;
+    let exitCode: number | undefined;
+    let error: string | undefined;
 
-  child.stdin?.on("error", (err: NodeJS.ErrnoException) => {
-    if (err.code !== "EPIPE") error = err.message;
-  });
-  child.stdin?.end(script);
+    const child = spawn(plan.command, plan.args, {
+      env: transportEnv(opts),
+      detached: true,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    notifySpawn(child.pid, opts);
 
-  const abortHandler = (): void => {
-    error = "cancelled";
-    if (child.pid) killProcessGroup(child.pid);
-  };
-  if (opts.signal?.aborted) abortHandler();
-  opts.signal?.addEventListener("abort", abortHandler, { once: true });
+    child.stdin?.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code !== "EPIPE") error = err.message;
+    });
+    child.stdin?.end(script);
 
-  const timer =
-    typeof spec.timeoutMs === "number"
-      ? setTimeout(() => {
-          timedOut = true;
-          if (child.pid) killProcessGroup(child.pid);
-        }, spec.timeoutMs)
-      : undefined;
-  timer?.unref();
-  let idleTimer: NodeJS.Timeout | undefined;
-  const resetIdleTimer = (): void => {
-    if (!spec.idleTimeoutMs) return;
-    if (idleTimer) clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => {
-      idleTimedOut = true;
+    const abortHandler = (): void => {
+      error = "cancelled";
       if (child.pid) killProcessGroup(child.pid);
-    }, spec.idleTimeoutMs);
-    idleTimer.unref();
-  };
-  resetIdleTimer();
+    };
+    if (opts.signal?.aborted) abortHandler();
+    opts.signal?.addEventListener("abort", abortHandler, { once: true });
 
-  // Persistent-decoder encoding keeps multi-byte UTF-8 sequences split across
-  // pipe chunks intact (see BoundedOutputBuffer).
-  child.stdout?.setEncoding("utf8");
-  child.stderr?.setEncoding("utf8");
-  child.stdout?.on("data", (chunk: string) => {
-    stdout.append(chunk);
+    const timer =
+      typeof spec.timeoutMs === "number"
+        ? setTimeout(() => {
+            timedOut = true;
+            if (child.pid) killProcessGroup(child.pid);
+          }, spec.timeoutMs)
+        : undefined;
+    timer?.unref();
+    let idleTimer: NodeJS.Timeout | undefined;
+    const resetIdleTimer = (): void => {
+      if (!spec.idleTimeoutMs) return;
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        idleTimedOut = true;
+        if (child.pid) killProcessGroup(child.pid);
+      }, spec.idleTimeoutMs);
+      idleTimer.unref();
+    };
     resetIdleTimer();
-  });
-  child.stderr?.on("data", (chunk: string) => {
-    stderr.append(chunk);
-    resetIdleTimer();
-  });
 
-  try {
-    const [code, signal] = (await once(child, "exit")) as [number | null, NodeJS.Signals | null];
-    if (typeof code === "number") exitCode = code;
-    if (signal) error = `terminated by ${signal}`;
-  } catch (err) {
-    error = err instanceof Error ? err.message : String(err);
-  } finally {
-    if (timer) clearTimeout(timer);
-    if (idleTimer) clearTimeout(idleTimer);
-    opts.signal?.removeEventListener("abort", abortHandler);
-  }
+    // Persistent-decoder encoding keeps multi-byte UTF-8 sequences split across
+    // pipe chunks intact (see BoundedOutputBuffer).
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      stdout.append(chunk);
+      resetIdleTimer();
+    });
+    child.stderr?.on("data", (chunk: string) => {
+      stderr.append(chunk);
+      resetIdleTimer();
+    });
 
-  const fields: ResultFields = { exitCode, stdout: stdout.value(), stderr: stderr.value(), pid: child.pid };
-  if (timedOut || idleTimedOut) {
-    return timeoutResult(
-      startedAt,
-      idleTimedOut ? `idle timed out after ${spec.idleTimeoutMs}ms without stdout/stderr` : `timed out after ${spec.timeoutMs}ms`,
-      fields,
-    );
-  }
-  if (!error && exitCode !== 0 && codewithJsonlReconciledSuccess(spec, fields)) {
+    try {
+      const [code, signal] = (await once(child, "exit")) as [number | null, NodeJS.Signals | null];
+      if (typeof code === "number") exitCode = code;
+      if (signal) error = `terminated by ${signal}`;
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (idleTimer) clearTimeout(idleTimer);
+      opts.signal?.removeEventListener("abort", abortHandler);
+    }
+
+    const attemptFinishedAt = nowIso();
+    const fields: ResultFields = { exitCode, stdout: stdout.value(), stderr: stderr.value(), pid: child.pid, finishedAt: attemptFinishedAt };
+    if (timedOut || idleTimedOut) {
+      return timeoutResult(
+        startedAt,
+        idleTimedOut ? `idle timed out after ${spec.idleTimeoutMs}ms without stdout/stderr` : `timed out after ${spec.timeoutMs}ms`,
+        fields,
+      );
+    }
+    if (!error && exitCode !== 0 && codewithJsonlReconciledSuccess(spec, fields)) {
+      return successResult(startedAt, fields);
+    }
+    if (error || exitCode !== 0) {
+      if (shouldRetryCodewithStartFailure(spec, fields, error, attemptStartedAt, attemptFinishedAt, attemptIndex)) {
+        opts.log?.(`retrying codewith agent after transient fast start failure (${attemptIndex + 1}/${CODEWITH_START_RETRY_DELAYS_MS.length + 1})`);
+        if (await waitForRetryDelay(CODEWITH_START_RETRY_DELAYS_MS[attemptIndex]!, opts.signal)) continue;
+        return failureResult(startedAt, "cancelled", fields);
+      }
+      return failureResult(startedAt, error ?? `remote process on ${machine.id} exited with code ${exitCode ?? "unknown"}`, fields);
+    }
     return successResult(startedAt, fields);
   }
-  if (error || exitCode !== 0) {
-    return failureResult(startedAt, error ?? `remote process on ${machine.id} exited with code ${exitCode ?? "unknown"}`, fields);
-  }
-  return successResult(startedAt, fields);
 }
 
 export function preflightTarget(
@@ -1243,12 +1296,6 @@ export async function executeTarget(
   }
   const maxOutputBytes = opts.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
   const startedAt = nowIso();
-  const stdout = new BoundedOutputBuffer(maxOutputBytes);
-  const stderr = new BoundedOutputBuffer(maxOutputBytes);
-  let timedOut = false;
-  let idleTimedOut = false;
-  let exitCode: number | undefined;
-  let error: string | undefined;
 
   const env = await executionEnv(spec, metadata, opts);
   if (!spec.shell && !executableExists(spec.command, env)) {
@@ -1272,89 +1319,105 @@ export async function executeTarget(
     Object.assign(env, allowlistEnv(spec.allowlist, spec.sessionContract));
   }
 
-  const child = spawn(spec.command, spec.args, {
-    cwd: spec.cwd,
-    env,
-    shell: spec.shell ?? false,
-    detached: true,
-    stdio: spec.stdin === undefined ? ["ignore", "pipe", "pipe"] : ["pipe", "pipe", "pipe"],
-  });
-  notifySpawn(child.pid, opts);
+  for (let attemptIndex = 0; ; attemptIndex += 1) {
+    const attemptStartedAt = attemptIndex === 0 ? startedAt : nowIso();
+    const stdout = new BoundedOutputBuffer(maxOutputBytes);
+    const stderr = new BoundedOutputBuffer(maxOutputBytes);
+    let timedOut = false;
+    let idleTimedOut = false;
+    let exitCode: number | undefined;
+    let error: string | undefined;
 
-  if (spec.stdin !== undefined && child.stdin) {
-    child.stdin.on("error", (err: NodeJS.ErrnoException) => {
-      if (err.code !== "EPIPE") error = err.message;
+    const child = spawn(spec.command, spec.args, {
+      cwd: spec.cwd,
+      env,
+      shell: spec.shell ?? false,
+      detached: true,
+      stdio: spec.stdin === undefined ? ["ignore", "pipe", "pipe"] : ["pipe", "pipe", "pipe"],
     });
-    child.stdin.end(spec.stdin);
-  }
+    notifySpawn(child.pid, opts);
 
-  const abortHandler = (): void => {
-    error = "cancelled";
-    if (child.pid) killProcessGroup(child.pid);
-  };
-  if (opts.signal?.aborted) abortHandler();
-  opts.signal?.addEventListener("abort", abortHandler, { once: true });
+    if (spec.stdin !== undefined && child.stdin) {
+      child.stdin.on("error", (err: NodeJS.ErrnoException) => {
+        if (err.code !== "EPIPE") error = err.message;
+      });
+      child.stdin.end(spec.stdin);
+    }
 
-  const timer =
-    typeof spec.timeoutMs === "number"
-      ? setTimeout(() => {
-          timedOut = true;
-          if (child.pid) killProcessGroup(child.pid);
-        }, spec.timeoutMs)
-      : undefined;
-  timer?.unref();
-  let idleTimer: NodeJS.Timeout | undefined;
-  const resetIdleTimer = (): void => {
-    if (!spec.idleTimeoutMs) return;
-    if (idleTimer) clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => {
-      idleTimedOut = true;
+    const abortHandler = (): void => {
+      error = "cancelled";
       if (child.pid) killProcessGroup(child.pid);
-    }, spec.idleTimeoutMs);
-    idleTimer.unref();
-  };
-  resetIdleTimer();
+    };
+    if (opts.signal?.aborted) abortHandler();
+    opts.signal?.addEventListener("abort", abortHandler, { once: true });
 
-  // Persistent-decoder encoding keeps multi-byte UTF-8 sequences split across
-  // pipe chunks intact (see BoundedOutputBuffer).
-  child.stdout?.setEncoding("utf8");
-  child.stderr?.setEncoding("utf8");
-  child.stdout?.on("data", (chunk: string) => {
-    stdout.append(chunk);
+    const timer =
+      typeof spec.timeoutMs === "number"
+        ? setTimeout(() => {
+            timedOut = true;
+            if (child.pid) killProcessGroup(child.pid);
+          }, spec.timeoutMs)
+        : undefined;
+    timer?.unref();
+    let idleTimer: NodeJS.Timeout | undefined;
+    const resetIdleTimer = (): void => {
+      if (!spec.idleTimeoutMs) return;
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        idleTimedOut = true;
+        if (child.pid) killProcessGroup(child.pid);
+      }, spec.idleTimeoutMs);
+      idleTimer.unref();
+    };
     resetIdleTimer();
-  });
-  child.stderr?.on("data", (chunk: string) => {
-    stderr.append(chunk);
-    resetIdleTimer();
-  });
 
-  try {
-    const [code, signal] = (await once(child, "exit")) as [number | null, NodeJS.Signals | null];
-    if (typeof code === "number") exitCode = code;
-    if (signal) error = `terminated by ${signal}`;
-  } catch (err) {
-    error = err instanceof Error ? err.message : String(err);
-  } finally {
-    if (timer) clearTimeout(timer);
-    if (idleTimer) clearTimeout(idleTimer);
-    opts.signal?.removeEventListener("abort", abortHandler);
-  }
+    // Persistent-decoder encoding keeps multi-byte UTF-8 sequences split across
+    // pipe chunks intact (see BoundedOutputBuffer).
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      stdout.append(chunk);
+      resetIdleTimer();
+    });
+    child.stderr?.on("data", (chunk: string) => {
+      stderr.append(chunk);
+      resetIdleTimer();
+    });
 
-  const fields: ResultFields = { exitCode, stdout: stdout.value(), stderr: stderr.value(), pid: child.pid };
-  if (timedOut || idleTimedOut) {
-    return timeoutResult(
-      startedAt,
-      idleTimedOut ? `idle timed out after ${spec.idleTimeoutMs}ms without stdout/stderr` : `timed out after ${spec.timeoutMs}ms`,
-      fields,
-    );
-  }
-  if (!error && exitCode !== 0 && codewithJsonlReconciledSuccess(spec, fields)) {
+    try {
+      const [code, signal] = (await once(child, "exit")) as [number | null, NodeJS.Signals | null];
+      if (typeof code === "number") exitCode = code;
+      if (signal) error = `terminated by ${signal}`;
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (idleTimer) clearTimeout(idleTimer);
+      opts.signal?.removeEventListener("abort", abortHandler);
+    }
+
+    const attemptFinishedAt = nowIso();
+    const fields: ResultFields = { exitCode, stdout: stdout.value(), stderr: stderr.value(), pid: child.pid, finishedAt: attemptFinishedAt };
+    if (timedOut || idleTimedOut) {
+      return timeoutResult(
+        startedAt,
+        idleTimedOut ? `idle timed out after ${spec.idleTimeoutMs}ms without stdout/stderr` : `timed out after ${spec.timeoutMs}ms`,
+        fields,
+      );
+    }
+    if (!error && exitCode !== 0 && codewithJsonlReconciledSuccess(spec, fields)) {
+      return successResult(startedAt, fields);
+    }
+    if (error || exitCode !== 0) {
+      if (shouldRetryCodewithStartFailure(spec, fields, error, attemptStartedAt, attemptFinishedAt, attemptIndex)) {
+        opts.log?.(`retrying codewith agent after transient fast start failure (${attemptIndex + 1}/${CODEWITH_START_RETRY_DELAYS_MS.length + 1})`);
+        if (await waitForRetryDelay(CODEWITH_START_RETRY_DELAYS_MS[attemptIndex]!, opts.signal)) continue;
+        return failureResult(startedAt, "cancelled", fields);
+      }
+      return failureResult(startedAt, error ?? `process exited with code ${exitCode ?? "unknown"}`, fields);
+    }
     return successResult(startedAt, fields);
   }
-  if (error || exitCode !== 0) {
-    return failureResult(startedAt, error ?? `process exited with code ${exitCode ?? "unknown"}`, fields);
-  }
-  return successResult(startedAt, fields);
 }
 
 export async function executeLoop(loop: Loop, run: LoopRun, opts: ExecuteOptions = {}): Promise<ExecutorResult> {
