@@ -20,6 +20,21 @@ const PREFIX = "enc:v1:";
 /** Env vars the master key is read from, in priority order. */
 export const MASTER_KEY_ENV = ["HASNA_SECRETS_MASTER_KEY", "SECRETS_MASTER_KEY"] as const;
 
+export const VAULT_DECRYPTION_ERROR_CODE = "VAULT_DECRYPTION_FAILED" as const;
+export const VAULT_DECRYPTION_RECOVERY =
+  "Restore HASNA_SECRETS_MASTER_KEY (or SECRETS_MASTER_KEY) to the value used when this entry was encrypted, or overwrite/delete and recreate the affected entry.";
+
+/** Safe, typed boundary error for encrypted data that the configured key cannot read. */
+export class VaultDecryptionError extends Error {
+  readonly code = VAULT_DECRYPTION_ERROR_CODE;
+  readonly recovery = VAULT_DECRYPTION_RECOVERY;
+
+  constructor() {
+    super("Encrypted vault data cannot be decrypted with the configured master key.");
+    this.name = "VaultDecryptionError";
+  }
+}
+
 let _cached: Buffer | null = null;
 
 /**
@@ -79,17 +94,23 @@ export function encryptValue(plaintext: string, env: NodeJS.ProcessEnv = process
 
 export function decryptValue(stored: string, env: NodeJS.ProcessEnv = process.env): string {
   if (!isEncrypted(stored)) return stored; // legacy/plaintext passthrough
-  const rest = stored.slice(PREFIX.length);
-  const sep = rest.indexOf(":");
-  if (sep === -1) throw new Error("Malformed encrypted value");
-  const iv = Buffer.from(rest.slice(0, sep), "hex");
-  const payload = Buffer.from(rest.slice(sep + 1), "hex");
-  const tag = payload.subarray(payload.length - 16);
-  const ciphertext = payload.subarray(0, payload.length - 16);
-  const key = getCloudMasterKey(env);
-  const decipher = createDecipheriv(ALGO, key, iv);
-  decipher.setAuthTag(tag);
-  return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
+  try {
+    const rest = stored.slice(PREFIX.length);
+    const sep = rest.indexOf(":");
+    if (sep === -1) throw new Error("Malformed encrypted value");
+    const iv = Buffer.from(rest.slice(0, sep), "hex");
+    const payload = Buffer.from(rest.slice(sep + 1), "hex");
+    const tag = payload.subarray(payload.length - 16);
+    const ciphertext = payload.subarray(0, payload.length - 16);
+    const key = getCloudMasterKey(env);
+    const decipher = createDecipheriv(ALGO, key, iv);
+    decipher.setAuthTag(tag);
+    return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
+  } catch {
+    // Do not expose OpenSSL's low-level authentication message. Callers can use
+    // the stable code and recovery guidance without receiving key/value material.
+    throw new VaultDecryptionError();
+  }
 }
 
 /** Test-only: reset the cached key. */

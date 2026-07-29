@@ -1,6 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import type { HasnaStorageClient } from "../src/store/contracts-client/index.js";
-import { ApiStore, getStore, LocalStore } from "../src/store/index.js";
+import { ApiStore, getStore, LocalStore, SecretDecryptionError } from "../src/store/index.js";
 
 // Build a fake transport + client that records calls and returns canned cloud
 // responses, so we assert the route + envelope mapping without the network.
@@ -73,6 +73,29 @@ describe("ApiStore route mapping", () => {
     const entry = await new ApiStore(client).getSecret("a/b");
     expect(entry?.value).toBe("v");
     expect(calls.find((c) => c[1] === "/secrets/get")[2]).toEqual({ key: "a/b" });
+  });
+
+  it("maps a typed server decryption response to an actionable client error", async () => {
+    const recovery = "Restore HASNA_SECRETS_MASTER_KEY, or recreate the affected entry.";
+    const { client } = fakeClient({});
+    client.transport.get = async () => {
+      throw {
+        status: 422,
+        body: {
+          error: "Encrypted vault data cannot be decrypted with the configured master key.",
+          code: "VAULT_DECRYPTION_FAILED",
+          recovery,
+        },
+      };
+    };
+
+    try {
+      await new ApiStore(client).getSecret("a/b");
+      throw new Error("expected getSecret to fail");
+    } catch (error) {
+      expect(error).toBeInstanceOf(SecretDecryptionError);
+      expect((error as Error).message).toContain(recovery);
+    }
   });
 
   it("deleteSecret hits DELETE /secrets?key= and reads { deleted }", async () => {

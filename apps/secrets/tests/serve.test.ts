@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mintApiKey, verifyApiKey } from "@hasna/contracts/auth";
 import { createHandler } from "../src/server/serve.js";
+import { VaultDecryptionError } from "../src/server/cloud-crypto.js";
 import type { CloudSecretsStore } from "../src/server/cloud-store.js";
 
 const SIGNING = "test-signing-secret-please-rotate";
@@ -116,5 +117,21 @@ describe("secrets serve", () => {
     // gone
     res = await h(new Request("http://x/v1/secrets/get?key=openai/api_key", { headers: { "x-api-key": key } }));
     expect(res.status).toBe(404);
+  });
+
+  test("returns a typed actionable 422 when the master key cannot decrypt a secret", async () => {
+    const store = {
+      ...fakeStore(),
+      async getSecret() { throw new VaultDecryptionError(); },
+    } as unknown as CloudSecretsStore;
+    const res = await handler(store)(new Request("http://x/v1/secrets/get?key=openai/api_key", {
+      headers: { "x-api-key": keyWith(["secrets:read"]) },
+    }));
+    const body = await res.json();
+
+    expect(res.status).toBe(422);
+    expect(body.code).toBe("VAULT_DECRYPTION_FAILED");
+    expect(body.recovery).toContain("HASNA_SECRETS_MASTER_KEY");
+    expect(body.error).not.toContain("authenticate data");
   });
 });

@@ -79,6 +79,15 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
         },
         SecretMetadata: secretMetadata,
         Secret: secret,
+        VaultDecryptionError: {
+          type: "object",
+          required: ["error", "code", "recovery"],
+          properties: {
+            error: { type: "string" },
+            code: { type: "string", enum: ["VAULT_DECRYPTION_FAILED"] },
+            recovery: { type: "string" },
+          },
+        },
         SecretInput: {
           type: "object",
           required: ["key", "value"],
@@ -147,7 +156,13 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
           operationId: "getSecret",
           summary: "Get a secret value by key",
           parameters: [{ name: "key", in: "query", required: true, schema: { type: "string" } }],
-          responses: r("#/components/schemas/Secret"),
+          responses: {
+            ...r("#/components/schemas/Secret"),
+            "422": {
+              description: "The configured master key cannot decrypt the stored value",
+              content: { "application/json": { schema: { $ref: "#/components/schemas/VaultDecryptionError" } } },
+            },
+          },
         },
       },
       "/v1/secrets/search": {

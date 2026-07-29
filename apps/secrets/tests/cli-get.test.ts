@@ -3,10 +3,8 @@ import { join } from "node:path";
 
 const rootDir = join(import.meta.dir, "..");
 
-// A stand-in cloud API that always fails the value read with a 500, mirroring the
-// real defect: the server returns 500 ("Unsupported state or unable to authenticate
-// data") when it cannot decrypt a stored secret. ApiStore.getSecret rethrows any
-// non-404 error, so the CLI `get` command must surface a clean one-line error
+// A stand-in cloud API that cannot decrypt the stored value. The server must use
+// the typed 422 contract, and the CLI must turn it into actionable recovery text
 // rather than dumping a raw HasnaHttpError stack trace.
 let server: ReturnType<typeof Bun.serve>;
 
@@ -15,8 +13,12 @@ beforeAll(() => {
     port: 0,
     fetch() {
       return new Response(
-        JSON.stringify({ error: "Unsupported state or unable to authenticate data" }),
-        { status: 500, headers: { "content-type": "application/json" } },
+        JSON.stringify({
+          error: "Encrypted vault data cannot be decrypted with the configured master key.",
+          code: "VAULT_DECRYPTION_FAILED",
+          recovery: "Restore HASNA_SECRETS_MASTER_KEY, or recreate the affected entry.",
+        }),
+        { status: 422, headers: { "content-type": "application/json" } },
       );
     },
   });
@@ -51,8 +53,8 @@ async function runGet() {
   return { stdout, stderr, exitCode };
 }
 
-describe("CLI get — API 500 handling", () => {
-  it("prints a clean one-line error and exits non-zero without leaking a stack trace", async () => {
+describe("CLI get — decryption failure handling", () => {
+  it("prints actionable recovery guidance and exits non-zero without leaking a stack trace", async () => {
     const { stdout, stderr, exitCode } = await runGet();
 
     // Non-zero exit, like the "Not found" path.
@@ -61,6 +63,7 @@ describe("CLI get — API 500 handling", () => {
     // Clean, actionable one-liner that names the key. Value material never leaks.
     expect(stderr).toContain("Unable to read secret");
     expect(stderr).toContain("hasna/cerebras/live/api_key");
+    expect(stderr).toContain("Recovery: Restore HASNA_SECRETS_MASTER_KEY");
 
     // The defect being fixed: the raw exception + Bun source frames must NOT leak.
     expect(stderr).not.toContain("HasnaHttpError");

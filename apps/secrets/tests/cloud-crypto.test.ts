@@ -4,6 +4,7 @@ import {
   decryptValue,
   isEncrypted,
   getCloudMasterKey,
+  VaultDecryptionError,
   _resetCloudMasterKey,
 } from "../src/server/cloud-crypto.js";
 
@@ -35,7 +36,14 @@ describe("cloud-crypto", () => {
   test("tampered ciphertext is rejected", () => {
     const ct = encryptValue("value", env);
     const tampered = ct.slice(0, -2) + (ct.endsWith("00") ? "11" : "00");
-    expect(() => decryptValue(tampered, env)).toThrow();
+    expect(() => decryptValue(tampered, env)).toThrow(VaultDecryptionError);
+  });
+
+  test("a mismatched key produces a safe typed error", () => {
+    const ct = encryptValue("value", env);
+    _resetCloudMasterKey();
+    const wrongEnv = { HASNA_SECRETS_MASTER_KEY: Buffer.alloc(32, 8).toString("base64") } as NodeJS.ProcessEnv;
+    expect(() => decryptValue(ct, wrongEnv)).toThrow(VaultDecryptionError);
   });
 
   test("passphrase key derives 32 bytes", () => {

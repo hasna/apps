@@ -25,7 +25,7 @@ import { APP_NAME, bootstrapCloudEnv, resolvePort, resolveSigningSecret } from "
 import { CloudSecretsStore } from "./cloud-store.js";
 import { SECRETS_MIGRATIONS } from "./cloud-migrations.js";
 import { buildOpenApiDocument } from "./openapi.js";
-import { getCloudMasterKey } from "./cloud-crypto.js";
+import { getCloudMasterKey, VaultDecryptionError } from "./cloud-crypto.js";
 import { VERSION } from "../version.js";
 import type { SecretType, VaultItemKind } from "../types.js";
 
@@ -243,6 +243,12 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
 
       return json({ error: "Not found" }, 404);
     } catch (error) {
+      if (error instanceof VaultDecryptionError) {
+        return json(
+          { error: error.message, code: error.code, recovery: error.recovery },
+          422,
+        );
+      }
       const message = error instanceof Error ? error.message : String(error);
       return json({ error: message }, 500);
     }
