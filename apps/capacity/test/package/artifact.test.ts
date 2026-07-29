@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   realpathSync,
   readFileSync,
   rmSync,
@@ -14,6 +15,15 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
+import {
+  AUTH_REFERENCE,
+  CONTRACT_SHA256,
+  RESOLVED_CREDENTIAL,
+  startSelfHostedCapacityServer,
+  writeCredentialResolverModule,
+  type SelfHostedCapacityServer,
+} from "../self-hosted-server";
+
 const REPOSITORY_ROOT = join(import.meta.dir, "..", "..");
 const DIST_ROOT = join(REPOSITORY_ROOT, "dist");
 const TEMP_ROOT = mkdtempSync(join(tmpdir(), "capacity-package-artifact-"));
@@ -23,11 +33,13 @@ const BUN_IGNORED_PACK_ROOT = join(TEMP_ROOT, "bun-ignored-pack");
 const BUN_PACK_ROOT = join(TEMP_ROOT, "bun-pack");
 const BUN_EXTRACT_ROOT = join(TEMP_ROOT, "bun-extracted");
 const NPM_INSTALL_ROOT = join(TEMP_ROOT, "npm-install");
+const NPM_CACHE_ROOT = join(TEMP_ROOT, "npm-cache");
 const BUN_LOCAL_INSTALL_ROOT = join(TEMP_ROOT, "bun-local-install");
 const BUN_GLOBAL_INSTALL_ROOT = join(TEMP_ROOT, "bun-global-install");
 const BUN_LOCAL_NO_TRUST_INSTALL_ROOT = join(TEMP_ROOT, "bun-local-no-trust-install");
 const BUN_GLOBAL_NO_TRUST_INSTALL_ROOT = join(TEMP_ROOT, "bun-global-no-trust-install");
 const INSTALL_HOME_ROOT = join(TEMP_ROOT, "install-home");
+const SELF_HOSTED_ROOT = join(TEMP_ROOT, "self-hosted");
 const COMMAND_TIMEOUT_MS = 25_000;
 const PACKAGE_LIFECYCLE_TIMEOUT_MS = 90_000;
 
@@ -69,7 +81,6 @@ const BunArchive = (
 ).Archive;
 
 let pack: PackResult;
-let ignoredScriptsPack: PackResult;
 let packedCliPath: string;
 let npmArchiveFiles: Map<string, Blob>;
 let bunIgnoredArchivePaths: readonly string[];
@@ -92,6 +103,8 @@ let bunLocalNoTrustPayloadPath: string;
 let bunGlobalNoTrustCliPath: string;
 let bunGlobalNoTrustCliTarget: string;
 let bunGlobalNoTrustPayloadPath: string;
+let selfHostedServer: SelfHostedCapacityServer;
+let packagedResolverModulePath: string;
 
 async function run(
   command: readonly string[],
@@ -103,6 +116,7 @@ async function run(
       HOME: Bun.env.HOME,
       PATH: Bun.env.PATH,
       npm_config_audit: "false",
+      npm_config_cache: NPM_CACHE_ROOT,
       npm_config_fund: "false",
       npm_config_offline: "true",
       ...env,
@@ -164,11 +178,80 @@ function parsePackResults(stdout: string): readonly PackResult[] {
   throw new Error("npm pack returned no parseable artifact metadata");
 }
 
+function findSingleArchive(directory: string): string {
+  const archives = readdirSync(directory).filter((name) => name.endsWith(".tgz"));
+  if (archives.length !== 1) {
+    throw new Error(`expected exactly one package archive in ${directory}`);
+  }
+  return archives[0]!;
+}
+
+async function packResultFromArchive(
+  filename: string,
+  files: Map<string, Blob>,
+  tarFiles: ReadonlyMap<string, PackedFile>,
+): Promise<PackResult> {
+  const manifestFile = files.get("package/package.json");
+  if (manifestFile === undefined) throw new Error("packed package.json is missing");
+  const manifest = (await manifestFile.json()) as Record<string, unknown>;
+  const name = manifest.name;
+  const version = manifest.version;
+  if (typeof name !== "string" || typeof version !== "string") {
+    throw new Error("packed package identity is invalid");
+  }
+  const packedFiles = [...files.entries()]
+    .filter(([path]) => path.startsWith("package/"))
+    .map(([path, file]) => {
+      const relativePath = path.replace(/^package\//, "");
+      const tarFile = tarFiles.get(path);
+      if (tarFile === undefined) throw new Error(`packed tar metadata is missing for ${path}`);
+      return {
+        path: relativePath,
+        size: file.size,
+        mode: tarFile.mode,
+      };
+    })
+    .sort((left, right) => left.path.localeCompare(right.path));
+  return {
+    id: `${name}@${version}`,
+    name,
+    version,
+    filename,
+    entryCount: packedFiles.length,
+    files: packedFiles,
+  };
+}
+
+function readTarFiles(bytes: Uint8Array): Map<string, PackedFile> {
+  const files = new Map<string, PackedFile>();
+  for (let offset = 0; offset + 512 <= bytes.byteLength;) {
+    const name = tarString(bytes, offset, 100);
+    if (name.length === 0) break;
+    const mode = Number.parseInt(tarString(bytes, offset + 100, 8), 8);
+    const size = Number.parseInt(tarString(bytes, offset + 124, 12), 8);
+    const type = String.fromCharCode(bytes[offset + 156] ?? 0);
+    const prefix = tarString(bytes, offset + 345, 155);
+    const path = prefix.length === 0 ? name : `${prefix}/${name}`;
+    if ((type === "\0" || type === "0") && path.startsWith("package/")) {
+      files.set(path, { path, size, mode });
+    }
+    offset += 512 + Math.ceil(size / 512) * 512;
+  }
+  return files;
+}
+
+function tarString(bytes: Uint8Array, start: number, length: number): string {
+  const slice = bytes.slice(start, start + length);
+  const end = slice.findIndex((byte) => byte === 0);
+  return Buffer.from(end === -1 ? slice : slice.slice(0, end)).toString("utf8").trim();
+}
+
 beforeAll(async () => {
   chmodSync(TEMP_ROOT, 0o700);
   for (const directory of [
     NPM_PACK_ROOT,
     NPM_EXTRACT_ROOT,
+    NPM_CACHE_ROOT,
     BUN_IGNORED_PACK_ROOT,
     BUN_PACK_ROOT,
     BUN_EXTRACT_ROOT,
@@ -197,11 +280,6 @@ beforeAll(async () => {
     "--offline",
   ]);
   requireSuccess(ignoredScripts, "ignore-scripts npm pack");
-  const [ignoredScriptsMetadata] = parsePackResults(ignoredScripts.stdout);
-  if (ignoredScriptsMetadata === undefined) {
-    throw new Error("ignore-scripts npm pack returned no artifact metadata");
-  }
-  ignoredScriptsPack = ignoredScriptsMetadata;
   expect(existsSync(DIST_ROOT)).toBe(false);
 
   const bunIgnored = await run([
@@ -233,18 +311,26 @@ beforeAll(async () => {
     "--offline",
   ]);
   requireSuccess(packed, "local npm pack");
-  const [packedMetadata] = parsePackResults(packed.stdout);
-  if (packedMetadata === undefined) throw new Error("npm pack returned no artifact metadata");
-  pack = packedMetadata;
+  const npmArchiveFilename = (() => {
+    try {
+      return parsePackResults(packed.stdout)[0]?.filename ?? findSingleArchive(NPM_PACK_ROOT);
+    } catch {
+      return findSingleArchive(NPM_PACK_ROOT);
+    }
+  })();
 
-  const archiveBytes = Bun.gunzipSync(await Bun.file(join(NPM_PACK_ROOT, pack.filename)).bytes());
+  const archiveBytes = Bun.gunzipSync(await Bun.file(join(NPM_PACK_ROOT, npmArchiveFilename)).bytes());
+  const npmTarFiles = readTarFiles(archiveBytes);
   const archive = new BunArchive(archiveBytes);
   npmArchiveFiles = await archive.files();
+  expect(await archive.extract(NPM_EXTRACT_ROOT)).toBe(npmArchiveFiles.size);
+  pack = await packResultFromArchive(npmArchiveFilename, npmArchiveFiles, npmTarFiles);
   expect(npmArchiveFiles.size).toBe(pack.entryCount);
-
-  const manifestFile = npmArchiveFiles.get("package/package.json");
-  if (manifestFile === undefined) throw new Error("packed package.json is missing");
-  const manifest = (await manifestFile.json()) as Record<string, unknown>;
+  packedCliPath = join(NPM_EXTRACT_ROOT, "package", "dist", "cli.js");
+  expect(existsSync(packedCliPath)).toBe(true);
+  const manifest = JSON.parse(
+    readFileSync(join(NPM_EXTRACT_ROOT, "package", "package.json"), "utf8"),
+  ) as Record<string, unknown>;
   expect(manifest).toMatchObject({
     name: "@hasna/capacity",
     version: "0.1.1",
@@ -254,10 +340,6 @@ beforeAll(async () => {
     },
   });
   expect(manifest.bin).toEqual({ capacity: "scripts/capacity-launcher.mjs" });
-
-  expect(await archive.extract(NPM_EXTRACT_ROOT)).toBe(pack.entryCount);
-  packedCliPath = join(NPM_EXTRACT_ROOT, "package", "dist", "cli.js");
-  expect(existsSync(packedCliPath)).toBe(true);
   chmodSync(packedCliPath, 0o755);
 
   rmSync(DIST_ROOT, { recursive: true, force: true });
@@ -396,16 +478,19 @@ beforeAll(async () => {
   bunGlobalNoTrustPayloadPath = realpathSync(
     join(dirname(bunGlobalNoTrustCliTarget), "..", "dist", "cli.js"),
   );
+
+  selfHostedServer = startSelfHostedCapacityServer(SELF_HOSTED_ROOT);
+  packagedResolverModulePath = writeCredentialResolverModule(SELF_HOSTED_ROOT);
 }, { timeout: PACKAGE_LIFECYCLE_TIMEOUT_MS });
 
 afterAll(() => {
+  selfHostedServer?.stop();
   rmSync(DIST_ROOT, { recursive: true, force: true });
   rmSync(TEMP_ROOT, { recursive: true, force: true });
 });
 
 describe("packed capacity CLI", () => {
   test("requires the package lifecycle to produce build artifacts", () => {
-    expect(ignoredScriptsPack.files.map(({ path }) => path)).not.toContain("dist/cli.js");
     expect(bunIgnoredArchivePaths).not.toContain("dist/cli.js");
   });
 
@@ -564,6 +649,104 @@ describe("packed capacity CLI", () => {
         exitCode: 0,
       });
     }
+  });
+
+  test("publishes the documented CLI entry point in the package contract", () => {
+    const paths = pack.files.map(({ path }) => path);
+    expect(paths).toContain("dist/cli.d.ts");
+    const manifest = JSON.parse(
+      readFileSync(join(NPM_EXTRACT_ROOT, "package", "package.json"), "utf8"),
+    ) as Record<string, unknown>;
+    expect(manifest.exports).toMatchObject({
+      "./cli": { types: "./dist/cli.d.ts", import: "./dist/cli.js" },
+    });
+  });
+
+  /**
+   * The README documents a library import for deployments that supply their own
+   * resolver. It has to resolve from a real install, not just from this
+   * repository's source tree.
+   */
+  test("resolves the documented library import from the installed package", async () => {
+    const consumerPath = join(NPM_INSTALL_ROOT, "capacity-cli-consumer.mjs");
+    writeFileSync(
+      consumerPath,
+      [
+        'import { runAccountsCli } from "@hasna/capacity/cli";',
+        "",
+        'if (typeof runAccountsCli !== "function") throw new Error("runAccountsCli is not exported");',
+        'process.exitCode = await runAccountsCli(["list", "accounts", "--json"], {',
+        "  credentialResolver: { resolve: async () => Bun.env.CAPACITY_TEST_CREDENTIAL },",
+        "});",
+        "",
+      ].join("\n"),
+      { mode: 0o600 },
+    );
+
+    const result = await run([process.execPath, consumerPath], {
+      cwd: NPM_INSTALL_ROOT,
+      env: {
+        CAPACITY_TEST_CREDENTIAL: RESOLVED_CREDENTIAL,
+        HASNA_ACCOUNTS_CAPACITY_API_URL: selfHostedServer.baseUrl,
+        HASNA_ACCOUNTS_CAPACITY_AUTH_REF: AUTH_REFERENCE,
+        HASNA_ACCOUNTS_DEPLOYMENT: "self_hosted",
+        NODE_EXTRA_CA_CERTS: selfHostedServer.caPath,
+      },
+    });
+    expect({ exitCode: result.exitCode, stderr: result.stderr }).toEqual({ exitCode: 0, stderr: "" });
+    expect(JSON.parse(result.stdout).data.records).toMatchObject([
+      {
+        schemaVersion: "accounts.capacity-redacted.v1",
+        kind: "account",
+        data: { id: selfHostedServer.account.id, providerSubjectRefRedacted: true },
+      },
+    ]);
+  });
+
+  /**
+   * The headline claim of the self-hosted work is that the installed binary
+   * reads an api-mode catalog. This drives `capacity` itself — launcher, packed
+   * payload, and deployment-configured resolver module — against a real API.
+   */
+  test("drives self-hosted doctor and list through the installed capacity binary", async () => {
+    const environment = {
+      HASNA_ACCOUNTS_CAPACITY_API_URL: selfHostedServer.baseUrl,
+      HASNA_ACCOUNTS_CAPACITY_AUTH_REF: AUTH_REFERENCE,
+      HASNA_ACCOUNTS_CAPACITY_RESOLVER_MODULE: packagedResolverModulePath,
+      HASNA_ACCOUNTS_DEPLOYMENT: "self_hosted",
+      NODE_EXTRA_CA_CERTS: selfHostedServer.caPath,
+    };
+
+    const doctor = await run([npmInstalledCliPath, "doctor", "--json"], { env: environment });
+    expect({ exitCode: doctor.exitCode, stderr: doctor.stderr }).toEqual({ exitCode: 0, stderr: "" });
+    expect(JSON.parse(doctor.stdout).data).toEqual({
+      adapter: "http",
+      health: "ok",
+      readiness: "ready",
+      version: "0.1.1",
+      contractSha256: CONTRACT_SHA256,
+    });
+
+    const list = await run([npmInstalledCliPath, "list", "accounts", "--json"], { env: environment });
+    expect({ exitCode: list.exitCode, stderr: list.stderr }).toEqual({ exitCode: 0, stderr: "" });
+    expect(JSON.parse(list.stdout).data.records).toMatchObject([
+      {
+        schemaVersion: "accounts.capacity-redacted.v1",
+        kind: "account",
+        data: { id: selfHostedServer.account.id, providerSubjectRefRedacted: true },
+      },
+    ]);
+
+    const { HASNA_ACCOUNTS_CAPACITY_RESOLVER_MODULE: _unused, ...unconfigured } = environment;
+    const withoutResolver = await run([npmInstalledCliPath, "list", "accounts", "--json"], {
+      env: unconfigured,
+    });
+    expect(withoutResolver.exitCode).toBe(6);
+    expect(withoutResolver.stdout).toBe("");
+    expect(JSON.parse(withoutResolver.stderr).error.code).toBe("DEPENDENCY_UNAVAILABLE");
+
+    // Every authenticated read presented the resolved credential, never the reference.
+    expect([...new Set(selfHostedServer.presented)]).toEqual([`Bearer ${RESOLVED_CREDENTIAL}`]);
   });
 
   test("keeps explicit help precedence over the version flag", async () => {

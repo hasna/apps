@@ -11,6 +11,7 @@ import {
   parseEntitlementId,
 } from "../domain/ids";
 import {
+  ACCOUNTS_CAPACITY_REDACTED_SCHEMA_VERSION,
   ACCOUNTS_CAPACITY_SCHEMA_VERSION,
   ELIGIBILITY_REASON_CODES,
   type Account,
@@ -769,6 +770,96 @@ export function decodeRecordEnvelope(input: unknown): RecordEnvelope {
   }
   const kind = enumValue(value.kind, ENTITY_KINDS, "kind");
   return encodeRecordEnvelope(kind, validateEntity(kind, value.data));
+}
+
+/** Placeholder standing in for the removed subject while the exact domain validator runs. */
+const REDACTED_SUBJECT_PLACEHOLDER = "redacted:verified";
+
+export type RedactedRecord = Readonly<Record<string, unknown>>;
+
+export interface RedactedRecordEnvelope<K extends EntityKind = EntityKind> {
+  readonly schemaVersion: typeof ACCOUNTS_CAPACITY_REDACTED_SCHEMA_VERSION;
+  readonly kind: K;
+  readonly data: RedactedRecord;
+}
+
+/**
+ * The single reader redactor: HTTP responses, CLI JSON, and CLI normal output
+ * all project records through this function, so no reader surface can disagree
+ * about what a record contains. Applying it to an already redacted record is a
+ * no-op.
+ */
+export function redactRecord<K extends EntityKind>(kind: K, record: RedactedRecord): RedactedRecord {
+  const safe = { ...record };
+  if (kind === "account") {
+    const hadSubject = safe.providerSubjectRef !== undefined || safe.providerSubjectCandidateRef !== undefined;
+    delete safe.providerSubjectRef;
+    delete safe.providerSubjectCandidateRef;
+    if (hadSubject) safe.providerSubjectRefRedacted = true;
+  }
+  assertNoSensitiveFields(safe);
+  return Object.freeze(safe);
+}
+
+/** Validates a redacted read projection with the exact domain validator for its kind. */
+export function validateRedactedRecord<K extends EntityKind>(kind: K, input: unknown): RedactedRecord {
+  const value = object(input, "data");
+  assertNoSensitiveFields(value);
+  if (kind !== "account") {
+    validateEntity(kind, value);
+    return Object.freeze({ ...value });
+  }
+  if (Object.hasOwn(value, "providerSubjectRef") || Object.hasOwn(value, "providerSubjectCandidateRef")) {
+    throw invalid("data.providerSubjectRef");
+  }
+  if (value.providerSubjectRefRedacted !== undefined && value.providerSubjectRefRedacted !== true) {
+    throw invalid("data.providerSubjectRefRedacted");
+  }
+  const { providerSubjectRefRedacted: _redacted, ...domainRecord } = value;
+  // The subject is the only field the redactor removes, so restore an opaque
+  // placeholder for exactly the states that require one and validate the rest.
+  const requiresSubject =
+    domainRecord.status === "active" ||
+    domainRecord.status === "suspended" ||
+    (domainRecord.status === "revoked" && domainRecord.ownershipEvidenceRef !== undefined);
+  validateEntity(
+    "account",
+    requiresSubject ? { ...domainRecord, providerSubjectRef: REDACTED_SUBJECT_PLACEHOLDER } : domainRecord,
+  );
+  return Object.freeze({ ...value });
+}
+
+export function encodeRedactedRecordEnvelope<K extends EntityKind>(
+  kind: K,
+  record: RedactedRecord,
+): RedactedRecordEnvelope<K> {
+  return {
+    schemaVersion: ACCOUNTS_CAPACITY_REDACTED_SCHEMA_VERSION,
+    kind,
+    data: validateRedactedRecord(kind, redactRecord(kind, record)),
+  };
+}
+
+export function decodeRedactedRecordEnvelope(input: unknown): RedactedRecordEnvelope {
+  const value = object(input, "envelope");
+  assertNoSensitiveFields(value);
+  exactKeys(value, ["schemaVersion", "kind", "data"], [], "envelope");
+  if (value.schemaVersion !== ACCOUNTS_CAPACITY_REDACTED_SCHEMA_VERSION) {
+    throw new AccountsError("SCHEMA_VERSION_UNSUPPORTED", "Unsupported DTO schema version", {
+      details: {
+        schemaVersion:
+          typeof value.schemaVersion === "string" && /^[a-z][a-z0-9.-]{0,63}$/.test(value.schemaVersion)
+            ? value.schemaVersion
+            : "invalid",
+      },
+    });
+  }
+  const kind = enumValue(value.kind, ENTITY_KINDS, "kind");
+  return {
+    schemaVersion: ACCOUNTS_CAPACITY_REDACTED_SCHEMA_VERSION,
+    kind,
+    data: validateRedactedRecord(kind, value.data),
+  };
 }
 
 export function serializeRecordEnvelope<K extends EntityKind>(kind: K, data: EntityMap[K]): string {
