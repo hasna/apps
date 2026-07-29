@@ -648,6 +648,8 @@ function printHelp(options: RunAutomationsCliOptions = {}): void {
   console.log(`${name} ${packageVersion()}
 
 Usage:
+  ${name} --help
+  ${name} --version
   ${name} [--dir <path>] [--json] init
   ${name} [--dir <path>] [--json] status
   ${name} [--json] spec example
@@ -660,8 +662,17 @@ Usage:
   ${name} [--dir <path>] [--json] dlq list
   ${name} [--dir <path>] [--json] dlq replay <action-id>
   ${name} [--dir <path>] [--json] queue claim [--runner <id>]
+  ${name} [--dir <path>] [--json] queue complete <action-id> [--runner <id>] [--result-json <json>]
+  ${name} [--dir <path>] [--json] queue fail <action-id> [--runner <id>] [--code <code>] [--message <text>] [--retryable false] [--retry-backoff-ms <ms>]
+  ${name} [--dir <path>] [--json] queue approve <action-id>
+  ${name} [--dir <path>] [--json] queue reject <action-id> [--reason <text>]
   ${name} [--dir <path>] [--json] webhooks create <automation-id> --source <source> --type <type>
   ${name} [--dir <path>] [--json] webhooks list
+  ${name} [--dir <path>] [--json] webhooks show <id-or-path>
+  ${name} [--dir <path>] [--json] webhooks enable|disable|archive <id-or-path>
+  ${name} [--dir <path>] [--json] webhooks rotate-secret <id-or-path> --secret-ref <secret://ref>
+  ${name} [--dir <path>] [--json] webhooks test <id-or-path> [--body-json <json>] [--header <name:value>]
+  ${name} [--dir <path>] [--json] webhooks event <id-or-path> [--body-json <json>] [--header <name:value>]
   ${name} [--json] recipes list
   ${name} [--dir <path>] [--json] recipes render launch-followup --app-id <appId> --package <npm-name> --app-version <semver> [--out <dir>] [--create]
   ${name} [--dir <path>] [--json] runtimes
@@ -682,8 +693,8 @@ Usage:
   ${name} [--dir <path>] [--json] webhooks disable <id-or-path>
   ${name} [--dir <path>] [--json] webhooks archive <id-or-path>
   ${name} [--dir <path>] [--json] webhooks rotate-secret <id-or-path> --secret-ref <secret://ref>
-  ${name} [--dir <path>] [--json] webhooks test <id-or-path> --body-json <json> [--header <name:value>]
-  ${name} [--dir <path>] [--json] webhooks event <id-or-path> --body-json <json> [--header <name:value>]
+  ${name} [--dir <path>] [--json] webhooks test <id-or-path> [--body-json <json>] [--header <name:value>]
+  ${name} [--dir <path>] [--json] webhooks event <id-or-path> [--body-json <json>] [--header <name:value>]
 
 Notes:
   test and event are local operator commands; they do not verify HMAC signatures.

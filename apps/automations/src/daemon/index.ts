@@ -449,9 +449,15 @@ function printHelp(): void {
   console.log(`automations-daemon ${packageVersion()}
 
 Usage:
+  automations-daemon --help
+  automations-daemon --version
   automations-daemon [--dir <path>] [--json] status
   automations-daemon [--dir <path>] [--json] run [--once] [--interval-ms <ms>] [--ttl-ms <ms>]
-  automations-daemon [--dir <path>] [--json] serve [--host <host>] [--port <port>] [--max-body-bytes <bytes>]`);
+  automations-daemon [--dir <path>] [--json] serve [--host <host>] [--port <port>] [--interval-ms <ms>] [--ttl-ms <ms>] [--max-body-bytes <bytes>]
+
+Defaults:
+  run/serve heartbeat interval: 5000 ms; lease TTL: 15000 ms
+  serve host: 127.0.0.1; port: 7391; maximum body: 1048576 bytes`);
 }
 
 function packageVersion(): string {

@@ -62,7 +62,21 @@ describe("automations CLI", () => {
     expect(help.exitCode).toBe(0);
     expect(help.stderr).toBe("");
     expect(help.stdout).toContain("automations");
-    expect(help.stdout).toContain("status");
+    expect(help.stdout).toContain("runs show <run-id> [--contract]");
+    expect(help.stdout).toContain("queue complete <action-id>");
+    expect(help.stdout).toContain("queue approve <action-id>");
+    expect(help.stdout).toContain("webhooks rotate-secret <id-or-path>");
+    expect(help.stdout).toContain("webhooks event <id-or-path>");
+
+    const webhooksHelp = await runCli(["webhooks", "--help"]);
+    expect(webhooksHelp.exitCode).toBe(0);
+    expect(webhooksHelp.stdout).toContain("webhooks test <id-or-path> [--body-json <json>]");
+
+    const daemonHelp = await runDaemon(["--help"]);
+    expect(daemonHelp.exitCode).toBe(0);
+    expect(daemonHelp.stderr).toBe("");
+    expect(daemonHelp.stdout).toContain("serve [--host <host>] [--port <port>] [--interval-ms <ms>] [--ttl-ms <ms>] [--max-body-bytes <bytes>]");
+    expect(daemonHelp.stdout).toContain("maximum body: 1048576 bytes");
 
     const status = await runCli(["status"]);
     expect(status.exitCode).toBe(0);

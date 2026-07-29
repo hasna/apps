@@ -1,6 +1,6 @@
 # OpenAutomations Repo And Package Plan
 
-Date: 2026-07-07
+Date: 2026-07-29
 
 This plan records the current shipped `@hasna/automations` repository state
 after the 2026-06-28 scaffold and follow-up publish work. It supersedes the
@@ -8,15 +8,15 @@ older pre-scaffold planning note that assumed no daemon existed yet.
 
 ## Current State
 
-- Package: `@hasna/automations` version `0.1.3`.
+- Package: `@hasna/automations` version `0.2.0`.
 - License and OSS files: Apache-2.0 `LICENSE`, `README.md`, `SECURITY.md`, and
   `CONTRIBUTING.md` are present and included in the npm package file allowlist.
 - Runtime target: Bun ESM package with TypeScript declarations emitted into
   `dist`.
-- Current Hasna package dependency: `@hasna/actions` is the only shipped peer
-  and local dev dependency. There is no direct package dependency on
-  `@hasna/events`, `@hasna/loops`, `@hasna/connectors`, or `@hasna/cloud` on
-  the GitHub `main` base for this plan.
+- Current Hasna package dependencies: `@hasna/contracts` is a direct runtime
+  dependency, and `@hasna/actions` is a peer and local dev dependency. There
+  is no direct package dependency on `@hasna/events`, `@hasna/loops`,
+  `@hasna/connectors`, or `@hasna/cloud`.
 - Product ownership: OpenAutomations owns automation specs, trigger
   materialization, durable automation runs, deterministic queued action rows,
   approval gates, DLQ/replay, webhook route metadata, and daemon leases.
@@ -36,6 +36,10 @@ implementation task and release plan.
 - `@hasna/automations/paths`: data-directory and daemon path helpers.
 - `@hasna/automations/runtime`: runtime binding descriptors, currently for
   OpenLoops handoff.
+- `@hasna/automations/contracts`: shared contract adapters for work runs,
+  approval decisions, and evidence references.
+- `@hasna/automations/recipes`: launch follow-up recipe rendering and file
+  helpers.
 - `@hasna/automations/cli`: CLI runner entrypoint for tests and embedding.
 - `@hasna/automations/daemon`: daemon runner and webhook server entrypoint.
 
@@ -44,11 +48,8 @@ are useful for integration tests and targeted embedding, but future expansion
 should avoid turning CLI or daemon internals into a broad compatibility
 promise. Add new subpaths only when they map to a stable integration boundary.
 
-Current package metadata needs one follow-up decision before the next publish:
-the worktree remote is `https://github.com/hasna/automations.git`, while the
-package `repository`, `homepage`, and `bugs` URLs point at
-`hasna/open-automations`. Confirm the canonical GitHub repository name and
-align package metadata in a focused implementation task.
+Package repository, homepage, and bugs metadata use the canonical
+`https://github.com/hasna/automations` repository.
 
 ## CLI Bin Surface
 
@@ -62,11 +63,13 @@ The `automations` CLI should remain the stable local operator surface for:
 - `status` and `init`.
 - `spec example`.
 - `validate`, `create`, `list`, and `simulate`.
+- `runs list` and `runs show`, including shared-contract output.
 - `queue claim`, `queue complete`, `queue fail`, `queue approve`, and
   `queue reject`.
 - `dlq list` and `dlq replay`.
 - `webhooks create`, `list`, `show`, `enable`, `disable`, `archive`,
   `rotate-secret`, `test`, and `event`.
+- `recipes list` and `recipes render launch-followup`.
 - `runtimes`.
 
 The `automations-daemon` CLI should remain the stable daemon surface for:
@@ -93,6 +96,8 @@ The root SDK currently re-exports:
   `daemonLogPath`, `daemonPidFilePath`, and `ensureAutomationsDataDir`.
 - Runtime binding helpers `createOpenLoopsRuntimeBinding` and
   `listDefaultRuntimeBindings`.
+- Contract adapters for shared work-run, decision, and evidence contracts.
+- Launch follow-up recipe rendering, listing, writing, and loading helpers.
 
 Keep `EventEnvelopeLike` structural. That lets OpenEvents deliveries enter
 Automations without making OpenEvents durable storage or transport APIs part of
@@ -102,7 +107,8 @@ what Automations materializes and workers execute.
 
 Future SDK work should split along stable boundaries:
 
-- A recipe/compiler layer can be added after the domain model task lands.
+- Additional recipe or compiler layers should remain explicit stable
+  boundaries alongside the shipped launch follow-up recipe pack.
 - An optional OpenEvents adapter can compile subscriptions or normalize
   deliveries, but should not make OpenEvents the source of durable automation
   state.
@@ -129,6 +135,15 @@ queue leases, approval gates, DLQ behavior, secret-reference rules, or runtime
 ownership boundaries.
 
 ## Dependency Direction
+
+### `@hasna/contracts`
+
+Direction: shared runtime contract dependency.
+
+OpenAutomations depends directly on OpenContracts to emit validated work-run,
+approval decision, resource, and evidence documents at package and CLI
+boundaries. Internal automation records remain the durable source model; the
+adapter layer maps its broader status vocabulary without replacing it.
 
 ### `@hasna/actions`
 
@@ -191,6 +206,11 @@ Current docs:
   ingress, and explicit OpenLoops handoff. Its install example matches the
   current package peer dependency shape: `@hasna/automations` plus
   `@hasna/actions`.
+- `docs/cli.md` is the complete operator command and daemon-default reference.
+- `docs/sdk.md` records the export map, durable store behavior, contract
+  adapters, runtime descriptor, and recipe surface.
+- `docs/webhooks.md` records route mapping, lifecycle, signature resolution,
+  local command boundaries, and HTTP response behavior.
 - `CONTRIBUTING.md` records Bun validation and the rule that runtime
   integrations must not move product ownership into OpenLoops.
 - `SECURITY.md` records private reporting and secret-reference expectations.
@@ -202,11 +222,13 @@ Current test coverage:
   materialization, queue rows, replay requests, daemon heartbeat, webhook
   routes, idempotency, dependencies, approval gates, stale runner guards, and
   spec validation.
-- CLI help, status, spec examples, daemon status/run, concurrent fresh DB
-  initialization, create/list/simulate/claim/fail/replay, runtime listing, and
-  webhook route commands.
+- CLI help parity, status, spec examples, daemon status/run, concurrent fresh
+  DB initialization, create/list/simulate/claim/fail/replay, shared-contract
+  run output, runtime listing, recipe rendering, and webhook route commands.
 - Daemon HTTP webhook serving, raw-body HMAC verification, and deterministic
   failure responses.
+- Shared work-run, approval decision, and evidence contract adapters, plus the
+  launch follow-up recipe pack and file loader.
 
 Recommended validation for package-surface changes:
 
@@ -224,28 +246,17 @@ repository workflow.
 
 ## Follow-Up Map
 
-Keep these existing planning and implementation tracks:
+Keep these open planning and implementation tracks:
 
-- `4e9e2f9d`: define the AutomationRecipe domain model.
 - `2bacc4b1`: design the compiler to OpenEvents and OpenLoops boundaries.
 - `1459a133`: design approval and policy flow.
 - `feae83a6`: design Automations CLI and SDK evolution.
 - `dc48c754`: plan MCP and dashboard after CLI stabilization.
 - `40cefcfe`: design observability and audit timeline.
-- `d6dd5932`: adopt shared contract types for work runs, decisions, and
-  evidence references.
 - `60b574ab`: converge deterministic queue handoff and `loops events handle`
   reaction paths without merging product ownership.
 - `1248913a`: wire schedule, manual, and API triggers.
 - `050a9c85`: implement per-step `when` condition evaluation.
-- `54eecc38`: investigate duplicate packed `dist/cli/index.js` listing.
-- `20a990d1`: add repeatable webhook release smoke checks.
-
-Create or keep one focused follow-up for the metadata discrepancy if no
-deduped task already exists:
-
-- Align `@hasna/automations` package repository, homepage, and bugs URLs with
-  the canonical GitHub remote before the next publish.
 
 Do not mutate `open-actions`, `open-events`, `open-loops`, or
 `open-connectors` from this repository plan. Cross-repo integration work should

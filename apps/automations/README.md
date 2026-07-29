@@ -23,31 +23,54 @@ console.log(store.status());
 store.close();
 ```
 
+## Documentation
+
+- [CLI reference](docs/cli.md): commands, options, queue semantics, and daemon defaults.
+- [SDK reference](docs/sdk.md): exports, store behavior, contract adapters, and recipes.
+- [Webhook ingress](docs/webhooks.md): mappings, route lifecycle, signatures, and HTTP responses.
+- [Repository and package plan](docs/repo-package-plan.md): package boundaries and follow-up direction.
+
 ## CLI
 
 ```sh
 automations --help
+automations --version
+automations --json init
 automations --json status
 automations --json spec example
 automations --json validate automation.json
 automations --json create automation.json
 automations --json list
 automations --json simulate automation.json --persist --event-json '{"id":"evt_1","source":"open-events","type":"ticket.created","data":{"priority":"critical"}}'
+automations --json runs list --contract
+automations --json runs show <run-id> --contract
 automations --json queue claim --runner worker-1
-automations --json queue fail <action-id> --code UPSTREAM_500 --message "upstream failed"
+automations --json queue complete <action-id> --runner worker-1 --result-json '{"ok":true}'
+automations --json queue fail <action-id> --runner worker-1 --code UPSTREAM_500 --message "upstream failed"
+automations --json queue approve <action-id>
+automations --json queue reject <action-id> --reason "policy denied"
 automations --json dlq list
 automations --json dlq replay <action-id>
 automations --json webhooks create tickets.escalate-critical --id tickets --path /webhooks/tickets --source open-events --type ticket.created --data-path data --dedupe-key-header X-Hasna-Event-Id --secret-ref secret://automations/webhooks/tickets
 automations --json webhooks event tickets --body-json '{"data":{"priority":"critical"}}' --header X-Hasna-Event-Id:evt_1
 automations --json webhooks test tickets --body-json '{"data":{"priority":"critical"}}' --header X-Hasna-Event-Id:evt_1
+automations --json webhooks list
+automations --json webhooks show tickets
+automations --json webhooks disable tickets
+automations --json webhooks enable tickets
+automations --json webhooks rotate-secret tickets --secret-ref secret://automations/webhooks/tickets-v2
+automations --json webhooks archive tickets
 automations --json recipes list
 automations --json recipes render launch-followup --app-id open-todos --package @hasna/todos --app-version 1.2.3 --out ./specs --create
 automations --json runtimes
 automations-daemon --json status
+automations-daemon --version
 automations-daemon --json run
 automations-daemon --json run --once
 automations-daemon --json serve --host 127.0.0.1 --port 7391
 ```
+
+Global `--dir` and `--json` options must appear before the command.
 
 The default data root is `~/.hasna/automations`. Override it with
 `HASNA_AUTOMATIONS_DIR` or `AUTOMATIONS_DATA_DIR`.
@@ -57,17 +80,18 @@ it receives `SIGINT` or `SIGTERM`. Use `--once` for smoke checks and tests.
 
 ## Release Webhook Smoke
 
-The repeatable release smoke for the `@hasna/automations@0.1.1` installed
-package evidence is captured in `scripts/release-webhook-smoke.ts`:
+The repeatable installed-package release smoke is captured in
+`scripts/release-webhook-smoke.ts`. With no options it installs the version in
+`package.json` and its default `@hasna/actions` peer into a disposable project:
 
 ```sh
-bun run smoke:webhook-release -- --package @hasna/automations@0.1.1
+bun run smoke:webhook-release
 ```
 
 The script installs the requested package spec into a disposable Bun project.
-For the exact `@hasna/automations@0.1.1` replay it also pins the compatible
-release peer `@hasna/actions@0.1.0` unless `--no-default-peers` is passed. It
-uses disposable `HASNA_AUTOMATIONS_DIR`
+For the historical `@hasna/automations@0.1.1` replay it pins
+`@hasna/actions@0.1.0`; other package specs use `@hasna/actions@^0.1.0` unless
+`--no-default-peers` is passed. It uses disposable `HASNA_AUTOMATIONS_DIR`
 state, creates a fixture automation and signed webhook route, records daemon
 heartbeat and `/healthz` checks, sends a signed HTTP `POST`, claims the queued
 action as an OpenLoops runner, and exports a normalized webhook event as dry-run
@@ -137,8 +161,10 @@ so the OpenEvents package remains the trigger ingress boundary.
 OpenEvents deliveries are input, not durable automation state. OpenAutomations
 uses `event.dedupeKey` first and falls back to `event.id` when building
 event-to-run and event-to-action idempotency keys. Replaying the same event
-through OpenEvents therefore returns the existing run/action rows unless the
-operator creates an explicit replay request through OpenAutomations.
+through OpenEvents therefore returns the existing run/action rows. SDK replay
+requests record operator intent but do not rematerialize a run or bypass
+idempotency; `dlq replay` is the executable replay surface and only requeues a
+dead action.
 
 OpenLoops is an optional runtime binding for deterministic OpenAutomations
 actions, not the scheduler or control plane for automations. A runtime worker
@@ -164,7 +190,9 @@ requests on registered webhook paths, verifies HMAC SHA-256 signatures over the
 exact raw request bytes when a route has `secretRef`, normalizes the request
 into an event envelope, and then calls the durable materializer. It never stores
 raw webhook secrets, raw signatures, request headers, or raw payload blobs by
-default; route metadata stores secret references and body hashes only.
+default. Route state stores secret references, while normalized event envelopes
+include a SHA-256 body hash and route metadata; durable run/action metadata does
+not copy the raw payload.
 
 At runtime the daemon resolves signed route secrets from route-scoped
 environment variables:
