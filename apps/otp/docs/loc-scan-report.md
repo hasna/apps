@@ -1,10 +1,7 @@
 # LOC Scan Report — open-otp
 
-**Scan date:** 2026-07-05  
+**Scan date:** 2026-07-29  
 **Repository:** `@hasna/otp` (open-otp)  
-**Worktree:** `4d3b38b2-d855-422e-98c7-01a1974e319d-0ccb9351`  
-**Branch:** `openloops/open-otp/4d3b38b2-d855-422e-98c7-01a1974e319d-0ccb9351`  
-**Base commit:** `42bbbfc`
 
 ## Thresholds
 
@@ -16,32 +13,33 @@
 ## Scan command
 
 ```bash
-find . -type f \( -name '*.ts' -o -name '*.js' \) ! -path '*/node_modules/*' ! -path '*/.git/*' | xargs wc -l | sort -n
+git ls-files 'src/**/*.ts' 'src/*.ts' 'tests/*.ts' | sort -u | xargs wc -l | sort -n
 ```
 
 Verification command (acceptance criteria):
 
 ```bash
-cd /home/hasna/workspace/hasna/opensource/open-otp && find src -name '*.ts' | xargs wc -l | sort -n | tail
+git ls-files 'src/**/*.ts' 'src/*.ts' | sort -u | xargs wc -l | sort -n
 ```
 
 ## Results
 
-**14 source/test files scanned; 1,158 total lines.**
+**14 source/test files scanned; 1,529 total lines.**
 
 | File | LOC |
 |------|-----|
-| `tests/totp.test.ts` | 20 |
-| `tests/otpauth.test.ts` | 22 |
 | `tests/helpers.ts` | 28 |
 | `src/index.ts` | 32 |
-| `tests/storage.test.ts` | 48 |
 | `src/otpauth.ts` | 55 |
 | `tests/cli.test.ts` | 65 |
+| `tests/otpauth.test.ts` | 69 |
 | `src/types.ts` | 71 |
 | `src/crypto.ts` | 84 |
 | `src/totp.ts` | 109 |
 | `src/mcp/index.ts` | 117 |
+| `tests/crypto.test.ts` | 124 |
+| `tests/totp.test.ts` | 129 |
+| `tests/storage.test.ts` | 139 |
 | `src/storage.ts` | 233 |
 | `src/cli/index.ts` | 274 |
 

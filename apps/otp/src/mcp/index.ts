@@ -24,7 +24,7 @@ function parseTime(value: string | undefined): Date | number | undefined {
   if (!value) return undefined;
   if (/^\d+$/.test(value)) return Number.parseInt(value, 10) * 1000;
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) throw new Error("at must be a Unix timestamp or ISO date");
+  if (Number.isNaN(date.getTime())) throw new Error("at must be a Unix timestamp in seconds or ISO date");
   return date;
 }
 
@@ -59,7 +59,7 @@ export function buildServer(): McpServer {
     "Generate a TOTP code by id, label, issuer:account, or unique account. Seeds are never returned.",
     {
       target: z.string().describe("OTP entry id, label, issuer:account, or unique account"),
-      at: z.string().optional().describe("Unix timestamp or ISO date for deterministic generation"),
+      at: z.string().optional().describe("Unix timestamp in seconds or ISO date for deterministic generation"),
     },
     async (args) => jsonText(generateOtpCode(args.target, generationOptions(args.at))),
   );

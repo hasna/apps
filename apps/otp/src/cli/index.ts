@@ -38,7 +38,7 @@ function parseTime(value: string | undefined): Date | number | undefined {
   if (!value) return undefined;
   if (/^\d+$/.test(value)) return Number.parseInt(value, 10) * 1000;
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) throw new Error("--at must be a Unix timestamp or ISO date");
+  if (Number.isNaN(date.getTime())) throw new Error("--at must be a Unix timestamp in seconds or ISO date");
   return date;
 }
 
@@ -137,8 +137,8 @@ async function main(): Promise<void> {
     .option("--secret-stdin", "read the base32 TOTP secret from stdin")
     .option("--secret-env <name>", "read the base32 TOTP secret from an environment variable")
     .option("--algorithm <algorithm>", "SHA1, SHA256, or SHA512", "SHA1")
-    .option("--digits <n>", "code length, 6 to 8 digits")
-    .option("--period <seconds>", "TOTP period in seconds")
+    .option("--digits <n>", "code length, 6 to 8 digits (default: 6)")
+    .option("--period <seconds>", "TOTP period, 1 to 300 seconds (default: 30)")
     .option("--json", "print JSON")
     .action(async (options: {
       account: string;
@@ -208,7 +208,7 @@ async function main(): Promise<void> {
     .description("Show one OTP entry without revealing its seed")
     .argument("<target>", "entry id, label, issuer:account, or unique account")
     .option("--code", "include a freshly generated TOTP code")
-    .option("--at <time>", "Unix timestamp or ISO date for code generation")
+    .option("--at <time>", "Unix timestamp in seconds or ISO date (with --code)")
     .option("--json", "print JSON")
     .action((target: string, options: { code?: boolean; at?: string; json?: boolean }) => {
       const entry = getOtpEntry(target);
@@ -241,9 +241,9 @@ async function main(): Promise<void> {
   program
     .command("generate")
     .alias("code")
-    .description("Generate a TOTP code by entry id or label")
+    .description("Generate a TOTP code by id, label, issuer:account, or unique account")
     .argument("<target>", "entry id, label, issuer:account, or unique account")
-    .option("--at <time>", "Unix timestamp or ISO date")
+    .option("--at <time>", "Unix timestamp in seconds or ISO date")
     .option("--json", "print JSON")
     .action((target: string, options: { at?: string; json?: boolean }) => {
       const generated = generateOtpCode(target, generationOptions(options.at));

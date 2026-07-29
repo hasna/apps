@@ -5,11 +5,17 @@ Local encrypted OTP/TOTP manager for Hasna agent workflows.
 `open-otp` provides:
 
 - `otp` CLI for adding, importing, listing, showing, removing, and generating TOTP codes.
-- `otp-mcp` MCP server with tools to list labels and generate codes without returning seeds.
+- `otp-mcp` MCP server with tools to list labels, generate codes, and inspect storage status without returning seeds.
 - SDK exports for TypeScript/Bun automation.
 - Local encrypted storage at `~/.hasna/otp/`.
 
 TOTP seeds are credentials. Normal CLI, SDK metadata, and MCP responses never return seed values.
+
+Reference documentation:
+
+- [CLI commands and options](./docs/cli.md)
+- [MCP server and tools](./docs/mcp.md)
+- [SDK exports and types](./docs/sdk.md)
 
 ## Install
 
@@ -64,6 +70,13 @@ Set `HASNA_OTP_HOME=/path/to/store` to use a non-default local store.
 
 ## CLI
 
+Initialize the key and store files explicitly:
+
+```bash
+otp bootstrap
+otp status
+```
+
 Add an entry without printing the seed:
 
 ```bash
@@ -94,6 +107,7 @@ Generate a TOTP code:
 
 ```bash
 otp generate Example:agent@example.com
+otp generate Example:agent@example.com --at 1710000000
 otp generate Example:agent@example.com --json
 ```
 
@@ -103,7 +117,11 @@ Remove an entry:
 otp remove Example:agent@example.com
 ```
 
-CLI commands return entry metadata (`id`, `label`, `issuer`, `account`, algorithm settings, timestamps) or generated codes. Seeds and `encrypted_secret` are never included in stdout.
+Targets may be an id, label, `issuer:account`, or unique account. The `code`
+and `rm` aliases map to `generate` and `remove`. Numeric `--at` values are Unix
+timestamps in seconds; ISO dates are also accepted.
+
+CLI commands return entry metadata (`id`, `label`, `issuer`, `account`, algorithm settings, timestamps), storage status, or generated codes. Seeds and `encrypted_secret` are never included in stdout. See the [CLI reference](./docs/cli.md) for every command, option, default, validation range, input precedence rule, and output shape.
 
 ## MCP
 
@@ -121,6 +139,8 @@ Tools:
 
 MCP tools never return seeds.
 
+See the [MCP reference](./docs/mcp.md) for tool inputs and response fields.
+
 ## SDK
 
 ```ts
@@ -130,7 +150,7 @@ const entries = listOtpEntries();
 const code = generateOtpCode(entries[0].id);
 ```
 
-Key exports:
+Common storage exports:
 
 - `addOtpEntry(input)` — accepts `secret` as write input; returns `OtpEntry` without it
 - `importOtpAuthUri(input)` — parses `otpauth://` URI; returns `OtpEntry` without secret
@@ -140,7 +160,16 @@ Key exports:
 - `removeOtpEntry(target)` — returns removed `OtpEntry` (no `encrypted_secret`)
 - `getOtpStorageStatus()` — paths and counts; no key bytes or seeds
 
-Exported types (`OtpEntry`, `GeneratedOtpCode`, `OtpStorageStatus`) never include `encrypted_secret` or plaintext seeds. `StoredOtpEntry` with `encrypted_secret` is internal to the storage layer.
+The root package also exports storage bootstrap/path helpers, `parseOtpAuthUri()`,
+TOTP generation and normalization utilities, and their public types. Subpath
+exports are available at `@hasna/otp/otpauth`, `@hasna/otp/storage`, and
+`@hasna/otp/totp`.
+
+Exported result types (`OtpEntry`, `GeneratedOtpCode`, `GeneratedTotp`,
+`OtpStorageStatus`) never include `encrypted_secret` or plaintext seeds.
+`StoredOtpEntry` with `encrypted_secret` is internal to the storage layer. See
+the [SDK reference](./docs/sdk.md) for all exports, types, defaults, and option
+semantics.
 
 ## Development
 
