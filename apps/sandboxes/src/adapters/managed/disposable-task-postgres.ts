@@ -38,7 +38,12 @@ import {
   parseDisposableSandboxTaskRequestV1,
 } from "./disposable-task"
 import type { Digest } from "./types"
-import type { PostgresClientV1, PostgresSessionV1 } from "./postgres-client"
+import {
+  assertPostgresClientV1,
+  assertPostgresSessionV1,
+  type PostgresClientV1,
+  type PostgresSessionV1,
+} from "./postgres-client"
 
 const MIGRATION_NAME = "0001_disposable_task_journal.sql"
 const MIGRATION_V2_NAME = "0002_disposable_task_intent_v2.sql"
@@ -563,6 +568,7 @@ async function assertSessionIdentity(
 ): Promise<JournalSessionIdentity> {
   if (!SAFE_ROLE.test(expectedRole) || expectedDatabase.length === 0 ||
     !SAFE_CLUSTER_IDENTIFIER.test(expectedClusterSystemIdentifier)) throw adapterError("validation_failed")
+  assertPostgresClientV1(client, "disposable task journal identity check")
   const rows = await client.query<JournalSessionIdentity>(`
     SELECT session_user::text AS session_user, current_user::text AS current_user,
       current_database()::text AS current_database,
@@ -630,6 +636,7 @@ async function applyPostgresDisposableTaskJournalMigrationTarget(
     options.verification_key_sha256]) assertDigest(value)
   assertText(options.signer_principal)
   assertText(options.signing_key_id)
+  assertPostgresClientV1(client, "disposable task journal migration")
   const identity = await client.query<{
     session_user: string
     current_user: string
@@ -661,6 +668,7 @@ async function applyPostgresDisposableTaskJournalMigrationTarget(
     checksum: digestBytes(bytes(migration.source)),
   }))
   await client.transaction(async (session) => {
+    assertPostgresSessionV1(session, "disposable task journal migration transaction")
     await session.query("SELECT pg_advisory_xact_lock(36711471343122001)")
     await session.query(`CREATE SCHEMA IF NOT EXISTS ${SCHEMA}`)
     await session.query(`CREATE TABLE IF NOT EXISTS ${SCHEMA}.schema_migrations (

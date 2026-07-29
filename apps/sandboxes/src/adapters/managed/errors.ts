@@ -31,9 +31,9 @@ export class AdapterContractError extends Error {
 
   constructor(
     code: AdapterErrorCodeV1,
-    options: { retryable?: boolean; quarantineRequired?: boolean; cause?: unknown } = {},
+    options: { retryable?: boolean; quarantineRequired?: boolean; cause?: unknown; message?: string } = {},
   ) {
-    super(code)
+    super(options.message ?? code)
     this.code = code
     this.retryable = options.retryable ?? false
     this.quarantine_required = options.quarantineRequired ?? false
@@ -51,7 +51,7 @@ export class AdapterContractError extends Error {
 
 export function adapterError(
   code: AdapterErrorCodeV1,
-  options?: { retryable?: boolean; quarantineRequired?: boolean; cause?: unknown },
+  options?: { retryable?: boolean; quarantineRequired?: boolean; cause?: unknown; message?: string },
 ): AdapterContractError {
   return new AdapterContractError(code, options)
 }

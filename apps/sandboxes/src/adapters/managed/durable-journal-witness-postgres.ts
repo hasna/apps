@@ -17,7 +17,12 @@ import type {
   DurableJournalWitnessReceiptV1,
 } from "./disposable-task"
 import type { Digest } from "./types"
-import type { PostgresClientV1, PostgresSessionV1 } from "./postgres-client"
+import {
+  assertPostgresClientV1,
+  assertPostgresSessionV1,
+  type PostgresClientV1,
+  type PostgresSessionV1,
+} from "./postgres-client"
 
 const SCHEMA = "sandboxes_durable_journal_witness"
 const MIGRATION_NAME = "0001_durable_journal_witness.sql"
@@ -308,6 +313,7 @@ function validateRoleConfiguration(
 }
 
 async function sessionIdentity(client: PostgresClientV1): Promise<SessionIdentity> {
+  assertPostgresClientV1(client, "durable journal witness identity check")
   const rows = await client.query<SessionIdentity>(`
     SELECT session_user::text AS session_user, current_user::text AS current_user,
       current_database()::text AS current_database,
@@ -451,6 +457,7 @@ export async function applyPostgresDurableJournalWitnessMigrationV1(
   const database = quoteIdentifier(options.expected_database)
 
   await client.transaction(async (session) => {
+    assertPostgresSessionV1(session, "durable journal witness migration transaction")
     await session.query("SELECT pg_advisory_xact_lock(36711471343122011)")
     await session.query(`CREATE SCHEMA IF NOT EXISTS ${SCHEMA}`)
     await session.query(`CREATE TABLE IF NOT EXISTS ${SCHEMA}.schema_migrations (
