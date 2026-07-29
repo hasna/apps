@@ -13,6 +13,7 @@ import {
   resolveStationTemplate,
   type CommandProbe,
 } from "../src/station-template/index.js";
+import { sortSystemdDropinNames } from "../src/station-template/check.js";
 
 const SHIPPED = defaultTemplatesDir();
 const repoRoot = resolve(import.meta.dir, "..");
@@ -411,6 +412,13 @@ describe("drift check", () => {
   });
 
   test("drop-ins use systemd's lexicographic order when later assignments restore compliance", () => {
+    // This assertion is independent of how the test filesystem happens to
+    // enumerate entries, and fails if the production ordering step is lost.
+    expect(sortSystemdDropinNames(["90-restore.conf", "README", "10-lower.conf"])).toEqual([
+      "10-lower.conf",
+      "90-restore.conf",
+    ]);
+
     const { root, home, effective } = buildCleanFixture();
     const unitDir = join(home, ".config/systemd/user");
     const dropinDir = join(unitDir, "hasna-dropin-order.service.d");
