@@ -13,14 +13,50 @@ import { RESTART_INTERRUPTED_RUN_PREFIX } from "../lib/health.js";
 
 const cliPath = join(dirname(fileURLToPath(import.meta.url)), "index.ts");
 
+function hasArgSequence(args: string[], sequence: string[]): boolean {
+  return args.some((_, index) => sequence.every((entry, offset) => args[index + offset] === entry));
+}
+
+function maybeAutoSourceTaskEnv(dataDir: string, args: string[], env: Record<string, string>): Record<string, string> {
+  if (env.OPENLOOPS_TEST_DISABLE_AUTO_SOURCE_TASK) return {};
+  if (args.includes("--dry-run")) return {};
+  const isTodosTaskCreate =
+    hasArgSequence(args, ["events", "handle", "todos-task"]) ||
+    hasArgSequence(args, ["routes", "create", "todos-task"]);
+  if (!isTodosTaskCreate) return {};
+  const binDir = join(dataDir, "auto-source-task-bin");
+  mkdirSync(binDir, { recursive: true });
+  const todosBin = join(binDir, "todos");
+  writeFileSync(
+    todosBin,
+    [
+      "#!/usr/bin/env bash",
+      "for arg in \"$@\"; do",
+      "  if [[ \"$arg\" == \"inspect\" ]]; then",
+      "    task_id=\"${@: -1}\"",
+      "    printf '{\"id\":\"%s\",\"title\":\"CLI route source task\",\"status\":\"pending\",\"tags\":[\"auto:route\"]}' \"$task_id\"",
+      "    exit 0",
+      "  fi",
+      "done",
+      "printf 'unexpected todos command: %s\\n' \"$*\" >&2",
+      "exit 2",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(todosBin, 0o755);
+  return { PATH: `${binDir}:${env.PATH ?? process.env.PATH ?? ""}` };
+}
+
 function runCli(dataDir: string, args: string[], input?: string, env: Record<string, string> = {}) {
   const isolatedEnv = {
     HASNA_LOOPS_STORAGE_MODE: "local",
     HASNA_LOOPS_API_URL: "",
     HASNA_LOOPS_API_KEY: "",
+    LOOPS_MACHINE_ID: "cli-test-machine",
   };
+  const autoSourceTaskEnv = maybeAutoSourceTaskEnv(dataDir, args, env);
   return spawnSync(process.execPath, [cliPath, ...args], {
-    env: { ...process.env, ...isolatedEnv, ...env, LOOPS_DATA_DIR: dataDir },
+    env: { ...process.env, ...isolatedEnv, ...env, ...autoSourceTaskEnv, LOOPS_DATA_DIR: dataDir },
     input,
     encoding: "utf8",
   });
@@ -4054,6 +4090,63 @@ describe("loops CLI", () => {
     expect(secondValue.deduped).toBe(true);
     expect(secondValue.idempotencyKey).toBe(firstValue.idempotencyKey);
     expect(secondValue.loop.id).toBe(firstValue.loop.id);
+  });
+
+  test("todos task event handler skips missing source tasks before creating a loop", () => {
+    const dataDir = freshDataDir("loops-cli-event-handler-missing-source-");
+    const binDir = join(dataDir, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "for arg in \"$@\"; do",
+        "  if [[ \"$arg\" == \"inspect\" ]]; then",
+        "    printf 'task not found\\n' >&2",
+        "    exit 1",
+        "  fi",
+        "done",
+        "printf 'unexpected todos command: %s\\n' \"$*\" >&2",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todosBin, 0o755);
+    const event = {
+      id: "evt-task-created-missing-source",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-created-missing-source",
+        title: "Missing source task",
+        working_dir: "/tmp/open-todos",
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    const result = runCli(
+      dataDir,
+      ["--json", "events", "handle", "todos-task", "--todos-project", join(dataDir, "todos-source")],
+      JSON.stringify(event),
+      { PATH: `${binDir}:/usr/bin:/bin`, OPENLOOPS_TEST_DISABLE_AUTO_SOURCE_TASK: "1" },
+    );
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.skipped).toBe(true);
+    expect(value.blocked).toBe(true);
+    expect(value.reason).toContain("source todos task is not resolvable");
+    expect(value.sourceTaskResolution).toMatchObject({
+      checked: true,
+      resolved: false,
+      taskId: "task-created-missing-source",
+      todosProjectPath: join(dataDir, "todos-source"),
+      error: "task not found\n",
+    });
+    const loops = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);
+    expect(loops).toHaveLength(0);
   });
 
   test("todos task drain smoke admits one task-lifecycle workflow for a disposable repo and dedupes replay", () => {

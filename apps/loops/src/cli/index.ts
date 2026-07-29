@@ -1276,6 +1276,14 @@ async function handleRouteEvent(kind: string, opts: TodosTaskRouteOptions): Prom
   const event = await readEventEnvelopeInput(opts);
   const result = routeEventByKind(kind, event, opts);
   print(result.value, result.human);
+  // A skip because the source could not be reached is not a successful routing
+  // decision: the events transport treats exit 0 as delivered and never retries,
+  // so a router launched without `todos` on PATH would drop every task event while
+  // every delivery reported success. Same doctrine as the drain's `fatal` count.
+  if (result.value.sourceUnavailable) {
+    console.error(`route could not reach the task source; event not routed and not retried unless this run fails: ${String(result.value.reason ?? "source unavailable")}`);
+    process.exitCode = 1;
+  }
 }
 
 function handleRouteDrain(kind: string, opts: TodosDrainOptions): void {

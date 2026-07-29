@@ -56,6 +56,8 @@ export interface TodosTaskRouteOptions {
   todosProject?: string;
   /** Internal drain context; never derived from CLI/event fields. */
   sourceTodosProjectPath?: string;
+  /** Internal drain proof that this task came from the active todos source queue. */
+  sourceTaskResolved?: boolean;
 }
 
 export interface TodosReadyTask {

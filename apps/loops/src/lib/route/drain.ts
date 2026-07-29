@@ -689,6 +689,7 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
         ...opts,
         ...(explicitRouteProjectPath ? { projectPath: explicitRouteProjectPath } : {}),
         ...(sourceProject ? { sourceTodosProjectPath: sourceProject } : {}),
+        sourceTaskResolved: true,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

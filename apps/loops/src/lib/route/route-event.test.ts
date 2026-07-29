@@ -21,13 +21,16 @@ interface RouteEnv {
 
 function withRouteEnv(): RouteEnv {
   const oldDataDir = process.env.LOOPS_DATA_DIR;
+  const oldMachineId = process.env.LOOPS_MACHINE_ID;
   const dataDir = mkdtempSync(join(tmpdir(), "loops-route-dedupe-"));
   process.env.LOOPS_DATA_DIR = dataDir;
+  process.env.LOOPS_MACHINE_ID = "route-event-test-machine";
   return {
     dataDir,
     restore: () => {
       if (oldDataDir === undefined) delete process.env.LOOPS_DATA_DIR;
       else process.env.LOOPS_DATA_DIR = oldDataDir;
+      restoreEnv("LOOPS_MACHINE_ID", oldMachineId);
       rmSync(dataDir, { recursive: true, force: true });
     },
   };
@@ -142,6 +145,54 @@ function withFakeCodewith(dataDir: string, diagnostics: unknown, opts: { status?
   };
 }
 
+function withFakeTodosInspect(dataDir: string, task: unknown, opts: { status?: number; stderr?: string } = {}): { calls: string; restore: () => void } {
+  const binDir = join(dataDir, "bin");
+  mkdirSync(binDir, { recursive: true });
+  const calls = join(dataDir, "todos-calls.log");
+  const todos = join(binDir, "todos");
+  writeFileSync(
+    todos,
+    [
+      "#!/usr/bin/env bash",
+      "printf '%s\\n' \"$*\" >> \"$OPENLOOPS_TEST_TODOS_CALLS\"",
+      "for arg in \"$@\"; do",
+      "  if [[ \"$arg\" == \"inspect\" ]]; then",
+      "    if [[ \"${OPENLOOPS_TEST_TODOS_STATUS:-0}\" != \"0\" ]]; then",
+      "      printf '%s\\n' \"$OPENLOOPS_TEST_TODOS_STDERR\" >&2",
+      "      exit \"$OPENLOOPS_TEST_TODOS_STATUS\"",
+      "    fi",
+      "    printf '%s' \"$OPENLOOPS_TEST_TODOS_TASK_JSON\"",
+      "    exit 0",
+      "  fi",
+      "done",
+      "printf 'unexpected todos command: %s\\n' \"$*\" >&2",
+      "exit 2",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(todos, 0o755);
+  const oldPath = process.env.PATH;
+  const oldCalls = process.env.OPENLOOPS_TEST_TODOS_CALLS;
+  const oldTaskJson = process.env.OPENLOOPS_TEST_TODOS_TASK_JSON;
+  const oldStatus = process.env.OPENLOOPS_TEST_TODOS_STATUS;
+  const oldStderr = process.env.OPENLOOPS_TEST_TODOS_STDERR;
+  process.env.PATH = `${binDir}:${process.env.PATH ?? ""}`;
+  process.env.OPENLOOPS_TEST_TODOS_CALLS = calls;
+  process.env.OPENLOOPS_TEST_TODOS_TASK_JSON = typeof task === "string" ? task : JSON.stringify(task);
+  process.env.OPENLOOPS_TEST_TODOS_STATUS = String(opts.status ?? 0);
+  process.env.OPENLOOPS_TEST_TODOS_STDERR = opts.stderr ?? "task not found";
+  return {
+    calls,
+    restore: () => {
+      restoreEnv("PATH", oldPath);
+      restoreEnv("OPENLOOPS_TEST_TODOS_CALLS", oldCalls);
+      restoreEnv("OPENLOOPS_TEST_TODOS_TASK_JSON", oldTaskJson);
+      restoreEnv("OPENLOOPS_TEST_TODOS_STATUS", oldStatus);
+      restoreEnv("OPENLOOPS_TEST_TODOS_STDERR", oldStderr);
+    },
+  };
+}
+
 describe("routeTodosTaskEvent dedupe re-admission", () => {
   let env: RouteEnv;
   beforeEach(() => {
@@ -156,6 +207,83 @@ describe("routeTodosTaskEvent dedupe re-admission", () => {
     expect(result.kind).toBe("created");
     expect(result.value.deduped).toBeFalsy();
     expect(workItemRow()).toEqual({ status: "admitted", attempts: 1 });
+  });
+
+  test("skips a task-created event when the source todos task is missing", () => {
+    const fakeTodos = withFakeTodosInspect(env.dataDir, {}, { status: 1, stderr: "task not found" });
+    try {
+      const result = routeTodosTaskEvent(pendingTaskEvent(), {
+        ...ROUTE_OPTS,
+        todosProject: "/tmp/source-todos",
+      });
+
+      expect(result.kind).toBe("skipped");
+      expect(result.value.blocked).toBe(true);
+      expect(result.value.reason).toContain("source todos task is not resolvable");
+      expect(result.value.sourceTaskResolution).toMatchObject({
+        checked: true,
+        resolved: false,
+        taskId: TASK_ID,
+        todosProjectPath: "/tmp/source-todos",
+        error: "task not found\n",
+      });
+      expect(loopCount()).toBe(0);
+      expect(workItemRow()).toBeUndefined();
+      expect(readFileSync(fakeTodos.calls, "utf8")).toContain(`--project /tmp/source-todos --json inspect ${TASK_ID}`);
+    } finally {
+      fakeTodos.restore();
+    }
+  });
+
+  test("a definitive 'task not found' from the source is NOT flagged as an unavailable source", () => {
+    // Negative control for the two tests below: the source answered, so the skip is
+    // benign and must stay exit-0. If this ever starts reporting sourceUnavailable,
+    // every legitimately-absent task would fail its route run.
+    const fakeTodos = withFakeTodosInspect(env.dataDir, {}, { status: 1, stderr: "task not found" });
+    try {
+      const result = routeTodosTaskEvent(pendingTaskEvent(), { ...ROUTE_OPTS, todosProject: "/tmp/source-todos" });
+      expect(result.kind).toBe("skipped");
+      expect(result.value.sourceUnavailable).toBeUndefined();
+      expect(result.value.sourceTaskResolution).toMatchObject({ resolved: false });
+      expect((result.value.sourceTaskResolution as { sourceUnavailable?: boolean }).sourceUnavailable).toBeUndefined();
+      expect(loopCount()).toBe(0);
+    } finally {
+      fakeTodos.restore();
+    }
+  });
+
+  test("flags sourceUnavailable when todos is not on PATH, so the caller can fail instead of silently dropping the event", () => {
+    // Regression for the silent-event-loss hole: a router launched without `todos`
+    // on PATH skipped every event and exited 0, and the events transport marked each
+    // silent drop a successful delivery, so nothing was ever retried.
+    const emptyBin = join(env.dataDir, "empty-bin");
+    mkdirSync(emptyBin, { recursive: true });
+    const oldPath = process.env.PATH;
+    process.env.PATH = emptyBin;
+    try {
+      const result = routeTodosTaskEvent(pendingTaskEvent(), { ...ROUTE_OPTS, todosProject: "/tmp/source-todos" });
+      expect(result.kind).toBe("skipped");
+      expect(result.value.sourceUnavailable).toBe(true);
+      expect(result.value.reason).toContain("could not ask the active todos source");
+      expect(result.value.sourceTaskResolution).toMatchObject({ checked: true, resolved: false, sourceUnavailable: true });
+      // Still refuses to route: unknown existence is not proven existence.
+      expect(loopCount()).toBe(0);
+    } finally {
+      restoreEnv("PATH", oldPath);
+    }
+  });
+
+  test("flags sourceUnavailable when the source exits 0 with output we cannot parse", () => {
+    const fakeTodos = withFakeTodosInspect(env.dataDir, "not-json-at-all", { status: 0 });
+    try {
+      const result = routeTodosTaskEvent(pendingTaskEvent(), { ...ROUTE_OPTS, todosProject: "/tmp/source-todos" });
+      expect(result.kind).toBe("skipped");
+      expect(result.value.sourceUnavailable).toBe(true);
+      expect(result.value.sourceTaskResolution).toMatchObject({ resolved: false, sourceUnavailable: true });
+      expect(loopCount()).toBe(0);
+    } finally {
+      fakeTodos.restore();
+    }
   });
 
   test("an in-flight (admitted) work item still dedupes", () => {
@@ -277,6 +405,7 @@ describe("routeTodosTaskEvent PR fingerprint dedupe", () => {
     const first = routeTodosTaskEvent(prTaskEvent("task-checkout-a"), {
       ...ROUTE_OPTS,
       sourceTodosProjectPath: "/repos/example-checkout-a",
+      sourceTaskResolved: true,
     });
     expect(first.kind).toBe("created");
     expect(first.value.idempotencyKey).toBe("todos-task:pr:hasna/example#7");
@@ -284,6 +413,7 @@ describe("routeTodosTaskEvent PR fingerprint dedupe", () => {
     const second = routeTodosTaskEvent(prTaskEvent("task-checkout-b"), {
       ...ROUTE_OPTS,
       sourceTodosProjectPath: "/repos/example-checkout-b",
+      sourceTaskResolved: true,
     });
     // Regression: the old (source-path, task-id) key kept these distinct and
     // spawned a full worker per checkout; the fingerprint collapses them to one.
@@ -308,15 +438,15 @@ describe("routeTodosTaskEvent PR fingerprint dedupe", () => {
           project_path: process.cwd(),
         },
       } as never,
-      { ...ROUTE_OPTS, sourceTodosProjectPath: "/repos/a" },
+      { ...ROUTE_OPTS, sourceTodosProjectPath: "/repos/a", sourceTaskResolved: true },
     );
     expect(first.kind).toBe("created");
     expect(first.value.idempotencyKey).toBe("todos-task:pr:hasna/example#7");
   });
 
   test("non-PR tasks from different checkouts keep independent keys (no false dedupe)", () => {
-    const first = routeTodosTaskEvent(plainTaskEvent("task-x"), { ...ROUTE_OPTS, sourceTodosProjectPath: "/repos/a" });
-    const second = routeTodosTaskEvent(plainTaskEvent("task-y"), { ...ROUTE_OPTS, sourceTodosProjectPath: "/repos/b" });
+    const first = routeTodosTaskEvent(plainTaskEvent("task-x"), { ...ROUTE_OPTS, sourceTodosProjectPath: "/repos/a", sourceTaskResolved: true });
+    const second = routeTodosTaskEvent(plainTaskEvent("task-y"), { ...ROUTE_OPTS, sourceTodosProjectPath: "/repos/b", sourceTaskResolved: true });
     expect(first.kind).toBe("created");
     // Two genuinely different tasks with no PR reference must NOT collapse.
     expect(second.kind).toBe("created");
@@ -495,6 +625,26 @@ describe("routeTodosTaskEvent operator-authoritative project-group admission", (
   test("concurrent admissions against one local store serialize under the group cap", async () => {
     const store = new Store(dbPath());
     store.close();
+    const binDir = join(env.dataDir, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "for arg in \"$@\"; do",
+        "  if [[ \"$arg\" == \"inspect\" ]]; then",
+        "    task_id=\"${@: -1}\"",
+        "    printf '{\"id\":\"%s\",\"status\":\"pending\",\"tags\":[\"auto:route\"]}' \"$task_id\"",
+        "    exit 0",
+        "  fi",
+        "done",
+        "printf 'unexpected todos command: %s\\n' \"$*\" >&2",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todosBin, 0o755);
     const cliPath = join(import.meta.dir, "../../cli/index.ts");
     const argsFor = (taskId: string) => [
       process.execPath,
@@ -523,6 +673,7 @@ describe("routeTodosTaskEvent operator-authoritative project-group admission", (
           HASNA_LOOPS_STORAGE_MODE: "local",
           HASNA_LOOPS_API_URL: "",
           HASNA_LOOPS_API_KEY: "",
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
         },
         stdout: "pipe",
         stderr: "pipe",

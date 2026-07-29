@@ -16,7 +16,7 @@ import type {
 } from "../../types.js";
 import { GATE_DEATH_CEILING, Store } from "../store.js";
 import { ValidationError } from "../errors.js";
-import { publicLoop, publicWorkflow, publicWorkflowInvocation, publicWorkflowWorkItem } from "../format.js";
+import { publicLoop, publicWorkflow, publicWorkflowInvocation, publicWorkflowWorkItem, redact } from "../format.js";
 import { listOpenMachines } from "../machines.js";
 import {
   renderEventWorkerVerifierWorkflow,
@@ -59,6 +59,7 @@ import {
   type RouteThrottleLimits,
 } from "./throttle.js";
 import type { TodosTaskRouteOptions, TodosTaskRoutePrint } from "./types.js";
+import { runLocalCommand } from "./todos-cli.js";
 
 /** Shared event-to-workflow route engine behind `routes create/preview` and the deprecated `events handle` aliases. */
 
@@ -329,6 +330,110 @@ interface PoolRoutingPlan {
   maxPerProfile?: number;
   /** Codewith agent step id -> lifecycle role, for the steps to reassign. */
   rolesByStepId: Record<string, AgentWorkflowRole>;
+}
+
+interface SourceTaskResolution {
+  checked: boolean;
+  resolved: boolean;
+  taskId: string;
+  todosProjectPath?: string;
+  status?: string;
+  title?: string;
+  error?: string;
+  /**
+   * True when we never got an answer from the source, as opposed to the source
+   * answering that the task is absent. Both skip the route, but only this one is
+   * a route error: a systemic misconfiguration (todos missing from a router's
+   * PATH, a hung source, unintelligible output) would otherwise drop every event
+   * while exiting 0, and the events transport would mark each silent drop a
+   * successful delivery and never retry it.
+   */
+  sourceUnavailable?: boolean;
+}
+
+function todosTaskRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const task = record.task;
+  if (task && typeof task === "object" && !Array.isArray(task)) return task as Record<string, unknown>;
+  return record;
+}
+
+function inspectSourceTodosTask(todosProjectPath: string, taskId: string): SourceTaskResolution {
+  const result = runLocalCommand("todos", ["--project", todosProjectPath, "--json", "inspect", taskId], {
+    timeoutMs: 30_000,
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  if (!result.ok) {
+    // A non-numeric status means the process never produced an exit status at
+    // all, so the source told us nothing about the task and its existence is
+    // unknown rather than disproven. Measured on bun 1.3.14: a missing binary
+    // yields status `undefined` (not `null`) while a timeout/signal kill yields
+    // `null` — so test the invariant ("we got no exit status") rather than either
+    // sentinel, which is why this is not `=== null`. A numeric non-zero status is
+    // the source answering, e.g. `todos inspect` exiting 1 for an absent task.
+    const sourceUnavailable = typeof result.status !== "number";
+    return {
+      checked: true,
+      resolved: false,
+      taskId,
+      todosProjectPath,
+      ...(sourceUnavailable ? { sourceUnavailable: true } : {}),
+      error: redact(result.stderr || result.error || `todos inspect produced no exit status`, 320),
+    };
+  }
+  try {
+    const parsed = JSON.parse(result.stdout || "{}");
+    const task = todosTaskRecord(parsed);
+    if (!task) throw new Error("todos inspect returned a non-object value");
+    const inspectedId = taskEventField(task, ["id", "task_id", "taskId"]);
+    if (!inspectedId) throw new Error("todos inspect returned a task without an id");
+    if (inspectedId !== taskId) throw new Error(`todos inspect returned task ${inspectedId}`);
+    return {
+      checked: true,
+      resolved: true,
+      taskId,
+      todosProjectPath,
+      status: stringField(task.status)?.trim().toLowerCase(),
+      title: stringField(task.title),
+    };
+  } catch (error) {
+    // The source exited 0 but we could not read a task out of its output, so we
+    // still do not know whether the task exists. Unintelligible success is an
+    // unavailable source, not a definitive absence.
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      checked: true,
+      resolved: false,
+      taskId,
+      todosProjectPath,
+      sourceUnavailable: true,
+      error: redact(`failed to parse todos inspect JSON: ${message}`, 320),
+    };
+  }
+}
+
+function resolveSourceTodosTask(
+  taskId: string,
+  data: Record<string, unknown>,
+  metadata: Record<string, unknown>,
+  opts: TodosTaskRouteOptions,
+): SourceTaskResolution | undefined {
+  if (opts.sourceTaskResolved) {
+    return {
+      checked: false,
+      resolved: true,
+      taskId,
+      todosProjectPath: opts.sourceTodosProjectPath?.trim() || opts.todosProject?.trim(),
+    };
+  }
+  const sourceTodosProjectPath =
+    opts.sourceTodosProjectPath?.trim() ||
+    taskEventField(data, ["source_todos_project_path", "sourceTodosProjectPath", "todos_project_path", "todosProjectPath", "todos_project", "todosProject"]) ||
+    taskEventField(metadata, ["source_todos_project_path", "sourceTodosProjectPath", "todos_project_path", "todosProjectPath", "todos_project", "todosProject"]) ||
+    opts.todosProject?.trim();
+  if (!sourceTodosProjectPath) return undefined;
+  return inspectSourceTodosTask(sourceTodosProjectPath, taskId);
 }
 
 /**
@@ -734,6 +839,29 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
   const namePrefix = opts.namePrefix ?? "event:todos-task";
   const workflowName = `${namePrefix}:${taskId.slice(0, 8)}:${idempotencySuffix}:workflow`;
   const loopName = `${namePrefix}:${taskId.slice(0, 8)}:${idempotencySuffix}:run`;
+  const sourceTaskResolution = opts.dryRun ? undefined : resolveSourceTodosTask(taskId, data, metadata, opts);
+  if (sourceTaskResolution && !sourceTaskResolution.resolved) {
+    const reason = sourceTaskResolution.sourceUnavailable
+      ? `could not ask the active todos source whether task ${taskId} exists: ${sourceTaskResolution.error ?? "todos inspect produced no exit status"}`
+      : `source todos task is not resolvable in active todos source: ${sourceTaskResolution.error ?? "todos inspect failed"}`;
+    return {
+      kind: "skipped",
+      value: {
+        skipped: true,
+        blocked: true,
+        reason,
+        event,
+        taskId,
+        routeError: true,
+        // Distinguishes "the source says this task is absent" (a benign skip) from
+        // "the source could not be reached" (a misconfiguration the caller must
+        // surface as a failure so the event is retried rather than silently lost).
+        ...(sourceTaskResolution.sourceUnavailable ? { sourceUnavailable: true } : {}),
+        sourceTaskResolution,
+      },
+      human: `skipped task ${taskId}: ${reason}`,
+    };
+  }
   if (!opts.dryRun) {
     // Dedupe before worktree validation and provider checks so replayed task
     // events never fail on since-broken project paths or provider options.
@@ -928,6 +1056,7 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
       providerRouting: providerRoutingPublic(providerRouting),
       prReviewRouting: prReviewRouting.required ? prReviewRouting : undefined,
       routePolicy,
+      sourceTaskResolution,
     },
     dedupeValueExtras: {},
   });
