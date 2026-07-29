@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#ffffff">
+  <title>Codex</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <svg class="icon-sprite" aria-hidden="true">
+    <symbol id="icon-compose" viewBox="0 0 20 20">
+      <path d="M11.7 4.2H5.6A2.6 2.6 0 0 0 3 6.8v7.6A2.6 2.6 0 0 0 5.6 17h7.6a2.6 2.6 0 0 0 2.6-2.6V8.3"/>
+      <path d="m9 11 1.2-3.2 4.4-4.4a1.4 1.4 0 0 1 2 2l-4.4 4.4L9 11Z"/>
+    </symbol>
+    <symbol id="icon-search" viewBox="0 0 20 20">
+      <circle cx="8.8" cy="8.8" r="5.3"/><path d="m12.8 12.8 3.7 3.7"/>
+    </symbol>
+    <symbol id="icon-plugins" viewBox="0 0 20 20">
+      <path d="M7.3 4.3V2.7M12.7 4.3V2.7M7.3 17.3v-2.1M12.7 17.3v-2.1M4.3 7.3H2.7M4.3 12.7H2.7M17.3 7.3h-1.6M17.3 12.7h-1.6"/>
+      <rect x="4.3" y="4.3" width="11.4" height="10.9" rx="2.8"/><path d="M8 8h4v3.7H8z"/>
+    </symbol>
+    <symbol id="icon-automation" viewBox="0 0 20 20">
+      <path d="M10 2.7v2.1M10 15.2v2.1M2.7 10h2.1M15.2 10h2.1M4.9 4.9l1.5 1.5M13.6 13.6l1.5 1.5M15.1 4.9l-1.5 1.5M6.4 13.6l-1.5 1.5"/>
+      <circle cx="10" cy="10" r="3.1"/>
+    </symbol>
+    <symbol id="icon-phone" viewBox="0 0 20 20">
+      <rect x="5.4" y="2.4" width="9.2" height="15.2" rx="2.1"/><path d="M8.3 5h3.4M9.2 14.9h1.6"/>
+    </symbol>
+    <symbol id="icon-folder" viewBox="0 0 20 20">
+      <path d="M2.8 6.1A2.1 2.1 0 0 1 4.9 4h3l1.7 2h5.5a2.1 2.1 0 0 1 2.1 2.1v6a2.1 2.1 0 0 1-2.1 2.1H4.9a2.1 2.1 0 0 1-2.1-2.1v-8Z"/>
+    </symbol>
+    <symbol id="icon-chat" viewBox="0 0 20 20">
+      <path d="M16.8 9.6a6.6 6.6 0 0 1-7 6.6 7.6 7.6 0 0 1-2.6-.6l-3.8 1 1-3.5a6.6 6.6 0 1 1 12.4-3.5Z"/>
+    </symbol>
+    <symbol id="icon-settings" viewBox="0 0 20 20">
+      <circle cx="10" cy="10" r="2.6"/><path d="m16.1 11.8 1-1.1-1-2.5-1.5-.1a6.4 6.4 0 0 0-1.1-1.2l.1-1.5-2.4-1.1-1.1 1a6.3 6.3 0 0 0-1.6.1l-1-1.1L5 5.4l.1 1.5A6.5 6.5 0 0 0 4 8.1l-1.5.1-1 2.5 1 1.1c.1.5.3 1 .6 1.5L3 14.8l2.2 1.4 1.3-.8c.5.2 1 .3 1.6.4l.8 1.3h2.6l.7-1.3c.5-.1 1-.3 1.5-.6l1.4.7 2.1-1.6-.3-1.4c.2-.4.3-.8.4-1.2l-1.2.1Z"/>
+    </symbol>
+    <symbol id="icon-sidebar" viewBox="0 0 20 20">
+      <rect x="2.5" y="3" width="15" height="14" rx="2.5"/><path d="M7.2 3v14"/>
+    </symbol>
+    <symbol id="icon-plus" viewBox="0 0 20 20"><path d="M10 4v12M4 10h12"/></symbol>
+    <symbol id="icon-chevron" viewBox="0 0 20 20"><path d="m7.5 5 5 5-5 5"/></symbol>
+    <symbol id="icon-send" viewBox="0 0 20 20"><path d="m5.2 10 4.8-4.8 4.8 4.8M10 5.7v8.8"/></symbol>
+    <symbol id="icon-branch" viewBox="0 0 20 20">
+      <circle cx="6" cy="4.2" r="1.6"/><circle cx="14" cy="5.4" r="1.6"/><circle cx="6" cy="15.8" r="1.6"/><path d="M6 5.8v8.4M7.6 7.6c3.7 0 3.1-2.2 4.8-2.2"/>
+    </symbol>
+  </svg>
+
+  <div class="desktop">
+    <div class="app-window">
+      <aside class="sidebar" id="sidebar" aria-label="Codex navigation">
+        <header class="sidebar-header">
+          <button class="brand-badge" type="button" aria-label="Codex home">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 3.2a4.4 4.4 0 0 1 4.2 3 4.4 4.4 0 0 1 2 7.8 4.4 4.4 0 0 1-6.2 5.8 4.4 4.4 0 0 1-6.2-5.8 4.4 4.4 0 0 1 2-7.8 4.4 4.4 0 0 1 4.2-3Z"/>
+              <path d="m8.2 6.4 3.8 2.2v4.5m3.8 4.5L12 15.4l-3.9 2.2m10.1-3.5-3.8-2.2-3.9 2.2M5.8 9.9l3.8 2.2V7.7m6.2-1.3-3.8 2.2"/>
+            </svg>
+          </button>
+          <button class="icon-button desktop-sidebar-toggle" type="button" data-action="toggle-sidebar" aria-label="Collapse sidebar" aria-expanded="true">
+            <svg><use href="#icon-sidebar"/></svg>
+          </button>
+        </header>
+
+        <nav class="primary-nav" aria-label="Primary">
+          <button class="nav-item is-active" type="button" data-view="New chat">
+            <svg><use href="#icon-compose"/></svg><span>New chat</span>
+          </button>
+          <button class="nav-item" type="button" data-action="search">
+            <svg><use href="#icon-search"/></svg><span>Search</span><kbd>⌘ K</kbd>
+          </button>
+          <button class="nav-item" type="button" data-view="Plugins">
+            <svg><use href="#icon-plugins"/></svg><span>Plugins</span>
+          </button>
+          <button class="nav-item" type="button" data-view="Automations">
+            <svg><use href="#icon-automation"/></svg><span>Automations</span>
+          </button>
+          <button class="nav-item" type="button" data-view="Codex mobile">
+            <svg><use href="#icon-phone"/></svg><span>Codex mobile</span><span class="new-pill">New</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-scroll">
+          <section class="sidebar-section" aria-labelledby="projects-label">
+            <div class="section-heading">
+              <h2 id="projects-label">Projects</h2>
+              <button class="section-action" type="button" aria-label="Add project"><svg><use href="#icon-plus"/></svg></button>
+            </div>
+            <button class="nav-item project-item" type="button" data-view="scaffold-api">
+              <svg><use href="#icon-folder"/></svg><span>scaffold-api</span>
+            </button>
+            <button class="nav-item project-item" type="button" data-view="tasks">
+              <svg><use href="#icon-folder"/></svg><span>tasks</span>
+            </button>
+          </section>
+
+          <section class="sidebar-section" aria-labelledby="chats-label">
+            <div class="section-heading"><h2 id="chats-label">Chats</h2></div>
+            <button class="nav-item chat-item" type="button" data-view="Scaffold the web UI">
+              <svg><use href="#icon-chat"/></svg><span>Scaffold the web UI</span>
+            </button>
+            <button class="nav-item chat-item" type="button" data-view="Design system tokens">
+              <svg><use href="#icon-chat"/></svg><span>Design system tokens</span>
+            </button>
+            <button class="nav-item chat-item" type="button" data-view="API project setup">
+              <svg><use href="#icon-chat"/></svg><span>API project setup</span>
+            </button>
+          </section>
+        </div>
+
+        <footer class="sidebar-footer">
+          <button class="nav-item" type="button" data-view="Settings">
+            <svg><use href="#icon-settings"/></svg><span>Settings</span>
+          </button>
+          <button class="account" type="button" aria-label="Open account menu">
+            <span class="avatar">A</span>
+            <span class="account-copy"><strong>Alex Morgan</strong><small>Personal</small></span>
+            <svg class="account-chevron"><use href="#icon-chevron"/></svg>
+          </button>
+        </footer>
+      </aside>
+
+      <div class="sidebar-scrim" data-action="toggle-sidebar" aria-hidden="true"></div>
+
+      <main class="workspace">
+        <header class="workspace-header">
+          <button class="icon-button mobile-sidebar-toggle" type="button" data-action="toggle-sidebar" aria-label="Open sidebar" aria-expanded="false">
+            <svg><use href="#icon-sidebar"/></svg>
+          </button>
+          <div class="workspace-context">
+            <span class="context-mark"><svg><use href="#icon-branch"/></svg></span>
+            <span id="view-title">New chat</span>
+          </div>
+          <button class="share-button" type="button">Share</button>
+        </header>
+
+        <section class="empty-chat" aria-labelledby="welcome-title">
+          <div class="welcome-mark" aria-hidden="true">
+            <span></span><span></span><span></span><span></span>
+          </div>
+          <h1 id="welcome-title">What can I help you build?</h1>
+          <p>Ask Codex to work with your code, answer questions, or start a task.</p>
+        </section>
+
+        <div class="composer-wrap">
+          <form class="composer" id="composer">
+            <label class="sr-only" for="prompt">Message Codex</label>
+            <textarea id="prompt" rows="1" placeholder="Ask Codex anything" autocomplete="off"></textarea>
+            <div class="composer-toolbar">
+              <div class="composer-options">
+                <button class="round-button" type="button" aria-label="Attach context"><svg><use href="#icon-plus"/></svg></button>
+                <button class="mode-button" type="button">Agent <span>⌄</span></button>
+              </div>
+              <button class="send-button" type="submit" aria-label="Send message" disabled><svg><use href="#icon-send"/></svg></button>
+            </div>
+          </form>
+          <p class="composer-note">Codex can make mistakes. Review generated code and commands.</p>
+        </div>
+      </main>
+
+      <div class="search-dialog" id="search-dialog" role="dialog" aria-modal="true" aria-labelledby="search-title" hidden>
+        <div class="search-card">
+          <svg><use href="#icon-search"/></svg>
+          <label class="sr-only" id="search-title" for="search-input">Search chats and projects</label>
+          <input id="search-input" type="search" placeholder="Search chats and projects">
+          <kbd>Esc</kbd>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
