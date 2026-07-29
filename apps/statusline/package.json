@@ -34,7 +34,9 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "check": "bun run typecheck && bun test && bun run build",
-    "prepack": "bun run build",
+    "contract-check": "bunx @hasna/contracts check",
+    "artifact-scan": "bunx @hasna/contracts artifact-scan",
+    "prepack": "bun run build && bun run artifact-scan",
     "prepublishOnly": "bun run typecheck && bun test && bun run build"
   },
   "repository": {

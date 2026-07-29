@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "name": "@hasna/statusline",
+  "type": "npm-package",
+  "packageManager": "bun",
+  "waivers": {
+    "storage": {
+      "reason": "The CLI intentionally persists user-authored display settings and updates Claude settings during explicit install commands.",
+      "scope": "Statusline config and the Claude settings.json selected by CLAUDE_CONFIG_DIR"
+    }
+  }
+}
