@@ -23,7 +23,7 @@ import type {
   Entitlement,
 } from "../domain/models";
 import { AccountsError, asAccountsError, toErrorEnvelope } from "../errors";
-import { validateEligibilityRequest, validateEntity } from "../serialization/dto";
+import { redactRecord, validateEligibilityRequest, validateEntity } from "../serialization/dto";
 import {
   assertNoSensitiveFields,
   canonicalJson,
@@ -731,15 +731,7 @@ async function ownerForRecord<K extends EntityKind>(
 }
 
 function redactEntity<K extends EntityKind>(kind: K, record: EntityMap[K]): Readonly<Record<string, unknown>> {
-  const safe = { ...(record as unknown as Record<string, unknown>) };
-  if (kind === "account") {
-    const hadSubject = safe.providerSubjectRef !== undefined || safe.providerSubjectCandidateRef !== undefined;
-    delete safe.providerSubjectRef;
-    delete safe.providerSubjectCandidateRef;
-    if (hadSubject) safe.providerSubjectRefRedacted = true;
-  }
-  assertNoSensitiveFields(safe);
-  return Object.freeze(safe);
+  return redactRecord(kind, record as unknown as Record<string, unknown>);
 }
 
 function parseEntityId<K extends EntityKind>(kind: K, value: unknown): EntityMap[K]["id"] {

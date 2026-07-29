@@ -2,12 +2,12 @@ import { Database } from "bun:sqlite";
 import { afterAll, describe, expect, test } from "bun:test";
 import {
   chmodSync,
-  mkdirSync,
   mkdtempSync,
   rmSync,
   statSync,
   symlinkSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
@@ -25,7 +25,10 @@ import { AccountsCatalog } from "../../src/domain/catalog";
 import { transitionEntity } from "../../src/domain/state";
 import { InMemoryAccountsRepository } from "../../src/storage/memory";
 import type { AccountsRepository } from "../../src/storage/repository";
-import { SQLiteAccountsRepository } from "../../src/storage/sqlite";
+import {
+  SQLiteAccountsRepository,
+  sqlitePathComponentViolation,
+} from "../../src/storage/sqlite";
 import { FileRecoveryLedger } from "../../src/storage/file-recovery-ledger";
 import {
   SQLITE_MIGRATION_V1,
@@ -49,14 +52,13 @@ import {
   TEST_AUTHORITY_POLICY,
 } from "../fixtures";
 
-const TEMP_ROOT = join(import.meta.dir, "..", "..", ".tmp", "storage-tests");
-mkdirSync(TEMP_ROOT, { recursive: true, mode: 0o700 });
-chmodSync(join(import.meta.dir, "..", "..", ".tmp"), 0o700);
+const TEMP_ROOT = mkdtempSync(join(tmpdir(), "capacity-storage-tests-"));
 chmodSync(TEMP_ROOT, 0o700);
 
 const cleanup: string[] = [];
 afterAll(() => {
   for (const path of cleanup) rmSync(path, { recursive: true, force: true });
+  rmSync(TEMP_ROOT, { recursive: true, force: true });
 });
 
 type AdapterFactory = () => {
@@ -811,6 +813,41 @@ describe("SQLite migration and filesystem hardening", () => {
     }
     expect(tables).not.toContain("access_methods");
     await repository.close();
+  });
+
+  test("pins the accepted and rejected SQLite path-component ownership matrix", () => {
+    const caller = 1000;
+    const other = 1001;
+    const accepted = [
+      { uid: caller, mode: 0o700 },
+      { uid: caller, mode: 0o755 },
+      { uid: 0, mode: 0o755 },
+      { uid: 0, mode: 0o1777 },
+    ] as const;
+    for (const status of accepted) {
+      expect(sqlitePathComponentViolation(status, caller)).toBeUndefined();
+    }
+
+    // A third-party owner can rename or replace the subtree between validation
+    // and open, so ownership is rejected before any mode exemption applies.
+    for (const status of [
+      { uid: other, mode: 0o700 },
+      { uid: other, mode: 0o755 },
+      { uid: other, mode: 0o1777 },
+    ] as const) {
+      expect(sqlitePathComponentViolation(status, caller)).toBe(
+        "SQLite path component has an unexpected owner",
+      );
+    }
+
+    // The sticky exemption is scoped to root: only root-owned sticky
+    // directories may be group- or world-writable.
+    expect(sqlitePathComponentViolation({ uid: 0, mode: 0o777 }, caller)).toBe(
+      "SQLite path component is writable by another user",
+    );
+    expect(sqlitePathComponentViolation({ uid: 0, mode: 0o775 }, caller)).toBe(
+      "SQLite path component is writable by another user",
+    );
   });
 
   test("refuses symbolic-link path components", () => {
