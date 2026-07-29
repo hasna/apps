@@ -130,6 +130,15 @@ describe("physical render", () => {
     expect(commands).toContain("stations/prod/tailscale/authkey");
     expect(commands).not.toContain("tskey-");
   });
+
+  test("stages the Tailscale auth key in an unpredictable temporary file", () => {
+    const steps = buildStationTemplateSteps(effectiveFor(["dgx-spark"]), { station: "station01" });
+    const joinStep = steps.find((step) => step.id === "template-tailscale-join");
+    expect(joinStep?.command).toContain("TAILSCALE_AUTHKEY_FILE=$(mktemp)");
+    expect(joinStep?.command).toContain('file:"$TAILSCALE_AUTHKEY_FILE"');
+    expect(joinStep?.command).toContain(`trap 'rm -f "$TAILSCALE_AUTHKEY_FILE"' EXIT`);
+    expect(joinStep?.command).not.toContain("/tmp/ts-authkey");
+  });
 });
 
 describe("cloud-init render", () => {

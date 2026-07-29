@@ -126,8 +126,9 @@ export function buildStationTemplateSteps(effective: EffectiveTemplate, options:
       id: "template-tailscale-join",
       title: "Join tailnet if not already joined (auth key via secrets vault, name only)",
       command:
-        `tailscale status >/dev/null 2>&1 || (umask 077 && secrets get ${quote(effective.tailscale.authKeySecretName)} | tr -d '\\r\\n' > /tmp/ts-authkey && ` +
-        `sudo tailscale up --auth-key file:/tmp/ts-authkey${hostnameFlag}${sshFlag}; rm -f /tmp/ts-authkey)`,
+        `tailscale status >/dev/null 2>&1 || (umask 077 && TAILSCALE_AUTHKEY_FILE=$(mktemp) && ` +
+        `trap 'rm -f "$TAILSCALE_AUTHKEY_FILE"' EXIT && secrets get ${quote(effective.tailscale.authKeySecretName)} | tr -d '\\r\\n' > "$TAILSCALE_AUTHKEY_FILE" && ` +
+        `sudo tailscale up --auth-key file:"$TAILSCALE_AUTHKEY_FILE"${hostnameFlag}${sshFlag})`,
       manager: "custom",
       privileged: true,
     });
