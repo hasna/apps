@@ -6,6 +6,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Enabled TypeScript's unused-local and unused-parameter checks and removed the
+  dead code they exposed.
+
 ## [0.2.3] - 2026-07-29
 
 ### Added

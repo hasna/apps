@@ -58,7 +58,6 @@ import {
   planWaves,
   runFlip,
   selectTargets,
-  type FlipMode,
   type RunnerFn,
 } from "../commands/flip.js";
 import {
@@ -78,8 +77,8 @@ import {
 } from "../commands/notifications.js";
 import { listPorts } from "../commands/ports.js";
 import { buildTmuxPaneDiedHookPlan, watchTmuxPane } from "../commands/runtime.js";
-import { buildSshCommand, resolveSshTarget } from "../commands/ssh.js";
-import { resolveScreenTarget, buildScreenCommand, buildScreenEnableCommand, resolveScreenCredentials, screenCredentialsFailed } from "../commands/screen.js";
+import { buildSshCommand } from "../commands/ssh.js";
+import { resolveScreenTarget, buildScreenEnableCommand, resolveScreenCredentials, screenCredentialsFailed } from "../commands/screen.js";
 import { buildSyncPlan, runSyncPlan } from "../commands/sync.js";
 import {
   buildReconcilePlan,

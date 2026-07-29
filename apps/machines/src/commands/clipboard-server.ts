@@ -125,7 +125,7 @@ export function startClipboardServer(options: ClipboardServerOptions = {}): Clip
 
     // GET /clipboard - get current local clipboard content
     if (url.pathname === "/clipboard" && request.method === "GET") {
-      return handleGetClipboard(response, config);
+      return handleGetClipboard(response);
     }
 
     // GET /health - check if server is alive
@@ -200,7 +200,7 @@ function handleReceiveClipboard(request: IncomingMessage, response: ServerRespon
   });
 }
 
-function handleGetClipboard(response: ServerResponse, config: ClipboardConfig): void {
+function handleGetClipboard(response: ServerResponse): void {
   const content = readLocalClipboardSync();
   if (!content) {
     return jsonResponse(response, 200, { content: "", hash: null });

@@ -27,26 +27,6 @@ function readLocalClipboardSync(): string {
   return "";
 }
 
-function writeLocalClipboardSync(content: string): boolean {
-  const platform = process.platform;
-  if (platform === "darwin") {
-    const result = Bun.spawnSync(["pbcopy"], { stdin: new TextEncoder().encode(content), stdout: "ignore", stderr: "ignore" });
-    return result.exitCode === 0;
-  }
-  if (platform === "linux") {
-    if (hasCommand("wl-copy")) {
-      const result = Bun.spawnSync(["wl-copy"], { stdin: new TextEncoder().encode(content), stdout: "ignore", stderr: "ignore" });
-      return result.exitCode === 0;
-    }
-    if (hasCommand("xclip")) {
-      const result = Bun.spawnSync(["xclip", "-selection", "clipboard"], { stdin: new TextEncoder().encode(content), stdout: "ignore", stderr: "ignore" });
-      return result.exitCode === 0;
-    }
-    return false;
-  }
-  return false;
-}
-
 function hasCommand(binary: string): boolean {
   const result = Bun.spawnSync(["bash", "-lc", `command -v ${binary} >/dev/null 2>&1`], { stdout: "ignore", stderr: "ignore", env: process.env });
   return result.exitCode === 0;
@@ -135,7 +115,7 @@ export function startClipboardDaemon(port?: number): void {
   const daemonPort = port || config.port;
 
   // Start HTTP server
-  const { server, close } = startClipboardServer({ port: daemonPort });
+  const { server } = startClipboardServer({ port: daemonPort });
   server.on("listening", () => {
     console.log(`clipboard daemon started on port ${daemonPort} (pid ${process.pid})`);
     writePid(process.pid);

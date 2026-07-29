@@ -141,7 +141,7 @@ function canonicalCollectionMachineId(
   return null;
 }
 
-function heartbeatCommand(machineId: string, doctorSummary: boolean): string {
+function heartbeatCommand(doctorSummary: boolean): string {
   const doctorArgs = doctorSummary
     ? `if machines-agent --help 2>&1 | grep -q -- '--doctor-summary'; then doctor='--doctor-summary'; else doctor=''; fi`
     : "doctor=''";
@@ -259,7 +259,7 @@ export function collectHeartbeats(
 
     let result: ReturnType<MachineCommandRunner>;
     try {
-      result = runner(machineId, heartbeatCommand(machineId, options.doctorSummary !== false), {
+      result = runner(machineId, heartbeatCommand(options.doctorSummary !== false), {
         timeoutMs: options.timeoutMs ?? 45_000,
         killGraceMs: 2_000,
       });

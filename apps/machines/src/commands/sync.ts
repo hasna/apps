@@ -1,6 +1,5 @@
 import { existsSync, lstatSync, readFileSync, symlinkSync, copyFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname } from "node:path";
 import { readManifest } from "../manifests.js";
 import { ensureParentDir } from "../paths.js";
 import { getLocalMachineId, recordSyncRun } from "../db.js";
