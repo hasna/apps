@@ -19,7 +19,7 @@ import {
   substituteTemplateVariables,
 } from "../../lib/template-semantics.js";
 import { inspectPlanArtifact, readPlanArtifact, writePlanArtifact } from "../../lib/plan-artifacts.js";
-import { formatTaskLine, autoProject, handleError, output } from "../helpers.js";
+import { formatTaskLine, autoProject, handleError, jsonModeRequested, output } from "../helpers.js";
 import {
   getTodosCloudClient,
   cloudCreatePlan,
@@ -230,14 +230,18 @@ function resolvePlanCliRef(ref: string, projectId: string | undefined): string {
   const db = getDatabase();
   const resolved = resolvePlanRefDetailed(ref, db, projectId);
   if (resolved.id) return resolved.id;
+  const message = resolved.reason === "ambiguous"
+    ? `Ambiguous plan reference: ${ref}`
+    : `Could not resolve plan ID or slug: ${ref}`;
   if (resolved.reason === "ambiguous") {
-    console.error(chalk.red(`Ambiguous plan reference: ${ref}`));
+    console.error(chalk.red(message));
     if (resolved.matches.length > 0) {
       console.error(chalk.dim(`Matches: ${resolved.matches.map((plan) => `${plan.slug ?? plan.name} (${plan.id.slice(0, 8)})`).join(", ")}`));
     }
   } else {
-    console.error(chalk.red(`Could not resolve plan ID or slug: ${ref}`));
+    console.error(chalk.red(message));
   }
+  if (jsonModeRequested()) output({ error: message }, true);
   process.exit(1);
 }
 
@@ -254,8 +258,10 @@ export function registerPlanTemplateCommands(program: Command) {
     .option("--write-artifacts", "Write local Markdown artifacts for all project-scoped plans in scope")
     .option("--delete <id>", "Delete a plan")
     .option("--complete <id>", "Mark a plan as completed")
+    .option("-j, --json", "Print JSON output", false)
     .action(async (opts) => {
       const globalOpts = program.opts();
+      const jsonMode = Boolean(opts.json || globalOpts.json);
       const cloud = getTodosCloudClient();
       const projectId = cloud
         ? (globalOpts.project ? await cloudResolveProjectRef(cloud, globalOpts.project) : undefined)
@@ -276,7 +282,7 @@ export function registerPlanTemplateCommands(program: Command) {
         }
         const artifact = cloud ? null : writePlanArtifact(plan);
 
-        if (globalOpts.json) {
+        if (jsonMode) {
           output(plan, true);
         } else {
           console.log(chalk.green("Plan created:"));
@@ -297,11 +303,11 @@ export function registerPlanTemplateCommands(program: Command) {
         const inspection = inspectPlanArtifact(plan, db);
         if (!inspection) {
           const result = { plan_id: plan.id, artifact: null, reason: "plan is not project-scoped" };
-          if (globalOpts.json) output(result, true);
+          if (jsonMode) output(result, true);
           else console.log(chalk.dim("Plan is not project-scoped; no local Markdown artifact path is available."));
           return;
         }
-        if (globalOpts.json) {
+        if (jsonMode) {
           output({ plan, artifact: inspection }, true);
           return;
         }
@@ -329,7 +335,7 @@ export function registerPlanTemplateCommands(program: Command) {
             path: entry.artifact!.path,
           })),
         };
-        if (globalOpts.json) {
+        if (jsonMode) {
           output(result, true);
         } else {
           console.log(chalk.green(`Wrote ${written.length} plan artifact(s).`));
@@ -349,7 +355,7 @@ export function registerPlanTemplateCommands(program: Command) {
             handleError(new Error(`Plan not found: ${opts.show}`));
           }
           const tasks = await cloudListTasks(cloud, { plan_id: plan.id, include_subtasks: true });
-          if (globalOpts.json) {
+          if (jsonMode) {
             output({ plan, tasks, artifact: null }, true);
             return;
           }
@@ -379,7 +385,7 @@ export function registerPlanTemplateCommands(program: Command) {
         const tasks = listTasks({ plan_id: resolvedId });
         const artifact = readPlanArtifact(plan, db);
 
-        if (globalOpts.json) {
+        if (jsonMode) {
           output({
             plan,
             tasks,
@@ -423,7 +429,7 @@ export function registerPlanTemplateCommands(program: Command) {
         }
         const resolvedId = cloudPlan?.id ?? resolvePlanCliRef(opts.delete, projectId);
         const deleted = cloud ? await cloudDeletePlan(cloud, resolvedId) : deletePlan(resolvedId);
-        if (globalOpts.json) {
+        if (jsonMode) {
           output({ deleted }, true);
           if (!deleted) process.exitCode = 1;
         } else if (deleted) {
@@ -445,7 +451,7 @@ export function registerPlanTemplateCommands(program: Command) {
             ? await cloudUpdatePlan(cloud, resolvedId, { status: "completed" })
             : updatePlan(resolvedId, { status: "completed" });
           const artifact = cloud ? null : writePlanArtifact(plan);
-          if (globalOpts.json) {
+          if (jsonMode) {
             output(plan, true);
           } else {
             console.log(chalk.green("Plan completed:"));
@@ -461,7 +467,7 @@ export function registerPlanTemplateCommands(program: Command) {
       // Default: list plans
       const plans = cloud ? await cloudListPlans(cloud, projectId) : listPlans(projectId);
 
-      if (globalOpts.json) {
+      if (jsonMode) {
         output(plans, true);
         return;
       }
@@ -492,8 +498,10 @@ export function registerPlanTemplateCommands(program: Command) {
     .option("--update <id>", "Update a template")
     .option("--use <id>", "Create a task from a template")
     .option("--var <vars...>", "Variable substitutions: key=value (e.g. --var feature=login)")
+    .option("-j, --json", "Print JSON output", false)
     .action(async (opts) => {
       const globalOpts = program.opts();
+      const jsonMode = Boolean(opts.json || globalOpts.json);
       const cloud = getTodosCloudClient();
       if (cloud) {
         try {
@@ -508,13 +516,13 @@ export function registerPlanTemplateCommands(program: Command) {
               tags: opts.tags ? opts.tags.split(",").map((tag: string) => tag.trim()).filter(Boolean) : [],
               project_id: projectId,
             });
-            if (globalOpts.json) { output(template, true); }
+            if (jsonMode) { output(template, true); }
             else { console.log(chalk.green(`Template created: ${template.id.slice(0, 8)} | ${template.name} | "${template.title_pattern}"`)); }
             return;
           }
           if (opts.delete) {
             const deleted = await cloudDeleteTemplate(cloud, opts.delete);
-            if (globalOpts.json) { output({ deleted }, true); }
+            if (jsonMode) { output({ deleted }, true); }
             else if (deleted) { console.log(chalk.green("Template deleted.")); }
             else { handleError(new Error("Template not found.")); }
             return;
@@ -530,7 +538,7 @@ export function registerPlanTemplateCommands(program: Command) {
             }
             const updated = await cloudUpdateTemplate(cloud, opts.update, updates);
             if (!updated) { handleError(new Error("Template not found.")); }
-            if (globalOpts.json) { output(updated, true); }
+            if (jsonMode) { output(updated, true); }
             else { console.log(chalk.green(`Template updated: ${updated.id.slice(0, 8)} | ${updated.name} | "${updated.title_pattern}"`)); }
             return;
           }
@@ -556,7 +564,7 @@ export function registerPlanTemplateCommands(program: Command) {
                 priority: opts.priority,
               },
             );
-            if (globalOpts.json) { output(created, true); }
+            if (jsonMode) { output(created, true); }
             else {
               console.log(chalk.green(`${created.length} task(s) created from template:`));
               for (const task of created) console.log(formatTaskLine(task));
@@ -564,7 +572,7 @@ export function registerPlanTemplateCommands(program: Command) {
             return;
           }
           const templates = await cloudListTemplates(cloud, projectId);
-          if (globalOpts.json) { output(templates, true); return; }
+          if (jsonMode) { output(templates, true); return; }
           if (templates.length === 0) { console.log(chalk.dim("No templates.")); return; }
           console.log(chalk.bold(`${templates.length} template(s):\n`));
           for (const template of templates) {
@@ -594,14 +602,14 @@ export function registerPlanTemplateCommands(program: Command) {
           tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : [],
           project_id: projectId,
         });
-        if (globalOpts.json) { output(template, true); }
+        if (jsonMode) { output(template, true); }
         else { console.log(chalk.green(`Template created: ${template.id.slice(0, 8)} | ${template.name} | "${template.title_pattern}"`)); }
         return;
       }
 
       if (opts.delete) {
         const deleted = deleteTemplate(opts.delete);
-        if (globalOpts.json) { output({ deleted }, true); }
+        if (jsonMode) { output({ deleted }, true); }
         else if (deleted) { console.log(chalk.green("Template deleted.")); }
         else { handleError(new Error("Template not found.")); }
         return;
@@ -616,7 +624,7 @@ export function registerPlanTemplateCommands(program: Command) {
         if (opts.tags) updates.tags = opts.tags.split(",").map((t: string) => t.trim());
         const updated = updateTemplate(opts.update, updates);
         if (!updated) { handleError(new Error("Template not found.")); }
-        if (globalOpts.json) { output(updated, true); }
+        if (jsonMode) { output(updated, true); }
         else { console.log(chalk.green(`Template updated: ${updated.id.slice(0, 8)} | ${updated.name} | "${updated.title_pattern}"`)); }
         return;
       }
@@ -641,7 +649,7 @@ export function registerPlanTemplateCommands(program: Command) {
               template.project_id || autoProject(globalOpts),
               Object.keys(variables).length > 0 ? variables : undefined,
             );
-            if (globalOpts.json) {
+            if (jsonMode) {
               output(tasks, true);
             } else {
               console.log(chalk.green(`${tasks.length} tasks created from template:`));
@@ -671,7 +679,7 @@ export function registerPlanTemplateCommands(program: Command) {
             input.description = description;
           }
           const task = createTask({ ...input, agent_id: globalOpts.agent, project_id: input.project_id || autoProject(globalOpts) });
-          if (globalOpts.json) { output(task, true); }
+          if (jsonMode) { output(task, true); }
           else { console.log(chalk.green("Task created from template:")); console.log(formatTaskLine(task)); }
         } catch (e) { handleError(e); }
         return;
@@ -679,7 +687,7 @@ export function registerPlanTemplateCommands(program: Command) {
 
       // List templates
       const templates = listTemplates();
-      if (globalOpts.json) { output(templates, true); return; }
+      if (jsonMode) { output(templates, true); return; }
       if (templates.length === 0) { console.log(chalk.dim("No templates.")); return; }
       console.log(chalk.bold(`${templates.length} template(s):\n`));
       for (const t of templates) {
@@ -693,11 +701,12 @@ export function registerPlanTemplateCommands(program: Command) {
     .command("template-init")
     .alias("templates-init")
     .description("Initialize the bundled local template library")
-    .action(async () => {
+    .option("-j, --json", "Print JSON output", false)
+    .action(async (opts: { json?: boolean }) => {
       const globalOpts = program.opts();
       const { initBuiltinTemplates } = await import("../../db/builtin-templates.js");
       const result = initBuiltinTemplates();
-      if (globalOpts.json) { output(result, true); return; }
+      if (opts.json || globalOpts.json) { output(result, true); return; }
       if (result.created === 0) {
         console.log(chalk.dim(`All ${result.skipped} built-in template(s) already exist.`));
       } else {
@@ -712,7 +721,8 @@ export function registerPlanTemplateCommands(program: Command) {
     .description("List, show, or write the bundled local template library as editable JSON files")
     .option("--show <name>", "Show one bundled template as JSON")
     .option("--write <dir>", "Write all bundled templates to editable JSON files")
-    .action(async (opts: { show?: string; write?: string }) => {
+    .option("-j, --json", "Print JSON output", false)
+    .action(async (opts: { show?: string; write?: string; json?: boolean }) => {
       const globalOpts = program.opts();
       const {
         exportBuiltinTemplate,
@@ -727,7 +737,7 @@ export function registerPlanTemplateCommands(program: Command) {
         }
         if (opts.write) {
           const result = writeBuiltinTemplateFiles(opts.write);
-          if (globalOpts.json) { output(result, true); return; }
+          if (opts.json || globalOpts.json) { output(result, true); return; }
           console.log(chalk.green(`Wrote ${result.written} editable template file(s) to ${result.directory}`));
           for (const file of result.files) console.log(chalk.dim(`  ${file}`));
           return;
@@ -740,7 +750,7 @@ export function registerPlanTemplateCommands(program: Command) {
           variables: template.variables,
           task_count: template.tasks.length,
         }));
-        if (globalOpts.json) { output(templates, true); return; }
+        if (opts.json || globalOpts.json) { output(templates, true); return; }
         console.log(chalk.bold(`${templates.length} bundled local template(s):\n`));
         for (const template of templates) {
           console.log(`  ${chalk.bold(template.name)} ${chalk.dim(`[${template.category}]`)} ${chalk.yellow(`${template.task_count} tasks`)}`);
@@ -755,7 +765,8 @@ export function registerPlanTemplateCommands(program: Command) {
     .alias("templates-preview")
     .description("Preview a template without creating tasks — shows resolved titles, deps, and priorities")
     .option("--var <vars...>", "Variable substitution in key=value format (e.g. --var name=invoices)")
-    .action(async (id: string, opts: { var?: string[] }) => {
+    .option("-j, --json", "Print JSON output", false)
+    .action(async (id: string, opts: { var?: string[]; json?: boolean }) => {
       const globalOpts = program.opts();
 
       const variables: Record<string, string> = {};
@@ -782,7 +793,7 @@ export function registerPlanTemplateCommands(program: Command) {
             Object.keys(variables).length > 0 ? variables : undefined,
           );
         }
-        if (globalOpts.json) { output(result, true); return; }
+        if (opts.json || globalOpts.json) { output(result, true); return; }
 
         console.log(chalk.bold(`Preview: ${result.template_name} (${result.tasks.length} tasks)`));
         if (result.description) console.log(chalk.dim(`  ${result.description}`));
@@ -805,6 +816,7 @@ export function registerPlanTemplateCommands(program: Command) {
     .command("template-export <id>")
     .alias("templates-export")
     .description("Export a template as JSON to stdout")
+    .option("-j, --json", "Print JSON output", false)
     .action(async (id: string) => {
       try {
         const cloud = getTodosCloudClient();
@@ -827,7 +839,8 @@ export function registerPlanTemplateCommands(program: Command) {
     .alias("templates-import")
     .description("Import a template from a JSON file")
     .option("--file <path>", "Path to template JSON file (alternative to positional arg)")
-    .action(async (file: string | undefined, opts: { file?: string }) => {
+    .option("-j, --json", "Print JSON output", false)
+    .action(async (file: string | undefined, opts: { file?: string; json?: boolean }) => {
       const globalOpts = program.opts();
       const { readFileSync } = await import("node:fs");
       try {
@@ -839,7 +852,7 @@ export function registerPlanTemplateCommands(program: Command) {
         const template = cloud
           ? await cloudCreateTemplate(cloud, json)
           : (await import("../../db/templates.js")).importTemplate(json);
-        if (globalOpts.json) { output(template, true); }
+        if (opts.json || globalOpts.json) { output(template, true); }
         else { console.log(chalk.green(`Template imported: ${template.id.slice(0, 8)} | ${template.name} | "${template.title_pattern}"`)); }
       } catch (e) { handleError(e); }
     });
@@ -849,14 +862,15 @@ export function registerPlanTemplateCommands(program: Command) {
     .command("template-history <id>")
     .alias("templates-history")
     .description("Show version history of a template")
-    .action(async (id: string) => {
+    .option("-j, --json", "Print JSON output", false)
+    .action(async (id: string, opts: { json?: boolean }) => {
       const globalOpts = program.opts();
       const { listTemplateVersions, getTemplate } = await import("../../db/templates.js");
       try {
         const template = getTemplate(id);
         if (!template) { handleError(new Error("Template not found.")); }
         const versions = listTemplateVersions(id);
-        if (globalOpts.json) { output({ current_version: template.version, versions }, true); return; }
+        if (opts.json || globalOpts.json) { output({ current_version: template.version, versions }, true); return; }
         console.log(chalk.bold(`${template.name} — current version: ${template.version}`));
         if (versions.length === 0) {
           console.log(chalk.dim("  No previous versions."));

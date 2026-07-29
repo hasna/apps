@@ -46,7 +46,8 @@ export function registerRoadmapCommands(program: Command) {
     .option("--owner <name>", "Owner name")
     .option("--agent <name>", "Agent owner")
     .option("--release <name>", "Default release label")
-    .action(async (name: string, opts: { description?: string; project?: string; status?: LocalRoadmapStatus; owner?: string; agent?: string; release?: string }) => {
+    .option("-j, --json", "Print JSON output", false)
+    .action(async (name: string, opts: { description?: string; project?: string; status?: LocalRoadmapStatus; owner?: string; agent?: string; release?: string; json?: boolean }) => {
       const globalOpts = globalOptions(program);
       try {
         const { createRoadmap } = await import("../../lib/roadmaps.js");
@@ -59,7 +60,7 @@ export function registerRoadmapCommands(program: Command) {
           agent_id: opts.agent || globalOpts.agent,
           release: opts.release,
         });
-        if (globalOpts.json) { output(roadmap, true); return; }
+        if (opts.json || globalOpts.json) { output(roadmap, true); return; }
         console.log(chalk.green(`Roadmap created: ${roadmap.id.slice(0, 8)} ${roadmap.name}`));
       } catch (e) {
         handleError(e);
@@ -71,12 +72,13 @@ export function registerRoadmapCommands(program: Command) {
     .description("List local roadmaps")
     .option("--project <id>", "Project ID")
     .option("--status <status>", "Filter by status")
-    .action(async (opts: { project?: string; status?: LocalRoadmapStatus }) => {
+    .option("-j, --json", "Print JSON output", false)
+    .action(async (opts: { project?: string; status?: LocalRoadmapStatus; json?: boolean }) => {
       const globalOpts = globalOptions(program);
       try {
         const { listRoadmaps } = await import("../../lib/roadmaps.js");
         const items = listRoadmaps({ project_id: resolveOptional("projects", opts.project || globalOpts.project), status: opts.status });
-        if (globalOpts.json) { output(items, true); return; }
+        if (opts.json || globalOpts.json) { output(items, true); return; }
         if (items.length === 0) {
           console.log(chalk.dim("No roadmaps configured."));
           return;
@@ -91,16 +93,22 @@ export function registerRoadmapCommands(program: Command) {
     .command("show <roadmap>")
     .description("Show a roadmap summary")
     .option("--format <format>", "json or markdown", "json")
-    .action(async (roadmap: string, opts: { format?: string }) => {
+    .option("-j, --json", "Print JSON output", false)
+    .action(async (roadmap: string, opts: { format?: string; json?: boolean }) => {
       const globalOpts = globalOptions(program);
       try {
         const { renderRoadmapMarkdown, summarizeRoadmap } = await import("../../lib/roadmaps.js");
+        if (opts.json || globalOpts.json) {
+          const summary = summarizeRoadmap(roadmap);
+          output(summary, true);
+          return;
+        }
         if (opts.format === "markdown") {
           console.log(renderRoadmapMarkdown(roadmap));
           return;
         }
         const summary = summarizeRoadmap(roadmap);
-        if (globalOpts.json || opts.format === "json") { output(summary, true); return; }
+        if (opts.format === "json") { output(summary, true); return; }
         console.log(`${summary.name}: ${summary.progress.percent_complete}% (${summary.progress.readiness})`);
       } catch (e) {
         handleError(e);
@@ -117,7 +125,8 @@ export function registerRoadmapCommands(program: Command) {
     .option("--owner <name>", "Owner name")
     .option("--agent <name>", "Agent owner")
     .option("--release <name>", "Release label")
-    .action(async (roadmap: string, opts: { name?: string; description?: string; project?: string; status?: LocalRoadmapStatus; owner?: string; agent?: string; release?: string }) => {
+    .option("-j, --json", "Print JSON output", false)
+    .action(async (roadmap: string, opts: { name?: string; description?: string; project?: string; status?: LocalRoadmapStatus; owner?: string; agent?: string; release?: string; json?: boolean }) => {
       const globalOpts = globalOptions(program);
       try {
         const { updateRoadmap } = await import("../../lib/roadmaps.js");
@@ -130,7 +139,7 @@ export function registerRoadmapCommands(program: Command) {
           agent_id: opts.agent,
           release: opts.release,
         });
-        if (globalOpts.json) { output(updated, true); return; }
+        if (opts.json || globalOpts.json) { output(updated, true); return; }
         console.log(chalk.green(`Roadmap updated: ${updated.id.slice(0, 8)} ${updated.name}`));
       } catch (e) {
         handleError(e);
@@ -140,12 +149,13 @@ export function registerRoadmapCommands(program: Command) {
   roadmaps
     .command("delete <roadmap>")
     .description("Delete a local roadmap and its local milestone/release config")
-    .action(async (roadmap: string) => {
+    .option("-j, --json", "Print JSON output", false)
+    .action(async (roadmap: string, opts: { json?: boolean }) => {
       const globalOpts = globalOptions(program);
       try {
         const { deleteRoadmap } = await import("../../lib/roadmaps.js");
         const deleted = deleteRoadmap(roadmap);
-        if (globalOpts.json) { output({ deleted }, true); return; }
+        if (opts.json || globalOpts.json) { output({ deleted }, true); return; }
         console.log(deleted ? chalk.green("Roadmap deleted.") : chalk.dim("No roadmap matched."));
       } catch (e) {
         handleError(e);
@@ -167,7 +177,8 @@ export function registerRoadmapCommands(program: Command) {
     .option("--runs <list>", "Comma-separated run IDs")
     .option("--release <name>", "Release label")
     .option("--tags <list>", "Comma-separated tags")
-    .action(async (roadmap: string, title: string, opts: { description?: string; due?: string; status?: LocalMilestoneStatus; owner?: string; agent?: string; tasks?: string; plans?: string; runs?: string; release?: string; tags?: string }) => {
+    .option("-j, --json", "Print JSON output", false)
+    .action(async (roadmap: string, title: string, opts: { description?: string; due?: string; status?: LocalMilestoneStatus; owner?: string; agent?: string; tasks?: string; plans?: string; runs?: string; release?: string; tags?: string; json?: boolean }) => {
       const globalOpts = globalOptions(program);
       try {
         const { createMilestone } = await import("../../lib/roadmaps.js");
@@ -185,7 +196,7 @@ export function registerRoadmapCommands(program: Command) {
           release: opts.release,
           tags: splitList(opts.tags),
         });
-        if (globalOpts.json) { output(milestone, true); return; }
+        if (opts.json || globalOpts.json) { output(milestone, true); return; }
         console.log(chalk.green(`Milestone added: ${milestone.id.slice(0, 8)} ${milestone.title}`));
       } catch (e) {
         handleError(e);
@@ -206,7 +217,8 @@ export function registerRoadmapCommands(program: Command) {
     .option("--runs <list>", "Comma-separated run IDs")
     .option("--release <name>", "Release label")
     .option("--tags <list>", "Comma-separated tags")
-    .action(async (milestone: string, opts: { title?: string; description?: string; due?: string; status?: LocalMilestoneStatus; owner?: string; agent?: string; tasks?: string; plans?: string; runs?: string; release?: string; tags?: string }) => {
+    .option("-j, --json", "Print JSON output", false)
+    .action(async (milestone: string, opts: { title?: string; description?: string; due?: string; status?: LocalMilestoneStatus; owner?: string; agent?: string; tasks?: string; plans?: string; runs?: string; release?: string; tags?: string; json?: boolean }) => {
       const globalOpts = globalOptions(program);
       try {
         const { updateMilestone } = await import("../../lib/roadmaps.js");
@@ -223,7 +235,7 @@ export function registerRoadmapCommands(program: Command) {
           release: opts.release,
           tags: opts.tags === undefined ? undefined : splitList(opts.tags),
         });
-        if (globalOpts.json) { output(updated, true); return; }
+        if (opts.json || globalOpts.json) { output(updated, true); return; }
         console.log(chalk.green(`Milestone updated: ${updated.id.slice(0, 8)} ${updated.title}`));
       } catch (e) {
         handleError(e);
@@ -242,7 +254,8 @@ export function registerRoadmapCommands(program: Command) {
     .option("--plans <list>", "Comma-separated plan IDs")
     .option("--runs <list>", "Comma-separated run IDs")
     .option("--notes <text>", "Release notes")
-    .action(async (roadmap: string, name: string, opts: { releaseVersion?: string; status?: LocalMilestoneStatus; milestones?: string; tasks?: string; plans?: string; runs?: string; notes?: string }) => {
+    .option("-j, --json", "Print JSON output", false)
+    .action(async (roadmap: string, name: string, opts: { releaseVersion?: string; status?: LocalMilestoneStatus; milestones?: string; tasks?: string; plans?: string; runs?: string; notes?: string; json?: boolean }) => {
       const globalOpts = globalOptions(program);
       try {
         const { upsertReleaseGroup } = await import("../../lib/roadmaps.js");
@@ -257,7 +270,7 @@ export function registerRoadmapCommands(program: Command) {
           run_ids: resolveMany("task_runs", splitList(opts.runs)),
           notes: opts.notes,
         });
-        if (globalOpts.json) { output(release, true); return; }
+        if (opts.json || globalOpts.json) { output(release, true); return; }
         console.log(chalk.green(`Release group saved: ${release.name}`));
       } catch (e) {
         handleError(e);
@@ -269,16 +282,18 @@ export function registerRoadmapCommands(program: Command) {
     .description("Export a roadmap as JSON bundle or Markdown")
     .option("--format <format>", "json or markdown", "json")
     .option("--out <path>", "Write output to a file")
-    .action(async (roadmap: string, opts: { format?: string; out?: string }) => {
+    .option("-j, --json", "Print JSON output", false)
+    .action(async (roadmap: string, opts: { format?: string; out?: string; json?: boolean }) => {
       const globalOpts = globalOptions(program);
       try {
         const { exportRoadmapBundle, renderRoadmapMarkdown } = await import("../../lib/roadmaps.js");
         const content = opts.format === "markdown" ? renderRoadmapMarkdown(roadmap) : JSON.stringify(exportRoadmapBundle(roadmap), null, 2);
+        const jsonMode = Boolean(opts.json || globalOpts.json);
         if (opts.out) {
           writeFileSync(opts.out, content);
-          if (!(globalOpts.json)) console.log(chalk.green(`Wrote roadmap export to ${opts.out}`));
+          if (!jsonMode) console.log(chalk.green(`Wrote roadmap export to ${opts.out}`));
         }
-        if (globalOpts.json) { output(opts.format === "markdown" ? { content } : JSON.parse(content), true); return; }
+        if (jsonMode) { output(opts.format === "markdown" ? { content } : JSON.parse(content), true); return; }
         if (!opts.out) console.log(content);
       } catch (e) {
         handleError(e);
@@ -289,13 +304,14 @@ export function registerRoadmapCommands(program: Command) {
     .command("import <path>")
     .description("Preview or apply a roadmap JSON bundle")
     .option("--apply", "Apply the import")
-    .action(async (path: string, opts: { apply?: boolean }) => {
+    .option("-j, --json", "Print JSON output", false)
+    .action(async (path: string, opts: { apply?: boolean; json?: boolean }) => {
       const globalOpts = globalOptions(program);
       try {
         const { importRoadmapBundle } = await import("../../lib/roadmaps.js");
         const bundle = JSON.parse(readFileSync(path, "utf8")) as RoadmapBundle;
         const result = importRoadmapBundle(bundle, { apply: Boolean(opts.apply) });
-        if (globalOpts.json) { output(result, true); return; }
+        if (opts.json || globalOpts.json) { output(result, true); return; }
         console.log(result.applied ? chalk.green(`Imported roadmap ${result.roadmap_id}`) : chalk.dim(`Preview: ${result.milestones} milestones, ${result.releases} releases`));
       } catch (e) {
         handleError(e);

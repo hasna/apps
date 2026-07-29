@@ -88,7 +88,7 @@ export function registerRiskCommands(program: Command) {
     .option("--task <id>", "Link to a task")
     .option("--tag <tag>", "Tag; repeatable or comma-separated", (value, previous: string[]) => [...previous, value], [])
     .option("--metadata-json <json>", "JSON object metadata")
-    .option("-j, --json", "Output as JSON")
+    .option("-j, --json", "Print JSON output", false)
     .action((title: string, opts) => {
       try {
         const globalOpts = program.opts();
@@ -125,7 +125,7 @@ export function registerRiskCommands(program: Command) {
     .option("--tag <tag>", "Filter by tag")
     .option("--include-closed", "Include resolved and accepted risks")
     .option("--limit <n>", "Maximum records", "50")
-    .option("-j, --json", "Output as JSON")
+    .option("-j, --json", "Print JSON output", false)
     .action((opts) => {
       try {
         const globalOpts = program.opts();
@@ -138,7 +138,7 @@ export function registerRiskCommands(program: Command) {
   risks
     .command("show <id>")
     .description("Show one local risk")
-    .option("-j, --json", "Output as JSON")
+    .option("-j, --json", "Print JSON output", false)
     .action((id: string, opts) => {
       try {
         const globalOpts = program.opts();
@@ -165,7 +165,7 @@ export function registerRiskCommands(program: Command) {
     .option("--task <id>", "Link to a task")
     .option("--tag <tag>", "Replace tags; repeatable or comma-separated", (value, previous: string[]) => [...previous, value], [])
     .option("--metadata-json <json>", "Replace JSON object metadata")
-    .option("-j, --json", "Output as JSON")
+    .option("-j, --json", "Print JSON output", false)
     .action((id: string, opts) => {
       try {
         const globalOpts = program.opts();
@@ -193,7 +193,7 @@ export function registerRiskCommands(program: Command) {
     .command("close <id>")
     .description("Close a risk as resolved or accepted")
     .option("--status <status>", "resolved or accepted", "resolved")
-    .option("-j, --json", "Output as JSON")
+    .option("-j, --json", "Print JSON output", false)
     .action((id: string, opts) => {
       try {
         const status = parseChoice(opts.status, ["resolved", "accepted"] as const, "--status");
@@ -209,7 +209,7 @@ export function registerRiskCommands(program: Command) {
     .description("Score local health for a plan or project")
     .option("--plan <id>", "Plan to score")
     .option("--project <id>", "Project to score")
-    .option("-j, --json", "Output as JSON")
+    .option("-j, --json", "Print JSON output", false)
     .action((opts) => {
       try {
         if (!opts.plan && !opts.project) throw new Error("Provide --plan or --project");
@@ -239,10 +239,15 @@ export function registerRiskCommands(program: Command) {
     .option("--include-closed", "Include resolved and accepted risks")
     .option("--limit <n>", "Maximum records", "100")
     .option("--format <format>", "json or markdown", "json")
-    .option("-j, --json", "Output as JSON")
+    .option("-j, --json", "Print JSON output", false)
     .action((opts) => {
       try {
         const report = createRiskRegisterExport(commonFilters(opts), getDatabase());
+        const globalOpts = program.opts();
+        if (opts.json || globalOpts.json) {
+          output(report, true);
+          return;
+        }
         if (opts.format === "markdown") {
           console.log(renderRiskRegisterMarkdown(report));
           return;
