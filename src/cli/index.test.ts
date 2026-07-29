@@ -163,6 +163,45 @@ describe("project-first CLI surface", () => {
     }
   });
 
+  test("prompt flags cannot hijack delete dispatch and delete requires a target", () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-delete-dispatch-"));
+    const env = {
+      HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
+      WORKSPACES_AGENT_MOCK: "1",
+    };
+    try {
+      const create = runProjects([
+        "create",
+        "--name",
+        "Dispatch Target",
+        "--path",
+        join(root, "dispatch-target"),
+        "--json",
+      ], env);
+      expect(create.exitCode).toBe(0);
+
+      for (const promptFlag of [
+        { name: "--yes", args: ["--yes"] },
+        { name: "--model", args: ["--model", "test-model"] },
+        { name: "--max-steps", args: ["--max-steps", "2"] },
+        { name: "--no-tmux", args: ["--no-tmux"] },
+      ]) {
+        const result = runProjects(["delete", "--hard", ...promptFlag.args, "dispatch-target"], env);
+        expect(result.exitCode).toBe(1);
+        expect(text(result.stderr)).toContain(`unknown option '${promptFlag.name}'`);
+      }
+
+      const stillPresent = runProjects(["show", "dispatch-target", "--json"], env);
+      expect(stillPresent.exitCode).toBe(0);
+
+      const missingTarget = runProjects(["delete", "--hard"], env);
+      expect(missingTarget.exitCode).toBe(1);
+      expect(text(missingTarget.stderr)).toContain("missing required argument 'id-or-slug'");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("dashboard validate emits structured JSON errors for malformed input", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-dashboard-invalid-"));
     const invalidFile = join(root, "invalid.json");

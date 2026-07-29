@@ -216,6 +216,7 @@ describe("project agent CLI", () => {
       "--recipe",
       "docs-recipe",
       "--no-tmux",
+      "--",
       "create",
       "\"Flagged Workspace\"",
       "with",
