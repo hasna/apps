@@ -11,6 +11,7 @@ import {
   deriveProjectChannel,
   ensureProjectChannel,
   ensureProjectChannelViaStore,
+  notifyProjectAgentOnline,
   normalizeProjectChannelName,
   projectChannelSummary,
   resolveProjectChannel,
@@ -18,6 +19,7 @@ import {
   resolveProjectChannelClassDetailed,
   resolveProjectChannelForProject,
   shouldEnsureProjectChannel,
+  shouldNotifyProjectAgentOnline,
   type ConversationsChannelRunner,
   type ConversationsRunResult,
   type ProjectChannelStore,
@@ -222,6 +224,108 @@ describe("shouldEnsureProjectChannel", () => {
     expect(shouldEnsureProjectChannel({ NODE_ENV: "test", PROJECTS_CHANNEL_ENSURE: "1" })).toBe(true);
     expect(shouldEnsureProjectChannel({ PROJECTS_CHANNEL_ENSURE: "off" })).toBe(false);
     expect(shouldEnsureProjectChannel({ OPEN_PROJECTS_CHANNEL_ENSURE: "false" })).toBe(false);
+  });
+});
+
+describe("project agent online notifications", () => {
+  test("are enabled by default and honor the opt-out flag", () => {
+    expect(shouldNotifyProjectAgentOnline({})).toBe(true);
+    expect(shouldNotifyProjectAgentOnline({ NODE_ENV: "test" })).toBe(true);
+    expect(shouldNotifyProjectAgentOnline({ PROJECTS_AGENT_ONLINE_NOTIFICATIONS: "off" })).toBe(false);
+    expect(shouldNotifyProjectAgentOnline({ OPEN_PROJECTS_AGENT_ONLINE_NOTIFICATIONS: "0" })).toBe(false);
+    expect(shouldNotifyProjectAgentOnline({ PROJECTS_AGENT_ONLINE_NOTIFICATIONS: "yes" })).toBe(true);
+  });
+
+  test("posts a newly started coding agent to the project channel", () => {
+    const db = makeDb();
+    const project = createWorkspace({ name: "Fleet Comms", slug: "fleet-comms", kind: "project" }, db);
+    const { calls, runner } = recordingRunner(() => ok);
+
+    const result = notifyProjectAgentOnline(project, {
+      agentTool: "claude",
+      sessionName: "fleet-comms",
+      agentStarted: true,
+      hasAgentCommand: true,
+      runner,
+    });
+
+    expect(result.status).toBe("sent");
+    expect(result.sent).toBe(true);
+    expect(result.channel).toBe("fleet-comms");
+    expect(calls).toEqual([[
+      "channel",
+      "send",
+      "fleet-comms",
+      "A claude agent is online for Fleet Comms (tmux session: fleet-comms).",
+      "--from",
+      "projects",
+      "-j",
+    ]]);
+    db.close();
+  });
+
+  test("does not emit false online notices for reused, unmanaged, disabled, or dry-run starts", () => {
+    const db = makeDb();
+    const project = createWorkspace({ name: "Quiet", slug: "quiet", kind: "project" }, db);
+    const { calls, runner } = recordingRunner(() => ok);
+
+    const reused = notifyProjectAgentOnline(project, {
+      agentTool: "codewith",
+      sessionName: "quiet",
+      agentStarted: false,
+      hasAgentCommand: true,
+      runner,
+    });
+    const unmanaged = notifyProjectAgentOnline(project, {
+      agentTool: "none",
+      sessionName: "quiet",
+      agentStarted: true,
+      hasAgentCommand: false,
+      runner,
+    });
+    const disabled = notifyProjectAgentOnline(project, {
+      agentTool: "claude",
+      sessionName: "quiet",
+      agentStarted: true,
+      hasAgentCommand: true,
+      enabled: false,
+      runner,
+    });
+    const planned = notifyProjectAgentOnline(project, {
+      agentTool: "claude",
+      sessionName: "quiet",
+      agentStarted: false,
+      hasAgentCommand: true,
+      dryRun: true,
+      runner,
+    });
+
+    expect(reused.status).toBe("skipped");
+    expect(unmanaged.status).toBe("skipped");
+    expect(disabled.status).toBe("skipped");
+    expect(disabled.enabled).toBe(false);
+    expect(planned.status).toBe("planned");
+    expect(calls).toHaveLength(0);
+    db.close();
+  });
+
+  test("reports chat delivery failures without throwing", () => {
+    const db = makeDb();
+    const project = createWorkspace({ name: "Fleet Comms", slug: "fleet-comms", kind: "project" }, db);
+    const { runner } = recordingRunner(() => ({ ok: false, stdout: "", stderr: "chat unavailable" }));
+
+    const result = notifyProjectAgentOnline(project, {
+      agentTool: "claude",
+      sessionName: "fleet-comms",
+      agentStarted: true,
+      hasAgentCommand: true,
+      runner,
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.sent).toBe(false);
+    expect(result.reason).toContain("chat unavailable");
+    db.close();
   });
 });
 
@@ -472,6 +576,8 @@ describe("channel ensure on project create/start", () => {
 
       expect(result.channel?.status).toBe("planned");
       expect(result.channel?.channel).toBe("start-me");
+      expect(result.online_notification.status).toBe("planned");
+      expect(result.online_notification.channel).toBe("start-me");
       expect(calls).toHaveLength(0);
     } finally {
       rmSync(path, { recursive: true, force: true });

@@ -6,6 +6,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `projects start` now posts a best-effort in-chat notification to the
+  project's Conversations channel when it creates a tmux session that launches
+  a coding agent. Notifications are enabled by default, can be disabled with
+  `PROJECTS_AGENT_ONLINE_NOTIFICATIONS=0`, remain side-effect-free in dry runs,
+  and are not repeated when an existing session is reused.
+
 ### Changed
 
 - **BREAKING — channel derivation no longer imposes a prefix.** `deriveProjectChannel`

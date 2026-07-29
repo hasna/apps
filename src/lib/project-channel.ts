@@ -131,6 +131,33 @@ export interface ConversationsRunResult {
 
 export type ConversationsChannelRunner = (args: string[]) => ConversationsRunResult;
 
+export type ProjectAgentOnlineNotificationStatus = "sent" | "planned" | "skipped" | "error";
+
+export interface ProjectAgentOnlineNotificationResult {
+  status: ProjectAgentOnlineNotificationStatus;
+  enabled: boolean;
+  sent: boolean;
+  channel: string | null;
+  from: string;
+  agent_tool: string;
+  session_name: string;
+  message: string;
+  reason?: string;
+}
+
+export interface NotifyProjectAgentOnlineOptions {
+  agentTool: string;
+  sessionName: string;
+  /** Whether this start created the session that launched the managed agent command. */
+  agentStarted: boolean;
+  /** Whether this start has a managed coding-agent command at all. */
+  hasAgentCommand: boolean;
+  enabled?: boolean;
+  dryRun?: boolean;
+  from?: string;
+  runner?: ConversationsChannelRunner;
+}
+
 export interface EnsureProjectChannelOptions {
   db?: Database;
   agentId?: string;
@@ -302,6 +329,22 @@ export function shouldEnsureProjectChannel(env: Record<string, string | undefine
   return true;
 }
 
+/**
+ * Online announcements are enabled by default. Set
+ * PROJECTS_AGENT_ONLINE_NOTIFICATIONS=0 to opt out.
+ */
+export function shouldNotifyProjectAgentOnline(env: Record<string, string | undefined> = process.env): boolean {
+  const flag = (
+    env["PROJECTS_AGENT_ONLINE_NOTIFICATIONS"]
+    ?? env["OPEN_PROJECTS_AGENT_ONLINE_NOTIFICATIONS"]
+  )?.trim().toLowerCase();
+  if (flag) {
+    if (["1", "true", "on", "yes"].includes(flag)) return true;
+    if (["0", "false", "off", "no"].includes(flag)) return false;
+  }
+  return true;
+}
+
 export const CONVERSATIONS_CLI_TIMEOUT_MS = 15_000;
 
 export function conversationsCliRunner(binary?: string): ConversationsChannelRunner {
@@ -324,6 +367,79 @@ export function conversationsCliRunner(binary?: string): ConversationsChannelRun
       return { ok: false, stdout: "", stderr: err instanceof Error ? err.message : String(err) };
     }
   };
+}
+
+function projectAgentOnlineMessage(project: Workspace, agentTool: string, sessionName: string): string {
+  const label = project.name.trim() || project.slug;
+  return `A ${agentTool} agent is online for ${label} (tmux session: ${sessionName}).`;
+}
+
+/**
+ * Post a project-scoped chat announcement when a start actually brings a
+ * coding agent online. This is best-effort: chat failures are returned to the
+ * caller and never turn a successful project start into a failure.
+ */
+export function notifyProjectAgentOnline(
+  project: Workspace,
+  options: NotifyProjectAgentOnlineOptions,
+): ProjectAgentOnlineNotificationResult {
+  const enabled = options.enabled ?? shouldNotifyProjectAgentOnline();
+  const from = options.from?.trim() || "projects";
+  const message = projectAgentOnlineMessage(project, options.agentTool, options.sessionName);
+  const base = {
+    enabled,
+    sent: false,
+    channel: null,
+    from,
+    agent_tool: options.agentTool,
+    session_name: options.sessionName,
+    message,
+  };
+
+  if (!enabled) {
+    return { ...base, status: "skipped", reason: "Agent online notifications are disabled." };
+  }
+  if (!options.hasAgentCommand) {
+    return { ...base, status: "skipped", reason: "This start does not launch a managed coding-agent command." };
+  }
+
+  let channel: string;
+  try {
+    channel = deriveProjectChannel(project).channel;
+  } catch (err) {
+    return { ...base, status: "error", reason: errorText(err) };
+  }
+
+  if (options.dryRun) {
+    return {
+      ...base,
+      status: "planned",
+      channel,
+      reason: `Would notify #${channel} if this start creates the coding-agent session.`,
+    };
+  }
+  if (!options.agentStarted) {
+    return { ...base, status: "skipped", channel, reason: "No new coding-agent session was created." };
+  }
+
+  const result = (options.runner ?? conversationsCliRunner())([
+    "channel",
+    "send",
+    channel,
+    message,
+    "--from",
+    from,
+    "-j",
+  ]);
+  if (!result.ok) {
+    return {
+      ...base,
+      status: "error",
+      channel,
+      reason: result.stderr.trim() || result.stdout.trim() || "conversations channel send failed",
+    };
+  }
+  return { ...base, status: "sent", sent: true, channel };
 }
 
 function projectChannelDescription(project: Workspace, channelClass: ProjectChannelClass | null): string {

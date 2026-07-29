@@ -365,6 +365,7 @@ export {
   conversationsCliRunner,
   deriveProjectChannel,
   ensureProjectChannel,
+  notifyProjectAgentOnline,
   normalizeProjectChannelName,
   projectChannelSummary,
   resolveProjectChannel,
@@ -372,11 +373,15 @@ export {
   resolveProjectChannelClassDetailed,
   resolveProjectChannelForProject,
   shouldEnsureProjectChannel,
+  shouldNotifyProjectAgentOnline,
 } from "./lib/project-channel.js";
 export type {
   ConversationsChannelRunner,
   ConversationsRunResult,
   EnsureProjectChannelOptions,
+  NotifyProjectAgentOnlineOptions,
+  ProjectAgentOnlineNotificationResult,
+  ProjectAgentOnlineNotificationStatus,
   ProjectChannelClass,
   ProjectChannelDerivation,
   ProjectChannelEnsureResult,

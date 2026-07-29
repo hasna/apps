@@ -163,6 +163,10 @@ projects channel my-app --ensure           # create the channel if it does not e
 # Most projects (kind `generic`) fall in that last bucket.
 # `projects create` and `projects start` ensure the channel automatically
 # (disable with PROJECTS_CHANNEL_ENSURE=0); MCP tool: projects_channel
+# A newly created coding-agent session also posts an online notice to this
+# channel so subscribed agents see it in chat. This is enabled by default;
+# disable it with PROJECTS_AGENT_ONLINE_NOTIFICATIONS=0. Reusing an existing
+# session does not post another online notice.
 
 # Shell completion, including workon
 eval "$(projects completion)"
