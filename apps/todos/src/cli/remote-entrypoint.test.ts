@@ -256,6 +256,7 @@ describe("remote CLI entrypoint authority boundary", () => {
       ["--agent=fixture-agent", "comment", TASK_FIXTURE_ID, "note"],
       ["history", TASK_FIXTURE_ID],
       ["approve", TASK_FIXTURE_ID],
+      ["complete", TASK_FIXTURE_ID],
       ["bulk", "done", TASK_FIXTURE_ID],
       // Bulk plan reassignment is serviced remotely (shared plan lookup + PATCH
       // per task), so it must not fail closed under remote authority.
@@ -750,7 +751,7 @@ describe("remote CLI entrypoint authority boundary", () => {
     }
   }, 45_000);
 
-  test("built remote done persists every evidence field and rejects invalid confidence before requests", async () => {
+  test("built remote done/complete persists every evidence field and rejects invalid confidence before requests", async () => {
     const TASK_ID = "33333333-3333-4333-8333-333333333333";
     const requests: Array<{ method: string; path: string; body: Record<string, unknown> }> = [];
     let advertiseEvidence = false;
@@ -833,8 +834,8 @@ describe("remote CLI entrypoint authority boundary", () => {
 
       advertiseEvidence = true;
       requests.length = 0;
-      const done = await runCli(executable, [
-        "--agent", "fixture-agent", "--json", "done", TASK_ID,
+      const completed = await runCli(executable, [
+        "--agent", "fixture-agent", "--json", "complete", TASK_ID,
         "--attach-ids", "attachment-one,attachment-two",
         "--files-changed", "src/a.ts,src/b.ts",
         "--test-results", "12 passed",
@@ -842,7 +843,7 @@ describe("remote CLI entrypoint authority boundary", () => {
         "--notes", "verified",
         "--confidence", "0.85",
       ], env, cwd);
-      expect({ exitCode: done.exitCode, stderr: done.stderr }).toEqual({ exitCode: 0, stderr: "" });
+      expect({ exitCode: completed.exitCode, stderr: completed.stderr }).toEqual({ exitCode: 0, stderr: "" });
       expect(requests).toHaveLength(2);
       expect(requests[0]).toMatchObject({ method: "GET", path: "/v1/openapi.json" });
       expect(requests[1]).toEqual({
@@ -858,7 +859,7 @@ describe("remote CLI entrypoint authority boundary", () => {
           confidence: 0.85,
         },
       });
-      const invalid = await runCli(executable, ["--json", "done", TASK_ID, "--confidence", "1.5"], env, cwd);
+      const invalid = await runCli(executable, ["--json", "complete", TASK_ID, "--confidence", "1.5"], env, cwd);
       expect(invalid.exitCode).toBe(1);
       expect(invalid.stderr).toContain("--confidence must be a number between 0.0 and 1.0");
       expect(requests).toHaveLength(2);
