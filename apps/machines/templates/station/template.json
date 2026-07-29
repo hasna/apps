@@ -1,7 +1,7 @@
 {
   "$schema": "hasna.station_template.v1",
   "name": "station",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Hasna station contract v1. Every item traces to a measured 2026-07-28 failure on station01 (designs/station-contract-design.md §8). Layers: base + dgx-spark (121G physical Spark) + ec2 (32G Graviton cloud station).",
   "base": {
     "files": [
@@ -102,7 +102,18 @@
           "mode": "0644",
           "kind": "systemd-user-unit",
           "lesson": "2026-07-28: hq/coordinator seats need MemoryLow protection when agent load spikes."
+        },
+        {
+          "id": "machines-roster-service",
+          "source": "files/dgx-spark/user-systemd/machines-roster.service",
+          "target": "~/.config/systemd/user/machines-roster.service",
+          "mode": "0644",
+          "kind": "systemd-user-unit",
+          "lesson": "2026-07-29: station01 had only the obsolete /opt/fixture unit and a stale Jul 8 heartbeat; this unit runs the packaged SQLite-leased reconciler."
         }
+      ],
+      "services": [
+        { "name": "machines-roster.service", "scope": "user", "expectEnabled": true, "expectActive": true }
       ]
     },
     "ec2": {

@@ -29,6 +29,18 @@ export function getRolloutRecordsPath(): string {
   return process.env["HASNA_MACHINES_ROLLOUT_RECORDS_PATH"] || join(getDataDir(), "rollout-records.jsonl");
 }
 
+export function getRosterConfigPath(): string {
+  return process.env["HASNA_MACHINES_ROSTER_CONFIG_PATH"] || join(getDataDir(), "roster.json");
+}
+
+export function getRosterRecordsPath(): string {
+  return process.env["HASNA_MACHINES_ROSTER_RECORDS_PATH"] || join(getDataDir(), "roster-records.jsonl");
+}
+
+export function getRosterHeartbeatPath(): string {
+  return process.env["HASNA_MACHINES_ROSTER_HEARTBEAT_PATH"] || join(getDataDir(), "roster-heartbeat.json");
+}
+
 export function getClipboardKeyPath(): string {
   return process.env["HASNA_MACHINES_CLIPBOARD_KEY_PATH"] || join(getDataDir(), "clipboard.key");
 }

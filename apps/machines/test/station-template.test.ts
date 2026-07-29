@@ -112,6 +112,15 @@ describe("overlay merge", () => {
     const agentsSlice = effective.files.find((file) => file.target.endsWith("hasna-agents.slice"));
     expect(agentsSlice?.content).toContain("MemoryHigh=54G");
     expect(agentsSlice?.content).toContain("MemoryMax=60G");
+    const rosterUnit = effective.files.find((file) => file.target.endsWith("machines-roster.service"));
+    expect(rosterUnit?.content).toContain("/home/hasna/.bun/bin/machines-agent roster daemon");
+    expect(rosterUnit?.content).not.toContain("/opt/fixture");
+    expect(effective.services).toContainEqual({
+      name: "machines-roster.service",
+      scope: "user",
+      expectEnabled: true,
+      expectActive: true,
+    });
     expect(effective.swap.sizeGb).toBe(0);
   });
 });
@@ -126,6 +135,7 @@ describe("physical render", () => {
     expect(commands).toContain("earlyoom");
     expect(commands).toContain("tailscale");
     expect(commands).toContain("bun install -g");
+    expect(commands).toContain("systemctl --user enable --now 'machines-roster.service'");
     // secret NAMES are allowed; secret VALUES have no path into a render
     expect(commands).toContain("stations/prod/tailscale/authkey");
     expect(commands).not.toContain("tskey-");

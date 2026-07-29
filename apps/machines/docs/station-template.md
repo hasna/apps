@@ -38,6 +38,31 @@ machines setup --template station,dgx-spark --check
 machines setup --template station,ec2 --render cloud-init --station station17 > user-data.yaml
 ```
 
+## Roster controller (station01)
+
+Copy `templates/station/roster.example.json` to
+`~/.hasna/machines/roster.json`, replace every placeholder, and keep
+`applyMode` set to `manual` through the first kill drill. A manual pass is:
+
+```bash
+HASNA_MACHINES_ALLOW_MUTATIONS=1 machines-agent roster reconcile \
+  --config "$HOME/.hasna/machines/roster.json" --apply --drill-level tmux-kill
+```
+
+The controller reads live tmux panes, its SQLite launch history, and seat
+heartbeats; it never treats a tmux-resurrect snapshot as desired state. It
+launches only `accounts launch <profile>` seats through `systemd-run` in
+`hasna-agents.slice`, never sends prompts or work. After the drill proves
+batching, resource refusal, crashloop latching, and functional storage checks,
+change `applyMode` to `auto` and enable the shipped user unit. The unit remains
+conditioned on the config file existing:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now machines-roster.service
+systemctl --user status machines-roster.service
+```
+
 ## What v1 covers
 
 | Item | Lesson (2026-07-28) |
@@ -46,6 +71,7 @@ machines setup --template station,ec2 --render cloud-init --station station17 > 
 | `/etc/tmpfiles.d/99-zz-hasna-station-mglru.conf` (`min_ttl_ms=1000`) | MGLRU knob was runtime-only, would not survive reboot |
 | earlyoom drop-in (`-m 4 -s 25 -r 300`, avoid sshd/tmux-server/systemd/journald, prefer node/bun/rustc/java, StartLimit 300/5) | the old guard computed swap depth and ignored it; kill-drill proven on station02 2026-07-28 |
 | `hasna-agents.slice` / `hasna-hq.slice` (per hardware class) | slices existed but nothing ran in them; the roster reconciler launches into them |
+| `machines-roster.service` (dgx-spark) | station01's old `/opt/fixture` unit was not the packaged controller and its heartbeat had gone stale |
 | unit conventions check (`StartLimitIntervalSec=300`, `StartLimitBurst=5`, `OnFailure=`, absolute `ExecStart`) | 203/EXEC bare-ExecStart bug; ~290k-restart loop; 0/40 units had StartLimit keys |
 | tailscale install + join (auth key by secret NAME, `file:` reference, `--ssh`) | cloud stations have no public ingress; the tailnet is the access plane |
 | bun + hasna CLI set, secrets bootstrap (names only) | cattle contract: a replacement box must converge unattended |
