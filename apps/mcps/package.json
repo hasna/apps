@@ -2,10 +2,20 @@
   "name": "@hasna/mcps",
   "version": "0.0.31",
   "description": "Meta-MCP registry & CLI — discover, manage, and proxy MCP servers",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "registry",
+    "cli"
+  ],
   "type": "module",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/hasna/mcps.git"
+  },
+  "homepage": "https://github.com/hasna/mcps#readme",
+  "bugs": {
+    "url": "https://github.com/hasna/mcps/issues"
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -42,11 +52,13 @@
     "dev:dashboard": "cd dashboard && bun run dev",
     "serve": "bun run src/cli/index.tsx serve",
     "test": "bun test",
+    "contract:check": "npx -y @hasna/contracts@0.8.5 repo-conformance .",
+    "artifact-scan": "bun scripts/no-cloud-artifact-scan.mjs",
     "no-cloud:source": "bun test src/no-cloud-boundary.test.ts",
-    "no-cloud:pack": "bun run build && bun scripts/no-cloud-artifact-scan.mjs",
+    "no-cloud:pack": "bun run build && bun run artifact-scan",
     "typecheck": "tsc --noEmit",
-    "prepack": "bun run build && bun scripts/no-cloud-artifact-scan.mjs",
-    "prepublishOnly": "bun test && bun run build && bun scripts/no-cloud-artifact-scan.mjs",
+    "prepack": "bun run build && bun run artifact-scan",
+    "prepublishOnly": "bun test && bun run build && bun run artifact-scan",
     "postinstall": "mkdir -p $HOME/.hasna/mcps/cache 2>/dev/null || true"
   },
   "dependencies": {
@@ -63,6 +75,7 @@
     "zod": "^3.23.0"
   },
   "devDependencies": {
+    "@hasna/contracts": "0.8.5",
     "@types/bun": "latest",
     "@types/pg": "^8.20.0",
     "@types/react": "^18.2.0",
