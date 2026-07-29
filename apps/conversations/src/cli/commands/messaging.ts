@@ -13,7 +13,7 @@ import { printMessageEntry } from "../message-output.js";
 import { checkForUpdate } from "../../lib/version-check.js";
 import { emitCliError } from "../cli-error.js";
 import type { DigestResult } from "../../lib/messages.js";
-import { printJson, printJsonLine } from "../stdout.js";
+import { printJson, printJsonLine, writeStdout } from "../stdout.js";
 
 function quoteDigestCommandArg(value: string): string {
   return /^[A-Za-z0-9._:/@=-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
@@ -503,7 +503,7 @@ export function registerMessagingCommands(program: Command): void {
         until: opts.until,
         format,
       });
-      console.log(result);
+      writeStdout(`${result}\n`);
       closeDb();
     });
 

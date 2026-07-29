@@ -143,6 +143,76 @@ describe("channel list --json through a real pipeline", () => {
   }, 30_000);
 });
 
+describe("export JSON through a real pipeline", () => {
+  test("is byte-for-byte identical to redirected-to-file output", () => {
+    const dir = mkdtempSync(join(tmpdir(), "conversations-export-pipe-"));
+    const dbPath = join(dir, "conversations.db");
+    const directPath = join(dir, "direct.json");
+    const pipedPath = join(dir, "piped.json");
+    const env = {
+      ...process.env,
+      CONVERSATIONS_DB_PATH: dbPath,
+      CONVERSATIONS_AGENT_ID: "export-pipe-test",
+      DIRECT_OUTPUT: directPath,
+      PIPED_OUTPUT: pipedPath,
+      FORCE_COLOR: "0",
+    };
+
+    try {
+      const boot = Bun.spawnSync({
+        cmd: ["bun", "run", "./src/cli/index.tsx", "export"],
+        cwd: process.cwd(),
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(boot.exitCode).toBe(0);
+
+      const db = new Database(dbPath);
+      const insert = db.prepare(
+        "INSERT INTO messages (session_id, from_agent, to_agent, content) VALUES (?, ?, ?, ?)",
+      );
+      db.exec("BEGIN");
+      for (let i = 0; i < 1_200; i++) {
+        insert.run(
+          `export-session-${String(i).padStart(4, "0")}`,
+          "export-pipe-test",
+          "reader",
+          `message ${i}: ${"large-json-payload-".repeat(32)}`,
+        );
+      }
+      db.exec("COMMIT");
+      db.close();
+
+      const shell = Bun.spawnSync({
+        cmd: [
+          "bash",
+          "-c",
+          [
+            "set -o pipefail",
+            "bun run ./src/cli/index.tsx export > \"$DIRECT_OUTPUT\"",
+            "bun run ./src/cli/index.tsx export | cat > \"$PIPED_OUTPUT\"",
+          ].join("\n"),
+        ],
+        cwd: process.cwd(),
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(shell.exitCode).toBe(0);
+      expect(new TextDecoder().decode(shell.stderr)).toBe("");
+
+      const direct = readFileSync(directPath);
+      const piped = readFileSync(pipedPath);
+      expect(direct.byteLength).toBeGreaterThan(65_536);
+      expect(piped.equals(direct)).toBe(true);
+      expect(JSON.parse(piped.toString())).toHaveLength(1_200);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+});
+
 describe("CLI JSON output", () => {
   test("does not bypass the completing writer", () => {
     const root = import.meta.dir;
