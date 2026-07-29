@@ -124,6 +124,7 @@ function mergeLayer(effective: EffectiveTemplate, layer: TemplateLayer, template
     }
   }
   if (layer.unitConventions) effective.unitConventions = layer.unitConventions;
+  if (layer.accessFloor) effective.accessFloor = layer.accessFloor;
   if (layer.tailscale) effective.tailscale = layer.tailscale;
   if (layer.secretsBootstrap) effective.secretsBootstrap = layer.secretsBootstrap;
   if (layer.swap) effective.swap = layer.swap;

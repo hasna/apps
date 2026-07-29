@@ -1,7 +1,7 @@
 {
   "$schema": "hasna.station_template.v1",
   "name": "station",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Hasna station contract v1. Every item traces to a measured 2026-07-28 failure on station01 (designs/station-contract-design.md §8). Layers: base + dgx-spark (121G physical Spark) + ec2 (32G Graviton cloud station).",
   "base": {
     "files": [
@@ -127,6 +127,11 @@
       "packages": {
         "apt": [],
         "bun": []
+      },
+      "accessFloor": {
+        "service": "snap.amazon-ssm-agent.amazon-ssm-agent",
+        "ensure": "( snap list amazon-ssm-agent >/dev/null 2>&1 || snap install amazon-ssm-agent --classic ) && systemctl enable --now snap.amazon-ssm-agent.amazon-ssm-agent.service",
+        "lesson": "2026-07-29 station17: the tailscale join died at boot (runcmd: aws: not found) on a box with zero SG ingress, no keypair, and no authorized SSH keys — SSM, authorized purely by the instance profile stations-prod-ec2-profile with no boot-time secret, was the only way back in. Owner ruling: nothing that requires fetching a secret at boot may sit on the critical path to a machine's reachability; the floor must be explicit and drift-checked, never incidental."
       },
       "commands": [
         {

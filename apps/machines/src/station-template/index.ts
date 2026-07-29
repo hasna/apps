@@ -7,6 +7,7 @@ export {
   type TemplateFile,
   type TemplateLayer,
   type TemplateCommand,
+  type AccessFloor,
   type LoadedTemplateFile,
   type EffectiveTemplate,
 } from "./schema.js";

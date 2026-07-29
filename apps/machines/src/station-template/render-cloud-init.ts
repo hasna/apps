@@ -67,11 +67,26 @@ export function renderCloudInit(effective: EffectiveTemplate, options: CloudInit
   }
 
   const runcmd: string[] = [];
-  // Required binaries first: the tailscale join below fetches the auth key with
+  // The access floor comes FIRST, and never fatally. Owner ruling 2026-07-29
+  // (station17): nothing that requires fetching a secret at boot may sit on
+  // the critical path to a machine's reachability. The floor (EC2: the SSM
+  // agent, preseeded in the Ubuntu AMI and authorized purely by the instance
+  // profile) is what keeps a station recoverable when everything below —
+  // including the tailscale join — fails; this entry asserts/repairs it before
+  // anything else gets a chance to go wrong.
+  if (effective.accessFloor) {
+    runcmd.push(
+      `( ${effective.accessFloor.ensure} ) || echo 'hasna-station: access-floor ensure failed for ${effective.accessFloor.service} (NON-FATAL) — drift check reports access-floor state' >&2`
+    );
+  }
+  // Required binaries next: the tailscale join below fetches the auth key with
   // `aws secretsmanager`, and on station17 (2026-07-29) that ran with no aws on
-  // PATH — the join failed and the box never reached the tailnet.
+  // PATH — the join failed and the box never reached the tailnet. A failed
+  // install degrades to a drift report (command:<id>), never a dead boot.
   for (const command of effective.commands) {
-    runcmd.push(`command -v -- ${command.command} >/dev/null 2>&1 || sh -c '${command.install.replace(/'/g, `'\\''`)}'`);
+    runcmd.push(
+      `command -v -- ${command.command} >/dev/null 2>&1 || sh -c '${command.install.replace(/'/g, `'\\''`)}' || echo 'hasna-station: install of required command ${command.command} failed (NON-FATAL) — drift check reports command:${command.id}' >&2`
+    );
   }
   if (effective.files.some((file) => file.kind === "sysctl")) {
     runcmd.push("sysctl --system");
@@ -93,14 +108,24 @@ export function renderCloudInit(effective: EffectiveTemplate, options: CloudInit
     runcmd.push(`systemctl enable ${service.expectActive ? "--now " : ""}${service.name}`);
   }
   if (effective.tailscale?.join) {
-    runcmd.push("command -v tailscale >/dev/null 2>&1 || curl -fsSL https://tailscale.com/install.sh | sh");
+    // Tailscale is an access path, not a boot dependency (owner ruling
+    // 2026-07-29). Both entries end non-fatally: a failed install or join
+    // leaves a reachable, debuggable station whose drift check reports
+    // tailscale:join — never a stranded one, and never a silent one (the
+    // warning lands in the cloud-init log).
+    runcmd.push(
+      "command -v tailscale >/dev/null 2>&1 || curl -fsSL https://tailscale.com/install.sh | sh || echo 'hasna-station: tailscale install failed (NON-FATAL) — station stays reachable via its access floor; drift check reports tailscale:join' >&2"
+    );
     const hostnameFlag = station && effective.tailscale.hostnameFromStation ? ` --hostname ${station}` : "";
     const sshFlag = effective.tailscale.ssh ? " --ssh" : "";
+    // The subshell both bounds the failure (a broken && chain can only reach
+    // the || warning, even under `sh -e`) and scopes `umask 077`, which
+    // previously leaked into every later runcmd entry.
     runcmd.push(
-      "TOKEN=$(curl -sX PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 300') && " +
+      "( TOKEN=$(curl -sX PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 300') && " +
         'REGION=$(curl -sH "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/region) && ' +
         `umask 077 && aws secretsmanager get-secret-value --secret-id ${effective.tailscale.authKeySecretName} --query SecretString --output text --region "$REGION" | tr -d '\\r\\n' > /run/ts-authkey && ` +
-        `tailscale up --auth-key file:/run/ts-authkey${hostnameFlag}${sshFlag}; rm -f /run/ts-authkey`
+        `tailscale up --auth-key file:/run/ts-authkey${hostnameFlag}${sshFlag} ) || echo 'hasna-station: tailscale join failed (NON-FATAL) — station stays reachable via its access floor; drift check reports tailscale:join' >&2; rm -f /run/ts-authkey`
     );
   }
   runcmd.push(`loginctl enable-linger ${user}`);

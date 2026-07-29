@@ -477,6 +477,180 @@ describe("drift check", () => {
   });
 });
 
+describe("boot criticality (owner ruling 2026-07-29: tailscale must never be boot-critical)", () => {
+  /**
+   * Parse the runcmd entries out of rendered cloud-init user-data. yamlQuote
+   * escapes exactly backslash and double-quote, so each `  - "..."` line is a
+   * valid JSON string.
+   */
+  function runcmdEntries(userData: string): string[] {
+    const lines = userData.split("\n");
+    const start = lines.indexOf("runcmd:");
+    expect(start).toBeGreaterThan(-1);
+    const entries: string[] = [];
+    for (const line of lines.slice(start + 1)) {
+      if (!line.startsWith("  - ")) break;
+      entries.push(JSON.parse(line.slice(4)) as string);
+    }
+    return entries;
+  }
+
+  function writeStub(dir: string, name: string, body: string) {
+    writeFileSync(join(dir, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+  }
+
+  test("ec2 overlay declares the SSM agent as its access floor; physical layers do not", () => {
+    const effective = effectiveFor(["ec2"]);
+    // The floor must depend only on identity the platform already grants (the
+    // instance profile) — never on a credential fetched at boot.
+    expect(effective.accessFloor?.service).toBe("snap.amazon-ssm-agent.amazon-ssm-agent");
+    expect(effective.accessFloor?.lesson).toContain("station17");
+    // A physical box's floor is its out-of-band path, not a template service.
+    expect(effectiveFor(["dgx-spark"]).accessFloor).toBeUndefined();
+  });
+
+  test("runcmd order: access floor first, required-command install before the tool's caller", () => {
+    const entries = runcmdEntries(renderCloudInit(effectiveFor(["ec2"]), { station: "station17" }));
+    const floor = entries.findIndex((entry) => entry.includes("amazon-ssm-agent"));
+    const awsInstall = entries.findIndex((entry) => entry.includes("awscli.amazonaws.com"));
+    const joinIndex = entries.findIndex((entry) => entry.includes("secretsmanager get-secret-value"));
+    // The floor is guaranteed before anything below it can fail.
+    expect(floor).toBe(0);
+    // The install of a tool precedes the entry that calls it — asserted, not
+    // eyeballed (station17: `runcmd: 8: aws: not found`).
+    expect(awsInstall).toBeGreaterThan(floor);
+    expect(joinIndex).toBeGreaterThan(awsInstall);
+  });
+
+  test("POSITIVE CONTROL: forced join failure (station17 mode: aws absent) cannot abort boot; floor enabled; failure loud", () => {
+    const entries = runcmdEntries(renderCloudInit(effectiveFor(["ec2"]), { station: "stationtest" }));
+    const floorEntry = entries.find((entry) => entry.includes("amazon-ssm-agent"));
+    const installEntries = entries.filter((entry) => entry.includes("awscli.amazonaws.com") || entry.includes("tailscale.com/install.sh"));
+    const joinEntry = entries.find((entry) => entry.includes("secretsmanager get-secret-value"));
+    expect(floorEntry).toBeDefined();
+    expect(joinEntry).toBeDefined();
+
+    const stubs = mkdtempSync(join(tmpdir(), "station-boot-stubs-"));
+    const log = join(stubs, "invocations.log");
+    writeFileSync(log, "");
+    writeStub(stubs, "systemctl", `echo "systemctl $*" >> "${log}"`);
+    writeStub(stubs, "snap", `echo "snap $*" >> "${log}"`);
+    // IMDS answers; every other download (awscli installer, tailscale
+    // installer) fails — a plain network hiccup at boot.
+    writeStub(
+      stubs,
+      "curl",
+      `case "$*" in *api/token*) echo dummy-imds-token ;; *placement/region*) echo us-east-1 ;; *) exit 7 ;; esac`
+    );
+    writeStub(stubs, "tailscale", `echo "tailscale $*" >> "${log}"\ncase "$1" in up) exit 1 ;; *) exit 0 ;; esac`);
+    // `aws` is deliberately ABSENT from PATH — the exact station17 failure.
+
+    // Only the entries this ruling governs are executed; the untouched middle
+    // entries (sysctl/tmpfiles/swap/services) are exercised by the real boot
+    // prove loop on station17. `sh -e` is the strictest shell semantics a
+    // cloud-init change could ever run these under: surviving it proves the
+    // entries cannot abort a boot.
+    const script = [floorEntry!, ...installEntries, joinEntry!, "echo BOOT-CONTINUED-PAST-JOIN"].join("\n");
+    const scriptPath = join(stubs, "runcmd-under-test.sh");
+    writeFileSync(scriptPath, script);
+    const result = spawnSync("sh", ["-e", scriptPath], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${stubs}:/usr/bin:/bin` },
+    });
+    // Reachability: the script survives every planted failure.
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("BOOT-CONTINUED-PAST-JOIN");
+    // Never silent: the join failure is named on stderr (cloud-init logs it).
+    expect(result.stderr).toContain("tailscale join failed");
+    expect(result.stderr).toContain("NON-FATAL");
+    // The floor was enabled before the join had any chance to fail.
+    expect(readFileSync(log, "utf8")).toContain("enable --now snap.amazon-ssm-agent");
+    // No secret material has a path into the exercised output.
+    expect(result.stdout + result.stderr).not.toContain("tskey-");
+  });
+
+  test("POSITIVE CONTROL of the instrument: the sh -e harness detects a fatal entry", () => {
+    // If this harness could not fail, the forced-join-failure control above
+    // would be no evidence. Plant a fatal entry and assert it is fatal.
+    const stubs = mkdtempSync(join(tmpdir(), "station-boot-harness-control-"));
+    const scriptPath = join(stubs, "fatal.sh");
+    writeFileSync(scriptPath, ["sh -c 'exit 3'", "echo BOOT-CONTINUED-PAST-JOIN"].join("\n"));
+    const result = spawnSync("sh", ["-e", scriptPath], { encoding: "utf8", env: { ...process.env } });
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).not.toContain("BOOT-CONTINUED-PAST-JOIN");
+  });
+
+  test("POSITIVE CONTROL: access-floor service down is a violation naming the stranding risk", () => {
+    const { root, home, effective } = buildCleanFixture();
+    const probe: CommandProbe = (command, args) => {
+      if (command === "systemctl" && args.includes("snap.amazon-ssm-agent.amazon-ssm-agent")) {
+        return { ok: false, stdout: "inactive\n" };
+      }
+      if (command === "systemctl") {
+        return { ok: true, stdout: args.includes("is-active") ? "active\n" : "enabled\n" };
+      }
+      if (command === "tailscale") {
+        return { ok: true, stdout: JSON.stringify({ BackendState: "Running", Self: { HostName: "stationtest" } }) };
+      }
+      if (command === "sh") return { ok: true, stdout: "/usr/local/bin/aws\n" };
+      return { ok: true, stdout: "install ok installed" };
+    };
+    const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: probe });
+    const item = result.items.find((candidate) => candidate.id === "access-floor:snap.amazon-ssm-agent.amazon-ssm-agent");
+    expect(item?.status).toBe("violation");
+    expect(item?.detail).toContain("access floor");
+    expect(result.verdict).toBe("drift");
+  });
+
+  test("station17 end-state: floor healthy AND unjoined — reachable, and reported as drift", () => {
+    const { root, home, effective } = buildCleanFixture();
+    const probe: CommandProbe = (command, args) => {
+      if (command === "systemctl") {
+        return { ok: true, stdout: args.includes("is-active") ? "active\n" : "enabled\n" };
+      }
+      if (command === "tailscale") {
+        return { ok: true, stdout: JSON.stringify({ BackendState: "NeedsLogin", Self: { HostName: "station17" } }) };
+      }
+      if (command === "sh") return { ok: true, stdout: "/usr/local/bin/aws\n" };
+      return { ok: true, stdout: "install ok installed" };
+    };
+    const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: probe });
+    expect(result.items.find((candidate) => candidate.id === "access-floor:snap.amazon-ssm-agent.amazon-ssm-agent")?.status).toBe("ok");
+    expect(result.items.find((candidate) => candidate.id === "tailscale:join")?.status).toBe("drift");
+    expect(result.verdict).toBe("drift");
+  });
+
+  test("physical render: access floor step is first and non-fatal when a layer declares one", () => {
+    const steps = buildStationTemplateSteps(effectiveFor(["ec2"]), { station: "station17" });
+    expect(steps[0]!.id).toBe("template-access-floor");
+    expect(steps[0]!.command).toContain("NON-FATAL");
+    expect(steps.findIndex((step) => step.id === "template-tailscale-join")).toBeGreaterThan(0);
+    // dgx-spark declares no floor service, so no step is emitted.
+    const physical = buildStationTemplateSteps(effectiveFor(["dgx-spark"]), { station: "station01" });
+    expect(physical.some((step) => step.id === "template-access-floor")).toBe(false);
+  });
+
+  test("POSITIVE CONTROL: physical join step survives a vault hiccup, exits 0, and warns", () => {
+    // runSetupPlan aborts the whole setup on the first non-zero step — so a
+    // vault hiccup during the join must exit 0 or it takes the rest of the
+    // provisioning down with it. And it must WARN, or the failure is silent.
+    const steps = buildStationTemplateSteps(effectiveFor(["dgx-spark"]), { station: "station01" });
+    const joinStep = steps.find((step) => step.id === "template-tailscale-join");
+    expect(joinStep).toBeDefined();
+    const stubs = mkdtempSync(join(tmpdir(), "station-setup-stubs-"));
+    writeStub(stubs, "tailscale", "exit 1"); // not joined, and `up` fails
+    writeStub(stubs, "secrets", "exit 1"); // the vault hiccup
+    writeStub(stubs, "sudo", 'exec "$@"');
+    const result = spawnSync("sh", ["-e", "-c", joinStep!.command], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${stubs}:/usr/bin:/bin` },
+    });
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("tailscale join failed");
+    expect(result.stderr).toContain("NON-FATAL");
+  });
+});
+
 describe("setup --check targeting", () => {
   function checkEnv() {
     const dir = mkdtempSync(join(tmpdir(), "station-template-cli-"));

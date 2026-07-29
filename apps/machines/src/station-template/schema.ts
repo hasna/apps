@@ -80,6 +80,26 @@ export const unitConventionsSchema = z.object({
   lesson: z.string().min(1),
 });
 
+/**
+ * The guaranteed access path for a station class — a service that depends only
+ * on identity the platform already grants (EC2: the SSM agent via the instance
+ * profile), NEVER on a credential fetched at boot.
+ *
+ * Owner ruling 2026-07-29 (station17): nothing that requires fetching a secret
+ * at boot may sit on the critical path to a machine's reachability. Tailscale
+ * is an access path, not a boot dependency; the floor is what makes its
+ * failure survivable. Physical station classes declare no floor service here —
+ * their floor is an out-of-band path (console, physical port).
+ */
+export const accessFloorSchema = z.object({
+  /** systemd unit that provides the floor access path. */
+  service: z.string().min(1),
+  /** Idempotent shell that installs/enables the floor. Must need no secret. */
+  ensure: z.string().min(1),
+  /** Which measured failure this floor exists to prevent. */
+  lesson: z.string().min(1),
+});
+
 export const tailscaleSchema = z.object({
   join: z.boolean().default(true),
   /** Secret NAME only — the value is pulled at runtime, never rendered. */
@@ -109,6 +129,7 @@ export const templateLayerSchema = z.object({
   sysctls: z.record(z.string()).default({}),
   runtimeValues: z.array(runtimeValueSchema).default([]),
   unitConventions: unitConventionsSchema.optional(),
+  accessFloor: accessFloorSchema.optional(),
   tailscale: tailscaleSchema.optional(),
   secretsBootstrap: secretsBootstrapSchema.optional(),
   swap: swapSchema.optional(),
@@ -128,6 +149,7 @@ export type TemplateLayer = z.infer<typeof templateLayerSchema>;
 export type StationTemplate = z.infer<typeof stationTemplateSchema>;
 export type TemplateService = z.infer<typeof templateServiceSchema>;
 export type TemplateCommand = z.infer<typeof templateCommandSchema>;
+export type AccessFloor = z.infer<typeof accessFloorSchema>;
 export type UnitConventions = z.infer<typeof unitConventionsSchema>;
 
 /** A template file with its content loaded from disk. */
@@ -150,6 +172,7 @@ export interface EffectiveTemplate {
   sysctls: Record<string, string>;
   runtimeValues: z.infer<typeof runtimeValueSchema>[];
   unitConventions?: UnitConventions;
+  accessFloor?: AccessFloor;
   tailscale?: z.infer<typeof tailscaleSchema>;
   secretsBootstrap?: z.infer<typeof secretsBootstrapSchema>;
   swap: { sizeGb: number };

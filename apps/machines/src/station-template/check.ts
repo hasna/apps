@@ -19,6 +19,7 @@ export interface TemplateCheckItem {
     | "package"
     | "command"
     | "service"
+    | "access-floor"
     | "unit-convention"
     | "tailscale"
     | "swap";
@@ -332,6 +333,31 @@ export function checkStationTemplate(effective: EffectiveTemplate, options: Chec
             detail: `${service.name} expected active=${service.expectActive} enabled=${service.expectEnabled}, found ${active.stdout.trim() || "unknown"}/${enabled.stdout.trim() || "unknown"}`,
           }
     );
+  }
+
+  // The access floor is the guaranteed way into the box (EC2: the SSM agent,
+  // authorized purely by the instance profile — no boot-time secret). A down
+  // floor is not mere drift: it means the next tailscale failure reproduces
+  // exactly the stranded-station17 state, so it reports as a violation.
+  if (effective.accessFloor) {
+    const floor = effective.accessFloor;
+    if (!probe) {
+      items.push({ id: `access-floor:${floor.service}`, kind: "access-floor", status: "skipped", detail: "no command probe" });
+    } else {
+      const active = probe("systemctl", ["is-active", floor.service]);
+      const enabled = probe("systemctl", ["is-enabled", floor.service]);
+      const floorUp = active.ok && active.stdout.trim() === "active" && enabled.ok && enabled.stdout.trim() === "enabled";
+      items.push(
+        floorUp
+          ? { id: `access-floor:${floor.service}`, kind: "access-floor", status: "ok", detail: `${floor.service} active/enabled — floor access path present` }
+          : {
+              id: `access-floor:${floor.service}`,
+              kind: "access-floor",
+              status: "violation",
+              detail: `access floor ${floor.service} not active+enabled (found ${active.stdout.trim() || "unknown"}/${enabled.stdout.trim() || "unknown"}) — one tailscale failure away from an unreachable station`,
+            }
+      );
+    }
   }
 
   // `tailscaled active/enabled` is NOT tailnet membership. station17 reported
