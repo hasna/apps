@@ -274,6 +274,33 @@ describe("drift check", () => {
     expect(item?.detail).toContain("StartLimitIntervalSec=10, convention is 300");
   });
 
+  test("POSITIVE CONTROL: conflicting drop-ins flip the verdict in lexicographic filename order", () => {
+    const { root, home, effective } = buildCleanFixture();
+    const unitDir = join(home, ".config/systemd/user");
+    const dropinDir = join(unitDir, "hasna-dropin-order.service.d");
+    mkdirSync(dropinDir, { recursive: true });
+    writeFileSync(
+      join(unitDir, "hasna-dropin-order.service"),
+      "[Unit]\nStartLimitIntervalSec=300\nStartLimitBurst=5\nOnFailure=hasna-unit-failure-notify@%n.service\n[Service]\nExecStart=/bin/true\n"
+    );
+    writeFileSync(join(dropinDir, "90-restore.conf"), "[Unit]\nStartLimitIntervalSec=300\n");
+    writeFileSync(join(dropinDir, "10-break.conf"), "[Unit]\nStartLimitIntervalSec=10\n");
+
+    const clean = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: null });
+    expect(clean.verdict).toBe("clean");
+    expect(clean.items.find((candidate) => candidate.id === "unit:hasna-dropin-order.service")?.status).toBe("ok");
+
+    // Swap which filename carries the bad value: the later-sorting assignment
+    // now wins, proving the verdict depends on systemd's filename ordering.
+    writeFileSync(join(dropinDir, "10-break.conf"), "[Unit]\nStartLimitIntervalSec=300\n");
+    writeFileSync(join(dropinDir, "90-restore.conf"), "[Unit]\nStartLimitIntervalSec=10\n");
+    const drift = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: null });
+    expect(drift.verdict).toBe("drift");
+    const item = drift.items.find((candidate) => candidate.id === "unit:hasna-dropin-order.service");
+    expect(item?.status).toBe("violation");
+    expect(item?.detail).toContain("StartLimitIntervalSec=10, convention is 300");
+  });
+
   test("OnFailure= reset in a drop-in drops the convention target (systemd list semantics)", () => {
     const { root, home, effective } = buildCleanFixture();
     const unitDir = join(home, ".config/systemd/user");

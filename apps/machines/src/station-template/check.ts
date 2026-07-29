@@ -293,7 +293,7 @@ export function checkStationTemplate(effective: EffectiveTemplate, options: Chec
         }
         const dropinDir = join(unitDir, `${entry}.d`);
         if (existsSync(dropinDir)) {
-          for (const dropin of readdirSync(dropinDir).filter((name) => name.endsWith(".conf"))) {
+          for (const dropin of readdirSync(dropinDir).filter((name) => name.endsWith(".conf")).sort()) {
             try {
               content += `\n${readFileSync(join(dropinDir, dropin), "utf8")}`;
             } catch {
