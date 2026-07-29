@@ -29,12 +29,6 @@ struct RecordWorkspaceView: View {
                     replyBlock(reply)
                 }
 
-                activeProjectRow
-
-                if let synchronizationError = store.projectStore.synchronizationError {
-                    projectSynchronizationWarning(synchronizationError)
-                }
-
                 if !engine.recentTranscriptions.isEmpty {
                     recentStrip
                 }
@@ -364,64 +358,6 @@ struct RecordWorkspaceView: View {
         .frame(maxWidth: 560)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Answer: \(reply.answer)")
-    }
-
-    // MARK: - Active project
-
-    @ViewBuilder
-    private var activeProjectRow: some View {
-        if !store.projects.isEmpty {
-            HStack {
-                Menu {
-                    Button("None") { selectProject(nil) }
-                    Divider()
-                    ForEach(store.projects) { project in
-                        Button {
-                            selectProject(project.id)
-                        } label: {
-                            if project.id == store.projectStore.settings.activeProjectId {
-                                Label(project.name, systemImage: "checkmark")
-                            } else { Text(project.name) }
-                        }
-                    }
-                } label: {
-                    Label(store.projectStore.activeProject?.name ?? "No project", systemImage: "folder")
-                }
-                .menuStyle(.borderlessButton).fixedSize()
-                .disabled(!store.projectStore.canMutateProjects)
-                .help("New transcripts are tagged to this project")
-                .accessibilityLabel("Project: \(store.projectStore.activeProject?.name ?? "None")")
-                Spacer()
-            }
-            .font(.callout)
-            .tint(Theme.accent)
-            .frame(maxWidth: 560)
-        }
-    }
-
-    private func selectProject(_ id: String?) {
-        do {
-            try store.projectStore.setActive(id)
-        } catch {
-            store.operationError = store.projectStore.persistenceError ?? error.localizedDescription
-        }
-    }
-
-    private func projectSynchronizationWarning(_ message: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-            Text(message)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-            Spacer()
-            Button("Retry") { store.reconcileProjects() }
-                .buttonStyle(.borderless)
-                .disabled(store.projectStore.isSynchronizingProjects)
-        }
-        .frame(maxWidth: 560)
-        .accessibilityElement(children: .combine)
     }
 
     // MARK: - Recent strip
