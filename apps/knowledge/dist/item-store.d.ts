@@ -1,4 +1,4 @@
-import { type KnowledgeItem } from './store';
+import { type KnowledgeItem, type KnowledgeItemVersion, type KnowledgeItemVersionList } from './store';
 export interface ItemCreateInput {
     /** Optional caller-supplied id (upsert/import). Both transports honor it: the
      * local store persists it; the API transport forwards it and the server upserts
@@ -19,10 +19,32 @@ export interface ItemPatch {
     metadata?: Record<string, unknown>;
     archived?: boolean;
 }
+export interface ItemUpdateOptions {
+    /**
+     * Optimistic concurrency guard — the version the caller last read. Honoured
+     * by the api transport; meaningless on the local JSON store, which is
+     * single-machine and has no version line.
+     */
+    expectedVersion?: number;
+}
 export interface ItemListResult {
     items: KnowledgeItem[];
     /** Whether the backing store exists (always true for the API transport). */
     exists: boolean;
+}
+/**
+ * Raised when version history is asked of a backend that does not keep any.
+ *
+ * This is an ERROR, deliberately, and not an empty list. An empty list would be
+ * indistinguishable from "this entry has never been edited", which is exactly
+ * how the sibling implementation reported a memory sitting at version 4 with
+ * zero retained bodies — a true-looking answer that was not a measurement. A
+ * store with no history must say so.
+ */
+export declare class VersionHistoryUnsupportedError extends Error {
+    readonly location: string;
+    readonly code = "version_history_unsupported";
+    constructor(location: string);
 }
 /** The single knowledge-item storage surface every item command routes through. */
 export interface ItemStore {
@@ -31,14 +53,27 @@ export interface ItemStore {
     readonly location: string;
     /** Whether the backing store currently exists (api transport is always true). */
     readonly exists: boolean;
+    /** Whether this transport retains entry history at all. */
+    readonly supportsVersions: boolean;
     /** Every item including archived; callers filter/sort/paginate. */
     listAll(): Promise<ItemListResult>;
     get(idOrShort: string): Promise<KnowledgeItem | null>;
     create(input: ItemCreateInput): Promise<KnowledgeItem>;
-    update(idOrShort: string, patch: ItemPatch): Promise<KnowledgeItem | null>;
+    update(idOrShort: string, patch: ItemPatch, options?: ItemUpdateOptions): Promise<KnowledgeItem | null>;
     delete(idOrShort: string): Promise<boolean>;
     /** Delete many ids at once (prune/dedupe). Returns the count removed. */
     deleteMany(idsOrShorts: string[]): Promise<number>;
+    /**
+     * Prior versions of an entry, newest first. `null` means NO SUCH ENTRY; an
+     * entry that exists but was never edited yields an empty `items` array.
+     * Throws {@link VersionHistoryUnsupportedError} on a store without history.
+     */
+    listVersions(idOrShort: string, options?: {
+        limit?: number;
+        offset?: number;
+    }): Promise<KnowledgeItemVersionList | null>;
+    /** One prior snapshot by version number. */
+    getVersion(idOrShort: string, version: number): Promise<KnowledgeItemVersion | null>;
 }
 export interface ResolveItemStoreOptions {
     storePath: string;

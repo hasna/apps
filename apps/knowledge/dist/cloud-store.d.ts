@@ -1,4 +1,4 @@
-import type { KnowledgeItem } from './store';
+import type { KnowledgeItem, KnowledgeItemVersion, KnowledgeItemVersionList } from './store';
 import { KNOWLEDGE_APP_SLUG } from './knowledge-mode.js';
 export { KNOWLEDGE_APP_SLUG };
 /** Cloud resource path served under /v1 by knowledge-serve. */
@@ -29,6 +29,27 @@ export interface KnowledgeCloudPatch {
     metadata?: Record<string, unknown>;
     archived?: boolean;
 }
+export interface KnowledgeCloudUpdateOptions {
+    /**
+     * Optimistic concurrency: send the version this caller last read, as
+     * `If-Match`. The server applies the write only if the stored entry is still
+     * at that version, so two agents editing the same entry cannot both "succeed"
+     * with one silently overwritten.
+     */
+    expectedVersion?: number;
+}
+/**
+ * Raised when the server refuses a write because the entry moved on. Surfaces
+ * both numbers so a caller can judge whether re-reading and re-applying is safe
+ * — never a blind retry, which overwrites the other writer while believing the
+ * conflict was handled.
+ */
+export declare class KnowledgeVersionConflictError extends Error {
+    readonly expected: number;
+    readonly current: number;
+    readonly code = "version_conflict";
+    constructor(expected: number, current: number);
+}
 /**
  * The knowledge-item storage surface, cloud edition. Mirrors the operations the
  * local db.json store supports so the CLI can call either behind one shape.
@@ -42,8 +63,15 @@ export interface KnowledgeCloudStore {
     }>;
     get(idOrShort: string): Promise<KnowledgeItem | null>;
     create(input: KnowledgeCloudCreateInput): Promise<KnowledgeItem>;
-    update(idOrShort: string, patch: KnowledgeCloudPatch): Promise<KnowledgeItem | null>;
+    update(idOrShort: string, patch: KnowledgeCloudPatch, options?: KnowledgeCloudUpdateOptions): Promise<KnowledgeItem | null>;
     delete(idOrShort: string): Promise<boolean>;
+    /** Prior versions of an entry, newest first. `null` when the entry is absent. */
+    listVersions(idOrShort: string, options?: {
+        limit?: number;
+        offset?: number;
+    }): Promise<KnowledgeItemVersionList | null>;
+    /** One prior snapshot by version number. */
+    getVersion(idOrShort: string, version: number): Promise<KnowledgeItemVersion | null>;
 }
 /**
  * Resolve the cloud knowledge store from the environment. Returns a ready

@@ -27908,6 +27908,18 @@ function transportOverrides(env) {
   };
 }
 var KNOWLEDGE_RESOURCE = "notes";
+
+class KnowledgeVersionConflictError extends Error {
+  expected;
+  current;
+  code = "version_conflict";
+  constructor(expected, current) {
+    super(`version_conflict: this edit was written against version ${expected} but the stored entry is now at version ${current}. ` + "Nothing was written. Re-read the entry and re-apply only if the fields you are changing are untouched between the two versions.");
+    this.expected = expected;
+    this.current = current;
+    this.name = "KnowledgeVersionConflictError";
+  }
+}
 function toQuery(options) {
   const q = {};
   if (options.search)
@@ -27949,12 +27961,17 @@ function wrap(client) {
         ...input.metadata ? { metadata: input.metadata } : {}
       });
     },
-    async update(idOrShort, patch) {
+    async update(idOrShort, patch, options = {}) {
       try {
-        return await client.update(KNOWLEDGE_RESOURCE, idOrShort, patch);
+        return await client.update(KNOWLEDGE_RESOURCE, idOrShort, patch, {
+          ...options.expectedVersion !== undefined ? { headers: { "if-match": String(options.expectedVersion) } } : {}
+        });
       } catch (error51) {
         if (isNotFound(error51))
           return null;
+        const conflict = asVersionConflict(error51);
+        if (conflict)
+          throw conflict;
         throw error51;
       }
     },
@@ -27964,8 +27981,45 @@ function wrap(client) {
         return false;
       await client.delete(KNOWLEDGE_RESOURCE, existing.id);
       return true;
+    },
+    async listVersions(idOrShort, options = {}) {
+      try {
+        return await client.transport.get(`/${KNOWLEDGE_RESOURCE}/${encodeURIComponent(idOrShort)}/versions`, { query: { limit: options.limit, offset: options.offset } });
+      } catch (error51) {
+        if (isNotFound(error51))
+          return null;
+        throw error51;
+      }
+    },
+    async getVersion(idOrShort, version2) {
+      try {
+        return await client.transport.get(`/${KNOWLEDGE_RESOURCE}/${encodeURIComponent(idOrShort)}/versions/${version2}`);
+      } catch (error51) {
+        if (isNotFound(error51))
+          return null;
+        throw error51;
+      }
     }
   };
+}
+function asVersionConflict(error51) {
+  if (!error51 || typeof error51 !== "object")
+    return null;
+  if (error51.status !== 409)
+    return null;
+  const body = error51.body;
+  const parsed = typeof body === "string" ? safeJson(body) : body;
+  const shape = parsed ?? {};
+  if (shape.error !== "version_conflict")
+    return null;
+  return new KnowledgeVersionConflictError(Number(shape.expected ?? 0), Number(shape.current ?? 0));
+}
+function safeJson(value) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
 }
 function isNotFound(error51) {
   return Boolean(error51 && typeof error51 === "object" && error51.status === 404);
@@ -28932,6 +28986,15 @@ function makeShortId(id) {
 
 // src/item-store.ts
 import { existsSync as existsSync3 } from "fs";
+class VersionHistoryUnsupportedError extends Error {
+  location;
+  code = "version_history_unsupported";
+  constructor(location) {
+    super("Version history is not kept by the local JSON knowledge store " + `(${location}). It has no version line, so an empty history here would be a claim, not a measurement. ` + "Entry versioning lives in the Postgres-backed store: point this CLI at it " + "(HASNA_KNOWLEDGE_STORAGE_MODE=cloud plus the API url/key) and re-run.");
+    this.location = location;
+    this.name = "VersionHistoryUnsupportedError";
+  }
+}
 function matchesId(item, idOrShort) {
   return item.id === idOrShort || item.short_id === idOrShort;
 }
@@ -28939,8 +29002,15 @@ function matchesId(item, idOrShort) {
 class LocalItemStore {
   storePath;
   kind = "local";
+  supportsVersions = false;
   constructor(storePath) {
     this.storePath = storePath;
+  }
+  async listVersions() {
+    throw new VersionHistoryUnsupportedError(this.storePath);
+  }
+  async getVersion() {
+    throw new VersionHistoryUnsupportedError(this.storePath);
   }
   get location() {
     return this.storePath;
@@ -29034,8 +29104,15 @@ class ApiItemStore {
   cloud;
   kind = "api";
   exists = true;
+  supportsVersions = true;
   constructor(cloud) {
     this.cloud = cloud;
+  }
+  async listVersions(idOrShort, options = {}) {
+    return this.cloud.listVersions(idOrShort, options);
+  }
+  async getVersion(idOrShort, version2) {
+    return this.cloud.getVersion(idOrShort, version2);
   }
   get location() {
     return this.cloud.baseUrl;
@@ -29056,8 +29133,8 @@ class ApiItemStore {
       ...input.metadata ? { metadata: input.metadata } : {}
     });
   }
-  async update(idOrShort, patch) {
-    return this.cloud.update(idOrShort, patch);
+  async update(idOrShort, patch, options = {}) {
+    return this.cloud.update(idOrShort, patch, { expectedVersion: options.expectedVersion });
   }
   async delete(idOrShort) {
     return this.cloud.delete(idOrShort);

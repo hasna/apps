@@ -13173,6 +13173,18 @@ function transportOverrides(env) {
   };
 }
 var KNOWLEDGE_RESOURCE = "notes";
+
+class KnowledgeVersionConflictError extends Error {
+  expected;
+  current;
+  code = "version_conflict";
+  constructor(expected, current) {
+    super(`version_conflict: this edit was written against version ${expected} but the stored entry is now at version ${current}. ` + "Nothing was written. Re-read the entry and re-apply only if the fields you are changing are untouched between the two versions.");
+    this.expected = expected;
+    this.current = current;
+    this.name = "KnowledgeVersionConflictError";
+  }
+}
 function toQuery(options) {
   const q = {};
   if (options.search)
@@ -13214,12 +13226,17 @@ function wrap(client) {
         ...input.metadata ? { metadata: input.metadata } : {}
       });
     },
-    async update(idOrShort, patch) {
+    async update(idOrShort, patch, options = {}) {
       try {
-        return await client.update(KNOWLEDGE_RESOURCE, idOrShort, patch);
+        return await client.update(KNOWLEDGE_RESOURCE, idOrShort, patch, {
+          ...options.expectedVersion !== undefined ? { headers: { "if-match": String(options.expectedVersion) } } : {}
+        });
       } catch (error) {
         if (isNotFound(error))
           return null;
+        const conflict = asVersionConflict(error);
+        if (conflict)
+          throw conflict;
         throw error;
       }
     },
@@ -13229,8 +13246,45 @@ function wrap(client) {
         return false;
       await client.delete(KNOWLEDGE_RESOURCE, existing.id);
       return true;
+    },
+    async listVersions(idOrShort, options = {}) {
+      try {
+        return await client.transport.get(`/${KNOWLEDGE_RESOURCE}/${encodeURIComponent(idOrShort)}/versions`, { query: { limit: options.limit, offset: options.offset } });
+      } catch (error) {
+        if (isNotFound(error))
+          return null;
+        throw error;
+      }
+    },
+    async getVersion(idOrShort, version) {
+      try {
+        return await client.transport.get(`/${KNOWLEDGE_RESOURCE}/${encodeURIComponent(idOrShort)}/versions/${version}`);
+      } catch (error) {
+        if (isNotFound(error))
+          return null;
+        throw error;
+      }
     }
   };
+}
+function asVersionConflict(error) {
+  if (!error || typeof error !== "object")
+    return null;
+  if (error.status !== 409)
+    return null;
+  const body = error.body;
+  const parsed = typeof body === "string" ? safeJson(body) : body;
+  const shape = parsed ?? {};
+  if (shape.error !== "version_conflict")
+    return null;
+  return new KnowledgeVersionConflictError(Number(shape.expected ?? 0), Number(shape.current ?? 0));
+}
+function safeJson(value) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
 }
 function isNotFound(error) {
   return Boolean(error && typeof error === "object" && error.status === 404);
@@ -14289,7 +14343,123 @@ var PG_MIGRATIONS = [
        setweight(to_tsvector('english', coalesce(content, '')), 'B')
      ) STORED`,
   `CREATE INDEX IF NOT EXISTS idx_knowledge_items_search_vector
-     ON knowledge_items USING GIN (search_vector)`
+     ON knowledge_items USING GIN (search_vector)`,
+  `ALTER TABLE knowledge_items ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1`,
+  `CREATE TABLE IF NOT EXISTS knowledge_item_versions (
+    id TEXT PRIMARY KEY,
+    item_id TEXT NOT NULL REFERENCES knowledge_items(id) ON DELETE CASCADE,
+    tenant_id TEXT,
+    version INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT,
+    body_uri TEXT,
+    content_hash TEXT NOT NULL,
+    content_bytes INTEGER NOT NULL,
+    url TEXT,
+    tags JSONB NOT NULL DEFAULT '[]'::jsonb,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    archived BOOLEAN NOT NULL DEFAULT FALSE,
+    actor TEXT,
+    reason TEXT,
+    valid_from TEXT,
+    valid_to TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    UNIQUE(item_id, version)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_item_versions_item
+     ON knowledge_item_versions(item_id, version DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_item_versions_hash
+     ON knowledge_item_versions(content_hash)`,
+  `CREATE OR REPLACE FUNCTION knowledge_items_version_snapshot()
+   RETURNS TRIGGER AS $knowledge_item_version$
+   BEGIN
+     IF (OLD.title, OLD.content, OLD.url, OLD.tags, OLD.metadata, OLD.archived)
+        IS NOT DISTINCT FROM
+        (NEW.title, NEW.content, NEW.url, NEW.tags, NEW.metadata, NEW.archived) THEN
+       -- No content-bearing change: no version, no snapshot. Pin the counter so
+       -- a caller cannot move it on a write the trigger otherwise ignores.
+       NEW.version := OLD.version;
+       RETURN NEW;
+     END IF;
+
+     INSERT INTO knowledge_item_versions
+       (id, item_id, tenant_id, version, title, content, content_hash, content_bytes,
+        url, tags, metadata, archived, actor, reason, valid_from, valid_to)
+     VALUES
+       (gen_random_uuid()::text,
+        OLD.id,
+        to_jsonb(OLD)->>'tenant_id',
+        OLD.version,
+        OLD.title,
+        OLD.content,
+        encode(sha256(convert_to(coalesce(OLD.content, ''), 'UTF8')), 'hex'),
+        octet_length(coalesce(OLD.content, '')),
+        OLD.url,
+        OLD.tags,
+        OLD.metadata,
+        OLD.archived,
+        NULLIF(current_setting('hasna.actor', true), ''),
+        NULLIF(current_setting('hasna.reason', true), ''),
+        OLD.updated_at,
+        to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'));
+
+     -- The bump and the snapshot are ONE write. The counter advances by exactly
+     -- one and only here, so a caller can neither skip it nor forge it.
+     NEW.version := OLD.version + 1;
+
+     -- updated_at is TEXT and the application fills it with toISOString(), so
+     -- the trigger must write the SAME shape. NOW()::text renders as
+     -- '2026-07-28 21:29:56.01+00'; space (0x20) sorts below 'T' (0x54), so a
+     -- column carrying both formats orders every trigger-written row before
+     -- every application-written one regardless of actual time, and valid_from
+     -- (copied verbatim from the row below) would stop being comparable with
+     -- valid_to. One format, no casts needed at read time.
+     --
+     -- Only stamped when the caller did NOT set it. Import, sync replay, and
+     -- backfill carry a SOURCE timestamp and kept it before this trigger
+     -- existed; silently replacing it would be a regression. A writer that says
+     -- nothing still gets a truthful advance.
+     IF NEW.updated_at IS NOT DISTINCT FROM OLD.updated_at THEN
+       NEW.updated_at := to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
+     END IF;
+     RETURN NEW;
+   END
+   $knowledge_item_version$ LANGUAGE plpgsql`,
+  `DO $knowledge_item_version_trigger$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM pg_trigger
+        WHERE tgname = 'trg_knowledge_items_version'
+          AND tgrelid = 'knowledge_items'::regclass
+     ) THEN
+       CREATE TRIGGER trg_knowledge_items_version
+         BEFORE UPDATE ON knowledge_items
+         FOR EACH ROW EXECUTE FUNCTION knowledge_items_version_snapshot();
+     END IF;
+   END
+   $knowledge_item_version_trigger$`,
+  `ALTER TABLE knowledge_items ENABLE ALWAYS TRIGGER trg_knowledge_items_version`,
+  `CREATE OR REPLACE FUNCTION knowledge_item_versions_append_only()
+   RETURNS TRIGGER AS $knowledge_item_versions_append_only$
+   BEGIN
+     RAISE EXCEPTION 'knowledge_item_versions is append-only: version % of item % cannot be rewritten',
+       OLD.version, OLD.item_id
+       USING ERRCODE = 'restrict_violation';
+   END
+   $knowledge_item_versions_append_only$ LANGUAGE plpgsql`,
+  `DO $knowledge_item_versions_guard$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM pg_trigger
+        WHERE tgname = 'trg_knowledge_item_versions_append_only'
+          AND tgrelid = 'knowledge_item_versions'::regclass
+     ) THEN
+       CREATE TRIGGER trg_knowledge_item_versions_append_only
+         BEFORE UPDATE ON knowledge_item_versions
+         FOR EACH ROW EXECUTE FUNCTION knowledge_item_versions_append_only();
+     END IF;
+   END
+   $knowledge_item_versions_guard$`,
+  `ALTER TABLE knowledge_item_versions ENABLE ALWAYS TRIGGER trg_knowledge_item_versions_append_only`
 ];
 export {
   wrapExecutor,

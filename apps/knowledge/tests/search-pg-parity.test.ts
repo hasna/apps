@@ -18,49 +18,26 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { PGlite } from '@electric-sql/pglite';
-import { PG_MIGRATIONS } from '../src/db/pg-migrations';
+import type { PGlite } from '@electric-sql/pglite';
 import { NoteRepo } from '../src/serve';
 import { hybridSearch } from '../src/search';
 import { PARITY_CORPUS, buildParitySqliteDb } from './fixtures/search-parity-fixtures';
-
-// Minimal PoolQueryClient shim backed by pglite (the subset NoteRepo uses).
-function pgliteClient(db: PGlite): any {
-  return {
-    async query(sql: string, params: unknown[] = []) {
-      return db.query(sql, params as unknown[]);
-    },
-    async many<T>(sql: string, params: unknown[] = []) {
-      return (await db.query<T>(sql, params as unknown[])).rows;
-    },
-    async get<T>(sql: string, params: unknown[] = []) {
-      return (await db.query<T>(sql, params as unknown[])).rows[0] ?? null;
-    },
-    async one<T>(sql: string, params: unknown[] = []) {
-      const row = (await db.query<T>(sql, params as unknown[])).rows[0];
-      if (!row) throw new Error('no rows');
-      return row;
-    },
-    async execute(sql: string, params: unknown[] = []) {
-      await db.query(sql, params as unknown[]);
-    },
-    async close() {},
-    get pool() {
-      return {} as unknown;
-    },
-  };
-}
+import { createMigratedPglite, pgliteClient } from './fixtures/pglite-client';
 
 let db: PGlite;
 let repo: NoteRepo;
 
 beforeAll(async () => {
-  db = new PGlite();
-  // Apply the real cloud DDL for the notes catalog (table, indexes, and the
-  // Stage 2 tsvector column + GIN index), in array order.
-  for (const sql of PG_MIGRATIONS.filter((s) => s.includes('knowledge_items'))) {
-    await db.exec(sql);
-  }
+  // Shared harness rather than a private shim. The copy that used to live here
+  // had no `transaction()`, so the moment NoteRepo's write path started using
+  // one it would have thrown inside this file — it survived only because these
+  // tests happen to call `list()` exclusively. That is the latent drift the
+  // shared fixture exists to remove.
+  //
+  // It also applies the FULL migration set, not a name-filtered subset, so this
+  // suite ranks against the same schema production has.
+  const created = await createMigratedPglite();
+  db = created.db;
   // Seed the shared parity corpus with deterministic, increasing created_at so
   // the "relevance beats recency" assertion is meaningful (later index = newer).
   for (let i = 0; i < PARITY_CORPUS.length; i += 1) {

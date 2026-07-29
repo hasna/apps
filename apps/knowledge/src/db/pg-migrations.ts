@@ -377,4 +377,209 @@ export const PG_MIGRATIONS: string[] = [
      ) STORED`,
   `CREATE INDEX IF NOT EXISTS idx_knowledge_items_search_vector
      ON knowledge_items USING GIN (search_vector)`,
+
+  // --- Entry versioning (R4) --------------------------------------------------
+  // MEASURED 2026-07-28, before this shipped: an entry created over the hosted
+  // API and edited twice had BOTH prior bodies unrecoverable. knowledge_items
+  // carried no version column, there was no versions table, and PATCH was
+  // last-writer-wins with no conflict detection — on a fleet running many agents
+  // against one store. (Positive control that the absence was real and not a
+  // reading error: this same file DOES define source_revisions above, with
+  // UNIQUE(source_id, revision) and a hash column.)
+  //
+  // Shape follows source_revisions rather than inventing a second convention:
+  // TEXT primary key, TEXT foreign key with ON DELETE CASCADE, a hash column, a
+  // *_uri column for a body held outside Postgres, and UNIQUE(parent, revision).
+  // Timestamps are TEXT like every other table here; a TIMESTAMPTZ column would
+  // have needed a cast of the existing TEXT updated_at inside a BEFORE UPDATE
+  // trigger, and a cast that throws on one badly-shaped legacy string would
+  // abort a legitimate write. Range queries cast at read time instead.
+  //
+  // APPEND-ONLY: ids derive from array index, so these stay at the end.
+  `ALTER TABLE knowledge_items ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1`,
+
+  `CREATE TABLE IF NOT EXISTS knowledge_item_versions (
+    id TEXT PRIMARY KEY,
+    item_id TEXT NOT NULL REFERENCES knowledge_items(id) ON DELETE CASCADE,
+    tenant_id TEXT,
+    version INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT,
+    body_uri TEXT,
+    content_hash TEXT NOT NULL,
+    content_bytes INTEGER NOT NULL,
+    url TEXT,
+    tags JSONB NOT NULL DEFAULT '[]'::jsonb,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    archived BOOLEAN NOT NULL DEFAULT FALSE,
+    actor TEXT,
+    reason TEXT,
+    valid_from TEXT,
+    valid_to TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    UNIQUE(item_id, version)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_item_versions_item
+     ON knowledge_item_versions(item_id, version DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_item_versions_hash
+     ON knowledge_item_versions(content_hash)`,
+
+  // WHY A TRIGGER AND NOT APPLICATION CODE — this is the load-bearing decision,
+  // and it is settled by measurement rather than taste.
+  //
+  // open-mementos implements the same feature in TypeScript: updateMemory
+  // snapshots into memory_versions and then bumps, while the merge branch of
+  // createMemory bumps with NO snapshot. `mementos save` takes the second path,
+  // which is the path every agent actually uses, so a memory sitting at version
+  // 4 today returns "No previous versions" — zero retained bodies. The failure
+  // was not a caller forgetting to call a helper; it was a SECOND WRITE PATH
+  // INSIDE THE OWNING PACKAGE forgetting. Application-level discipline failed at
+  // the layer that wrote the code.
+  //
+  // The writers of knowledge_items are already plural — the serve handler, the
+  // upsert/import path, `ingest rules`, sync/outbox replay, a backfill script,
+  // and a human at psql — and next month there will be another. A BEFORE UPDATE
+  // trigger is the only place that sits below all of them, and it cannot be
+  // bypassed by code that has not been written yet.
+  //
+  // Accepted trade-off: the bump is invisible in the TypeScript and the row the
+  // database returns differs from the row the caller sent. That is why
+  // tests/entry-versioning.test.ts writes via raw SQL, bypassing every
+  // application path, and asserts the snapshot appeared anyway.
+  //
+  // Three details are each load-bearing:
+  //   - THE NO-OP GUARD. Without it every idempotent re-upsert — what `ingest
+  //     rules` and every sync replay do on each run — would manufacture a
+  //     version and bury the real edits. History would become noise.
+  //   - NULLIF on the GUCs. A transaction-local setting resets to the EMPTY
+  //     STRING, not to unset, so on a pooled connection the write after an
+  //     attributed one would otherwise record an actor that is present but
+  //     blank — an attribution that reads as real and is not.
+  //   - to_jsonb(OLD)->>'tenant_id' rather than OLD.tenant_id. This repo's
+  //     knowledge_items has no tenant column; the deployed build's does. Reading
+  //     it through jsonb yields NULL where the column is absent and the real
+  //     value where it exists, so one migration is correct against both schemas.
+  `CREATE OR REPLACE FUNCTION knowledge_items_version_snapshot()
+   RETURNS TRIGGER AS $knowledge_item_version$
+   BEGIN
+     IF (OLD.title, OLD.content, OLD.url, OLD.tags, OLD.metadata, OLD.archived)
+        IS NOT DISTINCT FROM
+        (NEW.title, NEW.content, NEW.url, NEW.tags, NEW.metadata, NEW.archived) THEN
+       -- No content-bearing change: no version, no snapshot. Pin the counter so
+       -- a caller cannot move it on a write the trigger otherwise ignores.
+       NEW.version := OLD.version;
+       RETURN NEW;
+     END IF;
+
+     INSERT INTO knowledge_item_versions
+       (id, item_id, tenant_id, version, title, content, content_hash, content_bytes,
+        url, tags, metadata, archived, actor, reason, valid_from, valid_to)
+     VALUES
+       (gen_random_uuid()::text,
+        OLD.id,
+        to_jsonb(OLD)->>'tenant_id',
+        OLD.version,
+        OLD.title,
+        OLD.content,
+        encode(sha256(convert_to(coalesce(OLD.content, ''), 'UTF8')), 'hex'),
+        octet_length(coalesce(OLD.content, '')),
+        OLD.url,
+        OLD.tags,
+        OLD.metadata,
+        OLD.archived,
+        NULLIF(current_setting('hasna.actor', true), ''),
+        NULLIF(current_setting('hasna.reason', true), ''),
+        OLD.updated_at,
+        to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'));
+
+     -- The bump and the snapshot are ONE write. The counter advances by exactly
+     -- one and only here, so a caller can neither skip it nor forge it.
+     NEW.version := OLD.version + 1;
+
+     -- updated_at is TEXT and the application fills it with toISOString(), so
+     -- the trigger must write the SAME shape. NOW()::text renders as
+     -- '2026-07-28 21:29:56.01+00'; space (0x20) sorts below 'T' (0x54), so a
+     -- column carrying both formats orders every trigger-written row before
+     -- every application-written one regardless of actual time, and valid_from
+     -- (copied verbatim from the row below) would stop being comparable with
+     -- valid_to. One format, no casts needed at read time.
+     --
+     -- Only stamped when the caller did NOT set it. Import, sync replay, and
+     -- backfill carry a SOURCE timestamp and kept it before this trigger
+     -- existed; silently replacing it would be a regression. A writer that says
+     -- nothing still gets a truthful advance.
+     IF NEW.updated_at IS NOT DISTINCT FROM OLD.updated_at THEN
+       NEW.updated_at := to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
+     END IF;
+     RETURN NEW;
+   END
+   $knowledge_item_version$ LANGUAGE plpgsql`,
+
+  // Idempotent trigger creation as ONE statement. `CREATE OR REPLACE TRIGGER`
+  // would be shorter but needs Postgres 14+, and a migration that silently
+  // requires a newer server than the fleet runs is a deploy-time surprise.
+  `DO $knowledge_item_version_trigger$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM pg_trigger
+        WHERE tgname = 'trg_knowledge_items_version'
+          AND tgrelid = 'knowledge_items'::regclass
+     ) THEN
+       CREATE TRIGGER trg_knowledge_items_version
+         BEFORE UPDATE ON knowledge_items
+         FOR EACH ROW EXECUTE FUNCTION knowledge_items_version_snapshot();
+     END IF;
+   END
+   $knowledge_item_version_trigger$`,
+
+  // A trigger created normally does NOT fire while `session_replication_role =
+  // replica`. That is not an exotic setting: it is what logical-replication
+  // apply workers, `pg_restore --disable-triggers`, and AWS DMS set. MEASURED
+  // against a plain trigger — the update lands, the prior body is destroyed, no
+  // version row appears, AND the counter stays put, so `version` then actively
+  // lies about the row. With the deployed source still unlocated (task
+  // e0759534), any move of this data runs through one of those paths.
+  //
+  // ENABLE ALWAYS closes it. Idempotent, so re-running the migration is a no-op.
+  //
+  // What it does NOT close, stated rather than left implied: the table owner can
+  // still `ALTER TABLE ... DISABLE TRIGGER`. Nothing a trigger can do defends
+  // against its own owner; the service connects with a DML-only role, for which
+  // both this and the replication role are already refused.
+  `ALTER TABLE knowledge_items ENABLE ALWAYS TRIGGER trg_knowledge_items_version`,
+
+  // Append-only, enforced rather than merely named. Nothing in this package
+  // updates a retained version, so refusing it costs nothing and removes the one
+  // way history can be edited in place instead of added to. MEASURED before
+  // this: a plain application role could `UPDATE knowledge_item_versions SET
+  // content = ...` and rewrite a snapshot silently.
+  //
+  // DELETE is deliberately NOT blocked: `knowledge_item_versions` cascades from
+  // `knowledge_items`, and refusing it here would make `knowledge delete` fail
+  // outright. History for a deleted entry therefore goes with the entry — the
+  // S3 journal (task 7b80e498) is what survives that, and until it lands this
+  // table is append-only for LIVE entries, not durable across deletion.
+  `CREATE OR REPLACE FUNCTION knowledge_item_versions_append_only()
+   RETURNS TRIGGER AS $knowledge_item_versions_append_only$
+   BEGIN
+     RAISE EXCEPTION 'knowledge_item_versions is append-only: version % of item % cannot be rewritten',
+       OLD.version, OLD.item_id
+       USING ERRCODE = 'restrict_violation';
+   END
+   $knowledge_item_versions_append_only$ LANGUAGE plpgsql`,
+
+  `DO $knowledge_item_versions_guard$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM pg_trigger
+        WHERE tgname = 'trg_knowledge_item_versions_append_only'
+          AND tgrelid = 'knowledge_item_versions'::regclass
+     ) THEN
+       CREATE TRIGGER trg_knowledge_item_versions_append_only
+         BEFORE UPDATE ON knowledge_item_versions
+         FOR EACH ROW EXECUTE FUNCTION knowledge_item_versions_append_only();
+     END IF;
+   END
+   $knowledge_item_versions_guard$`,
+
+  `ALTER TABLE knowledge_item_versions ENABLE ALWAYS TRIGGER trg_knowledge_item_versions_append_only`,
 ];

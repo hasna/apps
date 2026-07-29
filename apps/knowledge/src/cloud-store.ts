@@ -24,7 +24,7 @@
  * boundary instead of reaching the live store.
  */
 import { resolveStorageClient, type HasnaStorageClient } from '@hasna/contracts/client/storage';
-import type { KnowledgeItem } from './store';
+import type { KnowledgeItem, KnowledgeItemVersion, KnowledgeItemVersionList } from './store';
 import {
   KNOWLEDGE_APP_SLUG,
   pinnedTransportEnv,
@@ -83,6 +83,33 @@ export interface KnowledgeCloudPatch {
   archived?: boolean;
 }
 
+export interface KnowledgeCloudUpdateOptions {
+  /**
+   * Optimistic concurrency: send the version this caller last read, as
+   * `If-Match`. The server applies the write only if the stored entry is still
+   * at that version, so two agents editing the same entry cannot both "succeed"
+   * with one silently overwritten.
+   */
+  expectedVersion?: number;
+}
+
+/**
+ * Raised when the server refuses a write because the entry moved on. Surfaces
+ * both numbers so a caller can judge whether re-reading and re-applying is safe
+ * — never a blind retry, which overwrites the other writer while believing the
+ * conflict was handled.
+ */
+export class KnowledgeVersionConflictError extends Error {
+  readonly code = 'version_conflict';
+  constructor(readonly expected: number, readonly current: number) {
+    super(
+      `version_conflict: this edit was written against version ${expected} but the stored entry is now at version ${current}. `
+        + 'Nothing was written. Re-read the entry and re-apply only if the fields you are changing are untouched between the two versions.',
+    );
+    this.name = 'KnowledgeVersionConflictError';
+  }
+}
+
 /**
  * The knowledge-item storage surface, cloud edition. Mirrors the operations the
  * local db.json store supports so the CLI can call either behind one shape.
@@ -93,8 +120,19 @@ export interface KnowledgeCloudStore {
   list(options?: KnowledgeCloudListOptions): Promise<{ items: KnowledgeItem[]; total: number | null }>;
   get(idOrShort: string): Promise<KnowledgeItem | null>;
   create(input: KnowledgeCloudCreateInput): Promise<KnowledgeItem>;
-  update(idOrShort: string, patch: KnowledgeCloudPatch): Promise<KnowledgeItem | null>;
+  update(
+    idOrShort: string,
+    patch: KnowledgeCloudPatch,
+    options?: KnowledgeCloudUpdateOptions,
+  ): Promise<KnowledgeItem | null>;
   delete(idOrShort: string): Promise<boolean>;
+  /** Prior versions of an entry, newest first. `null` when the entry is absent. */
+  listVersions(
+    idOrShort: string,
+    options?: { limit?: number; offset?: number },
+  ): Promise<KnowledgeItemVersionList | null>;
+  /** One prior snapshot by version number. */
+  getVersion(idOrShort: string, version: number): Promise<KnowledgeItemVersion | null>;
 }
 
 function toQuery(options: KnowledgeCloudListOptions): Record<string, string | number | boolean | undefined> {
@@ -142,11 +180,17 @@ function wrap(client: HasnaStorageClient): KnowledgeCloudStore {
       });
     },
 
-    async update(idOrShort: string, patch: KnowledgeCloudPatch) {
+    async update(idOrShort: string, patch: KnowledgeCloudPatch, options: KnowledgeCloudUpdateOptions = {}) {
       try {
-        return await client.update<KnowledgeItem>(KNOWLEDGE_RESOURCE, idOrShort, patch);
+        return await client.update<KnowledgeItem>(KNOWLEDGE_RESOURCE, idOrShort, patch, {
+          ...(options.expectedVersion !== undefined
+            ? { headers: { 'if-match': String(options.expectedVersion) } }
+            : {}),
+        });
       } catch (error) {
         if (isNotFound(error)) return null;
+        const conflict = asVersionConflict(error);
+        if (conflict) throw conflict;
         throw error;
       }
     },
@@ -158,7 +202,61 @@ function wrap(client: HasnaStorageClient): KnowledgeCloudStore {
       await client.delete(KNOWLEDGE_RESOURCE, existing.id);
       return true;
     },
+
+    // The version routes are sub-resources rather than top-level collections, so
+    // they use the transport escape hatch the storage client documents for
+    // exactly this — same base URL, same key, same outbound request guard.
+    async listVersions(idOrShort: string, options: { limit?: number; offset?: number } = {}) {
+      try {
+        return await client.transport.get<KnowledgeItemVersionList>(
+          `/${KNOWLEDGE_RESOURCE}/${encodeURIComponent(idOrShort)}/versions`,
+          { query: { limit: options.limit, offset: options.offset } },
+        );
+      } catch (error) {
+        // A 404 here means NO SUCH ENTRY, and must not be flattened into an
+        // empty history: "never edited" and "does not exist" are different
+        // answers, and conflating them is what made the sibling implementation's
+        // empty result unreadable as evidence.
+        if (isNotFound(error)) return null;
+        throw error;
+      }
+    },
+
+    async getVersion(idOrShort: string, version: number) {
+      try {
+        return await client.transport.get<KnowledgeItemVersion>(
+          `/${KNOWLEDGE_RESOURCE}/${encodeURIComponent(idOrShort)}/versions/${version}`,
+        );
+      } catch (error) {
+        if (isNotFound(error)) return null;
+        throw error;
+      }
+    },
   };
+}
+
+/**
+ * Translate a server 409 into the typed conflict error, preserving both version
+ * numbers. Anything else returns null so the original error propagates
+ * unchanged — a conflict must never be swallowed into a generic failure, and a
+ * generic failure must never be dressed up as a conflict.
+ */
+function asVersionConflict(error: unknown): KnowledgeVersionConflictError | null {
+  if (!error || typeof error !== 'object') return null;
+  if ((error as { status?: number }).status !== 409) return null;
+  const body = (error as { body?: unknown }).body;
+  const parsed = typeof body === 'string' ? safeJson(body) : body;
+  const shape = (parsed ?? {}) as { error?: string; expected?: unknown; current?: unknown };
+  if (shape.error !== 'version_conflict') return null;
+  return new KnowledgeVersionConflictError(Number(shape.expected ?? 0), Number(shape.current ?? 0));
+}
+
+function safeJson(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
 }
 
 function isNotFound(error: unknown): boolean {

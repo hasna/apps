@@ -28043,6 +28043,18 @@ function transportOverrides(env) {
   };
 }
 var KNOWLEDGE_RESOURCE = "notes";
+
+class KnowledgeVersionConflictError extends Error {
+  expected;
+  current;
+  code = "version_conflict";
+  constructor(expected, current) {
+    super(`version_conflict: this edit was written against version ${expected} but the stored entry is now at version ${current}. ` + "Nothing was written. Re-read the entry and re-apply only if the fields you are changing are untouched between the two versions.");
+    this.expected = expected;
+    this.current = current;
+    this.name = "KnowledgeVersionConflictError";
+  }
+}
 function toQuery(options) {
   const q = {};
   if (options.search)
@@ -28084,12 +28096,17 @@ function wrap(client) {
         ...input.metadata ? { metadata: input.metadata } : {}
       });
     },
-    async update(idOrShort, patch) {
+    async update(idOrShort, patch, options = {}) {
       try {
-        return await client.update(KNOWLEDGE_RESOURCE, idOrShort, patch);
+        return await client.update(KNOWLEDGE_RESOURCE, idOrShort, patch, {
+          ...options.expectedVersion !== undefined ? { headers: { "if-match": String(options.expectedVersion) } } : {}
+        });
       } catch (error) {
         if (isNotFound(error))
           return null;
+        const conflict = asVersionConflict(error);
+        if (conflict)
+          throw conflict;
         throw error;
       }
     },
@@ -28099,8 +28116,45 @@ function wrap(client) {
         return false;
       await client.delete(KNOWLEDGE_RESOURCE, existing.id);
       return true;
+    },
+    async listVersions(idOrShort, options = {}) {
+      try {
+        return await client.transport.get(`/${KNOWLEDGE_RESOURCE}/${encodeURIComponent(idOrShort)}/versions`, { query: { limit: options.limit, offset: options.offset } });
+      } catch (error) {
+        if (isNotFound(error))
+          return null;
+        throw error;
+      }
+    },
+    async getVersion(idOrShort, version) {
+      try {
+        return await client.transport.get(`/${KNOWLEDGE_RESOURCE}/${encodeURIComponent(idOrShort)}/versions/${version}`);
+      } catch (error) {
+        if (isNotFound(error))
+          return null;
+        throw error;
+      }
     }
   };
+}
+function asVersionConflict(error) {
+  if (!error || typeof error !== "object")
+    return null;
+  if (error.status !== 409)
+    return null;
+  const body = error.body;
+  const parsed = typeof body === "string" ? safeJson(body) : body;
+  const shape = parsed ?? {};
+  if (shape.error !== "version_conflict")
+    return null;
+  return new KnowledgeVersionConflictError(Number(shape.expected ?? 0), Number(shape.current ?? 0));
+}
+function safeJson(value) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
 }
 function isNotFound(error) {
   return Boolean(error && typeof error === "object" && error.status === 404);
@@ -29159,7 +29213,123 @@ var PG_MIGRATIONS = [
        setweight(to_tsvector('english', coalesce(content, '')), 'B')
      ) STORED`,
   `CREATE INDEX IF NOT EXISTS idx_knowledge_items_search_vector
-     ON knowledge_items USING GIN (search_vector)`
+     ON knowledge_items USING GIN (search_vector)`,
+  `ALTER TABLE knowledge_items ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1`,
+  `CREATE TABLE IF NOT EXISTS knowledge_item_versions (
+    id TEXT PRIMARY KEY,
+    item_id TEXT NOT NULL REFERENCES knowledge_items(id) ON DELETE CASCADE,
+    tenant_id TEXT,
+    version INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT,
+    body_uri TEXT,
+    content_hash TEXT NOT NULL,
+    content_bytes INTEGER NOT NULL,
+    url TEXT,
+    tags JSONB NOT NULL DEFAULT '[]'::jsonb,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    archived BOOLEAN NOT NULL DEFAULT FALSE,
+    actor TEXT,
+    reason TEXT,
+    valid_from TEXT,
+    valid_to TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    UNIQUE(item_id, version)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_item_versions_item
+     ON knowledge_item_versions(item_id, version DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_item_versions_hash
+     ON knowledge_item_versions(content_hash)`,
+  `CREATE OR REPLACE FUNCTION knowledge_items_version_snapshot()
+   RETURNS TRIGGER AS $knowledge_item_version$
+   BEGIN
+     IF (OLD.title, OLD.content, OLD.url, OLD.tags, OLD.metadata, OLD.archived)
+        IS NOT DISTINCT FROM
+        (NEW.title, NEW.content, NEW.url, NEW.tags, NEW.metadata, NEW.archived) THEN
+       -- No content-bearing change: no version, no snapshot. Pin the counter so
+       -- a caller cannot move it on a write the trigger otherwise ignores.
+       NEW.version := OLD.version;
+       RETURN NEW;
+     END IF;
+
+     INSERT INTO knowledge_item_versions
+       (id, item_id, tenant_id, version, title, content, content_hash, content_bytes,
+        url, tags, metadata, archived, actor, reason, valid_from, valid_to)
+     VALUES
+       (gen_random_uuid()::text,
+        OLD.id,
+        to_jsonb(OLD)->>'tenant_id',
+        OLD.version,
+        OLD.title,
+        OLD.content,
+        encode(sha256(convert_to(coalesce(OLD.content, ''), 'UTF8')), 'hex'),
+        octet_length(coalesce(OLD.content, '')),
+        OLD.url,
+        OLD.tags,
+        OLD.metadata,
+        OLD.archived,
+        NULLIF(current_setting('hasna.actor', true), ''),
+        NULLIF(current_setting('hasna.reason', true), ''),
+        OLD.updated_at,
+        to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'));
+
+     -- The bump and the snapshot are ONE write. The counter advances by exactly
+     -- one and only here, so a caller can neither skip it nor forge it.
+     NEW.version := OLD.version + 1;
+
+     -- updated_at is TEXT and the application fills it with toISOString(), so
+     -- the trigger must write the SAME shape. NOW()::text renders as
+     -- '2026-07-28 21:29:56.01+00'; space (0x20) sorts below 'T' (0x54), so a
+     -- column carrying both formats orders every trigger-written row before
+     -- every application-written one regardless of actual time, and valid_from
+     -- (copied verbatim from the row below) would stop being comparable with
+     -- valid_to. One format, no casts needed at read time.
+     --
+     -- Only stamped when the caller did NOT set it. Import, sync replay, and
+     -- backfill carry a SOURCE timestamp and kept it before this trigger
+     -- existed; silently replacing it would be a regression. A writer that says
+     -- nothing still gets a truthful advance.
+     IF NEW.updated_at IS NOT DISTINCT FROM OLD.updated_at THEN
+       NEW.updated_at := to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
+     END IF;
+     RETURN NEW;
+   END
+   $knowledge_item_version$ LANGUAGE plpgsql`,
+  `DO $knowledge_item_version_trigger$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM pg_trigger
+        WHERE tgname = 'trg_knowledge_items_version'
+          AND tgrelid = 'knowledge_items'::regclass
+     ) THEN
+       CREATE TRIGGER trg_knowledge_items_version
+         BEFORE UPDATE ON knowledge_items
+         FOR EACH ROW EXECUTE FUNCTION knowledge_items_version_snapshot();
+     END IF;
+   END
+   $knowledge_item_version_trigger$`,
+  `ALTER TABLE knowledge_items ENABLE ALWAYS TRIGGER trg_knowledge_items_version`,
+  `CREATE OR REPLACE FUNCTION knowledge_item_versions_append_only()
+   RETURNS TRIGGER AS $knowledge_item_versions_append_only$
+   BEGIN
+     RAISE EXCEPTION 'knowledge_item_versions is append-only: version % of item % cannot be rewritten',
+       OLD.version, OLD.item_id
+       USING ERRCODE = 'restrict_violation';
+   END
+   $knowledge_item_versions_append_only$ LANGUAGE plpgsql`,
+  `DO $knowledge_item_versions_guard$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM pg_trigger
+        WHERE tgname = 'trg_knowledge_item_versions_append_only'
+          AND tgrelid = 'knowledge_item_versions'::regclass
+     ) THEN
+       CREATE TRIGGER trg_knowledge_item_versions_append_only
+         BEFORE UPDATE ON knowledge_item_versions
+         FOR EACH ROW EXECUTE FUNCTION knowledge_item_versions_append_only();
+     END IF;
+   END
+   $knowledge_item_versions_guard$`,
+  `ALTER TABLE knowledge_item_versions ENABLE ALWAYS TRIGGER trg_knowledge_item_versions_append_only`
 ];
 // src/serve.ts
 import { readFileSync as readFileSync4 } from "fs";
@@ -29949,6 +30119,51 @@ function resolveSigningSecret(env = process.env) {
   }
   return secret;
 }
+
+class VersionConflictError extends Error {
+  expected;
+  current;
+  code = "version_conflict";
+  constructor(expected, current) {
+    super(`version_conflict: expected version ${expected}, stored version is ${current}`);
+    this.expected = expected;
+    this.current = current;
+    this.name = "VersionConflictError";
+  }
+}
+function parseJsonColumn(value, fallback) {
+  if (value == null)
+    return fallback;
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return fallback;
+    }
+  }
+  return value;
+}
+function rowToVersion(row) {
+  return {
+    id: String(row.id),
+    item_id: String(row.item_id),
+    tenant_id: row.tenant_id ?? null,
+    version: Number(row.version),
+    title: String(row.title ?? ""),
+    content: row.content ?? null,
+    body_uri: row.body_uri ?? null,
+    content_hash: String(row.content_hash ?? ""),
+    content_bytes: Number(row.content_bytes ?? 0),
+    url: row.url ?? null,
+    tags: parseJsonColumn(row.tags, []),
+    metadata: parseJsonColumn(row.metadata, {}),
+    archived: Boolean(row.archived),
+    actor: row.actor ?? null,
+    reason: row.reason ?? null,
+    valid_from: row.valid_from ?? null,
+    valid_to: String(row.valid_to ?? "")
+  };
+}
 function rowToItem(row) {
   const parseJson = (value, fallback) => {
     if (value == null)
@@ -29972,7 +30187,8 @@ function rowToItem(row) {
     metadata: parseJson(row.metadata, {}),
     archived: Boolean(row.archived),
     created_at: String(row.created_at),
-    updated_at: String(row.updated_at)
+    updated_at: String(row.updated_at),
+    version: row.version == null ? 1 : Number(row.version)
   };
 }
 
@@ -29981,14 +30197,23 @@ class NoteRepo {
   constructor(client) {
     this.client = client;
   }
-  async create(input) {
+  async write(options, fn) {
+    return this.client.transaction(async (tx) => {
+      await tx.execute(`SELECT set_config('hasna.actor', $1, true), set_config('hasna.reason', $2, true)`, [
+        options.actor ?? "",
+        options.reason ?? ""
+      ]);
+      return fn(tx);
+    });
+  }
+  async create(input, options = {}) {
     if (!input.title || typeof input.title !== "string") {
       throw new HttpError(400, "title is required");
     }
     const now = new Date().toISOString();
     const suppliedId = typeof input.id === "string" ? input.id.trim() : "";
     if (suppliedId) {
-      const row2 = await this.client.get(`INSERT INTO knowledge_items (id, short_id, title, content, url, tags, metadata, archived, created_at, updated_at)
+      const row2 = await this.write(options, (tx) => tx.get(`INSERT INTO knowledge_items (id, short_id, title, content, url, tags, metadata, archived, created_at, updated_at)
          VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,FALSE,$8,$8)
          ON CONFLICT (id) DO UPDATE SET
            title = EXCLUDED.title,
@@ -30006,11 +30231,11 @@ class NoteRepo {
         JSON.stringify(input.tags ?? []),
         JSON.stringify(input.metadata ?? {}),
         now
-      ]);
+      ]));
       return rowToItem(row2);
     }
     const id = makeId();
-    const row = await this.client.get(`INSERT INTO knowledge_items (id, short_id, title, content, url, tags, metadata, archived, created_at, updated_at)
+    const row = await this.write(options, (tx) => tx.get(`INSERT INTO knowledge_items (id, short_id, title, content, url, tags, metadata, archived, created_at, updated_at)
        VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,FALSE,$8,$9)
        RETURNING *`, [
       id,
@@ -30022,7 +30247,7 @@ class NoteRepo {
       JSON.stringify(input.metadata ?? {}),
       now,
       now
-    ]);
+    ]));
     return rowToItem(row);
   }
   async list(options = {}) {
@@ -30049,7 +30274,7 @@ class NoteRepo {
     const row = await this.client.get(`SELECT * FROM knowledge_items WHERE id = $1 OR short_id = $1 LIMIT 1`, [idOrShort]);
     return row ? rowToItem(row) : null;
   }
-  async update(idOrShort, patch) {
+  async update(idOrShort, patch, options = {}) {
     const existing = await this.get(idOrShort);
     if (!existing)
       return null;
@@ -30073,8 +30298,44 @@ class NoteRepo {
       push("archived", patch.archived);
     push("updated_at", new Date().toISOString());
     params.push(existing.id);
-    const row = await this.client.get(`UPDATE knowledge_items SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING *`, params);
-    return row ? rowToItem(row) : null;
+    let where = `id = $${params.length}`;
+    const { expectedVersion } = options;
+    if (expectedVersion !== undefined) {
+      params.push(expectedVersion);
+      where += ` AND version = $${params.length}`;
+    }
+    const row = await this.write(options, (tx) => tx.get(`UPDATE knowledge_items SET ${sets.join(", ")} WHERE ${where} RETURNING *`, params));
+    if (row)
+      return rowToItem(row);
+    if (expectedVersion === undefined)
+      return null;
+    const current = await this.get(existing.id);
+    if (!current)
+      return null;
+    throw new VersionConflictError(expectedVersion, current.version ?? 1);
+  }
+  async listVersions(idOrShort, options = {}) {
+    const existing = await this.get(idOrShort);
+    if (!existing)
+      return null;
+    const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
+    const offset = Math.max(options.offset ?? 0, 0);
+    const totalRow = await this.client.get(`SELECT count(*)::text AS count FROM knowledge_item_versions WHERE item_id = $1`, [existing.id]);
+    const rows = await this.client.many(`SELECT * FROM knowledge_item_versions WHERE item_id = $1
+        ORDER BY version DESC LIMIT ${limit} OFFSET ${offset}`, [existing.id]);
+    return {
+      item_id: existing.id,
+      current_version: existing.version ?? 1,
+      total: Number(totalRow?.count ?? 0),
+      items: rows.map(rowToVersion)
+    };
+  }
+  async getVersion(idOrShort, version) {
+    const existing = await this.get(idOrShort);
+    if (!existing)
+      return null;
+    const row = await this.client.get(`SELECT * FROM knowledge_item_versions WHERE item_id = $1 AND version = $2`, [existing.id, version]);
+    return row ? rowToVersion(row) : null;
   }
   async delete(idOrShort) {
     const existing = await this.get(idOrShort);
@@ -30097,9 +30358,34 @@ function knowledgeOpenApi(version) {
       metadata: { type: "object", additionalProperties: true },
       archived: { type: "boolean" },
       created_at: { type: "string" },
-      updated_at: { type: "string" }
+      updated_at: { type: "string" },
+      version: { type: "integer", description: "Current entry version; send it back as If-Match to write safely." }
     },
-    required: ["id", "title", "content", "tags", "archived", "created_at", "updated_at"]
+    required: ["id", "title", "content", "tags", "archived", "created_at", "updated_at", "version"]
+  };
+  const noteVersionSchema = {
+    type: "object",
+    description: "An immutable snapshot of the entry as it stood BEFORE the edit that produced the next version.",
+    properties: {
+      id: { type: "string" },
+      item_id: { type: "string" },
+      tenant_id: { type: "string", nullable: true },
+      version: { type: "integer" },
+      title: { type: "string" },
+      content: { type: "string", nullable: true },
+      body_uri: { type: "string", nullable: true },
+      content_hash: { type: "string" },
+      content_bytes: { type: "integer" },
+      url: { type: "string", nullable: true },
+      tags: { type: "array", items: { type: "string" } },
+      metadata: { type: "object", additionalProperties: true },
+      archived: { type: "boolean" },
+      actor: { type: "string", nullable: true },
+      reason: { type: "string", nullable: true },
+      valid_from: { type: "string", nullable: true },
+      valid_to: { type: "string" }
+    },
+    required: ["id", "item_id", "version", "title", "content_hash", "content_bytes", "tags", "archived", "valid_to"]
   };
   const noteInput = {
     type: "object",
@@ -30121,8 +30407,21 @@ function knowledgeOpenApi(version) {
       url: { type: "string", nullable: true },
       tags: { type: "array", items: { type: "string" } },
       metadata: { type: "object", additionalProperties: true },
-      archived: { type: "boolean" }
+      archived: { type: "boolean" },
+      expected_version: {
+        type: "integer",
+        description: "Optimistic concurrency guard, equivalent to the If-Match header, for clients that cannot set headers. " + "The write applies only if the stored entry is still at this version; otherwise 409 version_conflict."
+      }
     }
+  };
+  const versionConflict = {
+    type: "object",
+    properties: {
+      error: { type: "string", enum: ["version_conflict"] },
+      expected: { type: "integer" },
+      current: { type: "integer" }
+    },
+    required: ["error", "expected", "current"]
   };
   return {
     openapi: "3.0.3",
@@ -30133,6 +30432,8 @@ function knowledgeOpenApi(version) {
         Note: noteSchema,
         NoteInput: noteInput,
         NotePatch: notePatch,
+        NoteVersion: noteVersionSchema,
+        VersionConflict: versionConflict,
         NoteList: {
           type: "object",
           properties: {
@@ -30140,6 +30441,16 @@ function knowledgeOpenApi(version) {
             total: { type: "integer" }
           },
           required: ["items", "total"]
+        },
+        NoteVersionList: {
+          type: "object",
+          properties: {
+            item_id: { type: "string" },
+            current_version: { type: "integer" },
+            total: { type: "integer" },
+            items: { type: "array", items: { $ref: "#/components/schemas/NoteVersion" } }
+          },
+          required: ["item_id", "current_version", "total", "items"]
         }
       }
     },
@@ -30182,13 +30493,26 @@ function knowledgeOpenApi(version) {
         patch: {
           operationId: "updateNote",
           summary: "Update a knowledge item",
-          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } },
+            {
+              name: "If-Match",
+              in: "header",
+              required: false,
+              schema: { type: "string" },
+              description: "Optimistic concurrency guard: the version the client last read. The write applies only if the " + "stored entry is still at that version, otherwise 409 version_conflict. Optional in this phase so " + 'already-installed clients keep working; `*` means "any existing version".'
+            }
+          ],
           requestBody: {
             required: true,
             content: { "application/json": { schema: { $ref: "#/components/schemas/NotePatch" } } }
           },
           responses: {
-            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/Note" } } } }
+            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/Note" } } } },
+            "409": {
+              description: "The stored entry moved on; nothing was written.",
+              content: { "application/json": { schema: { $ref: "#/components/schemas/VersionConflict" } } }
+            }
           }
         },
         delete: {
@@ -30196,6 +30520,35 @@ function knowledgeOpenApi(version) {
           summary: "Delete a knowledge item",
           parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
           responses: { "204": {} }
+        }
+      },
+      "/v1/notes/{id}/versions": {
+        get: {
+          operationId: "listNoteVersions",
+          summary: "List prior versions of a knowledge item (newest first)",
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } },
+            { name: "limit", in: "query", schema: { type: "integer" } },
+            { name: "offset", in: "query", schema: { type: "integer" } }
+          ],
+          responses: {
+            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/NoteVersionList" } } } },
+            "404": { description: "No such entry. An entry that exists but was never edited returns 200 with an empty list." }
+          }
+        }
+      },
+      "/v1/notes/{id}/versions/{version}": {
+        get: {
+          operationId: "getNoteVersion",
+          summary: "Fetch one prior version of a knowledge item",
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } },
+            { name: "version", in: "path", required: true, schema: { type: "integer" } }
+          ],
+          responses: {
+            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/NoteVersion" } } } },
+            "404": { description: "No such entry, or no such version of it." }
+          }
         }
       },
       "/v1/registry": {
@@ -30223,6 +30576,28 @@ function json(body, status = 200) {
     status,
     headers: { "content-type": "application/json" }
   });
+}
+function principalActor(principal) {
+  return principal.agent ? `agent:${principal.agent}` : `key:${principal.kid}`;
+}
+function parseExpectedVersion(req, body) {
+  const header = req.headers.get("if-match");
+  if (header != null && header.trim() !== "" && header.trim() !== "*") {
+    const cleaned = header.trim().replace(/^W\//i, "").replace(/^"(.*)"$/, "$1");
+    const parsed2 = Number(cleaned);
+    if (!Number.isInteger(parsed2) || parsed2 < 1) {
+      throw new HttpError(400, `If-Match must be an entry version number (got ${header}).`);
+    }
+    return parsed2;
+  }
+  const fromBody = body.expected_version;
+  if (fromBody === undefined || fromBody === null)
+    return;
+  const parsed = Number(fromBody);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new HttpError(400, "expected_version must be a positive integer entry version.");
+  }
+  return parsed;
 }
 function createServeHandler(deps) {
   const repo = new NoteRepo(deps.client);
@@ -30283,12 +30658,31 @@ function createServeHandler(deps) {
           return json(result);
         }
         if (method === "POST") {
-          await authOrThrow(req, ["knowledge:write"]);
+          const principal = await authOrThrow(req, ["knowledge:write"]);
           const body = await req.json().catch(() => ({}));
-          const item = await repo.create(body);
+          const item = await repo.create(body, { actor: principalActor(principal) });
           return json(item, 201);
         }
         return json({ error: "method_not_allowed" }, 405);
+      }
+      const versionListMatch = path.match(/^\/v1\/notes\/([^/]+)\/versions$/);
+      if (versionListMatch) {
+        if (method !== "GET")
+          return json({ error: "method_not_allowed" }, 405);
+        await authOrThrow(req, ["knowledge:read"]);
+        const history = await repo.listVersions(decodeURIComponent(versionListMatch[1]), {
+          limit: url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : undefined,
+          offset: url.searchParams.has("offset") ? Number(url.searchParams.get("offset")) : undefined
+        });
+        return history ? json(history) : json({ error: "not_found" }, 404);
+      }
+      const versionOneMatch = path.match(/^\/v1\/notes\/([^/]+)\/versions\/(\d+)$/);
+      if (versionOneMatch) {
+        if (method !== "GET")
+          return json({ error: "method_not_allowed" }, 405);
+        await authOrThrow(req, ["knowledge:read"]);
+        const snapshot = await repo.getVersion(decodeURIComponent(versionOneMatch[1]), Number(versionOneMatch[2]));
+        return snapshot ? json(snapshot) : json({ error: "not_found" }, 404);
       }
       const noteMatch = path.match(/^\/v1\/notes\/([^/]+)$/);
       if (noteMatch) {
@@ -30299,10 +30693,22 @@ function createServeHandler(deps) {
           return item ? json(item) : json({ error: "not_found" }, 404);
         }
         if (method === "PATCH") {
-          await authOrThrow(req, ["knowledge:write"]);
+          const principal = await authOrThrow(req, ["knowledge:write"]);
           const body = await req.json().catch(() => ({}));
-          const item = await repo.update(id, body);
-          return item ? json(item) : json({ error: "not_found" }, 404);
+          const expectedVersion = parseExpectedVersion(req, body);
+          const { expected_version: _ignored, ...patch } = body;
+          try {
+            const item = await repo.update(id, patch, {
+              expectedVersion,
+              actor: principalActor(principal)
+            });
+            return item ? json(item) : json({ error: "not_found" }, 404);
+          } catch (error) {
+            if (error instanceof VersionConflictError) {
+              return json({ error: "version_conflict", expected: error.expected, current: error.current }, 409);
+            }
+            throw error;
+          }
         }
         if (method === "DELETE") {
           await authOrThrow(req, ["knowledge:write"]);
@@ -40393,6 +40799,15 @@ function lintWiki(options) {
 
 // src/item-store.ts
 import { existsSync as existsSync12 } from "fs";
+class VersionHistoryUnsupportedError extends Error {
+  location;
+  code = "version_history_unsupported";
+  constructor(location) {
+    super("Version history is not kept by the local JSON knowledge store " + `(${location}). It has no version line, so an empty history here would be a claim, not a measurement. ` + "Entry versioning lives in the Postgres-backed store: point this CLI at it " + "(HASNA_KNOWLEDGE_STORAGE_MODE=cloud plus the API url/key) and re-run.");
+    this.location = location;
+    this.name = "VersionHistoryUnsupportedError";
+  }
+}
 function matchesId(item, idOrShort) {
   return item.id === idOrShort || item.short_id === idOrShort;
 }
@@ -40400,8 +40815,15 @@ function matchesId(item, idOrShort) {
 class LocalItemStore {
   storePath;
   kind = "local";
+  supportsVersions = false;
   constructor(storePath) {
     this.storePath = storePath;
+  }
+  async listVersions() {
+    throw new VersionHistoryUnsupportedError(this.storePath);
+  }
+  async getVersion() {
+    throw new VersionHistoryUnsupportedError(this.storePath);
   }
   get location() {
     return this.storePath;
@@ -40495,8 +40917,15 @@ class ApiItemStore {
   cloud;
   kind = "api";
   exists = true;
+  supportsVersions = true;
   constructor(cloud) {
     this.cloud = cloud;
+  }
+  async listVersions(idOrShort, options = {}) {
+    return this.cloud.listVersions(idOrShort, options);
+  }
+  async getVersion(idOrShort, version2) {
+    return this.cloud.getVersion(idOrShort, version2);
   }
   get location() {
     return this.cloud.baseUrl;
@@ -40517,8 +40946,8 @@ class ApiItemStore {
       ...input.metadata ? { metadata: input.metadata } : {}
     });
   }
-  async update(idOrShort, patch) {
-    return this.cloud.update(idOrShort, patch);
+  async update(idOrShort, patch, options = {}) {
+    return this.cloud.update(idOrShort, patch, { expectedVersion: options.expectedVersion });
   }
   async delete(idOrShort) {
     return this.cloud.delete(idOrShort);

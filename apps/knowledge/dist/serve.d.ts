@@ -1,5 +1,5 @@
 import { ApiKeyStore, type ApiKeyVerifier } from '@hasna/contracts/auth';
-import { type KnowledgeItem } from './store.js';
+import { type KnowledgeItem, type KnowledgeItemVersion, type KnowledgeItemVersionList } from './store.js';
 import type { PoolQueryClient } from './generated/storage-kit/index.js';
 export declare const KNOWLEDGE_SERVE_APP = "knowledge";
 /**
@@ -27,10 +27,62 @@ export interface NoteListOptions {
     search?: string;
     includeArchived?: boolean;
 }
+/**
+ * Attribution and concurrency control for a write. `actor`/`reason` are handed
+ * to the database as transaction-local settings so the versioning trigger can
+ * stamp them onto the snapshot it takes — the writer never inserts the history
+ * row itself, which is the whole point (see db/pg-migrations.ts).
+ */
+export interface NoteWriteOptions {
+    /** Authenticated identity performing the write; recorded on the snapshot. */
+    actor?: string | null;
+    /** Optional free-text justification recorded on the snapshot. */
+    reason?: string | null;
+}
+export interface NoteUpdateOptions extends NoteWriteOptions {
+    /**
+     * Optimistic concurrency: apply only if the stored row is still at this
+     * version. Absent means last-writer-wins (phase 1 — every installed 0.2.x CLI
+     * on the fleet omits it and must keep working).
+     */
+    expectedVersion?: number;
+}
+/**
+ * Raised when `expectedVersion` no longer matches the stored row. Carries both
+ * numbers so a caller can decide whether a re-read-and-retry is safe, rather
+ * than blind-retrying and overwriting the other writer.
+ */
+export declare class VersionConflictError extends Error {
+    readonly expected: number;
+    readonly current: number;
+    readonly code = "version_conflict";
+    constructor(expected: number, current: number);
+}
+/**
+ * One immutable snapshot of an entry, and a page of them. The shapes live in
+ * store.ts next to KnowledgeItem so the CLI and SDK clients can consume them
+ * without importing the server; these aliases keep the serve-side vocabulary.
+ */
+export type NoteVersion = KnowledgeItemVersion;
+export type NoteVersionList = KnowledgeItemVersionList;
 export declare class NoteRepo {
     private readonly client;
     constructor(client: PoolQueryClient);
-    create(input: NoteInput): Promise<KnowledgeItem>;
+    /**
+     * Run a write with its attribution attached, in one transaction.
+     *
+     * `set_config(..., true)` is TRANSACTION-local, which is what makes this safe
+     * on a pooled connection: the value cannot leak into the next request that
+     * happens to be handed the same client. It resets to the empty string rather
+     * than to unset, which is why the trigger reads it through NULLIF — otherwise
+     * an unattributed write would record an actor that is present but blank.
+     *
+     * Every knowledge_items write goes through here, including the upsert branch
+     * of create(), because that branch is an UPDATE whenever the id already
+     * exists and must be attributed like any other edit.
+     */
+    private write;
+    create(input: NoteInput, options?: NoteWriteOptions): Promise<KnowledgeItem>;
     list(options?: NoteListOptions): Promise<{
         items: KnowledgeItem[];
         total: number;
@@ -38,7 +90,21 @@ export declare class NoteRepo {
     get(idOrShort: string): Promise<KnowledgeItem | null>;
     update(idOrShort: string, patch: Partial<NoteInput> & {
         archived?: boolean;
-    }): Promise<KnowledgeItem | null>;
+    }, options?: NoteUpdateOptions): Promise<KnowledgeItem | null>;
+    /**
+     * Prior snapshots for an entry, newest first.
+     *
+     * Returns `null` — not an empty list — when the entry itself is absent. The
+     * distinction is the whole lesson of the open-mementos read bug: "this entry
+     * has never been edited" and "this entry does not exist" printed the same
+     * "No previous versions" line, so an empty result was unreadable as evidence.
+     */
+    listVersions(idOrShort: string, options?: {
+        limit?: number;
+        offset?: number;
+    }): Promise<NoteVersionList | null>;
+    /** One prior snapshot by version number, or `null` if that version is absent. */
+    getVersion(idOrShort: string, version: number): Promise<NoteVersion | null>;
     delete(idOrShort: string): Promise<boolean>;
 }
 export declare function knowledgeOpenApi(version: string): Record<string, unknown>;

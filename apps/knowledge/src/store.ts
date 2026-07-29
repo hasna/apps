@@ -30,6 +30,54 @@ export interface KnowledgeItem {
   archived?: boolean;
   created_at: string;
   updated_at: string;
+  /**
+   * Entry version, owned by the database (see db/pg-migrations.ts). Present on
+   * items read from the Postgres-backed store; absent on the local JSON store,
+   * which has no version line at all — and that absence is deliberately visible
+   * rather than defaulted to 1, so a caller cannot mistake "this store does not
+   * version" for "this entry has never been edited".
+   */
+  version?: number;
+}
+
+/**
+ * An immutable snapshot of an entry as it stood BEFORE the edit that produced
+ * the next version. Written only by the database trigger (see
+ * db/pg-migrations.ts) — never by application code, on any surface.
+ *
+ * Defined here, alongside {@link KnowledgeItem}, because both the serve layer
+ * that produces these rows and the CLI/SDK clients that read them need the
+ * shape, and neither should have to import the other.
+ */
+export interface KnowledgeItemVersion {
+  id: string;
+  item_id: string;
+  tenant_id: string | null;
+  version: number;
+  title: string;
+  content: string | null;
+  /** Set when the body was offloaded out of Postgres; null while inline. */
+  body_uri: string | null;
+  /** sha256 of the full body. Always present, so drift checks need no network. */
+  content_hash: string;
+  content_bytes: number;
+  url: string | null;
+  tags: string[];
+  metadata: Record<string, unknown>;
+  archived: boolean;
+  actor: string | null;
+  reason: string | null;
+  valid_from: string | null;
+  valid_to: string;
+}
+
+export interface KnowledgeItemVersionList {
+  item_id: string;
+  /** The version the entry is at NOW; every snapshot in `items` is prior to it. */
+  current_version: number;
+  /** Total snapshots retained, independent of limit/offset. */
+  total: number;
+  items: KnowledgeItemVersion[];
 }
 
 export interface Store {

@@ -7,6 +7,14 @@ import { createServeHandler, knowledgeOpenApi, normalizeCloudDatabaseUrl } from 
 const SIGNING = 'test-signing-secret-not-a-real-key';
 
 // In-memory query client shim implementing the subset the serve/store use.
+//
+// SCOPE, stated because it is easy to over-read: this fake answers by matching
+// SQL strings. It has no trigger, no constraints, and no transaction semantics,
+// so it CANNOT observe entry versioning — a versioning regression would sail
+// through every assertion here. It is the routing/auth/response-shape suite and
+// nothing more. The versioning behaviour is pinned in
+// tests/entry-versioning.test.ts against a real in-process Postgres, which is
+// the only input that can produce both the pass and the fail.
 function makeMemoryClient() {
   const rows: Record<string, Record<string, unknown>>[] = [] as any;
   const items = new Map<string, Record<string, unknown>>();
@@ -31,6 +39,12 @@ function makeMemoryClient() {
       await runSql(sql, params);
     },
     async close() {},
+    // Writes run inside a transaction so the actor GUC is transaction-local.
+    // There is nothing to isolate in a Map, so this just runs the callback —
+    // which is precisely why this shim proves nothing about versioning.
+    async transaction(fn: (c: any) => Promise<unknown>) {
+      return fn(client);
+    },
     get pool() {
       return {} as any;
     },
@@ -40,6 +54,8 @@ function makeMemoryClient() {
     const s = sql.trim().toLowerCase();
     // health/ready probe
     if (s.startsWith('select 1')) return { rows: [{ '?column?': 1 }], rowCount: 1 };
+    // write attribution GUCs — a no-op without a real backend
+    if (s.startsWith('select set_config(')) return { rows: [], rowCount: 0 };
     // api_keys store: findByKid / isRevoked etc — treat all unknown kids as absent (not revoked)
     if (s.includes('from api_keys')) return { rows: [], rowCount: 0 };
     if (s.startsWith('update api_keys')) return { rows: [], rowCount: 0 };

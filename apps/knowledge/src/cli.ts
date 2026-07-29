@@ -7,6 +7,7 @@
 import { defaultStorePath, ensureStore, importLegacyGlobalStore, type KnowledgeItem } from './store';
 import { resolveItemStore, type ItemStore } from './item-store';
 import { isKnowledgeApiMode } from './cloud-store';
+import { diffEntries, formatEntryDiff, type EntrySnapshot } from './entry-diff';
 import {
   KNOWLEDGE_API_KEY_ENV_KEYS,
   KNOWLEDGE_API_URL_ENV_KEYS,
@@ -78,6 +79,9 @@ interface Flags {
   maxTokens?: number;
   maxItems?: number;
   from?: string;
+  to?: string;
+  /** Entry version for `diff`. Named --rev because -v/--version is taken. */
+  rev?: number;
   since?: string;
   topic?: string;
   dedupe?: boolean;
@@ -124,7 +128,7 @@ interface ParseResult {
 }
 
 const EVENTS_COMMANDS = ['events', 'webhooks'];
-const COMMANDS = ['add', 'list', 'get', 'delete', 'update', 'archive', 'restore', 'upsert', 'untag', 'export', 'prune', 'dedupe', 'stats', 'inventory', 'project-panel', 'paths', 'mode', 'setup', 'auth', 'storage', 'machines', 'sync', 'db', 'wiki', 'app-wiki', 'source', 'ingest', 'reindex', 'search', 'context', 'proposals', 'web', 'ask', 'build', 'embeddings', 'providers', 'safety', 'help', ...EVENTS_COMMANDS];
+const COMMANDS = ['add', 'list', 'get', 'delete', 'update', 'archive', 'restore', 'upsert', 'untag', 'versions', 'diff', 'export', 'prune', 'dedupe', 'stats', 'inventory', 'project-panel', 'paths', 'mode', 'setup', 'auth', 'storage', 'machines', 'sync', 'db', 'wiki', 'app-wiki', 'source', 'ingest', 'reindex', 'search', 'context', 'proposals', 'web', 'ask', 'build', 'embeddings', 'providers', 'safety', 'help', ...EVENTS_COMMANDS];
 const COMMAND_ALIASES: Record<string, string> = {
   ls: 'list',
   rm: 'delete',
@@ -217,6 +221,11 @@ function parseArgs(argv: string[]): ParseResult {
       case '--max-tokens': flags.maxTokens = Number(argv[i + 1]); i += 1; break;
       case '--max-items': flags.maxItems = Number(argv[i + 1]); i += 1; break;
       case '--from': flags.from = argv[i + 1]; i += 1; break;
+      case '--to': flags.to = argv[i + 1]; i += 1; break;
+      // `--rev`, not the design's `-v`: `-v` is already the global alias for
+      // --version (print the package version), and re-pointing it at an entry
+      // version would silently break every existing `knowledge -v` invocation.
+      case '--rev': flags.rev = Number(argv[i + 1]); i += 1; break;
       case '--since': flags.since = argv[i + 1]; i += 1; break;
       case '--topic': flags.topic = argv[i + 1]; i += 1; break;
       case '--dedupe': flags.dedupe = true; break;
@@ -324,6 +333,8 @@ Commands:
   restore --id <id>           Restore an archived item
   upsert [title] [content]    Create or update an item by --id
   untag --id <id> -t <tag>    Remove tag(s) from an item (-t repeatable; exits 1 if nothing removed)
+  versions --id <id>          Show retained prior versions of an item (newest first)
+  diff --id <id>              Diff two versions of an item (--rev N, or --from A --to B)
   delete (alias: rm) --id <id> Delete item (requires --yes)
   export                       Export all items (--format jsonl)
   prune                        Remove old/empty items (requires --yes)
@@ -454,6 +465,8 @@ function printCommandHelp(command: string): void {
   if (command === 'restore' || command === 'unarchive') { console.log('Usage: knowledge restore|unarchive --id <id> [--json]'); return; }
   if (command === 'upsert') { console.log('Usage: knowledge upsert [title] [content] [--id <id>] [--title <title>] [--content <content>] [--url <url>] [-t <tag>]... [--json]\n  -t/--tag is repeatable and accepts comma-separated values; tags are added, never replaced.\n  With -t the output reports how many tags were actually added, on both the create and update paths.'); return; }
   if (command === 'untag') { console.log('Usage: knowledge untag --id <id> -t <tag>... [--json]\n  -t/--tag is repeatable and accepts comma-separated values.\n  Each value is matched whole first, and only split on commas if no stored tag equals it,\n  so a legacy literal "a,b,c" tag can still be removed.\n  Removing nothing exits 1; unmatched names are reported in not_found.'); return; }
+  if (command === 'versions') { console.log('Usage: knowledge versions --id <id> [-l <limit>] [--json]\n  Lists the retained prior versions of an item, newest first, with the version the item is at now.\n  An item that exists but was never edited prints an EMPTY history, which is not the same answer as\n  "no such item" (that exits 1) or "this store keeps no history" (also exits 1, naming the store).\n  Entry history lives in the Postgres-backed store; the local JSON store has no version line.'); return; }
+  if (command === 'diff') { console.log('Usage: knowledge diff --id <id> [--rev <n>] [--from <a> --to <b>] [--json]\n  Default: the latest retained version vs the item as it stands now.\n  --rev <n>: version n vs version n-1.  --from <a> --to <b>: two explicit versions, where\n  either side may be "current" to mean the live item.\n  --rev is spelled out because -v is the global --version flag.\n  Reports changed fields (title/url/tags/metadata/archived) as well as a line diff of the body,\n  so an edit that moved only the tags is not rendered as "no changes".'); return; }
   if (command === 'delete' || command === 'rm') { console.log('Usage: knowledge delete|rm --id <id> -y [--json]'); return; }
   if (command === 'export') { console.log('Usage: knowledge export [--verbose] [--json] [--format json|jsonl]'); return; }
   if (command === 'prune') { console.log('Usage: knowledge prune --yes [--older-than <days>] [--empty] [--json]'); return; }
@@ -834,11 +847,11 @@ async function run(argv: string[]): Promise<void> {
   if (flags.completions) {
     const shell = flags.completions;
     if (shell === 'bash') {
-    console.log(`_knowledge() { local cur; cur="${"$"}{COMP_WORDS[COMP_CWORD]}"; COMPREPLY=($(compgen -W "add list get update archive restore upsert untag delete export prune dedupe stats inventory project-panel paths mode setup auth storage machines sync db wiki app-wiki source ingest reindex search context proposals web ask build embeddings providers safety events webhooks help ls rm edit unarchive --json --verbose --yes --help --version --desc --page --limit --search --sort --id --store --title --content --url --tag --format --completions --purpose --model --dimensions --semantic --context --max-tokens --max-items --from --since --topic --dedupe --generate --approve-write --provider --mode --machine --workspace --peer-workspace --api-url --canonical-example --api-key --email --org --org-id --user-id --owner --domain --file-results --full --dry-run --fake --no-tailscale --no-artifact-content --no-color --scope --tables --archived --include-archived --project --contract --source-ref --allow-global" -- "$cur")); }; complete -F _knowledge knowledge`);
+    console.log(`_knowledge() { local cur; cur="${"$"}{COMP_WORDS[COMP_CWORD]}"; COMPREPLY=($(compgen -W "add list get update archive restore upsert untag versions diff delete export prune dedupe stats inventory project-panel paths mode setup auth storage machines sync db wiki app-wiki source ingest reindex search context proposals web ask build embeddings providers safety events webhooks help ls rm edit unarchive --json --verbose --yes --help --version --desc --page --limit --search --sort --id --store --title --content --url --tag --rev --to --format --completions --purpose --model --dimensions --semantic --context --max-tokens --max-items --from --since --topic --dedupe --generate --approve-write --provider --mode --machine --workspace --peer-workspace --api-url --canonical-example --api-key --email --org --org-id --user-id --owner --domain --file-results --full --dry-run --fake --no-tailscale --no-artifact-content --no-color --scope --tables --archived --include-archived --project --contract --source-ref --allow-global" -- "$cur")); }; complete -F _knowledge knowledge`);
     } else if (shell === 'zsh') {
-      console.log(`#compdef knowledge\n_knowledge() { _arguments -C "1: :(add list get update archive restore upsert untag delete export prune dedupe stats inventory project-panel paths mode setup auth storage machines sync db wiki app-wiki source ingest reindex search context proposals web ask build embeddings providers safety events webhooks help ls rm edit unarchive)" "(--json)--json" "(--verbose)--verbose" "(--yes)-y" "(--help)--help" "(--version)--version" "(--desc)--desc" "(--archived)--archived" "(--include-archived)--include-archived" "(--semantic)--semantic" "(--context)--context" "(--dedupe)--dedupe" "(--generate)--generate" "(--approve-write)--approve-write" "(--canonical-example)--canonical-example" "(--file-results)--file-results" "(--full)--full" "(--dry-run)--dry-run" "(--fake)--fake" "(--no-tailscale)--no-tailscale" "(--no-artifact-content)--no-artifact-content" "(--contract)--contract" "(--allow-global)--allow-global" "(-p --page)"{-p,--page}"[page number]:number:" "(-l --limit)"{-l,--limit}"[items per page]:number:" "(-s --search)"{-s,--search}"[search text]:text:" "(--sort)--sort"\{created,title\}:" "(--id)--id[item id]:id:" "(--store)--store[store path]:path:" "(--title)--title[new title]:" "(--content)--content[new content]:" "(--url)--url[source url]:" "(-t --tag)"{-t,--tag}"[tag]:tag:" "(--format)--format[json|jsonl]:" "(--completions)--completions[output completions]:shell:(bash zsh fish):" "(--purpose)--purpose[purpose]:" "(--model)--model[model ref]:" "(--dimensions)--dimensions[embedding dimensions]:number:" "(--max-tokens)--max-tokens[token budget]:number:" "(--max-items)--max-items[item budget]:number:" "(--from)--from"\{search,loops,runs\}:" "(--since)--since[duration or ISO time]:" "(--topic)--topic[topic text]:" "(--provider)--provider[provider]:" "(--mode)--mode"\{local,hosted\}:" "(--machine)--machine[machine id or SSH alias]:" "(--workspace)--workspace[repo workspace path]:path:" "(--peer-workspace)--peer-workspace[peer repo or knowledge home path]:path:" "(--api-url)--api-url[hosted API URL]:" "(--api-key)--api-key[hosted API key]:" "(--email)--email[email]:" "(--org)--org[org slug]:" "(--org-id)--org-id[org id]:" "(--user-id)--user-id[user id]:" "(--owner)--owner[provenance owner]:" "(--domain)--domain[domain]:" "(--project)--project[project id/name/slug]:" "(--source-ref)--source-ref[source ref]:" "(--no-color)--no-color[disable color]" "(--scope)--scope"\{local,global,project\}:" "(--tables)--tables[comma-separated DB sync tables]:" }; _knowledge`);
+      console.log(`#compdef knowledge\n_knowledge() { _arguments -C "1: :(add list get update archive restore upsert untag versions diff delete export prune dedupe stats inventory project-panel paths mode setup auth storage machines sync db wiki app-wiki source ingest reindex search context proposals web ask build embeddings providers safety events webhooks help ls rm edit unarchive)" "(--json)--json" "(--verbose)--verbose" "(--yes)-y" "(--help)--help" "(--version)--version" "(--desc)--desc" "(--archived)--archived" "(--include-archived)--include-archived" "(--semantic)--semantic" "(--context)--context" "(--dedupe)--dedupe" "(--generate)--generate" "(--approve-write)--approve-write" "(--canonical-example)--canonical-example" "(--file-results)--file-results" "(--full)--full" "(--dry-run)--dry-run" "(--fake)--fake" "(--no-tailscale)--no-tailscale" "(--no-artifact-content)--no-artifact-content" "(--contract)--contract" "(--allow-global)--allow-global" "(-p --page)"{-p,--page}"[page number]:number:" "(-l --limit)"{-l,--limit}"[items per page]:number:" "(-s --search)"{-s,--search}"[search text]:text:" "(--sort)--sort"\{created,title\}:" "(--id)--id[item id]:id:" "(--store)--store[store path]:path:" "(--title)--title[new title]:" "(--content)--content[new content]:" "(--url)--url[source url]:" "(-t --tag)"{-t,--tag}"[tag]:tag:" "(--format)--format[json|jsonl]:" "(--completions)--completions[output completions]:shell:(bash zsh fish):" "(--purpose)--purpose[purpose]:" "(--model)--model[model ref]:" "(--dimensions)--dimensions[embedding dimensions]:number:" "(--max-tokens)--max-tokens[token budget]:number:" "(--max-items)--max-items[item budget]:number:" "(--from)--from"\{search,loops,runs\}:" "(--to)--to[diff target: version number or current]:" "(--rev)--rev[entry version for diff]:number:" "(--since)--since[duration or ISO time]:" "(--topic)--topic[topic text]:" "(--provider)--provider[provider]:" "(--mode)--mode"\{local,hosted\}:" "(--machine)--machine[machine id or SSH alias]:" "(--workspace)--workspace[repo workspace path]:path:" "(--peer-workspace)--peer-workspace[peer repo or knowledge home path]:path:" "(--api-url)--api-url[hosted API URL]:" "(--api-key)--api-key[hosted API key]:" "(--email)--email[email]:" "(--org)--org[org slug]:" "(--org-id)--org-id[org id]:" "(--user-id)--user-id[user id]:" "(--owner)--owner[provenance owner]:" "(--domain)--domain[domain]:" "(--project)--project[project id/name/slug]:" "(--source-ref)--source-ref[source ref]:" "(--no-color)--no-color[disable color]" "(--scope)--scope"\{local,global,project\}:" "(--tables)--tables[comma-separated DB sync tables]:" }; _knowledge`);
     } else if (shell === 'fish') {
-      console.log(`complete -c knowledge -f; complete -c knowledge -a "add list get update archive restore upsert untag delete export prune dedupe stats inventory project-panel paths mode setup auth storage machines sync db wiki app-wiki source ingest reindex search context proposals web ask build embeddings providers safety events webhooks help ls rm edit unarchive"; complete -c knowledge -l json; complete -c knowledge -l verbose; complete -c knowledge -l yes -s y; complete -c knowledge -l help -s h; complete -c knowledge -l version -s v; complete -c knowledge -l desc; complete -c knowledge -l archived; complete -c knowledge -l include-archived; complete -c knowledge -l semantic; complete -c knowledge -l context; complete -c knowledge -l max-tokens; complete -c knowledge -l max-items; complete -c knowledge -l from -a "search loops runs"; complete -c knowledge -l since; complete -c knowledge -l topic; complete -c knowledge -l dedupe; complete -c knowledge -l generate; complete -c knowledge -l approve-write; complete -c knowledge -l allow-global; complete -c knowledge -l canonical-example; complete -c knowledge -l provider; complete -c knowledge -l mode; complete -c knowledge -l machine; complete -c knowledge -l workspace; complete -c knowledge -l peer-workspace; complete -c knowledge -l api-url; complete -c knowledge -l api-key; complete -c knowledge -l email; complete -c knowledge -l org; complete -c knowledge -l org-id; complete -c knowledge -l user-id; complete -c knowledge -l owner; complete -c knowledge -l domain; complete -c knowledge -l project; complete -c knowledge -l contract; complete -c knowledge -l source-ref; complete -c knowledge -l file-results; complete -c knowledge -l full; complete -c knowledge -l dry-run; complete -c knowledge -l fake; complete -c knowledge -l no-tailscale; complete -c knowledge -l no-artifact-content; complete -c knowledge -s p -l page; complete -c knowledge -s l -l limit; complete -c knowledge -s s -l search; complete -c knowledge -l sort; complete -c knowledge -l id; complete -c knowledge -l store; complete -c knowledge -l title; complete -c knowledge -l content; complete -c knowledge -l url; complete -c knowledge -s t -l tag; complete -c knowledge -l format; complete -c knowledge -l completions; complete -c knowledge -l purpose; complete -c knowledge -l model; complete -c knowledge -l dimensions; complete -c knowledge -l no-color; complete -c knowledge -l scope -a "local global project"; complete -c knowledge -l tables`);
+      console.log(`complete -c knowledge -f; complete -c knowledge -a "add list get update archive restore upsert untag versions diff delete export prune dedupe stats inventory project-panel paths mode setup auth storage machines sync db wiki app-wiki source ingest reindex search context proposals web ask build embeddings providers safety events webhooks help ls rm edit unarchive"; complete -c knowledge -l json; complete -c knowledge -l verbose; complete -c knowledge -l yes -s y; complete -c knowledge -l help -s h; complete -c knowledge -l version -s v; complete -c knowledge -l desc; complete -c knowledge -l archived; complete -c knowledge -l include-archived; complete -c knowledge -l semantic; complete -c knowledge -l context; complete -c knowledge -l max-tokens; complete -c knowledge -l max-items; complete -c knowledge -l from -a "search loops runs"; complete -c knowledge -l to; complete -c knowledge -l rev; complete -c knowledge -l since; complete -c knowledge -l topic; complete -c knowledge -l dedupe; complete -c knowledge -l generate; complete -c knowledge -l approve-write; complete -c knowledge -l allow-global; complete -c knowledge -l canonical-example; complete -c knowledge -l provider; complete -c knowledge -l mode; complete -c knowledge -l machine; complete -c knowledge -l workspace; complete -c knowledge -l peer-workspace; complete -c knowledge -l api-url; complete -c knowledge -l api-key; complete -c knowledge -l email; complete -c knowledge -l org; complete -c knowledge -l org-id; complete -c knowledge -l user-id; complete -c knowledge -l owner; complete -c knowledge -l domain; complete -c knowledge -l project; complete -c knowledge -l contract; complete -c knowledge -l source-ref; complete -c knowledge -l file-results; complete -c knowledge -l full; complete -c knowledge -l dry-run; complete -c knowledge -l fake; complete -c knowledge -l no-tailscale; complete -c knowledge -l no-artifact-content; complete -c knowledge -s p -l page; complete -c knowledge -s l -l limit; complete -c knowledge -s s -l search; complete -c knowledge -l sort; complete -c knowledge -l id; complete -c knowledge -l store; complete -c knowledge -l title; complete -c knowledge -l content; complete -c knowledge -l url; complete -c knowledge -s t -l tag; complete -c knowledge -l format; complete -c knowledge -l completions; complete -c knowledge -l purpose; complete -c knowledge -l model; complete -c knowledge -l dimensions; complete -c knowledge -l no-color; complete -c knowledge -l scope -a "local global project"; complete -c knowledge -l tables`);
     } else {
       throw new Error("Invalid --completions value. Use 'bash', 'zsh', or 'fish'.");
     }
@@ -1930,6 +1943,130 @@ async function run(argv: string[]): Promise<void> {
     return;
   }
 
+  if (command === 'versions') {
+    requireId(flags);
+    const versionsPage = Number.isFinite(flags.page) && (flags.page as number) > 0 ? (flags.page as number) : 1;
+    const versionsLimit = Number.isFinite(flags.limit) && (flags.limit as number) > 0 ? (flags.limit as number) : undefined;
+    // The server caps a page at 200. Without an offset an entry past that
+    // many retained versions has history it reports in `total` but cannot
+    // return, which is a retrieval hole rather than a display one.
+    const history = await itemStore.listVersions(flags.id!, {
+      limit: versionsLimit,
+      offset: (versionsPage - 1) * (versionsLimit ?? 50),
+    });
+    // null is NO SUCH ITEM. It is reported as an error, never as an empty
+    // history — "never edited" and "does not exist" must not print the same
+    // line, which is precisely how the sibling implementation's empty result
+    // became unreadable as evidence.
+    if (!history) throw new Error(`Item not found: ${flags.id}`);
+    const result = {
+      ok: true,
+      id: history.item_id,
+      current_version: history.current_version,
+      total: history.total,
+      page: versionsPage,
+      store: itemStore.location,
+      versions: history.items,
+      message: history.total === 0
+        ? `${history.item_id} is at version ${history.current_version} with no retained prior versions`
+        : `${history.item_id} is at version ${history.current_version}; ${history.total} prior version(s) retained`,
+    };
+    if (flags.json || flags.verbose) { output(result, flags.json, flags); return; }
+    console.log(result.message);
+    for (const version of history.items) {
+      const who = version.actor ? ` by ${version.actor}` : '';
+      const why = version.reason ? ` (${version.reason})` : '';
+      console.log(`v${version.version}\t${version.valid_to}${who}${why}\t${version.content_bytes} bytes\t${version.content_hash.slice(0, 12)}`);
+    }
+    if (history.items.length > 0) console.log('Hint: `knowledge diff --id <id> --rev <n>` shows what changed.');
+    return;
+  }
+
+  if (command === 'diff') {
+    requireId(flags);
+    const current = await itemStore.get(flags.id!);
+    if (!current) throw new Error(`Item not found: ${flags.id}`);
+    if (flags.rev !== undefined && (flags.from !== undefined || flags.to !== undefined)) {
+      throw new Error('Use either --rev <n> or --from <a> --to <b>, not both.');
+    }
+
+    // Snapshots exist only for versions the entry has LEFT: the state of the
+    // version it is at now is the live row, not a history row. So resolving a
+    // side means "history row if there is one, live row if the number is the
+    // current version" — otherwise `--rev <current>` would report "no such
+    // version" for the version the entry is demonstrably at.
+    const liveSnapshot = (): EntrySnapshot => ({
+      title: current.title,
+      content: current.content,
+      url: current.url,
+      tags: current.tags ?? [],
+      metadata: current.metadata ?? {},
+      archived: current.archived ?? false,
+    });
+    const liveLabel = `v${current.version ?? '?'} (current)`;
+
+    const resolveSide = async (ref: string): Promise<{ label: string; snapshot: EntrySnapshot }> => {
+      if (ref === 'current') return { label: liveLabel, snapshot: liveSnapshot() };
+      const wanted = Number(ref);
+      if (!Number.isInteger(wanted) || wanted < 1) throw new Error(`Not a version number: ${ref}`);
+      if (current.version !== undefined && wanted === current.version) {
+        return { label: liveLabel, snapshot: liveSnapshot() };
+      }
+      const snapshot = await itemStore.getVersion(current.id, wanted);
+      if (!snapshot) {
+        throw new Error(
+          `No version ${wanted} retained for ${current.id} (it is at version ${current.version ?? '?'}). `
+          + 'Run `knowledge versions --id <id>` to see what is retained.',
+        );
+      }
+      return {
+        label: `v${snapshot.version}`,
+        snapshot: {
+          title: snapshot.title,
+          content: snapshot.content,
+          url: snapshot.url,
+          tags: snapshot.tags,
+          metadata: snapshot.metadata,
+          archived: snapshot.archived,
+        },
+      };
+    };
+
+    let fromRef: string;
+    let toRef: string;
+    if (flags.rev !== undefined) {
+      // mementos semantics: --rev N compares N with N-1.
+      if (!Number.isInteger(flags.rev) || flags.rev < 1) throw new Error('--rev must be a positive version number.');
+      if (flags.rev === 1) throw new Error('Version 1 has no predecessor to diff against.');
+      fromRef = String(flags.rev - 1);
+      toRef = String(flags.rev);
+    } else if (flags.from !== undefined || flags.to !== undefined) {
+      if (flags.from === undefined || flags.to === undefined) throw new Error('--from and --to must be given together.');
+      fromRef = flags.from;
+      toRef = flags.to;
+    } else {
+      // Default: the newest retained version vs the live item — "what did the
+      // last edit change".
+      const history = await itemStore.listVersions(current.id, { limit: 1 });
+      if (!history) throw new Error(`Item not found: ${flags.id}`);
+      if (history.items.length === 0) {
+        throw new Error(`${current.id} is at version ${history.current_version} with no retained prior versions to diff against.`);
+      }
+      fromRef = String(history.items[0]!.version);
+      toRef = 'current';
+    }
+
+    const left = await resolveSide(fromRef);
+    const right = await resolveSide(toRef);
+    const diff = diffEntries(left.snapshot, right.snapshot);
+    if (flags.json || flags.verbose) {
+      output({ ok: true, id: current.id, from: left.label, to: right.label, ...diff }, flags.json, flags);
+      return;
+    }
+    console.log(formatEntryDiff(diff, `${current.id} ${left.label}`, `${current.id} ${right.label}`));
+    return;
+  }
+
   if (command === 'update') {
     requireId(flags);
     const current = await itemStore.get(flags.id!);
@@ -1943,7 +2080,15 @@ async function run(argv: string[]): Promise<void> {
       added = tagsToAppend(current.tags, flags.tag);
       if (added.length > 0) patch.tags = [...(current.tags ?? []), ...added];
     }
-    const item = await itemStore.update(current.id, patch);
+    // This command is already read-then-write, so it can send the version it
+    // just read as the concurrency guard for free — the agent never types a
+    // version number. Without this the server's check exists but nothing on the
+    // fleet ever exercises it, and two agents editing one entry still lose an
+    // edit silently. A conflict surfaces as a non-zero exit naming both
+    // versions; there is deliberately NO automatic retry, because re-applying
+    // without comparing the fields that moved is how you overwrite a colleague
+    // while believing you handled the conflict.
+    const item = await itemStore.update(current.id, patch, { expectedVersion: current.version });
     // When -t was asked for, report how many tags were actually added. Without this,
     // "added 3" and "added none, they were all already there" both print `Updated <id>`
     // at exit 0 and carry the count nowhere — not in `message`, not in JSON — the same
@@ -1957,7 +2102,7 @@ async function run(argv: string[]): Promise<void> {
     requireId(flags);
     const current = await itemStore.get(flags.id!);
     if (!current) throw new Error(`Item not found: ${flags.id}`);
-    const item = await itemStore.update(current.id, { archived: command === 'archive' });
+    const item = await itemStore.update(current.id, { archived: command === 'archive' }, { expectedVersion: current.version });
     output({ ok: true, item, message: `${command === 'archive' ? 'Archived' : 'Restored'} ${item?.id ?? current.id}` }, flags.json, flags);
     return;
   }
@@ -2014,7 +2159,7 @@ async function run(argv: string[]): Promise<void> {
     if (removed === 0) {
       throw new Error(`No matching tag on ${current.id}: ${notFound.map((tag) => JSON.stringify(tag)).join(', ')} not in [${before.map((tag) => JSON.stringify(tag)).join(', ')}]`);
     }
-    const item = await itemStore.update(current.id, { tags });
+    const item = await itemStore.update(current.id, { tags }, { expectedVersion: current.version });
     // A partial miss must be visible too, not just the all-miss case — and it has to be
     // in `message`, because non-JSON output prints nothing else.
     //
@@ -2065,7 +2210,7 @@ async function run(argv: string[]): Promise<void> {
       added = tagsToAppend(existing.tags, flags.tag);
       if (added.length > 0) patch.tags = [...(existing.tags ?? []), ...added];
     }
-    const item = await itemStore.update(existing.id, patch);
+    const item = await itemStore.update(existing.id, patch, { expectedVersion: existing.version });
     output(tagCountResult({ ok: true, created: false, item }, `Upserted ${item?.id ?? existing.id}`, added), flags.json, flags);
     return;
   }
