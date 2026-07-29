@@ -11,7 +11,7 @@ import {
   updateProject,
 } from "../../db/projects.js";
 import { addComment } from "../../db/comments.js";
-import { getTodosCloudClient, cloudAddComment, cloudCreateProject, cloudListProjects, cloudListTasks, cloudResolveProject, cloudResolveProjectRef, cloudUpdateProject, cloudAddDependency, cloudRemoveDependency, cloudGetDependencies, cloudGetTaskRelations, cloudRenameProject } from "../cloud-router.js";
+import { getTodosCloudClient, cloudAddComment, cloudCreateProject, cloudDeleteProject, cloudListProjects, cloudListTasks, cloudResolveProject, cloudResolveProjectRef, cloudUpdateProject, cloudAddDependency, cloudRemoveDependency, cloudGetDependencies, cloudGetTaskRelations, cloudRenameProject } from "../cloud-router.js";
 import {
   buildProjectDependencyGraph,
   buildTaskDependencyEdges,
@@ -136,6 +136,14 @@ function countProjectTasks(projectId: string): { total: number; incomplete: numb
      FROM tasks
      WHERE project_id = ?`,
   ).get(projectId) as { total: number; incomplete: number };
+}
+
+async function countCloudProjectTasks(cloud: CloudClient, projectId: string): Promise<{ total: number; incomplete: number }> {
+  const tasks = await cloudListTasks(cloud, { project_id: projectId, include_subtasks: true });
+  return {
+    total: tasks.length,
+    incomplete: tasks.filter((task) => task.status !== "completed" && task.status !== "cancelled").length,
+  };
 }
 
 function pathIsWithinPrefix(projectPath: string, prefix: string): boolean {
@@ -774,11 +782,10 @@ export function registerProjectCommands(program: Command) {
       }
 
       if (opts.deregister) {
-        if (cloud) {
-          handleError(new Error("REMOTE_COMMAND_UNSUPPORTED: projects --deregister has no safe /v1 equivalent; local SQLite fallback is disabled"));
-        }
-        const project = resolveExplicitProject(opts.deregister);
-        const counts = countProjectTasks(project.id);
+        const project = cloud ? await cloudResolveProject(cloud, opts.deregister) : resolveExplicitProject(opts.deregister);
+        const counts = cloud
+          ? await countCloudProjectTasks(cloud, project.id)
+          : countProjectTasks(project.id);
 
         if (opts.pathPrefix && !pathIsWithinPrefix(project.path, opts.pathPrefix)) {
           handleError(new Error(`Refusing to deregister ${project.name}: path ${project.path} is not within ${opts.pathPrefix}`));
@@ -799,7 +806,8 @@ export function registerProjectCommands(program: Command) {
         };
 
         if (!opts.dryRun) {
-          deleteProject(project.id);
+          const deleted = cloud ? await cloudDeleteProject(cloud, project.id) : deleteProject(project.id);
+          if (!deleted) handleError(new Error(`Project not found: "${opts.deregister}"`));
         }
 
         if (globalOpts.json) {

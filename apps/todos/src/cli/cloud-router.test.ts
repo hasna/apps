@@ -29,6 +29,7 @@ import {
   cloudTaskStats,
   cloudRecentActivity,
   cloudListProjects,
+  cloudDeleteProject,
   cloudListTaskLists,
   cloudNextTask,
   cloudAllDependencies,
@@ -971,6 +972,18 @@ describe("cloud read/analytics routing reads the shared cloud dataset", () => {
 });
 
 describe("cloud task-list, filter, and force-unlock parity", () => {
+  test("project delete -> DELETE /v1/projects/:id and preserves 404 as not found", async () => {
+    const calls = installFetch((call) => call.url.endsWith("/projects/missing")
+      ? { status: 404, body: { error: "not found" } }
+      : { body: { deleted: true } });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudDeleteProject(client, "project/with spaces")).resolves.toBe(true);
+    await expect(cloudDeleteProject(client, "missing")).resolves.toBe(false);
+    expect(calls[0]!.method).toBe("DELETE");
+    expect(calls[0]!.url).toBe("https://todos.example.com/v1/projects/project%2Fwith%20spaces");
+  });
+
   test("project resolution preserves exact UUIDs and resolves unique prefixes, names, slugs, and paths", async () => {
     installFetch(() => ({
       body: {

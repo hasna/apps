@@ -231,7 +231,11 @@ function commandSupportsRemote(invocation: ParsedInvocation): boolean {
     case "doctor":
       return positionalArgs(args)[0] !== "routing" && !hasOption(args, "--apply") && !hasOption(args, "--fix");
     case "projects":
-      return !hasOption(args, "--deregister") && !hasOption(args, "--path-prefix") && !hasOption(args, "--dry-run");
+      // Deregistration has a guarded remote implementation (remote task check,
+      // optional path-prefix/dry-run, then DELETE /v1/projects/:id). The latter
+      // two flags remain local-only for every other projects action.
+      return hasOption(args, "--deregister") ||
+        (!hasOption(args, "--path-prefix") && !hasOption(args, "--dry-run"));
     case "plans":
       return !hasOption(args, "--artifact") && !hasOption(args, "--write-artifacts");
     case "list":
