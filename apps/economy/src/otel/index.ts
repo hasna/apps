@@ -14,9 +14,17 @@ function resolvePort(argv: string[]): number {
 
 const args = process.argv.slice(2)
 if (args.includes('--help') || args.includes('-h')) {
-  console.log(`Usage: economy-otel [--port 4318]
+  console.log(`Usage: economy-otel [options]
 
 OTLP/HTTP metrics sidecar — ingests *.cost.* / *.token.* metrics into economy.db
+
+Options:
+  -p, --port <port>  Port to bind (default: ECONOMY_OTEL_PORT or 4318)
+  -h, --help         display help for command
+
+Environment:
+  ECONOMY_OTEL_PORT  Override the default port (4318)
+  ECONOMY_OTEL_BIND  Bind address (default: 127.0.0.1)
 
 Endpoints:
   POST /v1/metrics     OTLP JSON metrics

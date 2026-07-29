@@ -27,6 +27,7 @@
   },
   "files": [
     "dist",
+    "docs",
     "dashboard/dist",
     "LICENSE",
     "README.md",
