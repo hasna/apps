@@ -763,6 +763,15 @@ export const openApiSpec: Record<string, unknown> = {
             }
           },
           {
+            "name": "since",
+            "in": "query",
+            "description": "ISO timestamp lower bound; takes precedence over period",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
             "name": "machine",
             "in": "query",
             "schema": {

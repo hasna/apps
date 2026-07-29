@@ -1,7 +1,7 @@
 import type { SqliteAdapter as Database } from '../db/sqlite-adapter.js'
 import {
   querySummary, querySessions, queryTopSessions,
-  queryModelBreakdown, queryProjectBreakdown, queryAgentBreakdown, queryDailyBreakdown, queryHourlyBreakdown,
+  queryModelBreakdown, queryProjectBreakdown, queryProjectBreakdownSince, queryAgentBreakdown, queryDailyBreakdown, queryHourlyBreakdown,
   queryAccountBreakdown, queryCostCenterBreakdown,
   getBudgetStatuses, upsertBudget, deleteBudget,
   listProjects, upsertProject, deleteProject,
@@ -385,8 +385,9 @@ export function createHandler(db: Database, options: HandlerOptions = {}) {
     if (path === '/api/breakdown' && method === 'GET') {
       const by = url.searchParams.get('by') ?? 'model'
       const period = (url.searchParams.get('period') ?? 'all') as Period
+      const since = url.searchParams.get('since') ?? undefined
       const machine = url.searchParams.get('machine') ?? undefined
-      if (by === 'project') return ok(queryProjectBreakdown(db, period, machine))
+      if (by === 'project') return ok(since ? queryProjectBreakdownSince(db, since) : queryProjectBreakdown(db, period, machine))
       if (by === 'agent') return ok(queryAgentBreakdown(db, period, machine))
       if (by === 'account') return ok(queryAccountBreakdown(db, period, machine))
       if (by === 'cost-center') return ok(queryCostCenterBreakdown(db, period, { machine }))

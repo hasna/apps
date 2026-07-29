@@ -397,6 +397,9 @@ describe('REST API server', () => {
     const projects = (response.data as Record<string, unknown>)['data'] as Array<Record<string, unknown>>
     expect(projects[0]?.['project_path']).toBe('/proj/a')
 
+    response = await req(handler, '/api/breakdown?by=project&since=2999-01-01T00:00:00.000Z')
+    expect((response.data as Record<string, unknown>)['data']).toEqual([])
+
     response = await req(handler, '/api/breakdown?by=agent&period=all')
     expect(response.status).toBe(200)
     const agents = (response.data as Record<string, unknown>)['data'] as Array<Record<string, unknown>>

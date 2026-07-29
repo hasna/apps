@@ -3,7 +3,7 @@ import { Database as BunDatabase } from 'bun:sqlite'
 import {
   openDatabase, getDataDir, getDbPath, upsertRequest, upsertSession, rollupSession,
   querySummary, querySessions, queryTopSessions,
-  queryModelBreakdown, queryAgentBreakdown, queryProjectBreakdown, queryAccountBreakdown, queryDailyBreakdown, queryHourlyBreakdown,
+  queryModelBreakdown, queryAgentBreakdown, queryProjectBreakdown, queryProjectBreakdownSince, queryAccountBreakdown, queryDailyBreakdown, queryHourlyBreakdown,
   queryRequestsSince, getIngestState, setIngestState,
   upsertProject, getProject, listProjects, deleteProject,
   upsertBudget, listBudgets, deleteBudget, getBudgetStatuses,
@@ -764,6 +764,65 @@ describe('queryProjectBreakdown', () => {
 
     expect(row?.sessions).toBe(2)
     expect(row?.cost_usd).toBeCloseTo(5)
+  })
+
+  it('uses project name or path attribution for since-scoped sessions', () => {
+    const db = makeDb()
+    upsertSession(db, sampleSession({
+      id: 'codex-path-only',
+      agent: 'codex',
+      project_path: '/Users/hasna/Workspace/machines',
+      project_name: '',
+      total_cost_usd: 2,
+    }))
+    upsertSession(db, sampleSession({
+      id: 'codex-name-only-hasna',
+      agent: 'codex',
+      project_path: '',
+      project_name: 'hasna',
+      total_cost_usd: 3,
+    }))
+    upsertSession(db, sampleSession({
+      id: 'codex-name-only-loops',
+      agent: 'codex',
+      project_path: '',
+      project_name: 'loops',
+      total_cost_usd: 4,
+    }))
+
+    const rows = queryProjectBreakdownSince(db, '2020-01-01T00:00:00.000Z')
+    const pathOnly = rows.find(row => row.project_path === '/Users/hasna/Workspace/machines')
+
+    expect(pathOnly?.project_name).toBe('machines')
+    expect(rows.map(row => row.project_name).sort()).toEqual(['hasna', 'loops', 'machines'])
+  })
+
+  it('uses request timestamps and totals for since-scoped project breakdowns', () => {
+    const db = makeDb()
+    upsertSession(db, sampleSession({
+      id: 'old-codex-session',
+      agent: 'codex',
+      project_path: '/Users/hasna/Workspace/loops',
+      project_name: 'loops',
+      started_at: '2000-01-01T00:00:00.000Z',
+      total_cost_usd: 99,
+      total_tokens: 99,
+      request_count: 99,
+    }))
+    upsertRequest(db, sampleRequest({
+      id: 'recent-codex-request',
+      agent: 'codex',
+      session_id: 'old-codex-session',
+      cost_usd: 3,
+      timestamp: NOW,
+    }))
+
+    const row = queryProjectBreakdownSince(db, '2020-01-01T00:00:00.000Z')[0]
+
+    expect(row?.project_name).toBe('loops')
+    expect(row?.sessions).toBe(1)
+    expect(row?.requests).toBe(1)
+    expect(row?.cost_usd).toBe(3)
   })
 })
 

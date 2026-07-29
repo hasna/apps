@@ -750,9 +750,14 @@ function groupKeyForPath(projectPath: string, projectName: string): string {
   return labelForPath(projectPath, projectName).trim().toLowerCase()
 }
 
-export function queryProjectBreakdown(db: Database, period: Period = 'all', machine?: string): ProjectBreakdown[] {
-  const requestWhere = requestPeriodWhere(period)
-  const sessionWhere = sessionPeriodWhere(period)
+function queryProjectBreakdownScoped(
+  db: Database,
+  requestWhere: string,
+  sessionWhere: string,
+  requestScopeParams: Array<string | number> = [],
+  sessionScopeParams: Array<string | number> = [],
+  machine?: string,
+): ProjectBreakdown[] {
   const sessionMachineClause = machine ? ' AND (machine_id = ? OR id IN (SELECT DISTINCT session_id FROM requests WHERE machine_id = ?))' : ''
   const requestMachineClause = machine ? ' AND machine_id = ?' : ''
   const sessionMachineParams = machine ? [machine, machine] : []
@@ -792,7 +797,7 @@ export function queryProjectBreakdown(db: Database, period: Period = 'all', mach
           WHERE session_id IN (${placeholders})
             AND ${requestWhere}
             ${requestMachineClause}
-        `).get(...g.sessionIds, ...requestMachineParams) as { sessions: number; requests: number; cost_usd: number; total_tokens: number; last_active: string | null }
+        `).get(...g.sessionIds, ...requestScopeParams, ...requestMachineParams) as { sessions: number; requests: number; cost_usd: number; total_tokens: number; last_active: string | null }
       : { sessions: 0, requests: 0, cost_usd: 0, total_tokens: 0, last_active: null }
 
     const sessionOnlyStats = placeholders.length
@@ -808,7 +813,7 @@ export function queryProjectBreakdown(db: Database, period: Period = 'all', mach
             AND ${sessionWhere}
             ${sessionOnlyMachineClause}
             AND id NOT IN (SELECT DISTINCT session_id FROM requests)
-        `).get(...g.sessionIds, ...sessionOnlyMachineParams) as { sessions: number; requests: number; total_tokens: number; cost_usd: number; last_active: string | null }
+        `).get(...g.sessionIds, ...sessionScopeParams, ...sessionOnlyMachineParams) as { sessions: number; requests: number; total_tokens: number; cost_usd: number; last_active: string | null }
       : { sessions: 0, requests: 0, total_tokens: 0, cost_usd: 0, last_active: null }
 
     const totalSessions = reqStats.sessions + sessionOnlyStats.sessions
@@ -828,6 +833,17 @@ export function queryProjectBreakdown(db: Database, period: Period = 'all', mach
 
   result.sort((a, b) => b.cost_usd - a.cost_usd)
   return result
+}
+
+export function queryProjectBreakdown(db: Database, period: Period = 'all', machine?: string): ProjectBreakdown[] {
+  return queryProjectBreakdownScoped(
+    db,
+    requestPeriodWhere(period),
+    sessionPeriodWhere(period),
+    [],
+    [],
+    machine,
+  )
 }
 
 function normalizeAccountEmail(email: string | null | undefined): string {
@@ -1180,16 +1196,13 @@ export function queryCostCenterBreakdown(
 // code path can serve both period and since queries (no inline SQL in the CLI).
 
 export function queryProjectBreakdownSince(db: Database, since: string): ProjectBreakdown[] {
-  return db.prepare(`
-    SELECT project_path, project_name,
-           COUNT(*) as sessions,
-           COALESCE(SUM(total_tokens), 0) as total_tokens,
-           COALESCE(SUM(request_count), 0) as requests,
-           COALESCE(SUM(total_cost_usd), 0) as cost_usd,
-           MAX(started_at) as last_active
-    FROM sessions WHERE started_at >= ?
-    GROUP BY project_path ORDER BY cost_usd DESC
-  `).all(since) as ProjectBreakdown[]
+  return queryProjectBreakdownScoped(
+    db,
+    'timestamp >= ?',
+    'started_at >= ?',
+    [since],
+    [since],
+  )
 }
 
 export function queryAgentBreakdownSince(db: Database, since: string): AgentBreakdown[] {
