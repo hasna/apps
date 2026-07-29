@@ -1,12 +1,12 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
-import { constants, existsSync, mkdirSync, statSync } from "node:fs";
+import { constants, existsSync, mkdirSync } from "node:fs";
 import { access, rm, writeFile } from "node:fs/promises";
-import { delimiter } from "node:path";
 import { dirname, join } from "node:path";
 import { FeedbackClient } from "../client.js";
 import { startFeedbackServer } from "../server/index.js";
 import { createFeedbackStore, describeFeedbackStoreRuntime, resolveFeedbackFilePath } from "../storage.js";
+import { describeTaskSinkRuntime, findBinaryOnPath } from "../tasks.js";
 import type {
   FeedbackContext,
   FeedbackInput,
@@ -49,12 +49,33 @@ function mergeJsonObjects(first: JsonObject | undefined, second: JsonObject | un
   return { ...first, ...second };
 }
 
+export interface FeedbackApiTarget {
+  apiUrl: string;
+  token?: string;
+}
+
+/**
+ * Resolve which Open Feedback service a command talks to.
+ *
+ * `FEEDBACK_API_URL` exists so a fleet can be pointed at a hosted deployment
+ * once, in the environment, instead of every agent and human remembering to
+ * type `--api-url` on every invocation. Without it, "we run this in the cloud"
+ * silently degrades to "everyone writes to their own machine's JSONL file".
+ */
+export function resolveApiTarget(
+  options: { apiUrl?: string; token?: string },
+  env: Record<string, string | undefined> = process.env,
+): FeedbackApiTarget | null {
+  const apiUrl = options.apiUrl?.trim() || env["FEEDBACK_API_URL"]?.trim();
+  if (!apiUrl) return null;
+  const token = options.token?.trim() || env["FEEDBACK_API_TOKEN"]?.trim();
+  return token ? { apiUrl, token } : { apiUrl };
+}
+
 function maybeClient(options: { apiUrl?: string; token?: string }): FeedbackClient | null {
-  if (!options.apiUrl) return null;
-  return new FeedbackClient({
-    baseUrl: options.apiUrl,
-    token: options.token ?? process.env["FEEDBACK_API_TOKEN"],
-  });
+  const target = resolveApiTarget(options);
+  if (!target) return null;
+  return new FeedbackClient({ baseUrl: target.apiUrl, token: target.token });
 }
 
 function localStore(): FeedbackStore {
@@ -85,38 +106,35 @@ function buildContext(options: Record<string, string | string[] | undefined>): F
   return Object.values(context).some((value) => value !== undefined) ? context : undefined;
 }
 
-function findOnPath(command: string, pathValue = process.env["PATH"]): string | null {
-  for (const dir of (pathValue ?? "").split(delimiter).filter(Boolean)) {
-    const filePath = join(dir, command);
-    if (!existsSync(filePath)) continue;
-    try {
-      statSync(filePath);
-      return filePath;
-    } catch {
-      // Keep looking.
-    }
-  }
-  return null;
-}
-
 export interface FeedbackDoctorReport {
   ok: boolean;
   version: string;
   runtime: ReturnType<typeof describeFeedbackStoreRuntime>;
+  /** The wire that turns feedback into a task an executor can pick up. */
+  taskSink: ReturnType<typeof describeTaskSinkRuntime>;
+  /** Which store the CLI will actually read and write with this environment. */
+  target: "local" | "remote";
   dataFile?: string;
   dataDirWritable: boolean | null;
   dataFileReadable: boolean | null;
+  /** Configured remote service, if any. Never includes the token value. */
+  apiUrl: string | null;
   apiTokenConfigured: boolean;
   bins: Record<"feedback" | "feedback-mcp" | "feedback-serve", string | null>;
 }
 
 export async function buildDoctorReport(env: Record<string, string | undefined> = process.env): Promise<FeedbackDoctorReport> {
   const runtime = describeFeedbackStoreRuntime({ env });
+  const apiUrl = env["FEEDBACK_API_URL"]?.trim() || null;
+  // With a remote configured, every verb talks to the service. Probing and
+  // reporting a local data file the CLI will never touch made doctor gate the
+  // wrong store.
+  const target: "local" | "remote" = apiUrl ? "remote" : "local";
   const filePath = runtime.local?.dataFile ?? resolveFeedbackFilePath({ dataDir: env["FEEDBACK_DATA_DIR"] });
   let dataDirWritable: boolean | null = null;
   let dataFileReadable: boolean | null = null;
 
-  if (runtime.mode === "local") {
+  if (target === "local" && runtime.mode === "local") {
     const dataDir = dirname(filePath);
     mkdirSync(dataDir, { recursive: true });
     const tmpPath = join(dataDir, `.feedback-doctor-${process.pid}.tmp`);
@@ -140,25 +158,34 @@ export async function buildDoctorReport(env: Record<string, string | undefined> 
   }
 
   const bins = {
-    feedback: findOnPath("feedback", env["PATH"]),
-    "feedback-mcp": findOnPath("feedback-mcp", env["PATH"]),
-    "feedback-serve": findOnPath("feedback-serve", env["PATH"]),
+    feedback: findBinaryOnPath("feedback", env["PATH"]),
+    "feedback-mcp": findBinaryOnPath("feedback-mcp", env["PATH"]),
+    "feedback-serve": findBinaryOnPath("feedback-serve", env["PATH"]),
   };
-  const localStorageOk = runtime.mode !== "local" || (dataDirWritable === true && dataFileReadable === true);
+  const taskSink = describeTaskSinkRuntime({ env });
+  const localStorageOk =
+    target === "remote" || runtime.mode !== "local" || (dataDirWritable === true && dataFileReadable === true);
   return {
-    ok: runtime.ok && localStorageOk,
+    ok: runtime.ok && localStorageOk && taskSink.ok,
     version: VERSION,
     runtime,
-    dataFile: runtime.mode === "local" ? filePath : undefined,
+    taskSink,
+    target,
+    dataFile: target === "local" && runtime.mode === "local" ? filePath : undefined,
     dataDirWritable,
     dataFileReadable,
+    apiUrl,
     apiTokenConfigured: Boolean(env["FEEDBACK_API_TOKEN"]),
     bins,
   };
 }
 
 async function runDoctor(): Promise<void> {
-  printJson(await buildDoctorReport());
+  const report = await buildDoctorReport();
+  printJson(report);
+  // A health check that always exits 0 cannot gate anything. Report the
+  // verdict in the exit code as well as the payload.
+  if (!report.ok) process.exitCode = 1;
 }
 
 export async function main(argv: string[] = process.argv): Promise<void> {
@@ -179,7 +206,10 @@ export async function main(argv: string[] = process.argv): Promise<void> {
 
   program
     .command("doctor")
-    .description("Check local Open Feedback installation and storage")
+    .description("Check Open Feedback installation, storage, task sink, and remote target")
+    // Doctor's only output format is JSON. `--json` is accepted so callers
+    // following the fleet-wide convention do not get an "unknown option" error.
+    .option("--json", "Output JSON (default, accepted for convention parity)")
     .action(async () => {
       await runDoctor();
     });
@@ -234,7 +264,17 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         context: buildContext(options),
       };
       const client = maybeClient({ apiUrl: options.apiUrl as string | undefined, token: options.token as string | undefined });
-      printJson(client ? await client.submit(input) : await localStore().createFeedback(input, { source: "cli" }));
+      const item = client ? await client.submit(input) : await localStore().createFeedback(input, { source: "cli" });
+      printJson(item);
+      // An open loop must be visible at the moment it opens, not discovered
+      // later by whoever wonders why nothing happened.
+      if (item.taskError) {
+        console.error(
+          `Warning: feedback stored, but no task was created: ${item.taskError}\n` +
+            `Retry with: feedback sync-tasks`,
+        );
+        process.exitCode = 1;
+      }
     });
 
   program
@@ -293,17 +333,20 @@ export async function main(argv: string[] = process.argv): Promise<void> {
 
   program
     .command("shipped")
-    .description(
-      "Mark feedback as shipped and link it to the changelog entry that shipped it. " +
-        "Local store only for now (the remote API has no shipped endpoint yet); " +
-        "against a remote API use `status <id> shipped`, which records no changelogRef",
-    )
+    .description("Mark feedback as shipped and link it to the changelog entry that shipped it")
     .argument("<id>", "Feedback id")
     .requiredOption("--changelog-ref <ref>", "Changelog entry id or URI (feedback → changelog linkage)")
-    .action(async (id: string, options: { changelogRef: string }) => {
+    .option("--api-url <url>", "Remote Open Feedback API URL")
+    .option("--token <token>", "API bearer token")
+    .action(async (id: string, options: { changelogRef: string; apiUrl?: string; token?: string }) => {
+      const client = maybeClient(options);
+      if (client) {
+        printJson(await client.markShipped(id, options.changelogRef));
+        return;
+      }
       const store = localStore();
       if (!store.markFeedbackShipped) {
-        console.error("feedback shipped is only supported for the local store");
+        console.error("This store cannot record changelog linkage");
         process.exitCode = 1;
         return;
       }
@@ -314,6 +357,52 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         return;
       }
       printJson(item);
+    });
+
+  program
+    .command("sync-tasks")
+    .description("Create tasks for feedback that has none yet (repair path for a task sink that was down or unconfigured)")
+    .option("--limit <n>", "Maximum number of items to process")
+    .option("--retry-uncertain", "Also retry items whose previous attempt recorded no outcome (may duplicate a task)")
+    .action(async (options: { limit?: string; retryUncertain?: boolean }) => {
+      // Against a remote service this would silently sync the (usually empty)
+      // local store and report all-clear, which is worse than refusing.
+      const target = resolveApiTarget({});
+      if (target) {
+        console.error(
+          "sync-tasks operates on the local store, but FEEDBACK_API_URL points at a remote service. " +
+            "Task linkage for a hosted deployment is created server-side. " +
+            "Unset FEEDBACK_API_URL to repair a local store.",
+        );
+        process.exitCode = 1;
+        return;
+      }
+      const store = localStore();
+      if (!store.syncTasks) {
+        console.error("This store does not support task syncing");
+        process.exitCode = 1;
+        return;
+      }
+      const result = await store.syncTasks({
+        limit: options.limit ? Number.parseInt(options.limit, 10) : undefined,
+        retryUncertain: options.retryUncertain,
+      });
+      printJson(result);
+      if (!result.sinkConfigured) {
+        console.error(
+          "No task sink is configured, so no tasks were created. " +
+            "Set FEEDBACK_TASK_SINK=todos (or install the todos CLI for auto-detection).",
+        );
+        process.exitCode = 1;
+        return;
+      }
+      if (result.uncertain > 0) {
+        console.error(
+          `${result.uncertain} item(s) have an attempt with no recorded outcome and may already have a task. ` +
+            "They were NOT re-filed. Check them, then re-run with --retry-uncertain to force.",
+        );
+      }
+      if (result.failed > 0) process.exitCode = 1;
     });
 
   program

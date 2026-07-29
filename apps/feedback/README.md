@@ -118,19 +118,75 @@ feedback list --app my-app --search export --since 2026-01-01 --limit 20
 feedback show <id>
 feedback status <id> triaged
 feedback shipped <id> --changelog-ref open-todos@1.2.3
+feedback sync-tasks
 feedback stats
 feedback export --format jsonl --until 2026-12-31
 ```
 
-Use `--api-url` and `--token` to target a remote Open Feedback API instead of local JSONL storage. This is the CLI path for a shared production deployment; the CLI does not open database connections or create cloud resources itself.
+Use `--api-url` and `--token` to target a remote Open Feedback API instead of local JSONL storage, or set `FEEDBACK_API_URL` / `FEEDBACK_API_TOKEN` once so every command uses the shared deployment without retyping the flags. An explicit flag always beats the environment. The CLI does not open database connections or create cloud resources itself.
 
-`feedback shipped <id> --changelog-ref <ref>` marks feedback as shipped, records the changelog-entry linkage (`changelogRef`, `shippedAt`), and emits the `feedback.triaged` notification event with disposition `shipped`. **Local store only for now**: the remote API has no shipped endpoint yet, so the command takes no `--api-url`/`--token`. Against a remote API, `feedback status <id> shipped` moves the status (without recording a `changelogRef`); a remote shipped endpoint is a follow-up.
+`feedback shipped <id> --changelog-ref <ref>` marks feedback as shipped, records the changelog-entry linkage (`changelogRef`, `shippedAt`), and emits the `feedback.triaged` notification event with disposition `shipped`. It works against both the local store and a remote API (`--api-url`/`--token`, or `FEEDBACK_API_URL`). `feedback status <id> shipped` also moves the status but records no `changelogRef` — prefer `shipped` so the link between a report and the thing that resolved it survives.
+
+`feedback doctor` exits non-zero when it reports `ok: false`, so it can gate a health check or a loop.
+
+### Closing the loop: feedback → task → PR
+
+Feedback is only useful if something picks it up. On the create path, Open Feedback files a task in a task tracker and records the link on the feedback item as `taskRef`:
+
+```bash
+feedback submit "Export button 500s for orgs over 10k members" --app my-app --kind bug --severity high
+# -> stores the feedback AND creates a task titled
+#    "[feedback:my-app] Export button 500s for orgs over 10k members"
+```
+
+The task body carries the feedback id, the reporter context, and the commands to read the original report and close it out, so an executor picking the task up has everything it needs.
+
+This runs in-process rather than through an out-of-process event subscriber on purpose: channel configuration is machine-local state a fresh install does not inherit, so a wire that lives there is invisible when it is missing and silent when it fails.
+
+| variable | default | meaning |
+| --- | --- | --- |
+| `FEEDBACK_TASK_SINK` | `auto` | `auto` (use `todos` when its CLI is on `PATH`, otherwise do nothing), `todos`, `command`, or `none` |
+| `FEEDBACK_TASK_PROJECT` | — | project every task is filed under |
+| `FEEDBACK_TASK_PROJECT_MAP` | — | JSON `{"<appId>": "<project>"}`, per-app routing; beats `FEEDBACK_TASK_PROJECT` |
+| `FEEDBACK_TASK_PRIORITY_MAP` | severity→same name | JSON overriding the severity→priority mapping |
+| `FEEDBACK_TASK_TAGS` | — | comma-separated extra tags |
+| `FEEDBACK_TASK_BIN` | `todos` | task CLI name or path |
+| `FEEDBACK_TASK_TIMEOUT_MS` | `15000` | how long task creation may block capture before it is killed and recorded as a failure |
+| `FEEDBACK_TASK_COMMAND` | — | with `FEEDBACK_TASK_SINK=command`, the command to run; it receives `{"feedback":…,"task":…}` on stdin and must print JSON containing an `id` |
+
+`auto` is deliberately quiet: an install without a task CLI writes feedback and creates nothing, rather than failing every submit.
+
+**Capture is never held hostage by the tracker.** The report is written to storage first, and task creation runs after it with a timeout — a tracker that is down, slow, or hung costs you a task, never a report. If filing fails, the error is recorded on the item as `taskError` (truncated to the schema bound), `submit` warns and exits non-zero, and `feedback sync-tasks` retries:
+
+```bash
+feedback sync-tasks   # -> {"sinkConfigured":true,"created":2,"failed":0,"skipped":11,"uncertain":0,"remaining":0,"errors":[]}
+```
+
+`sync-tasks` distinguishes two kinds of unlinked feedback, because they are not equally safe to retry:
+
+- a recorded `taskError` means the attempt is **known** to have failed, so it is retried automatically;
+- an attempt with no recorded outcome (a crash or timeout between "task created" and "link written") is reported as **`uncertain`** and skipped, because a task may already exist and re-filing would duplicate it. Use `--retry-uncertain` to force it after checking.
+
+`--limit` reports what it did not get to as `remaining`, so a partial run never reads as a complete one.
+
+### Storage shape
+
+The JSONL file is an **append-only log** with two kinds of record:
+
+- a **full item** — the whole feedback object, written once when it is submitted (and again when the log is compacted);
+- a **linkage patch** — `{"patch":"task","id":…,"taskRef":…}`, carrying only the task fields, where `null` clears a field.
+
+Reading folds the log by id: a full record replaces, a patch **merges field by field**. Task linkage is written as a patch rather than as a fresh snapshot of the whole item, and that distinction is load-bearing: the snapshot would be taken *before* task creation, so replaying it would resurrect the pre-task status and silently erase a `shipped` (and its `changelogRef`) that landed while the task was being created.
+
+Linkage is never written by rewriting the file. Rewriting on the create path is O(n) under the data lock and, under concurrency, drops writes outright. `feedback status` and `feedback shipped` compact the log back to one full record per item.
+
+A patch is small, but an untriaged store still carries roughly one extra record per item until something compacts it, and reads scale with records rather than items. That is fine at the scale this is built for; it is worth knowing before pointing it at a very large backlog.
 
 ### Distribution events
 
 Feedback stores emit `feedback.created` and `feedback.triaged` event envelopes (distribution event catalog, contract `hasna.feedback.v1`) through `@hasna/events` on the create/triage paths. Pass `eventSink: null` to `LocalFeedbackStore` to disable emission, or provide your own `FeedbackEventSink`. The default sink respects `HASNA_EVENTS_DIR`.
 
-`feedback doctor` checks the package version, selected storage runtime, local data file path and permissions when local mode is active, token configuration, cloud configuration presence, and whether the expected binaries are on `PATH`. Diagnostics only report whether sensitive settings are configured; they do not print token, DSN, ARN, or secret values.
+`feedback doctor` checks the package version, selected storage runtime, local data file path and permissions when local mode is active, the resolved task sink, the configured remote URL, token configuration, cloud configuration presence, and whether the expected binaries are on `PATH`. Diagnostics only report whether sensitive settings are configured; they do not print token, DSN, ARN, or secret values. It exits non-zero when `ok` is false.
 
 ### Terminal Slash Commands
 
@@ -163,6 +219,8 @@ Available tools:
 - `feedback_stats`
 - `export_feedback`
 - `feedback_diagnostics`
+
+Feedback submitted through the MCP server goes through the same store, so it creates a task and records `taskRef` exactly as the CLI does.
 
 ## Storage
 

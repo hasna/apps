@@ -45,6 +45,74 @@ export const feedbackInputSchema = z.object({
 
 export const feedbackStatusSchema = z.enum(feedbackStatuses);
 
+export const feedbackTaskRefSchema = z.object({
+  provider: z.string().trim().min(1).max(128),
+  taskId: z.string().trim().min(1).max(256),
+  shortId: z.string().trim().min(1).max(128).optional(),
+  project: z.string().trim().min(1).max(256).optional(),
+  createdAt: z.string().datetime(),
+});
+
+export const feedbackTaskAttemptSchema = z.object({
+  startedAt: z.string().datetime(),
+  attempts: z.number().int().min(1).max(1_000_000),
+});
+
+/**
+ * Upper bound on a stored task-creation error. Writers truncate to this; the
+ * single source of truth lives here so a writer can never produce a value its
+ * own reader rejects. It previously could: an unbounded write against a
+ * capped read made one verbose subprocess crash brick the entire store,
+ * because writes are unvalidated and every read validates.
+ */
+export const FEEDBACK_TASK_ERROR_MAX_LENGTH = 4096;
+
+export function truncateTaskError(message: string): string {
+  const trimmed = message.trim();
+  return trimmed.length > FEEDBACK_TASK_ERROR_MAX_LENGTH
+    ? `${trimmed.slice(0, FEEDBACK_TASK_ERROR_MAX_LENGTH - 1)}…`
+    : trimmed;
+}
+
+/**
+ * Read side is lenient by design: it clamps rather than rejects, so a row
+ * written by an older or buggy version stays readable instead of taking the
+ * whole file down with it.
+ */
+const clampedTaskErrorSchema = z.preprocess(
+  (value) => (typeof value === "string" ? truncateTaskError(value) : value),
+  z.string().trim().min(1).max(FEEDBACK_TASK_ERROR_MAX_LENGTH),
+);
+
+const storedTaskErrorSchema = clampedTaskErrorSchema.optional();
+
+/**
+ * A field-level patch appended to the log to record task linkage.
+ *
+ * Linkage must NOT be written as a whole-item snapshot: the snapshot is taken
+ * before task creation, and with last-record-wins folding it would resurrect
+ * the stale status — silently erasing a `shipped` (and its `changelogRef`)
+ * that landed while the task was being created. A delta touches only the
+ * fields it names. `null` means "clear this field".
+ */
+export const feedbackLinkageDeltaSchema = z.object({
+  patch: z.literal("task"),
+  id: z.string().min(1),
+  taskRef: feedbackTaskRefSchema.nullable().optional(),
+  taskError: clampedTaskErrorSchema.nullable().optional(),
+  taskAttempt: feedbackTaskAttemptSchema.nullable().optional(),
+});
+
+export type FeedbackLinkageDelta = z.infer<typeof feedbackLinkageDeltaSchema>;
+
+export function isFeedbackLinkageDelta(value: unknown): boolean {
+  return Boolean(value && typeof value === "object" && (value as { patch?: unknown }).patch === "task");
+}
+
+export function parseFeedbackLinkageDelta(input: unknown): FeedbackLinkageDelta {
+  return feedbackLinkageDeltaSchema.parse(input);
+}
+
 export const feedbackItemSchema = feedbackInputSchema.extend({
   id: z.string().min(1),
   createdAt: z.string().datetime(),
@@ -53,6 +121,9 @@ export const feedbackItemSchema = feedbackInputSchema.extend({
   source: z.enum(["api", "cli", "sdk", "mcp", "server"]),
   changelogRef: z.string().trim().min(1).max(2048).optional(),
   shippedAt: z.string().datetime().optional(),
+  taskRef: feedbackTaskRefSchema.optional(),
+  taskError: storedTaskErrorSchema,
+  taskAttempt: feedbackTaskAttemptSchema.optional(),
 });
 
 const sensitiveKeyPattern = /(?:api[_-]?key|authorization|cookie|password|secret|token|refresh[_-]?token|access[_-]?token|private[_-]?key)/i;

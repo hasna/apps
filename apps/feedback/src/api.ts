@@ -1,4 +1,4 @@
-import { createFeedbackStore } from "./storage.js";
+import { createFeedbackStore, FeedbackStoreBusyError } from "./storage.js";
 import type { FeedbackListFilter, FeedbackStatus, FeedbackStore } from "./types.js";
 import { parseFeedbackInput, parseFeedbackStatus, validationErrorMessage } from "./validation.js";
 import { VERSION } from "./version.js";
@@ -217,8 +217,27 @@ export function createFeedbackHandler(options: FeedbackApiOptions = {}): (reques
         const denied = authorize(request, "triage", auth);
         if (denied) return withCors(denied, corsOrigin);
         const id = decodeURIComponent(pathname.slice("/v1/feedback/".length));
-        const body = (await request.json()) as { status?: FeedbackStatus };
-        const item = await store.updateFeedbackStatus(id, parseFeedbackStatus(body.status));
+        const body = (await request.json()) as { status?: FeedbackStatus; changelogRef?: string };
+        const status = parseFeedbackStatus(body.status);
+
+        // `changelogRef` carries the feedback → changelog receipt. Routing it
+        // through the existing PATCH keeps the hosted path able to record what
+        // shipped a report, which `updateFeedbackStatus` alone cannot.
+        if (body.changelogRef !== undefined) {
+          if (status !== "shipped") {
+            return withCors(errorResponse(400, "changelogRef is only valid with status \"shipped\""), corsOrigin);
+          }
+          if (!store.markFeedbackShipped) {
+            return withCors(errorResponse(501, "This store cannot record changelog linkage"), corsOrigin);
+          }
+          if (!body.changelogRef.trim()) {
+            return withCors(errorResponse(400, "changelogRef must not be empty"), corsOrigin);
+          }
+          const shipped = await store.markFeedbackShipped(id, body.changelogRef);
+          return withCors(shipped ? jsonResponse(shipped) : errorResponse(404, "Feedback not found"), corsOrigin);
+        }
+
+        const item = await store.updateFeedbackStatus(id, status);
         return withCors(item ? jsonResponse(item) : errorResponse(404, "Feedback not found"), corsOrigin);
       }
 
@@ -236,6 +255,12 @@ export function createFeedbackHandler(options: FeedbackApiOptions = {}): (reques
 
       return withCors(errorResponse(404, "Not found"), corsOrigin);
     } catch (error) {
+      // Contention is a server-side, retryable condition — not a bad request.
+      if (error instanceof FeedbackStoreBusyError) {
+        const response = errorResponse(503, "Feedback store is busy, retry shortly");
+        response.headers.set("retry-after", "1");
+        return withCors(response, corsOrigin);
+      }
       return withCors(errorResponse(400, validationErrorMessage(error)), corsOrigin);
     }
   };
