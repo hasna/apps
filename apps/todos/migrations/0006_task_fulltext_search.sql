@@ -2,10 +2,10 @@
 --
 -- ROOT CAUSE this fixes: `searchTasks` (src/lib/search.ts) queries the local
 -- bun:sqlite FTS5 index unconditionally. On a Postgres self-hosted/cloud
--- deployment the shared task rows live in `todos_sync_records`, not in the local
+-- deployment the shared task rows live in `todos_records`, not in the local
 -- SQLite file, so search returned EMPTY. Cloud search must run against Postgres.
 --
--- This migration gives `todos_sync_records` a weighted tsvector for ranked
+-- This migration gives `todos_records` a weighted tsvector for ranked
 -- full-text search plus a pg_trgm trigram index for typo/fuzzy matching, both
 -- diacritics-insensitive via unaccent. The Postgres adapter's buildTaskFilterSql
 -- emits a `task_search_tsv @@ websearch_to_tsquery(...)` predicate (with a
@@ -31,7 +31,7 @@ CREATE OR REPLACE FUNCTION todos_immutable_unaccent(text)
 -- jsonb array in the payload; translate() strips the JSON punctuation to a
 -- space-separated token list without a non-immutable subquery. 'simple' keeps
 -- the config language-neutral; unaccent folds diacritics.
-ALTER TABLE todos_sync_records
+ALTER TABLE todos_records
   ADD COLUMN IF NOT EXISTS task_search_tsv tsvector
   GENERATED ALWAYS AS (
     setweight(to_tsvector('simple', todos_immutable_unaccent(COALESCE(payload->>'title', ''))), 'A')
@@ -40,13 +40,13 @@ ALTER TABLE todos_sync_records
   ) STORED;
 
 -- Ranked full-text lookups (websearch_to_tsquery @@ task_search_tsv).
-CREATE INDEX IF NOT EXISTS todos_sync_records_task_search_tsv_idx
-  ON todos_sync_records USING gin (task_search_tsv)
+CREATE INDEX IF NOT EXISTS todos_records_task_search_tsv_idx
+  ON todos_records USING gin (task_search_tsv)
   WHERE object_type = 'tasks' AND deleted_at IS NULL;
 
 -- Typo/fuzzy fallback: trigram similarity over the unaccented title+description.
-CREATE INDEX IF NOT EXISTS todos_sync_records_task_search_trgm_idx
-  ON todos_sync_records USING gin (
+CREATE INDEX IF NOT EXISTS todos_records_task_search_trgm_idx
+  ON todos_records USING gin (
     todos_immutable_unaccent(COALESCE(payload->>'title', '') || ' ' || COALESCE(payload->>'description', '')) gin_trgm_ops
   )
   WHERE object_type = 'tasks' AND deleted_at IS NULL;

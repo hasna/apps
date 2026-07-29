@@ -3,7 +3,7 @@
  *
  * This is the half of the fix that a SQLite-only test cannot prove. The live
  * authority is Postgres, and Postgres mode is NOT relational: every entity is a
- * jsonb payload in one `todos_sync_records` table with NO foreign keys, so the
+ * jsonb payload in one `todos_records` table with NO foreign keys, so the
  * orphan classes SQLite forbids structurally are exactly the ones that accumulate
  * in production. A check implemented for one engine only reports healthy on the
  * other, and here the engine it would report healthy on is the one that actually
@@ -18,7 +18,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import { INTEGRITY_CONDITIONS } from "../lib/integrity.js";
 import { createTodosCloudQueryClient, type TodosCloudQueryClient } from "./cloud-client.js";
 import { createPostgresTodosStorageAdapter } from "./postgres-adapter.js";
-import { postgresTodosSyncSchemaSql } from "./postgres-sync.js";
+import { postgresTodosSchemaSql } from "./postgres-store.js";
 import type { TodosStorageAdapter } from "./interfaces.js";
 
 const PG_URL = process.env["TODOS_TEST_PG_URL"];
@@ -41,7 +41,7 @@ describe.skipIf(!PG_URL)("postgres referential-integrity report", () => {
     deleted = false,
   ): Promise<void> => {
     await client.query(
-      `INSERT INTO todos_sync_records (service, object_type, object_id, payload, updated_at, deleted_at)
+      `INSERT INTO todos_records (service, object_type, object_id, payload, updated_at, deleted_at)
        VALUES ($1, $2, $3, $4::jsonb, now(), ${deleted ? "now()" : "NULL"})
        ON CONFLICT (service, object_type, object_id)
          DO UPDATE SET payload = EXCLUDED.payload, deleted_at = EXCLUDED.deleted_at`,
@@ -68,18 +68,18 @@ describe.skipIf(!PG_URL)("postgres referential-integrity report", () => {
 
   beforeAll(async () => {
     client = createTodosCloudQueryClient(PG_URL!);
-    for (const sql of postgresTodosSyncSchemaSql()) await client.query(sql);
+    for (const sql of postgresTodosSchemaSql()) await client.query(sql);
     store = createPostgresTodosStorageAdapter({ client, service: SERVICE });
   });
 
   afterAll(async () => {
     if (!PG_URL) return;
-    await client.query("DELETE FROM todos_sync_records WHERE service = $1", [SERVICE]);
+    await client.query("DELETE FROM todos_records WHERE service = $1", [SERVICE]);
     await client.close();
   });
 
   beforeEach(async () => {
-    await client.query("DELETE FROM todos_sync_records WHERE service = $1", [SERVICE]);
+    await client.query("DELETE FROM todos_records WHERE service = $1", [SERVICE]);
   });
 
   test("implements the integrity store (the Postgres half of the storage duality gate)", () => {
@@ -156,17 +156,17 @@ describe.skipIf(!PG_URL)("postgres referential-integrity report", () => {
   test("READ-ONLY: the report never mutates a row", async () => {
     await insertTask("f0000000-0000-4000-8000-000000000030", { status: "pending" });
     const before = await client.query<{ count: string }>(
-      "SELECT count(*)::text AS count FROM todos_sync_records WHERE service = $1", [SERVICE]);
+      "SELECT count(*)::text AS count FROM todos_records WHERE service = $1", [SERVICE]);
     const snapshot = await client.query<{ payload: unknown; updated_at: string }>(
-      "SELECT payload, updated_at FROM todos_sync_records WHERE service = $1 ORDER BY object_id", [SERVICE]);
+      "SELECT payload, updated_at FROM todos_records WHERE service = $1 ORDER BY object_id", [SERVICE]);
 
     await store.integrity!.report();
     await store.integrity!.report();
 
     const after = await client.query<{ count: string }>(
-      "SELECT count(*)::text AS count FROM todos_sync_records WHERE service = $1", [SERVICE]);
+      "SELECT count(*)::text AS count FROM todos_records WHERE service = $1", [SERVICE]);
     const afterSnapshot = await client.query<{ payload: unknown; updated_at: string }>(
-      "SELECT payload, updated_at FROM todos_sync_records WHERE service = $1 ORDER BY object_id", [SERVICE]);
+      "SELECT payload, updated_at FROM todos_records WHERE service = $1 ORDER BY object_id", [SERVICE]);
     expect(after.rows[0]!.count).toBe(before.rows[0]!.count);
     expect(JSON.stringify(afterSnapshot.rows)).toBe(JSON.stringify(snapshot.rows));
   });

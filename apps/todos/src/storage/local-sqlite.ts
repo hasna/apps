@@ -173,10 +173,10 @@ export function createLocalSqliteTodosStorageAdapter(
     kind: "sqlite",
     capabilities: {
       localPersistence: true,
-      remotePersistence: false,
+      cloudPersistence: false,
       transactions: true,
       auditLog: true,
-      sync: true,
+      snapshots: true,
     },
     tasks: {
       create: (input) => createTask(input, database()),
@@ -265,7 +265,7 @@ export function createLocalSqliteTodosStorageAdapter(
       getTaskHistory: (taskId) => getTaskHistory(taskId, database()),
       getRecentActivity: (limit) => getRecentActivity(limit, database()),
     },
-    sync: {
+    snapshots: {
       getTasksChangedSince: (since, filters) => getTasksChangedSince(since, filters, database()),
       exportSnapshot: () => exportSqliteTodosStorageSnapshot(database()),
       importSnapshot: (snapshot) => importSqliteTodosStorageSnapshot(snapshot, database()),

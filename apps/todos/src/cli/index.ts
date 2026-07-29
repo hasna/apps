@@ -1,15 +1,10 @@
 #!/usr/bin/env bun
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { getTodosMode } from "../runtime-mode.js";
 
 async function main(): Promise<void> {
-  if (process.argv.includes("--help") || process.argv.includes("-h")) {
-    console.log("Usage: todos-mcp\n\nStarts the stdio MCP server for HASNA_TODOS_MODE=local|cloud.");
-    return;
-  }
   const mode = getTodosMode();
   const runtime = mode === "cloud" ? await import("./cloud.js") : await import("./local.js");
-  await runtime.buildServer().connect(new StdioServerTransport());
+  await runtime.run(process.argv);
 }
 
 main().catch((error) => {

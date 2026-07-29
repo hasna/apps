@@ -16,10 +16,10 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createTodosCloudQueryClient, type TodosCloudQueryClient } from "./cloud-client.js";
 import { createPostgresTodosStorageAdapter } from "./postgres-adapter.js";
 import {
-  postgresTodosSyncSchemaSql,
+  postgresTodosSchemaSql,
   postgresTodosTaskShortIdIndexSql,
   postgresTodosTaskObjectIdIndexSql,
-} from "./postgres-sync.js";
+} from "./postgres-store.js";
 import type { TodosStorageAdapter } from "./interfaces.js";
 
 const PG_URL = process.env["TODOS_TEST_PG_URL"];
@@ -49,7 +49,7 @@ describe.skipIf(!PG_URL)("postgres resolveTaskRef — real en_US.utf8 collation"
     // exactly like the adapter's jsonbParam — a stringified value becomes a jsonb
     // STRING scalar and every payload->>'field' filter silently misses.
     await client.query(
-      `INSERT INTO todos_sync_records (service, object_type, object_id, payload, updated_at, deleted_at)
+      `INSERT INTO todos_records (service, object_type, object_id, payload, updated_at, deleted_at)
        VALUES ($1, 'tasks', $2, $3::jsonb, now(), $4)
        ON CONFLICT (service, object_type, object_id) DO UPDATE SET payload = EXCLUDED.payload, deleted_at = EXCLUDED.deleted_at`,
       [SERVICE, objectId, payload, (extra as { _deleted?: boolean })._deleted ? new Date().toISOString() : null],
@@ -58,10 +58,10 @@ describe.skipIf(!PG_URL)("postgres resolveTaskRef — real en_US.utf8 collation"
 
   beforeAll(async () => {
     client = createTodosCloudQueryClient(PG_URL!);
-    for (const sql of postgresTodosSyncSchemaSql()) await client.query(sql);
+    for (const sql of postgresTodosSchemaSql()) await client.query(sql);
     await client.query(postgresTodosTaskShortIdIndexSql());
     await client.query(postgresTodosTaskObjectIdIndexSql());
-    await client.query("DELETE FROM todos_sync_records WHERE service = $1", [SERVICE]);
+    await client.query("DELETE FROM todos_records WHERE service = $1", [SERVICE]);
     store = createPostgresTodosStorageAdapter({ client, service: SERVICE });
 
     // Prefix ending in '9' — the exact case the naive locale range dropped.
@@ -81,7 +81,7 @@ describe.skipIf(!PG_URL)("postgres resolveTaskRef — real en_US.utf8 collation"
     // handful of rows Postgres correctly chooses a seq scan, which made the plan
     // assertion flap. 'b'-prefixed ids/short_ids never collide with any test ref.
     await client.query(
-      `INSERT INTO todos_sync_records (service, object_type, object_id, payload, updated_at)
+      `INSERT INTO todos_records (service, object_type, object_id, payload, updated_at)
        SELECT $1, 'tasks',
               'b' || lpad(gs::text, 7, '0') || '-0000-4000-8000-000000000000',
               jsonb_build_object(
@@ -93,12 +93,12 @@ describe.skipIf(!PG_URL)("postgres resolveTaskRef — real en_US.utf8 collation"
        FROM generate_series(1, 5000) AS gs`,
       [SERVICE],
     );
-    await client.query("ANALYZE todos_sync_records");
+    await client.query("ANALYZE todos_records");
   });
 
   afterAll(async () => {
     if (!PG_URL) return;
-    await client.query("DELETE FROM todos_sync_records WHERE service = $1", [SERVICE]);
+    await client.query("DELETE FROM todos_records WHERE service = $1", [SERVICE]);
     await client.close();
   });
 
@@ -150,7 +150,7 @@ describe.skipIf(!PG_URL)("postgres resolveTaskRef — real en_US.utf8 collation"
 
   test("the id-prefix range uses the COLLATE \"C\" index (stays bounded)", async () => {
     const plan = await client.query<{ "QUERY PLAN": string }>(
-      `EXPLAIN SELECT payload FROM todos_sync_records
+      `EXPLAIN SELECT payload FROM todos_records
         WHERE service = $1 AND object_type = 'tasks' AND deleted_at IS NULL
           AND object_id COLLATE "C" >= $2 AND object_id COLLATE "C" < $3
         LIMIT 2`,

@@ -53,11 +53,10 @@ import type {
 } from "./interfaces.js";
 import {
   DEFAULT_TODOS_POSTGRES_CURSOR_TABLE,
-  DEFAULT_TODOS_POSTGRES_SYNC_TABLE,
-  postgresTodosSyncSchemaSql,
+  DEFAULT_TODOS_POSTGRES_RECORD_TABLE,
   type TodosPostgresQueryClient,
-  type TodosPostgresSyncRecordType,
-} from "./postgres-sync.js";
+  type TodosPostgresSnapshotRecordType,
+} from "./postgres-store.js";
 import {
   buildIntegrityReport,
   buildPostgresIntegritySql,
@@ -76,7 +75,7 @@ import {
   validateSnapshotRoutingRecords,
 } from "../lib/slugs.js";
 
-type RemoteObjectType = TodosPostgresSyncRecordType | "comments" | "dependencies" | "verifications" | "commits" | "refs" | "template_tasks";
+type StoredObjectType = TodosPostgresSnapshotRecordType | "comments" | "dependencies" | "verifications" | "commits" | "refs" | "template_tasks";
 
 export interface CreatePostgresTodosStorageAdapterOptions {
   client: TodosPostgresQueryClient;
@@ -86,7 +85,7 @@ export interface CreatePostgresTodosStorageAdapterOptions {
   cursorTableName?: string;
 }
 
-interface RemoteRecordRow {
+interface StoredRecordRow {
   object_type: string;
   object_id: string;
   payload: unknown;
@@ -96,13 +95,13 @@ interface RemoteRecordRow {
   version?: number | null;
 }
 
-interface RemoteRecord<T> {
+interface StoredRecord<T> {
   objectId: string;
   payload: T;
   updatedAt: string;
 }
 
-interface RemoteRecordClock {
+interface StoredRecordClock {
   updatedAt: string;
   deletedAt: string | null;
 }
@@ -115,10 +114,10 @@ export function createPostgresTodosStorageAdapter(
     kind: "postgres",
     capabilities: {
       localPersistence: false,
-      remotePersistence: true,
+      cloudPersistence: true,
       transactions: false,
       auditLog: true,
-      sync: true,
+      snapshots: true,
     },
     tasks: {
       create: (input, context) => createTask(input, store, context),
@@ -245,7 +244,7 @@ export function createPostgresTodosStorageAdapter(
         .sort((a, b) => b.created_at.localeCompare(a.created_at))
         .slice(0, limit),
     },
-    sync: {
+    snapshots: {
       getTasksChangedSince: (since, filters) => getChangedSince(since, filters, store),
       exportSnapshot: () => exportSnapshot(store),
       importSnapshot: (snapshot, context) => importSnapshot(snapshot, store, context),
@@ -263,12 +262,12 @@ class PostgresJsonRecordStore {
   private readonly sourceMachineId?: string;
   private readonly tableName: string;
   private readonly cursorTableName: string;
-  private schemaReady: Promise<void> | null = null;
+  private schemaChecked: Promise<void> | null = null;
 
   constructor(private readonly options: CreatePostgresTodosStorageAdapterOptions) {
     this.service = options.service ?? "todos";
     this.sourceMachineId = options.sourceMachineId;
-    this.tableName = options.tableName ?? DEFAULT_TODOS_POSTGRES_SYNC_TABLE;
+    this.tableName = options.tableName ?? DEFAULT_TODOS_POSTGRES_RECORD_TABLE;
     this.cursorTableName = options.cursorTableName ?? DEFAULT_TODOS_POSTGRES_CURSOR_TABLE;
   }
 
@@ -276,18 +275,16 @@ class PostgresJsonRecordStore {
     return context?.requestId ?? this.sourceMachineId ?? null;
   }
 
-  async ensureSchema(): Promise<void> {
-    this.schemaReady ??= (async () => {
-      for (const sql of postgresTodosSyncSchemaSql(this.tableName, this.cursorTableName)) {
-        await this.options.client.query(sql);
-      }
-    })();
-    await this.schemaReady;
+  async assertSchema(): Promise<void> {
+    this.schemaChecked ??= this.options.client
+      .query(`SELECT 1 FROM ${this.tableName} LIMIT 0`)
+      .then(() => undefined);
+    await this.schemaChecked;
   }
 
-  async get<T>(type: RemoteObjectType, id: string): Promise<T | null> {
-    await this.ensureSchema();
-    const result = await this.options.client.query<RemoteRecordRow>(
+  async get<T>(type: StoredObjectType, id: string): Promise<T | null> {
+    await this.assertSchema();
+    const result = await this.options.client.query<StoredRecordRow>(
       `SELECT object_type, object_id, payload, updated_at
        FROM ${this.tableName}
        WHERE service = $1 AND object_type = $2 AND object_id = $3 AND deleted_at IS NULL
@@ -297,12 +294,12 @@ class PostgresJsonRecordStore {
     return result.rows[0] ? payloadRecord<T>(result.rows[0].payload) : null;
   }
 
-  async list<T>(type: RemoteObjectType): Promise<T[]> {
+  async list<T>(type: StoredObjectType): Promise<T[]> {
     return (await this.listRecords<T>(type)).map((record) => record.payload);
   }
 
   async listComments(taskId: string, options: TodosCommentListOptions = {}): Promise<TaskComment[]> {
-    await this.ensureSchema();
+    await this.assertSchema();
     const limit = options.limit ?? 100;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_001) {
       throw new Error("Postgres comment limit must be an integer between 1 and 1001");
@@ -326,9 +323,9 @@ class PostgresJsonRecordStore {
     return result.rows.map((row) => payloadRecord<TaskComment>(row.payload)).reverse();
   }
 
-  async listRecords<T>(type: RemoteObjectType): Promise<RemoteRecord<T>[]> {
-    await this.ensureSchema();
-    const result = await this.options.client.query<RemoteRecordRow>(
+  async listRecords<T>(type: StoredObjectType): Promise<StoredRecord<T>[]> {
+    await this.assertSchema();
+    const result = await this.options.client.query<StoredRecordRow>(
       `SELECT object_type, object_id, payload, updated_at
        FROM ${this.tableName}
        WHERE service = $1 AND object_type = $2 AND deleted_at IS NULL
@@ -395,7 +392,7 @@ class PostgresJsonRecordStore {
     if (rawQuery && rawQuery !== "*") {
       queryRef = p(rawQuery);
       // Weighted full-text match, diacritics folded via the immutable unaccent
-      // wrapper installed by migrations/0006 (mirrored in postgresTodosSyncSchemaSql).
+      // wrapper installed by migrations/0006 (mirrored in schema bootstrap SQL).
       // websearch_to_tsquery gives AND-by-default, quoted phrases, and tolerates
       // punctuation instead of rejecting it.
       const clauses = [`task_search_tsv @@ websearch_to_tsquery('simple', todos_immutable_unaccent(${queryRef}))`];
@@ -414,7 +411,7 @@ class PostgresJsonRecordStore {
   }
 
   async listTasks(filter: TaskFilter): Promise<Task[]> {
-    await this.ensureSchema();
+    await this.assertSchema();
     const { where, params, queryRef } = this.buildTaskFilterSql(filter);
     // With a search query, rank by full-text relevance first (parity with the
     // SQLite bm25() ordering), then fall back to the standard priority/recency
@@ -436,7 +433,7 @@ class PostgresJsonRecordStore {
   }
 
   async getTaskByFingerprint(fingerprint: string): Promise<Task | null> {
-    await this.ensureSchema();
+    await this.assertSchema();
     // Dedupe key lives in the task payload metadata. Exclude tombstoned rows so a
     // deleted task never masks a fresh upsert. LIMIT 1 — the fingerprint is unique
     // per the local upsert contract; the oldest live match wins deterministically.
@@ -461,7 +458,7 @@ class PostgresJsonRecordStore {
    * expand a short reference.
    */
   async resolveTaskRef(ref: string): Promise<Task | null> {
-    await this.ensureSchema();
+    await this.assertSchema();
     // Case-insensitive, matching the CLI's historical resolution: task ids/object_ids
     // are stored lower-case, short_ids upper-case. Normalizing to lower-case lets a
     // lower-cased id prefix and an upper-cased short_id both resolve.
@@ -518,7 +515,7 @@ class PostgresJsonRecordStore {
   }
 
   async countTasks(filter: TaskFilter): Promise<number> {
-    await this.ensureSchema();
+    await this.assertSchema();
     const { where, params } = this.buildTaskFilterSql(filter);
     const sql = `/* todos:count-tasks */ SELECT COUNT(*)::int AS count FROM ${this.tableName} WHERE ${where}`;
     const result = await this.options.client.query<{ count: number | string }>(sql, params);
@@ -535,7 +532,7 @@ class PostgresJsonRecordStore {
    * Read-only by construction: COUNT queries only.
    */
   async integrityReport(): Promise<IntegrityReport> {
-    await this.ensureSchema();
+    await this.assertSchema();
     const conditions: IntegrityCondition[] = [];
     for (const spec of INTEGRITY_CONDITIONS) {
       const { sql, params } = buildPostgresIntegritySql(spec, { table: this.tableName, service: this.service });
@@ -559,8 +556,8 @@ class PostgresJsonRecordStore {
   }
 
   async listTombstones(): Promise<TodosStorageTombstone[]> {
-    await this.ensureSchema();
-    const result = await this.options.client.query<RemoteRecordRow>(
+    await this.assertSchema();
+    const result = await this.options.client.query<StoredRecordRow>(
       `SELECT object_type, object_id, payload, updated_at, deleted_at, source_machine_id, version
        FROM ${this.tableName}
        WHERE service = $1 AND deleted_at IS NOT NULL
@@ -582,7 +579,7 @@ class PostgresJsonRecordStore {
   }
 
   async upsert<T extends { id: string; updated_at?: string; created_at?: string; version?: number }>(
-    type: RemoteObjectType,
+    type: StoredObjectType,
     value: T,
     context: TodosStorageContext = {},
   ): Promise<T> {
@@ -597,7 +594,7 @@ class PostgresJsonRecordStore {
         throw new Error("Invalid task-list project scope — project_id must be null, missing, or a non-empty string");
       }
     }
-    await this.ensureSchema();
+    await this.assertSchema();
     const updatedAt = stringValue(value.updated_at) ?? stringValue(value.created_at) ?? new Date().toISOString();
     // M8: resolve conflicts by (updated_at, version) rather than wall-clock only.
     // A row with an equal timestamp but a higher version still wins, and a
@@ -671,7 +668,7 @@ class PostgresJsonRecordStore {
     tasks: TemplateTask[],
     context: TodosStorageContext = {},
   ): Promise<void> {
-    await this.ensureSchema();
+    await this.assertSchema();
     const records = [
       { object_type: "templates", object_id: template.id, payload: template, updated_at: template.created_at, version: template.version },
       ...tasks.map((task) => ({ object_type: "template_tasks", object_id: task.id, payload: task, updated_at: task.created_at, version: 1 })),
@@ -710,7 +707,7 @@ class PostgresJsonRecordStore {
 
   /** Tombstone a template and every checklist step in one atomic statement. */
   async deleteTemplateWithTasks(id: string, context: TodosStorageContext = {}): Promise<boolean> {
-    await this.ensureSchema();
+    await this.assertSchema();
     const timestamp = new Date().toISOString();
     const result = await this.options.client.query<{ object_type: string }>(
       `/* todos:delete-template-with-tasks-atomic */ WITH target AS (
@@ -735,7 +732,7 @@ class PostgresJsonRecordStore {
     agentId: string | undefined,
     options: TodosTaskCompletionOptions | undefined,
   ): Promise<Task | null> {
-    await this.ensureSchema();
+    await this.assertSchema();
     const operationTimestamp = new Date().toISOString();
     const completedAt = options?.completed_at ?? operationTimestamp;
     const evidence = options ? {
@@ -800,7 +797,7 @@ class PostgresJsonRecordStore {
     name?: string,
     context: TodosStorageContext = {},
   ): Promise<{ project: Project; task_lists_updated: number }> {
-    await this.ensureSchema();
+    await this.assertSchema();
     const normalizedSlug = slugifyRaw(newSlug);
     if (!normalizedSlug) throw new Error("Invalid slug — must be non-empty kebab-case");
     const timestamp = new Date().toISOString();
@@ -903,7 +900,7 @@ class PostgresJsonRecordStore {
     projectId: string,
     _context: TodosStorageContext = {},
   ): Promise<number | null> {
-    await this.ensureSchema();
+    await this.assertSchema();
     // M8: atomic counter increment inside the jsonb payload — replaces the
     // read-modify-write in nextTaskShortId that could hand two concurrent
     // callers the same short id.
@@ -922,8 +919,8 @@ class PostgresJsonRecordStore {
     return Number(row.counter);
   }
 
-  async delete(type: RemoteObjectType, id: string, context: TodosStorageContext = {}): Promise<boolean> {
-    await this.ensureSchema();
+  async delete(type: StoredObjectType, id: string, context: TodosStorageContext = {}): Promise<boolean> {
+    await this.assertSchema();
     const existing = await this.get<Record<string, unknown>>(type, id);
     if (!existing) return false;
     const timestamp = new Date().toISOString();
@@ -938,7 +935,7 @@ class PostgresJsonRecordStore {
   }
 
   async deletePlan(id: string, context: TodosStorageContext = {}): Promise<boolean> {
-    await this.ensureSchema();
+    await this.assertSchema();
     const timestamp = new Date().toISOString();
     const result = await this.options.client.query<{ found: boolean; tasks_updated: number | string }>(
       `/* todos:delete-plan-atomic */ WITH target AS (
@@ -978,7 +975,7 @@ class PostgresJsonRecordStore {
 
   async tombstone(
     tombstone: {
-      object_type: RemoteObjectType;
+      object_type: StoredObjectType;
       object_id: string;
       deleted_at: string;
       updated_at?: string;
@@ -988,7 +985,7 @@ class PostgresJsonRecordStore {
     },
     context: TodosStorageContext = {},
   ): Promise<boolean> {
-    await this.ensureSchema();
+    await this.assertSchema();
     const deletedAt = stringValue(tombstone.deleted_at) ?? new Date().toISOString();
     const updatedAt = stringValue(tombstone.updated_at) ?? deletedAt;
     const existing = await this.clock(tombstone.object_type, tombstone.object_id);
@@ -1019,9 +1016,9 @@ class PostgresJsonRecordStore {
     return true;
   }
 
-  async clock(type: RemoteObjectType, id: string): Promise<RemoteRecordClock | null> {
-    await this.ensureSchema();
-    const result = await this.options.client.query<RemoteRecordRow>(
+  async clock(type: StoredObjectType, id: string): Promise<StoredRecordClock | null> {
+    await this.assertSchema();
+    const result = await this.options.client.query<StoredRecordRow>(
       `SELECT object_type, object_id, updated_at, deleted_at
        FROM ${this.tableName}
        WHERE service = $1 AND object_type = $2 AND object_id = $3
@@ -1037,7 +1034,7 @@ class PostgresJsonRecordStore {
   }
 
   async getCursor(name: string): Promise<string | null> {
-    await this.ensureSchema();
+    await this.assertSchema();
     const result = await this.options.client.query<{ value: string }>(
       `SELECT value FROM ${this.cursorTableName} WHERE service = $1 AND cursor_name = $2`,
       [this.service, name],
@@ -1046,7 +1043,7 @@ class PostgresJsonRecordStore {
   }
 
   async setCursor(name: string, value: string): Promise<void> {
-    await this.ensureSchema();
+    await this.assertSchema();
     await this.options.client.query(
       `INSERT INTO ${this.cursorTableName} (service, cursor_name, value, updated_at)
        VALUES ($1, $2, $3, now())
@@ -1304,10 +1301,7 @@ async function removeDependency(taskId: string, dependsOn: string, store: Postgr
 }
 
 /**
- * List a task's outgoing (`dependencies`) and incoming (`blocks`) dependency
- * edges. The incoming edges are ALSO emitted under the deprecated legacy wire
- * name `blocked_by` for fleet clients up to 0.13.1, which read that field for
- * the `Blocks:` rendering — see {@link TodosTaskDependencies}.
+ * List a task's outgoing (`dependencies`) and incoming (`blocks`) edges.
  */
 async function listDependencies(taskId: string, store: PostgresJsonRecordStore): Promise<TodosTaskDependencies> {
   const edges = await store.list<TaskDependency>("dependencies");
@@ -1317,7 +1311,6 @@ async function listDependencies(taskId: string, store: PostgresJsonRecordStore):
   return {
     dependencies: edges.filter((edge) => edge.task_id === taskId).map((edge) => ({ task_id: edge.task_id, depends_on: edge.depends_on })),
     blocks: incoming,
-    blocked_by: incoming,
   };
 }
 
@@ -1845,7 +1838,7 @@ async function importSnapshot(
   ));
   if (result.errors.length > 0) return result;
   const entries: ReadonlyArray<readonly [
-    RemoteObjectType,
+    StoredObjectType,
     { id: string; updated_at?: string; created_at?: string; version?: number },
   ]> = [
     ...snapshot.tasks.map((row) => ["tasks", row] as const),
@@ -1888,7 +1881,7 @@ async function importSnapshot(
   return result;
 }
 
-async function requireRecord<T>(type: RemoteObjectType, id: string, store: PostgresJsonRecordStore): Promise<T> {
+async function requireRecord<T>(type: StoredObjectType, id: string, store: PostgresJsonRecordStore): Promise<T> {
   const record = await store.get<T>(type, id);
   if (!record) throw new Error(`${type} record not found: ${id}`);
   return record;

@@ -29,7 +29,7 @@ import type { IntegrityReport } from "../lib/integrity.js";
 
 export type MaybePromise<T> = T | Promise<T>;
 
-export type TodosStorageKind = "sqlite" | "postgres" | "remote" | "memory" | (string & {});
+export type TodosStorageKind = "sqlite" | "postgres" | "memory";
 
 export interface TodosStorageContext {
   organizationId?: string;
@@ -42,10 +42,10 @@ export interface TodosStorageContext {
 
 export interface TodosStorageCapabilities {
   localPersistence: boolean;
-  remotePersistence: boolean;
+  cloudPersistence: boolean;
   transactions: boolean;
   auditLog: boolean;
-  sync: boolean;
+  snapshots: boolean;
 }
 
 export interface TodosStorageAdapter {
@@ -58,12 +58,8 @@ export interface TodosStorageAdapter {
   readonly taskLists: TodosTaskListStore;
   readonly templates: TodosTemplateStore;
   readonly audit: TodosAuditStore;
-  readonly sync: TodosSyncStore;
-  /**
-   * Task dependency edges. Optional because only the cloud/remote adapters expose
-   * it through the `/v1` API — the local CLI/MCP paths call the sqlite `db/*`
-   * helpers directly. Present on the Postgres (self_hosted) adapter.
-   */
+  readonly snapshots: TodosSnapshotStore;
+  /** Task dependency edges exposed by the Postgres service adapter. */
   readonly dependencies?: TodosDependencyStore;
   /** Task verification records (optional; present on the Postgres adapter). */
   readonly verifications?: TodosVerificationStore;
@@ -158,18 +154,10 @@ export interface TodosLockResult {
  * `dependencies` are the OUTGOING edges (this task depends on `depends_on`);
  * `blocks` are the INCOMING edges (their `task_id` depends on this task).
  *
- * `blocked_by` is a DEPRECATED wire alias that carries the SAME contents as
- * `blocks` (the incoming/dependent edges — despite what the name suggests).
- * It is kept because fleet clients up to @hasna/todos 0.13.1 read it for the
- * `Blocks:` rendering and the show/inspect hydration; renaming it server-side
- * would silently flip their display (regression 4599ef37). New consumers must
- * read `blocks`.
  */
 export interface TodosTaskDependencies {
   dependencies: TaskDependency[];
   blocks: TaskDependency[];
-  /** @deprecated legacy wire alias of {@link TodosTaskDependencies.blocks}. */
-  blocked_by: TaskDependency[];
 }
 
 export interface TodosDependencyStore {
@@ -353,7 +341,7 @@ export interface TodosAuditStore {
   ): MaybePromise<TaskHistory>;
   addComment(input: CreateCommentInput, context?: TodosStorageContext): MaybePromise<TaskComment>;
   getComments(taskId: string, context?: TodosStorageContext): MaybePromise<TaskComment[]>;
-  /** Optional bounded cursor capability; legacy implementations need not provide it. */
+  /** Optional bounded cursor capability. */
   getCommentsPage?(
     taskId: string,
     options: TodosCommentListOptions,
@@ -364,24 +352,13 @@ export interface TodosAuditStore {
 }
 
 export interface TodosCommentListOptions {
-  /** Maximum rows returned. Remote adapters must enforce a finite bound. */
+  /** Maximum rows returned. */
   limit?: number;
   /** Return comments strictly older than this stable `(created_at, id)` tuple. */
   before?: { created_at: string; id: string };
 }
 
-type TodosTypeAssertion<T extends true> = T;
-type TodosLegacyGetCommentsSignature = (
-  taskId: string,
-  context?: TodosStorageContext,
-) => MaybePromise<TaskComment[]>;
-
-/** Compile-time guard: pre-pagination audit-store implementations stay assignable. */
-export type TodosLegacyGetCommentsCompatibility = TodosTypeAssertion<
-  TodosLegacyGetCommentsSignature extends TodosAuditStore["getComments"] ? true : false
->;
-
-export interface TodosSyncStore {
+export interface TodosSnapshotStore {
   getTasksChangedSince(since: string, filters?: TodosActiveWorkFilter, context?: TodosStorageContext): MaybePromise<Task[]>;
   exportSnapshot?(context?: TodosStorageContext): MaybePromise<TodosStorageSnapshot>;
   importSnapshot?(snapshot: TodosStorageSnapshot, context?: TodosStorageContext): MaybePromise<TodosStorageImportResult>;

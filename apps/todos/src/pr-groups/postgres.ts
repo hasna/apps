@@ -1,4 +1,4 @@
-import type { TodosPostgresQueryClient } from "../storage/postgres-sync.js";
+import type { TodosPostgresQueryClient } from "../storage/postgres-store.js";
 import {
   PrGroupLedgerError,
   type PrGroupAttemptRecord,

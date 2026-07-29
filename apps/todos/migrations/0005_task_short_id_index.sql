@@ -16,10 +16,10 @@
 -- optimizations. CREATE INDEX CONCURRENTLY does not lock the shared table and
 -- must run outside a transaction. Applied automatically by `todos-serve migrate`
 -- (ensureCloudTaskShortIdIndex + ensureCloudTaskObjectIdIndex).
-CREATE INDEX CONCURRENTLY IF NOT EXISTS todos_sync_records_task_short_id_idx
-  ON todos_sync_records ((LOWER(payload->>'short_id')))
+CREATE INDEX CONCURRENTLY IF NOT EXISTS todos_records_task_short_id_idx
+  ON todos_records ((LOWER(payload->>'short_id')))
   WHERE object_type = 'tasks' AND deleted_at IS NULL;
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS todos_sync_records_task_object_id_c_idx
-  ON todos_sync_records (service, (object_id COLLATE "C"))
+CREATE INDEX CONCURRENTLY IF NOT EXISTS todos_records_task_object_id_c_idx
+  ON todos_records (service, (object_id COLLATE "C"))
   WHERE object_type = 'tasks' AND deleted_at IS NULL;

@@ -1,83 +1,52 @@
 /**
- * Cloud (A1 pure-remote) service wiring for `todos-serve`.
+ * Cloud service wiring for `todos-serve`.
  *
  * This module powers the versioned `/v1` API and its API-key auth. Per Amendment
- * A1 the serve process reads and writes the shared RDS Postgres DIRECTLY through
- * the repo-native Postgres storage adapter — there is NO local sync/cache in the
- * service. Everything here is lazy: nothing touches Postgres or crypto until the
- * first `/v1` (or `/ready`) request, so the local-first CLI/dashboard paths keep
- * ZERO cloud dependencies.
+ * The process reads and writes Postgres through the server adapter. Everything
+ * is lazy so selecting cloud mode never imports SQLite.
  */
 import { verifyApiKey, type ApiKeyVerifier } from "@hasna/contracts/auth";
 import { ApiKeyStore, type AuthQueryClient } from "@hasna/contracts/auth";
-import { createTodosCloudQueryClient, type TodosCloudQueryClient } from "../storage/cloud-client.js";
+import { createTodosPostgresClient, type TodosPostgresClient } from "../storage/postgres-client.js";
 import { createPostgresTodosStorageAdapter } from "../storage/postgres-adapter.js";
 import type { TodosStorageAdapter } from "../storage/interfaces.js";
 import { PrGroupLedger } from "../pr-groups/ledger.js";
+import { PostgresPrGroupLedgerPersistence } from "../pr-groups/postgres.js";
 import {
-  PostgresPrGroupLedgerPersistence,
-  postgresPrGroupSchemaSql,
-} from "../pr-groups/postgres.js";
-import {
-  ensurePostgresScopedSlugUniqueIndexes,
-  postgresTodosCommentCursorIndexSql,
-  postgresTodosTaskShortIdIndexSql,
-  postgresTodosTaskObjectIdIndexSql,
-  postgresTodosSyncSchemaSql,
-} from "../storage/postgres-sync.js";
-import {
-  backfillPostgresCommentRedaction,
-  type CommentRedactionBackfillOptions,
-  type CommentRedactionBackfillResult,
-} from "../storage/comment-redaction-backfill.js";
+  DEFAULT_TODOS_POSTGRES_RECORD_TABLE,
+} from "../storage/postgres-store.js";
 
 export const TODOS_APP_SLUG = "todos";
 
-/** Resolve the remote DATABASE_URL from the supported env vars (in priority order). */
+/** Resolve the one supported server database setting. */
 export function resolveCloudDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  return (
-    env.HASNA_TODOS_DATABASE_URL ||
-    env.TODOS_DATABASE_URL ||
-    env.DATABASE_URL ||
-    undefined
-  );
+  return env.HASNA_TODOS_DATABASE_URL?.trim() || undefined;
 }
 
 /** Resolve the HMAC signing secret used to verify API keys. */
 export function resolveSigningSecret(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  return (
-    env.HASNA_TODOS_API_SIGNING_KEY ||
-    env.HASNA_API_SIGNING_KEY ||
-    env.API_KEY_SIGNING_SECRET ||
-    undefined
-  );
+  return env.HASNA_TODOS_API_SIGNING_KEY?.trim() || undefined;
 }
 
-/** True when this process is configured to serve the cloud `/v1` API. */
-export function isCloudModeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(resolveCloudDatabaseUrl(env));
-}
-
-let cachedClient: TodosCloudQueryClient | null = null;
+let cachedClient: TodosPostgresClient | null = null;
 let cachedAdapter: TodosStorageAdapter | null = null;
 let cachedStore: ApiKeyStore | null = null;
 let cachedVerifier: ApiKeyVerifier | null = null;
 let cachedPrGroupLedger: PrGroupLedger | null = null;
-let schemaEnsured: Promise<void> | null = null;
 
-function getClient(): TodosCloudQueryClient {
+function getClient(): TodosPostgresClient {
   if (cachedClient) return cachedClient;
   const url = resolveCloudDatabaseUrl();
   if (!url) {
     throw new Error(
-      "Cloud /v1 requires a remote database URL (HASNA_TODOS_DATABASE_URL / TODOS_DATABASE_URL / DATABASE_URL).",
+      "Cloud /v1 requires HASNA_TODOS_DATABASE_URL.",
     );
   }
-  cachedClient = createTodosCloudQueryClient(url, { max: 6, idleTimeout: 30, connectionTimeout: 15 });
+  cachedClient = createTodosPostgresClient(url, { max: 6, idleTimeout: 30, connectionTimeout: 15 });
   return cachedClient;
 }
 
-/** The pure-remote Postgres storage adapter backing every `/v1` handler. */
+/** The Postgres storage adapter backing every cloud `/v1` handler. */
 export function getCloudStorageAdapter(): TodosStorageAdapter {
   if (cachedAdapter) return cachedAdapter;
   const client = getClient();
@@ -129,7 +98,7 @@ export function getCloudVerifier(): ApiKeyVerifier {
   const signingSecret = resolveSigningSecret();
   if (!signingSecret) {
     throw new Error(
-      "Cloud /v1 auth requires a signing secret (HASNA_TODOS_API_SIGNING_KEY / HASNA_API_SIGNING_KEY / API_KEY_SIGNING_SECRET).",
+      "Cloud /v1 auth requires HASNA_TODOS_API_SIGNING_KEY.",
     );
   }
   const store = getApiKeyStore();
@@ -141,85 +110,9 @@ export function getCloudVerifier(): ApiKeyVerifier {
   return cachedVerifier;
 }
 
-/**
- * Ensure the remote schema exists: the JSONB sync tables the Postgres adapter
- * reads/writes, plus the api-keys table. Idempotent, run once per process and by
- * the migration runner. NEVER drops or rewrites existing tables.
- */
+/** Read-only startup check. Schema changes are deployment operations. */
 export async function ensureCloudSchema(): Promise<void> {
-  if (schemaEnsured) return schemaEnsured;
-  schemaEnsured = (async () => {
-    const client = getClient();
-    for (const sql of postgresTodosSyncSchemaSql()) {
-      await client.query(sql);
-    }
-    for (const sql of postgresPrGroupSchemaSql()) {
-      await client.query(sql);
-    }
-    await getApiKeyStore().ensureSchema();
-  })();
-  return schemaEnsured;
-}
-
-/**
- * Prebuild the task-comment cursor index without blocking writes. This is a
- * deployment migration, not request-path schema work; PostgreSQL requires
- * `CREATE INDEX CONCURRENTLY` to execute outside an explicit transaction.
- */
-export async function ensureCloudCommentCursorIndex(): Promise<void> {
-  await getClient().query(postgresTodosCommentCursorIndexSql());
-}
-
-/**
- * Optional latency index for case-insensitive short_id resolution. CONCURRENTLY,
- * outside a transaction — a deployment migration, not request-path schema work.
- */
-export async function ensureCloudTaskShortIdIndex(): Promise<void> {
-  await getClient().query(postgresTodosTaskShortIdIndexSql());
-}
-
-/**
- * Optional byte-order index for the id-prefix branch of short-reference
- * resolution. CONCURRENTLY, outside a transaction — a deployment migration.
- */
-export async function ensureCloudTaskObjectIdIndex(): Promise<void> {
-  await getClient().query(postgresTodosTaskObjectIdIndexSql());
-}
-
-/** Audit duplicates, then establish project/task-list slug invariants concurrently. */
-export async function ensureCloudScopedSlugUniqueIndexes(): Promise<void> {
-  await ensurePostgresScopedSlugUniqueIndexes(getClient());
-}
-
-/**
- * Repair legacy double-encoded payloads. Earlier writes bound `JSON.stringify(value)`
- * to a `$::jsonb` param, which Bun.SQL stores as a jsonb STRING scalar rather than
- * an object — so every server-side `payload->>'field'` filter (and jsonb_set for the
- * short-id counter) silently failed. This converts those rows back to real jsonb
- * objects. Idempotent: only touches rows where `jsonb_typeof(payload) = 'string'`,
- * so it is safe to run repeatedly and a no-op once migrated. Returns the row count
- * that was normalized.
- */
-export async function normalizeCloudPayloads(): Promise<number> {
-  const client = getClient();
-  const res = await client.query<{ id: string }>(
-    `UPDATE todos_sync_records
-       SET payload = (payload #>> '{}')::jsonb
-     WHERE jsonb_typeof(payload) = 'string'
-     RETURNING object_id AS id`,
-  );
-  return res.rows.length;
-}
-
-/**
- * Preview or explicitly apply the historical comment redaction backfill using
- * the service's existing Postgres pool. The underlying operation defaults to a
- * dry run and independently enforces its apply confirmation gate.
- */
-export function backfillCloudCommentRedaction(
-  options: CommentRedactionBackfillOptions = {},
-): Promise<CommentRedactionBackfillResult> {
-  return backfillPostgresCommentRedaction(getClient(), { ...options, service: TODOS_APP_SLUG });
+  await getClient().query(`SELECT 1 FROM ${DEFAULT_TODOS_POSTGRES_RECORD_TABLE} LIMIT 0`);
 }
 
 /** Cheap readiness probe: round-trips a trivial query to RDS. */
@@ -237,5 +130,4 @@ export async function closeCloud(): Promise<void> {
   cachedStore = null;
   cachedVerifier = null;
   cachedPrGroupLedger = null;
-  schemaEnsured = null;
 }

@@ -15,7 +15,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createTodosCloudQueryClient, type TodosCloudQueryClient } from "./cloud-client.js";
 import { createPostgresTodosStorageAdapter } from "./postgres-adapter.js";
-import { postgresTodosSyncSchemaSql } from "./postgres-sync.js";
+import { postgresTodosSchemaSql } from "./postgres-store.js";
 import type { TodosStorageAdapter } from "./interfaces.js";
 
 const PG_URL = process.env["TODOS_TEST_PG_URL"];
@@ -48,7 +48,7 @@ describe.skipIf(!PG_URL)("postgres tasks.update — re-parent semantics", () => 
       updated_at: "2026-07-20T00:00:00.000Z",
     };
     await client.query(
-      `INSERT INTO todos_sync_records (service, object_type, object_id, payload, updated_at, deleted_at)
+      `INSERT INTO todos_records (service, object_type, object_id, payload, updated_at, deleted_at)
        VALUES ($1, 'tasks', $2, $3::jsonb, now(), NULL)
        ON CONFLICT (service, object_type, object_id)
          DO UPDATE SET payload = EXCLUDED.payload, deleted_at = NULL`,
@@ -58,13 +58,13 @@ describe.skipIf(!PG_URL)("postgres tasks.update — re-parent semantics", () => 
 
   beforeAll(async () => {
     client = createTodosCloudQueryClient(PG_URL!);
-    for (const sql of postgresTodosSyncSchemaSql()) await client.query(sql);
+    for (const sql of postgresTodosSchemaSql()) await client.query(sql);
     store = createPostgresTodosStorageAdapter({ client, service: SERVICE });
   });
 
   afterAll(async () => {
     if (!PG_URL) return;
-    await client.query("DELETE FROM todos_sync_records WHERE service = $1", [SERVICE]);
+    await client.query("DELETE FROM todos_records WHERE service = $1", [SERVICE]);
     await client.close();
   });
 

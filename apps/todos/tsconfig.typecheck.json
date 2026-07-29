@@ -16,15 +16,11 @@
   },
   "include": [
     "src/index.ts",
-    "src/cli/index.tsx",
+    "src/cli/index.ts",
     "src/mcp.ts",
     "src/mcp/index.ts",
-    "src/registry.ts",
-    "src/contracts.ts",
-    "src/storage.ts",
     "src/server/index.ts",
-    "src/sdk/index.ts",
-    "src/sdk/**/*.ts",
+    "src/client.generated.ts",
     "src/test/**/*.ts"
   ]
 }

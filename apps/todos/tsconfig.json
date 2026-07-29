@@ -3,7 +3,6 @@
     "target": "ES2022",
     "module": "ES2022",
     "moduleResolution": "bundler",
-    "jsx": "react-jsx",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -22,15 +21,11 @@
   },
   "include": [
     "src/index.ts",
-    "src/cli/index.tsx",
+    "src/cli/index.ts",
     "src/mcp.ts",
     "src/mcp/index.ts",
-    "src/registry.ts",
-    "src/contracts.ts",
-    "src/storage.ts",
     "src/server/index.ts",
-    "src/sdk/index.ts",
-    "src/sdk/**/*.ts"
+    "src/client.generated.ts"
   ],
   "exclude": ["node_modules", "dist", "**/*.test.ts"]
 }

@@ -8,17 +8,17 @@
 -- The write path now binds the object directly; this migration converts existing
 -- string-encoded rows back to real jsonb objects. Idempotent: only rows whose
 -- payload is currently a jsonb string are touched.
-UPDATE todos_sync_records
+UPDATE todos_records
    SET payload = (payload #>> '{}')::jsonb
  WHERE jsonb_typeof(payload) = 'string';
 
 -- Indexes that make the pushed-down task filters cheap. Created by the schema
--- runner (postgresTodosSyncSchemaSql) as well; repeated here for transparency.
-CREATE INDEX IF NOT EXISTS todos_sync_records_task_status_idx
-  ON todos_sync_records ((payload->>'status'))
+-- runner (postgresTodosSchemaSql) as well; repeated here for transparency.
+CREATE INDEX IF NOT EXISTS todos_records_task_status_idx
+  ON todos_records ((payload->>'status'))
   WHERE object_type = 'tasks' AND deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS todos_sync_records_task_project_idx
-  ON todos_sync_records ((payload->>'project_id'))
+CREATE INDEX IF NOT EXISTS todos_records_task_project_idx
+  ON todos_records ((payload->>'project_id'))
   WHERE object_type = 'tasks' AND deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS todos_sync_records_payload_gin
-  ON todos_sync_records USING gin (payload jsonb_path_ops);
+CREATE INDEX IF NOT EXISTS todos_records_payload_gin
+  ON todos_records USING gin (payload jsonb_path_ops);

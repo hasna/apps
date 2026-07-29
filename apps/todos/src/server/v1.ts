@@ -315,7 +315,7 @@ function decodeCommentCursor(value: string): { created_at: string; id: string } 
  * single object type (e.g. just `tasks`) or a full snapshot. Non-array values for
  * a record key are treated as empty rather than throwing, keeping partial-chunk
  * ingest robust. The returned snapshot is safe to hand straight to
- * `storage.sync.importSnapshot`, which upserts every row by primary key (idempotent).
+ * `storage.snapshots.importSnapshot`, which upserts every row by primary key (idempotent).
  */
 export function normalizeImportSnapshot(raw: unknown): TodosStorageSnapshot {
   const body = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
@@ -1230,7 +1230,7 @@ export async function handleV1Request(
     // `todos:write` scope (enforced above for non-GET methods).
     if (resource === "import") {
       if (method !== "POST") return error(405, `method ${method} not allowed on /v1/import`);
-      if (typeof store.sync.importSnapshot !== "function") {
+      if (typeof store.snapshots.importSnapshot !== "function") {
         return error(501, "snapshot import is not supported by this storage backend");
       }
       const raw = await readJson<unknown>(req);
@@ -1240,7 +1240,7 @@ export async function handleV1Request(
       if (received === 0) {
         return error(400, "empty snapshot: provide at least one record array (tasks/projects/plans/...)");
       }
-      const result = await store.sync.importSnapshot(snapshot, contextFromPrincipal(principal));
+      const result = await store.snapshots.importSnapshot(snapshot, contextFromPrincipal(principal));
       return json({ result, received });
     }
 
