@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import chalk from "chalk";
+import { printLine } from "./stdout.js";
 import { mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import { spawnSync } from "child_process";
@@ -35,7 +36,7 @@ export function registerBrainsCommand(program: Command): void {
         writeFileSync(outputPath, jsonl, "utf-8");
 
         if (opts.json) {
-          console.log(JSON.stringify({ path: outputPath, count: result.count, source: result.source }));
+          printLine(JSON.stringify({ path: outputPath, count: result.count, source: result.source }));
         } else {
           console.log(chalk.green(`Gathered ${result.count} training examples`));
           console.log(chalk.dim(`  Written to: ${outputPath}`));

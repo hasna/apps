@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { printLine } from "../stdout.js";
 import chalk from "chalk";
 import { readFileSync } from "fs";
 import { closeDb } from "../../lib/db.js";
@@ -83,7 +84,7 @@ export function registerAdminCommands(program: Command): void {
         });
 
         if (opts.json) {
-          console.log(JSON.stringify(result, null, 2));
+          printLine(JSON.stringify(result, null, 2));
         } else {
           printRedactionSummary(result);
         }

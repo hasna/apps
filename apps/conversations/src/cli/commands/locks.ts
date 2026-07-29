@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { printLine } from "../stdout.js";
 import { getStore } from "../../lib/store/index.js";
 import chalk from "chalk";
 import { closeDb } from "../../lib/db.js";
@@ -74,7 +75,7 @@ export function registerLockCommands(program: Command): void {
       }
 
       if (opts.json) {
-        console.log(JSON.stringify(result, null, 2));
+        printLine(JSON.stringify(result, null, 2));
       } else if (result.acquired && result.lock) {
         console.log(chalk.green(`Lock acquired: ${resourceType}/${resourceId}`) + chalk.dim(` by ${agent} (${lockType}, expires ${result.lock.expires_at})`));
       } else {
@@ -104,7 +105,7 @@ export function registerLockCommands(program: Command): void {
       const released = await getStore().releaseLock(resourceType, resourceId, agent);
 
       if (opts.json) {
-        console.log(JSON.stringify({ released }));
+        printLine(JSON.stringify({ released }));
       } else if (released) {
         console.log(chalk.green(`Lock released: ${resourceType}/${resourceId}`));
       } else {
@@ -126,7 +127,7 @@ export function registerLockCommands(program: Command): void {
       const lock = await getStore().checkLock(resourceType, resourceId);
 
       if (opts.json) {
-        console.log(JSON.stringify(lock ? { locked: true, ...lock } : { locked: false }, null, 2));
+        printLine(JSON.stringify(lock ? { locked: true, ...lock } : { locked: false }, null, 2));
       } else if (lock) {
         console.log(chalk.yellow(`Locked: ${resourceType}/${resourceId}`) + chalk.dim(` by ${lock.agent_id} (${lock.lock_type}, expires ${lock.expires_at})`));
       } else {
@@ -155,7 +156,7 @@ export function registerLockCommands(program: Command): void {
       const page = windowItems(locksList, window);
 
       if (opts.json) {
-        console.log(JSON.stringify({
+        printLine(JSON.stringify({
           locks: page.items,
           count: page.count,
           total: page.total,
@@ -190,7 +191,7 @@ export function registerLockCommands(program: Command): void {
       const total = released_stale_agent + released_expired;
 
       if (opts.json) {
-        console.log(JSON.stringify({ released_stale_agent, released_expired, total }));
+        printLine(JSON.stringify({ released_stale_agent, released_expired, total }));
       } else {
         console.log(chalk.green(`Cleaned ${total} lock(s)`) + chalk.dim(` (${released_expired} expired, ${released_stale_agent} stale-agent)`));
       }

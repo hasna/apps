@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { printLine } from "../stdout.js";
 import { getStore } from "../../lib/store/index.js";
 import chalk from "chalk";
 import { createConversationsProjectPanel } from "../../lib/project-panel.js";
@@ -42,7 +43,7 @@ export function registerProjectCommands(program: Command): void {
       try {
         const panel = await createConversationsProjectPanel(opts.project, { limit: opts.limit });
         if (opts.json || opts.contract) {
-          console.log(JSON.stringify(panel, null, 2));
+          printLine(JSON.stringify(panel, null, 2));
         } else {
           console.log(chalk.bold(panel.title));
           if (panel.summary) console.log(`  ${panel.summary}`);
@@ -51,7 +52,7 @@ export function registerProjectCommands(program: Command): void {
         }
       } catch (e: any) {
         if (opts.json || opts.contract) {
-          console.log(JSON.stringify({ error: e.message }));
+          printLine(JSON.stringify({ error: e.message }));
         } else {
           console.error(chalk.red(e.message));
         }
@@ -104,7 +105,7 @@ export function registerProjectCommands(program: Command): void {
           tags,
         });
         if (opts.json) {
-          console.log(JSON.stringify(p, null, 2));
+          printLine(JSON.stringify(p, null, 2));
         } else {
           console.log(chalk.green(`Project "${p.name}" created`) + chalk.dim(` (id: ${p.id})`));
         }
@@ -147,7 +148,7 @@ export function registerProjectCommands(program: Command): void {
         : pageFromQuery(projects, window);
 
       if (opts.json) {
-        console.log(JSON.stringify(projects, null, 2));
+        printLine(JSON.stringify(projects, null, 2));
       } else {
         if (projects.length === 0) {
           console.log(chalk.dim("No projects found."));
@@ -183,7 +184,7 @@ export function registerProjectCommands(program: Command): void {
       }
 
       if (opts.json) {
-        console.log(JSON.stringify(p, null, 2));
+        printLine(JSON.stringify(p, null, 2));
       } else {
         console.log(chalk.bold(p.name));
         if (p.description) console.log(`  Description: ${p.description}`);
@@ -229,7 +230,7 @@ export function registerProjectCommands(program: Command): void {
         const resolvedId = isUuid ? id : ((await getStore().getProjectByName(id))?.id ?? id);
         const p = await getStore().updateProject(resolvedId, updates as any);
         if (opts.json) {
-          console.log(JSON.stringify(p, null, 2));
+          printLine(JSON.stringify(p, null, 2));
         } else {
           console.log(chalk.green(`Project "${p.name}" updated.`));
         }
@@ -255,13 +256,13 @@ export function registerProjectCommands(program: Command): void {
           throw new Error(`Project "${id}" not found.`);
         }
         if (opts.json) {
-          console.log(JSON.stringify({ id, deleted: true }));
+          printLine(JSON.stringify({ id, deleted: true }));
         } else {
           console.log(chalk.green(`Project deleted.`));
         }
       } catch (e: any) {
         if (opts.json) {
-          console.log(JSON.stringify({ id, deleted: false, error: e.message }));
+          printLine(JSON.stringify({ id, deleted: false, error: e.message }));
         } else {
           console.error(chalk.red(e.message));
         }

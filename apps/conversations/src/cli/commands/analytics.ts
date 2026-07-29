@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { printLine } from "../stdout.js";
 import { getStore } from "../../lib/store/index.js";
 import chalk from "chalk";
 import { getDbPath, closeDb } from "../../lib/db.js";
@@ -20,7 +21,7 @@ export function registerAnalyticsCommands(program: Command): void {
     .action(async (opts) => {
       const result = await getStore().buildGraph();
       if (opts.json) {
-        console.log(JSON.stringify(result, null, 2));
+        printLine(JSON.stringify(result, null, 2));
       } else {
         console.log(chalk.green(`Graph built: ${result.edges_created} created, ${result.edges_updated} updated`));
       }
@@ -34,7 +35,7 @@ export function registerAnalyticsCommands(program: Command): void {
     .action(async (opts) => {
       const stats = await getStore().getGraphStats();
       if (opts.json) {
-        console.log(JSON.stringify(stats, null, 2));
+        printLine(JSON.stringify(stats, null, 2));
       } else {
         console.log(chalk.bold(`Knowledge Graph: ${stats.total_edges} edges\n`));
         for (const [relation, count] of Object.entries(stats.by_relation)) {
@@ -52,7 +53,7 @@ export function registerAnalyticsCommands(program: Command): void {
     .action(async (name, opts) => {
       const network = await getStore().getAgentNetwork(name);
       if (opts.json) {
-        console.log(JSON.stringify(network, null, 2));
+        printLine(JSON.stringify(network, null, 2));
       } else {
         console.log(chalk.bold(`Network for ${chalk.cyan(name)}\n`));
         if (network.communicates_with.length > 0) {
@@ -87,7 +88,7 @@ export function registerAnalyticsCommands(program: Command): void {
       }
 
       if (opts.json) {
-        console.log(JSON.stringify(summary, null, 2));
+        printLine(JSON.stringify(summary, null, 2));
       } else {
         console.log(chalk.bold(`Summary: ${target}\n`));
         console.log(`  ${chalk.bold("Participants:")} ${summary.participants.join(", ")}`);
@@ -135,7 +136,7 @@ export function registerAnalyticsCommands(program: Command): void {
       }
 
       if (opts.json) {
-        console.log(JSON.stringify(topics, null, 2));
+        printLine(JSON.stringify(topics, null, 2));
       } else {
         if (topics.length === 0) {
           console.log(chalk.dim("No topics found."));
@@ -167,7 +168,7 @@ export function registerAnalyticsCommands(program: Command): void {
       });
 
       if (opts.json) {
-        console.log(JSON.stringify(sessions, null, 2));
+        printLine(JSON.stringify(sessions, null, 2));
       } else {
         if (sessions.length === 0) {
           console.log(chalk.dim("No hot conversations."));
@@ -228,7 +229,7 @@ export function registerAnalyticsCommands(program: Command): void {
       };
 
       if (opts.json) {
-        console.log(JSON.stringify(context, null, 2));
+        printLine(JSON.stringify(context, null, 2));
       } else {
         console.log(chalk.bold(`Context for ${chalk.cyan(agent)}\n`));
 
@@ -306,7 +307,7 @@ export function registerAnalyticsCommands(program: Command): void {
       const page = windowItems(sessions, window);
 
       if (opts.json) {
-        console.log(JSON.stringify(sessions, null, 2));
+        printLine(JSON.stringify(sessions, null, 2));
       } else {
         if (sessions.length === 0) {
           console.log(chalk.dim("No sessions found."));
@@ -372,7 +373,7 @@ export function registerAnalyticsCommands(program: Command): void {
       };
 
       if (opts.json) {
-        console.log(JSON.stringify(stats, null, 2));
+        printLine(JSON.stringify(stats, null, 2));
       } else {
         console.log(chalk.bold("Conversations Status"));
         if (cloud) {
@@ -453,7 +454,7 @@ export function registerAnalyticsCommands(program: Command): void {
       const allOk = checks.every((c) => c.ok);
 
       if (opts.json) {
-        console.log(JSON.stringify({ ok: allOk, checks }, null, 2));
+        printLine(JSON.stringify({ ok: allOk, checks }, null, 2));
       } else {
         console.log(chalk.bold("Conversations Doctor\n"));
         for (const check of checks) {
@@ -497,7 +498,7 @@ export function registerAnalyticsCommands(program: Command): void {
         emitCliError(error instanceof Error ? error.message : String(error), opts);
       }
       if (opts.json) {
-        console.log(JSON.stringify(reaction, null, 2));
+        printLine(JSON.stringify(reaction, null, 2));
       } else {
         console.log(chalk.green(`${emoji} reaction added to message #${id}`));
       }
@@ -516,7 +517,7 @@ export function registerAnalyticsCommands(program: Command): void {
       const agent = resolveIdentity(opts.from);
       const removed = await getStore().removeReaction(id, agent, emoji);
       if (opts.json) {
-        console.log(JSON.stringify({ removed }, null, 2));
+        printLine(JSON.stringify({ removed }, null, 2));
       } else {
         if (removed) {
           console.log(chalk.green(`${emoji} reaction removed from message #${id}`));
@@ -536,7 +537,7 @@ export function registerAnalyticsCommands(program: Command): void {
     .action(async (id, opts) => {
       const summary = await getStore().getReactionSummary(id);
       if (opts.json) {
-        console.log(JSON.stringify(summary, null, 2));
+        printLine(JSON.stringify(summary, null, 2));
       } else {
         if (summary.length === 0) {
           console.log(chalk.dim(`No reactions on message #${id}`));
