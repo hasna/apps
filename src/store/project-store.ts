@@ -200,6 +200,7 @@ export interface AssignAgentInput {
 /** Register another on-disk location for a project (on-box sub-resource). */
 export interface AddLocationInput {
   path: string;
+  machineId?: string;
   label?: string;
   kind?: string;
   isPrimary?: boolean;
@@ -495,6 +496,7 @@ class LocalProjectStore implements ProjectStore {
       const location = dbAddWorkspaceLocation({
         workspace_id: project.id,
         path: input.path,
+        machine_id: input.machineId,
         label: input.label,
         kind: input.kind,
         is_primary: input.isPrimary,

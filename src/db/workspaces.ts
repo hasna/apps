@@ -19,6 +19,8 @@ import type {
   CreateWorkspaceInput,
   EventSource,
   JsonObject,
+  Machine,
+  MachineRow,
   Recipe,
   RecipeRow,
   RecordWorkspaceEventInput,
@@ -114,6 +116,13 @@ function rowToAgent(row: AgentRow): Agent {
     kind: row.kind as Agent["kind"],
     permissions: parseJson<string[]>(row.permissions, []),
     metadata: redactProjectValue(parseJson<JsonObject>(row.metadata, {})),
+  };
+}
+
+function rowToMachine(row: MachineRow): Machine {
+  return {
+    ...row,
+    role: row.role as Machine["role"],
   };
 }
 
@@ -439,6 +448,17 @@ export function listAgents(db?: Database): Agent[] {
   return (d.query("SELECT * FROM agents ORDER BY slug ASC").all() as AgentRow[]).map(rowToAgent);
 }
 
+export function getMachine(slug: string, db?: Database): Machine | null {
+  const d = db || getDatabase();
+  const row = d.query("SELECT * FROM machines WHERE slug = ?").get(slug) as MachineRow | null;
+  return row ? rowToMachine(row) : null;
+}
+
+export function listMachines(db?: Database): Machine[] {
+  const d = db || getDatabase();
+  return (d.query("SELECT * FROM machines ORDER BY slug ASC").all() as MachineRow[]).map(rowToMachine);
+}
+
 export function mergeAgentPermissions(agentId: string, permissions: string[], db?: Database): Agent {
   const d = db || getDatabase();
   const agent = getAgent(agentId, d);
@@ -637,7 +657,27 @@ export function listTmuxProfileWindows(profileId: string, db?: Database): TmuxPr
 }
 
 function machineId(): string {
-  return process.env["HOSTNAME"] || hostname();
+  return hostname();
+}
+
+function hasOwn(metadata: JsonObject, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(metadata, key);
+}
+
+function canonicalMachineFromMetadata(metadata: JsonObject): string | null | undefined {
+  if (!hasOwn(metadata, "canonical_machine")) return undefined;
+  const value = metadata["canonical_machine"];
+  if (value === null) return null;
+  if (typeof value !== "string") {
+    throw new Error("canonical_machine metadata must be a machine slug string");
+  }
+  return value.trim() || null;
+}
+
+function withoutCanonicalMachineMetadata(metadata: JsonObject): JsonObject {
+  const copy = { ...metadata };
+  delete copy["canonical_machine"];
+  return copy;
 }
 
 function deriveWorkspacePath(input: CreateWorkspaceInput, root: Root | null, slug: string, id: string, kind: WorkspaceKind): string | null {
@@ -829,6 +869,29 @@ export function updateWorkspace(id: string, input: UpdateWorkspaceInput, db?: Da
   const recipe = input.recipe_id === undefined || input.recipe_id === null ? null : getRecipe(input.recipe_id, d);
   if (input.recipe_id && !recipe) throw new Error(`Recipe not found: ${input.recipe_id}`);
 
+  const inputMetadataMachine = input.metadata === undefined
+    ? undefined
+    : canonicalMachineFromMetadata(input.metadata);
+  const existingMetadataMachine = canonicalMachineFromMetadata(before.metadata);
+  let canonicalMachine = input.canonical_machine;
+  if (canonicalMachine === undefined && inputMetadataMachine !== undefined) {
+    canonicalMachine = inputMetadataMachine;
+  } else if (canonicalMachine === undefined && before.canonical_machine === null && existingMetadataMachine !== undefined) {
+    canonicalMachine = existingMetadataMachine;
+  }
+  if (typeof canonicalMachine === "string") {
+    canonicalMachine = canonicalMachine.trim();
+    if (!canonicalMachine) throw new Error("Canonical machine must not be empty");
+    if (!getMachine(canonicalMachine, d)) throw new Error(`Machine not found: ${canonicalMachine}`);
+  }
+
+  let metadata = input.metadata;
+  if (metadata !== undefined && inputMetadataMachine !== undefined) {
+    metadata = withoutCanonicalMachineMetadata(metadata);
+  } else if (metadata === undefined && existingMetadataMachine !== undefined) {
+    metadata = withoutCanonicalMachineMetadata(before.metadata);
+  }
+
   const updates: string[] = [];
   const params: SQLQueryBindings[] = [];
   const set = (column: string, value: SQLQueryBindings) => {
@@ -843,13 +906,14 @@ export function updateWorkspace(id: string, input: UpdateWorkspaceInput, db?: Da
   if (input.status !== undefined) set("status", input.status);
   if (input.root_id !== undefined) set("root_id", input.root_id);
   if (input.recipe_id !== undefined) set("recipe_id", input.recipe_id);
+  if (canonicalMachine !== undefined) set("canonical_machine", canonicalMachine);
   if (input.primary_path !== undefined) set("primary_path", input.primary_path ? resolve(input.primary_path) : null);
   if (input.git_remote !== undefined) set("git_remote", input.git_remote);
   if (input.s3_bucket !== undefined) set("s3_bucket", input.s3_bucket);
   if (input.s3_prefix !== undefined) set("s3_prefix", input.s3_prefix);
   if (input.tags !== undefined) set("tags", json(normalizeList(input.tags)));
   if (input.integrations !== undefined) set("integrations", json(input.integrations));
-  if (input.metadata !== undefined) set("metadata", json(input.metadata));
+  if (metadata !== undefined) set("metadata", json(metadata));
 
   if (updates.length > 0) {
     updates.push("updated_at = ?");
@@ -946,6 +1010,7 @@ export function deleteWorkspace(
 export interface AddWorkspaceLocationInput {
   workspace_id: string;
   path: string;
+  machine_id?: string;
   label?: string;
   kind?: string;
   is_primary?: boolean;
@@ -967,6 +1032,9 @@ export function addWorkspaceLocation(input: AddWorkspaceLocationInput, db?: Data
 
   const id = generateLocationId();
   const path = resolve(input.path);
+  const localMachine = machineId();
+  const machine = input.machine_id === undefined ? localMachine : input.machine_id.trim();
+  if (!machine) throw new Error("Location machine must not be empty");
   const ts = now();
   d.run(
     `INSERT INTO workspace_locations (
@@ -981,11 +1049,11 @@ export function addWorkspaceLocation(input: AddWorkspaceLocationInput, db?: Data
       id,
       input.workspace_id,
       path,
-      machineId(),
+      machine,
       input.label ?? "main",
       input.kind ?? "local",
       input.is_primary ? 1 : 0,
-      existsSync(path) ? 1 : 0,
+      machine === localMachine && existsSync(path) ? 1 : 0,
       json(input.metadata ?? {}),
       ts,
     ],
@@ -997,7 +1065,7 @@ export function addWorkspaceLocation(input: AddWorkspaceLocationInput, db?: Data
 
   const row = d
     .query("SELECT * FROM workspace_locations WHERE workspace_id = ? AND path = ? AND machine_id = ?")
-    .get(input.workspace_id, path, machineId()) as WorkspaceLocationRow | null;
+    .get(input.workspace_id, path, machine) as WorkspaceLocationRow | null;
   if (!row) throw new Error(`Workspace location was not written: ${path}`);
   const location = rowToLocation(row);
   if (input.source || input.agent_id || input.prompt || input.command) {
@@ -1415,6 +1483,7 @@ function migrateLegacyWorkdirs(db: Database): { migrated: number; skipped: numbe
     }
     const path = resolve(workdir.path);
     const machine = workdir.machine_id || machineId();
+    const existsAtCreate = machine === machineId() && existsSync(path);
     const existing = db.query(
       "SELECT id FROM workspace_locations WHERE workspace_id = ? AND path = ? AND machine_id = ?",
     ).get(mapped.workspace_id, path, machine) as { id: string } | null;
@@ -1434,7 +1503,7 @@ function migrateLegacyWorkdirs(db: Database): { migrated: number; skipped: numbe
         `UPDATE workspace_locations
          SET label = ?, kind = ?, is_primary = ?, exists_at_create = ?, metadata = ?
          WHERE id = ?`,
-        [workdir.label || "main", "local", isPrimary ? 1 : 0, existsSync(path) ? 1 : 0, metadata, existing.id],
+        [workdir.label || "main", "local", isPrimary ? 1 : 0, existsAtCreate ? 1 : 0, metadata, existing.id],
       );
       skipped++;
     } else {
@@ -1450,7 +1519,7 @@ function migrateLegacyWorkdirs(db: Database): { migrated: number; skipped: numbe
           workdir.label || "main",
           "local",
           isPrimary ? 1 : 0,
-          existsSync(path) ? 1 : 0,
+          existsAtCreate ? 1 : 0,
           metadata,
           workdir.created_at ?? now(),
         ],

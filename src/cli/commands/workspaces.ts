@@ -2242,6 +2242,7 @@ function registerProjectCommands(program: Command): void {
     .option("--clear-root", "Clear root")
     .option("--recipe <id-or-slug>", "Recipe id or slug")
     .option("--clear-recipe", "Clear recipe")
+    .option("--canonical-machine <id>", "Canonical owner machine")
     .option("--path <path>", "Primary path")
     .option("--clear-path", "Clear primary path")
     .option("--tags <tags>", "Replace tags with comma-separated tags")
@@ -2329,6 +2330,7 @@ function registerProjectCommands(program: Command): void {
           kind: parseKind(opts.kind),
           status: parseStatus(opts.status),
           ...rootPatch,
+          canonical_machine: opts.canonicalMachine,
           primary_path: opts.clearPath ? null : opts.path,
           tags: opts.tags === undefined ? undefined : splitList(opts.tags),
           git_remote: opts.clearGitRemote ? null : opts.gitRemote,
@@ -3285,6 +3287,7 @@ function registerLocationsCommand(program: Command): void {
   cmd
     .command("add <project> <path>")
     .description("Register another folder location for a project")
+    .option("--machine <id>", "Machine that hosts this location")
     .option("--label <label>", "Location label", "main")
     .option("--kind <kind>", "Location kind", "local")
     .option("--primary", "Make this the primary project path")
@@ -3297,6 +3300,7 @@ function registerLocationsCommand(program: Command): void {
         const project = await store.resolveTarget(projectIdOrSlug);
         const { project: updated, location } = await store.addLocation(project.id, {
           path,
+          machineId: opts.machine,
           label: opts.label,
           kind: opts.kind,
           isPrimary: Boolean(opts.primary),
