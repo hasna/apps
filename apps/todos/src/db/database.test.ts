@@ -125,7 +125,7 @@ describe("global database path", () => {
     }
   });
 
-  it("creates project-scoped database under the git root .hasna/todos directory", () => {
+  it("does not create a project-scoped database for non-initialization calls", () => {
     closeDatabase();
     resetDatabase();
     delete process.env["TODOS_DB_PATH"];
@@ -148,9 +148,9 @@ describe("global database path", () => {
       projectDb.close();
       resetDatabase();
 
-      expect(existsSync(join(project, ".hasna", "todos", "todos.db"))).toBe(true);
+      expect(existsSync(join(project, ".hasna", "todos", "todos.db"))).toBe(false);
       expect(existsSync(join(project, ".todos", "todos.db"))).toBe(false);
-      expect(existsSync(join(home, ".hasna", "todos", "todos.db"))).toBe(false);
+      expect(existsSync(join(home, ".hasna", "todos", "todos.db"))).toBe(true);
     } finally {
       process.chdir(originalCwd);
       if (originalHome === undefined) delete process.env["HOME"];
@@ -174,10 +174,16 @@ describe("global database path", () => {
     const projectB = join(tmp, "workspace", "project-b");
     const nestedA = join(projectA, "src");
     const nestedB = join(projectB, "src");
+    const projectDbA = join(projectA, ".hasna", "todos", "todos.db");
+    const projectDbB = join(projectB, ".hasna", "todos", "todos.db");
     mkdirSync(join(projectA, ".git"), { recursive: true });
     mkdirSync(join(projectB, ".git"), { recursive: true });
     mkdirSync(nestedA, { recursive: true });
     mkdirSync(nestedB, { recursive: true });
+    mkdirSync(join(projectA, ".hasna", "todos"), { recursive: true });
+    mkdirSync(join(projectB, ".hasna", "todos"), { recursive: true });
+    writeFileSync(projectDbA, "");
+    writeFileSync(projectDbB, "");
 
     try {
       process.env["HOME"] = home;

@@ -38,6 +38,34 @@ function findGitRoot(startDir: string): string | null {
   return null;
 }
 
+function getGlobalDbPath(): string {
+  const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
+  return join(home, ".hasna", "todos", "todos.db");
+}
+
+function hasExplicitProjectArg(args: readonly string[] = process.argv.slice(2)): boolean {
+  return args.some((arg) => arg === "--project" || arg.startsWith("--project="));
+}
+
+function getCliCommand(args: readonly string[] = process.argv.slice(2)): string | null {
+  const globalOptionsWithValues = new Set(["--project", "--agent", "--session"]);
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (globalOptionsWithValues.has(arg)) {
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("-")) continue;
+    return arg;
+  }
+  return null;
+}
+
+function canCreateScopedProjectDb(args: readonly string[] = process.argv.slice(2)): boolean {
+  return getCliCommand(args) === "project-bootstrap"
+    && !args.some((arg) => arg === "--dry-run" || arg.startsWith("--dry-run="));
+}
+
 function getDbPath(): string {
   // 1. Environment variable override (new env var takes precedence)
   if (process.env["HASNA_TODOS_DB_PATH"]) {
@@ -47,22 +75,28 @@ function getDbPath(): string {
     return process.env["TODOS_DB_PATH"];
   }
 
-  // 2. Per-project: .hasna/todos/todos.db in cwd or any parent (incl. repo root)
+  // 2. An explicit project selector is resolved against the global registry.
+  // A cwd-scoped database must not silently replace that registry, especially
+  // when a stray empty database exists at the repository root.
+  if (hasExplicitProjectArg()) return getGlobalDbPath();
+
+  // 3. Per-project: .hasna/todos/todos.db in cwd or any parent (incl. repo root)
   const cwd = process.cwd();
   const nearest = findNearestProjectDb(cwd);
   if (nearest) return nearest;
 
-  // 3. Explicit project scope (force repo root)
+  // 4. Explicit project scope may create a new scoped store only through the
+  // project initialization command. Reads and ordinary writes fall back to the
+  // global store instead of materializing an accidental shadow database.
   if (process.env["TODOS_DB_SCOPE"] === "project") {
     const gitRoot = findGitRoot(cwd);
-    if (gitRoot) {
+    if (gitRoot && canCreateScopedProjectDb()) {
       return join(gitRoot, ".hasna", "todos", "todos.db");
     }
   }
 
-  // 4. Default: ~/.hasna/todos/todos.db
-  const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
-  return join(home, ".hasna", "todos", "todos.db");
+  // 5. Default: ~/.hasna/todos/todos.db
+  return getGlobalDbPath();
 }
 
 export function getDatabasePath(): string {
