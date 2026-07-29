@@ -42,6 +42,8 @@
     "build:server": "bun build src/server/index.ts --outdir dist/server --target bun --packages external",
     "build:lib": "bun build src/index.ts --outdir dist --target bun --packages external",
     "build:dashboard": "cd dashboard && bun run build",
+    "artifact-scan": "contracts artifact-scan",
+    "prepack": "bun run artifact-scan",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:cli": "bun run src/cli/index.ts",
