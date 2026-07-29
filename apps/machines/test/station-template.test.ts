@@ -191,6 +191,37 @@ describe("drift check", () => {
     expect(item?.detail).toContain("expected 60, found 1");
   });
 
+  test("POSITIVE CONTROL: missing declared bun global is detected", () => {
+    const { root, home, effective } = buildCleanFixture();
+    const bunPackages = effective.packages.bun.filter((pkg) => pkg !== "@hasna/knowledge");
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const result = checkStationTemplate(effective, {
+      rootDir: root,
+      homeDir: home,
+      commandProbe(command, args) {
+        calls.push({ command, args });
+        if (command === "bun") {
+          return {
+            ok: true,
+            stdout: bunPackages.map((pkg, index) => `${index === bunPackages.length - 1 ? "└" : "├"}── ${pkg}@1.0.0`).join("\n"),
+          };
+        }
+        if (command === "dpkg-query") return { ok: true, stdout: "install ok installed" };
+        if (args.includes("is-active")) return { ok: true, stdout: "active\n" };
+        return { ok: true, stdout: "enabled\n" };
+      },
+    });
+
+    const bunItems = result.items.filter((item) => item.id.startsWith("package:bun:"));
+    expect(bunItems).toHaveLength(effective.packages.bun.length);
+    expect(bunItems.find((item) => item.id === "package:bun:@hasna/machines")?.status).toBe("ok");
+    expect(bunItems.find((item) => item.id === "package:bun:@hasna/knowledge")?.status).toBe("drift");
+    expect(result.verdict).toBe("drift");
+    expect(calls.filter((call) => call.command === "bun")).toEqual([
+      { command: "bun", args: ["pm", "ls", "-g"] },
+    ]);
+  });
+
   test("POSITIVE CONTROL: unit missing StartLimit/OnFailure/absolute ExecStart is flagged", () => {
     const { root, home, effective } = buildCleanFixture();
     const unitDir = join(home, ".config/systemd/user");

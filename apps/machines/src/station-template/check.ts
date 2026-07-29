@@ -4,6 +4,7 @@ import { basename, dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { getLocalMachineId } from "../db.js";
+import { parseBunGlobalList } from "../commands/reconcile.js";
 import { parseSysctlKeys } from "./loader.js";
 import type { EffectiveTemplate } from "./schema.js";
 
@@ -253,6 +254,24 @@ export function checkStationTemplate(effective: EffectiveTemplate, options: Chec
         ? { id: `package:apt:${pkg}`, kind: "package", status: "ok", detail: `${pkg} installed` }
         : { id: `package:apt:${pkg}`, kind: "package", status: "drift", detail: `${pkg} not installed` }
     );
+  }
+
+  if (effective.packages.bun.length > 0) {
+    if (!probe) {
+      for (const pkg of effective.packages.bun) {
+        items.push({ id: `package:bun:${pkg}`, kind: "package", status: "skipped", detail: "no command probe" });
+      }
+    } else {
+      const result = probe("bun", ["pm", "ls", "-g"]);
+      const installed = new Set(result.ok ? parseBunGlobalList(result.stdout).map((pkg) => pkg.name) : []);
+      for (const pkg of effective.packages.bun) {
+        items.push(
+          installed.has(pkg)
+            ? { id: `package:bun:${pkg}`, kind: "package", status: "ok", detail: `${pkg} installed` }
+            : { id: `package:bun:${pkg}`, kind: "package", status: "drift", detail: `${pkg} not installed` }
+        );
+      }
+    }
   }
 
   for (const service of effective.services) {
