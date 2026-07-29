@@ -69,6 +69,7 @@ import {
   exportSqliteTodosStorageSnapshot,
   importSqliteTodosStorageSnapshot,
 } from "./sqlite-snapshot.js";
+import { createLocalAuthorityEndpoint } from "../lib/authority-transfer.js";
 
 export interface CreateLocalSqliteTodosStorageAdapterOptions {
   db?: Database;
@@ -270,6 +271,7 @@ export function createLocalSqliteTodosStorageAdapter(
       exportSnapshot: () => exportSqliteTodosStorageSnapshot(database()),
       importSnapshot: (snapshot) => importSqliteTodosStorageSnapshot(snapshot, database()),
     },
+    transfers: createLocalAuthorityEndpoint(database()),
     integrity: {
       report: () => scanSqliteIntegrity(database()),
     },

@@ -26,6 +26,11 @@ import type {
   UpdateTaskListInput,
 } from "../types/index.js";
 import type { IntegrityReport } from "../lib/integrity.js";
+import type {
+  TodosAuthorityTransferBundle,
+  TodosTransferImportResult,
+  TodosTransferSource,
+} from "../lib/authority-transfer.js";
 
 export type MaybePromise<T> = T | Promise<T>;
 
@@ -59,6 +64,8 @@ export interface TodosStorageAdapter {
   readonly templates: TodosTemplateStore;
   readonly audit: TodosAuditStore;
   readonly sync: TodosSyncStore;
+  /** Explicit authority movement; never a read fallback or a dual writer. */
+  readonly transfers?: TodosAuthorityTransferStore;
   /**
    * Task dependency edges. Optional because only the cloud/remote adapters expose
    * it through the `/v1` API — the local CLI/MCP paths call the sqlite `db/*`
@@ -84,6 +91,12 @@ export interface TodosStorageAdapter {
    */
   readonly integrity?: TodosIntegrityStore;
   transaction?<T>(fn: (adapter: TodosStorageAdapter) => MaybePromise<T>, context?: TodosStorageContext): MaybePromise<T>;
+}
+
+export interface TodosAuthorityTransferStore {
+  readonly authority: TodosTransferSource;
+  exportBundle(): MaybePromise<TodosAuthorityTransferBundle>;
+  importBundle(bundle: TodosAuthorityTransferBundle): MaybePromise<TodosTransferImportResult>;
 }
 
 export interface TodosIntegrityStore {

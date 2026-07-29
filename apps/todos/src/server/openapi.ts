@@ -1328,6 +1328,36 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { tasks: { type: "number" }, projects: { type: "number" } } } } } } },
         },
       },
+      "/v1/transfers/export": {
+        get: {
+          operationId: "exportAuthorityTransfer",
+          summary: "Export one deterministic, checksum-protected authority transfer bundle",
+          responses: {
+            "200": { content: { "application/json": { schema: {
+              type: "object",
+              required: ["bundle"],
+              properties: { bundle: { type: "object", additionalProperties: true } },
+            } } } },
+          },
+        },
+      },
+      "/v1/transfers/import": {
+        post: {
+          operationId: "importAuthorityTransfer",
+          summary: "Validate and idempotently import an authority transfer bundle",
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { type: "object", additionalProperties: true } } },
+          },
+          responses: {
+            "200": { content: { "application/json": { schema: {
+              type: "object",
+              required: ["result"],
+              properties: { result: { type: "object", additionalProperties: true } },
+            } } } },
+          },
+        },
+      },
       "/v1/import": {
         post: {
           operationId: "importSnapshot",

@@ -1,4 +1,4 @@
-export type TodosStorageMode = "local" | "remote" | "hybrid";
+export type TodosStorageMode = "local" | "cloud";
 
 export type TodosStorageEnv = Record<string, string | undefined>;
 
@@ -151,7 +151,7 @@ export function loadStorageConfig(env: TodosStorageEnv = process.env): TodosStor
 }
 
 export function isTodosRemoteStorageEnabled(config: TodosStorageConfig): boolean {
-  return config.mode === "remote" || config.mode === "hybrid";
+  return config.mode === "cloud";
 }
 
 export function assertTodosRemoteStorageConfig(config: TodosStorageConfig): void {
@@ -164,12 +164,14 @@ export function assertTodosRemoteStorageConfig(config: TodosStorageConfig): void
 export function parseStorageMode(value: string | undefined): TodosStorageMode {
   const normalized = clean(value)?.toLowerCase();
   if (!normalized) return "local";
-  if (normalized === "local" || normalized === "remote" || normalized === "hybrid") return normalized;
-  throw new Error(`${TODOS_STORAGE_ENV.mode} must be local, remote, or hybrid`);
+  if (normalized === "local" || normalized === "cloud") return normalized;
+  throw new Error(`${TODOS_STORAGE_ENV.mode} must be local or cloud`);
 }
 
 export function getTodosStorageMode(env: TodosStorageEnv = process.env): TodosStorageMode {
-  return parseStorageMode(readStorageEnv(env, "mode").value);
+  // The legacy TODOS_STORAGE_MODE compatibility reader was intentionally
+  // removed: authority selection must be canonical and unambiguous.
+  return parseStorageMode(clean(env[TODOS_STORAGE_ENV.mode]));
 }
 
 export function getStorageMode(env: TodosStorageEnv = process.env): TodosStorageMode {

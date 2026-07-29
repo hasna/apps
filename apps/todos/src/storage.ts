@@ -5,6 +5,7 @@ export type {
   TodosAgentUpdateInput,
   TodosAgentStore,
   TodosAuditStore,
+  TodosAuthorityTransferStore,
   TodosCommentListOptions,
   TodosPlanStore,
   TodosProjectStore,

@@ -148,6 +148,24 @@ export class TodosV1Client {
       });
     }
 
+    /** Export one deterministic, checksum-protected authority transfer bundle */
+    async exportAuthorityTransfer(init?: RequestInit): Promise<{ "bundle": Record<string, unknown> }> {
+      return this.request("GET", `/v1/transfers/export`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Validate and idempotently import an authority transfer bundle */
+    async importAuthorityTransfer(body: Record<string, unknown>, init?: RequestInit): Promise<{ "result": Record<string, unknown> }> {
+      return this.request("POST", `/v1/transfers/import`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** List plans */
     async listPlans(query?: { "project_id"?: string }, init?: RequestInit): Promise<{ "plans"?: Array<Plan>; "count"?: number }> {
       return this.request("GET", `/v1/plans`, {

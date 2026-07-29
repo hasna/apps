@@ -401,6 +401,22 @@ export async function handleV1Request(
   const subId = segments[4];
 
   try {
+    // ── /v1/transfers/export|import ──
+    // This is the only local/cloud movement surface. It moves one immutable,
+    // checksum-protected bundle and never enables a second writer or fallback.
+    if (resource === "transfers" && (id === "export" || id === "import") && !action) {
+      if (!store.transfers) return error(501, "authority transfer is not supported by this storage backend");
+      if (id === "export") {
+        if (method !== "GET") return error(405, `method ${method} not allowed on /v1/transfers/export`);
+        return json({ bundle: await store.transfers.exportBundle() });
+      }
+      if (method !== "POST") return error(405, `method ${method} not allowed on /v1/transfers/import`);
+      const bundle = await readJson<unknown>(req);
+      if (bundle === null) return error(400, "invalid JSON body");
+      const result = await store.transfers.importBundle(bundle as never);
+      return json({ result });
+    }
+
     // ── /v1/tasks ──
     if (resource === "tasks") {
       // ── POST /v1/tasks/exists — bulk existence check for parity verification ──

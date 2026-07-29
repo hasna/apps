@@ -1,7 +1,7 @@
 /**
  * Authenticated `/v1` routing for the open Todos CLI.
  *
- * Local mode remains SQLite-backed. An explicit remote/self-hosted mode instead
+ * Local mode remains SQLite-backed. An explicit cloud mode instead
  * requires the canonical API URL and API key, validates the authority before a
  * local-capable command module can run, and never falls back to SQLite. This is
  * the repo-owned self-hosted REST contract; it has no dependency on a private
@@ -16,11 +16,12 @@ import { redactEvidenceText } from "../lib/redaction.js";
 import type { IntegrityReport, IntegrityTaskRow } from "../lib/integrity.js";
 import type { PrGroupEventListOptions, PrGroupEventPage, PrGroupStateView } from "../pr-groups/types.js";
 import { parsePrGroupEventPage, parsePrGroupStateView } from "../pr-groups/http-client.js";
+import { readAuthorityProfile, type TodosAuthorityProfile } from "../lib/authority-transfer.js";
 
 type Env = Record<string, string | undefined>;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const CLOUD_MODES = new Set(["self_hosted", "cloud", "remote", "hybrid"]);
-const VALID_STORAGE_MODES = new Set(["local", ...CLOUD_MODES]);
+const CLOUD_MODES = new Set(["cloud"]);
+const VALID_STORAGE_MODES = new Set(["local", "cloud"]);
 const COMPLETION_EVIDENCE_FIELDS = [
   "attachment_ids",
   "files_changed",
@@ -56,7 +57,7 @@ export interface TodosRemoteAuthorityConfigStatus {
 export interface TodosCliStorageModeResolution {
   mode: string;
   selected: boolean;
-  source: "HASNA_TODOS_STORAGE_MODE" | "TODOS_STORAGE_MODE" | "default";
+  source: "HASNA_TODOS_STORAGE_MODE" | "profile" | "default";
 }
 
 function cleanMode(value: string | undefined): string | null {
@@ -64,55 +65,44 @@ function cleanMode(value: string | undefined): string | null {
   return normalized || null;
 }
 
-function modeRole(mode: string): "local" | "remote" {
-  return mode === "local" ? "local" : "remote";
-}
-
 /**
- * Resolve the CLI storage selector without allowing an invalid or conflicting
- * environment to drift into SQLite. Empty canonical values do not mask the
- * legacy fallback; explicit canonical/fallback disagreement is rejected.
+ * Resolve exactly one authority. The canonical environment variable is an
+ * explicit process override; otherwise the verified persisted profile is used.
+ * Legacy selectors are deliberately not compatibility-read.
  */
 export function resolveTodosCliStorageMode(env: Env = process.env as Env): TodosCliStorageModeResolution {
-  for (const source of ["HASNA_TODOS_STORAGE_MODE", "TODOS_STORAGE_MODE"] as const) {
-    if (env[source] !== undefined && env[source]!.trim() === "") {
-      throw new Error(
-        `REMOTE_STORAGE_MODE_INVALID: ${source} must not be blank; local SQLite fallback is disabled for invalid routing state`,
-      );
-    }
-  }
-  const canonical = cleanMode(env.HASNA_TODOS_STORAGE_MODE);
-  const fallback = cleanMode(env.TODOS_STORAGE_MODE);
-
-  for (const [source, value] of [
-    ["HASNA_TODOS_STORAGE_MODE", canonical],
-    ["TODOS_STORAGE_MODE", fallback],
-  ] as const) {
-    if (value && !VALID_STORAGE_MODES.has(value)) {
-      throw new Error(
-        `REMOTE_STORAGE_MODE_INVALID: ${source}=${value} must be local, remote, self_hosted, cloud, or hybrid; ` +
-          "local SQLite fallback is disabled for invalid routing state",
-      );
-    }
-  }
-
-  if (canonical && fallback && modeRole(canonical) !== modeRole(fallback)) {
+  if (env.HASNA_TODOS_STORAGE_MODE !== undefined && env.HASNA_TODOS_STORAGE_MODE.trim() === "") {
     throw new Error(
-      `REMOTE_STORAGE_MODE_CONFLICT: HASNA_TODOS_STORAGE_MODE=${canonical} conflicts with ` +
-        `TODOS_STORAGE_MODE=${fallback}; local SQLite fallback is disabled`,
+      "REMOTE_STORAGE_MODE_INVALID: HASNA_TODOS_STORAGE_MODE must not be blank; local SQLite fallback is disabled for invalid routing state",
     );
   }
-
-  const mode = canonical ?? fallback ?? "local";
+  const canonical = cleanMode(env.HASNA_TODOS_STORAGE_MODE);
+  if (canonical && !VALID_STORAGE_MODES.has(canonical)) {
+    throw new Error(
+      `REMOTE_STORAGE_MODE_INVALID: HASNA_TODOS_STORAGE_MODE=${canonical} must be local or cloud; ` +
+        "local SQLite fallback is disabled for invalid routing state",
+    );
+  }
+  if (canonical) return { mode: canonical, selected: canonical === "cloud", source: "HASNA_TODOS_STORAGE_MODE" };
+  const profile = readAuthorityProfile();
+  const mode = profile.mode;
   return {
     mode,
-    selected: CLOUD_MODES.has(mode),
-    source: canonical
-      ? "HASNA_TODOS_STORAGE_MODE"
-      : fallback
-        ? "TODOS_STORAGE_MODE"
-        : "default",
+    selected: mode === "cloud",
+    source: mode === "local" ? "default" : "profile",
   };
+}
+
+function selectedProfile(env: Env, resolution: TodosCliStorageModeResolution): TodosAuthorityProfile {
+  if (resolution.source === "profile") return readAuthorityProfile();
+  if (resolution.mode === "cloud") {
+    return {
+      mode: "cloud",
+      base_url: env.HASNA_TODOS_API_URL?.trim() || "",
+      api_key_env: "HASNA_TODOS_API_KEY",
+    };
+  }
+  return { mode: "local" };
 }
 
 function requestedStorageMode(env: Env): string {
@@ -172,7 +162,7 @@ export function getTodosRemoteAuthorityConfigStatus(
     return {
       selected: true,
       ok: false,
-      mode: cleanMode(env.HASNA_TODOS_STORAGE_MODE) ?? cleanMode(env.TODOS_STORAGE_MODE) ?? "invalid",
+      mode: cleanMode(env.HASNA_TODOS_STORAGE_MODE) ?? "invalid",
       api_url_configured: Boolean(env.HASNA_TODOS_API_URL?.trim()),
       api_key_configured: Boolean(env.HASNA_TODOS_API_KEY?.trim()),
       v1_base_url: null,
@@ -195,21 +185,23 @@ export function getTodosRemoteAuthorityConfigStatus(
   }
 
   const issues: string[] = [];
+  const profile = selectedProfile(env, resolution);
   let apiUrl: string | null = null;
   try {
-    apiUrl = normalizeRemoteAuthorityUrl(env.HASNA_TODOS_API_URL);
+    apiUrl = normalizeRemoteAuthorityUrl(profile.mode === "cloud" ? profile.base_url : undefined);
   } catch (error) {
     issues.push(error instanceof Error ? error.message : String(error));
   }
-  const apiKeyConfigured = Boolean(env.HASNA_TODOS_API_KEY?.trim());
+  const apiKeyEnv = profile.mode === "cloud" ? profile.api_key_env : "HASNA_TODOS_API_KEY";
+  const apiKeyConfigured = Boolean(env[apiKeyEnv]?.trim());
   if (!apiUrl && issues.length === 0) {
     issues.push(
-      "REMOTE_API_URL_MISSING: remote Todos storage requires HASNA_TODOS_API_URL; local SQLite fallback is disabled",
+      "REMOTE_API_URL_MISSING: cloud Todos storage requires an authority profile URL; local SQLite fallback is disabled",
     );
   }
   if (!apiKeyConfigured) {
     issues.push(
-      "REMOTE_API_KEY_MISSING: remote Todos storage requires HASNA_TODOS_API_KEY; local SQLite fallback is disabled",
+      `REMOTE_API_KEY_MISSING: cloud Todos storage requires ${apiKeyEnv}; local SQLite fallback is disabled`,
     );
   }
 
@@ -228,11 +220,14 @@ export function getTodosRemoteAuthorityConfigStatus(
 function requireTodosRemoteAuthorityEnv(env: Env): Env {
   const status = getTodosRemoteAuthorityConfigStatus(env);
   if (!status.ok) throw new Error(status.issues[0]);
+  const resolution = resolveTodosCliStorageMode(env);
+  const profile = selectedProfile(env, resolution);
+  const apiKeyEnv = profile.mode === "cloud" ? profile.api_key_env : "HASNA_TODOS_API_KEY";
   return {
     ...env,
     HASNA_TODOS_STORAGE_MODE: "cloud",
     HASNA_TODOS_API_URL: status.v1_base_url!.replace(/\/v1$/, ""),
-    HASNA_TODOS_API_KEY: env.HASNA_TODOS_API_KEY!.trim(),
+    HASNA_TODOS_API_KEY: env[apiKeyEnv]!.trim(),
   };
 }
 

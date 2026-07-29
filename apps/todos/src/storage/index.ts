@@ -9,6 +9,7 @@ export type {
   TodosPlanStore,
   TodosProjectStore,
   TodosIntegrityStore,
+  TodosAuthorityTransferStore,
   TodosStorageAdapter,
   TodosStorageCapabilities,
   TodosStorageContext,

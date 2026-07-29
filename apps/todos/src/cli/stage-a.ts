@@ -68,7 +68,7 @@ const REMOTE_COMMANDS = new Set([
   "doctor", "done", "find-commit", "find-ref", "health", "heartbeat", "history", "init", "inspect", "link-commit",
   "link-ref", "list", "lists", "lock", "log-progress", "move", "next", "plans", "project-rename", "projects", "recap",
   "record-verification", "release", "remove", "show", "standup", "start", "status", "tag", "task", "task-lists",
-  "template-export", "template-import", "template-preview", "templates", "timeline", "tl", "unlock", "untag", "update",
+  "storage", "template-export", "template-import", "template-preview", "templates", "timeline", "tl", "unlock", "untag", "update",
 ]);
 
 const COMMAND_CAPABILITY_MATRIX = new Map<string, TodosCliCommandOwner>();
@@ -214,8 +214,10 @@ function isMetadataInvocation(args: string[], invocation: ParsedInvocation): boo
       (invocation.commandArgs.length === 1 && HELP_FLAGS.has(invocation.commandArgs[0]!));
   }
   if (invocation.command === "storage") {
-    return invocation.commandArgs.length === 1 &&
-      (invocation.commandArgs[0] === "status" || HELP_FLAGS.has(invocation.commandArgs[0]!));
+    const positional = positionalArgs(invocation.commandArgs);
+    return (positional.length === 1 && (positional[0] === "status" || HELP_FLAGS.has(positional[0]!))) ||
+      (positional.length === 2 && positional[0] === "profile" && positional[1] === "show") ||
+      (positional.length === 3 && positional[0] === "transfer" && positional[1] === "validate");
   }
   return invocation.commandArgs.length === 1 &&
     (HELP_FLAGS.has(invocation.commandArgs[0]!) || VERSION_FLAGS.has(invocation.commandArgs[0]!));
@@ -226,6 +228,11 @@ function commandSupportsRemote(invocation: ParsedInvocation): boolean {
   if (!command || COMMAND_CAPABILITY_MATRIX.get(command) !== "remote-http") return false;
   const args = invocation.commandArgs;
   switch (command) {
+    case "storage": {
+      const positional = positionalArgs(args);
+      return (positional[0] === "profile" && positional[1] === "switch") ||
+        (positional[0] === "transfer" && positional[1] === "export");
+    }
     case "task":
       return positionalArgs(args)[0] === "upsert";
     case "doctor":

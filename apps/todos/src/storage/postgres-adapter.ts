@@ -68,6 +68,16 @@ import {
   type IntegrityReport,
 } from "../lib/integrity.js";
 import { redactEvidenceText } from "../lib/redaction.js";
+import { getPackageVersion } from "../lib/package-version.js";
+import {
+  createAuthorityTransferBundle,
+  makeTransferRepairReport,
+  validateAuthorityTransferBundle,
+  type TodosAuthorityTransferBundle,
+  type TodosTransferImportResult,
+  type TodosTransferIssue,
+} from "../lib/authority-transfer.js";
+import type { TodosLocalBridgeBundle, TodosLocalBridgeData } from "../lib/local-bridge.js";
 import {
   isCanonicalSlug,
   isValidTaskListProjectScope,
@@ -76,7 +86,9 @@ import {
   validateSnapshotRoutingRecords,
 } from "../lib/slugs.js";
 
-type RemoteObjectType = TodosPostgresSyncRecordType | "comments" | "dependencies" | "verifications" | "commits" | "refs" | "template_tasks";
+type RemoteObjectType = TodosPostgresSyncRecordType | "comments" | "dependencies" | "verifications" | "commits" | "refs" | "template_tasks"
+  | "runs" | "run_events" | "run_commands" | "run_artifacts" | "artifact_contents" | "task_files"
+  | "saved_views" | "task_boards" | "local_calendar_items";
 
 export interface CreatePostgresTodosStorageAdapterOptions {
   client: TodosPostgresQueryClient;
@@ -249,6 +261,11 @@ export function createPostgresTodosStorageAdapter(
       getTasksChangedSince: (since, filters) => getChangedSince(since, filters, store),
       exportSnapshot: () => exportSnapshot(store),
       importSnapshot: (snapshot, context) => importSnapshot(snapshot, store, context),
+    },
+    transfers: {
+      authority: { mode: "cloud", authority: `postgres:${options.service ?? "todos"}` },
+      exportBundle: () => exportAuthorityTransfer(store, options.service ?? "todos"),
+      importBundle: (bundle) => importAuthorityTransfer(bundle, store, options.service ?? "todos"),
     },
     integrity: {
       report: () => store.integrityReport(),
@@ -1886,6 +1903,163 @@ async function importSnapshot(
     }
   }
   return result;
+}
+
+const TRANSFER_SECTION_TYPES = {
+  projects: "projects",
+  task_lists: "task_lists",
+  plans: "plans",
+  tasks: "tasks",
+  task_dependencies: "dependencies",
+  comments: "comments",
+  runs: "runs",
+  run_events: "run_events",
+  run_commands: "run_commands",
+  run_artifacts: "run_artifacts",
+  task_files: "task_files",
+  task_commits: "commits",
+  task_git_refs: "refs",
+  task_verifications: "verifications",
+  saved_views: "saved_views",
+  task_boards: "task_boards",
+  local_calendar_items: "local_calendar_items",
+} as const satisfies Record<keyof TodosLocalBridgeData, RemoteObjectType>;
+
+function transferRowId(section: keyof TodosLocalBridgeData | "artifact_contents", row: Record<string, unknown>): string {
+  if (section === "task_dependencies") return dependencyId(String(row.task_id ?? ""), String(row.depends_on ?? ""));
+  if (section === "artifact_contents") return String(row.artifact_id ?? "");
+  return String(row.id ?? "");
+}
+
+function normalizedTransferRow(section: keyof TodosLocalBridgeData, row: Record<string, unknown>): Record<string, unknown> {
+  if (section === "task_dependencies") {
+    return {
+      task_id: row.task_id,
+      depends_on: row.depends_on,
+      ...(row.external_project_id !== undefined ? { external_project_id: row.external_project_id } : {}),
+      ...(row.external_task_id !== undefined ? { external_task_id: row.external_task_id } : {}),
+    };
+  }
+  if (section === "task_verifications") {
+    const { updated_at: _updatedAt, ...rest } = row;
+    return rest;
+  }
+  if (section === "task_commits") {
+    const { updated_at: _updatedAt, ...rest } = row;
+    return rest;
+  }
+  return row;
+}
+
+function stableTransferJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableTransferJson).join(",")}]`;
+  const row = value as Record<string, unknown>;
+  return `{${Object.keys(row).sort().map((key) => `${JSON.stringify(key)}:${stableTransferJson(row[key])}`).join(",")}}`;
+}
+
+async function exportAuthorityTransfer(store: PostgresJsonRecordStore, service: string): Promise<TodosAuthorityTransferBundle> {
+  const entries = await Promise.all(Object.entries(TRANSFER_SECTION_TYPES).map(async ([section, type]) => {
+    const rows = (await store.list<Record<string, unknown>>(type)).map((row) =>
+      normalizedTransferRow(section as keyof TodosLocalBridgeData, row));
+    return [section, rows] as const;
+  }));
+  const data = Object.fromEntries(entries) as unknown as TodosLocalBridgeData;
+  const artifactContents = (await store.list<NonNullable<TodosLocalBridgeBundle["artifact_contents"]>[number] & { id?: string }>("artifact_contents"))
+    .map(({ id: _id, ...content }) => content);
+  const stats = Object.fromEntries(Object.entries(data).map(([key, rows]) => [key, rows.length])) as TodosLocalBridgeBundle["stats"];
+  const bridge: TodosLocalBridgeBundle = {
+    kind: "hasna.todos.local-bridge",
+    schemaVersion: 1,
+    exportedAt: "1970-01-01T00:00:00.000Z",
+    package: { packageName: "@hasna/todos", repository: "hasna/todos", version: getPackageVersion(import.meta.url) },
+    source: { project_id: null, project_path: null },
+    data,
+    artifact_contents: artifactContents,
+    stats,
+  };
+  return createAuthorityTransferBundle(bridge, { mode: "cloud", authority: `postgres:${service}` });
+}
+
+async function importAuthorityTransfer(
+  bundle: TodosAuthorityTransferBundle,
+  store: PostgresJsonRecordStore,
+  service: string,
+): Promise<TodosTransferImportResult> {
+  const destination = { mode: "cloud" as const, authority: `postgres:${service}` };
+  const validation = validateAuthorityTransferBundle(bundle);
+  if (!validation.ok) {
+    return {
+      ok: false,
+      idempotent: false,
+      import_result: null,
+      repair_report: makeTransferRepairReport(bundle.bundle_id || "invalid", destination, validation.issues),
+    };
+  }
+
+  const rows: Array<{ section: keyof TodosLocalBridgeData | "artifact_contents"; type: RemoteObjectType; row: Record<string, unknown> }> = [];
+  for (const [section, type] of Object.entries(TRANSFER_SECTION_TYPES) as Array<[keyof TodosLocalBridgeData, RemoteObjectType]>) {
+    for (const row of bundle.data[section] as unknown as Array<Record<string, unknown>>) rows.push({ section, type, row });
+  }
+  for (const row of bundle.artifact_contents as unknown as Array<Record<string, unknown>>) {
+    rows.push({ section: "artifact_contents", type: "artifact_contents", row });
+  }
+
+  const rejected: TodosTransferIssue[] = [];
+  const pending: typeof rows = [];
+  let skipped = 0;
+  for (const entry of rows) {
+    const id = transferRowId(entry.section, entry.row);
+    const existing = await store.get<Record<string, unknown>>(entry.type, id);
+    if (!existing) {
+      pending.push(entry);
+      continue;
+    }
+    const normalizedExisting = entry.section === "artifact_contents"
+      ? existing
+      : normalizedTransferRow(entry.section, existing);
+    const normalizedIncoming = entry.section === "artifact_contents"
+      ? entry.row
+      : normalizedTransferRow(entry.section, entry.row);
+    if (stableTransferJson(normalizedExisting) === stableTransferJson(normalizedIncoming)) skipped += 1;
+    else rejected.push({
+      code: "checksum",
+      section: entry.section,
+      row_id: id,
+      message: "destination already contains a divergent row",
+    });
+  }
+  if (rejected.length > 0) {
+    return {
+      ok: false,
+      idempotent: false,
+      import_result: { inserted: 0, skipped, rejected: rejected.length },
+      repair_report: makeTransferRepairReport(bundle.bundle_id, destination, rejected),
+    };
+  }
+
+  let inserted = 0;
+  for (const entry of pending) {
+    const id = transferRowId(entry.section, entry.row);
+    try {
+      await store.upsert(entry.type, { ...entry.row, id });
+      inserted += 1;
+    } catch (error) {
+      rejected.push({
+        code: "bundle",
+        section: entry.section,
+        row_id: id || null,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      break;
+    }
+  }
+  return {
+    ok: rejected.length === 0,
+    idempotent: inserted === 0,
+    import_result: { inserted, skipped, rejected: rejected.length },
+    repair_report: rejected.length ? makeTransferRepairReport(bundle.bundle_id, destination, rejected) : null,
+  };
 }
 
 async function requireRecord<T>(type: RemoteObjectType, id: string, store: PostgresJsonRecordStore): Promise<T> {

@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import chalk from "chalk";
+import { readFileSync, writeFileSync } from "node:fs";
 import { handleError, output } from "../helpers.js";
 import type { NativeStorageStatus, NativeStorageSyncPlan } from "../../lib/native-storage-status.js";
 import type { ShadowStatusReport } from "../../lib/shadow-status.js";
@@ -151,6 +152,127 @@ export function registerStorageCommands(program: Command) {
   const storage = program
     .command("storage")
     .description("Inspect explicit native local and remote storage configuration");
+
+  const profiles = storage
+    .command("profile")
+    .description("Show or explicitly switch the single active local/cloud authority profile");
+
+  profiles
+    .command("show")
+    .description("Show the persisted active authority profile (credentials are never stored)")
+    .option("-j, --json", "Output as JSON")
+    .action(async (opts: { json?: boolean }) => {
+      try {
+        const globalOpts = globalOptions(program);
+        const { defaultTransferPaths, readAuthorityProfile } = await import("../../lib/authority-transfer.js");
+        const profile = readAuthorityProfile();
+        const value = { active: profile, profile_path: defaultTransferPaths().profile };
+        if (opts.json || globalOpts.json) { output(value, true); return; }
+        console.log(chalk.bold("todos storage profile"));
+        console.log(`Active: ${profile.mode}`);
+        if (profile.mode === "cloud") {
+          console.log(`Authority: ${profile.base_url}`);
+          console.log(`API key env: ${profile.api_key_env}`);
+        }
+      } catch (error) {
+        handleError(error);
+      }
+    });
+
+  profiles
+    .command("switch <mode>")
+    .description("Transfer, verify, receipt, then atomically select local or cloud")
+    .option("--url <url>", "Cloud authority origin or /v1 URL")
+    .option("--api-key-env <name>", "Environment variable containing the cloud API key", "HASNA_TODOS_API_KEY")
+    .option("-j, --json", "Output as JSON")
+    .action(async (mode: string, opts: { url?: string; apiKeyEnv?: string; json?: boolean }) => {
+      try {
+        const globalOpts = globalOptions(program);
+        const {
+          createCloudAuthorityEndpoint,
+          createLocalAuthorityEndpoint,
+          normalizeAuthorityProfile,
+          readAuthorityProfile,
+          transferAndSwitch,
+        } = await import("../../lib/authority-transfer.js");
+        const current = readAuthorityProfile();
+        if (mode !== "local" && mode !== "cloud") throw new Error("profile mode must be local or cloud");
+        const target = mode === "local"
+          ? ({ mode: "local" } as const)
+          : normalizeAuthorityProfile({
+              mode: "cloud",
+              base_url: opts.url ?? (current.mode === "cloud" ? current.base_url : ""),
+              api_key_env: opts.apiKeyEnv ?? "HASNA_TODOS_API_KEY",
+            });
+        if (current.mode === target.mode) throw new Error(`authority profile is already ${mode}`);
+        const source = current.mode === "local"
+          ? createLocalAuthorityEndpoint()
+          : createCloudAuthorityEndpoint(current);
+        const destination = target.mode === "local"
+          ? createLocalAuthorityEndpoint()
+          : createCloudAuthorityEndpoint(target);
+        const result = await transferAndSwitch({ source, destination });
+        const value = {
+          ok: true,
+          active: target,
+          bundle_id: result.bundle.bundle_id,
+          receipt: result.receipt,
+          receipt_path: result.receipt_path,
+        };
+        if (opts.json || globalOpts.json) { output(value, true); return; }
+        console.log(chalk.green(`Active authority switched to ${target.mode}.`));
+        console.log(`Bundle: ${result.bundle.bundle_id}`);
+        console.log(`Receipt: ${result.receipt_path}`);
+      } catch (error) {
+        handleError(error);
+      }
+    });
+
+  const transfers = storage
+    .command("transfer")
+    .description("Export or validate deterministic authority-transfer bundles");
+
+  transfers
+    .command("export <path>")
+    .description("Export the current authority without changing the active profile")
+    .option("-j, --json", "Output as JSON")
+    .action(async (path: string, opts: { json?: boolean }) => {
+      try {
+        const globalOpts = globalOptions(program);
+        const {
+          createCloudAuthorityEndpoint,
+          createLocalAuthorityEndpoint,
+          readAuthorityProfile,
+        } = await import("../../lib/authority-transfer.js");
+        const profile = readAuthorityProfile();
+        const endpoint = profile.mode === "local" ? createLocalAuthorityEndpoint() : createCloudAuthorityEndpoint(profile);
+        const bundle = await endpoint.exportBundle();
+        writeFileSync(path, `${JSON.stringify(bundle, null, 2)}\n`, { mode: 0o600 });
+        const value = { ok: true, path, bundle_id: bundle.bundle_id, counts: bundle.counts, checksum: bundle.checksum };
+        if (opts.json || globalOpts.json) { output(value, true); return; }
+        console.log(chalk.green(`Transfer bundle written: ${path}`));
+        console.log(`Bundle: ${bundle.bundle_id}`);
+      } catch (error) {
+        handleError(error);
+      }
+    });
+
+  transfers
+    .command("validate <path>")
+    .description("Validate compatibility, relationships, counts, and checksums without importing")
+    .option("-j, --json", "Output as JSON")
+    .action(async (path: string, opts: { json?: boolean }) => {
+      try {
+        const globalOpts = globalOptions(program);
+        const { validateAuthorityTransferBundle } = await import("../../lib/authority-transfer.js");
+        const validation = validateAuthorityTransferBundle(JSON.parse(readFileSync(path, "utf8")));
+        if (opts.json || globalOpts.json) output(validation, true);
+        else console.log(validation.ok ? chalk.green("Transfer bundle is valid.") : chalk.red(validation.issues.map((item) => item.message).join("\n")));
+        if (!validation.ok) process.exitCode = 1;
+      } catch (error) {
+        handleError(error);
+      }
+    });
 
   storage
     .command("status")
