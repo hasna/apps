@@ -1,13 +1,14 @@
 #!/usr/bin/env bun
-// `loops-serve` — the self-hosted HTTP control-plane binary.
+// `loops-serve` — the Loops HTTP control-plane binary.
 //
-// The service reads and writes self-hosted RDS/Postgres directly. There is no
-// local SQLite, no cache, and no sync engine in the
-// serve process. Storage is the generated @hasna/contracts kit pool wrapping the
-// real `PostgresLoopStorage` backend. Every authenticated request gets one
-// dedicated transaction with tenant RLS context.
+// The serve process reads and writes its Postgres backend directly (selected
+// by HASNA_LOOPS_DATABASE_URL). There is no local SQLite, no cache, and no
+// sync engine in the serve process. Storage is the generated @hasna/contracts
+// kit pool wrapping the real `PostgresLoopStorage` backend. Every
+// authenticated request gets one dedicated transaction with tenant RLS
+// context.
 import { Command } from "commander";
-import { createLoopsApiServer } from "../api/index.js";
+import { contractHealthResponse, createLoopsApiServer } from "../api/index.js";
 import { TenantApiAuthenticator } from "../lib/auth/tenant-auth.js";
 import type { PoolQueryClient, TypedQueryClient } from "../generated/storage-kit/query.js";
 import { PgPoolExecutor } from "../lib/storage/pg-executor.js";
@@ -914,7 +915,7 @@ async function runServe(opts: { host: string; port: number }): Promise<void> {
 const program = new Command();
 program
   .name("loops-serve")
-  .description("Loops self-hosted HTTP control-plane (RDS-direct, API-key auth)")
+  .description("Loops HTTP control-plane (postgres-direct, API-key auth)")
   .version(packageVersion());
 
 program
@@ -1007,7 +1008,9 @@ program
 program
   .command("version")
   .description("print { status, version, mode }")
-  .action(() => console.log(JSON.stringify({ status: "ok", version: packageVersion(), mode: "self_hosted" })));
+  // Same envelope as GET /health: the installed @hasna/contracts foundation
+  // contract still requires a `local | cloud` wire mode field.
+  .action(() => console.log(JSON.stringify(contractHealthResponse())));
 
 if (import.meta.main) {
   // Bare `loops-serve` (no subcommand) defaults to `serve`. Commander cannot

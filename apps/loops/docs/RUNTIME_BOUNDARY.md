@@ -9,8 +9,8 @@ ownership, approvals, DLQ/replay, idempotency, and audit evidence live in
 Use this document when you need a single operator-facing boundary reference.
 For the planned upsert/DLQ/strict-mode contract, see
 [`AUTOMATION_RUNTIME_DESIGN.md`](./AUTOMATION_RUNTIME_DESIGN.md). For
-deployment-mode vocabulary (local vs self-hosted vs cloud), see
-[`DEPLOYMENT_MODES.md`](./DEPLOYMENT_MODES.md).
+storage vocabulary (the sqlite|http client seam and sqlite|postgres server
+backend), see [`STORAGE.md`](./STORAGE.md).
 
 ## Ownership Split
 
@@ -198,6 +198,6 @@ Do **not**:
 - [`AUTOMATION_RUNTIME_DESIGN.md`](./AUTOMATION_RUNTIME_DESIGN.md) — planned
   upsert SDK, DLQ/replay, strict automation execution mode.
 - [`USAGE.md`](./USAGE.md) — templates, todos-task routes, provider pools.
-- [`DEPLOYMENT_MODES.md`](./DEPLOYMENT_MODES.md) — local/self-hosted/cloud;
+- [`STORAGE.md`](./STORAGE.md) — the sqlite|http client seam and sqlite|postgres server backend;
   deployment concerns are runtime placement, not automation product surface.
 - README § OpenAutomations Runtime Binding — short summary and quick references.

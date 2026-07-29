@@ -66,21 +66,32 @@ function runnerPrincipal(principalId: string) {
 describe("loops-api foundation", () => {
   test("status output is import-safe and path-safe", async () => {
     const mod = await import("./index.js");
-    const status = mod.apiStatus();
+    // Pin the client seam: the host machine may carry real API-flip env vars.
+    const previousMode = process.env.HASNA_LOOPS_STORAGE_MODE;
+    process.env.HASNA_LOOPS_STORAGE_MODE = "sqlite";
+    try {
+      const status = mod.apiStatus();
 
-    expect(status.ok).toBe(true);
-    expect(status.service).toBe("loops-api");
-    expect(status.status.deploymentMode).toBe("self_hosted");
-    expect(JSON.stringify(status)).not.toContain("dataDir");
-    expect(JSON.stringify(status)).not.toContain("dbPath");
+      expect(status.ok).toBe(true);
+      expect(status.service).toBe("loops-api");
+      expect(status.status.dataBackend).toBe("sqlite");
+      expect(status.status.clientTransport).toBe("sqlite");
+      expect(status.status.authority).toBe("local_sqlite");
+      expect(JSON.stringify(status)).not.toContain("dataDir");
+      expect(JSON.stringify(status)).not.toContain("dbPath");
+    } finally {
+      if (previousMode === undefined) delete process.env.HASNA_LOOPS_STORAGE_MODE;
+      else process.env.HASNA_LOOPS_STORAGE_MODE = previousMode;
+    }
   });
 
-  test("health uses the strict contracts shape and maps self_hosted runtime to cloud storage mode", async () => {
+  test("health uses the strict contracts shape and maps server authority to the cloud wire mode", async () => {
     const mod = await import("./index.js");
     const previousMode = process.env.HASNA_LOOPS_STORAGE_MODE;
     const mutableBun = Bun as unknown as { serve: typeof Bun.serve };
     const originalServe = mutableBun.serve;
     let fetchHandler: ((request: Request) => Response | Promise<Response>) | undefined;
+    // Retired mode value: still selects the server authority (wire mode "cloud").
     process.env.HASNA_LOOPS_STORAGE_MODE = "self_hosted";
     mutableBun.serve = ((options: {
       fetch(request: Request): Response | Promise<Response>;
@@ -469,15 +480,18 @@ describe("loops-api foundation", () => {
   test("status command JSON uses the service envelope", () => {
     const result = spawnSync(process.execPath, [apiPath, "--json", "status"], {
       encoding: "utf8",
+      // Pin the client seam: the host machine may carry real API-flip env vars.
+      env: { ...process.env, HASNA_LOOPS_STORAGE_MODE: "sqlite" },
     });
 
     expect(result.status).toBe(0);
-    const body = JSON.parse(result.stdout) as { ok: boolean; service: string; status: { deploymentMode: string } };
+    const body = JSON.parse(result.stdout) as { ok: boolean; service: string; status: { dataBackend: string; clientTransport: string } };
     expect(body).toMatchObject({
       ok: true,
       service: "loops-api",
       status: {
-        deploymentMode: "self_hosted",
+        dataBackend: "sqlite",
+        clientTransport: "sqlite",
       },
     });
   });
@@ -1289,7 +1303,7 @@ describe("loops-api foundation", () => {
 
       // A default re-import overrides an existing active hosted row into a
       // scheduler-neutral paused representation. This is stricter than ordinary
-      // no-replace row import because self-hosted backfill must not wake loops.
+      // no-replace row import because a server backfill must not wake loops.
       const activeLoop = {
         ...loop,
         id: "loop-import-active",

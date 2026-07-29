@@ -1,27 +1,27 @@
 // Client-side transport resolver for the Hasna Service Contract v1.
 //
-// THIS IS THE B2 CORE FIX. Historically, setting a client to cloud/self_hosted
-// mode was a NO-OP: the CLI/MCP still read the local SQLite/db.json store even
-// though `HASNA_<APP>_STORAGE_MODE=cloud` and a DATABASE_URL were set. A DSN on
-// the client does NOT switch the dataset a CLI reads.
+// THIS IS THE B2 CORE FIX. Historically, flipping a client to the hosted API
+// was a NO-OP: the CLI/MCP still read the local SQLite/db.json store even
+// though the flip env vars and a DATABASE_URL were set. A DSN on the client
+// does NOT switch the dataset a CLI reads.
 //
-// This module makes the client actually talk to the cloud. Given an app name and
-// the environment it decides whether reads AND writes should be routed to the
-// app's cloud HTTP API (`<API_URL>/v1`, e.g. `https://<app>.<your-deployment-domain>/v1`)
-// with the API key, or fall through to the local store. There is no built-in
-// hostname default — the API URL must be configured explicitly (see below).
+// This module makes the client actually talk to the server. Given an app name
+// and the environment it decides whether reads AND writes should be routed to
+// the app's HTTP API (`<API_URL>/v1`, e.g. `https://<app>.<your-deployment-domain>/v1`)
+// with the API key, or fall through to the on-box sqlite store. There is no
+// built-in hostname default — the API URL must be configured explicitly.
 //
 // THE CLIENT-FLIP CONTRACT (env vars). For app `<NAME>` = envToken(name):
 //
-//   Mode:
-//     HASNA_<NAME>_STORAGE_MODE = local | self_hosted | cloud
+//   Store seam pin (optional; unset resolves from the API vars):
+//     HASNA_<NAME>_STORAGE_MODE = sqlite | http
 //   API base URL (`/v1` is appended automatically):
 //     HASNA_<NAME>_API_URL = https://<app>.<your-deployment-domain>
 //   API key (bearer / x-api-key):
 //     HASNA_<NAME>_API_KEY = hasna_<app>_...
 //
-// DECISION: transport is `cloud-http` for self_hosted/cloud only when both the
-// API URL and API key are present. Partial remote configuration throws.
+// DECISION: transport is `http` only when both the API URL and API key are
+// present. Partial remote configuration throws.
 //
 // SAFETY: this module never returns, logs, or embeds the API key value. Callers
 // receive only presence flags and env-key names.
@@ -70,16 +70,16 @@ export function toV1BaseUrl(apiUrl: string): string {
   return url.toString().replace(/\/+$/, "");
 }
 
-export type ClientTransportKind = "local" | "cloud-http";
+export type ClientTransportKind = "sqlite" | "http";
 
 export interface ClientTransportResolution {
   /** Where the client should read/write from. */
   transport: ClientTransportKind;
-  /** Resolved canonical deployment mode. */
+  /** Resolved client store seam value. */
   mode: StorageMode;
   /** Env key the mode was read from, or `"default"`. */
   modeSource: string;
-  /** `<origin>/v1` base for the cloud API when transport is cloud-http, else null. */
+  /** `<origin>/v1` base for the hosted API when transport is http, else null. */
   baseUrl: string | null;
   /** Env key the API URL came from, `"default"` (host template), or null. */
   apiUrlSource: string | null;
@@ -100,7 +100,7 @@ export function resolveClientTransport(name: string, env: Env = process.env): Cl
   const urlHit = firstEnv(env, keys.apiUrlKeys);
   const keyHit = firstEnv(env, keys.apiKeyKeys);
 
-  let mode: StorageMode = "local";
+  let mode: StorageMode = "sqlite";
   let modeSource = "default";
 
   if (modeHit) {
@@ -108,10 +108,10 @@ export function resolveClientTransport(name: string, env: Env = process.env): Cl
     modeSource = modeHit.key;
   }
 
-  // Local mode: never route to the network, regardless of URL/key presence.
-  if (mode === "local") {
+  // The sqlite pin never routes to the network, regardless of URL/key presence.
+  if (mode === "sqlite") {
     return {
-      transport: "local",
+      transport: "sqlite",
       mode,
       modeSource,
       baseUrl: null,
@@ -131,7 +131,7 @@ export function resolveClientTransport(name: string, env: Env = process.env): Cl
   const baseUrl = toV1BaseUrl(urlHit.value);
 
   return {
-    transport: "cloud-http",
+    transport: "http",
     mode,
     modeSource,
     baseUrl,
@@ -372,30 +372,30 @@ export function createHasnaHttpTransport(options: HasnaHttpTransportOptions): Ha
 }
 
 /**
- * Convenience: resolve transport from env and, when cloud-http, build the HTTP
- * client in one call. Returns `{ transport: 'local', resolution }` for local, or
- * `{ transport: 'cloud-http', client, resolution }` for self_hosted/cloud.
- * Incomplete remote configuration throws before a client is built.
+ * Convenience: resolve transport from env and, when http, build the HTTP
+ * client in one call. Returns `{ transport: 'sqlite', resolution }` for the
+ * on-box store, or `{ transport: 'http', client, resolution }` for the hosted
+ * API. Incomplete remote configuration throws before a client is built.
  */
 export function createClientTransport(
   name: string,
   env: Env = process.env,
   overrides?: Partial<Pick<HasnaHttpTransportOptions, "fetchImpl" | "headers" | "timeoutMs" | "retry" | "sleepImpl">>,
 ):
-  | { transport: "local"; client: null; resolution: ClientTransportResolution }
-  | { transport: "cloud-http"; client: HasnaHttpTransport; resolution: ClientTransportResolution } {
+  | { transport: "sqlite"; client: null; resolution: ClientTransportResolution }
+  | { transport: "http"; client: HasnaHttpTransport; resolution: ClientTransportResolution } {
   const resolution = resolveClientTransport(name, env);
-  if (resolution.transport === "local" || !resolution.baseUrl) {
-    return { transport: "local", client: null, resolution };
+  if (resolution.transport === "sqlite" || !resolution.baseUrl) {
+    return { transport: "sqlite", client: null, resolution };
   }
   const keys = clientTransportEnvKeys(name);
   const apiKey = firstEnv(env, keys.apiKeyKeys)?.value;
   if (!apiKey) {
     // Should be unreachable given resolution logic, but never build without a key.
-    throw new Error(`Client for '${name}' resolved to cloud-http without an API key.`);
+    throw new Error(`Client for '${name}' resolved to the http transport without an API key.`);
   }
   return {
-    transport: "cloud-http",
+    transport: "http",
     client: createHasnaHttpTransport({
       name,
       baseUrl: resolution.baseUrl,

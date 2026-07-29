@@ -1,68 +1,76 @@
-# Loops Deployment Modes
+# Loops Storage
 
 Loops supports one active source of truth at a time. The public package
-defines the mode vocabulary, local cache behavior, API shape, and runner
+defines the storage vocabulary, local cache behavior, API shape, and runner
 contract. Hosted multi-tenant operation is implemented outside this public
 package.
 
-Deployment modes describe **where the Loops runtime stores and executes**
-loops and workflows (`local` SQLite, `self_hosted` control plane, or `cloud`
-contract). They are runtime placement concerns, not the automation product
-surface — specs, queues, approvals, and audit for product automations remain in
+There is ONE data-backend axis and two seams — there is no deployment-mode
+axis. "Where does Loops run" is an operations question; the package only
+answers "which store is authoritative":
+
+- **Client store seam** (`loops` CLI / MCP / SDK): `sqlite | http`. The client
+  reads the on-box SQLite file, or the server's HTTP `/v1` API. It never opens
+  Postgres directly.
+- **Server data backend** (`loops-serve` / `loops-daemon`): `sqlite | postgres`.
+  The on-box daemon schedules from SQLite; `loops-serve` runs against the
+  Postgres database selected by `HASNA_LOOPS_DATABASE_URL`.
+
+Storage is a runtime concern, not the automation product surface — specs,
+queues, approvals, and audit for product automations remain in
 `@hasna/automations` and `@hasna/actions`. See
 [Runtime Boundary](./RUNTIME_BOUNDARY.md).
 
-## Modes
+## The two seams
 
-| Mode | Source of truth | Local storage role | Executor |
+| Seam | Values | Selected by | Executor |
 | --- | --- | --- | --- |
-| `local` | SQLite in `LOOPS_DATA_DIR` | Authoritative | `loops-daemon` |
-| `self_hosted` | Hasna-owned AWS/RDS control plane served by `loops-serve` using the embeddable `loops-api` contract | Cache and offline spool | `loops-runner` foundation |
-| `cloud` | A configured hosted control plane contract | Cache and offline spool | `loops-runner` foundation |
+| Client store | `sqlite` (default) | nothing set, or `HASNA_LOOPS_STORAGE_MODE=sqlite` pin | `loops-daemon` |
+| Client store | `http` | `HASNA_LOOPS_API_URL` + `HASNA_LOOPS_API_KEY` | `loops-runner` foundation |
+| Server backend | `sqlite` (daemon) | default | `loops-daemon` |
+| Server backend | `postgres` (`loops-serve`) | `HASNA_LOOPS_DATABASE_URL` | `loops-runner` foundation |
 
-`local` remains the default. It must keep working without network access,
-tokens, Postgres, or hosted infrastructure.
+The on-box sqlite store remains the default. It must keep working without
+network access, tokens, Postgres, or hosted infrastructure.
 
-`self_hosted` is the Hasna-owned AWS/RDS control-plane deployment. The public
-`@hasna/loops` package owns `loops-serve`, the embeddable `loops-api` contract,
-the Postgres storage adapter, migrations, HTTP SDK, and runner contract for this
-mode.
+The server side is `loops-serve`: the control-plane deployment served against
+operator-owned Postgres. The public `@hasna/loops` package owns `loops-serve`,
+the embeddable `loops-api` contract, the Postgres storage adapter, migrations,
+HTTP SDK, and runner contract. Account provisioning and hosted infrastructure
+stay outside this package; the public package must not depend on private hosted
+packages or resource names.
 
-`cloud` is the hosted control-plane contract. The public package exposes the
-client and runner contract, tenant authentication, and tenant isolation; account
-provisioning and hosted infrastructure stay outside this package. The public package must not depend on
-private hosted packages or resource names. This release exposes status
-surfaces only.
+## Resolution
 
-## Mode Resolution
+`HASNA_LOOPS_STORAGE_MODE` may be set to `sqlite` or `http` and pins the
+client store seam. `sqlite` forces the on-box file even when the API vars are
+present — the reversible escape hatch. `http` requires both API vars and fails
+closed without them. Other spellings are rejected.
 
-`HASNA_LOOPS_STORAGE_MODE` may be set to `local`, `self_hosted`, or
-`cloud`. Other spellings and legacy mode names are rejected.
+The retired deployment-mode values (`local`, `self_hosted`, `cloud`) are still
+accepted from the environment and map onto the backend they always selected
+(`local` → `sqlite`; `self_hosted`/`cloud` → `http`). They are aliases only:
+they never appear in any output.
 
-When no explicit mode is set, Loops resolves the mode from configuration:
+When no explicit pin is set, Loops resolves from configuration:
 
-1. `HASNA_LOOPS_API_URL` or
-   `HASNA_LOOPS_DATABASE_URL` selects `self_hosted`.
-2. Otherwise Loops uses `local`.
+1. `HASNA_LOOPS_API_URL` (with `HASNA_LOOPS_API_KEY`) selects the http client
+   transport; either the API URL or `HASNA_LOOPS_DATABASE_URL` hands scheduler
+   authority to the server contract.
+2. Otherwise the on-box sqlite store is authoritative.
 
-Both non-local modes use the canonical `HASNA_LOOPS_API_URL`; an explicit
-`HASNA_LOOPS_STORAGE_MODE=cloud` distinguishes hosted cloud from self-hosted.
-
-Tokens are represented only as presence signals in status output. Self-hosted
-status uses `HASNA_LOOPS_API_KEY`. Cloud status uses
-`HASNA_LOOPS_API_KEY`. URL credentials, query
-strings, and fragments are not returned in status output.
+Tokens are represented only as presence signals in status output. URL
+credentials, query strings, and fragments are not returned in status output.
 
 ## Commands
 
 ```bash
 loops mode
 loops --json mode
-loops self-hosted status
-loops self-hosted migrate --dry-run
-loops self-hosted push --dry-run
-loops self-hosted pull --dry-run
-loops cloud status
+loops server status
+loops server migrate --dry-run
+loops server push --dry-run
+loops server pull --dry-run
 loops-api status
 loops-serve version
 HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --dry-run
@@ -75,36 +83,37 @@ loops import ./loops-export.json
 loops import ./loops-export.json --apply
 ```
 
+`loops self-hosted …` and `loops cloud …` remain as hidden aliases of
+`loops server …` for existing automation; they print the same status.
+
 Human status output is intentionally compact:
 
 ```text
-deploymentMode=local active source=default truth=local_sqlite local=authoritative scheduler=local_sqlite control_plane=none
+backend=sqlite client=sqlite authority=local_sqlite source=default local=authoritative scheduler=local_sqlite server=false
 ```
 
 JSON uses these field names:
 
-- `deploymentMode`: the requested status perspective.
-- `activeDeploymentMode`: the mode selected from the current environment.
-- `deploymentModeSource`: the env var or default that selected the active mode.
-- `sourceOfTruth`: `local_sqlite`, `self_hosted_control_plane`, or
-  `cloud_control_plane`.
-- `localStore.role`: `authoritative` in local mode, `cache_and_spool` in
-  non-local modes.
-- `controlPlane.configured`: true only when the current mode has enough
-  configuration to be usable. Cloud requires both the canonical API URL and a token
-  presence signal.
-- `controlPlane.apiUrl`: a display-safe URL without credentials, query string,
+- `dataBackend`: this process's server-side data backend — `postgres` iff
+  `HASNA_LOOPS_DATABASE_URL` is set, else `sqlite`.
+- `clientTransport`: the client store seam — `http` when the API URL and key
+  are configured, else `sqlite`.
+- `authority`: `local_sqlite` or `server_api` — which store is authoritative
+  for loop data on this machine.
+- `authoritySource`: the env var or default that selected the authority.
+- `localStore.role`: `authoritative` when the on-box store is authoritative,
+  `cache_and_spool` when the server is.
+- `server.configured`: true when the API URL or database URL is present.
+- `server.apiUrl`: a display-safe URL without credentials, query string,
   or fragment.
 - `schedulerState.localStore`: always names the local SQLite store and local
-  run artifact files. In `local` mode this store is authoritative; in
-  non-local modes it is a cache, offline spool, and audit copy.
-- `schedulerState.remoteStore`: names the non-local scheduler contract:
-  `api_control_plane_contract`, `postgres_contract`,
-  `hosted_control_plane_contract`, `unconfigured`, or `none`. The standalone
-  CLI never mutates Postgres directly; self-hosted apply goes through the
-  configured control-plane API import contract. `loops-serve` itself wires the
-  Postgres storage adapter for normal control-plane CRUD, id-preserving import,
-  and runner protocol routes.
+  run artifact files. Authoritative or cache/spool per `authority`.
+- `schedulerState.remoteStore`: names the server scheduler contract:
+  `api_control_plane_contract`, `postgres_contract`, `unconfigured`, or
+  `none`. The standalone CLI never mutates Postgres directly; remote apply
+  goes through the configured control-plane API import contract. `loops-serve`
+  itself wires the Postgres storage adapter for normal control-plane CRUD,
+  id-preserving import, and runner protocol routes.
 - `schedulerState.remoteStore.objectArtifacts`: `object_store_contract` means
   remote artifact/object storage is a control-plane contract. The public package
   does not create or mutate S3 buckets, AWS resources, or hosted credentials.
@@ -114,7 +123,7 @@ JSON uses these field names:
   Live active counts use admitted/running work items; dry-runs do not open or
   migrate the live store to compute counts.
 
-`loops-serve` is the self-hosted HTTP control-plane binary in this public
+`loops-serve` is the Postgres-backed HTTP control-plane binary in this public
 package. It reads and writes Postgres directly, serves open foundation probes
 (`GET /health`, `/ready`, `/version`, `/openapi.json`), gates `/v1` loop/run and
 runner-protocol routes with API-key auth on non-local binds, and applies the
@@ -129,7 +138,7 @@ tenant enforcement normalizes cluster role attributes and therefore requires
 the PostgreSQL privilege to alter role security attributes.
 
 The in-cluster credential reconciler is `loops-serve db-credentials reconcile`.
-It is source-only infrastructure glue for self-hosted deployments that use an
+It is source-only infrastructure glue for server deployments that use an
 RDS-managed master secret and separate app DSN secrets. The command must run
 with the ECS task role (`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`) and AWS
 Secrets Manager access to exactly four distinct same-region secret ARNs. It
@@ -148,11 +157,11 @@ detached from service roles; after `0010`, each is attached only to its exact
 matching NOLOGIN role.
 
 `loops-api` is the embeddable API contract in the same public package. It is not
-a separate service because self-hosted users and the hosted service must share
-the same public contract. `loops-serve` is the only shipped Postgres-backed
-self-hosted host.
+a separate service because every server operator and the hosted service must
+share the same public contract. `loops-serve` is the only shipped
+Postgres-backed host.
 
-`loops-runner` is the process that connects a machine to a non-local control
+`loops-runner` is the process that connects a machine to a server control
 plane. The current public package supports a bounded one-shot protocol:
 claim polling, claim-token fenced lease heartbeat/finalization, and
 `loops-runner run-once` execution for command, agent, and workflow targets.
@@ -185,7 +194,7 @@ refuses to write a no-loss bundle unless the operator explicitly uses
 requires `--apply`; existing rows with the same id are updated only with
 `--replace`. The CLI creates a local SQLite backup before a safe apply.
 
-`loops self-hosted push` applies an additional self-hosted safety rule. Imported
+`loops server push` applies an additional server-side safety rule. Imported
 workflow definitions are archived, and imported loops are paused with
 `nextRunAt`/`retryScheduledFor` cleared. That safety normalization can re-archive
 or re-pause existing same-id rows even when `--replace` is not supplied; explicit
@@ -199,25 +208,25 @@ later release adds full table-preserving migration. Active daemon leases,
 running loop runs, running workflow runs/steps, and leased work items also
 block migration; finish or stop that work first.
 
-Self-hosted sync commands use the control-plane API:
+Server sync commands use the control-plane API:
 
 ```bash
-loops self-hosted migrate --dry-run
-loops self-hosted push --dry-run
-loops self-hosted push --apply
-loops self-hosted pull --dry-run
+loops server migrate --dry-run
+loops server push --dry-run
+loops server push --apply
+loops server pull --dry-run
 ```
 
 They inspect local state, inspect `HASNA_LOOPS_API_URL` when configured, and
-report the rows that would move. `loops self-hosted push --apply` sends the
+report the rows that would move. `loops server push --apply` sends the
 id-preserving workflow and loop import bundle to `/v1/import`; imported
 workflows are archived and imported loops are paused with run pointers cleared.
 Local SQLite remains authoritative until an operator applies the import and
-records the rollout evidence; in non-local modes it may remain a cache, offline
-spool, and audit copy.
+records the rollout evidence; when the server is authoritative it may remain a
+cache, offline spool, and audit copy.
 
-`HASNA_LOOPS_DATABASE_URL` selects the self-hosted
-Postgres scheduler-state contract and is required by `loops-serve`. It does not
+`HASNA_LOOPS_DATABASE_URL` selects the server's Postgres
+scheduler-state contract and is required by `loops-serve`. It does not
 make the standalone `loops` CLI mutate a remote database by itself. Remote
 execution still flows through a configured control-plane API and runner
 protocol. `loops-runner` needs `HASNA_LOOPS_API_URL` to claim
@@ -241,20 +250,20 @@ Single-run loops need a lease so only one runner executes each scheduled slot.
 Multi-machine loops must record per-machine run evidence so duplicate work is
 distinguishable from intentional fan-out.
 
-This is separate from existing local OpenMachines dispatch. In `local` mode,
-`loops-daemon` can still dispatch a loop target to a configured remote machine
-through the existing OpenMachines transport. In `self_hosted` or `cloud`,
-machine execution is runner-pull: `loops-runner` claims work from
-the control plane. Operators should not treat local remote dispatch as cloud
-mode.
+This is separate from existing local OpenMachines dispatch. When the on-box
+store is authoritative, `loops-daemon` can still dispatch a loop target to a
+configured remote machine through the existing OpenMachines transport. When the
+server is authoritative, machine execution is runner-pull: `loops-runner`
+claims work from the control plane. Operators should not conflate local remote
+dispatch with the server runner protocol.
 
 ## Follow-Up Work
 
-Non-local execution needs these follow-up releases before it is complete:
+Server-side execution needs these follow-up releases before it is complete:
 
 - Long-running runner daemon mode with backoff, fleet observability, and
   durable machine registration records.
-- Id-preserving self-hosted import coverage for run history, workflow history,
+- Id-preserving server import coverage for run history, workflow history,
   work items, goals, and audit rows.
 - Hosted product integration outside the public package.
 
@@ -263,8 +272,8 @@ Non-local execution needs these follow-up releases before it is complete:
 The public package owns:
 
 - local SQLite scheduling and daemon execution,
-- the mode resolver and status surfaces,
-- the self-hosted API contract,
+- the storage resolver and status surfaces,
+- the server API contract,
 - the runner contract,
 - local cache/spool semantics,
 - import/export and migration commands,
@@ -278,6 +287,6 @@ Hosted product code owns:
 - cloud infrastructure deployment,
 - product UI and customer lifecycle flows.
 
-The public package must document cloud behavior as a contract unless a hosted
-URL and token are explicitly configured. It must not claim that cloud service is
-live by default.
+The public package must document hosted behavior as a contract unless a hosted
+URL and token are explicitly configured. It must not claim that a hosted
+service is live by default.

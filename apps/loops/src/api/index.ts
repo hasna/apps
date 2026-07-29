@@ -51,9 +51,8 @@ import {
   publicWorkflowWorkItem,
 } from "../lib/format.js";
 import {
-  buildDeploymentStatus,
-  deploymentStatusLine,
-  resolveLoopDeploymentMode,
+  buildStorageStatus,
+  storageStatusLine,
 } from "../lib/mode.js";
 import { dueSlots } from "../lib/recurrence.js";
 import {
@@ -88,7 +87,7 @@ const MIN_RUNNER_LEASE_MS = 1_000;
 
 program
   .name("loops-api")
-  .description("Loops self-hosted control-plane API foundation")
+  .description("Loops control-plane API foundation")
   .version(packageVersion())
   .option("-j, --json", "print JSON");
 
@@ -97,9 +96,9 @@ function wantsJson(opts?: { json?: boolean }): boolean {
 }
 
 function printStatus(opts?: { json?: boolean }): void {
-  const status = buildDeploymentStatus({ perspective: "self_hosted" });
+  const status = buildStorageStatus();
   if (wantsJson(opts)) console.log(JSON.stringify(apiStatus(), null, 2));
-  else console.log(deploymentStatusLine(status));
+  else console.log(storageStatusLine(status));
 }
 
 function ok(payload: Record<string, unknown> = {}, init?: ResponseInit): Response {
@@ -114,7 +113,7 @@ export function apiStatus() {
   return {
     ok: true,
     service: "loops-api",
-    status: buildDeploymentStatus({ perspective: "self_hosted" }),
+    status: buildStorageStatus(),
   };
 }
 
@@ -157,9 +156,15 @@ export interface LoopsApiServerOptions {
   }>;
 }
 
-/** Deployment mode for the general foundation envelopes. */
-function foundationMode(): string {
-  return buildDeploymentStatus({}).activeDeploymentMode;
+/**
+ * Wire `mode` value for the foundation envelopes. The installed
+ * @hasna/contracts foundation contract still requires a `local | cloud` mode
+ * field on /health, /ready, and /version; it collapses to "which store is
+ * authoritative" and is regenerated away when the contracts package ships the
+ * mode-free schema.
+ */
+function foundationMode(): "local" | "cloud" {
+  return buildStorageStatus().authority === "local_sqlite" ? "local" : "cloud";
 }
 
 /** Shared { status, version, mode } envelope for /health, /ready, /version. */
@@ -179,11 +184,11 @@ function foundationEnvelope(
 export function contractHealthResponse(
   env: Record<string, string | undefined> = process.env,
 ): { status: "ok"; version: string; mode: "local" | "cloud" } {
-  const runtimeMode = resolveLoopDeploymentMode(env).deploymentMode;
+  const { authority } = buildStorageStatus({ env });
   return {
     status: "ok",
     version: packageVersion(),
-    mode: runtimeMode === "local" ? "local" : "cloud",
+    mode: authority === "local_sqlite" ? "local" : "cloud",
   };
 }
 
@@ -384,7 +389,7 @@ function validateImportedAgentTargets(workflows: WorkflowSpec[], loops: Loop[]):
 }
 
 /**
- * Bulk id-preserving import for a local->self-hosted backfill.
+ * Bulk id-preserving import for a local->server backfill.
  *
  * Accepts batches of full `workflows` / `loops` / `runs` rows (the same public
  * shapes that `loops export` emits) and upserts them by id via the storage
@@ -394,7 +399,7 @@ function validateImportedAgentTargets(workflows: WorkflowSpec[], loops: Loop[]):
  * (workflows, then loops, then runs). Volatile `running` runs are skipped (they
  * carry lease/process ownership) and reported in `skippedRunning` rather than
  * failing the batch. This is the endpoint the migration module noted as the
- * missing "id-preserving import" surface for self-hosted push.
+ * missing "id-preserving import" surface for server push.
  */
 async function handleImportRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
   if (segments.length !== 0 || ctx.request.method !== "POST") return fail("not_found", 404);

@@ -7,10 +7,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  LOOP_DEPLOYMENT_MODES,
-  normalizeLoopDeploymentMode,
-} from "../src/lib/mode.ts";
+import { normalizeLoopClientTransport } from "../src/lib/mode.ts";
 import {
   formatContractConformance,
   repoRoot,
@@ -158,18 +155,19 @@ describe("Loops repository contract conformance", () => {
       types: "./dist/api/index.d.ts",
       import: "./dist/api/index.js",
     });
+    // SEAM: hasna.contract.json still declares the retired deployment-mode
+    // fields because the INSTALLED @hasna/contracts schema requires them. The
+    // manifest is rewritten when the mode-free contracts release ships; until
+    // then these literals pin the seam and the runtime must keep mapping the
+    // retired value onto the backend switch.
     expect(httpSurface.deploymentModes).toEqual(["self-hosted"]);
     expect(serviceMetadata.deploymentModeMapping).toEqual({
       contract: "self-hosted",
       runtime: "self_hosted",
     });
     expect(
-      LOOP_DEPLOYMENT_MODES.includes(
-        normalizeLoopDeploymentMode(
-          serviceMetadata.deploymentModeMapping.runtime,
-        ),
-      ),
-    ).toBe(true);
+      normalizeLoopClientTransport(serviceMetadata.deploymentModeMapping.runtime),
+    ).toBe("http");
 
     expect(manifest.storage.databaseUrlSecretRef).toBeUndefined();
     expect(

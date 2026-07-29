@@ -1,6 +1,6 @@
 // Postgres implementation of the LoopStorageContract.
 //
-// This is the self-hosted Postgres backend counterpart to SqliteLoopStorage. It
+// This is the Postgres backend counterpart to SqliteLoopStorage. It
 // speaks the exact same ~60-method surface as the local sqlite `Store`, but
 // every method is async and every statement runs against a live `pg.Pool`
 // through the generated @hasna/contracts storage kit (direct Postgres, no cache,
@@ -942,7 +942,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
   // ----------------------------------------------- id-preserving bulk import
   // Postgres counterparts of the sqlite Store.upsertMigration* methods. These
   // preserve the incoming id/status/timestamps exactly (no genId, no forced
-  // "active"), so a local->self-hosted backfill reproduces the source rows
+  // "active"), so a local->server backfill reproduces the source rows
   // faithfully and idempotently (tenant-qualified upsert — re-runs never
   // duplicate). Without --replace an existing row is left untouched and
   // returned as-is. Run/step output is re-clamped by persistedRunOutput and

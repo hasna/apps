@@ -22,7 +22,7 @@ import { dataDir } from "../lib/paths.js";
 import { computeNextAfter } from "../lib/recurrence.js";
 import { runLoopNow } from "../lib/scheduler.js";
 import { Store } from "../lib/store.js";
-import { LocalStore, getStore, isCloudStore, type LoopStore } from "../lib/store/index.js";
+import { LocalStore, getStore, isApiStore, type LoopStore } from "../lib/store/index.js";
 import { packageVersion } from "../lib/version.js";
 import { preflightWorkflow } from "../lib/workflow-runner.js";
 import { workflowBodyFromJson } from "../lib/workflow-spec.js";
@@ -272,10 +272,10 @@ async function withStore<T>(fn: (store: LoopStore) => T | Promise<T>): Promise<T
  * CLI's `assertLocalOnlyCommand` + `new Store()` pattern.
  */
 async function withLocalStore<T>(operation: string, fn: (store: Store) => T | Promise<T>): Promise<T> {
-  if (isCloudStore()) {
+  if (isApiStore()) {
     throw new Error(
       `'${operation}' inspects this machine's local Loops runtime and is not available while flipped to the hosted Loops API. ` +
-        `Unset HASNA_LOOPS_API_URL/HASNA_LOOPS_API_KEY (or set HASNA_LOOPS_STORAGE_MODE=local) to run it here.`,
+        `Unset HASNA_LOOPS_API_URL/HASNA_LOOPS_API_KEY (or set HASNA_LOOPS_STORAGE_MODE=sqlite) to run it here.`,
     );
   }
   const store = new Store();
@@ -833,9 +833,9 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
         daemon: { running: boolean; stale: boolean; pid: number | undefined } | undefined;
         warning: string | undefined;
       }>(async (store) => {
-        if (store.transport === "cloud-http") {
-          // Flipped to cloud: marking due is a schedule mutation on the hosted
-          // loop record (set next_run_at=now) via the ApiStore; a self-hosted
+        if (store.transport === "http") {
+          // Flipped to the hosted API: marking due is a schedule mutation on the
+          // hosted loop record (set next_run_at=now) via the ApiStore; a server
           // runner picks it up. There is no local daemon to report.
           const loop = await store.requireUniqueLoop(idOrName);
           if (loop.archivedAt) throw new LoopArchivedError(idOrName);
@@ -846,7 +846,7 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
             loop: publicLoop(updated),
             daemon: undefined,
             warning:
-              "loops is flipped to self_hosted: the loop is marked due on the hosted control plane; a self-hosted runner must execute it.",
+              "loops is flipped to the hosted API: the loop is marked due on the server; a server-side runner must execute it.",
           };
         }
         // Local: schedule via the shared runLoopNow (schedule mode) against this

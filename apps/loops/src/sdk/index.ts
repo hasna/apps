@@ -17,14 +17,14 @@ import { buildHealthReport, buildHealthScan, type BuildHealthScanOptions, type L
 import {
   applyImportMigrationBundle,
   buildImportMigrationPlan,
-  buildSelfHostedMigrationPlan,
+  buildServerMigrationPlan,
   exportLoopsMigrationBundle,
   type ApplyLoopsMigrationResult,
   type ExportLoopsMigrationOptions,
   type ImportLoopsMigrationOptions,
   type LoopsMigrationBundle,
   type LoopsMigrationPlan,
-  type SelfHostedPlanOptions,
+  type ServerPlanOptions,
 } from "../lib/migration.js";
 import { computeNextAfter } from "../lib/recurrence.js";
 import { runLoopNow, tick } from "../lib/scheduler.js";
@@ -36,7 +36,7 @@ export {
   LOOPS_MIGRATION_SCHEMA,
   applyImportMigrationBundle,
   buildImportMigrationPlan,
-  buildSelfHostedMigrationPlan,
+  buildServerMigrationPlan,
   exportLoopsMigrationBundle,
   migrationHash,
   validateLoopsMigrationBundle,
@@ -51,7 +51,7 @@ export type {
   LoopsMigrationPlanRow,
   LoopsMigrationPlanSummary,
   LoopsMigrationResource,
-  SelfHostedPlanOptions,
+  ServerPlanOptions,
 } from "../lib/migration.js";
 
 export interface LoopsClientOptions {
@@ -122,10 +122,10 @@ export class LoopsClient {
    * hitting the on-box island when the client is flipped to the hosted API.
    */
   private localRuntime(operation: string): Store {
-    if (this.store.transport !== "local") {
+    if (this.store.transport !== "sqlite") {
       throw new Error(
         `loops SDK ${operation} operates on this machine's local runtime and is not available while flipped to the hosted Loops API. ` +
-          `Unset HASNA_LOOPS_API_URL/HASNA_LOOPS_API_KEY (or set HASNA_LOOPS_STORAGE_MODE=local) to run it here.`,
+          `Unset HASNA_LOOPS_API_URL/HASNA_LOOPS_API_KEY (or set HASNA_LOOPS_STORAGE_MODE=sqlite) to run it here.`,
       );
     }
     return (this.store as LocalStore).raw;
@@ -292,8 +292,8 @@ export class LoopsClient {
     return applyImportMigrationBundle(this.localRuntime("importBundle()"), bundle, opts);
   }
 
-  planSelfHostedMigration(opts: Omit<SelfHostedPlanOptions, "operation"> & { operation?: SelfHostedPlanOptions["operation"] } = {}): Promise<LoopsMigrationPlan> {
-    return buildSelfHostedMigrationPlan(this.localRuntime("planSelfHostedMigration()"), { ...opts, operation: opts.operation ?? "self-hosted-migrate" });
+  planServerMigration(opts: Omit<ServerPlanOptions, "operation"> & { operation?: ServerPlanOptions["operation"] } = {}): Promise<LoopsMigrationPlan> {
+    return buildServerMigrationPlan(this.localRuntime("planServerMigration()"), { ...opts, operation: opts.operation ?? "server-migrate" });
   }
 
   async close(): Promise<void> {

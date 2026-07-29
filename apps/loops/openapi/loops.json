@@ -3,12 +3,12 @@
   "info": {
     "title": "Loops",
     "version": "0.4.29",
-    "description": "Loops self-hosted multi-tenant control-plane HTTP API. All non-probe operations require a tenant-bound API key with the declared scope, role, and token kind."
+    "description": "Loops multi-tenant control-plane HTTP API. All non-probe operations require a tenant-bound API key with the declared scope, role, and token kind."
   },
   "servers": [
     {
       "url": "https://your-deployment.example",
-      "description": "Replace with your self-hosted Loops deployment's base URL."
+      "description": "Replace with your Loops server's base URL."
     }
   ],
   "paths": {
@@ -724,7 +724,7 @@
     "/v1/import": {
       "post": {
         "operationId": "importRows",
-        "summary": "Bulk id-preserving import (self-hosted backfill)",
+        "summary": "Bulk id-preserving import (server backfill)",
         "description": "Upsert full workflow/loop/run rows by id (idempotent; ON CONFLICT(id) DO UPDATE). Preserves ids, definitions, and timestamps while applying safe defaults: imported workflows are archived, imported loops are paused, and nextRunAt/retryScheduledFor are cleared by default so backfills never schedule immediately. Set preserveWorkflowActivation=true or preserveLoopScheduling=true only for intentional activation. Applied FK-safe: workflows, then loops, then runs. Volatile running runs are skipped and reported.",
         "requestBody": {
           "required": true,

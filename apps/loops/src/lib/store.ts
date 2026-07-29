@@ -5067,7 +5067,7 @@ export class Store {
   /**
    * Page through loop_runs for a streaming export. A full `exportMigrationRows`
    * loads every run's stdout/stderr into memory at once (hundreds of MB on a
-   * busy host); a self-hosted backfill instead pulls stable ordered pages so
+   * busy host); a server backfill instead pulls stable ordered pages so
    * peak memory stays bounded. Order is deterministic (created_at, id) so
    * offset paging over an immutable snapshot never skips or repeats a row.
    */

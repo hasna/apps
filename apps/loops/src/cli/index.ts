@@ -39,7 +39,7 @@ import {
 } from "../lib/format.js";
 import { computeNextAfter, parseDuration } from "../lib/recurrence.js";
 import { Store } from "../lib/store.js";
-import { getStore, isCloudStore, type LoopStore } from "../lib/store/index.js";
+import { getStore, isApiStore, type LoopStore } from "../lib/store/index.js";
 import { executeWorkflow, preflightWorkflow } from "../lib/workflow-runner.js";
 import { runLoopNow, tick } from "../lib/scheduler.js";
 import { daemonStatus, stopDaemon } from "../daemon/control.js";
@@ -51,15 +51,15 @@ import { buildHealthReport, buildHealthScan, expectationForLoop, writeHealthScan
 import { runLoopsUiApp } from "./ui.js";
 import {
   applyImportMigrationBundle,
-  applySelfHostedPush,
+  applyServerPush,
   buildImportMigrationPlan,
-  buildSelfHostedMigrationPlan,
+  buildServerMigrationPlan,
   exportLoopsMigrationBundle,
   publicMigrationBundle,
   validateLoopsMigrationBundle,
   type LoopsMigrationPlan,
 } from "../lib/migration.js";
-import { buildDeploymentStatus, deploymentStatusLine, type LoopDeploymentMode, type LoopDeploymentStatus } from "../lib/mode.js";
+import { buildStorageStatus, storageStatusLine, type LoopStorageStatus } from "../lib/mode.js";
 import {
   buildDuplicateOverlapReport,
   buildNameHygieneReport,
@@ -282,25 +282,25 @@ async function listAllLoops(
  * Fail loudly instead.
  */
 function assertLocalOnlyCommand(command: string): void {
-  if (isCloudStore()) {
+  if (isApiStore()) {
     throw new ValidationError(
       `'loops ${command}' operates on this machine's local runtime and is not available while flipped to the hosted Loops API. ` +
-        `Unset HASNA_LOOPS_API_URL/HASNA_LOOPS_API_KEY (or set HASNA_LOOPS_STORAGE_MODE=local) to run it here.`,
+        `Unset HASNA_LOOPS_API_URL/HASNA_LOOPS_API_KEY (or set HASNA_LOOPS_STORAGE_MODE=sqlite) to run it here.`,
     );
   }
 }
 
-function printDeploymentStatus(status: LoopDeploymentStatus, opts: { json?: boolean } = {}): void {
+function printStorageStatus(status: LoopStorageStatus, opts: { json?: boolean } = {}): void {
   if (isJson() || opts.json) console.log(JSON.stringify(status, null, 2));
   else {
-    console.log(deploymentStatusLine(status));
+    console.log(storageStatusLine(status));
     for (const warning of status.warnings) console.log(`warn ${warning}`);
   }
 }
 
-function deploymentStatusCommand(mode?: LoopDeploymentMode) {
+function storageStatusCommand() {
   return (opts: { json?: boolean } = {}) => {
-    printDeploymentStatus(buildDeploymentStatus({ perspective: mode }), opts);
+    printStorageStatus(buildStorageStatus(), opts);
   };
 }
 
@@ -803,15 +803,17 @@ const goal = program.command("goal").description("inspect goal runs");
 
 program
   .command("mode")
-  .description("show the active Loops deployment mode")
+  .description("show the active Loops storage backend and client transport")
   .option("--json", "print JSON")
-  .action(runAction(deploymentStatusCommand()));
+  .action(runAction(storageStatusCommand()));
 
-const selfHosted = program.command("self-hosted").description("inspect the self-hosted Loops contract");
-selfHosted
+const server = program
+  .command("server")
+  .description("inspect the Loops server contract (HTTP control plane / postgres backend)");
+server
   .command("status")
   .option("--json", "print JSON")
-  .action(runAction(deploymentStatusCommand("self_hosted")));
+  .action(runAction(storageStatusCommand()));
 
 program
   .command("export")
@@ -893,11 +895,11 @@ program
     }
   }));
 
-function selfHostedMigrationCommand(operation: "self-hosted-push" | "self-hosted-pull" | "self-hosted-migrate") {
+function serverMigrationCommand(operation: "server-push" | "server-pull" | "server-migrate") {
   return runAction(async (opts: { apiUrl?: string; runs?: boolean; json?: boolean }) => {
     const store = new Store();
     try {
-      const plan = await buildSelfHostedMigrationPlan(store, {
+      const plan = await buildServerMigrationPlan(store, {
         operation,
         apiUrl: opts.apiUrl,
         includeRuns: opts.runs,
@@ -909,31 +911,31 @@ function selfHostedMigrationCommand(operation: "self-hosted-push" | "self-hosted
   });
 }
 
-selfHosted
+server
   .command("migrate")
-  .description("preview local-to-self-hosted migration actions")
-  .option("--api-url <url>", "self-hosted control-plane API URL")
-  .option("--dry-run", "preview only; self-hosted migrate does not apply remote changes yet")
+  .description("preview local-to-server migration actions")
+  .option("--api-url <url>", "server control-plane API URL")
+  .option("--dry-run", "preview only; server migrate does not apply remote changes yet")
   .option("--no-runs", "omit loop run history from the preview")
   .option("--json", "print JSON")
-  .action(selfHostedMigrationCommand("self-hosted-migrate"));
+  .action(serverMigrationCommand("server-migrate"));
 
-selfHosted
+server
   .command("push")
-  .description("preview (default) or apply an id-preserving local->self-hosted backfill")
-  .option("--api-url <url>", "self-hosted control-plane API URL")
+  .description("preview (default) or apply an id-preserving local->server backfill")
+  .option("--api-url <url>", "server control-plane API URL")
   .option("--apply", "apply the backfill via the control-plane /v1/import endpoint (default is preview)")
   .option("--replace", "update differing same-id remote rows; safe default may still archive/pause same-id definitions")
   .option("--dry-run", "preview only; equivalent to omitting --apply")
   .option("--no-runs", "omit loop run history")
-  .option("--manifest-file <path>", "write a self-hosted comparison/import manifest JSON file")
+  .option("--manifest-file <path>", "write a server comparison/import manifest JSON file")
   .option("--json", "print JSON")
   .action(runAction(async (opts: { apiUrl?: string; apply?: boolean; replace?: boolean; dryRun?: boolean; runs?: boolean; manifestFile?: string; json?: boolean }) => {
     if (!opts.apply || opts.dryRun) {
       const store = new Store();
       try {
-        const plan = await buildSelfHostedMigrationPlan(store, {
-          operation: "self-hosted-push",
+        const plan = await buildServerMigrationPlan(store, {
+          operation: "server-push",
           apiUrl: opts.apiUrl,
           includeRuns: opts.runs,
           replace: opts.replace,
@@ -947,7 +949,7 @@ selfHosted
     }
     const store = new Store();
     try {
-      const result = await applySelfHostedPush(store, {
+      const result = await applyServerPush(store, {
         apiUrl: opts.apiUrl,
         includeRuns: opts.runs,
         replace: opts.replace,
@@ -965,20 +967,14 @@ selfHosted
     }
   }));
 
-selfHosted
+server
   .command("pull")
-  .description("preview self-hosted rows that would be pulled locally")
-  .option("--api-url <url>", "self-hosted control-plane API URL")
-  .option("--dry-run", "preview only; self-hosted pull does not apply local changes yet")
+  .description("preview server rows that would be pulled locally")
+  .option("--api-url <url>", "server control-plane API URL")
+  .option("--dry-run", "preview only; server pull does not apply local changes yet")
   .option("--no-runs", "omit loop run history from the preview")
   .option("--json", "print JSON")
-  .action(selfHostedMigrationCommand("self-hosted-pull"));
-
-const cloud = program.command("cloud").description("inspect the hosted Loops contract");
-cloud
-  .command("status")
-  .option("--json", "print JSON")
-  .action(runAction(deploymentStatusCommand("cloud")));
+  .action(serverMigrationCommand("server-pull"));
 
 function formatTemplateVariable(template: LoopTemplateSummary, name: string): string {
   const variable = template.variables.find((entry) => entry.name === name);
@@ -2473,7 +2469,7 @@ program
 
     // Backups protect the on-box sqlite file; there is nothing local to snapshot
     // when the rename is routed to the hosted API.
-    const backupPath = store.transport === "local" ? backupLoopsDatabase("rename") : undefined;
+    const backupPath = store.transport === "sqlite" ? backupLoopsDatabase("rename") : undefined;
     const renamed = await store.renameLoop(loop.id, trimmed);
     print(
       {
@@ -2767,4 +2763,15 @@ daemon
     else console.log(lines.join("\n"));
   }));
 
-await program.parseAsync(process.argv);
+// The retired command groups keep working for existing automation, but never
+// appear in help or any other output. Rewrite argv before dispatch.
+const LEGACY_SERVER_GROUPS = new Set([
+  "self-hosted", // LEGACY-DEPLOYMENT-MODE-ALIAS
+  "cloud", // LEGACY-DEPLOYMENT-MODE-ALIAS
+]);
+const argv = process.argv.slice();
+const firstCommandIndex = argv.findIndex((arg, index) => index >= 2 && !arg.startsWith("-"));
+if (firstCommandIndex !== -1 && LEGACY_SERVER_GROUPS.has(argv[firstCommandIndex]!)) {
+  argv[firstCommandIndex] = "server";
+}
+await program.parseAsync(argv);

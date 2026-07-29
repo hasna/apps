@@ -259,7 +259,7 @@ export class LoopsClient {
       });
     }
 
-    /** Bulk id-preserving import (self-hosted backfill) */
+    /** Bulk id-preserving import (server backfill) */
     async importRows(body: ImportInput, init?: RequestInit): Promise<ImportResponse> {
       return this.request("POST", `/v1/import`, {
         body,

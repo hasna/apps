@@ -7,6 +7,10 @@ import { contractHealthResponse } from "../src/api/index.ts";
 
 export const repoRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 
+// SEAM: the INSTALLED @hasna/contracts conformance harness still expects the
+// retired deployment-mode env value; the runtime maps it onto the backend
+// switch (self_hosted -> http client / "cloud" wire mode). Update to the
+// canonical `http` value when the mode-free contracts release ships.
 const conformanceEnv = {
   HASNA_LOOPS_STORAGE_MODE: "self_hosted",
 };

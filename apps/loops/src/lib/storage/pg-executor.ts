@@ -2,7 +2,7 @@
 //
 // Adapts the generated @hasna/contracts storage kit (`createQueryClient` over a
 // `pg.Pool`) to the `PostgresQueryExecutor` contract consumed by
-// `PostgresStorage`. A pool is only ever built when a self-hosted database URL
+// `PostgresStorage`. A pool is only ever built when a server database URL
 // is present; there is no local/hybrid Postgres path.
 
 import type { PoolQueryClient, TypedQueryClient } from "../../generated/storage-kit/query.js";

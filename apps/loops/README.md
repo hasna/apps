@@ -23,41 +23,44 @@ It supports deterministic command loops, JSON-defined workflows, and guarded CLI
 - `opencode run`
 - `codex exec`
 
-## Deployment Modes
+## Storage
 
-Loops has three deployment modes:
+Loops has ONE data-backend axis and two seams — there is no deployment-mode
+axis:
 
-- `local`: SQLite in `LOOPS_DATA_DIR` is authoritative and `loops-daemon` executes scheduled work.
-- `self_hosted`: the Hasna-owned AWS/RDS control-plane deployment, served by
-  `loops-serve` and backed by Postgres, with the embeddable `loops-api` contract
-  shared by serve, SDK, and tests. This release exposes status, storage-backed
+- **Client store seam** (`loops` CLI / MCP / SDK): `sqlite | http`. The client
+  reads the on-box SQLite file in `LOOPS_DATA_DIR`, or the server's HTTP `/v1`
+  API. It never opens Postgres directly.
+- **Server data backend** (`loops-serve`): `sqlite | postgres`. The on-box
+  `loops-daemon` schedules from SQLite; `loops-serve` runs against the Postgres
+  database selected by `HASNA_LOOPS_DATABASE_URL`, with the embeddable
+  `loops-api` contract shared by serve, SDK, and tests — status, storage-backed
   `/v1` loop CRUD and run listing, runner claim/heartbeat/finalize protocol
-  endpoints, a one-shot `loops-runner run-once` execution path for embedded
-  control-plane hosts, id-preserving local export/import, tenant-bound API-key
-  authentication, and forced Postgres row-level tenant isolation.
-- `cloud`: a hosted control-plane contract using the same tenant-bound API.
+  endpoints, a one-shot `loops-runner run-once` execution path, id-preserving
+  local export/import, tenant-bound API-key authentication, and forced Postgres
+  row-level tenant isolation.
 
-`local` is the default and requires no network, token, Postgres, or hosted
-service. Set `HASNA_LOOPS_STORAGE_MODE` to `local`, `self_hosted`, or
-`cloud` to choose explicitly. Without an explicit mode,
-`HASNA_LOOPS_API_URL` or `HASNA_LOOPS_DATABASE_URL` selects `self_hosted`.
+The on-box sqlite store is the default and requires no network, token,
+Postgres, or hosted service. Setting `HASNA_LOOPS_API_URL` plus
+`HASNA_LOOPS_API_KEY` flips the client to the server's API;
+`HASNA_LOOPS_STORAGE_MODE=sqlite` pins the on-box file even when the API vars
+are present (the reversible escape hatch).
 
-The public `@hasna/loops` package owns the local runtime, mode resolver,
-self-hosted API contract, tenant authentication and authorization, runner
+The public `@hasna/loops` package owns the local runtime, storage resolver,
+server API contract, tenant authentication and authorization, runner
 contract, SDK, MCP server, and CLI. Account provisioning and infrastructure
-deployment remain operator responsibilities. Cloud clients use
-`HASNA_LOOPS_API_URL` plus `HASNA_LOOPS_API_KEY`.
+deployment remain operator responsibilities.
 
 Scheduler state is explicit in status JSON. `schedulerState.localStore` is
-SQLite plus local run artifact files: authoritative in `local`, cache/spool in
-non-local modes. `schedulerState.remoteStore` names the non-local contract
-(`api_control_plane_contract`, `postgres_contract`, or
-`hosted_control_plane_contract`). The standalone `loops` CLI reports
-`applySupported=false` for non-local apply because it does not perform
+SQLite plus local run artifact files: authoritative when the on-box store is
+authoritative, cache/spool when the server is. `schedulerState.remoteStore`
+names the server contract (`api_control_plane_contract` or
+`postgres_contract`). The standalone `loops` CLI reports
+`applySupported=false` for remote apply because it does not perform
 id-preserving remote migration, S3/object storage mutation, AWS resource
-mutation, or hosted credential mutation. `loops-serve` mutates self-hosted
-Postgres for normal control-plane CRUD and runner protocol routes when it is
-explicitly configured. Route admission remains bounded by `max_dispatch`,
+mutation, or hosted credential mutation. `loops-serve` mutates its
+Postgres backend for normal control-plane CRUD and runner protocol routes when
+it is explicitly configured. Route admission remains bounded by `max_dispatch`,
 `max_active`, `max_active_per_project`, `max_active_per_project_group`,
 `max_active_scope`, and `max_per_profile`.
 
@@ -66,15 +69,14 @@ Useful status and setup commands:
 ```bash
 loops mode
 loops --json mode
-loops self-hosted status
-loops self-hosted migrate --dry-run
-loops self-hosted push --dry-run
-loops self-hosted pull --dry-run
+loops server status
+loops server migrate --dry-run
+loops server push --dry-run
+loops server pull --dry-run
 loops export --file ./loops-export.json --dry-run
 loops export --file ./loops-export.json
 loops import ./loops-export.json
 loops import ./loops-export.json --apply
-loops cloud status
 loops-api status
 loops-serve version
 HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --dry-run
@@ -83,14 +85,14 @@ HASNA_LOOPS_DATABASE_URL=... HASNA_LOOPS_AUTH_DATABASE_URL=... loops-serve serve
 loops-runner status
 ```
 
-`loops self-hosted push` is safe by default: imported workflows are archived and
+`loops server push` is safe by default: imported workflows are archived and
 imported loops are paused with `nextRunAt`/`retryScheduledFor` cleared. Even
 without `--replace`, the control-plane import boundary may rewrite existing
 same-id workflows/loops into that disabled representation; use explicit
 preserve flags only for an intentional activation.
 
-See [Deployment Modes](docs/DEPLOYMENT_MODES.md) for the full package boundary
-and machine-placement contract.
+See [Storage](docs/STORAGE.md) for the full package boundary
+contract.
 
 ### Provider database credentials
 

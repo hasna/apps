@@ -8,14 +8,14 @@ import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { Store } from "../lib/store.js";
 import { createSqliteLoopStorage } from "../lib/storage/sqlite.js";
-import { applySelfHostedPush } from "../lib/migration.js";
+import { applyServerPush } from "../lib/migration.js";
 import { RESTART_INTERRUPTED_RUN_PREFIX } from "../lib/health.js";
 
 const cliPath = join(dirname(fileURLToPath(import.meta.url)), "index.ts");
 
 function runCli(dataDir: string, args: string[], input?: string, env: Record<string, string> = {}) {
   const isolatedEnv = {
-    HASNA_LOOPS_STORAGE_MODE: "local",
+    HASNA_LOOPS_STORAGE_MODE: "sqlite",
     HASNA_LOOPS_API_URL: "",
     HASNA_LOOPS_API_KEY: "",
   };
@@ -281,7 +281,7 @@ describe("loops CLI", () => {
     expect(receipts.map((receipt) => receipt.run_id)).toEqual(["run-cli"]);
   });
 
-  test("reports local deployment mode by default", () => {
+  test("reports the sqlite backend by default", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-mode-local-"));
     const mode = runCli(dataDir, ["--json", "mode"], undefined, {
       HASNA_LOOPS_STORAGE_MODE: "",
@@ -291,8 +291,9 @@ describe("loops CLI", () => {
 
     expect(mode.status).toBe(0);
     const value = JSON.parse(mode.stdout);
-    expect(value.deploymentMode).toBe("local");
-    expect(value.sourceOfTruth).toBe("local_sqlite");
+    expect(value.dataBackend).toBe("sqlite");
+    expect(value.clientTransport).toBe("sqlite");
+    expect(value.authority).toBe("local_sqlite");
     expect(value.localStore.role).toBe("authoritative");
     expect(value.schedulerState).toMatchObject({
       authority: "local_sqlite",
@@ -304,61 +305,67 @@ describe("loops CLI", () => {
     expect(mode.stdout).not.toContain("dbPath");
   });
 
-  test("reports self-hosted and cloud contract perspectives without exposing tokens", () => {
+  test("reports the server contract without exposing tokens, including via legacy command aliases", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-mode-cloud-"));
-    const selfHosted = runCli(dataDir, ["--json", "self-hosted", "status"], undefined, {
-      HASNA_LOOPS_STORAGE_MODE: "self_hosted",
+    const server = runCli(dataDir, ["--json", "server", "status"], undefined, {
+      HASNA_LOOPS_STORAGE_MODE: "",
       HASNA_LOOPS_API_URL: "http://127.0.0.1:8787",
       HASNA_LOOPS_API_KEY: "do-not-print-this-token",
     });
-    expect(selfHosted.status).toBe(0);
-    expect(selfHosted.stdout).not.toContain("do-not-print-this-token");
-    expect(JSON.parse(selfHosted.stdout)).toMatchObject({
-      deploymentMode: "self_hosted",
-      activeDeploymentMode: "self_hosted",
-      sourceOfTruth: "self_hosted_control_plane",
-      controlPlane: {
-        kind: "self_hosted",
+    expect(server.status).toBe(0);
+    expect(server.stdout).not.toContain("do-not-print-this-token");
+    expect(JSON.parse(server.stdout)).toMatchObject({
+      dataBackend: "sqlite",
+      clientTransport: "http",
+      authority: "server_api",
+      server: {
         configured: true,
         apiUrl: "http://127.0.0.1:8787",
         apiKeyPresent: true,
       },
       schedulerState: {
-        authority: "self_hosted_control_plane",
+        authority: "server_api",
         localStore: { backend: "sqlite", role: "cache_and_spool" },
         remoteStore: { backend: "api_control_plane_contract", configured: true, applySupported: false },
         routeAdmission: { stateStore: "control_plane_contract" },
       },
     });
 
-    const cloud = runCli(dataDir, ["--json", "cloud", "status"], undefined, {
+    // The retired command groups remain as aliases and print the SAME status.
+    for (const legacyGroup of ["self-hosted", "cloud"]) {
+      const aliased = runCli(dataDir, ["--json", legacyGroup, "status"], undefined, {
+        HASNA_LOOPS_STORAGE_MODE: "",
+        HASNA_LOOPS_API_URL: "http://127.0.0.1:8787",
+        HASNA_LOOPS_API_KEY: "do-not-print-this-token",
+      });
+      expect(aliased.status).toBe(0);
+      expect(aliased.stdout).not.toContain("do-not-print-this-token");
+      expect(JSON.parse(aliased.stdout)).toEqual(JSON.parse(server.stdout));
+    }
+
+    // The sqlite pin (via the retired "local" spelling) keeps the on-box store
+    // authoritative even with API vars present.
+    const pinned = runCli(dataDir, ["--json", "server", "status"], undefined, {
       HASNA_LOOPS_STORAGE_MODE: "local",
       HASNA_LOOPS_API_URL: "https://loops.example.test",
       HASNA_LOOPS_API_KEY: "do-not-print-this-cloud-token",
     });
-    expect(cloud.status).toBe(0);
-    expect(cloud.stdout).not.toContain("do-not-print-this-cloud-token");
-    const cloudValue = JSON.parse(cloud.stdout);
-    expect(cloudValue).toMatchObject({
-      deploymentMode: "cloud",
-      activeDeploymentMode: "local",
-      active: false,
-      sourceOfTruth: "cloud_control_plane",
-      controlPlane: {
-        kind: "cloud",
-        configured: true,
-        apiUrl: "https://loops.example.test",
-        apiKeyPresent: true,
-      },
+    expect(pinned.status).toBe(0);
+    expect(pinned.stdout).not.toContain("do-not-print-this-cloud-token");
+    const pinnedValue = JSON.parse(pinned.stdout);
+    expect(pinnedValue).toMatchObject({
+      dataBackend: "sqlite",
+      clientTransport: "sqlite",
+      authority: "local_sqlite",
+      localStore: { backend: "sqlite", role: "authoritative" },
       schedulerState: {
-        authority: "cloud_control_plane",
-        remoteStore: { backend: "hosted_control_plane_contract", configured: true, applySupported: false, mutatesAws: false },
-        routeAdmission: { stateStore: "control_plane_contract" },
+        authority: "local_sqlite",
+        remoteStore: { backend: "none", configured: false, applySupported: false, mutatesAws: false },
+        routeAdmission: { stateStore: "local_sqlite" },
       },
     });
-    expect(cloudValue.warnings.join(" ")).toContain("active deployment mode is local");
-    expect(cloud.stdout).not.toContain("dataDir");
-    expect(cloud.stdout).not.toContain("dbPath");
+    expect(pinned.stdout).not.toContain("dataDir");
+    expect(pinned.stdout).not.toContain("dbPath");
   });
 
   test("exports and imports id-preserving migration bundles idempotently", () => {
@@ -480,33 +487,33 @@ describe("loops CLI", () => {
     expect(missing.stderr).toContain("--file");
   });
 
-  test("self-hosted migrate preview reports blocked unsupported rows without tokens", () => {
-    const dataDir = freshDataDir("loops-cli-self-hosted-migrate-");
+  test("server migrate preview reports blocked unsupported rows without tokens", () => {
+    const dataDir = freshDataDir("loops-cli-server-migrate-");
     const create = runCli(dataDir, ["create", "command", "remote-loop", "--at", futureAt(), "--cmd", "true"]);
     expect(create.status).toBe(0);
 
-    const preview = runCli(dataDir, ["--json", "self-hosted", "migrate", "--dry-run"], undefined, {
+    const preview = runCli(dataDir, ["--json", "server", "migrate", "--dry-run"], undefined, {
       HASNA_LOOPS_API_KEY: "do-not-print-this-token",
     });
     expect(preview.status).toBe(0);
     expect(preview.stdout).not.toContain("do-not-print-this-token");
     const plan = JSON.parse(preview.stdout);
-    expect(plan.operation).toBe("self-hosted-migrate");
+    expect(plan.operation).toBe("server-migrate");
     expect(plan.dryRun).toBe(true);
     expect(plan.importable).toBe(false);
     expect(plan.summary.blocked).toBeGreaterThan(0);
     expect(plan.warnings.join(" ")).toContain("HASNA_LOOPS_API_URL");
 
     for (const command of ["push", "pull"]) {
-      const documented = runCli(dataDir, ["--json", "self-hosted", command, "--dry-run"]);
+      const documented = runCli(dataDir, ["--json", "server", command, "--dry-run"]);
       expect(documented.status).toBe(0);
-      expect(JSON.parse(documented.stdout).operation).toBe(`self-hosted-${command}`);
+      expect(JSON.parse(documented.stdout).operation).toBe(`server-${command}`);
     }
   });
 
-  test("self-hosted push applies id-preserving definitions paused/disabled and writes a manifest", async () => {
+  test("server push applies id-preserving definitions paused/disabled and writes a manifest", async () => {
     const mod = await import("../api/index.js");
-    const sourceDir = freshDataDir("loops-cli-self-hosted-push-source-");
+    const sourceDir = freshDataDir("loops-cli-server-push-source-");
     const remoteStorage = createSqliteLoopStorage(":memory:");
     const principal = {
       tenantId: "tenant-test", principalId: "principal-test", requestId: "request-test",
@@ -543,7 +550,7 @@ describe("loops CLI", () => {
 
     try {
       const source = new Store(join(sourceDir, "loops.db"));
-      const output = await applySelfHostedPush(source, {
+      const output = await applyServerPush(source, {
         apiUrl: `http://${server.hostname}:${server.port}`,
         apiKey: "test-token",
         includeRuns: false,

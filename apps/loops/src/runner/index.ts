@@ -15,7 +15,7 @@ import type {
 } from "../types.js";
 import { executeLoop } from "../lib/executor.js";
 import { executeLoopTarget, type WorkflowExecutionStore } from "../lib/workflow-runner.js";
-import { buildDeploymentStatus, deploymentStatusLine } from "../lib/mode.js";
+import { buildStorageStatus, storageStatusLine } from "../lib/mode.js";
 import { packageVersion } from "../lib/version.js";
 
 const program = new Command();
@@ -42,8 +42,8 @@ function configuredApiKey(env: NodeJS.ProcessEnv = process.env): string | undefi
 }
 
 export function runnerStatus(machineId = process.env.LOOPS_RUNNER_MACHINE_ID || process.env.HASNA_MACHINE_ID) {
-  const deployment = buildDeploymentStatus();
-  const local = deployment.deploymentMode === "local";
+  const storage = buildStorageStatus();
+  const local = storage.authority === "local_sqlite";
   const apiUrl = configuredApiUrl();
   const token = configuredApiKey();
   const apiReady = Boolean(apiUrl && token);
@@ -51,7 +51,7 @@ export function runnerStatus(machineId = process.env.LOOPS_RUNNER_MACHINE_ID || 
     ok: local || apiReady,
     service: "loops-runner",
     machineId,
-    deployment,
+    storage,
     state: local
       ? "local_daemon_authoritative"
       : apiReady
@@ -484,7 +484,7 @@ function wantsJson(opts?: { json?: boolean }): boolean {
 function printStatus(opts?: { json?: boolean }): void {
   const status = runnerStatus();
   if (wantsJson(opts)) console.log(JSON.stringify(status, null, 2));
-  else console.log(`${deploymentStatusLine(status.deployment)} runner=${status.state}${status.machineId ? ` machine=${status.machineId}` : ""}`);
+  else console.log(`${storageStatusLine(status.storage)} runner=${status.state}${status.machineId ? ` machine=${status.machineId}` : ""}`);
   if (!status.ok) process.exitCode = 1;
 }
 

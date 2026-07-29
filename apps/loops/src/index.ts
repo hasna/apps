@@ -152,27 +152,31 @@ export type {
 } from "./lib/storage/index.js";
 
 // ---------------------------------------------------------------------------
-// Experimental: deployment mode contract
+// Experimental: storage backend contract
 // ---------------------------------------------------------------------------
 export {
-  LOOP_DEPLOYMENT_MODES,
-  buildDeploymentStatus,
-  deploymentStatusLine,
-  loopControlPlaneConfig,
-  normalizeLoopDeploymentMode,
-  resolveLoopDeploymentMode,
+  LOOP_CLIENT_TRANSPORTS,
+  LOOP_DATA_BACKENDS,
+  buildStorageStatus,
+  loopServerConfig,
+  normalizeLoopClientTransport,
+  resolveLoopClientTransport,
+  resolveLoopDataBackend,
+  storageStatusLine,
 } from "./lib/mode.js";
 export type {
-  LoopControlPlaneConfig,
-  LoopDeploymentMode,
-  LoopDeploymentStatus,
-  LoopModeResolution,
+  LoopClientTransport,
+  LoopClientTransportResolution,
+  LoopDataBackend,
+  LoopDataBackendResolution,
   LoopRemoteArtifactStore,
   LoopRemoteSchedulerBackend,
   LoopRouteAdmissionGate,
   LoopRouteAdmissionStateStore,
   LoopSchedulerStateStatus,
-  LoopSourceOfTruth,
+  LoopServerConfig,
+  LoopStorageAuthority,
+  LoopStorageStatus,
 } from "./lib/mode.js";
 
 // ---------------------------------------------------------------------------
@@ -202,11 +206,11 @@ export {
   LOOPS_MIGRATION_SCHEMA,
   applyImportMigrationBundle,
   buildImportMigrationPlan,
-  buildSelfHostedMigrationPlan,
+  buildServerMigrationPlan,
   exportLoopsMigrationBundle,
   migrationHash,
   publicMigrationBundle,
-  selfHostedControlPlaneSummary,
+  serverControlPlaneSummary,
   validateLoopsMigrationBundle,
 } from "./lib/migration.js";
 export { runGoal } from "./lib/goal/runner.js";
@@ -260,5 +264,5 @@ export type {
   LoopsMigrationPlanRow,
   LoopsMigrationPlanSummary,
   LoopsMigrationResource,
-  SelfHostedPlanOptions,
+  ServerPlanOptions,
 } from "./lib/migration.js";

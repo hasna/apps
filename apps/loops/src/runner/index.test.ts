@@ -37,22 +37,22 @@ describe("loops-runner", () => {
 
   test("reports local daemon authority by default", () => {
     const previous = process.env.HASNA_LOOPS_STORAGE_MODE;
-    process.env.HASNA_LOOPS_STORAGE_MODE = "local";
+    process.env.HASNA_LOOPS_STORAGE_MODE = "sqlite";
     const status = runnerStatus();
     if (previous === undefined) delete process.env.HASNA_LOOPS_STORAGE_MODE;
     else process.env.HASNA_LOOPS_STORAGE_MODE = previous;
 
     expect(status.ok).toBe(true);
     expect(status.service).toBe("loops-runner");
-    expect(status.deployment.deploymentMode).toBe("local");
+    expect(status.storage.authority).toBe("local_sqlite");
     expect(status.state).toBe("local_daemon_authoritative");
   });
 
-  test("fails closed for configured self-hosted mode without an API URL", () => {
+  test("fails closed for a server-authority machine without an API URL", () => {
     const previousMode = process.env.HASNA_LOOPS_STORAGE_MODE;
     const previousDatabaseUrl = process.env.HASNA_LOOPS_DATABASE_URL;
     const previousApiUrl = process.env.HASNA_LOOPS_API_URL;
-    process.env.HASNA_LOOPS_STORAGE_MODE = "self_hosted";
+    process.env.HASNA_LOOPS_STORAGE_MODE = "http";
     process.env.HASNA_LOOPS_DATABASE_URL = "postgres://loops.example.test/openloops";
     delete process.env.HASNA_LOOPS_API_URL;
 
@@ -61,8 +61,8 @@ describe("loops-runner", () => {
 
       expect(status.ok).toBe(false);
       expect(status.machineId).toBe("machine-test");
-      expect(status.deployment.deploymentMode).toBe("self_hosted");
-      expect(status.deployment.controlPlane.configured).toBe(true);
+      expect(status.storage.authority).toBe("server_api");
+      expect(status.storage.server.configured).toBe(true);
       expect(status.state).toBe("missing_control_plane_api_url");
     } finally {
       if (previousMode === undefined) delete process.env.HASNA_LOOPS_STORAGE_MODE;
@@ -74,10 +74,11 @@ describe("loops-runner", () => {
     }
   });
 
-  test("reports ready when a self-hosted API URL and token are configured", () => {
+  test("reports ready when a server API URL and token are configured", () => {
     const previousMode = process.env.HASNA_LOOPS_STORAGE_MODE;
     const previousApiUrl = process.env.HASNA_LOOPS_API_URL;
     const previousToken = process.env.HASNA_LOOPS_API_KEY;
+    // Retired mode value: must keep selecting the http transport.
     process.env.HASNA_LOOPS_STORAGE_MODE = "self_hosted";
     process.env.HASNA_LOOPS_API_URL = "https://loops.example.test";
     process.env.HASNA_LOOPS_API_KEY = "token-present";

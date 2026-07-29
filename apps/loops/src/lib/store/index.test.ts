@@ -3,7 +3,7 @@ import { createLoopsApiServer } from "../../api/index.js";
 import { createSqliteLoopStorage } from "../storage/sqlite.js";
 import { createHasnaStorageClient, type HasnaStorageClient } from "../cloud/storage.js";
 import { createHasnaHttpTransport } from "../cloud/transport.js";
-import { ApiStore, CloudUnsupportedError, getStore, isCloudStore, LocalStore } from "./index.js";
+import { ApiStore, ApiUnsupportedError, getStore, isApiStore, LocalStore } from "./index.js";
 import { Store } from "../store.js";
 import type { CreateLoopInput, CreateWorkflowInput } from "../../types.js";
 
@@ -26,23 +26,27 @@ function apiStoreForServer(port: number): ApiStore {
 }
 
 describe("getStore resolver", () => {
-  test("returns LocalStore when no API vars are set", () => {
-    expect(getStore({})).toBeInstanceOf(LocalStore);
-    expect(isCloudStore({})).toBe(false);
+  test("returns LocalStore (sqlite) when no API vars are set", () => {
+    const store = getStore({});
+    expect(store).toBeInstanceOf(LocalStore);
+    expect(store.transport).toBe("sqlite");
+    expect(isApiStore({})).toBe(false);
   });
 
-  test("returns ApiStore (cloud-http) when both API vars are set", () => {
+  test("returns ApiStore (http) when both API vars are set", () => {
     const store = getStore({ HASNA_LOOPS_API_URL: "https://loops.example.test", HASNA_LOOPS_API_KEY: "k" });
     expect(store).toBeInstanceOf(ApiStore);
-    expect(store.transport).toBe("cloud-http");
-    expect(isCloudStore({ HASNA_LOOPS_API_URL: "https://loops.example.test", HASNA_LOOPS_API_KEY: "k" })).toBe(true);
+    expect(store.transport).toBe("http");
+    expect(isApiStore({ HASNA_LOOPS_API_URL: "https://loops.example.test", HASNA_LOOPS_API_KEY: "k" })).toBe(true);
   });
 
   test("rejects partial remote configuration instead of opening LocalStore", () => {
     expect(() => getStore({ HASNA_LOOPS_API_URL: "https://loops.example.test" })).toThrow("requires both");
     expect(() => getStore({ HASNA_LOOPS_API_KEY: "k" })).toThrow("requires both");
-    expect(() => getStore({ HASNA_LOOPS_STORAGE_MODE: "self_hosted" })).toThrow("requires both");
-    expect(() => getStore({ HASNA_LOOPS_STORAGE_MODE: "cloud" })).toThrow("requires both");
+    expect(() => getStore({ HASNA_LOOPS_STORAGE_MODE: "http" })).toThrow("requires both");
+    // Retired mode values keep selecting the same backend they always selected.
+    expect(() => getStore({ HASNA_LOOPS_STORAGE_MODE: "self_hosted" })).toThrow("requires both"); // LEGACY-DEPLOYMENT-MODE-ALIAS
+    expect(() => getStore({ HASNA_LOOPS_STORAGE_MODE: "cloud" })).toThrow("requires both"); // LEGACY-DEPLOYMENT-MODE-ALIAS
   });
 });
 
@@ -324,8 +328,8 @@ describe("ApiStore end-to-end against the real /v1 server", () => {
 
   test("unsupported mutations fail loudly instead of silently hitting local sqlite", async () => {
     const store = apiStoreForServer(1);
-    await expect(store.cancelWorkflowRun("wr_x")).rejects.toBeInstanceOf(CloudUnsupportedError);
-    await expect(store.requeueWorkflowWorkItem("wi_x")).rejects.toBeInstanceOf(CloudUnsupportedError);
+    await expect(store.cancelWorkflowRun("wr_x")).rejects.toBeInstanceOf(ApiUnsupportedError);
+    await expect(store.requeueWorkflowWorkItem("wi_x")).rejects.toBeInstanceOf(ApiUnsupportedError);
   });
 
   test("fails closed when a remote workflow event has malformed base fields", async () => {

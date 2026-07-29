@@ -72,13 +72,14 @@ describe("doctor", () => {
   });
 
   test("warns when non-local scheduler state is selected without control-plane configuration", () => {
+    // Retired mode value: still selects the server authority via the alias.
     process.env.HASNA_LOOPS_STORAGE_MODE = "cloud";
     const store = new Store(":memory:");
     try {
       const report = runDoctor(store);
       const scheduler = check(report, "scheduler-state");
       expect(scheduler?.status).toBe("warn");
-      expect(scheduler?.message).toBe("scheduler state authority=cloud_control_plane local=cache_and_spool remote=unconfigured");
+      expect(scheduler?.message).toBe("scheduler state authority=server_api local=cache_and_spool remote=unconfigured");
       expect(scheduler?.detail).toContain("remote_apply=false");
       expect(report.ok).toBe(true);
     } finally {

@@ -6,7 +6,7 @@ import { ensureDataDir } from "./paths.js";
 import { preflightTarget } from "./executor.js";
 import { workflowExecutionOrder } from "./workflow-spec.js";
 import { listOpenMachines } from "./machines.js";
-import { buildDeploymentStatus } from "./mode.js";
+import { buildStorageStatus } from "./mode.js";
 import { RESTART_INTERRUPTED_RUN_PREFIX } from "./health.js";
 
 export type DoctorSeverity = "ok" | "warn" | "fail";
@@ -125,11 +125,11 @@ export function runDoctor(store: Store): DoctorReport {
     });
   }
 
-  const deployment = buildDeploymentStatus();
-  const schedulerState = deployment.schedulerState;
+  const storage = buildStorageStatus();
+  const schedulerState = storage.schedulerState;
   checks.push({
     id: "scheduler-state",
-    status: deployment.deploymentMode === "local" || deployment.controlPlane.configured ? "ok" : "warn",
+    status: storage.authority === "local_sqlite" || storage.server.configured ? "ok" : "warn",
     message: `scheduler state authority=${schedulerState.authority} local=${schedulerState.localStore.role} remote=${schedulerState.remoteStore.backend}`,
     detail: [
       `route_state=${schedulerState.routeAdmission.stateStore}`,

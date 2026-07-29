@@ -401,8 +401,8 @@ describe("loops sdk", () => {
         }
         return Response.json({ ok: true, loops: [{ id: "remote-loop-1", name: "remote-loop" }] });
       };
-      const pull = await pullClient.planSelfHostedMigration({
-        operation: "self-hosted-pull",
+      const pull = await pullClient.planServerMigration({
+        operation: "server-pull",
         apiUrl: "http://127.0.0.1:8787",
         apiKey: "test-token",
         fetchImpl: fetchImpl as typeof fetch,
