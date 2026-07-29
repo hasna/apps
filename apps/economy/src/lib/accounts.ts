@@ -8,7 +8,7 @@ export interface AccountAttribution {
   account_source: 'override' | 'env' | 'applied' | 'current'
 }
 
-type AccountsApi = typeof import('@hasna/accounts')
+type AccountsStore = import('@hasna/accounts').AccountsStore
 type AccountsProfile = import('@hasna/accounts').Profile
 type AccountsTool = import('@hasna/accounts').ToolDef
 
@@ -83,23 +83,16 @@ function envOverride(agent: Agent, env: NodeJS.ProcessEnv): AccountAttribution |
   }
 }
 
-function knownToolIds(api: AccountsApi): Set<string> {
-  try {
-    return new Set(api.listTools().map((tool) => tool.id))
-  } catch {
-    return new Set()
-  }
-}
-
-function profileForEnvDir(api: AccountsApi, tool: AccountsTool, env: NodeJS.ProcessEnv): AccountsProfile | null {
+async function profileForEnvDir(
+  store: AccountsStore,
+  tool: AccountsTool,
+  env: NodeJS.ProcessEnv,
+): Promise<AccountsProfile | null> {
   const configuredDir = env[tool.envVar]
   if (!configuredDir) return null
   const normalized = normalizeDir(configuredDir)
-  try {
-    return api.listProfiles(tool.id).find((profile) => normalizeDir(profile.dir) === normalized) ?? null
-  } catch {
-    return null
-  }
+  return (await store.listProfiles(tool.id))
+    .find((profile) => normalizeDir(profile.dir) === normalized) ?? null
 }
 
 export async function resolveAccountForAgent(
@@ -109,35 +102,25 @@ export async function resolveAccountForAgent(
   const override = envOverride(agent, env)
   if (override) return override
 
-  let api: AccountsApi
-  try {
-    api = await import('@hasna/accounts')
-  } catch {
-    return null
-  }
+  const api = await import('@hasna/accounts')
+  const store = api.resolveStore(env)
+  const tools = new Map((await store.listTools()).map((tool) => [tool.id, tool]))
 
-  const toolIds = knownToolIds(api)
   for (const toolId of AGENT_ACCOUNT_TOOLS[agent]) {
-    if (!toolIds.has(toolId)) continue
-    let tool: AccountsTool
-    try {
-      tool = api.getTool(toolId)
-    } catch {
-      continue
-    }
+    const tool = tools.get(toolId)
+    if (!tool) continue
 
-    const envProfile = profileForEnvDir(api, tool, env)
+    const envProfile = await profileForEnvDir(store, tool, env)
     if (envProfile) return fromProfile(envProfile, 'env')
 
-    try {
-      const applied = api.appliedProfile(toolId)
+    const appliedName = api.appliedProfileName(toolId)
+    if (appliedName) {
+      const applied = await store.findProfile(appliedName, toolId)
       if (applied) return fromProfile(applied, 'applied')
-    } catch { /* optional accounts store */ }
+    }
 
-    try {
-      const current = api.currentProfile(toolId)
-      if (current) return fromProfile(current, 'current')
-    } catch { /* optional accounts store */ }
+    const current = await store.currentProfile(toolId)
+    if (current) return fromProfile(current, 'current')
   }
 
   return null

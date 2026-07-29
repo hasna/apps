@@ -103,6 +103,41 @@ describe('resolveAccountForAgent', () => {
     })
   })
 
+  test('resolves the machine-local applied profile through the accounts store', async () => {
+    const root = makeRoot()
+    const profileDir = join(root, 'profiles', 'claude', 'applied')
+    process.env['ACCOUNTS_STORE_PATH'] = join(root, 'accounts.json')
+    writeFileSync(process.env['ACCOUNTS_STORE_PATH'], JSON.stringify({
+      version: 1,
+      current: {},
+      applied: { claude: 'applied' },
+      tools: [],
+      profiles: [{
+        name: 'applied',
+        tool: 'claude',
+        dir: profileDir,
+        createdAt: '2026-06-04T00:00:00.000Z',
+      }],
+    }))
+
+    const account = await resolveAccountForAgent('claude')
+
+    expect(account).toMatchObject({
+      account_key: 'claude:applied',
+      account_tool: 'claude',
+      account_name: 'applied',
+      account_source: 'applied',
+    })
+  })
+
+  test('propagates account store configuration errors', async () => {
+    const env = {
+      HASNA_ACCOUNTS_STORAGE_MODE: 'cloud',
+    } as NodeJS.ProcessEnv
+
+    await expect(resolveAccountForAgent('codex', env)).rejects.toThrow()
+  })
+
   test('uses accounts built-ins for non-Claude agent profiles', async () => {
     const root = makeRoot()
     const profileDir = join(root, 'profiles', 'gemini', 'studio')
