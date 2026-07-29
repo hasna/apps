@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { validateServiceContractManifest } from "@hasna/contracts/service-contract";
 import contract from "../hasna.contract.json";
+import cursorMcp from "../.cursor/mcp.json";
 
 describe("hasna.contract.json", () => {
   test("is a valid service contract manifest", () => {
@@ -26,5 +27,14 @@ describe("hasna.contract.json", () => {
     expect(svc.versionPath).toBe("/version");
     expect(svc.apiVersion).toBe("v1");
     expect(svc.auth).toBe("api-key");
+  });
+});
+
+describe("Cursor MCP discovery", () => {
+  test("registers the conversations MCP server from this checkout", () => {
+    expect(cursorMcp.mcpServers.conversations).toEqual({
+      command: "bun",
+      args: ["run", "src/mcp/index.ts"],
+    });
   });
 });
