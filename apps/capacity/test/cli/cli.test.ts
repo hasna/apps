@@ -1,5 +1,13 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -28,7 +36,11 @@ import {
   makeTestRecoveryLedger,
   seedActiveCatalog,
 } from "../fixtures";
-import { runAccountsCli, type AccountsCliOptions } from "../../src/cli";
+import {
+  isTrustedCredentialCommandStatus,
+  runAccountsCli,
+  type AccountsCliOptions,
+} from "../../src/cli";
 
 const TEMP_PARENT = existsSync("/dev/shm") ? "/dev/shm" : tmpdir();
 const TEMP_ROOT = join(TEMP_PARENT, "capacity-cli-tests");
@@ -491,6 +503,52 @@ describe("accounts CLI", () => {
     expect(relative.exitCode).toBe(2);
     expect(JSON.parse(relative.stderr).error.code).toBe("VALIDATION_FAILED");
     expect(calls).toEqual([]);
+  });
+
+  test("refuses a credential command reached through a symlink", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+      calls.push(String(input));
+      return jsonResponse({ schemaVersion: "accounts.health.v1", status: "ok" });
+    }) as unknown as typeof fetch;
+
+    // The target itself passes the mode check, so only following the link can
+    // decide the outcome: a link is a name another account may later re-point.
+    const target = writeCredentialCommand(`printf '%s\\n' '${AUTH_CREDENTIAL}'`);
+    const directory = mkdtempSync(join(TEMP_ROOT, "credential-command-link-"));
+    cleanup.push(directory);
+    const link = join(directory, "resolve-capacity-credential.sh");
+    symlinkSync(target, link);
+
+    const result = await runCliInProcess(["list", "access-methods", "--json"], {
+      ...apiEnvironment(),
+      HASNA_ACCOUNTS_CAPACITY_CREDENTIAL_COMMAND: link,
+    });
+    // Asserted first: an accepted link means the linked script already ran and
+    // its chosen credential already reached the wire.
+    expect(calls).toEqual([]);
+    expect(result.exitCode).toBe(7);
+    expect(JSON.parse(result.stderr).error).toMatchObject({
+      code: "POLICY_DENIED",
+      details: { field: "credentialCommand" },
+    });
+    expect(result.stdout).toBe("");
+  });
+
+  test("refuses a credential command another local account owns", () => {
+    // A foreign uid cannot be produced without privilege, so the ownership rule
+    // is measured where it is decided: on the facts read off the descriptor.
+    const executable = { mode: 0o100755, uid: 4242, isFile: () => true };
+    expect(isTrustedCredentialCommandStatus(executable, 1000)).toBe(false);
+    expect(isTrustedCredentialCommandStatus(executable, 4242)).toBe(true);
+    // root-owned resolvers are the packaged-install case and stay trusted.
+    expect(isTrustedCredentialCommandStatus({ ...executable, uid: 0 }, 1000)).toBe(true);
+    expect(
+      isTrustedCredentialCommandStatus({ ...executable, uid: 1000, mode: 0o100775 }, 1000),
+    ).toBe(false);
+    expect(
+      isTrustedCredentialCommandStatus({ ...executable, uid: 1000, isFile: () => false }, 1000),
+    ).toBe(false);
   });
 
   test("keeps a failing credential command's diagnostics off every surface", async () => {

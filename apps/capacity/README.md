@@ -121,9 +121,12 @@ HASNA_ACCOUNTS_CAPACITY_CREDENTIAL_COMMAND=/opt/hasna/bin/capacity-credential \
   capacity list access-methods --json
 ```
 
-The command is held to the same artifact rule as the launcher payload: a
-regular file that is not group- or world-writable, or the CLI refuses with
-`POLICY_DENIED` (exit 7) before the reference is handed over. Without a
+The command is held to the same artifact rule as the launcher payload, and
+judged from the descriptor the CLI opens rather than the path it was handed: a
+regular file, reached without following a symlink, owned by the invoking user
+or by root, and not group- or world-writable. Anything else refuses with
+`POLICY_DENIED` (exit 7) before the reference is handed over, and the rule is
+re-applied on the descriptor the spawn runs, not only at startup. Without a
 resolver command the packaged binary refuses `self_hosted` commands with
 `DEPENDENCY_UNAVAILABLE` (exit 6) before any request is built — it never
 invents a credential source.

@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 import { randomUUID } from "node:crypto";
-import { statSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 
@@ -255,33 +255,117 @@ function credentialResolver(options: AccountsCliOptions): AccountsCapacityCreden
   return createCommandCredentialResolver(command);
 }
 
+/** The descriptor facts the trust decision is made from. */
+export type CredentialCommandStatus = {
+  readonly mode: number;
+  readonly uid: number;
+  readonly isFile: () => boolean;
+};
+
+/** A credential command that passed the trust check, held open by descriptor. */
+type TrustedCredentialCommand = {
+  readonly descriptor: number;
+  readonly path: string;
+};
+
 /**
- * Mirrors the launcher's artifact check. A resolver another local account can
- * rewrite is a credential-exfiltration path, so it is refused before it runs
- * rather than after it has been handed the reference.
+ * Refuses a resolver another local account owns or can rewrite, since either is
+ * a credential-exfiltration path. Ownership is half the decision a mode test
+ * cannot make on its own: a script uid 1001 owns at 0755 has no group- or
+ * world-write bit, yet uid 1001 rewrites it at will. root stays trusted because
+ * that is where a packaged install puts it.
+ */
+export function isTrustedCredentialCommandStatus(
+  status: CredentialCommandStatus,
+  processUid: number | undefined,
+): boolean {
+  if (!status.isFile()) return false;
+  if (process.platform === "win32") return true;
+  if ((status.mode & 0o022) !== 0) return false;
+  return processUid === undefined || status.uid === processUid || status.uid === 0;
+}
+
+/**
+ * Mirrors the launcher's artifact check, which judges the descriptor it is
+ * about to use rather than the name it was handed: O_NOFOLLOW refuses a link
+ * into a path another account controls, and fstat reads mode and ownership off
+ * the opened inode so a swap cannot answer the check with one file and the
+ * spawn with another. The caller closes the descriptor.
+ */
+function openTrustedCredentialCommand(command: string): TrustedCredentialCommand {
+  let descriptor: number;
+  try {
+    descriptor = openSync(command, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  } catch {
+    // O_NOFOLLOW is what refuses the link; the lstat only separates that
+    // refusal from a command that is simply not there.
+    throw isSymbolicLink(command)
+      ? credentialCommandNotTrusted()
+      : credentialCommandUnavailable();
+  }
+  try {
+    if (!isTrustedCredentialCommandStatus(fstatSync(descriptor), process.getuid?.())) {
+      throw credentialCommandNotTrusted();
+    }
+    return Object.freeze({ descriptor, path: descriptorPath(descriptor, command) });
+  } catch (error) {
+    closeSync(descriptor);
+    if (error instanceof AccountsError) throw error;
+    throw credentialCommandUnavailable();
+  }
+}
+
+/**
+ * Where procfs exposes the open descriptor, its realpath names the inode the
+ * check just accepted rather than the string the environment supplied, so the
+ * spawn cannot be redirected by a name change made after the check. Elsewhere
+ * the supplied path is the only handle available, and the descriptor is held
+ * open across the spawn either way so that inode cannot be recycled.
+ */
+function descriptorPath(descriptor: number, command: string): string {
+  try {
+    return realpathSync(`/proc/self/fd/${descriptor}`);
+  } catch {
+    return command;
+  }
+}
+
+function isSymbolicLink(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Refused before any request is made, so a resolver the deployment cannot trust
+ * never reaches the wire. The spawn re-runs the same check on its own
+ * descriptor, because that is the moment the reference is handed over.
  */
 function assertTrustedCredentialCommand(command: string): void {
-  let mode: number;
-  let isFile: boolean;
-  try {
-    const status = statSync(command);
-    mode = status.mode;
-    isFile = status.isFile();
-  } catch {
-    throw new AccountsError("DEPENDENCY_UNAVAILABLE", "Capacity credential command is unavailable");
-  }
-  if (!isFile || (process.platform !== "win32" && (mode & 0o022) !== 0)) {
-    throw new AccountsError("POLICY_DENIED", "Capacity credential command is not trusted", {
-      details: { field: "credentialCommand" },
-    });
-  }
+  closeSync(openTrustedCredentialCommand(command).descriptor);
+}
+
+function credentialCommandNotTrusted(): AccountsError {
+  return new AccountsError("POLICY_DENIED", "Capacity credential command is not trusted", {
+    details: { field: "credentialCommand" },
+  });
+}
+
+function credentialCommandUnavailable(): AccountsError {
+  return new AccountsError(
+    "DEPENDENCY_UNAVAILABLE",
+    "Capacity credential command is unavailable",
+  );
 }
 
 function createCommandCredentialResolver(command: string): AccountsCapacityCredentialResolver {
   return Object.freeze({
     resolve: async (reference: string, signal?: AbortSignal): Promise<string> => {
+      const trusted = openTrustedCredentialCommand(command);
       try {
-        const child = Bun.spawn([command, reference], {
+        const child = Bun.spawn([trusted.path, reference], {
           stdin: "ignore",
           stdout: "pipe",
           // Resolver diagnostics can echo credential material, so stderr is
@@ -303,6 +387,8 @@ function createCommandCredentialResolver(command: string): AccountsCapacityCrede
       } catch (error) {
         if (error instanceof AccountsError) throw error;
         throw credentialCommandFailed();
+      } finally {
+        closeSync(trusted.descriptor);
       }
     },
   });
