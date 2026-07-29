@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import { SqliteAdapter } from "@hasna/cloud";
 import { dirname, join } from "path";
 import { homedir } from "os";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
@@ -35,21 +35,19 @@ function getDbDir(): string {
   return dirname(getDbPath());
 }
 
-let _db: Database | null = null;
+let _db: SqliteAdapter | null = null;
 
-export function getDb(): Database {
+export function getDb(): SqliteAdapter {
   const path = getDbPath();
   // Open fresh db if path changed (supports test isolation)
-  if (_db && (_db as any).filename !== path) {
+  if (_db && _db.raw.filename !== path) {
     _db.close();
     _db = null;
   }
   if (!_db) {
     const dir = getDbDir();
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-    _db = new Database(path);
-    _db.exec("PRAGMA journal_mode = WAL");
-    _db.exec("PRAGMA foreign_keys = ON");
+    _db = new SqliteAdapter(path);
     migrate(_db);
   }
   return _db;
@@ -63,7 +61,7 @@ export function resetDb(): void {
   closeDb();
 }
 
-function migrate(db: Database): void {
+function migrate(db: SqliteAdapter): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS secrets (
       key        TEXT PRIMARY KEY,
@@ -146,7 +144,7 @@ function migrate(db: Database): void {
  * inserts that omit them. Existing rows are copied across; the dropped `service`
  * value is discarded. No-op when the table is already canonical or absent.
  */
-function rebuildLegacyFeedback(db: Database): void {
+function rebuildLegacyFeedback(db: SqliteAdapter): void {
   const cols = new Set(
     (db.prepare(`PRAGMA table_info(feedback)`).all() as Array<{ name: string }>).map((c) => c.name),
   );
@@ -194,7 +192,7 @@ function rebuildLegacyFeedback(db: Database): void {
  * use only constant defaults (SQLite forbids non-constant defaults in ADD COLUMN).
  * Table/column names are internal constants — never user input.
  */
-function ensureColumns(db: Database, table: string, columns: Record<string, string>): void {
+function ensureColumns(db: SqliteAdapter, table: string, columns: Record<string, string>): void {
   const existing = new Set(
     (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((c) => c.name),
   );

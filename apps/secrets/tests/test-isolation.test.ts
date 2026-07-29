@@ -161,7 +161,7 @@ function openVaultInChild(home: string, extraEnv: Record<string, string>) {
   const dbModule = pathToFileURL(join(rootDir, "src", "db.ts")).href;
   const code = [
     `const mod = await import(${JSON.stringify(dbModule)});`,
-    `try { const db = mod.getDb(); console.log("OPENED:" + db.filename); }`,
+    `try { const db = mod.getDb(); console.log("OPENED:" + db.raw.filename); }`,
     `catch (e) { console.log("THREW:" + (e instanceof Error ? e.message : String(e))); }`,
   ].join("\n");
 

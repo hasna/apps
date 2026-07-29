@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { SqliteAdapter } from "@hasna/cloud";
 import { Database } from "bun:sqlite";
 import { getDb, closeDb } from "./db.js";
 
@@ -45,6 +46,7 @@ describe("legacy feedback table migration", () => {
     process.env.HASNA_SECRETS_DB_PATH = seedLegacy();
     const db = getDb();
 
+    expect(db).toBeInstanceOf(SqliteAdapter);
     const cols = (db.prepare("PRAGMA table_info(feedback)").all() as Array<{ name: string }>).map((c) => c.name);
     expect(cols).not.toContain("service");
     expect(cols).toContain("category");

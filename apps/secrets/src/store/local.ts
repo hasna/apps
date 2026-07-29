@@ -7,7 +7,7 @@
 
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
-import type { Database } from "bun:sqlite";
+import type { SqliteAdapter } from "@hasna/cloud";
 import { getDb } from "../db.js";
 import { encrypt, decrypt, isEncrypted } from "../crypto.js";
 import { assertValidSecretPath } from "../hasna-xyz-paths.js";
@@ -218,7 +218,7 @@ function hostSearchTerms(host: string): string[] {
 export class LocalStore implements Store {
   readonly mode = "local" as const;
 
-  private db(): Database {
+  private db(): SqliteAdapter {
     return getDb();
   }
 
@@ -476,7 +476,7 @@ export class LocalStore implements Store {
   }
 
   describe(): StoreDescriptor {
-    const path = String((this.db() as { filename?: string }).filename ?? "");
+    const path = this.db().raw.filename;
     return { mode: "local", location: path };
   }
 
