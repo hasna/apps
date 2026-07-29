@@ -75,6 +75,7 @@ import {
   cloudRecentActivity,
   cloudNextTask,
   cloudClaimNext,
+  cloudFailTask,
   cloudResolveProjectRef,
   cloudBlockingDepsMap,
   cloudRecap,
@@ -240,7 +241,6 @@ function parseQuietHoursOption(value: string | undefined, timezone: string | und
 export function registerQueryCommands(program: Command) {
   const references = program
     .command("references")
-    .alias("refs")
     .description("Resolve local file, symbol, git, plan, run, task, and agent references");
 
   references
@@ -585,10 +585,19 @@ export function registerQueryCommands(program: Command) {
     .action(async (id, opts) => {
       const globalOpts = program.opts();
       const json = opts.json || globalOpts.json;
-      const db = getDatabase();
-      const resolvedId = resolvePartialId(db, "tasks", id);
-      if (!resolvedId) { handleError(new Error(`Task not found: ${id}`)); }
-      const result = failTask(resolvedId, opts.agent, opts.reason, { retry: opts.retry }, db);
+      const cloud = getTodosCloudClient();
+      const result = cloud
+        ? await cloudFailTask(cloud, await resolveTaskIdForCommand(id, cloud), {
+            ...(opts.agent || globalOpts.agent ? { agent_id: opts.agent || globalOpts.agent } : {}),
+            ...(opts.reason ? { reason: opts.reason } : {}),
+            ...(opts.retry ? { retry: true } : {}),
+          })
+        : (() => {
+            const db = getDatabase();
+            const resolvedId = resolvePartialId(db, "tasks", id);
+            if (!resolvedId) { handleError(new Error(`Task not found: ${id}`)); }
+            return failTask(resolvedId, opts.agent, opts.reason, { retry: opts.retry }, db);
+          })();
       if (json) { console.log(JSON.stringify(result, null, 2)); return; }
       console.log(chalk.red(`Failed: ${result.task.short_id || result.task.id.slice(0, 8)} | ${result.task.title}`));
       if (opts.reason) console.log(chalk.dim(`Reason: ${opts.reason}`));

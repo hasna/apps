@@ -273,11 +273,10 @@ export function registerProjectCommands(program: Command) {
       }
     });
 
-  // comment (aliased as log-progress so documented progress commands work)
+  // comment
   program
     .command("comment <id> <text>")
-    .alias("log-progress")
-    .description("Add a comment to a task (alias: log-progress, for recording intermediate progress)")
+    .description("Add a comment to a task, optionally recording progress")
     .option("--pct <percent>", "Progress percentage (0-100) to record alongside the note")
     .action(async (id: string, text: string, opts: { pct?: string }) => {
       const globalOpts = program.opts();
@@ -1239,8 +1238,6 @@ export function registerProjectCommands(program: Command) {
 
   program
     .command("todos-md-import <file>")
-    .alias("markdown-import")
-    .alias("import-md")
     .description("Dry-run or apply a local todos.md Markdown import")
     .option("--apply", "Apply the import. Defaults to dry-run.")
     .option("--resolve-conflicts", "Safely merge embedded bridge task conflicts while preserving local divergent fields")

@@ -1,9 +1,89 @@
 /**
- * OpenAPI 3.1 document for the versioned `/v1` cloud API. This is the SINGLE
- * source of truth the typed SDK is generated from (see scripts/generate-sdk.ts)
- * and is served live at `GET /openapi.json` and `GET /v1/openapi.json`.
+ * OpenAPI 3.1 document for the versioned `/v1` cloud API. Operation inventory
+ * comes from the canonical cross-surface manifest; this module supplies the
+ * detailed JSON schemas consumed by the generated SDK.
  */
 import { getPackageVersion } from "../lib/package-version.js";
+import { PUBLIC_HTTP_OPERATIONS, type PublicHttpOperation } from "../operation-manifest.js";
+
+type OpenApiRecord = Record<string, any>;
+
+function schemaReference(document: OpenApiRecord, name: string): OpenApiRecord {
+  const schemas = document.components?.schemas as Record<string, unknown> | undefined;
+  return schemas?.[name]
+    ? { $ref: `#/components/schemas/${name}` }
+    : { type: "object", additionalProperties: true, title: name };
+}
+
+function genericOpenApiOperation(document: OpenApiRecord, operation: PublicHttpOperation): OpenApiRecord {
+  const pathParameters = [...operation.path.matchAll(/\{([^}]+)\}/g)].map((match) => ({
+    name: match[1],
+    in: "path",
+    required: true,
+    schema: { type: "string" },
+  }));
+  const paginationParameters = operation.pagination === "offset"
+    ? [
+        { name: "limit", in: "query", schema: { type: "integer", minimum: 1 } },
+        { name: "offset", in: "query", schema: { type: "integer", minimum: 0 } },
+      ]
+    : operation.pagination === "cursor"
+      ? [
+          { name: "limit", in: "query", schema: { type: "integer", minimum: 1 } },
+          { name: "cursor", in: "query", schema: { type: "string" } },
+        ]
+      : [];
+  const responses: OpenApiRecord = {
+    "200": {
+      description: "Authoritative operation result; empty collections are represented explicitly.",
+      content: { "application/json": { schema: schemaReference(document, operation.responseSchema) } },
+    },
+  };
+  for (const status of operation.errors) {
+    responses[String(status)] = {
+      description: `Operation failed with HTTP ${status}.`,
+      content: { "application/json": { schema: schemaReference(document, "ErrorResponse") } },
+    };
+  }
+  return {
+    operationId: operation.operationId,
+    summary: operation.summary,
+    parameters: [...pathParameters, ...paginationParameters],
+    ...(operation.requestSchema
+      ? {
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: schemaReference(document, operation.requestSchema) } },
+          },
+        }
+      : {}),
+    responses,
+  };
+}
+
+function applyCanonicalOperationInventory(document: OpenApiRecord): OpenApiRecord {
+  document.paths ??= {};
+  for (const contract of PUBLIC_HTTP_OPERATIONS) {
+    const pathItem = (document.paths[contract.path] ??= {});
+    const method = contract.method.toLowerCase();
+    const operation = pathItem[method] ?? genericOpenApiOperation(document, contract);
+    if (operation.operationId && operation.operationId !== contract.operationId) {
+      throw new Error(
+        `OpenAPI operation drift for ${contract.method} ${contract.path}: ` +
+          `${operation.operationId} != ${contract.operationId}`,
+      );
+    }
+    operation.operationId = contract.operationId;
+    operation["x-todos-auth"] = contract.auth;
+    operation["x-todos-pagination"] = contract.pagination;
+    operation["x-todos-request-schema"] = contract.requestSchema;
+    operation["x-todos-response-schema"] = contract.responseSchema;
+    operation["x-todos-authoritative"] = true;
+    if (contract.auth === "none") operation.security = [];
+    pathItem[method] = operation;
+  }
+  return document;
+}
 
 const taskSchema = {
   type: "object",
@@ -157,7 +237,7 @@ const createTemplateTaskInputSchema = {
 } as const;
 
 export function buildV1OpenApiDocument(version = getPackageVersion()) {
-  return {
+  const document: OpenApiRecord = {
     openapi: "3.1.0",
     info: {
       title: "Todos V1 API",
@@ -1386,4 +1466,5 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
       },
     },
   };
+  return applyCanonicalOperationInventory(document);
 }

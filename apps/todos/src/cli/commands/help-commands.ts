@@ -20,7 +20,6 @@ export function registerHelpCommands(
 ) {
   program
     .command("completions")
-    .alias("completion")
     .description("Generate shell completions for bash, zsh, or fish")
     .argument("<shell>", "Shell to generate: bash, zsh, or fish")
     .action((shell: string) => {

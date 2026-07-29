@@ -39,7 +39,6 @@ function printScorecard(scorecard: AgentReliabilityScorecard): void {
 export function registerAgentReliabilityCommands(program: Command) {
   const reliability = program
     .command("reliability")
-    .alias("scorecards")
     .description("Generate local-only agent reliability scorecards from tasks, runs, verification evidence, locks, retries, and handoffs");
 
   reliability

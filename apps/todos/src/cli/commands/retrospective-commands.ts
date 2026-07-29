@@ -29,7 +29,6 @@ function printRetrospective(record: ReturnType<typeof createRetrospective>): voi
 export function registerRetrospectiveCommands(program: Command) {
   const retrospectives = program
     .command("retrospectives")
-    .alias("retro")
     .description("Generate and store local retrospectives and lessons learned from project or plan evidence");
 
   retrospectives

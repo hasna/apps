@@ -12,7 +12,6 @@ function printJson(value: unknown): void {
 export function registerEnvironmentSnapshotCommands(program: Command): void {
   const envCmd = program
     .command("env-snapshot")
-    .alias("environment-snapshot")
     .description("Capture and compare local reproducible environment snapshots");
 
   envCmd

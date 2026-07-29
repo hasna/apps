@@ -691,7 +691,6 @@ export function registerPlanTemplateCommands(program: Command) {
   // template-init
   program
     .command("template-init")
-    .alias("templates-init")
     .description("Initialize the bundled local template library")
     .action(async () => {
       const globalOpts = program.opts();
@@ -708,7 +707,6 @@ export function registerPlanTemplateCommands(program: Command) {
   // template-library
   program
     .command("template-library")
-    .alias("templates-library")
     .description("List, show, or write the bundled local template library as editable JSON files")
     .option("--show <name>", "Show one bundled template as JSON")
     .option("--write <dir>", "Write all bundled templates to editable JSON files")
@@ -752,7 +750,6 @@ export function registerPlanTemplateCommands(program: Command) {
   // template-preview
   program
     .command("template-preview <id>")
-    .alias("templates-preview")
     .description("Preview a template without creating tasks — shows resolved titles, deps, and priorities")
     .option("--var <vars...>", "Variable substitution in key=value format (e.g. --var name=invoices)")
     .action(async (id: string, opts: { var?: string[] }) => {
@@ -803,7 +800,6 @@ export function registerPlanTemplateCommands(program: Command) {
   // template-export
   program
     .command("template-export <id>")
-    .alias("templates-export")
     .description("Export a template as JSON to stdout")
     .action(async (id: string) => {
       try {
@@ -824,7 +820,6 @@ export function registerPlanTemplateCommands(program: Command) {
   // template-import
   program
     .command("template-import [file]")
-    .alias("templates-import")
     .description("Import a template from a JSON file")
     .option("--file <path>", "Path to template JSON file (alternative to positional arg)")
     .action(async (file: string | undefined, opts: { file?: string }) => {
@@ -847,7 +842,6 @@ export function registerPlanTemplateCommands(program: Command) {
   // template-history
   program
     .command("template-history <id>")
-    .alias("templates-history")
     .description("Show version history of a template")
     .action(async (id: string) => {
       const globalOpts = program.opts();

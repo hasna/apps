@@ -181,7 +181,6 @@ export function registerAgentCommands(program: Command) {
 
   program
     .command("agents-normalize")
-    .alias("normalize-agents")
     .description("Plan safe replacement labels for invalid/generated agent names (non-mutating: candidates are quarantined, existing names and references are left unchanged)")
     .action(async () => {
       const globalOpts = program.opts();
@@ -209,7 +208,6 @@ export function registerAgentCommands(program: Command) {
   // agent-update <name>
   program
     .command("agent-update <name>")
-    .alias("agents-update")
     .description("Update an agent's description, role, or other fields")
     .option("--description <text>", "New description")
     .option("--role <role>", "New role")
@@ -376,7 +374,6 @@ export function registerAgentCommands(program: Command) {
   // lists
   program
     .command("lists")
-    .aliases(["task-lists", "tl"])
     .description("List and manage task lists")
     .option("--add <name>", "Create a task list")
     .option("--show <id>", "Resolve and show a task list")
@@ -477,7 +474,6 @@ export function registerAgentCommands(program: Command) {
   // upgrade (self-update)
   program
     .command("upgrade")
-    .alias("self-update")
     .description("Update todos to the latest version")
     .option("--check", "Only check for updates, don't install")
     .action(async (opts) => {

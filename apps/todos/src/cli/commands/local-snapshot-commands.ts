@@ -20,7 +20,6 @@ function parseLimit(value?: string): number | undefined {
 export function registerLocalSnapshotCommands(program: Command) {
   program
     .command("snapshots")
-    .alias("local-snapshots")
     .description("List, read, or poll local agent snapshots")
     .option("--show <type>", "Read one snapshot: projects, tasks, plans, runs, dependencies, events, or evidence")
     .option("--poll", "Poll snapshot resources and return only snapshots changed since --since")

@@ -829,9 +829,18 @@ export async function handleV1Request(
           });
         }
         if (action === "fail" && method === "POST") {
-          return json({ result: await store.tasks.fail(id, agentId, typeof body.reason === "string" ? body.reason : "failed", {}) });
+          return json({
+            result: await store.tasks.fail(
+              id,
+              agentId,
+              typeof body.reason === "string" ? body.reason : "failed",
+              { retry: body.retry === true },
+              contextFromPrincipal(principal, body),
+            ),
+          });
         }
         if (action === "claim" && method === "POST") {
+          if (id !== "next") return error(404, "unknown task action: claim");
           return json({ task: await store.tasks.claimNext(agentId, {}) });
         }
         return error(404, `unknown task action: ${action}`);

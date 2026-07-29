@@ -4,6 +4,13 @@ import {
   getTodosRemoteAuthorityConfigStatus,
   resolveTodosCliStorageMode,
 } from "./cloud-router.js";
+import {
+  CLI_OPERATIONS,
+  CLI_REMOTE_INVOCATION_RULES,
+  REMOTE_DIAGNOSTIC_COMMANDS,
+  getCliOperation,
+  listCliTopLevelCommands,
+} from "../operation-manifest.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -14,72 +21,14 @@ export type TodosCliAuthorityInitialization =
 
 export type TodosCliCommandOwner = "diagnostic" | "remote-http" | "local-only";
 
-const REGISTERED_CANONICAL_COMMANDS = [
-  "active", "add", "agent", "agent-runs", "agent-update", "agents", "agents-normalize", "api-keys",
-  "approvals", "approve", "assign", "audit-ledger", "backup", "blame", "blocked", "board",
-  "branch-plan", "bridge-import", "bulk", "burndown", "calendar", "capacity", "claim", "comment",
-  "completions", "config", "context", "context-pack", "contracts", "count", "dashboard", "dedupe",
-  "delete", "deps", "dispatch", "dispatches", "doctor", "done", "encryption", "env-snapshot",
-  "event-hooks", "events", "export", "extensions", "extract", "extract-watch", "fail", "fields",
-  "find-commit", "find-ref", "findings", "focus", "handoff", "health", "heartbeat", "history",
-  "hook", "hooks", "import", "inbox", "init", "inspect", "interactive", "issues",
-  "knowledge", "link-commit", "link-ref", "list", "lists", "lock", "log", "machines",
-  "manual", "mcp", "mine", "move", "next", "notifications", "onboarding", "org", "overdue",
-  "pin", "plans", "policies", "priorities", "project-bootstrap", "project-panel", "project-rename", "projects",
-  "projects-path", "ready", "recap", "record-verification", "redaction", "redistribute", "references", "release",
-  "release-compat", "release-notes", "reliability", "remove", "report", "report-failure", "reports", "retention",
-  "retrospectives", "reviews", "risks", "roadmaps", "runs", "sandbox", "scale", "sdk-fixtures",
-  "search", "serve", "show", "sla", "snapshots", "sprint", "stale", "standup",
-  "start", "status", "steal", "storage", "stream", "summary", "sync", "tag",
-  "task", "template-export", "template-history", "template-import", "template-init", "template-library", "template-preview", "templates",
-  "terminal-notifications", "time", "timeline", "today", "todos-md-import", "trace", "trust", "unassign",
-  "unlock", "untag", "update", "upgrade", "usage", "verify-providers", "views", "watch",
-  "webhooks", "week", "workflow", "workflows", "yesterday",
-] as const;
-
-export const TODOS_CLI_COMMAND_ALIASES = {
-  onboarding: ["demo-fixtures"],
-  retrospectives: ["retro"],
-  completions: ["completion"],
-  comment: ["log-progress"],
-  "todos-md-import": ["import-md", "markdown-import"],
-  "api-keys": ["api-key"],
-  "template-init": ["templates-init"],
-  "template-library": ["templates-library"],
-  "template-preview": ["templates-preview"],
-  "template-export": ["templates-export"],
-  "template-import": ["templates-import"],
-  "template-history": ["templates-history"],
-  "agents-normalize": ["normalize-agents"],
-  "agent-update": ["agents-update"],
-  upgrade: ["self-update"],
-  roadmaps: ["roadmap"],
-  "env-snapshot": ["environment-snapshot"],
-  reviews: ["review-queue"],
-  snapshots: ["local-snapshots"],
-  references: ["refs"],
-  reliability: ["scorecards"],
-  lists: ["task-lists", "tl"],
-} as const satisfies Record<string, readonly string[]>;
-
-const DIAGNOSTIC_COMMANDS = new Set(["help", "manual", "completions", "completion", "config", "storage"]);
-const REMOTE_COMMANDS = new Set([
-  "active", "add", "agent", "agents", "approve", "assign", "bulk", "claim", "comment", "count", "delete", "deps",
-  "doctor", "done", "find-commit", "find-ref", "health", "heartbeat", "history", "init", "inspect", "link-commit",
-  "link-ref", "list", "lists", "lock", "log-progress", "move", "next", "plans", "project-rename", "projects", "recap",
-  "record-verification", "release", "remove", "show", "standup", "start", "status", "tag", "task", "task-lists",
-  "template-export", "template-import", "template-preview", "templates", "timeline", "tl", "unlock", "untag", "update",
-]);
-
 const COMMAND_CAPABILITY_MATRIX = new Map<string, TodosCliCommandOwner>();
-for (const command of REGISTERED_CANONICAL_COMMANDS) COMMAND_CAPABILITY_MATRIX.set(command, "local-only");
+for (const command of listCliTopLevelCommands()) COMMAND_CAPABILITY_MATRIX.set(command, "local-only");
 COMMAND_CAPABILITY_MATRIX.set("help", "diagnostic");
-for (const command of DIAGNOSTIC_COMMANDS) COMMAND_CAPABILITY_MATRIX.set(command, "diagnostic");
-for (const command of REMOTE_COMMANDS) COMMAND_CAPABILITY_MATRIX.set(command, "remote-http");
-for (const [canonical, aliases] of Object.entries(TODOS_CLI_COMMAND_ALIASES)) {
-  const owner = COMMAND_CAPABILITY_MATRIX.get(canonical);
-  if (!owner) throw new Error(`Missing capability owner for ${canonical}`);
-  for (const alias of aliases) COMMAND_CAPABILITY_MATRIX.set(alias, owner);
+for (const command of REMOTE_DIAGNOSTIC_COMMANDS) COMMAND_CAPABILITY_MATRIX.set(command, "diagnostic");
+for (const operation of CLI_OPERATIONS) {
+  if (operation.topology === "shared-customer-domain") {
+    COMMAND_CAPABILITY_MATRIX.set(operation.path.split(" ")[0]!, "remote-http");
+  }
 }
 
 export function getTodosCliCommandCapabilityMatrix(): ReadonlyMap<string, TodosCliCommandOwner> {
@@ -206,7 +155,7 @@ function isMetadataInvocation(args: string[], invocation: ParsedInvocation): boo
   // pure static output that never touches the DB or network, so every form of it
   // — with or without a shell argument — is a diagnostic invocation that must
   // succeed offline in remote mode.
-  if (invocation.command === "completions" || invocation.command === "completion") return true;
+  if (invocation.command === "completions") return true;
   if (invocation.command === "manual" && invocation.commandArgs.length === 0) return true;
   if (invocation.command === "help" && invocation.commandArgs.every((arg) => !arg.startsWith("-"))) return true;
   if (invocation.command === "config") {
@@ -225,42 +174,26 @@ function commandSupportsRemote(invocation: ParsedInvocation): boolean {
   const command = invocation.command;
   if (!command || COMMAND_CAPABILITY_MATRIX.get(command) !== "remote-http") return false;
   const args = invocation.commandArgs;
-  switch (command) {
-    case "task":
-      return positionalArgs(args)[0] === "upsert";
-    case "doctor":
-      return positionalArgs(args)[0] !== "routing" && !hasOption(args, "--apply") && !hasOption(args, "--fix");
-    case "projects":
-      return !hasOption(args, "--deregister") && !hasOption(args, "--path-prefix") && !hasOption(args, "--dry-run");
-    case "plans":
-      return !hasOption(args, "--artifact") && !hasOption(args, "--write-artifacts");
-    case "list":
-      return !hasOption(args, "--tags") && !hasOption(args, "--tag") && !hasOption(args, "--recurring");
-    case "claim":
-      return !invocation.globalOptions.has("--project") && !hasOption(args, "--project") &&
-        !hasOption(args, "--stale-minutes") && !hasOption(args, "--steal-stale");
-    case "status":
-      return !invocation.globalOptions.has("--agent") && !hasOption(args, "--agent");
-    // `deps <id>` (read edges), `--needs`/`--remove` (write edges), and the
-    // presentation-only `--graph`/`--direction` flags are all serviced remotely:
-    // the cloud handler renders the shared dependency/blocked-by edges and, since
-    // the recursive graph is a local-only view, gracefully falls back to those
-    // same flat edges for `--graph`/`--direction` instead of failing closed.
-    case "deps":
-      return true;
-    case "bulk": {
-      const action = positionalArgs(args)[0];
-      // `bulk plan|move-plan` reassigns tasks through the shared /v1 dataset
-      // (plan ref resolved remotely, then PATCH /v1/tasks/<id>), so it is
-      // serviced remotely. The other actions carry no plan semantics, so the
-      // plan flags stay rejected there rather than being silently ignored.
-      if (action === "plan" || action === "move-plan") return true;
-      return Boolean(action && ["done", "complete", "start", "delete"].includes(action)) &&
-        !hasOption(args, "--plan") && !hasOption(args, "--clear-plan");
+  const positionals = positionalArgs(args);
+  let operation = getCliOperation(command);
+  for (let length = Math.min(positionals.length, 3); length > 0; length -= 1) {
+    const candidate = getCliOperation([command, ...positionals.slice(0, length)].join(" "));
+    if (candidate) {
+      operation = candidate;
+      break;
     }
-    default:
-      return true;
   }
+  if (!operation || operation.topology !== "shared-customer-domain") return false;
+
+  const rule = CLI_REMOTE_INVOCATION_RULES[operation.path] ?? CLI_REMOTE_INVOCATION_RULES[command];
+  if (!rule) return true;
+  if (rule.deniedGlobalOptions?.some((option) => invocation.globalOptions.has(option))) return false;
+  if (rule.allowedActions) {
+    const action = positionals[0];
+    if (!action || !rule.allowedActions.includes(action)) return false;
+    if (rule.unrestrictedActions?.includes(action)) return true;
+  }
+  return !rule.deniedOptions?.some((option) => hasOption(args, option));
 }
 
 function assertRemoteCommandSupported(invocation: ParsedInvocation): void {

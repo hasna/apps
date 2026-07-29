@@ -21,6 +21,7 @@ import {
 import type { Task } from "../types/index.js";
 import type { RouteContext, FilteredClient } from "./routes.js";
 import * as handlers from "./routes.js";
+import { findPublicHttpOperation } from "../operation-manifest.js";
 
 // Resolve the dashboard dist directory — check multiple locations
 function resolveDashboardDir(): string {
@@ -377,7 +378,8 @@ export async function startServer(port: number, options?: StartServerOptions): P
       }
 
       // ── Service surface probes (unauthenticated): /health /ready /version ──
-      if ((path === "/health" || path === "/ready" || path === "/version") && method === "GET") {
+      const publicOperation = findPublicHttpOperation(method, path);
+      if (["getHealth", "getReady", "getVersion"].includes(publicOperation?.operationId ?? "")) {
         const { getPackageVersion } = await import("../lib/package-version.js");
         const { isCloudModeEnabled, pingCloud } = await import("./cloud.js");
         const mode = isCloudModeEnabled() ? "remote" : "local";
@@ -402,7 +404,7 @@ export async function startServer(port: number, options?: StartServerOptions): P
       }
 
       // ── OpenAPI document (unauthenticated; source of truth for the SDK) ──
-      if ((path === "/openapi.json" || path === "/v1/openapi.json") && method === "GET") {
+      if (["getOpenApi", "getV1OpenApi"].includes(publicOperation?.operationId ?? "")) {
         const { buildV1OpenApiDocument } = await import("./openapi.js");
         return Response.json(buildV1OpenApiDocument());
       }

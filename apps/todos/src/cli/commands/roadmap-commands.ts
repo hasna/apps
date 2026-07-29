@@ -34,7 +34,6 @@ function globalOptions(program: Command): Record<string, any> {
 export function registerRoadmapCommands(program: Command) {
   const roadmaps = program
     .command("roadmaps")
-    .alias("roadmap")
     .description("Manage local roadmaps, milestones, and release groupings");
 
   roadmaps

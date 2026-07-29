@@ -18,7 +18,6 @@ function parseLimit(value?: string): number | undefined {
 export function registerReviewQueueCommands(program: Command) {
   const reviews = program
     .command("reviews")
-    .alias("review-queue")
     .description("Manage local review queues, reviewer claims, returns, approvals, and routing rules");
 
   reviews

@@ -11,7 +11,7 @@ import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts/
 import { resolve as resolvePath } from "node:path";
 import type { Agent, CreatePlanInput, CreateTaskListInput, CreateTemplateInput, Plan, Project, RegisterAgentInput, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList, TaskTemplate, TemplateWithTasks, UpdatePlanInput, UpdateTaskListInput } from "../types/index.js";
 import { isBlockingDependencyStatus } from "../types/index.js";
-import type { UpdateTemplateInput } from "../storage/interfaces.js";
+import type { TodosTaskFailureResult, UpdateTemplateInput } from "../storage/interfaces.js";
 import { redactEvidenceText } from "../lib/redaction.js";
 import type { IntegrityReport, IntegrityTaskRow } from "../lib/integrity.js";
 import type { PrGroupEventListOptions, PrGroupEventPage, PrGroupStateView } from "../pr-groups/types.js";
@@ -600,6 +600,30 @@ export async function cloudTaskAction(
 ): Promise<Task> {
   const raw = await client.transport.post<unknown>(`/tasks/${encodeURIComponent(id)}/${action}`, body);
   return unwrapTask(raw);
+}
+
+/** Fail a task and preserve the optional authoritative retry task. */
+export async function cloudFailTask(
+  client: HasnaStorageClient,
+  id: string,
+  input: { agent_id?: string; reason?: string; retry?: boolean } = {},
+): Promise<TodosTaskFailureResult> {
+  const raw = await client.transport.post<unknown>(`/tasks/${encodeURIComponent(id)}/fail`, input);
+  const envelope = raw && typeof raw === "object" && !Array.isArray(raw)
+    ? raw as Record<string, unknown>
+    : null;
+  const result = envelope?.["result"] && typeof envelope["result"] === "object"
+    ? envelope["result"] as Record<string, unknown>
+    : envelope;
+  if (!result?.["task"] || typeof result["task"] !== "object") {
+    throw new Error("Invalid cloud task failure response");
+  }
+  return {
+    task: result["task"] as Task,
+    ...(result["retryTask"] && typeof result["retryTask"] === "object"
+      ? { retryTask: result["retryTask"] as Task }
+      : {}),
+  };
 }
 
 function resolveOpenApiSchema(document: unknown, schema: unknown): Record<string, unknown> | null {

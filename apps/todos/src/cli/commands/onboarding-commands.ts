@@ -6,7 +6,6 @@ import { handleError, output } from "../helpers.js";
 export function registerOnboardingCommands(program: Command) {
   program
     .command("onboarding")
-    .alias("demo-fixtures")
     .description("List, show, write, or import bundled local onboarding fixtures")
     .option("--show <name>", "Show one fixture bridge bundle as JSON")
     .option("--write <dir>", "Write all bundled fixture bridge bundles to a directory")

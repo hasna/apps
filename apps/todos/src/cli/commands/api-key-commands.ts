@@ -6,12 +6,10 @@ import { handleError, output } from "../helpers.js";
 export function registerApiKeyCommands(program: Command) {
   const apiKeys = program
     .command("api-keys")
-    .alias("api-key")
     .description("Generate, list, and revoke API keys for secured app/API access");
 
   apiKeys
     .command("create <name>")
-    .alias("generate")
     .description("Generate a new API key. The plaintext key is shown once.")
     .option("--expires-at <iso>", "Optional ISO timestamp when this key expires")
     .option("--permissions <list>", "Comma-separated permissions (default: *)")
