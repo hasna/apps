@@ -39,12 +39,14 @@
     "build:server": "rm -rf dist/server dist/sdk && bun run scripts/build-bundles.ts --server-only",
     "generate:sdk": "bun run scripts/generate-sdk.ts",
     "migrate": "bun run scripts/migrate.ts",
+    "contract:check": "contracts conformance",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:cli": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
     "prepublishOnly": "bun run typecheck && bun test && bun run build",
+    "prepack": "contracts artifact-scan",
     "postinstall": "install -d -m 700 \"$HOME/.hasna/contacts\" \"$HOME/.hasna/contacts/backups\" \"$HOME/.hasna/contacts/images\" \"$HOME/.hasna/contacts/documents\" 2>/dev/null || mkdir -p $HOME/.hasna/contacts/{backups,images,documents} 2>/dev/null || true"
   },
   "keywords": [
