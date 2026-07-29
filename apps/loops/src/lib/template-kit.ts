@@ -376,6 +376,22 @@ export function todosVerificationLine(todosProjectPath: string, taskId: string):
   return `- Record verification: todos --project ${todosProjectPath} comment ${taskId} "<verification evidence or blocker>"`;
 }
 
+export type TaskEvidenceRole = "worker" | "verifier";
+
+export function taskEvidenceMarker(role: TaskEvidenceRole, taskId: string, eventId?: string): string {
+  return `openloops:${role}=evidence task=${taskId}${eventId ? ` event=${eventId}` : ""}`;
+}
+
+export function todosTaskEvidenceLine(
+  todosProjectPath: string,
+  taskId: string,
+  role: TaskEvidenceRole,
+  marker: string,
+  placeholder: string,
+): string {
+  return `- Record ${role} evidence: todos --project ${todosProjectPath} comment ${taskId} "${marker}\n<${placeholder}>"`;
+}
+
 export function todosDoneLine(todosProjectPath: string, taskId: string): string {
   return `- If valid and complete: todos --project ${todosProjectPath} done ${taskId}`;
 }
@@ -684,6 +700,80 @@ export function lifecycleGateCommand(
     `const goMarker = ${JSON.stringify(goMarker)};`,
     `const blockedMarker = ${JSON.stringify(blockedMarker)};`,
     LIFECYCLE_GATE_SCRIPT_TAIL,
+    "BUN",
+  ].join("\n");
+}
+
+const TASK_EVIDENCE_GATE_SCRIPT = [
+  "const raw = process.env.TASK_JSON || '{}';",
+  "const payload = JSON.parse(raw);",
+  "const task = payload.task && typeof payload.task === 'object' ? payload.task : payload;",
+  "const status = String(task.status || '').toLowerCase().replace(/_/g, '-');",
+  "const taskId = process.env.TASK_ID || String(task.id || task.taskId || 'task');",
+  "const workerMarker = process.env.WORKER_MARKER || '';",
+  "const verifierMarker = process.env.VERIFIER_MARKER || '';",
+  "const completedStatuses = new Set(['completed', 'done']);",
+  "const commentText = (comment) => String(comment?.content ?? comment?.text ?? comment?.body ?? comment?.comment ?? '');",
+  "const taskComments = Array.isArray(task.comments) ? task.comments : [];",
+  "const payloadComments = Array.isArray(payload.comments) ? payload.comments : [];",
+  "const comments = taskComments.length ? taskComments : payloadComments;",
+  "const markerTime = (comment, index) => {",
+  "  const rawTime = comment?.created_at ?? comment?.createdAt ?? comment?.updated_at ?? comment?.updatedAt;",
+  "  const parsed = rawTime ? Date.parse(String(rawTime)) : Number.NaN;",
+  "  return Number.isFinite(parsed) ? parsed : index;",
+  "};",
+  "const markerRecord = (marker) => comments",
+  "  .map((comment, index) => {",
+  "    const text = commentText(comment);",
+  "    const firstLine = text.trimStart().split(/\\r?\\n/, 1)[0]?.trimEnd() || '';",
+  "    const body = text.trimStart().split(/\\r?\\n/).slice(1).join('\\n').trim();",
+  "    return { marker: firstLine, body, order: markerTime(comment, index), index };",
+  "  })",
+  "  .filter((entry) => entry.marker === marker)",
+  "  .sort((a, b) => a.order - b.order || a.index - b.index)",
+  "  .at(-1);",
+  "const hasEvidenceBody = (entry) => {",
+  "  if (!entry) return false;",
+  "  if (entry.body.length < 12) return false;",
+  "  if (/^<[^>]+>$/.test(entry.body)) return false;",
+  "  if (/placeholder|verification evidence or blocker|concise evidence/i.test(entry.body)) return false;",
+  "  return true;",
+  "};",
+  "const worker = markerRecord(workerMarker);",
+  "const verifier = markerRecord(verifierMarker);",
+  "const blockers = [];",
+  "if (!completedStatuses.has(status)) blockers.push(`task status is ${status || 'unknown'}, expected completed/done`);",
+  "if (!worker) blockers.push(`missing worker evidence marker: ${workerMarker}`);",
+  "else if (!hasEvidenceBody(worker)) blockers.push('worker evidence marker has no concrete non-placeholder body');",
+  "if (!verifier) blockers.push(`missing verifier evidence marker: ${verifierMarker}`);",
+  "else if (!hasEvidenceBody(verifier)) blockers.push('verifier evidence marker has no concrete non-placeholder body');",
+  "if (worker && verifier && verifier.order < worker.order) blockers.push('verifier evidence marker predates worker evidence marker');",
+  "if (blockers.length) {",
+  "  console.error(`task evidence gate failed for ${taskId}: ${blockers.join('; ')}`);",
+  "  process.exit(1);",
+  "}",
+  "console.log(JSON.stringify({",
+  "  ok: true,",
+  "  taskId,",
+  "  status,",
+  "  evidence: {",
+  "    worker: { marker: workerMarker, order: worker.order },",
+  "    verifier: { marker: verifierMarker, order: verifier.order },",
+  "  },",
+  "}));",
+].join("\n");
+
+export function taskEvidenceGateCommand(
+  todosProjectPath: string,
+  taskId: string,
+  workerMarker: string,
+  verifierMarker: string,
+): string {
+  return [
+    "set -euo pipefail",
+    `task_json="$(todos --project ${shellQuote(todosProjectPath)} --json inspect ${shellQuote(taskId)})"`,
+    `TASK_JSON="$task_json" TASK_ID=${shellQuote(taskId)} WORKER_MARKER=${shellQuote(workerMarker)} VERIFIER_MARKER=${shellQuote(verifierMarker)} bun - <<'BUN'`,
+    TASK_EVIDENCE_GATE_SCRIPT,
     "BUN",
   ].join("\n");
 }

@@ -40,15 +40,16 @@ import {
   routingRemediationPreflightCommand,
   SCHEDULED_AUDIT_TEMPLATE_ID,
   sourceTaskGateCommand,
+  taskEvidenceGateCommand,
+  taskEvidenceMarker,
   TASK_LIFECYCLE_TEMPLATE_ID,
   TASK_REVIEW_FOCUS,
   TASK_VERIFIER_DECISION_FRAGMENT,
   TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID,
   todosDoneLine,
-  todosEvidenceLine,
   todosExactCommandsFragment,
   todosStartLine,
-  todosVerificationLine,
+  todosTaskEvidenceLine,
   VERIFIER_TINY_FIXES_FRAGMENT,
   verifierIdleTimeoutMs,
   verifierRuntimeGuidance,
@@ -617,6 +618,25 @@ function lifecycleGateStep(opts: LifecycleGateStepOptions): GateWorkflowStep {
   });
 }
 
+function taskEvidenceCheckStep(
+  todosProjectPath: string,
+  taskId: string,
+  plan: WorktreePlan,
+  workerMarker: string,
+  verifierMarker: string,
+): WorkflowStep {
+  return commandStep({
+    id: "task-evidence-check",
+    name: "Task Evidence Check",
+    description: "Fail route success unless the verifier completed the task with visible worker and verifier evidence.",
+    dependsOn: ["verifier"],
+    command: taskEvidenceGateCommand(todosProjectPath, taskId, workerMarker, verifierMarker),
+    cwd: plan.originalCwd,
+    timeoutMs: 60_000,
+    blockedExitCodes: [],
+  });
+}
+
 function prHandoffArtifactPath(plan: WorktreePlan, taskId: string): string {
   return join(plan.cwd, ".openloops", "pr-handoff", `${slugSegment(taskId, "task")}.json`);
 }
@@ -743,6 +763,8 @@ export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTe
   if (!input.projectPath?.trim()) throw new Error("projectPath is required");
   const todosProjectPath = input.todosProjectPath ?? input.routeProjectPath ?? input.projectPath;
   const plan = worktreePlan(input, input.taskId);
+  const workerMarker = taskEvidenceMarker("worker", input.taskId, input.eventId);
+  const verifierMarker = taskEvidenceMarker("verifier", input.taskId, input.eventId);
   const taskContext = {
     taskId: input.taskId,
     taskTitle: input.taskTitle,
@@ -760,7 +782,7 @@ export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTe
     worktreePrompt(plan),
     ...todosExactCommandsFragment(todosProjectPath, input.taskId, [
       todosStartLine(todosProjectPath, input.taskId),
-      todosEvidenceLine(todosProjectPath, input.taskId, "concise evidence and blockers"),
+      todosTaskEvidenceLine(todosProjectPath, input.taskId, "worker", workerMarker, "concise worker evidence and blockers"),
     ]),
     "Investigate first before changing files. Use the todos CLI as the source of truth for the task.",
     "Inspect the repository/project state, implement only the task scope, run focused validation, preserve unrelated user changes, and update the task with comments, evidence, changed files, commits, and blockers.",
@@ -773,7 +795,7 @@ export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTe
     ...goalHeaderFragment(`Verify todos task ${input.taskId} after the worker step.`, "verifier", "task"),
     worktreePrompt(plan),
     ...todosExactCommandsFragment(todosProjectPath, input.taskId, [
-      todosVerificationLine(todosProjectPath, input.taskId),
+      todosTaskEvidenceLine(todosProjectPath, input.taskId, "verifier", verifierMarker, "concise verification evidence or blocker"),
       todosDoneLine(todosProjectPath, input.taskId),
     ]),
     adversarialReviewFragment("the task, repository state, commits, tests, and worker evidence", TASK_REVIEW_FOCUS),
@@ -806,6 +828,7 @@ export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTe
         verifierDescription: "Adversarially verify worker output and update todos.",
         workerDependsOn: ["source-task-gate"],
       }),
+      taskEvidenceCheckStep(todosProjectPath, input.taskId, plan, workerMarker, verifierMarker),
     ],
   };
 }
@@ -815,6 +838,8 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
   if (!input.projectPath?.trim()) throw new Error("projectPath is required");
   const todosProjectPath = input.todosProjectPath ?? input.routeProjectPath ?? input.projectPath;
   const plan = worktreePlan(input, input.taskId);
+  const workerMarker = taskEvidenceMarker("worker", input.taskId, input.eventId);
+  const verifierMarker = taskEvidenceMarker("verifier", input.taskId, input.eventId);
   const taskContext = {
     taskId: input.taskId,
     taskTitle: input.taskTitle,
@@ -886,6 +911,7 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
     ...boundedStepHeaderFragment(`Complete todos task ${input.taskId} according to the planner evidence.`, "worker", "lifecycle"),
     shared,
     todosStartLine(todosProjectPath, input.taskId),
+    todosTaskEvidenceLine(todosProjectPath, input.taskId, "worker", workerMarker, "concrete worker evidence: changed files, commits, validation, blockers, residual risks"),
     "Read the triage and planner comments first. Implement only the scoped task, run focused validation, and record concrete worker evidence in todos: changed files, commits, validation results, blockers, and residual risks.",
     input.prHandoff ? `When only GitHub network access is blocked after a successful commit/validation, record the handoff artifact at ${handoffArtifactPath} instead of repeatedly retrying push/PR creation.` : undefined,
     WORKER_LEAVES_COMPLETION_FRAGMENT,
@@ -894,6 +920,7 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
     ...boundedStepHeaderFragment(`Verify todos task ${input.taskId} after the full lifecycle worker step.`, "verifier", "lifecycle"),
     shared,
     "Before completion, record concrete verification evidence in todos with changed files, validation results, findings, and the task decision.",
+    todosTaskEvidenceLine(todosProjectPath, input.taskId, "verifier", verifierMarker, "concrete verifier evidence: findings, validation, task decision"),
     todosDoneLine(todosProjectPath, input.taskId),
     adversarialReviewFragment("triage, plan, worker evidence, repo state, commits, tests, and acceptance criteria", TASK_REVIEW_FOCUS),
     verifierRuntimeGuidance(input),
@@ -964,6 +991,7 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
     target: agentTarget(input, verifierPrompt, "verifier", input.taskId, plan),
     timeoutMs: agentTimeoutMs(input),
   });
+  steps.push(taskEvidenceCheckStep(todosProjectPath, input.taskId, plan, workerMarker, verifierMarker));
 
   return {
     name: `task-lifecycle-${input.taskId.slice(0, 8)}-triage-plan-worker-verifier`,

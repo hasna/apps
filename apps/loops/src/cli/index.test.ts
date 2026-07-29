@@ -2946,7 +2946,7 @@ describe("loops CLI", () => {
     expect(render.status).toBe(0);
     const workflow = JSON.parse(render.stdout);
     expect(workflow.name).toContain("task-123");
-    expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(["source-task-gate", "worker", "verifier"]);
+    expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(["source-task-gate", "worker", "verifier", "task-evidence-check"]);
     expect(workflow.steps[0].target).toMatchObject({
       type: "command",
       command: "bash",
@@ -3553,7 +3553,7 @@ describe("loops CLI", () => {
     expect(render.status).toBe(0);
     const workflow = JSON.parse(render.stdout);
     expect(workflow.name).toContain("todos-task-task-col");
-    expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(["source-task-gate", "worker", "verifier"]);
+    expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(["source-task-gate", "worker", "verifier", "task-evidence-check"]);
   });
 
   test("templates select different worker and verifier auth profiles from a pool", () => {
@@ -3608,7 +3608,7 @@ describe("loops CLI", () => {
 
     expect(render.status).toBe(0);
     const workflow = JSON.parse(render.stdout);
-    expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(["source-task-gate", "worker", "verifier"]);
+    expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(["source-task-gate", "worker", "verifier", "task-evidence-check"]);
     expect(workflow.steps[1].dependsOn).toEqual(["source-task-gate"]);
     expect(workflow.steps[1].target.cwd).toContain(worktreeRoot);
     expect(workflow.steps[1].target.worktree).toMatchObject({
@@ -3785,7 +3785,7 @@ describe("loops CLI", () => {
 
     expect(render.status).toBe(0);
     const workflow = JSON.parse(render.stdout);
-    expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(["source-task-gate", "worker", "verifier"]);
+    expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(["source-task-gate", "worker", "verifier", "task-evidence-check"]);
     expect(workflow.steps[1].target.cwd).toBe(repo);
     expect(workflow.steps[1].target.worktree).toMatchObject({
       mode: "main",
@@ -4023,7 +4023,7 @@ describe("loops CLI", () => {
     const firstValue = JSON.parse(first.stdout);
     expect(firstValue.deduped).toBe(false);
     expect(firstValue.idempotencyKey).toBe("todos-task:task-created-0001");
-    expect(firstValue.workflow.steps.map((step: { id: string }) => step.id)).toEqual(["source-task-gate", "worker", "verifier"]);
+    expect(firstValue.workflow.steps.map((step: { id: string }) => step.id)).toEqual(["source-task-gate", "worker", "verifier", "task-evidence-check"]);
     expect(firstValue.loop.name).toContain("event:todos-task:task-cre:");
     expect(firstValue.loop.name).not.toContain("evt-task");
     expect(firstValue.loop.target.workflowId).toBe(firstValue.workflow.id);
@@ -4161,6 +4161,7 @@ describe("loops CLI", () => {
       "worker",
       "pr-handoff",
       "verifier",
+      "task-evidence-check",
     ]);
 
     const store = new Store(join(dataDir, "loops.db"));
@@ -4894,7 +4895,7 @@ describe("loops CLI", () => {
     expect(nonAuthorReviewer.status).toBe(0);
     const nonAuthorValue = JSON.parse(nonAuthorReviewer.stdout);
     expect(nonAuthorValue.skipped).toBeUndefined();
-    expect(nonAuthorValue.workflow.steps.map((step: { id: string }) => step.id)).toEqual(["source-task-gate", "worker", "verifier"]);
+    expect(nonAuthorValue.workflow.steps.map((step: { id: string }) => step.id)).toEqual(["source-task-gate", "worker", "verifier", "task-evidence-check"]);
     expect(nonAuthorValue.prReviewRouting).toMatchObject({
       required: true,
       allowed: true,
@@ -5193,6 +5194,7 @@ describe("loops CLI", () => {
       "planner-gate",
       "worker",
       "verifier",
+      "task-evidence-check",
     ]);
     const stepsById = Object.fromEntries(previewValue.workflow.steps.map((step: { id: string }) => [step.id, step])) as Record<string, any>;
     expect(stepsById.triage.dependsOn).toEqual(["source-task-gate"]);
@@ -5401,6 +5403,7 @@ describe("loops CLI", () => {
       "worker",
       "pr-handoff",
       "verifier",
+      "task-evidence-check",
     ]);
     const stepsById = Object.fromEntries(value.workflow.steps.map((step: { id: string }) => [step.id, step])) as Record<string, any>;
     expect(stepsById["pr-handoff"].dependsOn).toEqual(["worker"]);
@@ -6178,7 +6181,7 @@ describe("loops CLI", () => {
 
     expect(result.status).toBe(0);
     const value = JSON.parse(result.stdout);
-    expect(value.workflow.steps.map((step: { id: string }) => step.id)).toEqual(["source-task-gate", "worker", "verifier"]);
+    expect(value.workflow.steps.map((step: { id: string }) => step.id)).toEqual(["source-task-gate", "worker", "verifier", "task-evidence-check"]);
     expect(value.workflow.steps[1].target.cwd).toContain(worktreeRoot);
     expect(value.workflow.steps[1].target.worktree.enabled).toBe(true);
     expect(testPath(value.workflow.steps[1].target.worktree.originalCwd)).toBe(testPath(repo));

@@ -10,6 +10,7 @@ import { buildHealthReport } from "./health.js";
 import { tick } from "./scheduler.js";
 import { Store } from "./store.js";
 import { prHandoffCommand } from "./template-kit.js";
+import { renderTodosTaskWorkerVerifierWorkflow, TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID } from "./templates.js";
 import { executeLoopTarget, executeWorkflow } from "./workflow-runner.js";
 import { workflowBodyFromJson } from "./workflow-spec.js";
 import { expectMarkerNeverWritten, gatedWriteCommand, openGate, waitUntil } from "../test-helpers.js";
@@ -45,6 +46,79 @@ function mockObjects(objects: unknown[], totalTokens = 10) {
   return new MockLanguageModelV3({
     doGenerate: async () => generated(objects[Math.min(index++, objects.length - 1)], totalTokens),
   });
+}
+
+function installFakeCodewithAndTodos(root: string): string {
+  const binDir = join(root, "bin");
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(join(root, ".bash_profile"), `export PATH='${binDir}':$PATH\n`);
+  const codewith = join(binDir, "codewith");
+  writeFileSync(codewith, "#!/usr/bin/env bash\ncat >/dev/null\nprintf 'fake codewith succeeded without todos mutation\\n'\n");
+  chmodSync(codewith, 0o755);
+  const todos = join(binDir, "todos");
+  writeFileSync(
+    todos,
+    [
+      "#!/usr/bin/env bash",
+      "for arg in \"$@\"; do",
+      "  if [ \"$arg\" = \"inspect\" ]; then",
+      "    if [ -n \"${FAKE_TODOS_TASK_JSON+x}\" ]; then",
+      "      printf '%s\\n' \"$FAKE_TODOS_TASK_JSON\"",
+      "    else",
+      "      printf '{}\\n'",
+      "    fi",
+      "    exit 0",
+      "  fi",
+      "done",
+      "printf 'unsupported fake todos command: %s\\n' \"$*\" >&2",
+      "exit 2",
+    ].join("\n"),
+  );
+  chmodSync(todos, 0o755);
+  return binDir;
+}
+
+function createTodosTaskRouteHarness(store: Store, projectPath: string, taskId = "task-hidden") {
+  const workflow = store.createWorkflow(renderTodosTaskWorkerVerifierWorkflow({
+    taskId,
+    projectPath,
+    todosProjectPath: projectPath,
+    worktreeMode: "off",
+  }));
+  const invocation = store.createWorkflowInvocation({
+    templateId: TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID,
+    sourceRef: { kind: "event", id: `evt-${taskId}`, dedupeKey: `route-${taskId}` },
+    subjectRef: { kind: "task", id: taskId, path: projectPath },
+    intent: "route",
+    scope: { projectPath },
+  });
+  const workItem = store.upsertWorkflowWorkItem({
+    routeKey: "todos-task",
+    idempotencyKey: `route-${taskId}`,
+    invocationId: invocation.id,
+    sourceType: "task.created",
+    sourceRef: `evt-${taskId}`,
+    subjectRef: taskId,
+    projectKey: projectPath,
+    status: "queued",
+  });
+  const loop = store.createLoop({
+    name: `route-${taskId}`,
+    schedule: { type: "once", at: new Date().toISOString() },
+    target: {
+      type: "workflow",
+      workflowId: workflow.id,
+      input: {
+        workflowInvocationId: invocation.id,
+        workflowWorkItemId: workItem.id,
+      },
+    },
+    overlap: "skip",
+    maxAttempts: 1,
+    retryDelayMs: 60_000,
+    leaseMs: 90_000,
+  });
+  return { workflow, workItem, loop };
 }
 
 class ServerDerivedContractStore extends Store {
@@ -179,6 +253,80 @@ describe("workflow runner", () => {
     } finally {
       store.close();
       rmSync(binDir, { recursive: true, force: true });
+    }
+  });
+
+  test("todos task workflow fails when successful agents leave no task completion evidence", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-hidden-evidence-"));
+    const binDir = installFakeCodewithAndTodos(root);
+    try {
+      const { workflow, workItem, loop } = createTodosTaskRouteHarness(store, root);
+      const result = await executeWorkflow(store, workflow, {
+        loop,
+        env: {
+          ...process.env,
+          HOME: root,
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+          FAKE_TODOS_TASK_JSON: JSON.stringify({ id: "task-hidden", status: "pending", comments: [] }),
+        },
+      });
+
+      expect(result.status).toBe("failed");
+      const run = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0]!;
+      expect(run.status).toBe("failed");
+      expect(store.getWorkflowWorkItem(workItem.id)?.status).toBe("failed");
+      const steps = store.listWorkflowStepRuns(run.id);
+      expect(steps.map((step) => [step.stepId, step.status])).toEqual([
+        ["source-task-gate", "succeeded"],
+        ["worker", "succeeded"],
+        ["verifier", "succeeded"],
+        ["task-evidence-check", "failed"],
+      ]);
+      expect(steps.find((step) => step.stepId === "task-evidence-check")?.stderr).toContain("task evidence gate failed");
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("todos task workflow succeeds only after completed worker and verifier evidence markers", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-visible-evidence-"));
+    const binDir = installFakeCodewithAndTodos(root);
+    try {
+      const { workflow, workItem, loop } = createTodosTaskRouteHarness(store, root, "task-visible");
+      const result = await executeWorkflow(store, workflow, {
+        loop,
+        env: {
+          ...process.env,
+          HOME: root,
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+          FAKE_TODOS_TASK_JSON: JSON.stringify({
+            id: "task-visible",
+            status: "completed",
+            comments: [
+              {
+                content: "openloops:worker=evidence task=task-visible\nchanged files: src/a.ts; validation: bun test passed",
+                created_at: "2026-06-30T10:00:00.000Z",
+              },
+              {
+                content: "openloops:verifier=evidence task=task-visible\nverdict: GO; validation rerun passed",
+                created_at: "2026-06-30T10:05:00.000Z",
+              },
+            ],
+          }),
+        },
+      });
+
+      expect(result.status).toBe("succeeded");
+      const run = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0]!;
+      expect(run.status).toBe("succeeded");
+      expect(store.getWorkflowWorkItem(workItem.id)?.status).toBe("succeeded");
+      expect(store.getWorkflowStepRun(run.id, "task-evidence-check")?.stdout).toContain('"ok":true');
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

@@ -117,7 +117,8 @@ describe("prompt fragment composition", () => {
     expect(lines[stanzaStart - 1]).toBe("Todos project path: /srv/todos");
     expect(lines[stanzaStart + 1]).toBe("- Inspect first: todos --project /srv/todos inspect task-1200");
     expect(lines[stanzaStart + 2]).toBe("- Claim/start if appropriate: todos --project /srv/todos start task-1200");
-    expect(lines[stanzaStart + 3]).toBe('- Record evidence: todos --project /srv/todos comment task-1200 "<concise evidence and blockers>"');
+    expect(lines[stanzaStart + 3]).toBe('- Record worker evidence: todos --project /srv/todos comment task-1200 "openloops:worker=evidence task=task-1200');
+    expect(lines[stanzaStart + 4]).toBe('<concise worker evidence and blockers>"');
   });
 
   test("worker prompt keeps the no-tmux and completion-ownership stanzas", () => {
@@ -126,7 +127,7 @@ describe("prompt fragment composition", () => {
   });
 
   test("verifier prompt gets verification/done commands but not the claim/start command", () => {
-    expect(verifierPrompt).toContain('- Record verification: todos --project /srv/todos comment task-1200 "<verification evidence or blocker>"');
+    expect(verifierPrompt).toContain('- Record verifier evidence: todos --project /srv/todos comment task-1200 "openloops:verifier=evidence task=task-1200\n<concise verification evidence or blocker>"');
     expect(verifierPrompt).toContain("- If valid and complete: todos --project /srv/todos done task-1200");
     expect(verifierPrompt).not.toContain("- Claim/start if appropriate:");
     expect(verifierPrompt).toContain("Act as an adversarial reviewer focused on correctness, regressions, missing tests, security, and incomplete requirements.");
@@ -265,7 +266,9 @@ describe("prompt fragment composition", () => {
     expect(planner).toContain(plannerGoCommand);
     expect(planner).toContain(plannerBlockedCommand);
     expect(worker).toContain("record concrete worker evidence in todos");
+    expect(worker).toContain('openloops:worker=evidence task=task-1200 event=evt-9');
     expect(verifier).toContain("record concrete verification evidence in todos");
+    expect(verifier).toContain('openloops:verifier=evidence task=task-1200 event=evt-9');
   });
 
   test("verifier runtime guidance reflects the idle watchdog configuration", () => {
@@ -339,8 +342,9 @@ describe("executor-native worktree specs", () => {
       projectPath: repoPath,
       worktreeRoot,
     });
-    expect(workflow.steps.map((step) => step.id)).toEqual(["source-task-gate", "worker", "verifier"]);
+    expect(workflow.steps.map((step) => step.id)).toEqual(["source-task-gate", "worker", "verifier", "task-evidence-check"]);
     expect(stepById(workflow, "worker").dependsOn).toEqual(["source-task-gate"]);
+    expect(stepById(workflow, "task-evidence-check").dependsOn).toEqual(["verifier"]);
     for (const step of workflow.steps) {
       const command = step.target.type === "command" ? commandOf(step) : "";
       expect(command).not.toContain("git worktree add");
@@ -385,7 +389,7 @@ describe("executor-native worktree specs", () => {
       expect(spec).toEqual(specs[0]);
       expect(spec?.enabled).toBe(true);
     }
-    for (const id of ["source-task-gate", "triage-gate", "planner-gate", "pr-handoff"]) {
+    for (const id of ["source-task-gate", "triage-gate", "planner-gate", "pr-handoff", "task-evidence-check"]) {
       const step = stepById(workflow, id);
       expect(step.target.type).toBe("command");
       expect(step.target.type === "command" ? step.target.cwd : undefined).toBe(repoPath);
@@ -408,7 +412,8 @@ describe("gate steps", () => {
       expect(gate.blockedExitCodes).toEqual([12]);
     }
     for (const step of steps.filter((entry) => !entry.id.endsWith("-gate"))) {
-      expect(step.blockedExitCodes).toBeUndefined();
+      if (step.id === "task-evidence-check") expect(step.blockedExitCodes).toEqual([]);
+      else expect(step.blockedExitCodes).toBeUndefined();
     }
   });
 
@@ -419,6 +424,24 @@ describe("gate steps", () => {
     expect(command).toContain('const goMarker = "openloops:triage=go task=task-1200";');
     expect(command).toContain('const blockedMarker = "openloops:triage=blocked task=task-1200";');
     expect(command).toContain("bun - <<'BUN'");
+  });
+
+  test("task evidence check requires completed task plus worker and verifier markers", () => {
+    const workflow = renderTaskLifecycleWorkflow({
+      taskId: "task-1200",
+      projectPath: repoPath,
+      worktreeRoot,
+      eventId: "evt-9",
+    });
+    const step = stepById(workflow, "task-evidence-check") as WorkflowStepInput & { blockedExitCodes?: number[] };
+    const command = commandOf(step);
+    expect(step.dependsOn).toEqual(["verifier"]);
+    expect(step.blockedExitCodes).toEqual([]);
+    expect(command).toContain("completedStatuses = new Set(['completed', 'done'])");
+    expect(command).toContain("WORKER_MARKER='openloops:worker=evidence task=task-1200 event=evt-9'");
+    expect(command).toContain("VERIFIER_MARKER='openloops:verifier=evidence task=task-1200 event=evt-9'");
+    expect(command).toContain("missing worker evidence marker");
+    expect(command).toContain("process.exit(1);");
   });
 
   test("pr-handoff step is env-driven and bounded", () => {
