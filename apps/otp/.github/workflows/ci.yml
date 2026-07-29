@@ -20,3 +20,8 @@ jobs:
 
       - name: Check (typecheck, test, build)
         run: bun run check
+
+      # Runs prepack end to end, so a broken release hook fails here instead of
+      # at publish time.
+      - name: Pack dry-run (exercises prepack)
+        run: npm pack --dry-run

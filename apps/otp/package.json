@@ -40,11 +40,10 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "check": "bun run typecheck && bun test && bun run build",
-    "contracts:check": "npx --yes @hasna/contracts check",
-    "artifact-scan": "npx --yes @hasna/contracts artifact-scan",
+    "scan:artifact": "bun scripts/scan-artifact.ts",
     "dev:cli": "bun run src/cli/index.ts",
     "dev:mcp": "bun run src/mcp/index.ts",
-    "prepack": "bun run build && bun run artifact-scan",
+    "prepack": "bun run build && bun run scan:artifact",
     "prepublishOnly": "bun run typecheck && bun test && bun run build",
     "postinstall": "mkdir -p $HOME/.hasna/otp 2>/dev/null && chmod 700 $HOME/.hasna/otp 2>/dev/null || true"
   },
@@ -79,6 +78,7 @@
     "zod": "3.25.76"
   },
   "devDependencies": {
+    "@hasna/contracts": "0.8.5",
     "@types/bun": "^1.3.14",
     "typescript": "^5.9.3"
   }
