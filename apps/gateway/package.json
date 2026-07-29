@@ -45,7 +45,9 @@
     "check": "bun run typecheck && bun run build && bun test",
     "test": "bun test",
     "contracts:validate": "contracts conformance fixtures/contracts",
+    "artifact-scan": "contracts artifact-scan",
     "dev": "bun run src/cli/index.ts serve --config gateway.config.example.json",
+    "prepack": "bun run build && bun run artifact-scan",
     "prepublishOnly": "bun run typecheck && bun run build && bun run test"
   },
   "keywords": [
@@ -65,11 +67,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/gateway.git"
+    "url": "git+https://github.com/hasna/open-gateway.git"
   },
-  "homepage": "https://github.com/hasna/gateway",
+  "homepage": "https://github.com/hasna/open-gateway#readme",
   "bugs": {
-    "url": "https://github.com/hasna/gateway/issues"
+    "url": "https://github.com/hasna/open-gateway/issues"
   },
   "engines": {
     "bun": ">=1.0.0"
