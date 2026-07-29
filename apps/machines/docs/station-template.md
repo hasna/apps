@@ -72,13 +72,28 @@ and requiring the convention target to survive it. A unit carrying the
 default-class `10s`/burst window is the exact 2026-07-28 restart-loop shape and
 is reported as a violation.
 
+Drop-ins are merged in **lexicographic filename order**, the order
+systemd.unit(5) applies them in, not in directory-listing order: Bun's
+`readdirSync` returns raw directory order and the CLI runs on Bun, so a
+`90-loosen.conf` handing a compliant unit the incident's 10s window could
+otherwise be masked by a `10-tighten.conf` that happened to list later.
+
+The check reports on the **station user's** units. Applying the template needs
+root, so `--check` is naturally run elevated; the home is therefore taken from
+`SUDO_USER` (via `/etc/passwd`) before the invoking process's own, and any unit
+directory that does not exist is emitted as an explicit `skipped` item naming
+the path. A surface that was not read is always visible in the JSON — the
+verdict never claims `clean` over units nobody looked at.
+
 Positive controls live in `test/station-template.test.ts`: planted content
 drift, a planted later-sorting conflicting sysctl file, planted runtime drift,
 a planted convention-violating unit, a unit whose keys are all present but
 whose values are the incident's (`10`/`99999`/wrong `OnFailure`), a drop-in
-that lowers the window under a compliant unit file, and a rejected
-`--check --machine <other>` must each be detected — a check that cannot fail is
-not evidence.
+that lowers the window under a compliant unit file, a pair of units whose
+drop-ins are handed to the check in reversed listing order, an uninspected unit
+directory, a `SUDO_USER` run that must still see the station user's units, and a
+rejected `--check --machine <other>` must each be detected — a check that cannot
+fail is not evidence.
 
 ## Versioning
 

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, cpSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync, cpSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { hostname, tmpdir } from "node:os";
 import {
@@ -272,6 +272,84 @@ describe("drift check", () => {
     const item = result.items.find((candidate) => candidate.id === "unit:hasna-dropin-downgrade.service");
     expect(item?.status).toBe("violation");
     expect(item?.detail).toContain("StartLimitIntervalSec=10, convention is 300");
+  });
+
+  test("drop-ins merge in lexicographic order even when the directory lists them backwards", () => {
+    const { root, home, effective } = buildCleanFixture();
+    const unitDir = join(home, ".config/systemd/user");
+    // Bun's readdirSync returns raw directory order (Node's sorts), and the CLI
+    // ships #!/usr/bin/env bun. systemd.unit(5) applies drop-ins in lexicographic
+    // order, so the check must sort rather than trust the listing.
+    const backwards = (dir: string) => readdirSync(dir).sort().reverse();
+
+    // 90-loosen sorts last, so systemd's effective window is the incident's 10s.
+    mkdirSync(join(unitDir, "hasna-listing-loosened.service.d"), { recursive: true });
+    writeFileSync(
+      join(unitDir, "hasna-listing-loosened.service"),
+      "[Unit]\nStartLimitIntervalSec=300\nStartLimitBurst=5\nOnFailure=hasna-unit-failure-notify@%n.service\n[Service]\nExecStart=/bin/true\n"
+    );
+    writeFileSync(join(unitDir, "hasna-listing-loosened.service.d", "10-tighten.conf"), "[Unit]\nStartLimitIntervalSec=300\n");
+    writeFileSync(join(unitDir, "hasna-listing-loosened.service.d", "90-loosen.conf"), "[Unit]\nStartLimitIntervalSec=10\n");
+
+    // Mirror image: 90-tighten sorts last, so this unit really is compliant and
+    // must NOT be reported — proving the sort picks the right winner rather than
+    // always taking the strictest value it saw.
+    mkdirSync(join(unitDir, "hasna-listing-tightened.service.d"), { recursive: true });
+    writeFileSync(
+      join(unitDir, "hasna-listing-tightened.service"),
+      "[Unit]\nStartLimitIntervalSec=10\nStartLimitBurst=5\nOnFailure=hasna-unit-failure-notify@%n.service\n[Service]\nExecStart=/bin/true\n"
+    );
+    writeFileSync(join(unitDir, "hasna-listing-tightened.service.d", "10-loosen.conf"), "[Unit]\nStartLimitIntervalSec=10\n");
+    writeFileSync(join(unitDir, "hasna-listing-tightened.service.d", "90-tighten.conf"), "[Unit]\nStartLimitIntervalSec=300\n");
+
+    const result = checkStationTemplate(effective, {
+      rootDir: root,
+      homeDir: home,
+      commandProbe: null,
+      readDirectory: backwards,
+    });
+    const loosened = result.items.find((candidate) => candidate.id === "unit:hasna-listing-loosened.service");
+    expect(loosened?.status).toBe("violation");
+    expect(loosened?.detail).toContain("StartLimitIntervalSec=10, convention is 300");
+    expect(result.items.find((candidate) => candidate.id === "unit:hasna-listing-tightened.service")?.status).toBe("ok");
+    expect(result.verdict).toBe("drift");
+  });
+
+  test("a unit directory that does not exist is named in the report, never silently uninspected", () => {
+    const { root, effective } = buildCleanFixture();
+    const emptyHome = join(root, "home", "nobody");
+    const result = checkStationTemplate(effective, { rootDir: root, homeDir: emptyHome, commandProbe: null });
+    const item = result.items.find(
+      (candidate) => candidate.id === `unit-dir:${join(emptyHome, ".config/systemd/user")}`
+    );
+    expect(item?.status).toBe("skipped");
+    expect(item?.detail).toContain("no units inspected there");
+  });
+
+  test("run under sudo, the check inspects the station user's units instead of root's", () => {
+    const { root, home, effective } = buildCleanFixture();
+    const unitDir = join(home, ".config/systemd/user");
+    mkdirSync(unitDir, { recursive: true });
+    writeFileSync(
+      join(unitDir, "hasna-sudo-scope.service"),
+      "[Unit]\nDescription=no limits at all\n[Service]\nExecStart=snapshots-agent\n"
+    );
+    writeFileSync(join(root, "etc", "passwd"), `root:x:0:0:root:/root:/bin/bash\nstation:x:1000:1000::${home}:/bin/bash\n`);
+    const previous = process.env["SUDO_USER"];
+    process.env["SUDO_USER"] = "station";
+    try {
+      // homeDir deliberately omitted: applying the template needs root, so the
+      // drift check runs elevated, where homedir() is root's home and the whole
+      // user-unit surface used to go unread while the verdict said "clean".
+      const result = checkStationTemplate(effective, { rootDir: root, commandProbe: null });
+      const item = result.items.find((candidate) => candidate.id === "unit:hasna-sudo-scope.service");
+      expect(item?.status).toBe("violation");
+      expect(item?.detail).toContain("missing StartLimitIntervalSec");
+      expect(result.verdict).toBe("drift");
+    } finally {
+      if (previous === undefined) delete process.env["SUDO_USER"];
+      else process.env["SUDO_USER"] = previous;
+    }
   });
 
   test("OnFailure= reset in a drop-in drops the convention target (systemd list semantics)", () => {

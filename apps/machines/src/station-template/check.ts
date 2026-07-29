@@ -47,6 +47,13 @@ export interface CheckOptions {
    * never shells out by accident.
    */
   commandProbe?: CommandProbe | null;
+  /**
+   * Directory listing seam, like commandProbe. Defaults to readdirSync. Every
+   * caller must treat the result as UNORDERED — Bun's readdirSync does not sort
+   * (Node's does), and the CLI runs on Bun — so tests inject an adverse order to
+   * prove the check does its own sorting.
+   */
+  readDirectory?: (dir: string) => string[];
   /** Additional systemd unit dirs to scan for unit conventions. */
   unitDirs?: string[];
   /** Identity stamped into the result. Defaults to the local machine id. */
@@ -137,6 +144,50 @@ function effectiveListDirective(content: string, name: string): string[] {
   return values;
 }
 
+/**
+ * Drop-in merge order. systemd.unit(5): drop-in files "are applied in
+ * lexicographic order" of their filename — plain byte-wise strcmp, not a
+ * version sort — so `10-a.conf` is parsed before `90-b.conf` and the later file
+ * wins a scalar directive. Compared as UTF-8 bytes rather than JS's default
+ * UTF-16 code-unit order so non-ASCII names order the way systemd reads them.
+ */
+function compareDropinNames(a: string, b: string): number {
+  return Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
+}
+
+/** Home directory of `user` per an /etc/passwd file, or null if not listed. */
+function passwdHome(passwdPath: string, user: string): string | null {
+  let content: string;
+  try {
+    content = readFileSync(passwdPath, "utf8");
+  } catch {
+    return null;
+  }
+  for (const line of content.split("\n")) {
+    const fields = line.split(":");
+    if (fields[0] === user && fields[5]) return fields[5];
+  }
+  return null;
+}
+
+/**
+ * Home of the station user the `~/` targets and user-unit conventions belong
+ * to. Applying the template needs root (targets under /etc), so the drift check
+ * is naturally run in the same elevated context — where homedir() is root's
+ * home, the whole ~/.config/systemd/user surface goes unread, and the report
+ * says "clean" about units nobody looked at. Prefer the invoking user's home
+ * over the elevated process's own.
+ */
+function resolveStationHome(rootDir: string, explicit?: string): string {
+  if (explicit) return explicit;
+  const sudoUser = process.env["SUDO_USER"];
+  if (sudoUser && sudoUser !== "root") {
+    const home = passwdHome(join(rootDir, "etc/passwd"), sudoUser);
+    if (home) return home;
+  }
+  return homedir();
+}
+
 function defaultCommandProbe(): CommandProbe {
   return (command, args) => {
     try {
@@ -156,7 +207,8 @@ function defaultCommandProbe(): CommandProbe {
  */
 export function checkStationTemplate(effective: EffectiveTemplate, options: CheckOptions = {}): TemplateCheckResult {
   const rootDir = options.rootDir ?? "/";
-  const homeDir = options.homeDir ?? homedir();
+  const homeDir = resolveStationHome(rootDir, options.homeDir);
+  const listDir = options.readDirectory ?? readdirSync;
   const probe =
     options.commandProbe === null
       ? null
@@ -194,7 +246,7 @@ export function checkStationTemplate(effective: EffectiveTemplate, options: Chec
     const ourName = basename(file.target);
     if (!existsSync(dir)) continue;
     const conflicts: string[] = [];
-    for (const entry of readdirSync(dir)) {
+    for (const entry of listDir(dir)) {
       if (!entry.endsWith(".conf") || entry === ourName) continue;
       let otherKeys: string[] = [];
       try {
@@ -282,8 +334,19 @@ export function checkStationTemplate(effective: EffectiveTemplate, options: Chec
     const pattern = new RegExp(`^${conventions.match.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`);
     const unitDirs = options.unitDirs ?? [join(homeDir, ".config/systemd/user"), join(rootDir, "etc/systemd/system")];
     for (const unitDir of unitDirs) {
-      if (!existsSync(unitDir)) continue;
-      for (const entry of readdirSync(unitDir)) {
+      if (!existsSync(unitDir)) {
+        // Name every surface we did not read. A bare `continue` here let a
+        // wrong-home run (sudo) drop the entire user-unit surface and still
+        // return "clean" — the one thing a drift check must never do.
+        items.push({
+          id: `unit-dir:${unitDir}`,
+          kind: "unit-convention",
+          status: "skipped",
+          detail: `${unitDir} does not exist — no units inspected there`,
+        });
+        continue;
+      }
+      for (const entry of listDir(unitDir)) {
         if (!entry.endsWith(".service") || !pattern.test(entry)) continue;
         let content = "";
         try {
@@ -293,7 +356,14 @@ export function checkStationTemplate(effective: EffectiveTemplate, options: Chec
         }
         const dropinDir = join(unitDir, `${entry}.d`);
         if (existsSync(dropinDir)) {
-          for (const dropin of readdirSync(dropinDir).filter((name) => name.endsWith(".conf"))) {
+          // Sorted, because the directory listing is not: appending drop-ins in
+          // listing order computed the effective value of the LAST-LISTED file
+          // instead of the last-sorting one, so a `90-loosen.conf` that hands the
+          // unit the incident's 10s window could be masked by a `10-tighten.conf`.
+          const dropins = listDir(dropinDir)
+            .filter((name) => name.endsWith(".conf"))
+            .sort(compareDropinNames);
+          for (const dropin of dropins) {
             try {
               content += `\n${readFileSync(join(dropinDir, dropin), "utf8")}`;
             } catch {
