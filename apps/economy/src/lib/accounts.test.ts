@@ -10,8 +10,13 @@ const envKeys = [
   'CODEX_HOME',
   'ECONOMY_CODEX_ACCOUNT',
   'ECONOMY_ACCOUNT',
+  'HASNA_ACCOUNTS_API_KEY',
+  'HASNA_ACCOUNTS_API_URL',
+  'HASNA_ACCOUNTS_STORAGE_MODE',
+  'HASNA_ACCOUNTS_STRICT_ROOT_COMPAT',
 ] as const
 const originalEnv = new Map<string, string | undefined>()
+const originalFetch = globalThis.fetch
 
 for (const key of envKeys) originalEnv.set(key, process.env[key])
 
@@ -22,6 +27,7 @@ function makeRoot(): string {
 }
 
 afterEach(() => {
+  globalThis.fetch = originalFetch
   for (const key of envKeys) {
     const original = originalEnv.get(key)
     if (original == null) delete process.env[key]
@@ -74,6 +80,48 @@ describe('resolveAccountForAgent', () => {
       account_email: 'client@example.com',
       account_source: 'env',
     })
+  })
+
+  test('matches hosted profiles through the async accounts store in strict root mode', async () => {
+    const profileDir = '/hosted/profiles/codex/account003'
+    process.env['CODEX_HOME'] = profileDir
+    process.env['HASNA_ACCOUNTS_API_URL'] = 'https://accounts.example.test'
+    process.env['HASNA_ACCOUNTS_API_KEY'] = 'hasna_accounts_testkey_0000'
+    process.env['HASNA_ACCOUNTS_STRICT_ROOT_COMPAT'] = '1'
+    globalThis.fetch = (async (input) => {
+      const url = String(input)
+      if (url.endsWith('/v1/tools')) {
+        return Response.json({ tools: [] })
+      }
+      if (url.includes('/v1/accounts?') && url.includes('tool=codex')) {
+        return Response.json({
+          accounts: [{
+            name: 'account003',
+            tool: 'codex',
+            email: 'account003@example.com',
+            dir: profileDir,
+            createdAt: '2026-06-04T00:00:00.000Z',
+          }],
+        })
+      }
+      return Response.json({ error: 'not found' }, { status: 404 })
+    }) as typeof fetch
+
+    const account = await resolveAccountForAgent('codex')
+
+    expect(account).toEqual({
+      account_key: 'codex:account003@example.com',
+      account_tool: 'codex',
+      account_name: 'account003',
+      account_email: 'account003@example.com',
+      account_source: 'env',
+    })
+  })
+
+  test('propagates accounts store resolution errors', async () => {
+    await expect(resolveAccountForAgent('codex', {
+      HASNA_ACCOUNTS_STORAGE_MODE: 'cloud',
+    })).rejects.toThrow(/requires HASNA_ACCOUNTS_API_URL and HASNA_ACCOUNTS_API_KEY/)
   })
 
   test('falls back to the current profile for a supported tool', async () => {
