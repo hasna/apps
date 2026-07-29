@@ -31,7 +31,7 @@ const REGISTERED_CANONICAL_COMMANDS = [
   "retrospectives", "reviews", "risks", "roadmaps", "runs", "sandbox", "scale", "sdk-fixtures",
   "search", "serve", "show", "sla", "snapshots", "sprint", "stale", "standup",
   "start", "status", "steal", "storage", "stream", "summary", "sync", "tag",
-  "task", "template-export", "template-history", "template-import", "template-init", "template-library", "template-preview", "templates",
+  "task", "task-to-pr-projection", "template-export", "template-history", "template-import", "template-init", "template-library", "template-preview", "templates",
   "terminal-notifications", "time", "timeline", "today", "todos-md-import", "trace", "trust", "unassign",
   "unlock", "untag", "update", "upgrade", "usage", "verify-providers", "views", "watch",
   "webhooks", "week", "workflow", "workflows", "yesterday",
@@ -67,7 +67,7 @@ const REMOTE_COMMANDS = new Set([
   "active", "add", "agent", "agents", "approve", "assign", "bulk", "claim", "comment", "count", "delete", "deps",
   "doctor", "done", "find-commit", "find-ref", "health", "heartbeat", "history", "init", "inspect", "link-commit",
   "link-ref", "list", "lists", "lock", "log-progress", "move", "next", "plans", "project-rename", "projects", "recap",
-  "record-verification", "release", "remove", "show", "standup", "start", "status", "tag", "task", "task-lists",
+  "record-verification", "release", "remove", "show", "standup", "start", "status", "tag", "task", "task-lists", "task-to-pr-projection",
   "template-export", "template-import", "template-preview", "templates", "timeline", "tl", "unlock", "untag", "update",
 ]);
 
@@ -228,6 +228,8 @@ function commandSupportsRemote(invocation: ParsedInvocation): boolean {
   switch (command) {
     case "task":
       return positionalArgs(args)[0] === "upsert";
+    case "task-to-pr-projection":
+      return ["list", "get"].includes(positionalArgs(args)[0] ?? "");
     case "doctor":
       return positionalArgs(args)[0] !== "routing" && !hasOption(args, "--apply") && !hasOption(args, "--fix");
     case "projects":

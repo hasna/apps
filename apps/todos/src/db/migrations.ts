@@ -1674,4 +1674,39 @@ export const MIGRATIONS = [
   COMMIT;
   PRAGMA foreign_keys = ON;
   `,
+  // Migration 69: Strict local TaskToPrProjection snapshot persistence
+  `
+  CREATE TABLE IF NOT EXISTS task_to_pr_projection_snapshots (
+    projection_id TEXT NOT NULL,
+    version INTEGER NOT NULL CHECK(version > 0),
+    sequence INTEGER NOT NULL CHECK(sequence >= 0),
+    owner TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    repository_id TEXT NOT NULL,
+    worktree_id TEXT NOT NULL,
+    branch_id TEXT NOT NULL,
+    pull_request_id TEXT,
+    source_group_id TEXT,
+    project_id TEXT,
+    task_list_id TEXT,
+    plan_id TEXT,
+    agent_id TEXT,
+    status TEXT,
+    derived_at TEXT NOT NULL,
+    digest TEXT NOT NULL CHECK(length(digest) = 64),
+    payload TEXT NOT NULL,
+    PRIMARY KEY (projection_id, version),
+    UNIQUE (projection_id, sequence)
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_to_pr_projection_latest
+    ON task_to_pr_projection_snapshots(projection_id, version DESC);
+  CREATE INDEX IF NOT EXISTS idx_task_to_pr_projection_task
+    ON task_to_pr_projection_snapshots(task_id, version DESC);
+  CREATE INDEX IF NOT EXISTS idx_task_to_pr_projection_scope
+    ON task_to_pr_projection_snapshots(project_id, task_list_id, plan_id, agent_id);
+  CREATE INDEX IF NOT EXISTS idx_task_to_pr_projection_status_changed
+    ON task_to_pr_projection_snapshots(status, derived_at DESC);
+
+  INSERT OR IGNORE INTO _migrations (id) VALUES (69);
+  `,
 ];

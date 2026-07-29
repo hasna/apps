@@ -2,7 +2,7 @@
 // Regenerate: bun run scripts/generate-sdk.ts
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Todos V1 API 0.11.96
+// Source: Todos V1 API 0.13.2
 
 export interface Task { "id"?: string; "title"?: string; "description"?: string; "status"?: string; "priority"?: string; "project_id"?: string | null; "assigned_to"?: string | null; "agent_id"?: string | null; "tags"?: Array<string>; "version"?: number; "created_at"?: string; "updated_at"?: string }
 
@@ -83,6 +83,16 @@ export interface RecoverPrGroupInput { "root_request_id": string; "repository": 
 export interface AppendPrGroupEventInput { "attempt_id": string; "writer_generation": string; "idempotency_key": string; "event_type": "started" | "progress" | "heartbeat" | "handoff" | "review_requested" | "review_receipt" | "repair_accepted" | "repair_rejected" | "conditional_merge_receipt" | "merge_outcome" | "cancellation" | "failure" | "cleanup_eligible" | "terminal_outcome"; "message"?: string | null; "head_sha"?: string | null; "receipt_key"?: string | null; "review_receipt_key"?: string | null; "conditional_merge_receipt_key"?: string | null; "outcome"?: "approved" | "changes_requested" | "dismissed" | "accepted" | "rejected" | "merged" | "not_merged" | "cancelled" | "failed" | "no_go" | null; "repository"?: string; "pr_number"?: number | null; "base_sha"?: string | null; "actor_id"?: string | null; "actor_run_id"?: string | null; "expected_reviewer_id"?: string | null; "expected_reviewer_run_id"?: string | null; "repair_cycle"?: number | null; "ci_proof"?: PrGroupCiProof | null; "cleanup_proof"?: PrGroupCleanupProof | null; "metadata"?: Record<string, unknown>; "created_at"?: string }
 
 export interface PrGroupMutationResult { "created": boolean; "adopted": boolean; "appended": boolean; "view": PrGroupStateView; "event": PrGroupEventRecord }
+
+export interface Hasna_todos_request_list_v1 { "agentId": __schema0 | null; "changedAfter": string | null; "cursor": string | null; "limit": number; "planId": __schema0 | null; "projectId": __schema0 | null; "status": string | null; "taskListId": __schema0 | null }
+
+export interface Hasna_todos_request_ref_v1 { "ref": string }
+
+export type Hasna_todos_response_projection_page_v1 = { "data": { "count": number; "items": Array<{ "derivedAt": __schema5; "digest": __schema2; "head": { "branchHead": __schema3; "equalityProof": __schema4 | null; "providerObservedHead": __schema3 | null; "publishedHead": __schema3 | null }; "id": __schema0; "identity": { "baseHead": __schema3; "branchRef": { "digest": __schema2; "id": __schema0; "kind": string; "owner": __schema1 }; "repositoryRef": { "digest": __schema2; "id": __schema0; "kind": string; "owner": __schema1 }; "taskRef": { "digest": __schema2; "id": __schema0; "kind": string; "owner": __schema1 }; "worktreeRef": { "digest": __schema2; "id": __schema0; "kind": string; "owner": __schema1 } }; "owner": __schema1; "predecessor": { "digest": __schema2; "kind": string; "owner": __schema1; "projectionId": __schema0; "version": number } | null; "proofs": Array<__schema4>; "pullRequestRef": { "digest": __schema2; "id": __schema0; "kind": string; "owner": __schema1 } | null; "schema": string; "sequence": number; "version": number }>; "nextCursor": string | null }; "ok": boolean; "requestId": __schema6 } | { "error": { "code": "TODOS_INVALID_INPUT" | "TODOS_INVALID_MODE" | "TODOS_AUTHENTICATION_FAILED" | "TODOS_SCOPE_REQUIRED" | "TODOS_TENANT_MISMATCH" | "TODOS_ACCESS_DENIED" | "TODOS_NOT_FOUND" | "TODOS_AMBIGUOUS_REFERENCE" | "TODOS_VERSION_CONFLICT" | "TODOS_RESOURCE_CONFLICT" | "TODOS_LOCK_CONFLICT" | "TODOS_PRECONDITION_FAILED" | "TODOS_APPROVAL_REQUIRED" | "TODOS_CAPABILITY_REQUIRED" | "TODOS_OPERATION_UNSUPPORTED" | "TODOS_IDEMPOTENCY_REQUIRED" | "TODOS_IDEMPOTENCY_CONFLICT" | "TODOS_RATE_LIMITED" | "TODOS_QUOTA_EXCEEDED" | "TODOS_UPGRADE_REQUIRED" | "TODOS_AUTHORITY_MISMATCH" | "TODOS_AUTHORITY_UNAVAILABLE" | "TODOS_INTERNAL" | "TODOS_TRANSFER_INVALID" | "TODOS_TRANSFER_CHECKSUM_MISMATCH" | "TODOS_TRANSFER_REFERENCE_MISSING" | "TODOS_PROJECTION_PREDECESSOR_CONFLICT"; "details": Array<{ "actual"?: __schema7; "expected"?: __schema7; "field": string | null; "reason": string }>; "message": string; "retryable": boolean }; "ok": boolean; "requestId": __schema6 };
+
+export type Hasna_todos_response_projection_v1 = { "data": { "derivedAt": __schema5; "digest": __schema2; "head": { "branchHead": __schema3; "equalityProof": __schema4 | null; "providerObservedHead": __schema3 | null; "publishedHead": __schema3 | null }; "id": __schema0; "identity": { "baseHead": __schema3; "branchRef": { "digest": __schema2; "id": __schema0; "kind": string; "owner": __schema1 }; "repositoryRef": { "digest": __schema2; "id": __schema0; "kind": string; "owner": __schema1 }; "taskRef": { "digest": __schema2; "id": __schema0; "kind": string; "owner": __schema1 }; "worktreeRef": { "digest": __schema2; "id": __schema0; "kind": string; "owner": __schema1 } }; "owner": __schema1; "predecessor": { "digest": __schema2; "kind": string; "owner": __schema1; "projectionId": __schema0; "version": number } | null; "proofs": Array<__schema4>; "pullRequestRef": { "digest": __schema2; "id": __schema0; "kind": string; "owner": __schema1 } | null; "schema": string; "sequence": number; "version": number }; "ok": boolean; "requestId": __schema6 } | { "error": { "code": "TODOS_INVALID_INPUT" | "TODOS_INVALID_MODE" | "TODOS_AUTHENTICATION_FAILED" | "TODOS_SCOPE_REQUIRED" | "TODOS_TENANT_MISMATCH" | "TODOS_ACCESS_DENIED" | "TODOS_NOT_FOUND" | "TODOS_AMBIGUOUS_REFERENCE" | "TODOS_VERSION_CONFLICT" | "TODOS_RESOURCE_CONFLICT" | "TODOS_LOCK_CONFLICT" | "TODOS_PRECONDITION_FAILED" | "TODOS_APPROVAL_REQUIRED" | "TODOS_CAPABILITY_REQUIRED" | "TODOS_OPERATION_UNSUPPORTED" | "TODOS_IDEMPOTENCY_REQUIRED" | "TODOS_IDEMPOTENCY_CONFLICT" | "TODOS_RATE_LIMITED" | "TODOS_QUOTA_EXCEEDED" | "TODOS_UPGRADE_REQUIRED" | "TODOS_AUTHORITY_MISMATCH" | "TODOS_AUTHORITY_UNAVAILABLE" | "TODOS_INTERNAL" | "TODOS_TRANSFER_INVALID" | "TODOS_TRANSFER_CHECKSUM_MISMATCH" | "TODOS_TRANSFER_REFERENCE_MISSING" | "TODOS_PROJECTION_PREDECESSOR_CONFLICT"; "details": Array<{ "actual"?: __schema7; "expected"?: __schema7; "field": string | null; "reason": string }>; "message": string; "retryable": boolean }; "ok": boolean; "requestId": __schema6 };
+
+export interface Hasna_todos_error_v1 { "code": "TODOS_INVALID_INPUT" | "TODOS_INVALID_MODE" | "TODOS_AUTHENTICATION_FAILED" | "TODOS_SCOPE_REQUIRED" | "TODOS_TENANT_MISMATCH" | "TODOS_ACCESS_DENIED" | "TODOS_NOT_FOUND" | "TODOS_AMBIGUOUS_REFERENCE" | "TODOS_VERSION_CONFLICT" | "TODOS_RESOURCE_CONFLICT" | "TODOS_LOCK_CONFLICT" | "TODOS_PRECONDITION_FAILED" | "TODOS_APPROVAL_REQUIRED" | "TODOS_CAPABILITY_REQUIRED" | "TODOS_OPERATION_UNSUPPORTED" | "TODOS_IDEMPOTENCY_REQUIRED" | "TODOS_IDEMPOTENCY_CONFLICT" | "TODOS_RATE_LIMITED" | "TODOS_QUOTA_EXCEEDED" | "TODOS_UPGRADE_REQUIRED" | "TODOS_AUTHORITY_MISMATCH" | "TODOS_AUTHORITY_UNAVAILABLE" | "TODOS_INTERNAL" | "TODOS_TRANSFER_INVALID" | "TODOS_TRANSFER_CHECKSUM_MISMATCH" | "TODOS_TRANSFER_REFERENCE_MISSING" | "TODOS_PROJECTION_PREDECESSOR_CONFLICT"; "details": Array<{ "actual"?: __schema0; "expected"?: __schema0; "field": string | null; "reason": string }>; "message": string; "retryable": boolean }
 
 export interface TodosV1ClientOptions {
   /** Base URL, e.g. process.env.APP_API_URL. */
@@ -341,6 +351,24 @@ export class TodosV1Client {
     async updateTaskList(id: string, body: UpdateTaskListInput, init?: RequestInit): Promise<{ "task_list"?: TaskList }> {
       return this.request("PATCH", `/v1/task-lists/${encodeURIComponent(String(id))}`, {
         body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** task_to_pr_projection.list */
+    async listTaskToPrProjections(query?: { "cursor": Cursor; "limit": Limit; "projectId": ProjectId; "taskListId": TaskListId; "planId": PlanId; "agentId": AgentId; "status": Status; "changedAfter": ChangedAfter }, init?: RequestInit): Promise<Hasna_todos_response_projection_page_v1> {
+      return this.request("GET", `/v1/task-to-pr-projections`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** task_to_pr_projection.get */
+    async getTaskToPrProjection(ref: Ref, init?: RequestInit): Promise<Hasna_todos_response_projection_v1> {
+      return this.request("GET", `/v1/task-to-pr-projections/${encodeURIComponent(String(ref))}`, {
+        body: undefined,
         query: undefined,
         init,
       });

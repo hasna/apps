@@ -10,6 +10,20 @@
 
 export { TodosClient, createClient } from "./client.js";
 export type { TodosClientOptions } from "./client.js";
+export {
+  TaskToPrProjectionSdk,
+  TaskToPrProjectionSdkResource,
+  createTaskToPrProjectionSdk,
+} from "./task-to-pr-projection.js";
+export type {
+  TaskToPrProjection,
+  TaskToPrProjectionListOptions,
+  TaskToPrProjectionPage,
+  TaskToPrProjectionRebuildInput,
+  TaskToPrProjectionRebuildResult,
+  TaskToPrProjectionScope,
+  TaskToPrProjectionWriteResult,
+} from "../task-to-pr-projections/types.js";
 
 // Versioned /v1 cloud client, generated from the serve OpenAPI document
 // (src/server/openapi.ts). Regenerate with `bun run scripts/generate-sdk.ts`.

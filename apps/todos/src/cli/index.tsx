@@ -147,6 +147,7 @@ const [
   { registerStorageCommands },
   { registerScaleHardeningCommands },
   { registerPrGroupCommands },
+  { registerTaskToPrProjectionCommands },
   { registerHelpCommands },
 ] = await Promise.all([
   import("./helpers.js"),
@@ -178,6 +179,7 @@ const [
   import("./commands/storage-commands.js"),
   import("./commands/scale-hardening-commands.js"),
   import("./commands/pr-group-commands.js"),
+  import("./commands/task-to-pr-projection-commands.js"),
   import("./commands/help-commands.js"),
 ]);
 
@@ -209,6 +211,7 @@ registerLocalBackupCommands(program);
 registerStorageCommands(program);
 registerScaleHardeningCommands(program);
 registerPrGroupCommands(program);
+registerTaskToPrProjectionCommands(program);
 await registerOptionalEventsCommands(program);
 registerHelpCommands(program, authority.route);
 

@@ -11,10 +11,51 @@ import { writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { generateSdkFromOpenApi } from "@hasna/contracts/sdk";
+import todosContractOpenApi from "@hasna/contracts/todos/artifacts/openapi.json";
 import { buildV1OpenApiDocument } from "../src/server/openapi.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const spec = buildV1OpenApiDocument();
+const spec = buildV1OpenApiDocument() as Record<string, any>;
+
+// The hosted TaskToPrProjection reader is a generated @hasna/contracts route,
+// not an OSS server implementation. Merge only its customer read operations
+// into the cloud SDK input so cloud callers cannot drift onto an invented HTTP
+// shape or a local SQLite fallback.
+const contract = todosContractOpenApi as Record<string, any>;
+function resolveContractRef(reference: string): unknown {
+  let current: any = contract;
+  for (const segment of reference.slice(2).split("/")) {
+    current = current?.[segment.replace(/~1/g, "/").replace(/~0/g, "~")];
+  }
+  return structuredClone(current);
+}
+for (const [path, operationId] of [
+  ["/v1/task-to-pr-projections", "listTaskToPrProjections"],
+  ["/v1/task-to-pr-projections/{ref}", "getTaskToPrProjection"],
+] as const) {
+  const pathItem = structuredClone(contract.paths[path]);
+  pathItem.get.operationId = operationId;
+  // Contract identity headers are supplied centrally by the projection cloud
+  // adapter. Keeping them out of each method signature makes it impossible for
+  // CLI/MCP call sites to send inconsistent digests or operation ids.
+  pathItem.get.parameters = pathItem.get.parameters.filter(
+    (parameter: { in?: string }) => parameter.in !== "header",
+  );
+  for (const parameter of pathItem.get.parameters) {
+    if (typeof parameter.schema?.["$ref"] === "string") {
+      parameter.schema = resolveContractRef(parameter.schema["$ref"]);
+    }
+  }
+  // Runtime response decoding is deliberately delegated to the strict Zod
+  // schemas exported from @hasna/contracts/todos. The SDK generator only owns
+  // transport code here; flattening the contract's local $defs would create a
+  // second, lossy validation implementation.
+  pathItem.get.responses["200"].content["application/json"].schema = {
+    type: "object",
+    additionalProperties: true,
+  };
+  spec.paths[path] = pathItem;
+}
 const { code, operations, warnings } = generateSdkFromOpenApi(spec as never, {
   className: "TodosV1Client",
   apiKeyHeader: "x-api-key",
