@@ -76,6 +76,7 @@ describe("task list and completion OpenAPI contract", () => {
       "task_list_id",
       "assigned_to",
       "agent_id",
+      "tags",
       "limit",
       "offset",
     ]);

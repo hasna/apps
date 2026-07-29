@@ -2124,7 +2124,7 @@ describe("CLI integration", () => {
 
     expect(status.exitCode).toBe(0);
     const payload = JSON.parse(status.stdout);
-    expect(payload.mode).toBe("local");
+    expect(payload.mode).toBe("sqlite");
     expect(payload.remote_enabled).toBe(false);
     expect(payload.no_network).toBe(true);
     expect(payload.database.configured).toBe(false);
@@ -2160,7 +2160,7 @@ describe("CLI integration", () => {
 
     expect(status.exitCode).toBe(1);
     const payload = JSON.parse(status.stdout);
-    expect(payload.mode).toBe("remote");
+    expect(payload.mode).toBe("http");
     expect(payload.remote_enabled).toBe(true);
     expect(payload.transport).toBe("http-v1");
     expect(payload.database.configured).toBe(false);

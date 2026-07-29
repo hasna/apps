@@ -331,7 +331,7 @@ export function registerTaskCommands(program: Command) {
       opts.tags = opts.tags || opts.tag;
       opts.list = opts.list || opts.taskList;
 
-      // self_hosted cloud routing: create straight against <app-host>/v1.
+      // http authority routing: create straight against <app-host>/v1.
       const cloud = getTodosCloudClient();
       if (cloud) {
         let task;
@@ -470,7 +470,7 @@ export function registerTaskCommands(program: Command) {
       opts.tags = opts.tags || opts.tag;
       opts.list = opts.list || opts.taskList;
       const explicitProject = opts.project || globalOpts.project;
-      // self_hosted cloud routing: dedupe-and-upsert on the SHARED dataset. The
+      // http authority routing: dedupe-and-upsert on the SHARED dataset. The
       // local path wrote the task to this machine's sqlite by fingerprint, so on a
       // flipped machine the row never reached the cloud /v1 API (a split-brain write).
       const cloud = getTodosCloudClient();
@@ -657,7 +657,7 @@ export function registerTaskCommands(program: Command) {
       const globalOpts = program.opts();
       opts.tags = opts.tags || opts.tag;
       opts.list = opts.list || opts.taskList;
-      // self_hosted cloud routing: skip local-store detection and resolve explicit
+      // http authority routing: skip local-store detection and resolve explicit
       // project/list filters against the shared API before listing tasks.
       const cloud = getTodosCloudClient();
       const cloudProjectRef = globalOpts.project || opts.projectName;
@@ -1097,7 +1097,7 @@ export function registerTaskCommands(program: Command) {
     .description("Show change history for a task (audit log)")
     .action(async (id: string) => {
       const globalOpts = program.opts();
-      // self_hosted cloud routing: read the SHARED audit trail. The local path read
+      // http authority routing: read the SHARED audit trail. The local path read
       // this machine's sqlite and reported "No history" for a cloud task.
       const cloud = getTodosCloudClient();
       const resolvedId = await resolveTaskIdForCommand(id, cloud);
@@ -1176,7 +1176,7 @@ export function registerTaskCommands(program: Command) {
         handleError(new Error("Use either --working-dir or --clear-working-dir, not both."));
       }
 
-      // self_hosted cloud routing: PATCH straight against <app-host>/v1.
+      // http authority routing: PATCH straight against <app-host>/v1.
       const cloud = getTodosCloudClient();
       if (cloud) {
         let task;
@@ -1405,7 +1405,7 @@ export function registerTaskCommands(program: Command) {
       const globalOpts = program.opts();
       const approver = globalOpts.agent || "cli";
       try {
-        // self_hosted cloud routing: resolve and approve the task on the SHARED
+        // http authority routing: resolve and approve the task on the SHARED
         // dataset. The local path read this machine's sqlite and 404'd
         // ("Task not found") a task that lives only in the cloud.
         const cloud = getTodosCloudClient();
@@ -1498,7 +1498,7 @@ export function registerTaskCommands(program: Command) {
       const resolvedId = cloud ? await resolveTaskIdForCommand(id, cloud) : resolveTaskId(id);
       let result;
       try {
-        // self_hosted cloud routing: lock on the SHARED dataset so every agent
+        // http authority routing: lock on the SHARED dataset so every agent
         // coordinates on the same lock. Local lookup 404'd cloud tasks before.
         result = cloud ? await cloudLockTask(cloud, resolvedId, agentId) : lockTask(resolvedId, agentId);
       } catch (e) {
@@ -1604,7 +1604,7 @@ export function registerTaskCommands(program: Command) {
         handleError(new Error(`Unknown action: ${action}. Use: done, start, delete, plan (alias: move-plan)`));
       }
 
-      // self_hosted cloud routing: run each op against the SHARED dataset. The local
+      // http authority routing: run each op against the SHARED dataset. The local
       // path resolved ids against this machine's sqlite — `bulk done` threw
       // "Task not found" for valid cloud task ids (while `bulk delete` silently
       // no-op'd), a split-brain read.

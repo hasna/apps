@@ -354,7 +354,7 @@ exit 0
       const resolvedId = await resolveTaskIdForCommand(taskId, cloud);
       const files = opts.files ? opts.files.split(",").filter(Boolean) : undefined;
       try {
-        // self_hosted cloud routing: attach the commit link to the REAL cloud task.
+        // http authority routing: attach the commit link to the REAL cloud task.
         // The local path wrote to this machine's sqlite where the cloud task does
         // not exist, tripping a FOREIGN KEY constraint failure.
         const commit = cloud
@@ -384,7 +384,7 @@ exit 0
     .action(async (sha: string) => {
       const globalOpts = program.opts();
       try {
-        // self_hosted cloud routing: search the SHARED commit-link dataset.
+        // http authority routing: search the SHARED commit-link dataset.
         const cloud = getTodosCloudClient();
         if (cloud) {
           const commit = await cloudFindCommit(cloud, sha);
@@ -438,7 +438,7 @@ exit 0
         }
       }
       try {
-        // self_hosted cloud routing: attach the ref link to the REAL cloud task.
+        // http authority routing: attach the ref link to the REAL cloud task.
         // The local path wrote to sqlite where the cloud task does not exist,
         // tripping a FOREIGN KEY constraint failure.
         const gitRef = cloud
@@ -470,7 +470,7 @@ exit 0
     .action(async (ref: string) => {
       const globalOpts = program.opts();
       try {
-        // self_hosted cloud routing: search the SHARED ref-link dataset.
+        // http authority routing: search the SHARED ref-link dataset.
         const cloud = getTodosCloudClient();
         if (cloud) {
           const refs = await cloudFindRefs(cloud, ref);
@@ -558,7 +558,7 @@ exit 0
         handleError(new Error("--status must be passed, failed, or unknown"));
       }
       try {
-        // self_hosted cloud routing: attach the verification to the REAL cloud task.
+        // http authority routing: attach the verification to the REAL cloud task.
         // The local path wrote the row to this machine's sqlite where the cloud task
         // does not exist, tripping a FOREIGN KEY constraint.
         const cloud = getTodosCloudClient();

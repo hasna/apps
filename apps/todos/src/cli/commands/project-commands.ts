@@ -41,7 +41,7 @@ function collectOption(value: string, previous: string[] = []): string[] {
   return [...previous, value];
 }
 
-/** The resolved cloud/self-hosted client, when a remote authority is selected. */
+/** The resolved hosted /v1 client, when a remote authority is selected. */
 type CloudClient = NonNullable<ReturnType<typeof getTodosCloudClient>>;
 
 /** Bounded concurrency for per-task edge reads while assembling a cloud graph. */
@@ -59,7 +59,7 @@ function isResolvedTask(task: Task): boolean {
 }
 
 /**
- * Assemble the whole-project dependency graph from a self-hosted authority.
+ * Assemble the whole-project dependency graph from a hosted /v1 authority.
  * The cloud API exposes edges per task, so nodes come from one list call and
  * the adjacency list is gathered from each task's dependency edges (bounded
  * concurrency). A single unreadable task degrades to a missing node/edge rather
@@ -350,8 +350,8 @@ export function registerProjectCommands(program: Command) {
     .action(async (query: string, opts) => {
       const globalOpts = program.opts();
       try {
-        // self_hosted cloud routing: the local FTS5 index (searchTasks) only sees
-        // the local SQLite file, which is empty on a cloud/self-hosted deployment.
+        // http authority routing: the local FTS5 index (searchTasks) only sees
+        // the local SQLite file, which is empty when the http transport is selected.
         // Route task search through the shared `/v1/tasks?q=` API so it runs the
         // Postgres tsvector/trigram path instead of returning nothing.
         const cloud = getTodosCloudClient();
@@ -375,7 +375,7 @@ export function registerProjectCommands(program: Command) {
         }
         if (cloud) {
           if (scope !== "tasks") {
-            console.error(chalk.red(`Cross-entity search scope "${scope}" is not supported against a self-hosted authority; only --scope tasks is available.`));
+            console.error(chalk.red(`Cross-entity search scope "${scope}" is not supported against a hosted /v1 authority; only --scope tasks is available.`));
             process.exit(1);
           }
           const tasks = await cloudListTasks(cloud, {
@@ -601,7 +601,7 @@ export function registerProjectCommands(program: Command) {
         return;
       }
 
-      // self_hosted cloud routing: dependency edges live on the SHARED dataset.
+      // http authority routing: dependency edges live on the SHARED dataset.
       // The previous path read LOCAL sqlite and 404'd cloud tasks. The recursive
       // `--graph` view is a local-only concept; in cloud mode we show the flat
       // dependency/blocked-by edges instead.

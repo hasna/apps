@@ -379,7 +379,16 @@ class PostgresJsonRecordStore {
     if (filter.assigned_to !== undefined) conds.push(`payload->>'assigned_to' = ${p(filter.assigned_to)}`);
     if (filter.agent_id !== undefined) conds.push(`payload->>'agent_id' = ${p(filter.agent_id)}`);
     if (filter.session_id !== undefined) conds.push(`payload->>'session_id' = ${p(filter.session_id)}`);
-    if (filter.tags?.length) conds.push(`payload->'tags' @> ${p(filter.tags)}::jsonb`);
+    if (filter.tags?.length) {
+      // ANY-of tag matching, parity with the SQLite path (src/db/task-crud.ts:
+      // `id IN (SELECT task_id FROM task_tags WHERE tag IN (...))`). Scalar
+      // params only — the previous `@> $n::jsonb` bound a JS array, which
+      // Bun.SQL flattens into a malformed literal (see inClause note above).
+      conds.push(
+        `EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(payload->'tags', '[]'::jsonb)) AS task_tags(tag) ` +
+          `WHERE ${inClause("task_tags.tag", filter.tags)})`,
+      );
+    }
     if (filter.has_recurrence !== undefined) {
       conds.push(`(COALESCE(payload->>'recurrence_rule', '') <> '') = ${p(filter.has_recurrence)}`);
     }

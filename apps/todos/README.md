@@ -606,7 +606,7 @@ todos ready
 prerequisites, `blocked_by` = the incomplete prerequisites currently blocking
 the task — empty means dispatchable, `blocks` = downstream dependents) and
 `todos.project_dependency_graph.v1` for `--project` (a `nodes`/`edges`/`cycles`
-adjacency list). Both are identical in local and self-hosted mode. Human output
+adjacency list). Both are identical on the sqlite and http transports. Human output
 and `--graph --json` are unchanged.
 
 The same workflow is available to MCP clients through
@@ -746,8 +746,8 @@ todos plans --show <plan-id>                  # verify the plan's task set
 
 Plan references accept a UUID, a plan slug, a plan name, or a unique id prefix.
 An unknown or ambiguous reference exits non-zero before any task is modified.
-All of these run against whichever authority the CLI is configured for: local
-SQLite, or the shared `/v1` dataset under a self-hosted/cloud authority.
+All of these run against whichever store the CLI is configured for: the local
+SQLite file, or the shared dataset behind a hosted `/v1` authority.
 
 ## Local Git Traceability
 

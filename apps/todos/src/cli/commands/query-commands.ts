@@ -393,7 +393,7 @@ export function registerQueryCommands(program: Command) {
         const projectId = projectRef
           ? await cloudResolveProjectRef(cloud, projectRef)
           : undefined;
-        // self_hosted cloud routing: build the health snapshot from the shared
+        // http authority routing: build the health snapshot from the shared
         // cloud dataset (counts + active/next lists) instead of the local mirror.
         const baseFilter = projectId ? { project_id: projectId } : {};
         const [stats, pending, in_progress, completed, activeTasks, nextTasks] = await Promise.all([

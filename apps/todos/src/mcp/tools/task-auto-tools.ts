@@ -324,7 +324,7 @@ export function registerTaskAutoTools(server: McpServer, ctx: TaskAutoContext) {
       "Get system health: task counts by status, active agents, project summary.",
       async () => {
         try {
-          // self_hosted cloud routing: report health from the shared cloud dataset.
+          // http authority routing: report health from the shared cloud dataset.
           const cloud = getTodosCloudClient();
           if (cloud) {
             const [stats, pending, inProgress, completed, cancelled, projects, agents] = await Promise.all([

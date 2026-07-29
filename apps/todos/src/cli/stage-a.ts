@@ -176,8 +176,24 @@ function parseInvocation(args: string[]): ParsedInvocation {
   return { command, commandArgs, globalOptions, metadataFlags, invalidGlobalOption, unknownLeadingOption };
 }
 
+/**
+ * Human-readable label for a refused invocation. Skips positionals that are the
+ * VALUE of a preceding `--option value` pair so a refusal never presents an
+ * option argument (e.g. a tag name) as though it were a subcommand.
+ */
 function invocationLabel(invocation: ParsedInvocation): string {
-  const detail = invocation.commandArgs.find((arg) => !arg.startsWith("-"));
+  const args = invocation.commandArgs;
+  let detail: string | undefined;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (arg.startsWith("-")) {
+      // `--option value` consumes the next token; `--option=value` does not.
+      if (!arg.includes("=")) index += 1;
+      continue;
+    }
+    detail = arg;
+    break;
+  }
   return [invocation.command, detail].filter(Boolean).join(" ") || "this invocation";
 }
 
@@ -234,8 +250,11 @@ function commandSupportsRemote(invocation: ParsedInvocation): boolean {
       return !hasOption(args, "--deregister") && !hasOption(args, "--path-prefix") && !hasOption(args, "--dry-run");
     case "plans":
       return !hasOption(args, "--artifact") && !hasOption(args, "--write-artifacts");
+    // `list --tags/--tag` is serviced remotely: the /v1 list route filters by
+    // tag server-side and the cloud router preflights the capability against
+    // the authority's OpenAPI contract (task 90c0b178).
     case "list":
-      return !hasOption(args, "--tags") && !hasOption(args, "--tag") && !hasOption(args, "--recurring");
+      return !hasOption(args, "--recurring");
     case "claim":
       return !invocation.globalOptions.has("--project") && !hasOption(args, "--project") &&
         !hasOption(args, "--stale-minutes") && !hasOption(args, "--steal-stale");

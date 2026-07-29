@@ -379,26 +379,29 @@ export async function startServer(port: number, options?: StartServerOptions): P
       // ── Service surface probes (unauthenticated): /health /ready /version ──
       if ((path === "/health" || path === "/ready" || path === "/version") && method === "GET") {
         const { getPackageVersion } = await import("../lib/package-version.js");
-        const { isCloudModeEnabled, pingCloud } = await import("./cloud.js");
-        const mode = isCloudModeEnabled() ? "remote" : "local";
+        const { isPostgresBackendConfigured, pingCloud } = await import("./cloud.js");
+        // `mode` keeps its historical remote|local wire values (deployed smoke
+        // checks assert them); `backend` is the canonical two-arm answer.
+        const backend = isPostgresBackendConfigured() ? "postgresql" : "sqlite";
+        const mode = backend === "postgresql" ? "remote" : "local";
         const version = getPackageVersion();
         if (path === "/version") {
-          return Response.json({ status: "ok", version, mode, name: "todos" });
+          return Response.json({ status: "ok", version, mode, backend, name: "todos" });
         }
         if (path === "/ready") {
-          if (mode === "remote") {
+          if (backend === "postgresql") {
             try {
               await pingCloud();
             } catch (e) {
               return Response.json(
-                { status: "unavailable", version, mode, error: (e as Error).message },
+                { status: "unavailable", version, mode, backend, error: (e as Error).message },
                 { status: 503 },
               );
             }
           }
-          return Response.json({ status: "ready", version, mode });
+          return Response.json({ status: "ready", version, mode, backend });
         }
-        return Response.json({ status: "ok", version, mode, name: "todos" });
+        return Response.json({ status: "ok", version, mode, backend, name: "todos" });
       }
 
       // ── OpenAPI document (unauthenticated; source of truth for the SDK) ──

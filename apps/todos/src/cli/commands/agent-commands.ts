@@ -31,7 +31,7 @@ export function registerAgentCommands(program: Command) {
     .action(async (name: string, opts) => {
       const globalOpts = program.opts();
       try {
-        // self_hosted cloud routing: register into the SHARED cloud roster so the
+        // http authority routing: register into the SHARED cloud roster so the
         // agent identity lives in /v1/agents (not this machine's local sqlite).
         // This is the agent-identity misroute fix — a flipped machine's `init`
         // used to write the agent locally only, invisible to the cloud fleet.
@@ -66,7 +66,7 @@ export function registerAgentCommands(program: Command) {
       const agentId = agent || globalOpts.agent;
       if (!agentId) { handleError(new Error("Agent ID required. Use --agent or pass as argument.")); }
       try {
-        // self_hosted cloud routing: heartbeat the SHARED cloud roster so a flipped
+        // http authority routing: heartbeat the SHARED cloud roster so a flipped
         // machine refreshes the same agent every other agent sees. The local path
         // 404'd cloud-only agents ("Agent not found").
         const cloud = getTodosCloudClient();
@@ -98,7 +98,7 @@ export function registerAgentCommands(program: Command) {
       const agentId = agent || globalOpts.agent;
       if (!agentId) { handleError(new Error("Agent ID or name required. Use --agent or pass as argument.")); }
       try {
-        // self_hosted cloud routing: release in the SHARED cloud roster so the name
+        // http authority routing: release in the SHARED cloud roster so the name
         // frees up for every agent. The local path 404'd cloud-only agents.
         const cloud = getTodosCloudClient();
         if (cloud) {

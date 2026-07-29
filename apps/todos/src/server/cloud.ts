@@ -53,9 +53,19 @@ export function resolveSigningSecret(env: NodeJS.ProcessEnv = process.env): stri
   );
 }
 
-/** True when this process is configured to serve the cloud `/v1` API. */
-export function isCloudModeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+/**
+ * True when this process is configured with the PostgreSQL backend (a database
+ * URL is present), i.e. it serves the authenticated `/v1` API. This is the
+ * server's single data-backend switch: sqlite (no DSN) or postgres (DSN) —
+ * there is no deployment-mode axis.
+ */
+export function isPostgresBackendConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
   return Boolean(resolveCloudDatabaseUrl(env));
+}
+
+/** @deprecated Renamed to {@link isPostgresBackendConfigured}. */
+export function isCloudModeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return isPostgresBackendConfigured(env);
 }
 
 let cachedClient: TodosCloudQueryClient | null = null;

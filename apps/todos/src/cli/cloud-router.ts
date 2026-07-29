@@ -1,11 +1,12 @@
 /**
  * Authenticated `/v1` routing for the open Todos CLI.
  *
- * Local mode remains SQLite-backed. An explicit remote/self-hosted mode instead
- * requires the canonical API URL and API key, validates the authority before a
- * local-capable command module can run, and never falls back to SQLite. This is
- * the repo-owned self-hosted REST contract; it has no dependency on a private
- * SaaS API or database connection string.
+ * The client seam has exactly two transports: the local SQLite file (default)
+ * or the hosted HTTP `/v1` authority. Selecting the http transport requires the
+ * canonical API URL and API key, validates the authority before a local-capable
+ * command module can run, and never falls back to SQLite. This is the repo-owned
+ * REST contract; it has no dependency on a private SaaS API or database
+ * connection string, and the client never opens Postgres directly.
  */
 import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
 import { resolve as resolvePath } from "node:path";
@@ -19,8 +20,28 @@ import { parsePrGroupEventPage, parsePrGroupStateView } from "../pr-groups/http-
 
 type Env = Record<string, string | undefined>;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const CLOUD_MODES = new Set(["self_hosted", "cloud", "remote", "hybrid"]);
-const VALID_STORAGE_MODES = new Set(["local", ...CLOUD_MODES]);
+
+/**
+ * The OSS client seam has exactly TWO implementations (owner directive
+ * 2026-07-29, knowledge k_ms3e6v41_zbe7m8): the local SQLite file or the hosted
+ * HTTP `/v1` authority. The client never opens Postgres directly. Every accepted
+ * selector token normalizes onto one of these transports at the parse boundary;
+ * the former deployment-mode vocabulary does not survive past it.
+ */
+export type TodosCliTransport = "sqlite" | "http";
+
+const TRANSPORT_TOKENS: Record<string, TodosCliTransport> = {
+  sqlite: "sqlite",
+  http: "http",
+  // Legacy placement tokens, silently accepted — the fleet sets these today.
+  local: "sqlite",
+  remote: "http",
+  // Deprecated deployment-mode tokens (dead axis); tolerated only so an
+  // unmigrated environment keeps routing. Never advertised in refusal text.
+  self_hosted: "http",
+  cloud: "http",
+  hybrid: "http",
+};
 const COMPLETION_EVIDENCE_FIELDS = [
   "attachment_ids",
   "files_changed",
@@ -54,7 +75,10 @@ export interface TodosRemoteAuthorityConfigStatus {
 }
 
 export interface TodosCliStorageModeResolution {
-  mode: string;
+  /** Canonical transport the selector resolved to (`sqlite` | `http`). */
+  mode: TodosCliTransport;
+  /** Same value under its own name; prefer this in new code. */
+  transport: TodosCliTransport;
   selected: boolean;
   source: "HASNA_TODOS_STORAGE_MODE" | "TODOS_STORAGE_MODE" | "default";
 }
@@ -64,12 +88,8 @@ function cleanMode(value: string | undefined): string | null {
   return normalized || null;
 }
 
-function modeRole(mode: string): "local" | "remote" {
-  return mode === "local" ? "local" : "remote";
-}
-
 /**
- * Resolve the CLI storage selector without allowing an invalid or conflicting
+ * Resolve the CLI transport selector without allowing an invalid or conflicting
  * environment to drift into SQLite. Empty canonical values do not mask the
  * legacy fallback; explicit canonical/fallback disagreement is rejected.
  */
@@ -88,25 +108,29 @@ export function resolveTodosCliStorageMode(env: Env = process.env as Env): Todos
     ["HASNA_TODOS_STORAGE_MODE", canonical],
     ["TODOS_STORAGE_MODE", fallback],
   ] as const) {
-    if (value && !VALID_STORAGE_MODES.has(value)) {
+    if (value && !(value in TRANSPORT_TOKENS)) {
       throw new Error(
-        `REMOTE_STORAGE_MODE_INVALID: ${source}=${value} must be local, remote, self_hosted, cloud, or hybrid; ` +
+        `REMOTE_STORAGE_MODE_INVALID: ${source}=${value} must be sqlite (local file) or http (hosted /v1 authority); ` +
+          "legacy values local and remote are accepted; " +
           "local SQLite fallback is disabled for invalid routing state",
       );
     }
   }
 
-  if (canonical && fallback && modeRole(canonical) !== modeRole(fallback)) {
+  const canonicalTransport = canonical ? TRANSPORT_TOKENS[canonical]! : null;
+  const fallbackTransport = fallback ? TRANSPORT_TOKENS[fallback]! : null;
+  if (canonicalTransport && fallbackTransport && canonicalTransport !== fallbackTransport) {
     throw new Error(
       `REMOTE_STORAGE_MODE_CONFLICT: HASNA_TODOS_STORAGE_MODE=${canonical} conflicts with ` +
         `TODOS_STORAGE_MODE=${fallback}; local SQLite fallback is disabled`,
     );
   }
 
-  const mode = canonical ?? fallback ?? "local";
+  const transport = canonicalTransport ?? fallbackTransport ?? "sqlite";
   return {
-    mode,
-    selected: CLOUD_MODES.has(mode),
+    mode: transport,
+    transport,
+    selected: transport === "http",
     source: canonical
       ? "HASNA_TODOS_STORAGE_MODE"
       : fallback
@@ -115,8 +139,8 @@ export function resolveTodosCliStorageMode(env: Env = process.env as Env): Todos
   };
 }
 
-function requestedStorageMode(env: Env): string {
-  return resolveTodosCliStorageMode(env).mode;
+function requestedTransport(env: Env): TodosCliTransport {
+  return resolveTodosCliStorageMode(env).transport;
 }
 
 function normalizeRemoteAuthorityUrl(value: string | undefined): string | null {
@@ -185,7 +209,7 @@ export function getTodosRemoteAuthorityConfigStatus(
     return {
       selected: false,
       ok: true,
-      mode: mode || "local",
+      mode,
       api_url_configured: false,
       api_key_configured: false,
       v1_base_url: null,
@@ -230,6 +254,9 @@ function requireTodosRemoteAuthorityEnv(env: Env): Env {
   if (!status.ok) throw new Error(status.issues[0]);
   return {
     ...env,
+    // Seam with the pinned @hasna/contracts 0.5.2 client resolver, whose
+    // normalizeStorageMode still expects its own local|cloud enum. Collapses
+    // when contracts lands the no-modes shape; do not widen from here.
     HASNA_TODOS_STORAGE_MODE: "cloud",
     HASNA_TODOS_API_URL: status.v1_base_url!.replace(/\/v1$/, ""),
     HASNA_TODOS_API_KEY: env.HASNA_TODOS_API_KEY!.trim(),
@@ -349,10 +376,9 @@ async function requiredRemoteRoute<T>(
  * remote mode with a missing or invalid URL/key always throws.
  */
 export function getTodosCloudClient(env: Env = process.env as Env): HasnaStorageClient | null {
-  // Never route over HTTP from URL/key presence alone. The mode is the explicit
-  // authority selector; an absent selector preserves the local default.
-  const mode = requestedStorageMode(env);
-  if (!CLOUD_MODES.has(mode)) return null;
+  // Never route over HTTP from URL/key presence alone. The selector is the
+  // explicit authority switch; an absent selector preserves the local default.
+  if (requestedTransport(env) !== "http") return null;
   const resolved = resolveStorageClient("todos", requireTodosRemoteAuthorityEnv(env), {
     fetchImpl: (input, init) => globalThis.fetch(input, { ...init, redirect: "manual" }),
   });
@@ -368,6 +394,7 @@ export function isCloudRouting(env: Env = process.env as Env): boolean {
 export function resetTodosCloudClient(): void {
   // Only protocol capabilities are cached, keyed by authority rather than credentials.
   completionCapabilityCache.clear();
+  listTagsCapabilityCache.clear();
 }
 
 function assertRemotePrGroupView(value: unknown, route: string): PrGroupStateView {
@@ -458,13 +485,61 @@ function toListQuery(filter: TaskFilter = {}): Record<string, string | number> {
   if (filter.task_list_id) query["task_list_id"] = filter.task_list_id;
   if (filter.assigned_to) query["assigned_to"] = filter.assigned_to;
   if (filter.agent_id) query["agent_id"] = filter.agent_id;
+  if (filter.tags?.length) query["tags"] = filter.tags.join(",");
   if (typeof filter.limit === "number") query["limit"] = filter.limit;
   if (typeof filter.offset === "number") query["offset"] = filter.offset;
   return query;
 }
 
+const listTagsCapabilityCache = new Map<string, Promise<boolean>>();
+
+/** Whether this authority's `GET /v1/tasks` advertises the `tags` query param. */
+async function fetchListTagsCapability(client: HasnaStorageClient): Promise<boolean> {
+  const document = await requiredRemoteRoute(client, "/v1/openapi.json", () =>
+    client.transport.get<unknown>("/openapi.json"));
+  if (!document || typeof document !== "object" || Array.isArray(document)) return false;
+  const paths = (document as Record<string, unknown>)["paths"];
+  const tasksPath = paths && typeof paths === "object" && !Array.isArray(paths)
+    ? (paths as Record<string, unknown>)["/v1/tasks"]
+    : undefined;
+  const get = tasksPath && typeof tasksPath === "object" && !Array.isArray(tasksPath)
+    ? (tasksPath as Record<string, unknown>)["get"]
+    : undefined;
+  const parameters = get && typeof get === "object" && !Array.isArray(get)
+    ? (get as Record<string, unknown>)["parameters"]
+    : undefined;
+  return Array.isArray(parameters) &&
+    parameters.some((parameter) =>
+      parameter && typeof parameter === "object" &&
+      (parameter as Record<string, unknown>)["name"] === "tags");
+}
+
+/**
+ * Fail closed when a tags filter is requested against an authority that
+ * predates server-side tags filtering. An authority that does not parse the
+ * `tags` query param would silently return the UNFILTERED task list — worse
+ * than a refusal — so the capability is preflighted against the authority's
+ * own OpenAPI contract (task 90c0b178).
+ */
+async function requireTagsFilterCapability(client: HasnaStorageClient): Promise<void> {
+  const authority = remoteAuthorityBase(client);
+  let capability = listTagsCapabilityCache.get(authority);
+  if (!capability) {
+    capability = fetchListTagsCapability(client);
+    listTagsCapabilityCache.set(authority, capability);
+  }
+  if (!(await capability)) {
+    throw new Error(
+      `REMOTE_TAGS_FILTER_UNSUPPORTED: configured Todos authority ${authority} does not advertise the tags ` +
+        "query param on GET /v1/tasks; deploy the current @hasna/todos /v1 server to filter by tag; " +
+        "no unfiltered task read was issued",
+    );
+  }
+}
+
 /** List tasks from the cloud (`GET /v1/tasks`). Returns the `tasks` array. */
 export async function cloudListTasks(client: HasnaStorageClient, filter: TaskFilter = {}): Promise<Task[]> {
+  if (filter.tags?.length) await requireTagsFilterCapability(client);
   const res = await requiredRemoteRoute(client, "/v1/tasks", () =>
     client.list<Task>("tasks", { query: toListQuery(filter) }));
   const envelope = res.raw as { tasks?: Task[] } | undefined;
@@ -1166,6 +1241,7 @@ export async function cloudUpsertTaskByFingerprint(
  */
 export async function cloudCountTasks(client: HasnaStorageClient, filter: TaskFilter = {}): Promise<number> {
   const { limit: _drop, offset: _o, ...rest } = filter;
+  if (rest.tags?.length) await requireTagsFilterCapability(client);
   const res = await requiredRemoteRoute(client, "/v1/tasks", () =>
     client.list<Task>("tasks", { query: { ...toListQuery(rest), limit: 1 } }));
   const envelope = res.raw as { total?: number; count?: number; tasks?: Task[] } | undefined;
@@ -1593,7 +1669,7 @@ export async function cloudRecordVerification(
 // `blocked`, `ready`, `next`, `priorities`, `week`, `today`, `yesterday`,
 // `summary`, `report`, `recap`, `standup`, `log`, `burndown`, `lists`, `agent`,
 // `mine`) historically read this machine's LOCAL sqlite even on a flipped
-// machine, so a `self_hosted` box reported its private island instead of the
+// machine, so an http-routed box reported its private island instead of the
 // shared cloud dataset. The helpers below re-derive each of those views from the
 // cloud `/v1` API so a flipped machine reports the SAME numbers as every other
 // agent. Analytics that the local `db/*` helpers compute in SQL are recomputed

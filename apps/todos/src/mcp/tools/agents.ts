@@ -108,7 +108,7 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
       },
       async ({ name, description, role, title, level, permissions, capabilities, session_id, working_dir, force }) => {
         try {
-          // self_hosted cloud routing: register into the SHARED cloud roster so the
+          // http authority routing: register into the SHARED cloud roster so the
           // agent lands in /v1/agents (not this machine's local sqlite island),
           // fixing the identity misroute where list_agents/tasks read cloud but the
           // agent existed only locally.
@@ -209,7 +209,7 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
       },
       async ({ include_archived }) => {
         try {
-          // self_hosted cloud routing: list agents from the shared <app-host>/v1
+          // http authority routing: list agents from the shared <app-host>/v1
           // dataset rather than this machine's local SQLite island.
           const cloud = getTodosCloudClient();
           const agents = cloud
@@ -431,7 +431,7 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
       },
       async ({ agent_id }) => {
         try {
-          // self_hosted cloud routing: heartbeat the SHARED cloud roster so a
+          // http authority routing: heartbeat the SHARED cloud roster so a
           // flipped machine refreshes the same agent every other agent sees. The
           // local path 404'd cloud-only agents ("Agent not found").
           const cloud = getTodosCloudClient();
@@ -476,7 +476,7 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
       },
       async ({ agent_id, session_id }) => {
         try {
-          // self_hosted cloud routing: release in the SHARED cloud roster so the
+          // http authority routing: release in the SHARED cloud roster so the
           // name frees up for every agent. The local path 404'd cloud-only agents.
           const cloud = getTodosCloudClient();
           if (cloud) {

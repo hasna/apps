@@ -11,7 +11,7 @@ function globalOptions(program: Command): Record<string, any> {
   return command.optsWithGlobals?.() ?? program.opts();
 }
 
-function printStatus(status: NativeStorageStatus): void {
+function printStatus(status: Omit<NativeStorageStatus, "mode"> & { mode: string }): void {
   console.log(chalk.bold("todos storage"));
   console.log(`Mode: ${status.mode}`);
   console.log(`Remote: ${status.remote_enabled ? "enabled" : "disabled"}`);
@@ -166,7 +166,7 @@ export function registerStorageCommands(program: Command) {
           ? {
               ...nativeStatus,
               ok: remoteAuthority.ok,
-              mode: "remote" as const,
+              mode: "http" as const,
               local_default: false,
               remote_enabled: true,
               transport: "http-v1" as const,
@@ -198,7 +198,7 @@ export function registerStorageCommands(program: Command) {
         }
         if (remoteAuthority.selected) {
           console.log(chalk.bold("todos storage"));
-          console.log("Mode: remote");
+          console.log("Mode: http");
           console.log("Transport: authenticated HTTP /v1");
           console.log(`Authority: ${remoteAuthority.v1_base_url ?? "not configured"}`);
           console.log(`API key: ${remoteAuthority.api_key_configured ? "configured" : "not configured"}`);

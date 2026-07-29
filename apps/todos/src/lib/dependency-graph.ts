@@ -63,7 +63,7 @@ export interface TaskDependencyEdges {
   task_id: string;
   /**
    * The root task's short id when the caller already holds the row (local
-   * store); `null` from a self-hosted authority, where surfacing it would cost
+   * store); `null` from a hosted /v1 authority, where surfacing it would cost
    * an extra round trip and consumers key on `task_id` anyway.
    */
   short_id: string | null;

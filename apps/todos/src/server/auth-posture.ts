@@ -25,7 +25,7 @@
  * starting wide open.
  */
 
-import { isCloudModeEnabled } from "./cloud.js";
+import { isPostgresBackendConfigured } from "./cloud.js";
 
 /** Env var that configures the static server credential for `/api/*` + `/mcp`. */
 export const AUTH_ENV_VAR = "TODOS_API_KEY";
@@ -125,7 +125,7 @@ export function authNotConfiguredMessage(host: string | undefined): string {
  * only remaining option would be to serve data anonymously off-box.
  */
 export function resolveAuthPosture(input: AuthPostureInput): AuthPosture {
-  const hosted = input.hosted ?? isCloudModeEnabled();
+  const hosted = input.hosted ?? isPostgresBackendConfigured();
   const hasCredentialSource = Boolean(input.apiKey) || input.hasGeneratedKeys;
 
   if (hasCredentialSource) {

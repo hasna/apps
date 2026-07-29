@@ -1,4 +1,14 @@
-export type TodosStorageMode = "local" | "remote" | "hybrid";
+/**
+ * The single data-backend switch (owner directive 2026-07-29, knowledge
+ * k_ms3e6v41_zbe7m8): storage is either the local SQLite file or PostgreSQL.
+ * The former deployment-mode axis (local / remote / self_hosted / cloud /
+ * hybrid) is gone — legacy env tokens are normalized onto these two arms at the
+ * parse boundary and nowhere else.
+ */
+export type TodosStorageBackend = "sqlite" | "postgres";
+
+/** @deprecated Renamed to {@link TodosStorageBackend}; values collapsed to sqlite|postgres. */
+export type TodosStorageMode = TodosStorageBackend;
 
 export type TodosStorageEnv = Record<string, string | undefined>;
 
@@ -34,7 +44,8 @@ export interface TodosSyncConfig {
 
 export interface TodosStorageConfig {
   service: "todos";
-  mode: TodosStorageMode;
+  /** The selected data backend: the local SQLite file or PostgreSQL. */
+  mode: TodosStorageBackend;
   database?: TodosPostgresStorageConfig;
   objectStorage?: TodosS3StorageConfig;
   sync: TodosSyncConfig;
@@ -106,7 +117,7 @@ export function getCanonicalTodosRdsConfig(env: TodosStorageEnv = process.env): 
 }
 
 export function loadTodosStorageConfig(env: TodosStorageEnv = process.env): TodosStorageConfig {
-  const mode = getTodosStorageMode(env);
+  const mode = getTodosStorageBackend(env);
   const databaseUrl = getTodosStorageDatabaseUrl(env);
   const bucket = readStorageEnv(env, "s3Bucket").value;
   const prefix = readStorageEnv(env, "s3Prefix").value ?? "todos/";
@@ -150,30 +161,66 @@ export function loadStorageConfig(env: TodosStorageEnv = process.env): TodosStor
   return loadTodosStorageConfig(env);
 }
 
+/** True when the parsed config selects the PostgreSQL backend. */
+export function isTodosPostgresBackend(config: TodosStorageConfig): boolean {
+  return config.mode === "postgres";
+}
+
+/** @deprecated Renamed to {@link isTodosPostgresBackend}. */
 export function isTodosRemoteStorageEnabled(config: TodosStorageConfig): boolean {
-  return config.mode === "remote" || config.mode === "hybrid";
+  return isTodosPostgresBackend(config);
 }
 
 export function assertTodosRemoteStorageConfig(config: TodosStorageConfig): void {
-  if (!isTodosRemoteStorageEnabled(config)) return;
+  if (!isTodosPostgresBackend(config)) return;
   if (!config.database?.url) {
     throw new Error(`${TODOS_STORAGE_ENV.databaseUrl} is required when ${TODOS_STORAGE_ENV.mode}=${config.mode}`);
   }
 }
 
-export function parseStorageMode(value: string | undefined): TodosStorageMode {
+/**
+ * Legacy env tokens, normalized at the parse boundary and nowhere else. `local`
+ * and `remote` remain silently accepted because the fleet sets them today; the
+ * former deployment-mode tokens are tolerated only so an unmigrated environment
+ * keeps working, and they must never appear in output or refusal text.
+ */
+const LEGACY_BACKEND_TOKENS: Record<string, TodosStorageBackend> = {
+  local: "sqlite",
+  remote: "postgres",
+  postgresql: "postgres",
+  // Deprecated deployment-mode vocabulary (self_hosted/cloud/hybrid): the
+  // placement axis is dead; these all meant "the Postgres-backed dataset".
+  hybrid: "postgres",
+  self_hosted: "postgres",
+  cloud: "postgres",
+};
+
+export function parseStorageBackend(value: string | undefined): TodosStorageBackend {
   const normalized = clean(value)?.toLowerCase();
-  if (!normalized) return "local";
-  if (normalized === "local" || normalized === "remote" || normalized === "hybrid") return normalized;
-  throw new Error(`${TODOS_STORAGE_ENV.mode} must be local, remote, or hybrid`);
+  if (!normalized) return "sqlite";
+  if (normalized === "sqlite" || normalized === "postgres") return normalized;
+  const legacy = LEGACY_BACKEND_TOKENS[normalized];
+  if (legacy) return legacy;
+  throw new Error(`${TODOS_STORAGE_ENV.mode} must be sqlite or postgres (legacy values local and remote are accepted)`);
 }
 
-export function getTodosStorageMode(env: TodosStorageEnv = process.env): TodosStorageMode {
-  return parseStorageMode(readStorageEnv(env, "mode").value);
+/** @deprecated Renamed to {@link parseStorageBackend}; values collapsed to sqlite|postgres. */
+export function parseStorageMode(value: string | undefined): TodosStorageBackend {
+  return parseStorageBackend(value);
 }
 
-export function getStorageMode(env: TodosStorageEnv = process.env): TodosStorageMode {
-  return getTodosStorageMode(env);
+export function getTodosStorageBackend(env: TodosStorageEnv = process.env): TodosStorageBackend {
+  return parseStorageBackend(readStorageEnv(env, "mode").value);
+}
+
+/** @deprecated Renamed to {@link getTodosStorageBackend}. */
+export function getTodosStorageMode(env: TodosStorageEnv = process.env): TodosStorageBackend {
+  return getTodosStorageBackend(env);
+}
+
+/** @deprecated Renamed to {@link getTodosStorageBackend}. */
+export function getStorageMode(env: TodosStorageEnv = process.env): TodosStorageBackend {
+  return getTodosStorageBackend(env);
 }
 
 /**
@@ -193,9 +240,9 @@ export function getTodosStorageShadowEnvName(env: TodosStorageEnv = process.env)
 
 export function assertTodosShadowConfig(config: TodosStorageConfig, env: TodosStorageEnv = process.env): void {
   if (!isTodosShadowEnabled(env)) return;
-  if (config.mode !== "local") {
+  if (config.mode !== "sqlite") {
     throw new Error(
-      `${readStorageEnv(env, "shadow").name} shadow mirror requires ${TODOS_STORAGE_ENV.mode}=local (got ${config.mode})`,
+      `${readStorageEnv(env, "shadow").name} shadow mirror requires the sqlite backend (got ${config.mode})`,
     );
   }
   if (!config.database?.url) {

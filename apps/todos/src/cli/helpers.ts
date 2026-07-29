@@ -61,8 +61,8 @@ const TASK_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
  * Resolve a user-supplied task reference (full UUID, id prefix, or short_id) to a
  * canonical task id, CONSISTENTLY across every `todos` subcommand.
  *
- * Two rules make this safe whether the machine is `local` or flipped to the shared
- * `self_hosted` cloud store:
+ * Two rules make this safe whether the machine reads its local SQLite file or is
+ * flipped to the shared hosted /v1 store:
  *
  *  1. A full task UUID is authoritative on its own — it is returned verbatim and is
  *     NEVER required to exist in this box's local SQLite mirror. On a flipped

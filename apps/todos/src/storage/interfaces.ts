@@ -62,7 +62,7 @@ export interface TodosStorageAdapter {
   /**
    * Task dependency edges. Optional because only the cloud/remote adapters expose
    * it through the `/v1` API — the local CLI/MCP paths call the sqlite `db/*`
-   * helpers directly. Present on the Postgres (self_hosted) adapter.
+   * helpers directly. Present on the Postgres adapter.
    */
   readonly dependencies?: TodosDependencyStore;
   /** Task verification records (optional; present on the Postgres adapter). */
@@ -178,7 +178,7 @@ export interface TodosDependencyStore {
   list(taskId: string, context?: TodosStorageContext): MaybePromise<TodosTaskDependencies>;
   /**
    * Every dependency edge in the dataset. Optional — present on the Postgres
-   * (self_hosted) adapter so the CLI can derive blocked/ready/sprint/recap
+   * adapter so the CLI can derive blocked/ready/sprint/recap
    * dependency analytics over the shared cloud set in one round trip.
    */
   listAll?(context?: TodosStorageContext): MaybePromise<TaskDependency[]>;
@@ -284,7 +284,7 @@ export interface TodosAgentStore {
   update(id: string, input: TodosAgentUpdateInput, context?: TodosStorageContext): MaybePromise<Agent | null>;
   /**
    * Refresh an agent's `last_seen_at` (heartbeat), resolving by id OR name.
-   * Optional — present on the Postgres (self_hosted) adapter so a flipped machine
+   * Optional — present on the Postgres adapter so a flipped machine
    * heartbeats the SHARED cloud roster instead of its local sqlite island (the
    * previous CLI/MCP path 404'd cloud-only agents with "Agent not found").
    */
@@ -293,7 +293,7 @@ export interface TodosAgentStore {
    * Release/logout an agent — clears its session binding so the name is available.
    * Resolves by id OR name. When `sessionId` is provided the release only succeeds
    * if it matches the agent's current session (returns `{ released: false }` on a
-   * mismatch). Optional — present on the Postgres (self_hosted) adapter.
+   * mismatch). Optional — present on the Postgres adapter.
    */
   release?(idOrName: string, sessionId?: string, context?: TodosStorageContext): MaybePromise<TodosAgentReleaseResult | null>;
 }

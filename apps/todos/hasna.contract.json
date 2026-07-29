@@ -4,7 +4,7 @@
   "class": "service",
   "contractVersion": "v1",
   "kitVersion": "0.4.1",
-  "description": "Universal task management for AI coding agents. CLI + MCP + HTTP API (todos-serve) + generated SDK. Cloud mode (HASNA_TODOS_STORAGE_MODE=remote / HASNA_TODOS_DATABASE_URL set) is PURE REMOTE per Amendment A1: the serve process reads/writes the shared cloud Postgres directly with API-key auth via @hasna/contracts.",
+  "description": "Universal task management for AI coding agents. CLI + MCP + HTTP API (todos-serve) + generated SDK. One data-backend switch, two arms: the server stores in the local SQLite file by default, or in PostgreSQL when HASNA_TODOS_DATABASE_URL is set (serving the authenticated /v1 API per Amendment A1, API-key auth via @hasna/contracts). The client connects to its local SQLite file or to the /v1 authority over HTTP; it never opens Postgres directly.",
   "bins": ["todos", "todos-mcp", "todos-serve"],
   "storage": {
     "mode": "local",

@@ -9,15 +9,23 @@ future SaaS wrappers should configure it through `HASNA_TODOS_*` variables and
 provide the matching Postgres/S3 clients through the public `./storage` package
 export.
 
-## Modes
+## The data-backend switch
 
-- `HASNA_TODOS_STORAGE_MODE=local`: default local SQLite/file behavior.
-- `HASNA_TODOS_STORAGE_MODE=remote`: ordinary CLI coordination commands use the
-  configured authenticated Todos `/v1` HTTP authority. The public storage
-  library can separately construct an injected Postgres adapter for server-side
-  integrations.
-- `HASNA_TODOS_STORAGE_MODE=hybrid`: use a local plus remote adapter with
-  explicit sync behavior.
+There is no deployment-mode axis. One switch selects where data lives, with
+exactly two arms on each side of the HTTP boundary:
+
+- **Client (CLI/MCP/TUI)** — `sqlite` (the default local file) or `http` (the
+  authenticated Todos `/v1` authority). The client never opens Postgres
+  directly.
+- **Server (`todos-serve`) / native storage tooling** — `sqlite` (no database
+  URL configured) or `postgres` (a `HASNA_TODOS_DATABASE_URL` is present).
+
+`HASNA_TODOS_STORAGE_MODE` accepts the canonical tokens `sqlite` and `http`
+(client) / `postgres` (storage tooling). The legacy tokens `local` and `remote`
+remain accepted and normalize onto the same two arms; the retired
+deployment-mode tokens (`self_hosted`, `cloud`, `hybrid`) are tolerated for
+unmigrated environments only and also normalize (client: `http`; storage:
+`postgres`). No third arm exists.
 
 Legacy hosted API toggles are not storage selectors. They must not change the
 local CLI default.
@@ -28,8 +36,8 @@ The open CLI remote route uses only these canonical settings:
 
 | Setting | Purpose |
 | --- | --- |
-| `HASNA_TODOS_STORAGE_MODE` | Set to `remote`, `self_hosted`, `cloud`, or `hybrid` to select authenticated HTTP. |
-| `HASNA_TODOS_API_URL` | Self-hosted Todos authority root, or the same root ending in `/v1`. |
+| `HASNA_TODOS_STORAGE_MODE` | Set to `http` (legacy: `remote`) to select the authenticated HTTP authority. |
+| `HASNA_TODOS_API_URL` | Todos authority root, or the same root ending in `/v1`. |
 | `HASNA_TODOS_API_KEY` | API key supplied to the authority as a bearer credential. |
 
 The URL must use HTTPS, except for loopback development authorities. Userinfo,
@@ -49,8 +57,8 @@ task-list and plan moves, comments, start/complete/delete, and next/claim. A
 command without a safe `/v1` equivalent exits with `REMOTE_COMMAND_UNSUPPORTED`
 before local helpers run.
 
-`todos storage status --json` is a configuration-only diagnostic. In remote
-mode it reports the redacted `/v1` base, URL/key presence, HTTP transport, and
+`todos storage status --json` is a configuration-only diagnostic. On the http
+transport it reports the redacted `/v1` base, URL/key presence, HTTP transport, and
 the disabled local fallback without opening a database or making a network
 request. `todos health` and `todos doctor` authenticate against the required
 remote routes.
@@ -111,7 +119,7 @@ storage contract, local tests, and explicit remote adapter interfaces.
 
 The public `@hasna/todos/storage` export now includes:
 
-- `loadTodosStorageConfig` and `createTodosStorageAdapter` for mode selection.
+- `loadTodosStorageConfig` and `createTodosStorageAdapter` for backend selection.
 - `STORAGE_TABLES`, `TODOS_STORAGE_ENV`, and `TODOS_STORAGE_FALLBACK_ENV` for
   wrapper provenance and explicit env mapping.
 - `exportSqliteTodosStorageSnapshot` and `importSqliteTodosStorageSnapshot`
@@ -207,10 +215,12 @@ frontmatter/task comments. The CLI does not silently treat the Markdown file as
 authoritative when conflicts exist; agents should resolve the conflict through
 the CLI or an explicit migration task.
 
-## Hybrid Sync Shape
+## Hybrid Sync Shape (explicit migration machinery)
 
-`HASNA_TODOS_STORAGE_MODE=hybrid` can now build a local-plus-remote adapter when
-the caller passes a Postgres-style query client or sync store:
+`createHybridTodosStorageAdapter` builds a local-plus-remote adapter when the
+caller passes a Postgres-style query client or sync store. It is migration/sync
+machinery invoked explicitly — it is NOT an arm of the data-backend switch, and
+no `HASNA_TODOS_STORAGE_MODE` value selects it:
 
 - Local CRUD stays SQLite-backed and works offline.
 - `adapter.sync.exportSnapshot()` and `adapter.sync.importSnapshot()` move the
@@ -225,10 +235,11 @@ the caller passes a Postgres-style query client or sync store:
 This is the open-package boundary. SaaS tenant wrappers can be added on top
 without changing the local default or depending on a shared cloud package.
 
-## Remote CRUD Shape
+## Postgres CRUD Shape
 
-`HASNA_TODOS_STORAGE_MODE=remote` can now build a pure Postgres adapter when the
-caller passes a Postgres-style query client to `createTodosStorageAdapter`:
+`HASNA_TODOS_STORAGE_MODE=postgres` (legacy: `remote`) builds a pure Postgres
+adapter when the caller passes a Postgres-style query client to
+`createTodosStorageAdapter`:
 
 - CRUD uses the repo-owned `todos_sync_records` JSONB table rather than SaaS
   tenant tables.

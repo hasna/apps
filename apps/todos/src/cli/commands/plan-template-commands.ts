@@ -138,7 +138,7 @@ function exportRemoteTemplate(template: TemplateWithTasks) {
 }
 
 /**
- * Apply the reusable-template contract through the self-hosted API without
+ * Apply the reusable-template contract through the hosted /v1 API without
  * opening local storage. This deliberately shares the variable and condition
  * language with the SQLite implementation while resolving included templates
  * through authenticated cloud reads.
@@ -339,7 +339,7 @@ export function registerPlanTemplateCommands(program: Command) {
       }
 
       if (opts.show) {
-        // self_hosted cloud routing: resolve the plan and its tasks from the SHARED
+        // http authority routing: resolve the plan and its tasks from the SHARED
         // dataset. The local path resolved the ref against this machine's sqlite
         // (which does not carry cloud plans), so it could not open a plan its own
         // cloud `plans` list had just returned.

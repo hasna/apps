@@ -262,7 +262,7 @@ export function registerTaskWorkflowTools(server: McpServer, ctx: TaskWorkflowCo
       },
       async ({ agent_id, project_id, task_list_id, explain_blocked, detail, max_description_chars }) => {
         try {
-          // self_hosted cloud routing: assemble session context from the shared
+          // http authority routing: assemble session context from the shared
           // cloud dataset (queue counts + active/next lists). Overdue and handoff
           // graphs are local-only concepts and default to empty in cloud mode.
           const cloud = getTodosCloudClient();
