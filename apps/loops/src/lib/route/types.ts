@@ -105,6 +105,22 @@ export interface TodosDrainOptions extends TodosTaskRouteOptions {
 
 export interface TodosTaskRoutePrint {
   kind: "skipped" | "deduped" | "throttled" | "created";
-  value: Record<string, unknown>;
+  /**
+   * `sourceUnavailable` is the flag the CLI reads to exit non-zero when the task
+   * source could not be reached (see handleRouteEvent). Naming it here documents
+   * that contract and pins its TYPE: writing a non-boolean to this exact key is a
+   * compile error (TS2322).
+   *
+   * It does NOT pin the NAME. The `Record<string, unknown>` index signature is
+   * still present, so a misspelling on either the producer or the consumer side
+   * compiles cleanly — measured: a probe misspelling it in both places typechecks
+   * rc=0, while assigning a number to the correct name errors TS2322. A typo would
+   * therefore pass every test and silently restore the bug where an unreachable
+   * source exited 0. The regression tests in route-event.test.ts are what actually
+   * guard the name; the type only guards the shape. Closing that gap means
+   * dropping the index signature or routing both sides through one shared
+   * constant, which is tracked separately rather than smuggled in here.
+   */
+  value: Record<string, unknown> & { sourceUnavailable?: boolean };
   human: string;
 }

@@ -4143,7 +4143,11 @@ describe("loops CLI", () => {
       resolved: false,
       taskId: "task-created-missing-source",
       todosProjectPath: join(dataDir, "todos-source"),
-      error: "task not found\n",
+      // Trimmed: stderr is trimmed before the truthiness test so a whitespace-only
+      // stderr cannot short-circuit past the exit status and hide the only
+      // diagnostic. Asserting the untrimmed "task not found\n" pinned the behaviour
+      // that hid it.
+      error: "task not found",
     });
     const loops = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);
     expect(loops).toHaveLength(0);

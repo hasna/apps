@@ -359,6 +359,23 @@ function todosTaskRecord(value: unknown): Record<string, unknown> | undefined {
   return record;
 }
 
+/**
+ * `todos inspect` canonicalizes the identifier it is given: it resolves an
+ * abbreviated id prefix and is case-insensitive, then echoes the full lowercase
+ * uuid. Measured against todos 0.13.2 — `inspect f72e5b32` and
+ * `inspect F72E5B32-6B23-43D6-8CEC-928367476EB2` both exit 0 returning
+ * `f72e5b32-6b23-43d6-8cec-928367476eb2`. Comparing the echoed id to the
+ * requested one byte-for-byte therefore reports a *mismatch* for a task that was
+ * found, so treat a canonical id that case-insensitively extends the requested
+ * one as the same task.
+ */
+function todosIdentifiesRequestedTask(inspectedId: string, requestedId: string): boolean {
+  const inspected = inspectedId.trim().toLowerCase();
+  const requested = requestedId.trim().toLowerCase();
+  if (!inspected || !requested) return false;
+  return inspected === requested || inspected.startsWith(requested);
+}
+
 function inspectSourceTodosTask(todosProjectPath: string, taskId: string): SourceTaskResolution {
   const result = runLocalCommand("todos", ["--project", todosProjectPath, "--json", "inspect", taskId], {
     timeoutMs: 30_000,
@@ -379,28 +396,24 @@ function inspectSourceTodosTask(todosProjectPath: string, taskId: string): Sourc
       taskId,
       todosProjectPath,
       ...(sourceUnavailable ? { sourceUnavailable: true } : {}),
-      error: redact(result.stderr || result.error || `todos inspect produced no exit status`, 320),
+      // Trim before testing for content: a process that exits non-zero having
+      // written only a newline to stderr would otherwise short-circuit to that
+      // whitespace and hide the exit status, which is the only diagnostic left.
+      error: redact(
+        result.stderr.trim() ||
+          result.error.trim() ||
+          (sourceUnavailable ? "todos inspect produced no exit status" : `todos inspect failed with status ${result.status}`),
+        320,
+      ),
     };
   }
+  let task: Record<string, unknown> | undefined;
   try {
-    const parsed = JSON.parse(result.stdout || "{}");
-    const task = todosTaskRecord(parsed);
-    if (!task) throw new Error("todos inspect returned a non-object value");
-    const inspectedId = taskEventField(task, ["id", "task_id", "taskId"]);
-    if (!inspectedId) throw new Error("todos inspect returned a task without an id");
-    if (inspectedId !== taskId) throw new Error(`todos inspect returned task ${inspectedId}`);
-    return {
-      checked: true,
-      resolved: true,
-      taskId,
-      todosProjectPath,
-      status: stringField(task.status)?.trim().toLowerCase(),
-      title: stringField(task.title),
-    };
+    task = todosTaskRecord(JSON.parse(result.stdout || "{}"));
   } catch (error) {
-    // The source exited 0 but we could not read a task out of its output, so we
-    // still do not know whether the task exists. Unintelligible success is an
-    // unavailable source, not a definitive absence.
+    // The source exited 0 but emitted something we cannot parse, so we still do
+    // not know whether the task exists. Unintelligible success is an unavailable
+    // source, not a definitive absence.
     const message = error instanceof Error ? error.message : String(error);
     return {
       checked: true,
@@ -411,6 +424,47 @@ function inspectSourceTodosTask(todosProjectPath: string, taskId: string): Sourc
       error: redact(`failed to parse todos inspect JSON: ${message}`, 320),
     };
   }
+  if (!task) {
+    return {
+      checked: true,
+      resolved: false,
+      taskId,
+      todosProjectPath,
+      sourceUnavailable: true,
+      error: redact("todos inspect returned a non-object value", 320),
+    };
+  }
+  const inspectedId = taskEventField(task, ["id", "task_id", "taskId"]);
+  // An id we can read is the source ANSWERING, so these two are definitive
+  // outcomes and must never be reported as an unreachable source — doing so
+  // failed runs for tasks that demonstrably exist and sent operators hunting a
+  // PATH/connectivity fault that was not there.
+  if (!inspectedId) {
+    return {
+      checked: true,
+      resolved: false,
+      taskId,
+      todosProjectPath,
+      error: redact("todos inspect returned a task without an id", 320),
+    };
+  }
+  if (!todosIdentifiesRequestedTask(inspectedId, taskId)) {
+    return {
+      checked: true,
+      resolved: false,
+      taskId,
+      todosProjectPath,
+      error: redact(`todos inspect returned task ${inspectedId}`, 320),
+    };
+  }
+  return {
+    checked: true,
+    resolved: true,
+    taskId,
+    todosProjectPath,
+    status: stringField(task.status)?.trim().toLowerCase(),
+    title: stringField(task.title),
+  };
 }
 
 function resolveSourceTodosTask(

@@ -38,7 +38,7 @@ function withRouteEnv(): RouteEnv {
 
 const TASK_ID = "task-dedupe-regression-1";
 
-function pendingTaskEvent() {
+function pendingTaskEvent(dataOverrides: Record<string, unknown> = {}) {
   return {
     id: "evt-dedupe-regression-1",
     type: "task.created",
@@ -50,6 +50,7 @@ function pendingTaskEvent() {
       status: "pending",
       tags: ["auto:route"],
       project_path: process.cwd(),
+      ...dataOverrides,
     },
   } as never;
 }
@@ -225,7 +226,10 @@ describe("routeTodosTaskEvent dedupe re-admission", () => {
         resolved: false,
         taskId: TASK_ID,
         todosProjectPath: "/tmp/source-todos",
-        error: "task not found\n",
+        // Trimmed: the reason is trimmed so whitespace-only stderr cannot mask the
+        // exit status. Asserting the untrimmed "task not found\n" baked in the
+        // behaviour that hid it.
+        error: "task not found",
       });
       expect(loopCount()).toBe(0);
       expect(workItemRow()).toBeUndefined();
@@ -247,6 +251,63 @@ describe("routeTodosTaskEvent dedupe re-admission", () => {
       expect(result.value.sourceTaskResolution).toMatchObject({ resolved: false });
       expect((result.value.sourceTaskResolution as { sourceUnavailable?: boolean }).sourceUnavailable).toBeUndefined();
       expect(loopCount()).toBe(0);
+    } finally {
+      fakeTodos.restore();
+    }
+  });
+
+  test("an abbreviated task id that todos canonicalizes still routes (existing task, not a mismatch)", () => {
+    // Regression: todos inspect resolves an 8-char prefix and echoes the FULL
+    // lowercase uuid, so a byte comparison called a found task a mismatch and the
+    // route then reported an unreachable source and failed the run.
+    const shortId = TASK_ID.slice(0, 8);
+    const fakeTodos = withFakeTodosInspect(env.dataDir, { id: TASK_ID, status: "pending", title: "canonicalized" });
+    try {
+      const result = routeTodosTaskEvent(pendingTaskEvent({ id: shortId }), { ...ROUTE_OPTS, todosProject: "/tmp/source-todos" });
+      expect(result.value.sourceUnavailable).toBeUndefined();
+      expect(result.value.sourceTaskResolution).toMatchObject({ checked: true, resolved: true, status: "pending" });
+      expect(result.kind).toBe("created");
+    } finally {
+      fakeTodos.restore();
+    }
+  });
+
+  test("an uppercase task id that todos canonicalizes still routes", () => {
+    const fakeTodos = withFakeTodosInspect(env.dataDir, { id: TASK_ID, status: "pending", title: "canonicalized" });
+    try {
+      const result = routeTodosTaskEvent(pendingTaskEvent({ id: TASK_ID.toUpperCase() }), { ...ROUTE_OPTS, todosProject: "/tmp/source-todos" });
+      expect(result.value.sourceUnavailable).toBeUndefined();
+      expect(result.value.sourceTaskResolution).toMatchObject({ resolved: true });
+      expect(result.kind).toBe("created");
+    } finally {
+      fakeTodos.restore();
+    }
+  });
+
+  test("a genuinely DIFFERENT task id from the source is a definitive answer, not an unreachable source", () => {
+    // The source answered intelligibly; it just answered about another task. That
+    // must stay a benign exit-0 skip, never "could not reach the task source".
+    const fakeTodos = withFakeTodosInspect(env.dataDir, { id: "99999999-9999-4999-8999-999999999999", status: "pending" });
+    try {
+      const result = routeTodosTaskEvent(pendingTaskEvent(), { ...ROUTE_OPTS, todosProject: "/tmp/source-todos" });
+      expect(result.kind).toBe("skipped");
+      expect(result.value.sourceUnavailable).toBeUndefined();
+      expect(String(result.value.reason)).toContain("todos inspect returned task 99999999");
+      expect(loopCount()).toBe(0);
+    } finally {
+      fakeTodos.restore();
+    }
+  });
+
+  test("a numeric non-zero exit keeps its status number in the reason", () => {
+    // Regression: the fallback message said "produced no exit status" for a process
+    // that produced status 4, which is self-contradictory and misdirects diagnosis.
+    const fakeTodos = withFakeTodosInspect(env.dataDir, {}, { status: 4, stderr: "" });
+    try {
+      const result = routeTodosTaskEvent(pendingTaskEvent(), { ...ROUTE_OPTS, todosProject: "/tmp/source-todos" });
+      expect(result.value.sourceUnavailable).toBeUndefined();
+      expect(String(result.value.reason)).toContain("status 4");
+      expect(String(result.value.reason)).not.toContain("produced no exit status");
     } finally {
       fakeTodos.restore();
     }
