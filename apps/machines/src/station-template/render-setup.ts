@@ -133,14 +133,16 @@ export function buildStationTemplateSteps(effective: EffectiveTemplate, options:
     });
     const hostnameFlag = station && effective.tailscale.hostnameFromStation ? ` --hostname ${quote(station)}` : "";
     const sshFlag = effective.tailscale.ssh ? " --ssh" : "";
-    // Secret NAME only; the value is pulled at runtime into a 0600 file and
-    // referenced via file: so it never appears in argv or logs.
+    // Secret NAME only; the value is pulled at runtime into a securely created
+    // 0600 temporary file and referenced via file: so it never appears in argv
+    // or logs.
     steps.push({
       id: "template-tailscale-join",
       title: "Join tailnet if not already joined (auth key via secrets vault, name only)",
       command:
-        `tailscale status >/dev/null 2>&1 || (umask 077 && secrets get ${quote(effective.tailscale.authKeySecretName)} | tr -d '\\r\\n' > /tmp/ts-authkey && ` +
-        `sudo tailscale up --auth-key file:/tmp/ts-authkey${hostnameFlag}${sshFlag}; rm -f /tmp/ts-authkey)`,
+        `tailscale status >/dev/null 2>&1 || (umask 077 && auth_key_file=$(mktemp) && ` +
+        `trap 'rm -f "$auth_key_file"' EXIT && secrets get ${quote(effective.tailscale.authKeySecretName)} | tr -d '\\r\\n' > "$auth_key_file" && ` +
+        `sudo tailscale up --auth-key "file:$auth_key_file"${hostnameFlag}${sshFlag})`,
       manager: "custom",
       privileged: true,
     });
