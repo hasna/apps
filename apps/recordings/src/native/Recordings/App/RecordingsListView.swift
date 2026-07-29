@@ -94,7 +94,7 @@ struct RecordingsListView: View {
         case .mode(let m): return "No \(m) recordings yet"
         case .thisMachine: return "No recordings on this Mac yet"
         case .machine(let m): return "No recordings from \(m) yet"
-        case .all, .project, .noProject: return "No recordings yet"
+        case .all: return "No recordings yet"
         }
     }
 
