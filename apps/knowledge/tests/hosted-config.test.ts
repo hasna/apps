@@ -11,7 +11,8 @@ describe('hosted-aware config and remote contracts', () => {
     const service = createKnowledgeService({ scope: 'project', cwd: dir });
 
     const setup = service.setup({
-      mode: 'remote',
+      // 'remote' is retired vocabulary; the setup axis is hosted | local.
+      mode: 'hosted',
       apiUrl: 'https://knowledge.example.com/api/v1',
     });
     expect(setup.mode).toBe('hosted');

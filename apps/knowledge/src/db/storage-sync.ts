@@ -44,15 +44,14 @@ export const KNOWLEDGE_STORAGE_TABLES = STORAGE_TABLES;
 type StorageTable = (typeof STORAGE_TABLES)[number];
 
 /**
- * Runtime storage mode per Amendment A1 (PURE REMOTE):
+ * Runtime storage mode:
  *   - `local`: SQLite knowledge.db is authoritative.
  *   - `cloud`: the shared store is reached through the HTTP ApiStore.
- * The legacy words `hybrid`, `remote`, and `self_hosted` are accepted only as
- * deprecated aliases that normalize to `cloud`.
+ * There is no third value. The retired deployment-mode words (`hybrid`,
+ * `remote`, `self_hosted`) are rejected loudly (owner directive 2026-07-29) —
+ * a silent remap or fallback flips which store a process reads.
  */
 export type StorageMode = 'local' | 'cloud';
-
-const DEPRECATED_CLOUD_ALIASES = ['remote', 'hybrid', 'self_hosted'] as const;
 
 export interface StorageSyncOptions {
   tables?: string[];
@@ -96,12 +95,16 @@ function readEnv(name: string): string | undefined {
   return value || undefined;
 }
 
-function normalizeStorageMode(value: string | undefined): StorageMode | undefined {
+function normalizeStorageMode(value: string | undefined, envName: string): StorageMode | undefined {
   const normalized = value?.trim().toLowerCase().replace(/-/g, '_');
+  if (!normalized) return undefined;
   if (normalized === 'local') return 'local';
   if (normalized === 'cloud') return 'cloud';
-  if (normalized && (DEPRECATED_CLOUD_ALIASES as readonly string[]).includes(normalized)) return 'cloud';
-  return undefined;
+  // Unknown values — including the retired deployment-mode words — fail loudly
+  // and name the variable. Falling through would silently pick a store.
+  throw new Error(
+    `knowledge: ${envName}=${value} is not a valid storage mode. Use local (on-box store) or cloud (HTTP API).`,
+  );
 }
 
 function openScopedDb(options: StorageStatusOptions = {}): { db: Database; path: string; scope: string } {
@@ -115,8 +118,8 @@ function openScopedDb(options: StorageStatusOptions = {}): { db: Database; path:
 }
 
 export function getStorageMode(): StorageMode {
-  const mode = normalizeStorageMode(readEnv(KNOWLEDGE_STORAGE_MODE_ENV))
-    ?? normalizeStorageMode(readEnv(KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV));
+  const mode = normalizeStorageMode(readEnv(KNOWLEDGE_STORAGE_MODE_ENV), KNOWLEDGE_STORAGE_MODE_ENV)
+    ?? normalizeStorageMode(readEnv(KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV), KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV);
   if (mode) return mode;
   // Presence of a DATABASE_URL no longer auto-enables cloud. Cloud mode must be
   // requested explicitly; default is local.

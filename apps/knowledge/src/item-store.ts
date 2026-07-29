@@ -5,7 +5,7 @@
  *
  * ONE interface, two transports:
  *   - LocalItemStore  -> on-box JSON store (db.json) behind a file lock.
- *   - ApiItemStore    -> HTTP `/v1` + bearer key (self_hosted / cloud) via
+ *   - ApiItemStore    -> HTTP `/v1` + bearer key (cloud) via
  *                        @hasna/contracts client transport.
  *
  * Mode resolver: an EXPLICIT mode var (`HASNA_KNOWLEDGE_STORAGE_MODE=cloud` and
@@ -13,9 +13,7 @@
  * — including a machine whose shell exports HASNA_KNOWLEDGE_API_URL and
  * HASNA_KNOWLEDGE_API_KEY — is local. Presence of a URL or key is a pointer, not
  * a selection: it says where the cloud is, not that this process should write to
- * it. `self_hosted` normalizes to `cloud` and uses ApiItemStore (identical
- * client code; only URL/key differ — that distinction is server-side tenancy,
- * not client). An explicit `--store` path override always pins to the local
+ * it. An explicit `--store` path override always pins to the local
  * transport (fully reversible).
  *
  * EVERY knowledge-item CLI command routes through this Store. No item command

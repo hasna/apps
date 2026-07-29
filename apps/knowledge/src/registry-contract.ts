@@ -1,5 +1,5 @@
 /**
- * @hasna/knowledge — self-hosted registry descriptor.
+ * @hasna/knowledge — server registry descriptor.
  * Copyright 2026 Hasna Inc.
  * Licensed under the Apache License, Version 2.0
  *
@@ -32,7 +32,7 @@ export interface KnowledgeRegistryContract {
   contract_version: typeof KNOWLEDGE_REGISTRY_CONTRACT_VERSION;
   service: 'open-knowledge';
   mode: 'local' | 'hosted';
-  /** Capabilities the self-hosted HTTP API actually serves. */
+  /** Capabilities the HTTP API actually serves. */
   capabilities: string[];
   /** Endpoints the server actually implements under the API origin. */
   endpoints: {

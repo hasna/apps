@@ -1,5 +1,5 @@
 /**
- * @hasna/knowledge — cloud (self_hosted) storage resolver.
+ * @hasna/knowledge — cloud (HTTP API) storage resolver.
  * Copyright 2026 Hasna Inc.
  * Licensed under the Apache License, Version 2.0
  *

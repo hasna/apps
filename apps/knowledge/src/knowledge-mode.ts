@@ -58,7 +58,7 @@ export interface KnowledgeModeSource {
   kind: 'env' | 'default';
   /** The env key that selected the mode, or null for the default. */
   name: string | null;
-  /** The mode var's own value (`local` / `cloud` / a deprecated alias). Never a pointer value. */
+  /** The mode var's own value (`local` / `cloud`). Never a pointer value. */
   value: string | null;
 }
 
@@ -117,12 +117,18 @@ export function resolveKnowledgeModeSelection(env: NodeJS.ProcessEnv = process.e
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(`knowledge: ${name}=${value} is not a valid mode. ${message}`);
     }
-    const warnings: string[] = [];
+    // Retired deployment-mode words (self_hosted / remote / hybrid) are dead
+    // vocabulary, not aliases (owner directive 2026-07-29). The vendored kit
+    // still normalizes them for the transitional contracts release, so the
+    // rejection lives here: silently remapping a mode word is how the
+    // vocabulary survived every previous removal.
     if (normalized.deprecatedAlias) {
-      warnings.push(
-        `Deprecated mode '${normalized.deprecatedAlias}' from ${name} is treated as 'cloud'. Prefer ${canonicalModeKey}=cloud.`,
+      throw new Error(
+        `knowledge: ${name}=${value} is a retired deployment-mode word. `
+        + `Deployment modes were removed; set ${canonicalModeKey}=local for the on-box store or ${canonicalModeKey}=cloud for the HTTP API.`,
       );
     }
+    const warnings: string[] = [];
     if (name !== canonicalModeKey) {
       warnings.push(`Using alias env ${name}; the canonical key is ${canonicalModeKey}.`);
     }

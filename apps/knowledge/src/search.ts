@@ -731,8 +731,8 @@ export async function hybridSearchLegacyStore(options: Omit<HybridSearchOptions,
 }
 
 /**
- * Lexical search over an in-memory knowledge-item corpus. In api (self_hosted /
- * cloud) mode the client has no local sqlite catalog; the shared corpus is the
+ * Lexical search over an in-memory knowledge-item corpus. In cloud (api)
+ * mode the client has no local sqlite catalog; the shared corpus is the
  * cloud knowledge-items fetched through the item Store. Both `search` and `ask`
  * route their retrieval here so cloud mode is first-class instead of throwing.
  * Semantic ranking (vector index) lives only in the local sqlite catalog, so it

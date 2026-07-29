@@ -118,13 +118,19 @@ describe('knowledge mode selection is explicit, never inferred from a pointer', 
     expect(resolved.warning).toContain('canonical key is HASNA_KNOWLEDGE_STORAGE_MODE');
   });
 
-  test("the deprecated 'self_hosted' value normalizes to cloud with a note", () => {
-    const resolved = resolveKnowledgeModeSelection({
-      ...POINTER_ONLY,
-      HASNA_KNOWLEDGE_STORAGE_MODE: 'self_hosted',
-    } as NodeJS.ProcessEnv);
-    expect(resolved.mode).toBe('cloud');
-    expect(resolved.warning).toContain("Deprecated mode 'self_hosted'");
+  test('the retired deployment-mode words are rejected loudly, naming the variable', () => {
+    // Deployment modes were removed (owner directive 2026-07-29): the only
+    // backends are the on-box store and the HTTP API. A leftover env var still
+    // carrying a retired mode word must fail loudly instead of being silently
+    // remapped — remapping is what kept the vocabulary alive.
+    for (const retired of ['self_hosted', 'self-hosted', 'remote', 'hybrid']) {
+      expect(() =>
+        resolveKnowledgeModeSelection({
+          ...POINTER_ONLY,
+          HASNA_KNOWLEDGE_STORAGE_MODE: retired,
+        } as NodeJS.ProcessEnv),
+      ).toThrow(`HASNA_KNOWLEDGE_STORAGE_MODE=${retired}`);
+    }
   });
 
   test('whitespace-only mode vars are treated as unset, not as an error', () => {

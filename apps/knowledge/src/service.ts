@@ -1563,7 +1563,9 @@ function normalizeMode(value: string | undefined): KnowledgeConfig['mode'] | und
   if (!value) return undefined;
   const normalized = value.trim().toLowerCase();
   if (normalized === 'local' || normalized === 'offline') return 'local';
-  if (normalized === 'hosted' || normalized === 'remote' || normalized === 'knowledge.md') return 'hosted';
+  // `knowledge.md` is a legacy filename hint for the hosted wiki setup. The
+  // retired deployment-mode words (`remote` et al.) are NOT accepted here.
+  if (normalized === 'hosted' || normalized === 'knowledge.md') return 'hosted';
   throw new Error('Invalid setup mode. Use hosted or local.');
 }
 
@@ -1593,8 +1595,8 @@ export class KnowledgeService {
   /**
    * The single knowledge-item Store for this scope. One interface, two
    * transports resolved from the environment: LocalItemStore (on-box db.json)
-   * in local mode, ApiItemStore (HTTP `/v1` + bearer key) in self_hosted/cloud
-   * mode. EVERY item read/write — CLI, MCP, and SDK — routes through this one
+   * in local mode, ApiItemStore (HTTP `/v1` + bearer key) in cloud mode.
+   * EVERY item read/write — CLI, MCP, and SDK — routes through this one
    * surface, so no path touches sqlite or the raw HTTP client directly.
    */
   itemStore(): ItemStore {
@@ -1636,8 +1638,8 @@ export class KnowledgeService {
   }
 
   /**
-   * Unified inventory dispatch: the shared cloud knowledge-item corpus in api
-   * mode (self_hosted/cloud), the local sqlite/JSON catalog otherwise. CLI, MCP,
+   * Unified inventory dispatch: the shared cloud knowledge-item corpus in
+   * cloud (api) mode, the local sqlite/JSON catalog otherwise. CLI, MCP,
    * and SDK all call this so no surface reads a divergent store.
    */
   async resolveInventory(options: KnowledgeInventoryOptions = {}): Promise<KnowledgeInventoryResult> {

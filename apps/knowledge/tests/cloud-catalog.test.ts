@@ -5,7 +5,7 @@ import { runKnowledgePromptOverItems } from '../src/agent';
 import type { KnowledgeItem } from '../src/store';
 
 /**
- * Cloud (self_hosted / api) mode has NO local sqlite catalog — the shared corpus
+ * Cloud (api) mode has NO local sqlite catalog — the shared corpus
  * is the cloud knowledge-items fetched through the item Store. These tests prove
  * that search / context / ask route over that in-memory item corpus and return
  * cited results instead of throwing (the pre-fix behaviour via assertLocalCatalogMode).

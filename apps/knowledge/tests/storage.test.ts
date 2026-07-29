@@ -27,17 +27,22 @@ describe('knowledge database storage status (local, read-only)', () => {
     // Default is local; the client has NO DATABASE_URL/DSN surface at all.
     expect(getStorageMode()).toBe('local');
 
-    // Canonical cloud mode, plus deprecated aliases that normalize to cloud.
+    // Canonical cloud mode.
     process.env[KNOWLEDGE_STORAGE_MODE_ENV] = 'cloud';
     expect(getStorageMode()).toBe('cloud');
-    process.env[KNOWLEDGE_STORAGE_MODE_ENV] = 'remote';
-    expect(getStorageMode()).toBe('cloud');
-    process.env[KNOWLEDGE_STORAGE_MODE_ENV] = 'hybrid';
-    expect(getStorageMode()).toBe('cloud');
+  });
 
-    process.env[KNOWLEDGE_STORAGE_MODE_ENV] = 'invalid';
-    process.env[KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV] = 'local';
-    expect(getStorageMode()).toBe('local');
+  test('retired deployment-mode words and junk values throw, naming the variable', () => {
+    // Deployment modes were removed (owner directive 2026-07-29). A silent
+    // fallback here flips which store a process reads — the one failure that
+    // must always be loud.
+    for (const value of ['remote', 'hybrid', 'self_hosted', 'invalid']) {
+      process.env[KNOWLEDGE_STORAGE_MODE_ENV] = value;
+      expect(() => getStorageMode()).toThrow(KNOWLEDGE_STORAGE_MODE_ENV);
+    }
+    delete process.env[KNOWLEDGE_STORAGE_MODE_ENV];
+    process.env[KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV] = 'self_hosted';
+    expect(() => getStorageMode()).toThrow(KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV);
   });
 
   test('exposes durable knowledge tables and excludes local FTS indexes', () => {

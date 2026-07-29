@@ -123,9 +123,13 @@ describe('knowledge-serve', () => {
     const h = buildHandler();
     const res = await h(new Request('http://x/openapi.json'));
     expect(res.status).toBe(200);
-    const spec = (await res.json()) as { paths: Record<string, unknown> };
+    const spec = (await res.json()) as { paths: Record<string, unknown>; info: { description: string } };
     expect(Object.keys(spec.paths)).toContain('/v1/notes');
     expect(Object.keys(spec.paths)).toContain('/v1/notes/{id}');
+    // Retired deployment-mode vocabulary must not reach user-facing output
+    // (owner directive 2026-07-29). Positive control: the description exists.
+    expect(spec.info.description.length).toBeGreaterThan(0);
+    expect(spec.info.description).not.toMatch(/self[-_]hosted/i);
   });
 
   test('unauthenticated /v1 requests are rejected', async () => {

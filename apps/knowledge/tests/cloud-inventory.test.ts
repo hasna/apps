@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { createKnowledgeService } from '../src/service';
 
 /**
- * Cloud (self_hosted / api) mode `inventory` must route through the cloud item
+ * Cloud (api) mode `inventory` must route through the cloud item
  * transport and report the shared corpus — NOT read the local db.json and NOT
  * open the local sqlite catalog (which would throw the local-catalog guard on a
  * flipped fleet machine that still has a leftover knowledge.db). This proves the

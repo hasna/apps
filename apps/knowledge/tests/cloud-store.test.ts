@@ -7,7 +7,7 @@ import {
 
 const CLEAN_ENV = {} as NodeJS.ProcessEnv;
 
-describe('knowledge cloud-store resolver (self_hosted client flip)', () => {
+describe('knowledge cloud-store resolver (cloud client flip)', () => {
   test('resource + slug are the contract-stable values', () => {
     expect(KNOWLEDGE_APP_SLUG).toBe('knowledge');
     expect(KNOWLEDGE_RESOURCE).toBe('notes');
@@ -26,18 +26,33 @@ describe('knowledge cloud-store resolver (self_hosted client flip)', () => {
     expect(store).toBeNull();
   });
 
-  test('throws (never silent local drift) when self_hosted requested but API key missing', () => {
+  test('throws (never silent local drift) when cloud requested but API key missing', () => {
     expect(() =>
       resolveKnowledgeCloudStore({
-        HASNA_KNOWLEDGE_STORAGE_MODE: 'self_hosted',
+        HASNA_KNOWLEDGE_STORAGE_MODE: 'cloud',
         HASNA_KNOWLEDGE_API_URL: 'https://knowledge.md',
       } as NodeJS.ProcessEnv),
     ).toThrow();
   });
 
-  test('resolves a cloud-http store pointed at the configured URL when self_hosted + url + key', () => {
+  test('throws on the retired deployment-mode words instead of remapping them', () => {
+    // Deployment modes were removed (owner directive 2026-07-29): a stale
+    // env still saying self_hosted must fail naming the fix, not silently
+    // pick a backend.
+    for (const retired of ['self_hosted', 'self-hosted', 'remote', 'hybrid']) {
+      expect(() =>
+        resolveKnowledgeCloudStore({
+          HASNA_KNOWLEDGE_STORAGE_MODE: retired,
+          HASNA_KNOWLEDGE_API_URL: 'https://knowledge.md',
+          HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
+        } as NodeJS.ProcessEnv),
+      ).toThrow(/retired deployment-mode word/);
+    }
+  });
+
+  test('resolves a cloud-http store pointed at the configured URL when cloud + url + key', () => {
     const store = resolveKnowledgeCloudStore({
-      HASNA_KNOWLEDGE_STORAGE_MODE: 'self_hosted',
+      HASNA_KNOWLEDGE_STORAGE_MODE: 'cloud',
       HASNA_KNOWLEDGE_API_URL: 'https://knowledge.md',
       HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
     } as NodeJS.ProcessEnv);
@@ -96,7 +111,7 @@ describe('knowledge cloud-store resolver (self_hosted client flip)', () => {
     // which still templates `https://<app>.hasna.xyz`. That default needs its own
     // fix in the @hasna/contracts package; tracked separately from this repo.
     const store = resolveKnowledgeCloudStore({
-      HASNA_KNOWLEDGE_STORAGE_MODE: 'self_hosted',
+      HASNA_KNOWLEDGE_STORAGE_MODE: 'cloud',
       HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
     } as NodeJS.ProcessEnv);
     expect(store).not.toBeNull();
