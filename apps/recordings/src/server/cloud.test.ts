@@ -9,21 +9,17 @@ import {
 import type { PgAdapterAsync } from "../db/remote-storage.js";
 
 const REQUIRED_COLUMNS = {
-  projects: {
-    id: ["text", false], name: ["text", false], path: ["text", false],
-    description: ["text", true], created_at: ["text", false], updated_at: ["text", false],
-  },
   agents: {
     id: ["text", false], name: ["text", false], description: ["text", true],
     role: ["text", true], metadata: ["text", true], created_at: ["text", false],
-    last_seen_at: ["text", false], active_project_id: ["text", true],
+    last_seen_at: ["text", false],
   },
   recordings: {
     id: ["text", false], audio_path: ["text", true], raw_text: ["text", false],
     processed_text: ["text", true], processing_mode: ["text", false],
     model_used: ["text", false], enhancement_model: ["text", true],
     duration_ms: ["integer", true], language: ["text", true], tags: ["text", true],
-    agent_id: ["text", true], project_id: ["text", true], session_id: ["text", true],
+    agent_id: ["text", true], session_id: ["text", true],
     goal: ["text", true], role: ["text", true], task_list_id: ["text", true],
     machine_id: ["text", true], metadata: ["text", true], created_at: ["text", false],
   },
@@ -59,14 +55,6 @@ const READY_COLUMNS = Object.entries(REQUIRED_COLUMNS).flatMap(([table_name, col
 
 const READY_CONSTRAINTS = [
   {
-    table_name: "projects", constraint_type: "p", columns: ["id"],
-    referenced_schema: null, referenced_table: null, referenced_columns: [], delete_action: null,
-  },
-  {
-    table_name: "projects", constraint_type: "u", columns: ["path"],
-    referenced_schema: null, referenced_table: null, referenced_columns: [], delete_action: null,
-  },
-  {
     table_name: "agents", constraint_type: "p", columns: ["id"],
     referenced_schema: null, referenced_table: null, referenced_columns: [], delete_action: null,
   },
@@ -75,20 +63,12 @@ const READY_CONSTRAINTS = [
     referenced_schema: null, referenced_table: null, referenced_columns: [], delete_action: null,
   },
   {
-    table_name: "agents", constraint_type: "f", columns: ["active_project_id"],
-    referenced_schema: "public", referenced_table: "projects", referenced_columns: ["id"], delete_action: "n",
-  },
-  {
     table_name: "recordings", constraint_type: "p", columns: ["id"],
     referenced_schema: null, referenced_table: null, referenced_columns: [], delete_action: null,
   },
   {
     table_name: "recordings", constraint_type: "f", columns: ["agent_id"],
     referenced_schema: "public", referenced_table: "agents", referenced_columns: ["id"], delete_action: "n",
-  },
-  {
-    table_name: "recordings", constraint_type: "f", columns: ["project_id"],
-    referenced_schema: "public", referenced_table: "projects", referenced_columns: ["id"], delete_action: "n",
   },
   {
     table_name: "recording_tags", constraint_type: "p", columns: ["recording_id", "tag"],
@@ -150,10 +130,6 @@ for (const constraint of READY_CONSTRAINTS) {
 }
 
 const READY_INDEXES = [
-  { table_name: "projects", is_primary: true, is_unique: true, is_valid: true, nulls_not_distinct: false,
-    predicate: null, columns: ["id"] },
-  { table_name: "projects", is_primary: false, is_unique: true, is_valid: true, nulls_not_distinct: false,
-    predicate: null, columns: ["path"] },
   { table_name: "agents", is_primary: true, is_unique: true, is_valid: true, nulls_not_distinct: false,
     predicate: null, columns: ["id"] },
   { table_name: "agents", is_primary: false, is_unique: true, is_valid: true, nulls_not_distinct: false,
@@ -188,7 +164,6 @@ const READY_ROLE = {
   can_recordings: true,
   can_recording_tags: true,
   can_agents: true,
-  can_projects: true,
   can_feedback: true,
   can_api_keys: true,
   can_recording_idempotency: true,
@@ -206,7 +181,6 @@ const READY_ROLE = {
   has_extra_recordings_privileges: false,
   has_extra_recording_tags_privileges: false,
   has_extra_agents_privileges: false,
-  has_extra_projects_privileges: false,
   has_extra_feedback_privileges: false,
   has_extra_api_keys_privileges: false,
   has_extra_recording_idempotency_privileges: false,
@@ -423,7 +397,6 @@ describe("cloud schema readiness", () => {
       "has_extra_recordings_privileges",
       "has_extra_recording_tags_privileges",
       "has_extra_agents_privileges",
-      "has_extra_projects_privileges",
       "has_extra_feedback_privileges",
       "has_extra_api_keys_privileges",
       "has_extra_recording_idempotency_privileges",

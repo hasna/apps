@@ -55,7 +55,6 @@ describe("createRecording", () => {
     expect(rec.enhancement_model).toBeNull();
     expect(rec.language).toBeNull();
     expect(rec.agent_id).toBeNull();
-    expect(rec.project_id).toBeNull();
     expect(rec.session_id).toBeNull();
     expect(rec.duration_ms).toBe(0);
     expect(rec.created_at).toBeDefined();
@@ -364,18 +363,6 @@ describe("listRecordings", () => {
     const results = listRecordings({ agent_id: "agent-1" }, db);
     expect(results).toHaveLength(1);
     expect(results[0]!.raw_text).toBe("by agent");
-  });
-
-  test("filters by project_id", () => {
-    db.query("INSERT INTO projects (id, name, path, created_at, updated_at) VALUES (?, ?, ?, ?, ?)").run(
-      "proj-1", "my-project", "/tmp/proj", new Date().toISOString(), new Date().toISOString()
-    );
-    createRecording({ raw_text: "in project", project_id: "proj-1" }, db);
-    createRecording({ raw_text: "no project" }, db);
-
-    const results = listRecordings({ project_id: "proj-1" }, db);
-    expect(results).toHaveLength(1);
-    expect(results[0]!.raw_text).toBe("in project");
   });
 
   test("default limit is 50", () => {

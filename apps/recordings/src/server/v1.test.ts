@@ -15,18 +15,6 @@ const AGENT_ROW = {
   metadata: "{}",
   created_at: "2026-01-01T00:00:00.000Z",
   last_seen_at: "2026-01-01T00:00:00.000Z",
-  active_project_id: null,
-};
-
-// A real project row with a full 36-char UUID PK; the tools surface only the
-// first 8 chars, so focus must resolve the truncated ref back to this row.
-const PROJECT_ROW = {
-  id: "164a6e1f-ac00-4d5d-9390-215cfa9be003",
-  name: "workspace",
-  path: "/home/agent/workspace",
-  description: null,
-  created_at: "2026-01-01T00:00:00.000Z",
-  updated_at: "2026-01-01T00:00:00.000Z",
 };
 
 const runCalls: Array<{ sql: string; params: unknown[] }> = [];
@@ -94,13 +82,12 @@ const fakePg = {
         language: params[8],
         tags: params[9],
         agent_id: params[10],
-        project_id: params[11],
-        session_id: params[12],
-        goal: params[13],
-        role: params[14],
-        task_list_id: params[15],
-        machine_id: params[16],
-        metadata: params[17],
+        session_id: params[11],
+        goal: params[12],
+        role: params[13],
+        task_list_id: params[14],
+        machine_id: params[15],
+        metadata: params[16],
         created_at: "2026-01-01T00:00:00.000Z",
       });
     } else if (/delete\s+from\s+recordings/i.test(sql)) {
@@ -127,17 +114,6 @@ const fakePg = {
     }
     // Any agent lookup resolves to our canned row.
     if (/from\s+agents/i.test(sql)) return { ...AGENT_ROW };
-    // Project resolution mirrors repo.getProject: exact id/path/name or the
-    // truncated id-prefix (LIKE) all resolve to PROJECT_ROW; anything else null.
-    if (/from\s+projects/i.test(sql)) {
-      const ref = params[0] as string;
-      const matches =
-        ref === PROJECT_ROW.id ||
-        ref === PROJECT_ROW.path ||
-        ref === PROJECT_ROW.name ||
-        (/like/i.test(sql) && PROJECT_ROW.id.startsWith(ref));
-      return matches ? { ...PROJECT_ROW } : null;
-    }
     return null;
   },
   async all(sql: string, ...params: unknown[]) {
@@ -550,43 +526,21 @@ describe("v1 handler: previously-failing cloud routes", () => {
     expect(runCalls.some((c) => /update agents set last_seen_at/i.test(c.sql))).toBe(true);
   });
 
-  test("POST /v1/agents/:id/focus -> 200 (not 405)", async () => {
-    const req = post("/v1/agents/agent-1/focus", { project_id: null });
-    const res = await handleV1Request(req, new URL(req.url));
-    expect(res!.status).toBe(200);
-    expect(runCalls.some((c) => /update agents set active_project_id/i.test(c.sql))).toBe(true);
-  });
+  test("the retired focus and projects routes are gone", async () => {
+    const focus = post("/v1/agents/agent-1/focus", { project_id: null });
+    const focusRes = await handleV1Request(focus, new URL(focus.url));
+    expect(focusRes!.status).toBe(404);
+    expect(runCalls.some((c) => /active_project_id/i.test(c.sql))).toBe(false);
 
-  test("POST focus with the TRUNCATED project id -> 200 and stores the full UUID", async () => {
-    const shortId = "164a6e1f"; // the 8-char ref the tools surface
-    const req = post("/v1/agents/agent-1/focus", { project_id: shortId });
-    const res = await handleV1Request(req, new URL(req.url));
-    expect(res!.status).toBe(200);
-    const write = runCalls.find((c) => /update agents set active_project_id/i.test(c.sql));
-    expect(write).toBeDefined();
-    // The resolved full UUID is persisted, never the truncated ref.
-    expect(write!.params[0]).toBe("164a6e1f-ac00-4d5d-9390-215cfa9be003");
-  });
-
-  test("POST focus with the project NAME -> 200 (resolved)", async () => {
-    const req = post("/v1/agents/agent-1/focus", { project_id: "workspace" });
-    const res = await handleV1Request(req, new URL(req.url));
-    expect(res!.status).toBe(200);
-    const write = runCalls.find((c) => /update agents set active_project_id/i.test(c.sql));
-    expect(write!.params[0]).toBe("164a6e1f-ac00-4d5d-9390-215cfa9be003");
-  });
-
-  test("POST focus with an unknown project -> clean 400 (never a raw 500 FK leak)", async () => {
-    const req = post("/v1/agents/agent-1/focus", { project_id: "deadbeef" });
-    const res = await handleV1Request(req, new URL(req.url));
-    expect(res!.status).toBe(400);
-    const body = (await res!.json()) as { error: string };
-    expect(body.error).toBe("project not found: deadbeef");
-    // The Postgres FK constraint name must never surface to the client.
-    expect(body.error).not.toMatch(/fkey/i);
-    expect(body.error).not.toMatch(/foreign key/i);
-    // And no focus write was attempted for the bad ref.
-    expect(runCalls.some((c) => /update agents set active_project_id/i.test(c.sql))).toBe(false);
+    for (const path of ["/v1/projects", "/v1/projects/some-id"]) {
+      const res = await handleV1Request(
+        new Request(`http://localhost${path}`, { headers: { "x-api-key": "test" } }),
+        new URL(`http://localhost${path}`),
+      );
+      expect(res!.status).toBe(404);
+      const body = (await res!.json()) as { error: string };
+      expect(body.error).toBe("unknown /v1 resource: projects");
+    }
   });
 
   test("an unexpected DB error -> sanitized 500 that never leaks internals", async () => {

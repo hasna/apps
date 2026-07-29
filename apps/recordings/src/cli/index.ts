@@ -57,7 +57,6 @@ program
   .version(VERSION)
   .option("--json", "Output as JSON")
   .option("--agent <name>", "Agent name or ID")
-  .option("--project <name>", "Project name or ID")
   .option("--session <id>", "Session ID");
 
 registerEventsCommands(program, { source: "recordings" });
@@ -186,7 +185,6 @@ withRealtimeTranscriptionOptions(program.command("record"))
       language: transcription.language || undefined,
       tags,
       agent_id: parentOpts.agent || undefined,
-      project_id: parentOpts.project || undefined,
       session_id: parentOpts.session || undefined,
       machine_id: currentMachineId(),
       metadata: buildTranscriptionMetadata(config, processed, {
@@ -262,7 +260,6 @@ withRealtimeTranscriptionOptions(program.command("transcribe <file>"))
       language: transcription.language || undefined,
       tags,
       agent_id: parentOpts.agent || undefined,
-      project_id: parentOpts.project || undefined,
       session_id: parentOpts.session || undefined,
       machine_id: currentMachineId(),
       metadata: buildTranscriptionMetadata(config, processed, {
@@ -348,7 +345,6 @@ withRealtimeTranscriptionOptions(program.command("save-text [text]"))
       language: opts.language || undefined,
       tags,
       agent_id: parentOpts.agent || undefined,
-      project_id: parentOpts.project || undefined,
       session_id: parentOpts.session || undefined,
       machine_id: currentMachineId(),
       metadata,
@@ -445,7 +441,6 @@ program
         enhancement_model: enhModel,
         tags,
         agent_id: parentOpts.agent,
-        project_id: parentOpts.project,
         session_id: parentOpts.session,
         machine_id: currentMachineId(),
       });
@@ -487,7 +482,6 @@ program
       until: opts.until,
       offset: pagination.offset,
       agent_id: parentOpts.agent,
-      project_id: parentOpts.project,
       session_id: parentOpts.session,
     };
     const store = getStore();
@@ -547,7 +541,6 @@ program
       since: opts.since,
       until: opts.until,
       agent_id: parentOpts.agent,
-      project_id: parentOpts.project,
       session_id: opts.session || parentOpts.session,
     };
     const store = getStore();
@@ -657,67 +650,6 @@ program
       }
     }
     printPaginationHints(page.length, agents.length, pagination);
-  });
-
-// ── projects ────────────────────────────────────────────────────────────────
-
-const projectCommand = program
-  .command("project")
-  .description("Manage registered projects");
-
-projectCommand
-  .command("register")
-  .description("Register a project in the active Store")
-  .requiredOption("--name <name>", "Project name")
-  .requiredOption("--path <path>", "Stable project path or URI")
-  .option("--description <description>", "Project description")
-  .action(async (opts) => {
-    const parentOpts = program.opts();
-    const project = await getStore().registerProject(opts.name, opts.path, opts.description);
-    if (parentOpts.json) {
-      console.log(JSON.stringify(project, null, 2));
-      return;
-    }
-    console.log(`${chalk.cyan(truncateText(project.id, 80))} ${chalk.bold(truncateText(project.name, 80))} — ${truncatePath(project.path, 120)}`);
-  });
-
-program
-  .command("projects")
-  .description("List registered projects")
-  .option("-n, --limit <n>", "Max results")
-  .option("--offset <n>", "Skip this many results")
-  .option("--cursor <n>", "Pagination cursor alias for --offset")
-  .option("--verbose", "Show descriptions and timestamps")
-  .action(async (opts) => {
-    const parentOpts = program.opts();
-    const pagination = resolvePagination(opts, parentOpts);
-
-    const projects = await getStore().listProjects();
-    const page = parentOpts.json
-      ? maybePageJson(projects, pagination, opts)
-      : pageItems(projects, pagination);
-
-    if (parentOpts.json) {
-      console.log(JSON.stringify(page, null, 2));
-      return;
-    }
-
-    if (page.length === 0) {
-      console.log(chalk.dim(projects.length === 0 ? "No projects registered." : "No projects at this cursor."));
-      if (projects.length > 0) console.log(chalk.dim("Try a lower --cursor."));
-      return;
-    }
-
-    console.log(formatPageHeader("projects", page.length, projects.length, pagination.offset, pagination.limit));
-    for (const p of page) {
-      const line = `${chalk.cyan(truncateText(p.id, 8))} ${chalk.bold(truncateText(p.name, 80))}`;
-      if (opts.verbose) {
-        console.log(`${line}\n  path: ${truncatePath(p.path, 120)}\n  updated: ${truncateText(p.updated_at, 40)}${p.description ? `\n  ${truncateText(p.description, 140)}` : ""}`);
-      } else {
-        console.log(`${line} — ${truncatePath(p.path, 96)}`);
-      }
-    }
-    printPaginationHints(page.length, projects.length, pagination);
   });
 
 // ── init ────────────────────────────────────────────────────────────────────
@@ -1311,7 +1243,6 @@ withRealtimeTranscriptionOptions(program.command("listen"))
               language: transcription.language || undefined,
               tags,
               agent_id: parentOpts.agent || undefined,
-              project_id: parentOpts.project || undefined,
               session_id: parentOpts.session || undefined,
               machine_id: currentMachineId(),
               metadata: buildTranscriptionMetadata(config, processed, {
@@ -1777,7 +1708,6 @@ function formatRecordingVerboseLine(r: Recording): string {
   if (r.audio_path) lines.push(`  audio: ${truncatePath(r.audio_path, 120)}`);
   const scopes = [
     r.agent_id ? `agent=${truncateText(r.agent_id, 80)}` : null,
-    r.project_id ? `project=${truncateText(r.project_id, 80)}` : null,
     r.session_id ? `session=${truncateText(r.session_id, 80)}` : null,
   ].filter(Boolean);
   if (scopes.length > 0) lines.push(`  scope: ${scopes.join(" ")}`);

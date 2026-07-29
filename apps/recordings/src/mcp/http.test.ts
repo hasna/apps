@@ -9,7 +9,6 @@ import { handleMcpRequest, resolveMcpHttpPort, DEFAULT_MCP_HTTP_PORT } from "./h
 import { closeDatabase, getDatabase, resetDatabase } from "../db/database.js";
 import { createRecording } from "../db/recordings.js";
 import { registerAgent } from "../db/agents.js";
-import { registerProject } from "../db/projects.js";
 import { __resetStore } from "../store.js";
 
 describe("recordings MCP HTTP transport", () => {
@@ -151,7 +150,7 @@ describe("recordings MCP HTTP transport", () => {
     await client.close();
   });
 
-  test("MCP agent/project pages and model stats enforce output caps", async () => {
+  test("MCP agent pages and model stats enforce output caps", async () => {
     const tempDir = join(tmpdir(), `open-recordings-mcp-caps-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     const previousMode = process.env.HASNA_RECORDINGS_STORAGE_MODE;
     process.env.HASNA_RECORDINGS_STORAGE_MODE = "local";
@@ -165,10 +164,6 @@ describe("recordings MCP HTTP transport", () => {
         `agent-${index}${terminalPayload}${"a".repeat(120)}`,
         undefined,
         `role-${index}${terminalPayload}${"r".repeat(80)}`,
-      );
-      registerProject(
-        `project-${index}${terminalPayload}${"n".repeat(120)}`,
-        `/workspace/project-${index}${terminalPayload}${"p".repeat(180)}`,
       );
     }
     for (let index = 0; index < 55; index += 1) {
@@ -197,18 +192,6 @@ describe("recordings MCP HTTP transport", () => {
       expect(agentsText).not.toContain("c1-title");
       expect(agentsText).not.toContain("a".repeat(80));
       expect(agentsText).not.toContain("r".repeat(40));
-
-      const projectsResult = await client.callTool({ name: "list_projects", arguments: { limit: 100 } });
-      const projectsText = ((projectsResult.content as Array<{ text?: string }> | undefined)?.[0]?.text) ?? "";
-      expect(projectsText).toContain("projects: showing 50 of 55");
-      expect(projectsText).toContain("limit capped at 50");
-      expect(projectsText).toContain("next cursor: 50");
-      expect(projectsText).not.toContain("\u001b");
-      expect(projectsText).not.toContain("\u009b");
-      expect(projectsText).not.toContain("esc-title");
-      expect(projectsText).not.toContain("c1-title");
-      expect(projectsText).not.toContain("n".repeat(80));
-      expect(projectsText).not.toContain("p".repeat(120));
 
       const statsResult = await client.callTool({ name: "recording_stats", arguments: {} });
       const statsText = ((statsResult.content as Array<{ text?: string }> | undefined)?.[0]?.text) ?? "";

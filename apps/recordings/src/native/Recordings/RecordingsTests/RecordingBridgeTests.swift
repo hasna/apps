@@ -29,7 +29,6 @@ struct RecordingBridgeTests {
           "duration_ms": 65000,
           "language": "en",
           "tags": ["demo", "test"],
-          "project_id": "proj_1",
           "machine_id": "apple06",
           "created_at": "2026-06-22T10:00:00.000Z"
         }
@@ -40,7 +39,6 @@ struct RecordingBridgeTests {
         #expect(rec.isEnhanced)
         #expect(rec.durationLabel == "1:05")
         #expect(rec.tags == ["demo", "test"])
-        #expect(rec.projectId == "proj_1")
         #expect(rec.createdDate != nil)
     }
 

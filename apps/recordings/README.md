@@ -15,20 +15,18 @@ npm install -g @hasna/recordings
 
 Recordings ships a **full native macOS app** (SwiftUI, macOS 26 / Liquid Glass) with a
 companion menu-bar control. It opens to a **Recordings workspace**: a narrow violet
-Liquid-Glass sidebar (Workspace · Library · Projects · Modes · Machines) beside one
+Liquid-Glass sidebar (Workspace · Library · Modes · Machines) beside one
 continuous canvas with the record hero, transcript library, and detail view. The menu bar
 provides recording controls and access to the main window while it is in the background.
 
 - **Record** — large push-to-talk / dictation / command hero with live transcription,
-  duration, the active project, and a "just now" strip. Global shortcut (default F5, or
-  hold fn) works while the window is in the background.
+  duration, and a "just now" strip. Global shortcut (default F5, or hold fn) works while
+  the window is in the background.
 - **Library** — every past transcript (read straight from the active local or HTTP Store
-  the CLI and MCP write), searchable and filterable by project, mode, and machine, with a
-  detail pane (copy, paste-into-front-app, audio playback, metadata).
-- **Projects** — app projects are registered through the same canonical Store before a
-  recording can reference them, preserving referential integrity in local and remote modes.
-- **Settings** (⌘,) — OpenAI key, language, recording shortcut, permissions, projects,
-  and voice shortcuts.
+  the CLI and MCP write), searchable and filterable by mode and machine, with a detail
+  pane (copy, paste-into-front-app, audio playback, metadata).
+- **Settings** (⌘,) — OpenAI key, language, recording shortcut, permissions, and voice
+  shortcuts.
 
 The app embeds a same-version `recordings` CLI as its data layer, so the CLI, MCP, and app
 share one store without depending on a possibly stale global CLI installation. Production
@@ -255,8 +253,8 @@ transcription/enhancement use it.
 The app's **Transcription Cleanup** setting controls the same post-processing pipeline as
 the CLI and MCP server. Use **Raw** to keep verbatim text only, **Auto** to clean up only
 when trigger phrases or instruction patterns are detected, or **Always** to run the
-transcriber cleanup prompt for every recording. Global cleanup instructions can be set in
-Settings, and project-specific instructions are appended when a project is active.
+transcriber cleanup prompt for every recording. Global cleanup instructions are set in
+Settings.
 
 The native app uses OpenAI realtime transcription for the stop-and-paste path: settled
 `gpt-live-transcribe` text is saved and pasted immediately, while full-file
@@ -437,7 +435,6 @@ Versioned API (`/v1/*`, API-key auth via `x-api-key` or `Authorization: Bearer`)
 | GET/DELETE | `/v1/recordings/:id` | `recordings:read` / `recordings:write` |
 | GET | `/v1/stats` | `recordings:read` |
 | GET/POST | `/v1/agents` · GET `/v1/agents/:id` | `recordings:read` / `recordings:write` |
-| GET/POST | `/v1/projects` · GET `/v1/projects/:id` | `recordings:read` / `recordings:write` |
 
 Env: `HASNA_RECORDINGS_DATABASE_URL` (remote Postgres DSN — enables cloud `/v1`)
 and `HASNA_RECORDINGS_API_SIGNING_KEY` (HMAC signing secret for API-key auth).

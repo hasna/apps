@@ -19,8 +19,6 @@ export type {
   RecordingsV1ClientOptions,
   Recording as RecordingsV1Recording,
   Agent as RecordingsV1Agent,
-  Project as RecordingsV1Project,
   CreateRecordingInput as RecordingsV1CreateRecordingInput,
   RegisterAgentInput as RecordingsV1RegisterAgentInput,
-  RegisterProjectInput as RecordingsV1RegisterProjectInput,
 } from "./v1.generated.js";

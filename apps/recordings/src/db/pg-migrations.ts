@@ -5,15 +5,10 @@
  */
 
 export const PG_MIGRATIONS: string[] = [
-  // Migration 0: Initial schema — projects, agents, recordings, recording_tags
-  `CREATE TABLE IF NOT EXISTS projects (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    path TEXT UNIQUE NOT NULL,
-    description TEXT,
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
+  // Migration 0: retired. Historical migrations are immutable once recorded in
+  // `_pg_migrations`, so the slot is kept to preserve version numbering. It
+  // created the `projects` table, which migration 19 drops.
+  `SELECT 1`,
 
   `CREATE TABLE IF NOT EXISTS agents (
     id TEXT PRIMARY KEY,
@@ -37,7 +32,6 @@ export const PG_MIGRATIONS: string[] = [
     language TEXT,
     tags TEXT DEFAULT '[]',
     agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
-    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
     session_id TEXT,
     machine_id TEXT,
     metadata TEXT DEFAULT '{}',
@@ -56,7 +50,6 @@ export const PG_MIGRATIONS: string[] = [
   )`,
 
   `CREATE INDEX IF NOT EXISTS idx_recordings_agent ON recordings(agent_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_recordings_project ON recordings(project_id)`,
   `CREATE INDEX IF NOT EXISTS idx_recordings_session ON recordings(session_id)`,
   `CREATE INDEX IF NOT EXISTS idx_recordings_created ON recordings(created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_recordings_mode ON recordings(processing_mode)`,
@@ -79,8 +72,9 @@ export const PG_MIGRATIONS: string[] = [
     created_at TEXT NOT NULL DEFAULT NOW()::text
   )`,
 
-  // Migration 4: agent focus
-  `ALTER TABLE agents ADD COLUMN IF NOT EXISTS active_project_id TEXT REFERENCES projects(id) ON DELETE SET NULL`,
+  // Migration 4: retired (agent focus on a project). Slot preserved for
+  // version numbering; migration 20 drops the column it added.
+  `SELECT 1`,
 
   // Migration 5: principal-scoped, request-bound create idempotency
   `CREATE TABLE IF NOT EXISTS recording_idempotency (
@@ -100,4 +94,15 @@ export const PG_MIGRATIONS: string[] = [
    ALTER TABLE recording_idempotency
      ADD CONSTRAINT recording_idempotency_recording_id_fkey
      FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE SET NULL`,
+
+  // Migration 19: drop the retired projects feature. Forward-only — no
+  // compatibility view and no retained nullable column.
+  `DROP INDEX IF EXISTS idx_recordings_project;
+   ALTER TABLE recordings DROP COLUMN IF EXISTS project_id`,
+
+  // Migration 20: drop the agent's active project reference.
+  `ALTER TABLE agents DROP COLUMN IF EXISTS active_project_id`,
+
+  // Migration 21: drop the projects table itself.
+  `DROP TABLE IF EXISTS projects`,
 ];

@@ -2374,21 +2374,6 @@ function verifyActiveApp(
       HASNA_RECORDINGS_DB_PATH: join(contractHome, "recordings.db"),
       RECORDINGS_AUDIO_DIR: join(contractHome, "audio"),
     };
-    const project = JSON.parse(
-      runWithEnvironment(
-        helperPath,
-        [
-          "--json",
-          "project",
-          "register",
-          "--name",
-          "Activated Helper Contract",
-          "--path",
-          "recordings-app://install/activated-helper-contract",
-        ],
-        environment,
-      ),
-    ) as { name?: string };
     const recording = JSON.parse(
       runWithEnvironment(
         helperPath,
@@ -2404,7 +2389,7 @@ function verifyActiveApp(
         environment,
       ),
     ) as { raw_text?: string };
-    if (project.name !== "Activated Helper Contract" || recording.raw_text !== "Activated helper contract") {
+    if (recording.raw_text !== "Activated helper contract") {
       throw new Error("activated companion capability contract returned unexpected data");
     }
   } finally {

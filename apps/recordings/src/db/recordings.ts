@@ -22,7 +22,6 @@ function parseRow(row: Record<string, unknown>): Recording {
     language: (row["language"] as string) || null,
     tags: JSON.parse((row["tags"] as string) || "[]") as string[],
     agent_id: (row["agent_id"] as string) || null,
-    project_id: (row["project_id"] as string) || null,
     session_id: (row["session_id"] as string) || null,
     machine_id: (row["machine_id"] as string) || null,
     goal: (row["goal"] as string) || null,
@@ -50,8 +49,8 @@ export function createRecording(
     const metadataJson = JSON.stringify(input.metadata || {});
 
     const insertResult = d.query(
-    `INSERT INTO recordings (id, audio_path, raw_text, processed_text, processing_mode, model_used, enhancement_model, duration_ms, language, tags, agent_id, project_id, session_id, goal, role, task_list_id, machine_id, metadata)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO recordings (id, audio_path, raw_text, processed_text, processing_mode, model_used, enhancement_model, duration_ms, language, tags, agent_id, session_id, goal, role, task_list_id, machine_id, metadata)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO NOTHING`
     ).run(
     id,
@@ -65,7 +64,6 @@ export function createRecording(
     input.language || null,
     tagsJson,
     input.agent_id || null,
-    input.project_id || null,
     input.session_id || null,
     input.goal || null,
     input.role || null,
@@ -150,10 +148,6 @@ function buildRecordingWhere(filter?: RecordingFilter): {
   if (filter?.agent_id) {
     conditions.push("agent_id = ?");
     params.push(filter.agent_id);
-  }
-  if (filter?.project_id) {
-    conditions.push("project_id = ?");
-    params.push(filter.project_id);
   }
   if (filter?.session_id) {
     conditions.push("session_id = ?");

@@ -40,15 +40,6 @@ public enum RecordingsCLI {
         guard !versionOutput.isEmpty, versionOutput == expectedVersion else {
             throw Failure(message: "Packaged companion version does not match the app")
         }
-        let project = try registerProject(
-            name: "Activated Helper Contract",
-            path: "recordings-app://install/activated-helper-contract",
-            description: "Installed app resolver verification",
-            home: home
-        )
-        guard project.name == "Activated Helper Contract" else {
-            throw Failure(message: "Packaged companion project capability failed")
-        }
         let saved = CLIRunner.run(
             ["--json", "save-text", "Activated helper contract", "--source", "native_install_contract", "--post-processing", "off"],
             home: home
@@ -63,10 +54,8 @@ public enum RecordingsCLI {
 
     // MARK: - Library
 
-    public static func list(limit: Int = 100, offset: Int = 0, projectId: String? = nil, home: String = defaultHome) throws -> [Recording] {
-        var args = ["--json"]
-        if let projectId, !projectId.isEmpty { args += ["--project", projectId] }
-        args += ["list", "-n", String(limit), "--offset", String(offset)]
+    public static func list(limit: Int = 100, offset: Int = 0, home: String = defaultHome) throws -> [Recording] {
+        let args = ["--json", "list", "-n", String(limit), "--offset", String(offset)]
         return try runDecoding([Recording].self, args, home: home)
     }
 
@@ -116,25 +105,6 @@ public enum RecordingsCLI {
     public static func delete(id: String, home: String = defaultHome) throws {
         let output = CLIRunner.run(["delete", id], home: home)
         if let err = CLIRunner.parseError(output) { throw Failure(message: err) }
-    }
-
-    public struct CanonicalProject: Codable, Sendable {
-        public let id: String
-        public let name: String
-        public let path: String
-    }
-
-    public static func registerProject(
-        name: String,
-        path: String,
-        description: String = "Recordings macOS project",
-        home: String = defaultHome
-    ) throws -> CanonicalProject {
-        try runDecoding(
-            CanonicalProject.self,
-            ["--json", "project", "register", "--name", name, "--path", path, "--description", description],
-            home: home
-        )
     }
 
     // MARK: - Internals

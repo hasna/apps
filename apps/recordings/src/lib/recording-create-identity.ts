@@ -35,7 +35,6 @@ export function recordingCreateFingerprint(input: CreateRecordingInput): string 
     language: input.language || null,
     tags: input.tags || [],
     agent_id: input.agent_id || null,
-    project_id: input.project_id || null,
     session_id: input.session_id || null,
     goal: input.goal || null,
     role: input.role || null,

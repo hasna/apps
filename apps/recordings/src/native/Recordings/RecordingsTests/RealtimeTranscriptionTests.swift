@@ -886,10 +886,10 @@ struct RealtimeTranscriptionTests {
             enhanceTriggersJSON: #"["rewrite a"]"#,
             keywordTransformsJSON: #"{"code with":"Codewith"}"#
         )
-        var currentProject = recordingA
-        let capturedForRecovery = currentProject
+        var currentConfiguration = recordingA
+        let capturedForRecovery = currentConfiguration
 
-        currentProject = RecordingProcessingConfiguration(
+        currentConfiguration = RecordingProcessingConfiguration(
             transcriptionPrompt: "Project B vocabulary",
             transcriberPrompt: "Project B rewrite policy",
             postProcessingMode: PostProcessingMode.always.rawValue,
@@ -904,7 +904,6 @@ struct RealtimeTranscriptionTests {
         )
         let recoveryArgs = RecordingEngine.transcribeCLIArgs(
             audioPath: "/tmp/recording-a.wav",
-            activeProjectId: "project-a",
             transcriberPrompt: capturedForRecovery.transcriberPrompt,
             postProcessingMode: capturedForRecovery.postProcessingMode,
             language: capturedForRecovery.transcriptionLanguage,
@@ -917,7 +916,7 @@ struct RealtimeTranscriptionTests {
             recordingId: "pipeline-a"
         )
 
-        #expect(capturedForRecovery != currentProject)
+        #expect(capturedForRecovery != currentConfiguration)
         #expect(recoveryArgs.contains("Project A vocabulary"))
         #expect(recoveryArgs.contains(PostProcessingMode.off.rawValue))
         #expect(recoveryArgs.contains("es"))
@@ -931,7 +930,7 @@ struct RealtimeTranscriptionTests {
         #expect(!recoveryArgs.contains("en"))
     }
 
-    @Test("Command rewrite retains recording A configuration after switching to project B")
+    @Test("Command rewrite retains recording A configuration after switching to config B")
     func commandRewriteUsesCapturedConfiguration() {
         let recordingA = RecordingProcessingConfiguration(
             transcriptionPrompt: "Project A vocabulary",
@@ -966,13 +965,12 @@ struct RealtimeTranscriptionTests {
         let args = RecordingEngine.rewriteCLIArgs(
             selectedText: "selected A",
             instruction: "instruction A",
-            activeProjectId: "project-a",
             processingConfiguration: capturedRequest
         )
 
         #expect(capturedRequest != mutableCurrentConfiguration)
         for expected in [
-            "selected A", "instruction A", "project-a", "Project A vocabulary",
+            "selected A", "instruction A", "Project A vocabulary",
             "Project A rewrite policy", PostProcessingMode.always.rawValue, "es", "whisper-a",
             "gpt-command-a", "gpt-fallback-a", #"["rewrite a"]"#,
             #"{"code with":"Codewith A"}"#,
@@ -990,7 +988,6 @@ struct RealtimeTranscriptionTests {
         let optionLikeTextArgs = RecordingEngine.rewriteCLIArgs(
             selectedText: "--literal-selection",
             instruction: "instruction A",
-            activeProjectId: "project-a",
             processingConfiguration: capturedRequest
         )
         #expect(Array(optionLikeTextArgs.suffix(2)) == ["--", "--literal-selection"])

@@ -2,19 +2,15 @@
 // Regenerate: bun run scripts/generate-sdk.ts
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Recordings V1 API 0.2.13
+// Source: Recordings V1 API 0.2.14
 
-export interface Recording { "id"?: string; "audio_path"?: string | null; "raw_text"?: string; "processed_text"?: string | null; "processing_mode"?: "raw" | "enhanced"; "model_used"?: string; "enhancement_model"?: string | null; "duration_ms"?: number; "language"?: string | null; "tags"?: Array<string>; "agent_id"?: string | null; "project_id"?: string | null; "session_id"?: string | null; "goal"?: string | null; "role"?: string | null; "task_list_id"?: string | null; "machine_id"?: string | null; "metadata"?: Record<string, unknown>; "created_at"?: string }
+export interface Recording { "id"?: string; "audio_path"?: string | null; "raw_text"?: string; "processed_text"?: string | null; "processing_mode"?: "raw" | "enhanced"; "model_used"?: string; "enhancement_model"?: string | null; "duration_ms"?: number; "language"?: string | null; "tags"?: Array<string>; "agent_id"?: string | null; "session_id"?: string | null; "goal"?: string | null; "role"?: string | null; "task_list_id"?: string | null; "machine_id"?: string | null; "metadata"?: Record<string, unknown>; "created_at"?: string }
 
 export interface Agent { "id"?: string; "name"?: string; "description"?: string | null; "role"?: string; "metadata"?: Record<string, unknown>; "created_at"?: string; "last_seen_at"?: string }
 
-export interface Project { "id"?: string; "name"?: string; "path"?: string; "description"?: string | null; "created_at"?: string; "updated_at"?: string }
-
-export interface CreateRecordingInput { "id"?: string; "raw_text": string; "audio_path"?: string; "processed_text"?: string; "processing_mode"?: "raw" | "enhanced"; "model_used"?: string; "enhancement_model"?: string; "duration_ms"?: number; "language"?: string; "tags"?: Array<string>; "agent_id"?: string; "project_id"?: string; "session_id"?: string; "goal"?: string; "role"?: string; "task_list_id"?: string; "machine_id"?: string; "metadata"?: Record<string, unknown> }
+export interface CreateRecordingInput { "id"?: string; "raw_text": string; "audio_path"?: string; "processed_text"?: string; "processing_mode"?: "raw" | "enhanced"; "model_used"?: string; "enhancement_model"?: string; "duration_ms"?: number; "language"?: string; "tags"?: Array<string>; "agent_id"?: string; "session_id"?: string; "goal"?: string; "role"?: string; "task_list_id"?: string; "machine_id"?: string; "metadata"?: Record<string, unknown> }
 
 export interface RegisterAgentInput { "name": string; "description"?: string; "role"?: string }
-
-export interface RegisterProjectInput { "name": string; "path": string; "description"?: string }
 
 export interface RecordingsV1ClientOptions {
   /** Base URL, e.g. process.env.APP_API_URL. */
@@ -102,35 +98,8 @@ export class RecordingsV1Client {
       });
     }
 
-    /** List projects */
-    async listProjects(init?: RequestInit): Promise<{ "projects"?: Array<Project>; "count"?: number }> {
-      return this.request("GET", `/v1/projects`, {
-        body: undefined,
-        query: undefined,
-        init,
-      });
-    }
-
-    /** Register (upsert) a project */
-    async registerProject(body: RegisterProjectInput, init?: RequestInit): Promise<{ "project"?: Project }> {
-      return this.request("POST", `/v1/projects`, {
-        body,
-        query: undefined,
-        init,
-      });
-    }
-
-    /** Get a project by id or path */
-    async getProject(id: string, init?: RequestInit): Promise<{ "project"?: Project }> {
-      return this.request("GET", `/v1/projects/${encodeURIComponent(String(id))}`, {
-        body: undefined,
-        query: undefined,
-        init,
-      });
-    }
-
     /** List recordings */
-    async listRecordings(query?: { "agent_id"?: string; "project_id"?: string; "session_id"?: string; "processing_mode"?: "raw" | "enhanced"; "tags"?: Array<string>; "search"?: string; "since"?: string; "until"?: string; "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<{ "recordings"?: Array<Recording>; "count"?: number }> {
+    async listRecordings(query?: { "agent_id"?: string; "session_id"?: string; "processing_mode"?: "raw" | "enhanced"; "tags"?: Array<string>; "search"?: string; "since"?: string; "until"?: string; "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<{ "recordings"?: Array<Recording>; "count"?: number }> {
       return this.request("GET", `/v1/recordings`, {
         body: undefined,
         query,

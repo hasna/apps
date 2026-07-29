@@ -17,16 +17,12 @@ public struct TranscriptionResult: Identifiable, Sendable {
     let rawText: String
     let processedText: String?
     let timestamp: Date
-    let projectId: String?
-    let projectName: String?
     public var displayText: String { processedText ?? rawText }
 
-    init(rawText: String, processedText: String?, timestamp: Date, projectId: String?, projectName: String?) {
+    init(rawText: String, processedText: String?, timestamp: Date) {
         self.rawText = rawText
         self.processedText = processedText
         self.timestamp = timestamp
-        self.projectId = projectId
-        self.projectName = projectName
     }
 }
 
@@ -64,22 +60,19 @@ struct RecordingStartAXSnapshot: Sendable {
 }
 
 /// Everything about the recording that is only known once the start-time Accessibility
-/// snapshot and project auto-selection have resolved. Bound to one recording generation via
-/// the task stored in `RecordingCaptureConfiguration`.
+/// snapshot has resolved. Bound to one recording generation via the task stored in
+/// `RecordingCaptureConfiguration`.
 struct RecordingStartResolvedContext: Sendable {
     let selectionToken: AccessibilitySelectionToken?
-    let canonicalProjectId: String?
-    let displayProjectId: String?
-    let activeProjectName: String?
     let processing: RecordingProcessingConfiguration
 }
 
 struct RecordingCaptureConfiguration: Sendable {
     let targetAppBundleIdentifier: String?
     let targetAppPid: pid_t?
-    /// Resolves the frozen selection token, project binding, and processing configuration.
-    /// Started at recording start and awaited only after the recorder has stopped, so
-    /// capture latency can never delay microphone start.
+    /// Resolves the frozen selection token and processing configuration. Started at
+    /// recording start and awaited only after the recorder has stopped, so capture
+    /// latency can never delay microphone start.
     let startContext: Task<RecordingStartResolvedContext, Never>
 }
 
@@ -1071,43 +1064,23 @@ public final class RecordingEngine: ObservableObject {
             )
         }
 
-        // Project auto-selection and the processing configuration resolve with the
-        // snapshot, still once per recording start and frozen for this generation; the
-        // recording pipeline awaits this context only after the recorder has stopped.
+        // The processing configuration resolves with the snapshot, still once per
+        // recording start and frozen for this generation; the recording pipeline awaits
+        // this context only after the recorder has stopped.
         let generation = recordingGeneration
         let projectStore = projectStore
-        let targetBundleIdentifierForProjects = targetAppBundleIdentifier
         let transcriptionLanguageAtStart = transcriptionLanguage
         let intentDetectionEnabledAtStart = intentDetectionEnabled
         let homePath = home
         let startContext = Task { @MainActor [weak self] () -> RecordingStartResolvedContext in
             let axSnapshot = await axSnapshotTask.value
-            if let self, generation == self.recordingGeneration, let store = projectStore {
-                let projects = store.settings.projects
-                let detected = ProjectStore.matchProject(
-                    windowTitle: axSnapshot.focusedWindowTitle,
-                    bundleId: targetBundleIdentifierForProjects,
-                    projects: projects
-                )
-                if let detected,
-                   detected.id != store.settings.activeProjectId,
-                   store.canMutateProjects {
-                    do {
-                        try store.setActive(detected.id)
-                    } catch {
-                        self.log("project auto-selection failed; continuing capture with the last active project: \(error.localizedDescription)")
-                    }
-                }
-                if let warning = store.synchronizationError ?? store.persistenceError {
-                    self.log("project synchronization degraded; continuing capture: \(warning)")
-                }
+            if let self, generation == self.recordingGeneration,
+               let warning = projectStore?.persistenceError {
+                self.log("settings persistence degraded; continuing capture: \(warning)")
             }
             let modelSelection = OpenAIAPIKeyStore.loadProcessingModelSelection(homePath: homePath)
             return RecordingStartResolvedContext(
                 selectionToken: axSnapshot.selectionToken,
-                canonicalProjectId: projectStore?.activeCanonicalProjectIdForRecording,
-                displayProjectId: projectStore?.settings.activeProjectId,
-                activeProjectName: projectStore?.activeProject?.name,
                 processing: RecordingProcessingConfiguration(
                     transcriptionPrompt: modelSelection.transcriptionPrompt,
                     transcriberPrompt: projectStore?.effectiveSystemPrompt ?? "",
@@ -1502,9 +1475,6 @@ public final class RecordingEngine: ObservableObject {
             // cases, and its Accessibility reads are bounded either way.
             let startContext = await captureConfiguration.startContext.value
             let selectionToken = startContext.selectionToken
-            let activeProjectId = startContext.displayProjectId
-            let canonicalProjectId = startContext.canonicalProjectId
-            let activeProjectName = startContext.activeProjectName
             let processingConfiguration = startContext.processing
             let postProcessingMode = processingConfiguration.postProcessingMode
             let busyLabel = Self.shouldLabelRewriting(
@@ -1552,7 +1522,6 @@ public final class RecordingEngine: ObservableObject {
                         audioPath: audioPath,
                         pcmData: pcmData,
                         durationMs: durationMs,
-                        activeProjectId: canonicalProjectId,
                         processingConfiguration: processingConfiguration,
                         language: language,
                         recordingId: pipelineTrace.id,
@@ -1579,9 +1548,6 @@ public final class RecordingEngine: ObservableObject {
                                     targetAppBundleIdentifier: targetAppBundleIdentifier,
                                     targetAppPid: targetAppPid,
                                     selectionToken: selectionToken,
-                                    canonicalProjectId: canonicalProjectId,
-                                    activeProjectId: activeProjectId,
-                                    activeProjectName: activeProjectName,
                                     processingConfiguration: processingConfiguration,
                                     pipelineTrace: pipelineTrace,
                                     pipelineGeneration: pipelineGeneration,
@@ -1599,9 +1565,6 @@ public final class RecordingEngine: ObservableObject {
                                     targetAppBundleIdentifier: targetAppBundleIdentifier,
                                     targetAppPid: targetAppPid,
                                     selectionToken: selectionToken,
-                                    canonicalProjectId: canonicalProjectId,
-                                    displayProjectId: activeProjectId,
-                                    activeProjectName: activeProjectName,
                                     processingConfiguration: processingConfiguration,
                                     pipelineTrace: pipelineTrace,
                                     pipelineGeneration: pipelineGeneration
@@ -1626,9 +1589,6 @@ public final class RecordingEngine: ObservableObject {
                             targetAppBundleIdentifier: targetAppBundleIdentifier,
                             targetAppPid: targetAppPid,
                             selectionToken: selectionToken,
-                            canonicalProjectId: canonicalProjectId,
-                            displayProjectId: activeProjectId,
-                            activeProjectName: activeProjectName,
                             processingConfiguration: processingConfiguration,
                             realtimeText: safeRealtimeFallbackText,
                             pipelineTrace: pipelineTrace,
@@ -1649,9 +1609,6 @@ public final class RecordingEngine: ObservableObject {
                     targetAppBundleIdentifier: targetAppBundleIdentifier,
                     targetAppPid: targetAppPid,
                     selectionToken: selectionToken,
-                    canonicalProjectId: canonicalProjectId,
-                    activeProjectId: activeProjectId,
-                    activeProjectName: activeProjectName,
                     processingConfiguration: processingConfiguration,
                     pipelineTrace: pipelineTrace,
                     pipelineGeneration: pipelineGeneration
@@ -1667,9 +1624,6 @@ public final class RecordingEngine: ObservableObject {
                     targetAppBundleIdentifier: targetAppBundleIdentifier,
                     targetAppPid: targetAppPid,
                     selectionToken: selectionToken,
-                    canonicalProjectId: canonicalProjectId,
-                    displayProjectId: activeProjectId,
-                    activeProjectName: activeProjectName,
                     processingConfiguration: processingConfiguration,
                     realtimeText: safeRealtimeFallbackText,
                     pipelineTrace: pipelineTrace,
@@ -1690,9 +1644,6 @@ public final class RecordingEngine: ObservableObject {
                         targetAppBundleIdentifier: targetAppBundleIdentifier,
                         targetAppPid: targetAppPid,
                         selectionToken: selectionToken,
-                        canonicalProjectId: canonicalProjectId,
-                        activeProjectId: activeProjectId,
-                        activeProjectName: activeProjectName,
                         processingConfiguration: processingConfiguration,
                         pipelineTrace: pipelineTrace,
                         pipelineGeneration: pipelineGeneration
@@ -2016,9 +1967,6 @@ public final class RecordingEngine: ObservableObject {
         targetAppBundleIdentifier: String?,
         targetAppPid: pid_t?,
         selectionToken: AccessibilitySelectionToken?,
-        canonicalProjectId: String?,
-        activeProjectId: String?,
-        activeProjectName: String?,
         processingConfiguration: RecordingProcessingConfiguration,
         pipelineTrace: RecordingPipelineTrace? = nil,
         pipelineGeneration: UInt64? = nil,
@@ -2058,9 +2006,6 @@ public final class RecordingEngine: ObservableObject {
                 targetAppBundleIdentifier: targetAppBundleIdentifier,
                 targetAppPid: targetAppPid,
                 selectionToken: selectionToken,
-                canonicalProjectId: canonicalProjectId,
-                activeProjectId: activeProjectId,
-                activeProjectName: activeProjectName,
                 processingConfiguration: processingConfiguration,
                 pipelineTrace: pipelineTrace,
                 pipelineGeneration: pipelineGeneration,
@@ -2084,9 +2029,7 @@ public final class RecordingEngine: ObservableObject {
             )
             insertRecentTranscription(
                 rawText: rawTranscript,
-                processedText: shortcutText,
-                projectId: activeProjectId,
-                projectName: activeProjectName
+                processedText: shortcutText
             )
             return
         }
@@ -2120,9 +2063,7 @@ public final class RecordingEngine: ObservableObject {
         // already be there.
         insertRecentTranscription(
             rawText: rawTranscript,
-            processedText: nil,
-            projectId: activeProjectId,
-            projectName: activeProjectName
+            processedText: nil
         )
         let deliveryGeneration = pipelineGeneration ?? recordingGeneration
         beginIntentDelivery(for: deliveryGeneration)
@@ -2179,9 +2120,6 @@ public final class RecordingEngine: ObservableObject {
         targetAppBundleIdentifier: String?,
         targetAppPid: pid_t?,
         selectionToken: AccessibilitySelectionToken?,
-        canonicalProjectId: String?,
-        activeProjectId: String?,
-        activeProjectName: String?,
         processingConfiguration: RecordingProcessingConfiguration,
         pipelineTrace: RecordingPipelineTrace?,
         pipelineGeneration: UInt64?,
@@ -2209,9 +2147,7 @@ public final class RecordingEngine: ObservableObject {
             } else {
                 insertRecentTranscription(
                     rawText: rawTranscript,
-                    processedText: output == rawTranscript ? nil : output,
-                    projectId: activeProjectId,
-                    projectName: activeProjectName
+                    processedText: output == rawTranscript ? nil : output
                 )
             }
         case .rewriteSelection(let reason):
@@ -2221,9 +2157,7 @@ public final class RecordingEngine: ObservableObject {
             if !transcriptRetainedInRecent {
                 insertRecentTranscription(
                     rawText: rawTranscript,
-                    processedText: nil,
-                    projectId: activeProjectId,
-                    projectName: activeProjectName
+                    processedText: nil
                 )
             }
             runCommandMode(
@@ -2231,7 +2165,6 @@ public final class RecordingEngine: ObservableObject {
                 targetAppBundleIdentifier: targetAppBundleIdentifier,
                 targetAppPid: targetAppPid,
                 selectionToken: selectionToken,
-                canonicalProjectId: canonicalProjectId,
                 processingConfiguration: processingConfiguration,
                 pipelineTrace: pipelineTrace,
                 pipelineGeneration: pipelineGeneration,
@@ -2242,9 +2175,7 @@ public final class RecordingEngine: ObservableObject {
             if !transcriptRetainedInRecent {
                 insertRecentTranscription(
                     rawText: rawTranscript,
-                    processedText: nil,
-                    projectId: activeProjectId,
-                    projectName: activeProjectName
+                    processedText: nil
                 )
             }
             runConversationMode(
@@ -2259,17 +2190,13 @@ public final class RecordingEngine: ObservableObject {
 
     private func insertRecentTranscription(
         rawText: String,
-        processedText: String?,
-        projectId: String?,
-        projectName: String?
+        processedText: String?
     ) {
         recentTranscriptions.insert(
             TranscriptionResult(
                 rawText: rawText,
                 processedText: processedText,
-                timestamp: Date(),
-                projectId: projectId,
-                projectName: projectName
+                timestamp: Date()
             ),
             at: 0
         )
@@ -2286,9 +2213,7 @@ public final class RecordingEngine: ObservableObject {
         recentTranscriptions[index] = TranscriptionResult(
             rawText: existing.rawText,
             processedText: processedText,
-            timestamp: existing.timestamp,
-            projectId: existing.projectId,
-            projectName: existing.projectName
+            timestamp: existing.timestamp
         )
     }
 
@@ -2316,7 +2241,6 @@ public final class RecordingEngine: ObservableObject {
         audioPath: String?,
         pcmData: Data,
         durationMs: Int,
-        activeProjectId: String?,
         processingConfiguration: RecordingProcessingConfiguration,
         language: String,
         recordingId: String,
@@ -2351,7 +2275,6 @@ public final class RecordingEngine: ObservableObject {
                 let args = saveTextCLIArgs(
                     textFile: textFile,
                     audioPath: savedAudioPath,
-                    activeProjectId: activeProjectId,
                     transcriberPrompt: processingConfiguration.transcriberPrompt,
                     postProcessingMode: processingConfiguration.postProcessingMode,
                     language: language,
@@ -2460,9 +2383,6 @@ public final class RecordingEngine: ObservableObject {
         targetAppBundleIdentifier: String?,
         targetAppPid: pid_t?,
         selectionToken: AccessibilitySelectionToken?,
-        canonicalProjectId: String?,
-        displayProjectId: String?,
-        activeProjectName: String?,
         processingConfiguration: RecordingProcessingConfiguration,
         pipelineTrace: RecordingPipelineTrace,
         pipelineGeneration: UInt64
@@ -2498,9 +2418,6 @@ public final class RecordingEngine: ObservableObject {
                     targetAppBundleIdentifier: targetAppBundleIdentifier,
                     targetAppPid: targetAppPid,
                     selectionToken: selectionToken,
-                    canonicalProjectId: canonicalProjectId,
-                    displayProjectId: displayProjectId,
-                    activeProjectName: activeProjectName,
                     processingConfiguration: processingConfiguration,
                     realtimeText: nil,
                     pipelineTrace: pipelineTrace,
@@ -2584,9 +2501,6 @@ public final class RecordingEngine: ObservableObject {
         targetAppBundleIdentifier: String?,
         targetAppPid: pid_t?,
         selectionToken: AccessibilitySelectionToken?,
-        canonicalProjectId: String?,
-        displayProjectId: String?,
-        activeProjectName: String?,
         processingConfiguration: RecordingProcessingConfiguration,
         realtimeText: String? = nil,
         pipelineTrace: RecordingPipelineTrace? = nil,
@@ -2612,11 +2526,8 @@ public final class RecordingEngine: ObservableObject {
             }
         }
 
-        // Only a proven canonical Store id may be persisted. The local display id remains
-        // available to recent-transcript UI even when synchronization is degraded.
         let transcribeArgs = Self.transcribeCLIArgs(
             audioPath: audioPath,
-            activeProjectId: canonicalProjectId,
             transcriberPrompt: processingConfiguration.transcriberPrompt,
             postProcessingMode: processingConfiguration.postProcessingMode,
             language: processingConfiguration.transcriptionLanguage,
@@ -2673,9 +2584,6 @@ public final class RecordingEngine: ObservableObject {
                         targetAppBundleIdentifier: targetAppBundleIdentifier,
                         targetAppPid: targetAppPid,
                         selectionToken: selectionToken,
-                        canonicalProjectId: canonicalProjectId,
-                        activeProjectId: displayProjectId,
-                        activeProjectName: activeProjectName,
                         processingConfiguration: processingConfiguration,
                         pipelineTrace: pipelineTrace,
                         pipelineGeneration: pipelineGeneration
@@ -2717,7 +2625,6 @@ public final class RecordingEngine: ObservableObject {
 
     nonisolated static func transcribeCLIArgs(
         audioPath: String,
-        activeProjectId: String?,
         transcriberPrompt: String,
         postProcessingMode: String,
         language: String = "auto",
@@ -2730,9 +2637,6 @@ public final class RecordingEngine: ObservableObject {
         recordingId: String? = nil
     ) -> [String] {
         var args = ["--json"]
-        if let activeProjectId, !activeProjectId.isEmpty {
-            args += ["--project", activeProjectId]
-        }
         args += ["transcribe", audioPath]
 
         let languageHint = OpenAIAPIKeyStore.apiLanguageHint(for: language)
@@ -2775,7 +2679,6 @@ public final class RecordingEngine: ObservableObject {
     nonisolated static func saveTextCLIArgs(
         textFile: String,
         audioPath: String?,
-        activeProjectId: String?,
         transcriberPrompt: String,
         postProcessingMode: String,
         language: String,
@@ -2790,9 +2693,6 @@ public final class RecordingEngine: ObservableObject {
         modelUsed: String
     ) -> [String] {
         var args = ["--json"]
-        if let activeProjectId, !activeProjectId.isEmpty {
-            args += ["--project", activeProjectId]
-        }
         args += [
             "save-text",
             "--text-file", textFile,
@@ -2837,13 +2737,9 @@ public final class RecordingEngine: ObservableObject {
     nonisolated static func rewriteCLIArgs(
         selectedText: String,
         instruction: String,
-        activeProjectId: String?,
         processingConfiguration: RecordingProcessingConfiguration
     ) -> [String] {
         var args: [String] = []
-        if let activeProjectId, !activeProjectId.isEmpty {
-            args += ["--project", activeProjectId]
-        }
         args += [
             "rewrite",
             "--instruction", instruction,
@@ -2948,7 +2844,6 @@ public final class RecordingEngine: ObservableObject {
         targetAppBundleIdentifier: String?,
         targetAppPid: pid_t?,
         selectionToken: AccessibilitySelectionToken?,
-        canonicalProjectId: String?,
         processingConfiguration: RecordingProcessingConfiguration,
         pipelineTrace: RecordingPipelineTrace?,
         pipelineGeneration: UInt64?,
@@ -3014,7 +2909,6 @@ public final class RecordingEngine: ObservableObject {
             let rewriteArguments = Self.rewriteCLIArgs(
                 selectedText: selected,
                 instruction: instruction,
-                activeProjectId: canonicalProjectId,
                 processingConfiguration: processingConfiguration
             )
             let runCLI = self.commandCLI
@@ -3141,7 +3035,7 @@ public final class RecordingEngine: ObservableObject {
     // MARK: - Window Title (Accessibility API)
 
     /// Runs off the MainActor in the recording-start snapshot; every IPC round trip is
-    /// bounded so an unresponsive app delays project detection, never recording.
+    /// bounded so an unresponsive app can never delay recording.
     private nonisolated static func focusedWindowTitle(pid: pid_t?) -> String? {
         guard let pid else { return nil }
         let app = AXUIElementCreateApplication(pid)

@@ -1153,17 +1153,15 @@ struct CLIRunnerTests {
         expectProcessIsGone(holderPid)
     }
 
-    @Test("transcribeCLIArgs passes project, cleanup mode, and transcriber prompt")
+    @Test("transcribeCLIArgs passes cleanup mode and transcriber prompt")
     func transcribeCLIArgsWithPrompt() {
         let args = RecordingEngine.transcribeCLIArgs(
             audioPath: "/tmp/audio.wav",
-            activeProjectId: "project-1",
             transcriberPrompt: "Format as notes",
             postProcessingMode: "always"
         )
         #expect(args == [
             "--json",
-            "--project", "project-1",
             "transcribe", "/tmp/audio.wav",
             "--post-processing", "always",
             "--transcriber-prompt", "Format as notes",
@@ -1175,7 +1173,6 @@ struct CLIRunnerTests {
     func transcribeCLIArgsDefaultAuto() {
         let args = RecordingEngine.transcribeCLIArgs(
             audioPath: "/tmp/audio.wav",
-            activeProjectId: nil,
             transcriberPrompt: "   ",
             postProcessingMode: ""
         )
@@ -1190,7 +1187,6 @@ struct CLIRunnerTests {
     func transcribeCLIArgsInvalidModeFallback() {
         let args = RecordingEngine.transcribeCLIArgs(
             audioPath: "/tmp/audio.wav",
-            activeProjectId: "",
             transcriberPrompt: "",
             postProcessingMode: "sometimes"
         )
@@ -1206,7 +1202,6 @@ struct CLIRunnerTests {
         let args = RecordingEngine.saveTextCLIArgs(
             textFile: "/tmp/transcript.txt",
             audioPath: "/tmp/audio.wav",
-            activeProjectId: "project-1",
             transcriberPrompt: "Format as notes",
             postProcessingMode: "auto",
             language: "en",
@@ -1216,7 +1211,6 @@ struct CLIRunnerTests {
         )
         #expect(args == [
             "--json",
-            "--project", "project-1",
             "save-text",
             "--text-file", "/tmp/transcript.txt",
             "--source", "realtime_fast_path",
@@ -1229,12 +1223,11 @@ struct CLIRunnerTests {
         ])
     }
 
-    @Test("saveTextCLIArgs omits an unsafe local project id")
-    func saveTextCLIArgsWithoutCanonicalProject() {
+    @Test("saveTextCLIArgs never emits a retired --project option")
+    func saveTextCLIArgsHasNoProjectOption() {
         let args = RecordingEngine.saveTextCLIArgs(
             textFile: "/tmp/transcript.txt",
             audioPath: nil,
-            activeProjectId: nil,
             transcriberPrompt: "Keep local prompt context",
             postProcessingMode: "auto",
             language: "en",

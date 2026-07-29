@@ -10,15 +10,6 @@ let _adapter: SqliteAdapter | null = null;
 const MIGRATIONS = [
   // Migration 0: Initial schema
   `
-  CREATE TABLE IF NOT EXISTS projects (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    path TEXT UNIQUE NOT NULL,
-    description TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-
   CREATE TABLE IF NOT EXISTS agents (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
@@ -41,7 +32,6 @@ const MIGRATIONS = [
     language TEXT,
     tags TEXT DEFAULT '[]',
     agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
-    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
     session_id TEXT,
     machine_id TEXT,
     metadata TEXT DEFAULT '{}',
@@ -60,7 +50,6 @@ const MIGRATIONS = [
   );
 
   CREATE INDEX IF NOT EXISTS idx_recordings_agent ON recordings(agent_id);
-  CREATE INDEX IF NOT EXISTS idx_recordings_project ON recordings(project_id);
   CREATE INDEX IF NOT EXISTS idx_recordings_session ON recordings(session_id);
   CREATE INDEX IF NOT EXISTS idx_recordings_created ON recordings(created_at);
   CREATE INDEX IF NOT EXISTS idx_recordings_mode ON recordings(processing_mode);
@@ -86,11 +75,6 @@ const MIGRATIONS = [
     machine_id TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
-  `,
-
-  // Migration 4: agent focus
-  `
-  ALTER TABLE agents ADD COLUMN active_project_id TEXT REFERENCES projects(id) ON DELETE SET NULL;
   `,
 ];
 
@@ -158,12 +142,125 @@ function repairSchemaDrift(db: Database): void {
   ensureColumn(db, "recordings", "task_list_id", "TEXT");
   ensureColumn(db, "recordings", "machine_id", "TEXT");
   ensureColumn(db, "recordings", "metadata", "TEXT DEFAULT '{}'");
-  ensureColumn(
-    db,
-    "agents",
-    "active_project_id",
-    "TEXT REFERENCES projects(id) ON DELETE SET NULL"
-  );
+  // Runs last: the rebuild below copies the full expected column set, so every
+  // column must already exist.
+  dropRetiredProjectsSchema(db);
+}
+
+/**
+ * Forward-only removal of the retired projects feature.
+ *
+ * SQLite cannot `ALTER TABLE ... DROP COLUMN` a column named in a foreign key,
+ * so `recordings.project_id` and `agents.active_project_id` are removed by
+ * rebuilding each table without them. There is no compatibility view and the
+ * columns are not retained in any form. The step is idempotent: once the
+ * columns and the `projects` table are gone it does nothing.
+ */
+function dropRetiredProjectsSchema(db: Database): void {
+  const recordingsHasProject = tableColumns(db, "recordings").includes("project_id");
+  const agentsHasProject = tableColumns(db, "agents").includes("active_project_id");
+  const projectsExists = tableExists(db, "projects");
+  if (!recordingsHasProject && !agentsHasProject && !projectsExists) return;
+
+  // Both pragmas are no-ops inside a transaction and must be set around it.
+  // legacy_alter_table keeps RENAME from re-parsing sibling tables while the
+  // schema is momentarily inconsistent.
+  db.run("PRAGMA foreign_keys = OFF");
+  db.run("PRAGMA legacy_alter_table = ON");
+  try {
+    db.transaction(() => {
+      if (agentsHasProject) {
+        rebuildTable(
+          db,
+          "agents",
+          `CREATE TABLE agents_rebuilt (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT,
+            role TEXT DEFAULT 'agent',
+            metadata TEXT DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            last_seen_at TEXT NOT NULL DEFAULT (datetime('now'))
+          )`,
+          ["id", "name", "description", "role", "metadata", "created_at", "last_seen_at"],
+          []
+        );
+      }
+      if (recordingsHasProject) {
+        rebuildTable(
+          db,
+          "recordings",
+          `CREATE TABLE recordings_rebuilt (
+            id TEXT PRIMARY KEY,
+            audio_path TEXT,
+            raw_text TEXT NOT NULL,
+            processed_text TEXT,
+            processing_mode TEXT NOT NULL DEFAULT 'raw' CHECK(processing_mode IN ('raw', 'enhanced')),
+            model_used TEXT NOT NULL DEFAULT 'gpt-transcribe',
+            enhancement_model TEXT,
+            duration_ms INTEGER DEFAULT 0,
+            language TEXT,
+            tags TEXT DEFAULT '[]',
+            agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+            session_id TEXT,
+            goal TEXT,
+            role TEXT,
+            task_list_id TEXT,
+            machine_id TEXT,
+            metadata TEXT DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+          )`,
+          [
+            "id", "audio_path", "raw_text", "processed_text", "processing_mode",
+            "model_used", "enhancement_model", "duration_ms", "language", "tags",
+            "agent_id", "session_id", "goal", "role", "task_list_id", "machine_id",
+            "metadata", "created_at",
+          ],
+          [
+            "CREATE INDEX IF NOT EXISTS idx_recordings_agent ON recordings(agent_id)",
+            "CREATE INDEX IF NOT EXISTS idx_recordings_session ON recordings(session_id)",
+            "CREATE INDEX IF NOT EXISTS idx_recordings_created ON recordings(created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_recordings_mode ON recordings(processing_mode)",
+          ]
+        );
+      }
+      db.run("DROP INDEX IF EXISTS idx_recordings_project");
+      db.run("DROP TABLE IF EXISTS projects");
+    })();
+  } finally {
+    db.run("PRAGMA legacy_alter_table = OFF");
+    db.run("PRAGMA foreign_keys = ON");
+  }
+}
+
+function rebuildTable(
+  db: Database,
+  table: string,
+  createRebuilt: string,
+  columns: string[],
+  indexes: string[]
+): void {
+  const rebuilt = `${table}_rebuilt`;
+  const columnList = columns.join(", ");
+  db.run(`DROP TABLE IF EXISTS ${rebuilt}`);
+  db.run(createRebuilt);
+  db.run(`INSERT INTO ${rebuilt} (${columnList}) SELECT ${columnList} FROM ${table}`);
+  db.run(`DROP TABLE ${table}`);
+  db.run(`ALTER TABLE ${rebuilt} RENAME TO ${table}`);
+  for (const statement of indexes) db.run(statement);
+}
+
+function tableColumns(db: Database, table: string): string[] {
+  if (!tableExists(db, table)) return [];
+  const rows = db.query(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  return rows.map((row) => row.name);
+}
+
+function tableExists(db: Database, table: string): boolean {
+  const row = db
+    .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(table) as { name: string } | null;
+  return row !== null;
 }
 
 function ensureColumn(
@@ -172,12 +269,8 @@ function ensureColumn(
   column: string,
   definition: string
 ): void {
-  const rows = db.query(`PRAGMA table_info(${table})`).all() as {
-    name: string;
-  }[];
-  if (rows.some((row) => row.name === column)) {
-    return;
-  }
+  if (!tableExists(db, table)) return;
+  if (tableColumns(db, table).includes(column)) return;
   db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 

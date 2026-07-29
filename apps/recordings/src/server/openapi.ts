@@ -19,7 +19,6 @@ const recordingSchema = {
     language: { type: "string", nullable: true },
     tags: { type: "array", items: { type: "string" } },
     agent_id: { type: "string", nullable: true },
-    project_id: { type: "string", nullable: true },
     session_id: { type: "string", nullable: true },
     goal: { type: "string", nullable: true },
     role: { type: "string", nullable: true },
@@ -43,18 +42,6 @@ const agentSchema = {
   },
 } as const;
 
-const projectSchema = {
-  type: "object",
-  properties: {
-    id: { type: "string" },
-    name: { type: "string" },
-    path: { type: "string" },
-    description: { type: "string", nullable: true },
-    created_at: { type: "string" },
-    updated_at: { type: "string" },
-  },
-} as const;
-
 export function buildV1OpenApiDocument(version = VERSION) {
   return {
     openapi: "3.1.0",
@@ -72,7 +59,6 @@ export function buildV1OpenApiDocument(version = VERSION) {
       schemas: {
         Recording: recordingSchema,
         Agent: agentSchema,
-        Project: projectSchema,
         CreateRecordingInput: {
           type: "object",
           required: ["raw_text"],
@@ -88,7 +74,6 @@ export function buildV1OpenApiDocument(version = VERSION) {
             language: { type: "string" },
             tags: { type: "array", items: { type: "string" } },
             agent_id: { type: "string" },
-            project_id: { type: "string" },
             session_id: { type: "string" },
             goal: { type: "string" },
             role: { type: "string" },
@@ -106,15 +91,6 @@ export function buildV1OpenApiDocument(version = VERSION) {
             role: { type: "string" },
           },
         },
-        RegisterProjectInput: {
-          type: "object",
-          required: ["name", "path"],
-          properties: {
-            name: { type: "string" },
-            path: { type: "string" },
-            description: { type: "string" },
-          },
-        },
       },
     },
     security: [{ apiKey: [] }],
@@ -125,7 +101,6 @@ export function buildV1OpenApiDocument(version = VERSION) {
           summary: "List recordings",
           parameters: [
             { name: "agent_id", in: "query", schema: { type: "string" } },
-            { name: "project_id", in: "query", schema: { type: "string" } },
             { name: "session_id", in: "query", schema: { type: "string" } },
             { name: "processing_mode", in: "query", schema: { type: "string", enum: ["raw", "enhanced"] } },
             { name: "tags", in: "query", style: "form", explode: true, schema: { type: "array", items: { type: "string" } } },
@@ -290,66 +265,6 @@ export function buildV1OpenApiDocument(version = VERSION) {
               content: {
                 "application/json": {
                   schema: { type: "object", properties: { agent: { $ref: "#/components/schemas/Agent" } } },
-                },
-              },
-            },
-            "404": { description: "Not found" },
-          },
-        },
-      },
-      "/v1/projects": {
-        get: {
-          operationId: "listProjects",
-          summary: "List projects",
-          responses: {
-            "200": {
-              description: "List of projects",
-              content: {
-                "application/json": {
-                  schema: {
-                    type: "object",
-                    properties: {
-                      projects: { type: "array", items: { $ref: "#/components/schemas/Project" } },
-                      count: { type: "integer" },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-        post: {
-          operationId: "registerProject",
-          summary: "Register (upsert) a project",
-          requestBody: {
-            required: true,
-            content: {
-              "application/json": { schema: { $ref: "#/components/schemas/RegisterProjectInput" } },
-            },
-          },
-          responses: {
-            "201": {
-              description: "The project",
-              content: {
-                "application/json": {
-                  schema: { type: "object", properties: { project: { $ref: "#/components/schemas/Project" } } },
-                },
-              },
-            },
-          },
-        },
-      },
-      "/v1/projects/{id}": {
-        get: {
-          operationId: "getProject",
-          summary: "Get a project by id or path",
-          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-          responses: {
-            "200": {
-              description: "The project",
-              content: {
-                "application/json": {
-                  schema: { type: "object", properties: { project: { $ref: "#/components/schemas/Project" } } },
                 },
               },
             },

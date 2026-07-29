@@ -20,11 +20,9 @@ import type {
   CreateRecordingInput,
   RecordingFilter,
   Agent,
-  Project,
 } from "./types/index.js";
 import * as recordingsDb from "./db/recordings.js";
 import * as agentsDb from "./db/agents.js";
-import * as projectsDb from "./db/projects.js";
 import { saveFeedback as saveFeedbackLocal, type FeedbackInput } from "./db/feedback.js";
 import { resolveStorageClient, type StorageClient } from "./http/client.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -61,12 +59,6 @@ export interface Store {
   getAgent(idOrName: string): Promise<Agent | null>;
   listAgents(): Promise<Agent[]>;
   heartbeatAgent(idOrName: string): Promise<Agent | null>;
-  setAgentFocus(idOrName: string, projectId: string | null): Promise<Agent | null>;
-
-  // ── projects ──
-  registerProject(name: string, path: string, description?: string): Promise<Project>;
-  getProject(idOrPath: string): Promise<Project | null>;
-  listProjects(): Promise<Project[]>;
 
   // ── feedback ──
   saveFeedback(input: FeedbackInput): Promise<void>;
@@ -78,7 +70,6 @@ function listQuery(
   if (!filter) return {};
   return {
     agent_id: filter.agent_id,
-    project_id: filter.project_id,
     session_id: filter.session_id,
     processing_mode: filter.processing_mode,
     tags: filter.tags,
@@ -136,18 +127,6 @@ const localStore: Store = {
   },
   async heartbeatAgent(idOrName) {
     return withLocalStoreReaderLease(() => agentsDb.heartbeatAgent(idOrName));
-  },
-  async setAgentFocus(idOrName, projectId) {
-    return withLocalStoreReaderLease(() => agentsDb.setAgentFocus(idOrName, projectId));
-  },
-  async registerProject(name, path, description) {
-    return withLocalStoreReaderLease(() => projectsDb.registerProject(name, path, description));
-  },
-  async getProject(idOrPath) {
-    return withLocalStoreReaderLease(() => projectsDb.getProject(idOrPath));
-  },
-  async listProjects() {
-    return withLocalStoreReaderLease(() => projectsDb.listProjects());
   },
   async saveFeedback(input) {
     await withLocalStoreReaderLease(() => saveFeedbackLocal(input));
@@ -263,40 +242,6 @@ function apiStore(client: StorageClient): Store {
         if (error && typeof error === "object" && (error as { status?: number }).status === 404) return null;
         throw error;
       }
-    },
-    async setAgentFocus(idOrName, projectId) {
-      try {
-        const res = await client.transport.post<unknown>(`/agents/${encodeURIComponent(idOrName)}/focus`, { project_id: projectId });
-        return res ? unwrap<Agent>(res, "agent") : null;
-      } catch (error) {
-        if (error && typeof error === "object") {
-          const status = (error as { status?: number }).status;
-          if (status === 404) return null;
-          // A 400 means the project ref could not be resolved server-side.
-          // Surface the server's clean message ("project not found: X") instead
-          // of the generic "request failed -> 400".
-          if (status === 400) {
-            const body = (error as { body?: unknown }).body;
-            const msg = body && typeof body === "object" && typeof (body as { error?: unknown }).error === "string"
-              ? (body as { error: string }).error
-              : "invalid focus request";
-            throw new Error(msg);
-          }
-        }
-        throw error;
-      }
-    },
-    async registerProject(name, path, description) {
-      const res = await client.create<unknown>("projects", { name, path, description });
-      return unwrap<Project>(res, "project");
-    },
-    async getProject(idOrPath) {
-      const res = await client.get<unknown>("projects", idOrPath);
-      return res ? unwrap<Project>(res, "project") : null;
-    },
-    async listProjects() {
-      const { items } = await client.list<Project>("projects");
-      return items;
     },
     async saveFeedback(input) {
       await client.create<unknown>("feedback", input);

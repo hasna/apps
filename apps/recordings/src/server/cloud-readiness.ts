@@ -3,21 +3,17 @@ import type { PgAdapterAsync } from "../db/remote-storage.js";
 type ColumnSpec = Readonly<Record<string, readonly [dataType: string, nullable: boolean]>>;
 
 const REQUIRED_COLUMNS: Readonly<Record<string, ColumnSpec>> = {
-  projects: {
-    id: ["text", false], name: ["text", false], path: ["text", false],
-    description: ["text", true], created_at: ["text", false], updated_at: ["text", false],
-  },
   agents: {
     id: ["text", false], name: ["text", false], description: ["text", true],
     role: ["text", true], metadata: ["text", true], created_at: ["text", false],
-    last_seen_at: ["text", false], active_project_id: ["text", true],
+    last_seen_at: ["text", false],
   },
   recordings: {
     id: ["text", false], audio_path: ["text", true], raw_text: ["text", false],
     processed_text: ["text", true], processing_mode: ["text", false],
     model_used: ["text", false], enhancement_model: ["text", true],
     duration_ms: ["integer", true], language: ["text", true], tags: ["text", true],
-    agent_id: ["text", true], project_id: ["text", true], session_id: ["text", true],
+    agent_id: ["text", true], session_id: ["text", true],
     goal: ["text", true], role: ["text", true], task_list_id: ["text", true],
     machine_id: ["text", true], metadata: ["text", true], created_at: ["text", false],
   },
@@ -94,26 +90,14 @@ interface ConstraintSpec {
 }
 
 const REQUIRED_CONSTRAINTS: Readonly<Record<string, readonly ConstraintSpec[]>> = {
-  projects: [
-    { type: "p", columns: ["id"] },
-    { type: "u", columns: ["path"] },
-  ],
   agents: [
     { type: "p", columns: ["id"] },
     { type: "u", columns: ["name"] },
-    {
-      type: "f", columns: ["active_project_id"], referencedTable: "projects",
-      referencedColumns: ["id"], deleteAction: "n",
-    },
   ],
   recordings: [
     { type: "p", columns: ["id"] },
     {
       type: "f", columns: ["agent_id"], referencedTable: "agents",
-      referencedColumns: ["id"], deleteAction: "n",
-    },
-    {
-      type: "f", columns: ["project_id"], referencedTable: "projects",
       referencedColumns: ["id"], deleteAction: "n",
     },
   ],
@@ -145,7 +129,6 @@ interface UniqueIndexSpec {
 }
 
 const REQUIRED_UNIQUE_INDEXES: Readonly<Record<string, readonly UniqueIndexSpec[]>> = {
-  projects: [{ primary: true, columns: ["id"] }, { primary: false, columns: ["path"] }],
   agents: [{ primary: true, columns: ["id"] }, { primary: false, columns: ["name"] }],
   recordings: [{ primary: true, columns: ["id"] }],
   recording_tags: [{ primary: true, columns: ["recording_id", "tag"] }],
@@ -356,14 +339,6 @@ export async function assertCloudSchemaReady(
          has_table_privilege(current_user, 'public.agents', 'REFERENCES') OR
          has_any_column_privilege(current_user, 'public.agents', 'REFERENCES') OR
          has_table_privilege(current_user, 'public.agents', 'TRIGGER') AS has_extra_agents_privileges,
-       has_table_privilege(current_user, 'public.projects', 'SELECT') AND
-         has_table_privilege(current_user, 'public.projects', 'INSERT') AND
-         has_table_privilege(current_user, 'public.projects', 'UPDATE') AS can_projects,
-       has_table_privilege(current_user, 'public.projects', 'DELETE') OR
-         has_table_privilege(current_user, 'public.projects', 'TRUNCATE') OR
-         has_table_privilege(current_user, 'public.projects', 'REFERENCES') OR
-         has_any_column_privilege(current_user, 'public.projects', 'REFERENCES') OR
-         has_table_privilege(current_user, 'public.projects', 'TRIGGER') AS has_extra_projects_privileges,
        has_table_privilege(current_user, 'public.feedback', 'INSERT') AS can_feedback,
        has_table_privilege(current_user, 'public.feedback', 'SELECT') OR
          has_any_column_privilege(current_user, 'public.feedback', 'SELECT') OR

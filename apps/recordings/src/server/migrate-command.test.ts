@@ -48,7 +48,11 @@ describe("cloud migration command", () => {
     expect(apiKeysEnsured).toBe(true);
   });
 
-  test("a migration-17 database applies only migration 18 before validation", async () => {
+  test("a partially migrated database applies only the outstanding migrations", async () => {
+    const alreadyApplied = 18;
+    const outstanding = PG_MIGRATIONS.slice(alreadyApplied);
+    expect(outstanding.length).toBeGreaterThan(0);
+
     const executed: string[] = [];
     const recorded: number[] = [];
     const pg = {
@@ -56,11 +60,27 @@ describe("cloud migration command", () => {
         if (/insert into _pg_migrations/i.test(sql)) recorded.push(version!);
         return { changes: 1 };
       },
-      async all() { return Array.from({ length: 18 }, (_, version) => ({ version })); },
+      async all() {
+        return Array.from({ length: alreadyApplied }, (_, version) => ({ version }));
+      },
       async exec(sql: string) { executed.push(sql); },
     } as unknown as PgAdapterAsync;
     await applyRecordedCloudMigrations(pg, async () => {});
-    expect(executed).toEqual([PG_MIGRATIONS[18]!]);
-    expect(recorded).toEqual([18]);
+    expect(executed).toEqual(outstanding);
+    expect(recorded).toEqual(
+      outstanding.map((_, index) => alreadyApplied + index),
+    );
+  });
+
+  test("the projects schema is dropped forward-only, with no compatibility view", () => {
+    const dropSteps = PG_MIGRATIONS.filter((ddl) => /projects|project_id/i.test(ddl));
+    expect(dropSteps.length).toBeGreaterThan(0);
+    for (const step of dropSteps) {
+      expect(step).toMatch(/drop/i);
+    }
+    expect(PG_MIGRATIONS.join("\n")).not.toMatch(/create\s+(or\s+replace\s+)?view/i);
+    // Nothing recreates the retired table or column after the drops.
+    const lastDrop = PG_MIGRATIONS.findLastIndex((ddl) => /drop table if exists projects/i.test(ddl));
+    expect(lastDrop).toBe(PG_MIGRATIONS.length - 1);
   });
 });

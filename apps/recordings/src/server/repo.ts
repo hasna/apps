@@ -12,13 +12,12 @@
  * stubs — every operation executes real SQL.
  */
 import type { PgAdapterAsync } from "../db/remote-storage.js";
-import { ProjectNotFoundError, ValidationError } from "../db/errors.js";
+import { ValidationError } from "../db/errors.js";
 import type {
   Recording,
   CreateRecordingInput,
   RecordingFilter,
   Agent,
-  Project,
 } from "../types/index.js";
 import {
   recordingCreateFingerprint,
@@ -26,9 +25,9 @@ import {
 } from "../lib/recording-create-identity.js";
 import { DEFAULT_TRANSCRIPTION_MODEL } from "../lib/config.js";
 
-// Re-exported so `/v1` route code can `import * as repo` and reference
-// `repo.ProjectNotFoundError` when mapping a bad focus ref to a clean 400.
-export { ProjectNotFoundError, ValidationError };
+// Re-exported so `/v1` route code can `import * as repo` and reference the
+// shared domain errors when mapping them to clean HTTP statuses.
+export { ValidationError };
 
 export class IdempotencyConflictError extends Error {
   constructor() {
@@ -68,7 +67,6 @@ function parseRecording(row: Record<string, unknown>): Recording {
     language: (row["language"] as string) || null,
     tags: parseJson<string[]>(row["tags"], []),
     agent_id: (row["agent_id"] as string) || null,
-    project_id: (row["project_id"] as string) || null,
     session_id: (row["session_id"] as string) || null,
     goal: (row["goal"] as string) || null,
     role: (row["role"] as string) || null,
@@ -88,17 +86,6 @@ function parseAgent(row: Record<string, unknown>): Agent {
     metadata: parseJson<Record<string, unknown>>(row["metadata"], {}),
     created_at: row["created_at"] as string,
     last_seen_at: row["last_seen_at"] as string,
-  };
-}
-
-function parseProject(row: Record<string, unknown>): Project {
-  return {
-    id: row["id"] as string,
-    name: row["name"] as string,
-    path: row["path"] as string,
-    description: (row["description"] as string) || null,
-    created_at: row["created_at"] as string,
-    updated_at: row["updated_at"] as string,
   };
 }
 
@@ -155,8 +142,8 @@ export async function createRecording(
     }
 
     // Resolve references only after the scoped idempotency lock and winner recheck. A
-    // concurrent retry must not mutate an agent or fail a changed project ref
-    // after another request has already committed this logical recording.
+    // concurrent retry must not mutate an agent after another request has
+    // already committed this logical recording.
     let resolvedAgentId: string | null = null;
     if (input.agent_id) {
       const agent = await getAgent(transaction, input.agent_id);
@@ -164,16 +151,10 @@ export async function createRecording(
         ? agent.id
         : (await registerAgent(transaction, input.agent_id)).id;
     }
-    let resolvedProjectId: string | null = null;
-    if (input.project_id) {
-      const project = await getProject(transaction, input.project_id);
-      if (!project) throw new ProjectNotFoundError(input.project_id);
-      resolvedProjectId = project.id;
-    }
 
     const insertResult = await transaction.run(
-    `INSERT INTO recordings (id, audio_path, raw_text, processed_text, processing_mode, model_used, enhancement_model, duration_ms, language, tags, agent_id, project_id, session_id, goal, role, task_list_id, machine_id, metadata)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO recordings (id, audio_path, raw_text, processed_text, processing_mode, model_used, enhancement_model, duration_ms, language, tags, agent_id, session_id, goal, role, task_list_id, machine_id, metadata)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO NOTHING`,
     id,
     input.audio_path || null,
@@ -186,7 +167,6 @@ export async function createRecording(
     input.language || null,
     JSON.stringify(input.tags || []),
     resolvedAgentId,
-    resolvedProjectId,
     input.session_id || null,
     input.goal || null,
     input.role || null,
@@ -287,10 +267,6 @@ function buildRecordingWhere(filter?: RecordingFilter): {
   if (filter?.agent_id) {
     conditions.push("agent_id = ?");
     params.push(filter.agent_id);
-  }
-  if (filter?.project_id) {
-    conditions.push("project_id = ?");
-    params.push(filter.project_id);
   }
   if (filter?.session_id) {
     conditions.push("session_id = ?");
@@ -446,97 +422,6 @@ export async function heartbeatAgent(
     agent.id,
   );
   return getAgent(pg, agent.id);
-}
-
-export async function setAgentFocus(
-  pg: PgAdapterAsync,
-  idOrName: string,
-  projectId: string | null,
-): Promise<Agent | null> {
-  const agent = await getAgent(pg, idOrName);
-  if (!agent) return null;
-  // Resolve the project reference (full UUID, truncated prefix, path, or name)
-  // to the real primary key BEFORE writing, so the truncated id the tools
-  // surface works and an unknown ref fails cleanly instead of tripping the
-  // active_project_id foreign key and leaking the raw DB error.
-  let resolvedProjectId: string | null = null;
-  if (projectId) {
-    const project = await getProject(pg, projectId);
-    if (!project) throw new ProjectNotFoundError(projectId);
-    resolvedProjectId = project.id;
-  }
-  await pg.run(
-    "UPDATE agents SET active_project_id = ?, last_seen_at = ? WHERE id = ?",
-    resolvedProjectId,
-    new Date().toISOString(),
-    agent.id,
-  );
-  return getAgent(pg, agent.id);
-}
-
-// ── Projects ────────────────────────────────────────────────────────────────
-
-export async function registerProject(
-  pg: PgAdapterAsync,
-  name: string,
-  path: string,
-  description?: string | null,
-): Promise<Project> {
-  if (!name || !path) throw new ValidationError("name and path are required");
-  const now = new Date().toISOString();
-  const existing = (await pg.get("SELECT * FROM projects WHERE path = ?", path)) as
-    | Record<string, unknown>
-    | null;
-  if (existing) {
-    await pg.run("UPDATE projects SET updated_at = ? WHERE id = ?", now, existing["id"]);
-    return (await getProject(pg, existing["id"] as string))!;
-  }
-  const id = crypto.randomUUID();
-  await pg.run(
-    "INSERT INTO projects (id, name, path, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-    id,
-    name,
-    path,
-    description || null,
-    now,
-    now,
-  );
-  return (await getProject(pg, id))!;
-}
-
-export async function getProject(
-  pg: PgAdapterAsync,
-  idOrPath: string,
-): Promise<Project | null> {
-  // Resolve in the same widening order the recordings/agents lookups use so a
-  // full id, path, name, or truncated id-prefix (what list/register surface)
-  // all resolve to the same row.
-  let row = (await pg.get("SELECT * FROM projects WHERE id = ?", idOrPath)) as
-    | Record<string, unknown>
-    | null;
-  if (!row) {
-    row = (await pg.get("SELECT * FROM projects WHERE path = ?", idOrPath)) as
-      | Record<string, unknown>
-      | null;
-  }
-  if (!row) {
-    row = (await pg.get("SELECT * FROM projects WHERE name = ?", idOrPath)) as
-      | Record<string, unknown>
-      | null;
-  }
-  if (!row && idOrPath) {
-    row = (await pg.get("SELECT * FROM projects WHERE id LIKE ? || '%'", idOrPath)) as
-      | Record<string, unknown>
-      | null;
-  }
-  return row ? parseProject(row) : null;
-}
-
-export async function listProjects(pg: PgAdapterAsync): Promise<Project[]> {
-  const rows = (await pg.all(
-    "SELECT * FROM projects ORDER BY updated_at DESC",
-  )) as Record<string, unknown>[];
-  return rows.map(parseProject);
 }
 
 // ── Feedback ──────────────────────────────────────────────────────────────────

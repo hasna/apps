@@ -141,40 +141,36 @@ describe("recordings CLI", () => {
     expect(JSON.parse(stdout)).toEqual([]);
   });
 
-  test("project register returns a canonical local Store id", async () => {
+  test("the retired project commands are gone", async () => {
     const home = join(tmpdir(), `open-recordings-cli-project-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     tempDirs.push(home);
     mkdirSync(home, { recursive: true });
-    const proc = Bun.spawn(
-      [
-        process.execPath,
-        cliEntry,
-        "--json",
-        "project",
-        "register",
-        "--name",
-        "Desktop App",
-        "--path",
-        "recordings-app://projects/desktop",
-      ],
-      {
+
+    for (const args of [["project", "register", "--name", "x", "--path", "y"], ["projects"]]) {
+      const proc = Bun.spawn([process.execPath, cliEntry, "--json", ...args], {
         cwd: home,
         env: isolatedCliEnv(home),
         stdout: "pipe",
         stderr: "pipe",
-      },
-    );
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ]);
+      });
+      const [stderr, exitCode] = await Promise.all([
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      expect(exitCode).not.toBe(0);
+      expect(stderr).toContain("unknown command");
+    }
 
-    expect(exitCode).toBe(0);
-    expect(stderr).toBe("");
-    const project = JSON.parse(stdout) as { id: string; name: string; path: string };
-    expect(project.id).toHaveLength(36);
-    expect(project).toMatchObject({ name: "Desktop App", path: "recordings-app://projects/desktop" });
+    const help = Bun.spawn([process.execPath, cliEntry, "--help"], {
+      cwd: home,
+      env: isolatedCliEnv(home),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const helpText = await new Response(help.stdout).text();
+    await help.exited;
+    expect(helpText).not.toContain("--project");
+    expect(helpText).not.toContain("projects");
   });
 
   test("--json app status reports package installer paths", async () => {
@@ -1023,7 +1019,7 @@ describe("recordings CLI", () => {
     }
   });
 
-  test("--json save-text persists degraded-sync text without an unsafe project id", async () => {
+  test("--json save-text persists degraded-sync realtime text", async () => {
     const home = join(tmpdir(), `open-recordings-cli-save-text-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     tempDirs.push(home);
     mkdirSync(home, { recursive: true });

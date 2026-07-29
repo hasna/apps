@@ -7,7 +7,6 @@ export type {
   PostProcessingMode,
   RealtimeTranscriptionDelay,
   Agent,
-  Project,
   RecordingsConfig,
   TranscriptionResult,
   EnhancementResult,
@@ -96,8 +95,6 @@ export type {
   RecordingsV1ClientOptions,
   RecordingsV1Recording,
   RecordingsV1Agent,
-  RecordingsV1Project,
   RecordingsV1CreateRecordingInput,
   RecordingsV1RegisterAgentInput,
-  RecordingsV1RegisterProjectInput,
 } from "./sdk/index.js";

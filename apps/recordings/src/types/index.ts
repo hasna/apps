@@ -12,7 +12,6 @@ export interface Recording {
   language: string | null;
   tags: string[];
   agent_id: string | null;
-  project_id: string | null;
   session_id: string | null;
   goal: string | null;
   role: string | null;
@@ -37,7 +36,6 @@ export interface CreateRecordingInput {
   language?: string;
   tags?: string[];
   agent_id?: string;
-  project_id?: string;
   session_id?: string;
   goal?: string;
   role?: string;
@@ -48,7 +46,6 @@ export interface CreateRecordingInput {
 
 export interface RecordingFilter {
   agent_id?: string;
-  project_id?: string;
   session_id?: string;
   processing_mode?: ProcessingMode;
   tags?: string[];
@@ -69,17 +66,6 @@ export interface Agent {
   metadata: Record<string, unknown>;
   created_at: string;
   last_seen_at: string;
-}
-
-// ── Project Types ───────────────────────────────────────────────────────────
-
-export interface Project {
-  id: string;
-  name: string;
-  path: string;
-  description: string | null;
-  created_at: string;
-  updated_at: string;
 }
 
 // ── Config Types ────────────────────────────────────────────────────────────
