@@ -158,6 +158,21 @@ export const SQLITE_MIGRATION_V1_CHECKSUM = `sha256:${createHash("sha256")
   .update(SQLITE_MIGRATION_V1, "utf8")
   .digest("hex")}`;
 
+/**
+ * NOTE ON RETIRED VOCABULARY — do not "clean up" the `deployment_mode` column below.
+ *
+ * Deployment modes are removed from every live switch in this package, but this
+ * column is frozen into already-shipped schema. The SQL text below is hashed into
+ * `SQLITE_MIGRATION_V2_CHECKSUM`, which is persisted per version in
+ * `accounts_schema_migrations` and re-verified on every open (see `sqlite.ts`
+ * doctor and migrate). Editing a single byte — including adding a comment inside
+ * the template literal — makes every existing database fail with
+ * `SCHEMA_CHECKSUM_MISMATCH`.
+ *
+ * The column selects no behaviour: nothing branches on it. Renaming it to
+ * `data_backend` requires a V3 migration that also rewrites the stored
+ * `configuration_attestation_digest`, whose preimage is noted in `sqlite.ts`.
+ */
 export const SQLITE_MIGRATION_V2 = `
 ALTER TABLE access_methods RENAME TO account_lanes;
 

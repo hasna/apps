@@ -195,7 +195,12 @@ export interface InternalHttpService {
 }
 
 export interface AccountsHttpDeploymentConfig {
-  readonly mode: "self_hosted";
+  /**
+   * The server's own internal storage. A capacity server serves clients over
+   * HTTP and holds its state in PostgreSQL; this replaces the retired
+   * deployment-mode switch.
+   */
+  readonly dataBackend: "postgresql";
   readonly identityRealm: string;
   readonly organizationRef: string;
   readonly publicAudience: string;

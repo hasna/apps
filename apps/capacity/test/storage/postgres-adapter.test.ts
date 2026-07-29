@@ -24,12 +24,12 @@ const authority = {
 };
 
 describe("Postgres adapter boundary", () => {
-  test("is implemented and wired for self-hosted conformance", () => {
+  test("is implemented and wired for Postgres data-backend conformance", () => {
     expect(POSTGRES_ADAPTER_STATUS_V1).toEqual({
       adapter: "postgres",
       implemented: true,
       conformanceClaim: true,
-      target: "self_hosted",
+      target: "postgresql",
     });
     expect(POSTGRES_ACCOUNTS_CONTRACT_SHA256).toBe(ACCOUNTS_V1_CONTRACT_SHA256);
   });

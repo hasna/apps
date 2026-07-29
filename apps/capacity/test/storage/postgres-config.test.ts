@@ -7,7 +7,7 @@ import {
 } from "../../src/storage/postgres-config";
 
 describe("Postgres connection policy", () => {
-  test("requires verify-full TLS for a self-hosted network endpoint", () => {
+  test("requires verify-full TLS for a networked Postgres endpoint", () => {
     const normalized = normalizePostgresConnection({
       url: "postgresql://accounts@example.internal/accounts?sslmode=verify-full",
     });

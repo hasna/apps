@@ -32,9 +32,14 @@ import {
 } from "../serialization/json";
 import type { MutationContext } from "../storage/repository";
 import {
+  RETIRED_DEPLOYMENT_MODE_KEYS,
+  retiredDeploymentModeError,
+} from "../storage-selection";
+import {
   ACCOUNTS_HTTP_SCOPES,
   HTTP_ENTITY_ROUTES,
   type AccountsAuthenticatedPrincipal,
+  type AccountsHttpDeploymentConfig,
   type AccountsHttpHandlerOptions,
   type AccountsHttpScope,
   type HttpEntityRoute,
@@ -186,11 +191,24 @@ export function createAccountsHttpHandler(options: AccountsHttpHandlerOptions): 
 }
 
 function validateDeployment(options: AccountsHttpHandlerOptions): void {
-  const deployment = options.deployment;
-  if (deployment.mode !== "self_hosted") {
-    throw new AccountsError("VALIDATION_FAILED", "HTTP requires explicit self_hosted deployment", {
-      details: { field: "deployment.mode" },
-    });
+  const deployment = options.deployment as AccountsHttpDeploymentConfig & Record<string, unknown>;
+  // A retired deployment-mode key is refused rather than translated, so a stale
+  // caller fails loudly instead of running with an unvalidated configuration.
+  for (const key of RETIRED_DEPLOYMENT_MODE_KEYS) {
+    if (Object.hasOwn(deployment, key)) {
+      throw retiredDeploymentModeError(
+        key,
+        deployment[key],
+        'deployment.dataBackend: "postgresql"',
+      );
+    }
+  }
+  if (deployment.dataBackend !== "postgresql") {
+    throw new AccountsError(
+      "VALIDATION_FAILED",
+      'The HTTP server requires an explicit dataBackend: "postgresql"',
+      { details: { field: "dataBackend" } },
+    );
   }
   for (const [field, value] of [
     ["identityRealm", deployment.identityRealm],
