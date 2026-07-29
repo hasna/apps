@@ -17,13 +17,14 @@ Discovery should capture the source URL, license, supported tasks, metrics, runn
 
 ## Promotion States
 
-- `planned`: candidate identified, no adapter contract yet
-- `dry-run`: manifest and command plan exist; no external execution
-- `manual-record`: users can record results produced elsewhere
-- `experimental`: runnable only in controlled local sandboxes
-- `stable`: repeatable runner, parser, safety gates, and evidence coverage are validated
+- `planned`
+- `candidate`
+- `dry-run`
+- `runnable`
+- `verified`
+- `deprecated`
 
-Current package behavior supports bundled `dry-run` and `manual-record` paths.
+These are the exact values accepted by `adapter.status` in `bench.manifest.v1`. All 13 bundled manifests currently use `planned`. Separately, every built-in adapter advertises the `dry-run` and `manual-record` execution modes. The status and execution-mode fields are related but not interchangeable.
 
 ## Minimum Metadata
 

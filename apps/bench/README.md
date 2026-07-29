@@ -15,11 +15,12 @@ It complements `@hasna/evals`: evals scores app behavior; bench orchestrates ext
 - Emits canonical `@hasna/contracts` JSON additively with `--contract --json` for dry-run plans, recorded runs, fixture runs, and result details.
 - Redacts raw credential-shaped values before persistence and rejects unsafe model/provider/metric/artifact metadata.
 - Enforces fail-closed fixture gates for secret refs, required network, sandbox requirements, high-cost budgets, token limits, and runtime limits.
-- Exposes the same core capabilities through CLI, SDK, and MCP tools.
+- Exposes discovery, validation, planning, result inspection, comparison, reporting, and diagnostics through CLI, SDK, and MCP surfaces. Recording is available through the CLI and SDK; fixture-safe recording is available through the CLI and exported runner API, but neither recording path is exposed as an MCP tool.
 
 ## Current Limits
 
 - Built-in adapters are dry-run/manual-record only; real external benchmark execution is intentionally not enabled yet.
+- Fixture-safe recording is enabled only for `lm-evaluation-harness`, `promptfoo`, `ragas`, and `llmperf`; it normalizes caller-supplied metrics and does not invoke those harnesses.
 - The seed registry is bundled at package build time. User registry ingestion and remote discovery crawlers are planned but not yet implemented.
 - Large artifact upload is represented by local artifact metadata. Future integrations should move large blobs to `@hasna/files` or another artifact store.
 - MCP tools inspect registry/results and validate in-request manifest objects; they do not execute local benchmark files.
@@ -32,7 +33,7 @@ bun install -g @hasna/bench
 
 ## Quick Start
 
-Commands that call `doctor`, `runs record`, or `runs fixture` create local SQLite/JSONL state. By default that state is under `~/.hasna/bench`. Use an isolated store when trying the package:
+Storage-backed commands (`runs record`, `runs fixture`, `results list`, `results show`, `compare`, `report`, and `doctor`) initialize local directories and SQLite state. Recording commands also append JSONL result segments. Registry inspection, manifest validation, and `plan` do not open local storage. By default state is under `~/.hasna/bench`; use an isolated store when trying the package:
 
 ```bash
 export HASNA_BENCH_HOME="$(mktemp -d)"
@@ -40,7 +41,6 @@ export HASNA_BENCH_DB_PATH="$HASNA_BENCH_HOME/bench.db"
 
 bench suites list
 bench suites show lm-evaluation-harness --json
-bench suites list --json
 bench plan lm-evaluation-harness --model example/model --provider example-provider --json
 bench results list --json
 bench report --json
@@ -58,7 +58,7 @@ bench plan lm-evaluation-harness --model example/model --provider example-provid
 bench results show <run-id> --json --contract
 ```
 
-`--contract --json` is additive: the response includes both `legacy` bench output and canonical `contracts` output validated through `@hasna/contracts`. The canonical contract evidence refs use portable `artifact://bench/...` URIs. The `legacy` object preserves existing bench JSON and may include local storage paths such as result segment files, so share the `contracts` object when a portable or machine-neutral payload is needed. The local `bench.manifest.v1` and `bench.evidence.v1` envelopes are still supported, but they are legacy bench-owned shapes pending the namespace decision that `hasna.*` schema ids are minted only by `@hasna/contracts`.
+`--contract` is supported by `plan`, `runs record`, `runs fixture`, and `results show`, and it requires `--json`. The response includes both `legacy` bench output and canonical `contracts` output validated through `@hasna/contracts`. Canonical evidence refs use portable `artifact://bench/...` URIs. The `legacy` object preserves existing bench JSON and may include local storage paths such as result segment files, so share the `contracts` object when a portable or machine-neutral payload is needed. The local `bench.manifest.v1` and `bench.evidence.v1` envelopes remain supported legacy bench-owned shapes; `hasna.*` schema ids are minted only by `@hasna/contracts`.
 
 ## Discovery Model
 
@@ -75,9 +75,9 @@ See [docs/discovery.md](docs/discovery.md) for how candidate benchmarks are foun
 
 ## Data Directory
 
-Local data is stored under `~/.hasna/bench/`.
+Local data defaults to `~/.hasna/bench/`: `bench.db`, `runs/<run-id>/results.jsonl`, and `artifacts/`.
 
-Use `HASNA_BENCH_HOME` or `HASNA_BENCH_DB_PATH` to isolate test stores.
+`HASNA_BENCH_HOME` changes the root used for the database, run segments, and artifacts. `HASNA_BENCH_DB_PATH` overrides only the SQLite path; run segments and artifacts still use `HASNA_BENCH_HOME`.
 
 ## Current Status
 

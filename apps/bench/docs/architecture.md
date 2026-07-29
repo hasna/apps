@@ -14,7 +14,7 @@
 
 Default root: `~/.hasna/bench`.
 
-Initial layout:
+Current layout:
 
 ```text
 ~/.hasna/bench/
@@ -36,7 +36,7 @@ Storage hardening rules:
 - One raw result segment record is capped at 1 MiB by default; large raw outputs should be stored as artifacts.
 - Artifact paths are normalized and must remain inside the bench store.
 
-Initial tables:
+Current tables:
 
 - `registries`
 - `benchmarks`
@@ -64,7 +64,7 @@ Every built-in suite is parsed through legacy `bench.manifest.v1` at package loa
 
 ## Adapters
 
-Adapters are declarative in this slice. Each adapter records install metadata, supported execution modes, a safe sample command, expected outputs, parse mode, safety metadata, and the metrics it can project. `bench plan` and `bench_plan` return those dry-run plans without executing external code.
+Adapters are declarative in this slice. Each adapter records install metadata, supported execution modes, a safe sample command, expected outputs, parse mode, safety metadata, and the metrics it can project. `bench plan` and the MCP tool `bench_plan` return those dry-run plans without executing external code. Every bundled manifest currently has `adapter.status: planned`, while the adapter objects advertise `dry-run` and `manual-record` execution modes.
 
 Adapter execution modes:
 
@@ -74,7 +74,7 @@ Adapter execution modes:
 
 ## Safety And Evidence
 
-Runnable paths fail closed unless license metadata is explicit and the caller satisfies the benchmark's safety metadata. Secret-bearing benchmarks accept only secret reference names such as `OPENAI_API_KEY`, never raw credential values. Network, sandbox, high-cost, token, and runtime limits are carried as explicit run policy.
+Fixture-safe recording fails closed unless license metadata is explicit and the caller satisfies the benchmark's safety metadata. Secret-bearing benchmarks accept only secret reference names such as `OPENAI_API_KEY`, never raw credential values. Network and sandbox acknowledgements plus high-cost, token, and runtime limits are carried as explicit fixture policy. Manual `runs record` persists supplied results but does not apply the fixture safety gate.
 
 Fixture-safe runs do not execute external benchmark code. They normalize caller-supplied metric payloads, redact sensitive evidence fields before append-only storage, persist a legacy `bench.evidence.v1` manifest, and index each segment by offset, length, and SHA-256.
 
@@ -88,4 +88,4 @@ Low-level storage helpers also protect evidence:
 
 ## MCP Boundary
 
-`bench-mcp` exposes registry, validation, planning, result inspection, comparison, report, and doctor tools over stdio. The MCP server validates manifest objects supplied in the request. It intentionally does not read arbitrary local manifest paths or run benchmark commands.
+`bench-mcp` exposes registry, validation, planning, result inspection, comparison, report, and doctor tools over stdio. The MCP server validates manifest objects supplied in the request. It intentionally does not read arbitrary local manifest paths, record results, emit additive contract bundles, or run benchmark commands.

@@ -24,6 +24,8 @@ bench suites show lm-evaluation-harness --json
 bench manifest validate examples/benchmark.valid.json --json
 bench plan lm-evaluation-harness --model example/model --provider example-provider --json
 bench runs record lm-evaluation-harness --model example/model --provider example-provider --input examples/result-record.json --json
+bench results list --json
+bench report --json
 bench doctor --json
 bench-mcp --help
 ```
@@ -54,5 +56,4 @@ Before commit or push, run the mandatory staged-files secret scan from the works
 
 - Do not claim real benchmark execution until an isolated runner exists.
 - Do not bypass adversarial reviews for safety, docs, publish, or install tasks.
-- Keep Todos tasks updated one by one.
 - Preserve unrelated user changes in the worktree.

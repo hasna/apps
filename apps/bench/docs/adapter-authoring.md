@@ -1,6 +1,6 @@
 # Adapter Authoring
 
-Adapters describe how open-bench would run and parse an external benchmark. In this release, adapters are declarative and dry-run safe; they do not execute external benchmark code.
+Adapters describe how open-bench would run and parse an external benchmark. In this release, built-in adapters are declarative and advertise `dry-run` and `manual-record`; they do not execute external benchmark code. A separate fixture-safe runner can normalize caller-supplied results for `lm-evaluation-harness`, `promptfoo`, `ragas`, and `llmperf` without invoking those harnesses.
 
 ## Adapter Contract
 
@@ -23,10 +23,12 @@ Use fail-closed metadata:
 - Network-required runners must set `runner.requiresNetwork`.
 - Generated-code, browser, Docker, or repository-test runners must require sandboxing.
 - Provider-calling benchmarks must declare `requiresSecrets`.
-- High-cost benchmarks must require an explicit `maxCostUsd` limit.
+- Fixture-safe runs for high-cost benchmarks must receive an explicit `maxCostUsd` limit.
 - Expected artifacts should be specific enough to support checksums and parser tests.
 
 Never include credential values in adapter commands, examples, test fixtures, docs, or evidence.
+
+The CLI accepts these policy acknowledgements only on `bench runs fixture`: repeatable `--secret-ref <env>`, `--network`, `--sandbox`, `--max-cost-usd <usd>`, `--max-input-tokens <tokens>`, `--max-output-tokens <tokens>`, and `--max-runtime-ms <ms>`. They govern fixture evidence and do not enable external execution.
 
 ## Parser Requirements
 

@@ -1,24 +1,16 @@
 # Results Format
 
-The first result format will normalize external benchmark outputs into stable records:
+Local results are split between SQLite projections and append-only JSONL events. A run stores its benchmark and immutable manifest version, model/provider/route metadata, status, labels, and timestamps. Related tables store attempts, metrics, provider usage, artifact metadata, and result-segment indexes.
 
-- suite id, schema version, and immutable manifest version
-- run id and attempt id
-- model/provider/route metadata
-- metrics and score values
-- latency, token, and cost fields when available
-- artifact references and checksums
-- safety/license/sandbox/source metadata
-- evidence manifests with redacted fixture payload hashes and safety gate results
-- parser warnings and raw-output pointers
+`bench runs record` creates one completed run and attempt, records declared metrics and optional provider usage, and appends one redacted event. The event type defaults to `manual-record` but can be supplied through the SDK. `bench runs fixture` creates the same run/attempt projections, records normalized declared metrics and a provider-usage marker, and appends both `fixture-result` and `evidence-manifest` events.
 
 Large raw outputs should live outside SQLite. SQLite stores metadata, indexes, hashes, and artifact pointers.
 
 Raw segment records are append-only JSONL. Each indexed segment stores the byte offset, byte length, and SHA-256 of the exact JSONL line. A single segment event is capped at 1 MiB by default so oversized raw output is forced into artifact storage instead of SQLite-indexed event payloads.
 
-Fixture-safe wrapper runs write two evidence events: a redacted `fixture-result` event and a legacy `bench.evidence.v1` manifest. Credential values are never accepted on the command line; callers pass environment variable names with `--secret-ref`.
+Fixture-safe wrapper runs write two evidence events: a redacted `fixture-result` event and a legacy `bench.evidence.v1` manifest. Callers pass environment variable names with repeatable `--secret-ref`; values that are not environment-variable names or look like raw secrets fail the fixture safety gate.
 
-`bench.evidence.v1` is a bench-owned legacy envelope. Canonical `@hasna/contracts` output is available additively with `--contract --json`, which maps result segments and legacy evidence into `hasna.evidence_ref.v1`, `hasna.proof_bundle.v1`, `hasna.work_run.v1`, and `hasna.cost_estimate.v1`. Contract evidence URIs use `artifact://bench/...` identifiers instead of machine-specific local paths. In the same additive response, `legacy` preserves the existing bench result JSON and can still include local segment paths; use `contracts` for portable evidence references.
+`bench.evidence.v1` is a bench-owned legacy envelope. Canonical `@hasna/contracts` output is available additively from `bench plan`, `bench runs record`, `bench runs fixture`, and `bench results show` when both `--contract` and `--json` are present. Result mappings can include `hasna.evidence_ref.v1`, `hasna.proof_bundle.v1`, `hasna.work_run.v1`, and `hasna.cost_estimate.v1`; plan mappings emit `hasna.validation_plan.v1`. A cost estimate is emitted only when provider usage includes `costUsd`. Contract evidence URIs use `artifact://bench/...` identifiers instead of machine-specific local paths. In the same additive response, `legacy` preserves the existing bench result JSON and can still include local segment paths; use `contracts` for portable evidence references.
 
 `bench.evidence.v1` includes:
 
