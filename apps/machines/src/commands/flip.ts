@@ -1,8 +1,8 @@
 /**
- * Fleet env-flip mechanism (API-client / self-hosted mode).
+ * Fleet env-flip mechanism (local store <-> hosted API client).
  *
- * Coordinates flipping an @hasna OSS app's runtime storage mode across the
- * fleet from local (on-box sqlite/json) to **self_hosted** (the app's cloud
+ * Coordinates flipping an @hasna OSS app's client backend across the
+ * fleet from local (on-box sqlite/json) to **api** (the app's hosted
  * API at https://<app>.<fleet-domain>) — and back — by:
  *   1. writing a per-app fleet env file on each target machine,
  *   2. wiring that env file into the app's service manager (systemd / launchd),
@@ -38,14 +38,24 @@
 
 import type { FleetManifest, MachinePlatform } from "../types.js";
 
-export type FlipMode = "self_hosted" | "local";
+export type FlipMode = "api" | "local";
+
+/** Retired deployment-mode words: rejected loudly, never remapped. */
+const RETIRED_FLIP_MODE_WORDS = new Set(["self_hosted", "self-hosted", "remote", "hybrid"]);
 
 /** Normalize user-facing mode aliases to the canonical FlipMode. */
 export function normalizeFlipMode(value?: string): FlipMode {
-  const v = (value ?? "self_hosted").trim().toLowerCase();
+  const v = (value ?? "api").trim().toLowerCase();
   if (v === "local" || v === "revert" || v === "off") return "local";
-  // remote/cloud/api/on all mean the sanctioned self-hosted API client mode.
-  return "self_hosted";
+  if (RETIRED_FLIP_MODE_WORDS.has(v)) {
+    // Deployment modes were removed (owner directive 2026-07-29). Remapping
+    // the old word would keep it alive in every operator's muscle memory.
+    throw new Error(
+      `"${value}" is a retired deployment-mode word. Use --mode api (route the client to the hosted API) or --mode local (revert to the on-box store).`,
+    );
+  }
+  // cloud/api/on all mean the sanctioned hosted-API client mode.
+  return "api";
 }
 
 /** Per-app fleet-flip profile. Add a new app by adding an entry here. */
@@ -67,10 +77,10 @@ export interface FlipAppSpec {
   /** Args passed to the CLI to emit redacted JSON storage status. */
   statusArgs: string;
   /**
-   * Extra env lines (KEY=VALUE) applied only in self_hosted mode. Values here
+   * Extra env lines (KEY=VALUE) applied only in api mode. Values here
    * are non-secret literals only (e.g. shadow flags). Never a secret/DSN.
    */
-  extraSelfHostedEnv?: Record<string, string>;
+  extraApiEnv?: Record<string, string>;
   /**
    * When true this app requires a passing freeze-check before any flip
    * (coordination stores: drain the dual-write shadow to divergence==0 before
@@ -82,7 +92,7 @@ export interface FlipAppSpec {
 }
 
 /**
- * All 25 @hasna OSS apps that expose a self-hosted API at <app>.<fleet-domain>.
+ * All 25 @hasna OSS apps that expose a hosted API at <app>.<fleet-domain>.
  * Coordination hot stores are freeze-gated (drain shadow before atomic flip).
  */
 const ALL_APPS = [
@@ -115,16 +125,16 @@ const ALL_APPS = [
 
 /**
  * Coordination stores dual-write to a shadow before the atomic cutover; a flip
- * to self_hosted must be preceded by a passing freeze-check (drain shadow to
+ * to api must be preceded by a passing freeze-check (drain shadow to
  * divergence==0) so machines never split-brain.
  */
 const FREEZE_REQUIRED_APPS = new Set(["todos", "loops", "mementos", "conversations"]);
 
-/** Per-app non-secret env overlays applied only in self_hosted mode. */
-const EXTRA_SELF_HOSTED_ENV: Record<string, Record<string, string>> = {};
+/** Per-app non-secret env overlays applied only in api mode. */
+const EXTRA_API_ENV: Record<string, Record<string, string>> = {};
 
 /**
- * Fleet API domain suffix used to build each app's default self-hosted URL.
+ * Fleet API domain suffix used to build each app's default hosted-API URL.
  * REQUIRED for a real deployment: set `HASNA_FLEET_API_DOMAIN` to the
  * operator's own private root domain before running fleet-flip for real. This
  * published package never bakes in a real internal hostname — absent that env
@@ -148,8 +158,8 @@ function defineFlipApp(app: string): FlipAppSpec {
     spec.freezeRequired = true;
     spec.note = "Coordination store: drain dual-write shadow to divergence==0, then atomic --all-machines cutover.";
   }
-  const extra = EXTRA_SELF_HOSTED_ENV[app];
-  if (extra) spec.extraSelfHostedEnv = extra;
+  const extra = EXTRA_API_ENV[app];
+  if (extra) spec.extraApiEnv = extra;
   return spec;
 }
 
@@ -157,7 +167,7 @@ function defineFlipApp(app: string): FlipAppSpec {
  * Canonical per-app flip registry — ALL 25 @hasna OSS apps.
  *
  * Secret paths follow the shared convention `hasna/oss/<app>/api-key`.
- * SELF-HOSTED (LOCKED): the client talks to the app's HTTPS API; no DSN ever
+ * LOCKED: the client talks to the app's HTTPS API; no DSN ever
  * reaches a machine.
  */
 export const FLIP_APPS: Record<string, FlipAppSpec> = Object.fromEntries(
@@ -280,7 +290,7 @@ export interface BuildScriptOptions {
 }
 
 /**
- * Build the remote bash script that applies (mode="self_hosted") or reverts
+ * Build the remote bash script that applies (mode="api") or reverts
  * (mode="local") the flip for one app on one machine.
  *
  * The API key is fetched on-target from the secret store; it never appears in
@@ -299,17 +309,21 @@ export function buildFlipScript(spec: FlipAppSpec, mode: FlipMode, options: Buil
     "umask 077",
   ];
 
-  if (mode === "self_hosted") {
+  if (mode === "api") {
     // Fetch the API key on-target; abort if the secret is missing (never write
-    // a half-configured self_hosted env file).
+    // a half-configured API env file). The --raw probe silences its own stderr
+    // (older secrets CLIs lack the flag and would double-report), but the
+    // fallback attempt keeps stderr: this script runs on a remote machine, and
+    // discarding both streams turned every provisioning failure into a silent
+    // empty key with no cause attached.
     lines.push(
-      `API_KEY="$(secrets get ${sq(spec.apiKeySecretPath)} --raw 2>/dev/null || secrets get ${sq(spec.apiKeySecretPath)} 2>/dev/null)"`,
+      `API_KEY="$(secrets get ${sq(spec.apiKeySecretPath)} --raw 2>/dev/null || secrets get ${sq(spec.apiKeySecretPath)})"`,
       'if [ -z "${API_KEY:-}" ]; then echo "FLIP_ERROR: could not resolve API key secret" >&2; exit 3; fi',
       'TMP_ENV="$(mktemp "${ENV_DIR}/.${APP}.env.XXXXXX")"',
       `printf '%s\\n' ${sq(`${spec.apiUrlEnv}=${spec.apiUrl}`)} >> "$TMP_ENV"`,
       `printf '%s=%s\\n' ${sq(spec.apiKeyEnv)} "$API_KEY" >> "$TMP_ENV"`,
     );
-    for (const [key, value] of Object.entries(spec.extraSelfHostedEnv ?? {})) {
+    for (const [key, value] of Object.entries(spec.extraApiEnv ?? {})) {
       lines.push(`printf '%s\\n' ${sq(`${key}=${value}`)} >> "$TMP_ENV"`);
     }
     lines.push('chmod 600 "$TMP_ENV"', 'mv -f "$TMP_ENV" "$ENV_FILE"', 'unset API_KEY');
@@ -335,9 +349,9 @@ export function buildFlipScript(spec: FlipAppSpec, mode: FlipMode, options: Buil
 
 /**
  * Portable service-manager wiring:
- *  - systemd (linux): self_hosted writes a drop-in EnvironmentFile; local
+ *  - systemd (linux): api mode writes a drop-in EnvironmentFile; local
  *    removes that drop-in so the vars are gone.
- *  - launchd (macOS): self_hosted setenv's each var from the env file; local
+ *  - launchd (macOS): api mode setenv's each var from the env file; local
  *    unsetenv's the two known vars.
  * Detection is at runtime on the target so one script serves the mixed fleet.
  */
@@ -351,7 +365,7 @@ function buildServiceWiring(spec: FlipAppSpec, mode: FlipMode): string {
     'if command -v systemctl >/dev/null 2>&1; then',
     '  DROPIN_DIR="${HOME}/.config/systemd/user/${UNIT}.service.d"',
   ];
-  if (mode === "self_hosted") {
+  if (mode === "api") {
     common.push(
       '  mkdir -p "$DROPIN_DIR"',
       '  {',
@@ -368,7 +382,7 @@ function buildServiceWiring(spec: FlipAppSpec, mode: FlipMode): string {
     'elif command -v launchctl >/dev/null 2>&1; then',
     '  DOMAIN="gui/$(id -u)"',
   );
-  if (mode === "self_hosted") {
+  if (mode === "api") {
     common.push(
       '  # macOS: export each var from the env file into the user launchd domain.',
       '  while IFS="=" read -r k v; do [ -n "$k" ] && launchctl setenv "$k" "$v"; done < "${ENV_FILE_ABS}"',
@@ -402,6 +416,11 @@ export interface StorageStatusVerification {
  * Parse `<app> storage status --json` output (possibly wrapped in the
  * FLIP_STATUS_BEGIN/END markers) and check it matches the expected mode.
  * Accepts either `api_enabled` or the legacy `remote_enabled` boolean.
+ *
+ * Read-side compat: the fleet updates in waves, so a not-yet-updated app may
+ * still REPORT a retired mode word (e.g. `self_hosted`) in its status JSON.
+ * Any non-local reported mode counts as api-backed; this code never emits the
+ * retired words itself.
  */
 export function verifyStorageMode(rawOutput: string, expected: FlipMode): StorageStatusVerification {
   const json = extractStatusJson(rawOutput);
@@ -415,9 +434,9 @@ export function verifyStorageMode(rawOutput: string, expected: FlipMode): Storag
       : typeof json.remote_enabled === "boolean"
         ? json.remote_enabled
         : null;
-  if (expected === "self_hosted") {
-    const ok = observedMode === "self_hosted" && apiEnabled !== false;
-    return { ok, observedMode, apiEnabled, reason: ok ? undefined : "expected mode=self_hosted & api_enabled!=false" };
+  if (expected === "api") {
+    const ok = observedMode !== null && observedMode !== "local" && apiEnabled !== false;
+    return { ok, observedMode, apiEnabled, reason: ok ? undefined : "expected an api-backed mode & api_enabled!=false" };
   }
   const ok = observedMode === "local" && apiEnabled !== true;
   return { ok, observedMode, apiEnabled, reason: ok ? undefined : "expected mode=local" };
@@ -535,8 +554,8 @@ export function runFlip(options: RunFlipOptions): RunFlipReport {
   for (const wave of waves) {
     let waveFailed = false;
     for (const target of wave.targets) {
-      // Freeze gate applies per-machine before any mutation (self_hosted only).
-      if (execute && mode === "self_hosted" && spec.freezeRequired) {
+      // Freeze gate applies per-machine before any mutation (api mode only).
+      if (execute && mode === "api" && spec.freezeRequired) {
         const freeze = runFreezeCheck(spec, runner, {
           machineId: target.id,
           freezeCommand: options.freezeCommand,
@@ -607,6 +626,6 @@ export function buildFlipPlan(spec: FlipAppSpec, mode: FlipMode, waves: FlipWave
     freezeRequired: Boolean(spec.freezeRequired),
     waves: waves.map((w) => ({ name: w.name, machines: w.targets.map((t) => t.id) })),
     scriptPreview: buildFlipScript(spec, mode, scriptOptions),
-    secretPathsReferenced: mode === "self_hosted" ? [spec.apiKeySecretPath] : [],
+    secretPathsReferenced: mode === "api" ? [spec.apiKeySecretPath] : [],
   };
 }

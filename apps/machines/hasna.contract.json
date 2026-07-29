@@ -31,7 +31,6 @@
       ]
     },
     "client": {
-      "mode": "self_hosted",
       "apiUrlEnv": "MACHINES_API_URL",
       "apiKeyEnv": "MACHINES_API_KEY"
     }

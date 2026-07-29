@@ -67,14 +67,22 @@ describe("flip registry", () => {
 });
 
 describe("mode normalization", () => {
-  test("maps cloud/remote/api/on aliases to self_hosted", () => {
-    for (const v of ["self_hosted", "remote", "cloud", "api", "on", undefined]) {
-      expect(normalizeFlipMode(v)).toBe("self_hosted");
+  test("maps api/cloud/on (and the default) to api", () => {
+    for (const v of ["api", "cloud", "on", undefined]) {
+      expect(normalizeFlipMode(v)).toBe("api");
     }
   });
   test("maps local/revert/off to local", () => {
     for (const v of ["local", "revert", "off"]) {
       expect(normalizeFlipMode(v)).toBe("local");
+    }
+  });
+  test("rejects the retired deployment-mode words loudly", () => {
+    // Deployment modes were removed (owner directive 2026-07-29); a flip
+    // invoked with the old vocabulary must fail with the replacement named,
+    // never be silently remapped.
+    for (const v of ["self_hosted", "self-hosted", "remote", "hybrid"]) {
+      expect(() => normalizeFlipMode(v)).toThrow(/retired/);
     }
   });
 });
@@ -114,8 +122,8 @@ describe("wave planning", () => {
 describe("script generation", () => {
   const spec = getFlipApp("todos");
 
-  test("self_hosted script writes API_URL + API_KEY, fetches the key from the secret store, never a DSN", () => {
-    const script = buildFlipScript(spec, "self_hosted");
+  test("api script writes API_URL + API_KEY, fetches the key from the secret store, never a DSN", () => {
+    const script = buildFlipScript(spec, "api");
     expect(script).toContain("secrets get 'hasna/oss/todos/api-key'");
     expect(script).toContain("HASNA_TODOS_API_URL=https://todos.your-deployment.example");
     expect(script).toContain("HASNA_TODOS_API_KEY");
@@ -130,10 +138,19 @@ describe("script generation", () => {
     expect(script).toContain("todos storage status --json");
   });
 
-  test("self_hosted script aborts when the API-key secret cannot be resolved", () => {
-    const script = buildFlipScript(spec, "self_hosted");
+  test("api script aborts when the API-key secret cannot be resolved", () => {
+    const script = buildFlipScript(spec, "api");
     expect(script).toContain("FLIP_ERROR: could not resolve API key secret");
     expect(script).toContain("exit 3");
+  });
+
+  test("the fallback secret fetch keeps its stderr — the loud signal when provisioning fails", () => {
+    const script = buildFlipScript(spec, "api");
+    // The --raw probe may silence its own stderr (older secrets CLIs lack the
+    // flag), but the fallback attempt must NOT: this script runs on a remote
+    // machine, and a swallowed error there reads as an empty key with no cause.
+    expect(script).toMatch(/\|\| secrets get 'hasna\/oss\/todos\/api-key'\)"/);
+    expect(script).not.toMatch(/\|\| secrets get [^\n]*2>\/dev\/null/);
   });
 
   test("local (revert) script removes the env file and never touches the secret", () => {
@@ -146,7 +163,7 @@ describe("script generation", () => {
   });
 
   test("wires both systemd and launchd", () => {
-    const script = buildFlipScript(spec, "self_hosted");
+    const script = buildFlipScript(spec, "api");
     expect(script).toContain("systemctl --user restart");
     expect(script).toContain("launchctl kickstart");
     expect(script).toContain("10-cloud-flip.conf");
@@ -160,32 +177,38 @@ describe("script generation", () => {
   });
 
   test("skipRestart omits the service wiring", () => {
-    const script = buildFlipScript(spec, "self_hosted", { skipRestart: true });
+    const script = buildFlipScript(spec, "api", { skipRestart: true });
     expect(script).not.toContain("systemctl --user restart");
   });
 });
 
 describe("verification", () => {
-  test("accepts self_hosted status (api_enabled)", () => {
-    const out = `noise\nFLIP_STATUS_BEGIN\n{"mode":"self_hosted","api_enabled":true}\nFLIP_STATUS_END`;
-    const v = verifyStorageMode(out, "self_hosted");
+  test("accepts an api-backed status (mode=cloud + api_enabled)", () => {
+    const out = `noise\nFLIP_STATUS_BEGIN\n{"mode":"cloud","api_enabled":true}\nFLIP_STATUS_END`;
+    const v = verifyStorageMode(out, "api");
     expect(v.ok).toBe(true);
-    expect(v.observedMode).toBe("self_hosted");
+    expect(v.observedMode).toBe("cloud");
+  });
+  test("accepts a status from an older installed CLI that still reports a retired mode word", () => {
+    // Read-side compat only: the fleet updates in waves, so a not-yet-updated
+    // app may still SAY self_hosted in its status JSON. We accept the report
+    // as api-backed; we never emit the word ourselves.
+    expect(verifyStorageMode(`{"mode":"self_hosted","api_enabled":true}`, "api").ok).toBe(true);
   });
   test("accepts legacy remote_enabled boolean too", () => {
-    const out = `{"mode":"self_hosted","remote_enabled":true}`;
-    expect(verifyStorageMode(out, "self_hosted").ok).toBe(true);
+    const out = `{"mode":"cloud","remote_enabled":true}`;
+    expect(verifyStorageMode(out, "api").ok).toBe(true);
   });
-  test("rejects local status when self_hosted expected", () => {
+  test("rejects local status when api expected", () => {
     const out = `{"mode":"local","api_enabled":false}`;
-    expect(verifyStorageMode(out, "self_hosted").ok).toBe(false);
+    expect(verifyStorageMode(out, "api").ok).toBe(false);
   });
   test("accepts local status on revert", () => {
     const out = `{"mode":"local","api_enabled":false}`;
     expect(verifyStorageMode(out, "local").ok).toBe(true);
   });
   test("fails cleanly on unparseable output", () => {
-    expect(verifyStorageMode("boom", "self_hosted").ok).toBe(false);
+    expect(verifyStorageMode("boom", "api").ok).toBe(false);
   });
 });
 
@@ -221,7 +244,7 @@ describe("orchestration", () => {
       calls += 1;
       return { stdout: "", stderr: "", exitCode: 0 };
     };
-    const report = runFlip({ spec: knowledge, mode: "self_hosted", waves, runner, execute: false });
+    const report = runFlip({ spec: knowledge, mode: "api", waves, runner, execute: false });
     expect(calls).toBe(0);
     expect(report.results).toHaveLength(4);
     expect(report.results.every((r) => !r.applied)).toBe(true);
@@ -229,11 +252,11 @@ describe("orchestration", () => {
 
   test("execute verifies each machine and completes when all pass", () => {
     const runner: RunnerFn = () => ({
-      stdout: `FLIP_STATUS_BEGIN{"mode":"self_hosted","api_enabled":true}FLIP_STATUS_END`,
+      stdout: `FLIP_STATUS_BEGIN{"mode":"cloud","api_enabled":true}FLIP_STATUS_END`,
       stderr: "",
       exitCode: 0,
     });
-    const report = runFlip({ spec: knowledge, mode: "self_hosted", waves, runner, execute: true });
+    const report = runFlip({ spec: knowledge, mode: "api", waves, runner, execute: true });
     expect(report.aborted).toBe(false);
     expect(report.results.every((r) => r.verification.ok)).toBe(true);
   });
@@ -243,9 +266,9 @@ describe("orchestration", () => {
     const seen: string[] = [];
     const runner: RunnerFn = (id) => {
       seen.push(id);
-      return { stdout: `{"mode":"self_hosted","api_enabled":true}`, stderr: "", exitCode: 0 };
+      return { stdout: `{"mode":"cloud","api_enabled":true}`, stderr: "", exitCode: 0 };
     };
-    const report = runFlip({ spec: knowledge, mode: "self_hosted", waves: atomicWaves, runner, execute: true });
+    const report = runFlip({ spec: knowledge, mode: "api", waves: atomicWaves, runner, execute: true });
     expect(report.aborted).toBe(false);
     expect(seen).toEqual(["apple01", "apple03", "spark01", "station02"]);
     expect(report.results).toHaveLength(4);
@@ -258,7 +281,7 @@ describe("orchestration", () => {
       // canary machine reports still-local -> verification fails
       return { stdout: `{"mode":"local","api_enabled":false}`, stderr: "not flipped", exitCode: 0 };
     };
-    const report = runFlip({ spec: knowledge, mode: "self_hosted", waves, runner, execute: true });
+    const report = runFlip({ spec: knowledge, mode: "api", waves, runner, execute: true });
     expect(report.aborted).toBe(true);
     expect(seen).toBe(1); // only the canary ran
     expect(report.results).toHaveLength(1);
@@ -266,7 +289,7 @@ describe("orchestration", () => {
 
   test("freeze-required app aborts the flip when no freeze command is given", () => {
     const runner: RunnerFn = () => ({ stdout: "", stderr: "", exitCode: 0 });
-    const report = runFlip({ spec: getFlipApp("todos"), mode: "self_hosted", waves, runner, execute: true });
+    const report = runFlip({ spec: getFlipApp("todos"), mode: "api", waves, runner, execute: true });
     expect(report.aborted).toBe(true);
     expect(report.results[0]?.error).toContain("requires --freeze-check");
   });
@@ -276,7 +299,7 @@ describe("plan", () => {
   test("plan lists waves and referenced api-key secret paths without values", () => {
     const spec = getFlipApp("mementos");
     const waves = planWaves(selectTargets(manifest), { canarySize: 1, batchSize: 2 });
-    const plan = buildFlipPlan(spec, "self_hosted", waves);
+    const plan = buildFlipPlan(spec, "api", waves);
     expect(plan.secretPathsReferenced).toEqual(["hasna/oss/mementos/api-key"]);
     expect(plan.waves[0]?.machines).toEqual(["apple01"]);
     expect(Object.keys(FLIP_APPS)).toContain(plan.app);

@@ -312,7 +312,8 @@ function buildEnvironment(
     env["HASNA_MACHINES_AGENT_STORAGE_PUSH"] = "1";
     env["HASNA_MACHINES_AGENT_STORAGE_PUSH_BACKOFF_MS"] = "250";
     env["HASNA_MACHINES_AGENT_STORAGE_PUSH_RETRIES"] = "2";
-    env["HASNA_MACHINES_STORAGE_MODE"] = "hybrid";
+    // No mode var: storage push needs only the DSN placeholder, and deployment
+    // modes were removed (owner directive 2026-07-29).
     env["HASNA_MACHINES_DATABASE_URL"] = placeholderForEnv("HASNA_MACHINES_DATABASE_URL");
     warnings.push("storagePush is represented with env placeholders; no database URL is embedded in the plan.");
   }

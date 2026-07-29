@@ -1,6 +1,6 @@
 // Client-side transport resolver for the Hasna Service Contract v1.
 //
-// THIS IS THE B2 CORE FIX. Historically, setting a client to cloud/self_hosted
+// THIS IS THE B2 CORE FIX. Historically, setting a client to cloud
 // mode was a NO-OP: the CLI/MCP still read the local SQLite/db.json store even
 // though `HASNA_<APP>_STORAGE_MODE=cloud` and a DATABASE_URL were set. A DSN on
 // the client does NOT switch the dataset a CLI reads.
@@ -12,9 +12,9 @@
 //
 // THE CLIENT-FLIP CONTRACT (env vars). For app `<NAME>` = envToken(name):
 //
-//   Mode   (any one, first match wins; aliases self_hosted/remote/hybrid -> cloud):
-//     HASNA_<NAME>_STORAGE_MODE = cloud | self_hosted | local | ...
-//     HASNA_<NAME>_MODE         = cloud | self_hosted | local | ...   (alias)
+//   Mode   (any one, first match wins; the only values are local | cloud):
+//     HASNA_<NAME>_STORAGE_MODE = cloud | local
+//     HASNA_<NAME>_MODE         = cloud | local                       (alias)
 //     <NAME>_STORAGE_MODE                                             (alias)
 //     <NAME>_MODE                                                     (alias)
 //   API base URL (optional; `/v1` is appended automatically):
@@ -108,8 +108,6 @@ export interface ClientTransportResolution {
   transport: ClientTransportKind;
   /** Resolved storage mode (`local` | `cloud`). */
   mode: StorageMode;
-  /** Deprecated mode alias that was normalized (e.g. `self_hosted`), if any. */
-  deprecatedAlias: string | null;
   /** Env key the mode was read from, or `"default"`. */
   modeSource: string;
   /** `<origin>/v1` base for the cloud API when transport is cloud-http, else null. */
@@ -143,20 +141,14 @@ export function resolveClientTransport(name: string, env: Env = process.env): Cl
   const keyHit = firstEnv(env, keys.apiKeyKeys);
 
   let mode: StorageMode = "local";
-  let deprecatedAlias: string | null = null;
   let modeSource = "default";
   const warnings: string[] = [];
 
   if (modeHit) {
-    const normalized = normalizeStorageMode(modeHit.value);
-    mode = normalized.mode;
-    deprecatedAlias = normalized.deprecatedAlias;
+    // Throws on anything but local | cloud (retired deployment-mode words
+    // included), so a stale env var fails loudly instead of picking a store.
+    mode = normalizeStorageMode(modeHit.value).mode;
     modeSource = modeHit.key;
-    if (deprecatedAlias) {
-      warnings.push(
-        `Deprecated mode '${deprecatedAlias}' from ${modeHit.key} is treated as 'cloud'. Prefer ${keys.modeKeys[0]}=cloud.`,
-      );
-    }
   }
 
   // Local mode: never route to the network, regardless of URL/key presence.
@@ -164,7 +156,6 @@ export function resolveClientTransport(name: string, env: Env = process.env): Cl
     return {
       transport: "local",
       mode,
-      deprecatedAlias,
       modeSource,
       baseUrl: null,
       apiUrlSource: null,
@@ -183,7 +174,6 @@ export function resolveClientTransport(name: string, env: Env = process.env): Cl
     return {
       transport: "local",
       mode,
-      deprecatedAlias,
       modeSource,
       baseUrl: null,
       apiUrlSource: null,
@@ -205,7 +195,6 @@ export function resolveClientTransport(name: string, env: Env = process.env): Cl
     return {
       transport: "local",
       mode,
-      deprecatedAlias,
       modeSource,
       baseUrl: null,
       apiUrlSource: null,
@@ -219,7 +208,6 @@ export function resolveClientTransport(name: string, env: Env = process.env): Cl
   return {
     transport: "cloud-http",
     mode,
-    deprecatedAlias,
     modeSource,
     baseUrl,
     apiUrlSource,

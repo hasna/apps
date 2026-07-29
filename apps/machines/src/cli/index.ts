@@ -3648,7 +3648,7 @@ flipCommand
 flipCommand
   .command("plan <app>")
   .description("Show the flip plan (waves + generated script) without executing")
-  .option("--mode <mode>", "self_hosted (flip to cloud API) or local (revert)", "self_hosted")
+  .option("--mode <mode>", "api (route the client to the hosted API) or local (revert)", "api")
   .option("--machines <ids>", "Restrict to these machine ids (comma/space separated)")
   .option("--tags <tags>", "Restrict to machines carrying ALL of these tags")
   .option("--exclude <ids>", "Exclude these machine ids")
@@ -3675,7 +3675,7 @@ flipCommand
 flipCommand
   .command("script <app>")
   .description("Print the generated remote flip script for one app")
-  .option("--mode <mode>", "self_hosted or local", "self_hosted")
+  .option("--mode <mode>", "api or local", "api")
   .option("--skip-restart", "Write env only; do not restart the service", false)
   .action((app: string, options: { mode?: string; skipRestart?: boolean }) => {
     const spec = getFlipApp(app);
@@ -3685,7 +3685,7 @@ flipCommand
 flipCommand
   .command("apply <app>")
   .description("Apply the flip across the fleet, wave by wave, verifying each machine")
-  .option("--mode <mode>", "self_hosted (flip to cloud API) or local (revert)", "self_hosted")
+  .option("--mode <mode>", "api (route the client to the hosted API) or local (revert)", "api")
   .option("--machines <ids>", "Restrict to these machine ids")
   .option("--tags <tags>", "Restrict to machines carrying ALL of these tags")
   .option("--exclude <ids>", "Exclude these machine ids")
@@ -3754,7 +3754,7 @@ flipCommand
 
 const registryCommand = program
   .command("registry")
-  .description("Machine registry CRUD (routes to <machines.host>/v1/machines when self_hosted, else local store)");
+  .description("Machine registry CRUD (routes to <machines.host>/v1/machines when flipped to the hosted API, else local store)");
 
 registryCommand
   .command("backend")

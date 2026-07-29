@@ -1,11 +1,11 @@
 // App-level cloud storage resolver.
 //
-// The fleet flip writes exactly two vars per app on a self_hosted machine:
+// The fleet flip writes exactly two vars per app on an API-flipped machine:
 //   HASNA_<APP>_API_URL   = https://<app>.<your-deployment-domain>
 //   HASNA_<APP>_API_KEY   = <bearer key>
 // (no STORAGE_MODE / DSN — the raw database URL is never shipped to clients).
 //
-// So the presence of BOTH an API URL and an API key IS the self_hosted signal:
+// So the presence of BOTH an API URL and an API key IS the API-client signal:
 // when they are set we route every read+write to the hosted `/v1` API; when they
 // are unset we fall back to the local store. An explicit mode of `local`
 // (HASNA_<APP>_STORAGE_MODE=local) is an escape hatch that forces local even if
@@ -53,7 +53,7 @@ export function resolveCloudStorage(name: string, env: Env = process.env): Cloud
   }
 
   // Synthesize a cloud-mode env so the vendored transport resolves to cloud-http.
-  const cloudEnv: Env = { ...env, [`HASNA_${token}_STORAGE_MODE`]: "self_hosted" };
+  const cloudEnv: Env = { ...env, [`HASNA_${token}_STORAGE_MODE`]: "cloud" };
   const wired = createClientTransport(name, cloudEnv);
   if (wired.transport !== "cloud-http") {
     return { transport: "local", client: null };

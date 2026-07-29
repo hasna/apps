@@ -33,6 +33,20 @@ describe("resolveCloudStorage (machines)", () => {
       }).transport,
     ).toBe("local");
   });
+  test("retired deployment-mode words in the mode env are rejected loudly", () => {
+    // Deployment modes were removed (owner directive 2026-07-29): a stale
+    // HASNA_MACHINES_STORAGE_MODE=self_hosted must fail naming the fix, not be
+    // silently remapped to another backend.
+    for (const retired of ["self_hosted", "self-hosted", "remote", "hybrid"]) {
+      expect(() =>
+        resolveCloudStorage("machines", {
+          HASNA_MACHINES_STORAGE_MODE: retired,
+          HASNA_MACHINES_API_URL: "https://machines.example.test",
+          HASNA_MACHINES_API_KEY: "k",
+        }),
+      ).toThrow(/use local \(on-box store\) or cloud/);
+    }
+  });
 });
 
 describe("resolveMachineRegistryStore backend selection", () => {

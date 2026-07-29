@@ -1,5 +1,5 @@
 // Machine registry data access, resolved to the hosted `/v1/machines` API when
-// the app is flipped to self_hosted, else the local SQLite `machine_registry`
+// the app is flipped to the API client, else the local SQLite `machine_registry`
 // table. Both implementations share the {@link MachineRecord} shape the serve
 // app returns, so `machines registry ...` behaves identically online/offline and
 // a flip is fully reversible by unsetting HASNA_MACHINES_API_URL/_API_KEY.
@@ -187,7 +187,7 @@ class LocalMachineRegistryStore implements MachineRegistryStore {
 
 /**
  * Resolve the machine registry store for the current environment: the hosted
- * `/v1/machines` API when flipped to self_hosted (HASNA_MACHINES_API_URL +
+ * `/v1/machines` API when flipped to the hosted API (HASNA_MACHINES_API_URL +
  * HASNA_MACHINES_API_KEY set), else the local SQLite table.
  */
 export function resolveMachineRegistryStore(env: NodeJS.ProcessEnv = process.env): MachineRegistryStore {

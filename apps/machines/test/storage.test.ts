@@ -45,21 +45,31 @@ describe("machines storage config", () => {
     expect(getStorageDatabaseUrl()).toBeNull();
     expect(getStorageMode()).toBe("local");
 
+    // A DSN in the environment is a pointer, not a mode: it never flips the
+    // resolved mode by presence (that inference was the deployment-mode axis).
     process.env[MACHINES_STORAGE_FALLBACK_ENV] = "postgres://fallback/machines";
     expect(getStorageDatabaseEnv()?.name).toBe(MACHINES_STORAGE_FALLBACK_ENV);
     expect(getStorageDatabaseUrl()).toBe("postgres://fallback/machines");
-    expect(getStorageMode()).toBe("hybrid");
+    expect(getStorageMode()).toBe("local");
 
     process.env[MACHINES_STORAGE_ENV] = "postgres://primary/machines";
     expect(getStorageDatabaseEnv()?.name).toBe(MACHINES_STORAGE_ENV);
     expect(getStorageDatabaseUrl()).toBe("postgres://primary/machines");
 
-    process.env[MACHINES_STORAGE_MODE_ENV] = "remote";
-    expect(getStorageMode()).toBe("remote");
+    process.env[MACHINES_STORAGE_MODE_ENV] = "cloud";
+    expect(getStorageMode()).toBe("cloud");
+  });
 
-    process.env[MACHINES_STORAGE_MODE_ENV] = "invalid";
-    process.env[MACHINES_STORAGE_MODE_FALLBACK_ENV] = "local";
-    expect(getStorageMode()).toBe("local");
+  test("retired deployment-mode words and junk values throw, naming the variable", () => {
+    // Deployment modes were removed (owner directive 2026-07-29). A silent
+    // fallback here flips which store a process reads — always fail loudly.
+    for (const value of ["remote", "hybrid", "self_hosted", "invalid"]) {
+      process.env[MACHINES_STORAGE_MODE_ENV] = value;
+      expect(() => getStorageMode()).toThrow(MACHINES_STORAGE_MODE_ENV);
+    }
+    delete process.env[MACHINES_STORAGE_MODE_ENV];
+    process.env[MACHINES_STORAGE_MODE_FALLBACK_ENV] = "hybrid";
+    expect(() => getStorageMode()).toThrow(MACHINES_STORAGE_MODE_FALLBACK_ENV);
   });
 
   test("exposes and validates storage tables", () => {

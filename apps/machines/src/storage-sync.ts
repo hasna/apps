@@ -14,7 +14,12 @@ export const MACHINES_STORAGE_TABLES = STORAGE_TABLES;
 type StorageTable = (typeof STORAGE_TABLES)[number];
 type Row = Record<string, unknown>;
 
-export type StorageMode = "local" | "hybrid" | "remote";
+/**
+ * Storage mode: `local` (on-box SQLite) or `cloud` (hosted HTTP API). There is
+ * no third value; the retired deployment-mode words (`hybrid`, `remote`,
+ * `self_hosted`) are rejected loudly (owner directive 2026-07-29).
+ */
+export type StorageMode = "local" | "cloud";
 
 export interface StorageEnv {
   name: string;
@@ -61,10 +66,16 @@ function readEnv(name: string): string | undefined {
   return value || undefined;
 }
 
-function normalizeStorageMode(value: string | undefined): StorageMode | undefined {
-  const normalized = value?.trim().toLowerCase();
-  if (normalized === "local" || normalized === "hybrid" || normalized === "remote") return normalized;
-  return undefined;
+function normalizeStorageMode(value: string | undefined, envName: string): StorageMode | undefined {
+  const normalized = value?.trim().toLowerCase().replace(/-/g, "_");
+  if (!normalized) return undefined;
+  if (normalized === "local") return "local";
+  if (normalized === "cloud") return "cloud";
+  // Unknown values — including the retired deployment-mode words — fail loudly
+  // and name the variable. Falling through would silently pick a store.
+  throw new Error(
+    `machines: ${envName}=${value} is not a valid storage mode. Use local (on-box store) or cloud (hosted HTTP API).`,
+  );
 }
 
 export function getStorageDatabaseEnvName(): (typeof STORAGE_DATABASE_ENV)[number] | null {
@@ -85,10 +96,12 @@ export function getStorageDatabaseUrl(): string | null {
 }
 
 export function getStorageMode(): StorageMode {
-  const mode = normalizeStorageMode(readEnv(MACHINES_STORAGE_MODE_ENV))
-    ?? normalizeStorageMode(readEnv(MACHINES_STORAGE_MODE_FALLBACK_ENV));
+  const mode = normalizeStorageMode(readEnv(MACHINES_STORAGE_MODE_ENV), MACHINES_STORAGE_MODE_ENV)
+    ?? normalizeStorageMode(readEnv(MACHINES_STORAGE_MODE_FALLBACK_ENV), MACHINES_STORAGE_MODE_FALLBACK_ENV);
   if (mode) return mode;
-  return getStorageDatabaseUrl() ? "hybrid" : "local";
+  // A DSN in the environment is a pointer, not a mode: presence never selects
+  // a backend (that inference was the deployment-mode axis). Default is local.
+  return "local";
 }
 
 export async function getStoragePg(): Promise<PgAdapterAsync> {
