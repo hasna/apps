@@ -1,10 +1,11 @@
 {
+  "$schema": "./node_modules/@hasna/contracts/dist/hasna.contract.schema.json",
   "schema": "hasna.service_contract.v1",
   "name": "projects",
   "class": "service",
   "contractVersion": "v1",
   "kitVersion": "0.8.4",
-  "description": "High-level project/workspace management: CLI, MCP server, HTTP API (projects-serve), and typed SDK. The server's data backend is a two-value switch, HASNA_PROJECTS_STORAGE_MODE=sqlite|postgres (a HASNA_PROJECTS_DATABASE_URL implies postgres); on postgres the serve process reads/writes that database directly.",
+  "description": "High-level project/workspace management: CLI, MCP server, HTTP API (projects-serve), and typed SDK, with local SQLite and direct PostgreSQL storage paths.",
   "bins": [
     "projects",
     "projects-mcp",
@@ -62,7 +63,7 @@
     }
   ],
   "storage": {
-    "mode": "sqlite",
+    "mode": "postgres",
     "engines": [
       "sqlite",
       "postgres"
