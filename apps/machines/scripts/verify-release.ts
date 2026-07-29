@@ -20,6 +20,12 @@ const REQUIRED_FILES = [
   "package/dist/mcp/index.js",
   "package/dist/agent/index.js",
   "package/schemas/machines-consumer.schema.json",
+  // The station template must ship in the tarball: the CLI resolves it relative
+  // to the package root, so if `templates/` ever falls out of package.json
+  // `files` the installed binary fails with "Station template not found" and
+  // nothing else catches it.
+  "package/templates/station/template.json",
+  "package/templates/station/files/base/etc/sysctl.d/99-zz-hasna-station.conf",
   "package/scripts/consumer-conformance.mjs",
   "package/LICENSE",
   "package/README.md",
