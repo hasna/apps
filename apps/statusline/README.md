@@ -2,7 +2,7 @@
 
 Tiny, composable statusline CLI for AI coding agents. Pre-built segments you toggle
 on and off — machine name, project + branch, model, context remaining, session cost,
-and more — rendered as a single line for your agent's status bar.
+and more — rendered as one or more rows in your agent's status bar.
 
 ```
 apple03 · statusline (main) · 12h · 1.2k · fable 5 [1m] · 90% left · $0.04
@@ -14,7 +14,7 @@ Built with [Bun](https://bun.sh) + TypeScript. The CLI renderer is dependency-li
 
 ```bash
 bun install -g @hasna/statusline
-statusline install claude        # wires it into ~/.claude/settings.json
+statusline install claude        # wires it into the active Claude config dir
 ```
 
 That's it — Claude Code picks it up on the next status refresh (no restart needed).
@@ -22,7 +22,7 @@ That's it — Claude Code picks it up on the next status refresh (no restart nee
 ## Segments
 
 `statusline list` shows a compact, enabled-first summary of your segments (use
-`statusline list --all` for every row). The table below is the full catalog — all 18
+`statusline list --all` for every row). The table below is the full catalog — all 26
 segment ids from `src/segments/index.ts`.
 
 `renderLine` walks your configured segment order, renders each one, and **drops**
@@ -39,7 +39,8 @@ anything that returns `null` or throws. A failed segment never breaks the host U
 | `current-dir` | off | Current working directory (basename) | `StatusContext.cwd` | never (always renders basename) | `open-statusline` |
 | `model` | off | Current model name (no context tag) | `StatusContext.model.id` via friendly formatter | no model id | `fable 5` |
 | `model-context` | on | Model name with context-size tag | same formatter, keeps `[tag]` suffix | no model id | `fable 5 [1m]` |
-| `model-with-reasoning` | off | Model name with its reasoning effort | `model.display_name` (or friendly id) + `effort.level`; falls back to `thinking.enabled`, which the host defaults to on | no model | `Fable (xhigh)` |
+| `model-with-reasoning` | off | Model name with its reasoning effort | lowercased `model.display_name` (or friendly id) + `effort.level`; falls back to `thinking.enabled` when on | no model | `fable (xhigh)` |
+| `fast-mode` | off | Fast-mode indicator | `fastMode` in this session's Claude config-dir `settings.json` | fast mode is off or settings are unavailable | `fast` |
 | `auth-profile` | off | Account profile this session runs as | this process's `CLAUDE_CONFIG_DIR`, resolved against the accounts registry | config dir is unmanaged and has no login | `account001` |
 | `auth-email` | off | Account email this session is logged in as | the agent's own login record for this config dir, else the registry | no login recorded | `dev@example.com` |
 | `five-hour-limit` | off | Percentage of the 5-hour rate limit used | `rate_limits.five_hour.used_percentage` | host reports no limit data | `5h:42%` |
@@ -49,11 +50,12 @@ anything that returns `null` or throws. A failed segment never breaks the host U
 | `context-remaining` | on | Percentage of context window remaining | transcript via `contextUsage` | transcript missing/unreadable | `90% left` |
 | `used-tokens` | off | Total tokens in the context window | transcript usage block (input + output) | transcript missing/unreadable | `102k tok` |
 | `cost` | on | Session cost in USD | `StatusContext.cost.totalCostUsd` | cost is zero or missing | `$1,234.50` |
-| `duration` | off | Session wall-clock duration | `StatusContext.cost.totalDurationMs` | duration missing | `1h30m` |
+| `duration` | off | Session wall-clock duration | `StatusContext.cost.totalDurationMs` | duration is zero or missing | `1h30m` |
 | `lines-changed` | off | Lines added/removed this session | `cost.totalLinesAdded/Removed` | both zero | `+142/-18` |
 | `output-style` | off | Active output style | `StatusContext.outputStyle` | style is `default` or missing | `concise` |
 | `agent-version` | off | Host agent version | `StatusContext.version` | version missing | `v2.1.39` |
 | `session-id` | off | Session identifier (short) | first UUID segment of `sessionId` | no session id | `abc12345` |
+| `newline` | off | Row break | renderer starts a new output row | always (the segment emits no text itself) | line break |
 
 ### Context segments and transcripts
 
@@ -103,7 +105,7 @@ registry knows about always wins.
 ### Colours
 
 Segments may declare a colour, applied by `renderLine` when colours are on
-(the default). The rate-limit segments escalate from yellow to red past 80%.
+(the default). The rate-limit segments escalate from yellow to red at 80%.
 
 ```bash
 statusline colors off      # or set "colors": false in the config
@@ -117,7 +119,7 @@ statusline colors off      # or set "colors": false in the config
 enabled segments first, capped rows, and hints for the detail paths:
 
 ```
-Segments: 7 enabled / 18 total (showing 12 of 18)
+Segments: 7 enabled / 26 total (showing 12 of 26)
 state  default  id
 on     yes      machine
 on     yes      project
@@ -130,7 +132,7 @@ off    no       project-name
 off    no       git-branch
 off    no       current-dir
 off    no       model
-off    no       context-used
+off    no       model-with-reasoning
 Hint: use `--all` for all matching rows, `statusline show <id>` for details, `--verbose` for descriptions, `--json` for machines.
 ```
 
@@ -158,6 +160,8 @@ statusbar width.
 
 ```bash
 statusline list                          # compact segment summary
+statusline search token --json           # search ids/descriptions; list flags apply
+statusline show model-context             # show one segment in detail
 statusline enable used-tokens duration    # turn segments on (appended at the end)
 statusline disable loc                    # turn segments off
 statusline colors off                     # drop ANSI colours
@@ -165,6 +169,8 @@ statusline order machine project model-context cost   # exact order = enabled se
 statusline separator " | "                # change the separator
 statusline preview                        # render a sample line from the current dir
 statusline reset                          # back to defaults
+statusline install claude                 # update the active Claude settings file
+statusline version                        # print the package version
 ```
 
 Config lives at `~/.config/statusline/config.json` (override with `$STATUSLINE_CONFIG`):
@@ -172,6 +178,7 @@ Config lives at `~/.config/statusline/config.json` (override with `$STATUSLINE_C
 ```json
 {
   "separator": " · ",
+  "colors": true,
   "segments": ["machine", "project", "commit-age", "loc", "model-context", "context-remaining", "cost"]
 }
 ```
@@ -197,7 +204,8 @@ ids to the end; `statusline disable` removes them.
 
 Claude Code pipes a JSON payload (cwd, model, session cost, transcript path, …) to the
 configured `statusLine` command on every status refresh. `statusline render` parses it,
-renders each enabled segment, drops anything unavailable, and prints one line. Segments
+renders each enabled segment, drops anything unavailable, and prints one or more rows.
+The `newline` segment starts a new row; empty rows are removed. Segments
 that need more than the payload offers (e.g. `context-remaining`) read the session
 transcript to compute it. A segment failure is never fatal — it's simply omitted.
 
@@ -220,9 +228,10 @@ const next = enableSegments(["duration"], config).config;
 saveConfig(next);
 ```
 
-Useful exports include `parseClaudeInput`, `renderLine`, `segments`, `getSegment`,
-`defaultConfig`, `loadConfig`, `saveConfig`, `configPath`, `previewStatusline`,
-`orderSegments`, `disableSegments`, `setSeparator`, and `installClaude`.
+Useful exports include `parseClaudeInput`, `renderLine`, `renderStatusline`, `segments`,
+`getSegment`, `listSegments`, `defaultConfig`, `loadConfig`, `saveConfig`, `configPath`,
+`previewStatusline`, `enableSegments`, `disableSegments`, `orderSegments`,
+`setSeparator`, `setColors`, `installClaude`, and the account, context, format, and Git helpers.
 
 ## MCP
 
@@ -232,7 +241,7 @@ Useful exports include `parseClaudeInput`, `renderLine`, `segments`, `getSegment
 statusline-mcp
 ```
 
-It exposes safe tools for `render_statusline`, `preview_statusline`,
+It exposes safe tools for `statusline_health`, `render_statusline`, `preview_statusline`,
 `list_segments`, `get_config`, `update_config`, `enable_segments`,
 `disable_segments`, `order_segments`, and `reset_config`. Config mutation tools
 require `confirm_write: true`; every mutation tool supports `dry_run: true`.
@@ -250,8 +259,9 @@ bun install -g @hasna/statusline
 statusline install claude
 ```
 
-`installClaude()` writes to `$CLAUDE_CONFIG_DIR/settings.json`, falling back to
-`~/.claude/settings.json`. This matters for multi-account setups: when a session is
+`installClaude()` writes to `$CLAUDE_CONFIG_DIR/settings.json` when the variable is
+non-blank, falling back to `~/.claude/settings.json`. A leading `~/` in
+`CLAUDE_CONFIG_DIR` is expanded against `$HOME`. This matters for multi-account setups: when a session is
 bound to an isolated config dir, `~/.claude/settings.json` is never read, so
 installing there wires up a statusline that silently never runs.
 

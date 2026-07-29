@@ -54,11 +54,11 @@ function printSegmentError(error: unknown): void {
 }
 
 function help(): string {
-  return `statusline ${statuslineVersion} — composable statusline for AI coding agents
+  return `statusline ${statuslineVersion} — composable status rows for AI coding agents
 
 usage:
-  statusline render              read agent JSON on stdin, print the statusline (default)
-  statusline list                compact segment list (default limit: ${DEFAULT_LIST_LIMIT})
+  statusline render              read agent JSON on stdin, print status rows (default)
+  statusline list [search text]  compact segment list (default limit: ${DEFAULT_LIST_LIMIT})
   statusline list --verbose      include descriptions
   statusline list --all          show all rows
   statusline list --json         machine-readable segment list
@@ -66,8 +66,8 @@ usage:
   statusline list --enabled      show only enabled segments
   statusline list --disabled     show only disabled segments
   statusline list --search text  filter by id or description
-  statusline search <text>       alias for list --search
-  statusline show <id>           show one segment in detail
+  statusline search <text>       alias for list --search (accepts list options)
+  statusline show <id>           show one segment in detail (--json supported)
   statusline show <id> --json    machine-readable segment detail
   statusline inspect <id>        alias for show
   statusline enable <id...>      enable segments (appended to the end)
@@ -77,7 +77,7 @@ usage:
   statusline colors <on|off>     toggle segment colours (default on)
   statusline preview             render with a sample payload from the current directory
   statusline reset               restore default config
-  statusline install [claude]    wire into Claude Code (~/.claude/settings.json)
+  statusline install [claude]    wire into the active Claude Code settings file
   statusline version             print version
 
 config: ${configPath()}`;

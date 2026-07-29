@@ -86,6 +86,10 @@ describe("CLI compatibility", () => {
     const help = runCli(["help"]);
     expect(help.exitCode).toBe(0);
     expect(help.stdout).toContain("statusline render");
+    expect(help.stdout).toContain("statusline list [search text]");
+    expect(help.stdout).toContain("statusline search <text>");
+    expect(help.stdout).toContain("statusline show <id>");
+    expect(help.stdout).toContain("active Claude Code settings file");
     const unknown = runCli(["not-a-command"]);
     expect(unknown.exitCode).toBe(1);
     expect(unknown.stdout).toContain("usage:");
