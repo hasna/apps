@@ -9,6 +9,19 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: todos_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
@@ -31,6 +44,8 @@ jobs:
         # SQLITE_BUSY / SQLITE_BUSY_SNAPSHOT ("database is locked") or a slow
         # cold-start can fail a random single test that passes on re-run. Retry
         # transient failures so genuine (deterministic) failures still surface.
+        env:
+          TODOS_TEST_PG_URL: postgres://postgres@127.0.0.1:5432/todos_test?sslmode=disable
         run: bun test --retry=2
 
       - name: Build
