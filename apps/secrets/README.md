@@ -485,6 +485,10 @@ Storage is **PURE REMOTE (Amendment A1)** in cloud mode: `secrets-serve` reads
 and writes the shared Postgres directly (no cache, no local mirror). Secret and
 vault-item values are **encrypted at rest** (AES-256-GCM) with a master key
 injected via `HASNA_SECRETS_MASTER_KEY` — the service fails closed without it.
+During a master-key rotation, set `HASNA_SECRETS_PREVIOUS_MASTER_KEYS` to a JSON
+array of former keys (newest first). Reads try those keys after the active key
+and lazily rewrite matching ciphertext with the active key; the variable can be
+removed after all legacy rows have been read or otherwise migrated.
 
 ```bash
 # migrate the cloud database (one-shot), then serve

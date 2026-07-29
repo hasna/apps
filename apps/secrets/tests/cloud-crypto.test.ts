@@ -4,8 +4,10 @@ import {
   decryptValue,
   isEncrypted,
   getCloudMasterKey,
+  decryptValueWithMetadata,
   _resetCloudMasterKey,
 } from "../src/server/cloud-crypto.js";
+import { CloudSecretsStore } from "../src/server/cloud-store.js";
 
 const KEY = Buffer.alloc(32, 7).toString("base64");
 const env = { HASNA_SECRETS_MASTER_KEY: KEY } as NodeJS.ProcessEnv;
@@ -36,6 +38,87 @@ describe("cloud-crypto", () => {
     const ct = encryptValue("value", env);
     const tampered = ct.slice(0, -2) + (ct.endsWith("00") ? "11" : "00");
     expect(() => decryptValue(tampered, env)).toThrow();
+  });
+
+  test("reads ciphertext with a previous key and marks it for re-encryption", () => {
+    const previousKey = Buffer.alloc(32, 8).toString("base64");
+    const previousEnv = { HASNA_SECRETS_MASTER_KEY: previousKey } as NodeJS.ProcessEnv;
+    const ct = encryptValue("old-value", previousEnv);
+
+    _resetCloudMasterKey();
+    const rotatedEnv = {
+      HASNA_SECRETS_MASTER_KEY: KEY,
+      HASNA_SECRETS_PREVIOUS_MASTER_KEYS: JSON.stringify([previousKey]),
+    } as NodeJS.ProcessEnv;
+    expect(decryptValueWithMetadata(ct, rotatedEnv)).toEqual({
+      value: "old-value",
+      needsReencryption: true,
+    });
+
+    _resetCloudMasterKey();
+    const rewritten = encryptValue("old-value", rotatedEnv);
+    expect(decryptValueWithMetadata(rewritten, rotatedEnv)).toEqual({
+      value: "old-value",
+      needsReencryption: false,
+    });
+  });
+
+  test("cloud reads lazily rewrite previous-key ciphertext with the active key", async () => {
+    const previousKey = Buffer.alloc(32, 9).toString("base64");
+    const ct = encryptValue("recovered-value", {
+      HASNA_SECRETS_MASTER_KEY: previousKey,
+    } as NodeJS.ProcessEnv);
+    const originalActive = process.env.HASNA_SECRETS_MASTER_KEY;
+    const originalPrevious = process.env.HASNA_SECRETS_PREVIOUS_MASTER_KEYS;
+    const writes: Array<{ sql: string; params: unknown[] }> = [];
+
+    _resetCloudMasterKey();
+    process.env.HASNA_SECRETS_MASTER_KEY = KEY;
+    process.env.HASNA_SECRETS_PREVIOUS_MASTER_KEYS = JSON.stringify([previousKey]);
+    try {
+      const db = {
+        async get() {
+          return {
+            key: "example/service/live/token",
+            value: ct,
+            type: "token",
+            label: null,
+            expires_at: null,
+            created_at: "created",
+            updated_at: "updated",
+          };
+        },
+        async execute(sql: string, params: unknown[]) {
+          writes.push({ sql, params });
+        },
+      };
+      const store = new CloudSecretsStore(db as any);
+      expect((await store.getSecret("example/service/live/token", "test-actor"))?.value).toBe("recovered-value");
+
+      const rewrite = writes.find(({ sql }) => sql.startsWith("UPDATE secrets SET value"));
+      expect(rewrite).toBeDefined();
+      expect(rewrite?.params.slice(1)).toEqual(["example/service/live/token", ct]);
+
+      _resetCloudMasterKey();
+      expect(decryptValueWithMetadata(String(rewrite?.params[0]), env)).toEqual({
+        value: "recovered-value",
+        needsReencryption: false,
+      });
+    } finally {
+      if (originalActive === undefined) delete process.env.HASNA_SECRETS_MASTER_KEY;
+      else process.env.HASNA_SECRETS_MASTER_KEY = originalActive;
+      if (originalPrevious === undefined) delete process.env.HASNA_SECRETS_PREVIOUS_MASTER_KEYS;
+      else process.env.HASNA_SECRETS_PREVIOUS_MASTER_KEYS = originalPrevious;
+      _resetCloudMasterKey();
+    }
+  });
+
+  test("rejects an invalid previous-key list", () => {
+    const badEnv = {
+      HASNA_SECRETS_MASTER_KEY: KEY,
+      HASNA_SECRETS_PREVIOUS_MASTER_KEYS: KEY,
+    } as NodeJS.ProcessEnv;
+    expect(() => getCloudMasterKey(badEnv)).toThrow(/JSON array/);
   });
 
   test("passphrase key derives 32 bytes", () => {

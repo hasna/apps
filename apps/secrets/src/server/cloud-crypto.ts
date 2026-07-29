@@ -17,10 +17,25 @@ const ALGO = "aes-256-gcm";
 const IV_BYTES = 12;
 const PREFIX = "enc:v1:";
 
-/** Env vars the master key is read from, in priority order. */
+/** Env vars the active master key is read from, in priority order. */
 export const MASTER_KEY_ENV = ["HASNA_SECRETS_MASTER_KEY", "SECRETS_MASTER_KEY"] as const;
 
-let _cached: Buffer | null = null;
+/**
+ * Optional JSON array of former master keys, newest first. These let the server
+ * read ciphertext left behind by a key rotation (or the retired raw Postgres
+ * sync) long enough for CloudSecretsStore to rewrite it with the active key.
+ */
+export const PREVIOUS_MASTER_KEYS_ENV = [
+  "HASNA_SECRETS_PREVIOUS_MASTER_KEYS",
+  "SECRETS_PREVIOUS_MASTER_KEYS",
+] as const;
+
+interface MasterKeyring {
+  active: Buffer;
+  previous: Buffer[];
+}
+
+let _cached: MasterKeyring | null = null;
 
 /**
  * Resolve the 32-byte master key from the environment. Accepts a base64 or hex
@@ -28,6 +43,10 @@ let _cached: Buffer | null = null;
  * operator-supplied passphrase also works. Throws when unset (fail-closed).
  */
 export function getCloudMasterKey(env: NodeJS.ProcessEnv = process.env): Buffer {
+  return getCloudMasterKeyring(env).active;
+}
+
+function getCloudMasterKeyring(env: NodeJS.ProcessEnv): MasterKeyring {
   if (_cached) return _cached;
   let raw: string | undefined;
   for (const key of MASTER_KEY_ENV) {
@@ -43,15 +62,36 @@ export function getCloudMasterKey(env: NodeJS.ProcessEnv = process.env): Buffer 
     );
   }
 
-  let key: Buffer;
+  const active = deriveKey(raw);
+  const previous = readPreviousKeys(env).map(deriveKey);
+  _cached = { active, previous };
+  return _cached;
+}
+
+function deriveKey(raw: string): Buffer {
   const b64 = tryDecode(raw, "base64");
   const hex = tryDecode(raw, "hex");
-  if (b64 && b64.length === 32) key = b64;
-  else if (hex && hex.length === 32) key = hex;
-  else key = createHash("sha256").update(raw, "utf8").digest();
+  if (b64 && b64.length === 32) return b64;
+  if (hex && hex.length === 32) return hex;
+  return createHash("sha256").update(raw, "utf8").digest();
+}
 
-  _cached = key;
-  return key;
+function readPreviousKeys(env: NodeJS.ProcessEnv): string[] {
+  for (const name of PREVIOUS_MASTER_KEYS_ENV) {
+    const raw = env[name]?.trim();
+    if (!raw) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error(`${name} must be a JSON array of non-empty strings.`);
+    }
+    if (!Array.isArray(parsed) || parsed.some((value) => typeof value !== "string" || !value.trim())) {
+      throw new Error(`${name} must be a JSON array of non-empty strings.`);
+    }
+    return parsed.map((value) => value.trim());
+  }
+  return [];
 }
 
 function tryDecode(value: string, encoding: "base64" | "hex"): Buffer | null {
@@ -77,19 +117,50 @@ export function encryptValue(plaintext: string, env: NodeJS.ProcessEnv = process
   return `${PREFIX}${iv.toString("hex")}:${Buffer.concat([ciphertext, tag]).toString("hex")}`;
 }
 
-export function decryptValue(stored: string, env: NodeJS.ProcessEnv = process.env): string {
-  if (!isEncrypted(stored)) return stored; // legacy/plaintext passthrough
+export interface DecryptedCloudValue {
+  value: string;
+  /** True when a previous key succeeded and the ciphertext should be rewritten. */
+  needsReencryption: boolean;
+}
+
+/** Decrypt a value and report whether it used a previous master key. */
+export function decryptValueWithMetadata(
+  stored: string,
+  env: NodeJS.ProcessEnv = process.env,
+): DecryptedCloudValue {
+  if (!isEncrypted(stored)) return { value: stored, needsReencryption: false }; // legacy/plaintext passthrough
   const rest = stored.slice(PREFIX.length);
   const sep = rest.indexOf(":");
   if (sep === -1) throw new Error("Malformed encrypted value");
-  const iv = Buffer.from(rest.slice(0, sep), "hex");
-  const payload = Buffer.from(rest.slice(sep + 1), "hex");
+  const ivHex = rest.slice(0, sep);
+  const payloadHex = rest.slice(sep + 1);
+  if (!/^[0-9a-f]+$/i.test(ivHex) || ivHex.length !== IV_BYTES * 2) {
+    throw new Error("Malformed encrypted value");
+  }
+  if (!/^[0-9a-f]+$/i.test(payloadHex) || payloadHex.length < 32 || payloadHex.length % 2 !== 0) {
+    throw new Error("Malformed encrypted value");
+  }
+  const iv = Buffer.from(ivHex, "hex");
+  const payload = Buffer.from(payloadHex, "hex");
   const tag = payload.subarray(payload.length - 16);
   const ciphertext = payload.subarray(0, payload.length - 16);
-  const key = getCloudMasterKey(env);
-  const decipher = createDecipheriv(ALGO, key, iv);
-  decipher.setAuthTag(tag);
-  return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
+  const keyring = getCloudMasterKeyring(env);
+  const keys = [keyring.active, ...keyring.previous];
+  for (let index = 0; index < keys.length; index++) {
+    try {
+      const decipher = createDecipheriv(ALGO, keys[index]!, iv);
+      decipher.setAuthTag(tag);
+      const value = Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
+      return { value, needsReencryption: index > 0 };
+    } catch {
+      // AES-GCM authentication failure: try the next explicitly configured key.
+    }
+  }
+  throw new Error("Unable to decrypt stored value with the configured master keys");
+}
+
+export function decryptValue(stored: string, env: NodeJS.ProcessEnv = process.env): string {
+  return decryptValueWithMetadata(stored, env).value;
 }
 
 /** Test-only: reset the cached key. */

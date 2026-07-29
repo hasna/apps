@@ -10,7 +10,7 @@
 import { randomUUID } from "node:crypto";
 import type { TypedQueryClient } from "../generated/storage-kit/index.js";
 import { assertValidSecretPath } from "../hasna-xyz-paths.js";
-import { decryptValue, encryptValue } from "./cloud-crypto.js";
+import { decryptValueWithMetadata, encryptValue } from "./cloud-crypto.js";
 import type {
   SecretEntry,
   SecretMetadata,
@@ -159,9 +159,18 @@ export class CloudSecretsStore {
     const row = await this.db.get<SecretRow>("SELECT * FROM secrets WHERE key = $1", [key]);
     if (!row) return undefined;
     await this.audit("get", key, actor);
+    const decrypted = decryptValueWithMetadata(row.value);
+    if (decrypted.needsReencryption) {
+      // Compare-and-swap avoids overwriting a concurrent `set`. Do not change
+      // updated_at: the secret material itself did not change during key repair.
+      await this.db.execute(
+        "UPDATE secrets SET value = $1 WHERE key = $2 AND value = $3",
+        [encryptValue(decrypted.value), key, row.value],
+      );
+    }
     return {
       key: row.key,
-      value: decryptValue(row.value),
+      value: decrypted.value,
       type: row.type,
       ...(row.label ? { label: row.label } : {}),
       ...(row.expires_at ? { expires_at: row.expires_at } : {}),
@@ -246,7 +255,14 @@ export class CloudSecretsStore {
     const row = await this.db.get<VaultRow>("SELECT * FROM vault_items WHERE id = $1", [id]);
     if (!row || !row.data) return undefined;
     await this.audit("get", `vault-item/${id}`, actor);
-    const payload = JSON.parse(decryptValue(row.data)) as VaultItemPayload;
+    const decrypted = decryptValueWithMetadata(row.data);
+    if (decrypted.needsReencryption) {
+      await this.db.execute(
+        "UPDATE vault_items SET data = $1 WHERE id = $2 AND data = $3",
+        [encryptValue(decrypted.value), id, row.data],
+      );
+    }
+    const payload = JSON.parse(decrypted.value) as VaultItemPayload;
     return { ...vaultMeta(row), data: payload };
   }
 
