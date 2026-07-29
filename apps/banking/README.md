@@ -17,7 +17,7 @@ reconciliation gates.
 | npm package | `@hasna/banking` |
 | CLI | `banking` |
 | MCP binary | `banking-mcp` |
-| Local data | `~/.hasna/banking/` |
+| Reserved global state | `~/.hasna/banking/` |
 
 ## Initial Provider Scope
 
@@ -51,6 +51,17 @@ provider conformance task.
 ```bash
 bun add @hasna/banking
 ```
+
+## State and paths
+
+The package currently owns no persistent user-level state, and installation
+does not create or modify a home directory. `~/.hasna/banking` is reserved as
+the only package-global root if state is added later. The SQLite development
+store remains in-memory unless its caller supplies an explicit path.
+
+Legacy global dotdirs are not read, and no package-owned project-local dotdir
+is supported. See [State layout](docs/STATE_LAYOUT.md) for the audited path
+inventory and ownership boundaries.
 
 ## CLI
 

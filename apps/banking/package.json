@@ -29,7 +29,6 @@
   "files": [
     "dist",
     "docs",
-    "scripts/postinstall.ts",
     "scripts/smoke-mercury-live.ts",
     "README.md",
     "CHANGELOG.md",
@@ -50,7 +49,6 @@
     "verify:release": "bun run typecheck && bun test && bun run build && bun run smoke:dist && bun run pack:check",
     "dev:cli": "bun run src/cli/index.ts",
     "dev:mcp": "bun run src/mcp/index.ts",
-    "postinstall": "bun scripts/postinstall.ts",
     "prepack": "bun run verify:release",
     "prepublishOnly": "bun run verify:release"
   },

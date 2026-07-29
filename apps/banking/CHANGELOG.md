@@ -2,7 +2,11 @@
 
 ## Unreleased
 
-No changes yet.
+### Changed
+
+- Reserved `~/.hasna/banking` as the sole future package-global state root,
+  removed the install-time home-directory mutation and unused project-local
+  `.banking` ignore, and documented that the current package remains stateless.
 
 ## 0.0.7 - 2026-06-29
 
