@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const packageJson = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')) as {
   files: string[];
+  scripts: Record<string, string>;
 };
 
 const publicDocs = [
@@ -77,6 +78,11 @@ describe('public package release safety', () => {
     // task 104f993d - bun:sqlite throws ERR_UNSUPPORTED_ESM_URL_SCHEME under node
     'scripts/smoke-open-files-installed-boundary.mjs -> bun:sqlite',
   ]);
+
+  test('publish chain runs the contract fixture conformance gate', () => {
+    expect(packageJson.scripts['contracts:conformance']).toBe('contracts conformance fixtures');
+    expect(packageJson.scripts.prepublishOnly.split(' && ')).toContain('bun run contracts:conformance');
+  });
 
   test('package files list public docs explicitly', () => {
     expect(packageJson.files).not.toContain('docs');
