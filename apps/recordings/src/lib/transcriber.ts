@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { createReadStream } from "fs";
 import type { RecordingsConfig, TranscriptionResult } from "../types/index.js";
 import { TranscriptionError } from "../types/index.js";
+import { modelSupportsFileStreaming } from "./config.js";
 
 let _client: OpenAI | null = null;
 let _clientApiKey: string | null = null;
@@ -103,7 +104,9 @@ export async function transcribeAudioStream(
   config: RecordingsConfig,
   options: TranscriptionOptions = {}
 ): Promise<TranscriptionResult> {
-  if (config.transcription_model === "whisper-1") {
+  // Streaming is a per-model capability of /v1/audio/transcriptions, so it is
+  // read from the capability table rather than matched against a model name.
+  if (!modelSupportsFileStreaming(config.transcription_model)) {
     return transcribeAudio(audioPath, config, options);
   }
 

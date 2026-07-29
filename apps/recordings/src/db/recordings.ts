@@ -7,6 +7,7 @@ import type {
 } from "../types/index.js";
 import { RecordingNotFoundError } from "../types/index.js";
 import { recordingCreateIdentity } from "../lib/recording-create-identity.js";
+import { DEFAULT_TRANSCRIPTION_MODEL } from "../lib/config.js";
 
 function parseRow(row: Record<string, unknown>): Recording {
   return {
@@ -15,7 +16,7 @@ function parseRow(row: Record<string, unknown>): Recording {
     raw_text: row["raw_text"] as string,
     processed_text: (row["processed_text"] as string) || null,
     processing_mode: (row["processing_mode"] as Recording["processing_mode"]) || "raw",
-    model_used: (row["model_used"] as string) || "gpt-4o-transcribe",
+    model_used: (row["model_used"] as string) || DEFAULT_TRANSCRIPTION_MODEL,
     enhancement_model: (row["enhancement_model"] as string) || null,
     duration_ms: (row["duration_ms"] as number) || 0,
     language: (row["language"] as string) || null,
@@ -58,7 +59,7 @@ export function createRecording(
     input.raw_text,
     input.processed_text || null,
     input.processing_mode || "raw",
-    input.model_used || "gpt-4o-transcribe",
+    input.model_used || DEFAULT_TRANSCRIPTION_MODEL,
     input.enhancement_model || null,
     input.duration_ms || 0,
     input.language || null,

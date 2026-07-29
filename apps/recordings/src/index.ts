@@ -5,6 +5,7 @@ export type {
   RecordingFilter,
   ProcessingMode,
   PostProcessingMode,
+  RealtimeTranscriptionDelay,
   Agent,
   Project,
   RecordingsConfig,
@@ -45,10 +46,21 @@ export {
   DEFAULT_TRANSCRIPTION_MODEL,
   DEFAULT_REALTIME_SESSION_MODEL,
   DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
+  DEFAULT_REALTIME_DELAY,
+  REALTIME_TRANSCRIPTION_DELAYS,
+  MODEL_CAPABILITIES,
+  canonicalModelId,
+  modelCapability,
+  modelSupportsSlot,
+  modelSupportsFileStreaming,
+  modelsForSlot,
+  buildRealtimeTranscriptionOptions,
+  parseDelimitedList,
   normalizeModelSlots,
   normalizePostProcessingConfig,
   normalizePostProcessingMode,
 } from "./lib/config.js";
+export type { ModelCapability, ModelSlot } from "./lib/config.js";
 
 // ── Transcription ───────────────────────────────────────────────────────────
 export {

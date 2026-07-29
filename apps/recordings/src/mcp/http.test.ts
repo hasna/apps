@@ -92,9 +92,9 @@ describe("recordings MCP HTTP transport", () => {
     expect(status.service).toBe("recordings");
     expect(status.mcp.default_http_port).toBe(8873);
     expect(status.mcp.endpoint).toBe("/mcp");
-    expect(status.config.transcription_model).toBe("gpt-4o-transcribe");
+    expect(status.config.transcription_model).toBe("gpt-transcribe");
     expect(status.config.realtime_session_model).toBe("gpt-realtime");
-    expect(status.config.realtime_transcription_model).toBe("gpt-realtime-whisper");
+    expect(status.config.realtime_transcription_model).toBe("gpt-live-transcribe");
     expect(status.config.transcriber_model).toBe("gpt-4o");
     expect(status.config.post_processing_mode).toBe("auto");
     expect(typeof status.config.transcription_prompt_configured).toBe("boolean");

@@ -202,10 +202,16 @@ private final class RealtimeOutboundOperationState {
 public final class RealtimeTranscriptionClient: ObservableObject, @unchecked Sendable {
     /// Realtime session model slot. Transcription-only models do not belong in the URL.
     public nonisolated static let sessionModelID = "gpt-realtime"
-    /// Low-latency model for realtime transcript deltas.
-    public nonisolated static let transcriptionModelID = "gpt-realtime-whisper"
+    /// Low-latency realtime transcription model. `/v1/audio/transcriptions`
+    /// does not accept this model — it is realtime-only.
+    public nonisolated static let transcriptionModelID = "gpt-live-transcribe"
     public nonisolated static let modelID = transcriptionModelID
-    public nonisolated static let transcriptionDelay = "low"
+    /// Latency/accuracy tradeoff accepted by the realtime transcription model.
+    public nonisolated static let transcriptionDelays = [
+        "minimal", "low", "medium", "high", "xhigh",
+    ]
+    public nonisolated static let defaultTranscriptionDelay = "low"
+    public nonisolated static let transcriptionDelay = defaultTranscriptionDelay
     private nonisolated static let transcriptionURL = URL(string: "wss://api.openai.com/v1/realtime?intent=transcription")!
 
     @Published public var accumulatedText = ""
@@ -247,7 +253,7 @@ public final class RealtimeTranscriptionClient: ObservableObject, @unchecked Sen
 
     /// Start a streaming transcription session.
     /// - Returns: The client is now streaming. Call `sendAudio(_:)` to send chunks.
-    public func startStreaming(language: String = "") async {
+    public func startStreaming(settings: RealtimeTranscriptionSettings) async {
         guard !apiKey.isEmpty else {
             self.error = "OpenAI API key not configured"
             return
@@ -282,16 +288,9 @@ public final class RealtimeTranscriptionClient: ObservableObject, @unchecked Sen
             await self?.receiveLoop()
         }
 
-        var transcription: [String: Any] = [
-            "model": Self.modelID,
-            "delay": Self.transcriptionDelay,
-        ]
-        let trimmedLanguage = language.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmedLanguage.isEmpty {
-            transcription["language"] = trimmedLanguage
-        }
-
-        let sessionConfig = Self.transcriptionSessionUpdateEvent(transcription: transcription)
+        let sessionConfig = Self.transcriptionSessionUpdateEvent(
+            transcription: Self.transcriptionOptions(settings)
+        )
 
         do {
             try await sendEvent(sessionConfig)
@@ -798,6 +797,22 @@ public final class RealtimeTranscriptionClient: ObservableObject, @unchecked Sen
         )
     }
 
+    /// The `transcription` object sent inside `session.update`. Only populated
+    /// keys are emitted so the server keeps its own defaults for the rest.
+    nonisolated static func transcriptionOptions(
+        _ settings: RealtimeTranscriptionSettings
+    ) -> [String: Any] {
+        var transcription: [String: Any] = [
+            "model": settings.model.isEmpty ? modelID : settings.model,
+            "delay": settings.delay.isEmpty ? defaultTranscriptionDelay : settings.delay,
+        ]
+        let prompt = settings.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !prompt.isEmpty { transcription["prompt"] = prompt }
+        if !settings.keywords.isEmpty { transcription["keywords"] = settings.keywords }
+        if !settings.languages.isEmpty { transcription["languages"] = settings.languages }
+        return transcription
+    }
+
     private nonisolated static func transcriptionSessionUpdateEvent(transcription: [String: Any]) -> [String: Any] {
         [
             "type": "session.update",
@@ -945,15 +960,10 @@ extension RealtimeTranscriptionClient {
         return (result.resolution, result.elapsedMilliseconds)
     }
 
-    public nonisolated static func sessionUpdateTestHelper(prompt: String, language: String = "") -> [String: Any] {
-        var transcription: [String: Any] = [
-            "model": modelID,
-            "delay": transcriptionDelay,
-        ]
-        if !language.isEmpty {
-            transcription["language"] = language
-        }
-        return transcriptionSessionUpdateEvent(transcription: transcription)
+    public nonisolated static func sessionUpdateTestHelper(
+        _ settings: RealtimeTranscriptionSettings
+    ) -> [String: Any] {
+        transcriptionSessionUpdateEvent(transcription: transcriptionOptions(settings))
     }
 
     private nonisolated static func _parseJSON(_ text: String) -> [String: Any]? {

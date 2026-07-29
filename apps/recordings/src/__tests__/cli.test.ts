@@ -872,7 +872,7 @@ describe("recordings CLI", () => {
     expect(report.enhancement_api_key_configured).toBe(true);
     expect(report.enhancement_model).toBe("gpt-4o");
     expect(report.realtime_session_model).toBe("gpt-realtime");
-    expect(report.realtime_transcription_model).toBe("gpt-realtime-whisper");
+    expect(report.realtime_transcription_model).toBe("gpt-live-transcribe");
     expect(Array.isArray(report.config_warnings)).toBe(true);
   });
 
@@ -929,7 +929,7 @@ describe("recordings CLI", () => {
       };
       expect(recording.raw_text).toBe("mock transcript");
       expect(recording.processing_mode).toBe("raw");
-      expect(recording.model_used).toBe("gpt-4o-transcribe");
+      expect(recording.model_used).toBe("gpt-transcribe");
     } finally {
       apiServer.stop(true);
     }
@@ -1045,7 +1045,7 @@ describe("recordings CLI", () => {
         "--source",
         "realtime_fast_path",
         "--model-used",
-        "gpt-realtime-whisper",
+        "gpt-live-transcribe",
         "--post-processing",
         "off",
         "--language",
@@ -1090,14 +1090,14 @@ describe("recordings CLI", () => {
     expect(recording.audio_path).toBe(audioPath);
     expect(recording.raw_text).toBe(transcript);
     expect(recording.processing_mode).toBe("raw");
-    expect(recording.model_used).toBe("gpt-realtime-whisper");
+    expect(recording.model_used).toBe("gpt-live-transcribe");
     expect(recording.duration_ms).toBe(1200);
     expect(recording.language).toBe("en");
     expect(recording.machine_id).toBe("station-test");
     expect(recording.metadata.transcription_source).toBe("realtime_fast_path");
     expect(recording.metadata.realtime).toEqual({
       fast_path: true,
-      model: "gpt-realtime-whisper",
+      model: "gpt-live-transcribe",
       bounded_fallback: false,
     });
     expect(recording.metadata.post_processing.mode).toBe("off");

@@ -24,7 +24,7 @@ struct RecordingBridgeTests {
           "raw_text": "hello world",
           "processed_text": "Hello, world.",
           "processing_mode": "enhanced",
-          "model_used": "gpt-4o-transcribe",
+          "model_used": "gpt-transcribe",
           "enhancement_model": "gpt-4o",
           "duration_ms": 65000,
           "language": "en",

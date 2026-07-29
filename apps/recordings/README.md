@@ -259,8 +259,8 @@ transcriber cleanup prompt for every recording. Global cleanup instructions can 
 Settings, and project-specific instructions are appended when a project is active.
 
 The native app uses OpenAI realtime transcription for the stop-and-paste path: settled
-`gpt-realtime-whisper` text is saved and pasted immediately, while full-file
-`gpt-4o-transcribe` remains the bounded quality fallback when realtime is empty,
+`gpt-live-transcribe` text is saved and pasted immediately, while full-file
+`gpt-transcribe` remains the bounded quality fallback when realtime is empty,
 unsettled, or cannot be saved. Raw and processed transcript fields are still stored
 separately, so cleanup instructions never replace the verbatim transcript.
 
@@ -341,7 +341,12 @@ Persistent config can be stored in `~/.hasna/recordings/config.json` or a projec
   "transcription_prompt": "Hasna, Alumia, gpt-4o",
   "transcriber_prompt": "Clean up grammar and format as concise Markdown notes.",
   "post_processing_mode": "always",
-  "enhancement_model": "gpt-4o"
+  "enhancement_model": "gpt-4o",
+  "transcription_model": "gpt-transcribe",
+  "realtime_transcription_model": "gpt-live-transcribe",
+  "realtime_keywords": ["Hasna", "Alumia"],
+  "realtime_languages": ["en"],
+  "realtime_delay": "low"
 }
 ```
 
@@ -352,14 +357,47 @@ export RECORDINGS_TRANSCRIPTION_PROMPT="Hasna, DALL-E, gpt-4o"
 export RECORDINGS_TRANSCRIBER_PROMPT="Format as polished meeting notes"
 export RECORDINGS_POST_PROCESSING_MODE=always
 export RECORDINGS_TRANSCRIBER_MODEL=gpt-4o
-export RECORDINGS_MODEL=gpt-4o-transcribe
+export RECORDINGS_MODEL=gpt-transcribe
 export RECORDINGS_REALTIME_SESSION_MODEL=gpt-realtime
-export RECORDINGS_REALTIME_TRANSCRIPTION_MODEL=gpt-realtime-whisper
+export RECORDINGS_REALTIME_TRANSCRIPTION_MODEL=gpt-live-transcribe
+
+# Realtime accuracy controls (gpt-live-transcribe only)
+export RECORDINGS_REALTIME_PROMPT="Weekly infrastructure standup"
+export RECORDINGS_REALTIME_KEYWORDS="Hasna,Alumia,Postgres"
+export RECORDINGS_REALTIME_LANGUAGES="en,fr"
+export RECORDINGS_REALTIME_DELAY=low
 ```
 
-`RECORDINGS_MODEL` is the bounded file-transcription model. Realtime session and realtime
-transcription models are separate slots; `recordings check --json` reports all three and
-includes `config_warnings` if a model is placed in the wrong slot.
+### Models
+
+Model slots are validated against an explicit capability table — a model is only accepted
+in a slot the table says it belongs to, matched by exact id (no name heuristics).
+
+| Slot | Config key | Valid models | Default |
+| ---- | ---------- | ------------ | ------- |
+| File transcription (`/v1/audio/transcriptions`) | `transcription_model` | `gpt-transcribe`, `whisper-1` | `gpt-transcribe` |
+| Realtime transcription (WebSocket/WebRTC) | `realtime_transcription_model` | `gpt-live-transcribe` | `gpt-live-transcribe` |
+| Realtime speech-to-speech session | `realtime_session_model` | `gpt-realtime` | `gpt-realtime` |
+
+`gpt-transcribe` handles completed audio files and supports response streaming.
+`gpt-live-transcribe` is realtime-only — `/v1/audio/transcriptions` does not accept it.
+`recordings check --json` reports every resolved slot and includes `config_warnings`
+whenever a model is placed in a slot it is not valid for.
+
+### Realtime accuracy controls
+
+`gpt-live-transcribe` accepts four extra controls that are sent inside the realtime
+`session.update` event under `session.audio.input.transcription`:
+
+| Config key | CLI flag | Meaning |
+| ---------- | -------- | ------- |
+| `realtime_prompt` | `--realtime-prompt` | Free-form description of the recording context |
+| `realtime_keywords` | `--realtime-keywords` | Domain-specific terms and names |
+| `realtime_languages` | `--realtime-languages` | Expected ISO 639-1 codes, e.g. `en,fr` |
+| `realtime_delay` | `--realtime-delay` | Latency/accuracy tradeoff: `minimal`, `low`, `medium`, `high`, `xhigh` |
+
+The MCP `realtime_transcription_settings` tool reads these with no arguments and persists
+any argument it is given to the recordings config file.
 
 ## MCP Server
 

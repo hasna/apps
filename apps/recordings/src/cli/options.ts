@@ -1,8 +1,9 @@
-import type { RecordingsConfig } from "../types/index.js";
+import type { RealtimeTranscriptionDelay, RecordingsConfig } from "../types/index.js";
 import {
   normalizeModelSlots,
   normalizePostProcessingConfig,
   normalizePostProcessingMode,
+  parseDelimitedList,
 } from "../lib/config.js";
 
 const POST_PROCESSING_MODES = new Set(["off", "auto", "always"]);
@@ -18,6 +19,11 @@ export type EnhancementOptionBag = {
   enhancementModel?: string;
   enhanceTriggersJson?: string;
   keywordTransformsJson?: string;
+  realtimeTranscriptionModel?: string;
+  realtimePrompt?: string;
+  realtimeKeywords?: string;
+  realtimeLanguages?: string;
+  realtimeDelay?: string;
 };
 
 export function parseListPagination(
@@ -78,6 +84,21 @@ export function applyEnhancementOptions(
   }
   if (opts.transcriptionModel) {
     config.transcription_model = opts.transcriptionModel;
+  }
+  if (opts.realtimeTranscriptionModel) {
+    config.realtime_transcription_model = opts.realtimeTranscriptionModel;
+  }
+  if (opts.realtimePrompt !== undefined) {
+    config.realtime_prompt = opts.realtimePrompt;
+  }
+  if (opts.realtimeKeywords !== undefined) {
+    config.realtime_keywords = parseDelimitedList(opts.realtimeKeywords);
+  }
+  if (opts.realtimeLanguages !== undefined) {
+    config.realtime_languages = parseDelimitedList(opts.realtimeLanguages);
+  }
+  if (opts.realtimeDelay !== undefined) {
+    config.realtime_delay = opts.realtimeDelay as RealtimeTranscriptionDelay;
   }
   if (opts.enhanceTriggersJson !== undefined) {
     const triggers = JSON.parse(opts.enhanceTriggersJson) as unknown;

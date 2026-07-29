@@ -1,6 +1,7 @@
 import { ValidationError } from "../db/errors.js";
 import type { CreateRecordingInput } from "../types/index.js";
 import { createHash } from "node:crypto";
+import { DEFAULT_TRANSCRIPTION_MODEL } from "./config.js";
 
 export interface RecordingCreateIdentity {
   input: CreateRecordingInput;
@@ -28,7 +29,7 @@ export function recordingCreateFingerprint(input: CreateRecordingInput): string 
     raw_text: input.raw_text,
     processed_text: input.processed_text || null,
     processing_mode: input.processing_mode || "raw",
-    model_used: input.model_used || "gpt-4o-transcribe",
+    model_used: input.model_used || DEFAULT_TRANSCRIPTION_MODEL,
     enhancement_model: input.enhancement_model || null,
     duration_ms: input.duration_ms || 0,
     language: input.language || null,

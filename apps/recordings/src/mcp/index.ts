@@ -6,13 +6,21 @@ import { z } from "zod";
 import {
   loadConfig,
   ensureDataDir,
+  normalizeModelSlots,
   normalizePostProcessingConfig,
   normalizePostProcessingMode,
+  saveRealtimeTranscriptionSettings,
+  REALTIME_TRANSCRIPTION_DELAYS,
 } from "../lib/config.js";
+import type { RealtimeTranscriptionSettings } from "../lib/config.js";
 import { countStoreRecordings, getStore } from "../store.js";
 import { transcribeAudio } from "../lib/transcriber.js";
 import { processText, needsEnhancement, resolveTranscriberModel } from "../lib/enhancer.js";
-import type { Recording, RecordingFilter } from "../types/index.js";
+import type {
+  RealtimeTranscriptionDelay,
+  Recording,
+  RecordingFilter,
+} from "../types/index.js";
 import { VERSION } from "../version.js";
 import { currentMachineId } from "../lib/machine.js";
 
@@ -109,9 +117,23 @@ function applyTranscriptionArgs(
     enhance?: boolean;
     transcriber_model?: string;
     enhancement_model?: string;
+    realtime_transcription_model?: string;
+    realtime_prompt?: string;
+    realtime_keywords?: string[];
+    realtime_languages?: string[];
+    realtime_delay?: RealtimeTranscriptionDelay;
   }
 ): ReturnType<typeof runtimeConfig> {
   if (args.language) cfg.language = args.language;
+
+  if (args.realtime_transcription_model) {
+    cfg.realtime_transcription_model = args.realtime_transcription_model;
+  }
+  if (args.realtime_prompt !== undefined) cfg.realtime_prompt = args.realtime_prompt;
+  if (args.realtime_keywords !== undefined) cfg.realtime_keywords = args.realtime_keywords;
+  if (args.realtime_languages !== undefined) cfg.realtime_languages = args.realtime_languages;
+  if (args.realtime_delay !== undefined) cfg.realtime_delay = args.realtime_delay;
+  normalizeModelSlots(cfg);
 
   const transcriptionPrompt = args.transcription_prompt ?? args.prompt;
   if (transcriptionPrompt !== undefined) {
@@ -348,7 +370,8 @@ async function saveRecordingMemento(args: {
 // ── Full tool schemas for describe_tool ─────────────────────────────────────
 
 const toolDocs: Record<string, string> = {
-  recordings_status: "Show safe service status for agents.\nParams: none\nReturns: JSON with package version, MCP HTTP defaults, active transcription/enhancement models, language, data paths, key-presence booleans, and recording counts. Never returns secret values.",
+  recordings_status: "Show safe service status for agents.\nParams: none\nReturns: JSON with package version, MCP HTTP defaults, active transcription/enhancement models, realtime accuracy controls, language, data paths, key-presence booleans, and recording counts. Never returns secret values.",
+  realtime_transcription_settings: `Read or update the realtime transcription accuracy controls used by the realtime model.\nParams: realtime_transcription_model (string) | prompt (string): free-form description of the recording context | keywords (string[]): domain-specific terms and names | languages (string[]): ISO 639-1 codes e.g. ["en","fr"] | delay (${REALTIME_TRANSCRIPTION_DELAYS.join("|")}): latency/accuracy tradeoff\nCalling with no params reads the active settings; any supplied param is persisted to the recordings config file.\nReturns: JSON with the resolved settings and any config warnings.`,
   transcribe_audio: "Transcribe audio file and save raw plus optional processed text.\nParams: audio_path (string, required): path to wav/mp3/m4a/webm | language (string): ISO code e.g. en/es/fr | transcription_prompt or prompt (string): STT vocabulary/context only | transcriber_prompt or system_prompt (string): post-transcription cleanup instructions | post_processing_mode ('off'|'auto'|'always') | transcriber_model (string) | no_enhance (bool): alias for post_processing_mode=off | tags (string[]) | agent_id (string) | project_id (string) | session_id (string)\nReturns: JSON recording summary with raw_text, processed_text, processing_mode, and safe metadata.",
   save_recording: "Save text as recording. Auto-enhances if needed.\nParams: text (string, required): text to save | enhance (bool): true forces always, false disables | transcriber_prompt or system_prompt (string): post-processing instructions | post_processing_mode ('off'|'auto'|'always') | tags (string[]) | agent_id (string) | project_id (string) | session_id (string) | metadata (object)",
   get_recording: "Get recording by ID or prefix.\nParams: id (string, required): recording ID or prefix",
@@ -397,6 +420,10 @@ registerTool(
           transcription_model: cfg.transcription_model,
           realtime_session_model: cfg.realtime_session_model,
           realtime_transcription_model: cfg.realtime_transcription_model,
+          realtime_prompt_configured: Boolean(cfg.realtime_prompt?.trim()),
+          realtime_keywords: cfg.realtime_keywords ?? [],
+          realtime_languages: cfg.realtime_languages ?? [],
+          realtime_delay: cfg.realtime_delay,
           enhancement_model: cfg.enhancement_model,
           transcriber_model: resolveTranscriberModel(cfg),
           language: cfg.language,
@@ -714,6 +741,46 @@ registerTool(
         }
       }
       return text(out);
+    } catch (e) {
+      return errorResult(e);
+    }
+  }
+);
+
+registerTool(
+  "realtime_transcription_settings",
+  "Read or update the realtime transcription accuracy controls.",
+  {
+    realtime_transcription_model: z.string().optional(),
+    prompt: z.string().optional(),
+    keywords: z.array(z.string()).optional(),
+    languages: z.array(z.string()).optional(),
+    delay: z.enum(REALTIME_TRANSCRIPTION_DELAYS).optional(),
+  },
+  async (args) => {
+    try {
+      const patch: RealtimeTranscriptionSettings = {};
+      if (args.realtime_transcription_model !== undefined) {
+        patch.realtime_transcription_model = args.realtime_transcription_model;
+      }
+      if (args.prompt !== undefined) patch.realtime_prompt = args.prompt;
+      if (args.keywords !== undefined) patch.realtime_keywords = args.keywords;
+      if (args.languages !== undefined) patch.realtime_languages = args.languages;
+      if (args.delay !== undefined) patch.realtime_delay = args.delay;
+
+      const updated = Object.keys(patch).length > 0;
+      if (updated) saveRealtimeTranscriptionSettings(patch);
+
+      const cfg = runtimeConfig();
+      return text(JSON.stringify({
+        updated,
+        realtime_transcription_model: cfg.realtime_transcription_model,
+        prompt: cfg.realtime_prompt ?? "",
+        keywords: cfg.realtime_keywords ?? [],
+        languages: cfg.realtime_languages ?? [],
+        delay: cfg.realtime_delay,
+        config_warnings: cfg.config_warnings ?? [],
+      }, null, 2));
     } catch (e) {
       return errorResult(e);
     }

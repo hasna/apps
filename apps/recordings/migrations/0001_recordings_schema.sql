@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS recordings (
     raw_text TEXT NOT NULL,
     processed_text TEXT,
     processing_mode TEXT NOT NULL DEFAULT 'raw' CHECK(processing_mode IN ('raw', 'enhanced')),
-    model_used TEXT NOT NULL DEFAULT 'gpt-4o-transcribe',
+    model_used TEXT NOT NULL DEFAULT 'gpt-transcribe',
     enhancement_model TEXT,
     duration_ms INTEGER DEFAULT 0,
     language TEXT,

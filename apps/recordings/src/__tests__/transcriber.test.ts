@@ -319,6 +319,39 @@ describe("transcribeAudioStream", () => {
     resetClient();
   });
 
+  test("streams for the default gpt-transcribe file model", async () => {
+    let capturedOpts: any = null;
+    mock.module("openai", () => ({
+      default: class MockOpenAI {
+        audio = {
+          transcriptions: {
+            create: mock((opts: any) => {
+              capturedOpts = opts;
+              return (async function* () {
+                yield { type: "transcript.text.done", text: "Streamed" };
+              })();
+            }),
+          },
+        };
+      },
+    }));
+
+    resetClient();
+    const { transcribeAudioStream } = await import("../lib/transcriber.js");
+    resetClient();
+
+    const result = await transcribeAudioStream(tempAudioFile, {
+      ...config,
+      transcription_model: "gpt-transcribe",
+    });
+
+    expect(result.text).toBe("Streamed");
+    expect(capturedOpts.model).toBe("gpt-transcribe");
+    expect(capturedOpts.stream).toBe(true);
+
+    resetClient();
+  });
+
   test("falls back to non-streaming transcription for whisper-1", async () => {
     let capturedOpts: any = null;
     mock.module("openai", () => ({

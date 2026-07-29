@@ -24,6 +24,7 @@ import {
   recordingCreateFingerprint,
   recordingCreateIdentity,
 } from "../lib/recording-create-identity.js";
+import { DEFAULT_TRANSCRIPTION_MODEL } from "../lib/config.js";
 
 // Re-exported so `/v1` route code can `import * as repo` and reference
 // `repo.ProjectNotFoundError` when mapping a bad focus ref to a clean 400.
@@ -61,7 +62,7 @@ function parseRecording(row: Record<string, unknown>): Recording {
     raw_text: row["raw_text"] as string,
     processed_text: (row["processed_text"] as string) || null,
     processing_mode: (row["processing_mode"] as Recording["processing_mode"]) || "raw",
-    model_used: (row["model_used"] as string) || "gpt-4o-transcribe",
+    model_used: (row["model_used"] as string) || DEFAULT_TRANSCRIPTION_MODEL,
     enhancement_model: (row["enhancement_model"] as string) || null,
     duration_ms: Number(row["duration_ms"] ?? 0),
     language: (row["language"] as string) || null,
@@ -179,7 +180,7 @@ export async function createRecording(
     input.raw_text,
     input.processed_text || null,
     input.processing_mode || "raw",
-    input.model_used || "gpt-4o-transcribe",
+    input.model_used || DEFAULT_TRANSCRIPTION_MODEL,
     input.enhancement_model || null,
     input.duration_ms || 0,
     input.language || null,

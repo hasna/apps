@@ -10,7 +10,15 @@ import {
 } from "fs";
 import { dirname, join as pathJoin } from "path";
 import { fileURLToPath } from "url";
-import { loadConfig, ensureDataDir } from "../lib/config.js";
+import {
+  loadConfig,
+  ensureDataDir,
+  DEFAULT_REALTIME_DELAY,
+  DEFAULT_REALTIME_SESSION_MODEL,
+  DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
+  DEFAULT_TRANSCRIPTION_MODEL,
+  REALTIME_TRANSCRIPTION_DELAYS,
+} from "../lib/config.js";
 import { countStoreRecordings, getStore } from "../store.js";
 import {
   startRecording,
@@ -58,10 +66,26 @@ const DEFAULT_LIST_LIMIT = 20;
 const MAX_HUMAN_LIST_LIMIT = 50;
 const DEFAULT_LOG_LINES = 40;
 
+/**
+ * Accuracy controls the realtime transcription model accepts under
+ * `session.audio.input.transcription`. Registered from one place so every
+ * command that can freeze a config snapshot exposes the identical flags.
+ */
+function withRealtimeTranscriptionOptions(command: Command): Command {
+  return command
+    .option("--realtime-transcription-model <model>", "Model for realtime transcription")
+    .option("--realtime-prompt <prompt>", "Context description for the realtime transcription model")
+    .option("--realtime-keywords <keywords>", "Comma-separated domain terms and names for the realtime model")
+    .option("--realtime-languages <codes>", "Comma-separated ISO 639-1 codes, e.g. en,fr")
+    .option(
+      "--realtime-delay <delay>",
+      `Realtime latency/accuracy tradeoff: ${REALTIME_TRANSCRIPTION_DELAYS.join(", ")}`
+    );
+}
+
 // ── record ──────────────────────────────────────────────────────────────────
 
-program
-  .command("record")
+withRealtimeTranscriptionOptions(program.command("record"))
   .description("Record from microphone, transcribe, and optionally enhance")
   .option("-d, --duration <seconds>", "Record for specific duration")
   .option("--no-enhance", "Skip AI enhancement")
@@ -183,8 +207,7 @@ program
 
 // ── transcribe ──────────────────────────────────────────────────────────────
 
-program
-  .command("transcribe <file>")
+withRealtimeTranscriptionOptions(program.command("transcribe <file>"))
   .description("Transcribe an existing audio file")
   .option("--no-enhance", "Skip AI enhancement")
   .option("--stream", "Stream transcription deltas while the file is processed")
@@ -266,8 +289,7 @@ program
 
 // ── save-text ───────────────────────────────────────────────────────────────
 
-program
-  .command("save-text [text]")
+withRealtimeTranscriptionOptions(program.command("save-text [text]"))
   .description("Save already-transcribed text as a recording")
   .option("--text-file <path>", "Read transcript text from a UTF-8 file")
   .option("--stdin", "Read transcript text from stdin")
@@ -343,8 +365,7 @@ program
 
 // ── rewrite ────────────────────────────────────────────────────────────────
 
-program
-  .command("rewrite <text>")
+withRealtimeTranscriptionOptions(program.command("rewrite <text>"))
   .description("Rewrite provided text using an instruction")
   .requiredOption("-i, --instruction <instruction>", "Rewrite instruction")
   .option("--prompt <prompt>", "Frozen transcription vocabulary/context prompt")
@@ -716,9 +737,13 @@ program
 
     if (!existsSync(configFile)) {
       const defaultConf = {
-        transcription_model: "gpt-4o-transcribe",
-        realtime_session_model: "gpt-realtime",
-        realtime_transcription_model: "gpt-realtime-whisper",
+        transcription_model: DEFAULT_TRANSCRIPTION_MODEL,
+        realtime_session_model: DEFAULT_REALTIME_SESSION_MODEL,
+        realtime_transcription_model: DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
+        realtime_prompt: "",
+        realtime_keywords: [],
+        realtime_languages: [],
+        realtime_delay: DEFAULT_REALTIME_DELAY,
         enhancement_model: "gpt-4o",
         transcriber_model: "gpt-4o",
         language: "en",
@@ -1133,6 +1158,10 @@ program
         transcriber_model: resolveTranscriberModel(config),
         realtime_session_model: config.realtime_session_model,
         realtime_transcription_model: config.realtime_transcription_model,
+        realtime_prompt_configured: Boolean(config.realtime_prompt?.trim()),
+        realtime_keywords: config.realtime_keywords ?? [],
+        realtime_languages: config.realtime_languages ?? [],
+        realtime_delay: config.realtime_delay,
         post_processing_mode: config.post_processing_mode,
         transcription_prompt_configured: Boolean(config.transcription_prompt?.trim()),
         transcriber_prompt_configured: Boolean(config.transcriber_prompt?.trim()),
@@ -1174,8 +1203,7 @@ program
 
 // ── listen ───────────────────────────────────────────────────────────────────
 
-program
-  .command("listen")
+withRealtimeTranscriptionOptions(program.command("listen"))
   .description("Push-to-talk mode — press Space to start/stop recording, Esc to quit")
   .option("-t, --tags <tags>", "Comma-separated tags for all recordings")
   .option("--no-enhance", "Skip AI enhancement")

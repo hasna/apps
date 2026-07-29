@@ -1212,7 +1212,7 @@ struct CLIRunnerTests {
             language: "en",
             durationMs: 1200,
             source: "realtime_fast_path",
-            modelUsed: "gpt-realtime-whisper"
+            modelUsed: "gpt-live-transcribe"
         )
         #expect(args == [
             "--json",
@@ -1220,7 +1220,7 @@ struct CLIRunnerTests {
             "save-text",
             "--text-file", "/tmp/transcript.txt",
             "--source", "realtime_fast_path",
-            "--model-used", "gpt-realtime-whisper",
+            "--model-used", "gpt-live-transcribe",
             "--post-processing", "auto",
             "--audio-path", "/tmp/audio.wav",
             "--duration-ms", "1200",
@@ -1240,7 +1240,7 @@ struct CLIRunnerTests {
             language: "en",
             durationMs: 0,
             source: "realtime_fast_path",
-            modelUsed: "gpt-realtime-whisper"
+            modelUsed: "gpt-live-transcribe"
         )
 
         #expect(!args.contains("--project"))

@@ -10,6 +10,30 @@ struct ProcessingModelSelection: Equatable, Sendable {
     let keywordTransformsJSON: String
 }
 
+/// Accuracy controls the realtime transcription model accepts under
+/// `session.audio.input.transcription`.
+public struct RealtimeTranscriptionSettings: Equatable, Sendable {
+    public let model: String
+    public let prompt: String
+    public let keywords: [String]
+    public let languages: [String]
+    public let delay: String
+
+    public init(
+        model: String,
+        prompt: String = "",
+        keywords: [String] = [],
+        languages: [String] = [],
+        delay: String
+    ) {
+        self.model = model
+        self.prompt = prompt
+        self.keywords = keywords
+        self.languages = languages
+        self.delay = delay
+    }
+}
+
 enum OpenAIAPIKeyStore {
     static let defaultLanguage = "en"
 
@@ -67,7 +91,7 @@ enum OpenAIAPIKeyStore {
         let transcriptionModel = firstNonEmpty(
             environment["RECORDINGS_MODEL"],
             json["transcription_model"] as? String
-        ) ?? "gpt-4o-transcribe"
+        ) ?? "gpt-transcribe"
         let intentModel = firstNonEmpty(
             environment["RECORDINGS_INTENT_MODEL"],
             json["intent_model"] as? String
@@ -94,6 +118,84 @@ enum OpenAIAPIKeyStore {
             enhanceTriggersJSON: triggerJSON,
             keywordTransformsJSON: transformJSON
         )
+    }
+
+    /// Realtime accuracy controls, resolved from RECORDINGS_REALTIME_* env vars
+    /// first and then the recordings config file. `languages` falls back to the
+    /// single Language setting so it still reaches the realtime session.
+    static func loadRealtimeTranscriptionSettings(
+        homePath: String,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        storedLanguage: String? = nil
+    ) -> RealtimeTranscriptionSettings {
+        let json = loadMutableConfig(homePath: homePath)
+
+        let model = firstNonEmpty(
+            environment["RECORDINGS_REALTIME_TRANSCRIPTION_MODEL"],
+            json["realtime_transcription_model"] as? String
+        ) ?? RealtimeTranscriptionClient.transcriptionModelID
+
+        let prompt = firstNonEmpty(
+            environment["RECORDINGS_REALTIME_PROMPT"],
+            json["realtime_prompt"] as? String
+        ) ?? ""
+
+        let keywords = resolveList(
+            environment["RECORDINGS_REALTIME_KEYWORDS"],
+            json["realtime_keywords"]
+        )
+
+        var languages = resolveList(
+            environment["RECORDINGS_REALTIME_LANGUAGES"],
+            json["realtime_languages"]
+        )
+        .map { $0.lowercased() }
+        .filter { isISO6391Code($0) }
+        if languages.isEmpty {
+            let hint = apiLanguageHint(
+                for: storedLanguage ?? loadLanguage(homePath: homePath, environment: environment)
+            )
+            if isISO6391Code(hint) { languages = [hint] }
+        }
+
+        let requestedDelay = (firstNonEmpty(
+            environment["RECORDINGS_REALTIME_DELAY"],
+            json["realtime_delay"] as? String
+        ) ?? RealtimeTranscriptionClient.defaultTranscriptionDelay).lowercased()
+        let delay = RealtimeTranscriptionClient.transcriptionDelays.contains(requestedDelay)
+            ? requestedDelay
+            : RealtimeTranscriptionClient.defaultTranscriptionDelay
+
+        return RealtimeTranscriptionSettings(
+            model: model,
+            prompt: prompt,
+            keywords: keywords,
+            languages: languages,
+            delay: delay
+        )
+    }
+
+    private static func resolveList(_ environmentValue: String?, _ configValue: Any?) -> [String] {
+        if let raw = firstNonEmpty(environmentValue) {
+            return normalizeList(raw.split(whereSeparator: { $0 == "," || $0.isNewline }).map(String.init))
+        }
+        if let values = configValue as? [String] {
+            return normalizeList(values)
+        }
+        return []
+    }
+
+    private static func normalizeList(_ values: [String]) -> [String] {
+        var out: [String] = []
+        for value in values {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty, !out.contains(trimmed) { out.append(trimmed) }
+        }
+        return out
+    }
+
+    private static func isISO6391Code(_ value: String) -> Bool {
+        value.count == 2 && value.allSatisfy { $0.isLetter && $0.isASCII }
     }
 
     /// Persist the key into ~/.hasna/recordings/config.json so the CLI (which the app

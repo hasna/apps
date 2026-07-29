@@ -1,7 +1,20 @@
-import { copyFileSync, existsSync, readFileSync, mkdirSync, readdirSync, realpathSync, statSync } from "fs";
+import {
+  copyFileSync,
+  existsSync,
+  readFileSync,
+  mkdirSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from "fs";
 import { dirname, join, resolve, sep } from "path";
 import { homedir } from "os";
-import type { PostProcessingMode, RecordingsConfig } from "../types/index.js";
+import type {
+  PostProcessingMode,
+  RealtimeTranscriptionDelay,
+  RecordingsConfig,
+} from "../types/index.js";
 import {
   acquireLocalStoreReaderLease,
   isGlobalRecordingsStatePath,
@@ -12,9 +25,85 @@ const POST_PROCESSING_MODES = new Set<PostProcessingMode>([
   "auto",
   "always",
 ]);
-export const DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-transcribe";
+
+// ── Model capability table ──────────────────────────────────────────────────
+//
+// The SINGLE source of truth for which OpenAI model is valid in which slot.
+// Model ids are resolved by exact (case-insensitive) match against this table;
+// there is no prefix or substring heuristic anywhere in the codebase.
+//
+//   file_transcription     — POST /v1/audio/transcriptions over a finished file
+//   realtime_transcription — realtime transcription session (WebSocket/WebRTC)
+//   realtime_session       — realtime speech-to-speech session model
+//
+// `file_streaming` records whether /v1/audio/transcriptions accepts
+// `stream: true` for the model, which is a property of the model and not of
+// the caller.
+
+export type ModelSlot =
+  | "file_transcription"
+  | "realtime_transcription"
+  | "realtime_session";
+
+export interface ModelCapability {
+  readonly slots: readonly ModelSlot[];
+  readonly file_streaming: boolean;
+}
+
+export const MODEL_CAPABILITIES: Readonly<Record<string, ModelCapability>> = {
+  // Completed audio files / batch transcription. Supports response streaming.
+  "gpt-transcribe": { slots: ["file_transcription"], file_streaming: true },
+  // Older file transcription model. No streaming on /v1/audio/transcriptions.
+  "whisper-1": { slots: ["file_transcription"], file_streaming: false },
+  // Low-latency realtime transcription ONLY.
+  // /v1/audio/transcriptions is explicitly unsupported for this model.
+  "gpt-live-transcribe": { slots: ["realtime_transcription"], file_streaming: false },
+  // Realtime speech-to-speech session model. Not a transcription model.
+  "gpt-realtime": { slots: ["realtime_session"], file_streaming: false },
+};
+
+export const DEFAULT_TRANSCRIPTION_MODEL = "gpt-transcribe";
 export const DEFAULT_REALTIME_SESSION_MODEL = "gpt-realtime";
-export const DEFAULT_REALTIME_TRANSCRIPTION_MODEL = "gpt-realtime-whisper";
+export const DEFAULT_REALTIME_TRANSCRIPTION_MODEL = "gpt-live-transcribe";
+
+export const REALTIME_TRANSCRIPTION_DELAYS = [
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+] as const;
+
+export const DEFAULT_REALTIME_DELAY: RealtimeTranscriptionDelay = "low";
+
+const REALTIME_DELAY_SET = new Set<string>(REALTIME_TRANSCRIPTION_DELAYS);
+
+/** Resolve a caller-supplied model id to its canonical table id, or null. */
+export function canonicalModelId(model: string): string | null {
+  const normalized = model.trim().toLowerCase();
+  return normalized in MODEL_CAPABILITIES ? normalized : null;
+}
+
+export function modelCapability(model: string): ModelCapability | null {
+  const id = canonicalModelId(model);
+  return id ? MODEL_CAPABILITIES[id]! : null;
+}
+
+export function modelSupportsSlot(model: string, slot: ModelSlot): boolean {
+  return modelCapability(model)?.slots.includes(slot) ?? false;
+}
+
+/** True when `/v1/audio/transcriptions` accepts `stream: true` for this model. */
+export function modelSupportsFileStreaming(model: string): boolean {
+  return modelCapability(model)?.file_streaming ?? false;
+}
+
+/** Every model id valid in a slot, in table order. */
+export function modelsForSlot(slot: ModelSlot): string[] {
+  return Object.entries(MODEL_CAPABILITIES)
+    .filter(([, capability]) => capability.slots.includes(slot))
+    .map(([id]) => id);
+}
 
 export const DEFAULT_CONFIG: RecordingsConfig = {
   openai_api_key: "",
@@ -22,6 +111,10 @@ export const DEFAULT_CONFIG: RecordingsConfig = {
   transcription_model: DEFAULT_TRANSCRIPTION_MODEL,
   realtime_session_model: DEFAULT_REALTIME_SESSION_MODEL,
   realtime_transcription_model: DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
+  realtime_prompt: "",
+  realtime_keywords: [],
+  realtime_languages: [],
+  realtime_delay: DEFAULT_REALTIME_DELAY,
   enhancement_model: "gpt-4o",
   transcriber_model: "gpt-4o",
   language: "en",
@@ -107,6 +200,18 @@ export function loadConfig(configPath?: string): RecordingsConfig {
   if (process.env.RECORDINGS_REALTIME_TRANSCRIPTION_MODEL) {
     config.realtime_transcription_model = process.env.RECORDINGS_REALTIME_TRANSCRIPTION_MODEL;
   }
+  if (process.env.RECORDINGS_REALTIME_PROMPT) {
+    config.realtime_prompt = process.env.RECORDINGS_REALTIME_PROMPT;
+  }
+  if (process.env.RECORDINGS_REALTIME_KEYWORDS) {
+    config.realtime_keywords = parseDelimitedList(process.env.RECORDINGS_REALTIME_KEYWORDS);
+  }
+  if (process.env.RECORDINGS_REALTIME_LANGUAGES) {
+    config.realtime_languages = parseDelimitedList(process.env.RECORDINGS_REALTIME_LANGUAGES);
+  }
+  if (process.env.RECORDINGS_REALTIME_DELAY) {
+    config.realtime_delay = process.env.RECORDINGS_REALTIME_DELAY as RealtimeTranscriptionDelay;
+  }
   if (process.env.RECORDINGS_ENHANCEMENT_MODEL) {
     config.enhancement_model = process.env.RECORDINGS_ENHANCEMENT_MODEL;
   }
@@ -181,56 +286,138 @@ export function normalizeModelSlots(config: RecordingsConfig): RecordingsConfig 
   const warnings = config.config_warnings ?? [];
   config.config_warnings = warnings;
 
-  const boundedModel = config.transcription_model?.trim() || DEFAULT_TRANSCRIPTION_MODEL;
-  if (isRealtimeOnlyModel(boundedModel)) {
-    warnings.push(
-      `Ignoring RECORDINGS_MODEL=${boundedModel}; bounded transcription uses ${DEFAULT_TRANSCRIPTION_MODEL}.`
-    );
-    config.transcription_model = DEFAULT_TRANSCRIPTION_MODEL;
-  } else {
-    config.transcription_model = boundedModel;
-  }
+  config.transcription_model = resolveModelSlot(
+    config.transcription_model,
+    "file_transcription",
+    "bounded transcription",
+    DEFAULT_TRANSCRIPTION_MODEL,
+    warnings
+  );
+  config.realtime_session_model = resolveModelSlot(
+    config.realtime_session_model,
+    "realtime_session",
+    "the realtime session",
+    DEFAULT_REALTIME_SESSION_MODEL,
+    warnings
+  );
+  config.realtime_transcription_model = resolveModelSlot(
+    config.realtime_transcription_model,
+    "realtime_transcription",
+    "realtime transcription",
+    DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
+    warnings
+  );
 
-  const realtimeSessionModel = config.realtime_session_model?.trim() || DEFAULT_REALTIME_SESSION_MODEL;
-  if (isTranscriptionOnlyModel(realtimeSessionModel)) {
-    warnings.push(
-      `Ignoring realtime session model ${realtimeSessionModel}; use ${DEFAULT_REALTIME_TRANSCRIPTION_MODEL} as realtime_transcription_model instead.`
-    );
-    config.realtime_session_model = DEFAULT_REALTIME_SESSION_MODEL;
-  } else {
-    config.realtime_session_model = realtimeSessionModel;
-  }
-
-  const realtimeTranscriptionModel = config.realtime_transcription_model?.trim()
-    || DEFAULT_REALTIME_TRANSCRIPTION_MODEL;
-  if (!isRealtimeTranscriptionModel(realtimeTranscriptionModel)) {
-    warnings.push(
-      `Ignoring realtime transcription model ${realtimeTranscriptionModel}; realtime transcription uses ${DEFAULT_REALTIME_TRANSCRIPTION_MODEL}.`
-    );
-    config.realtime_transcription_model = DEFAULT_REALTIME_TRANSCRIPTION_MODEL;
-  } else {
-    config.realtime_transcription_model = realtimeTranscriptionModel;
-  }
+  normalizeRealtimeAccuracyControls(config, warnings);
 
   return config;
 }
 
-export function isTranscriptionOnlyModel(model: string): boolean {
-  const m = model.trim().toLowerCase();
-  return m === "whisper-1"
-    || m === DEFAULT_REALTIME_TRANSCRIPTION_MODEL
-    || m.includes("transcribe");
+/**
+ * Bind one config slot to a model the capability table says is valid there.
+ * An unknown id, or a known id that is valid only in a different slot, is
+ * replaced by the slot default and reported as a config warning.
+ */
+function resolveModelSlot(
+  requested: string | undefined,
+  slot: ModelSlot,
+  label: string,
+  fallback: string,
+  warnings: string[]
+): string {
+  const trimmed = requested?.trim();
+  if (!trimmed) return fallback;
+  const canonical = canonicalModelId(trimmed);
+  if (canonical && modelSupportsSlot(canonical, slot)) return canonical;
+  warnings.push(
+    `Ignoring ${trimmed} for ${label}; valid models are ${modelsForSlot(slot).join(", ")}. Using ${fallback}.`
+  );
+  return fallback;
 }
 
-function isRealtimeOnlyModel(model: string): boolean {
-  const m = model.trim().toLowerCase();
-  return m.startsWith("gpt-realtime");
+/**
+ * Normalize the realtime transcription accuracy controls that
+ * `gpt-live-transcribe` accepts under `session.audio.input.transcription`.
+ */
+function normalizeRealtimeAccuracyControls(
+  config: RecordingsConfig,
+  warnings: string[]
+): void {
+  config.realtime_prompt = config.realtime_prompt?.trim() || "";
+  config.realtime_keywords = normalizeStringList(config.realtime_keywords);
+
+  const languages: string[] = [];
+  for (const candidate of normalizeStringList(config.realtime_languages)) {
+    const code = candidate.toLowerCase();
+    if (/^[a-z]{2}$/.test(code)) {
+      if (!languages.includes(code)) languages.push(code);
+      continue;
+    }
+    warnings.push(
+      `Ignoring realtime language ${candidate}; expected a two-letter ISO 639-1 code.`
+    );
+  }
+  config.realtime_languages = languages;
+
+  const delay = config.realtime_delay?.trim().toLowerCase();
+  if (!delay) {
+    config.realtime_delay = DEFAULT_REALTIME_DELAY;
+  } else if (REALTIME_DELAY_SET.has(delay)) {
+    config.realtime_delay = delay as RealtimeTranscriptionDelay;
+  } else {
+    warnings.push(
+      `Ignoring realtime delay ${config.realtime_delay}; valid values are ${REALTIME_TRANSCRIPTION_DELAYS.join(", ")}. Using ${DEFAULT_REALTIME_DELAY}.`
+    );
+    config.realtime_delay = DEFAULT_REALTIME_DELAY;
+  }
 }
 
-function isRealtimeTranscriptionModel(model: string): boolean {
-  const m = model.trim().toLowerCase();
-  return m === DEFAULT_REALTIME_TRANSCRIPTION_MODEL
-    || (m.startsWith("gpt-realtime") && m.includes("whisper"));
+function normalizeStringList(value: string[] | undefined): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") continue;
+    const trimmed = entry.trim();
+    if (trimmed && !out.includes(trimmed)) out.push(trimmed);
+  }
+  return out;
+}
+
+/** Split a comma- or newline-delimited env value into a clean list. */
+export function parseDelimitedList(value: string): string[] {
+  return normalizeStringList(value.split(/[,\n]/));
+}
+
+/**
+ * The `transcription` object sent inside the realtime `session.update` event.
+ * Only populated keys are emitted so the server keeps its own defaults.
+ */
+export function buildRealtimeTranscriptionOptions(
+  config: RecordingsConfig
+): Record<string, unknown> {
+  const options: Record<string, unknown> = {
+    model: config.realtime_transcription_model || DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
+    delay: config.realtime_delay || DEFAULT_REALTIME_DELAY,
+  };
+  const prompt = config.realtime_prompt?.trim();
+  if (prompt) options["prompt"] = prompt;
+  if (config.realtime_keywords && config.realtime_keywords.length > 0) {
+    options["keywords"] = [...config.realtime_keywords];
+  }
+  // `languages` is the realtime model's only language control. When it is not
+  // set explicitly, fall back to the single configured language hint so the
+  // app's Language setting still reaches the realtime session.
+  const languages = config.realtime_languages && config.realtime_languages.length > 0
+    ? [...config.realtime_languages]
+    : singleLanguageHint(config.language);
+  if (languages.length > 0) options["languages"] = languages;
+  return options;
+}
+
+function singleLanguageHint(language: string | undefined): string[] {
+  const code = language?.trim().toLowerCase();
+  if (!code || code === "auto" || !/^[a-z]{2}$/.test(code)) return [];
+  return [code];
 }
 
 export function normalizePostProcessingMode(
@@ -291,6 +478,45 @@ function expandEnvBackedConfig(config: Partial<RecordingsConfig>): Partial<Recor
 
 function findConfigFile(): string | null {
   return findProjectRecordingsPath("config.json");
+}
+
+/** Absolute path of the config file `loadConfig()` reads by default. */
+export function resolveConfigPath(): string {
+  return findConfigFile() || join(getDataDir(), "config.json");
+}
+
+export type RealtimeTranscriptionSettings = Partial<
+  Pick<
+    RecordingsConfig,
+    | "realtime_transcription_model"
+    | "realtime_prompt"
+    | "realtime_keywords"
+    | "realtime_languages"
+    | "realtime_delay"
+  >
+>;
+
+/**
+ * Merge realtime accuracy controls into the on-disk config. Every other key —
+ * including credentials — is preserved byte-for-byte in value.
+ */
+export function saveRealtimeTranscriptionSettings(
+  patch: RealtimeTranscriptionSettings,
+  configPath = resolveConfigPath()
+): void {
+  let existing: Record<string, unknown> = {};
+  if (existsSync(configPath)) {
+    try {
+      existing = JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>;
+    } catch {
+      existing = {};
+    }
+  }
+  for (const [key, value] of Object.entries(patch)) {
+    if (value !== undefined) existing[key] = value;
+  }
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, `${JSON.stringify(existing, null, 2)}\n`, "utf-8");
 }
 
 export function getDataDir(): string {

@@ -2,7 +2,19 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { tmpdir } from "os";
 import { join } from "path";
 import { mkdirSync, rmSync, existsSync, readFileSync, realpathSync, writeFileSync } from "fs";
-import { loadConfig, getDataDir, ensureDataDir, DEFAULT_CONFIG } from "../lib/config.js";
+import {
+  loadConfig,
+  getDataDir,
+  ensureDataDir,
+  buildRealtimeTranscriptionOptions,
+  canonicalModelId,
+  modelCapability,
+  modelsForSlot,
+  modelSupportsFileStreaming,
+  modelSupportsSlot,
+  saveRealtimeTranscriptionSettings,
+  DEFAULT_CONFIG,
+} from "../lib/config.js";
 import { getStore } from "../store.js";
 
 let tempDir: string;
@@ -16,6 +28,10 @@ const envKeys = [
   "RECORDINGS_MODEL",
   "RECORDINGS_REALTIME_SESSION_MODEL",
   "RECORDINGS_REALTIME_TRANSCRIPTION_MODEL",
+  "RECORDINGS_REALTIME_PROMPT",
+  "RECORDINGS_REALTIME_KEYWORDS",
+  "RECORDINGS_REALTIME_LANGUAGES",
+  "RECORDINGS_REALTIME_DELAY",
   "RECORDINGS_ENHANCEMENT_MODEL",
   "RECORDINGS_TRANSCRIBER_MODEL",
   "RECORDINGS_LANGUAGE",
@@ -78,9 +94,13 @@ afterEach(() => {
 
 describe("DEFAULT_CONFIG", () => {
   test("has expected default values", () => {
-    expect(DEFAULT_CONFIG.transcription_model).toBe("gpt-4o-transcribe");
+    expect(DEFAULT_CONFIG.transcription_model).toBe("gpt-transcribe");
     expect(DEFAULT_CONFIG.realtime_session_model).toBe("gpt-realtime");
-    expect(DEFAULT_CONFIG.realtime_transcription_model).toBe("gpt-realtime-whisper");
+    expect(DEFAULT_CONFIG.realtime_transcription_model).toBe("gpt-live-transcribe");
+    expect(DEFAULT_CONFIG.realtime_prompt).toBe("");
+    expect(DEFAULT_CONFIG.realtime_keywords).toEqual([]);
+    expect(DEFAULT_CONFIG.realtime_languages).toEqual([]);
+    expect(DEFAULT_CONFIG.realtime_delay).toBe("low");
     expect(DEFAULT_CONFIG.enhancement_model).toBe("gpt-4o");
     expect(DEFAULT_CONFIG.transcriber_model).toBe("gpt-4o");
     expect(DEFAULT_CONFIG.language).toBe("en");
@@ -101,9 +121,10 @@ describe("DEFAULT_CONFIG", () => {
 describe("loadConfig", () => {
   test("returns defaults when no config file or env vars", () => {
     const config = loadConfig(join(tempDir, "nonexistent.json"));
-    expect(config.transcription_model).toBe("gpt-4o-transcribe");
+    expect(config.transcription_model).toBe("gpt-transcribe");
     expect(config.realtime_session_model).toBe("gpt-realtime");
-    expect(config.realtime_transcription_model).toBe("gpt-realtime-whisper");
+    expect(config.realtime_transcription_model).toBe("gpt-live-transcribe");
+    expect(config.realtime_delay).toBe("low");
     expect(config.enhancement_model).toBe("gpt-4o");
     expect(config.transcriber_model).toBe("gpt-4o");
     expect(config.language).toBe("en");
@@ -157,7 +178,7 @@ describe("loadConfig", () => {
 
     const config = loadConfig(configPath);
     // Should fall back to defaults
-    expect(config.transcription_model).toBe("gpt-4o-transcribe");
+    expect(config.transcription_model).toBe("gpt-transcribe");
   });
 
   test("env var OPENAI_API_KEY overrides config", () => {
@@ -211,31 +232,71 @@ describe("loadConfig", () => {
   });
 
   test("realtime-only model is rejected for bounded transcription", () => {
+    process.env.RECORDINGS_MODEL = "gpt-live-transcribe";
+    const config = loadConfig(join(tempDir, "nonexistent.json"));
+    expect(config.transcription_model).toBe("gpt-transcribe");
+    expect(config.config_warnings?.some((warning) =>
+      warning.includes("Ignoring gpt-live-transcribe for bounded transcription")
+    )).toBe(true);
+  });
+
+  test("an unknown model id is rejected for bounded transcription", () => {
     process.env.RECORDINGS_MODEL = "gpt-realtime-2";
     const config = loadConfig(join(tempDir, "nonexistent.json"));
-    expect(config.transcription_model).toBe("gpt-4o-transcribe");
+    expect(config.transcription_model).toBe("gpt-transcribe");
     expect(config.config_warnings?.some((warning) =>
-      warning.includes("bounded transcription uses gpt-4o-transcribe")
+      warning.includes("Ignoring gpt-realtime-2 for bounded transcription")
     )).toBe(true);
   });
 
   test("transcription-only model is rejected for realtime session slot", () => {
-    process.env.RECORDINGS_REALTIME_SESSION_MODEL = "gpt-4o-transcribe";
-    process.env.RECORDINGS_REALTIME_TRANSCRIPTION_MODEL = "gpt-realtime-whisper";
+    process.env.RECORDINGS_REALTIME_SESSION_MODEL = "gpt-transcribe";
+    process.env.RECORDINGS_REALTIME_TRANSCRIPTION_MODEL = "gpt-live-transcribe";
     const config = loadConfig(join(tempDir, "nonexistent.json"));
     expect(config.realtime_session_model).toBe("gpt-realtime");
-    expect(config.realtime_transcription_model).toBe("gpt-realtime-whisper");
+    expect(config.realtime_transcription_model).toBe("gpt-live-transcribe");
     expect(config.config_warnings?.some((warning) =>
-      warning.includes("Ignoring realtime session model gpt-4o-transcribe")
+      warning.includes("Ignoring gpt-transcribe for the realtime session")
     )).toBe(true);
   });
 
   test("bounded transcription model is rejected for realtime transcription slot", () => {
-    process.env.RECORDINGS_REALTIME_TRANSCRIPTION_MODEL = "gpt-4o-transcribe";
+    process.env.RECORDINGS_REALTIME_TRANSCRIPTION_MODEL = "gpt-transcribe";
     const config = loadConfig(join(tempDir, "nonexistent.json"));
-    expect(config.realtime_transcription_model).toBe("gpt-realtime-whisper");
+    expect(config.realtime_transcription_model).toBe("gpt-live-transcribe");
     expect(config.config_warnings?.some((warning) =>
-      warning.includes("Ignoring realtime transcription model gpt-4o-transcribe")
+      warning.includes("Ignoring gpt-transcribe for realtime transcription")
+    )).toBe(true);
+  });
+
+  test("realtime accuracy controls load from RECORDINGS_REALTIME_* env vars", () => {
+    process.env.RECORDINGS_REALTIME_PROMPT = "Weekly infra standup";
+    process.env.RECORDINGS_REALTIME_KEYWORDS = "Hasna, Alumia , Postgres";
+    process.env.RECORDINGS_REALTIME_LANGUAGES = "en,FR";
+    process.env.RECORDINGS_REALTIME_DELAY = "xhigh";
+
+    const config = loadConfig(join(tempDir, "nonexistent.json"));
+    expect(config.realtime_prompt).toBe("Weekly infra standup");
+    expect(config.realtime_keywords).toEqual(["Hasna", "Alumia", "Postgres"]);
+    expect(config.realtime_languages).toEqual(["en", "fr"]);
+    expect(config.realtime_delay).toBe("xhigh");
+  });
+
+  test("an invalid realtime delay falls back to the default with a warning", () => {
+    process.env.RECORDINGS_REALTIME_DELAY = "instant";
+    const config = loadConfig(join(tempDir, "nonexistent.json"));
+    expect(config.realtime_delay).toBe("low");
+    expect(config.config_warnings?.some((warning) =>
+      warning.includes("Ignoring realtime delay instant")
+    )).toBe(true);
+  });
+
+  test("a non ISO 639-1 realtime language is dropped with a warning", () => {
+    process.env.RECORDINGS_REALTIME_LANGUAGES = "en,english";
+    const config = loadConfig(join(tempDir, "nonexistent.json"));
+    expect(config.realtime_languages).toEqual(["en"]);
+    expect(config.config_warnings?.some((warning) =>
+      warning.includes("Ignoring realtime language english")
     )).toBe(true);
   });
 
@@ -328,13 +389,13 @@ describe("loadConfig", () => {
     const configPath = join(tempDir, "config.json");
     writeFileSync(
       configPath,
-      JSON.stringify({ language: "fr", transcription_model: "file-model" })
+      JSON.stringify({ language: "fr", transcription_model: "whisper-1" })
     );
     process.env.RECORDINGS_LANGUAGE = "ja";
 
     const config = loadConfig(configPath);
     expect(config.language).toBe("ja"); // env wins
-    expect(config.transcription_model).toBe("file-model"); // no env override for this
+    expect(config.transcription_model).toBe("whisper-1"); // no env override for this
   });
 });
 
@@ -580,5 +641,117 @@ describe("ensureDataDir edge cases", () => {
     // Should not throw - dbDir will be empty string
     ensureDataDir(config);
     expect(existsSync(join(tempDir, "audio"))).toBe(true);
+  });
+});
+
+describe("model capability table", () => {
+  test("gpt-transcribe is the file-transcription model and supports streaming", () => {
+    expect(modelSupportsSlot("gpt-transcribe", "file_transcription")).toBe(true);
+    expect(modelSupportsSlot("gpt-transcribe", "realtime_transcription")).toBe(false);
+    expect(modelSupportsSlot("gpt-transcribe", "realtime_session")).toBe(false);
+    expect(modelSupportsFileStreaming("gpt-transcribe")).toBe(true);
+  });
+
+  test("gpt-live-transcribe is realtime-only and never valid on the file endpoint", () => {
+    expect(modelSupportsSlot("gpt-live-transcribe", "realtime_transcription")).toBe(true);
+    expect(modelSupportsSlot("gpt-live-transcribe", "file_transcription")).toBe(false);
+    expect(modelSupportsFileStreaming("gpt-live-transcribe")).toBe(false);
+  });
+
+  test("gpt-realtime is the speech-to-speech session model only", () => {
+    expect(modelSupportsSlot("gpt-realtime", "realtime_session")).toBe(true);
+    expect(modelSupportsSlot("gpt-realtime", "realtime_transcription")).toBe(false);
+    expect(modelSupportsSlot("gpt-realtime", "file_transcription")).toBe(false);
+  });
+
+  test("whisper-1 is a file-transcription model without response streaming", () => {
+    expect(modelSupportsSlot("whisper-1", "file_transcription")).toBe(true);
+    expect(modelSupportsFileStreaming("whisper-1")).toBe(false);
+  });
+
+  test("classification is exact-match, not prefix or substring based", () => {
+    // These would all have been misclassified by the old "gpt-realtime"/"whisper"
+    // string heuristics.
+    expect(canonicalModelId("gpt-realtime-whisper")).toBeNull();
+    expect(canonicalModelId("gpt-4o-transcribe")).toBeNull();
+    expect(canonicalModelId("gpt-live-transcribe-preview")).toBeNull();
+    expect(modelCapability("not-a-model")).toBeNull();
+    expect(modelSupportsSlot("not-a-model", "file_transcription")).toBe(false);
+  });
+
+  test("canonicalModelId normalizes surrounding space and case", () => {
+    expect(canonicalModelId("  GPT-Transcribe ")).toBe("gpt-transcribe");
+  });
+
+  test("modelsForSlot lists exactly the models valid in that slot", () => {
+    expect(modelsForSlot("file_transcription")).toEqual(["gpt-transcribe", "whisper-1"]);
+    expect(modelsForSlot("realtime_transcription")).toEqual(["gpt-live-transcribe"]);
+    expect(modelsForSlot("realtime_session")).toEqual(["gpt-realtime"]);
+  });
+});
+
+describe("buildRealtimeTranscriptionOptions", () => {
+  test("falls back to the single configured language hint", () => {
+    const config = loadConfig(join(tempDir, "nonexistent.json"));
+    expect(buildRealtimeTranscriptionOptions(config)).toEqual({
+      model: "gpt-live-transcribe",
+      delay: "low",
+      languages: ["en"],
+    });
+  });
+
+  test("emits no language control when the language hint is auto", () => {
+    const configPath = join(tempDir, "config.json");
+    writeFileSync(configPath, JSON.stringify({ language: "auto" }));
+    expect(buildRealtimeTranscriptionOptions(loadConfig(configPath))).toEqual({
+      model: "gpt-live-transcribe",
+      delay: "low",
+    });
+  });
+
+  test("emits the documented accuracy controls when configured", () => {
+    const configPath = join(tempDir, "config.json");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        realtime_prompt: "Pair programming on the payments service",
+        realtime_keywords: ["Stripe", "idempotency"],
+        realtime_languages: ["en", "fr"],
+        realtime_delay: "high",
+      })
+    );
+    const config = loadConfig(configPath);
+    expect(buildRealtimeTranscriptionOptions(config)).toEqual({
+      model: "gpt-live-transcribe",
+      delay: "high",
+      prompt: "Pair programming on the payments service",
+      keywords: ["Stripe", "idempotency"],
+      languages: ["en", "fr"],
+    });
+  });
+});
+
+describe("saveRealtimeTranscriptionSettings", () => {
+  test("merges realtime settings without disturbing other config keys", () => {
+    const configPath = join(tempDir, "config.json");
+    writeFileSync(
+      configPath,
+      JSON.stringify({ openai_api_key: "sk-preserved", language: "fr" })
+    );
+
+    saveRealtimeTranscriptionSettings(
+      { realtime_keywords: ["Hasna"], realtime_delay: "medium" },
+      configPath
+    );
+
+    const written = JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>;
+    expect(written["openai_api_key"]).toBe("sk-preserved");
+    expect(written["language"]).toBe("fr");
+    expect(written["realtime_keywords"]).toEqual(["Hasna"]);
+    expect(written["realtime_delay"]).toBe("medium");
+
+    const config = loadConfig(configPath);
+    expect(config.realtime_keywords).toEqual(["Hasna"]);
+    expect(config.realtime_delay).toBe("medium");
   });
 });

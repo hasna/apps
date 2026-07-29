@@ -1354,11 +1354,18 @@ public final class RecordingEngine: ObservableObject {
     private func startRealtimeStreaming(apiKey: String, transcriptionLanguage: String) {
         let client = RealtimeTranscriptionClient(apiKey: apiKey, homePath: home)
         realtimeClient = client
-        let language = OpenAIAPIKeyStore.apiLanguageHint(for: transcriptionLanguage)
-        log("realtime streaming task starting language=\(language.isEmpty ? "auto" : language)")
+        let settings = OpenAIAPIKeyStore.loadRealtimeTranscriptionSettings(
+            homePath: home,
+            storedLanguage: transcriptionLanguage
+        )
+        log(
+            "realtime streaming task starting model=\(settings.model) delay=\(settings.delay) "
+                + "languages=\(settings.languages.isEmpty ? "auto" : settings.languages.joined(separator: ",")) "
+                + "keywords=\(settings.keywords.count) prompt=\(settings.prompt.isEmpty ? "none" : "set")"
+        )
 
         streamingTask = Task {
-            await client.startStreaming(language: language)
+            await client.startStreaming(settings: settings)
             self.log("realtime start completed streaming=\(client.isStreaming) error=\(client.error ?? "")")
 
             var lastPeriodicCommitAt: UInt64?
