@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import type { Task, TaskFilter } from "../types/index.js";
+import { TaskReferenceAmbiguousError, type Task, type TaskFilter } from "../types/index.js";
 import { searchTasks } from "../lib/search.js";
 import {
   createTask,
@@ -92,18 +92,24 @@ function resolveTaskRefLocal(db: Database, ref: string): Task | null {
   if (TASK_UUID_RE.test(raw)) return getTask(raw, db);
 
   const prefixRows = db
-    .query("SELECT id FROM tasks WHERE LOWER(id) LIKE ? ESCAPE '\\' LIMIT 2")
-    .all(`${raw.replace(/[\\%_]/g, (c) => `\\${c}`)}%`) as { id: string }[];
+    .query("SELECT id, project_id FROM tasks WHERE LOWER(id) LIKE ? ESCAPE '\\' ORDER BY project_id, id LIMIT 2")
+    .all(`${raw.replace(/[\\%_]/g, (c) => `\\${c}`)}%`) as Array<{ id: string; project_id: string | null }>;
   if (prefixRows.length > 1) {
-    throw new Error(`Task reference is ambiguous: "${ref}"`);
+    throw new TaskReferenceAmbiguousError(
+      ref,
+      prefixRows.map((row) => ({ task_id: row.id, project_id: row.project_id })),
+    );
   }
   if (prefixRows.length === 1) return getTask(prefixRows[0]!.id, db);
 
   const shortIdRows = db
-    .query("SELECT id FROM tasks WHERE LOWER(short_id) = ? LIMIT 2")
-    .all(raw) as { id: string }[];
+    .query("SELECT id, project_id FROM tasks WHERE LOWER(short_id) = ? ORDER BY project_id, id LIMIT 2")
+    .all(raw) as Array<{ id: string; project_id: string | null }>;
   if (shortIdRows.length > 1) {
-    throw new Error(`Task reference is ambiguous: "${ref}"`);
+    throw new TaskReferenceAmbiguousError(
+      ref,
+      shortIdRows.map((row) => ({ task_id: row.id, project_id: row.project_id })),
+    );
   }
   if (shortIdRows.length === 1) return getTask(shortIdRows[0]!.id, db);
 

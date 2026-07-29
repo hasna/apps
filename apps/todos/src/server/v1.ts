@@ -7,7 +7,7 @@
  * require `todos:write` (a `todos:*` key satisfies both). This is a real wrapper
  * over the core storage lib — there are NO stubs; unimplemented routes 404.
  */
-import { LockError, ProjectNotFoundError, ResourceConflictError } from "../types/index.js";
+import { LockError, ProjectNotFoundError, ResourceConflictError, TaskReferenceAmbiguousError } from "../types/index.js";
 import type { CreatePlanInput, CreateProjectInput, CreateTaskInput, CreateTaskListInput, CreateTemplateInput, RenameProjectInput, TaskComment, TemplateTaskInput, UpdateTaskInput, UpdateTaskListInput } from "../types/index.js";
 import type { TodosStorageContext, TodosStorageSnapshot, TodosTaskCompletionOptions, UpdateTemplateInput } from "../storage/interfaces.js";
 import { getCloudPrGroupLedger, getCloudStorageAdapter, getCloudVerifier, ensureCloudSchema } from "./cloud.js";
@@ -851,6 +851,13 @@ export async function handleV1Request(
           try {
             task = await store.tasks.resolveRef(id);
           } catch (e) {
+            if (e instanceof TaskReferenceAmbiguousError) {
+              return error(409, e.message, {
+                code: TaskReferenceAmbiguousError.code,
+                candidate_project_ids: e.candidateProjectIds,
+                candidate_task_ids: e.candidateTaskIds,
+              });
+            }
             const msg = (e as Error).message || "";
             if (/ambiguous/i.test(msg)) return error(409, msg);
             throw e;
@@ -1251,6 +1258,13 @@ export async function handleV1Request(
 
     return error(404, `unknown /v1 resource: ${resource ?? "(root)"}`);
   } catch (e) {
+    if (e instanceof TaskReferenceAmbiguousError) {
+      return error(409, e.message, {
+        code: TaskReferenceAmbiguousError.code,
+        candidate_project_ids: e.candidateProjectIds,
+        candidate_task_ids: e.candidateTaskIds,
+      });
+    }
     if (e instanceof LockError) return error(409, e.message, { code: LockError.code });
     if (e instanceof ResourceConflictError) return error(409, e.message, { code: e.code, conflict: true });
     if (e instanceof ProjectNotFoundError) return error(404, e.message, { code: ProjectNotFoundError.code });

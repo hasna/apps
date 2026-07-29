@@ -567,7 +567,17 @@ export async function cloudResolveTaskRef(client: HasnaStorageClient, ref: strin
     task = await cloudGetTask(client, input);
   } catch (error) {
     const status = error && typeof error === "object" ? (error as { status?: unknown }).status : undefined;
-    if (status === 409) throw new Error(`Task reference is ambiguous: "${ref}"`);
+    if (status === 409) {
+      const body = error && typeof error === "object" ? (error as { body?: unknown }).body : undefined;
+      const authorityMessage = body && typeof body === "object" && !Array.isArray(body)
+        ? (body as { error?: unknown }).error
+        : undefined;
+      throw new Error(
+        typeof authorityMessage === "string" && authorityMessage.trim()
+          ? authorityMessage
+          : `Task reference is ambiguous: "${ref}"`,
+      );
+    }
     throw error;
   }
 

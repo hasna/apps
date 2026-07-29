@@ -7,6 +7,7 @@ import { logError } from "../lib/logger.js";
 import {
   VersionConflictError,
   TaskNotFoundError,
+  TaskReferenceAmbiguousError,
   ProjectNotFoundError,
   LockError,
   DependencyCycleError,
@@ -122,6 +123,15 @@ function formatError(error: unknown): string {
   }
   if (error instanceof TaskNotFoundError) {
     return JSON.stringify({ code: TaskNotFoundError.code, message: error.message, suggestion: TaskNotFoundError.suggestion });
+  }
+  if (error instanceof TaskReferenceAmbiguousError) {
+    return JSON.stringify({
+      code: TaskReferenceAmbiguousError.code,
+      message: error.message,
+      candidate_project_ids: error.candidateProjectIds,
+      candidate_task_ids: error.candidateTaskIds,
+      suggestion: "Use a full task UUID.",
+    });
   }
   if (error instanceof ProjectNotFoundError) {
     return JSON.stringify({ code: ProjectNotFoundError.code, message: error.message, suggestion: ProjectNotFoundError.suggestion });

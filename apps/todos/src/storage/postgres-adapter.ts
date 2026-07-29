@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { LockError, ProjectNotFoundError, ResourceConflictError } from "../types/index.js";
+import { LockError, ProjectNotFoundError, ResourceConflictError, TaskReferenceAmbiguousError } from "../types/index.js";
 import type {
   Agent,
   CreateCommentInput,
@@ -502,7 +502,11 @@ class PostgresJsonRecordStore {
         [this.service, raw, upper],
       );
       if (prefixResult.rows.length > 1) {
-        throw new Error(`Task reference is ambiguous: "${ref}"`);
+        const candidates = prefixResult.rows.map((row) => payloadRecord<Task>(row.payload));
+        throw new TaskReferenceAmbiguousError(
+          ref,
+          candidates.map((task) => ({ task_id: task.id, project_id: task.project_id })),
+        );
       }
       if (prefixResult.rows.length === 1) {
         return payloadRecord<Task>(prefixResult.rows[0]!.payload);
@@ -517,7 +521,11 @@ class PostgresJsonRecordStore {
       [this.service, raw],
     );
     if (shortIdResult.rows.length > 1) {
-      throw new Error(`Task reference is ambiguous: "${ref}"`);
+      const candidates = shortIdResult.rows.map((row) => payloadRecord<Task>(row.payload));
+      throw new TaskReferenceAmbiguousError(
+        ref,
+        candidates.map((task) => ({ task_id: task.id, project_id: task.project_id })),
+      );
     }
     if (shortIdResult.rows.length === 1) {
       return payloadRecord<Task>(shortIdResult.rows[0]!.payload);

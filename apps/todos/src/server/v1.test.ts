@@ -623,6 +623,40 @@ describe("/v1 short task reference resolution", () => {
     db.query("UPDATE tasks SET id = ? WHERE id = ?").run("dddddddd-0000-4000-8000-000000000002", idB);
     expect((await request("/v1/tasks/dddddddd"))?.status).toBe(409);
   });
+
+  test("GET /v1/tasks/:ref rejects duplicate project-scoped short IDs with candidate projects", async () => {
+    const firstProjectResponse = await request("/v1/projects", "POST", {
+      name: "Short ID First",
+      path: "/workspace/short-id-first",
+    });
+    const secondProjectResponse = await request("/v1/projects", "POST", {
+      name: "Short ID Second",
+      path: "/workspace/short-id-second",
+    });
+    const firstProject = (await firstProjectResponse!.json() as { project: { id: string } }).project;
+    const secondProject = (await secondProjectResponse!.json() as { project: { id: string } }).project;
+    const firstTaskResponse = await request("/v1/tasks", "POST", { title: "first", project_id: firstProject.id });
+    const secondTaskResponse = await request("/v1/tasks", "POST", { title: "second", project_id: secondProject.id });
+    const firstTask = (await firstTaskResponse!.json() as { task: { id: string } }).task;
+    const secondTask = (await secondTaskResponse!.json() as { task: { id: string } }).task;
+
+    db.query("UPDATE tasks SET short_id = ?, machine_id = ? WHERE id = ?").run("DUP-00001", "source-one", firstTask.id);
+    db.query("UPDATE tasks SET short_id = ?, machine_id = ? WHERE id = ?").run("DUP-00001", "source-two", secondTask.id);
+
+    const response = await request("/v1/tasks/DUP-00001");
+    expect(response?.status).toBe(409);
+    expect(await response!.json()).toEqual({
+      error: expect.stringContaining("Candidate project IDs:"),
+      code: "TASK_REFERENCE_AMBIGUOUS",
+      candidate_project_ids: [firstProject.id, secondProject.id].sort(),
+      candidate_task_ids: [firstTask.id, secondTask.id].sort(),
+    });
+
+    // Exact UUID identity is authoritative even while the human label collides.
+    const exact = await request(`/v1/tasks/${firstTask.id}`);
+    expect(exact?.status).toBe(200);
+    expect((await exact!.json() as { task: { id: string } }).task.id).toBe(firstTask.id);
+  });
 });
 
 describe("/v1/integrity", () => {

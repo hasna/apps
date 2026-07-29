@@ -404,12 +404,27 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
   });
 
   test("an ambiguous reference (authority 409) surfaces an ambiguity error", async () => {
+    const projectIds = [
+      "11111111-1111-4111-8111-111111111111",
+      "22222222-2222-4222-8222-222222222222",
+    ];
     const calls = installFetch((call) => {
-      if (new URL(call.url).pathname === "/v1/tasks/abc") return { status: 409, body: { error: "Task reference is ambiguous" } };
+      if (new URL(call.url).pathname === "/v1/tasks/abc") {
+        return {
+          status: 409,
+          body: {
+            error: `Task reference is ambiguous: "abc". Candidate project IDs: ${projectIds.join(", ")}. Use a full task UUID.`,
+            candidate_project_ids: projectIds,
+          },
+        };
+      }
       throw new Error(`unexpected request: ${call.url}`);
     });
     const client = getTodosCloudClient(CLOUD_ENV)!;
-    await expect(cloudResolveTaskRef(client, "abc")).rejects.toThrow("ambiguous");
+    const resolution = cloudResolveTaskRef(client, "abc");
+    await expect(resolution).rejects.toThrow("ambiguous");
+    await expect(resolution).rejects.toThrow(projectIds[0]);
+    await expect(resolution).rejects.toThrow(projectIds[1]);
     expect(calls).toHaveLength(1);
   });
 

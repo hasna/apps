@@ -1135,6 +1135,34 @@ export class TaskNotFoundError extends Error {
   }
 }
 
+export interface TaskReferenceCandidate {
+  task_id: string;
+  project_id: string | null;
+}
+
+export class TaskReferenceAmbiguousError extends Error {
+  static readonly code = "TASK_REFERENCE_AMBIGUOUS";
+  readonly candidateTaskIds: string[];
+  readonly candidateProjectIds: string[];
+
+  constructor(public readonly reference: string, candidates: TaskReferenceCandidate[]) {
+    const candidateTaskIds = [...new Set(candidates.map((candidate) => candidate.task_id))].sort();
+    const candidateProjectIds = [...new Set(
+      candidates
+        .map((candidate) => candidate.project_id)
+        .filter((projectId): projectId is string => typeof projectId === "string" && projectId.length > 0),
+    )].sort();
+    const projectList = candidateProjectIds.length > 0 ? candidateProjectIds.join(", ") : "(unscoped)";
+    super(
+      `Task reference is ambiguous: "${reference}". Candidate project IDs: ${projectList}. ` +
+      "Use a full task UUID.",
+    );
+    this.name = "TaskReferenceAmbiguousError";
+    this.candidateTaskIds = candidateTaskIds;
+    this.candidateProjectIds = candidateProjectIds;
+  }
+}
+
 export class ProjectNotFoundError extends Error {
   static readonly code = "PROJECT_NOT_FOUND";
   static readonly suggestion = "Use list_projects to see available projects.";

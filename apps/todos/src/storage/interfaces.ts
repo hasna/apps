@@ -216,10 +216,11 @@ export interface TodosTaskStore {
   /**
    * Resolve a task reference that is NOT already a full UUID — an exact `short_id`
    * (e.g. `OPE2-00125`) or a unique task-`id` prefix — to the single matching task,
-   * or `null` when nothing matches. Throws when a prefix is ambiguous (matches more
-   * than one task). This is a BOUNDED, index/SQL-side lookup: it must never load the
-   * whole task set. It exists so the `/v1/tasks/:ref` route can resolve short refs
-   * server-side instead of the CLI paging every task over HTTP to resolve them.
+   * or `null` when nothing matches. Throws when a prefix or short ID is ambiguous
+   * (matches more than one task), including the candidate project IDs. This is a
+   * BOUNDED, index/SQL-side lookup: it must never load the whole task set. It exists
+   * so the `/v1/tasks/:ref` route can resolve short refs server-side instead of the
+   * CLI paging every task over HTTP to resolve them.
    * Optional — an adapter that only ever receives full UUIDs may omit it.
    */
   resolveRef?(ref: string, context?: TodosStorageContext): MaybePromise<Task | null>;

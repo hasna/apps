@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { runMigrations, backfillTaskTags } from "./schema.js";
 import { backfillMachineId } from "./machines.js";
 import { ensureAgentIdentitySchema } from "./identity-mapping.js";
-import { IdentityAliasAmbiguousError } from "../types/index.js";
+import { IdentityAliasAmbiguousError, TaskReferenceAmbiguousError } from "../types/index.js";
 
 export const LOCK_EXPIRY_MINUTES = 30;
 
@@ -212,9 +212,17 @@ export function resolvePartialId(db: Database, table: string, partialId: string)
 
   // For tasks table, also try matching on short_id (e.g. "OPE-00006")
   if (table === "tasks") {
-    const shortIdRows = db.query("SELECT id FROM tasks WHERE short_id = ?").all(partialId) as { id: string }[];
+    const shortIdRows = db.query(
+      "SELECT id, project_id FROM tasks WHERE LOWER(short_id) = LOWER(?) ORDER BY project_id, id",
+    ).all(partialId) as Array<{ id: string; project_id: string | null }>;
     if (shortIdRows.length === 1) {
       return shortIdRows[0]!.id;
+    }
+    if (shortIdRows.length > 1) {
+      throw new TaskReferenceAmbiguousError(
+        partialId,
+        shortIdRows.map((row) => ({ task_id: row.id, project_id: row.project_id })),
+      );
     }
   }
 
