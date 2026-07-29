@@ -6,6 +6,31 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-07-29
+
+### Changed
+
+- **Tailscale is never boot-critical** (owner ruling 2026-07-29, PR #37). The
+  station template now declares a schema-level `accessFloor` (service +
+  idempotent ensure + lesson); the `ec2` overlay declares the snap SSM agent as
+  its floor, and both renderers (cloud-init and physical setup) emit the floor's
+  ensure first and non-fatally. Physical layers declare no floor — their access
+  floor is out-of-band.
+- The tailscale join is non-fatal in both renderers: a failed auth-key fetch or
+  `tailscale up` (station17's exact failure mode, `runcmd: 8: aws: not found`)
+  can no longer abort a boot or a setup plan. The failure is loud — a `NON-FATAL`
+  warning on stderr — and the drift check reports the unjoined station as
+  `tailscale:join` drift, so the non-fatal join cannot become a silent one. A
+  down access-floor service is reported as a `violation` naming the stranding
+  risk.
+
+### Fixed
+
+- The old cloud-init join entry silently masked its exit code (`; rm -f` after
+  `tailscale up` made the entry always exit 0), and leaked `umask 077` into
+  later runcmd entries. The join is now a scoped subshell with an explicit
+  `||` warning.
+
 ## [0.2.3] - 2026-07-29
 
 ### Added
