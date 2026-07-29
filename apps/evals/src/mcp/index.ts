@@ -7,17 +7,19 @@ import { isStdioMode, resolveHttpPort, startHttpServer } from "./http.js";
 function printHelp(): void {
   console.log(`Usage: evals-mcp [options]
 
-Runs the @hasna/evals MCP server (stdio by default).
+Runs the @hasna/evals MCP server (Streamable HTTP by default).
 
 Options:
-      --http         Serve MCP over Streamable HTTP on 127.0.0.1
-  -p, --port <port>  HTTP port (default: MCP_HTTP_PORT or 8817)
+      --http         Serve MCP over Streamable HTTP on 127.0.0.1 (default)
+      --stdio        Serve MCP over stdio instead of HTTP
+  -p, --port <port>  HTTP port (default: MCP_HTTP_PORT or 8862)
   -V, --version      output the version number
   -h, --help         display help for command
 
 Environment:
   MCP_HTTP=1         Enable HTTP mode
-  MCP_HTTP_PORT      Override default HTTP port (8817)`);
+  MCP_STDIO=1        Enable stdio mode
+  MCP_HTTP_PORT      Override default HTTP port (8862)`);
 }
 
 const args = process.argv.slice(2);

@@ -5,13 +5,22 @@ This file provides guidance to Claude Code when working with code in this reposi
 ## Commands
 
 ```bash
-bun install          # Install dependencies
-bun test             # Run all tests (69 tests across 5 files)
+bun install          # Install root dependencies (CLI, MCP, HTTP server)
+bun test             # Run all tests
 bun run typecheck    # TypeScript strict check (must be zero errors)
-bun run build        # Build all three entry points to dist/
+bun run build        # Build dashboard and four package entry points
 bun run dev:cli      # Run CLI in dev mode
 bun run dev:mcp      # Run MCP server in dev mode
 bun run dev:serve    # Run HTTP server in dev mode
+```
+
+`dashboard/` is a second install root, not a workspace of the repository root, so
+the root `bun install` does not reach it. `bun run build` shells into
+`cd dashboard && bun run build` and fails with `Cannot find module 'vite'` until
+the dashboard is installed separately, once:
+
+```bash
+cd dashboard && bun install
 ```
 
 ## Architecture
@@ -20,7 +29,7 @@ bun run dev:serve    # Run HTTP server in dev mode
 src/
   types/index.ts      — All TypeScript types (EvalCase, EvalResult, AdapterConfig, etc.)
   core/
-    assertions.ts     — 20+ deterministic assertion types, cheapest-first ordering
+    assertions.ts     — 19 assertion types, cheapest-first ordering
     judge.ts          — LLM-as-judge (Anthropic + OpenAI, temp=0, CoT-before-verdict)
     runner.ts         — Parallel execution, Pass^k metric, adapter dispatch
     reporter.ts       — Terminal / JSON / markdown output, run comparison
@@ -39,7 +48,7 @@ src/
     index.ts          — Commander.js entry point
     commands/         — One file per command
   mcp/
-    index.ts          — MCP server with 8 tools (stdio transport)
+    index.ts          — MCP server with 8 tools (HTTP default, stdio opt-in)
   server/
     index.ts          — HTTP API server
 
@@ -59,7 +68,7 @@ datasets/examples/    — Example JSONL datasets (used in tests and quickstart)
 ## Testing
 
 ```bash
-bun test                                  # All 69 tests
+bun test                                  # All tests
 bun test src/core/assertions.test.ts      # Specific file
 bun test --watch                          # Watch mode
 ```

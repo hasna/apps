@@ -2,7 +2,7 @@
 
 Open source AI evaluation framework — LLM-as-judge + assertion-based evals for any AI app.
 
-**CLI** (`evals`) · **MCP server** (`evals-mcp`) · **TypeScript SDK**
+**CLI** (`evals`) · **MCP server** (`evals-mcp`) · **HTTP API** (`evals-serve`) · **TypeScript SDK**
 
 ---
 
@@ -13,6 +13,16 @@ bun install -g @hasna/evals
 # or
 npm install -g @hasna/evals
 ```
+
+## Documentation
+
+- [CLI reference](docs/cli.md)
+- [Datasets and assertions](docs/datasets.md)
+- [Adapters](docs/adapters.md)
+- [MCP server and tools](docs/mcp.md)
+- [TypeScript SDK](docs/sdk.md)
+- [HTTP API](docs/http-api.md)
+- [Local storage and baselines](docs/storage.md)
 
 ## 5-minute quickstart
 
@@ -65,15 +75,17 @@ evals run datasets/smoke.jsonl --adapter http --url http://localhost:3000/api/ch
   "id": "refund-flow-001",
   "turns": [
     { "role": "user", "content": "I want a refund." },
-    { "role": "assistant", "expected": "asks for order ID" },
+    { "role": "assistant", "content": "Could you share your order ID?", "expected": "asks for order ID" },
     { "role": "user", "content": "Order #1234" },
-    { "role": "assistant", "expected": "confirms refund process" }
+    { "role": "assistant", "content": "I found the order and will explain the next steps.", "expected": "confirms refund process" }
   ],
   "judge": {
     "rubric": "Should collect order ID before processing. Should not promise instant refund."
   }
 }
 ```
+
+Multi-turn cases replay the complete `turns` transcript in one adapter call. Every turn needs `role` and `content`; `expected` is optional metadata for assistant turns.
 
 ### Pass^k (consistency testing)
 ```json
@@ -109,7 +121,7 @@ evals run datasets/smoke.jsonl --adapter http --url http://localhost:3000/api/ch
 | `cost_usd` | Cost under budget | `{"type":"cost_usd","max":0.01}` |
 | `semantic_similarity` | Meaning matches expected | `{"type":"semantic_similarity","value":"acknowledge frustration","threshold":0.8}` |
 
-Assertions run **cheapest-first** — deterministic checks before embeddings. The LLM judge only runs if all assertions pass.
+Assertions run **cheapest-first** and stop after the first failure. `semantic_similarity` uses OpenAI embeddings when `OPENAI_API_KEY` is available and otherwise falls back to Jaccard word overlap. The LLM judge only runs if every assertion passes.
 
 ---
 
@@ -156,6 +168,7 @@ Use real traffic to seed eval cases, but keep a review gate before cases become 
 # Capture sampled request/response pairs into a staging dataset
 evals capture \
   --app https://preview.example.com/api/chat \
+  --port 19441 \
   --rate 0.05 \
   --output datasets/captured.jsonl
 
@@ -176,7 +189,7 @@ evals ci run datasets/regression.jsonl \
   --fail-if-regression 5
 ```
 
-Captured cases are tagged `captured` and `needs-review` and include a short response preview. Promote only consent-safe, redacted, high-signal cases into durable datasets; keep the live capture output as a staging inbox rather than a direct CI corpus.
+`evals capture` starts a local reverse proxy. While it is running, send traffic to `http://localhost:19441`; requests are forwarded to the `--app` URL with the original path. The output file is reset on startup. Sampled JSON request/response pairs become cases tagged `captured` and `needs-review` with a short response preview. Promote only consent-safe, redacted, high-signal cases into durable datasets; keep capture output as a staging inbox rather than a direct CI corpus.
 
 ---
 
@@ -238,11 +251,18 @@ evals capture --app http://localhost:3000 --rate 0.1 --output datasets/captured.
 # Health check
 evals doctor
 
+# Shell completion
+evals completion bash
+evals completion zsh
+
 # Register MCP server with Claude Code / Codex / Gemini
 evals mcp register --claude      # Claude Code (~/.claude/mcp.json)
 evals mcp register --codex       # Codex (~/.codex/config.json)
 evals mcp register --gemini      # Gemini (~/.gemini/settings.json)
 evals mcp register --all         # all three at once
+
+# Start the MCP server in its default Streamable HTTP mode
+evals mcp start
 ```
 
 Default CLI output is compact for agent terminals: `run`, `ci run`, `compare`, `calibrate`, and `runs show` cap rows and truncate long details. Use `--verbose` for all human-readable rows, `--limit <n>` for a larger compact view, and `--json` for full machine-readable data. Saved-run discovery is progressive: `evals runs list` shows summaries, while `evals runs show <id>` or `evals runs inspect <id>` shows details.
@@ -292,18 +312,19 @@ evals_run_single(
 → PASS — The response correctly identifies Paris.
 ```
 
-## HTTP mode
+## MCP transports
 
-Shared Streamable HTTP transport for multi-agent sessions (stdio remains the default):
+Shared Streamable HTTP is the default transport:
 
 ```bash
-evals-mcp --http              # http://127.0.0.1:8817/mcp
-MCP_HTTP=1 evals-mcp          # same
-evals-mcp --http --port 8817  # explicit port
+evals-mcp                     # http://127.0.0.1:8862/mcp
+evals-mcp --http              # explicit HTTP mode; same endpoint
+evals-mcp --port 9000         # custom HTTP port
 ```
 
-- Health: `GET http://127.0.0.1:8817/health` → `{"status":"ok","name":"evals"}`
-- Override port with `MCP_HTTP_PORT` or `--port`
+- Health: `GET http://127.0.0.1:8862/health` → `{"status":"ok","name":"evals"}`
+- Override the port with `MCP_HTTP_PORT` or `--port`
+- Use `evals-mcp --stdio` or `MCP_STDIO=1 evals-mcp` for stdio clients
 
 ---
 

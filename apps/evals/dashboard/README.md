@@ -1,73 +1,38 @@
-# React + TypeScript + Vite
+# evals dashboard
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React/Vite dashboard for browsing saved `@hasna/evals` runs. It reads `GET /api/runs?limit=50` and displays run summaries, result rows, assertion failures, judge reasoning, duration, cost, and Pass^k details.
 
-Currently, two official plugins are available:
+## Development
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+`dashboard/` is a second install root, not a workspace of the repository root, so the root `bun install` does not reach it. Install both once:
 
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+bun install                    # repository root: CLI, MCP, and HTTP server deps
+cd dashboard && bun install    # this directory: React, Vite, ESLint
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Skipping the second install leaves `bun run dev` failing with `vite: command not found` and `bun run build` failing with `Cannot find module 'vite'`.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+Then run the API and Vite server in separate terminals:
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+# Terminal 1 (repository root): JSON API on http://localhost:19440
+bun run dev:serve
+
+# Terminal 2: Vite dev server with /api proxied to port 19440
+cd dashboard
+bun run dev
 ```
+
+Create saved data with `evals run ... --save` or `evals ci run ...`, then refresh the dashboard.
+
+## Commands
+
+```bash
+bun run dev      # Vite development server
+bun run build    # Type-check and build dashboard/dist
+bun run lint     # ESLint
+bun run preview  # Preview the static build
+```
+
+The root `bun run build` shells into this directory, so it needs the dashboard install above too. `evals-serve` currently serves the JSON API only; it does not serve `dashboard/dist`, so deploy or preview the static build separately with `/api` routed to `evals-serve`.

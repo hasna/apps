@@ -27,7 +27,7 @@ export function mcpCommand(): Command {
 
   cmd.addCommand(
     new Command("start")
-      .description("Start MCP server (stdio)")
+      .description("Start MCP server (Streamable HTTP)")
       .action(() => {
         const { spawnSync } = require("child_process");
         spawnSync(process.execPath, [join(import.meta.dir, "../../mcp/index.js")], { stdio: "inherit" });

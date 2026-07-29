@@ -6,11 +6,15 @@ Thank you for your interest in contributing! This guide will help you get starte
 
 ```bash
 # Clone the repository
-git clone https://github.com/hasna/evals.git
-cd evals
+git clone https://github.com/hasna/open-evals.git
+cd open-evals
 
-# Install dependencies
+# Install root dependencies (CLI, MCP, HTTP server)
 bun install
+
+# Install the dashboard, which is a second install root rather than a workspace
+# of the repository root — `bun run build` shells into it and fails without this
+cd dashboard && bun install && cd ..
 
 # Run tests
 bun test
@@ -29,14 +33,14 @@ src/
   types/        - TypeScript types (EvalCase, EvalResult, Assertion, JudgeConfig, EvalRun)
   core/
     runner.ts   - Orchestrates eval execution (parallel, Pass^k)
-    assertions/ - Deterministic assertion engine (20+ assertion types)
+    assertions.ts - Deterministic assertion engine (19 assertion types)
     judge.ts    - LLM-as-judge (multi-provider, CoT-before-verdict, temp=0)
     reporter.ts - Generate reports (JSON, markdown, terminal)
   adapters/     - App-under-test connectors (http, anthropic, openai, mcp, function, cli)
-  datasets/     - JSONL loader, case generator, sampler
+  datasets/     - JSONL/JSON loader and streaming reader
   db/           - SQLite for run history
-  cli/          - Commander.js CLI (evals run, judge, report, ci, estimate, generate, calibrate)
-  mcp/          - MCP server (evals tools for agents)
+  cli/          - Commander.js CLI and built-in command implementations
+  mcp/          - MCP server with HTTP-default and opt-in stdio transports
   server/       - HTTP API server
   index.ts      - Library re-exports
 
@@ -88,7 +92,7 @@ bun test --watch                        # Watch mode
 
 ## Reporting Issues
 
-Use [GitHub Issues](https://github.com/hasna/evals/issues) to report bugs or request features. Please include:
+Use [GitHub Issues](https://github.com/hasna/open-evals/issues) to report bugs or request features. Please include:
 
 - Steps to reproduce
 - Expected vs actual behavior
