@@ -17,10 +17,46 @@ const ALGO = "aes-256-gcm";
 const IV_BYTES = 12;
 const PREFIX = "enc:v1:";
 
-/** Env vars the master key is read from, in priority order. */
+/** Env vars the master key is read from, in write-priority order. */
 export const MASTER_KEY_ENV = ["HASNA_SECRETS_MASTER_KEY", "SECRETS_MASTER_KEY"] as const;
 
-let _cached: Buffer | null = null;
+let _cached: Buffer[] | null = null;
+
+function decodeKey(raw: string): Buffer {
+  const b64 = tryDecode(raw, "base64");
+  const hex = tryDecode(raw, "hex");
+  if (b64 && b64.length === 32) return b64;
+  if (hex && hex.length === 32) return hex;
+  return createHash("sha256").update(raw, "utf8").digest();
+}
+
+/**
+ * Resolve every configured key, with the canonical key first. New values use
+ * the first key; reads try the full set so adding the canonical env var does not
+ * make values written with the legacy SECRETS_MASTER_KEY alias unreadable.
+ */
+function getCloudMasterKeys(env: NodeJS.ProcessEnv = process.env): Buffer[] {
+  if (_cached) return _cached;
+  const rawKeys = MASTER_KEY_ENV
+    .map((name) => env[name]?.trim())
+    .filter((value): value is string => Boolean(value));
+  if (rawKeys.length === 0) {
+    throw new Error(
+      `secrets-serve requires a master key. Set ${MASTER_KEY_ENV[0]} (base64/hex 32 bytes) — the vault refuses to store plaintext.`,
+    );
+  }
+
+  const seen = new Set<string>();
+  _cached = rawKeys
+    .map(decodeKey)
+    .filter((key) => {
+      const id = key.toString("hex");
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+  return _cached;
+}
 
 /**
  * Resolve the 32-byte master key from the environment. Accepts a base64 or hex
@@ -28,30 +64,7 @@ let _cached: Buffer | null = null;
  * operator-supplied passphrase also works. Throws when unset (fail-closed).
  */
 export function getCloudMasterKey(env: NodeJS.ProcessEnv = process.env): Buffer {
-  if (_cached) return _cached;
-  let raw: string | undefined;
-  for (const key of MASTER_KEY_ENV) {
-    const v = env[key]?.trim();
-    if (v) {
-      raw = v;
-      break;
-    }
-  }
-  if (!raw) {
-    throw new Error(
-      `secrets-serve requires a master key. Set ${MASTER_KEY_ENV[0]} (base64/hex 32 bytes) — the vault refuses to store plaintext.`,
-    );
-  }
-
-  let key: Buffer;
-  const b64 = tryDecode(raw, "base64");
-  const hex = tryDecode(raw, "hex");
-  if (b64 && b64.length === 32) key = b64;
-  else if (hex && hex.length === 32) key = hex;
-  else key = createHash("sha256").update(raw, "utf8").digest();
-
-  _cached = key;
-  return key;
+  return getCloudMasterKeys(env)[0]!;
 }
 
 function tryDecode(value: string, encoding: "base64" | "hex"): Buffer | null {
@@ -86,10 +99,17 @@ export function decryptValue(stored: string, env: NodeJS.ProcessEnv = process.en
   const payload = Buffer.from(rest.slice(sep + 1), "hex");
   const tag = payload.subarray(payload.length - 16);
   const ciphertext = payload.subarray(0, payload.length - 16);
-  const key = getCloudMasterKey(env);
-  const decipher = createDecipheriv(ALGO, key, iv);
-  decipher.setAuthTag(tag);
-  return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
+  let firstError: unknown;
+  for (const key of getCloudMasterKeys(env)) {
+    try {
+      const decipher = createDecipheriv(ALGO, key, iv);
+      decipher.setAuthTag(tag);
+      return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
+    } catch (error) {
+      firstError ??= error;
+    }
+  }
+  throw firstError;
 }
 
 /** Test-only: reset the cached key. */

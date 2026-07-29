@@ -45,4 +45,30 @@ describe("cloud-crypto", () => {
     _resetCloudMasterKey();
     expect(decryptValue(ct, pEnv)).toBe("x");
   });
+
+  test("decrypts values written with the legacy key alias after the canonical key is added", () => {
+    const legacyKey = Buffer.alloc(32, 8).toString("base64");
+    const canonicalKey = Buffer.alloc(32, 9).toString("base64");
+    const ct = encryptValue("fleet-credential", { SECRETS_MASTER_KEY: legacyKey });
+
+    _resetCloudMasterKey();
+    expect(decryptValue(ct, {
+      HASNA_SECRETS_MASTER_KEY: canonicalKey,
+      SECRETS_MASTER_KEY: legacyKey,
+    })).toBe("fleet-credential");
+  });
+
+  test("uses the canonical key for new writes when both key names are configured", () => {
+    const legacyKey = Buffer.alloc(32, 8).toString("base64");
+    const canonicalKey = Buffer.alloc(32, 9).toString("base64");
+    const ct = encryptValue("new-credential", {
+      HASNA_SECRETS_MASTER_KEY: canonicalKey,
+      SECRETS_MASTER_KEY: legacyKey,
+    });
+
+    _resetCloudMasterKey();
+    expect(decryptValue(ct, { HASNA_SECRETS_MASTER_KEY: canonicalKey })).toBe("new-credential");
+    _resetCloudMasterKey();
+    expect(() => decryptValue(ct, { SECRETS_MASTER_KEY: legacyKey })).toThrow();
+  });
 });
