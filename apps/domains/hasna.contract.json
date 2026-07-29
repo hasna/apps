@@ -3,42 +3,97 @@
   "name": "domains",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.4.2",
-  "description": "Domain portfolio, registrar, marketplace, and DNS management for AI agents. Four surfaces: CLI (domains), MCP (domains-mcp), HTTP API (domains-serve), and a generated SDK (@hasna/domains/sdk). Local mode uses SQLite at ~/.local/share/open-domains/domains.db; cloud mode (HASNA_DOMAINS_STORAGE_MODE=cloud) is PURE REMOTE per Amendment A1 — the serve reads/writes the shared cloud Postgres directly, no cache or sync in the service.",
+  "kitVersion": "0.8.0",
+  "description": "Domain portfolio, registrar, marketplace, and DNS management for AI agents through CLI, MCP, HTTP API, and SDK surfaces.",
   "bins": [
     "domains",
     "domains-mcp",
     "domains-serve"
   ],
+  "deploymentModes": [
+    "local",
+    "self_hosted"
+  ],
+  "hosting": [
+    "user-hosted"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "http",
+      "kind": "api",
+      "status": "supported",
+      "bin": "domains-serve",
+      "authMode": "api-key",
+      "deploymentModes": [
+        "local",
+        "self_hosted"
+      ],
+      "health": {
+        "method": "GET",
+        "path": "/health",
+        "public": true
+      },
+      "readiness": {
+        "method": "GET",
+        "path": "/ready",
+        "public": false
+      },
+      "version": {
+        "method": "GET",
+        "path": "/version",
+        "public": true
+      },
+      "apiBasePath": "/v1",
+      "openApiPath": "/openapi.json"
+    },
+    {
+      "name": "domains-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "api-key",
+      "deploymentModes": [
+        "local",
+        "self_hosted"
+      ],
+      "exportSubpath": "./sdk",
+      "generatedFrom": "/openapi.json",
+      "clientClassName": "DomainsClient"
+    },
+    {
+      "name": "domains-mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "domains-mcp",
+      "authMode": "local-only",
+      "deploymentModes": [
+        "local",
+        "self_hosted"
+      ]
+    },
+    {
+      "name": "domains-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "domains",
+      "authMode": "local-only",
+      "deploymentModes": [
+        "local",
+        "self_hosted"
+      ]
+    }
+  ],
   "storage": {
     "mode": "local",
+    "engines": [
+      "sqlite",
+      "postgres"
+    ],
     "envPrefix": "HASNA_DOMAINS_",
     "aliasEnvPrefix": "DOMAINS_",
-    "databaseUrlSecretRef": "hasna/oss/domains/database-url",
-    "sqlitePath": "~/.local/share/open-domains/domains.db"
-  },
-  "metadata": {
-    "serve": {
-      "healthPath": "/health",
-      "readyPath": "/ready",
-      "versionPath": "/version",
-      "openapiPath": "/openapi.json",
-      "apiVersion": "v1",
-      "containerPort": 8080,
-      "auth": "api-key (@hasna/contracts) — header x-api-key or Authorization: Bearer",
-      "scopes": [
-        "domains:read",
-        "domains:write"
-      ],
-      "signingKeyEnv": "HASNA_DOMAINS_API_SIGNING_KEY",
-      "ownerDatabaseUrlSecretRef": "hasna/oss/domains/database-url-owner",
-      "apiKeySigningSecretRef": "hasna/oss/domains/api-key-signing-secret"
-    },
-    "sdk": {
-      "export": "@hasna/domains/sdk",
-      "client": "DomainsClient",
-      "envUrl": "DOMAINS_API_URL",
-      "envKey": "DOMAINS_API_KEY"
+    "sqlitePath": "~/.local/share/open-domains/domains.db",
+    "pgTestGate": {
+      "envVar": "HASNA_DOMAINS_TEST_DATABASE_URL",
+      "command": "HASNA_DOMAINS_DATABASE_URL_OWNER=\"$HASNA_DOMAINS_TEST_DATABASE_URL\" bun run src/cli/index.ts db migrate --dry-run --json"
     }
   }
 }

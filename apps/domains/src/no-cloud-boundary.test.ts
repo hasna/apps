@@ -2,19 +2,22 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 
-// Scan first-party source and hand-authored manifests only. The `dist`
-// bundle is deliberately self-contained (it vendors @hasna/contracts &
-// @hasna/mcp-harness), and those dependencies legitimately carry the
-// retired-marker strings inside their own no-cloud validators/schemas —
-// scanning the bundled output would flag a dependency's internal identifiers,
-// not any first-party coupling. The guard here is that OUR code and manifests
-// never depend on the retired shared cloud package.
+const packageJson = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8")) as {
+  files?: string[];
+  bin?: Record<string, string>;
+};
+
+// Scan first-party inputs and published artifacts. Runtime dependencies remain
+// external so their internal validators cannot leak retired cloud markers into
+// this package's generated JavaScript.
 const roots = Array.from(new Set([
   "package.json",
   "bun.lock",
   "LICENSE",
   "README.md",
   "src",
+  ...(packageJson.files ?? []),
+  ...Object.values(packageJson.bin ?? {}),
 ]));
 
 const ignoredDirs = new Set(["node_modules", ".git", ".hasna"]);
