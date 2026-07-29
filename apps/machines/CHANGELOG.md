@@ -6,6 +6,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- GitHub Actions now runs typechecking and tests for pull requests and pushes to
+  `main`.
+
 ## [0.2.3] - 2026-07-29
 
 ### Added
