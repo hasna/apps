@@ -6,15 +6,8 @@
 
 CREATE TABLE IF NOT EXISTS _pg_migrations (id SERIAL PRIMARY KEY, version INT UNIQUE NOT NULL, applied_at TIMESTAMPTZ DEFAULT NOW());
 
--- migration 0
-CREATE TABLE IF NOT EXISTS projects (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    path TEXT UNIQUE NOT NULL,
-    description TEXT,
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text
-  );
+-- migration 0 (retired: created the projects table, dropped by migration 21)
+SELECT 1;
 
 -- migration 1
 CREATE TABLE IF NOT EXISTS agents (
@@ -34,13 +27,12 @@ CREATE TABLE IF NOT EXISTS recordings (
     raw_text TEXT NOT NULL,
     processed_text TEXT,
     processing_mode TEXT NOT NULL DEFAULT 'raw' CHECK(processing_mode IN ('raw', 'enhanced')),
-    model_used TEXT NOT NULL DEFAULT 'gpt-4o-transcribe',
+    model_used TEXT NOT NULL DEFAULT 'gpt-transcribe',
     enhancement_model TEXT,
     duration_ms INTEGER DEFAULT 0,
     language TEXT,
     tags TEXT DEFAULT '[]',
     agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
-    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
     session_id TEXT,
     machine_id TEXT,
     metadata TEXT DEFAULT '{}',
@@ -63,8 +55,8 @@ CREATE TABLE IF NOT EXISTS _migrations (
 -- migration 5
 CREATE INDEX IF NOT EXISTS idx_recordings_agent ON recordings(agent_id);
 
--- migration 6
-CREATE INDEX IF NOT EXISTS idx_recordings_project ON recordings(project_id);
+-- migration 6 (retired: indexed recordings.project_id, dropped by migration 19)
+SELECT 1;
 
 -- migration 7
 CREATE INDEX IF NOT EXISTS idx_recordings_session ON recordings(session_id);
@@ -101,8 +93,8 @@ CREATE TABLE IF NOT EXISTS feedback (
     created_at TEXT NOT NULL DEFAULT NOW()::text
   );
 
--- migration 16
-ALTER TABLE agents ADD COLUMN IF NOT EXISTS active_project_id TEXT REFERENCES projects(id) ON DELETE SET NULL;
+-- migration 16 (retired: added agents.active_project_id, dropped by migration 20)
+SELECT 1;
 
 -- migration 17
 CREATE TABLE IF NOT EXISTS recording_idempotency (
@@ -122,3 +114,13 @@ ALTER TABLE recording_idempotency
 ALTER TABLE recording_idempotency
   ADD CONSTRAINT recording_idempotency_recording_id_fkey
   FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE SET NULL;
+
+-- migration 19: drop the retired projects feature (forward-only)
+DROP INDEX IF EXISTS idx_recordings_project;
+ALTER TABLE recordings DROP COLUMN IF EXISTS project_id;
+
+-- migration 20
+ALTER TABLE agents DROP COLUMN IF EXISTS active_project_id;
+
+-- migration 21
+DROP TABLE IF EXISTS projects;

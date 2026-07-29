@@ -14,7 +14,6 @@ public struct Recording: Identifiable, Codable, Sendable, Equatable {
     public let durationMs: Int
     public let language: String?
     public let tags: [String]
-    public let projectId: String?
     public let machineId: String?
     public let createdAt: String
 
@@ -29,7 +28,6 @@ public struct Recording: Identifiable, Codable, Sendable, Equatable {
         case durationMs = "duration_ms"
         case language
         case tags
-        case projectId = "project_id"
         case machineId = "machine_id"
         case createdAt = "created_at"
     }
@@ -46,7 +44,6 @@ public struct Recording: Identifiable, Codable, Sendable, Equatable {
         durationMs = (try c.decodeIfPresent(Int.self, forKey: .durationMs)) ?? 0
         language = try c.decodeIfPresent(String.self, forKey: .language)
         tags = (try c.decodeIfPresent([String].self, forKey: .tags)) ?? []
-        projectId = try c.decodeIfPresent(String.self, forKey: .projectId)
         machineId = try c.decodeIfPresent(String.self, forKey: .machineId)
         createdAt = (try c.decodeIfPresent(String.self, forKey: .createdAt)) ?? ""
     }
@@ -55,7 +52,7 @@ public struct Recording: Identifiable, Codable, Sendable, Equatable {
     public init(id: String, audioPath: String? = nil, rawText: String, processedText: String? = nil,
                 processingMode: String = "raw", modelUsed: String? = nil, enhancementModel: String? = nil,
                 durationMs: Int = 0, language: String? = nil, tags: [String] = [],
-                projectId: String? = nil, machineId: String? = nil, createdAt: String = "") {
+                machineId: String? = nil, createdAt: String = "") {
         self.id = id
         self.audioPath = audioPath
         self.rawText = rawText
@@ -66,7 +63,6 @@ public struct Recording: Identifiable, Codable, Sendable, Equatable {
         self.durationMs = durationMs
         self.language = language
         self.tags = tags
-        self.projectId = projectId
         self.machineId = machineId
         self.createdAt = createdAt
     }

@@ -77,7 +77,6 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
         if (method === "GET") {
           const filter = {
             ...(url.searchParams.get("agent_id") ? { agent_id: url.searchParams.get("agent_id")! } : {}),
-            ...(url.searchParams.get("project_id") ? { project_id: url.searchParams.get("project_id")! } : {}),
             ...(url.searchParams.get("session_id") ? { session_id: url.searchParams.get("session_id")! } : {}),
             ...(url.searchParams.get("processing_mode")
               ? { processing_mode: url.searchParams.get("processing_mode") as CreateRecordingInput["processing_mode"] }
@@ -153,49 +152,12 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
         const agent = await repo.heartbeatAgent(pg, id);
         return agent ? json({ agent }) : error(404, "agent not found");
       }
-      // /v1/agents/:id/focus
-      if (action === "focus") {
-        if (method !== "POST") return error(405, `method ${method} not allowed on /v1/agents/:id/focus`);
-        const body = await readJson<{ project_id?: string | null }>(req);
-        try {
-          const agent = await repo.setAgentFocus(pg, id, body?.project_id ?? null);
-          return agent ? json({ agent }) : error(404, "agent not found");
-        } catch (e) {
-          // Unknown project ref -> clean 400 (never leak the raw FK error).
-          if (e instanceof repo.ProjectNotFoundError) return error(400, e.message);
-          throw e;
-        }
-      }
       if (action) return error(404, `unknown agent action: ${action}`);
       if (method === "GET") {
         const agent = await repo.getAgent(pg, id);
         return agent ? json({ agent }) : error(404, "agent not found");
       }
       return error(405, `method ${method} not allowed on /v1/agents/:id`);
-    }
-
-    // ── /v1/projects ──
-    if (resource === "projects") {
-      if (!id) {
-        if (method === "GET") {
-          const projects = await repo.listProjects(pg);
-          return json({ projects, count: projects.length });
-        }
-        if (method === "POST") {
-          const body = await readJson<{ name?: string; path?: string; description?: string }>(req);
-          if (!body || typeof body.name !== "string" || !body.name.trim() || typeof body.path !== "string" || !body.path.trim()) {
-            return error(400, "name and path are required");
-          }
-          const project = await repo.registerProject(pg, body.name, body.path, body.description ?? null);
-          return json({ project }, 201);
-        }
-        return error(405, `method ${method} not allowed on /v1/projects`);
-      }
-      if (method === "GET") {
-        const project = await repo.getProject(pg, id);
-        return project ? json({ project }) : error(404, "project not found");
-      }
-      return error(405, `method ${method} not allowed on /v1/projects/:id`);
     }
 
     // ── /v1/feedback ──
@@ -222,16 +184,16 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
     return error(404, `unknown /v1 resource: ${resource ?? ""}`);
   } catch (e) {
     // Clean domain errors carry a safe, client-facing message → 400.
-    if (e instanceof repo.ProjectNotFoundError || e instanceof repo.ValidationError) {
+    if (e instanceof repo.ValidationError) {
       return error(400, e.message);
     }
     if (e instanceof repo.IdempotencyConflictError) {
       return error(409, e.message);
     }
     // Anything else is an unexpected/internal failure. Its raw text (e.g. a
-    // Postgres constraint name like `agents_active_project_id_fkey`, table or
-    // column names, or a DSN fragment) must NEVER reach the client. Log it
-    // server-side for diagnosis and return a generic message.
+    // Postgres constraint name, table or column names, or a DSN fragment) must
+    // NEVER reach the client. Log it server-side for diagnosis and return a
+    // generic message.
     console.error(`[recordings-serve] unhandled ${method} ${path} error:`, e);
     return error(500, "internal server error");
   }

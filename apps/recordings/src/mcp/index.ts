@@ -6,13 +6,21 @@ import { z } from "zod";
 import {
   loadConfig,
   ensureDataDir,
+  normalizeModelSlots,
   normalizePostProcessingConfig,
   normalizePostProcessingMode,
+  saveRealtimeTranscriptionSettings,
+  REALTIME_TRANSCRIPTION_DELAYS,
 } from "../lib/config.js";
+import type { RealtimeTranscriptionSettings } from "../lib/config.js";
 import { countStoreRecordings, getStore } from "../store.js";
 import { transcribeAudio } from "../lib/transcriber.js";
 import { processText, needsEnhancement, resolveTranscriberModel } from "../lib/enhancer.js";
-import type { Recording, RecordingFilter } from "../types/index.js";
+import type {
+  RealtimeTranscriptionDelay,
+  Recording,
+  RecordingFilter,
+} from "../types/index.js";
 import { VERSION } from "../version.js";
 import { currentMachineId } from "../lib/machine.js";
 
@@ -66,7 +74,6 @@ function detail(r: Recording): string {
   if (r.language) lines.push(`Language: ${truncateText(r.language, 20)}`);
   if (r.tags.length > 0) lines.push(`Tags: ${r.tags.map((tag) => truncateText(tag, 80)).join(", ")}`);
   if (r.agent_id) lines.push(`Agent: ${truncateText(r.agent_id, 80)}`);
-  if (r.project_id) lines.push(`Project: ${truncateText(r.project_id, 80)}`);
   if (r.session_id) lines.push(`Session: ${truncateText(r.session_id, 80)}`);
   lines.push(`Created: ${truncateText(r.created_at, 40)}`);
   lines.push(`Text: ${stripTerminalControls(r.raw_text)}`);
@@ -87,7 +94,6 @@ function verboseRecording(r: Recording): string {
   if (r.tags.length > 0) lines.push(`Tags: ${summarizeTags(r.tags)}`);
   const scopes = [
     r.agent_id ? `agent=${truncateText(r.agent_id, 80)}` : null,
-    r.project_id ? `project=${truncateText(r.project_id, 80)}` : null,
     r.session_id ? `session=${truncateText(r.session_id, 80)}` : null,
   ].filter(Boolean);
   if (scopes.length > 0) lines.push(`Scope: ${scopes.join(" ")}`);
@@ -109,9 +115,23 @@ function applyTranscriptionArgs(
     enhance?: boolean;
     transcriber_model?: string;
     enhancement_model?: string;
+    realtime_transcription_model?: string;
+    realtime_prompt?: string;
+    realtime_keywords?: string[];
+    realtime_languages?: string[];
+    realtime_delay?: RealtimeTranscriptionDelay;
   }
 ): ReturnType<typeof runtimeConfig> {
   if (args.language) cfg.language = args.language;
+
+  if (args.realtime_transcription_model) {
+    cfg.realtime_transcription_model = args.realtime_transcription_model;
+  }
+  if (args.realtime_prompt !== undefined) cfg.realtime_prompt = args.realtime_prompt;
+  if (args.realtime_keywords !== undefined) cfg.realtime_keywords = args.realtime_keywords;
+  if (args.realtime_languages !== undefined) cfg.realtime_languages = args.realtime_languages;
+  if (args.realtime_delay !== undefined) cfg.realtime_delay = args.realtime_delay;
+  normalizeModelSlots(cfg);
 
   const transcriptionPrompt = args.transcription_prompt ?? args.prompt;
   if (transcriptionPrompt !== undefined) {
@@ -348,12 +368,13 @@ async function saveRecordingMemento(args: {
 // ── Full tool schemas for describe_tool ─────────────────────────────────────
 
 const toolDocs: Record<string, string> = {
-  recordings_status: "Show safe service status for agents.\nParams: none\nReturns: JSON with package version, MCP HTTP defaults, active transcription/enhancement models, language, data paths, key-presence booleans, and recording counts. Never returns secret values.",
-  transcribe_audio: "Transcribe audio file and save raw plus optional processed text.\nParams: audio_path (string, required): path to wav/mp3/m4a/webm | language (string): ISO code e.g. en/es/fr | transcription_prompt or prompt (string): STT vocabulary/context only | transcriber_prompt or system_prompt (string): post-transcription cleanup instructions | post_processing_mode ('off'|'auto'|'always') | transcriber_model (string) | no_enhance (bool): alias for post_processing_mode=off | tags (string[]) | agent_id (string) | project_id (string) | session_id (string)\nReturns: JSON recording summary with raw_text, processed_text, processing_mode, and safe metadata.",
-  save_recording: "Save text as recording. Auto-enhances if needed.\nParams: text (string, required): text to save | enhance (bool): true forces always, false disables | transcriber_prompt or system_prompt (string): post-processing instructions | post_processing_mode ('off'|'auto'|'always') | tags (string[]) | agent_id (string) | project_id (string) | session_id (string) | metadata (object)",
+  recordings_status: "Show safe service status for agents.\nParams: none\nReturns: JSON with package version, MCP HTTP defaults, active transcription/enhancement models, realtime accuracy controls, language, data paths, key-presence booleans, and recording counts. Never returns secret values.",
+  realtime_transcription_settings: `Read or update the realtime transcription accuracy controls used by the realtime model.\nParams: realtime_transcription_model (string) | prompt (string): free-form description of the recording context | keywords (string[]): domain-specific terms and names | languages (string[]): ISO 639-1 codes e.g. ["en","fr"] | delay (${REALTIME_TRANSCRIPTION_DELAYS.join("|")}): latency/accuracy tradeoff\nCalling with no params reads the active settings; any supplied param is persisted to the recordings config file.\nReturns: JSON with the resolved settings and any config warnings.`,
+  transcribe_audio: "Transcribe audio file and save raw plus optional processed text.\nParams: audio_path (string, required): path to wav/mp3/m4a/webm | language (string): ISO code e.g. en/es/fr | transcription_prompt or prompt (string): STT vocabulary/context only | transcriber_prompt or system_prompt (string): post-transcription cleanup instructions | post_processing_mode ('off'|'auto'|'always') | transcriber_model (string) | no_enhance (bool): alias for post_processing_mode=off | tags (string[]) | agent_id (string) | session_id (string)\nReturns: JSON recording summary with raw_text, processed_text, processing_mode, and safe metadata.",
+  save_recording: "Save text as recording. Auto-enhances if needed.\nParams: text (string, required): text to save | enhance (bool): true forces always, false disables | transcriber_prompt or system_prompt (string): post-processing instructions | post_processing_mode ('off'|'auto'|'always') | tags (string[]) | agent_id (string) | session_id (string) | metadata (object)",
   get_recording: "Get recording by ID or prefix.\nParams: id (string, required): recording ID or prefix",
-  list_recordings: "List recordings, compact and capped by default, most recent first.\nParams: limit (number, default 10, max 50 compact / 10 verbose) | offset or cursor (number) | processing_mode ('raw'|'enhanced') | tags (string[]) | search (string): text search | since/until (ISO date) | agent_id | project_id | session_id | full (bool): richer metadata rows with bounded previews. Use get_recording for full text/details.",
-  search_recordings: "Search recordings by text content, compact and capped by default.\nParams: query (string, required) | limit (number, default 10, max 50 compact / 10 verbose) | offset or cursor (number) | agent_id | project_id | full (bool): richer metadata rows with bounded previews. Use get_recording for full text/details.",
+  list_recordings: "List recordings, compact and capped by default, most recent first.\nParams: limit (number, default 10, max 50 compact / 10 verbose) | offset or cursor (number) | processing_mode ('raw'|'enhanced') | tags (string[]) | search (string): text search | since/until (ISO date) | agent_id | session_id | full (bool): richer metadata rows with bounded previews. Use get_recording for full text/details.",
+  search_recordings: "Search recordings by text content, compact and capped by default.\nParams: query (string, required) | limit (number, default 10, max 50 compact / 10 verbose) | offset or cursor (number) | agent_id | full (bool): richer metadata rows with bounded previews. Use get_recording for full text/details.",
   delete_recording: "Delete recording by ID.\nParams: id (string, required)",
   recording_stats: "Recording count, mode breakdown, duration, and capped model breakdown.\nParams: limit_models (number, default 10, max 10 compact / 50 verbose) | verbose (bool): allow up to 50 model counts",
   detect_enhancement: "Check if text needs AI enhancement.\nParams: text (string, required)",
@@ -361,9 +382,6 @@ const toolDocs: Record<string, string> = {
   list_agents: "List registered agents, capped by default.\nParams: limit (number, default 20, max 50) | offset or cursor (number)",
   get_agent: "Get agent by ID or name.\nParams: id (string, required)",
   heartbeat: "Update last_seen_at to signal agent is active.\nParams: agent_id (string, required): agent ID or name",
-  set_focus: "Set active project context for this agent session.\nParams: agent_id (string, required) | project_id (string, nullable): project ID or null to clear",
-  register_project: "Register project (idempotent).\nParams: name (string, required) | path (string, required): absolute path | description (string)",
-  list_projects: "List registered projects, capped by default.\nParams: limit (number, default 20, max 50) | offset or cursor (number)",
 };
 
 // ── Meta Tool ───────────────────────────────────────────────────────────────
@@ -397,6 +415,10 @@ registerTool(
           transcription_model: cfg.transcription_model,
           realtime_session_model: cfg.realtime_session_model,
           realtime_transcription_model: cfg.realtime_transcription_model,
+          realtime_prompt_configured: Boolean(cfg.realtime_prompt?.trim()),
+          realtime_keywords: cfg.realtime_keywords ?? [],
+          realtime_languages: cfg.realtime_languages ?? [],
+          realtime_delay: cfg.realtime_delay,
           enhancement_model: cfg.enhancement_model,
           transcriber_model: resolveTranscriberModel(cfg),
           language: cfg.language,
@@ -438,7 +460,6 @@ registerTool(
     no_enhance: z.boolean().optional(),
     tags: z.array(z.string()).optional(),
     agent_id: z.string().optional(),
-    project_id: z.string().optional(),
     session_id: z.string().optional(),
   },
   async (args) => {
@@ -465,7 +486,6 @@ registerTool(
         language: transcription.language || undefined,
         tags: args.tags,
         agent_id: args.agent_id,
-        project_id: args.project_id,
         session_id: args.session_id,
         machine_id: currentMachineId(),
         metadata,
@@ -479,7 +499,6 @@ registerTool(
             recording_id: recording.id,
             text: processed.mode === "enhanced" ? processed.text : transcription.text,
             agent_id: args.agent_id,
-            project_id: args.project_id,
             session_id: args.session_id,
             created_at: recording.created_at
           }),
@@ -508,7 +527,6 @@ registerTool(
     enhancement_model: z.string().optional(),
     tags: z.array(z.string()).optional(),
     agent_id: z.string().optional(),
-    project_id: z.string().optional(),
     session_id: z.string().optional(),
     goal: z.string().optional().describe("Goal or purpose of this recording session (e.g. 'code review for PR #123')"),
     role: z.string().optional().describe("Agent role for this session (e.g. 'dev agent for connectdev')"),
@@ -550,7 +568,6 @@ registerTool(
         enhancement_model: enhModel,
         tags: args.tags,
         agent_id: args.agent_id,
-        project_id: args.project_id,
         session_id: args.session_id,
         goal: args.goal,
         role: args.role,
@@ -597,7 +614,6 @@ registerTool(
     since: z.string().optional(),
     until: z.string().optional(),
     agent_id: z.string().optional(),
-    project_id: z.string().optional(),
     session_id: z.string().optional(),
     full: z.boolean().optional(),
   },
@@ -613,7 +629,6 @@ registerTool(
         since: args.since,
         until: args.until,
         agent_id: args.agent_id,
-        project_id: args.project_id,
         session_id: args.session_id,
       };
 
@@ -644,7 +659,6 @@ registerTool(
     offset: z.number().optional(),
     cursor: z.number().optional(),
     agent_id: z.string().optional(),
-    project_id: z.string().optional(),
     session_id: z.string().optional(),
     full: z.boolean().optional(),
   },
@@ -655,7 +669,6 @@ registerTool(
         limit: pagination.limit,
         offset: pagination.offset,
         agent_id: args.agent_id,
-        project_id: args.project_id,
         session_id: args.session_id,
       };
       const store = getStore();
@@ -714,6 +727,46 @@ registerTool(
         }
       }
       return text(out);
+    } catch (e) {
+      return errorResult(e);
+    }
+  }
+);
+
+registerTool(
+  "realtime_transcription_settings",
+  "Read or update the realtime transcription accuracy controls.",
+  {
+    realtime_transcription_model: z.string().optional(),
+    prompt: z.string().optional(),
+    keywords: z.array(z.string()).optional(),
+    languages: z.array(z.string()).optional(),
+    delay: z.enum(REALTIME_TRANSCRIPTION_DELAYS).optional(),
+  },
+  async (args) => {
+    try {
+      const patch: RealtimeTranscriptionSettings = {};
+      if (args.realtime_transcription_model !== undefined) {
+        patch.realtime_transcription_model = args.realtime_transcription_model;
+      }
+      if (args.prompt !== undefined) patch.realtime_prompt = args.prompt;
+      if (args.keywords !== undefined) patch.realtime_keywords = args.keywords;
+      if (args.languages !== undefined) patch.realtime_languages = args.languages;
+      if (args.delay !== undefined) patch.realtime_delay = args.delay;
+
+      const updated = Object.keys(patch).length > 0;
+      if (updated) saveRealtimeTranscriptionSettings(patch);
+
+      const cfg = runtimeConfig();
+      return text(JSON.stringify({
+        updated,
+        realtime_transcription_model: cfg.realtime_transcription_model,
+        prompt: cfg.realtime_prompt ?? "",
+        keywords: cfg.realtime_keywords ?? [],
+        languages: cfg.realtime_languages ?? [],
+        delay: cfg.realtime_delay,
+        config_warnings: cfg.config_warnings ?? [],
+      }, null, 2));
     } catch (e) {
       return errorResult(e);
     }
@@ -788,46 +841,7 @@ registerTool(
   }
 );
 
-// ── Project Tools ───────────────────────────────────────────────────────────
-
-registerTool(
-  "register_project",
-  "Register project (idempotent).",
-  { name: z.string(), path: z.string(), description: z.string().optional() },
-  async (args) => {
-    try {
-      const p = await getStore().registerProject(args.name, args.path, args.description);
-      return text(`${truncateText(p.id, 8)} | ${truncateText(p.name, 80)} | ${truncateText(p.path, 120)}`);
-    } catch (e) {
-      return errorResult(e);
-    }
-  }
-);
-
-registerTool(
-  "list_projects",
-  "List registered projects, capped by default.",
-  {
-    limit: z.number().optional(),
-    offset: z.number().optional(),
-    cursor: z.number().optional(),
-  },
-  async (args) => {
-    try {
-      const projects = await getStore().listProjects();
-      return text(formatMcpPage(
-        "projects",
-        projects,
-        args,
-        (project) => `${truncateText(project.id, 8)} | ${truncateText(project.name, 80)} | ${truncateText(project.path, 120)}`
-      ));
-    } catch (e) {
-      return errorResult(e);
-    }
-  }
-);
-
-// ── Heartbeat & Focus ───────────────────────────────────────────────────────
+// ── Heartbeat ───────────────────────────────────────────────────────────────
 
 registerTool(
   "heartbeat",
@@ -838,21 +852,6 @@ registerTool(
       const agent = await getStore().heartbeatAgent(args.agent_id);
       if (!agent) return text(`Agent not found: ${truncateText(args.agent_id, 80)}`);
       return text(`${truncateText(agent.id, 80)} | ${truncateText(agent.name, 80)} | last_seen: ${truncateText(agent.last_seen_at, 40)}`);
-    } catch (e) {
-      return errorResult(e);
-    }
-  }
-);
-
-registerTool(
-  "set_focus",
-  "Set active project context for this agent session.",
-  { agent_id: z.string().describe("Agent ID or name"), project_id: z.string().nullable().optional().describe("Project ID to focus on, or null to clear") },
-  async (args) => {
-    try {
-      const agent = await getStore().setAgentFocus(args.agent_id, args.project_id ?? null);
-      if (!agent) return text(`Agent not found: ${truncateText(args.agent_id, 80)}`);
-      return text(args.project_id ? `Focus set: ${truncateText(args.project_id, 80)}` : "Focus cleared");
     } catch (e) {
       return errorResult(e);
     }

@@ -119,7 +119,7 @@ struct OpenAIAPIKeyStoreTests {
         let home = try makeHome()
         try writeConfig(home: home, [
             "openai_api_key": "old-key",
-            "transcription_model": "gpt-4o-transcribe",
+            "transcription_model": "gpt-transcribe",
         ])
 
         try OpenAIAPIKeyStore.save(key: "sk-rotated", homePath: home.path)
@@ -131,7 +131,7 @@ struct OpenAIAPIKeyStoreTests {
         let data = try Data(contentsOf: configURL)
         let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
         #expect(json["openai_api_key"] as? String == "sk-rotated")
-        #expect(json["transcription_model"] as? String == "gpt-4o-transcribe")
+        #expect(json["transcription_model"] as? String == "gpt-transcribe")
     }
 
     @Test("Saving an empty key removes it from config.json")
@@ -149,6 +149,85 @@ struct OpenAIAPIKeyStoreTests {
         #expect(key == "")
     }
 
+    @Test("Realtime transcription settings default to the live model and low delay")
+    func realtimeSettingsDefaults() throws {
+        let home = try makeHome()
+
+        let settings = OpenAIAPIKeyStore.loadRealtimeTranscriptionSettings(
+            homePath: home.path,
+            environment: [:],
+            storedLanguage: "en"
+        )
+
+        #expect(settings.model == "gpt-live-transcribe")
+        #expect(settings.delay == "low")
+        #expect(settings.prompt.isEmpty)
+        #expect(settings.keywords.isEmpty)
+        #expect(settings.languages == ["en"])
+    }
+
+    @Test("Realtime accuracy controls load from config.json")
+    func realtimeSettingsFromConfig() throws {
+        let home = try makeHome()
+        try writeAnyConfig(home: home, [
+            "realtime_transcription_model": "gpt-live-transcribe",
+            "realtime_prompt": "Weekly infrastructure standup",
+            "realtime_keywords": ["Hasna", "Alumia"],
+            "realtime_languages": ["en", "FR"],
+            "realtime_delay": "high",
+        ])
+
+        let settings = OpenAIAPIKeyStore.loadRealtimeTranscriptionSettings(
+            homePath: home.path,
+            environment: [:],
+            storedLanguage: "en"
+        )
+
+        #expect(settings.prompt == "Weekly infrastructure standup")
+        #expect(settings.keywords == ["Hasna", "Alumia"])
+        #expect(settings.languages == ["en", "fr"])
+        #expect(settings.delay == "high")
+    }
+
+    @Test("RECORDINGS_REALTIME_* env vars win over config.json")
+    func realtimeSettingsFromEnvironment() throws {
+        let home = try makeHome()
+        try writeAnyConfig(home: home, [
+            "realtime_prompt": "from config",
+            "realtime_delay": "high",
+        ])
+
+        let settings = OpenAIAPIKeyStore.loadRealtimeTranscriptionSettings(
+            homePath: home.path,
+            environment: [
+                "RECORDINGS_REALTIME_PROMPT": "from environment",
+                "RECORDINGS_REALTIME_KEYWORDS": "Takumi, Alumia ,Takumi",
+                "RECORDINGS_REALTIME_LANGUAGES": "de,invalid",
+                "RECORDINGS_REALTIME_DELAY": "minimal",
+            ],
+            storedLanguage: "en"
+        )
+
+        #expect(settings.prompt == "from environment")
+        #expect(settings.keywords == ["Takumi", "Alumia"])
+        #expect(settings.languages == ["de"])
+        #expect(settings.delay == "minimal")
+    }
+
+    @Test("An unsupported realtime delay falls back to the default")
+    func realtimeSettingsRejectUnknownDelay() throws {
+        let home = try makeHome()
+
+        let settings = OpenAIAPIKeyStore.loadRealtimeTranscriptionSettings(
+            homePath: home.path,
+            environment: ["RECORDINGS_REALTIME_DELAY": "instant"],
+            storedLanguage: "auto"
+        )
+
+        #expect(settings.delay == "low")
+        #expect(settings.languages.isEmpty)
+    }
+
     private func makeHome() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("recordings-key-store-\(UUID().uuidString)")
@@ -157,6 +236,10 @@ struct OpenAIAPIKeyStoreTests {
     }
 
     private func writeConfig(home: URL, _ config: [String: String]) throws {
+        try writeAnyConfig(home: home, config)
+    }
+
+    private func writeAnyConfig(home: URL, _ config: [String: Any]) throws {
         let configDir = home
             .appendingPathComponent(".hasna")
             .appendingPathComponent("recordings")

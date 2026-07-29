@@ -7,17 +7,16 @@ import type { PgAdapterAsync } from "../db/remote-storage.js";
  * agent_id that was not already an existing agent id (a name, or even a random
  * UUID) because the raw value was inserted straight into recordings.agent_id and
  * tripped the Postgres foreign key. createRecording must now resolve/register the
- * agent and resolve the project BEFORE the insert so the FK never fires.
+ * agent BEFORE the insert so the FK never fires.
  */
 
 interface Row {
   [k: string]: unknown;
 }
 
-/** Minimal in-memory Postgres fake with real agents/projects/recordings tables. */
+/** Minimal in-memory Postgres fake with real agents/recordings tables. */
 function makeFakePg() {
   const agents: Row[] = [];
-  const projects: Row[] = [];
   const recordings: Row[] = [];
   const recordingTags: Row[] = [];
   const idempotencyRows: Row[] = [];
@@ -36,7 +35,6 @@ function makeFakePg() {
       await previous;
       const snapshots = {
         agents: agents.map((row) => ({ ...row })),
-        projects: projects.map((row) => ({ ...row })),
         recordings: recordings.map((row) => ({ ...row })),
         recordingTags: recordingTags.map((row) => ({ ...row })),
         idempotencyRows: idempotencyRows.map((row) => ({ ...row })),
@@ -45,7 +43,6 @@ function makeFakePg() {
         return await operation(pg);
       } catch (error) {
         agents.splice(0, agents.length, ...snapshots.agents);
-        projects.splice(0, projects.length, ...snapshots.projects);
         recordings.splice(0, recordings.length, ...snapshots.recordings);
         recordingTags.splice(0, recordingTags.length, ...snapshots.recordingTags);
         idempotencyRows.splice(0, idempotencyRows.length, ...snapshots.idempotencyRows);
@@ -57,9 +54,7 @@ function makeFakePg() {
     async run(sql: string, ...params: unknown[]) {
       if (/^\s*insert\s+into\s+agents/i.test(sql)) {
         agents.push({ id: params[0], name: params[1], role: params[3] ?? "agent" });
-      } else if (/^\s*insert\s+into\s+projects/i.test(sql)) {
-        projects.push({ id: params[0], name: params[1], path: params[2] });
-      } else if (/^\s*insert\s+into\s+recording_idempotency/i.test(sql)) {
+            } else if (/^\s*insert\s+into\s+recording_idempotency/i.test(sql)) {
         if (idempotencyRows.some((row) =>
           (row["principal"] === params[0] && row["idempotency_key"] === params[1]) ||
           row["recording_id"] === params[3]
@@ -76,12 +71,8 @@ function makeFakePg() {
       } else if (/^\s*insert\s+into\s+recordings/i.test(sql)) {
         // Enforce the FK the same way Postgres would: reject a dangling agent_id.
         const agentId = params[10];
-        const projectId = params[11];
         if (agentId != null && !agents.some((a) => a["id"] === agentId)) {
           throw new Error(`insert or update on table "recordings" violates foreign key constraint "recordings_agent_id_fkey"`);
-        }
-        if (projectId != null && !projects.some((p) => p["id"] === projectId)) {
-          throw new Error(`violates foreign key constraint "recordings_project_id_fkey"`);
         }
         if (/on\s+conflict\s*\(id\)\s+do\s+nothing/i.test(sql)
           && recordings.some((recording) => recording["id"] === params[0])) {
@@ -91,7 +82,6 @@ function makeFakePg() {
           id: params[0],
           raw_text: params[2],
           agent_id: agentId,
-          project_id: projectId,
           created_at: new Date().toISOString(),
         });
       } else if (/^\s*delete\s+from\s+recordings/i.test(sql)) {
@@ -122,12 +112,6 @@ function makeFakePg() {
         if (/where\s+name\s*=/i.test(sql)) return agents.find((a) => a["name"] === ref) ?? null;
         if (/like/i.test(sql)) return agents.find((a) => String(a["id"]).startsWith(ref)) ?? null;
       }
-      if (/from\s+projects/i.test(sql)) {
-        if (/where\s+id\s*=/i.test(sql)) return projects.find((p) => p["id"] === ref) ?? null;
-        if (/where\s+path\s*=/i.test(sql)) return projects.find((p) => p["path"] === ref) ?? null;
-        if (/where\s+name\s*=/i.test(sql)) return projects.find((p) => p["name"] === ref) ?? null;
-        if (/like/i.test(sql)) return projects.find((p) => String(p["id"]).startsWith(ref)) ?? null;
-      }
       if (/from\s+recordings/i.test(sql)) {
         if (/like/i.test(sql)) return recordings.find((r) => String(r["id"]).startsWith(ref)) ?? null;
         return recordings.find((r) => r["id"] === ref) ?? null;
@@ -141,7 +125,6 @@ function makeFakePg() {
     // deterministic-ish id helper isn't needed; repo uses crypto.randomUUID
     _seq: () => seq++,
     agents,
-    projects,
     recordings,
     recordingTags,
     idempotencyRows,
@@ -149,7 +132,6 @@ function makeFakePg() {
   };
   return pg as unknown as PgAdapterAsync & {
     agents: Row[];
-    projects: Row[];
     recordings: Row[];
     recordingTags: Row[];
     idempotencyRows: Row[];
@@ -397,13 +379,5 @@ describe("repo.createRecording reference resolution", () => {
 
     expect(pg.recordings).toHaveLength(0);
     expect(pg.recordingTags).toHaveLength(0);
-  });
-
-  test("unknown project ref fails as a clean ProjectNotFoundError (→400), not a 500", async () => {
-    const pg = makeFakePg();
-    await expect(
-      repo.createRecording(pg, { raw_text: "x", project_id: "00000000-does-not-exist" }),
-    ).rejects.toBeInstanceOf(repo.ProjectNotFoundError);
-    expect(pg.recordings.length).toBe(0);
   });
 });

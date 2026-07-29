@@ -60,9 +60,14 @@ describe("getDatabase", () => {
 
     expect(tableNames).toContain("recordings");
     expect(tableNames).toContain("agents");
-    expect(tableNames).toContain("projects");
     expect(tableNames).toContain("recording_tags");
     expect(tableNames).toContain("_migrations");
+    // The projects feature is removed; a fresh database never creates it.
+    expect(tableNames).not.toContain("projects");
+    const recordingColumns = (
+      db.query("PRAGMA table_info(recordings)").all() as { name: string }[]
+    ).map((row) => row.name);
+    expect(recordingColumns).not.toContain("project_id");
   });
 
   test("sets WAL journal mode", () => {
@@ -163,6 +168,17 @@ describe("getDatabase", () => {
         applied_at TEXT NOT NULL DEFAULT (datetime('now'))
       )
     `);
+    legacy.run("ALTER TABLE agents ADD COLUMN active_project_id TEXT REFERENCES projects(id) ON DELETE SET NULL");
+    legacy.query(
+      "INSERT INTO projects (id, name, path) VALUES (?, ?, ?)"
+    ).run("legacy-project", "legacy", "/legacy");
+    legacy.query("INSERT INTO agents (id, name) VALUES (?, ?)").run("legacy-agent", "legacy-agent");
+    legacy.query("UPDATE agents SET active_project_id = ? WHERE id = ?").run("legacy-project", "legacy-agent");
+    legacy.query(
+      `INSERT INTO recordings (id, raw_text, processing_mode, model_used, tags, agent_id, project_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run("legacy-row", "kept", "raw", "whisper-1", "[]", "legacy-agent", "legacy-project");
+    legacy.query("INSERT INTO recording_tags (recording_id, tag) VALUES (?, ?)").run("legacy-row", "kept-tag");
     legacy.query("INSERT INTO _migrations (id) VALUES (?)").run(4);
     legacy.close();
 
@@ -173,22 +189,129 @@ describe("getDatabase", () => {
     const agentColumns = (
       db.query("PRAGMA table_info(agents)").all() as { name: string }[]
     ).map((row) => row.name);
+    const tableNames = (
+      db.query("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]
+    ).map((row) => row.name);
 
     expect(recordingColumns).toContain("goal");
     expect(recordingColumns).toContain("role");
     expect(recordingColumns).toContain("task_list_id");
     expect(recordingColumns).toContain("machine_id");
     expect(recordingColumns).toContain("metadata");
-    expect(agentColumns).toContain("active_project_id");
+
+    // Forward-only projects removal: the column, the agent focus column, and
+    // the table itself are gone, with no compatibility view left behind.
+    expect(recordingColumns).not.toContain("project_id");
+    expect(agentColumns).not.toContain("active_project_id");
+    expect(tableNames).not.toContain("projects");
+    const views = (
+      db.query("SELECT name FROM sqlite_master WHERE type='view'").all() as { name: string }[]
+    ).map((row) => row.name);
+    expect(views).not.toContain("projects");
+
+    // Existing rows and their relationships survive the table rebuild.
+    const kept = db.query("SELECT raw_text, agent_id FROM recordings WHERE id = ?").get("legacy-row") as {
+      raw_text: string;
+      agent_id: string;
+    };
+    expect(kept.raw_text).toBe("kept");
+    expect(kept.agent_id).toBe("legacy-agent");
+    const keptAgent = db.query("SELECT name FROM agents WHERE id = ?").get("legacy-agent") as { name: string };
+    expect(keptAgent.name).toBe("legacy-agent");
+    const keptTag = db.query("SELECT tag FROM recording_tags WHERE recording_id = ?").get("legacy-row") as {
+      tag: string;
+    };
+    expect(keptTag.tag).toBe("kept-tag");
+    expect(
+      (db.query("PRAGMA foreign_keys").get() as { foreign_keys: number }).foreign_keys
+    ).toBe(1);
 
     db.query(
       `INSERT INTO recordings (id, raw_text, processing_mode, model_used, tags, machine_id, metadata)
        VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).run("legacy-ok", "hello", "raw", "gpt-4o-transcribe", "[]", "apple03", "{}");
+    ).run("legacy-ok", "hello", "raw", "gpt-transcribe", "[]", "apple03", "{}");
     const row = db.query("SELECT machine_id FROM recordings WHERE id = ?").get("legacy-ok") as {
       machine_id: string;
     };
     expect(row.machine_id).toBe("apple03");
+  });
+
+  test("the forward-only projects drop is idempotent across reopens", () => {
+    const dbPath = join(tempDir, "idempotent.db");
+    const legacy = new Database(dbPath);
+    legacy.run(`
+      CREATE TABLE projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        path TEXT UNIQUE NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+    legacy.run(`
+      CREATE TABLE agents (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        description TEXT,
+        role TEXT DEFAULT 'agent',
+        metadata TEXT DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+        active_project_id TEXT REFERENCES projects(id) ON DELETE SET NULL
+      )
+    `);
+    legacy.run(`
+      CREATE TABLE recordings (
+        id TEXT PRIMARY KEY,
+        audio_path TEXT,
+        raw_text TEXT NOT NULL,
+        processed_text TEXT,
+        processing_mode TEXT NOT NULL DEFAULT 'raw',
+        model_used TEXT NOT NULL DEFAULT 'whisper-1',
+        enhancement_model TEXT,
+        duration_ms INTEGER DEFAULT 0,
+        language TEXT,
+        tags TEXT DEFAULT '[]',
+        agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+        project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+        session_id TEXT,
+        goal TEXT,
+        role TEXT,
+        task_list_id TEXT,
+        machine_id TEXT,
+        metadata TEXT DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+    legacy.run("CREATE INDEX idx_recordings_project ON recordings(project_id)");
+    legacy.run("CREATE TABLE recording_tags (recording_id TEXT NOT NULL REFERENCES recordings(id) ON DELETE CASCADE, tag TEXT NOT NULL, PRIMARY KEY (recording_id, tag))");
+    legacy.run("CREATE TABLE _migrations (id INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')))");
+    legacy.query("INSERT INTO _migrations (id) VALUES (?)").run(3);
+    legacy.query("INSERT INTO recordings (id, raw_text) VALUES (?, ?)").run("keep-me", "survivor");
+    legacy.close();
+
+    const columnsOf = (db: ReturnType<typeof getDatabase>, table: string) =>
+      (db.query(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((row) => row.name);
+
+    const first = getDatabase(dbPath);
+    expect(columnsOf(first, "recordings")).not.toContain("project_id");
+    expect(columnsOf(first, "agents")).not.toContain("active_project_id");
+    closeDatabase();
+    resetDatabase();
+
+    // Reopening must not throw and must not resurrect the retired schema.
+    const second = getDatabase(dbPath);
+    expect(columnsOf(second, "recordings")).not.toContain("project_id");
+    expect(columnsOf(second, "agents")).not.toContain("active_project_id");
+    const survivor = second.query("SELECT raw_text FROM recordings WHERE id = ?").get("keep-me") as {
+      raw_text: string;
+    };
+    expect(survivor.raw_text).toBe("survivor");
+    const indexes = (
+      second.query("SELECT name FROM sqlite_master WHERE type='index'").all() as { name: string }[]
+    ).map((row) => row.name);
+    expect(indexes).not.toContain("idx_recordings_project");
+    expect(indexes).toContain("idx_recordings_agent");
   });
 
   test("continues when a schema migration was partially applied", () => {

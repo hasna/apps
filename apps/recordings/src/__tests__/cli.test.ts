@@ -141,40 +141,36 @@ describe("recordings CLI", () => {
     expect(JSON.parse(stdout)).toEqual([]);
   });
 
-  test("project register returns a canonical local Store id", async () => {
+  test("the retired project commands are gone", async () => {
     const home = join(tmpdir(), `open-recordings-cli-project-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     tempDirs.push(home);
     mkdirSync(home, { recursive: true });
-    const proc = Bun.spawn(
-      [
-        process.execPath,
-        cliEntry,
-        "--json",
-        "project",
-        "register",
-        "--name",
-        "Desktop App",
-        "--path",
-        "recordings-app://projects/desktop",
-      ],
-      {
+
+    for (const args of [["project", "register", "--name", "x", "--path", "y"], ["projects"]]) {
+      const proc = Bun.spawn([process.execPath, cliEntry, "--json", ...args], {
         cwd: home,
         env: isolatedCliEnv(home),
         stdout: "pipe",
         stderr: "pipe",
-      },
-    );
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ]);
+      });
+      const [stderr, exitCode] = await Promise.all([
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      expect(exitCode).not.toBe(0);
+      expect(stderr).toContain("unknown command");
+    }
 
-    expect(exitCode).toBe(0);
-    expect(stderr).toBe("");
-    const project = JSON.parse(stdout) as { id: string; name: string; path: string };
-    expect(project.id).toHaveLength(36);
-    expect(project).toMatchObject({ name: "Desktop App", path: "recordings-app://projects/desktop" });
+    const help = Bun.spawn([process.execPath, cliEntry, "--help"], {
+      cwd: home,
+      env: isolatedCliEnv(home),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const helpText = await new Response(help.stdout).text();
+    await help.exited;
+    expect(helpText).not.toContain("--project");
+    expect(helpText).not.toContain("projects");
   });
 
   test("--json app status reports package installer paths", async () => {
@@ -872,7 +868,7 @@ describe("recordings CLI", () => {
     expect(report.enhancement_api_key_configured).toBe(true);
     expect(report.enhancement_model).toBe("gpt-4o");
     expect(report.realtime_session_model).toBe("gpt-realtime");
-    expect(report.realtime_transcription_model).toBe("gpt-realtime-whisper");
+    expect(report.realtime_transcription_model).toBe("gpt-live-transcribe");
     expect(Array.isArray(report.config_warnings)).toBe(true);
   });
 
@@ -929,7 +925,7 @@ describe("recordings CLI", () => {
       };
       expect(recording.raw_text).toBe("mock transcript");
       expect(recording.processing_mode).toBe("raw");
-      expect(recording.model_used).toBe("gpt-4o-transcribe");
+      expect(recording.model_used).toBe("gpt-transcribe");
     } finally {
       apiServer.stop(true);
     }
@@ -1023,7 +1019,7 @@ describe("recordings CLI", () => {
     }
   });
 
-  test("--json save-text persists degraded-sync text without an unsafe project id", async () => {
+  test("--json save-text persists degraded-sync realtime text", async () => {
     const home = join(tmpdir(), `open-recordings-cli-save-text-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     tempDirs.push(home);
     mkdirSync(home, { recursive: true });
@@ -1045,7 +1041,7 @@ describe("recordings CLI", () => {
         "--source",
         "realtime_fast_path",
         "--model-used",
-        "gpt-realtime-whisper",
+        "gpt-live-transcribe",
         "--post-processing",
         "off",
         "--language",
@@ -1090,14 +1086,14 @@ describe("recordings CLI", () => {
     expect(recording.audio_path).toBe(audioPath);
     expect(recording.raw_text).toBe(transcript);
     expect(recording.processing_mode).toBe("raw");
-    expect(recording.model_used).toBe("gpt-realtime-whisper");
+    expect(recording.model_used).toBe("gpt-live-transcribe");
     expect(recording.duration_ms).toBe(1200);
     expect(recording.language).toBe("en");
     expect(recording.machine_id).toBe("station-test");
     expect(recording.metadata.transcription_source).toBe("realtime_fast_path");
     expect(recording.metadata.realtime).toEqual({
       fast_path: true,
-      model: "gpt-realtime-whisper",
+      model: "gpt-live-transcribe",
       bounded_fallback: false,
     });
     expect(recording.metadata.post_processing.mode).toBe("off");

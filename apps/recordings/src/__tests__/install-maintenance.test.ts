@@ -252,10 +252,6 @@ const operations = [
   () => local.getAgent("fixture"),
   () => local.listAgents(),
   () => local.heartbeatAgent("fixture"),
-  () => local.setAgentFocus("fixture", null),
-  () => local.registerProject("fixture", "/fixture"),
-  () => local.getProject("/fixture"),
-  () => local.listProjects(),
   () => local.saveFeedback({ message: "fixture" }),
 ];
 let blocked = 0;
@@ -290,7 +286,7 @@ console.log(JSON.stringify({ blocked, cloudMode: cloud.mode, cloudCount: agents.
       new Response(child.stderr).text(),
     ]);
     expect(exitCode, stderr).toBe(0);
-    expect(JSON.parse(stdout)).toEqual({ blocked: 16, cloudMode: "cloud-http", cloudCount: 0 });
+    expect(JSON.parse(stdout)).toEqual({ blocked: 12, cloudMode: "cloud-http", cloudCount: 0 });
   });
 });
 

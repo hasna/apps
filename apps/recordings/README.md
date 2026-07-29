@@ -15,20 +15,18 @@ npm install -g @hasna/recordings
 
 Recordings ships a **full native macOS app** (SwiftUI, macOS 26 / Liquid Glass) with a
 companion menu-bar control. It opens to a **Recordings workspace**: a narrow violet
-Liquid-Glass sidebar (Workspace · Library · Projects · Modes · Machines) beside one
+Liquid-Glass sidebar (Workspace · Library · Modes · Machines) beside one
 continuous canvas with the record hero, transcript library, and detail view. The menu bar
 provides recording controls and access to the main window while it is in the background.
 
 - **Record** — large push-to-talk / dictation / command hero with live transcription,
-  duration, the active project, and a "just now" strip. Global shortcut (default F5, or
-  hold fn) works while the window is in the background.
+  duration, and a "just now" strip. Global shortcut (default F5, or hold fn) works while
+  the window is in the background.
 - **Library** — every past transcript (read straight from the active local or HTTP Store
-  the CLI and MCP write), searchable and filterable by project, mode, and machine, with a
-  detail pane (copy, paste-into-front-app, audio playback, metadata).
-- **Projects** — app projects are registered through the same canonical Store before a
-  recording can reference them, preserving referential integrity in local and remote modes.
-- **Settings** (⌘,) — OpenAI key, language, recording shortcut, permissions, projects,
-  and voice shortcuts.
+  the CLI and MCP write), searchable and filterable by mode and machine, with a detail
+  pane (copy, paste-into-front-app, audio playback, metadata).
+- **Settings** (⌘,) — OpenAI key, language, recording shortcut, permissions, and voice
+  shortcuts.
 
 The app embeds a same-version `recordings` CLI as its data layer, so the CLI, MCP, and app
 share one store without depending on a possibly stale global CLI installation. Production
@@ -255,12 +253,12 @@ transcription/enhancement use it.
 The app's **Transcription Cleanup** setting controls the same post-processing pipeline as
 the CLI and MCP server. Use **Raw** to keep verbatim text only, **Auto** to clean up only
 when trigger phrases or instruction patterns are detected, or **Always** to run the
-transcriber cleanup prompt for every recording. Global cleanup instructions can be set in
-Settings, and project-specific instructions are appended when a project is active.
+transcriber cleanup prompt for every recording. Global cleanup instructions are set in
+Settings.
 
 The native app uses OpenAI realtime transcription for the stop-and-paste path: settled
-`gpt-realtime-whisper` text is saved and pasted immediately, while full-file
-`gpt-4o-transcribe` remains the bounded quality fallback when realtime is empty,
+`gpt-live-transcribe` text is saved and pasted immediately, while full-file
+`gpt-transcribe` remains the bounded quality fallback when realtime is empty,
 unsettled, or cannot be saved. Raw and processed transcript fields are still stored
 separately, so cleanup instructions never replace the verbatim transcript.
 
@@ -341,7 +339,12 @@ Persistent config can be stored in `~/.hasna/recordings/config.json` or a projec
   "transcription_prompt": "Hasna, Alumia, gpt-4o",
   "transcriber_prompt": "Clean up grammar and format as concise Markdown notes.",
   "post_processing_mode": "always",
-  "enhancement_model": "gpt-4o"
+  "enhancement_model": "gpt-4o",
+  "transcription_model": "gpt-transcribe",
+  "realtime_transcription_model": "gpt-live-transcribe",
+  "realtime_keywords": ["Hasna", "Alumia"],
+  "realtime_languages": ["en"],
+  "realtime_delay": "low"
 }
 ```
 
@@ -352,14 +355,47 @@ export RECORDINGS_TRANSCRIPTION_PROMPT="Hasna, DALL-E, gpt-4o"
 export RECORDINGS_TRANSCRIBER_PROMPT="Format as polished meeting notes"
 export RECORDINGS_POST_PROCESSING_MODE=always
 export RECORDINGS_TRANSCRIBER_MODEL=gpt-4o
-export RECORDINGS_MODEL=gpt-4o-transcribe
+export RECORDINGS_MODEL=gpt-transcribe
 export RECORDINGS_REALTIME_SESSION_MODEL=gpt-realtime
-export RECORDINGS_REALTIME_TRANSCRIPTION_MODEL=gpt-realtime-whisper
+export RECORDINGS_REALTIME_TRANSCRIPTION_MODEL=gpt-live-transcribe
+
+# Realtime accuracy controls (gpt-live-transcribe only)
+export RECORDINGS_REALTIME_PROMPT="Weekly infrastructure standup"
+export RECORDINGS_REALTIME_KEYWORDS="Hasna,Alumia,Postgres"
+export RECORDINGS_REALTIME_LANGUAGES="en,fr"
+export RECORDINGS_REALTIME_DELAY=low
 ```
 
-`RECORDINGS_MODEL` is the bounded file-transcription model. Realtime session and realtime
-transcription models are separate slots; `recordings check --json` reports all three and
-includes `config_warnings` if a model is placed in the wrong slot.
+### Models
+
+Model slots are validated against an explicit capability table — a model is only accepted
+in a slot the table says it belongs to, matched by exact id (no name heuristics).
+
+| Slot | Config key | Valid models | Default |
+| ---- | ---------- | ------------ | ------- |
+| File transcription (`/v1/audio/transcriptions`) | `transcription_model` | `gpt-transcribe`, `whisper-1` | `gpt-transcribe` |
+| Realtime transcription (WebSocket/WebRTC) | `realtime_transcription_model` | `gpt-live-transcribe` | `gpt-live-transcribe` |
+| Realtime speech-to-speech session | `realtime_session_model` | `gpt-realtime` | `gpt-realtime` |
+
+`gpt-transcribe` handles completed audio files and supports response streaming.
+`gpt-live-transcribe` is realtime-only — `/v1/audio/transcriptions` does not accept it.
+`recordings check --json` reports every resolved slot and includes `config_warnings`
+whenever a model is placed in a slot it is not valid for.
+
+### Realtime accuracy controls
+
+`gpt-live-transcribe` accepts four extra controls that are sent inside the realtime
+`session.update` event under `session.audio.input.transcription`:
+
+| Config key | CLI flag | Meaning |
+| ---------- | -------- | ------- |
+| `realtime_prompt` | `--realtime-prompt` | Free-form description of the recording context |
+| `realtime_keywords` | `--realtime-keywords` | Domain-specific terms and names |
+| `realtime_languages` | `--realtime-languages` | Expected ISO 639-1 codes, e.g. `en,fr` |
+| `realtime_delay` | `--realtime-delay` | Latency/accuracy tradeoff: `minimal`, `low`, `medium`, `high`, `xhigh` |
+
+The MCP `realtime_transcription_settings` tool reads these with no arguments and persists
+any argument it is given to the recordings config file.
 
 ## MCP Server
 
@@ -399,7 +435,6 @@ Versioned API (`/v1/*`, API-key auth via `x-api-key` or `Authorization: Bearer`)
 | GET/DELETE | `/v1/recordings/:id` | `recordings:read` / `recordings:write` |
 | GET | `/v1/stats` | `recordings:read` |
 | GET/POST | `/v1/agents` · GET `/v1/agents/:id` | `recordings:read` / `recordings:write` |
-| GET/POST | `/v1/projects` · GET `/v1/projects/:id` | `recordings:read` / `recordings:write` |
 
 Env: `HASNA_RECORDINGS_DATABASE_URL` (remote Postgres DSN — enables cloud `/v1`)
 and `HASNA_RECORDINGS_API_SIGNING_KEY` (HMAC signing secret for API-key auth).

@@ -1458,7 +1458,6 @@ verify_hardened_helper() {
 run_signed_helper_contract() {
     local contract_home
     local version
-    local project_output
     local recording_output
     local helper_executable
     contract_home="$(run_sensitive_tool "$MKTEMP_EXECUTABLE" -d "$BUILD_WORK_DIR/signed-helper-contract.XXXXXX")"
@@ -1478,10 +1477,6 @@ run_signed_helper_contract() {
     }
     if ! version="$(contract_run "$helper_executable" --version)" || \
        [ "$version" != "$VERSION" ] || \
-       ! project_output="$(contract_run "$helper_executable" --json project register \
-           --name "Signed Helper Contract" \
-           --path "recordings-app://build/signed-helper-contract")" || \
-       [[ "$project_output" != *"Signed Helper Contract"* ]] || \
        ! recording_output="$(contract_run "$helper_executable" --json save-text \
            "Signed helper contract" \
            --source "native_build_contract" \
@@ -1495,13 +1490,9 @@ run_signed_helper_contract() {
         HOME="$BUILD_HOME" \
         PATH="$SANITIZED_PATH" \
         TMPDIR="$BUILD_WORK_DIR" \
-        PROJECT_JSON="$project_output" \
         RECORDING_JSON="$recording_output" \
         "$BUN_EXECUTABLE" -e '
-        const project = JSON.parse(process.env.PROJECT_JSON ?? "null");
         const recording = JSON.parse(process.env.RECORDING_JSON ?? "null");
-        if (project?.name !== "Signed Helper Contract") process.exit(1);
-        if (project?.path !== "recordings-app://build/signed-helper-contract") process.exit(1);
         if (recording?.raw_text !== "Signed helper contract") process.exit(1);
     '; then
         "$RM_EXECUTABLE" -rf "$contract_home"

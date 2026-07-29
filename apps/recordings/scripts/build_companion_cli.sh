@@ -302,13 +302,8 @@ require_flag() {
 for command in list show search stats delete transcribe save-text rewrite; do
   require_command "$command"
 done
-require_command project register
 
 require_flag "root" "--json"
-require_flag "root" "--project"
-for flag in --name --path --description; do
-  require_flag "project register" "$flag" project register
-done
 for flag in -n --limit --offset; do
   require_flag "list" "$flag" list
 done
@@ -317,7 +312,7 @@ require_flag "search" "--limit" search
 for flag in --post-processing --prompt --transcriber-prompt --language --recording-id --transcription-model --transcriber-model --enhancement-model --enhance-triggers-json --keyword-transforms-json; do
   require_flag "transcribe" "$flag" transcribe
 done
-for flag in --text-file --source --model-used --post-processing --audio-path --duration-ms --language --transcriber-prompt --recording-id --transcription-model --transcriber-model --enhancement-model --enhance-triggers-json --keyword-transforms-json; do
+for flag in --text-file --source --model-used --post-processing --audio-path --duration-ms --language --transcriber-prompt --recording-id --transcription-model --transcriber-model --enhancement-model --enhance-triggers-json --keyword-transforms-json --realtime-transcription-model --realtime-prompt --realtime-keywords --realtime-languages --realtime-delay; do
   require_flag "save-text" "$flag" save-text
 done
 for flag in --instruction --post-processing --language --prompt --transcriber-prompt --transcription-model --transcriber-model --enhancement-model --enhance-triggers-json --keyword-transforms-json; do

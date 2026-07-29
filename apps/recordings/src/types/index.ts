@@ -12,7 +12,6 @@ export interface Recording {
   language: string | null;
   tags: string[];
   agent_id: string | null;
-  project_id: string | null;
   session_id: string | null;
   goal: string | null;
   role: string | null;
@@ -37,7 +36,6 @@ export interface CreateRecordingInput {
   language?: string;
   tags?: string[];
   agent_id?: string;
-  project_id?: string;
   session_id?: string;
   goal?: string;
   role?: string;
@@ -48,7 +46,6 @@ export interface CreateRecordingInput {
 
 export interface RecordingFilter {
   agent_id?: string;
-  project_id?: string;
   session_id?: string;
   processing_mode?: ProcessingMode;
   tags?: string[];
@@ -71,20 +68,17 @@ export interface Agent {
   last_seen_at: string;
 }
 
-// ── Project Types ───────────────────────────────────────────────────────────
-
-export interface Project {
-  id: string;
-  name: string;
-  path: string;
-  description: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
 // ── Config Types ────────────────────────────────────────────────────────────
 
 export type PostProcessingMode = "off" | "auto" | "always";
+
+/** Latency/accuracy tradeoff for the realtime transcription model. */
+export type RealtimeTranscriptionDelay =
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh";
 
 export interface RecordingsConfig {
   openai_api_key: string;
@@ -92,6 +86,14 @@ export interface RecordingsConfig {
   transcription_model: string;
   realtime_session_model?: string;
   realtime_transcription_model?: string;
+  /** Free-form description of the recording context for realtime accuracy. */
+  realtime_prompt?: string;
+  /** Domain-specific terms and names the realtime model should recognize. */
+  realtime_keywords?: string[];
+  /** Expected spoken languages as ISO 639-1 codes, e.g. ["en", "fr"]. */
+  realtime_languages?: string[];
+  /** Realtime latency/accuracy tradeoff. */
+  realtime_delay?: RealtimeTranscriptionDelay;
   enhancement_model: string;
   transcriber_model?: string;
   language: string;

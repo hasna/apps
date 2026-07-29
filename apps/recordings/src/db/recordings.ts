@@ -7,6 +7,7 @@ import type {
 } from "../types/index.js";
 import { RecordingNotFoundError } from "../types/index.js";
 import { recordingCreateIdentity } from "../lib/recording-create-identity.js";
+import { DEFAULT_TRANSCRIPTION_MODEL } from "../lib/config.js";
 
 function parseRow(row: Record<string, unknown>): Recording {
   return {
@@ -15,13 +16,12 @@ function parseRow(row: Record<string, unknown>): Recording {
     raw_text: row["raw_text"] as string,
     processed_text: (row["processed_text"] as string) || null,
     processing_mode: (row["processing_mode"] as Recording["processing_mode"]) || "raw",
-    model_used: (row["model_used"] as string) || "gpt-4o-transcribe",
+    model_used: (row["model_used"] as string) || DEFAULT_TRANSCRIPTION_MODEL,
     enhancement_model: (row["enhancement_model"] as string) || null,
     duration_ms: (row["duration_ms"] as number) || 0,
     language: (row["language"] as string) || null,
     tags: JSON.parse((row["tags"] as string) || "[]") as string[],
     agent_id: (row["agent_id"] as string) || null,
-    project_id: (row["project_id"] as string) || null,
     session_id: (row["session_id"] as string) || null,
     machine_id: (row["machine_id"] as string) || null,
     goal: (row["goal"] as string) || null,
@@ -49,8 +49,8 @@ export function createRecording(
     const metadataJson = JSON.stringify(input.metadata || {});
 
     const insertResult = d.query(
-    `INSERT INTO recordings (id, audio_path, raw_text, processed_text, processing_mode, model_used, enhancement_model, duration_ms, language, tags, agent_id, project_id, session_id, goal, role, task_list_id, machine_id, metadata)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO recordings (id, audio_path, raw_text, processed_text, processing_mode, model_used, enhancement_model, duration_ms, language, tags, agent_id, session_id, goal, role, task_list_id, machine_id, metadata)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO NOTHING`
     ).run(
     id,
@@ -58,13 +58,12 @@ export function createRecording(
     input.raw_text,
     input.processed_text || null,
     input.processing_mode || "raw",
-    input.model_used || "gpt-4o-transcribe",
+    input.model_used || DEFAULT_TRANSCRIPTION_MODEL,
     input.enhancement_model || null,
     input.duration_ms || 0,
     input.language || null,
     tagsJson,
     input.agent_id || null,
-    input.project_id || null,
     input.session_id || null,
     input.goal || null,
     input.role || null,
@@ -149,10 +148,6 @@ function buildRecordingWhere(filter?: RecordingFilter): {
   if (filter?.agent_id) {
     conditions.push("agent_id = ?");
     params.push(filter.agent_id);
-  }
-  if (filter?.project_id) {
-    conditions.push("project_id = ?");
-    params.push(filter.project_id);
   }
   if (filter?.session_id) {
     conditions.push("session_id = ?");

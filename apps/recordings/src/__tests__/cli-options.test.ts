@@ -6,7 +6,7 @@ function config(auto_enhance = true): RecordingsConfig {
   return {
     openai_api_key: "sk-test",
     enhancement_api_key: "sk-enhance",
-    transcription_model: "gpt-4o-transcribe",
+    transcription_model: "gpt-transcribe",
     enhancement_model: "gpt-4o",
     language: "en",
     audio_format: "wav",
@@ -108,8 +108,32 @@ describe("CLI enhancement options", () => {
 
   test("frozen realtime-only model cannot bypass bounded transcription normalization", () => {
     const cfg = config(true);
-    applyEnhancementOptions(cfg, { transcriptionModel: "gpt-realtime" });
-    expect(cfg.transcription_model).toBe("gpt-4o-transcribe");
+    applyEnhancementOptions(cfg, { transcriptionModel: "gpt-live-transcribe" });
+    expect(cfg.transcription_model).toBe("gpt-transcribe");
+  });
+
+  test("frozen realtime accuracy controls are applied and normalized", () => {
+    const cfg = config(true);
+
+    applyEnhancementOptions(cfg, {
+      realtimeTranscriptionModel: "gpt-live-transcribe",
+      realtimePrompt: "Board meeting",
+      realtimeKeywords: "Hasna, Alumia",
+      realtimeLanguages: "en,FR",
+      realtimeDelay: "xhigh",
+    });
+
+    expect(cfg.realtime_transcription_model).toBe("gpt-live-transcribe");
+    expect(cfg.realtime_prompt).toBe("Board meeting");
+    expect(cfg.realtime_keywords).toEqual(["Hasna", "Alumia"]);
+    expect(cfg.realtime_languages).toEqual(["en", "fr"]);
+    expect(cfg.realtime_delay).toBe("xhigh");
+  });
+
+  test("a file-transcription model is rejected in the realtime transcription slot", () => {
+    const cfg = config(true);
+    applyEnhancementOptions(cfg, { realtimeTranscriptionModel: "gpt-transcribe" });
+    expect(cfg.realtime_transcription_model).toBe("gpt-live-transcribe");
   });
 
   test("invalid post-processing mode throws", () => {

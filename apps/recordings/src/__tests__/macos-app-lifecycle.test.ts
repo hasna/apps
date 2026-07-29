@@ -3709,11 +3709,7 @@ case "\${HASNA_RECORDINGS_DB_PATH:-}" in "$HOME"/*) ;; *) exit 71 ;; esac
 case "\${1:-}" in
   --version) printf '0.2.12\n' ;;
   --json)
-    if [ "\${2:-}" = project ] && [ "\${3:-}" = register ]; then
-      [ "\${4:-}" = --name ] && [ "\${5:-}" = "Signed Helper Contract" ] || exit 64
-      [ "\${6:-}" = --path ] && [ "\${7:-}" = "recordings-app://build/signed-helper-contract" ] || exit 64
-      printf '{"id":"smoke-project","name":"Signed Helper Contract","path":"recordings-app://build/signed-helper-contract"}\n'
-    elif [ "\${2:-}" = save-text ] && [ "\${3:-}" = "Signed helper contract" ]; then
+    if [ "\${2:-}" = save-text ] && [ "\${3:-}" = "Signed helper contract" ]; then
       [ "\${4:-}" = --source ] && [ "\${5:-}" = native_build_contract ] || exit 64
       [ "\${6:-}" = --post-processing ] && [ "\${7:-}" = off ] || exit 64
       printf '{"id":"smoke-recording","raw_text":"Signed helper contract"}\n'

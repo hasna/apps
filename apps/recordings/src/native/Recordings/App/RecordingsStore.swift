@@ -12,15 +12,13 @@ enum Pane: Equatable {
 /// Sidebar filter selection for the library.
 enum LibraryFilter: Hashable {
     case all
-    case project(String)     // project id
-    case noProject
     case mode(String)        // "raw" | "enhanced"
     case thisMachine
     case machine(String)
 }
 
 /// Observable application state for the full macOS app. Bridges the live `RecordingEngine`,
-/// the `ProjectStore` / `VoiceShortcuts`, and the `recordings` CLI Store.
+/// the `ProjectStore` (app settings) / `VoiceShortcuts`, and the `recordings` CLI Store.
 @MainActor
 final class RecordingsStore: ObservableObject {
     let engine: RecordingEngine
@@ -53,7 +51,7 @@ final class RecordingsStore: ObservableObject {
         engine.voiceShortcuts = voiceShortcuts
 
         // Re-publish the wrapped ObservableObjects so views that observe only this store
-        // refresh on live recording changes (timer, live text) and project edits.
+        // refresh on live recording changes (timer, live text) and settings edits.
         engine.objectWillChange
             .sink { [weak self] in self?.objectWillChange.send() }
             .store(in: &cancellables)
@@ -67,28 +65,9 @@ final class RecordingsStore: ObservableObject {
         voiceShortcuts.objectWillChange
             .sink { [weak self] in self?.objectWillChange.send() }
             .store(in: &cancellables)
-
-        reconcileProjects()
-    }
-
-    func reconcileProjects() {
-        let home = self.home
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                try await projectStore.reconcileWithCanonicalStore(home: home)
-                self.operationError = nil
-            } catch {
-                self.operationError = projectStore.persistenceError
-                    ?? (error as? RecordingsCLI.Failure)?.message
-                    ?? error.localizedDescription
-            }
-        }
     }
 
     // MARK: - Derived collections
-
-    var projects: [RecProject] { projectStore.settings.projects }
 
     var machines: [String] {
         Set(library.compactMap { $0.machineId }.filter { !$0.isEmpty })
@@ -104,8 +83,6 @@ final class RecordingsStore: ObservableObject {
     private func matchesFilter(_ r: Recording) -> Bool {
         switch filter {
         case .all: return true
-        case .project(let id): return r.projectId == id
-        case .noProject: return r.projectId == nil
         case .mode(let m): return r.processingMode == m
         case .thisMachine: return r.machineId == localMachineID
         case .machine(let m): return r.machineId == m
@@ -124,8 +101,6 @@ final class RecordingsStore: ObservableObject {
         library.filter {
             switch filter {
             case .all: return true
-            case .project(let id): return $0.projectId == id
-            case .noProject: return $0.projectId == nil
             case .mode(let m): return $0.processingMode == m
             case .thisMachine: return $0.machineId == localMachineID
             case .machine(let m): return $0.machineId == m
@@ -136,11 +111,6 @@ final class RecordingsStore: ObservableObject {
     var selectedRecording: Recording? {
         guard let id = selection else { return nil }
         return library.first { $0.id == id }
-    }
-
-    func projectName(_ id: String?) -> String? {
-        guard let id else { return nil }
-        return projects.first { $0.id == id }?.name
     }
 
     // MARK: - Library loading

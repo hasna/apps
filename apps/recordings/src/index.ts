@@ -5,8 +5,8 @@ export type {
   RecordingFilter,
   ProcessingMode,
   PostProcessingMode,
+  RealtimeTranscriptionDelay,
   Agent,
-  Project,
   RecordingsConfig,
   TranscriptionResult,
   EnhancementResult,
@@ -45,10 +45,21 @@ export {
   DEFAULT_TRANSCRIPTION_MODEL,
   DEFAULT_REALTIME_SESSION_MODEL,
   DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
+  DEFAULT_REALTIME_DELAY,
+  REALTIME_TRANSCRIPTION_DELAYS,
+  MODEL_CAPABILITIES,
+  canonicalModelId,
+  modelCapability,
+  modelSupportsSlot,
+  modelSupportsFileStreaming,
+  modelsForSlot,
+  buildRealtimeTranscriptionOptions,
+  parseDelimitedList,
   normalizeModelSlots,
   normalizePostProcessingConfig,
   normalizePostProcessingMode,
 } from "./lib/config.js";
+export type { ModelCapability, ModelSlot } from "./lib/config.js";
 
 // ── Transcription ───────────────────────────────────────────────────────────
 export {
@@ -84,8 +95,6 @@ export type {
   RecordingsV1ClientOptions,
   RecordingsV1Recording,
   RecordingsV1Agent,
-  RecordingsV1Project,
   RecordingsV1CreateRecordingInput,
   RecordingsV1RegisterAgentInput,
-  RecordingsV1RegisterProjectInput,
 } from "./sdk/index.js";

@@ -10,7 +10,15 @@ import {
 } from "fs";
 import { dirname, join as pathJoin } from "path";
 import { fileURLToPath } from "url";
-import { loadConfig, ensureDataDir } from "../lib/config.js";
+import {
+  loadConfig,
+  ensureDataDir,
+  DEFAULT_REALTIME_DELAY,
+  DEFAULT_REALTIME_SESSION_MODEL,
+  DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
+  DEFAULT_TRANSCRIPTION_MODEL,
+  REALTIME_TRANSCRIPTION_DELAYS,
+} from "../lib/config.js";
 import { countStoreRecordings, getStore } from "../store.js";
 import {
   startRecording,
@@ -49,7 +57,6 @@ program
   .version(VERSION)
   .option("--json", "Output as JSON")
   .option("--agent <name>", "Agent name or ID")
-  .option("--project <name>", "Project name or ID")
   .option("--session <id>", "Session ID");
 
 registerEventsCommands(program, { source: "recordings" });
@@ -58,10 +65,26 @@ const DEFAULT_LIST_LIMIT = 20;
 const MAX_HUMAN_LIST_LIMIT = 50;
 const DEFAULT_LOG_LINES = 40;
 
+/**
+ * Accuracy controls the realtime transcription model accepts under
+ * `session.audio.input.transcription`. Registered from one place so every
+ * command that can freeze a config snapshot exposes the identical flags.
+ */
+function withRealtimeTranscriptionOptions(command: Command): Command {
+  return command
+    .option("--realtime-transcription-model <model>", "Model for realtime transcription")
+    .option("--realtime-prompt <prompt>", "Context description for the realtime transcription model")
+    .option("--realtime-keywords <keywords>", "Comma-separated domain terms and names for the realtime model")
+    .option("--realtime-languages <codes>", "Comma-separated ISO 639-1 codes, e.g. en,fr")
+    .option(
+      "--realtime-delay <delay>",
+      `Realtime latency/accuracy tradeoff: ${REALTIME_TRANSCRIPTION_DELAYS.join(", ")}`
+    );
+}
+
 // ── record ──────────────────────────────────────────────────────────────────
 
-program
-  .command("record")
+withRealtimeTranscriptionOptions(program.command("record"))
   .description("Record from microphone, transcribe, and optionally enhance")
   .option("-d, --duration <seconds>", "Record for specific duration")
   .option("--no-enhance", "Skip AI enhancement")
@@ -162,7 +185,6 @@ program
       language: transcription.language || undefined,
       tags,
       agent_id: parentOpts.agent || undefined,
-      project_id: parentOpts.project || undefined,
       session_id: parentOpts.session || undefined,
       machine_id: currentMachineId(),
       metadata: buildTranscriptionMetadata(config, processed, {
@@ -183,8 +205,7 @@ program
 
 // ── transcribe ──────────────────────────────────────────────────────────────
 
-program
-  .command("transcribe <file>")
+withRealtimeTranscriptionOptions(program.command("transcribe <file>"))
   .description("Transcribe an existing audio file")
   .option("--no-enhance", "Skip AI enhancement")
   .option("--stream", "Stream transcription deltas while the file is processed")
@@ -239,7 +260,6 @@ program
       language: transcription.language || undefined,
       tags,
       agent_id: parentOpts.agent || undefined,
-      project_id: parentOpts.project || undefined,
       session_id: parentOpts.session || undefined,
       machine_id: currentMachineId(),
       metadata: buildTranscriptionMetadata(config, processed, {
@@ -266,8 +286,7 @@ program
 
 // ── save-text ───────────────────────────────────────────────────────────────
 
-program
-  .command("save-text [text]")
+withRealtimeTranscriptionOptions(program.command("save-text [text]"))
   .description("Save already-transcribed text as a recording")
   .option("--text-file <path>", "Read transcript text from a UTF-8 file")
   .option("--stdin", "Read transcript text from stdin")
@@ -326,7 +345,6 @@ program
       language: opts.language || undefined,
       tags,
       agent_id: parentOpts.agent || undefined,
-      project_id: parentOpts.project || undefined,
       session_id: parentOpts.session || undefined,
       machine_id: currentMachineId(),
       metadata,
@@ -343,8 +361,7 @@ program
 
 // ── rewrite ────────────────────────────────────────────────────────────────
 
-program
-  .command("rewrite <text>")
+withRealtimeTranscriptionOptions(program.command("rewrite <text>"))
   .description("Rewrite provided text using an instruction")
   .requiredOption("-i, --instruction <instruction>", "Rewrite instruction")
   .option("--prompt <prompt>", "Frozen transcription vocabulary/context prompt")
@@ -424,7 +441,6 @@ program
         enhancement_model: enhModel,
         tags,
         agent_id: parentOpts.agent,
-        project_id: parentOpts.project,
         session_id: parentOpts.session,
         machine_id: currentMachineId(),
       });
@@ -466,7 +482,6 @@ program
       until: opts.until,
       offset: pagination.offset,
       agent_id: parentOpts.agent,
-      project_id: parentOpts.project,
       session_id: parentOpts.session,
     };
     const store = getStore();
@@ -526,7 +541,6 @@ program
       since: opts.since,
       until: opts.until,
       agent_id: parentOpts.agent,
-      project_id: parentOpts.project,
       session_id: opts.session || parentOpts.session,
     };
     const store = getStore();
@@ -638,67 +652,6 @@ program
     printPaginationHints(page.length, agents.length, pagination);
   });
 
-// ── projects ────────────────────────────────────────────────────────────────
-
-const projectCommand = program
-  .command("project")
-  .description("Manage registered projects");
-
-projectCommand
-  .command("register")
-  .description("Register a project in the active Store")
-  .requiredOption("--name <name>", "Project name")
-  .requiredOption("--path <path>", "Stable project path or URI")
-  .option("--description <description>", "Project description")
-  .action(async (opts) => {
-    const parentOpts = program.opts();
-    const project = await getStore().registerProject(opts.name, opts.path, opts.description);
-    if (parentOpts.json) {
-      console.log(JSON.stringify(project, null, 2));
-      return;
-    }
-    console.log(`${chalk.cyan(truncateText(project.id, 80))} ${chalk.bold(truncateText(project.name, 80))} — ${truncatePath(project.path, 120)}`);
-  });
-
-program
-  .command("projects")
-  .description("List registered projects")
-  .option("-n, --limit <n>", "Max results")
-  .option("--offset <n>", "Skip this many results")
-  .option("--cursor <n>", "Pagination cursor alias for --offset")
-  .option("--verbose", "Show descriptions and timestamps")
-  .action(async (opts) => {
-    const parentOpts = program.opts();
-    const pagination = resolvePagination(opts, parentOpts);
-
-    const projects = await getStore().listProjects();
-    const page = parentOpts.json
-      ? maybePageJson(projects, pagination, opts)
-      : pageItems(projects, pagination);
-
-    if (parentOpts.json) {
-      console.log(JSON.stringify(page, null, 2));
-      return;
-    }
-
-    if (page.length === 0) {
-      console.log(chalk.dim(projects.length === 0 ? "No projects registered." : "No projects at this cursor."));
-      if (projects.length > 0) console.log(chalk.dim("Try a lower --cursor."));
-      return;
-    }
-
-    console.log(formatPageHeader("projects", page.length, projects.length, pagination.offset, pagination.limit));
-    for (const p of page) {
-      const line = `${chalk.cyan(truncateText(p.id, 8))} ${chalk.bold(truncateText(p.name, 80))}`;
-      if (opts.verbose) {
-        console.log(`${line}\n  path: ${truncatePath(p.path, 120)}\n  updated: ${truncateText(p.updated_at, 40)}${p.description ? `\n  ${truncateText(p.description, 140)}` : ""}`);
-      } else {
-        console.log(`${line} — ${truncatePath(p.path, 96)}`);
-      }
-    }
-    printPaginationHints(page.length, projects.length, pagination);
-  });
-
 // ── init ────────────────────────────────────────────────────────────────────
 
 program
@@ -716,9 +669,13 @@ program
 
     if (!existsSync(configFile)) {
       const defaultConf = {
-        transcription_model: "gpt-4o-transcribe",
-        realtime_session_model: "gpt-realtime",
-        realtime_transcription_model: "gpt-realtime-whisper",
+        transcription_model: DEFAULT_TRANSCRIPTION_MODEL,
+        realtime_session_model: DEFAULT_REALTIME_SESSION_MODEL,
+        realtime_transcription_model: DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
+        realtime_prompt: "",
+        realtime_keywords: [],
+        realtime_languages: [],
+        realtime_delay: DEFAULT_REALTIME_DELAY,
         enhancement_model: "gpt-4o",
         transcriber_model: "gpt-4o",
         language: "en",
@@ -1133,6 +1090,10 @@ program
         transcriber_model: resolveTranscriberModel(config),
         realtime_session_model: config.realtime_session_model,
         realtime_transcription_model: config.realtime_transcription_model,
+        realtime_prompt_configured: Boolean(config.realtime_prompt?.trim()),
+        realtime_keywords: config.realtime_keywords ?? [],
+        realtime_languages: config.realtime_languages ?? [],
+        realtime_delay: config.realtime_delay,
         post_processing_mode: config.post_processing_mode,
         transcription_prompt_configured: Boolean(config.transcription_prompt?.trim()),
         transcriber_prompt_configured: Boolean(config.transcriber_prompt?.trim()),
@@ -1174,8 +1135,7 @@ program
 
 // ── listen ───────────────────────────────────────────────────────────────────
 
-program
-  .command("listen")
+withRealtimeTranscriptionOptions(program.command("listen"))
   .description("Push-to-talk mode — press Space to start/stop recording, Esc to quit")
   .option("-t, --tags <tags>", "Comma-separated tags for all recordings")
   .option("--no-enhance", "Skip AI enhancement")
@@ -1283,7 +1243,6 @@ program
               language: transcription.language || undefined,
               tags,
               agent_id: parentOpts.agent || undefined,
-              project_id: parentOpts.project || undefined,
               session_id: parentOpts.session || undefined,
               machine_id: currentMachineId(),
               metadata: buildTranscriptionMetadata(config, processed, {
@@ -1749,7 +1708,6 @@ function formatRecordingVerboseLine(r: Recording): string {
   if (r.audio_path) lines.push(`  audio: ${truncatePath(r.audio_path, 120)}`);
   const scopes = [
     r.agent_id ? `agent=${truncateText(r.agent_id, 80)}` : null,
-    r.project_id ? `project=${truncateText(r.project_id, 80)}` : null,
     r.session_id ? `session=${truncateText(r.session_id, 80)}` : null,
   ].filter(Boolean);
   if (scopes.length > 0) lines.push(`  scope: ${scopes.join(" ")}`);

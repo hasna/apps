@@ -77,15 +77,14 @@ describe("native app companion contract", () => {
       const run = (...args: string[]) =>
         spawnSync(compiledCompanion, args, { encoding: "utf8", timeout: 10_000 });
       expect(run("--version").stdout.trim()).toBe(packageJson.version);
-      expect(run("project", "register", "--help").status).toBe(0);
       expect(run("save-text", "--help").status).toBe(0);
       const rootHelp = run("--help").stdout;
       expect(rootHelp).toContain("--json");
-      expect(rootHelp).toContain("--project");
-      const registrationHelp = run("project", "register", "--help").stdout;
-      expect(registrationHelp).toContain("--name");
-      expect(registrationHelp).toContain("--path");
-      expect(registrationHelp).toContain("--description");
+      // The projects feature is removed; the companion must not expose it.
+      expect(rootHelp).not.toContain("--project");
+      expect(rootHelp).not.toContain("projects");
+      expect(run("project", "register", "--name", "x", "--path", "y").status).not.toBe(0);
+      expect(run("projects").status).not.toBe(0);
       const listHelp = run("list", "--help").stdout;
       expect(listHelp).toContain("-n, --limit");
       expect(listHelp).toContain("--limit");
@@ -121,18 +120,19 @@ describe("native app companion contract", () => {
         expect(saveTextHelp).toContain(flag);
       }
       expect(run("rewrite", "--help").stdout).toContain("--instruction");
+      for (const flag of [
+        "--realtime-transcription-model",
+        "--realtime-prompt",
+        "--realtime-keywords",
+        "--realtime-languages",
+        "--realtime-delay",
+      ]) {
+        expect(saveTextHelp).toContain(flag);
+      }
 
-      const registration = spawnSync(
+      const save = spawnSync(
         compiledCompanion,
-        [
-          "--json",
-          "project",
-          "register",
-          "--name",
-          "Native Contract",
-          "--path",
-          "recordings-app://projects/native-contract",
-        ],
+        ["--json", "save-text", "Native contract transcript", "--post-processing", "off"],
         {
           cwd: directory,
           encoding: "utf8",
@@ -147,10 +147,9 @@ describe("native app companion contract", () => {
           },
         },
       );
-      expect(registration.status, registration.stderr).toBe(0);
-      expect(JSON.parse(registration.stdout)).toMatchObject({
-        name: "Native Contract",
-        path: "recordings-app://projects/native-contract",
+      expect(save.status, save.stderr).toBe(0);
+      expect(JSON.parse(save.stdout)).toMatchObject({
+        raw_text: "Native contract transcript",
       });
       expect(existsSync(join(directory, "recordings.db"))).toBeTrue();
     } finally {
@@ -320,7 +319,7 @@ describe("native app companion contract", () => {
     expect(engine).not.toContain("activateIgnoringOtherApps");
   });
 
-  test("recording capture is not gated on project synchronization readiness", () => {
+  test("recording capture is not gated on any store synchronization readiness", () => {
     const engine = readFileSync(
       "src/native/Recordings/RecordingsLib/RecordingEngine.swift",
       "utf8",
@@ -332,12 +331,10 @@ describe("native app companion contract", () => {
 
     expect(startBody).not.toContain("guard store.isReadyForRecording");
     expect(startBody).toContain("continuing capture");
-    expect(engine).toContain("displayProjectId: projectStore?.settings.activeProjectId");
-    expect(engine).toContain(
-      "canonicalProjectId: projectStore?.activeCanonicalProjectIdForRecording",
-    );
-    expect(engine).toContain("activeProjectId: canonicalProjectId");
-    expect(engine).toContain("activeProjectId: activeProjectId");
+    // The projects feature is removed: no project id is captured or forwarded.
+    expect(engine).not.toContain("activeProjectId");
+    expect(engine).not.toContain("canonicalProjectId");
+    expect(engine).not.toContain("displayProjectId");
   });
 
   test("recorder start never waits on Accessibility IPC; the frozen context is generation-bound", () => {

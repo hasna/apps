@@ -47,7 +47,7 @@ describe("createRecording", () => {
     expect(rec.id).toBeDefined();
     expect(rec.raw_text).toBe("hello world");
     expect(rec.processing_mode).toBe("raw");
-    expect(rec.model_used).toBe("gpt-4o-transcribe");
+    expect(rec.model_used).toBe("gpt-transcribe");
     expect(rec.tags).toEqual([]);
     expect(rec.metadata).toEqual({});
     expect(rec.audio_path).toBeNull();
@@ -55,7 +55,6 @@ describe("createRecording", () => {
     expect(rec.enhancement_model).toBeNull();
     expect(rec.language).toBeNull();
     expect(rec.agent_id).toBeNull();
-    expect(rec.project_id).toBeNull();
     expect(rec.session_id).toBeNull();
     expect(rec.duration_ms).toBe(0);
     expect(rec.created_at).toBeDefined();
@@ -366,18 +365,6 @@ describe("listRecordings", () => {
     expect(results[0]!.raw_text).toBe("by agent");
   });
 
-  test("filters by project_id", () => {
-    db.query("INSERT INTO projects (id, name, path, created_at, updated_at) VALUES (?, ?, ?, ?, ?)").run(
-      "proj-1", "my-project", "/tmp/proj", new Date().toISOString(), new Date().toISOString()
-    );
-    createRecording({ raw_text: "in project", project_id: "proj-1" }, db);
-    createRecording({ raw_text: "no project" }, db);
-
-    const results = listRecordings({ project_id: "proj-1" }, db);
-    expect(results).toHaveLength(1);
-    expect(results[0]!.raw_text).toBe("in project");
-  });
-
   test("default limit is 50", () => {
     for (let i = 0; i < 60; i++) {
       createRecording({ raw_text: `rec-${i}` }, db);
@@ -467,10 +454,10 @@ describe("getRecordingStats", () => {
   test("groups by model correctly", () => {
     createRecording({ raw_text: "a", model_used: "whisper-1" }, db);
     createRecording({ raw_text: "b", model_used: "whisper-1" }, db);
-    createRecording({ raw_text: "c", model_used: "gpt-4o-transcribe" }, db);
+    createRecording({ raw_text: "c", model_used: "gpt-transcribe" }, db);
 
     const stats = getRecordingStats(db);
     expect(stats.by_model["whisper-1"]).toBe(2);
-    expect(stats.by_model["gpt-4o-transcribe"]).toBe(1);
+    expect(stats.by_model["gpt-transcribe"]).toBe(1);
   });
 });

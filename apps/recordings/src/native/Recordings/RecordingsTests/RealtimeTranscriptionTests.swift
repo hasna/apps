@@ -91,9 +91,12 @@ struct RealtimeTranscriptionTests {
     @Test("Model ID is set to low-latency realtime transcription model")
     func modelID() {
         #expect(RealtimeTranscriptionClient.sessionModelID == "gpt-realtime")
-        #expect(RealtimeTranscriptionClient.transcriptionModelID == "gpt-realtime-whisper")
-        #expect(RealtimeTranscriptionClient.modelID == "gpt-realtime-whisper")
-        #expect(RealtimeTranscriptionClient.transcriptionDelay == "low")
+        #expect(RealtimeTranscriptionClient.transcriptionModelID == "gpt-live-transcribe")
+        #expect(RealtimeTranscriptionClient.modelID == "gpt-live-transcribe")
+        #expect(RealtimeTranscriptionClient.defaultTranscriptionDelay == "low")
+        #expect(RealtimeTranscriptionClient.transcriptionDelays == [
+            "minimal", "low", "medium", "high", "xhigh",
+        ])
     }
 
     @Test("Parses transcription delta events")
@@ -206,7 +209,13 @@ struct RealtimeTranscriptionTests {
 
     @Test("Builds realtime transcription session update event")
     func buildSessionUpdateEvent() {
-        let event = RealtimeTranscriptionClient.sessionUpdateTestHelper(prompt: "Use Alumia as vocabulary", language: "en")
+        let event = RealtimeTranscriptionClient.sessionUpdateTestHelper(
+            RealtimeTranscriptionSettings(
+                model: RealtimeTranscriptionClient.transcriptionModelID,
+                languages: ["en"],
+                delay: RealtimeTranscriptionClient.defaultTranscriptionDelay
+            )
+        )
         #expect(event["type"] as? String == "session.update")
 
         let session = event["session"] as? [String: Any]
@@ -219,15 +228,57 @@ struct RealtimeTranscriptionTests {
         #expect(format?["rate"] as? Int == 24_000)
 
         let transcription = input?["transcription"] as? [String: Any]
-        #expect(transcription?["model"] as? String == "gpt-realtime-whisper")
+        #expect(transcription?["model"] as? String == "gpt-live-transcribe")
         #expect(transcription?["delay"] as? String == "low")
         #expect(transcription?["prompt"] as? String == nil)
-        #expect(transcription?["language"] as? String == "en")
+        #expect(transcription?["keywords"] as? [String] == nil)
+        #expect(transcription?["languages"] as? [String] == ["en"])
+        // `language` (singular) is not part of the realtime transcription schema.
+        #expect(transcription?["language"] as? String == nil)
 
         #expect(input?["turn_detection"] is NSNull)
 
         let include = session?["include"] as? [String]
         #expect(include == nil)
+    }
+
+    @Test("Session update carries every realtime accuracy control that is set")
+    func sessionUpdateCarriesAccuracyControls() {
+        let event = RealtimeTranscriptionClient.sessionUpdateTestHelper(
+            RealtimeTranscriptionSettings(
+                model: "gpt-live-transcribe",
+                prompt: "Weekly infrastructure standup",
+                keywords: ["Hasna", "Alumia"],
+                languages: ["en", "fr"],
+                delay: "xhigh"
+            )
+        )
+        let session = event["session"] as? [String: Any]
+        let audio = session?["audio"] as? [String: Any]
+        let input = audio?["input"] as? [String: Any]
+        let transcription = input?["transcription"] as? [String: Any]
+
+        #expect(transcription?["model"] as? String == "gpt-live-transcribe")
+        #expect(transcription?["delay"] as? String == "xhigh")
+        #expect(transcription?["prompt"] as? String == "Weekly infrastructure standup")
+        #expect(transcription?["keywords"] as? [String] == ["Hasna", "Alumia"])
+        #expect(transcription?["languages"] as? [String] == ["en", "fr"])
+    }
+
+    @Test("Unset realtime accuracy controls are omitted from the payload")
+    func sessionUpdateOmitsUnsetAccuracyControls() {
+        let event = RealtimeTranscriptionClient.sessionUpdateTestHelper(
+            RealtimeTranscriptionSettings(
+                model: "gpt-live-transcribe",
+                delay: "minimal"
+            )
+        )
+        let session = event["session"] as? [String: Any]
+        let audio = session?["audio"] as? [String: Any]
+        let input = audio?["input"] as? [String: Any]
+        let transcription = input?["transcription"] as? [String: Any]
+
+        #expect(transcription?.keys.sorted() == ["delay", "model"])
     }
 
     @Test("Joins transcript parts without dropping spoken text")
@@ -835,15 +886,15 @@ struct RealtimeTranscriptionTests {
             enhanceTriggersJSON: #"["rewrite a"]"#,
             keywordTransformsJSON: #"{"code with":"Codewith"}"#
         )
-        var currentProject = recordingA
-        let capturedForRecovery = currentProject
+        var currentConfiguration = recordingA
+        let capturedForRecovery = currentConfiguration
 
-        currentProject = RecordingProcessingConfiguration(
+        currentConfiguration = RecordingProcessingConfiguration(
             transcriptionPrompt: "Project B vocabulary",
             transcriberPrompt: "Project B rewrite policy",
             postProcessingMode: PostProcessingMode.always.rawValue,
             transcriptionLanguage: "en",
-            transcriptionModel: "gpt-4o-transcribe",
+            transcriptionModel: "gpt-transcribe",
             transcriberModel: "gpt-b",
             enhancementModel: "gpt-b-fallback",
             intentModel: "gpt-intent-b",
@@ -853,7 +904,6 @@ struct RealtimeTranscriptionTests {
         )
         let recoveryArgs = RecordingEngine.transcribeCLIArgs(
             audioPath: "/tmp/recording-a.wav",
-            activeProjectId: "project-a",
             transcriberPrompt: capturedForRecovery.transcriberPrompt,
             postProcessingMode: capturedForRecovery.postProcessingMode,
             language: capturedForRecovery.transcriptionLanguage,
@@ -866,7 +916,7 @@ struct RealtimeTranscriptionTests {
             recordingId: "pipeline-a"
         )
 
-        #expect(capturedForRecovery != currentProject)
+        #expect(capturedForRecovery != currentConfiguration)
         #expect(recoveryArgs.contains("Project A vocabulary"))
         #expect(recoveryArgs.contains(PostProcessingMode.off.rawValue))
         #expect(recoveryArgs.contains("es"))
@@ -880,7 +930,7 @@ struct RealtimeTranscriptionTests {
         #expect(!recoveryArgs.contains("en"))
     }
 
-    @Test("Command rewrite retains recording A configuration after switching to project B")
+    @Test("Command rewrite retains recording A configuration after switching to config B")
     func commandRewriteUsesCapturedConfiguration() {
         let recordingA = RecordingProcessingConfiguration(
             transcriptionPrompt: "Project A vocabulary",
@@ -915,13 +965,12 @@ struct RealtimeTranscriptionTests {
         let args = RecordingEngine.rewriteCLIArgs(
             selectedText: "selected A",
             instruction: "instruction A",
-            activeProjectId: "project-a",
             processingConfiguration: capturedRequest
         )
 
         #expect(capturedRequest != mutableCurrentConfiguration)
         for expected in [
-            "selected A", "instruction A", "project-a", "Project A vocabulary",
+            "selected A", "instruction A", "Project A vocabulary",
             "Project A rewrite policy", PostProcessingMode.always.rawValue, "es", "whisper-a",
             "gpt-command-a", "gpt-fallback-a", #"["rewrite a"]"#,
             #"{"code with":"Codewith A"}"#,
@@ -939,7 +988,6 @@ struct RealtimeTranscriptionTests {
         let optionLikeTextArgs = RecordingEngine.rewriteCLIArgs(
             selectedText: "--literal-selection",
             instruction: "instruction A",
-            activeProjectId: "project-a",
             processingConfiguration: capturedRequest
         )
         #expect(Array(optionLikeTextArgs.suffix(2)) == ["--", "--literal-selection"])
