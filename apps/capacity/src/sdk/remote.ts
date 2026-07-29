@@ -30,7 +30,8 @@ const FORBIDDEN_AUTH_HEADERS = new Set([
   "x-legacy-api-key",
 ]);
 
-export function createSelfHostedAccountsCapacity(
+/** The HTTP client store. Named for its transport, not for a deployment mode. */
+export function createHttpAccountsCapacity(
   baseUrl: string,
   authProvider: AccountsAuthProvider,
 ): AccountsCapacity {

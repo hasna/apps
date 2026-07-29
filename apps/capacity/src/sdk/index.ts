@@ -1,6 +1,11 @@
 import { AccountsError } from "../errors";
+import {
+  RETIRED_DEPLOYMENT_MODE_KEYS,
+  isRetiredDeploymentModeValue,
+  retiredDeploymentModeError,
+} from "../storage-selection";
 import { createLocalAccountsCapacity } from "./local";
-import { createSelfHostedAccountsCapacity } from "./remote";
+import { createHttpAccountsCapacity } from "./remote";
 import type { AccountsCapacity, AccountsDeployment } from "./types";
 
 export type {
@@ -29,16 +34,20 @@ export type {
 export { createLocalAccountsCapacityFromCatalog } from "./local";
 
 /**
- * Deployment choice is explicit and immutable. A self-hosted error is returned
- * to the caller and never falls back to SQLite.
+ * Store choice is explicit and immutable. An HTTP error is returned to the
+ * caller and never falls back to SQLite.
+ *
+ * Retired deployment-mode configuration is rejected rather than normalized: an
+ * unknown value must not quietly become the SQLite store.
  */
 export function createAccountsCapacity(config: AccountsDeployment): AccountsCapacity {
   const record = config as AccountsDeployment & Record<string, unknown>;
   if (record === null || typeof record !== "object" || Array.isArray(record)) {
     throw invalidConfig("config");
   }
-  if (record.mode === "local") {
-    exactConfigurationKeys(record, ["mode", "actorRef"], ["sqlitePath", "recovery"]);
+  rejectRetiredDeploymentMode(record);
+  if (record.store === "sqlite") {
+    exactConfigurationKeys(record, ["store", "actorRef"], ["sqlitePath", "recovery"]);
     if (record.recovery !== undefined) {
       if (
         record.recovery === null ||
@@ -57,8 +66,8 @@ export function createAccountsCapacity(config: AccountsDeployment): AccountsCapa
     }
     return createLocalAccountsCapacity(record.actorRef, record.sqlitePath, record.recovery);
   }
-  if (record.mode === "self_hosted") {
-    exactConfigurationKeys(record, ["mode", "baseUrl", "authProvider"]);
+  if (record.store === "http") {
+    exactConfigurationKeys(record, ["store", "baseUrl", "authProvider"]);
     if (
       record.authProvider === null ||
       typeof record.authProvider !== "object" ||
@@ -66,9 +75,25 @@ export function createAccountsCapacity(config: AccountsDeployment): AccountsCapa
     ) {
       throw invalidConfig("authProvider");
     }
-    return createSelfHostedAccountsCapacity(record.baseUrl, record.authProvider);
+    return createHttpAccountsCapacity(record.baseUrl, record.authProvider);
   }
-  throw invalidConfig("mode");
+  throw invalidConfig("store");
+}
+
+/**
+ * Rejects the retired deployment-mode switch. A retired key is refused even when
+ * it carries a live store value, so `mode` cannot survive as an alias for
+ * `store`; and a retired value under the live key is refused rather than mapped.
+ */
+function rejectRetiredDeploymentMode(record: Record<string, unknown>): void {
+  for (const key of RETIRED_DEPLOYMENT_MODE_KEYS) {
+    if (Object.hasOwn(record, key)) {
+      throw retiredDeploymentModeError(key, record[key], 'store: "sqlite" | "http"');
+    }
+  }
+  if (isRetiredDeploymentModeValue(record.store)) {
+    throw retiredDeploymentModeError("store", record.store, 'store: "sqlite" | "http"');
+  }
 }
 
 function exactConfigurationKeys(

@@ -37,12 +37,12 @@ describe("adversarial public-boundary checks", () => {
     expect(publicApi).not.toHaveProperty("newCanonicalNodeId");
   });
 
-  test("exports the implemented self-hosted Postgres adapter without mutation authority", () => {
+  test("exports the implemented Postgres data-backend adapter without mutation authority", () => {
     expect(POSTGRES_ADAPTER_STATUS).toEqual({
       adapter: "postgres",
       implemented: true,
       conformanceClaim: true,
-      target: "self_hosted",
+      target: "postgresql",
     });
     expect(publicApi).toHaveProperty("createPostgresAccounts");
   });

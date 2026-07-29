@@ -26,6 +26,13 @@ import {
   type EntityKind,
   type NativeSubscriptionBindingSnapshot,
 } from "./index";
+import {
+  CLIENT_STORE_ENV,
+  RETIRED_DEPLOYMENT_ENV,
+  deploymentModeRetirementHint,
+  isRetiredDeploymentModeValue,
+  retiredDeploymentModeError,
+} from "./storage-selection";
 
 const CLI_SCHEMA_VERSION = "accounts.cli.v1" as const;
 
@@ -65,7 +72,7 @@ export async function runAccountsCli(argv: readonly string[]): Promise<number> {
       return await probeNativeCommand(positionals, parsed.flags, jsonRequested);
     }
 
-    const catalog = createLocalCatalog();
+    const catalog = createClientCatalog();
     try {
       if (command === "doctor") {
         requireNoPositionals(positionals, "doctor");
@@ -127,29 +134,53 @@ export async function runAccountsCli(argv: readonly string[]): Promise<number> {
     const envelope = toErrorEnvelope(safe, randomUUID());
     if (jsonRequested) Bun.stderr.write(`${canonicalJson(envelope)}\n`);
     else Bun.stderr.write(`${envelope.error.code}: ${envelope.error.message}\n`);
+    // AccountsError replaces its message with a fixed public string, so
+    // remediation for a retired configuration surface has to be written here or
+    // the operator never learns which variable replaced theirs.
+    const field = envelope.error.details.field;
+    const hint = typeof field === "string" ? deploymentModeRetirementHint(field) : undefined;
+    if (hint !== undefined) Bun.stderr.write(`${hint}\n`);
     return exitCodeForError(safe);
   }
 }
 
-function createLocalCatalog() {
-  const deployment = Bun.env.HASNA_ACCOUNTS_DEPLOYMENT;
+/**
+ * Selects the client store. The CLI is SQLite-or-HTTP and never opens
+ * PostgreSQL directly.
+ *
+ * The retired deployment variable is refused outright rather than translated,
+ * and no unrecognized value is normalized to the SQLite store. Silent
+ * normalization was the defect the retired vocabulary carried.
+ */
+function createClientCatalog() {
+  if (Bun.env[RETIRED_DEPLOYMENT_ENV] !== undefined) {
+    throw retiredDeploymentModeError(
+      RETIRED_DEPLOYMENT_ENV,
+      Bun.env[RETIRED_DEPLOYMENT_ENV],
+      `${CLIENT_STORE_ENV}=sqlite|http`,
+    );
+  }
+  const store = Bun.env[CLIENT_STORE_ENV];
   const localPath = Bun.env.HASNA_ACCOUNTS_DATABASE_PATH;
   const serviceConfigPresent =
     Bun.env.HASNA_ACCOUNTS_CAPACITY_API_URL !== undefined ||
     Bun.env.HASNA_ACCOUNTS_CAPACITY_AUTH_REF !== undefined;
-  if (deployment === "self_hosted" && localPath !== undefined) {
-    throw usageError("Self-hosted deployment cannot use a local database path");
+  if (isRetiredDeploymentModeValue(store)) {
+    throw retiredDeploymentModeError(CLIENT_STORE_ENV, store, `${CLIENT_STORE_ENV}=sqlite|http`);
   }
-  if (deployment !== "local") {
-    if (deployment === "self_hosted") {
-      throw new AccountsError("NOT_IMPLEMENTED", "The self-hosted CLI client is not configured", {
+  if (store === "http" && localPath !== undefined) {
+    throw usageError("The HTTP client store cannot use a local database path");
+  }
+  if (store !== "sqlite") {
+    if (store === "http") {
+      throw new AccountsError("NOT_IMPLEMENTED", "The HTTP CLI client is not configured", {
         details: { adapter: "http" },
       });
     }
-    throw usageError("HASNA_ACCOUNTS_DEPLOYMENT must be local or self_hosted");
+    throw usageError(`${CLIENT_STORE_ENV} must be sqlite or http`, CLIENT_STORE_ENV);
   }
   if (serviceConfigPresent) {
-    throw usageError("Local deployment cannot use self-hosted capacity configuration");
+    throw usageError("The SQLite client store cannot use HTTP capacity configuration");
   }
   if (localPath !== undefined && !isAbsolute(localPath)) {
     throw usageError("HASNA_ACCOUNTS_DATABASE_PATH must be absolute");
@@ -270,8 +301,12 @@ function requireNoPositionals(positionals: readonly string[], command: string): 
   requirePositionals(positionals, 0, command);
 }
 
-function usageError(message: string): AccountsError {
-  return new AccountsError("VALIDATION_FAILED", message);
+function usageError(message: string, field?: string): AccountsError {
+  return new AccountsError(
+    "VALIDATION_FAILED",
+    message,
+    field === undefined ? {} : { details: { field } },
+  );
 }
 
 function output(json: boolean, command: string, data: unknown): void {

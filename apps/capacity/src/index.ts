@@ -230,6 +230,24 @@ export const POSTGRES_ADAPTER_STATUS = POSTGRES_ADAPTER_STATUS_V1;
 export { runPostgresMigrations } from "./storage/postgres-migrator";
 export type { PostgresMigrationReport } from "./storage/postgres-migrator";
 export { ACCOUNTS_V1_CONTRACT_SHA256, PACKAGE_VERSION } from "./version";
+export {
+  CLIENT_STORES,
+  CLIENT_STORE_ENV,
+  RETIRED_DEPLOYMENT_ENV,
+  RETIRED_DEPLOYMENT_MODE_KEYS,
+  RETIRED_DEPLOYMENT_MODE_VALUES,
+  SERVER_DATA_BACKENDS,
+  deploymentModeRetirementHint,
+  isClientStore,
+  isRetiredDeploymentModeValue,
+  isServerDataBackend,
+  retiredDeploymentModeError,
+} from "./storage-selection";
+export type {
+  ClientStore,
+  RetiredDeploymentModeValue,
+  ServerDataBackend,
+} from "./storage-selection";
 export { createAccountsCapacity } from "./sdk/index";
 export type {
   AccountLanesApi,

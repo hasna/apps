@@ -24,15 +24,15 @@ function authProvider(onAuthorize?: (signal: AbortSignal | undefined) => void) {
 }
 
 describe("Accounts capacity SDK", () => {
-  test("requires an explicit closed deployment and HTTPS self-hosted origin", () => {
-    expect(() => createAccountsCapacity({ mode: "self_hosted", baseUrl: "http://accounts.internal", authProvider: authProvider() })).toThrow(AccountsError);
+  test("requires an explicit closed store selection and an HTTPS server origin", () => {
+    expect(() => createAccountsCapacity({ store: "http", baseUrl: "http://accounts.internal", authProvider: authProvider() })).toThrow(AccountsError);
     expect(() => createAccountsCapacity({
-      mode: "self_hosted",
+      store: "http",
       baseUrl: "https://accounts.internal",
       authProvider: authProvider(),
       sqlitePath: "/tmp/forbidden.db",
     } as never)).toThrow(AccountsError);
-    expect(() => createAccountsCapacity({ mode: "automatic" } as never)).toThrow(AccountsError);
+    expect(() => createAccountsCapacity({ store: "automatic" } as never)).toThrow(AccountsError);
   });
 
   test("passes the caller AbortSignal through authentication and fetch", async () => {
@@ -51,7 +51,7 @@ describe("Accounts capacity SDK", () => {
       }), { status: 200, headers: { "content-type": "application/json" } });
     }) as unknown as typeof fetch;
     const client = createAccountsCapacity({
-      mode: "self_hosted",
+      store: "http",
       baseUrl: "https://accounts.internal",
       authProvider: authProvider((signal) => {
         authSignal = signal;
@@ -74,7 +74,7 @@ describe("Accounts capacity SDK", () => {
       throw new Error("must not fetch");
     }) as unknown as typeof fetch;
     const client = createAccountsCapacity({
-      mode: "self_hosted",
+      store: "http",
       baseUrl: "https://accounts.internal",
       authProvider: authProvider(() => {
         authorized = true;
@@ -95,7 +95,7 @@ describe("Accounts capacity SDK", () => {
       data: { ...graph.binding, credentialHandle: "forbidden" },
     }), { status: 200, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
     const client = createAccountsCapacity({
-      mode: "self_hosted",
+      store: "http",
       baseUrl: "https://accounts.internal",
       authProvider: authProvider(),
     });
@@ -104,12 +104,12 @@ describe("Accounts capacity SDK", () => {
     });
   });
 
-  test("does not reinterpret a self-hosted transport failure as a local result", async () => {
+  test("does not reinterpret an HTTP transport failure as a SQLite result", async () => {
     globalThis.fetch = mock(async () => {
       throw new TypeError("synthetic network failure");
     }) as unknown as typeof fetch;
     const client = createAccountsCapacity({
-      mode: "self_hosted",
+      store: "http",
       baseUrl: "https://accounts.internal",
       authProvider: authProvider(),
     });
@@ -122,7 +122,7 @@ describe("Accounts capacity SDK", () => {
   test("local configuration binds mutations to its explicit audit actor", async () => {
     const directory = mkdtempSync(join(tmpdir(), "accounts-sdk-"));
     const client = createAccountsCapacity({
-      mode: "local",
+      store: "sqlite",
       sqlitePath: join(directory, "accounts.db"),
       actorRef: ACTOR_REF,
     });
@@ -143,7 +143,7 @@ describe("Accounts capacity SDK", () => {
       signingKey: new Uint8Array(32).fill(0x4d),
     } as const;
     const config = {
-      mode: "local" as const,
+      store: "sqlite" as const,
       sqlitePath: join(directory, "accounts.db"),
       actorRef: ACTOR_REF,
       recovery,

@@ -48,7 +48,7 @@ function localEnvironment(): Record<string, string> {
   const directory = mkdtempSync(join(TEMP_ROOT, "database-"));
   cleanup.push(directory);
   return {
-    HASNA_ACCOUNTS_DEPLOYMENT: "local",
+    HASNA_ACCOUNTS_STORE: "sqlite",
     HASNA_ACCOUNTS_DATABASE_PATH: join(directory, "accounts.db"),
   };
 }
@@ -231,26 +231,63 @@ describe("accounts CLI", () => {
     expect(eligibility.exitCode).toBe(3);
   });
 
-  test("refuses contradictory, implicit, relative, and unavailable deployment configuration", async () => {
-    const implicit = await runCli(["doctor", "--json"]);
+  test("refuses contradictory, implicit, relative, and unavailable store configuration", async () => {
+    // Spawned concurrently: four sequential CLI subprocesses exceed the default
+    // per-test timeout under full-suite load, failing without any assertion failing.
+    const [implicit, relative, contradictory, reserved] = await Promise.all([
+      runCli(["doctor", "--json"]),
+      runCli(["doctor", "--json"], {
+        HASNA_ACCOUNTS_STORE: "sqlite",
+        HASNA_ACCOUNTS_DATABASE_PATH: "relative.db",
+      }),
+      runCli(["doctor", "--json"], {
+        HASNA_ACCOUNTS_STORE: "http",
+        HASNA_ACCOUNTS_DATABASE_PATH: "/tmp/not-used.db",
+      }),
+      runCli(["doctor", "--json"], { HASNA_ACCOUNTS_STORE: "http" }),
+    ]);
     expect(implicit.exitCode).toBe(2);
-
-    const relative = await runCli(["doctor", "--json"], {
-      HASNA_ACCOUNTS_DEPLOYMENT: "local",
-      HASNA_ACCOUNTS_DATABASE_PATH: "relative.db",
-    });
     expect(relative.exitCode).toBe(2);
-
-    const contradictory = await runCli(["doctor", "--json"], {
-      HASNA_ACCOUNTS_DEPLOYMENT: "self_hosted",
-      HASNA_ACCOUNTS_DATABASE_PATH: "/tmp/not-used.db",
-    });
     expect(contradictory.exitCode).toBe(2);
-
-    const reserved = await runCli(["doctor", "--json"], {
-      HASNA_ACCOUNTS_DEPLOYMENT: "self_hosted",
-    });
     expect(reserved.exitCode).toBe(6);
     expect(JSON.parse(reserved.stderr).error.code).toBe("NOT_IMPLEMENTED");
+  });
+
+  test("refuses the retired deployment variable and names its replacement", async () => {
+    const directory = mkdtempSync(join(TEMP_ROOT, "database-"));
+    cleanup.push(directory);
+    // The retired variable must be refused even when it carries the value that
+    // used to work AND a perfectly valid database path is supplied, so the
+    // rejection cannot be mistaken for an unrelated configuration error.
+    const retired = await runCli(["doctor", "--json"], {
+      HASNA_ACCOUNTS_DEPLOYMENT: "local",
+      HASNA_ACCOUNTS_DATABASE_PATH: join(directory, "accounts.db"),
+    });
+    expect(retired.exitCode).toBe(2);
+    const envelope = JSON.parse(retired.stderr.split("\n")[0]!);
+    expect(envelope.error.code).toBe("VALIDATION_FAILED");
+    expect(envelope.error.details.field).toBe("HASNA_ACCOUNTS_DEPLOYMENT");
+    expect(retired.stderr).toContain("HASNA_ACCOUNTS_STORE");
+    expect(retired.stderr).toContain("sqlite");
+  });
+
+  test("refuses a retired mode value passed to the replacement variable", async () => {
+    const values = ["local", "self_hosted", "self-hosted", "cloud", "remote", "hybrid"] as const;
+    // Spawned concurrently: six sequential CLI subprocesses exceed the default
+    // per-test timeout, which fails the test without any assertion failing.
+    const results = await Promise.all(
+      values.map((value) => runCli(["doctor", "--json"], { HASNA_ACCOUNTS_STORE: value })),
+    );
+    results.forEach((result, index) => {
+      expect(result.exitCode).toBe(2);
+      const envelope = JSON.parse(result.stderr.split("\n")[0]!);
+      expect(envelope.error.code).toBe("VALIDATION_FAILED");
+      expect(envelope.error.details.field).toBe("HASNA_ACCOUNTS_STORE");
+      expect(result.stderr).toContain("HASNA_ACCOUNTS_STORE");
+      // No retired value may reach the SQLite store: a normalized fallback would
+      // have produced a successful doctor report instead of a rejection.
+      expect(result.stdout).not.toContain("sqlite");
+      expect(values[index]).toBeDefined();
+    });
   });
 });

@@ -71,7 +71,8 @@ export const POSTGRES_ADAPTER_STATUS_V1 = Object.freeze({
   adapter: "postgres" as const,
   implemented: true as const,
   conformanceClaim: true as const,
-  target: "self_hosted" as const,
+  /** The data backend this adapter provides, not a deployment mode. */
+  target: "postgresql" as const,
 });
 
 export type PostgresRepositoryDoctor = SharedPostgresRepositoryDoctor;
@@ -165,6 +166,12 @@ interface OutboxRow {
 }
 
 interface InstallationRow {
+  /**
+   * RETIREMENT-EXEMPT: mirrors the frozen `deployment_mode` column declared in
+   * `postgres-migrations.ts`, whose SQL text is checksum-bound. `ensureInstallation`
+   * compares it to fail closed when an installation's identity drifts; it selects
+   * between no behaviours and cannot be renamed without a schema migration.
+   */
   readonly deployment_mode: "self_hosted";
   readonly identity_realm: "hasna";
   readonly organization_ref: string;
