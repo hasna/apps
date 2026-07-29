@@ -47,6 +47,10 @@ status until an explicit prepared/submitted filing packet passes validation.
 npm install -g @hasna/signatures
 ```
 
+The command-line tools require [Bun](https://bun.sh/) 1.0 or newer. The npm
+package exposes `open-signatures` and `signatures` for the CLI,
+`signatures-serve` for the REST server, and `signatures-mcp` for MCP.
+
 Local development:
 
 ```bash
@@ -55,6 +59,12 @@ bun run typecheck
 bun test
 bun run build
 ```
+
+## Documentation
+
+- [CLI reference](docs/cli.md)
+- [REST API reference](docs/api.md)
+- [MCP reference](docs/mcp.md)
 
 ## Quick Start
 
@@ -302,7 +312,7 @@ export OPEN_SIGNATURES_ADMIN_TOKEN="$(openssl rand -hex 32)"
 signatures-serve
 ```
 
-Selected endpoints:
+Selected endpoints (see the [complete REST API reference](docs/api.md)):
 
 - `POST /api/documents/from-markdown`
 - `POST /api/documents/:id/sign`
@@ -315,7 +325,9 @@ Selected endpoints:
 - `POST /api/sign/:token`
 - `GET /api/people`
 
-All `/api/*` endpoints except `POST /api/sign/:token` require an admin token:
+All non-preflight `/api/*` endpoints except `POST /api/sign/:token` require an
+admin token. Supply it as a bearer token or with the
+`X-Open-Signatures-Admin-Token` header:
 
 ```bash
 curl http://localhost:19440/api/config \
@@ -359,7 +371,11 @@ provider, and domain setup views.
 signatures-mcp
 ```
 
-Workflow tools include:
+This starts Streamable HTTP on port `8878` by default. Use
+`signatures-mcp --stdio` for stdio transport or `--port <n>` (or
+`MCP_HTTP_PORT`) to change the HTTP port.
+
+Workflow tools include (see the [complete MCP reference](docs/mcp.md)):
 
 - `signatures_document_from_markdown`
 - `signatures_sign`

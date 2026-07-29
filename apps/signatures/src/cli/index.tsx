@@ -100,7 +100,6 @@ documentCmd
   .option("--name <name>", "Document name")
   .option("--project <id>", "Project ID")
   .option("--collection <id>", "Collection ID")
-  .option("--tags <tags>", "Comma-separated tag names")
   .option("--json", "Output as JSON")
   .action(async (file: string, opts: Record<string, unknown>) => {
     try {
