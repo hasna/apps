@@ -151,9 +151,11 @@ function commandError(error: unknown): never {
   process.exit(1);
 }
 
-function searchOptions(command: Command): Command {
+function searchOptions(command: Command, includeKind = true): Command {
+  if (includeKind) {
+    command.option("--kind <kind>", "entity kind: model, dataset, or space", "model");
+  }
   return command
-    .option("--kind <kind>", "entity kind: model, dataset, or space", "model")
     .option("--task <task>", "task or pipeline tag filter")
     .option("--license <license>", "license tag filter")
     .option("--tag <tag>", "additional Hub tag filter", collect, [])
@@ -236,7 +238,7 @@ program
   .option("--kind <kind>", "entity kind", "model")
   .option("--index", "store entry in local SQLite")
   .option("-j, --json", "output JSON")
-  .description("Inspect a model or dataset")
+  .description("Inspect a model, dataset, or Space")
   .action(async (refInput, opts) => {
     try {
       const ref = parseProviderRef(refInput, opts.kind);
@@ -254,7 +256,7 @@ program
   .option("--kind <kind>", "entity kind", "model")
   .option("--index", "store files in local SQLite")
   .option("-j, --json", "output JSON")
-  .description("List remote files for a model or dataset")
+  .description("List remote files for a model, dataset, or Space")
   .action(async (refInput, opts) => {
     try {
       const ref = parseProviderRef(refInput, opts.kind);
@@ -274,7 +276,7 @@ program
   .option("--exclude <pattern>", "exclude file path/glob; repeatable", collect, [])
   .option("--max-bytes <bytes>", "maximum total known bytes", parseBytes, parseBytes("2gb"))
   .option("-j, --json", "output JSON")
-  .description("Create a local download plan")
+  .description("Create a local selected-file download plan")
   .action(async (refInput, opts) => {
     try {
       const ref = parseProviderRef(refInput, opts.kind);
@@ -532,7 +534,7 @@ const datasets = program.command("datasets").description("Dataset catalog and in
 
 searchOptions(datasets.command("search")
   .argument("[query]", "search query")
-  .description("Search Hugging Face datasets"))
+  .description("Search Hugging Face datasets"), false)
   .option("--index", "store returned entries")
   .option("-j, --json", "output JSON")
   .action(async (query, opts) => {
@@ -652,17 +654,35 @@ program
 
 program
   .command("manual")
-  .description("Print the local command manual")
+  .description("Print examples for every current leaf command")
   .option("-j, --json", "output JSON")
   .action((opts) => {
     const commands = [
+      "models providers list --json",
       "models providers status --json",
+      "models providers auth huggingface --secret-key huggingface/token --json",
       "models search \"tiny gpt2\" --limit 5 --json",
       "models info hf:sshleifer/tiny-gpt2 --json",
       "models files hf:sshleifer/tiny-gpt2 --json",
+      "models plan hf:sshleifer/tiny-gpt2 --include config.json --max-bytes 5mb --json",
       "models install hf:sshleifer/tiny-gpt2 --include config.json --include tokenizer_config.json --max-bytes 5mb --json",
+      "models index hf \"tiny gpt2\" --limit 100 --with-files --json",
       "models index best --limit 100 --json",
+      "models list --json",
+      "models list --catalog --limit 20 --json",
+      "models capabilities seed-fixtures --json",
+      "models capabilities list --provider ollama --json",
+      "models capabilities get ollama:llama3.1:8b --json",
+      "models where hf:sshleifer/tiny-gpt2 --json",
+      "models remove hf:sshleifer/tiny-gpt2 --json",
+      "models remove hf:sshleifer/tiny-gpt2 --apply --files --json",
       "models datasets search rotten_tomatoes --limit 5 --json",
+      "models datasets info hf:dataset:cornell-movie-review-data/rotten_tomatoes --json",
+      "models datasets files hf:dataset:cornell-movie-review-data/rotten_tomatoes --json",
+      "models datasets install hf:dataset:cornell-movie-review-data/rotten_tomatoes --include README.md --dry-run --json",
+      "models doctor --json",
+      "models manual --json",
+      "models goals --json",
     ];
     const manual = { name: "models", version: getPackageVersion(), commands };
     printResult(manual, commands.join("\n"), opts);

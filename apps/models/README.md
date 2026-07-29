@@ -1,71 +1,111 @@
 # models
 
-A friendlier, more capable wrapper around Hugging Face for **discovering, searching,
-downloading, and running local models** — open source.
+A Bun/TypeScript CLI and library for discovering, inspecting, indexing, and
+downloading selected files from Hugging Face models, datasets, and Spaces.
 
-> Folder: `open-models` · npm: `@hasna/models` · GitHub: `hasna/models` · CLI: `models`
+> npm: `@hasna/models` · GitHub: `hasna/models` · CLI: `models`
 
 ## Why
 
-The Hugging Face CLI gets the bytes down, but finding the right model, picking the
-right format/quantization, managing disk, and actually running it is still fiddly.
-`models` aims to be the single tool for the whole local-model lifecycle.
-
-## Planned features
-
-- **Browse & search** the full HF catalog with rich filters (task, library, license,
-  size, format — GGUF/safetensors, quantization)
-- **One-command install** of any model to a local store, with resumable downloads
-- **Disk management** — see what's installed, sizes, dedupe, prune
-- **Run / serve helpers** — quick local inference or an OpenAI-compatible endpoint
-- **Search across installed + remote** in one place
-- CLI + (later) MCP server, consistent with the Hasna OSS tooling
+The Hugging Face catalog is broad, while local workflows often need exact file
+selection, byte limits, revision-aware references, and durable install metadata.
+`models` provides those workflows through human-readable and JSON CLI output,
+with a small TypeScript SDK for the same underlying operations.
 
 ## Status
 
-First CLI slice implemented. The package now has a Bun/TypeScript `models` CLI,
-Hugging Face provider access, local SQLite catalog storage, selected-file
-downloads, dataset search/install parity, a model capability schema for routing
-consumers, and a local implementation goal chain.
+The current CLI supports:
 
-See [PLAN.md](PLAN.md) for the full architecture and [docs/GOALS.md](docs/GOALS.md)
-for the chained build goals.
+- Hugging Face provider status and local secret references.
+- Catalog search, info, and file listing for models, datasets, and Spaces.
+- SQLite catalog and remote-file indexing, including a top-model index command.
+- Revision-aware download plans and selected-file model or dataset installs.
+- Local install listing, path lookup, and preview-first metadata/file removal.
+- Dataset-specific command aliases and local diagnostics.
+- A persisted model capability schema with fixtures for routing consumers.
+
+Runtime adapters, inference, serving, resumable downloads, cache management,
+additional providers, and MCP are planned but not implemented. See
+[PLAN.md](PLAN.md) for the target architecture and
+[docs/GOALS.md](docs/GOALS.md) for implementation status.
 
 ## Quick start
+
+From a source checkout:
 
 ```bash
 bun install
 bun run build
+bun run src/cli/index.ts --help
 bun run src/cli/index.ts providers status --json
-bun run src/cli/index.ts search tiny-gpt2 --limit 3
-bun run src/cli/index.ts index best --limit 500 --json
-bun run src/cli/index.ts capabilities seed-fixtures --json
-bun run src/cli/index.ts capabilities get ollama:llama3.1:8b --json
-bun run src/cli/index.ts install hf:sshleifer/tiny-gpt2 \
+bun run src/cli/index.ts search tiny-gpt2 --limit 3 --json
+bun run src/cli/index.ts info hf:sshleifer/tiny-gpt2@main --json
+bun run src/cli/index.ts plan hf:sshleifer/tiny-gpt2 \
   --include config.json \
   --include tokenizer_config.json \
-  --include vocab.json \
-  --include merges.txt \
-  --max-bytes 5mb
+  --max-bytes 5mb \
+  --json
+bun run src/cli/index.ts install hf:sshleifer/tiny-gpt2 \
+  --include config.json \
+  --max-bytes 5mb \
+  --dry-run \
+  --json
 ```
 
-Local data is stored under `~/.hasna/models/` by default. Set
-`HASNA_MODELS_HOME` or `HASNA_MODELS_DB` to isolate test stores.
+After a global package install, use the same arguments with the `models`
+executable. Use `models manual` for a compact example list and `models --help`
+or `models <command> --help` for the authoritative command surface. Most leaf
+commands accept `--json`; action failures are also emitted as JSON when enabled.
 
-Provider tokens are read from environment variables, `~/.hasna/models/auth.json`,
-or generic local `secrets` keys such as `huggingface/token`. Secret references
-stay local and are redacted from normal status output. For private or
-organization-specific secret names, configure a local reference without
-committing it:
+Provider refs use `hf:owner/repo@revision`. Add `dataset:` or `space:` after the
+provider for non-model repositories, for example
+`hf:dataset:owner/repo@revision`. The revision defaults to `main`.
+
+Downloads default to a 2 GiB known-byte cap. `--include` and `--exclude` are
+repeatable and accept exact paths, basenames, directory prefixes ending in `/`,
+or `*` globs. Plans with no matching files, known bytes above the cap, or unknown
+file sizes under a cap are blocked. `install --dry-run` performs the same plan
+without downloading.
+
+## Local data
+
+Local state defaults to `~/.hasna/models/`:
+
+- `models.db` stores catalog entries, remote file metadata, installs, and model
+  capabilities.
+- `auth.json` stores local auth configuration and secret references.
+- `installs/` contains downloaded files grouped by provider, entity kind, repo,
+  and revision.
+
+Override locations with `HASNA_MODELS_HOME`, `HASNA_MODELS_DB`,
+`HASNA_MODELS_CACHE`, and `HASNA_MODELS_INSTALLS`. `HF_ENDPOINT` overrides the
+Hugging Face base URL.
+
+## Authentication
+
+Hugging Face tokens are resolved in this order:
+
+1. `HF_TOKEN`, `HUGGINGFACE_HUB_TOKEN`, `HUGGING_FACE_HUB_TOKEN`, or
+   `HUGGINGFACE_TOKEN`.
+2. `huggingface.token` in `auth.json`.
+3. A local `secrets` CLI key selected by `HASNA_MODELS_HF_SECRET_KEY`,
+   `HF_SECRET_KEY`, `huggingface.secretKey` in `auth.json`, or the built-in keys
+   `huggingface/token`, `huggingface/live/token`, and `hf/token`.
+
+Configure a private or organization-specific secret reference without storing
+the token in this repository:
 
 ```bash
 models providers auth huggingface --secret-key <your/local/hf/token/key>
+models providers status --json
 ```
 
-This package targets Bun for the CLI and library surface because it uses
+Token values and configured secret-key names are redacted from provider status
+output. Anonymous Hub access remains available when no token resolves. This
+package targets Bun for both CLI and library use because storage uses
 `bun:sqlite`.
 
-## Capability Schema
+## Capability schema
 
 `@hasna/models` publishes `hasna.model-capability.v1` through the root SDK export
 and `@hasna/models/capabilities`. Capability records describe provider/model
@@ -84,29 +124,22 @@ models capabilities get gpt-4.1-mini --json
 ```
 
 Golden fixtures cover OpenAI-compatible hosted models, Ollama, LM Studio,
-Hugging Face artifacts, and provider-unavailable states. Missing pricing,
-unknown tool support, invalid modalities, invalid runtime kinds, and stale
-provider-health shapes fail validation before records are stored.
+Hugging Face artifacts, and provider-unavailable states. Validation rejects
+missing required sections, unsupported support/modality/runtime/health values,
+invalid token limits or prices, and missing required timestamps before records
+are stored.
 
-## Consumer Exposure Plan
-
-Current implemented surfaces:
+Current consumer surfaces are:
 
 - SDK: `ModelCapability`, `validateModelCapability`,
-  `assertModelCapability`, `MODEL_CAPABILITY_FIXTURES`.
+  `assertModelCapability`, and `MODEL_CAPABILITY_FIXTURES`.
 - Storage: `ModelsStore.upsertCapabilities`, `listCapabilities`, and
   `findCapability`.
 - CLI: `models capabilities seed-fixtures`, `list`, and `get`.
 
-MCP should expose the same contract as read-only tools first:
-`models_capabilities_list`, `models_capabilities_get`, and
-`models_capabilities_validate`. Mutation tools should stay local/operator-gated
-until provider probes and capability refresh jobs exist.
-
-First consumer adoption candidates are `open-swarm` for process-agent routing,
-`open-testers` for provider matrices and regression runs, `open-coders` for
-tool/function support checks, `open-prompts` for prompt/model/result/cost
-provenance, and `open-brains` for training/artifact boundaries.
+Future MCP consumers should expose the same contract as read-only tools first.
+Mutation tools should remain local/operator-gated until provider probes and
+capability refresh jobs exist.
 
 ## License
 

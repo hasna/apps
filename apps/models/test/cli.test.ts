@@ -47,6 +47,23 @@ test("CLI --version matches package metadata", () => {
   expect(result.stderr).toBe("");
 });
 
+test("dataset search help does not advertise the model kind option", () => {
+  const result = spawnSync(process.execPath, [
+    "src/cli/index.ts",
+    "datasets",
+    "search",
+    "--help",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    env: testEnv(),
+  });
+
+  expect(result.status).toBe(0);
+  expect(result.stdout).not.toContain("--kind");
+  expect(result.stderr).toBe("");
+});
+
 test("subcommand --json returns machine-readable action errors", () => {
   const result = spawnSync(process.execPath, [
     "src/cli/index.ts",
