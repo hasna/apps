@@ -60,6 +60,7 @@ export function formatStatus(status: ActionsStatus, options: { verbose?: boolean
     `dataDir: ${status.dataDir}`,
   ];
   if (options.verbose) {
+    lines.push(`storage: ${status.storage.engine} database=${status.storage.database.path}`);
     lines.push("files:");
     lines.push(`  manifests ${status.files.manifests.exists ? "exists" : "missing"} records=${status.files.manifests.records} path=${status.files.manifests.path}`);
     lines.push(`  runs ${status.files.runs.exists ? "exists" : "missing"} records=${status.files.runs.records} path=${status.files.runs.path}`);

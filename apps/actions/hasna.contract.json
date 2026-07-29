@@ -1,0 +1,72 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "actions",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "0.8.1",
+  "description": "Local-first action manifests, runs, and audit events exposed through CLI, MCP, and SDK surfaces.",
+  "bins": [
+    "actions",
+    "actions-mcp"
+  ],
+  "hosting": [
+    "user-hosted"
+  ],
+  "deploymentModes": [
+    "local"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "actions-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "actions",
+      "authMode": "local-only",
+      "deploymentModes": [
+        "local"
+      ]
+    },
+    {
+      "name": "actions-mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "actions-mcp",
+      "authMode": "local-only",
+      "deploymentModes": [
+        "local"
+      ]
+    },
+    {
+      "name": "actions-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "none",
+      "deploymentModes": [
+        "local"
+      ],
+      "exportSubpath": "./sdk"
+    }
+  ],
+  "storage": {
+    "mode": "local",
+    "engines": [
+      "sqlite"
+    ],
+    "sqlitePath": "~/.hasna/actions/actions.db"
+  },
+  "metadata": {
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
+    },
+    "conformance": {
+      "waivedStorageEngines": [
+        {
+          "engine": "postgres",
+          "reason": "Local-only CLI and stdio MCP package with no service bin, cloud placement, or managed SaaS runtime."
+        }
+      ]
+    }
+  }
+}

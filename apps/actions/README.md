@@ -18,6 +18,10 @@ and what rollback or compensating action is available.
 bun install @hasna/actions
 ```
 
+The CLI, the MCP server, and the default SQLite store require Bun (`engines.bun
+>= 1.0.0`). The library entry points also load under Node; see
+[Storage](#storage) for the store you need there.
+
 ## Manifest Shape
 
 ```ts
@@ -70,11 +74,14 @@ const action = createTypeScriptAction({
 
 ## SDK
 
+`ActionsClient` defaults to the SQLite store at `~/.hasna/actions/actions.db`,
+which is backed by `bun:sqlite` and therefore requires the Bun runtime. See
+[Storage](#storage) for the Node fallback.
+
 ```ts
-import { ActionsClient, JsonActionsStore } from "@hasna/actions";
+import { ActionsClient } from "@hasna/actions";
 
 const client = new ActionsClient({
-  store: new JsonActionsStore(),
   guardrailHooks: [
     async ({ manifest }) => (
       manifest.riskLevel === "critical"
@@ -114,6 +121,15 @@ await client.approve(run.id, {
 });
 
 await client.execute(run.id);
+```
+
+Outside Bun the default store throws, so select the JSON store explicitly:
+
+```ts
+import { ActionsClient, JsonActionsStore } from "@hasna/actions";
+
+// Node: bun:sqlite is unavailable, so pass the JSON store.
+const client = new ActionsClient({ store: new JsonActionsStore() });
 ```
 
 ## Local Shell Executor
@@ -251,8 +267,19 @@ Default local data directory:
 
 Override with `HASNA_ACTIONS_DIR` or `HASNA_ACTIONS_HOME`.
 
-The storage interface is intentionally small so the same contract can later be
-backed by SQLite, Postgres, a gateway service, or a signed audit ledger.
+The default store is SQLite at `~/.hasna/actions/actions.db`. On first use it
+imports any existing `manifests.json`, `runs.json`, and `audit-events.json`
+records once without overwriting newer database records. `JsonActionsStore`
+remains available for explicitly configured compatibility use.
+
+The SQLite store is backed by `bun:sqlite`, so it needs the Bun runtime. The
+package entry points import and validate manifests under Node as well; pass a
+`JsonActionsStore` to `ActionsClient` when running actions outside Bun.
+
+Directory and database permissions are tightened to `0700`/`0600` on a best
+effort basis. Data directories that reject `chmod`, such as shared team
+directories, container bind mounts, and volumes without POSIX modes, keep
+working with whatever permissions they already have.
 
 Local shell executors pass `PATH`, `HOME`, and temp directory variables by
 default, plus explicit manifest `env` values. They do not inherit the whole

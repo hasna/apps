@@ -4,7 +4,7 @@ import { Command } from "commander";
 import { ProjectPanelSchema, SCHEMA_IDS } from "@hasna/contracts/schemas";
 import type { ActionManifest, ActionRun, ActorRef, JsonObject, RiskLevel } from "../types.js";
 import { ActionsClient, assertManifest, createLocalShellAction } from "../index.js";
-import { JsonActionsStore, getActionsStatus } from "../storage.js";
+import { getActionsStatus } from "../storage.js";
 import {
   DEFAULT_LIST_LIMIT,
   formatManifestDetail,
@@ -54,7 +54,7 @@ function output(json: boolean | undefined, value: unknown, human: () => string):
 }
 
 function clientFor(dir?: string): ActionsClient {
-  return new ActionsClient({ store: new JsonActionsStore(dir) });
+  return new ActionsClient({ dataDir: dir });
 }
 
 async function registerShellManifest(client: ActionsClient, manifest: ActionManifest): Promise<void> {
@@ -174,7 +174,7 @@ export function createProgram(): Command {
   program
     .command("status")
     .description("Show local actions storage status")
-    .option("--verbose", "Show storage file details", false)
+    .option("--verbose", "Show storage details", false)
     .option("-j, --json", "Print JSON output", false)
     .action(async (options: { verbose?: boolean; json?: boolean }) => {
       const status = await getActionsStatus(program.opts<{ dir?: string }>().dir);

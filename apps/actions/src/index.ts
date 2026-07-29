@@ -16,7 +16,7 @@ import type {
   JsonObject,
   RunActionOptions,
 } from "./types.js";
-import { JsonActionsStore, type ActionsStore } from "./storage.js";
+import { SQLiteActionsStore, type ActionsStore } from "./storage.js";
 
 export * from "./types.js";
 export * from "./storage.js";
@@ -55,7 +55,7 @@ export class ActionsClient {
   private readonly auditSinks: ActionAuditSink[];
 
   constructor(options: ActionsClientOptions = {}) {
-    this.store = options.store ?? new JsonActionsStore(options.dataDir);
+    this.store = options.store ?? new SQLiteActionsStore(options.dataDir);
     this.guardrailHooks = options.guardrailHooks ?? [];
     this.auditSinks = options.auditSinks ?? [];
   }

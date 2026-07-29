@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
@@ -33,6 +33,23 @@ function manifest(overrides: Partial<ActionManifest> = {}): ActionManifest {
 }
 
 describe("ActionsClient", () => {
+  test("uses SQLite storage by default", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "actions-client-default-"));
+    try {
+      const client = new ActionsClient({ dataDir: dir });
+      await client.register(createTypeScriptAction({
+        manifest: manifest({ guardrail: undefined }),
+        execute: async () => ({ updated: true, project: "open-actions" }),
+      }));
+
+      expect(existsSync(join(dir, "actions.db"))).toBe(true);
+      const reopened = new ActionsClient({ dataDir: dir });
+      expect(await reopened.getManifest("projects.metadata.update")).toMatchObject({ id: "projects.metadata.update" });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("plans, previews, approvals, execution, audit, and idempotency", async () => {
     const dir = mkdtempSync(join(tmpdir(), "actions-client-"));
     try {

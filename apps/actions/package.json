@@ -1,6 +1,6 @@
 {
   "name": "@hasna/actions",
-  "version": "0.1.6",
+  "version": "0.2.0",
   "description": "Typed, auditable action contracts for agentic software.",
   "type": "module",
   "license": "Apache-2.0",
@@ -37,18 +37,23 @@
     }
   },
   "scripts": {
-    "build": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/index.ts src/storage.ts src/types.ts --outdir dist --target bun && bun build src/sdk/index.ts --outdir dist/sdk --target bun && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
+    "build": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun --external @hasna/contracts --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @hasna/contracts --external @modelcontextprotocol/sdk && bun build src/index.ts src/storage.ts src/types.ts --outdir dist --target bun --external @hasna/contracts && bun build src/sdk/index.ts --outdir dist/sdk --target bun --external @hasna/contracts && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
     "test": "bun test",
-    "verify:release": "bun run typecheck && bun test && bun run build",
+    "repo:conformance": "contracts repo-conformance --json .",
+    "scan:artifact": "bun scripts/scan-artifact.ts",
+    "verify:release": "bun run typecheck && bun test && bun run build && bun run repo:conformance",
     "dev:cli": "bun run src/cli/index.ts",
     "dev:mcp": "bun run src/mcp/index.ts",
-    "prepublishOnly": "bun run verify:release",
-    "postinstall": "mkdir -p $HOME/.hasna/actions 2>/dev/null || true"
+    "prepack": "bun run verify:release && bun run scan:artifact",
+    "prepublishOnly": "bun run verify:release"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
   },
   "dependencies": {
-    "@hasna/contracts": "^0.2.2",
+    "@hasna/contracts": "0.8.1",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "commander": "^13.1.0",
     "zod": "^3.24.2"

@@ -8,6 +8,7 @@ export {
 } from "../index.js";
 export {
   JsonActionsStore,
+  SQLiteActionsStore,
   getActionsDataDir,
   getActionsStatus,
 } from "../storage.js";
