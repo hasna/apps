@@ -45,6 +45,7 @@
   },
   "files": [
     "dist",
+    "docs",
     "fixtures",
     "hasna.contract.json",
     "LICENSE",

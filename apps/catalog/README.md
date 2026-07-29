@@ -1,93 +1,111 @@
 # @hasna/catalog
 
-Read-model app catalog. `catalog` seeds canonical `hasna.app.v1` app records
-from a local workspace of checkouts, serves them through a CLI, an MCP server,
-and minimal HTTP GET endpoints, and generates a public static catalog site.
+`@hasna/catalog` builds a local, SQLite-backed read model of
+`hasna.app.v1` application records. It can scan a directory of source
+checkouts, import JSONL records, query the result through a CLI or MCP server,
+serve a small HTTP API, and generate a static HTML catalog.
 
-This package is a **read model only**: it never writes install or rollout
-state. Rollout state arrives later as `hasna.rollout_record.v1` events written
-by `machines-agent`; a read-only ingestion hook validates those events today
-without persisting anything.
+The catalog stores application identity and release metadata only. It does not
+write install or rollout state. The exported rollout ingestion hook currently
+validates supported event envelopes and returns them with `persisted: false`.
 
 ## Install
 
 ```bash
 bun add @hasna/catalog
-# or globally
+# or install the CLI and MCP binaries globally
 bun add -g @hasna/catalog
 ```
 
-## Behaviour change in 0.2.0: duplicate checkouts
+The package requires Bun. A global install provides `catalog` and
+`catalog-mcp`.
 
-`DUPLICATE_CHECKOUTS` used to hard-code six real repository folder names. It is
-empty by default now, so a **deliberately renamed** duplicate checkout is no
-longer skipped by name. Worktree, PR, release, fix, legacy, and hash-suffixed
-checkouts are still skipped by pattern, and `dedupeByNpmName` still collapses
-two folders sharing an npm name.
+## Quick start
 
-The gap is narrow but real: when both folders share an npm name, the winner is
-the one matching `open-<unscoped-npm-name>`, so a stale alias can win over the
-folder you actually want, silently flipping that record's `appId` and
-`githubUrl`. When the npm names have also diverged, both get seeded.
+```bash
+# Scan immediate open-* child directories and upsert records into SQLite.
+catalog seed --root <checkout-dir>
 
-Supply your aliases to restore the old behaviour:
+# Query the local read model.
+catalog list
+catalog get <appId>
+catalog search "uptime"
+
+# Generate index.html plus one page per app.
+catalog site --out dist-site
+
+# Bind the local, unauthenticated read API.
+catalog serve
+```
+
+The default database is `~/.hasna/catalog/catalog.db`. Set `CATALOG_HOME` to
+move the catalog directory or `CATALOG_DB_PATH` to select a database directly;
+every data command also accepts `--db <path>`.
+
+See [the CLI reference](docs/cli.md) for every command, option, default, and
+output mode.
+
+## Interfaces
+
+- [CLI reference](docs/cli.md) — seeding, JSONL import, queries, site
+  generation, and serving
+- [HTTP API](docs/http-api.md) — routes, query parameters, responses, limits,
+  and exposure warning
+- [MCP server](docs/mcp.md) — stdio setup and the exact tool schemas
+- [Data model and library API](docs/data-model.md) — records, seed behavior,
+  storage, exports, and the rollout ingestion stub
+
+## Duplicate checkouts
+
+The scanner skips folders that do not start with `open-`, non-Git directories,
+and checkout names matching its worktree, pull-request, release, fix, legacy,
+or hash-suffix patterns. It also deduplicates candidates with the same npm
+package name.
+
+Deliberately renamed aliases cannot be recognized from their names. Supply a
+JSON object mapping alias folder names to canonical folder names:
 
 ```bash
 catalog seed --root <checkout-dir> --duplicates ./duplicates.json
 # or
-export CATALOG_DUPLICATE_CHECKOUTS=~/.config/catalog/duplicates.json
+export CATALOG_DUPLICATE_CHECKOUTS=/path/to/duplicates.json
 ```
 
 ```json
-{ "stale-folder-name": "canonical-folder-name" }
+{ "<alias-folder>": "<canonical-folder>" }
 ```
 
-That file is operator configuration. Keep it outside this repository.
+The built-in alias map is empty. Keep operator-specific maps outside this
+repository. If two unconfigured folders share an npm name, the scanner prefers
+`open-<unscoped-npm-name>`; otherwise it chooses the shortest folder name,
+using alphabetical order as the tiebreaker. If the npm names differ, both
+folders are seeded.
 
-## CLI
+## Security and deployment scope
 
-```bash
-# Seed the catalog by scanning a directory of checkouts (writes SQLite, and JSONL if asked)
-# The JSONL it writes is real inventory: send it somewhere outside this repo.
-catalog seed --root <checkout-dir> --db ./catalog.db
-catalog seed --root <checkout-dir> --fixture ~/catalog-export/apps.jsonl --seeded-from workspace-scan
-
-# Query the read model
-catalog list
-catalog list --lifecycle active --channel stable --json
-catalog get example-widget
-catalog search "uptime"
-
-# Generate the static catalog site into dist-site/
-catalog site --out dist-site
-
-# Serve minimal HTTP GET endpoints
-catalog serve --port 8797
-```
-
-## HTTP API (read-only)
-
-| Method | Path              | Description                          |
-| ------ | ----------------- | ------------------------------------ |
-| GET    | `/health`         | Health probe                         |
-| GET    | `/v1/apps`        | List apps (`?lifecycle=&channel=`)   |
-| GET    | `/v1/apps/:appId` | Get one app by `appId`               |
-| GET    | `/v1/search?q=`   | Search apps by id, name, summary     |
-
-## MCP
-
-`catalog-mcp` exposes read-only tools over stdio:
-
-- `catalog_list` — list apps with optional `lifecycle`, `channel`, `query` filters
-- `catalog_get` — fetch a single app by `app_id`
+`catalog serve` is a local development convenience, not an authenticated
+service. It binds to `127.0.0.1:8797` by default. Binding it to a non-loopback
+address exposes all catalog records without authentication. The static site
+command only writes files; deployment is a separate operation.
 
 ## Contracts
 
-App records implement `hasna.app.v1` from `@hasna/contracts`
-(`feat/distribution-schemas`). Because that branch is not yet published, this
-package vendors a minimal structural mirror of the schema in
-`src/contracts.ts`; swap it for the real `@hasna/contracts` import once
-published.
+The package currently vendors the distribution schema shapes it needs in
+`src/contracts.ts`: `hasna.app.v1`, `hasna.rollout_record.v1`, and related
+event names. The validators are strict where the source defines closed records;
+consult [the data model reference](docs/data-model.md) before producing JSONL.
+
+## Development
+
+```bash
+bun install
+bun run typecheck
+bun test
+bun run build
+```
+
+`bun run verify:release` runs typechecking, tests, the build, and the packed
+artifact disclosure scan.
 
 ## License
 
