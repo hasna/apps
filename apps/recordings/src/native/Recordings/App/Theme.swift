@@ -1,17 +1,37 @@
 import RecordingsLib
 import SwiftUI
 
-/// Design tokens and Liquid Glass helpers for the Recordings app. Mirrors the Hasna Notes
-/// visual system (narrow colored Liquid-Glass sidebar + one continuous canvas, hairline
-/// dividers, rounded type) with a Recordings identity: an "infinity violet→indigo" sidebar.
+/// The Recordings design system — deliberately small enough to hold in your head:
+/// one accent, one alert color, three corner radii, three spacing steps, one chrome
+/// font. Everything else leans on macOS system colors and materials. The identity
+/// is an "infinity violet" Liquid-Glass sidebar beside one continuous canvas.
 enum Theme {
+    // MARK: Color
+
     /// Accent used for selection highlights and small affordances.
     static let accent = Color(red: 0.42, green: 0.34, blue: 0.92)
+    /// Recording / destructive-adjacent alert color. Never the only signal —
+    /// always paired with an icon or label.
     static let recordRed = Color(red: 0.92, green: 0.26, blue: 0.30)
+
+    // MARK: Shape
 
     static let cornerLarge: CGFloat = 22
     static let cornerMedium: CGFloat = 14
     static let cornerSmall: CGFloat = 9
+
+    // MARK: Spacing — the only steps chrome should need.
+
+    static let spacingS: CGFloat = 8
+    static let spacingM: CGFloat = 16
+    static let spacingL: CGFloat = 24
+
+    // MARK: Type
+
+    /// Chrome label font (header line, metadata). Tracks Dynamic Type.
+    static let labelFont = Font.system(.subheadline, design: .rounded)
+
+    // MARK: Layout
 
     /// Deliberately narrow, Apple-style sidebar.
     static let sidebarWidth: CGFloat = 204
@@ -21,15 +41,14 @@ enum Theme {
         scheme == .dark ? Color(NSColor.windowBackgroundColor) : .white
     }
 
-    /// "Infinity violet" sidebar gradient rendered behind the Liquid Glass rows so the glass
-    /// refracts the color. Darkened in dark mode so white text stays legible.
+    /// "Infinity violet" sidebar gradient rendered behind the Liquid Glass rows so
+    /// the glass refracts the color. Two stops; darkened in dark mode so white
+    /// sidebar text keeps contrast.
     static func sidebarGradient(_ scheme: ColorScheme) -> LinearGradient {
         let colors: [Color] = scheme == .dark
             ? [Color(red: 0.16, green: 0.09, blue: 0.34),
-               Color(red: 0.20, green: 0.12, blue: 0.44),
                Color(red: 0.28, green: 0.12, blue: 0.46)]
             : [Color(red: 0.30, green: 0.18, blue: 0.66),
-               Color(red: 0.28, green: 0.20, blue: 0.76),
                Color(red: 0.44, green: 0.18, blue: 0.70)]
         return LinearGradient(colors: colors, startPoint: .top, endPoint: .bottom)
     }
