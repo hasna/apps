@@ -1336,6 +1336,7 @@ export function registerTaskCommands(program: Command) {
   // done
   program
     .command("done <id>")
+    .alias("complete")
     .description("Mark a task as completed")
     .option("--attach-ids <ids>", "Comma-separated @hasna/attachments IDs to link as evidence")
     .option("--files-changed <files>", "Comma-separated list of files changed")

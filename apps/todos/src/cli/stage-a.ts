@@ -38,6 +38,7 @@ const REGISTERED_CANONICAL_COMMANDS = [
 ] as const;
 
 export const TODOS_CLI_COMMAND_ALIASES = {
+  done: ["complete"],
   onboarding: ["demo-fixtures"],
   retrospectives: ["retro"],
   completions: ["completion"],
