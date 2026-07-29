@@ -3,7 +3,7 @@
   "version": "0.1.1",
   "description": "Fail-closed provider account capacity metadata for local and self-hosted Hasna deployments",
   "type": "module",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/hasna/capacity.git"
