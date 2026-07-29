@@ -13,8 +13,7 @@
     "url": "https://github.com/hasna/uptime/issues"
   },
   "publishConfig": {
-    "access": "public",
-    "provenance": true
+    "access": "public"
   },
   "readmeFilename": "README.md",
   "keywords": [

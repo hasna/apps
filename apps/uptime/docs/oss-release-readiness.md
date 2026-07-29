@@ -35,17 +35,32 @@ decision to `GO`; editing the decision file is not itself approval.
    `hasna/uptime` public and record the approved release commit in
    `oss-release-decision.json`. Do not infer approval from an npm release or
    from a `GO` edit.
+
+   The approved commit is recorded inside the tree it approves, so the recording
+   commit is necessarily a child of it. The gate accounts for that: it requires
+   `releaseCandidateCommit` to be a full 40-character SHA that is HEAD or an
+   ancestor of HEAD, and it requires HEAD to change nothing since that commit
+   except `docs/oss-release-decision.json` and this file. So the flow is: pick
+   the candidate commit, write its SHA into the decision record, commit only the
+   decision record, and publish from there. Any other change after the approved
+   commit means the tree being published is not the approved one, and the gate
+   names the offending paths.
 2. Rerun the gate on a clean release-candidate commit. Resolve all secret-scan,
    legal, package-content, and dependency-notice findings before exposing Git
    history.
 3. Make the repository public only as the approved visibility operation, then
    rerun the online gate so the public package links and GitHub visibility
    agree.
-4. Publish from an npm trusted-publishing environment with provenance. The
-   checked-in `publishConfig.provenance` setting requests an attestation; after
-   publication, verify that npm exposes `dist.attestations`. If trusted
-   publishing cannot be used, record and approve alternate evidence containing
-   the immutable source commit and package SHA-512 before setting `GO`.
+4. Publish from the trusted-publishing workflow in
+   `.github/workflows/release.yml`, which runs `npm publish --provenance` with
+   `id-token: write`. The `--provenance` request deliberately lives in that
+   workflow and not in `publishConfig`: npm only generates an attestation from a
+   supported CI provider and refuses to publish at all when `provenance` is set
+   outside one, which would break local and patch releases. After publication,
+   verify that npm exposes `dist.attestations`. If trusted publishing cannot be
+   used, record and approve alternate evidence containing the immutable source
+   commit — the same commit recorded as `releaseCandidateCommit` — and the
+   package SHA-512 before setting `GO`.
 5. Record the final `GO` or `HOLD` decision, reviewer, release version, commit,
    visibility observation, provenance evidence, and scan results. A registry
    signature or checksum alone is not alternate source provenance.

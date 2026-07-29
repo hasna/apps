@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -9,7 +9,7 @@ const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
   bin: Record<string, string>;
   exports: Record<string, { import: string }>;
   license: string;
-  publishConfig: { access: string; provenance: boolean };
+  publishConfig: { access: string; provenance?: boolean };
   repository: { type: string; url: string };
 };
 
@@ -347,13 +347,92 @@ test("built API enforces probe-bound hosted adapter behavior", async () => {
   }
 });
 
+const approvedCandidateCommit = "1f2e3d4c5b6a798877665544332211000ffeeddc";
+
+type ReleaseDecision = Record<string, any>;
+
+function approvedReleaseDecision(overrides: ReleaseDecision = {}): ReleaseDecision {
+  return {
+    schemaVersion: 1,
+    reviewedAt: "2026-07-29",
+    repository: "hasna/uptime",
+    package: "@hasna/uptime",
+    releaseVersion: "9.9.9",
+    decision: "GO",
+    explicitPublicApproval: true,
+    releaseCandidateCommit: approvedCandidateCommit,
+    observed: {
+      githubVisibility: "PUBLIC",
+      npmPackagePublic: true,
+      npmRepositoryUrl: "git+https://github.com/hasna/uptime.git",
+    },
+    legal: { status: "PASS" },
+    provenance: {
+      status: "VERIFIED",
+      npmAttestations: true,
+      npmGitHead: approvedCandidateCommit,
+      alternateEvidence: null,
+      registryIntegrity: "sha512-approvedReleaseCandidateIntegrityValue==",
+      registrySignature: true,
+    },
+    secretScan: { status: "PASS" },
+    ...overrides,
+  };
+}
+
+function registryStateFor(decision: ReleaseDecision, overrides: Record<string, any> = {}): Record<string, any> {
+  return {
+    githubVisibility: decision.observed.githubVisibility,
+    githubPrivate: decision.observed.githubVisibility === "PRIVATE",
+    npm: {
+      version: decision.releaseVersion,
+      repository: { type: "git", url: decision.observed.npmRepositoryUrl },
+      gitHead: decision.provenance.npmGitHead,
+      dist: {
+        integrity: decision.provenance.registryIntegrity,
+        signatures: [{ keyid: "registry-key", sig: "registry-signature" }],
+        attestations: {
+          url: "https://registry.npmjs.org/-/npm/v1/attestations/@hasna/uptime@9.9.9",
+          provenance: { predicateType: "https://slsa.dev/provenance/v1" },
+        },
+      },
+    },
+    ...overrides,
+  };
+}
+
+function evaluateApprovedRelease(
+  gate: Record<string, any>,
+  overrides: {
+    decision?: ReleaseDecision;
+    candidate?: Record<string, any>;
+    clean?: boolean;
+    provenancePublishing?: boolean;
+    online?: Record<string, any>;
+  } = {},
+): Record<string, any> {
+  const decision = overrides.decision ?? approvedReleaseDecision();
+  return gate.evaluateReleaseDecision({
+    decision,
+    staticErrors: [],
+    online: overrides.online ?? registryStateFor(decision),
+    candidate: overrides.candidate ?? {
+      resolved: decision.releaseCandidateCommit,
+      containedInHead: true,
+      changedPaths: ["docs/oss-release-decision.json"],
+    },
+    clean: overrides.clean ?? true,
+    provenancePublishing: overrides.provenancePublishing ?? true,
+    secretFindings: [],
+  });
+}
+
 test("public OSS release decision stays fail-closed while visibility and provenance are unresolved", async () => {
   const gate = await import(join(root, "scripts/oss-release-gate.mjs")) as Record<string, any>;
   const audit = gate.auditStaticRepository(root);
   const decision = audit.decision;
   const result = gate.evaluateReleaseDecision({
     decision,
-    package: audit.package,
     staticErrors: audit.errors,
     online: {
       githubVisibility: "PRIVATE",
@@ -368,15 +447,15 @@ test("public OSS release decision stays fail-closed while visibility and provena
         },
       },
     },
-    commit: "0123456789012345678901234567890123456789",
+    candidate: { resolved: null, containedInHead: false, changedPaths: [] },
     clean: true,
+    provenancePublishing: audit.provenancePublishing,
     secretFindings: [],
   });
 
   expect(audit.errors).toEqual([]);
   expect(pkg.license).toBe("Apache-2.0");
   expect(pkg.repository.url).toBe("git+https://github.com/hasna/uptime.git");
-  expect(pkg.publishConfig).toEqual({ access: "public", provenance: true });
   expect(decision).toMatchObject({
     decision: "HOLD",
     explicitPublicApproval: false,
@@ -388,7 +467,209 @@ test("public OSS release decision stays fail-closed while visibility and provena
   expect(result.releaseAllowed).toBe(false);
   expect(result.blockers).toContain("explicit repository-public approval is absent");
   expect(result.blockers).toContain("GitHub repository is not public, so public package metadata is unresolved");
+  expect(result.blockers).toContain("release candidate commit is not recorded");
   expect(result.blockers).toContain("npm provenance or approved alternate source evidence is not verified");
+});
+
+test("a fully approved release candidate is allowed, so the gate is reachable and not permanently closed", async () => {
+  const gate = await import(join(root, "scripts/oss-release-gate.mjs")) as Record<string, any>;
+  const result = evaluateApprovedRelease(gate);
+
+  expect(result.auditErrors).toEqual([]);
+  expect(result.blockers).toEqual([]);
+  expect(result.releaseAllowed).toBe(true);
+});
+
+test("approved alternate source evidence substitutes for npm attestations", async () => {
+  const gate = await import(join(root, "scripts/oss-release-gate.mjs")) as Record<string, any>;
+  const decision = approvedReleaseDecision({
+    provenance: {
+      status: "VERIFIED",
+      npmAttestations: false,
+      npmGitHead: approvedCandidateCommit,
+      alternateEvidence: {
+        sourceCommit: approvedCandidateCommit,
+        packageIntegrity: "sha512-approvedReleaseCandidateIntegrityValue==",
+        approvedBy: "release-owner",
+      },
+      registryIntegrity: "sha512-approvedReleaseCandidateIntegrityValue==",
+      registrySignature: true,
+    },
+  });
+  const online = registryStateFor(decision);
+  delete online.npm.dist.attestations;
+  const result = evaluateApprovedRelease(gate, { decision, online });
+
+  expect(result.auditErrors).toEqual([]);
+  expect(result.blockers).toEqual([]);
+  expect(result.releaseAllowed).toBe(true);
+});
+
+test("each release requirement blocks on its own when flipped away from the approved candidate", async () => {
+  const gate = await import(join(root, "scripts/oss-release-gate.mjs")) as Record<string, any>;
+  const privateDecision = approvedReleaseDecision({
+    observed: { githubVisibility: "PRIVATE", npmPackagePublic: true, npmRepositoryUrl: "git+https://github.com/hasna/uptime.git" },
+  });
+
+  const cases: Array<{ name: string; overrides: Parameters<typeof evaluateApprovedRelease>[1]; blocker: string }> = [
+    {
+      name: "recorded HOLD",
+      overrides: { decision: approvedReleaseDecision({ decision: "HOLD" }) },
+      blocker: "recorded public-release decision is HOLD",
+    },
+    {
+      name: "approval absent",
+      overrides: { decision: approvedReleaseDecision({ explicitPublicApproval: false }) },
+      blocker: "explicit repository-public approval is absent",
+    },
+    {
+      name: "repository still private",
+      overrides: { decision: privateDecision, online: registryStateFor(privateDecision) },
+      blocker: "GitHub repository is not public, so public package metadata is unresolved",
+    },
+    {
+      name: "dirty worktree",
+      overrides: { clean: false },
+      blocker: "release candidate worktree is not clean",
+    },
+    {
+      name: "no recorded candidate commit",
+      overrides: {
+        decision: approvedReleaseDecision({ releaseCandidateCommit: null }),
+        candidate: { resolved: null, containedInHead: false, changedPaths: [] },
+      },
+      blocker: "release candidate commit is not recorded",
+    },
+    {
+      name: "abbreviated candidate commit",
+      overrides: {
+        decision: approvedReleaseDecision({ releaseCandidateCommit: approvedCandidateCommit.slice(0, 10) }),
+        candidate: { resolved: approvedCandidateCommit, containedInHead: true, changedPaths: [] },
+      },
+      blocker: "recorded release candidate commit is not a full 40-character commit SHA",
+    },
+    {
+      name: "candidate commit missing from the repository",
+      overrides: { candidate: { resolved: null, containedInHead: false, changedPaths: [] } },
+      blocker: "recorded release candidate commit does not exist in this repository",
+    },
+    {
+      name: "candidate commit not in the HEAD history",
+      overrides: {
+        candidate: { resolved: approvedCandidateCommit, containedInHead: false, changedPaths: [] },
+      },
+      blocker: "recorded release candidate commit is neither HEAD nor an ancestor of HEAD",
+    },
+    {
+      name: "unapproved code after the candidate commit",
+      overrides: {
+        candidate: {
+          resolved: approvedCandidateCommit,
+          containedInHead: true,
+          changedPaths: ["docs/oss-release-decision.json", "src/index.ts"],
+        },
+      },
+      blocker: "HEAD changes src/index.ts since the recorded release candidate commit, so the published tree is not the approved one",
+    },
+    {
+      name: "provenance not verified",
+      overrides: {
+        decision: approvedReleaseDecision({
+          provenance: { ...approvedReleaseDecision().provenance, status: "MISSING" },
+        }),
+      },
+      blocker: "npm provenance or approved alternate source evidence is not verified",
+    },
+    {
+      name: "no trusted-publishing workflow",
+      overrides: { provenancePublishing: false },
+      blocker: "npm provenance publishing is not configured",
+    },
+  ];
+
+  for (const { name, overrides, blocker } of cases) {
+    const result = evaluateApprovedRelease(gate, overrides);
+    expect(`${name}: ${JSON.stringify(result.blockers)}`).toBe(`${name}: ${JSON.stringify([blocker])}`);
+    expect(result.releaseAllowed).toBe(false);
+  }
+});
+
+test("recording the approved release candidate commit is reachable in real Git history", async () => {
+  const gate = await import(join(root, "scripts/oss-release-gate.mjs")) as Record<string, any>;
+  const repository = mkdtempSync(join(tmpdir(), "uptime-release-candidate-"));
+  const git = (...args: string[]): string => {
+    const result = Bun.spawnSync({
+      cmd: ["git", ...args],
+      cwd: repository,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "Release Gate Test",
+        GIT_AUTHOR_EMAIL: "release-gate@example.invalid",
+        GIT_COMMITTER_NAME: "Release Gate Test",
+        GIT_COMMITTER_EMAIL: "release-gate@example.invalid",
+      },
+    });
+    expect(`git ${args[0]}: ${new TextDecoder().decode(result.stderr)}`).toBe(`git ${args[0]}: `);
+    return new TextDecoder().decode(result.stdout).trim();
+  };
+
+  try {
+    git("init", "--quiet", "--initial-branch", "main");
+    mkdirSync(join(repository, "docs"), { recursive: true });
+    writeFileSync(join(repository, "src.ts"), "export const value = 1;\n");
+    writeFileSync(join(repository, "docs/oss-release-decision.json"), JSON.stringify({ releaseCandidateCommit: null }, null, 2));
+    git("add", "src.ts", "docs/oss-release-decision.json");
+    git("commit", "--quiet", "-m", "release candidate");
+    const candidateCommit = git("rev-parse", "HEAD");
+
+    // Record the approved commit, which necessarily produces a child commit.
+    writeFileSync(join(repository, "docs/oss-release-decision.json"), JSON.stringify({ releaseCandidateCommit: candidateCommit }, null, 2));
+    git("add", "docs/oss-release-decision.json");
+    git("commit", "--quiet", "-m", "record approved release candidate");
+
+    const candidate = gate.inspectReleaseCandidate(candidateCommit, repository);
+    expect(candidate.resolved).toBe(candidateCommit);
+    expect(candidate.containedInHead).toBe(true);
+    expect(candidate.changedPaths).toEqual(["docs/oss-release-decision.json"]);
+    expect(gate.releaseCandidateBlockers(candidateCommit, candidate)).toEqual([]);
+
+    // Any later code change means the tree being published is not the approved one.
+    writeFileSync(join(repository, "src.ts"), "export const value = 2;\n");
+    git("add", "src.ts");
+    git("commit", "--quiet", "-m", "unapproved change");
+    const drifted = gate.inspectReleaseCandidate(candidateCommit, repository);
+    expect(drifted.containedInHead).toBe(true);
+    expect(drifted.changedPaths.sort()).toEqual(["docs/oss-release-decision.json", "src.ts"]);
+    expect(gate.releaseCandidateBlockers(candidateCommit, drifted)).toEqual([
+      "HEAD changes src.ts since the recorded release candidate commit, so the published tree is not the approved one",
+    ]);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("npm provenance is requested by the release workflow rather than publishConfig", async () => {
+  const gate = await import(join(root, "scripts/oss-release-gate.mjs")) as Record<string, any>;
+  const workflow = readFileSync(join(root, ".github/workflows/release.yml"), "utf8");
+
+  // publishConfig.provenance makes npm refuse to publish outside GitHub Actions
+  // or GitLab CI, which would brick every local and patch release.
+  expect(pkg.publishConfig).toEqual({ access: "public" });
+  expect(workflow).toContain("id-token: write");
+  expect(workflow).toMatch(/npm publish[^\n]*--provenance/);
+  expect(gate.auditProvenancePublishing(root)).toEqual({ configured: true, errors: [] });
+
+  const missingWorkflowRoot = mkdtempSync(join(tmpdir(), "uptime-release-workflow-"));
+  try {
+    expect(gate.auditProvenancePublishing(missingWorkflowRoot)).toEqual({
+      configured: false,
+      errors: [".github/workflows/release.yml is missing, so no trusted-publishing workflow can generate npm provenance"],
+    });
+  } finally {
+    rmSync(missingWorkflowRoot, { recursive: true, force: true });
+  }
 });
 
 test("package dry-run includes release artifacts and excludes source-only files", () => {

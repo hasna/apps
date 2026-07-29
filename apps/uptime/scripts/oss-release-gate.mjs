@@ -10,6 +10,14 @@ const root = resolve(dirname(scriptPath), "..");
 const expectedRepository = "hasna/uptime";
 const expectedRepositoryUrl = "git+https://github.com/hasna/uptime.git";
 const requiredLegalFiles = ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"];
+const releaseWorkflowPath = ".github/workflows/release.yml";
+
+// The approved release candidate is recorded inside the tree it approves, so
+// HEAD is always at least one commit ahead of it: writing the commit changes the
+// file, which changes HEAD. The gate therefore requires the recorded commit to
+// be HEAD or an ancestor of HEAD whose only later changes are the decision
+// record itself. Anything else means unapproved code is being published.
+const releaseDecisionPaths = ["docs/oss-release-decision.json", "docs/oss-release-readiness.md"];
 
 const secretPatterns = [
   ["private key", /-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----\s+[A-Za-z0-9+/=\r\n]{80,}-----END (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/g],
@@ -26,9 +34,9 @@ function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
 }
 
-function command(commandName, args) {
+function command(commandName, args, cwd = root) {
   return execFileSync(commandName, args, {
-    cwd: root,
+    cwd,
     encoding: "utf8",
     maxBuffer: 128 * 1024 * 1024,
     stdio: ["ignore", "pipe", "pipe"],
@@ -127,8 +135,11 @@ export function auditStaticRepository(repositoryRoot = root) {
   check(pkg.homepage === "https://github.com/hasna/uptime#readme", "package homepage is not the expected GitHub README", errors);
   check(pkg.bugs?.url === "https://github.com/hasna/uptime/issues", "package bugs URL is not the expected GitHub issue tracker", errors);
   check(pkg.publishConfig?.access === "public", "publishConfig.access must explicitly be public", errors);
-  check(pkg.publishConfig?.provenance === true, "publishConfig.provenance must be true", errors);
+  check(pkg.publishConfig?.provenance === undefined, "publishConfig.provenance must not be set, because npm refuses to publish outside a supported CI provider when it is", errors);
   check(pkg.scripts?.prepublishOnly?.startsWith("node scripts/oss-release-gate.mjs &&"), "prepublishOnly must run the OSS release gate first", errors);
+
+  const provenancePublishing = auditProvenancePublishing(repositoryRoot);
+  errors.push(...provenancePublishing.errors);
 
   for (const file of requiredLegalFiles) {
     check(existsSync(join(repositoryRoot, file)), `${file} is missing`, errors);
@@ -172,7 +183,23 @@ export function auditStaticRepository(repositoryRoot = root) {
   check(decision.legal?.status === "PASS", "legal review is not recorded as PASS", errors);
   check(decision.secretScan?.status === "PASS", "secret scan is not recorded as PASS", errors);
 
-  return { decision, errors, package: pkg };
+  return { decision, errors, package: pkg, provenancePublishing: provenancePublishing.configured };
+}
+
+// npm only generates a provenance attestation from a supported CI provider, so
+// the request for one belongs on the workflow's publish command, not in
+// publishConfig, where it makes every other publish path fail before it starts.
+export function auditProvenancePublishing(repositoryRoot = root) {
+  const workflowPath = join(repositoryRoot, releaseWorkflowPath);
+  if (!existsSync(workflowPath)) {
+    return { configured: false, errors: [`${releaseWorkflowPath} is missing, so no trusted-publishing workflow can generate npm provenance`] };
+  }
+
+  const errors = [];
+  const workflow = readFileSync(workflowPath, "utf8");
+  check(/^\s*id-token:\s*write\s*$/m.test(workflow), `${releaseWorkflowPath} does not request the id-token: write permission npm provenance requires`, errors);
+  check(/npm publish[^\n]*--provenance/.test(workflow), `${releaseWorkflowPath} does not publish with --provenance`, errors);
+  return { configured: errors.length === 0, errors };
 }
 
 function scanText(text, scope) {
@@ -205,6 +232,34 @@ function runGitleaks() {
   command("gitleaks", ["dir", "--redact", "--no-banner", "."]);
 }
 
+export function inspectReleaseCandidate(recordedCommit, repositoryRoot = root) {
+  const missing = { resolved: null, containedInHead: false, changedPaths: [] };
+  if (!recordedCommit) return missing;
+
+  let resolved;
+  try {
+    resolved = command("git", ["rev-parse", "--verify", "--quiet", `${recordedCommit}^{commit}`], repositoryRoot);
+  } catch {
+    return missing;
+  }
+
+  const head = command("git", ["rev-parse", "HEAD"], repositoryRoot);
+  let containedInHead = resolved === head;
+  if (!containedInHead) {
+    try {
+      command("git", ["merge-base", "--is-ancestor", resolved, head], repositoryRoot);
+      containedInHead = true;
+    } catch {
+      containedInHead = false;
+    }
+  }
+
+  const changedPaths = containedInHead
+    ? command("git", ["diff", "--name-only", resolved, head], repositoryRoot).split("\n").filter(Boolean)
+    : [];
+  return { resolved, containedInHead, changedPaths };
+}
+
 function inspectOnlineState(pkg, decision) {
   const github = JSON.parse(command("gh", ["repo", "view", expectedRepository, "--json", "visibility,isPrivate"]));
   const npm = JSON.parse(command("npm", ["view", `${pkg.name}@${decision.releaseVersion}`, "--json"]));
@@ -215,7 +270,22 @@ function inspectOnlineState(pkg, decision) {
   };
 }
 
-export function evaluateReleaseDecision({ decision, package: pkg, staticErrors = [], online, commit, clean, secretFindings = [] }) {
+// `candidate` is the Git view of the recorded release candidate, produced by
+// inspectReleaseCandidate: { resolved, containedInHead, changedPaths }.
+export function releaseCandidateBlockers(recordedCommit, candidate) {
+  if (!recordedCommit) return ["release candidate commit is not recorded"];
+  if (!/^[0-9a-f]{40}$/.test(recordedCommit)) return ["recorded release candidate commit is not a full 40-character commit SHA"];
+  if (candidate?.resolved !== recordedCommit) return ["recorded release candidate commit does not exist in this repository"];
+  if (!candidate.containedInHead) return ["recorded release candidate commit is neither HEAD nor an ancestor of HEAD"];
+
+  const unapproved = (candidate.changedPaths ?? []).filter((path) => !releaseDecisionPaths.includes(path));
+  if (unapproved.length > 0) {
+    return [`HEAD changes ${unapproved.join(", ")} since the recorded release candidate commit, so the published tree is not the approved one`];
+  }
+  return [];
+}
+
+export function evaluateReleaseDecision({ decision, staticErrors = [], online, candidate, clean, provenancePublishing = false, secretFindings = [] }) {
   const auditErrors = [...staticErrors, ...secretFindings];
   const blockers = [];
   const npmDist = online.npm.dist ?? {};
@@ -240,19 +310,20 @@ export function evaluateReleaseDecision({ decision, package: pkg, staticErrors =
   if (decision.explicitPublicApproval !== true) blockers.push("explicit repository-public approval is absent");
   if (online.githubVisibility !== "PUBLIC") blockers.push("GitHub repository is not public, so public package metadata is unresolved");
   if (!clean) blockers.push("release candidate worktree is not clean");
-  if (!decision.releaseCandidateCommit || decision.releaseCandidateCommit !== commit) blockers.push("release candidate commit is not recorded or does not match HEAD");
+  blockers.push(...releaseCandidateBlockers(decision.releaseCandidateCommit, candidate));
 
   const alternate = decision.provenance.alternateEvidence;
   const alternateValid = Boolean(
     alternate
-      && alternate.sourceCommit === commit
+      && decision.releaseCandidateCommit
+      && alternate.sourceCommit === decision.releaseCandidateCommit
       && /^sha512-[A-Za-z0-9+/]+={0,2}$/.test(alternate.packageIntegrity ?? "")
       && alternate.approvedBy,
   );
   if (!(npmAttestations || alternateValid) || decision.provenance.status !== "VERIFIED") {
     blockers.push("npm provenance or approved alternate source evidence is not verified");
   }
-  if (pkg.publishConfig?.provenance !== true) blockers.push("npm provenance publishing is not configured");
+  if (provenancePublishing !== true) blockers.push("npm provenance publishing is not configured");
   if (auditErrors.length > 0) blockers.push("release audit has errors");
 
   return {
@@ -273,13 +344,13 @@ function main() {
   const verifyRecordedState = process.argv.includes("--verify-recorded-state");
   const staticAudit = auditStaticRepository();
   let online;
-  let commit = "";
+  let candidate = { resolved: null, containedInHead: false, changedPaths: [] };
   let clean = false;
   const operationalErrors = [];
   const secretFindings = [];
 
   try {
-    commit = command("git", ["rev-parse", "HEAD"]);
+    candidate = inspectReleaseCandidate(staticAudit.decision.releaseCandidateCommit);
     clean = command("git", ["status", "--porcelain=v1"]) === "";
     secretFindings.push(...scanTrackedWorktree(), ...scanGitHistory());
     if (staticAudit.decision.decision === "GO") runGitleaks();
@@ -300,11 +371,11 @@ function main() {
 
   const result = evaluateReleaseDecision({
     decision: staticAudit.decision,
-    package: staticAudit.package,
     staticErrors: [...staticAudit.errors, ...operationalErrors],
     online,
-    commit,
+    candidate,
     clean,
+    provenancePublishing: staticAudit.provenancePublishing,
     secretFindings,
   });
   printResult(result, staticAudit.decision);

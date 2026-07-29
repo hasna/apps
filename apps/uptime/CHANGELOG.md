@@ -15,8 +15,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
-- Configured npm publication to request provenance and made the OSS gate run
-  before the existing build, typecheck, and test prepublish checks.
+- Added a trusted-publishing release workflow that publishes with
+  `npm publish --provenance` under `id-token: write`, and made the OSS gate run
+  before the existing build, typecheck, and test prepublish checks. The
+  provenance request lives in the workflow rather than in `publishConfig`,
+  because npm refuses to publish at all when `publishConfig.provenance` is set
+  outside a supported CI provider.
 
 ## [0.1.69] - 2026-06-30
 
