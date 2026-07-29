@@ -1805,7 +1805,9 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       {
         name: z.string().describe("Plan name"),
         slug: z.string().optional().describe("Readable plan slug"),
-        project_id: z.string().optional().describe("Project ID"),
+        project_id: z.string().optional().describe("Owning project ID"),
+        related_project_ids: z.array(z.string()).optional().describe("Related project IDs"),
+        task_list_id: z.string().optional().describe("Linked task-list ID"),
         description: z.string().optional(),
         start_date: z.string().optional().describe("ISO date"),
         end_date: z.string().optional().describe("ISO date"),
@@ -1815,6 +1817,10 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
         try {
           const resolved: Record<string, unknown> = { ...params };
           if (params.project_id) resolved.project_id = resolveId(params.project_id, "projects");
+          if (params.related_project_ids) {
+            resolved.related_project_ids = params.related_project_ids.map((id) => resolveId(id, "projects"));
+          }
+          if (params.task_list_id) resolved.task_list_id = resolveId(params.task_list_id, "task_lists");
           const plan = createPlan(resolved as Parameters<typeof createPlan>[0]);
           return { content: [{ type: "text" as const, text: `Plan created: ${plan.id.slice(0,8)} ${plan.name}` }] };
         } catch (e) {
@@ -1838,7 +1844,12 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
           if (project_id) resolved.project_id = resolveId(project_id, "projects");
           const plans = listPlans(resolved as Parameters<typeof listPlans>[0]);
           if (plans.length === 0) return { content: [{ type: "text" as const, text: "No plans found." }] };
-          const lines = plans.map(p => `[${p.status}] ${p.name} (${p.id.slice(0,8)})`);
+          const lines = plans.map((p) => {
+            const scope = p.project_id ? ` owner:${p.project_id}` : " owner:global";
+            const related = p.related_project_ids.length ? ` related:${p.related_project_ids.join(",")}` : "";
+            const taskList = p.task_list_id ? ` task-list:${p.task_list_id}` : "";
+            return `[${p.status}] ${p.name} (${p.id.slice(0,8)})${scope}${related}${taskList}`;
+          });
           return { content: [{ type: "text" as const, text: lines.join("\n") }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -1870,6 +1881,8 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
             `Name:  ${plan.name}`,
             `Status: ${plan.status}`,
             plan.project_id ? `Project: ${plan.project_id}` : null,
+            plan.related_project_ids.length ? `Related: ${plan.related_project_ids.join(", ")}` : null,
+            plan.task_list_id ? `Task list: ${plan.task_list_id}` : null,
             plan.start_date ? `Start:   ${plan.start_date}` : null,
             plan.end_date ? `End:     ${plan.end_date}` : null,
             `Tasks: ${tasks.length}`,
@@ -1892,6 +1905,9 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
         plan_id: z.string().describe("Plan ID"),
         name: z.string().optional(),
         description: z.string().optional(),
+        project_id: z.string().nullable().optional().describe("Owning project ID; null makes the plan global"),
+        related_project_ids: z.array(z.string()).optional().describe("Related project IDs"),
+        task_list_id: z.string().nullable().optional().describe("Linked task-list ID; null clears it"),
         start_date: z.string().optional(),
         end_date: z.string().optional(),
         status: z.enum(["planning", "active", "completed", "cancelled"]).optional(),
@@ -1899,6 +1915,11 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       async ({ plan_id, ...updates }) => {
         try {
           const resolvedId = resolveId(plan_id, "plans");
+          if (updates.project_id) updates.project_id = resolveId(updates.project_id, "projects");
+          if (updates.related_project_ids) {
+            updates.related_project_ids = updates.related_project_ids.map((id) => resolveId(id, "projects"));
+          }
+          if (updates.task_list_id) updates.task_list_id = resolveId(updates.task_list_id, "task_lists");
           const plan = updatePlan(resolvedId, updates as Parameters<typeof updatePlan>[1]);
           return { content: [{ type: "text" as const, text: `Plan ${plan.id.slice(0,8)} updated.` }] };
         } catch (e) {

@@ -117,6 +117,7 @@ export interface Plan {
   id: string;
   slug: string | null;
   project_id: string | null;
+  related_project_ids: string[];
   task_list_id: string | null;
   agent_id: string | null;
   name: string;
@@ -131,8 +132,9 @@ export interface Plan {
 export interface CreatePlanInput {
   name: string;
   slug?: string;
-  project_id?: string;
-  task_list_id?: string;
+  project_id?: string | null;
+  related_project_ids?: string[];
+  task_list_id?: string | null;
   agent_id?: string;
   description?: string;
   status?: PlanStatus;
@@ -143,8 +145,10 @@ export interface UpdatePlanInput {
   slug?: string;
   description?: string;
   status?: PlanStatus;
-  task_list_id?: string;
-  agent_id?: string;
+  project_id?: string | null;
+  related_project_ids?: string[];
+  task_list_id?: string | null;
+  agent_id?: string | null;
 }
 
 // Machine

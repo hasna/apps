@@ -162,8 +162,9 @@ export class TodosClient {
   }
 
   async createPlan(input: {
-    name: string; description?: string; project_id?: string;
-    task_list_id?: string; agent_id?: string; status?: string;
+    name: string; description?: string; project_id?: string | null;
+    related_project_ids?: string[]; task_list_id?: string | null;
+    agent_id?: string | null; status?: string;
   }): Promise<Plan> {
     return this.post<Plan>("/api/plans", { ...input, agent_id: input.agent_id || this.agentId });
   }

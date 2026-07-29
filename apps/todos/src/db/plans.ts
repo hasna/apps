@@ -7,6 +7,34 @@ import { getDatabase, now, uuid } from "./database.js";
 import { slugify } from "./projects.js";
 import { currentStorageMachineId, recordStorageTombstone } from "./storage-tombstones.js";
 
+interface PlanRow extends Omit<Plan, "related_project_ids"> {
+  related_project_ids: string | null;
+}
+
+function normalizeRelatedProjectIds(value: readonly string[] | undefined, projectId: string | null): string[] {
+  if (!value) return [];
+  return [...new Set(value.map((id) => id.trim()).filter((id) => id && id !== projectId))];
+}
+
+function planFromRow(row: PlanRow): Plan {
+  let relatedProjectIds: unknown = [];
+  try {
+    relatedProjectIds = JSON.parse(row.related_project_ids || "[]");
+  } catch {
+    relatedProjectIds = [];
+  }
+  return {
+    ...row,
+    related_project_ids: Array.isArray(relatedProjectIds)
+      ? normalizeRelatedProjectIds(relatedProjectIds.filter((id): id is string => typeof id === "string"), row.project_id)
+      : [],
+  };
+}
+
+function plansFromRows(rows: PlanRow[]): Plan[] {
+  return rows.map(planFromRow);
+}
+
 export interface ResolvePlanRefResult {
   id: string | null;
   reason: "id" | "slug" | "not_found" | "ambiguous";
@@ -26,11 +54,11 @@ export function normalizePlanSlug(value: string): string {
 function plansBySlug(slug: string, db: Database, projectId?: string | null): Plan[] {
   if (projectId !== undefined) {
     if (projectId === null) {
-      return db.query("SELECT * FROM plans WHERE slug = ? AND project_id IS NULL ORDER BY created_at ASC, id ASC").all(slug) as Plan[];
+      return plansFromRows(db.query("SELECT * FROM plans WHERE slug = ? AND project_id IS NULL ORDER BY created_at ASC, id ASC").all(slug) as PlanRow[]);
     }
-    return db.query("SELECT * FROM plans WHERE slug = ? AND project_id = ? ORDER BY created_at ASC, id ASC").all(slug, projectId) as Plan[];
+    return plansFromRows(db.query("SELECT * FROM plans WHERE slug = ? AND project_id = ? ORDER BY created_at ASC, id ASC").all(slug, projectId) as PlanRow[]);
   }
-  return db.query("SELECT * FROM plans WHERE slug = ? ORDER BY created_at ASC, id ASC").all(slug) as Plan[];
+  return plansFromRows(db.query("SELECT * FROM plans WHERE slug = ? ORDER BY created_at ASC, id ASC").all(slug) as PlanRow[]);
 }
 
 function planSlugExists(slug: string, projectId: string | null, db: Database, excludeId?: string): boolean {
@@ -61,7 +89,7 @@ function resolveCreateSlug(input: CreatePlanInput, projectId: string | null, db:
 
 export function resolvePlanRefDetailed(ref: string, db?: Database, projectId?: string | null): ResolvePlanRefResult {
   const d = db || getDatabase();
-  const byId = d.query("SELECT * FROM plans WHERE id = ? OR id LIKE ? ORDER BY id").all(ref, `${ref}%`) as Plan[];
+  const byId = plansFromRows(d.query("SELECT * FROM plans WHERE id = ? OR id LIKE ? ORDER BY id").all(ref, `${ref}%`) as PlanRow[]);
   if (byId.length === 1) return { id: byId[0]!.id, reason: "id", matches: byId };
   if (byId.length > 1) return { id: null, reason: "ambiguous", matches: byId };
 
@@ -83,16 +111,18 @@ export function createPlan(input: CreatePlanInput, db?: Database): Plan {
   const id = uuid();
   const timestamp = now();
   const projectId = input.project_id || null;
+  const relatedProjectIds = normalizeRelatedProjectIds(input.related_project_ids, projectId);
   const slug = resolveCreateSlug(input, projectId, d);
   const machineId = currentStorageMachineId(d);
 
   d.run(
-    `INSERT INTO plans (id, slug, project_id, task_list_id, agent_id, name, description, status, created_at, updated_at, machine_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO plans (id, slug, project_id, related_project_ids, task_list_id, agent_id, name, description, status, created_at, updated_at, machine_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       slug,
       projectId,
+      JSON.stringify(relatedProjectIds),
       input.task_list_id || null,
       input.agent_id || null,
       input.name,
@@ -109,20 +139,22 @@ export function createPlan(input: CreatePlanInput, db?: Database): Plan {
 
 export function getPlan(id: string, db?: Database): Plan | null {
   const d = db || getDatabase();
-  const row = d.query("SELECT * FROM plans WHERE id = ?").get(id) as Plan | null;
-  return row;
+  const row = d.query("SELECT * FROM plans WHERE id = ?").get(id) as PlanRow | null;
+  return row ? planFromRow(row) : null;
 }
 
 export function listPlans(projectId?: string, db?: Database): Plan[] {
   const d = db || getDatabase();
   if (projectId) {
-    return d
+    const rows = d
       .query("SELECT * FROM plans WHERE project_id = ? ORDER BY created_at DESC")
-      .all(projectId) as Plan[];
+      .all(projectId) as PlanRow[];
+    return plansFromRows(rows);
   }
-  return d
+  const rows = d
     .query("SELECT * FROM plans ORDER BY created_at DESC")
-    .all() as Plan[];
+    .all() as PlanRow[];
+  return plansFromRows(rows);
 }
 
 export function updatePlan(
@@ -137,13 +169,18 @@ export function updatePlan(
   const sets: string[] = ["updated_at = ?"];
   const params: SQLQueryBindings[] = [now()];
 
+  const projectId = input.project_id !== undefined ? input.project_id : plan.project_id;
+  if (input.project_id !== undefined && plan.slug && planSlugExists(plan.slug, projectId, d, id)) {
+    throw new Error(`Plan slug already exists in this scope: ${plan.slug}`);
+  }
+
   if (input.name !== undefined) {
     sets.push("name = ?");
     params.push(input.name);
   }
   if (input.slug !== undefined) {
     const slug = normalizePlanSlug(input.slug);
-    if (planSlugExists(slug, plan.project_id, d, id)) {
+    if (planSlugExists(slug, projectId, d, id)) {
       throw new Error(`Plan slug already exists in this scope: ${slug}`);
     }
     sets.push("slug = ?");
@@ -156,6 +193,14 @@ export function updatePlan(
   if (input.status !== undefined) {
     sets.push("status = ?");
     params.push(input.status);
+  }
+  if (input.project_id !== undefined) {
+    sets.push("project_id = ?");
+    params.push(input.project_id);
+  }
+  if (input.related_project_ids !== undefined || input.project_id !== undefined) {
+    sets.push("related_project_ids = ?");
+    params.push(JSON.stringify(normalizeRelatedProjectIds(input.related_project_ids ?? plan.related_project_ids, projectId)));
   }
   if (input.task_list_id !== undefined) {
     sets.push("task_list_id = ?");

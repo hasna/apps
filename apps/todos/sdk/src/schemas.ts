@@ -148,6 +148,8 @@ export const todosTools = [
         name: { type: "string" },
         description: { type: "string" },
         project_id: { type: "string" },
+        related_project_ids: { type: "array", items: { type: "string" } },
+        task_list_id: { type: "string" },
         status: { type: "string", enum: ["active", "completed", "archived"] },
       },
       required: ["name"],

@@ -271,6 +271,7 @@ describe("/v1 plan cloud parity", () => {
       { title: "Title", name: "Different" },
       { name: "Bad status", status: "done" },
       { name: "Bad slug", slug: "---" },
+      { name: "Bad related projects", related_project_ids: [""] },
       { name: "Unknown", extra: true },
     ]) {
       expect((await request("/v1/plans", "POST", body))?.status).toBe(400);
@@ -287,9 +288,24 @@ describe("/v1 plan cloud parity", () => {
     expect(completed?.status).toBe(200);
     expect(await completed!.json()).toMatchObject({ plan: { id: createdPlan.id, status: "completed" } });
 
-    for (const patch of [{}, { status: "done" }, { name: "" }, { slug: "---" }, { description: 42 }, { project_id: "unsafe" }]) {
+    for (const patch of [{}, { status: "done" }, { name: "" }, { slug: "---" }, { description: 42 }, { project_id: "" }, { related_project_ids: [42] }]) {
       expect((await request(`/v1/plans/${createdPlan.id}`, "PATCH", patch))?.status).toBe(400);
     }
+    const owner = await store.projects.create({ name: "Plan Owner", path: "/tmp/plan-owner" });
+    const related = await store.projects.create({ name: "Plan Related", path: "/tmp/plan-related" });
+    const list = await store.taskLists.create({ name: "Plan Work", project_id: owner.id });
+    const scoped = await request(`/v1/plans/${createdPlan.id}`, "PATCH", {
+      project_id: owner.id,
+      related_project_ids: [related.id],
+      task_list_id: list.id,
+    });
+    expect(await scoped!.json()).toMatchObject({
+      plan: { project_id: owner.id, related_project_ids: [related.id], task_list_id: list.id },
+    });
+    const ownerTask = await store.tasks.create({ title: "Owner task", project_id: owner.id, plan_id: createdPlan.id });
+    await store.tasks.create({ title: "Related task", project_id: related.id, plan_id: createdPlan.id });
+    const filteredTasks = await request(`/v1/tasks?plan_id=${createdPlan.id}&project_id=${owner.id}`);
+    expect(await filteredTasks!.json()).toMatchObject({ tasks: [{ id: ownerTask.id }], count: 1 });
     const other = await request("/v1/plans", "POST", { name: "Other plan", slug: "other-plan" });
     const otherPlan = (await other!.json() as { plan: { id: string } }).plan;
     const duplicatePatch = await request(`/v1/plans/${otherPlan.id}`, "PATCH", { slug: "codila cli control" });

@@ -1674,4 +1674,10 @@ export const MIGRATIONS = [
   COMMIT;
   PRAGMA foreign_keys = ON;
   `,
+  // Migration 69: Explicit related-project metadata for project-scoped plans.
+  // Existing global plans stay global and gain an empty related-project list.
+  `
+  ALTER TABLE plans ADD COLUMN related_project_ids TEXT NOT NULL DEFAULT '[]';
+  INSERT OR IGNORE INTO _migrations (id) VALUES (69);
+  `,
 ];

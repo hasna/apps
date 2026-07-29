@@ -2,7 +2,7 @@
 // Regenerate: bun run scripts/generate-sdk.ts
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Todos V1 API 0.11.96
+// Source: Todos V1 API 0.13.2
 
 export interface Task { "id"?: string; "title"?: string; "description"?: string; "status"?: string; "priority"?: string; "project_id"?: string | null; "assigned_to"?: string | null; "agent_id"?: string | null; "tags"?: Array<string>; "version"?: number; "created_at"?: string; "updated_at"?: string }
 
@@ -12,7 +12,7 @@ export interface TaskList { "id"?: string; "project_id"?: string | null; "slug"?
 
 export interface TaskComment { "id": string; "task_id": string; "agent_id": string | null; "session_id": string | null; "content": string; "type": "comment" | "progress" | "note"; "progress_pct": number | null; "created_at": string }
 
-export interface Plan { "id": string; "slug": string | null; "project_id"?: string | null; "task_list_id"?: string | null; "agent_id"?: string | null; "name": string; "description"?: string | null; "status": "active" | "completed" | "archived"; "created_at": string; "updated_at": string }
+export interface Plan { "id": string; "slug": string | null; "project_id"?: string | null; "related_project_ids"?: Array<string>; "task_list_id"?: string | null; "agent_id"?: string | null; "name": string; "description"?: string | null; "status": "active" | "completed" | "archived"; "created_at": string; "updated_at": string }
 
 export interface Template { "id": string; "name": string; "title_pattern": string; "description"?: string | null; "priority": "low" | "medium" | "high" | "critical"; "tags": Array<string>; "variables": Array<{ "name"?: string; "required"?: boolean; "default"?: string; "description"?: string }>; "version": number; "project_id"?: string | null; "plan_id"?: string | null; "metadata": Record<string, unknown>; "created_at": string; "tasks"?: Array<TemplateTask> }
 
@@ -42,9 +42,9 @@ export interface UpdateTaskListInput { "slug"?: string; "name"?: string; "descri
 
 export interface CreateTaskCommentInput { "content": string; "agent_id"?: string; "session_id"?: string; "type"?: "comment" | "progress" | "note"; "progress_pct"?: number }
 
-export interface CreatePlanInput { "name": string; "slug"?: string; "description"?: string; "project_id"?: string; "task_list_id"?: string; "agent_id"?: string; "status"?: "active" | "completed" | "archived" }
+export interface CreatePlanInput { "name": string; "slug"?: string; "description"?: string; "project_id"?: string | null; "related_project_ids"?: Array<string>; "task_list_id"?: string | null; "agent_id"?: string | null; "status"?: "active" | "completed" | "archived" }
 
-export interface UpdatePlanInput { "name"?: string; "slug"?: string; "description"?: string; "task_list_id"?: string; "agent_id"?: string; "status"?: "active" | "completed" | "archived" }
+export interface UpdatePlanInput { "name"?: string; "slug"?: string; "description"?: string; "project_id"?: string | null; "related_project_ids"?: Array<string>; "task_list_id"?: string | null; "agent_id"?: string | null; "status"?: "active" | "completed" | "archived" }
 
 export interface CreateTemplateInput { "name": string; "title_pattern": string; "description"?: string | null; "priority"?: "low" | "medium" | "high" | "critical"; "tags"?: Array<string>; "variables"?: Array<TemplateVariable>; "project_id"?: string | null; "plan_id"?: string | null; "metadata"?: Record<string, unknown>; "tasks"?: Array<CreateTemplateTaskInput> }
 

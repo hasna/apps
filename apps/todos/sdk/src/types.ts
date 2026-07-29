@@ -40,6 +40,7 @@ export interface Project {
 export interface Plan {
   id: string;
   project_id: string | null;
+  related_project_ids: string[];
   task_list_id: string | null;
   agent_id: string | null;
   name: string;

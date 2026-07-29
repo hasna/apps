@@ -360,6 +360,8 @@ export function registerPlanTemplateCommands(program: Command) {
           console.log(`  ${chalk.dim("Status:")}   ${chalk.cyan(plan.status)}`);
           if (plan.description) console.log(`  ${chalk.dim("Desc:")}     ${plan.description}`);
           if (plan.project_id) console.log(`  ${chalk.dim("Project:")}  ${plan.project_id}`);
+          if (plan.related_project_ids.length) console.log(`  ${chalk.dim("Related:")}  ${plan.related_project_ids.join(", ")}`);
+          if (plan.task_list_id) console.log(`  ${chalk.dim("Task List:")} ${plan.task_list_id}`);
           console.log(`  ${chalk.dim("Created:")}  ${plan.created_at}`);
           if (tasks.length > 0) {
             console.log(chalk.bold(`\n  Tasks (${tasks.length}):`));
@@ -402,6 +404,8 @@ export function registerPlanTemplateCommands(program: Command) {
         console.log(`  ${chalk.dim("Status:")}   ${chalk.cyan(plan.status)}`);
         if (plan.description) console.log(`  ${chalk.dim("Desc:")}     ${plan.description}`);
         if (plan.project_id) console.log(`  ${chalk.dim("Project:")}  ${plan.project_id}`);
+        if (plan.related_project_ids.length) console.log(`  ${chalk.dim("Related:")}  ${plan.related_project_ids.join(", ")}`);
+        if (plan.task_list_id) console.log(`  ${chalk.dim("Task List:")} ${plan.task_list_id}`);
         if (artifact) console.log(`  ${chalk.dim("Artifact:")} ${artifact.path}`);
         console.log(`  ${chalk.dim("Created:")}  ${plan.created_at}`);
 
@@ -475,7 +479,10 @@ export function registerPlanTemplateCommands(program: Command) {
       for (const p of plans) {
         const desc = p.description ? chalk.dim(` - ${p.description}`) : "";
         const slug = p.slug ? chalk.dim(` ${p.slug}`) : "";
-        console.log(`${chalk.dim(p.id.slice(0, 8))}${slug} ${chalk.bold(p.name)} ${chalk.cyan(`[${p.status}]`)}${desc}`);
+        const owner = p.project_id ? ` owner:${p.project_id.slice(0, 8)}` : " owner:global";
+        const related = p.related_project_ids.length ? ` related:${p.related_project_ids.length}` : "";
+        const taskList = p.task_list_id ? ` task-list:${p.task_list_id.slice(0, 8)}` : "";
+        console.log(`${chalk.dim(p.id.slice(0, 8))}${slug} ${chalk.bold(p.name)} ${chalk.cyan(`[${p.status}]`)}${chalk.dim(owner + related + taskList)}${desc}`);
       }
     });
 

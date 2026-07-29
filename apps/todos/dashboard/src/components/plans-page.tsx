@@ -59,6 +59,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 interface Plan {
   id: string;
   project_id: string | null;
+  related_project_ids: string[];
   task_list_id: string | null;
   agent_id: string | null;
   name: string;
@@ -194,6 +195,8 @@ function PlanFormDialog({
   const [description, setDescription] = React.useState("");
   const [status, setStatus] = React.useState<string>("active");
   const [projectId, setProjectId] = React.useState<string>("none");
+  const [relatedProjectIds, setRelatedProjectIds] = React.useState<string[]>([]);
+  const [taskListId, setTaskListId] = React.useState("");
   const [agentId, setAgentId] = React.useState<string>("none");
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -206,12 +209,16 @@ function PlanFormDialog({
       setDescription(editPlan.description || "");
       setStatus(editPlan.status);
       setProjectId(editPlan.project_id || "none");
+      setRelatedProjectIds(editPlan.related_project_ids || []);
+      setTaskListId(editPlan.task_list_id || "");
       setAgentId(editPlan.agent_id || "none");
     } else {
       setName("");
       setDescription("");
       setStatus("active");
       setProjectId("none");
+      setRelatedProjectIds([]);
+      setTaskListId("");
       setAgentId("none");
     }
     setError(null);
@@ -228,8 +235,10 @@ function PlanFormDialog({
         status,
       };
       if (description.trim()) body.description = description.trim();
-      if (projectId !== "none") body.project_id = projectId;
-      if (agentId !== "none") body.agent_id = agentId;
+      body.project_id = projectId === "none" ? null : projectId;
+      body.related_project_ids = relatedProjectIds.filter((id) => id !== projectId);
+      body.task_list_id = taskListId.trim() || null;
+      body.agent_id = agentId === "none" ? null : agentId;
 
       const url = isEdit ? `/api/plans/${editPlan.id}` : "/api/plans";
       const method = isEdit ? "PATCH" : "POST";
@@ -300,7 +309,13 @@ function PlanFormDialog({
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Project</label>
-              <Select value={projectId} onValueChange={setProjectId}>
+              <Select
+                value={projectId}
+                onValueChange={(value) => {
+                  setProjectId(value);
+                  setRelatedProjectIds((ids) => ids.filter((id) => id !== value));
+                }}
+              >
                 <SelectTrigger className="h-9">
                   <SelectValue placeholder="No project" />
                 </SelectTrigger>
@@ -314,6 +329,35 @@ function PlanFormDialog({
                 </SelectContent>
               </Select>
             </div>
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">Related Projects</label>
+            <div className="grid grid-cols-2 gap-2 rounded-md border border-input p-3">
+              {projects.filter((project) => project.id !== projectId).map((project) => (
+                <label key={project.id} className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={relatedProjectIds.includes(project.id)}
+                    onChange={(event) => setRelatedProjectIds((ids) => event.target.checked
+                      ? [...ids, project.id]
+                      : ids.filter((id) => id !== project.id))}
+                  />
+                  {project.name}
+                </label>
+              ))}
+              {projects.filter((project) => project.id !== projectId).length === 0 && (
+                <span className="text-xs text-muted-foreground">No other projects.</span>
+              )}
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">Task List ID</label>
+            <Input
+              value={taskListId}
+              onChange={(event) => setTaskListId(event.target.value)}
+              placeholder="Optional task-list UUID"
+              className="h-9 font-mono"
+            />
           </div>
           <div className="space-y-1.5">
             <label className="text-sm font-medium">Owner (Agent)</label>
@@ -456,6 +500,14 @@ function PlanDetailDialog({
               <span className="text-muted-foreground">Task List</span>
               <p className="font-medium">
                 {plan.task_list_id || "\u2014"}
+              </p>
+            </div>
+            <div>
+              <span className="text-muted-foreground">Related Projects</span>
+              <p className="font-medium">
+                {plan.related_project_ids?.length
+                  ? plan.related_project_ids.map((id) => projects.find((p) => p.id === id)?.name || id).join(", ")
+                  : "\u2014"}
               </p>
             </div>
             <div>
@@ -611,6 +663,7 @@ function makeColumns(): ColumnDef<Plan>[] {
         return (
           <span className="text-sm">
             {project?.name || projectId.slice(0, 8)}
+            {row.original.related_project_ids?.length ? ` +${row.original.related_project_ids.length}` : ""}
           </span>
         );
       },

@@ -11,7 +11,8 @@ import {
   deletePlan,
 } from "./plans.js";
 import { createProject } from "./projects.js";
-import { createTask } from "./tasks.js";
+import { createTask, listTasks } from "./tasks.js";
+import { createTaskList } from "./task-lists.js";
 import { runMigrations } from "./schema.js";
 import { PlanNotFoundError } from "../types/index.js";
 
@@ -37,6 +38,7 @@ describe("createPlan", () => {
     expect(plan.description).toBeNull();
     expect(plan.status).toBe("active");
     expect(plan.project_id).toBeNull();
+    expect(plan.related_project_ids).toEqual([]);
     expect(plan.created_at).toBeTruthy();
     expect(plan.updated_at).toBeTruthy();
   });
@@ -63,6 +65,24 @@ describe("createPlan", () => {
     const project = createProject({ name: "Proj", path: "/tmp/p" }, db);
     const plan = createPlan({ name: "Plan A", project_id: project.id }, db);
     expect(plan.project_id).toBe(project.id);
+  });
+
+  it("should store explicit owner, related projects, and task-list linkage", () => {
+    const owner = createProject({ name: "Owner", path: "/tmp/owner" }, db);
+    const related = createProject({ name: "Related", path: "/tmp/related" }, db);
+    const taskList = createTaskList({ name: "Owner Work", project_id: owner.id }, db);
+    const plan = createPlan({
+      name: "Cross-project rollout",
+      project_id: owner.id,
+      related_project_ids: [related.id, owner.id, related.id],
+      task_list_id: taskList.id,
+    }, db);
+
+    expect(plan).toMatchObject({
+      project_id: owner.id,
+      related_project_ids: [related.id],
+      task_list_id: taskList.id,
+    });
   });
 
   it("should create plans with explicit readable slugs", () => {
@@ -208,6 +228,41 @@ describe("updatePlan", () => {
     expect(updated.name).toBe("Updated");
     expect(updated.description).toBe("A description");
     expect(updated.status).toBe("completed");
+  });
+
+  it("should migrate a global plan to explicit project metadata and allow clearing it", () => {
+    const owner = createProject({ name: "Migration Owner", path: "/tmp/migration-owner" }, db);
+    const related = createProject({ name: "Migration Related", path: "/tmp/migration-related" }, db);
+    const taskList = createTaskList({ name: "Migration Work", project_id: owner.id }, db);
+    const plan = createPlan({ name: "Legacy global rollout" }, db);
+
+    const migrated = updatePlan(plan.id, {
+      project_id: owner.id,
+      related_project_ids: [related.id],
+      task_list_id: taskList.id,
+    }, db);
+    expect(migrated).toMatchObject({
+      project_id: owner.id,
+      related_project_ids: [related.id],
+      task_list_id: taskList.id,
+    });
+
+    const cleared = updatePlan(plan.id, {
+      project_id: null,
+      related_project_ids: [],
+      task_list_id: null,
+    }, db);
+    expect(cleared).toMatchObject({ project_id: null, related_project_ids: [], task_list_id: null });
+  });
+
+  it("filters a multi-project plan's tasks by plan and project together", () => {
+    const first = createProject({ name: "First Task Project", path: "/tmp/first-task-project" }, db);
+    const second = createProject({ name: "Second Task Project", path: "/tmp/second-task-project" }, db);
+    const plan = createPlan({ name: "Shared Plan", project_id: first.id, related_project_ids: [second.id] }, db);
+    const firstTask = createTask({ title: "First task", project_id: first.id, plan_id: plan.id }, db);
+    createTask({ title: "Second task", project_id: second.id, plan_id: plan.id }, db);
+
+    expect(listTasks({ plan_id: plan.id, project_id: first.id }, db).map((task) => task.id)).toEqual([firstTask.id]);
   });
 
   it("should update updated_at timestamp", () => {

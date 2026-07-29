@@ -120,6 +120,7 @@ export function ensureSchema(db: Database): void {
     CREATE TABLE plans (
       id TEXT PRIMARY KEY, slug TEXT,
       project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+      related_project_ids TEXT NOT NULL DEFAULT '[]',
       task_list_id TEXT, agent_id TEXT,
       name TEXT NOT NULL, description TEXT,
       status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'completed', 'archived')),
@@ -788,6 +789,7 @@ export function ensureSchema(db: Database): void {
 
   // Plans
   ensureColumn("plans", "slug", "TEXT");
+  ensureColumn("plans", "related_project_ids", "TEXT NOT NULL DEFAULT '[]'");
   ensureColumn("plans", "task_list_id", "TEXT");
   ensureColumn("plans", "agent_id", "TEXT");
   backfillPlanSlugs(db);

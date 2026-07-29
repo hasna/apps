@@ -170,8 +170,12 @@ export function createPostgresTodosStorageAdapter(
     },
     plans: {
       create: (input, context) => createPlan(input, store, context),
-      get: (id) => store.get<Plan>("plans", id),
+      get: async (id) => {
+        const plan = await store.get<Plan>("plans", id);
+        return plan ? normalizeStoredPlan(plan) : null;
+      },
       list: async (projectId) => (await store.list<Plan>("plans"))
+        .map(normalizeStoredPlan)
         .filter((plan) => projectId === undefined || plan.project_id === projectId)
         .sort((a, b) => a.name.localeCompare(b.name)),
       update: (id, input) => updatePlan(id, input, store),
@@ -1535,7 +1539,8 @@ async function updateProject(
 
 async function createPlan(input: CreatePlanInput, store: PostgresJsonRecordStore, context?: TodosStorageContext): Promise<Plan> {
   const timestamp = new Date().toISOString();
-  const projectId = input.project_id ?? context?.projectId ?? null;
+  const projectId = input.project_id !== undefined ? input.project_id : context?.projectId ?? null;
+  const relatedProjectIds = normalizePlanRelatedProjectIds(input.related_project_ids, projectId);
   const slug = await resolvePostgresPlanSlug({
     name: input.name,
     slug: input.slug,
@@ -1546,6 +1551,7 @@ async function createPlan(input: CreatePlanInput, store: PostgresJsonRecordStore
     id: randomUUID(),
     slug,
     project_id: projectId,
+    related_project_ids: relatedProjectIds,
     task_list_id: input.task_list_id ?? context?.taskListId ?? null,
     agent_id: input.agent_id ?? context?.agentId ?? null,
     name: input.name,
@@ -1559,18 +1565,43 @@ async function createPlan(input: CreatePlanInput, store: PostgresJsonRecordStore
 }
 
 async function updatePlan(id: string, input: UpdatePlanInput, store: PostgresJsonRecordStore): Promise<Plan> {
-  const plan = await requireRecord<Plan>("plans", id, store);
+  const plan = normalizeStoredPlan(await requireRecord<Plan>("plans", id, store));
   const patch = definedPatch(input);
+  const projectId = input.project_id !== undefined ? input.project_id : plan.project_id;
   if (input.slug !== undefined) {
     patch.slug = await resolvePostgresPlanSlug({
       name: plan.name,
       slug: input.slug,
-      projectId: plan.project_id,
+      projectId,
       store,
       excludeId: id,
     });
   }
+  if (input.project_id !== undefined && input.slug === undefined && plan.slug) {
+    const duplicate = (await store.list<Plan>("plans")).find((candidate) =>
+      candidate.id !== id && candidate.project_id === projectId && candidate.slug === plan.slug
+    );
+    if (duplicate) throw new Error(`Plan slug already exists in this scope: ${plan.slug}`);
+  }
+  if (input.related_project_ids !== undefined || input.project_id !== undefined) {
+    patch.related_project_ids = normalizePlanRelatedProjectIds(
+      input.related_project_ids ?? plan.related_project_ids,
+      projectId,
+    );
+  }
   return store.upsert("plans", { ...plan, ...patch, updated_at: new Date().toISOString() });
+}
+
+function normalizePlanRelatedProjectIds(value: readonly string[] | undefined, projectId: string | null): string[] {
+  if (!value) return [];
+  return [...new Set(value.map((id) => id.trim()).filter((id) => id && id !== projectId))];
+}
+
+function normalizeStoredPlan(plan: Plan): Plan {
+  return {
+    ...plan,
+    related_project_ids: normalizePlanRelatedProjectIds(plan.related_project_ids, plan.project_id),
+  };
 }
 
 async function registerAgent(

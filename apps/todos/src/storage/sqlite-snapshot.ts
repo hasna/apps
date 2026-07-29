@@ -37,7 +37,7 @@ const TASK_LIST_COLUMNS = [
 ] as const;
 
 const PLAN_COLUMNS = [
-  "id", "project_id", "task_list_id", "agent_id", "name", "description", "status",
+  "id", "slug", "project_id", "related_project_ids", "task_list_id", "agent_id", "name", "description", "status",
   "created_at", "updated_at", "machine_id", "synced_at",
 ] as const;
 
@@ -76,7 +76,7 @@ const AUDIT_COLUMNS = [
   "created_at", "machine_id",
 ] as const;
 
-const JSON_COLUMNS = new Set(["tags", "metadata", "permissions", "capabilities", "variables", "depends_on_positions"]);
+const JSON_COLUMNS = new Set(["tags", "metadata", "permissions", "capabilities", "variables", "depends_on_positions", "related_project_ids"]);
 const BOOLEAN_COLUMNS = new Set(["requires_approval"]);
 
 export function exportSqliteTodosStorageSnapshot(db?: Database): TodosStorageSnapshot {
