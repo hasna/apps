@@ -2,8 +2,9 @@ import SwiftUI
 import AVFoundation
 import RecordingsLib
 
-/// Detail pane for a selected recording: the full transcript on the white canvas, a slim
-/// action toolbar (copy / paste / play / delete), and a metadata strip. No boxed panels.
+/// Detail pane for a selected recording. The transcript is the content and gets the room:
+/// a quiet date header with a slim action row (play / copy / paste / delete), then the
+/// transcript at a readable measure, and one muted metadata line at the foot. No boxes.
 struct RecordingDetailView: View {
     @ObservedObject var store: RecordingsStore
     @State private var player: AVAudioPlayer?
@@ -15,7 +16,9 @@ struct RecordingDetailView: View {
             detail(rec)
         } else {
             VStack(spacing: 10) {
-                Image(systemName: "waveform.and.mic").font(.system(size: 40)).foregroundStyle(.quaternary)
+                Image(systemName: "waveform")
+                    .font(.system(size: 32)).foregroundStyle(.quaternary)
+                    .accessibilityHidden(true)
                 Text("Select a recording").foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -26,32 +29,39 @@ struct RecordingDetailView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
                 Text(rec.createdDate.map { dateLabel($0) } ?? "Recording")
-                    .font(.system(.title2, design: .rounded).weight(.semibold))
+                    .font(.system(.title3, design: .rounded).weight(.semibold))
                 Spacer()
                 toolbar(rec)
             }
-            .padding(.horizontal, 18).padding(.top, 16).padding(.bottom, 8)
+            .padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 10)
             Divider().opacity(0.4)
 
             ScrollView {
-                Text(rec.displayText.isEmpty ? "No transcript" : rec.displayText)
-                    .font(.system(.title3, design: .rounded))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 18).padding(.top, 14)
+                VStack(alignment: .leading, spacing: 24) {
+                    Text(rec.displayText.isEmpty ? "No transcript" : rec.displayText)
+                        .font(.system(.title3, design: .rounded))
+                        .lineSpacing(4)
+                        .textSelection(.enabled)
+                        .foregroundStyle(rec.displayText.isEmpty ? .secondary : .primary)
 
-                if rec.isEnhanced, !rec.rawText.isEmpty, rec.rawText != rec.displayText {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("RAW TRANSCRIPT").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-                        Text(rec.rawText).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                    if rec.isEnhanced, !rec.rawText.isEmpty, rec.rawText != rec.displayText {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Raw transcript")
+                                .font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                            Text(rec.rawText)
+                                .font(.callout).foregroundStyle(.secondary)
+                                .lineSpacing(3)
+                                .textSelection(.enabled)
+                        }
                     }
-                    .padding(.horizontal, 18).padding(.top, 18)
                 }
+                .frame(maxWidth: 680, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 20).padding(.vertical, 16)
             }
 
-            Divider().opacity(0.4)
-            metadata(rec).padding(.horizontal, 18).padding(.vertical, 10)
+            metadata(rec)
+                .padding(.horizontal, 20).padding(.vertical, 10)
         }
         .onChange(of: store.selection) { _, _ in stopPlayback() }
         .onDisappear { stopPlayback() }
@@ -80,24 +90,22 @@ struct RecordingDetailView: View {
 
     private func iconButton(_ name: String, help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) { Image(systemName: name).frame(width: 24, height: 24) }
-            .buttonStyle(.plain).help(help)
+            .buttonStyle(.plain)
+            .help(help)
+            .accessibilityLabel(help)
     }
 
     private func metadata(_ rec: Recording) -> some View {
-        HStack(spacing: 14) {
-            if rec.durationMs > 0 { metaItem("clock", rec.durationLabel) }
-            if let model = rec.modelUsed { metaItem("cpu", model) }
-            if let lang = rec.language, !lang.isEmpty { metaItem("globe", lang) }
-            if let name = store.projectName(rec.projectId) { metaItem("folder", name) }
-            if let machine = rec.machineId, !machine.isEmpty { metaItem("desktopcomputer", machine) }
-            if !rec.tags.isEmpty { metaItem("number", rec.tags.joined(separator: ", ")) }
-            Spacer()
-        }
-        .font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
-    }
-
-    private func metaItem(_ icon: String, _ text: String) -> some View {
-        Label(text, systemImage: icon).labelStyle(.titleAndIcon)
+        var parts: [String] = []
+        if rec.durationMs > 0 { parts.append(rec.durationLabel) }
+        if let model = rec.modelUsed { parts.append(model) }
+        if let lang = rec.language, !lang.isEmpty { parts.append(lang) }
+        if let machine = rec.machineId, !machine.isEmpty { parts.append(machine) }
+        if !rec.tags.isEmpty { parts.append(rec.tags.joined(separator: ", ")) }
+        return Text(parts.joined(separator: "  ·  "))
+            .font(.caption).foregroundStyle(.tertiary).lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel("Recording details: \(parts.joined(separator: ", "))")
     }
 
     private func dateLabel(_ date: Date) -> String {
