@@ -194,6 +194,13 @@ export interface WorkspaceIntegrations {
   github_repo?: string;
   github_url?: string;
   todos_project_id?: string;
+  todos_task_list_id?: string;
+  brief_id?: string;
+  brief_path?: string;
+  /** Opaque project/container id owned by the external Canvases product. */
+  canvases_project_id?: string;
+  /** Opaque default canvas id owned by the external Canvases product. */
+  canvases_default_canvas_id?: string;
   mementos_project_id?: string;
   conversations_space?: string;
   conversations_channel?: string;

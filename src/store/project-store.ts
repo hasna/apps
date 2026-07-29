@@ -70,31 +70,24 @@ import {
 } from "../http/client.js";
 import { resolveRegisteredProjectTargetOrThrow, type ProjectResolverOptions } from "../lib/project-resolver.js";
 import {
-  createProjectCanvas as dbCreateProjectCanvas,
   createProjectDataModel as dbCreateProjectDataModel,
   createProjectDataRecord as dbCreateProjectDataRecord,
-  ensureDefaultProjectCanvas as dbEnsureDefaultProjectCanvas,
-  getProjectCanvas as dbGetProjectCanvas,
   getProjectStorePaths,
   inspectProjectStore as dbInspectProjectStore,
   inspectProjectStoreWithLoops as dbInspectProjectStoreWithLoops,
   linkProjectLoop as dbLinkProjectLoop,
-  listProjectCanvases as dbListProjectCanvases,
   listProjectDataModels as dbListProjectDataModels,
   listProjectDataRecords as dbListProjectDataRecords,
   listProjectLoopLinks as dbListProjectLoopLinks,
   listProjectLoopSummaries as dbListProjectLoopSummaries,
   PROJECT_STORE_SCHEMA_VERSION,
-  type CreateProjectCanvasInput,
   type CreateProjectDataModelInput,
   type CreateProjectDataRecordInput,
   type LinkProjectLoopInput,
-  type ProjectCanvas,
   type ProjectDataModel,
   type ProjectDataRecord,
   type ProjectLoopLink,
   type ProjectLoopSummary,
-  type ProjectStoreProject,
   type ProjectStoreSummary,
 } from "../db/project-store.js";
 import {
@@ -300,15 +293,6 @@ export interface ProjectStore {
   // empty list rather than reading a local sqlite file the cloud project does
   // not own. This keeps the runs/handoff surfaces from split-brain reads.
   listAgentRuns(filter?: AgentRunFilter): Promise<AgentRun[]>;
-
-  // ---- Per-project React Flow canvases (on-box project.db sub-resource) ----
-  // The api transport does not model the per-project store server-side: reads
-  // return empty, writes throw LocalOnlyOperationError. This is what stops the
-  // silent local-sqlite write when the project itself lives in the cloud.
-  listCanvases(project: Workspace): Promise<ProjectCanvas[]>;
-  getCanvas(project: Workspace, idOrSlug: string): Promise<ProjectCanvas | null>;
-  createCanvas(project: Workspace, input: CreateProjectCanvasInput, ctx?: MutationContext): Promise<ProjectCanvas>;
-  ensureDefaultCanvas(project: ProjectStoreProject): Promise<ProjectCanvas>;
 
   // ---- Per-project data models & records (on-box project.db sub-resource) ----
   listDataModels(project: Workspace): Promise<ProjectDataModel[]>;
@@ -580,23 +564,6 @@ class LocalProjectStore implements ProjectStore {
 
   async listAgentRuns(filter?: AgentRunFilter): Promise<AgentRun[]> {
     return dbListAgentRuns(filter ?? {});
-  }
-
-  // ---- Canvases ----
-  async listCanvases(project: Workspace): Promise<ProjectCanvas[]> {
-    return dbListProjectCanvases(project);
-  }
-
-  async getCanvas(project: Workspace, idOrSlug: string): Promise<ProjectCanvas | null> {
-    return dbGetProjectCanvas(project, idOrSlug);
-  }
-
-  async createCanvas(project: Workspace, input: CreateProjectCanvasInput, ctx?: MutationContext): Promise<ProjectCanvas> {
-    return withLock(project.id, ctx, "project canvas create", () => dbCreateProjectCanvas(project, input));
-  }
-
-  async ensureDefaultCanvas(project: ProjectStoreProject): Promise<ProjectCanvas> {
-    return dbEnsureDefaultProjectCanvas(project);
   }
 
   // ---- Data models & records ----
@@ -915,27 +882,11 @@ class ApiProjectStore implements ProjectStore {
     return [];
   }
 
-  // The per-project React Flow store, custom data models/records, OpenLoops
-  // links and budgets/spend are on-box sub-resources under
+  // Custom data models/records, OpenLoops links and budgets/spend are on-box
+  // sub-resources under
   // $HASNA_PROJECTS_HOME/data/<id>; the projects API server does not model
   // them. Reads return empty and writes throw rather than silently reading or
   // writing a local sqlite file that does not hold the cloud project's data.
-  async listCanvases(): Promise<ProjectCanvas[]> {
-    return [];
-  }
-
-  async getCanvas(): Promise<ProjectCanvas | null> {
-    return null;
-  }
-
-  async createCanvas(): Promise<ProjectCanvas> {
-    throw new LocalOnlyOperationError("create project canvas");
-  }
-
-  async ensureDefaultCanvas(): Promise<ProjectCanvas> {
-    throw new LocalOnlyOperationError("ensure default project canvas");
-  }
-
   async listDataModels(): Promise<ProjectDataModel[]> {
     return [];
   }
@@ -1017,7 +968,18 @@ function emptyAppStoreSummary(project: Workspace): ProjectStoreSummary {
     paths,
     exists: false,
     schema_version: PROJECT_STORE_SCHEMA_VERSION,
-    counts: { canvases: 0, data_models: 0, data_records: 0, loop_links: 0 },
+    counts: { data_models: 0, data_records: 0, loop_links: 0 },
+    legacy_canvas_storage: {
+      state: "absent",
+      read_only: true,
+      table: "project_canvases",
+      table_exists: false,
+      record_count: 0,
+      db_path: paths.db_path,
+      files_path: `${paths.project_dir}/canvases`,
+      files_path_exists: false,
+      export_schema: "hasna.projects_legacy_canvas_export.v1",
+    },
   };
 }
 

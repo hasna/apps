@@ -48,7 +48,6 @@ _projects_completion() {
   local commands="${commandList}"
   local oss_commands="matrix"
   local store_commands="inspect ensure migrate"
-  local canvas_commands="create list show upsert compose"
   local loop_commands="link list"
   local label_commands="list add remove rm"
   local location_commands="add list"
@@ -74,10 +73,6 @@ _projects_completion() {
       ;;
     store)
       COMPREPLY=( $(compgen -W "$store_commands" -- "$cur") )
-      return 0
-      ;;
-    canvases)
-      COMPREPLY=( $(compgen -W "$canvas_commands" -- "$cur") )
       return 0
       ;;
     loops)
