@@ -3,7 +3,7 @@ import type { Session, SessionOptions, SessionStatus } from "../types/index.js";
 import { BrowserEngine, UseCase } from "../types/index.js";
 import { SessionNotFoundError, BrowserError } from "../types/index.js";
 import { createSession as dbCreateSession, getSession as dbGetSession, listSessions as dbListSessions, closeSession as dbCloseSession, updateSessionStatus, getSessionByName as dbGetSessionByName, renameSession as dbRenameSession, getActiveSessionForAgent as dbGetActiveSessionForAgent, getDefaultActiveSession as dbGetDefaultActiveSession, countActiveSessions as dbCountActiveSessions } from "../db/sessions.js";
-import { launchPlaywright, getPage as getPlaywrightPage, closeBrowser as closePlaywrightBrowser, BrowserPool } from "../engines/playwright.js";
+import { getPage as getPlaywrightPage, BrowserPool } from "../engines/playwright.js";
 import { connectLightpanda } from "../engines/lightpanda.js";
 import { BunWebViewSession, isBunWebViewAvailable } from "../engines/bun-webview.js";
 import { resolveEnginePreference, selectEngine } from "../engines/selector.js";
@@ -245,7 +245,7 @@ export async function createSession(opts: SessionOptions = {}): Promise<CreateSe
     if (!isBunWebViewAvailable()) {
       console.warn("[browser] Bun.WebView requested but not available — falling back to playwright. Run: bun upgrade --canary");
       actualEngine = "playwright";
-      browser = await launchPlaywright({ headless: opts.headless ?? true, viewport: opts.viewport, userAgent: opts.userAgent });
+      browser = await pool.acquire(opts.headless ?? true);
       page = await getPlaywrightPage(browser, { viewport: opts.viewport, userAgent: opts.userAgent });
     } else {
       // Create the WebView and verify it actually works (on Linux it needs Chrome CDP)
@@ -268,7 +268,7 @@ export async function createSession(opts: SessionOptions = {}): Promise<CreateSe
       if (!bunWorks) {
         console.warn("[browser] Bun.WebView exists but Chrome not available — falling back to playwright");
         actualEngine = "playwright";
-        browser = await launchPlaywright({ headless: opts.headless ?? true, viewport: opts.viewport, userAgent: opts.userAgent });
+        browser = await pool.acquire(opts.headless ?? true);
         page = await getPlaywrightPage(browser, { viewport: opts.viewport, userAgent: opts.userAgent });
       } else {
         actualEngine = "bun";

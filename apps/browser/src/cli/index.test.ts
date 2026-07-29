@@ -29,6 +29,7 @@ async function runCli(
 async function runCliWithTimeout(
   args: string[],
   timeoutMs: number,
+  env: Record<string, string | undefined> = {},
 ): Promise<{ stdout: string; stderr: string; code: number; timedOut: boolean }> {
   const proc = Bun.spawn(
     ["bun", "run", join(import.meta.dir, "index.tsx"), ...args],
@@ -40,6 +41,7 @@ async function runCliWithTimeout(
         BROWSER_DB_PATH: process.env["BROWSER_DB_PATH"],
         BROWSER_DATA_DIR: process.env["BROWSER_DATA_DIR"],
         HASNA_EVENTS_DIR: join(tmpDir, "events"),
+        ...env,
       },
     }
   );
@@ -79,6 +81,25 @@ describe("CLI — one-shot browse commands", () => {
     const parsed = JSON.parse(stdout);
     expect(parsed.title).toBe("CLI check");
     expect(parsed.links_count).toBe(1);
+    expect(parsed.screenshot).toBeString();
+  }, 10_000);
+
+  it("check --json closes Playwright after Bun.WebView fallback and exits", async () => {
+    const { stdout, code, timedOut } = await runCliWithTimeout(
+      [
+        "check",
+        "data:text/html,<title>Bun fallback</title><h1>Hello</h1>",
+        "--engine",
+        "bun",
+        "--json",
+      ],
+      5_000,
+      { BROWSER_ENABLE_BUN_WEBVIEW: "1" },
+    );
+    expect(timedOut).toBe(false);
+    expect(code).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.title).toBe("Bun fallback");
     expect(parsed.screenshot).toBeString();
   }, 10_000);
 
