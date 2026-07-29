@@ -8,6 +8,7 @@ import { previewText, windowItems } from "../../lib/compact-output.js";
 import { assertNoSensitiveContent } from "../../lib/content-safety.js";
 import { getCliWindow, pageFromQuery, printCompactFooter, queryLimitFor } from "../compact.js";
 import { printMessageEntry } from "../message-output.js";
+import { emitCliError } from "../cli-error.js";
 
 /**
  * Merge a channel class into existing channel metadata at `metadata.channel_schema.class`,
@@ -367,8 +368,12 @@ export function registerChannelCommands(program: Command): void {
         console.error(chalk.red("Channel name cannot be empty."));
         process.exit(1);
       }
+      const store = getStore();
+      if (!await store.getChannel(channelArg)) {
+        emitCliError(`Channel #${channelArg} not found.`, opts);
+      }
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
-      const messages = await await getStore().readMessages({
+      const messages = await store.readMessages({
         channel: channelArg,
         since: opts.since,
         limit: opts.json ? opts.limit : queryLimitFor(window),
@@ -384,8 +389,8 @@ export function registerChannelCommands(program: Command): void {
           console.error(chalk.red("Agent identity is required."));
           process.exit(1);
         }
-        await await getStore().recordReadReceiptsBatch(page.items.map((m) => m.id), agent);
-        await getStore().markChannelNotificationsRead(agent, page.items.map((m) => m.id));
+        await store.recordReadReceiptsBatch(page.items.map((m) => m.id), agent);
+        await store.markChannelNotificationsRead(agent, page.items.map((m) => m.id));
       }
 
       if (opts.json) {
