@@ -844,7 +844,11 @@ test('web chat streams sidecar events and applies approvals through the sidecar'
       return ndjsonResponse([
         { type: 'text-delta', text: 'Reviewing the note.' },
         { type: 'tool-call', toolCallId: 'tool-1', toolName: 'trash_note', input: { id: 'chat-1' } },
-        { type: 'tool-result', toolCallId: 'tool-1', output: { requiresConfirmation: true, approval } },
+        { type: 'tool-result', toolCallId: 'tool-1', output: {
+          requiresConfirmation: true,
+          approval,
+          sources: [{ id: 'chat-1', title: 'Alpha Plan', labels: ['alpha'], machine: 'studio-mac' }],
+        } },
         { type: 'confirmation', approval },
         { type: 'finish', text: 'Reviewing the note.', pendingConfirmations: [approval] },
       ]);
@@ -854,7 +858,7 @@ test('web chat streams sidecar events and applies approvals through the sidecar'
     }
     throw new Error(`unexpected sidecar url ${url}`);
   };
-  const { windowTarget } = loadWebAppWithFakeDOM(app, {
+  const { windowTarget, document } = loadWebAppWithFakeDOM(app, {
     __AI__: { port: 4222, available: true },
     fetch: fetchStub,
     TextDecoder,
@@ -877,6 +881,16 @@ test('web chat streams sidecar events and applies approvals through the sidecar'
   assert.equal(windowTarget.PersonalNotes.chat.state().status, 'awaiting_confirmation');
   assert.ok(events.some(event => event.name === 'hasna:chat-tool-call' && event.detail.toolCall.name === 'trash_note'));
   assert.ok(events.some(event => event.name === 'hasna:chat-confirmation' && event.detail.approval.id === approval.id));
+  assert.equal(document.getElementById('chat-log').children[0].classList.contains('chat-user'), true);
+  assert.equal(document.getElementById('chat-tools').children.length, 1, 'tool activity renders in the conversation');
+  assert.equal(document.getElementById('chat-outputs').children.length, 1, 'tool activity also renders in Outputs');
+  assert.equal(document.getElementById('chat-sources').children.length, 1, 'source notes render in the Sources panel');
+  document.getElementById('chat-panel-close').click();
+  assert.equal(document.getElementById('chat-panel').hidden, true);
+  document.getElementById('chat-panel-toggle').click();
+  assert.equal(document.getElementById('chat-panel').hidden, false);
+  document.getElementById('chat-view-toggle').click();
+  assert.equal(document.getElementById('chat-stage').classList.contains('chat-wide'), true);
 
   const approved = await windowTarget.PersonalNotes.chat.approve(approval.id, true);
   assert.equal(approved.approved, true);
@@ -933,6 +947,14 @@ test('web navigation: chat is a header button, labels manage in Settings, machin
   assert.match(html, /id="slash-menu"/);
   assert.doesNotMatch(html, /id="md-toolbar"|class="toolbar"/);
   assert.match(html, /id="chat-page"/);
+  assert.match(html, /id="chat-more"/);
+  assert.match(html, /id="chat-view-toggle"/);
+  assert.match(html, /id="chat-panel-toggle"/);
+  assert.match(html, /id="chat-outputs"/);
+  assert.match(html, /id="chat-sources"/);
+  assert.match(html, /<textarea[^>]+id="chat-input"/);
+  assert.match(app, /Loaded a tool/);
+  assert.match(app, /Reading SKILL\.md/);
   // Labels MANAGEMENT page lives inside Settings; the sidebar keeps filter rows only.
   assert.match(html, /data-tab="labels"[^>]*id="labels-page-main"/);
   // Search is a Cmd+K popover, not a page or sidebar field.
