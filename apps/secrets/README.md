@@ -330,9 +330,10 @@ scan_workspace_exposures(root?, limit?, maxFileBytes?, maxFiles?, maxBytesScanne
 scan_history_exposures(root?, limit?, maxCommits?, timeoutMs?)
 ```
 
-`list_secrets` and `search_secrets` return metadata only and do not decrypt
-stored values. `get_secret` returns the raw value, so use it only when the agent
-needs to pass the secret into a tool or command.
+`list_secrets`, `search_secrets`, and `get_secret` return metadata only and do
+not decrypt stored values. `get_secret` returns a `secretRef` for a trusted
+runtime or connector broker to resolve outside model context. `get_vault_item`
+similarly returns a `vaultItemRef` and metadata without the encrypted payload.
 
 The scan tools return compact JSON with a stable schema, bounded redacted
 findings, and path/line/commit references only. They do not return raw matching
@@ -412,7 +413,8 @@ The vault database lives at `~/.hasna/secrets/vault.db`. Key material lives in
   hatches for local restorable backups.
 - CLI import refuses redacted export bundles so placeholders do not overwrite
   real secrets by accident.
-- `get` and MCP `get_secret` return raw secret values.
+- CLI `get` returns a raw value for explicit human/runtime use. MCP
+  `get_secret` and `get_vault_item` return references and metadata only.
 - Never paste secret values into commits, logs, issues, PRs, or chat messages.
 - Keep `.env`, `.env.local`, `.secrets/`, and `.connect/` out of git.
 
@@ -475,8 +477,13 @@ typed SDK. Four surfaces cover the same core:
 - **`secrets-serve`** — the HTTP API. Unauthenticated probes `GET /health`,
   `/ready`, `/version` (`{status, version, mode}`) and `GET /openapi.json`; a
   versioned `/v1` surface (secrets + vault-item CRUD, search, audit, users)
-  behind **strict API-key auth** (`@hasna/contracts`). Scopes: `secrets:read`,
-  `secrets:write`.
+  behind **strict API-key auth** (`@hasna/contracts`). `secrets:read` is
+  metadata-only; decrypted reads require `secrets:reveal`. Any of `read`,
+  `write`, and `reveal` can be limited to a dotted key prefix, for example
+  `secrets:read.openai` or `secrets:reveal.openai.prod`. `secrets:*` remains a
+  trusted vault-wide bootstrap scope. Prefixes containing characters outside
+  the scope grammar use the encoded form produced by `secretScope()` from
+  `@hasna/secrets/security`.
 - **`@hasna/secrets/sdk`** — a typed, dependency-free fetch client generated
   from the serve OpenAPI. Client `self_hosted` mode uses `SECRETS_API_URL` +
   `SECRETS_API_KEY` (never a DSN).
@@ -496,7 +503,7 @@ secrets-serve db migrate
 secrets-serve                                             # listens on $PORT (default 8080)
 
 # issue an API key (@hasna/contracts issuer), then call the SDK
-bunx @hasna/contracts issue-key --app secrets --agent my-agent --scopes 'secrets:read,secrets:write'
+bunx @hasna/contracts issue-key --app secrets --agent my-agent --scopes 'secrets:read.openai,secrets:write.openai'
 ```
 
 ```ts

@@ -200,7 +200,8 @@ Self-hosted (api mode)
 Safety
   list, search, export, and scan commands do not print secret values by default.
   export --show and export --plaintext are explicit plaintext escape hatches.
-  get and get_secret return raw secret values. Use them only when needed.
+  get returns a raw secret value for explicit CLI use. MCP get_secret returns a
+  metadata-only secretRef so values do not cross into agent model context.
   Never paste secrets into commits, logs, issues, PRs, or chat messages.
 `);
 }

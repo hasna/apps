@@ -10,6 +10,7 @@
 import { randomUUID } from "node:crypto";
 import type { TypedQueryClient } from "../generated/storage-kit/index.js";
 import { assertValidSecretPath } from "../hasna-xyz-paths.js";
+import { isSecretExpired } from "../expiry.js";
 import { decryptValue, encryptValue } from "./cloud-crypto.js";
 import type {
   SecretEntry,
@@ -152,12 +153,20 @@ export class CloudSecretsStore {
       [key, encryptValue(value), type, label ?? null, expiresAt ?? null, existing?.created_at ?? now, now],
     );
     await this.audit("set", key, actor);
-    return (await this.getSecret(key, actor))!;
+    return {
+      key,
+      value,
+      type,
+      ...(label ? { label } : {}),
+      ...(expiresAt ? { expires_at: expiresAt } : {}),
+      created_at: existing?.created_at ?? now,
+      updated_at: now,
+    };
   }
 
   async getSecret(key: string, actor: string): Promise<SecretEntry | undefined> {
     const row = await this.db.get<SecretRow>("SELECT * FROM secrets WHERE key = $1", [key]);
-    if (!row) return undefined;
+    if (!row || isSecretExpired(row.expires_at)) return undefined;
     await this.audit("get", key, actor);
     return {
       key: row.key,

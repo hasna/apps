@@ -8,6 +8,10 @@ import {
   type ExposureScanResult,
 } from "./scanner.js";
 
+// Public helper for minting namespace/secret-scoped API keys, including keys
+// whose path segments need the contracts-compatible encoded representation.
+export { secretScope, type SecretAccess } from "./server/secret-access.js";
+
 export interface SecurityTaskSuggestion {
   fingerprint: string;
   title: string;

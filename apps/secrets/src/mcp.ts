@@ -8,6 +8,7 @@ import {
   scanWorkspaceExposures,
 } from "./scanner.js";
 import { getStore } from "./store/index.js";
+import { isSecretExpired } from "./expiry.js";
 
 const SECRET_TYPES = ["api_key", "password", "token", "credential", "other"] as const;
 const VAULT_ITEM_KINDS = ["login", "address", "identity", "payment_card", "secure_note", "api_key", "custom"] as const;
@@ -24,16 +25,23 @@ export function buildServer(): McpServer {
 
   server.tool(
     "get_secret",
-    "Retrieve a secret value by key",
+    "Retrieve a secret reference and metadata by key (never the decrypted value)",
     { key: z.string().describe("The secret key (e.g. openai/api_key)") },
     async ({ key }) => {
-      const entry = await store.getSecret(key);
-      if (!entry) return { content: [{ type: "text", text: `Not found: ${key}` }], isError: true };
+      const entry = (await store.listSecretMetadata(key)).find((candidate) => candidate.key === key);
+      if (!entry || isSecretExpired(entry.expires_at)) {
+        return { content: [{ type: "text", text: `Not found or expired: ${key}` }], isError: true };
+      }
       return {
         content: [
           {
             type: "text",
-            text: JSON.stringify({ key: entry.key, value: entry.value, type: entry.type, label: entry.label }),
+            text: JSON.stringify({
+              secretRef: entry.key,
+              type: entry.type,
+              ...(entry.label ? { label: entry.label } : {}),
+              ...(entry.expires_at ? { expires_at: entry.expires_at } : {}),
+            }),
           },
         ],
       };
@@ -122,15 +130,15 @@ export function buildServer(): McpServer {
 
   server.tool(
     "get_vault_item",
-    "Retrieve a structured vault item, including decrypted payload",
+    "Retrieve a structured vault item reference and metadata (never the decrypted payload)",
     { id: z.string().describe("Vault item id") },
     async ({ id }) => {
-      const item = await store.getVaultItem(id);
+      const item = (await store.listVaultItemMetadata()).find((candidate) => candidate.id === id);
       if (!item) return { content: [{ type: "text", text: `Not found: ${id}` }], isError: true };
       return {
         content: [{
           type: "text",
-          text: JSON.stringify(item, null, 2),
+          text: JSON.stringify({ vaultItemRef: item.id, ...item }, null, 2),
         }],
       };
     }

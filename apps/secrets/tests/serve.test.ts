@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mintApiKey, verifyApiKey } from "@hasna/contracts/auth";
 import { createHandler } from "../src/server/serve.js";
+import { secretScope } from "../src/server/secret-access.js";
 import type { CloudSecretsStore } from "../src/server/cloud-store.js";
 
 const SIGNING = "test-signing-secret-please-rotate";
@@ -87,6 +88,85 @@ describe("secrets serve", () => {
       }),
     );
     expect(res.status).toBe(403);
+  });
+
+  test("read scopes are metadata-only and namespace-limited", async () => {
+    const store = fakeStore();
+    const h = handler(store);
+    const admin = keyWith(["secrets:*"]);
+    for (const [key, value] of [["openai/api-key", "one"], ["stripe/api-key", "two"]]) {
+      const res = await h(new Request("http://x/v1/secrets", {
+        method: "POST",
+        headers: { "x-api-key": admin, "content-type": "application/json" },
+        body: JSON.stringify({ key, value }),
+      }));
+      expect(res.status).toBe(200);
+    }
+
+    const readOpenAi = keyWith(["secrets:read.openai"]);
+    let res = await h(new Request("http://x/v1/secrets", { headers: { "x-api-key": readOpenAi } }));
+    expect((await res.json()).secrets.map((entry: any) => entry.key)).toEqual(["openai/api-key"]);
+
+    res = await h(new Request("http://x/v1/secrets/get?key=openai/api-key", { headers: { "x-api-key": readOpenAi } }));
+    expect(res.status).toBe(403);
+    expect((await res.json()).reason).toBe("insufficient_scope");
+  });
+
+  test("namespace write and reveal scopes cannot cross their prefix", async () => {
+    const store = fakeStore();
+    const h = handler(store);
+    const writeOpenAi = keyWith(["secrets:write.openai"]);
+
+    let res = await h(new Request("http://x/v1/secrets", {
+      method: "POST",
+      headers: { "x-api-key": writeOpenAi, "content-type": "application/json" },
+      body: JSON.stringify({ key: "openai/api-key", value: "one" }),
+    }));
+    expect(res.status).toBe(200);
+
+    res = await h(new Request("http://x/v1/secrets", {
+      method: "POST",
+      headers: { "x-api-key": writeOpenAi, "content-type": "application/json" },
+      body: JSON.stringify({ key: "stripe/api-key", value: "two" }),
+    }));
+    expect(res.status).toBe(403);
+
+    const revealOpenAi = keyWith(["secrets:reveal.openai"]);
+    res = await h(new Request("http://x/v1/secrets/get?key=openai/api-key", { headers: { "x-api-key": revealOpenAi } }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).value).toBe("one");
+    res = await h(new Request("http://x/v1/secrets/get?key=stripe/api-key", { headers: { "x-api-key": revealOpenAi } }));
+    expect(res.status).toBe(403);
+  });
+
+  test("encoded scopes can target one key containing an underscore", async () => {
+    const store = fakeStore();
+    const h = handler(store);
+    const admin = keyWith(["secrets:*"]);
+    await h(new Request("http://x/v1/secrets", {
+      method: "POST",
+      headers: { "x-api-key": admin, "content-type": "application/json" },
+      body: JSON.stringify({ key: "openai/api_key", value: "one" }),
+    }));
+
+    const exact = keyWith([secretScope("reveal", "openai/api_key")]);
+    const own = await h(new Request("http://x/v1/secrets/get?key=openai/api_key", { headers: { "x-api-key": exact } }));
+    expect(own.status).toBe(200);
+    const other = await h(new Request("http://x/v1/secrets/get?key=openai/other", { headers: { "x-api-key": exact } }));
+    expect(other.status).toBe(403);
+  });
+
+  test("expired secrets fail closed even if a backing store returns them", async () => {
+    const h = handler(fakeStore());
+    const admin = keyWith(["secrets:*"]);
+    const expired = new Date(Date.now() - 1000).toISOString();
+    await h(new Request("http://x/v1/secrets", {
+      method: "POST",
+      headers: { "x-api-key": admin, "content-type": "application/json" },
+      body: JSON.stringify({ key: "temp/token", value: "old", expires_at: expired }),
+    }));
+    const res = await h(new Request("http://x/v1/secrets/get?key=temp/token", { headers: { "x-api-key": admin } }));
+    expect(res.status).toBe(404);
   });
 
   test("authenticated CRUD roundtrip with a wildcard key", async () => {

@@ -64,6 +64,20 @@ describe("setSecret / getSecret", () => {
     expect((await getSecret("token/short"))!.expires_at).toBe(future);
   });
 
+  it("fails closed for expired or malformed TTL records", async () => {
+    const past = new Date(Date.now() - 1000).toISOString();
+    await setSecret("token/expired", "must-not-be-read", "token", undefined, past);
+    await setSecret("token/malformed", "also-must-not-be-read", "token");
+    getDb().prepare("UPDATE secrets SET expires_at = ? WHERE key = ?").run("not-a-date", "token/malformed");
+
+    expect(await getSecret("token/expired")).toBeUndefined();
+    expect(await getSecret("token/malformed")).toBeUndefined();
+    expect(await listSecrets("token")).toHaveLength(0);
+    expect(await searchSecrets("token/")).toHaveLength(0);
+    expect((await exportSecrets(false)).secrets).toEqual({});
+    expect(await listSecretMetadata("token")).toHaveLength(2);
+  });
+
   it("updates existing secret preserving created_at", async () => {
     await setSecret("foo/bar", "v1", "other");
     const first = await getSecret("foo/bar")!;

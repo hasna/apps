@@ -57,7 +57,7 @@ describe("secrets Store resolver (env flip)", () => {
 });
 
 describe("ApiStore route mapping", () => {
-  it("setSecret POSTs /secrets then re-reads the full entry via /secrets/get", async () => {
+  it("setSecret POSTs /secrets without requiring a second reveal read", async () => {
     const { client, calls } = fakeClient({
       "POST /secrets": { key: "a/b", type: "api_key" },
       "GET /secrets/get": { key: "a/b", value: "v", type: "api_key", created_at: "t", updated_at: "t" },
@@ -65,7 +65,7 @@ describe("ApiStore route mapping", () => {
     const entry = await new ApiStore(client).setSecret("a/b", "v", "api_key");
     expect(entry.value).toBe("v");
     expect(calls.some((c) => c[0] === "POST" && c[1] === "/secrets")).toBe(true);
-    expect(calls.some((c) => c[0] === "GET" && c[1] === "/secrets/get")).toBe(true);
+    expect(calls.some((c) => c[0] === "GET" && c[1] === "/secrets/get")).toBe(false);
   });
 
   it("getSecret hits /secrets/get?key=", async () => {
@@ -73,6 +73,14 @@ describe("ApiStore route mapping", () => {
     const entry = await new ApiStore(client).getSecret("a/b");
     expect(entry?.value).toBe("v");
     expect(calls.find((c) => c[1] === "/secrets/get")[2]).toEqual({ key: "a/b" });
+  });
+
+  it("getSecret rejects expired responses from an older server", async () => {
+    const expired = new Date(Date.now() - 1000).toISOString();
+    const { client } = fakeClient({
+      "GET /secrets/get": { key: "a/b", value: "v", type: "other", expires_at: expired, created_at: "t", updated_at: "t" },
+    });
+    expect(await new ApiStore(client).getSecret("a/b")).toBeUndefined();
   });
 
   it("deleteSecret hits DELETE /secrets?key= and reads { deleted }", async () => {

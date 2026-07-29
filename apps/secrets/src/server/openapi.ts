@@ -63,7 +63,11 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
 
   return {
     openapi: "3.0.3",
-    info: { title: "SecretsApi", version, description: "Hasna secrets vault HTTP API" },
+    info: {
+      title: "SecretsApi",
+      version,
+      description: "Hasna secrets vault HTTP API. Read scopes expose metadata; decrypted reads require secrets:reveal (optionally narrowed with a dotted key prefix).",
+    },
     servers: [{ url: "/" }],
     components: {
       securitySchemes: {
@@ -145,7 +149,7 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       "/v1/secrets/get": {
         get: {
           operationId: "getSecret",
-          summary: "Get a secret value by key",
+          summary: "Broker a secret value by key (requires reveal scope)",
           parameters: [{ name: "key", in: "query", required: true, schema: { type: "string" } }],
           responses: r("#/components/schemas/Secret"),
         },

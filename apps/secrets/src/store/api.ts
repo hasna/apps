@@ -11,6 +11,7 @@
 
 import type { HasnaStorageClient } from "./contracts-client/index.js";
 import { assertValidSecretPath } from "../hasna-xyz-paths.js";
+import { isSecretExpired } from "../expiry.js";
 import { computeCounts, matchVaultItemsForUrl } from "./local.js";
 
 const VAULT_ITEM_KINDS: VaultItemKind[] = [
@@ -69,17 +70,26 @@ export class ApiStore implements Store {
     assertValidSecretPath(key);
     // The Store contract's 5th arg is an absolute ISO expiry (parseTtl already resolved any --ttl duration).
     // Send it as `expires_at`; forwarding it as `ttl` makes the server try to parse an ISO string as a duration -> 500.
-    await this.transport.post("/secrets", { key, value, type, ...(label ? { label } : {}), ...(expiresAt ? { expires_at: expiresAt } : {}) });
-    // POST returns metadata only; fetch the full entry to match the Store contract.
-    const entry = await this.getSecret(key);
-    if (entry) return entry;
+    const meta = await this.transport.post<SecretMetadata>("/secrets", { key, value, type, ...(label ? { label } : {}), ...(expiresAt ? { expires_at: expiresAt } : {}) });
+    // A write-scoped client must not need reveal permission merely to finish a
+    // write. The value is already present in this process, so combine it with
+    // the metadata response instead of performing a second, decrypted read.
     const now = new Date().toISOString();
-    return { key, value, type, ...(label ? { label } : {}), created_at: now, updated_at: now };
+    return {
+      key: meta.key ?? key,
+      value,
+      type: meta.type ?? type,
+      ...(meta.label ? { label: meta.label } : label ? { label } : {}),
+      ...(meta.expires_at ? { expires_at: meta.expires_at } : expiresAt ? { expires_at: expiresAt } : {}),
+      created_at: meta.created_at ?? now,
+      updated_at: meta.updated_at ?? now,
+    };
   }
 
   async getSecret(key: string): Promise<SecretEntry | undefined> {
     try {
-      return await this.transport.get<SecretEntry>("/secrets/get", { query: { key } });
+      const entry = await this.transport.get<SecretEntry>("/secrets/get", { query: { key } });
+      return isSecretExpired(entry.expires_at) ? undefined : entry;
     } catch (error) {
       if (isNotFound(error)) return undefined;
       throw error;

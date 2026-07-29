@@ -28,6 +28,8 @@ import { buildOpenApiDocument } from "./openapi.js";
 import { getCloudMasterKey } from "./cloud-crypto.js";
 import { VERSION } from "../version.js";
 import type { SecretType, VaultItemKind } from "../types.js";
+import { isSecretExpired } from "../expiry.js";
+import { canAccessSecret, hasGlobalSecretAccess, type SecretAccess } from "./secret-access.js";
 
 const READ = ["secrets:read"];
 const WRITE = ["secrets:write"];
@@ -59,7 +61,7 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
   const { client, store, verifier } = deps;
 
   async function auth(req: Request, requiredScopes: string[]): Promise<
-    { ok: true; actor: string } | { ok: false; res: Response }
+    { ok: true; actor: string; scopes: string[] } | { ok: false; res: Response }
   > {
     const url = new URL(req.url);
     const decision = await verifier.authenticate((name: string) => req.headers.get(name), {
@@ -71,7 +73,11 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
       return { ok: false, res: json({ error: decision.message, reason: decision.reason }, decision.status) };
     }
     const actor = decision.principal.agent ?? decision.principal.kid;
-    return { ok: true, actor };
+    return { ok: true, actor, scopes: decision.principal.scopes };
+  }
+
+  function secretDenied(access: SecretAccess): Response {
+    return json({ error: `API key lacks ${access} access for this secret namespace`, reason: "insufficient_scope" }, 403);
   }
 
   return async function handle(req: Request): Promise<Response> {
@@ -101,18 +107,20 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
 
       // ---- /v1 secrets ----
       if (path === "/v1/secrets" && method === "GET") {
-        const a = await auth(req, READ);
+        const a = await auth(req, []);
         if (!a.ok) return a.res;
         const namespace = url.searchParams.get("namespace") ?? undefined;
-        return json({ secrets: await store.listSecretMetadata(namespace) });
+        const entries = await store.listSecretMetadata(namespace);
+        return json({ secrets: entries.filter((entry) => canAccessSecret(a.scopes, "read", entry.key)) });
       }
       if (path === "/v1/secrets" && method === "POST") {
-        const a = await auth(req, WRITE);
+        const a = await auth(req, []);
         if (!a.ok) return a.res;
         const body = (await req.json().catch(() => null)) as
           | { key?: string; value?: string; type?: string; label?: string; ttl?: string; expires_at?: string }
           | null;
         if (!body?.key || typeof body.value !== "string") return json({ error: "key and value are required" }, 400);
+        if (!canAccessSecret(a.scopes, "write", body.key)) return secretDenied("write");
         const type = (body.type && SECRET_TYPES.includes(body.type as SecretType) ? body.type : "other") as SecretType;
         // Accept either an absolute ISO `expires_at` (Store-contract clients) or a `ttl` duration like "30d" (raw API).
         let expiresAt: string | undefined;
@@ -132,28 +140,31 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
         return json(meta, 200);
       }
       if (path === "/v1/secrets" && method === "DELETE") {
-        const a = await auth(req, WRITE);
+        const a = await auth(req, []);
         if (!a.ok) return a.res;
         const key = url.searchParams.get("key");
         if (!key) return json({ error: "Missing key" }, 400);
+        if (!canAccessSecret(a.scopes, "write", key)) return secretDenied("write");
         const ok = await store.deleteSecret(key, a.actor);
         return json({ deleted: ok }, ok ? 200 : 404);
       }
       if (path === "/v1/secrets/get" && method === "GET") {
-        const a = await auth(req, READ);
+        const a = await auth(req, []);
         if (!a.ok) return a.res;
         const key = url.searchParams.get("key");
         if (!key) return json({ error: "Missing key" }, 400);
+        if (!canAccessSecret(a.scopes, "reveal", key)) return secretDenied("reveal");
         const entry = await store.getSecret(key, a.actor);
-        if (!entry) return json({ error: "Not found" }, 404);
+        if (!entry || isSecretExpired(entry.expires_at)) return json({ error: "Not found" }, 404);
         return json(entry);
       }
       if (path === "/v1/secrets/search" && method === "GET") {
-        const a = await auth(req, READ);
+        const a = await auth(req, []);
         if (!a.ok) return a.res;
         const q = url.searchParams.get("q");
         if (!q) return json({ error: "Missing q" }, 400);
-        return json({ results: await store.searchSecretMetadata(q) });
+        const entries = await store.searchSecretMetadata(q);
+        return json({ results: entries.filter((entry) => canAccessSecret(a.scopes, "read", entry.key)) });
       }
 
       // ---- /v1 vault items ----
@@ -187,8 +198,9 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
       if (itemMatch) {
         const id = decodeURIComponent(itemMatch[1]!);
         if (method === "GET") {
-          const a = await auth(req, READ);
+          const a = await auth(req, []);
           if (!a.ok) return a.res;
+          if (!hasGlobalSecretAccess(a.scopes, "reveal")) return secretDenied("reveal");
           const item = await store.getVaultItem(id, a.actor);
           if (!item) return json({ error: "Not found" }, 404);
           return json(item);

@@ -11,6 +11,7 @@ import type { Database } from "bun:sqlite";
 import { getDb } from "../db.js";
 import { encrypt, decrypt, isEncrypted } from "../crypto.js";
 import { assertValidSecretPath } from "../hasna-xyz-paths.js";
+import { isSecretExpired } from "../expiry.js";
 import { VERSION } from "../version.js";
 import type {
   AuditEntry,
@@ -69,7 +70,9 @@ function vaultItemMetadataColumns(): string {
 }
 
 function decryptRows(rows: SecretEntry[]): SecretEntry[] {
-  return rows.map((r) => ({ ...r, value: decrypt(r.value) }));
+  return rows
+    .filter((r) => !isSecretExpired(r.expires_at))
+    .map((r) => ({ ...r, value: decrypt(r.value) }));
 }
 
 function parseJsonArray(value: string | null | undefined): string[] {
@@ -249,12 +252,20 @@ export class LocalStore implements Store {
     `).run(key, encrypt(value), type, label ?? null, expiresAt ?? null, existing?.created_at ?? now, now);
 
     this.audit("set", key);
-    return (await this.getSecret(key))!;
+    return {
+      key,
+      value,
+      type,
+      ...(label ? { label } : {}),
+      ...(expiresAt ? { expires_at: expiresAt } : {}),
+      created_at: existing?.created_at ?? now,
+      updated_at: now,
+    };
   }
 
   async getSecret(key: string): Promise<SecretEntry | undefined> {
     const row = this.db().prepare("SELECT * FROM secrets WHERE key = ?").get(key) as SecretEntry | undefined;
-    if (!row) return undefined;
+    if (!row || isSecretExpired(row.expires_at)) return undefined;
     row.value = decrypt(row.value);
     this.audit("get", key);
     return row;
@@ -323,7 +334,9 @@ export class LocalStore implements Store {
       return { version: 2, redacted: true, secrets };
     }
     const rows = db.prepare("SELECT * FROM secrets ORDER BY key").all() as SecretEntry[];
-    for (const row of rows) secrets[row.key] = { ...row, value: decrypt(row.value) };
+    for (const row of rows) {
+      if (!isSecretExpired(row.expires_at)) secrets[row.key] = { ...row, value: decrypt(row.value) };
+    }
     return { version: 2, redacted: false, secrets };
   }
 

@@ -52,7 +52,7 @@ describe("secrets MCP HTTP transport", () => {
     expect(await res.json()).toEqual({ status: "ok", name: "secrets" });
   });
 
-  test("MCP initialize + set/get a secret over Streamable HTTP", async () => {
+  test("MCP returns a reference without putting the secret value in model context", async () => {
     const client = new Client({ name: "secrets-http-test", version: "0.0.0" });
     const transport = new StreamableHTTPClientTransport(
       new URL(`http://127.0.0.1:${port}/mcp`),
@@ -64,7 +64,8 @@ describe("secrets MCP HTTP transport", () => {
     await client.callTool({ name: "set_secret", arguments: { key: "test/key", value: "s3cret" } });
     const got = await client.callTool({ name: "get_secret", arguments: { key: "test/key" } });
     const content = got.content as Array<{ type: string; text: string }>;
-    expect(content[0]?.text).toContain("s3cret");
+    expect(content[0]?.text).not.toContain("s3cret");
+    expect(JSON.parse(content[0]!.text)).toEqual({ secretRef: "test/key", type: "other" });
     await client.close();
   });
 });
