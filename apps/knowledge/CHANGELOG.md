@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — dependency hygiene
+
+- Removed the unused `@types/json-schema` runtime dependency.
+
 ## Unreleased — the backend is chosen explicitly, and test egress is refused
 
 **BREAKING for the fleet flip.** `HASNA_KNOWLEDGE_API_URL` +
