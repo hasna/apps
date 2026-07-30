@@ -44,3 +44,5 @@ export type {
   RedactionClass,
   RedactionMessageReport,
 } from "./lib/admin-redaction.js";
+
+export { IdentityError, resolveIdentity, describeIdentitySource } from "./lib/identity.js";

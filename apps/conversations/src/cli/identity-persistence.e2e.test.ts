@@ -37,6 +37,11 @@ function runCli(args: string[]) {
   env.USERPROFILE = HOME_DIR;
   env.CONVERSATIONS_DB_PATH = TEST_DB;
   env.FORCE_COLOR = "0";
+  // This suite is *about* the machine identity file, and a throwaway HOME with
+  // one identity in it is exactly the single-identity context the file is for.
+  // The file is no longer read without this opt-in, so the suite must declare
+  // it — the same one-line migration a cron job or loop makes.
+  env.CONVERSATIONS_USE_MACHINE_IDENTITY = "1";
 
   const result = Bun.spawnSync({
     cmd: [...CLI, ...args],
@@ -65,12 +70,25 @@ describe("CLI identity persistence (e2e)", () => {
     }
   });
 
-  test("plain register does NOT touch machine identity (shared-box safety)", () => {
-    // A first invocation auto-generates and persists some random name.
+  test("a machine with no identity refuses to invent one", () => {
+    // This ran first for a reason: the HOME is virgin here. The CLI used to mint
+    // a random name at this point and persist it as the machine identity, so a
+    // name nobody chose became the default author for every process on the box.
     const before = runCli(["whoami", "--json"]);
-    expect(before.exitCode).toBe(0);
-    const autoName = JSON.parse(before.stdout).agent as string;
-    expect(autoName).toBeTruthy();
+    expect(before.exitCode).toBe(1);
+    const payload = JSON.parse(before.stdout);
+    expect(payload.code).toBe("IDENTITY_NOT_SET");
+    expect(payload.agent).toBeNull();
+
+    // ...and it wrote nothing while refusing.
+    expect(() => storedIdentity()).toThrow();
+  });
+
+  test("plain register does NOT touch machine identity (shared-box safety)", () => {
+    // The box only has an identity because something claimed it deliberately.
+    const seed = runCli(["agents", "register", "seed-agent", "--identity", "--json"]);
+    expect(seed.exitCode).toBe(0);
+    const autoName = "seed-agent";
     expect(storedIdentity()).toBe(autoName);
 
     // Every agent session on a machine is told to run `agents register <name>`.

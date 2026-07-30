@@ -1,6 +1,5 @@
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
-import { AGENT_NAMES } from "./names.js";
 import { getDataDir } from "./db.js";
 import { normalizeAgentName } from "./presence.js";
 
@@ -17,21 +16,6 @@ function agentIdFile(): string {
 }
 
 let cachedAutoName: string | null = null;
-
-/**
- * Check if a name is already taken in the agent_presence table.
- * Uses a lazy import to avoid circular dependency with db.ts.
- */
-function isNameTaken(name: string): boolean {
-  try {
-    const { getDb } = require("./db.js");
-    const db = getDb();
-    const row = db.prepare("SELECT agent FROM agent_presence WHERE agent = ?").get(name);
-    return !!row;
-  } catch {
-    return false;
-  }
-}
 
 /**
  * Read the persisted identity straight from disk, bypassing the cache.
@@ -63,38 +47,95 @@ function persistIdentity(name: string): boolean {
   }
 }
 
+/** Raised when identity cannot be resolved without guessing. */
+export class IdentityError extends Error {
+  readonly code = "IDENTITY_NOT_SET" as const;
+  constructor(message: string) {
+    super(message);
+    this.name = "IdentityError";
+  }
+}
+
 /**
- * Get or create a persistent auto-generated agent name.
- * Stored in ~/.hasna/conversations/agent-id so the same installation
- * always gets the same name. Checks the DB to avoid duplicates.
+ * Whether this process opted in to the machine-wide identity file.
+ *
+ * Opting in is a positive act, and that is the whole point: the file is a
+ * legitimate answer for a context that owns the whole box (cron, a loop, the
+ * blocker hook, a single-seat install) and an illegitimate one for a box
+ * running several seats at once. Only the caller knows which it is, so only the
+ * caller may say so.
+ */
+function machineIdentityAllowed(): boolean {
+  const raw = process.env.CONVERSATIONS_USE_MACHINE_IDENTITY?.trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
+}
+
+function identityNotSet(persisted: string | null): IdentityError {
+  const held = persisted
+    ? `The machine identity file (${agentIdFile()}) currently names "${persisted}", but that identity belongs to whichever seat wrote it — it is not this session's to borrow.`
+    : `The machine identity file (${agentIdFile()}) does not exist.`;
+  return new IdentityError(
+    `No agent identity for this session. ${held}\n` +
+      `Declare one of:\n` +
+      `  - CONVERSATIONS_AGENT_ID=<name>   per session (what a durable seat should set)\n` +
+      `  - --from <name>                   per invocation\n` +
+      `  - CONVERSATIONS_USE_MACHINE_IDENTITY=1   only where this process owns the whole machine's identity`,
+  );
+}
+
+/**
+ * Read the machine-wide identity, or throw.
+ *
+ * This used to be `getAutoName()`, and it used to do two things that made
+ * attribution unreliable. It no longer does either.
+ *
+ * It no longer INVENTS. With no file present it picked a random name from the
+ * pool and *persisted it as the machine identity*, so a name nobody chose
+ * became the default author for the CLI, the MCP server and the blocker hook
+ * alike. An identity registry that mints identities cannot be a record of who
+ * did what.
+ *
+ * It no longer hands the file to every caller by DEFAULT. One file served the
+ * whole box, so the last writer's identity became everyone's: on 2026-07-30 a
+ * deliberate write of "agent-ceo" (correct for that one seat) silently
+ * reattributed a day of work from six other seats on the same machine. Callers
+ * that genuinely own the machine identity opt in; everyone else gets an error
+ * naming the identity they would have borrowed.
  */
 export function getAutoName(): string {
-  if (cachedAutoName) return cachedAutoName;
-
   const persisted = readPersistedIdentity();
+
+  // The gate is evaluated BEFORE the cache, and the order is the whole point.
+  // updateCachedAutoName() is called by register_agent's seed-if-absent and by
+  // rename's self-adoption, so the cache holds an identity that some *other*
+  // caller in this process claimed. Checking it first put that identity ahead
+  // of the gate, which reproduced the original defect inside a long-lived
+  // daemon: one seat's deliberate `register --identity` or self-rename became
+  // every later undeclared caller's identity. That is not hypothetical for the
+  // MCP HTTP server — it builds a fresh McpServer per request with
+  // `sessionIdGenerator: undefined`, so the per-connection rung is inert and
+  // undeclared callers land here.
+  if (!machineIdentityAllowed()) throw identityNotSet(persisted ?? cachedAutoName);
+
+  if (cachedAutoName) return cachedAutoName;
   if (persisted) {
     cachedAutoName = persisted;
     return persisted;
   }
 
-  // Pick a random name that isn't already taken
-  const shuffled = [...AGENT_NAMES].sort(() => Math.random() - 0.5);
-  let name = shuffled[0];
-  for (const candidate of shuffled) {
-    if (!isNameTaken(candidate)) {
-      name = candidate;
-      break;
-    }
-  }
-
-  cachedAutoName = name;
-  persistIdentity(name);
-  return name;
+  throw identityNotSet(null);
 }
 
 /**
  * Resolve agent identity.
- * Priority: explicit flag → CONVERSATIONS_AGENT_ID env → auto-generated persistent name
+ *
+ * Priority: explicit flag → CONVERSATIONS_AGENT_ID env → opted-in machine
+ * identity file. There is deliberately no fourth rung: a session that declared
+ * nothing gets an error, not a guess. Silent inheritance and silent invention
+ * were the same bug, and both were invisible precisely because resolution
+ * always succeeded.
+ *
+ * @throws {IdentityError} when nothing declared an identity for this session.
  */
 export function resolveIdentity(explicit?: string): string {
   const explicitValue = explicit?.trim();
@@ -102,6 +143,22 @@ export function resolveIdentity(explicit?: string): string {
   const envValue = process.env.CONVERSATIONS_AGENT_ID?.trim();
   if (envValue) return envValue;
   return getAutoName();
+}
+
+/**
+ * Describe, in operator-facing words, where the resolved identity came from.
+ *
+ * `whoami` used to build this string itself and always reported
+ * "auto-generated (<path>)" whenever the value had not come from the flag or
+ * the env var — including when it had plainly been READ from the file. That
+ * made an inherited identity indistinguishable from an invented one in the one
+ * diagnostic an operator would reach for while working out why their messages
+ * were signed by somebody else.
+ */
+export function describeIdentitySource(explicit?: string): string {
+  if (explicit?.trim()) return "explicit (--from flag)";
+  if (process.env.CONVERSATIONS_AGENT_ID?.trim()) return "env var (CONVERSATIONS_AGENT_ID)";
+  return `machine identity file, opted in via CONVERSATIONS_USE_MACHINE_IDENTITY (${agentIdFile()})`;
 }
 
 /**

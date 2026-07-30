@@ -4,7 +4,7 @@ import { Command } from "commander";
 import chalk from "chalk";
 import { render } from "ink";
 import React from "react";
-import { resolveIdentity } from "../lib/identity.js";
+import { resolveIdentity, IdentityError } from "../lib/identity.js";
 import { isCloudStore } from "../lib/store/index.js";
 import { App } from "./components/App.js";
 import { registerBrainsCommand } from "./brains.js";
@@ -18,7 +18,7 @@ import { registerLockCommands } from "./commands/locks.js";
 import { registerTmuxCommands } from "./commands/tmux.js";
 import { registerAdminCommands } from "./commands/admin.js";
 import pkg from "../../package.json";
-import { printErrorLine } from "../lib/stdout.js";
+import { printErrorLine, printJsonLine } from "../lib/stdout.js";
 
 const program = new Command();
 
@@ -115,7 +115,40 @@ function isHttpFailure(err: unknown): err is HttpFailure {
     && typeof candidate.path === "string";
 }
 
+/**
+ * Whether the invocation asked for machine-readable output.
+ *
+ * Recorded from commander's PARSED options, not by scanning argv. Scanning
+ * argv gets this wrong for a message whose body happens to be `--json`
+ * (`conversations send someone -- --json`), which would then be answered with a
+ * JSON error object by a caller that never asked for one.
+ *
+ * It is captured globally because identity resolution now fails at ~55
+ * independent call sites that previously had no failure path, and the repo's
+ * contract (src/cli/json-error-contract.e2e.test.ts) is that every error branch
+ * emits parseable JSON on stdout under --json so consumers that JSON.parse the
+ * output do not crash on an empty string.
+ */
+let jsonOutputRequested = false;
+
+program.hook("preAction", (_thisCommand, actionCommand) => {
+  const opts = actionCommand.opts() as { json?: boolean; contract?: boolean };
+  jsonOutputRequested = Boolean(opts.json || opts.contract);
+});
+
+function wantsJsonOutput(): boolean {
+  return jsonOutputRequested;
+}
+
 function reportCliError(err: unknown): never {
+  if (err instanceof IdentityError) {
+    if (wantsJsonOutput()) {
+      printJsonLine({ error: err.message, code: err.code, agent: null });
+    } else {
+      printErrorLine(chalk.red(err.message));
+    }
+    process.exit(1);
+  }
   if (isHttpFailure(err)) {
     const body = err.body && typeof err.body === "object"
       ? err.body as { error?: string; message?: string; reason?: string; hint?: string }

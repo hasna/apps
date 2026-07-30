@@ -2,7 +2,15 @@ import type { Command } from "commander";
 import { getStore } from "../../lib/store/index.js";
 import chalk from "chalk";
 import { closeDb } from "../../lib/db.js";
-import { resolveIdentity, readPersistedIdentity, updateCachedAutoName, isSelfRename } from "../../lib/identity.js";
+import {
+  resolveIdentity,
+  readPersistedIdentity,
+  updateCachedAutoName,
+  isSelfRename,
+  describeIdentitySource,
+  IdentityError,
+} from "../../lib/identity.js";
+import { emitCliError } from "../cli-error.js";
 import { isAgentConflict, normalizeAgentName } from "../../lib/presence.js";
 import { windowItems } from "../../lib/compact-output.js";
 import { getCliWindow, printCompactFooter } from "../compact.js";
@@ -65,8 +73,20 @@ export function registerAgentCommands(program: Command): void {
     .option("--cursor <n>", "Skip first N agents for pagination", parseInt)
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
-      const agent = resolveIdentity();
-      await getStore().heartbeat(agent);
+      // Roster discovery must NOT require an identity. This is the command a
+      // fresh seat runs to see which names are taken BEFORE claiming one, and
+      // the command an operator runs to work out who is who — requiring a name
+      // to ask which names exist is a deadlock, and `agents list` has no --from
+      // to escape it. The identity is incidental here: it drives a courtesy
+      // heartbeat and the "(you)" marker, and listAgents() takes no identity at
+      // all, so both simply drop out when nothing is declared.
+      let agent: string | null = null;
+      try {
+        agent = resolveIdentity();
+      } catch (err) {
+        if (!(err instanceof IdentityError)) throw err;
+      }
+      if (agent) await getStore().heartbeat(agent);
 
       const agentsList = await getStore().listAgents({ online_only: opts.online });
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
@@ -353,21 +373,19 @@ export function registerAgentCommands(program: Command): void {
     .option("--from <agent>", "Explicit agent identity")
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
-      const envValue = process.env.CONVERSATIONS_AGENT_ID?.trim();
-      const agent = resolveIdentity(opts.from);
-
-      let source: string;
-      if (opts.from) {
-        source = "explicit (--from flag)";
-      } else if (envValue) {
-        source = "env var (CONVERSATIONS_AGENT_ID)";
-      } else {
-        const { join } = require("path");
-        const { homedir } = require("os");
-        const { getDataDir } = require("../../lib/db.js");
-        const agentIdFile = join(getDataDir(), "agent-id");
-        source = `auto-generated (${agentIdFile})`;
+      // whoami is the command an operator reaches for *because* attribution
+      // looks wrong, so an unresolved identity is the answer here, not a crash:
+      // report it as the diagnosis, still non-zero so scripts notice.
+      let agent: string;
+      try {
+        agent = resolveIdentity(opts.from);
+      } catch (err) {
+        if (err instanceof IdentityError) {
+          emitCliError(err.message, opts, { code: err.code, agent: null });
+        }
+        throw err;
       }
+      const source = describeIdentitySource(opts.from);
 
       const presence = await getStore().getPresence(agent);
       const payload = buildWhoamiPayload(agent, source, presence);

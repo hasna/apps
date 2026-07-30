@@ -147,16 +147,47 @@ way:
 1. an explicit `--from` / `from` argument,
 2. the `CONVERSATIONS_AGENT_ID` env var,
 3. the agent that registered on this MCP connection (stdio only, see below),
-4. this installation's identity, `~/.hasna/conversations/agent-id`.
+4. this installation's identity, `~/.hasna/conversations/agent-id` — **only when
+   the process opts in with `CONVERSATIONS_USE_MACHINE_IDENTITY=1`**.
 
-The identity file is **machine-wide**: every process on the box that passes
-neither `--from` nor `CONVERSATIONS_AGENT_ID` answers to it, including the
-blocking-message hook. Claiming it is therefore deliberate:
+**There is no fifth rung. A session that declares nothing gets an error, not a
+name.** Resolution used to fall through to the machine-wide file for everyone,
+and, on a box with no file at all, to mint a random name and persist it as the
+machine identity. Both were silent, and both produced the same damage: messages
+signed by an agent that did not write them.
+
+The identity file is **machine-wide**, so it is correct only where one identity
+owns the whole box — cron, a loop, the blocking-message hook, a single-seat
+install. Those opt in — **scoped to that one caller**, never in a shell profile or a
+tmux-global environment. A blanket export hands the same identity back to every
+process on the box, which is the defect this gate exists to prevent:
 
 ```bash
-conversations agents register augustus --identity   # claim the box as "augustus"
-conversations whoami --json                          # what this box resolves to
+# in the crontab line, the loop's env block, or the hook's wrapper — not ~/.zshrc
+CONVERSATIONS_USE_MACHINE_IDENTITY=1 conversations read --blocking
 ```
+
+Anything else — in particular several agent seats sharing one machine — gives
+each session its own identity, which is also what keeps per-agent inbox
+filtering and creator-vs-assignee matching meaningful:
+
+```bash
+export CONVERSATIONS_AGENT_ID=agent-harness   # per seat, survives restarts
+```
+
+Claiming the machine identity is deliberate — and note that claiming it does
+**not** make this session resolve to it. Writing the file and reading the file
+are separate decisions on purpose, so a seat can set the box's identity without
+handing itself, or anyone else, an identity it never declared:
+
+```bash
+conversations agents register augustus --identity    # claim the box as "augustus"
+conversations whoami --json                          # still refuses: nothing declared for THIS session
+CONVERSATIONS_USE_MACHINE_IDENTITY=1 conversations whoami --json   # now resolves to augustus
+```
+
+`whoami` exits non-zero and reports `code: "IDENTITY_NOT_SET"` when nothing
+declared an identity, naming the identity it refused to borrow.
 
 Two things also write it, and nothing else does:
 
@@ -165,6 +196,14 @@ Two things also write it, and nothing else does:
 - On a box with **no** identity file at all, the first MCP `register_agent`
   claims it. Seed-if-absent, never last-writer-wins — an identity that already
   exists is left alone.
+
+**Migrating from ≤ 0.5.11:** the machine identity file is no longer read unless
+the process sets `CONVERSATIONS_USE_MACHINE_IDENTITY=1`, and a missing identity
+is now an error rather than a freshly invented name. If a box went quiet after
+upgrading, that is the fix working: something was relying on a borrowed or
+invented identity. Give each agent seat its own `CONVERSATIONS_AGENT_ID`, and
+set `CONVERSATIONS_USE_MACHINE_IDENTITY=1` only where a single identity really
+does own the machine.
 
 **Migrating from ≤ 0.5.9:** MCP `register_agent`/`heartbeat` used to rewrite the
 identity file on every call, so whichever agent last heartbeated owned the box.
@@ -209,8 +248,9 @@ The dashboard server also exposes `/health` and `/mcp` when running.
 One HTTP daemon serves many agents and is stateless — there is no session to
 remember who called last, so rung 3 above does not apply. Agents sharing an HTTP
 daemon must pass `from` explicitly on every write, or run their own process with
-`CONVERSATIONS_AGENT_ID` set; otherwise they all resolve to the same machine
-identity.
+`CONVERSATIONS_AGENT_ID` set. This used to degrade into every caller resolving to
+the same machine identity; it is now an error, so the misattribution surfaces at
+the first call instead of in the message history a day later.
 
 ## Self-hosted HTTP API (`conversations-serve`)
 

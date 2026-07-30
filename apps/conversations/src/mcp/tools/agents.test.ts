@@ -331,11 +331,15 @@ describe("agent MCP tools", () => {
       process.env.HOME = tempHome;
       process.env.USERPROFILE = tempHome;
       delete process.env.CONVERSATIONS_AGENT_ID;
+      // These tests are specifically about the machine identity FILE, which is
+      // no longer consulted unless the process says it owns the box's identity.
+      process.env.CONVERSATIONS_USE_MACHINE_IDENTITY = "1";
       _resetAutoName();
       setSessionAgent(server, "");
     });
 
     afterEach(() => {
+      delete process.env.CONVERSATIONS_USE_MACHINE_IDENTITY;
       if (savedHome !== undefined) process.env.HOME = savedHome;
       else delete process.env.HOME;
       if (savedUserProfile !== undefined) process.env.USERPROFILE = savedUserProfile;

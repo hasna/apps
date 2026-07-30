@@ -247,3 +247,5 @@ export class ConversationsClient {
       });
     }
 }
+
+export { IdentityError } from "../lib/identity.js";

@@ -18,11 +18,23 @@ import { resolveIdentity } from "../lib/identity.js";
 import { printLine } from "../lib/stdout.js";
 
 if (process.argv.includes("--help") || process.argv.includes("-h")) {
-  printLine("conversations-hook: Claude Code PreToolUse hook for blocking messages.\n\nUsage: conversations-hook\n\nReads CONVERSATIONS_AGENT_ID or CLAUDE_AGENT_ID env var to identify the agent.\nOutputs blocking messages to stdout and exits 0.");
+  printLine("conversations-hook: Claude Code PreToolUse hook for blocking messages.\n\nUsage: conversations-hook\n\nReads CONVERSATIONS_AGENT_ID to identify the agent. Exits 0 and stays silent\nwhen no identity is declared, since it runs before every tool call.\nOutputs blocking messages to stdout and exits 0.");
   process.exit(0);
 }
 
-const agent = resolveIdentity();
+// A session that never declared an identity has no inbox of its own, and this
+// hook must not be the thing that says so: it runs before EVERY tool call, and
+// its contract is to always exit 0 (see above — a non-zero exit here deadlocks
+// the agent). Guessing an identity is what corrupted attribution in the first
+// place, but reading somebody else's blockers is a read, not a write, so the
+// safe degradation is to stay quiet and let the first identity-scoped WRITE
+// (send/register/whoami) raise the error where it can actually be acted on.
+let agent: string;
+try {
+  agent = resolveIdentity();
+} catch {
+  process.exit(0);
+}
 
 // Routed through the Store: local sqlite or the self_hosted/cloud API.
 const blockers = await getStore().getUnreadBlockers(agent, { limit: 10 });

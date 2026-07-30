@@ -56,7 +56,12 @@ export function registerTaskTools(server: McpServer): void {
     },
   }, async (args: Record<string, any>) => {
     if (!args.reporter) {
-      try { args.reporter = resolveIdentity(undefined); } catch { args.reporter = "unknown"; }
+      // No try/catch: this catch used to be unreachable, because identity
+      // resolution could not fail. Now that it can, swallowing it would make
+      // create_task the one write that never refuses — seeding the task
+      // registry with an unattributable reporter instead of telling the caller
+      // to declare who it is.
+      args.reporter = resolveIdentity(undefined);
     }
     const task = await getStore().createTask({
       subject: args.subject,

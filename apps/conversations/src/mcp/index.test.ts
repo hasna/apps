@@ -5,7 +5,6 @@ import { server } from "./index.js";
 import { closeDb, getDb } from "../lib/db.js";
 import { sendMessage, readMessages } from "../lib/messages.js";
 import { createChannel } from "../lib/channels.js";
-import { resolveIdentity } from "../lib/identity.js";
 import { setSessionAgent } from "./channel.js";
 import { heartbeat } from "../lib/presence.js";
 import { unlinkSync } from "fs";
@@ -30,6 +29,10 @@ function insertLegacyChannelMessage(channel: string, content: string, opts?: { p
 beforeAll(async () => {
   process.env.CONVERSATIONS_DB_PATH = TEST_DB;
   delete process.env.CONVERSATIONS_AGENT_ID;
+  // Also cleared: an operator following the migration note may have exported
+  // this globally, and it would silently turn the refusal assertions below into
+  // failures that read like a real regression.
+  delete process.env.CONVERSATIONS_USE_MACHINE_IDENTITY;
   closeDb();
 
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -70,15 +73,16 @@ describe("send_message from parameter", () => {
     expect(msg.content).toBe("hello from alpha");
   });
 
-  test("falls back to auto-generated name when from is omitted and no env var", async () => {
-    const autoName = resolveIdentity();
+  // Identity is no longer invented or borrowed when `from` is omitted: the tool
+  // refuses instead. Attributing a write to a name the caller never chose is
+  // what corrupted a day of message history on a multi-seat box.
+  test("refuses to attribute the send when from is omitted and no env var", async () => {
     const result = await client.callTool({
       name: "send_message",
       arguments: { to: "someone", content: "no from" },
     });
-    const msg = parseResult(result as any) as any;
-    expect(msg.from_agent).toBe(autoName);
-    expect(msg.from_agent).not.toBe("user");
+    expect((result as any).isError).toBe(true);
+    expect(JSON.stringify(result)).toMatch(/no agent identity/i);
   });
 
   test("uses env var when from is omitted", async () => {
@@ -147,15 +151,17 @@ describe("reply from parameter", () => {
     expect(msg.session_id).toBe(sent.session_id);
   });
 
-  test("falls back to auto-generated name when from is omitted", async () => {
-    const autoName = resolveIdentity();
-    const sent = sendMessage({ from: "alice", to: autoName, content: "hey auto" });
+  // Identity is no longer invented or borrowed when `from` is omitted: the tool
+  // refuses instead. Attributing a write to a name the caller never chose is
+  // what corrupted a day of message history on a multi-seat box.
+  test("refuses to attribute the reply when from is omitted", async () => {
+    const sent = sendMessage({ from: "alice", to: "bob", content: "hey auto" });
     const result = await client.callTool({
       name: "reply",
       arguments: { message_id: sent.id, content: "reply without from" },
     });
-    const msg = parseResult(result as any) as any;
-    expect(msg.from_agent).toBe(autoName);
+    expect((result as any).isError).toBe(true);
+    expect(JSON.stringify(result)).toMatch(/no agent identity/i);
   });
 });
 
@@ -172,15 +178,17 @@ describe("mark_read from parameter", () => {
     expect(data.marked_read).toBe(1);
   });
 
-  test("falls back to auto-generated name when from is omitted", async () => {
-    const autoName = resolveIdentity();
-    const sent = sendMessage({ from: "alice", to: autoName, content: "for auto" });
+  // Identity is no longer invented or borrowed when `from` is omitted: the tool
+  // refuses instead. Attributing a write to a name the caller never chose is
+  // what corrupted a day of message history on a multi-seat box.
+  test("refuses to mark another identity's mail read when from is omitted", async () => {
+    const sent = sendMessage({ from: "alice", to: "bob", content: "for auto" });
     const result = await client.callTool({
       name: "mark_read",
       arguments: { ids: [sent.id] },
     });
-    const data = parseResult(result as any) as any;
-    expect(data.marked_read).toBe(1);
+    expect((result as any).isError).toBe(true);
+    expect(JSON.stringify(result)).toMatch(/no agent identity/i);
   });
 });
 
@@ -197,14 +205,16 @@ describe("create_channel from parameter", () => {
     expect(sp.created_by).toBe("channel-creator");
   });
 
-  test("falls back to auto-generated name when from is omitted", async () => {
-    const autoName = resolveIdentity();
+  // Identity is no longer invented or borrowed when `from` is omitted: the tool
+  // refuses instead. Attributing a write to a name the caller never chose is
+  // what corrupted a day of message history on a multi-seat box.
+  test("refuses to record a creator when from is omitted", async () => {
     const result = await client.callTool({
       name: "create_channel",
       arguments: { name: "test-channel-no-from" },
     });
-    const sp = parseResult(result as any) as any;
-    expect(sp.created_by).toBe(autoName);
+    expect((result as any).isError).toBe(true);
+    expect(JSON.stringify(result)).toMatch(/no agent identity/i);
   });
 });
 
@@ -222,15 +232,17 @@ describe("send_to_channel from parameter", () => {
     expect(msg.channel).toBe("msg-channel");
   });
 
-  test("falls back to auto-generated name when from is omitted", async () => {
-    const autoName = resolveIdentity();
+  // Identity is no longer invented or borrowed when `from` is omitted: the tool
+  // refuses instead. Attributing a write to a name the caller never chose is
+  // what corrupted a day of message history on a multi-seat box.
+  test("refuses to attribute the channel post when from is omitted", async () => {
     createChannel("msg-channel-2", "creator");
     const result = await client.callTool({
       name: "send_to_channel",
       arguments: { channel: "msg-channel-2", content: "no from" },
     });
-    const msg = parseResult(result as any) as any;
-    expect(msg.from_agent).toBe(autoName);
+    expect((result as any).isError).toBe(true);
+    expect(JSON.stringify(result)).toMatch(/no agent identity/i);
   });
 
   test("blocks sensitive channel input without echoing the value", async () => {
@@ -368,15 +380,17 @@ describe("join_channel from parameter", () => {
     expect(data.joined).toBe(true);
   });
 
-  test("falls back to auto-generated name when from is omitted", async () => {
-    const autoName = resolveIdentity();
+  // Identity is no longer invented or borrowed when `from` is omitted: the tool
+  // refuses instead. Attributing a write to a name the caller never chose is
+  // what corrupted a day of message history on a multi-seat box.
+  test("refuses to join as an undeclared identity when from is omitted", async () => {
     createChannel("join-channel-2", "creator");
     const result = await client.callTool({
       name: "join_channel",
       arguments: { channel: "join-channel-2" },
     });
-    const data = parseResult(result as any) as any;
-    expect(data.agent).toBe(autoName);
+    expect((result as any).isError).toBe(true);
+    expect(JSON.stringify(result)).toMatch(/no agent identity/i);
   });
 });
 
@@ -486,14 +500,16 @@ describe("create_project from parameter", () => {
     expect(proj.created_by).toBe("proj-creator");
   });
 
-  test("falls back to auto-generated name when from is omitted", async () => {
-    const autoName = resolveIdentity();
+  // Identity is no longer invented or borrowed when `from` is omitted: the tool
+  // refuses instead. Attributing a write to a name the caller never chose is
+  // what corrupted a day of message history on a multi-seat box.
+  test("refuses to record a project creator when from is omitted", async () => {
     const result = await client.callTool({
       name: "create_project",
       arguments: { name: "test-project-no-from" },
     });
-    const proj = parseResult(result as any) as any;
-    expect(proj.created_by).toBe(autoName);
+    expect((result as any).isError).toBe(true);
+    expect(JSON.stringify(result)).toMatch(/no agent identity/i);
   });
 });
 
@@ -569,18 +585,17 @@ describe("heartbeat from parameter", () => {
     expect(data.agent).toBe("heartbeat-session-agent");
   });
 
-  test("falls back to the machine identity when no agent has registered on this connection", async () => {
+  // Identity is no longer invented or borrowed when `from` is omitted: the tool
+  // refuses instead. Attributing a write to a name the caller never chose is
+  // what corrupted a day of message history on a multi-seat box.
+  test("refuses to heartbeat when no agent has registered on this connection", async () => {
     setSessionAgent(server, "");
-    const autoName = resolveIdentity();
     const result = await client.callTool({
       name: "heartbeat",
       arguments: {},
     });
-    const data = parseResult(result as any) as any;
-    expect(data.agent).toBe(autoName);
-
-    // That heartbeat just pinned the machine name as this session's agent;
-    // clear it so later tests are not attributed to it.
+    expect((result as any).isError).toBe(true);
+    expect(JSON.stringify(result)).toMatch(/no agent identity/i);
     setSessionAgent(server, "");
   });
 

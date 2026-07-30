@@ -168,34 +168,50 @@ describe("conversations MCP HTTP transport — two agents, one daemon", () => {
 
     try {
       await alpha.callTool({ name: "register_agent", arguments: { name: "alpha-agent" } });
-      // This HOME had no identity, so the first agent to register claims it.
+      // This HOME had no identity, so the first agent to register seeds it.
       expect(readPersistedIdentity()).toBe("alpha-agent");
-      const alphaBefore = parseResult(await alpha.callTool({ name: "get_focus", arguments: {} }));
 
       await beta.callTool({ name: "register_agent", arguments: { name: "beta-agent" } });
       // Seed-if-absent, not last-writer-wins: beta does not take the box.
       expect(readPersistedIdentity()).toBe("alpha-agent");
-      const alphaAfter = parseResult(await alpha.callTool({ name: "get_focus", arguments: {} }));
-
-      // With session state held process-wide, beta's registration silently
-      // retargets alpha: alpha's next implicit resolution returns "beta-agent"
-      // and alpha's unattributed posts are stored as beta.
-      expect(alphaAfter.agent).not.toBe("beta-agent");
-      expect(alphaAfter.agent).toBe(alphaBefore.agent);
 
       await alpha.callTool({ name: "create_channel", arguments: { name: "http-attribution", from: "alpha-agent" } });
-      await alpha.callTool({
+
+      // This test used to assert that alpha's UNATTRIBUTED post came back as
+      // alpha. It only ever passed because the seeding write above populated an
+      // in-process cache that identity resolution consulted before any gate --
+      // i.e. the daemon handed one client's identity to whichever client asked
+      // next. That is the defect, not the contract. This transport is stateless
+      // per request (`sessionIdGenerator: undefined`), so no client has a
+      // session rung and NONE of them may post implicitly.
+      const implicit = await alpha.callTool({
         name: "send_to_channel",
         arguments: { channel: "http-attribution", content: "alpha reporting an incident" },
       });
+      expect((implicit as any).isError).toBe(true);
+      expect(JSON.stringify(implicit)).toMatch(/no agent identity/i);
+
+      // The refusal must also have written nothing under a borrowed name.
       const posted = parseResult(await alpha.callTool({
         name: "read_channel",
-        arguments: { channel: "http-attribution", verbose: true },
+        arguments: { channel: "http-attribution", verbose: true, from: "alpha-agent" },
       }));
       const messages = Array.isArray(posted) ? posted : posted.messages;
-      expect(messages).toHaveLength(1);
-      expect(messages[0].from_agent).toBe(alphaBefore.agent);
-      expect(messages[0].from_agent).not.toBe("beta-agent");
+      expect(messages).toHaveLength(0);
+
+      // Explicit attribution is the supported path on a shared daemon, and works.
+      await alpha.callTool({
+        name: "send_to_channel",
+        arguments: { channel: "http-attribution", content: "alpha, explicitly", from: "alpha-agent" },
+      });
+      const after = parseResult(await alpha.callTool({
+        name: "read_channel",
+        arguments: { channel: "http-attribution", verbose: true, from: "alpha-agent" },
+      }));
+      const afterMessages = Array.isArray(after) ? after : after.messages;
+      expect(afterMessages).toHaveLength(1);
+      expect(afterMessages[0].from_agent).toBe("alpha-agent");
+      expect(afterMessages[0].from_agent).not.toBe("beta-agent");
     } finally {
       await alpha.close();
       await beta.close();
