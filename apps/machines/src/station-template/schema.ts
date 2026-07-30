@@ -80,6 +80,42 @@ export const unitConventionsSchema = z.object({
   lesson: z.string().min(1),
 });
 
+/**
+ * The guaranteed access path for a station class — a service that depends only
+ * on identity the platform already grants (EC2: the SSM agent via the instance
+ * profile), NEVER on a credential fetched at boot.
+ *
+ * Owner ruling 2026-07-29 (station17): nothing that requires fetching a secret
+ * at boot may sit on the critical path to a machine's reachability. Tailscale
+ * is an access path, not a boot dependency; the floor is what makes its
+ * failure survivable. Physical station classes declare no floor service here —
+ * their floor is an out-of-band path (console, physical port).
+ */
+export const accessFloorSchema = z.object({
+  /** systemd unit that provides the floor access path. */
+  service: z.string().min(1),
+  /** Idempotent shell that installs/enables the floor. Must need no secret. */
+  ensure: z.string().min(1),
+  /** Which measured failure this floor exists to prevent. */
+  lesson: z.string().min(1),
+});
+
+/**
+ * Tailscale membership — PHYSICAL station classes only.
+ *
+ * Owner ruling 2026-07-30 (supersedes the 2026-07-29 "never boot-critical"
+ * ruling): AWS stations do not run tailscale at all, and the cloud fleet is
+ * not connected to the physical fleet — joining EC2 hosts to the tailnet that
+ * carries the operator's own machines makes every cloud instance a peer of
+ * every physical station, a blast radius nobody chose. SSM (the ec2
+ * accessFloor) is the whole access path for cloud stations, not a floor
+ * beneath a mesh. This block therefore lives only in physical overlays; the
+ * base layer must not carry it, so no cloud render can ever reach an auth-key
+ * secret name. Enforced by the absence assertions in station-template.test.ts
+ * (which carry their own positive control). A single AWS box MAY later be
+ * granted tailscale as a deliberate, argued-for exception via its own overlay
+ * — never the default, never base.
+ */
 export const tailscaleSchema = z.object({
   join: z.boolean().default(true),
   /** Secret NAME only — the value is pulled at runtime, never rendered. */
@@ -99,6 +135,38 @@ export const swapSchema = z.object({
   sizeGb: z.number().int().min(0).default(0),
 });
 
+/**
+ * Free disk (GiB) that must remain after the swapfile is allocated. station17
+ * build 2 (2026-07-29) died of `fallocate -l 8G` on an 8G AMI-default root
+ * volume: the partial 4.2G file filled the disk to 364K available, journald
+ * could not create a journal, and cloud-final FAILED. Both renders refuse to
+ * allocate swap unless (sizeGb + this margin) GiB are free, and warn
+ * non-fatally instead.
+ */
+export const SWAP_HEADROOM_GB = 2;
+
+/**
+ * Minimum root-volume size for a station class. The template cannot set the
+ * volume at launch time — that lives in the launcher's BlockDeviceMappings —
+ * but declaring the floor here makes the requirement config-driven for launch
+ * tooling AND checkable after boot: an undersized root cannot be converged by
+ * setup, so the drift check reports it as a violation demanding a relaunch.
+ */
+export const diskSchema = z.object({
+  /** Minimum root filesystem size in GiB (launcher must request at least this). */
+  rootMinGb: z.number().int().positive(),
+  /**
+   * Minimum FREE space in GiB before the drift check reports the box.
+   * station17 build 2: at hard-0 free the SSM agent could not write its
+   * orchestration files and commands returned EMPTY output rather than
+   * errors — a full disk silently degrades the only access path, so it must
+   * be reported while there is still room to act.
+   */
+  minFreeGb: z.number().int().positive().optional(),
+  /** Which measured failure this floor exists to prevent. */
+  lesson: z.string().min(1),
+});
+
 export const templateLayerSchema = z.object({
   files: z.array(templateFileSchema).default([]),
   packages: templatePackagesSchema.default({ apt: [], bun: [] }),
@@ -109,9 +177,11 @@ export const templateLayerSchema = z.object({
   sysctls: z.record(z.string()).default({}),
   runtimeValues: z.array(runtimeValueSchema).default([]),
   unitConventions: unitConventionsSchema.optional(),
+  accessFloor: accessFloorSchema.optional(),
   tailscale: tailscaleSchema.optional(),
   secretsBootstrap: secretsBootstrapSchema.optional(),
   swap: swapSchema.optional(),
+  disk: diskSchema.optional(),
 });
 
 export const stationTemplateSchema = z.object({
@@ -128,6 +198,8 @@ export type TemplateLayer = z.infer<typeof templateLayerSchema>;
 export type StationTemplate = z.infer<typeof stationTemplateSchema>;
 export type TemplateService = z.infer<typeof templateServiceSchema>;
 export type TemplateCommand = z.infer<typeof templateCommandSchema>;
+export type AccessFloor = z.infer<typeof accessFloorSchema>;
+export type TemplateDisk = z.infer<typeof diskSchema>;
 export type UnitConventions = z.infer<typeof unitConventionsSchema>;
 
 /** A template file with its content loaded from disk. */
@@ -150,7 +222,9 @@ export interface EffectiveTemplate {
   sysctls: Record<string, string>;
   runtimeValues: z.infer<typeof runtimeValueSchema>[];
   unitConventions?: UnitConventions;
+  accessFloor?: AccessFloor;
   tailscale?: z.infer<typeof tailscaleSchema>;
   secretsBootstrap?: z.infer<typeof secretsBootstrapSchema>;
   swap: { sizeGb: number };
+  disk?: TemplateDisk;
 }

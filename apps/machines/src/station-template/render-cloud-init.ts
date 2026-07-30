@@ -1,4 +1,4 @@
-import type { EffectiveTemplate } from "./schema.js";
+import { SWAP_HEADROOM_GB, type EffectiveTemplate } from "./schema.js";
 
 export interface CloudInitOptions {
   /** Station identity, e.g. station17 — becomes hostname and tailscale name. */
@@ -67,11 +67,26 @@ export function renderCloudInit(effective: EffectiveTemplate, options: CloudInit
   }
 
   const runcmd: string[] = [];
-  // Required binaries first: the tailscale join below fetches the auth key with
+  // The access floor comes FIRST, and never fatally. Owner ruling 2026-07-29
+  // (station17): nothing that requires fetching a secret at boot may sit on
+  // the critical path to a machine's reachability. The floor (EC2: the SSM
+  // agent, preseeded in the Ubuntu AMI and authorized purely by the instance
+  // profile) is what keeps a station recoverable when everything below —
+  // including the tailscale join — fails; this entry asserts/repairs it before
+  // anything else gets a chance to go wrong.
+  if (effective.accessFloor) {
+    runcmd.push(
+      `( ${effective.accessFloor.ensure} ) || echo 'hasna-station: access-floor ensure failed for ${effective.accessFloor.service} (NON-FATAL) — drift check reports access-floor state' >&2`
+    );
+  }
+  // Required binaries next: the tailscale join below fetches the auth key with
   // `aws secretsmanager`, and on station17 (2026-07-29) that ran with no aws on
-  // PATH — the join failed and the box never reached the tailnet.
+  // PATH — the join failed and the box never reached the tailnet. A failed
+  // install degrades to a drift report (command:<id>), never a dead boot.
   for (const command of effective.commands) {
-    runcmd.push(`command -v -- ${command.command} >/dev/null 2>&1 || sh -c '${command.install.replace(/'/g, `'\\''`)}'`);
+    runcmd.push(
+      `command -v -- ${command.command} >/dev/null 2>&1 || sh -c '${command.install.replace(/'/g, `'\\''`)}' || echo 'hasna-station: install of required command ${command.command} failed (NON-FATAL) — drift check reports command:${command.id}' >&2`
+    );
   }
   if (effective.files.some((file) => file.kind === "sysctl")) {
     runcmd.push("sysctl --system");
@@ -84,23 +99,54 @@ export function renderCloudInit(effective: EffectiveTemplate, options: CloudInit
     runcmd.push("systemctl daemon-reload");
   }
   if (effective.swap.sizeGb > 0) {
+    // Convergent and never fatal. station17 build 2 (2026-07-29): the old
+    // `test -f /swapfile ||` guard met an 8G AMI-default root volume —
+    // fallocate -l 8G allocated 4.2G of extents until ENOSPC, filled the disk
+    // to 364K free (journald down, cloud-final FAILED), and because the
+    // partial FILE existed, every rerun skipped creation forever while
+    // `swapon --show` stayed empty. The guard is now "is /swapfile ACTIVE
+    // swap", a stale/partial file is removed before retrying, and allocation
+    // is refused unless the swap plus SWAP_HEADROOM_GB of headroom fit in the
+    // free space — an undersized volume degrades to a loud warning and a
+    // swap:size drift report, never a dead boot.
     const size = `${effective.swap.sizeGb}G`;
+    const requiredKb = (effective.swap.sizeGb + SWAP_HEADROOM_GB) * 1024 * 1024;
     runcmd.push(
-      `test -f /swapfile || (fallocate -l ${size} /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile && echo '/swapfile none swap sw 0 0' >> /etc/fstab)`
+      "swapon --noheadings --show=NAME | grep -qx /swapfile || { rm -f /swapfile; " +
+        `if [ "$(df -kP / | awk 'NR==2{print $4}')" -ge ${requiredKb} ]; then ` +
+        `fallocate -l ${size} /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile && ` +
+        "{ grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab; }; " +
+        `else echo 'hasna-station: swapfile skipped — less than ${effective.swap.sizeGb}G+${SWAP_HEADROOM_GB}G headroom free on / (NON-FATAL) — drift check reports swap:size and the disk floors' >&2; fi; } ` +
+        "|| echo 'hasna-station: swapfile setup failed (NON-FATAL) — drift check reports swap:size' >&2"
     );
   }
   for (const service of effective.services.filter((candidate) => candidate.scope === "system" && candidate.name !== "tailscaled")) {
     runcmd.push(`systemctl enable ${service.expectActive ? "--now " : ""}${service.name}`);
   }
   if (effective.tailscale?.join) {
-    runcmd.push("command -v tailscale >/dev/null 2>&1 || curl -fsSL https://tailscale.com/install.sh | sh");
+    // Owner ruling 2026-07-30: NO shipped cloud layer declares tailscale —
+    // AWS stations run none, and SSM is their whole access path. This branch
+    // is dead for the shipped station,ec2 render (asserted, with a positive
+    // control, in station-template.test.ts) and renders only if a future
+    // overlay deliberately opts a single box in as an argued-for exception.
+    // Where it does render, the 2026-07-29 ruling still governs: both entries
+    // end non-fatally — a failed install or join leaves a reachable,
+    // debuggable station whose drift check reports tailscale:join, never a
+    // stranded one, and never a silent one (the warning lands in the
+    // cloud-init log).
+    runcmd.push(
+      "command -v tailscale >/dev/null 2>&1 || curl -fsSL https://tailscale.com/install.sh | sh || echo 'hasna-station: tailscale install failed (NON-FATAL) — station stays reachable via its access floor; drift check reports tailscale:join' >&2"
+    );
     const hostnameFlag = station && effective.tailscale.hostnameFromStation ? ` --hostname ${station}` : "";
     const sshFlag = effective.tailscale.ssh ? " --ssh" : "";
+    // The subshell both bounds the failure (a broken && chain can only reach
+    // the || warning, even under `sh -e`) and scopes `umask 077`, which
+    // previously leaked into every later runcmd entry.
     runcmd.push(
-      "TOKEN=$(curl -sX PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 300') && " +
+      "( TOKEN=$(curl -sX PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 300') && " +
         'REGION=$(curl -sH "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/region) && ' +
         `umask 077 && aws secretsmanager get-secret-value --secret-id ${effective.tailscale.authKeySecretName} --query SecretString --output text --region "$REGION" | tr -d '\\r\\n' > /run/ts-authkey && ` +
-        `tailscale up --auth-key file:/run/ts-authkey${hostnameFlag}${sshFlag}; rm -f /run/ts-authkey`
+        `tailscale up --auth-key file:/run/ts-authkey${hostnameFlag}${sshFlag} ) || echo 'hasna-station: tailscale join failed (NON-FATAL) — station stays reachable via its access floor; drift check reports tailscale:join' >&2; rm -f /run/ts-authkey`
     );
   }
   runcmd.push(`loginctl enable-linger ${user}`);
