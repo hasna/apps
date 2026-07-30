@@ -750,6 +750,28 @@ function groupKeyForPath(projectPath: string, projectName: string): string {
   return labelForPath(projectPath, projectName).trim().toLowerCase()
 }
 
+type ProjectGroup = {
+  label: string
+  samplePath: string
+  sessions: number
+  requests: number
+  total_tokens: number
+  cost_usd: number
+  last_active: string
+}
+
+function laterTimestamp(current: string, candidate: string | null): string {
+  if (!candidate) return current
+  return candidate > current ? candidate : current
+}
+
+/**
+ * Aggregate in a fixed number of queries, independent of how many project labels
+ * exist. The earlier shape ran two `id IN (<session ids>)` queries per label, and
+ * neither could use an index for the scope predicate, so every label re-scanned the
+ * whole requests table — 233 labels x 877k rows took ~34s on the fleet database.
+ * Here requests are aggregated once per session and folded into labels in JS.
+ */
 function queryProjectBreakdownScoped(
   db: Database,
   requestWhere: string,
@@ -765,69 +787,89 @@ function queryProjectBreakdownScoped(
   const sessionOnlyMachineClause = machine ? ' AND machine_id = ?' : ''
   const sessionOnlyMachineParams = machine ? [machine] : []
   const sessions = db.prepare(`
-    SELECT id, project_path, project_name, total_cost_usd, started_at
+    SELECT id, project_path, project_name
     FROM sessions
     WHERE (project_path != '' OR project_name != '')${sessionMachineClause}
-  `).all(...sessionMachineParams) as Array<{ id: string; project_path: string; project_name: string; total_cost_usd: number; started_at: string }>
+  `).all(...sessionMachineParams) as Array<{ id: string; project_path: string; project_name: string }>
 
-  // Group sessions by derived label
-  const groups = new Map<string, { label: string; sessionIds: string[]; samplePath: string }>()
+  // Group sessions by derived label, and index each session id back to its group so
+  // the aggregate passes below fold in with a map lookup instead of their own query.
+  const groups = new Map<string, ProjectGroup>()
+  const groupKeyBySession = new Map<string, string>()
   for (const s of sessions) {
     const label = labelForPath(s.project_path, s.project_name)
     if (!label) continue
     const key = groupKeyForPath(s.project_path, s.project_name)
-    const g = groups.get(key) ?? { label, sessionIds: [], samplePath: s.project_path }
-    g.sessionIds.push(s.id)
+    const g = groups.get(key) ?? { label, samplePath: s.project_path, sessions: 0, requests: 0, total_tokens: 0, cost_usd: 0, last_active: '' }
     if (!g.samplePath) g.samplePath = s.project_path
     groups.set(key, g)
+    groupKeyBySession.set(s.id, key)
+  }
+
+  const groupFor = (sessionId: string): ProjectGroup | undefined => {
+    const key = groupKeyBySession.get(sessionId)
+    return key === undefined ? undefined : groups.get(key)
+  }
+
+  const requestRows = db.prepare(`
+    SELECT session_id,
+           COUNT(*) as requests,
+           COALESCE(SUM(cost_usd), 0) as cost_usd,
+           COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_create_tokens), 0) as total_tokens,
+           MAX(timestamp) as last_active
+    FROM requests
+    WHERE ${requestWhere}${requestMachineClause}
+    GROUP BY session_id
+  `).all(...requestScopeParams, ...requestMachineParams) as Array<{ session_id: string; requests: number; cost_usd: number; total_tokens: number; last_active: string | null }>
+
+  for (const row of requestRows) {
+    const g = groupFor(row.session_id)
+    if (!g) continue
+    g.sessions += 1
+    g.requests += row.requests
+    g.cost_usd += row.cost_usd
+    g.total_tokens += row.total_tokens
+    g.last_active = laterTimestamp(g.last_active, row.last_active)
+  }
+
+  // Sessions that never produced a request row contribute their own rolled-up
+  // totals. Resolve "has any request" once instead of as a NOT IN subquery per group.
+  const sessionsWithRequests = new Set(
+    (db.prepare(`SELECT DISTINCT session_id FROM requests`).all() as Array<{ session_id: string }>)
+      .map(row => row.session_id),
+  )
+  const sessionOnlyRows = db.prepare(`
+    SELECT id,
+           COALESCE(request_count, 0) as request_count,
+           COALESCE(total_tokens, 0) as total_tokens,
+           COALESCE(total_cost_usd, 0) as total_cost_usd,
+           started_at
+    FROM sessions
+    WHERE ${sessionWhere}${sessionOnlyMachineClause}
+  `).all(...sessionScopeParams, ...sessionOnlyMachineParams) as Array<{ id: string; request_count: number; total_tokens: number; total_cost_usd: number; started_at: string | null }>
+
+  for (const row of sessionOnlyRows) {
+    if (sessionsWithRequests.has(row.id)) continue
+    const g = groupFor(row.id)
+    if (!g) continue
+    g.sessions += 1
+    g.requests += row.request_count
+    g.total_tokens += row.total_tokens
+    g.cost_usd += row.total_cost_usd
+    g.last_active = laterTimestamp(g.last_active, row.started_at)
   }
 
   const result: ProjectBreakdown[] = []
   for (const g of groups.values()) {
-    const placeholders = g.sessionIds.map(() => '?').join(',')
-    const reqStats = placeholders.length
-      ? db.prepare(`
-          SELECT
-            COUNT(DISTINCT session_id) as sessions,
-            COUNT(*) as requests,
-            COALESCE(SUM(cost_usd), 0) as cost_usd,
-            COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_create_tokens), 0) as total_tokens,
-            MAX(timestamp) as last_active
-          FROM requests
-          WHERE session_id IN (${placeholders})
-            AND ${requestWhere}
-            ${requestMachineClause}
-        `).get(...g.sessionIds, ...requestScopeParams, ...requestMachineParams) as { sessions: number; requests: number; cost_usd: number; total_tokens: number; last_active: string | null }
-      : { sessions: 0, requests: 0, cost_usd: 0, total_tokens: 0, last_active: null }
-
-    const sessionOnlyStats = placeholders.length
-      ? db.prepare(`
-          SELECT
-            COUNT(*) as sessions,
-            COALESCE(SUM(request_count), 0) as requests,
-            COALESCE(SUM(total_tokens), 0) as total_tokens,
-            COALESCE(SUM(total_cost_usd), 0) as cost_usd,
-            MAX(started_at) as last_active
-          FROM sessions
-          WHERE id IN (${placeholders})
-            AND ${sessionWhere}
-            ${sessionOnlyMachineClause}
-            AND id NOT IN (SELECT DISTINCT session_id FROM requests)
-        `).get(...g.sessionIds, ...sessionScopeParams, ...sessionOnlyMachineParams) as { sessions: number; requests: number; total_tokens: number; cost_usd: number; last_active: string | null }
-      : { sessions: 0, requests: 0, total_tokens: 0, cost_usd: 0, last_active: null }
-
-    const totalSessions = reqStats.sessions + sessionOnlyStats.sessions
-    if (totalSessions === 0) continue
-    const lastActive = [reqStats.last_active, sessionOnlyStats.last_active].filter(Boolean).sort().at(-1) ?? ''
-
+    if (g.sessions === 0) continue
     result.push({
       project_path: g.samplePath,
       project_name: g.label,
-      sessions: totalSessions,
-      requests: reqStats.requests + sessionOnlyStats.requests,
-      total_tokens: reqStats.total_tokens + sessionOnlyStats.total_tokens,
-      cost_usd: reqStats.cost_usd + sessionOnlyStats.cost_usd,
-      last_active: lastActive,
+      sessions: g.sessions,
+      requests: g.requests,
+      total_tokens: g.total_tokens,
+      cost_usd: g.cost_usd,
+      last_active: g.last_active,
     })
   }
 

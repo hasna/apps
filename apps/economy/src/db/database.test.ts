@@ -824,6 +824,61 @@ describe('queryProjectBreakdown', () => {
     expect(row?.requests).toBe(1)
     expect(row?.cost_usd).toBe(3)
   })
+
+  it('issues a fixed number of queries regardless of how many projects exist', () => {
+    // A per-project query shape scans the whole requests table once per project, which
+    // on the fleet database (233 projects, 877k requests) took ~34s. Assert the query
+    // count stays flat as projects grow rather than timing it, which would be flaky.
+    const buildDb = (projectCount: number) => {
+      const db = makeDb()
+      for (let i = 0; i < projectCount; i++) {
+        upsertSession(db, sampleSession({
+          id: `sess-${i}`,
+          project_path: `/home/user/open-proj${i}`,
+          project_name: `open-proj${i}`,
+          total_cost_usd: 1,
+        }))
+        upsertRequest(db, sampleRequest({ id: `req-${i}`, session_id: `sess-${i}`, cost_usd: 1 }))
+        // A second session with no requests exercises the session-only aggregate path.
+        upsertSession(db, sampleSession({
+          id: `sess-empty-${i}`,
+          project_path: `/home/user/open-proj${i}`,
+          project_name: `open-proj${i}`,
+          total_cost_usd: 2,
+          request_count: 0,
+        }))
+      }
+      return db
+    }
+
+    const countQueries = (db: ReturnType<typeof makeDb>): { queries: number; rows: ReturnType<typeof queryProjectBreakdownSince> } => {
+      let queries = 0
+      const counting = new Proxy(db, {
+        get(target, prop, receiver) {
+          if (prop === 'prepare') {
+            return (...args: Parameters<typeof db.prepare>) => {
+              queries++
+              return target.prepare(...args)
+            }
+          }
+          const value = Reflect.get(target, prop, receiver)
+          return typeof value === 'function' ? value.bind(target) : value
+        },
+      })
+      const rows = queryProjectBreakdownSince(counting, '2020-01-01T00:00:00.000Z')
+      return { queries, rows }
+    }
+
+    const small = countQueries(buildDb(3))
+    const large = countQueries(buildDb(40))
+
+    expect(small.rows).toHaveLength(3)
+    expect(large.rows).toHaveLength(40)
+    expect(large.queries).toBe(small.queries)
+    // Totals must still combine the request-backed and session-only sessions.
+    expect(large.rows[0]?.sessions).toBe(2)
+    expect(large.rows[0]?.cost_usd).toBeCloseTo(3)
+  })
 })
 
 describe('queryAccountBreakdown', () => {
