@@ -1,0 +1,45 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "guardrails",
+  "class": "library",
+  "contractVersion": "v1",
+  "kitVersion": "0.8.5",
+  "description": "Local-first guardrail and policy decisions for agentic systems. Ships an SDK and a CLI evaluator; it owns no store.",
+  "bins": ["guardrails"],
+  "hosting": ["user-hosted"],
+  "serviceSurfaces": [
+    {
+      "name": "package-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "none",
+      "exportSubpath": "."
+    },
+    {
+      "name": "guardrail-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "guardrails",
+      "authMode": "local-only"
+    }
+  ],
+  "metadata": {
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
+    },
+    "conformance": {
+      "waivedSurfaces": [
+        {
+          "kind": "api",
+          "reason": "In-memory policy evaluator; it owns no HTTP service boundary."
+        },
+        {
+          "kind": "mcp",
+          "reason": "In-memory policy evaluator; MCP execution belongs to the consuming application."
+        }
+      ]
+    }
+  }
+}

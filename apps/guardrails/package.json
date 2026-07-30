@@ -16,8 +16,7 @@
     "access": "public"
   },
   "bin": {
-    "guardrails": "dist/cli/index.js",
-    "open-guardrails": "dist/cli/index.js"
+    "guardrails": "dist/cli/index.js"
   },
   "exports": {
     ".": {
@@ -36,14 +35,18 @@
     "dist",
     "examples",
     "docs",
-    "README.md"
+    "README.md",
+    "hasna.contract.json"
   ],
   "scripts": {
     "build": "rm -rf dist && bun build src/index.ts src/cli/index.ts --outdir dist --target bun && tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "lint": "tsc --noEmit",
-    "prepublishOnly": "bun run typecheck && bun run test && bun run build"
+    "contract-check": "bunx @hasna/contracts@0.8.5 repo-conformance .",
+    "scan:artifact": "bun scripts/scan-artifact.ts",
+    "prepack": "bun run scan:artifact",
+    "prepublishOnly": "bun run typecheck && bun run test && bun run contract-check && bun run build && bun run scan:artifact"
   },
   "dependencies": {
     "zod": "^3.25.76"
