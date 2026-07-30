@@ -2,6 +2,14 @@ import { dirname } from "node:path";
 import type { SetupStep } from "../types.js";
 import type { EffectiveTemplate, LoadedTemplateFile } from "./schema.js";
 
+/**
+ * Free space that must remain on / AFTER the swapfile is allocated, in GiB.
+ * Same figure and rationale as render-cloud-init.ts (station17, 2026-07-29):
+ * the swapfile is a backstop, and the machine still needs disk to finish
+ * provisioning. Keep in sync with render-cloud-init.ts.
+ */
+const SWAP_HEADROOM_GB = 2;
+
 function quote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
@@ -126,13 +134,23 @@ export function buildStationTemplateSteps(effective: EffectiveTemplate, options:
 
   if (effective.swap.sizeGb > 0) {
     const size = `${effective.swap.sizeGb}G`;
+    // Swap is a memory-pressure backstop, never boot-critical (station17,
+    // 2026-07-29: an unguarded 8G fallocate on an 8 GiB root volume filled
+    // the disk at boot and killed cloud-final; runSetupPlan aborts on the
+    // first non-zero step, so this render path had the same fatality).
+    // Allocate only when / keeps SWAP_HEADROOM_GB of working room after the
+    // swapfile; any shortfall or failure warns loudly, cleans up a partial
+    // file, and exits 0 — the drift check reports swap:size.
+    const requiredKb = (effective.swap.sizeGb + SWAP_HEADROOM_GB) * 1024 * 1024;
     steps.push({
       id: "template-swapfile",
-      title: `Ensure ${size} swapfile`,
+      title: `Ensure ${size} swapfile (free-space guarded; never boot-critical)`,
       command:
-        `test -f /swapfile || (sudo fallocate -l ${size} /swapfile && sudo chmod 600 /swapfile && ` +
+        `test -f /swapfile || ( [ "$(df -Pk / | awk 'NR==2{print $4}')" -ge ${requiredKb} ] && ` +
+        `sudo fallocate -l ${size} /swapfile && sudo chmod 600 /swapfile && ` +
         `sudo mkswap /swapfile && sudo swapon /swapfile && ` +
-        `echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null)`,
+        `echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null ) || ` +
+        `{ sudo rm -f /swapfile; echo 'hasna-station: ${size} swapfile not allocated — needs ${size} + ${SWAP_HEADROOM_GB}G free on / (NON-FATAL) — drift check reports swap:size' >&2; }`,
       manager: "shell",
       privileged: true,
     });

@@ -7,6 +7,15 @@ export interface CloudInitOptions {
   user?: string;
 }
 
+/**
+ * Free space that must remain on / AFTER the swapfile is allocated, in GiB.
+ * 2 GiB covers what the rest of a station boot writes (apt packages, bun +
+ * global CLIs, the tailscale install, cloud-init logs) with margin; on
+ * station17's 8 GiB AMI-default root volume it correctly refuses the 8G
+ * swapfile instead of filling the disk. Keep in sync with render-setup.ts.
+ */
+const SWAP_HEADROOM_GB = 2;
+
 function yamlQuote(value: string): string {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
@@ -100,8 +109,17 @@ export function renderCloudInit(effective: EffectiveTemplate, options: CloudInit
   }
   if (effective.swap.sizeGb > 0) {
     const size = `${effective.swap.sizeGb}G`;
+    // Swap is a memory-pressure backstop, never boot-critical (station17,
+    // 2026-07-29: an unguarded 8G fallocate on an 8 GiB root volume filled the
+    // disk at boot; every later runcmd entry died ENOSPC and cloud-final
+    // failed). Allocate only when / has room for the swapfile PLUS working
+    // headroom — the rest of this boot (apt, bun globals, tailscale, logs)
+    // still needs the disk. Any shortfall or failure degrades to a drift
+    // report (swap:size), never a dead boot, and the failure arm removes a
+    // partial swapfile so a mid-allocation ENOSPC cannot fill the disk anyway.
+    const requiredKb = (effective.swap.sizeGb + SWAP_HEADROOM_GB) * 1024 * 1024;
     runcmd.push(
-      `test -f /swapfile || (fallocate -l ${size} /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile && echo '/swapfile none swap sw 0 0' >> /etc/fstab)`
+      `test -f /swapfile || ( [ "$(df -Pk / | awk 'NR==2{print $4}')" -ge ${requiredKb} ] && fallocate -l ${size} /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile && echo '/swapfile none swap sw 0 0' >> /etc/fstab ) || { rm -f /swapfile; echo 'hasna-station: ${size} swapfile not allocated — needs ${size} + ${SWAP_HEADROOM_GB}G free on / (NON-FATAL) — drift check reports swap:size' >&2; }`
     );
   }
   for (const service of effective.services.filter((candidate) => candidate.scope === "system" && candidate.name !== "tailscaled")) {
