@@ -46,17 +46,20 @@
     "LICENSE",
     "README.md",
     "SECURITY.md",
-    "CONTRIBUTING.md"
+    "CONTRIBUTING.md",
+    "hasna.contract.json"
   ],
   "scripts": {
     "clean": "rm -rf dist",
     "build": "bun run clean && bun build src/index.ts src/api.ts src/browser.ts src/storage.ts src/events.ts --outdir dist --target bun && bun build src/cli/index.ts --outdir dist/cli --target bun --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts src/mcp/cli.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts src/server/cli.ts --outdir dist/server --target bun && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
+    "contract-check": "bunx @hasna/contracts check",
+    "artifact-scan": "bunx @hasna/contracts artifact-scan",
     "typecheck": "tsc --noEmit",
     "test": "bun test --timeout 120000",
     "dev:cli": "bun run src/cli/index.ts",
     "dev:mcp": "bun run src/mcp/cli.ts",
     "dev:serve": "bun run src/server/cli.ts",
-    "prepack": "bun run build",
+    "prepack": "bun run build && bun run artifact-scan",
     "prepublishOnly": "bun run typecheck && bun test",
     "postinstall": "mkdir -p $HOME/.hasna/feedback 2>/dev/null || true"
   },

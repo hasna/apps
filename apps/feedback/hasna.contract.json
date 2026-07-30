@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "project": {
+    "name": "open-feedback",
+    "package": "@hasna/feedback",
+    "repository": "hasna/feedback"
+  },
+  "waivers": {
+    "storage": {
+      "reason": "Open Feedback intentionally persists user-submitted feedback in local JSONL storage by default.",
+      "paths": ["~/.hasna/feedback"],
+      "configuration": "FEEDBACK_DATA_DIR"
+    }
+  }
+}
