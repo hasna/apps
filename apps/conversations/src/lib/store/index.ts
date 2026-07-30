@@ -203,7 +203,62 @@ function assertUsableApiUrl(urlHit: { key: string; value: string } | null): void
 }
 
 /**
- * Return an env in which `self_hosted` is implied when the API url + key are
+ * The value that means "use the server" for the contracts client THIS REPO USES.
+ *
+ * Derived, never hardcoded, and that is load-bearing rather than tidy. The
+ * storage-mode enum has already changed once: the generation vendored here
+ * accepts `cloud` plus the deprecated aliases `self_hosted`/`remote`/`hybrid`,
+ * while contracts after the inference removal (hasna/contracts#63) accepts ONLY
+ * `sqlite`/`postgres` and THROWS on everything else. The two valid sets are
+ * DISJOINT, so any literal pinned here is a bet on which side of that change
+ * this repo's client is on, and the bet loses on one side or the other.
+ *
+ * NOTE THE DISCRIMINATOR IS THE VENDORED MODULE, deliberately. `contracts-client`
+ * is a byte-faithful vendored copy, so the validator that actually rejects a bad
+ * mode in this repo is `../contracts-client/mode.js`, not whatever version of
+ * `@hasna/contracts` happens to be installed. Probing the installed package
+ * instead would answer a question nobody here asks, and would flip this value
+ * before the vendored resolver could accept it. It follows that the derived
+ * value changes exactly when the vendored copy is re-vendored — which is the
+ * correct coupling.
+ *
+ * The probe runs through `normalizeStorageMode`, which THROWS on an unknown
+ * token rather than returning a sentinel, so the test is exact rather than
+ * heuristic.
+ */
+export const SERVER_MODE_CANDIDATES = ["postgres", "self_hosted", "cloud"] as const;
+
+/** Accepts a mode token or throws. Injectable so both enum generations are testable. */
+export type ModeNormalizer = (value: string) => unknown;
+
+let cachedServerMode: string | null = null;
+
+export function serverStorageMode(normalize: ModeNormalizer = normalizeStorageMode): string {
+  // Only memoise the real normalizer: caching a custom one would poison later
+  // calls in a test that simulates the other enum generation.
+  const useCache = normalize === (normalizeStorageMode as ModeNormalizer);
+  if (useCache && cachedServerMode !== null) return cachedServerMode;
+  for (const candidate of SERVER_MODE_CANDIDATES) {
+    try {
+      normalize(candidate);
+      if (useCache) cachedServerMode = candidate;
+      return candidate;
+    } catch {
+      // Not a token this generation of the contracts client understands.
+    }
+  }
+  // Every candidate was rejected: the enum changed again and this list is stale.
+  // Fail loudly rather than guess — guessing is the defect class this module
+  // exists to remove, and a wrong mode silently reads the wrong dataset.
+  throw new Error(
+    `No known server storage mode is accepted by the vendored contracts client ` +
+      `(tried ${SERVER_MODE_CANDIDATES.join(", ")}). The storage-mode enum has changed; ` +
+      `add the new server token to SERVER_MODE_CANDIDATES in src/lib/store/index.ts.`,
+  );
+}
+
+/**
+ * Return an env in which the server mode is implied when the API url + key are
  * present but no explicit storage mode is set. Leaves an explicit mode (including
  * `local`) untouched, so the flip stays reversible. The fleet flip writes only the
  * two API URL + key vars; this makes that activate cloud. Never a DSN on the
@@ -226,7 +281,7 @@ export function conversationsCloudEnv(env: Env = process.env): Env {
   if (firstSet(env, ENV_KEYS.modeKeys)) return env;
 
   if (firstSet(env, ENV_KEYS.apiUrlKeys) && firstSet(env, ENV_KEYS.apiKeyKeys)) {
-    return { ...env, [ENV_KEYS.modeKeys[0]!]: "self_hosted" };
+    return { ...env, [ENV_KEYS.modeKeys[0]!]: serverStorageMode() };
   }
   return env;
 }
