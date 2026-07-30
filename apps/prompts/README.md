@@ -106,6 +106,13 @@ Current runtime semantics:
 - This package does not create buckets, secrets, roles, data migrations,
   infrastructure, or spend-increasing AWS resources.
 
+## Contracts conformance
+
+`hasna.contract.json` declares this repo against `hasna.service_contract.v1`, checked by
+`bun run contracts:check`. That check currently exits 1 on four structural gates. See
+[docs/contracts-conformance.md](docs/contracts-conformance.md) for which gates are open, why
+no manifest edit or waiver closes them, and the two routes to green.
+
 ## License
 
 Apache-2.0 -- see [LICENSE](LICENSE)
