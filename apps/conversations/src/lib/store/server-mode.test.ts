@@ -58,7 +58,7 @@ describe("serverStorageMode", () => {
   test("agrees with the contracts version actually installed", () => {
     // Not a tautology: this is the assertion that fails the day a dependency bump
     // lands a generation the candidate list does not cover.
-    expect(SERVER_MODE_CANDIDATES).toContain(serverStorageMode());
+    expect([...SERVER_MODE_CANDIDATES] as string[]).toContain(serverStorageMode());
   });
 
   test("the injected mode is the derived one, not a literal", () => {
