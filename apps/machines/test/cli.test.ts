@@ -33,6 +33,43 @@ function runCli(args: string[], env: NodeJS.ProcessEnv, input?: string) {
 }
 
 describe("cli command handling", () => {
+  test("route and ssh exit non-zero in JSON mode when the machine is unknown", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-cli-route-not-found-"));
+    try {
+      const env = {
+        ...process.env,
+        PATH: "",
+        HASNA_MACHINES_MANIFEST_PATH: join(dir, "machines.json"),
+        HASNA_MACHINES_DB_PATH: join(dir, "machines.db"),
+        HASNA_MACHINES_MACHINE_ID: "control",
+      };
+      const route = runCli(["route", "--machine", "unknown", "--no-tailscale", "--json"], env);
+      const ssh = runCli(["ssh", "--machine", "unknown", "--json"], env);
+
+      expect([route.status, ssh.status]).toEqual([1, 1]);
+      expect(route.stderr).toBe("");
+      expect(JSON.parse(route.stdout)).toMatchObject({
+        ok: false,
+        requested_machine_id: "unknown",
+        route: "unknown",
+        command: null,
+        warnings: expect.arrayContaining(["machine_not_found:unknown"]),
+      });
+      expect(ssh.stderr).toBe("");
+      expect(JSON.parse(ssh.stdout)).toMatchObject({
+        resolved: {
+          ok: false,
+          requested_machine_id: "unknown",
+          route: "unknown",
+          warnings: expect.arrayContaining(["machine_not_found:unknown"]),
+        },
+        command: null,
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("heartbeat collect requires scoped approval before route execution", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-cli-heartbeat-collect-"));
     try {

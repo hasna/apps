@@ -3163,13 +3163,13 @@ program
         : buildSshCommand(options.machine, options.cmd, { topology })
       : null;
     const payload = { ...publicResolved, command: options.privateMetadata ? command : command ? "[redacted]" : null };
+    if (!resolved.ok) process.exitCode = 1;
     if (options.json) {
       console.log(JSON.stringify(payload, null, 2));
       return;
     }
     if (!resolved.ok) {
       console.error(chalk.red(resolved.warnings.join("; ") || `No route found for ${options.machine}`));
-      process.exitCode = 1;
       return;
     }
     console.log(options.privateMetadata ? command ?? `${resolved.route}:${resolved.target}` : `${publicResolved.route}:${publicResolved.target ?? "unresolved"}`);
@@ -3186,13 +3186,13 @@ program
     const resolved = resolveMachineRoute(options.machine);
     const publicResolved = redactRouteForOutput(resolved, { privateMetadata: options.privateMetadata });
     const command = resolved.ok && options.privateMetadata ? buildSshCommand(options.machine, options.cmd) : resolved.ok ? REDACTED_VALUE : null;
+    if (!resolved.ok) process.exitCode = 1;
     if (options.json) {
       console.log(JSON.stringify({ resolved: publicResolved, command }, null, 2));
       return;
     }
     if (!resolved.ok) {
       console.error(chalk.red(resolved.warnings.join("; ") || `No route found for ${options.machine}`));
-      process.exitCode = 1;
       return;
     }
     if (!options.privateMetadata) {
