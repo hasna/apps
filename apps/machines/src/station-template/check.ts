@@ -180,6 +180,11 @@ function effectiveListDirective(contents: readonly string[], section: string, na
   return values;
 }
 
+/** Systemd applies drop-ins by filename, independent of directory enumeration order. */
+export function sortSystemdDropinNames(names: readonly string[]): string[] {
+  return names.filter((name) => name.endsWith(".conf")).sort();
+}
+
 function defaultCommandProbe(): CommandProbe {
   return (command, args) => {
     try {
@@ -520,7 +525,7 @@ export function checkStationTemplate(effective: EffectiveTemplate, options: Chec
         }
         const dropinDir = join(unitDir, `${entry}.d`);
         if (existsSync(dropinDir)) {
-          for (const dropin of readdirSync(dropinDir).filter((name) => name.endsWith(".conf"))) {
+          for (const dropin of sortSystemdDropinNames(readdirSync(dropinDir))) {
             try {
               contents.push(readFileSync(join(dropinDir, dropin), "utf8"));
             } catch {
