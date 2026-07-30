@@ -4,6 +4,9 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, cpSync } f
 import { join, resolve } from "node:path";
 import { hostname, tmpdir } from "node:os";
 import {
+  BASHRC_BLOCK_BEGIN,
+  BASHRC_BLOCK_END,
+  buildBashrcSpliceCommand,
   buildStationTemplateSteps,
   checkStationTemplate,
   defaultTemplatesDir,
@@ -1085,4 +1088,171 @@ describe("setup --check targeting", () => {
     expect(report.machineId).toBe("control");
     expect(report.schemaId).toBe("hasna.station_template.v1");
   }, 60_000);
+});
+
+describe("bashrc-block (station17 2026-07-30: ssh/mosh remote commands found no bun CLIs)", () => {
+  // Ubuntu's stock ~/.bashrc shape: the early-return guard, then user content.
+  const STOCK_BASHRC = [
+    "# ~/.bashrc: executed by bash(1) for non-login shells.",
+    "",
+    "# If not running interactively, don't do anything",
+    "case $- in",
+    "    *i*) ;;",
+    "      *) return;;",
+    "esac",
+    "",
+    "alias ll='ls -l'",
+    "",
+  ].join("\n");
+
+  function shippedBlock() {
+    const file = effectiveFor(["ec2"]).files.find((candidate) => candidate.id === "bashrc-noninteractive-path");
+    expect(file).toBeDefined();
+    return file!;
+  }
+
+  test("base layer ships the ~/.bashrc block, marker-delimited, with both PATH entries", () => {
+    const file = shippedBlock();
+    expect(file.kind).toBe("bashrc-block");
+    expect(file.target).toBe("~/.bashrc");
+    expect(file.content.startsWith(BASHRC_BLOCK_BEGIN)).toBe(true);
+    expect(file.content.trimEnd().endsWith(BASHRC_BLOCK_END)).toBe(true);
+    expect(file.content).toContain(".bun/bin");
+    expect(file.content).toContain(".local/bin");
+    // Idempotent under repeated sourcing, same as the profile.d file.
+    expect(file.content).toContain(':$PATH:');
+  });
+
+  test("physical render splices the block — it never whole-file writes ~/.bashrc", () => {
+    const steps = buildStationTemplateSteps(effectiveFor(["ec2"]), { station: "station18" });
+    const step = steps.find((candidate) => candidate.id === "template-file-bashrc-noninteractive-path");
+    expect(step).toBeDefined();
+    expect(step?.command).toContain(BASHRC_BLOCK_BEGIN);
+    expect(step?.command).toContain("mktemp");
+    // Runs as the login user — a sudo'd splice would write a root-owned bashrc.
+    expect(step?.privileged).not.toBe(true);
+    // The whole-file writer always chmods its target; the splice must not go
+    // through that path for ~/.bashrc.
+    const wholeFileWrites = steps.filter((candidate) => candidate.command.includes(`chmod 0644 "$HOME"/'.bashrc'`));
+    expect(wholeFileWrites).toEqual([]);
+  });
+
+  test("cloud-init render keeps ~/.bashrc out of write_files and splices via runuser", () => {
+    const file = shippedBlock();
+    const userData = renderCloudInit(effectiveFor(["ec2"]), { station: "station18" });
+    // A write_files entry would clobber the stock bashrc wholesale.
+    expect(userData).not.toContain("path: /home/hasna/.bashrc");
+    // The block content rides base64-encoded INSIDE the runuser splice line —
+    // never as a write_files payload, and never as a literal newline that
+    // would break the runcmd YAML scalar.
+    const b64 = Buffer.from(file.content, "utf8").toString("base64");
+    const carrier = userData.split("\n").filter((line) => line.includes(b64));
+    expect(carrier.length).toBe(1);
+    expect(carrier[0]).toContain("runuser -l hasna -c");
+    expect(carrier[0]).toContain("base64 -d");
+  });
+
+  test("FUNCTIONAL: splice lands ABOVE the guard, is idempotent, heals drift, and prepends when no guard exists", () => {
+    const file = shippedBlock();
+    const command = buildBashrcSpliceCommand(file.target, file.content);
+    const home = mkdtempSync(join(tmpdir(), "bashrc-splice-"));
+    writeFileSync(join(home, ".bashrc"), STOCK_BASHRC);
+    const run = () => spawnSync("bash", ["-c", command], { encoding: "utf8", env: { ...process.env, HOME: home } });
+
+    let result = run();
+    expect(result.status).toBe(0);
+    const once = readFileSync(join(home, ".bashrc"), "utf8");
+    expect(once).toContain(file.content);
+    // ABOVE the guard — the entire point: non-interactive shells return at the
+    // guard, so a block below it is dead code.
+    expect(once.indexOf(BASHRC_BLOCK_BEGIN)).toBeLessThan(once.indexOf("# If not running interactively"));
+    // The stock file survives around it.
+    expect(once).toContain("alias ll='ls -l'");
+    expect(once).toContain("*) return;;");
+
+    // Idempotent: a second run changes nothing and never duplicates.
+    result = run();
+    expect(result.status).toBe(0);
+    const twice = readFileSync(join(home, ".bashrc"), "utf8");
+    expect(twice).toBe(once);
+    expect(twice.split(BASHRC_BLOCK_BEGIN).length - 1).toBe(1);
+
+    // Heals drift: hand-edits inside the markers are replaced on re-converge.
+    writeFileSync(join(home, ".bashrc"), once.replace(".bun/bin", ".corrupted/bin"));
+    result = run();
+    expect(result.status).toBe(0);
+    expect(readFileSync(join(home, ".bashrc"), "utf8")).toBe(once);
+
+    // REGRESSION (review P1): an orphan BEGIN marker — a hand-edit deleted
+    // the END line — must NOT turn the next converge into silent truncation
+    // of everything below it. The strip buffers and restores when no END
+    // closes the block.
+    const orphanHome = mkdtempSync(join(tmpdir(), "bashrc-orphan-"));
+    const orphanBashrc = [
+      BASHRC_BLOCK_BEGIN,
+      'export PATH="$HOME/.stale/bin:$PATH"',
+      STOCK_BASHRC,
+    ].join("\n");
+    writeFileSync(join(orphanHome, ".bashrc"), orphanBashrc);
+    result = spawnSync("bash", ["-c", command], { encoding: "utf8", env: { ...process.env, HOME: orphanHome } });
+    expect(result.status).toBe(0);
+    const healed = readFileSync(join(orphanHome, ".bashrc"), "utf8");
+    // User content and the guard survive.
+    expect(healed).toContain("alias ll='ls -l'");
+    expect(healed).toContain("*) return;;");
+    // A managed block is present above the guard.
+    expect(healed).toContain(file.content);
+    expect(healed.indexOf(file.content)).toBeLessThan(healed.indexOf("# If not running interactively"));
+
+    // No guard anywhere: the block is prepended, not appended.
+    const homeNoGuard = mkdtempSync(join(tmpdir(), "bashrc-noguard-"));
+    writeFileSync(join(homeNoGuard, ".bashrc"), "alias x=1\n");
+    result = spawnSync("bash", ["-c", command], { encoding: "utf8", env: { ...process.env, HOME: homeNoGuard } });
+    expect(result.status).toBe(0);
+    const noGuard = readFileSync(join(homeNoGuard, ".bashrc"), "utf8");
+    expect(noGuard.startsWith(file.content)).toBe(true);
+    expect(noGuard).toContain("alias x=1");
+  });
+
+  test("POSITIVE CONTROL: missing block is drift; block AFTER the guard is a violation; above it is ok", () => {
+    const { root, home, effective } = buildCleanFixture();
+    const file = shippedBlock();
+
+    writeFileSync(join(home, ".bashrc"), STOCK_BASHRC);
+    let result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: null });
+    let item = result.items.find((candidate) => candidate.id === "file:bashrc-noninteractive-path");
+    expect(item?.status).toBe("drift");
+    expect(item?.detail).toContain("missing");
+
+    // Present but AFTER the guard — dead code for the shells it serves, and it
+    // is a violation (wrong position), never mere drift.
+    writeFileSync(join(home, ".bashrc"), `${STOCK_BASHRC}\n${file.content}`);
+    result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: null });
+    item = result.items.find((candidate) => candidate.id === "file:bashrc-noninteractive-path");
+    expect(item?.status).toBe("violation");
+    expect(item?.detail).toContain("AFTER the interactive guard");
+
+    writeFileSync(join(home, ".bashrc"), `${file.content}\n${STOCK_BASHRC}`);
+    result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: null });
+    item = result.items.find((candidate) => candidate.id === "file:bashrc-noninteractive-path");
+    expect(item?.status).toBe("ok");
+  });
+
+  test("bashrc-block content without both markers is rejected at load", () => {
+    const dir = mkdtempSync(join(tmpdir(), "station-template-badblock-"));
+    cpSync(join(SHIPPED, "station"), join(dir, "station"), { recursive: true });
+    writeFileSync(join(dir, "station", "files/base/home/bashrc-block-noninteractive-path.sh"), 'export PATH="$HOME/.bun/bin:$PATH"\n');
+    expect(() => resolveStationTemplate([], { templatesDir: dir })).toThrow(/marker/);
+  });
+
+  test("bashrc-block with a non-home target is rejected at load", () => {
+    const dir = mkdtempSync(join(tmpdir(), "station-template-badtarget-"));
+    cpSync(join(SHIPPED, "station"), join(dir, "station"), { recursive: true });
+    const templatePath = join(dir, "station", "template.json");
+    const template = JSON.parse(readFileSync(templatePath, "utf8"));
+    const entry = template.base.files.find((candidate: { id: string }) => candidate.id === "bashrc-noninteractive-path");
+    entry.target = "/etc/bash.bashrc";
+    writeFileSync(templatePath, JSON.stringify(template));
+    expect(() => resolveStationTemplate([], { templatesDir: dir })).toThrow(/home-relative/);
+  });
 });

@@ -1,5 +1,6 @@
 import { dirname } from "node:path";
 import type { SetupStep } from "../types.js";
+import { buildBashrcSpliceCommand } from "./bashrc-block.js";
 import { SWAP_FILE_PATH, SWAP_HEADROOM_GB, type EffectiveTemplate, type LoadedTemplateFile } from "./schema.js";
 
 function quote(value: string): string {
@@ -76,6 +77,22 @@ export function buildStationTemplateSteps(effective: EffectiveTemplate, options:
   }
 
   for (const file of effective.files) {
+    if (file.kind === "bashrc-block") {
+      // Never whole-file managed: ~/.bashrc is user-owned and machine-varied.
+      // The splice strips any previous copy of the marker-delimited block and
+      // re-inserts it ABOVE the stock interactive guard — the only position
+      // that reaches non-login non-interactive shells (ssh/mosh remote
+      // commands), which read ~/.bashrc and nothing else (station17
+      // 2026-07-30: profile.d is login-only and sshd-spawned bash sources
+      // ~/.bashrc INSTEAD of $BASH_ENV).
+      steps.push({
+        id: `template-file-${file.id}`,
+        title: `Splice managed block into ${file.target} above the interactive guard`,
+        command: buildBashrcSpliceCommand(file.target, file.content),
+        manager: "shell",
+      });
+      continue;
+    }
     steps.push({
       id: `template-file-${file.id}`,
       title: `Write ${file.target} (${file.kind})`,

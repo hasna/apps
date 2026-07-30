@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { validateBashrcBlockContent } from "./bashrc-block.js";
 import {
   ORDERING_PREFIX,
   ORDERING_SENSITIVE_KINDS,
@@ -43,6 +44,21 @@ function loadFile(templateDir: string, file: TemplateFile, templatePath: string)
     throw new Error(`Station template invalid: ${templatePath} file "${file.id}" source missing: ${sourcePath}`);
   }
   const content = readFileSync(sourcePath, "utf8");
+  if (file.kind === "bashrc-block") {
+    if (!file.target.startsWith("~/")) {
+      throw new Error(
+        `Station template invalid: ${templatePath} file "${file.id}" is a bashrc-block but targets ` +
+          `${file.target} — the splice runs unprivileged as the login user, so the target must be home-relative (~/...).`
+      );
+    }
+    const markerProblem = validateBashrcBlockContent(content);
+    if (markerProblem) {
+      throw new Error(
+        `Station template invalid: ${templatePath} file "${file.id}" bashrc-block content: ${markerProblem} — ` +
+          `without both markers the splice cannot find and replace its own block on re-converge.`
+      );
+    }
+  }
   const orderingSensitive = (ORDERING_SENSITIVE_KINDS as readonly string[]).includes(file.kind);
   if (orderingSensitive && !basename(file.target).startsWith(ORDERING_PREFIX)) {
     throw new Error(

@@ -1,4 +1,5 @@
 import { SWAP_FILE_PATH, SWAP_HEADROOM_GB, type EffectiveTemplate } from "./schema.js";
+import { buildBashrcSpliceCommand } from "./bashrc-block.js";
 
 export interface CloudInitOptions {
   /** Station identity, e.g. station17 — becomes hostname and tailscale name. */
@@ -50,9 +51,14 @@ export function renderCloudInit(effective: EffectiveTemplate, options: CloudInit
     for (const pkg of effective.packages.apt) lines.push(`  - ${pkg}`);
   }
 
-  if (effective.files.length > 0) {
+  // bashrc-block files are spliced, never whole-file written: a write_files
+  // entry for ~/.bashrc would clobber the stock file (and cloud-init writes
+  // before the user's skel copy lands). They render as a runcmd splice below.
+  const wholeFiles = effective.files.filter((file) => file.kind !== "bashrc-block");
+  const bashrcBlocks = effective.files.filter((file) => file.kind === "bashrc-block");
+  if (wholeFiles.length > 0) {
     lines.push("write_files:");
-    for (const file of effective.files) {
+    for (const file of wholeFiles) {
       const homeRelative = file.target.startsWith("~/");
       const path = homeRelative ? `${home}/${file.target.slice(2)}` : file.target;
       lines.push(`  - path: ${path}`);
@@ -177,6 +183,13 @@ export function renderCloudInit(effective: EffectiveTemplate, options: CloudInit
     runcmd.push(
       `runuser -l ${user} -c 'mkdir -p ~/.hasna && (command -v secrets >/dev/null 2>&1 && umask 077 && secrets get ${effective.secretsBootstrap.envSecretName} > ~/.hasna/station.env) || true'`
     );
+  }
+  for (const file of bashrcBlocks) {
+    // Same splice as the physical render, run as the login user so $HOME and
+    // ownership are right. runuser -l gives a login environment; the command
+    // itself needs nothing beyond sh, awk, grep and mktemp.
+    const splice = buildBashrcSpliceCommand(file.target, file.content);
+    runcmd.push(`runuser -l ${user} -c '${splice.replace(/'/g, `'\\''`)}'`);
   }
   runcmd.push(
     `mkdir -p ${home}/.hasna/machines && printf '%s' '{"template":"${effective.name}","version":"${effective.version}","layers":"${effective.layers.join(",")}","renderedFor":"${station ?? "unknown"}","appliedBy":"cloud-init"}' > ${home}/.hasna/machines/template-state.json && chown -R ${user}:${user} ${home}/.hasna`

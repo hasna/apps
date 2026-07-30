@@ -26,7 +26,7 @@ export const templateFileSchema = z.object({
    */
   target: z.string().min(1),
   mode: z.string().regex(/^0[0-7]{3}$/).default("0644"),
-  kind: z.enum(["sysctl", "tmpfiles", "systemd-dropin", "systemd-user-unit", "plain"]).default("plain"),
+  kind: z.enum(["sysctl", "tmpfiles", "systemd-dropin", "systemd-user-unit", "plain", "bashrc-block"]).default("plain"),
   /** Which measured failure this file exists to prevent. */
   lesson: z.string().min(1),
 });

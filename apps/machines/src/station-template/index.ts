@@ -23,6 +23,13 @@ export {
   type LoadedStationTemplate,
 } from "./loader.js";
 export { buildStationTemplateSteps } from "./render-setup.js";
+export {
+  BASHRC_BLOCK_BEGIN,
+  BASHRC_BLOCK_END,
+  BASHRC_GUARD_REGEX,
+  buildBashrcSpliceCommand,
+  validateBashrcBlockContent,
+} from "./bashrc-block.js";
 export { renderCloudInit, type CloudInitOptions } from "./render-cloud-init.js";
 export {
   checkStationTemplate,

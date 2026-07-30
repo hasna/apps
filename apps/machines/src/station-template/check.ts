@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { getLocalMachineId } from "../db.js";
 import { parseSysctlKeys } from "./loader.js";
+import { BASHRC_BLOCK_BEGIN, BASHRC_GUARD_REGEX } from "./bashrc-block.js";
 import type { EffectiveTemplate } from "./schema.js";
 
 export type CheckStatus = "ok" | "drift" | "violation" | "skipped";
@@ -221,6 +222,46 @@ export function checkStationTemplate(effective: EffectiveTemplate, options: Chec
       continue;
     }
     const actual = readFileSync(resolved, "utf8");
+    if (file.kind === "bashrc-block") {
+      // The block must be present VERBATIM and must sort BEFORE the stock
+      // interactive guard — a block after the guard is dead code for exactly
+      // the shells it exists to serve (ssh/mosh remote commands, which are
+      // non-login non-interactive and read only ~/.bashrc; station17
+      // 2026-07-30). Present-but-late is therefore a violation, not drift.
+      const blockIndex = actual.indexOf(file.content);
+      if (blockIndex < 0) {
+        const beginIndex = actual.indexOf(BASHRC_BLOCK_BEGIN);
+        items.push({
+          id: `file:${file.id}`,
+          kind: "file",
+          status: "drift",
+          detail:
+            beginIndex < 0
+              ? `${file.target} managed block missing (marker "${BASHRC_BLOCK_BEGIN}" not found)`
+              : `${file.target} managed block content mismatch: expected sha256 ${sha256(file.content).slice(0, 12)}`,
+        });
+        continue;
+      }
+      const guardMatch = BASHRC_GUARD_REGEX.exec(actual);
+      if (guardMatch && guardMatch.index < blockIndex) {
+        items.push({
+          id: `file:${file.id}`,
+          kind: "file",
+          status: "violation",
+          detail:
+            `${file.target} managed block sits AFTER the interactive guard — non-login non-interactive ` +
+            `shells (ssh/mosh remote commands) return before reaching it`,
+        });
+        continue;
+      }
+      items.push({
+        id: `file:${file.id}`,
+        kind: "file",
+        status: "ok",
+        detail: `${file.target} managed block present above the interactive guard (sha256 ${sha256(file.content).slice(0, 12)})`,
+      });
+      continue;
+    }
     if (actual === file.content) {
       items.push({ id: `file:${file.id}`, kind: "file", status: "ok", detail: `${file.target} matches (sha256 ${sha256(actual).slice(0, 12)})` });
     } else {

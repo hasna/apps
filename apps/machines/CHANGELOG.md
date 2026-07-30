@@ -6,6 +6,26 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-07-30
+
+### Added
+
+- **`bashrc-block` template file kind + base-layer `~/.bashrc` non-interactive
+  PATH block** (template 1.4.0 → 1.5.0). Measured on station17 2026-07-30:
+  `mosh station17 codewith` — and every `ssh stationN <cmd>` — resolved no
+  bun-installed CLI. Those shells are NON-LOGIN and NON-INTERACTIVE, so the
+  0.2.7 profile.d fix never runs for them, and the sshd-spawned bash sources
+  `~/.bashrc` INSTEAD of `$BASH_ENV` (verified: with `~/.bashrc` hidden and
+  sshd `SetEnv` pointing `BASH_ENV` at the PATH profile, resolution still
+  failed). The only hook those shells read is `~/.bashrc` ABOVE the stock
+  early-return guard, so the new kind splices a marker-delimited block there —
+  idempotent, drift-healing, never whole-file (the file is user-owned and
+  machine-varied; a cloud-init `write_files` entry would clobber it). The
+  drift check requires the block verbatim AND positioned before the guard;
+  present-but-after-guard is a violation, not drift. Block content rides
+  base64 inside a single-line command in both renders (a literal newline in a
+  runcmd double-quoted YAML scalar is invalid YAML).
+
 ## [0.2.7] - 2026-07-30
 
 ### Added
