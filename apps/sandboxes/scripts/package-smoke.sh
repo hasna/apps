@@ -8,7 +8,10 @@ trap cleanup EXIT
 
 cd "$repo_root"
 bun run build
-bun pm pack --destination "$temporary" --quiet >/dev/null
+# `bun pm pack` runs `prepack`, and `prepack` runs this scan, so the inner pack
+# would recurse forever. The guard is read by `prepack` in package.json, which
+# builds but skips the scan while a scan is already in flight.
+SANDBOXES_ARTIFACT_SCAN_ACTIVE=1 bun pm pack --destination "$temporary" --quiet >/dev/null
 tarball=$(find "$temporary" -maxdepth 1 -type f -name '*.tgz' -print -quit)
 test -n "$tarball"
 tar -tzf "$tarball" >"$temporary/package-files.txt"

@@ -47,11 +47,13 @@
   ],
   "scripts": {
     "test": "bun run test:hermetic",
-    "test:hermetic": "tmp=$(mktemp -d); trap 'rm -rf \"$tmp\"' EXIT; env -i PATH=\"$PATH\" HOME=\"$tmp\" XDG_CONFIG_HOME=\"$tmp/config\" TMPDIR=\"$tmp\" TZ=UTC bun test tests/managed-adapters tests/cli-mcp",
+    "test:hermetic": "tmp=$(mktemp -d); trap 'rm -rf \"$tmp\"' EXIT; env -i PATH=\"$PATH\" HOME=\"$tmp\" XDG_CONFIG_HOME=\"$tmp/config\" TMPDIR=\"$tmp\" TZ=UTC bun test tests/contract tests/managed-adapters tests/cli-mcp",
     "test:postgres": "bun run test:postgres:journal && bun run test:postgres:witness",
     "test:postgres:journal": "./scripts/disposable-task-postgres-integration.sh",
     "test:postgres:witness": "./tests/managed-adapters/durable-journal-witness-postgres.integration.sh",
-    "test:pack": "./scripts/package-smoke.sh",
+    "test:pack": "bun run scan:artifact",
+    "scan:artifact": "./scripts/package-smoke.sh",
+    "conformance": "contracts repo-conformance",
     "test:transport": "bun run build && bun tests/transport/transport-smoke.ts",
     "test:node": "bun run build && node tests/node/managed-promise-boundary.mjs",
     "test:types": "bun run build && tsc -p tests/types/tsconfig.json",
@@ -60,7 +62,7 @@
     "build:adapters": "bun build src/adapters/managed/index.ts --outdir dist --target node --format esm --external e2b --external @daytona/sdk && bun build src/adapters/managed/postgres.ts --outdir dist --target bun --format esm && tsc -p tsconfig.build.json && bun scripts/fix-declaration-imports.ts && mkdir -p dist/adapters/managed && cp scripts/e2b-guest-broker-v1.py dist/adapters/managed/e2b-guest-broker-v1.py",
     "build:bins": "bun build src/cli/index.ts --outdir dist/cli --target bun --format esm --external e2b --external @daytona/sdk --external @modelcontextprotocol/sdk --external commander && bun build src/mcp/index.ts --outdir dist/mcp --target bun --format esm --external e2b --external @daytona/sdk --external @modelcontextprotocol/sdk --external @hasna/mcp-harness --external commander && bun scripts/finalize-bins.ts",
     "audit": "bun audit",
-    "prepack": "bun run build"
+    "prepack": "bun run build && { [ -n \"${SANDBOXES_ARTIFACT_SCAN_ACTIVE:-}\" ] || bun run scan:artifact; }"
   },
   "dependencies": {
     "@daytona/sdk": "0.193.0",

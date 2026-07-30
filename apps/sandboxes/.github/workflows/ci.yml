@@ -1,0 +1,30 @@
+name: ci
+
+# Before this workflow nothing in-repo ran the suite, so a malformed
+# hasna.contract.json (or any other regression) could land green. The contract
+# guard in tests/contract only gates the PR because this job runs it.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run build
+      - run: bun run test
