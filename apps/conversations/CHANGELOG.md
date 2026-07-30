@@ -7,6 +7,9 @@ All notable changes to this project will be documented in this file.
 ### Added
 - Run typechecking and tests in GitHub Actions for pull requests and pushes to `main`.
 
+### Tests
+- Add unit coverage for the contracts client HTTP transport and storage adapter, including configuration refusal, request retries, CRUD normalization, and error handling.
+
 ### Fixed
 - **MCP heartbeats no longer hijack the machine identity, and the CLI now persists it.** `register_agent`/`heartbeat` used to rewrite `~/.hasna/conversations/agent-id` on every call. The MCP server is one long-lived daemon under a single HOME, so whichever agent heartbeated last owned the whole box — last writer wins, no audit trail. They now record the caller *per MCP connection* only. In exchange, the identity file gets two deliberate writers: `conversations agents register <name> --identity` (opt-in, reports write failures instead of claiming success) and `conversations agents rename <old> <new>` (only when the renamed agent *is* this installation's identity, decided from the file on disk rather than a possibly days-stale in-process cache).
 - **A box with no identity file adopts the first agent that registers over MCP.** Seed-if-absent, never last-writer-wins: an identity that already exists is left alone. Without this, a fresh install split in two — the MCP session spoke as the registered agent while every CLI process and `conversations-hook` fell through to the auto-name generator, invented a pool name, persisted it as the machine identity, and then polled blocking messages addressed to an agent nobody was.
