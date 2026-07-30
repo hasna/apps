@@ -132,6 +132,18 @@ export function buildStationTemplateSteps(effective: EffectiveTemplate, options:
       privileged: true,
     });
   }
+  if (effective.files.some((file) => file.kind === "journald-dropin")) {
+    // journald reads its config only at start: a written drop-in without a
+    // restart is a cap on disk but not in force (daemon-reload does NOT
+    // reload journald config). Same shape as the sysctl/tmpfiles hooks.
+    steps.push({
+      id: "template-journald-restart",
+      title: "Restart systemd-journald so the journal size cap is in force",
+      command: "sudo systemctl restart systemd-journald",
+      manager: "shell",
+      privileged: true,
+    });
+  }
   if (effective.files.some((file) => file.kind === "systemd-user-unit")) {
     steps.push({
       id: "template-systemd-user-reload",
