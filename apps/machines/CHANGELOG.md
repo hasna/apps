@@ -17,8 +17,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `journald.conf`, an absent `journald.conf.d`, and NO drift item covering
   the axis (found by the 2026-07-30 item-4 box audit; re-measured on both
   station17 and station18 with a positive control). The bound in force was
-  the accidental journald default of 10% of the filesystem (~6G on the 61G
-  ec2-class root). The base layer now ships
+  the accidental journald default of min(10% of the filesystem, 4G) — "max
+  4.0G" measured in both boxes' own journald startup lines. The base layer
+  now ships
   `/etc/systemd/journald.conf.d/99-zz-hasna-station.conf` with
   `SystemMaxUse=2G` (two orders of magnitude above the measured 16M of use)
   and `SystemKeepFree=8G` (mirrors the ec2 overlay's `disk.minFreeGb` floor,

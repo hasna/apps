@@ -362,7 +362,7 @@ export function checkStationTemplate(effective: EffectiveTemplate, options: Chec
               id: `journald:${name}`,
               kind: "journald",
               status: "drift",
-              detail: `${name} expected ${expected}, effective value across ${basename(stockConf)} + sorted drop-ins is ${actual ?? "unset (journald's built-in default applies — for SystemMaxUse, 10% of the filesystem)"}`,
+              detail: `${name} expected ${expected}, effective value across ${basename(stockConf)} + sorted drop-ins is ${actual ?? "unset (journald's built-in default applies)"}`,
             }
       );
     }
