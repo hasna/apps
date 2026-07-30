@@ -2,6 +2,11 @@
 
 All notable changes to `@hasna/bench` are documented here.
 
+## Unreleased
+
+- Add GitHub Actions CI for pull requests and pushes to `main`, covering the
+  frozen Bun install, typecheck, build, and test suite.
+
 ## 0.0.3
 
 - Fix: CLI `--version` reported a stale hardcoded value (`0.0.1`) that had
