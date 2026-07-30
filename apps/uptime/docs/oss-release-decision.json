@@ -20,6 +20,7 @@
   },
   "provenance": {
     "status": "MISSING",
+    "registryVersion": "0.1.69",
     "npmAttestations": false,
     "npmGitHead": null,
     "alternateEvidence": null,

@@ -33,6 +33,11 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GITLEAKS_VERSION: "8.30.1"
+      # The release gate shells out to `gh`, which refuses to run on a
+      # GitHub-hosted runner without a token. Declaring it on the job covers
+      # both gate invocations: the audit step, and `npm publish`'s
+      # prepublishOnly.
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -70,3 +75,9 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --provenance --access public
+
+      # An attestation exists only once the version is on the registry, which is
+      # why the pre-publish gate cannot require one. Assert it here, where it can
+      # be true, so a publish that silently produced no provenance still fails.
+      - name: Verify the published provenance attestation
+        run: bun run release:oss:verify-published

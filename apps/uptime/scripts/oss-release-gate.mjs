@@ -174,6 +174,9 @@ export function auditStaticRepository(repositoryRoot = root) {
     errors.push(`could not verify runtime dependency notices: ${error.message}`);
   }
 
+  const workflowAuthentication = auditReleaseWorkflowAuthentication(repositoryRoot);
+  errors.push(...workflowAuthentication.errors);
+
   check(decision.schemaVersion === 1, "release decision schemaVersion must be 1", errors);
   check(decision.repository === expectedRepository, "release decision names the wrong repository", errors);
   check(decision.package === pkg.name, "release decision names the wrong package", errors);
@@ -182,6 +185,16 @@ export function auditStaticRepository(repositoryRoot = root) {
   check(decision.observed?.npmPackagePublic === true, "release decision must record that the npm package is public", errors);
   check(decision.legal?.status === "PASS", "legal review is not recorded as PASS", errors);
   check(decision.secretScan?.status === "PASS", "secret scan is not recorded as PASS", errors);
+
+  // Registry evidence is retrospective: it describes a release npm already
+  // serves. The version being released is not on npm yet, so it can never be
+  // the subject of that evidence.
+  const registryVersion = decision.provenance?.registryVersion;
+  check(
+    registryVersion === null || typeof registryVersion === "string",
+    "release decision must record provenance.registryVersion — the published version its registry evidence describes, or null before the first publication",
+    errors,
+  );
 
   return { decision, errors, package: pkg, provenancePublishing: provenancePublishing.configured };
 }
@@ -200,6 +213,64 @@ export function auditProvenancePublishing(repositoryRoot = root) {
   check(/^\s*id-token:\s*write\s*$/m.test(workflow), `${releaseWorkflowPath} does not request the id-token: write permission npm provenance requires`, errors);
   check(/npm publish[^\n]*--provenance/.test(workflow), `${releaseWorkflowPath} does not publish with --provenance`, errors);
   return { configured: errors.length === 0, errors };
+}
+
+// The gate shells out to `gh`, which refuses to run on a GitHub-hosted runner
+// without GH_TOKEN in the environment. A release workflow that runs the gate
+// without one fails on every tag push, so the gate refuses to certify it.
+export function auditReleaseWorkflowAuthentication(repositoryRoot = root) {
+  const workflowPath = join(repositoryRoot, releaseWorkflowPath);
+  if (!existsSync(workflowPath)) {
+    return { authenticated: false, errors: [`${releaseWorkflowPath} is missing, so no release workflow can run the gate`] };
+  }
+
+  const errors = [];
+  const steps = releaseWorkflowGateSteps(readFileSync(workflowPath, "utf8"));
+  check(steps.length > 0, `${releaseWorkflowPath} never runs the OSS release gate`, errors);
+  for (const step of steps) {
+    check(
+      step.githubToken,
+      `${releaseWorkflowPath} step "${step.name}" runs the OSS release gate without GH_TOKEN, so its \`gh\` calls cannot authenticate`,
+      errors,
+    );
+  }
+  return { authenticated: errors.length === 0, errors };
+}
+
+// A line-oriented reader rather than a YAML parser: the gate runs under plain
+// Node, which has none, and adding a parser to publish a release is not worth
+// the dependency. Any GH_TOKEN binding declared before the first step applies
+// workflow- or job-wide, so it covers every step below it.
+function releaseWorkflowGateSteps(workflow) {
+  const stepMarker = /^(\s*)- (?:name|uses|run):/;
+  const gateInvocation = /release:oss:|scripts\/oss-release-gate\.mjs|npm publish/;
+  const githubTokenBinding = /^\s*(?:GH_TOKEN|GITHUB_TOKEN):\s*\S/;
+  const lines = workflow.split("\n").filter((line) => !/^\s*#/.test(line));
+  const stepIndent = lines.map((line) => line.match(stepMarker)?.[1].length).find((indent) => indent !== undefined);
+
+  const steps = [];
+  let current = null;
+  let sharedToken = false;
+  for (const line of lines) {
+    if (line.match(stepMarker)?.[1].length === stepIndent) {
+      current = { name: null, lines: [] };
+      steps.push(current);
+    }
+    if (!current) {
+      if (githubTokenBinding.test(line)) sharedToken = true;
+      continue;
+    }
+    current.lines.push(line);
+    const name = line.match(/^\s*(?:- )?name:\s*(.+)$/);
+    if (name && current.name === null) current.name = name[1].trim();
+  }
+
+  return steps
+    .filter((step) => step.lines.some((line) => gateInvocation.test(line)))
+    .map((step) => ({
+      name: step.name ?? "(unnamed)",
+      githubToken: sharedToken || step.lines.some((line) => githubTokenBinding.test(line)),
+    }));
 }
 
 function scanText(text, scope) {
@@ -260,13 +331,43 @@ export function inspectReleaseCandidate(recordedCommit, repositoryRoot = root) {
   return { resolved, containedInHead, changedPaths };
 }
 
+// `npm view <name>@<version>` exits non-zero with E404 when the version is not
+// published. For the version this gate is about to release that is the expected
+// state, not a failure to reach the registry, so it must not become an audit
+// error — treating it as one closes the gate against every new version.
+function npmView(specifier) {
+  let output;
+  try {
+    output = command("npm", ["view", specifier, "--json"]);
+  } catch (error) {
+    if (!isRegistryNotFound(error)) throw error;
+    return { published: false, view: null };
+  }
+  if (output === "") return { published: false, view: null };
+  const view = JSON.parse(output);
+  if (view?.error) {
+    if (view.error.code === "E404") return { published: false, view: null };
+    throw new Error(`npm view ${specifier} failed: ${view.error.summary ?? view.error.code}`);
+  }
+  return { published: true, view };
+}
+
+function isRegistryNotFound(error) {
+  return /\bE404\b/.test(`${error?.stdout ?? ""}\n${error?.stderr ?? ""}\n${error?.message ?? ""}`);
+}
+
 function inspectOnlineState(pkg, decision) {
   const github = JSON.parse(command("gh", ["repo", "view", expectedRepository, "--json", "visibility,isPrivate"]));
-  const npm = JSON.parse(command("npm", ["view", `${pkg.name}@${decision.releaseVersion}`, "--json"]));
+  const registryVersion = decision.provenance?.registryVersion ?? null;
+  const baseline = registryVersion ? npmView(`${pkg.name}@${registryVersion}`) : { published: false, view: null };
+  if (registryVersion && !baseline.published) {
+    throw new Error(`npm does not publish ${pkg.name}@${registryVersion}, so the recorded registry evidence cannot be verified`);
+  }
   return {
     githubVisibility: github.visibility,
     githubPrivate: github.isPrivate,
-    npm,
+    registry: baseline.view,
+    releaseVersionPublished: npmView(`${pkg.name}@${decision.releaseVersion}`).published,
   };
 }
 
@@ -288,27 +389,40 @@ export function releaseCandidateBlockers(recordedCommit, candidate) {
 export function evaluateReleaseDecision({ decision, staticErrors = [], online, candidate, clean, provenancePublishing = false, secretFindings = [] }) {
   const auditErrors = [...staticErrors, ...secretFindings];
   const blockers = [];
-  const npmDist = online.npm.dist ?? {};
-  const npmRepositoryUrl = typeof online.npm.repository === "string" ? online.npm.repository : online.npm.repository?.url;
-  const npmAttestations = Boolean(
-    npmDist.attestations?.url
-      && npmDist.attestations?.provenance?.predicateType === "https://slsa.dev/provenance/v1",
+  // `online.registry` is the npm record of the release npm already serves —
+  // `provenance.registryVersion` — never the version being released, which does
+  // not exist on the registry until this release publishes it.
+  const registry = online.registry ?? null;
+  const registryDist = registry?.dist ?? {};
+  const registryRepositoryUrl = typeof registry?.repository === "string" ? registry.repository : registry?.repository?.url;
+  const registryAttestations = Boolean(
+    registryDist.attestations?.url
+      && registryDist.attestations?.provenance?.predicateType === "https://slsa.dev/provenance/v1",
   );
-  const npmGitHead = online.npm.gitHead ?? null;
-  const npmRegistrySignature = Array.isArray(npmDist.signatures) && npmDist.signatures.length > 0;
+  const registryGitHead = registry?.gitHead ?? null;
+  const registrySignature = Array.isArray(registryDist.signatures) && registryDist.signatures.length > 0;
 
   check(online.githubVisibility === decision.observed.githubVisibility, "recorded GitHub visibility does not match GitHub", auditErrors);
   check(online.githubPrivate === (decision.observed.githubVisibility === "PRIVATE"), "recorded GitHub private state is inconsistent", auditErrors);
-  check(online.npm.version === decision.releaseVersion, "recorded npm version does not match the registry", auditErrors);
-  check(npmRepositoryUrl === decision.observed.npmRepositoryUrl, "recorded npm repository URL does not match the registry", auditErrors);
-  check(npmDist.integrity === decision.provenance.registryIntegrity, "recorded npm integrity does not match the registry", auditErrors);
-  check(npmRegistrySignature === decision.provenance.registrySignature, "recorded npm registry-signature state does not match the registry", auditErrors);
-  check(npmAttestations === decision.provenance.npmAttestations, "recorded npm attestation state does not match the registry", auditErrors);
-  check(npmGitHead === decision.provenance.npmGitHead, "recorded npm gitHead does not match the registry", auditErrors);
+
+  if (registry) {
+    check(registry.version === decision.provenance.registryVersion, "recorded npm registry version does not match the registry", auditErrors);
+    check(registryRepositoryUrl === decision.observed.npmRepositoryUrl, "recorded npm repository URL does not match the registry", auditErrors);
+    check(registryDist.integrity === decision.provenance.registryIntegrity, "recorded npm integrity does not match the registry", auditErrors);
+    check(registrySignature === decision.provenance.registrySignature, "recorded npm registry-signature state does not match the registry", auditErrors);
+    check(registryAttestations === decision.provenance.npmAttestations, "recorded npm attestation state does not match the registry", auditErrors);
+    check(registryGitHead === decision.provenance.npmGitHead, "recorded npm gitHead does not match the registry", auditErrors);
+  } else {
+    // Nothing is published yet, so there is no registry evidence to record.
+    check(decision.provenance.registryVersion === null, "release decision records npm registry evidence for a version npm does not publish", auditErrors);
+    check(decision.provenance.registryIntegrity === null, "release decision records npm integrity with no published version to verify it against", auditErrors);
+    check(decision.provenance.npmAttestations === false, "release decision records npm attestations with no published version to verify them against", auditErrors);
+  }
 
   if (decision.decision !== "GO") blockers.push("recorded public-release decision is HOLD");
   if (decision.explicitPublicApproval !== true) blockers.push("explicit repository-public approval is absent");
   if (online.githubVisibility !== "PUBLIC") blockers.push("GitHub repository is not public, so public package metadata is unresolved");
+  if (online.releaseVersionPublished === true) blockers.push("the release version is already published to npm");
   if (!clean) blockers.push("release candidate worktree is not clean");
   blockers.push(...releaseCandidateBlockers(decision.releaseCandidateCommit, candidate));
 
@@ -320,10 +434,13 @@ export function evaluateReleaseDecision({ decision, staticErrors = [], online, c
       && /^sha512-[A-Za-z0-9+/]+={0,2}$/.test(alternate.packageIntegrity ?? "")
       && alternate.approvedBy,
   );
-  if (!(npmAttestations || alternateValid) || decision.provenance.status !== "VERIFIED") {
-    blockers.push("npm provenance or approved alternate source evidence is not verified");
-  }
-  if (provenancePublishing !== true) blockers.push("npm provenance publishing is not configured");
+  // An attestation for the version being released cannot exist before it is
+  // released, so requiring one here would close the gate permanently. What is
+  // checkable beforehand is the recorded verdict and the existence of a path
+  // that will actually produce provenance; the release workflow asserts the
+  // attestation itself once the version is on the registry.
+  if (decision.provenance.status !== "VERIFIED") blockers.push("recorded provenance status is not VERIFIED");
+  if (provenancePublishing !== true && !alternateValid) blockers.push("npm provenance publishing is not configured");
   if (auditErrors.length > 0) blockers.push("release audit has errors");
 
   return {
@@ -340,7 +457,36 @@ function printResult(result, decision) {
   for (const blocker of result.blockers) console.error(`BLOCKED: ${blocker}`);
 }
 
+// The attestation the pre-publish gate cannot require, asserted where it can
+// exist: after `npm publish` has put the version on the registry.
+export function publishedProvenanceErrors(view) {
+  const errors = [];
+  const attestations = view?.dist?.attestations;
+  check(Boolean(attestations?.url), "the published release has no npm attestation bundle", errors);
+  check(
+    attestations?.provenance?.predicateType === "https://slsa.dev/provenance/v1",
+    "the published release has no SLSA provenance attestation",
+    errors,
+  );
+  return errors;
+}
+
+function verifyPublishedProvenance() {
+  const pkg = readJson(join(root, "package.json"));
+  const specifier = `${pkg.name}@${pkg.version}`;
+  const published = npmView(specifier);
+  const errors = published.published
+    ? publishedProvenanceErrors(published.view)
+    : [`${specifier} is not published, so its provenance cannot be verified`];
+
+  for (const error of errors) console.error(`AUDIT ERROR: ${error}`);
+  if (errors.length > 0) process.exitCode = 1;
+  else console.log(`Published provenance verified for ${specifier}`);
+}
+
 function main() {
+  if (process.argv.includes("--verify-published-provenance")) return verifyPublishedProvenance();
+
   const verifyRecordedState = process.argv.includes("--verify-recorded-state");
   const staticAudit = auditStaticRepository();
   let online;
@@ -365,7 +511,8 @@ function main() {
     online = {
       githubVisibility: "UNKNOWN",
       githubPrivate: false,
-      npm: { version: null, repository: null, dist: {} },
+      registry: null,
+      releaseVersionPublished: false,
     };
   }
 
