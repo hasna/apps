@@ -28,7 +28,8 @@ machines setup --template station,dgx-spark
 # apply on a physical box (mutation-gated like every setup apply)
 machines setup --template station,dgx-spark --apply --yes
 
-# drift check: read-only, JSON verdict — parse the JSON, never the exit code.
+# drift check: read-only. The JSON names WHICH item failed; the exit code says
+# whether anything did — 0 clean / 1 findings / 2 incomplete (see below).
 # It inspects THIS box; the report carries "machineId" so a fleet sweep can
 # attribute it. Passing --machine <other> is rejected, not silently ignored —
 # run it over SSH on that station instead.
@@ -193,9 +194,77 @@ the old `test -f /swapfile ||` guard treated the partial file as done forever
 
 `--check` is a pure read: file content (sha256), sysctl runtime values
 (`/proc/sys`), MGLRU runtime value, package presence, service state, unit
-conventions, and the **ordering rule** — a managed sysctl file must sort last
-among all files in its directory that define any of its keys. Verdict is in
-the JSON (`"verdict": "clean" | "drift"`); exit codes are not the interface.
+conventions, **declared absences**, and the **ordering rule** — a managed sysctl
+file must sort last among all files in its directory that define any of its
+keys.
+
+### Exit codes (0.3.0)
+
+| rc | meaning |
+|----|---------|
+| 0  | clean, and every item reached a verdict |
+| 1  | findings — at least one item is `drift` or `violation` |
+| 2  | incomplete — no findings, but at least one item is `skipped` |
+
+Findings outrank incompleteness. `2` matters as much as `1`: a check with
+`skipped` items has not proven the box clean, it has proven it could not look,
+and "could not look" reported as success is exactly how a station running a
+live tailscale passed a check that was supposed to assert its absence.
+
+`--no-fail-on-findings` restores the pre-0.3.0 behaviour of always exiting 0.
+It silences the exit code, not the report — the JSON still says `drift`.
+
+**This is a breaking change for callers.** Until 0.3.0 `--check` exited 0
+whether the verdict was `clean` or `drift`, so every caller in the fleet parsed
+the JSON and recorded `check_rc=0 (NOT trusted)`. Those callers keep working —
+the JSON is unchanged and is still the richer answer, because it names which
+item failed. What breaks is any caller that treated a non-zero rc as "the
+command itself failed"; add `--no-fail-on-findings` there, or read the rc.
+
+The numbers match the `0 clean / 1 findings / 2 incomplete` contract on the
+table for `todos doctor`, and the opt-out flag deliberately carries the same
+name. That contract is scoped to the todos CLI and has not landed, so it does
+not bind this one — but the estate gets one numeric language for "did the check
+pass", not two.
+
+### Version floors
+
+`packages.bun` entries declare a `minVersion` **floor** — never a pin. A newer
+version is `ok`; an older one is `drift` naming both versions; a version that
+cannot be read as semver is `drift`, never `ok`. Presence alone was the whole
+contract until 0.3.0, which made 12 of the 42 items version-blind: a station
+carrying a CLI from before a fix was indistinguishable from one updated an hour
+ago. The renders install latest, so a floor never pins a station to the oldest
+acceptable release.
+
+The bare-string form (`"@hasna/todos"`) still loads for out-of-tree templates,
+but carries no floor, and the item detail says so. The shipped template must
+never use it.
+
+### Declared absences
+
+`absences` declare what a station class must **not** have, so that its presence
+can go red. Each entry may probe a `command` (must not resolve on PATH), a
+`service` (systemd must report `LoadState=not-found`), and `paths` (none may
+exist); at least one probe is required, or the item could only ever report ok.
+
+Presence is a `violation`, not `drift`: `setup --apply` does not uninstall, so
+re-running setup cannot converge it.
+
+An absence whose command/service could not be probed reports `skipped`, never
+`ok` — the check has not earned "absent" from the paths alone.
+
+A layer set that both requires and forbids the same thing is refused at load
+time rather than reported twice. The ec2 overlay declares tailscale absent
+(owner ruling 2026-07-30), so the ruling's narrow future exception — a single
+AWS box granted tailscale as an access path — has to be written into that box's
+own overlay, retracting the absence deliberately, rather than arrived at by
+deleting a check.
+
+Note what this is **not**: it is not a `tailscale:join` check. Asking whether
+the tailnet is healthy on a box that must not be on a tailnet is noise, and
+noise is how real drift gets ignored. The item asks one question — "is it
+here?" — and the only acceptable answer is no.
 
 It reads the **local** filesystem only. The report names the box it describes
 in `"machineId"`, and `--machine <other>` is a hard error rather than a report

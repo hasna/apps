@@ -6,6 +6,65 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-31
+
+Three defects, all in the drift check, all with the same shape: the check
+reported success about things it had not actually established.
+
+### Changed
+
+- **BREAKING — `setup --check` exit codes: `0` clean / `1` findings / `2`
+  incomplete** (defect 2bfe61b0). It previously exited 0 whether the verdict
+  was `clean` or `drift`, so it was structurally unable to fail: every caller
+  in the fleet parsed the JSON `verdict` and recorded `check_rc=0 (NOT
+  trusted)`. A check that cannot fail is not a gate. Findings outrank
+  incompleteness; `2` exists because a check with `skipped` items has not
+  proven the box clean, it has proven it could not look. `--no-fail-on-findings`
+  restores the old always-0 behaviour for callers not ready to move — it
+  silences the exit code, not the report. **Blast radius:** any caller treating
+  a non-zero rc as "the command itself failed". The JSON is unchanged and is
+  still the richer answer, because it names which item failed.
+
+  The numbers, and the opt-out flag name, match the `0 clean / 1 findings /
+  2 incomplete` contract on the table for `todos doctor` (task 71f7faba). That
+  contract is scoped to the todos CLI and has not landed, so it does not bind
+  this one; conforming avoids a second numeric convention in the same estate.
+
+- **BREAKING — `packages.bun` entries are `{ name, minVersion }`, and the
+  version is now judged** (template 1.6.0 → 1.7.0). `package:bun:*` reported
+  `ok` when the package was present at ANY version, across 12 of the 42 items,
+  so a station carrying a CLI from before a fix read identical to one updated
+  an hour ago. The defect was pinned by a test asserting a 9.9.9 fixture was
+  `ok`; that assertion is inverted, not deleted. `minVersion` is a FLOOR, never
+  a pin — newer is `ok`, and the renders still install latest. An unreadable or
+  non-semver version is `drift`, never `ok`. The bare-string form still loads
+  for out-of-tree templates but carries no floor and says so in the item
+  detail. Each shipped floor is the version published 2026-07-31.
+  **Expect existing stations to go red on this axis: that is the fix working.**
+  `EffectiveTemplate.packages.bun` changes type from `string[]`.
+
+### Added
+
+- **Declared absences — `absences`, and the ec2 overlay declares tailscale
+  absent.** The owner ruling of 2026-07-30 removed tailscale from AWS stations;
+  the implementation of it deleted the check along with the config and left the
+  ruling claimed but unasserted. `check.ts` guarded its whole tailscale block on
+  `effective.tailscale?.join`, so an EC2 render emitted no tailscale item at all
+  (measured 2026-07-30 22:02Z: `tailscale_items=[]`), and a station18 running a
+  LIVE tailscale with `BackendState=Running` still read clean 42/42. An absence
+  nothing checks is a claim, not a control.
+
+  This is deliberately **not** a `tailscale:join` check — asking whether the
+  tailnet is healthy on a box that must not be on one is noise, and noise is how
+  real drift gets ignored. The item asks "is it here?" and any yes is a
+  `violation` (`setup --apply` does not uninstall, so re-running setup cannot
+  converge it). An absence whose command/service could not be probed reports
+  `skipped`, never `ok`. A layer set that both requires and forbids the same
+  thing is refused at load time, so the ruling's narrow future exception — one
+  AWS box granted tailscale — must be written into that box's overlay rather
+  than reached by deleting a check. Physical classes are untouched: `dgx-spark`
+  keeps `tailscale:join` and gets no absence item.
+
 ## [0.2.9] - 2026-07-30
 
 ### Added
