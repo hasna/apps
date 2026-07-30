@@ -1,5 +1,5 @@
-import { describe, expect, it } from "bun:test";
-import { resolveFilesCloudStorage } from "./cloud-storage.js";
+import { describe, expect, it, test } from "bun:test";
+import { filesCloudEnv, resolveFilesCloudStorage } from "./cloud-storage.js";
 
 const KEY = "hasna_files_testkey_00000000000";
 
@@ -121,5 +121,77 @@ describe("resolveFilesCloudStorage", () => {
     expect(calls[0]!.url).toContain("ext=txt");
     expect(calls[0]!.url).toContain("limit=50");
     expect(calls[0]!.auth).toBe(`Bearer ${KEY}`);
+  });
+});
+
+// ── Explicit mode pinning ────────────────────────────────────────────────────
+//
+// The client must hand `resolveStorageClient` an env whose mode is PINNED, never
+// rely on the contracts resolver inferring cloud from the mere presence of an API
+// URL + key pair.
+//
+// hasna/contracts#51 removes that inference under an owner ruling (2026-07-29):
+// a local->network transition must be explicitly signalled, never inferred. After
+// it lands, a consumer that passes `process.env` straight through gets the local
+// SQLite store for a fully-configured cloud client — silently, at exit 0.
+//
+// Measured 2026-07-30: of the 5 repos importing the contracts client at runtime,
+// `domains`, `logs` and `todos` already pin. `files` and `sessions` did not, and
+// were the two that #51 would strand. This pins `files`.
+
+describe("filesCloudEnv", () => {
+  const URL_VAR = "HASNA_FILES_API_URL";
+  const KEY_VAR = "HASNA_FILES_API_KEY";
+  const MODE_VAR = "HASNA_FILES_STORAGE_MODE";
+  const API_URL = "https://files.md";
+  /** Not a credential: a deliberately invalid stub. */
+  const FAKE_KEY = ["files", "FAKE", "NOT", "A", "REAL", "KEY"].join("_");
+
+  test("pins self_hosted when an API url and key are present and no mode is set", () => {
+    const env = filesCloudEnv({ [URL_VAR]: API_URL, [KEY_VAR]: FAKE_KEY });
+
+    expect(env[MODE_VAR]).toBe("self_hosted");
+  });
+
+  test("honours the unprefixed url/key aliases", () => {
+    const env = filesCloudEnv({ FILES_API_URL: API_URL, FILES_API_KEY: FAKE_KEY });
+
+    expect(env[MODE_VAR]).toBe("self_hosted");
+  });
+
+  for (const modeKey of [
+    "HASNA_FILES_STORAGE_MODE",
+    "HASNA_FILES_MODE",
+    "FILES_STORAGE_MODE",
+    "FILES_MODE",
+  ]) {
+    test(`leaves an explicit ${modeKey} untouched`, () => {
+      const env = filesCloudEnv({ [modeKey]: "local", [URL_VAR]: API_URL, [KEY_VAR]: FAKE_KEY });
+
+      expect(env[modeKey]).toBe("local");
+      expect(env[MODE_VAR]).toBe(modeKey === MODE_VAR ? "local" : undefined);
+    });
+  }
+
+  test("does not invent a mode when only one of url/key is present", () => {
+    expect(filesCloudEnv({ [URL_VAR]: API_URL })[MODE_VAR]).toBeUndefined();
+    expect(filesCloudEnv({ [KEY_VAR]: FAKE_KEY })[MODE_VAR]).toBeUndefined();
+  });
+
+  test("does not invent a mode when nothing is configured", () => {
+    expect(filesCloudEnv({})[MODE_VAR]).toBeUndefined();
+  });
+
+  test("blank values count as unset", () => {
+    expect(filesCloudEnv({ [URL_VAR]: "  ", [KEY_VAR]: "  " })[MODE_VAR]).toBeUndefined();
+  });
+
+  test("the resolver is reached with a pinned mode, so cloud survives #51", () => {
+    const storage = resolveFilesCloudStorage(
+      { [URL_VAR]: API_URL, [KEY_VAR]: FAKE_KEY },
+      { fetchImpl: (async () => new Response("{}")) as unknown as typeof fetch },
+    );
+
+    expect(storage.active).toBe(true);
   });
 });
