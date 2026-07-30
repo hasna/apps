@@ -146,6 +146,16 @@ export const swapSchema = z.object({
 export const SWAP_HEADROOM_GB = 2;
 
 /**
+ * The one swapfile path both renders manage and /etc/fstab names. Centralized
+ * (PR #46 review P3-C) so the renders, the fstab entry, and any future
+ * per-path check all read the same value instead of four literals drifting.
+ * Note the drift check's swap:size intentionally sums ALL of /proc/swaps —
+ * total swap is the earlyoom-relevant quantity — so a box swapping on another
+ * name still counts.
+ */
+export const SWAP_FILE_PATH = "/swapfile";
+
+/**
  * Minimum root-volume size for a station class. The template cannot set the
  * volume at launch time — that lives in the launcher's BlockDeviceMappings —
  * but declaring the floor here makes the requirement config-driven for launch
@@ -184,14 +194,38 @@ export const templateLayerSchema = z.object({
   disk: diskSchema.optional(),
 });
 
-export const stationTemplateSchema = z.object({
-  $schema: z.literal(STATION_TEMPLATE_SCHEMA_ID),
-  name: z.string().min(1),
-  version: z.string().regex(semverPattern, "template version must be semver x.y.z"),
-  description: z.string().min(1),
-  base: templateLayerSchema,
-  overlays: z.record(templateLayerSchema).default({}),
-});
+export const stationTemplateSchema = z
+  .object({
+    $schema: z.literal(STATION_TEMPLATE_SCHEMA_ID),
+    name: z.string().min(1),
+    version: z.string().regex(semverPattern, "template version must be semver x.y.z"),
+    description: z.string().min(1),
+    base: templateLayerSchema,
+    overlays: z.record(templateLayerSchema).default({}),
+  })
+  .superRefine((template, ctx) => {
+    // Owner ruling 2026-07-30, enforced at the schema so "structurally
+    // unreachable from an EC2 render" is a load-time guarantee, not only a
+    // test assertion (PR #46 review P3-D): the base layer is what every
+    // station class shares, and AWS stations carry no tailscale — so
+    // tailscale may only ever be declared in an overlay.
+    if (template.base.tailscale) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["base", "tailscale"],
+        message:
+          "tailscale must not live in the base layer — every cloud render includes base and AWS stations carry no tailscale (owner ruling 2026-07-30); declare it in a physical overlay",
+      });
+    }
+    if (template.base.services.some((service) => service.name === "tailscaled")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["base", "services"],
+        message:
+          "tailscaled must not be a base-layer service — AWS stations carry no tailscale (owner ruling 2026-07-30); declare it in a physical overlay",
+      });
+    }
+  });
 
 export type TemplateFile = z.infer<typeof templateFileSchema>;
 export type TemplateLayer = z.infer<typeof templateLayerSchema>;

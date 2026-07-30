@@ -213,12 +213,19 @@ describe("cloud-init render", () => {
     // The guard is ACTIVE swap, never file existence: build 2's partial 4.2G
     // fallocate leftover satisfied `test -f` forever while swapon stayed empty.
     expect(userData).not.toContain("test -f /swapfile");
-    expect(userData).toContain("swapon --noheadings --show=NAME");
+    // ...and it reads /proc/swaps directly (review P2-B): a PATH without
+    // /usr/sbin made a `swapon`-based guard fail open and delete live swap.
+    expect(userData).toContain("grep -q '^/swapfile[[:space:]]' /proc/swaps");
+    expect(userData).not.toContain("swapon --noheadings");
     expect(userData).toContain("rm -f /swapfile");
     // 8G swap + 2G headroom = 10485760 KB must be free before allocating.
     expect(userData).toContain("-ge 10485760");
-    // fstab append is deduplicated, and failure is loud but non-fatal.
-    expect(userData).toContain("grep -q '^/swapfile ' /etc/fstab");
+    // An unmeasurable df is named as such, never reported as "insufficient",
+    // and nothing is touched in that branch (review P3-A).
+    expect(userData).toContain("could not measure free space");
+    // fstab append is deduplicated on any whitespace (review P3-B), and
+    // failure is loud but non-fatal.
+    expect(userData).toContain("grep -q '^/swapfile[[:space:]]' /etc/fstab");
     expect(userData).toContain("swapfile skipped");
   });
 });
@@ -782,25 +789,39 @@ describe("boot criticality (owner ruling 2026-07-29: tailscale must never be boo
     expect(physical.findIndex((step) => step.id === "template-tailscale-join")).toBeGreaterThan(0);
   });
 
-  test("POSITIVE CONTROL: swap entry on a too-small disk skips loudly, cleans the stale file, and cannot abort boot (station17 build 2)", () => {
+  /**
+   * The rendered swap entry, with only its literal `/proc/swaps` redirected
+   * to a fixture file so the scenario does not depend on the host's swap
+   * state. Everything else — quoting, case/if structure, guards — is the
+   * exact rendered text.
+   */
+  function swapEntryWithSwapsFixture(swapsContent: string): { entry: string; stubs: string; log: string } {
     const entries = runcmdEntries(renderCloudInit(effectiveFor(["ec2"]), { station: "stationtest" }));
-    const swapEntry = entries.find((entry) => entry.includes("swapon --noheadings"));
-    expect(swapEntry).toBeDefined();
-
+    const rendered = entries.find((entry) => entry.includes("/proc/swaps"));
+    expect(rendered).toBeDefined();
     const stubs = mkdtempSync(join(tmpdir(), "station-swap-stubs-"));
+    const swapsPath = join(stubs, "proc-swaps");
+    writeFileSync(swapsPath, swapsContent);
     const log = join(stubs, "invocations.log");
     writeFileSync(log, "");
-    // No active swap (empty --show), a stale partial file to clean up, and a
-    // build-2-sized disk: 364K available on a 6.8G filesystem.
-    writeStub(stubs, "swapon", `echo "swapon $*" >> "${log}"`);
     writeStub(stubs, "rm", `echo "rm $*" >> "${log}"`);
+    writeStub(stubs, "fallocate", `echo "fallocate $*" >> "${log}"`);
+    writeStub(stubs, "swapon", `echo "swapon $*" >> "${log}"`);
+    return { entry: rendered!.replaceAll("/proc/swaps", swapsPath), stubs, log };
+  }
+
+  test("POSITIVE CONTROL: swap entry on a too-small disk skips loudly, cleans the stale file, and cannot abort boot (station17 build 2)", () => {
+    // Swap active under ANOTHER name, a stale partial /swapfile, and a
+    // build-2-sized disk: 364K available on a 6.8G filesystem.
+    const { entry, stubs, log } = swapEntryWithSwapsFixture(
+      "Filename\tType\tSize\tUsed\tPriority\n/swap.img file 4189180 0 -2\n"
+    );
     writeStub(
       stubs,
       "df",
       `echo "Filesystem 1024-blocks Used Available Capacity Mounted on"\necho "/dev/root 7096304 7095940 364 100% /"`
     );
-    writeStub(stubs, "fallocate", `echo "fallocate $*" >> "${log}"`);
-    const result = spawnSync("sh", ["-e", "-c", swapEntry!], {
+    const result = spawnSync("sh", ["-e", "-c", entry], {
       encoding: "utf8",
       env: { ...process.env, PATH: `${stubs}:/usr/bin:/bin` },
     });
@@ -814,6 +835,38 @@ describe("boot criticality (owner ruling 2026-07-29: tailscale must never be boo
     expect(invocations).toContain("rm -f /swapfile");
     // ...and allocation is refused rather than re-filling the disk.
     expect(invocations).not.toContain("fallocate");
+  });
+
+  test("POSITIVE CONTROL: unmeasurable df touches NOTHING and says so (review P3-A), still exit 0", () => {
+    const { entry, stubs, log } = swapEntryWithSwapsFixture("Filename\tType\tSize\tUsed\tPriority\n");
+    writeStub(stubs, "df", "exit 1");
+    const result = spawnSync("sh", ["-e", "-c", entry], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${stubs}:/usr/bin:/bin` },
+    });
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("could not measure free space");
+    // The old shape removed /swapfile before discovering it could not
+    // measure; now nothing at all is touched.
+    expect(readFileSync(log, "utf8")).toBe("");
+  });
+
+  test("REGRESSION (review P2-B): active /swapfile is a no-op even on a PATH without /usr/sbin", () => {
+    // The old guard resolved `swapon` from PATH; a login shell without
+    // /usr/sbin failed it open, deleted the LIVE swapfile, and re-allocated
+    // 8G against a kernel-held unlinked inode. The /proc/swaps guard needs no
+    // binary beyond grep: with /swapfile active, nothing runs at all.
+    const { entry, stubs, log } = swapEntryWithSwapsFixture(
+      "Filename\tType\tSize\tUsed\tPriority\n/swapfile file 8388604 0 -2\n"
+    );
+    writeStub(stubs, "df", `echo "should never be called" >> "${log}"\nexit 1`);
+    const result = spawnSync("sh", ["-e", "-c", entry], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${stubs}:/usr/bin:/bin` }, // no /usr/sbin, no /sbin
+    });
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(readFileSync(log, "utf8")).toBe("");
   });
 
   test("POSITIVE CONTROL: physical join step survives a vault hiccup, exits 0, and warns", () => {
@@ -881,23 +934,46 @@ describe("no tailscale on AWS stations (owner ruling 2026-07-30 — supersedes t
     }
   });
 
+  test("SCHEMA GUARANTEE (review P3-D): a base-layer tailscale plant is refused at load time", () => {
+    // The realistic regression is someone re-adding tailscale to base for
+    // uniformity. That is no longer merely caught by the render assertions —
+    // the schema refuses to load such a template at all, which is what makes
+    // "structurally unreachable from an EC2 render" a true statement.
+    for (const plant of ["tailscale", "tailscaled-service"] as const) {
+      const planted = mkdtempSync(join(tmpdir(), "station-template-baseplant-"));
+      cpSync(join(SHIPPED, "station"), join(planted, "station"), { recursive: true });
+      const templatePath = join(planted, "station", "template.json");
+      const template = JSON.parse(readFileSync(templatePath, "utf8"));
+      if (plant === "tailscale") {
+        template.base.tailscale = { join: true, authKeySecretName: "stations/prod/tailscale/authkey" };
+      } else {
+        template.base.services.push({ name: "tailscaled", scope: "system", expectEnabled: true, expectActive: true });
+      }
+      writeFileSync(templatePath, JSON.stringify(template));
+      expect(() => resolveStationTemplate(["ec2"], { templatesDir: planted })).toThrow(/owner ruling 2026-07-30/);
+    }
+  });
+
   test("POSITIVE CONTROL: tailscale planted into a copied template turns every absence assertion red", () => {
     // An absence assertion that cannot fail is worth nothing (~10 vacuous
-    // passes measured on this fleet in one day). Plant tailscale back into a
-    // COPY of the shipped template — base first, the realistic regression
-    // (uniformity argument re-adding it for everyone) — and prove the same
-    // pattern and the same item filters the ABSENCE tests use now detect it.
+    // passes measured on this fleet in one day). A base-layer plant is now
+    // refused by the schema (previous test), so plant into the ec2 OVERLAY —
+    // the deliberate-opt-in path that remains schema-legal — and prove the
+    // same pattern and the same item filters the ABSENCE tests use detect it.
     const planted = mkdtempSync(join(tmpdir(), "station-template-planted-"));
     cpSync(join(SHIPPED, "station"), join(planted, "station"), { recursive: true });
     const templatePath = join(planted, "station", "template.json");
     const template = JSON.parse(readFileSync(templatePath, "utf8"));
-    template.base.tailscale = {
+    template.overlays.ec2.tailscale = {
       join: true,
       authKeySecretName: "stations/prod/tailscale/authkey",
       hostnameFromStation: true,
       ssh: true,
     };
-    template.base.services.push({ name: "tailscaled", scope: "system", expectEnabled: true, expectActive: true });
+    template.overlays.ec2.services = [
+      ...(template.overlays.ec2.services ?? []),
+      { name: "tailscaled", scope: "system", expectEnabled: true, expectActive: true },
+    ];
     writeFileSync(templatePath, JSON.stringify(template));
 
     const effective = resolveStationTemplate(["ec2"], { templatesDir: planted });

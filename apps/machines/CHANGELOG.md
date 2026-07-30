@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-07-30
+
 ### Added
 
 - GitHub Actions CI now runs typechecking and the test suite on pull requests
@@ -15,6 +17,34 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Dashboard servers now preserve an explicit ephemeral port (`port: 0`),
   keeping server tests isolated in CI.
+- **Swap guard reads `/proc/swaps`, not a PATH-resolved `swapon`** (0.2.5
+  review P2-B). A login shell whose PATH lacks `/usr/sbin` failed the old
+  guard open and deleted a LIVE swapfile before re-allocating 8G against a
+  kernel-held unlinked inode — the ENOSPC class the guard exists to prevent.
+  The kernel file needs no PATH lookup and no privilege; regression test runs
+  the rendered entry on a PATH without /usr/sbin.
+- **Unmeasurable free space is named as such** (P3-A): a broken `df` now
+  leaves the swapfile untouched and warns "could not measure", instead of
+  removing the file and claiming "insufficient headroom".
+- **fstab dedupe matches any whitespace** (P3-B) — tab-delimited entries no
+  longer get duplicated.
+- Removed a stray 1010-line `pnpm-lock.yaml` committed by mistake in 313462a
+  (P2-A) and gitignored foreign lockfiles in this Bun-first repo. It was never
+  in the npm tarball and holds no secrets.
+
+### Changed
+
+- **Base-layer tailscale is refused by the schema** (P3-D): "structurally
+  unreachable from an EC2 render" is now a load-time guarantee, not only a
+  test assertion — a template with `base.tailscale` or a base `tailscaled`
+  service fails to load, naming the 2026-07-30 ruling. The absence-assertion
+  positive control now plants into the ec2 overlay (the schema-legal opt-in
+  path).
+- The swapfile path is a single exported constant (`SWAP_FILE_PATH`, P3-C);
+  `swap:size` still deliberately sums all of `/proc/swaps`.
+- `disk:root` ok-detail explains the 90% filesystem-overhead tolerance, so
+  "61.0G, floor 64G" no longer reads like a near-miss (station17 build 3
+  operator feedback).
 
 ## [0.2.5] - 2026-07-30
 

@@ -479,7 +479,7 @@ export function checkStationTemplate(effective: EffectiveTemplate, options: Chec
         // partitioning and reserved blocks are taken out — require 90%.
         items.push(
           totalGb >= disk.rootMinGb * 0.9
-            ? { id: "disk:root", kind: "disk", status: "ok", detail: `root filesystem ${totalGb.toFixed(1)}G (floor ${disk.rootMinGb}G)` }
+            ? { id: "disk:root", kind: "disk", status: "ok", detail: `root filesystem ${totalGb.toFixed(1)}G meets the ${disk.rootMinGb}G-volume floor (90% tolerance covers partitioning/reserved-block overhead)` }
             : {
                 id: "disk:root",
                 kind: "disk",

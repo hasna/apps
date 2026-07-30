@@ -3,3 +3,8 @@ dist
 *.log
 
 .takumi/
+
+# Bun-first repo: no other package-manager lockfiles (a stray pnpm-lock.yaml reached main once — PR #46 review P2-A)
+pnpm-lock.yaml
+package-lock.json
+yarn.lock

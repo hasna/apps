@@ -1,6 +1,6 @@
 import { dirname } from "node:path";
 import type { SetupStep } from "../types.js";
-import { SWAP_HEADROOM_GB, type EffectiveTemplate, type LoadedTemplateFile } from "./schema.js";
+import { SWAP_FILE_PATH, SWAP_HEADROOM_GB, type EffectiveTemplate, type LoadedTemplateFile } from "./schema.js";
 
 function quote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
@@ -131,17 +131,25 @@ export function buildStationTemplateSteps(effective: EffectiveTemplate, options:
     // the box kept a full disk and zero active swap forever. Guard on ACTIVE
     // swap, clean up stale files, and refuse to allocate without
     // SWAP_HEADROOM_GB of headroom beyond the swap itself.
+    // Same shape and same review fixes as the cloud-init render (P2-B/P3-A/
+    // P3-B): the active-swap guard reads /proc/swaps (no PATH lookup, no
+    // privilege — a login shell without /usr/sbin could previously fail the
+    // `swapon` guard open and delete a LIVE swapfile), nothing is touched
+    // until the free-space measurement parses as a number, and the fstab
+    // dedupe matches any whitespace.
     const size = `${effective.swap.sizeGb}G`;
     const requiredKb = (effective.swap.sizeGb + SWAP_HEADROOM_GB) * 1024 * 1024;
+    const swapfile = SWAP_FILE_PATH;
     steps.push({
       id: "template-swapfile",
       title: `Ensure ${size} swapfile is active (never boot-critical; requires ${effective.swap.sizeGb + SWAP_HEADROOM_GB}G free)`,
       command:
-        "swapon --noheadings --show=NAME | grep -qx /swapfile || { sudo rm -f /swapfile; " +
-        `if [ "$(df -kP / | awk 'NR==2{print $4}')" -ge ${requiredKb} ]; then ` +
-        `sudo fallocate -l ${size} /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile && ` +
-        "{ sudo grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null; }; " +
-        `else echo 'hasna-station: swapfile skipped — less than ${effective.swap.sizeGb}G+${SWAP_HEADROOM_GB}G headroom free on / (NON-FATAL) — drift check reports swap:size and the disk floors' >&2; fi; } ` +
+        `grep -q '^${swapfile}[[:space:]]' /proc/swaps || { avail_kb="$(df -kP / | awk 'NR==2{print $4}')"; case "$avail_kb" in ` +
+        `''|*[!0-9]*) echo 'hasna-station: could not measure free space on / — swapfile left untouched (NON-FATAL) — drift check reports swap:size' >&2 ;; ` +
+        `*) sudo rm -f ${swapfile}; if [ "$avail_kb" -ge ${requiredKb} ]; then ` +
+        `sudo fallocate -l ${size} ${swapfile} && sudo chmod 600 ${swapfile} && sudo mkswap ${swapfile} && sudo swapon ${swapfile} && ` +
+        `{ grep -q '^${swapfile}[[:space:]]' /etc/fstab || echo '${swapfile} none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null; }; ` +
+        `else echo 'hasna-station: swapfile skipped — less than ${effective.swap.sizeGb}G+${SWAP_HEADROOM_GB}G headroom free on / (NON-FATAL) — drift check reports swap:size and the disk floors' >&2; fi ;; esac; } ` +
         "|| echo 'hasna-station: swapfile setup failed (NON-FATAL) — drift check reports swap:size' >&2",
       manager: "shell",
       privileged: true,
