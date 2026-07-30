@@ -30,7 +30,11 @@
  * and no network.
  */
 import { clientTransportEnvKeys } from '@hasna/contracts/client';
-import { normalizeStorageMode, type StorageMode } from './generated/storage-kit/index.js';
+import { normalizeStorageMode as normalizeContractsMode } from '@hasna/contracts/mode';
+import {
+  normalizeStorageMode as normalizeVendoredMode,
+  type StorageMode,
+} from './generated/storage-kit/index.js';
 import { isNetworkGuardActive } from './net-guard.js';
 
 /** App slug behind every `HASNA_KNOWLEDGE_*` / `KNOWLEDGE_*` env key. */
@@ -110,9 +114,13 @@ export function resolveKnowledgeModeSelection(env: NodeJS.ProcessEnv = process.e
     if (!value) continue;
     // Name the offending key in the failure. `Unknown storage mode: hosted` on
     // its own leaves the operator guessing which of four vars to edit.
-    let normalized: ReturnType<typeof normalizeStorageMode>;
+    let normalized: ReturnType<typeof normalizeVendoredMode>;
     try {
-      normalized = normalizeStorageMode(value);
+      // The VENDORED normalizer, deliberately: this validates what an OPERATOR
+      // typed, and `local`/`cloud` is the operator-facing vocabulary. The live
+      // contracts token is derived separately, at the boundary — see
+      // {@link contractsStorageModeFor}.
+      normalized = normalizeVendoredMode(value);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(`knowledge: ${name}=${value} is not a valid mode. ${message}`);
@@ -152,16 +160,135 @@ export function resolveKnowledgeModeSelection(env: NodeJS.ProcessEnv = process.e
 }
 
 /**
+ * Server-side tokens, in probe order. The order is load-bearing, and it is
+ * NEWEST-GENERATION FIRST, THEN CANONICAL BEFORE DEPRECATED:
+ *
+ *   postgres     the current canonical server token
+ *   cloud        the previous canonical server token
+ *   self_hosted  a DEPRECATED alias of `cloud`, last resort only
+ *
+ * Both halves matter. Newest-first is what stops a transitional contracts
+ * release — one that still honours the old words — from pinning us to the old
+ * generation. Canonical-before-deprecated is what stops us pinning
+ * `self_hosted` on the enum where `cloud` is the real answer: both are accepted
+ * there, but only one is the token this package already injects, and switching
+ * to the alias would be a live behaviour change dressed up as a refactor.
+ *
+ * (Sibling repos list `self_hosted` ahead of `cloud` for exactly the same
+ * reason inverted — `self_hosted` is the literal THEY replace. The rule is
+ * "derive what this repo already injects on the installed generation", not
+ * "copy the other repo's array".)
+ */
+export const SERVER_MODE_CANDIDATES = ['postgres', 'cloud', 'self_hosted'] as const;
+/** On-box tokens, same rule: newest generation first. */
+export const LOCAL_MODE_CANDIDATES = ['sqlite', 'local'] as const;
+
+/** Accepts a mode token or throws. Injectable so both enum generations are testable. */
+export type ModeNormalizer = (value: string) => unknown;
+
+const derivedTokenCache = new Map<readonly string[], string>();
+
+function deriveToken(
+  candidates: readonly string[],
+  normalize: ModeNormalizer,
+  constantName: string,
+): string {
+  // Only the default normalizer may use the cache: memoising an injected one
+  // would poison every later call, including the real one.
+  const useCache = normalize === (normalizeContractsMode as ModeNormalizer);
+  if (useCache) {
+    const hit = derivedTokenCache.get(candidates);
+    if (hit !== undefined) return hit;
+  }
+  for (const candidate of candidates) {
+    try {
+      normalize(candidate);
+      if (useCache) derivedTokenCache.set(candidates, candidate);
+      return candidate;
+    } catch {
+      // Not a token this generation of @hasna/contracts understands.
+    }
+  }
+  // Every candidate was rejected: the enum changed again and this list is stale.
+  // Fail loudly rather than guess — a wrong token silently reads the wrong store,
+  // which is the entire defect class this module exists to close.
+  throw new Error(
+    `knowledge: no known storage token is accepted by the installed @hasna/contracts `
+      + `(tried ${candidates.join(', ')}). The storage-mode enum has changed; add the new `
+      + `token to ${constantName} in src/knowledge-mode.ts.`,
+  );
+}
+
+/** The live-contracts token meaning "the app server". */
+export function serverStorageMode(normalize: ModeNormalizer = normalizeContractsMode): string {
+  return deriveToken(SERVER_MODE_CANDIDATES, normalize, 'SERVER_MODE_CANDIDATES');
+}
+
+/** The live-contracts token meaning "the on-box store". */
+export function localStorageMode(normalize: ModeNormalizer = normalizeContractsMode): string {
+  return deriveToken(LOCAL_MODE_CANDIDATES, normalize, 'LOCAL_MODE_CANDIDATES');
+}
+
+/**
+ * Translate OUR semantic mode into the token the INSTALLED @hasna/contracts
+ * accepts.
+ *
+ * THIS FUNCTION IS A TRANSLATION, NOT A PASS-THROUGH, AND THAT IS THE WHOLE
+ * POINT — do not "simplify" it back. This module holds two independent
+ * validators, and they are allowed to disagree:
+ *
+ *   - {@link normalizeVendoredMode}, from the vendored `src/generated/storage-kit`,
+ *     validates what an OPERATOR typed. Its vocabulary is `local | cloud` and
+ *     that is the vocabulary in the docs, the `knowledge mode` report, and the
+ *     env vars people set. {@link KnowledgeMode} is that type.
+ *   - the LIVE `@hasna/contracts` validates the token we hand its resolver.
+ *     After the placement axis was removed it accepts ONLY `sqlite | postgres`
+ *     and THROWS on `local`/`cloud`.
+ *
+ * Post-removal those two sets are DISJOINT, which reads at first like an
+ * impossible constraint: the token that satisfies the type is the token the
+ * resolver rejects. It is not impossible, because they never had to be the same
+ * value. {@link KnowledgeMode} types the INTERNAL semantic mode; what reaches
+ * the resolver is an ENV STRING, and `NodeJS.ProcessEnv` values are
+ * `string | undefined` — nothing ever forced the stamped token to satisfy the
+ * vendored type. The two vocabularies meet in exactly one place, here, so
+ * translating here keeps the vendored kit, the operator vocabulary, and the
+ * explicit-only no-inference guarantee all untouched. Re-vendoring the kit is
+ * NOT required to make this forward-compatible.
+ *
+ * The tokens are DERIVED by probing the installed `normalizeStorageMode` rather
+ * than hardcoded, because a literal is a bet on which contracts generation a
+ * given machine has, and the bet loses on one side or the other. `normalize` is
+ * injectable because only one generation can be installed at a time, so
+ * forward-compatibility would otherwise be an assertion rather than a test.
+ *
+ * BOUNDARY: the returned token is for the contracts resolver ONLY. Do not feed
+ * a pinned env back into {@link resolveKnowledgeModeSelection} — that validates
+ * with the VENDORED normalizer, which will reject the live token once the two
+ * enums diverge.
+ */
+export function contractsStorageModeFor(
+  mode: KnowledgeMode,
+  normalize: ModeNormalizer = normalizeContractsMode,
+): string {
+  return mode === 'cloud' ? serverStorageMode(normalize) : localStorageMode(normalize);
+}
+
+/**
  * The env to hand @hasna/contracts, with the mode we resolved stamped on top.
  *
- * Load-bearing in BOTH directions. Stamping `cloud` keeps the transport from
- * refusing a mode we deliberately chose; stamping `local` is what stops
- * `resolveClientTransport` from re-deriving cloud out of the ambient pointer
- * vars we just decided to ignore. Handing it the raw environment instead would
- * put the backend choice back in a second layer.
+ * Load-bearing in BOTH directions. Stamping the server token keeps the
+ * transport from refusing a mode we deliberately chose; stamping the local
+ * token is what stops `resolveClientTransport` from re-deriving the server out
+ * of the ambient pointer vars we just decided to ignore. Handing it the raw
+ * environment instead would put the backend choice back in a second layer.
+ *
+ * The stamped VALUE is the live-contracts token, not our `KnowledgeMode` — see
+ * {@link contractsStorageModeFor} for why those are deliberately different
+ * things.
  */
 export function pinnedTransportEnv(env: NodeJS.ProcessEnv, mode: KnowledgeMode): NodeJS.ProcessEnv {
-  return { ...env, [KNOWLEDGE_MODE_ENV_KEYS[0]]: mode };
+  return { ...env, [KNOWLEDGE_MODE_ENV_KEYS[0]]: contractsStorageModeFor(mode) };
 }
 
 /**

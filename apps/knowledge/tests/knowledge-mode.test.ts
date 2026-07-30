@@ -19,10 +19,15 @@ import {
   KNOWLEDGE_API_KEY_ENV_KEYS,
   KNOWLEDGE_API_URL_ENV_KEYS,
   KNOWLEDGE_MODE_ENV_KEYS,
+  LOCAL_MODE_CANDIDATES,
+  SERVER_MODE_CANDIDATES,
   assertKnowledgeModeSelected,
+  contractsStorageModeFor,
   knowledgeModeReport,
+  localStorageMode,
   pinnedTransportEnv,
   resolveKnowledgeModeSelection,
+  serverStorageMode,
 } from '../src/knowledge-mode';
 import { isKnowledgeApiMode, resolveKnowledgeCloudStore } from '../src/cloud-store';
 import { resolveItemStore } from '../src/item-store';
@@ -179,12 +184,24 @@ describe('the resolved mode reaches the real store resolvers', () => {
   test('pinnedTransportEnv overwrites an ambient mode var in both directions', () => {
     // This is what stops @hasna/contracts from re-deriving cloud from the
     // pointers after we have decided the answer is local.
-    expect(pinnedTransportEnv(POINTER_ONLY, 'local').HASNA_KNOWLEDGE_STORAGE_MODE).toBe('local');
+    //
+    // Compared against the DERIVED token, not against the literals 'local' and
+    // 'cloud' this test used to hardcode. Those literals are only correct on one
+    // generation of @hasna/contracts, so asserting them would have turned this
+    // test into a second place the enum change has to be edited.
+    expect(pinnedTransportEnv(POINTER_ONLY, 'local').HASNA_KNOWLEDGE_STORAGE_MODE).toBe(
+      localStorageMode(),
+    );
     expect(
       pinnedTransportEnv({ HASNA_KNOWLEDGE_STORAGE_MODE: 'cloud' } as NodeJS.ProcessEnv, 'local')
         .HASNA_KNOWLEDGE_STORAGE_MODE,
-    ).toBe('local');
-    expect(pinnedTransportEnv(POINTER_ONLY, 'cloud').HASNA_KNOWLEDGE_STORAGE_MODE).toBe('cloud');
+    ).toBe(localStorageMode());
+    expect(pinnedTransportEnv(POINTER_ONLY, 'cloud').HASNA_KNOWLEDGE_STORAGE_MODE).toBe(
+      serverStorageMode(),
+    );
+    // The overwrite is real in both directions: local and server must not
+    // collapse to the same token.
+    expect(localStorageMode()).not.toBe(serverStorageMode());
   });
 });
 
@@ -325,5 +342,133 @@ describe('a half-configured client refuses to guess which store it is on', () =>
     // rejects, or the command that explains the problem dies with it.
     expect(resolveKnowledgeModeSelection(POINTER_ONLY).mode).toBe('local');
     expect(knowledgeModeReport(URL_ONLY).pointer_ignored).toBe(true);
+  });
+});
+
+// -- The translation boundary -------------------------------------------------
+//
+// This module holds TWO independent validators and they are allowed to disagree:
+// the vendored storage-kit validates what an OPERATOR typed (`local | cloud`),
+// while the live @hasna/contracts validates the token we hand its resolver.
+// After the placement axis was removed the live enum accepts ONLY
+// `sqlite | postgres` and THROWS on `local`/`cloud` — so the two valid sets are
+// DISJOINT.
+//
+// That is survivable because they were never required to be the same value:
+// `KnowledgeMode` types the INTERNAL semantic mode, while what reaches the
+// resolver is an env STRING. `pinnedTransportEnv` is the one place they meet, so
+// it translates. These tests exist to stop that translation being "simplified"
+// back into a pass-through, which would reintroduce the break.
+//
+// `normalize` is injectable because only one contracts generation can be
+// installed at a time — without the seam, forward compatibility would be an
+// assertion rather than a test.
+
+describe('the live-contracts token is derived, never hardcoded', () => {
+  const acceptOnly = (accepted: readonly string[]) => (value: string) => {
+    if (!accepted.includes(value)) throw new Error(`Unknown storage mode: ${value}`);
+    return value;
+  };
+
+  const PRE_REMOVAL = ['local', 'cloud', 'self_hosted', 'remote', 'hybrid'];
+  const POST_REMOVAL = ['sqlite', 'postgres', 'postgresql'];
+
+  // Widened so `toContain` compares strings rather than narrowing to the tuple.
+  const SERVER: readonly string[] = SERVER_MODE_CANDIDATES;
+  const LOCAL: readonly string[] = LOCAL_MODE_CANDIDATES;
+
+  test('derives the pre-removal tokens on the old contracts enum', () => {
+    expect(serverStorageMode(acceptOnly(PRE_REMOVAL))).toBe('cloud');
+    expect(localStorageMode(acceptOnly(PRE_REMOVAL))).toBe('local');
+  });
+
+  test('derives the post-removal tokens on the new contracts enum', () => {
+    // The whole point: after the bump, `cloud` and `local` both throw at the
+    // resolver, and these are the tokens that do not.
+    expect(serverStorageMode(acceptOnly(POST_REMOVAL))).toBe('postgres');
+    expect(localStorageMode(acceptOnly(POST_REMOVAL))).toBe('sqlite');
+  });
+
+  test('prefers the newest accepted token when several are valid', () => {
+    // A transitional release that still honours the aliases must not pin a
+    // deprecated one.
+    const transitional = acceptOnly(['sqlite', 'postgres', 'local', 'cloud', 'self_hosted']);
+
+    expect(serverStorageMode(transitional)).toBe('postgres');
+    expect(localStorageMode(transitional)).toBe('sqlite');
+  });
+
+  test('never prefers a deprecated alias over the canonical token of the same generation', () => {
+    // `self_hosted` and `cloud` are BOTH accepted on the pre-removal enum, and
+    // `self_hosted` is the deprecated one. Picking it would be a live behaviour
+    // change — this package injects `cloud` today — disguised as a refactor.
+    // This is the assertion that caught exactly that mistake while writing this.
+    expect(serverStorageMode(acceptOnly(['self_hosted', 'cloud']))).toBe('cloud');
+    expect(SERVER_MODE_CANDIDATES.indexOf('cloud')).toBeLessThan(
+      SERVER_MODE_CANDIDATES.indexOf('self_hosted'),
+    );
+  });
+
+  test('the alias still works when it is the only server token on offer', () => {
+    // Canonical-before-deprecated is a preference, not a refusal: a generation
+    // that only understands the alias must still resolve rather than throw.
+    expect(serverStorageMode(acceptOnly(['self_hosted']))).toBe('self_hosted');
+  });
+
+  test('throws with an actionable message when the enum changes again', () => {
+    // Guessing is the defect class this module exists to remove, so an
+    // unrecognised enum must fail loudly rather than fall through to a wrong
+    // store.
+    const rejectAll = acceptOnly([]);
+
+    expect(() => serverStorageMode(rejectAll)).toThrow(/no known storage token/i);
+    expect(() => serverStorageMode(rejectAll)).toThrow(/SERVER_MODE_CANDIDATES/);
+    expect(() => localStorageMode(rejectAll)).toThrow(/LOCAL_MODE_CANDIDATES/);
+  });
+
+  test('an injected normalizer never poisons the cached default', () => {
+    // The cache is keyed per candidate list and only read/written for the
+    // default normalizer. Without that guard the first injected probe would fix
+    // the value for the whole process.
+    const realServer = serverStorageMode();
+    const realLocal = localStorageMode();
+
+    expect(serverStorageMode(acceptOnly(POST_REMOVAL))).toBe('postgres');
+    expect(localStorageMode(acceptOnly(POST_REMOVAL))).toBe('sqlite');
+
+    expect(serverStorageMode()).toBe(realServer);
+    expect(localStorageMode()).toBe(realLocal);
+  });
+
+  test('agrees with the contracts version actually installed', () => {
+    // Not a tautology: this is the assertion that fails the day a dependency
+    // bump lands a generation the candidate lists do not cover.
+    expect(SERVER).toContain(serverStorageMode());
+    expect(LOCAL).toContain(localStorageMode());
+  });
+
+  test('contractsStorageModeFor maps the semantic mode, not the literal', () => {
+    expect(contractsStorageModeFor('cloud')).toBe(serverStorageMode());
+    expect(contractsStorageModeFor('local')).toBe(localStorageMode());
+
+    // Across the change, both directions still translate — this is the property
+    // that a pass-through would lose.
+    expect(contractsStorageModeFor('cloud', acceptOnly(POST_REMOVAL))).toBe('postgres');
+    expect(contractsStorageModeFor('local', acceptOnly(POST_REMOVAL))).toBe('sqlite');
+  });
+
+  test('the operator vocabulary is untouched by the translation', () => {
+    // The vendored kit still validates what a person types, and `cloud` stays
+    // the word in the docs and the env var. Translating at the boundary must not
+    // leak the live token into the operator surface.
+    const resolution = resolveKnowledgeModeSelection({
+      HASNA_KNOWLEDGE_STORAGE_MODE: 'cloud',
+    } as NodeJS.ProcessEnv);
+
+    expect(resolution.mode).toBe('cloud');
+    expect(resolution.source.value).toBe('cloud');
+    expect(knowledgeModeReport({ HASNA_KNOWLEDGE_STORAGE_MODE: 'local' } as NodeJS.ProcessEnv).mode).toBe(
+      'local',
+    );
   });
 });
