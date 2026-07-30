@@ -1,7 +1,7 @@
 # `@hasna/sandboxes`
 
-Managed E2B / Daytona sandbox adapters plus a `sandboxes` CLI and a
-`sandboxes-mcp` MCP server for driving disposable cloud sandboxes.
+Managed E2B / Daytona sandbox adapters plus a deterministic local simulator, a
+`sandboxes` CLI, and a `sandboxes-mcp` MCP server for disposable sandboxes.
 
 > ### ⚠️ 1.0.0 — from-scratch rebuild (BREAKING)
 >
@@ -33,12 +33,22 @@ Managed E2B / Daytona sandbox adapters plus a `sandboxes` CLI and a
   the removed sandbox-manager repository.
 - `sandboxes` — CLI: `create`, `list`, `get`, `exec`, `logs`, `write-file`,
   `read-file`, `list-files`, `expose-port`, `list-ports`, `snapshot`, `stop`,
-  `keep-alive`, `destroy`. Choose a backend with `--provider local|e2b|daytona`.
-- `sandboxes-mcp` — MCP (stdio) server exposing `create_sandbox`,
+  `keep-alive`, `destroy`, plus the legacy `agents` migration helper. Choose a
+  backend with `--provider local|e2b|daytona`.
+- `sandboxes-mcp` — MCP server using Streamable HTTP on
+  `127.0.0.1:8875/mcp` by default, or stdio with `--stdio`, exposing `create_sandbox`,
   `list_sandboxes`, `get_sandbox`, `delete_sandbox`, `stop_sandbox`,
   `keep_alive`, `exec_command`, `read_file`, `write_file`, `list_files`,
   `get_logs`, `expose_port`, `list_exposed_ports`, `snapshot_sandbox`,
   `upload_dir`, `run_agent`, `version`, `health`.
+
+Detailed references:
+
+- [CLI](docs/cli.md)
+- [MCP server and tools](docs/mcp.md)
+- [Provider behavior](docs/providers.md)
+- [Managed adapters](docs/managed-adapters.md)
+- [PostgreSQL journal and witness](docs/postgres.md)
 
 ### Providers & credentials
 
@@ -117,6 +127,12 @@ future hardening capability, not a V1 containment claim. Such untrusted SDK port
 admitted to production.
 
 ## Durable native execution
+
+The exported V1 and V2 disposable-task production admission constants are
+currently `false`. The package exposes the contracts, preparation and
+authorization machinery, durable storage, and provider-specific candidate
+runners for integration and conformance work, but public production dispatch
+fails closed until those gates are deliberately enabled by a future release.
 
 The native managed contract is split deliberately:
 
