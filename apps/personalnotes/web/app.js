@@ -3099,7 +3099,10 @@
     input.style.height = Math.min(input.scrollHeight || 34, 116) + 'px';
   }
   function onChatInputKeydown(e) {
-    if (!e || e.key !== 'Enter' || e.shiftKey) return;
+    // An Enter that only commits an input-method candidate (Japanese/Chinese/Korean)
+    // must never send: the browser reports it with `isComposing` — `keyCode` 229 on
+    // older WebKit — and native form submission is suppressed the same way.
+    if (!e || e.key !== 'Enter' || e.shiftKey || e.isComposing || e.keyCode === 229) return;
     e.preventDefault();
     onChatSubmit();
   }
