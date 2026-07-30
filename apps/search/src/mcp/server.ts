@@ -143,7 +143,12 @@ server.tool(
       caseSensitive: case_sensitive,
     });
     if (!response.indexed) {
-      return plainText("No index roots ready. Add one with the index_add tool (e.g. {\"path\": \"~/workspace\"}) or `search index add <path>`.");
+      // isError is load-bearing: without it the agent reads this as prose next
+      // to an empty result set and concludes the workspace has no matches.
+      return plainText(
+        `${response.error ?? "No index roots ready."} Add a root with the index_add tool (e.g. {"path": "~/workspace"}) or \`search index add <path>\`.`,
+        true,
+      );
     }
     const results = verbose
       ? response.results

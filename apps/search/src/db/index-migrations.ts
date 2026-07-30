@@ -102,6 +102,19 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 4,
+    description: "Index run start marker so a killed indexer is detectable",
+    up: (db) => {
+      const columns = db.query("PRAGMA table_info(index_roots)").all() as Array<{ name: string }>;
+      if (!columns.some((c) => c.name === "indexing_started_at")) {
+        db.exec("ALTER TABLE index_roots ADD COLUMN indexing_started_at TEXT");
+      }
+      // Rows already stuck at 'indexing' predate the marker; leaving them with a
+      // NULL start time is what makes them classify as wedged (not running), so
+      // the recovery path picks them up instead of skipping them forever.
+    },
+  },
 ];
 
 export function runIndexMigrations(db: Database): void {

@@ -10,9 +10,13 @@ import {
   indexAllRoots,
   listRoots,
   removeRoot,
+  rootHealth,
+  isRootUnhealthy,
   type IndexRoot,
   type IndexStats,
+  type RootHealth,
 } from "../lib/local/indexer.js";
+import { getConfig } from "../lib/config.js";
 import {
   DEFAULT_COMPACT_LIMIT,
   clampLimit,
@@ -87,6 +91,17 @@ function rootStatus(status: IndexRoot["status"]): string {
       : chalk.yellow(status);
 }
 
+/**
+ * Render derived health. `wedged` and `error` are red because they mean the
+ * index cannot answer queries — the old output painted a dead run the same
+ * yellow as a live one, which is how a 48-day outage read as "busy".
+ */
+function rootHealthLabel(health: RootHealth): string {
+  if (health === "ready") return chalk.green(health);
+  if (health === "wedged" || health === "error") return chalk.red(health);
+  return chalk.yellow(health);
+}
+
 export function registerLocalCommands(program: Command): void {
   program
     .command("find")
@@ -123,14 +138,19 @@ export function registerLocalCommands(program: Command): void {
         return;
       }
 
-      if (opts.json) {
-        printJson(response);
+      // The unusable-index check must precede the --json return. When it did
+      // not, `search find ... --json` exited 0 with `results: []` against a
+      // wedged index, which every scripted consumer reads as "no matches
+      // exist". A degraded index is an error state, not an empty result.
+      if (!response.indexed) {
+        if (opts.json) printJson(response);
+        else console.error(chalk.red(`Error: ${response.error ?? "no index roots ready"}`));
+        process.exitCode = 1;
         return;
       }
 
-      if (!response.indexed) {
-        console.log(chalk.yellow("No index roots ready. Add one with: search index add <path>"));
-        process.exitCode = 1;
+      if (opts.json) {
+        printJson(response);
         return;
       }
 
@@ -269,12 +289,21 @@ export function registerLocalCommands(program: Command): void {
     .option("--verbose", "Show full root paths and errors")
     .action((opts) => {
       const roots = listRoots();
+      const staleMinutesConfig = getConfig().indexStaleMinutes;
       const status = roots.map((r) => ({
         ...r,
+        // `status` is the stored sentinel and can lie after a crash; `health`
+        // is derived and is what callers should gate on.
+        health: rootHealth(r, staleMinutesConfig),
         staleMinutes: r.lastIndexedAt
           ? Math.round((Date.now() - Date.parse(r.lastIndexedAt)) / 60_000)
           : null,
       }));
+      // A status command that always exits 0 cannot be used as a gate. An
+      // unhealthy index is a failure, and it must be readable as one.
+      const unhealthy = status.filter((r) => isRootUnhealthy(r));
+      if (unhealthy.length > 0) process.exitCode = 1;
+
       if (opts.json) {
         printJson(status);
         return;
@@ -292,8 +321,15 @@ export function registerLocalCommands(program: Command): void {
         const age = r.staleMinutes === null ? "never indexed" : `indexed ${r.staleMinutes}m ago`;
         const path = opts.verbose ? r.path : truncateMiddle(r.path, 88);
         console.log(
-          `${chalk.yellow(truncateText(r.name, 20).padEnd(20))} ${r.status.padEnd(8)} ${String(r.fileCount).padStart(7)} files  ${age}  ${chalk.dim(`(${r.lastDurationMs ?? "?"}ms)`)}  ${chalk.dim(path)}`,
+          `${chalk.yellow(truncateText(r.name, 20).padEnd(20))} ${rootHealthLabel(r.health).padEnd(19)} ${String(r.fileCount).padStart(7)} files  ${age}  ${chalk.dim(`(${r.lastDurationMs ?? "?"}ms)`)}  ${chalk.dim(path)}`,
         );
+        if (r.health === "wedged") {
+          console.log(
+            chalk.red(
+              "    an index run was killed and never finished — recover it with `search index update`",
+            ),
+          );
+        }
         if (r.error) console.log(chalk.red(`    ${opts.verbose ? r.error : truncateText(r.error, 140)}`));
       }
       printPageHint(page.length, status.length, offset, "search index status", "details: search index status --verbose");

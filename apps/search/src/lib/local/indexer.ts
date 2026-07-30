@@ -6,6 +6,7 @@ import {
   readFileSync,
   statSync,
   unlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -34,7 +35,24 @@ export interface IndexRoot {
   lastIndexedAt: string | null;
   lastDurationMs: number | null;
   createdAt: string;
+  /**
+   * Set when an index run starts, cleared when it finishes (either way). A row
+   * at status 'indexing' whose marker is old — or absent, for rows written
+   * before this column existed — belonged to a process that died without
+   * running its own cleanup.
+   */
+  indexingStartedAt: string | null;
 }
+
+/**
+ * The honest state of a root, as opposed to the raw `status` column.
+ *
+ * `status` is a stored sentinel: a process killed mid-run (SIGKILL, OOM,
+ * reboot) leaves it at 'indexing' forever, because no catch block runs. Health
+ * is derived, so a dead run reports `wedged` instead of masquerading as work in
+ * progress.
+ */
+export type RootHealth = "pending" | "indexing" | "wedged" | "stale" | "ready" | "error";
 
 export interface IndexStats {
   rootId: string;
@@ -61,6 +79,7 @@ interface RootRow {
   last_indexed_at: string | null;
   last_duration_ms: number | null;
   created_at: string;
+  indexing_started_at: string | null;
 }
 
 interface FileRow {
@@ -82,10 +101,112 @@ interface PreparedFileChange {
 
 const INDEX_LOCK_STALE_MS = 10 * 60_000;
 
+/**
+ * How long a root may sit at status 'indexing' before it is treated as the
+ * residue of a killed process rather than an active run.
+ *
+ * Deliberately generous: a full pass over ~110k files measured 114s on
+ * station01, so 30 minutes cannot misclassify a slow but healthy run. The
+ * on-disk lock (INDEX_LOCK_STALE_MS) remains the concurrency guard — this
+ * threshold only governs whether the *status column* is believed.
+ */
+export const INDEXING_STALL_MS = 30 * 60_000;
+
 function rootLockPath(rootId: string): string {
   const dir = `${getConfigDir()}/locks`;
   mkdirSync(dir, { recursive: true });
   return `${dir}/index-${rootId.replace(/[^a-zA-Z0-9_.-]/g, "_")}.lock`;
+}
+
+/**
+ * What the on-disk lock says about the process that claimed this root.
+ *
+ * Tri-state on purpose. "unknown" means no lock exists — tests and injected
+ * databases never take one — and must never be read as either liveness or
+ * death; only `alive` and `dead` are evidence.
+ */
+type LockHolderState = "alive" | "dead" | "unknown";
+
+/**
+ * How often a running index refreshes its lock's mtime.
+ *
+ * Comfortably inside INDEX_LOCK_STALE_MS so a healthy run's lock is never
+ * mistaken for abandoned residue, and cheap enough to call from inner loops.
+ */
+const INDEX_LOCK_HEARTBEAT_MS = 30_000;
+
+let lastHeartbeatAt = new Map<string, number>();
+
+/**
+ * Refresh the lock's mtime to prove the holder is still working.
+ *
+ * Two things depend on this and would otherwise be unsound:
+ *
+ *  - `probeLockHolder` only trusts a *fresh* lock. A pid alone proves nothing:
+ *    station01 has pid_max 4194304 and burns ~78k pids/day, so the allocator
+ *    wraps in well under two months and an unrelated live process inherits the
+ *    number. Trusting a bare running pid is unbounded in time, against a
+ *    measured 48-day detection latency for the original defect.
+ *  - `acquireRootLock` steals any lock older than INDEX_LOCK_STALE_MS. Before
+ *    this the mtime never moved for the whole duration of a pass, so any run
+ *    outlasting that window could have its lock unlinked and a second indexer
+ *    started concurrently.
+ *
+ * Throttled unless `force`, so inner-loop callers cost one clock read.
+ */
+export function heartbeatRootLock(rootId: string, force = false): void {
+  const now = Date.now();
+  if (!force) {
+    const last = lastHeartbeatAt.get(rootId) ?? 0;
+    if (now - last < INDEX_LOCK_HEARTBEAT_MS) return;
+  }
+  lastHeartbeatAt.set(rootId, now);
+  try {
+    const when = new Date(now);
+    utimesSync(rootLockPath(rootId), when, when);
+  } catch {
+    // The lock may have been released or stolen; the next acquire surfaces it.
+  }
+}
+
+function probeLockHolder(rootId: string): LockHolderState {
+  const path = rootLockPath(rootId);
+
+  // Freshness is checked BEFORE the pid, and bounds how long a pid can be
+  // trusted. A stale lock is abandoned residue whatever its pid says — the same
+  // rule acquireRootLock already uses to decide the lock is stealable, so the
+  // two cannot disagree about whether a run is live.
+  try {
+    if (Date.now() - statSync(path).mtimeMs > INDEX_LOCK_STALE_MS) return "dead";
+  } catch {
+    return "unknown";
+  }
+
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf-8");
+  } catch {
+    return "unknown";
+  }
+
+  let pid: unknown;
+  try {
+    pid = (JSON.parse(raw) as { pid?: unknown }).pid;
+  } catch {
+    // A corrupt lock is residue from a process that died mid-write.
+    return "dead";
+  }
+  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return "dead";
+  if (pid === process.pid) return "alive";
+
+  try {
+    // Signal 0 probes existence without delivering anything.
+    process.kill(pid, 0);
+    return "alive";
+  } catch (err) {
+    // EPERM means the pid exists but belongs to another user — alive.
+    return (err as NodeJS.ErrnoException).code === "EPERM" ? "alive" : "dead";
+  }
 }
 
 function acquireRootLock(rootId: string): () => void {
@@ -117,10 +238,13 @@ function acquireRootLock(rootId: string): () => void {
     closeSync(fd);
   }
 
+  lastHeartbeatAt.set(rootId, Date.now());
+
   let released = false;
   return () => {
     if (released) return;
     released = true;
+    lastHeartbeatAt.delete(rootId);
     try {
       unlinkSync(path);
     } catch {
@@ -143,7 +267,62 @@ function rowToRoot(row: RootRow): IndexRoot {
     lastIndexedAt: row.last_indexed_at,
     lastDurationMs: row.last_duration_ms,
     createdAt: row.created_at,
+    indexingStartedAt: row.indexing_started_at ?? null,
   };
+}
+
+/**
+ * Classify a root by what is actually true of it, not by the stored sentinel.
+ *
+ * `staleMinutes` is optional because staleness is a config concern; omit it and
+ * a ready root simply reports `ready`.
+ */
+export function rootHealth(root: IndexRoot, staleMinutes?: number): RootHealth {
+  if (root.status === "error") return "error";
+  if (root.status === "pending") return "pending";
+
+  if (root.status === "indexing") {
+    // Direct evidence about the process outranks every inference drawn from a
+    // column, and it is consulted FIRST. Three cases depend on this ordering:
+    //
+    //  - Mixed versions. Older builds take a lock but never write the start
+    //    marker, so a null marker is not evidence of death. Ranking the marker
+    //    higher declared a healthy, actively-running index dead — and the
+    //    remedy we print (`search index update`, run with whatever binary is on
+    //    PATH) was itself the trigger.
+    //  - A pass that legitimately outruns INDEXING_STALL_MS is still alive.
+    //  - Recovery must not steal a root from a live indexer. Since the removal
+    //    of the unconditional `status === 'indexing'` skip in
+    //    refreshStaleRoots, this is the only thing preventing that: any pass
+    //    outlasting INDEX_LOCK_STALE_MS has a "stale" lock, because the lock
+    //    mtime is never refreshed during a run, so acquireRootLock would
+    //    happily unlink it and run a second indexer concurrently.
+    const lock = probeLockHolder(root.id);
+    if (lock === "alive") return "indexing";
+    // A dead holder is proof the run ended, so a run killed seconds ago is
+    // caught immediately rather than masquerading as live until the threshold.
+    if (lock === "dead") return "wedged";
+
+    // No lock to consult. Fall back to the start marker: absent means the row
+    // predates the marker column, i.e. written by a build that could not record
+    // liveness at all.
+    if (!root.indexingStartedAt) return "wedged";
+    const startedAt = Date.parse(root.indexingStartedAt);
+    if (!Number.isFinite(startedAt)) return "wedged";
+    return Date.now() - startedAt > INDEXING_STALL_MS ? "wedged" : "indexing";
+  }
+
+  if (staleMinutes !== undefined && root.lastIndexedAt) {
+    const indexedAt = Date.parse(root.lastIndexedAt);
+    if (Number.isFinite(indexedAt) && Date.now() - indexedAt > staleMinutes * 60_000) return "stale";
+  }
+  return "ready";
+}
+
+/** True when a root's index is unusable and a query against it would be a lie. */
+export function isRootUnhealthy(root: IndexRoot): boolean {
+  const health = rootHealth(root);
+  return health === "wedged" || health === "error" || health === "pending";
 }
 
 export function normalizeRootPath(path: string): string {
@@ -288,10 +467,18 @@ export function indexRoot(
   const releaseRootLock = db ? () => undefined : acquireRootLock(root.id);
 
   const start = Date.now();
-  d.prepare("UPDATE index_roots SET status = 'indexing', error = NULL WHERE id = ?").run(root.id);
+  // Committed immediately and outside the transaction below, so a concurrent
+  // reader can see that work started. That is also why it must carry a start
+  // marker: if this process is killed, nothing here runs again, and the marker
+  // is the only evidence that lets a later run tell 'running' from 'died'.
+  d.prepare(
+    "UPDATE index_roots SET status = 'indexing', error = NULL, indexing_started_at = ? WHERE id = ?",
+  ).run(new Date(start).toISOString(), root.id);
 
   try {
-    const { files: scanned, skippedDirs } = scanRoot(root.path, root.exclude);
+    const { files: scanned, skippedDirs } = scanRoot(root.path, root.exclude, () =>
+      heartbeatRootLock(root.id),
+    );
     const now = new Date().toISOString();
 
     const existingRows = d
@@ -326,6 +513,8 @@ export function indexRoot(
     const seen = new Set<string>();
     const changes: PreparedFileChange[] = [];
     for (const file of scanned) {
+      // Reading and tokenising file bodies is the longest phase of a run.
+      heartbeatRootLock(root.id);
       seen.add(file.relPath);
       const prev = existing.get(file.relPath);
       const changed = !prev || prev.size !== file.size || prev.mtime_ms !== file.mtimeMs;
@@ -402,7 +591,7 @@ export function indexRoot(
 
       stats.durationMs = Date.now() - start;
       d.prepare(
-        "UPDATE index_roots SET status = 'ready', file_count = ?, last_indexed_at = ?, last_duration_ms = ? WHERE id = ?",
+        "UPDATE index_roots SET status = 'ready', file_count = ?, last_indexed_at = ?, last_duration_ms = ?, indexing_started_at = NULL WHERE id = ?",
       ).run(scanned.length, now, stats.durationMs, root.id);
       d.exec("COMMIT");
     } catch (err) {
@@ -413,7 +602,9 @@ export function indexRoot(
     return stats;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    d.prepare("UPDATE index_roots SET status = 'error', error = ? WHERE id = ?").run(message, root.id);
+    d.prepare(
+      "UPDATE index_roots SET status = 'error', error = ?, indexing_started_at = NULL WHERE id = ?",
+    ).run(message, root.id);
     throw err;
   } finally {
     releaseRootLock();
@@ -439,9 +630,20 @@ export function refreshStaleRoots(staleMinutes: number, db?: Database): IndexSta
   const stats: IndexStats[] = [];
 
   for (const root of listRoots(db)) {
-    if (root.status === "indexing" || root.status === "pending") continue;
-    if (root.lastIndexedAt && Date.parse(root.lastIndexedAt) > cutoff) continue;
+    if (root.status === "pending") continue;
     if (refreshing.has(root.id)) continue;
+
+    const health = rootHealth(root);
+    // A live run owns the root; leave it alone. A *wedged* one does not — it is
+    // the residue of a killed process, and skipping it (as this loop used to do
+    // for anything at status 'indexing') is what turned one crash into a
+    // 48-day outage: the sentinel disabled its own recovery path. Recover it
+    // regardless of staleness, because being wedged already makes every query
+    // against it fail. The on-disk lock still prevents a real double-index.
+    if (health === "indexing") continue;
+    if (health !== "wedged" && root.lastIndexedAt && Date.parse(root.lastIndexedAt) > cutoff) {
+      continue;
+    }
 
     refreshing.add(root.id);
     try {

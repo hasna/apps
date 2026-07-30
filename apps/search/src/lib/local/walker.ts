@@ -81,7 +81,17 @@ export function extOf(name: string): string {
  * Known limitation: a file edited without changing its size or mtime (e.g.
  * mtime-preserving copies) is not detected as changed — use a force reindex.
  */
-export function scanRoot(rootPath: string, extraExcludes: string[] = []): ScanResult {
+/**
+ * `onProgress` fires once per directory entered. The indexer uses it to keep
+ * its lock's mtime fresh: the walk is the one phase of a run that cannot
+ * heartbeat from the caller's own loop, and a lock that goes stale mid-walk is
+ * both stealable by another indexer and read as a dead holder.
+ */
+export function scanRoot(
+  rootPath: string,
+  extraExcludes: string[] = [],
+  onProgress?: () => void,
+): ScanResult {
   const hardMatchers = [new IgnoreMatcher(DEFAULT_EXCLUDES)];
   if (extraExcludes.length > 0) hardMatchers.push(new IgnoreMatcher(extraExcludes));
   const stack = new IgnoreStack(hardMatchers);
@@ -89,6 +99,7 @@ export function scanRoot(rootPath: string, extraExcludes: string[] = []): ScanRe
   const skippedDirs: string[] = [];
 
   const walk = (dirAbs: string, dirRel: string): void => {
+    onProgress?.();
     const gitignore = readGitignore(dirAbs);
     if (gitignore) stack.push(new IgnoreMatcher(gitignore, dirRel));
 
