@@ -6,6 +6,28 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Added a fail-closed public OSS release gate with a machine-readable `HOLD`
+  decision, online GitHub/npm state checks, runtime dependency notice and
+  license verification, full-history credential scanning, and an explicit
+  approval/provenance requirement.
+- Added `release:oss:verify`, the post-publish half of the release gate. It
+  verifies on the registry the provenance attestation, signature, and `gitHead`
+  that only a completed publish can produce, and the release workflow runs it
+  immediately after `npm publish`. The pre-publish gate treats the absent
+  version as expected state and requires the capability to mint provenance
+  instead, so an approved `GO` candidate can actually be published.
+
+### Security
+
+- Added a trusted-publishing release workflow that publishes with
+  `npm publish --provenance` under `id-token: write`, and made the OSS gate run
+  before the existing build, typecheck, and test prepublish checks. The
+  provenance request lives in the workflow rather than in `publishConfig`,
+  because npm refuses to publish at all when `publishConfig.provenance` is set
+  outside a supported CI provider.
+
 ## [0.1.69] - 2026-06-30
 
 ### Added
