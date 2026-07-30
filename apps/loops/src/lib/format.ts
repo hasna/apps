@@ -13,14 +13,25 @@ import type {
   WorkflowStepRun,
   WorkflowWorkItem,
 } from "../types.js";
-import { scrubSecrets } from "./redact.js";
+import { isRedactionPlaceholder, scrubSecrets } from "./redact.js";
 import { publicWorkflowEvent as validatedWorkflowEvent } from "./workflow-events.js";
 
 const TEXT_OUTPUT_LIMIT = 32 * 1024;
 const SENSITIVE_PAYLOAD_KEYS = new Set(["env", "error", "prompt", "reason", "stderr", "stdout"]);
 
+/**
+ * Replace `value` with a placeholder recording how long it was.
+ *
+ * Idempotent: redacting an already-redacted value returns it unchanged rather
+ * than reporting the placeholder's own length. A control-plane client reads
+ * loops through an API that has already redacted them, then formats them for
+ * display — without this, a 137-character prompt printed as "[redacted 20
+ * chars]" (the length of "[redacted 137 chars]"), which silently destroyed the
+ * only signal an operator had for checking the stored prompt was intact.
+ */
 export function redact(value: string | undefined, visible = 0): string | undefined {
   if (!value) return value;
+  if (isRedactionPlaceholder(value)) return value;
   const scrubbed = scrubSecrets(value);
   if (scrubbed.length <= visible) return scrubbed;
   if (visible <= 0) return `[redacted ${scrubbed.length} chars]`;

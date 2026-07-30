@@ -7,7 +7,7 @@ import type {
   WorkflowLifecycleEventType,
 } from "../types.js";
 import { ValidationError } from "./errors.js";
-import { scrubSecrets } from "./redact.js";
+import { isRedactionPlaceholder, scrubSecrets } from "./redact.js";
 
 export const WORKFLOW_LIFECYCLE_EVENT_TYPES = [
   "created",
@@ -60,7 +60,6 @@ function isOptionalStringArray(value: unknown): value is string[] | undefined {
 
 const SENSITIVE_CUSTOM_EVENT_KEYS = new Set(["env", "error", "prompt", "reason", "stderr", "stdout"]);
 const BENIGN_CUSTOM_EVENT_KEY_NAMES = new Set(["dedupekey", "idempotencykey", "routekey"]);
-const REDACTED_VALUE = /^\[redacted(?: \d+ chars)?\]$/;
 
 function isSensitiveCustomEventKey(key: string): boolean {
   const normalized = key.replace(/[^a-z0-9]/gi, "").toLowerCase();
@@ -73,7 +72,7 @@ function isSensitiveCustomEventKey(key: string): boolean {
 function sanitizeCustomEventValue(value: unknown, key?: string): unknown {
   if (key && isSensitiveCustomEventKey(key)) {
     if (typeof value === "string") {
-      if (REDACTED_VALUE.test(value)) return value;
+      if (isRedactionPlaceholder(value)) return value;
       return `[redacted ${value.length} chars]`;
     }
     if (value === undefined || value === null) return value;

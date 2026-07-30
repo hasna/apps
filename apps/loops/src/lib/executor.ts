@@ -24,6 +24,7 @@ import { commandNotFoundMessage, executableExists, normalizeExecutionPath } from
 import { nowIso } from "./ids.js";
 import { refreshLoopMachine, resolveMachineCommand } from "./machines.js";
 import { processStartTimeMs } from "./process-identity.js";
+import { isRedactionPlaceholder } from "./redact.js";
 
 const DEFAULT_TIMEOUT_MS = 30 * 60_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 256 * 1024;
@@ -196,6 +197,68 @@ function timeoutResult(startedAt: string, error: string, fields: ResultFields = 
 function successResult(startedAt: string, fields: ResultFields = {}): ExecutorResult {
   return buildResult("succeeded", startedAt, fields);
 }
+
+/**
+ * Incident 607176 — the "fake green" class: a run that reports `succeeded` with
+ * exit 0 while the agent did nothing at all.
+ *
+ * The trigger was a redacted prompt. The control plane's runner-claim payload
+ * ran the loop through `publicLoop`, so the runner received target.prompt as
+ * the literal string "[redacted 152 chars]" and handed *that* to the provider
+ * as the entire instruction. The provider replied "I don't see a task in your
+ * message" and exited 0, and the runner recorded a green run. Four agent loops
+ * had been reporting success for weeks without ever executing their prompt.
+ *
+ * Two guards, deliberately independent, because the one-line upstream fix only
+ * closes the hop we already know about:
+ *
+ *   {@link agentPromptDeliveryFailure} is a PREcondition on the payload. It
+ *   holds no matter which hop corrupts the prompt — API, transport, cache,
+ *   spool, migration import, or a future one — because it validates at the
+ *   point of use rather than trusting every hop in between.
+ *
+ *   {@link agentProducedNoOutput} is a POSTcondition on the process.
+ *
+ * What is deliberately NOT used as a signal: run duration. "Suspiciously
+ * short" is not a property of a run, it is a property of a workload — the
+ * probe that exposed this took 6.8s, while a legitimate agent that finds
+ * nothing to do can finish faster than that. A duration threshold would fail
+ * healthy runs and still miss a slow no-op, so it buys unreliability in both
+ * directions. Both guards below are instead deterministic: each has a single
+ * unambiguous trigger and no tunable.
+ */
+function agentPromptDeliveryFailure(target: ExecutableTarget): string | undefined {
+  if (target.type !== "agent") return undefined;
+  const prompt = (target as AgentTarget).prompt;
+  if (prompt === undefined || prompt === null || prompt.trim().length === 0) {
+    return "agent prompt is empty: refusing to start a provider with no instruction";
+  }
+  if (isRedactionPlaceholder(prompt)) {
+    return `agent prompt was redacted before delivery (received ${JSON.stringify(prompt)}): ` +
+      "the executor was handed a display placeholder instead of the real prompt, so the run was not started. " +
+      "This means a layer between storage and the runner redacted target.prompt (see incident 607176).";
+  }
+  return undefined;
+}
+
+/**
+ * An agent process that exits 0 having written nothing whatsoever to either
+ * stream did not do the work. Every supported provider announces itself on
+ * stdout — a result envelope under `--output-format json`, or at minimum the
+ * assistant's text — so total silence means the agent never really ran.
+ *
+ * Scoped to agent targets on purpose: `command` loops legitimately succeed
+ * without output (`true`, a quiet `rsync`, a no-change `git gc`), so applying
+ * this to them would break working loops.
+ */
+function agentProducedNoOutput(spec: CommandSpec, fields: ResultFields): boolean {
+  if (!spec.agentProvider) return false;
+  return (fields.stdout ?? "").trim().length === 0 && (fields.stderr ?? "").trim().length === 0;
+}
+
+const AGENT_NO_OUTPUT_ERROR =
+  "agent exited 0 with no output on stdout or stderr: the provider produced nothing, " +
+  "so the run did no work and is not reported as succeeded";
 
 function codewithJsonlHasTerminalSuccess(stdout: string): boolean {
   for (const line of stdout.split(/\r?\n/)) {
@@ -1244,6 +1307,7 @@ async function executeRemoteSpec(
       }
       return failureResult(startedAt, error ?? `remote process on ${machine.id} exited with code ${exitCode ?? "unknown"}`, fields);
     }
+    if (agentProducedNoOutput(spec, fields)) return failureResult(startedAt, AGENT_NO_OUTPUT_ERROR, fields);
     return successResult(startedAt, fields);
   }
 }
@@ -1283,6 +1347,11 @@ export async function executeTarget(
   metadata: ExecutionMetadata = {},
   opts: ExecuteOptions = {},
 ): Promise<ExecutorResult> {
+  // Before anything is spawned, locally or remotely: a prompt that never
+  // survived delivery is a failed run, not a green one. See
+  // agentPromptDeliveryFailure (incident 607176).
+  const promptFailure = agentPromptDeliveryFailure(target);
+  if (promptFailure) return failureResult(nowIso(), promptFailure);
   let spec = commandSpec(target, opts);
   const machine = resolvedMachine(opts);
   if (machine && !machine.local) {
@@ -1416,6 +1485,7 @@ export async function executeTarget(
       }
       return failureResult(startedAt, error ?? `process exited with code ${exitCode ?? "unknown"}`, fields);
     }
+    if (agentProducedNoOutput(spec, fields)) return failureResult(startedAt, AGENT_NO_OUTPUT_ERROR, fields);
     return successResult(startedAt, fields);
   }
 }

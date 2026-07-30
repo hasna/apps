@@ -153,3 +153,28 @@ export function scrubSecretsDeep<T>(value: T): T {
   }
   return value;
 }
+
+/**
+ * The display-layer redaction placeholder produced by `redact()` in format.ts:
+ * `[redacted]` or `[redacted <n> chars]`, and nothing else. Anchored on
+ * purpose — prose that merely mentions a placeholder ("why does [redacted 12
+ * chars] appear in my output?") is real content and must not be treated as one.
+ *
+ * This lives here, next to the write-path scrubber, because three unrelated
+ * layers need the same answer and must not each carry their own copy of the
+ * shape: format.ts (so redaction is idempotent), workflow-events.ts (so a
+ * re-sanitized event payload is not re-wrapped), and executor.ts (so a prompt
+ * that arrives already redacted is never handed to a provider as if it were an
+ * instruction — incident 607176).
+ */
+const REDACTION_PLACEHOLDER = /^\[redacted(?: \d+ chars)?\]$/;
+
+/**
+ * True when `value` is exactly a redaction placeholder, not text containing
+ * one. Returns a plain boolean rather than a `value is string` predicate on
+ * purpose: callers ask this about a value they have already narrowed to a
+ * string, and a predicate would narrow the *false* branch to `never`.
+ */
+export function isRedactionPlaceholder(value: unknown): boolean {
+  return typeof value === "string" && REDACTION_PLACEHOLDER.test(value.trim());
+}

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   publicExecutorResult,
   publicLoop,
+  redact,
   publicRun,
   publicWorkflow,
   publicWorkflowEvent,
@@ -243,5 +244,39 @@ describe("textOutputBlocks", () => {
     expect(json).not.toContain("SECRET_EXECUTOR_STDERR");
     expect(json).not.toContain("SECRET_EXECUTOR_ERROR");
     expect(json).toContain("[redacted");
+  });
+});
+
+// Incident 607176 follow-up. `loops show` on a control-plane machine reads a
+// loop that the server already redacted, then redacts it again, so a 137-char
+// prompt printed as "[redacted 20 chars]" — the length of the placeholder, not
+// of the prompt. That destroyed the one signal an operator had for checking
+// whether the stored prompt was intact. Redaction is now idempotent, so the
+// displayed length is always the real prompt's length.
+describe("redact", () => {
+  test("is idempotent over its own placeholder", () => {
+    const prompt = "x".repeat(137);
+    const once = redact(prompt);
+    expect(once).toBe("[redacted 137 chars]");
+    expect(redact(once)).toBe("[redacted 137 chars]");
+    expect(redact(redact(once))).toBe("[redacted 137 chars]");
+  });
+
+  test("passes a bare placeholder through unchanged", () => {
+    expect(redact("[redacted]")).toBe("[redacted]");
+  });
+
+  test("still redacts text that merely contains a placeholder", () => {
+    const value = "prefix [redacted 12 chars] suffix";
+    expect(redact(value)).toBe(`[redacted ${value.length} chars]`);
+  });
+
+  test("publicLoop on an already-public agent loop keeps the original length", () => {
+    const prompt = "y".repeat(137);
+    const loop = { id: "l1", target: { type: "agent", provider: "claude", prompt } } as never;
+    const once = publicLoop(loop) as { target: { prompt: string } };
+    expect(once.target.prompt).toBe("[redacted 137 chars]");
+    const twice = publicLoop(once as never) as { target: { prompt: string } };
+    expect(twice.target.prompt).toBe("[redacted 137 chars]");
   });
 });

@@ -1378,7 +1378,11 @@ describe("executeLoop", () => {
     mkdirSync(binDir, { recursive: true });
     const gate = join(home, "gate");
     const fake = join(binDir, "claude");
-    await Bun.write(fake, `#!/usr/bin/env bash\n${gateWaitScript(gate)}cat >/dev/null\n`);
+    // Emits output on purpose: this test is about env stripping, but an agent
+    // that exits 0 having written nothing at all is now a failed run (the
+    // incident-607176 no-output guard), so a silent fixture would fail here for
+    // a reason unrelated to what it is checking.
+    await Bun.write(fake, `#!/usr/bin/env bash\n${gateWaitScript(gate)}cat >/dev/null\nprintf 'remote-env-agent-ran\\n'\n`);
     chmodSync(fake, 0o755);
 
     const store = new Store(":memory:");
@@ -2257,5 +2261,123 @@ describe("executeLoop", () => {
         { env: { PATH: "/usr/bin:/bin" } },
       ),
     ).toThrow("opencode.model is required");
+  });
+});
+
+// Incident 607176 — "fake green": agent loops reported succeeded/exit 0 while
+// having done nothing at all. The trigger was a redacted prompt reaching the
+// executor (the control plane's runner-claim payload ran target.prompt through
+// publicLoop, so the provider was handed the literal string
+// "[redacted N chars]"). The provider dutifully exited 0 after answering that
+// it could not see a task, and the runner recorded success.
+//
+// These tests pin the two independent defences:
+//   1. PRECONDITION — an agent prompt that is missing, blank, or a redaction
+//      placeholder is never executed. Deterministic, zero false positives, and
+//      it holds no matter which upstream hop corrupts the prompt.
+//   2. POSTCONDITION — an agent process that exits 0 having written nothing at
+//      all to stdout or stderr did not really run, and must not be success.
+describe("agent run integrity (incident 607176)", () => {
+  function fakeClaude(root: string, script: string): string {
+    const bin = join(root, "bin");
+    mkdirSync(bin, { recursive: true });
+    const claude = join(bin, "claude");
+    writeFileSync(claude, script);
+    chmodSync(claude, 0o755);
+    return bin;
+  }
+
+  const echoingClaude = ["#!/usr/bin/env bash", "cat > /dev/null", "printf 'agent ran\\n'", ""].join("\n");
+  const silentClaude = ["#!/usr/bin/env bash", "cat > /dev/null", "exit 0", ""].join("\n");
+
+  test.each([
+    ["a redaction placeholder with a length", "[redacted 152 chars]"],
+    ["a bare redaction placeholder", "[redacted]"],
+    ["an empty prompt", ""],
+    ["a whitespace-only prompt", "   \n\t  "],
+  ])("refuses to execute an agent target whose prompt is %s", async (_label, prompt) => {
+    const root = mkdtempSync(join(tmpdir(), "loops-agent-prompt-guard-"));
+    // The marker proves the guard is a PREcondition: if the provider is ever
+    // spawned the file appears, and a "failed" status would be an accident.
+    const marker = join(root, "provider-was-spawned");
+    const bin = fakeClaude(
+      root,
+      ["#!/usr/bin/env bash", `touch ${JSON.stringify(marker)}`, "cat > /dev/null", "printf 'ran\\n'", ""].join("\n"),
+    );
+    try {
+      const result = await executeTarget(
+        { type: "agent", provider: "claude", prompt, cwd: root } as AgentTarget,
+        {},
+        { env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` } },
+      );
+      expect(result.status).toBe("failed");
+      expect(result.error ?? "").toMatch(/prompt/i);
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a real prompt still runs and still succeeds", async () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-agent-prompt-ok-"));
+    const bin = fakeClaude(root, echoingClaude);
+    try {
+      const result = await executeTarget(
+        {
+          type: "agent",
+          provider: "claude",
+          prompt: "Write /tmp/sentinel.txt containing SENTINEL-OK and stop.",
+          cwd: root,
+        } as AgentTarget,
+        {},
+        { env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` } },
+      );
+      expect(result.status).toBe("succeeded");
+      expect(result.stdout).toContain("agent ran");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a prompt that merely mentions redaction is not mistaken for a placeholder", async () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-agent-prompt-mentions-"));
+    const bin = fakeClaude(root, echoingClaude);
+    try {
+      const result = await executeTarget(
+        {
+          type: "agent",
+          provider: "claude",
+          prompt: "Explain why [redacted 12 chars] shows up in loop output, then stop.",
+          cwd: root,
+        } as AgentTarget,
+        {},
+        { env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` } },
+      );
+      expect(result.status).toBe("succeeded");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an agent that exits 0 with no output at all is not a success", async () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-agent-silent-"));
+    const bin = fakeClaude(root, silentClaude);
+    try {
+      const result = await executeTarget(
+        { type: "agent", provider: "claude", prompt: "do the thing", cwd: root } as AgentTarget,
+        {},
+        { env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` } },
+      );
+      expect(result.status).toBe("failed");
+      expect(result.exitCode).toBe(0);
+      expect(result.error ?? "").toMatch(/no output/i);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a silent command target is still a success (the guard is agent-only)", async () => {
+    const result = await executeTarget({ type: "command", command: "true" }, {}, {});
+    expect(result.status).toBe("succeeded");
   });
 });

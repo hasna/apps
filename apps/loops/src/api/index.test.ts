@@ -2091,6 +2091,55 @@ describe("loops-api foundation", () => {
     }
   });
 
+  // Incident 607176. The runner executes the loop it is handed by the claim
+  // response; nothing downstream can recover a prompt that was redacted here.
+  // `claimRuns` used to push `publicLoop(claim.loop)`, which rewrote
+  // target.prompt to "[redacted N chars]" for agent targets, so every agent
+  // loop ran with a 20-character placeholder as its entire instruction and
+  // exited 0 having done nothing. The redaction belongs on operator-facing
+  // reads (GET /v1/loops), never on the runner's execution payload.
+  test("runner claim delivers the agent prompt unredacted", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const now = new Date("2026-01-01T00:00:05Z");
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage, now: () => now }, runnerPrincipal("runner-prompt"));
+    const prompt = "Using the Write tool, create /tmp/loop-probe.txt containing exactly SENTINEL-OK and nothing else.";
+
+    try {
+      const loop = await storage.createLoop(
+        {
+          name: "api-runner-agent-prompt",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "agent", provider: "claude", prompt },
+          leaseMs: 60_000,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+
+      const claimResponse = await fetch(apiUrl(server, "/v1/runners/claim"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ runnerId: "runner-prompt", now: "2026-01-01T00:00:00Z", maxClaims: 1 }),
+      });
+      expect(claimResponse.status).toBe(200);
+      const claimed = (await claimResponse.json()) as {
+        claims: Array<{ loop: { id: string; target: { prompt?: string } } }>;
+      };
+      expect(claimed.claims).toHaveLength(1);
+      expect(claimed.claims[0]!.loop.id).toBe(loop.id);
+      expect(claimed.claims[0]!.loop.target.prompt).toBe(prompt);
+      expect(claimed.claims[0]!.loop.target.prompt).not.toMatch(/^\[redacted/);
+
+      // ...while the operator-facing read stays redacted.
+      const read = await fetch(apiUrl(server, `/v1/loops/${loop.id}`), { headers: jsonHeaders });
+      const body = (await read.json()) as { loop: { target: { prompt?: string } } };
+      expect(body.loop.target.prompt).toBe(`[redacted ${prompt.length} chars]`);
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
   test("runner claim and run finalization are fenced by claim token", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
