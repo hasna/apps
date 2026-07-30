@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.3] - 2026-07-30
+
+### Added
+
+- **`@hasna/todos/testing` — a shipped test-isolation helper, so a consumer's test suite
+  cannot write into the shared hosted store.** Measured on 2026-07-30, three repositories
+  had between them left **2,094 rows** in the live authority purely from tests:
+  1,151 from `hasnaxyz/iapp-takumi` (`Short ID resolution test`, `Scoped getTask resolution
+  test`, `seed-task-<epoch>` under `test-resolution-*` projects) and 943 `Merge the release
+  PR` rows from `hasna/loops`' `drain.test.ts`, which shelled out to the real `todos` CLI
+  with an unmodified `process.env`. None was ever assigned, commented on, or actioned.
+  The cause is the same in every case: the client resolves its transport from the
+  environment, and every shell on a fleet machine exports the shared-store pointers.
+
+  The export is `SHARED_TODOS_STORE_ENV_KEYS` (the routing variables, held as **one
+  constant shared with the resolver that reads them** — including the legacy
+  `TODOS_API_URL` / `TODOS_API_KEY` aliases a hand-rolled consumer copy reliably misses),
+  plus `localTodosTestEnv()`, `applyLocalTodosTestEnv()` (with exact restore) and
+  `assertLocalTodosTestEnv()`. It is published as a subpath so the list lives next to the
+  resolver: a consumer-side reimplementation stops protecting anything the day this package
+  adds a routing variable, and that failure mode is a green suite silently writing to
+  production.
+
+  Guarded by two tests that fail rather than drift: one regex-scans the resolver for every
+  `TODOS_*` variable it reads and fails if any is neither scrubbed nor explicitly declared
+  local-only; the other fails if the subpath ships without its declaration file.
+
 ### Fixed
 
 - **`todos doctor` no longer reports healthy on a dataset full of orphaned rows.** In remote

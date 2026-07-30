@@ -20,7 +20,7 @@ export interface TodosPackageSource {
 }
 
 export interface TodosPackageExportContract {
-  subpath: "." | "./sdk" | "./mcp" | "./registry" | "./contracts" | "./storage";
+  subpath: "." | "./sdk" | "./mcp" | "./registry" | "./contracts" | "./storage" | "./testing";
   import: string;
   types: string;
   description: string;
@@ -80,6 +80,13 @@ export const TODOS_PACKAGE_EXPORTS: TodosPackageExportContract[] = [
     import: "./dist/storage.js",
     types: "./dist/storage.d.ts",
     description: "Storage and service adapter contracts for local SQLite implementations.",
+    stability: "stable",
+  },
+  {
+    subpath: "./testing",
+    import: "./dist/testing.js",
+    types: "./dist/testing.d.ts",
+    description: "Test-store isolation helpers that keep a consumer's test suite off a shared todos store.",
     stability: "stable",
   },
 ];

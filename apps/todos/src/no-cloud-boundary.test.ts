@@ -22,10 +22,31 @@ describe("OSS no-cloud boundary", () => {
       /telemetry/i,
     ];
 
+    // Narrow, named exemptions. Each names ONE file and ONE pattern and says why the
+    // match is the opposite of the thing the guard is looking for. Never widen a pattern
+    // to make a file pass; add a line here or fix the file.
+    const exempt = new Map<string, { pattern: RegExp; reason: string }[]>([
+      [
+        "src/testing.ts",
+        [
+          {
+            pattern: /\bTODOS_API_URL\b/,
+            reason:
+              "the scrub list must NAME the legacy hosted-routing aliases in order to blank them; " +
+              "this module exists to keep tests off a hosted store, not to reach one",
+          },
+        ],
+      ],
+    ]);
+
     for (const file of runtimeSourceFiles(join(root, "src"))) {
       const text = readFileSync(file, "utf8");
+      const rel = relative(root, file);
+      const allowed = exempt.get(rel) ?? [];
       for (const pattern of forbidden) {
-        if (pattern.test(text)) offenders.push(`${relative(root, file)}: ${pattern}`);
+        if (!pattern.test(text)) continue;
+        if (allowed.some((entry) => entry.pattern.source === pattern.source)) continue;
+        offenders.push(`${rel}: ${pattern}`);
       }
     }
 
