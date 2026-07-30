@@ -27,9 +27,11 @@ export interface SessionAccount {
   /**
    * How `profile` was resolved. `"layout"` means it was read off the dir path
    * rather than the registry, which is authoritative about the dir but can lag
-   * a rename — see `layoutProfile`. Surfaced for diagnostics, not for display.
+   * a rename — see `layoutProfile`. `"switched"` means an in-place
+   * `switch-account` marker named another profile's account as the dir's
+   * current occupant. Surfaced for diagnostics, not for display.
    */
-  source: "registry" | "layout" | null;
+  source: "registry" | "layout" | "switched" | null;
 }
 
 /** Env var Claude Code uses to point a process at an isolated config dir. */
@@ -50,6 +52,21 @@ const ACCOUNTS_HOME_ENV = "ACCOUNTS_HOME";
 const DEFAULT_ACCOUNTS_HOME = [".hasna", "accounts"];
 const STORE_FILE = "accounts.json";
 const PROFILES_SUBDIR = "profiles";
+
+/**
+ * `accounts switch-account` switches a session's account IN PLACE: it swaps
+ * the live auth files inside the config dir and records the new occupant in
+ * this marker, without moving the dir or re-pointing the registry. So both the
+ * registry entry and the dir's path name keep describing the dir's *owner*
+ * after a switch — only the marker knows who is actually logged in now. It is
+ * cleared when the owner's account is restored or a fresh login lands.
+ *
+ * The filenames mirror `@hasna/accounts`'s claude-layout module, which owns
+ * them but does not export a public reader; if one appears it should replace
+ * these constants via the same lazy import used for `accountsPaths`.
+ */
+const AUTH_STATE_SUBDIR = ".accounts-auth";
+const SWITCHED_ACCOUNT_MARKER_FILE = "switched-account.json";
 
 /**
  * Where the host agent records which account is logged in. Mirrors Claude
@@ -206,6 +223,25 @@ function layoutProfile(profilesRoot: string, configDir: string, env: Env): Sessi
   return { configDir, profile, tool, source: "layout" };
 }
 
+interface SwitchedOccupant {
+  profile: string | null;
+  email: string | null;
+}
+
+/**
+ * The account currently occupying this config dir after an in-place
+ * `switch-account`, or null when the dir carries its own account. A marker
+ * with no usable fields is treated as absent rather than as an anonymous
+ * occupant.
+ */
+function switchedOccupant(configDir: string): SwitchedOccupant | null {
+  const raw = readJson(join(configDir, AUTH_STATE_SUBDIR, SWITCHED_ACCOUNT_MARKER_FILE));
+  if (!raw) return null;
+  const profile = str(raw.profile);
+  const email = str(raw.email);
+  return profile || email ? { profile, email } : null;
+}
+
 /** Config dir the current process is bound to, for settings and registry lookup. */
 export function sessionConfigDir(env: Env = process.env): string {
   return canonical(str(env[CONFIG_DIR_ENV]) ?? join(home(env), DEFAULT_CONFIG_SUBDIR), env);
@@ -238,8 +274,15 @@ export async function sessionAccount(env: Env = process.env, tool?: string): Pro
     const paths = await accountsPaths(env);
     const entry = registryEntry(paths.store, configDir, env, tool);
     const name = str(entry?.name);
-    if (name) return { configDir, profile: name, tool: str(entry?.tool), source: "registry" };
-    return layoutProfile(paths.profiles, configDir, env) ?? unresolved;
+    const owner: SessionAccount = name
+      ? { configDir, profile: name, tool: str(entry?.tool), source: "registry" }
+      : (layoutProfile(paths.profiles, configDir, env) ?? unresolved);
+    // An in-place switch overrides the owner. A nameless occupant still
+    // suppresses the owner's name — reporting it would be a stale identity —
+    // and lets callers fall back to `sessionAccountEmail`.
+    const occupant = switchedOccupant(configDir);
+    if (occupant) return { configDir, profile: occupant.profile, tool: owner.tool, source: "switched" };
+    return owner;
   } catch {
     return unresolved;
   }
@@ -256,8 +299,13 @@ export async function sessionAccountEmail(env: Env = process.env, tool?: string)
     const stateFile = sessionStateFile(env);
     const live = stateFile ? str(readJson(stateFile)?.oauthAccount?.emailAddress) : null;
     if (live) return live;
+    const configDir = sessionConfigDir(env);
+    // After an in-place switch the registry's email describes the dir's
+    // parked owner, not this session — the marker's copy is the occupant's.
+    const occupant = switchedOccupant(configDir);
+    if (occupant) return occupant.email;
     const paths = await accountsPaths(env);
-    return str(registryEntry(paths.store, sessionConfigDir(env), env, tool)?.email);
+    return str(registryEntry(paths.store, configDir, env, tool)?.email);
   } catch {
     return null;
   }

@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sessionAccount, sessionAccountEmail, sessionConfigDir, sessionStateFile } from "../src/accounts";
@@ -137,10 +137,98 @@ describe("sessionAccount", () => {
   });
 });
 
+/** Simulate `accounts switch-account`: the dir's live auth now carries another account. */
+function switchTo(configDir: string, profile: string | null, email: string | null) {
+  const authDir = join(configDir, ".accounts-auth");
+  mkdirSync(authDir, { recursive: true });
+  writeFileSync(
+    join(authDir, "switched-account.json"),
+    JSON.stringify({ profile, email, switchedAt: new Date().toISOString() }),
+  );
+}
+
+describe("sessionAccount after an in-place switch-account", () => {
+  test("shows the occupant, not the dir owner — and flips when the switch lands", async () => {
+    const { root, entries } = accountsHome([
+      { name: "account088", tool: "claude", email: "owner@example.com" },
+      { name: "account033", tool: "claude", email: "occupant@example.com" },
+    ]);
+    const dir = entries[0]!.dir;
+    // positive control: before the switch this same input resolves to the owner
+    expect((await sessionAccount(env(root, dir))).profile).toBe("account088");
+    switchTo(dir, "account033", "occupant@example.com");
+    const after = await sessionAccount(env(root, dir));
+    expect(after.profile).toBe("account033");
+    expect(after.source).toBe("switched");
+  });
+
+  test("the occupant also wins over the layout name for an unregistered dir", async () => {
+    const { root } = accountsHome([{ name: "account001", tool: "claude" }]);
+    const unregistered = join(root, "profiles", "claude", "account042");
+    mkdirSync(unregistered, { recursive: true });
+    switchTo(unregistered, "account007", "occupant@example.com");
+    const account = await sessionAccount(env(root, unregistered));
+    expect(account.profile).toBe("account007");
+    expect(account.source).toBe("switched");
+  });
+
+  test("a nameless occupant yields no profile rather than the stale owner name", async () => {
+    const { root, entries } = accountsHome([{ name: "account088", tool: "claude" }]);
+    switchTo(entries[0]!.dir, null, "occupant@example.com");
+    const account = await sessionAccount(env(root, entries[0]!.dir));
+    expect(account.profile).toBeNull();
+    expect(account.source).toBe("switched");
+  });
+
+  test("clearing the marker restores the owner, so a switch back is visible too", async () => {
+    const { root, entries } = accountsHome([{ name: "account088", tool: "claude" }]);
+    const dir = entries[0]!.dir;
+    switchTo(dir, "account033", "occupant@example.com");
+    expect((await sessionAccount(env(root, dir))).profile).toBe("account033");
+    rmSync(join(dir, ".accounts-auth", "switched-account.json"));
+    const restored = await sessionAccount(env(root, dir));
+    expect(restored.profile).toBe("account088");
+    expect(restored.source).toBe("registry");
+  });
+
+  test("a corrupt marker degrades to the owner instead of failing", async () => {
+    const { root, entries } = accountsHome([{ name: "account088", tool: "claude" }]);
+    const dir = entries[0]!.dir;
+    mkdirSync(join(dir, ".accounts-auth"), { recursive: true });
+    writeFileSync(join(dir, ".accounts-auth", "switched-account.json"), "{not json");
+    expect((await sessionAccount(env(root, dir))).profile).toBe("account088");
+  });
+
+  test("two dirs render different occupants simultaneously", async () => {
+    const { root, entries } = accountsHome([
+      { name: "account001", tool: "claude" },
+      { name: "account088", tool: "claude" },
+    ]);
+    switchTo(entries[0]!.dir, "account010", "ten@example.com");
+    switchTo(entries[1]!.dir, "account033", "occupant@example.com");
+    expect((await sessionAccount(env(root, entries[0]!.dir))).profile).toBe("account010");
+    expect((await sessionAccount(env(root, entries[1]!.dir))).profile).toBe("account033");
+  });
+});
+
 describe("sessionAccountEmail", () => {
   test("prefers the agent's own record over the registry copy", async () => {
     const { root, entries } = accountsHome([{ name: "account006", tool: "claude", email: "stale@example.com" }]);
     login(entries[0]!.dir, "live@example.com");
+    expect(await sessionAccountEmail(env(root, entries[0]!.dir))).toBe("live@example.com");
+  });
+
+  test("after a switch, the occupant's email beats the owner's registry copy", async () => {
+    const { root, entries } = accountsHome([{ name: "account088", tool: "claude", email: "owner@example.com" }]);
+    switchTo(entries[0]!.dir, "account033", "occupant@example.com");
+    expect(await sessionAccountEmail(env(root, entries[0]!.dir))).toBe("occupant@example.com");
+  });
+
+  test("the agent's own record still wins over the switch marker", async () => {
+    // the live state file is what the session actually authenticates as
+    const { root, entries } = accountsHome([{ name: "account088", tool: "claude", email: "owner@example.com" }]);
+    login(entries[0]!.dir, "live@example.com");
+    switchTo(entries[0]!.dir, "account033", "marker@example.com");
     expect(await sessionAccountEmail(env(root, entries[0]!.dir))).toBe("live@example.com");
   });
 
