@@ -397,6 +397,13 @@ function parsePositiveInteger(value: string | undefined, label: string): number 
   return parsed;
 }
 
+function parseNonNegativeInteger(value: string | undefined, label: string): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) throw new Error(`${label} must be a non-negative integer`);
+  return parsed;
+}
+
 function parseNonNegativeNumber(value: string | undefined, label: string): number | undefined {
   if (value === undefined) return undefined;
   const parsed = Number(value);
@@ -1987,7 +1994,12 @@ function registerProjectCommands(program: Command): void {
     .option("--label <labels>", "Comma-separated label filter (labels are stored as tags)")
     .option("--labels <labels>", "Comma-separated label filter (alias for --label)")
     .option("--include-evals", "Include prompt-agent eval fixture projects")
-    .option("--limit <n>", `Max rows for terminal output (default ${DEFAULT_LIST_LIMIT}, max ${MAX_HUMAN_LIMIT})`)
+    .option(
+      "--limit <n>",
+      `Max rows (terminal output defaults to ${DEFAULT_LIST_LIMIT} and caps at ${MAX_HUMAN_LIMIT}; --json returns every matching project unless you pass this)`,
+    )
+    .option("--offset <n>", "Skip this many matching projects before listing")
+    .option("--meta", "With --json, wrap the array in { projects, count, total, has_more, complete }")
     .option("--verbose", "Show additional columns in terminal output")
     .option("--render-spec", "Output a JSON Render spec")
     .option("-j, --json", "Output JSON")
@@ -1999,6 +2011,7 @@ function registerProjectCommands(program: Command): void {
           status: parseStatus(opts.status),
           query: opts.query,
           tags: splitLabelFilters(opts.tags, opts.label, opts.labels),
+          offset: parseNonNegativeInteger(opts.offset, "--offset"),
         };
         const store = resolveProjectStore();
         if (wantsRenderSpec(opts)) {
@@ -2011,12 +2024,48 @@ function registerProjectCommands(program: Command): void {
           return;
         }
         if (json) {
-          const projects = filterProjectEvalArtifacts(await store.listProjects({
+          // No --limit means every matching project: the store walks the
+          // server's pages so a capped response can no longer masquerade as the
+          // whole registry. A caller-supplied --limit is still honoured, but the
+          // result is then announced as bounded rather than passing for
+          // complete.
+          const page = await store.listProjectsPage({
             ...baseFilter,
             exclude_eval_artifacts: !opts.includeEvals,
             limit: parsePositiveInteger(opts.limit, "--limit"),
-          }), opts.includeEvals);
-          printObject(projects.map(projectWithManagement), opts);
+          });
+          const projects = filterProjectEvalArtifacts(page.projects, opts.includeEvals);
+          const rows = projects.map(projectWithManagement);
+          // Eval fixtures are dropped client-side on the api path (the server
+          // has no such filter), so a complete read knows its own true total;
+          // a bounded one can only report the server's, minus what it dropped.
+          const dropped = page.projects.length - projects.length;
+          const total = page.complete ? rows.length : Math.max(page.total - dropped, rows.length);
+          if (opts.meta) {
+            printObject(
+              {
+                projects: rows,
+                count: rows.length,
+                total,
+                offset: page.offset,
+                limit: page.limit,
+                has_more: page.has_more,
+                complete: page.complete,
+              },
+              opts,
+            );
+          } else {
+            printObject(rows, opts);
+          }
+          if (!page.complete) {
+            // stdout stays a clean JSON document; the warning goes to stderr so
+            // a piped consumer still sees that it is holding a partial list.
+            console.error(
+              chalk.yellow(
+                `projects list: returned ${rows.length} of ${total} matching projects (offset ${page.offset}${page.limit === null ? "" : `, --limit ${page.limit}`}). Drop --limit for the full set, or use --meta to read total/has_more.`,
+              ),
+            );
+          }
           return;
         }
         const limit = parseHumanLimit(opts.limit, DEFAULT_LIST_LIMIT);

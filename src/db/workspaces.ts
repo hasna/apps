@@ -773,8 +773,12 @@ export interface WorkspaceFilter {
   offset?: number;
 }
 
-export function listWorkspaces(filter: WorkspaceFilter = {}, db?: Database): Workspace[] {
-  const d = db || getDatabase();
+/**
+ * Build the shared WHERE clause + bindings for a workspace filter, so listing
+ * and counting can never drift apart (a total computed from a different
+ * predicate than the rows is worse than no total at all).
+ */
+function workspaceFilterSql(filter: WorkspaceFilter): { where: string; params: SQLQueryBindings[] } {
   const conditions: string[] = [];
   const params: SQLQueryBindings[] = [];
 
@@ -805,12 +809,34 @@ export function listWorkspaces(filter: WorkspaceFilter = {}, db?: Database): Wor
     )`);
   }
 
-  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  return { where: conditions.length ? `WHERE ${conditions.join(" AND ")}` : "", params };
+}
+
+/**
+ * List workspaces.
+ *
+ * `filter.limit` is optional and, when omitted, means EVERY matching row.
+ * It used to silently default to 100, so a caller asking for "all projects"
+ * quietly received the first hundred with nothing in the result to say so —
+ * the local twin of the server's 1000-row cap. SQLite's `LIMIT -1` is the
+ * documented "no limit" sentinel and keeps OFFSET usable.
+ */
+export function listWorkspaces(filter: WorkspaceFilter = {}, db?: Database): Workspace[] {
+  const d = db || getDatabase();
+  const { where, params } = workspaceFilterSql(filter);
   const rows = d
     .query(`SELECT * FROM workspaces ${where} ORDER BY name ASC LIMIT ? OFFSET ?`)
-    .all(...params, filter.limit ?? 100, filter.offset ?? 0) as WorkspaceRow[];
+    .all(...params, filter.limit ?? -1, filter.offset ?? 0) as WorkspaceRow[];
 
   return rows.map(rowToWorkspace);
+}
+
+/** Rows matching `filter`, ignoring its limit/offset. */
+export function countWorkspaces(filter: WorkspaceFilter = {}, db?: Database): number {
+  const d = db || getDatabase();
+  const { where, params } = workspaceFilterSql(filter);
+  const row = d.query(`SELECT COUNT(*) AS n FROM workspaces ${where}`).get(...params) as { n: number } | null;
+  return row?.n ?? 0;
 }
 
 export function resolveWorkspace(idOrSlug: string, db?: Database): Workspace | null {

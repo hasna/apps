@@ -157,6 +157,16 @@ export class ValidationError extends Error {
   }
 }
 
+/**
+ * Server-side bounds on a single `/v1/projects` page. These protect the
+ * database from an unbounded scan; they are NOT a statement that the caller may
+ * only ever see this many projects. The response reports `total` and `has_more`
+ * so a client can page the rest — the `@hasna/projects` store does so
+ * automatically.
+ */
+export const WORKSPACE_LIST_DEFAULT_LIMIT = 100;
+export const WORKSPACE_LIST_MAX_LIMIT = 1000;
+
 export interface WorkspaceFilter {
   status?: WorkspaceStatus;
   kind?: WorkspaceKind;
@@ -360,7 +370,12 @@ export class ProjectsPgStore {
   }
 
   // --- workspaces (projects) -------------------------------------------
-  async listWorkspaces(filter: WorkspaceFilter = {}): Promise<Workspace[]> {
+  /**
+   * Shared predicate for listing and counting workspaces. Kept in one place so
+   * a reported total can never describe a different set than the rows beside
+   * it.
+   */
+  private workspaceFilterSql(filter: WorkspaceFilter): { where: string; params: unknown[] } {
     const conditions: string[] = [];
     const params: unknown[] = [];
     const push = (clause: (idx: number) => string, value: unknown) => {
@@ -383,8 +398,12 @@ export class ProjectsPgStore {
         conditions.push(`(tags::jsonb ? $${params.length})`);
       }
     }
-    const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-    params.push(Math.min(Math.max(filter.limit ?? 100, 1), 1000));
+    return { where: conditions.length ? `WHERE ${conditions.join(" AND ")}` : "", params };
+  }
+
+  async listWorkspaces(filter: WorkspaceFilter = {}): Promise<Workspace[]> {
+    const { where, params } = this.workspaceFilterSql(filter);
+    params.push(Math.min(Math.max(filter.limit ?? WORKSPACE_LIST_DEFAULT_LIMIT, 1), WORKSPACE_LIST_MAX_LIMIT));
     const limitIdx = params.length;
     params.push(Math.max(filter.offset ?? 0, 0));
     const offsetIdx = params.length;
@@ -393,6 +412,13 @@ export class ProjectsPgStore {
       params,
     );
     return rows.map(rowToWorkspace);
+  }
+
+  /** Rows matching `filter`, ignoring its limit/offset. */
+  async countWorkspaces(filter: WorkspaceFilter = {}): Promise<number> {
+    const { where, params } = this.workspaceFilterSql(filter);
+    const row = await this.db.get<{ n: string | number }>(`SELECT COUNT(*) AS n FROM workspaces ${where}`, params);
+    return Number(row?.n ?? 0);
   }
 
   async getWorkspace(idOrSlug: string): Promise<Workspace | null> {

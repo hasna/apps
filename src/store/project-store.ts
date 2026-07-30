@@ -49,6 +49,7 @@ import {
   listWorkspaceEvents as dbListWorkspaceEvents,
   listWorkspaceLocations as dbListWorkspaceLocations,
   listWorkspaceLocks as dbListWorkspaceLocks,
+  countWorkspaces as dbCountWorkspaces,
   listWorkspaces as dbListWorkspaces,
   rankRoots,
   recordWorkspaceEvent as dbRecordWorkspaceEvent,
@@ -69,6 +70,7 @@ import {
   type QueryParams,
 } from "../http/client.js";
 import { resolveRegisteredProjectTargetOrThrow, type ProjectResolverOptions } from "../lib/project-resolver.js";
+import { collectPages } from "./paginate.js";
 import {
   createProjectCanvas as dbCreateProjectCanvas,
   createProjectDataModel as dbCreateProjectDataModel,
@@ -235,11 +237,39 @@ class LocalOnlyOperationError extends Error {
   }
 }
 
+/**
+ * A project list plus the metadata a caller needs to know whether it is the
+ * whole set. `projects list --json` used to emit a bare array that was capped
+ * server-side, so a truncated read and a complete one looked identical; every
+ * bounded read now carries `total`/`has_more`/`complete`.
+ */
+export interface ProjectListPage {
+  readonly projects: Workspace[];
+  /** Rows returned in this page. */
+  readonly count: number;
+  /** Rows matching the filter, ignoring limit/offset. */
+  readonly total: number;
+  /** Offset this page started at. */
+  readonly offset: number;
+  /** Caller-requested bound, or null when the caller asked for everything. */
+  readonly limit: number | null;
+  /** More rows exist past this page. */
+  readonly has_more: boolean;
+  /** Every matching row is present (i.e. `offset === 0 && !has_more`). */
+  readonly complete: boolean;
+}
+
 export interface ProjectStore {
   readonly mode: ProjectStoreMode;
   /** Base `<url>/v1` for api mode; null for local. Never contains the key. */
   readonly baseUrl: string | null;
+  /**
+   * List projects. With no `limit` this returns EVERY matching row — the store
+   * walks the server's pages itself rather than handing back one capped page.
+   */
   listProjects(filter?: WorkspaceFilter): Promise<Workspace[]>;
+  /** As `listProjects`, plus the totals that make a bounded read detectable. */
+  listProjectsPage(filter?: WorkspaceFilter): Promise<ProjectListPage>;
   getProject(idOrSlug: string): Promise<Workspace | null>;
   /**
    * Resolve a caller-supplied target to a single project, throwing if none
@@ -403,6 +433,11 @@ class LocalProjectStore implements ProjectStore {
 
   async listProjects(filter?: WorkspaceFilter): Promise<Workspace[]> {
     return dbListWorkspaces(filter ?? {});
+  }
+
+  async listProjectsPage(filter?: WorkspaceFilter): Promise<ProjectListPage> {
+    const f = filter ?? {};
+    return buildProjectListPage(dbListWorkspaces(f), f, dbCountWorkspaces(f));
   }
 
   async getProject(idOrSlug: string): Promise<Workspace | null> {
@@ -675,6 +710,22 @@ class LocalProjectStore implements ProjectStore {
 // Api transport (HTTP /v1 + bearer key)
 // --------------------------------------------------------------------------
 
+/** Assemble the completeness envelope both stores return. */
+function buildProjectListPage(projects: Workspace[], filter: WorkspaceFilter, total: number): ProjectListPage {
+  const offset = filter.offset ?? 0;
+  const limit = filter.limit ?? null;
+  const has_more = offset + projects.length < total;
+  return {
+    projects,
+    count: projects.length,
+    total,
+    offset,
+    limit,
+    has_more,
+    complete: offset === 0 && !has_more,
+  };
+}
+
 function listQuery(filter?: WorkspaceFilter): QueryParams {
   if (!filter) return {};
   return {
@@ -739,12 +790,83 @@ class ApiProjectStore implements ProjectStore {
     this.baseUrl = client.baseUrl;
   }
 
-  async listProjects(filter?: WorkspaceFilter): Promise<Workspace[]> {
-    const raw = await this.client.transport.get<{ workspaces?: Workspace[]; projects?: Workspace[] }>("/projects", {
-      query: listQuery(filter),
+  /**
+   * Fetch one page. The server clamps `limit` to its own maximum, so the row
+   * count that comes back — not the one we asked for — is the truth.
+   */
+  private async fetchProjectPage(
+    filter: WorkspaceFilter | undefined,
+    params: { limit: number; offset: number },
+  ): Promise<{ rows: Workspace[]; total: number | null }> {
+    const raw = await this.client.transport.get<{
+      workspaces?: Workspace[];
+      projects?: Workspace[];
+      total?: number;
+    }>("/projects", {
+      query: { ...listQuery(filter), limit: params.limit, offset: params.offset },
     });
-    const rows = raw.workspaces ?? raw.projects ?? [];
-    return rows.map((row) => normalizeApiWorkspace(row) ?? (row as Workspace));
+    const rows = (raw.workspaces ?? raw.projects ?? []).map((row) => normalizeApiWorkspace(row) ?? (row as Workspace));
+    // `total` is served by projects >= 0.1.96; older deployments omit it and we
+    // fall back to what the page walk actually observed.
+    return { rows, total: typeof raw.total === "number" ? raw.total : null };
+  }
+
+  /**
+   * List projects, walking the server's pages.
+   *
+   * The API caps every list response (1000 rows at the time of writing) and
+   * reports only the page length, so the previous single-request implementation
+   * returned a truncated set that no caller could distinguish from a complete
+   * one. We now page through `offset` until the server runs out; the stride is
+   * whatever the first response actually contained, so the cap is never
+   * hardcoded here and a server-side change needs no client release.
+   */
+  async listProjects(filter?: WorkspaceFilter): Promise<Workspace[]> {
+    return collectPages<Workspace>(
+      async (params) => (await this.fetchProjectPage(filter, params)).rows,
+      (row) => row?.id,
+      {
+        ...(filter?.limit !== undefined ? { want: filter.limit } : {}),
+        ...(filter?.offset !== undefined ? { offset: filter.offset } : {}),
+      },
+    );
+  }
+
+  async listProjectsPage(filter?: WorkspaceFilter): Promise<ProjectListPage> {
+    const f = filter ?? {};
+    let serverTotal: number | null = null;
+    const projects = await collectPages<Workspace>(
+      async (params) => {
+        const page = await this.fetchProjectPage(f, params);
+        if (page.total !== null) serverTotal = page.total;
+        return page.rows;
+      },
+      (row) => row?.id,
+      {
+        ...(f.limit !== undefined ? { want: f.limit } : {}),
+        ...(f.offset !== undefined ? { offset: f.offset } : {}),
+      },
+    );
+    // No server-reported total (pre-0.1.96 deployment): ask for one row past the
+    // bound to learn whether more exist, rather than reporting a guess.
+    const total = serverTotal ?? (await this.probeTotal(f, projects.length));
+    return buildProjectListPage(projects, f, total);
+  }
+
+  /**
+   * Establish the true match count when the server does not report one: an
+   * unbounded read is already the whole set, and a bounded read only needs to
+   * know whether anything lies past its window.
+   */
+  private async probeTotal(filter: WorkspaceFilter, returned: number): Promise<number> {
+    const offset = filter.offset ?? 0;
+    if (filter.limit === undefined) return offset + returned;
+    const rest = await collectPages<Workspace>(
+      async (params) => (await this.fetchProjectPage(filter, params)).rows,
+      (row) => row?.id,
+      { offset: offset + returned },
+    );
+    return offset + returned + rest.length;
   }
 
   async getProject(idOrSlug: string): Promise<Workspace | null> {

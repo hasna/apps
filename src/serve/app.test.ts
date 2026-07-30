@@ -41,6 +41,9 @@ function fakeStore(): ProjectsPgStore {
     async listWorkspaces() {
       return created;
     },
+    async countWorkspaces() {
+      return created.length;
+    },
     async createWorkspace(input: { name: string; slug?: string }) {
       const ws = fakeWorkspace({ id: `wks_${created.length + 1}`, name: input.name, slug: input.slug ?? "demo" });
       created.push(ws);
@@ -219,5 +222,54 @@ describe("projects-serve auth", () => {
     const token = keyWith(["projects:*"]);
     const res = await handler()(new Request("http://x/v1/nope", { headers: { "x-api-key": token } }));
     expect(res.status).toBe(404);
+  });
+});
+
+// Regression for dc3ba294: the list envelope carried only `count` (the page
+// length), so a client had no way to tell a server-capped page from the whole
+// set — `projects list --json` returned 939 of 2399 rows with rc=0 and no
+// signal. The response now reports the match total and an explicit has_more.
+describe("projects-serve list envelope (truncation must be detectable)", () => {
+  function pagedHandler(total: number, cap: number) {
+    const rows = Array.from({ length: total }, (_, i) => fakeWorkspace({ id: `wks_${i}`, slug: `p-${i}` }));
+    const store = {
+      async ping() {
+        return true;
+      },
+      async listWorkspaces(filter: { limit?: number; offset?: number } = {}) {
+        const limit = Math.min(Math.max(filter.limit ?? 100, 1), cap);
+        const offset = Math.max(filter.offset ?? 0, 0);
+        return rows.slice(offset, offset + limit);
+      },
+      async countWorkspaces() {
+        return rows.length;
+      },
+    } as unknown as ProjectsPgStore;
+    return createFetchHandler({ store, version: "9.9.9", app: "projects", signingSecret: SIGNING_SECRET });
+  }
+
+  test("a capped page reports total and has_more, not just count", async () => {
+    const res = await pagedHandler(2399, 1000)(
+      new Request("http://x/v1/projects?limit=100000", { headers: { "x-api-key": keyWith(["projects:read"]) } }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.count).toBe(1000);
+    expect(body.total).toBe(2399);
+    expect(body.limit).toBe(1000); // the clamp is reported, not hidden
+    expect(body.has_more).toBe(true);
+  });
+
+  test("the final page reports has_more false", async () => {
+    const res = await pagedHandler(2399, 1000)(
+      new Request("http://x/v1/projects?limit=1000&offset=2000", {
+        headers: { "x-api-key": keyWith(["projects:read"]) },
+      }),
+    );
+    const body = await res.json();
+    expect(body.count).toBe(399);
+    expect(body.total).toBe(2399);
+    expect(body.offset).toBe(2000);
+    expect(body.has_more).toBe(false);
   });
 });
