@@ -47,11 +47,39 @@ machines setup --template station,ec2 --render cloud-init --station station17 > 
 | earlyoom drop-in (`-m 4 -s 25 -r 300`, avoid sshd/tmux-server/systemd/journald, prefer node/bun/rustc/java, StartLimit 300/5) | the old guard computed swap depth and ignored it; kill-drill proven on station02 2026-07-28 |
 | `hasna-agents.slice` / `hasna-hq.slice` (per hardware class) | slices existed but nothing ran in them; the roster reconciler launches into them |
 | unit conventions check (`StartLimitIntervalSec=300`, `StartLimitBurst=5`, `OnFailure=`, absolute `ExecStart`) | 203/EXEC bare-ExecStart bug; ~290k-restart loop; 0/40 units had StartLimit keys |
-| tailscale install + join (auth key by secret NAME, `file:` reference, `--ssh`; **non-fatal** — see criticality doctrine) | cloud stations have no public ingress; the tailnet is the access plane — but never a boot dependency (station17, 2026-07-29) |
+| tailscale install + join — **physical overlays only** (auth key by secret NAME, `file:` reference, `--ssh`; **non-fatal** — see criticality doctrine) | physical boxes behind NAT need a mesh access path; AWS stations carry NO tailscale at all (owner ruling 2026-07-30) — SSM is their whole access path |
 | bun + hasna CLI set, secrets bootstrap (names only) | cattle contract: a replacement box must converge unattended |
-| ec2 overlay: 8G swapfile, aws CLI command, SSM access floor, 20G/24G agent slice | EC2 has no swap by default; 32G class needs real agent bounds; SSM is the no-secret floor that kept station17 recoverable |
+| ec2 overlay: 8G swapfile (space-guarded, convergent), aws CLI command, SSM access floor, 64G root-volume floor, 20G/24G agent slice | EC2 has no swap by default; 32G class needs real agent bounds; SSM is the no-secret access path; build 2 (2026-07-29) filled an 8G AMI-default root volume with the swapfile and lost cloud-final |
 
-## Criticality doctrine (owner ruling 2026-07-29)
+## No tailscale on AWS stations (owner ruling 2026-07-30)
+
+**AWS stations do not run tailscale — at all — and the cloud fleet is not
+connected to the physical fleet.** Joining EC2 hosts to the tailnet that
+carries the operator's home and office machines makes every cloud instance a
+peer of every physical station; that blast radius outweighs the uniformity
+convenience the 2026-07-29 design chose. This supersedes the "uniform access
+plane across all station classes" doctrine below on the placement axis:
+
+- The `tailscale` block and the `tailscaled` service live only in **physical
+  overlays** (`dgx-spark`). The base layer carries neither, so
+  `base.tailscale.authKeySecretName` is structurally unreachable from a
+  `station,ec2` render.
+- The rendered `station,ec2` cloud-init contains **no tailscale install, no
+  join, no auth-key fetch** — asserted in `test/station-template.test.ts` with
+  a positive control that plants tailscale into a copied template and proves
+  the assertion goes red.
+- The EC2 drift report carries **no `tailscale:join` item in any status** — a
+  check for a thing we deliberately do not run is noise, and noise is how real
+  drift gets ignored. Physical classes keep theirs.
+- **SSM is the whole access path for cloud stations**, not a floor beneath a
+  mesh. The `accessFloor` machinery and the aws-CLI-v2 command fix from 0.2.4
+  survive unchanged and are now load-bearing.
+- A *single* AWS box may later be granted tailscale as a deliberate,
+  argued-for exception via its own overlay — never the default, never base.
+  The render/check code paths stay data-driven for that case and their
+  non-fatality remains proven via a planted opt-in overlay test.
+
+## Criticality doctrine (owner ruling 2026-07-29 — placement superseded 2026-07-30, criticality still in force for physical classes)
 
 **Tailscale is an access path, not a boot dependency.** A failed tailscale
 install or join must never produce an unreachable station: the box still comes
@@ -83,16 +111,38 @@ How the template implements it:
 - **Required-command installs degrade to drift**, never a dead boot: a failed
   `commands[]` install warns and leaves `command:<id>` to the drift check.
 
-Tailscale stays in `base`: it is the uniform access plane across all station
-classes (physical boxes behind NAT have no alternative) and does peer-to-peer
-work SSM cannot. Only its *criticality* changed.
+Tailscale placement: **physical overlays only** since 2026-07-30 (see the
+section above). The 2026-07-29 "stays in base as the uniform access plane"
+reasoning is superseded — the criticality rules in this section still govern
+wherever a physical layer (or a future argued-for exception overlay) declares
+tailscale.
 
 Positive controls: the rendered floor/install/join entries are executed under
 `sh -e` with the join forced to fail (station17 mode: `aws` absent) and must
 exit 0, reach the entry after the join, warn on stderr, and have enabled the
-floor first; the harness itself is proven able to fail on a planted fatal
-entry; a down floor and an unjoined station are each planted and must be
-reported.
+floor first — driven from a planted opt-in overlay since no shipped cloud
+layer joins; the harness itself is proven able to fail on a planted fatal
+entry; a down floor and an unjoined physical station are each planted and must
+be reported.
+
+## Root-volume floor and convergent swap (station17 build 2, 2026-07-29)
+
+Build 2 (`i-0f522f0138a0411e1`) launched with no `BlockDeviceMappings`, so the
+AMI-default **8G** gp3 root volume shipped under an overlay demanding an **8G
+swapfile**. Measured over SSM: `fallocate -l 8G` allocated 4.2G of extents
+until ENOSPC, `/` hit 100% with 364K free, journald could not create a system
+journal, and `cloud-final.service` FAILED 43.8s into `modules-final` — while
+the old `test -f /swapfile ||` guard treated the partial file as done forever
+(`swapon --show` empty). Two changes:
+
+- **`disk.rootMinGb`** (ec2: 64): the launcher must request at least this root
+  volume explicitly; the drift check reads `df -kP` and reports an undersized
+  root as a **violation** (`disk:root`) because setup cannot converge it — the
+  fix is a relaunch.
+- **Convergent, space-guarded swap**: both renders guard on *active* swap
+  (`swapon --show`), remove a stale/partial file before retrying, refuse to
+  allocate without `sizeGb + 2G` of free headroom (loud `NON-FATAL` warning,
+  `swap:size` drift), and deduplicate the fstab entry.
 
 ## Check semantics
 

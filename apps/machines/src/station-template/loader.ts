@@ -128,6 +128,7 @@ function mergeLayer(effective: EffectiveTemplate, layer: TemplateLayer, template
   if (layer.tailscale) effective.tailscale = layer.tailscale;
   if (layer.secretsBootstrap) effective.secretsBootstrap = layer.secretsBootstrap;
   if (layer.swap) effective.swap = layer.swap;
+  if (layer.disk) effective.disk = layer.disk;
 }
 
 /**

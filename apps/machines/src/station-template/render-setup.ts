@@ -1,6 +1,6 @@
 import { dirname } from "node:path";
 import type { SetupStep } from "../types.js";
-import type { EffectiveTemplate, LoadedTemplateFile } from "./schema.js";
+import { SWAP_HEADROOM_GB, type EffectiveTemplate, type LoadedTemplateFile } from "./schema.js";
 
 function quote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
@@ -125,22 +125,35 @@ export function buildStationTemplateSteps(effective: EffectiveTemplate, options:
   }
 
   if (effective.swap.sizeGb > 0) {
+    // Convergent and never fatal — same shape as the cloud-init render.
+    // station17 build 2 (2026-07-29): `test -f /swapfile ||` skipped a PARTIAL
+    // 4.2G file that fallocate left behind at ENOSPC on an 8G root volume, so
+    // the box kept a full disk and zero active swap forever. Guard on ACTIVE
+    // swap, clean up stale files, and refuse to allocate without
+    // SWAP_HEADROOM_GB of headroom beyond the swap itself.
     const size = `${effective.swap.sizeGb}G`;
+    const requiredKb = (effective.swap.sizeGb + SWAP_HEADROOM_GB) * 1024 * 1024;
     steps.push({
       id: "template-swapfile",
-      title: `Ensure ${size} swapfile`,
+      title: `Ensure ${size} swapfile is active (never boot-critical; requires ${effective.swap.sizeGb + SWAP_HEADROOM_GB}G free)`,
       command:
-        `test -f /swapfile || (sudo fallocate -l ${size} /swapfile && sudo chmod 600 /swapfile && ` +
-        `sudo mkswap /swapfile && sudo swapon /swapfile && ` +
-        `echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null)`,
+        "swapon --noheadings --show=NAME | grep -qx /swapfile || { sudo rm -f /swapfile; " +
+        `if [ "$(df -kP / | awk 'NR==2{print $4}')" -ge ${requiredKb} ]; then ` +
+        `sudo fallocate -l ${size} /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile && ` +
+        "{ sudo grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null; }; " +
+        `else echo 'hasna-station: swapfile skipped — less than ${effective.swap.sizeGb}G+${SWAP_HEADROOM_GB}G headroom free on / (NON-FATAL) — drift check reports swap:size and the disk floors' >&2; fi; } ` +
+        "|| echo 'hasna-station: swapfile setup failed (NON-FATAL) — drift check reports swap:size' >&2",
       manager: "shell",
       privileged: true,
     });
   }
 
   if (effective.tailscale?.join) {
-    // Tailscale is an access path, not a provisioning dependency (owner ruling
-    // 2026-07-29). Both steps end non-fatally: runSetupPlan aborts the whole
+    // Owner ruling 2026-07-30: tailscale is a PHYSICAL-class concern only —
+    // no shipped cloud layer declares it (asserted with a positive control in
+    // station-template.test.ts), so this renders for dgx-spark and any future
+    // physical overlay. Tailscale remains an access path, not a provisioning
+    // dependency (owner ruling 2026-07-29). Both steps end non-fatally: runSetupPlan aborts the whole
     // setup on the first non-zero step, and a vault hiccup during the join
     // must not take the rest of the provisioning down with it. The failure is
     // warned loudly and reported by the drift check as tailscale:join — the

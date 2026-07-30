@@ -1,4 +1,4 @@
-import type { EffectiveTemplate } from "./schema.js";
+import { SWAP_HEADROOM_GB, type EffectiveTemplate } from "./schema.js";
 
 export interface CloudInitOptions {
   /** Station identity, e.g. station17 — becomes hostname and tailscale name. */
@@ -99,20 +99,41 @@ export function renderCloudInit(effective: EffectiveTemplate, options: CloudInit
     runcmd.push("systemctl daemon-reload");
   }
   if (effective.swap.sizeGb > 0) {
+    // Convergent and never fatal. station17 build 2 (2026-07-29): the old
+    // `test -f /swapfile ||` guard met an 8G AMI-default root volume —
+    // fallocate -l 8G allocated 4.2G of extents until ENOSPC, filled the disk
+    // to 364K free (journald down, cloud-final FAILED), and because the
+    // partial FILE existed, every rerun skipped creation forever while
+    // `swapon --show` stayed empty. The guard is now "is /swapfile ACTIVE
+    // swap", a stale/partial file is removed before retrying, and allocation
+    // is refused unless the swap plus SWAP_HEADROOM_GB of headroom fit in the
+    // free space — an undersized volume degrades to a loud warning and a
+    // swap:size drift report, never a dead boot.
     const size = `${effective.swap.sizeGb}G`;
+    const requiredKb = (effective.swap.sizeGb + SWAP_HEADROOM_GB) * 1024 * 1024;
     runcmd.push(
-      `test -f /swapfile || (fallocate -l ${size} /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile && echo '/swapfile none swap sw 0 0' >> /etc/fstab)`
+      "swapon --noheadings --show=NAME | grep -qx /swapfile || { rm -f /swapfile; " +
+        `if [ "$(df -kP / | awk 'NR==2{print $4}')" -ge ${requiredKb} ]; then ` +
+        `fallocate -l ${size} /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile && ` +
+        "{ grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab; }; " +
+        `else echo 'hasna-station: swapfile skipped — less than ${effective.swap.sizeGb}G+${SWAP_HEADROOM_GB}G headroom free on / (NON-FATAL) — drift check reports swap:size and the disk floors' >&2; fi; } ` +
+        "|| echo 'hasna-station: swapfile setup failed (NON-FATAL) — drift check reports swap:size' >&2"
     );
   }
   for (const service of effective.services.filter((candidate) => candidate.scope === "system" && candidate.name !== "tailscaled")) {
     runcmd.push(`systemctl enable ${service.expectActive ? "--now " : ""}${service.name}`);
   }
   if (effective.tailscale?.join) {
-    // Tailscale is an access path, not a boot dependency (owner ruling
-    // 2026-07-29). Both entries end non-fatally: a failed install or join
-    // leaves a reachable, debuggable station whose drift check reports
-    // tailscale:join — never a stranded one, and never a silent one (the
-    // warning lands in the cloud-init log).
+    // Owner ruling 2026-07-30: NO shipped cloud layer declares tailscale —
+    // AWS stations run none, and SSM is their whole access path. This branch
+    // is dead for the shipped station,ec2 render (asserted, with a positive
+    // control, in station-template.test.ts) and renders only if a future
+    // overlay deliberately opts a single box in as an argued-for exception.
+    // Where it does render, the 2026-07-29 ruling still governs: both entries
+    // end non-fatally — a failed install or join leaves a reachable,
+    // debuggable station whose drift check reports tailscale:join, never a
+    // stranded one, and never a silent one (the warning lands in the
+    // cloud-init log).
     runcmd.push(
       "command -v tailscale >/dev/null 2>&1 || curl -fsSL https://tailscale.com/install.sh | sh || echo 'hasna-station: tailscale install failed (NON-FATAL) — station stays reachable via its access floor; drift check reports tailscale:join' >&2"
     );
