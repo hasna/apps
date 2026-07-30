@@ -6,6 +6,7 @@ import { spawnSync } from "child_process";
 import { gatherTrainingData } from "../lib/gatherer.js";
 import { getActiveModel, setActiveModel, clearActiveModel, DEFAULT_MODEL } from "../lib/model-config.js";
 import { getDataDir } from "../lib/db.js";
+import { printErrorLine, printJsonLine, printLine } from "../lib/stdout.js";
 
 export function registerBrainsCommand(program: Command): void {
   const brains = program
@@ -35,13 +36,13 @@ export function registerBrainsCommand(program: Command): void {
         writeFileSync(outputPath, jsonl, "utf-8");
 
         if (opts.json) {
-          console.log(JSON.stringify({ path: outputPath, count: result.count, source: result.source }));
+          printJsonLine({ path: outputPath, count: result.count, source: result.source });
         } else {
-          console.log(chalk.green(`Gathered ${result.count} training examples`));
-          console.log(chalk.dim(`  Written to: ${outputPath}`));
+          printLine(chalk.green(`Gathered ${result.count} training examples`));
+          printLine(chalk.dim(`  Written to: ${outputPath}`));
         }
       } catch (err) {
-        console.error(chalk.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
+        printErrorLine(chalk.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
         process.exit(1);
       }
     });
@@ -65,7 +66,7 @@ export function registerBrainsCommand(program: Command): void {
         args.push("--dataset", opts.dataset);
       }
 
-      console.log(chalk.dim(`Running: brains ${args.join(" ")}`));
+      printLine(chalk.dim(`Running: brains ${args.join(" ")}`));
       const result = spawnSync("brains", args, { stdio: "inherit" });
       if (result.status !== 0) {
         process.exit(result.status ?? 1);
@@ -79,9 +80,9 @@ export function registerBrainsCommand(program: Command): void {
     .action(() => {
       const active = getActiveModel();
       if (active === DEFAULT_MODEL) {
-        console.log(chalk.dim(`Active model: ${active} (default)`));
+        printLine(chalk.dim(`Active model: ${active} (default)`));
       } else {
-        console.log(chalk.green(`Active model: ${active}`));
+        printLine(chalk.green(`Active model: ${active}`));
       }
     });
 
@@ -90,7 +91,7 @@ export function registerBrainsCommand(program: Command): void {
     .description("Set the active fine-tuned model ID")
     .action((id: string) => {
       setActiveModel(id);
-      console.log(chalk.green(`Active model set to: ${id}`));
+      printLine(chalk.green(`Active model set to: ${id}`));
     });
 
   modelCmd
@@ -98,6 +99,6 @@ export function registerBrainsCommand(program: Command): void {
     .description("Clear the active model, reverting to default")
     .action(() => {
       clearActiveModel();
-      console.log(chalk.dim(`Active model cleared. Using default: ${DEFAULT_MODEL}`));
+      printLine(chalk.dim(`Active model cleared. Using default: ${DEFAULT_MODEL}`));
     });
 }

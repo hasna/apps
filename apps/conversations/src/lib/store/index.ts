@@ -25,6 +25,8 @@
 // embedded in any value produced here. Only the HTTP transport ever holds it.
 
 import { resolveStorageClient, type HasnaStorageClient } from "../contracts-client/storage.js";
+import { clientTransportEnvKeys } from "../contracts-client/transport.js";
+import { envToken, normalizeStorageMode } from "../contracts-client/mode.js";
 import { normalizeChannelName } from "../channel-names.js";
 import { localHealthChecks } from "../db.js";
 import { ApiStore } from "./api-store.js";
@@ -53,6 +55,152 @@ type Async<F extends (...args: never[]) => unknown> = (
 ) => Promise<Awaited<ReturnType<F>>>;
 
 // ── Mode resolution ───────────────────────────────────────────────────────────
+//
+// STORE RESOLUTION MUST NEVER SILENTLY DOWNGRADE.
+//
+// Measured on station01, 2026-07-30, at 0.5.9: with HASNA_CONVERSATIONS_API_URL
+// set and HASNA_CONVERSATIONS_API_KEY absent, `getStore()` handed back a LocalStore
+// over ~/.hasna/conversations/*.db and served a DIFFERENT dataset — 608 channels
+// instead of 844, newest message 2026-07-18 instead of today — with no error and no
+// flag. An agent reading that concludes the messages were never sent. It is the
+// same failure that got MCPs banned on this fleet (~/.claude/rules/no-mcps.md).
+//
+// The rule that prevents it: AMBIGUOUS CONFIGURATION IS AN ERROR, NOT A DEFAULT.
+// When cloud is expected and cannot be built, refuse — naming the missing variable
+// — rather than answering from a different dataset. An explicit, unambiguous local
+// configuration stays fully supported; the bug was the silent downgrade, not local
+// storage.
+//
+// This guard lives in the APP-OWNED layer on purpose. `src/lib/contracts-client/*`
+// is a byte-faithful vendored copy of @hasna/contracts and is periodically
+// re-vendored; a guard placed there would be silently reverted by the next
+// re-vendor. The generic resolver keeps its own `misconfigured` throw as defence in
+// depth, and the same gap is tracked upstream against @hasna/contracts.
+
+/** Raised when the environment does not unambiguously select one store. */
+export class ConversationsStoreConfigError extends Error {
+  readonly code = "CONVERSATIONS_STORE_CONFIG";
+  constructor(message: string) {
+    super(message);
+    this.name = "ConversationsStoreConfigError";
+  }
+}
+
+/** Env var names for this app, from the shared transport contract (never hardcoded). */
+const ENV_KEYS = clientTransportEnvKeys(APP);
+/** Local SQLite path overrides, highest-precedence signal. */
+const DB_PATH_KEYS = [`HASNA_${envToken(APP)}_DB_PATH`, `${envToken(APP)}_DB_PATH`] as const;
+
+/**
+ * First key in `keys` with a non-blank value in `env`, else null.
+ *
+ * Trims and treats a blank value as unset, matching `firstEnv` in the transport
+ * resolver EXACTLY. If the two disagreed, this guard would classify an env the
+ * resolver classifies differently — which is how a guard becomes its own source of
+ * wrong-store bugs.
+ */
+function firstSet(env: Env, keys: readonly string[]): { key: string; value: string } | null {
+  for (const key of keys) {
+    const value = env[key]?.trim();
+    if (value) return { key, value };
+  }
+  return null;
+}
+
+/** Suffix telling the operator how to ask for local explicitly. */
+const LOCAL_ESCAPE_HATCH =
+  `If you meant to use the on-box SQLite store, set ${ENV_KEYS.modeKeys[0]}=local explicitly.`;
+
+/**
+ * Throw unless `env` unambiguously selects exactly one store.
+ *
+ * See {@link getStore} for the full precedence table. Never reads, logs, or embeds
+ * a credential value — only variable NAMES appear in any message.
+ */
+export function assertUnambiguousStoreEnv(env: Env = process.env): void {
+  // 1. An explicit local SQLite path is the narrowest, most specific signal and wins.
+  if (firstSet(env, DB_PATH_KEYS)) return;
+
+  const modeHit = firstSet(env, ENV_KEYS.modeKeys);
+  const urlHit = firstSet(env, ENV_KEYS.apiUrlKeys);
+  const keyHit = firstSet(env, ENV_KEYS.apiKeyKeys);
+
+  // 2. An explicit mode is authoritative — but must be spelled correctly.
+  if (modeHit) {
+    let mode: string;
+    try {
+      mode = normalizeStorageMode(modeHit.value).mode;
+    } catch {
+      throw new ConversationsStoreConfigError(
+        `${modeHit.key} is set to an unrecognised value. Valid values are 'local' and 'cloud'. ` +
+          `Refusing to guess which store to use.`,
+      );
+    }
+    // 2a. Explicit local: cloud credentials are deliberately ignored, not ambiguous.
+    if (mode === "local") return;
+    // 2b. Explicit cloud with no credential: refuse. Do NOT read the local store.
+    if (!keyHit) {
+      throw new ConversationsStoreConfigError(
+        `${modeHit.key} selects the cloud store but ${ENV_KEYS.apiKeyKeys[0]} is not set. ` +
+          `Refusing to serve the on-box SQLite store in its place, because it holds a different ` +
+          `dataset. Set ${ENV_KEYS.apiKeyKeys[0]} to reach the cloud store. ${LOCAL_ESCAPE_HATCH}`,
+      );
+    }
+    assertUsableApiUrl(urlHit);
+    return;
+  }
+
+  // 3. No explicit mode: the URL + key pair is the fleet flip signal.
+  if (urlHit && keyHit) {
+    assertUsableApiUrl(urlHit);
+    return;
+  }
+
+  // 3a. THE P0. Half a cloud configuration is an error, never a fall-back to local.
+  if (urlHit) {
+    throw new ConversationsStoreConfigError(
+      `${urlHit.key} points at a cloud store but ${ENV_KEYS.apiKeyKeys[0]} is not set. ` +
+        `Refusing to serve the on-box SQLite store in its place, because it holds a different ` +
+        `dataset. Set ${ENV_KEYS.apiKeyKeys[0]} to reach the cloud store. ${LOCAL_ESCAPE_HATCH}`,
+    );
+  }
+  if (keyHit) {
+    throw new ConversationsStoreConfigError(
+      `${keyHit.key} is set but ${ENV_KEYS.apiUrlKeys[0]} is not, so the cloud store cannot be ` +
+        `reached. Refusing to serve the on-box SQLite store in its place, because it holds a ` +
+        `different dataset. Set ${ENV_KEYS.apiUrlKeys[0]} to reach the cloud store. ` +
+        `${LOCAL_ESCAPE_HATCH}`,
+    );
+  }
+
+  // 4. Nothing configured: the documented single-operator default is local SQLite.
+}
+
+/**
+ * Refuse a cloud URL the transport could not use, rather than quietly reading local
+ * data. Applies the same two conditions as `toV1BaseUrl`: it must parse, and it must
+ * be http(s). Kept in step with that function so the guard and the resolver agree.
+ */
+function assertUsableApiUrl(urlHit: { key: string; value: string } | null): void {
+  if (!urlHit) return; // Absent URL is legal: the transport falls back to the default host.
+  let parsed: URL;
+  try {
+    parsed = new URL(urlHit.value);
+  } catch {
+    throw new ConversationsStoreConfigError(
+      `${urlHit.key} is not a parseable URL, so the cloud store cannot be reached. Refusing to ` +
+        `serve the on-box SQLite store in its place, because it holds a different dataset. ` +
+        `Correct ${urlHit.key}. ${LOCAL_ESCAPE_HATCH}`,
+    );
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new ConversationsStoreConfigError(
+      `${urlHit.key} must use http or https, so the cloud store cannot be reached. Refusing to ` +
+        `serve the on-box SQLite store in its place, because it holds a different dataset. ` +
+        `Correct ${urlHit.key}. ${LOCAL_ESCAPE_HATCH}`,
+    );
+  }
+}
 
 /**
  * Return an env in which `self_hosted` is implied when the API url + key are
@@ -62,16 +210,23 @@ type Async<F extends (...args: never[]) => unknown> = (
  * client. A command-level SQLite DB path is treated as an explicit local override,
  * so local CLI test/dev commands cannot accidentally write to cloud when cloud
  * credentials are exported globally.
+ *
+ * Throws {@link ConversationsStoreConfigError} when the env does not unambiguously
+ * select one store, so no caller can drift onto the wrong dataset.
  */
 export function conversationsCloudEnv(env: Env = process.env): Env {
-  if (env.HASNA_CONVERSATIONS_DB_PATH || env.CONVERSATIONS_DB_PATH) {
-    return { ...env, HASNA_CONVERSATIONS_STORAGE_MODE: "local" };
+  assertUnambiguousStoreEnv(env);
+
+  if (firstSet(env, DB_PATH_KEYS)) {
+    return { ...env, [ENV_KEYS.modeKeys[0]!]: "local" };
   }
-  const url = env.HASNA_CONVERSATIONS_API_URL ?? env.CONVERSATIONS_API_URL;
-  const key = env.HASNA_CONVERSATIONS_API_KEY ?? env.CONVERSATIONS_API_KEY;
-  const mode = env.HASNA_CONVERSATIONS_STORAGE_MODE ?? env.HASNA_CONVERSATIONS_MODE;
-  if (url && key && !mode) {
-    return { ...env, HASNA_CONVERSATIONS_STORAGE_MODE: "self_hosted" };
+  // Honour EVERY documented mode variable, not just the HASNA_-prefixed pair.
+  // Overwriting the highest-precedence mode key below would otherwise silently
+  // override an operator who pinned local through an unprefixed variable.
+  if (firstSet(env, ENV_KEYS.modeKeys)) return env;
+
+  if (firstSet(env, ENV_KEYS.apiUrlKeys) && firstSet(env, ENV_KEYS.apiKeyKeys)) {
+    return { ...env, [ENV_KEYS.modeKeys[0]!]: "self_hosted" };
   }
   return env;
 }
@@ -411,9 +566,31 @@ let localSingleton: LocalStore | null = null;
 
 /**
  * Resolve the active {@link ConversationsStore} for the current environment.
- * Returns an {@link ApiStore} when the client-flip contract resolves to cloud-http
- * (self_hosted/cloud), else a {@link LocalStore}. Throws if cloud was requested but
- * is misconfigured, so callers can never silently read/write the wrong dataset.
+ *
+ * PRECEDENCE, highest first. Exactly one branch applies; anything that does not
+ * land unambiguously on one store raises {@link ConversationsStoreConfigError}
+ * rather than answering from the other one.
+ *
+ * 1. `HASNA_CONVERSATIONS_DB_PATH` / `CONVERSATIONS_DB_PATH` set → LOCAL. A
+ *    command-level SQLite path is the narrowest, most specific signal, so local
+ *    dev and test commands cannot write to cloud when fleet credentials are
+ *    exported globally. Wins over an explicit cloud mode.
+ * 2. A storage mode set (`HASNA_CONVERSATIONS_STORAGE_MODE`,
+ *    `HASNA_CONVERSATIONS_MODE`, `CONVERSATIONS_STORAGE_MODE`, `CONVERSATIONS_MODE`,
+ *    in that order) → authoritative.
+ *    - `local` → LOCAL; any API URL/key present is deliberately ignored.
+ *    - `cloud` (or a deprecated alias) → CLOUD; requires an API key, ERROR without
+ *      one. The API URL is optional and defaults to the app's cloud host.
+ *    - anything else → ERROR naming the variable and the legal values.
+ * 3. No mode, both API URL and API key set → CLOUD. This pair IS the fleet flip
+ *    signal; removing both reverts to local.
+ * 4. No mode, exactly ONE of API URL / API key set → ERROR naming the missing
+ *    variable. Half a cloud configuration is ambiguous, and answering it from the
+ *    on-box SQLite store means serving a different dataset with no signal.
+ * 5. Nothing configured → LOCAL. The documented single-operator default.
+ *
+ * An API URL that cannot be parsed is an ERROR wherever cloud is expected, never a
+ * quiet fall-back. No error message ever contains a credential value — only names.
  */
 export function getStore(env: Env = process.env): ConversationsStore {
   const client = resolveConversationsCloud(env);
