@@ -33,6 +33,20 @@ function runCli(args: string[], env: NodeJS.ProcessEnv, input?: string) {
 }
 
 describe("cli command handling", () => {
+  test("completion emits scripts for supported shells", () => {
+    for (const shell of ["bash", "zsh", "fish"]) {
+      const result = runCli(["completion", shell], process.env);
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+      for (const command of ["route", "screen", "manifest", "status"]) {
+        expect(result.stdout).toContain(command);
+      }
+    }
+
+    const unsupported = runCli(["completion", "powershell"], process.env);
+    expect(unsupported.status).not.toBe(0);
+  });
+
   test("heartbeat collect requires scoped approval before route execution", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-cli-heartbeat-collect-"));
     try {

@@ -3863,6 +3863,45 @@ registryCommand
     if (!removed) process.exitCode = 1;
   });
 
+function renderCompletionScript(shell: string): string {
+  const commands = program.commands.map((command) => command.name());
+  const commandList = commands.join(" ");
+
+  switch (shell) {
+    case "bash":
+      return `_machines_completion() {
+  local current
+  current="\${COMP_WORDS[COMP_CWORD]}"
+  if (( COMP_CWORD == 1 )); then
+    COMPREPLY=( $(compgen -W '${commandList}' -- "$current") )
+  fi
+}
+complete -F _machines_completion machines`;
+    case "zsh":
+      return `#compdef machines
+_machines_completion() {
+  local -a commands
+  commands=(
+    ${commands.join("\n    ")}
+  )
+  _describe 'command' commands
+}
+compdef _machines_completion machines`;
+    case "fish":
+      return `complete -c machines -f
+complete -c machines -n '__fish_use_subcommand' -a '${commandList}'`;
+    default:
+      failCli(`unsupported completion shell: ${shell} (expected bash, zsh, or fish)`, false);
+  }
+}
+
+program
+  .command("completion <shell>")
+  .description("Generate a shell completion script for bash, zsh, or fish")
+  .action((shell: string) => {
+    console.log(renderCompletionScript(shell));
+  });
+
 try {
   applyJsonAwareErrorHandling(program);
   await program.parseAsync(process.argv);
