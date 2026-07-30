@@ -6,6 +6,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-07-30
+
+### Added
+
+- **`/etc/profile.d/99-zz-hasna-station-path.sh` in the template base layer**
+  (template 1.3.0 → 1.4.0). Measured on station17 build 3:
+  `sudo -iu hasna bash -lc 'machines --version'` exited 127 — Ubuntu's stock
+  `~/.bashrc` early-returns for non-interactive shells before bun's PATH
+  export, so SSM-driven automation could not find any bun-installed CLI and
+  `command:aws-cli` went red under a PATH lacking /usr/local/bin. The
+  profile.d file puts `/usr/local/bin` and `$HOME/.bun/bin` on PATH for every
+  login shell regardless of interactivity; content-drift is caught by the
+  existing file machinery (`file:path-profile`).
+- **Security-group doctrine documented** (docs/station-template.md): the
+  per-station SG stays in the launch set, EMPTY as its expected steady state
+  — it is the pre-attached hook for the single argued-for exception the
+  2026-07-30 ruling allows — tagged `Purpose=per-station-exception-hook`;
+  all fleet-wide rules live on `stations-prod-fleet-sg`.
+
 ## [0.2.6] - 2026-07-30
 
 ### Added

@@ -159,6 +159,22 @@ describe("overlay merge", () => {
     expect(effective.swap.sizeGb).toBe(0);
   });
 
+  test("base layer ships the non-interactive PATH profile (station17 build 3: SSM automation got 127)", () => {
+    const effective = effectiveFor(["ec2"]);
+    const pathFile = effective.files.find((file) => file.id === "path-profile");
+    expect(pathFile?.target).toBe("/etc/profile.d/99-zz-hasna-station-path.sh");
+    expect(pathFile?.content).toContain(".bun/bin");
+    expect(pathFile?.content).toContain("/usr/local/bin");
+    // Idempotent under repeated sourcing: guarded by case on ":$PATH:".
+    expect(pathFile?.content).toContain(':$PATH:');
+    // Rendered into cloud-init like every base file.
+    const userData = renderCloudInit(effective, { station: "station17" });
+    expect(userData).toContain("/etc/profile.d/99-zz-hasna-station-path.sh");
+    // And the physical render writes it too.
+    const steps = buildStationTemplateSteps(effectiveFor(["dgx-spark"]), { station: "station01" });
+    expect(steps.some((step) => step.id === "template-file-path-profile")).toBe(true);
+  });
+
   test("physical overlay keeps tailscale — the 2026-07-30 ruling routes it, it does not delete it", () => {
     const effective = effectiveFor(["dgx-spark"]);
     expect(effective.tailscale?.join).toBe(true);

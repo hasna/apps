@@ -151,6 +151,24 @@ layer joins; the harness itself is proven able to fail on a planted fatal
 entry; a down floor and an unjoined physical station are each planted and must
 be reported.
 
+## Security-group doctrine for AWS stations (coordinator ruling 2026-07-30)
+
+Every AWS station carries **two** security groups, and the split is the point:
+
+- **`stations-prod-fleet-sg`** (`sg-019e80897ae8ef5f8`) — every fleet-wide
+  rule lives here. Today that is exactly one: a self-referencing TCP 22 rule
+  (source = the group itself) enabling VPC-internal station-to-station SSH.
+  Zero ingress from anywhere else, by design.
+- **`stations-prod-<station>-sg`** — the per-station group, attached at
+  launch, and **EMPTY of rules in its expected steady state**. It is not an
+  oversight and must not be deleted: it is the pre-attached hook for the one
+  exception the 2026-07-30 owner ruling carves out (a *single* AWS station
+  may later be granted an access path, argued for individually). With the
+  hook in place, granting that exception is a rule addition; without it, it
+  is SG-topology surgery on a live box. The group is tagged
+  `Purpose=per-station-exception-hook` so the intent survives outside this
+  file. Never add a fleet-wide rule here — that belongs on the fleet SG.
+
 ## Root-volume floor and convergent swap (station17 build 2, 2026-07-29)
 
 Build 2 (`i-0f522f0138a0411e1`) launched with no `BlockDeviceMappings`, so the
