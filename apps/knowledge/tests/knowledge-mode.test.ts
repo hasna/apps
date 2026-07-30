@@ -15,9 +15,11 @@
  */
 import { describe, expect, test } from 'bun:test';
 import {
+  HalfConfiguredKnowledgeClientError,
   KNOWLEDGE_API_KEY_ENV_KEYS,
   KNOWLEDGE_API_URL_ENV_KEYS,
   KNOWLEDGE_MODE_ENV_KEYS,
+  assertKnowledgeModeSelected,
   knowledgeModeReport,
   pinnedTransportEnv,
   resolveKnowledgeModeSelection,
@@ -211,5 +213,117 @@ describe('the mode report is safe to print', () => {
     expect(report.mode).toBe('cloud');
     expect(report.store_transport).toBe('api');
     expect(report.network_guard_active).toBe(false);
+  });
+});
+
+/**
+ * The half-configured client.
+ *
+ * The block above locks in the RESOLUTION: a pointer never selects the backend,
+ * so an ambient `HASNA_KNOWLEDGE_API_URL` cannot silently route writes at the
+ * live store. That was the right call and it stays.
+ *
+ * What it left behind is the mirror-image failure. An operator who exports the
+ * URL *on purpose* and forgets the mode var gets the on-box store, and every
+ * command answers `{"ok": true, "total": 0, "items": []}` with exit 0 — a
+ * silent empty result on a machine that is explicitly pointed at a store
+ * holding 869 entries. Only `knowledge mode` ever mentioned it, and nobody runs
+ * `knowledge mode` before trusting a list.
+ *
+ * Both silent readings are wrong for the same reason: the environment is
+ * AMBIGUOUS and the client picked an answer instead of saying so. Naming the
+ * variable is the only response that is not a guess.
+ */
+describe('a half-configured client refuses to guess which store it is on', () => {
+  const URL_ONLY = { HASNA_KNOWLEDGE_API_URL: FAKE_URL } as NodeJS.ProcessEnv;
+
+  test('REGRESSION: a URL pointer with no mode var is an error, not a silent local read', () => {
+    // On 0.2.92 this returned the local store and exit 0. The measured symptom
+    // was 98 entries where the configured store held 869.
+    expect(() => assertKnowledgeModeSelected(POINTER_ONLY)).toThrow(HalfConfiguredKnowledgeClientError);
+  });
+
+  test('the error names the variable that is set and BOTH ways out', () => {
+    let caught: unknown;
+    try {
+      assertKnowledgeModeSelected(POINTER_ONLY);
+    } catch (error) {
+      caught = error;
+    }
+    const message = (caught as Error).message;
+    // The URL var that provoked it, so the operator knows which config is live.
+    expect(message).toContain('HASNA_KNOWLEDGE_API_URL');
+    // Both remedies. An error that only offers `=cloud` reads as "you must go
+    // cloud", and an operator who wanted the on-box store would unset a
+    // variable they need for other tools instead of pinning the mode.
+    expect(message).toContain('HASNA_KNOWLEDGE_STORAGE_MODE=cloud');
+    expect(message).toContain('HASNA_KNOWLEDGE_STORAGE_MODE=local');
+    expect((caught as { code?: string }).code).toBe('knowledge_mode_unset_with_api_url');
+  });
+
+  test('the error carries pointer NAMES only, never a URL or a key value', () => {
+    // This message goes to stderr, into agent transcripts, and into task
+    // comments. One of the vars it talks about holds a bearer key.
+    let message = '';
+    try {
+      assertKnowledgeModeSelected(POINTER_ONLY);
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).not.toContain(FAKE_KEY);
+    expect(message).not.toContain(FAKE_URL);
+  });
+
+  test('an alias URL key provokes it too, and is the one named', () => {
+    let message = '';
+    try {
+      assertKnowledgeModeSelected({ KNOWLEDGE_API_URL: FAKE_URL } as NodeJS.ProcessEnv);
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toContain('KNOWLEDGE_API_URL');
+  });
+
+  test('an explicit cloud mode is unambiguous and passes', () => {
+    const resolved = assertKnowledgeModeSelected({
+      ...POINTER_ONLY,
+      HASNA_KNOWLEDGE_STORAGE_MODE: 'cloud',
+    } as NodeJS.ProcessEnv);
+    expect(resolved.mode).toBe('cloud');
+  });
+
+  test('an explicit local mode is unambiguous and passes — the pointer stays ignored', () => {
+    // The escape hatch for a machine whose shell exports the URL for other
+    // tooling. Saying `local` out loud is cheap; being guessed at is not.
+    const resolved = assertKnowledgeModeSelected({
+      ...POINTER_ONLY,
+      HASNA_KNOWLEDGE_STORAGE_MODE: 'local',
+    } as NodeJS.ProcessEnv);
+    expect(resolved.mode).toBe('local');
+  });
+
+  test('an API key with no URL is NOT ambiguous — there is no second store named', () => {
+    // A key on its own points at nothing. Erroring here would fire on machines
+    // that can never have routed anywhere, which is how a loud check gets
+    // switched off.
+    const resolved = assertKnowledgeModeSelected({ HASNA_KNOWLEDGE_API_KEY: FAKE_KEY } as NodeJS.ProcessEnv);
+    expect(resolved.mode).toBe('local');
+  });
+
+  test('an explicit --store override is an explicit local choice and passes', () => {
+    const resolved = assertKnowledgeModeSelected(POINTER_ONLY, { storePathOverridden: true });
+    expect(resolved.mode).toBe('local');
+  });
+
+  test('an empty environment is still fine', () => {
+    expect(assertKnowledgeModeSelected({} as NodeJS.ProcessEnv).mode).toBe('local');
+  });
+
+  test('the pure resolver is UNCHANGED — it still answers local without throwing', () => {
+    // The guard is a separate gate on top of the resolution, deliberately. The
+    // `mode` reporter has to keep working in exactly the environment the guard
+    // rejects, or the command that explains the problem dies with it.
+    expect(resolveKnowledgeModeSelection(POINTER_ONLY).mode).toBe('local');
+    expect(knowledgeModeReport(URL_ONLY).pointer_ignored).toBe(true);
   });
 });

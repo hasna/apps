@@ -12,6 +12,7 @@ import {
   KNOWLEDGE_API_KEY_ENV_KEYS,
   KNOWLEDGE_API_URL_ENV_KEYS,
   KNOWLEDGE_MODE_ENV_KEYS,
+  assertKnowledgeModeSelected,
   knowledgeModeReport,
   type KnowledgeModeReport,
 } from './knowledge-mode';
@@ -896,6 +897,16 @@ async function run(argv: string[]): Promise<void> {
     output(flags.json || flags.verbose ? { ok: true, ...report } : formatMode(report), flags.json, flags);
     return;
   }
+
+  // Refuse to guess. An API URL with no mode variable is a HALF-CONFIGURED
+  // client: the environment names a store and never says to use it, and every
+  // command below would answer from the on-box store with exit 0 — measured on
+  // station01 as 98 entries against the 869 in the store the URL names. A
+  // silent wrong answer is worse than no answer, so this stops here and names
+  // the variable. Placed AFTER `mode` on purpose: the diagnostic that explains
+  // this state has to keep working in it. `--store` is an explicit local
+  // choice and passes, exactly like an explicit mode=local.
+  assertKnowledgeModeSelected(process.env, { storePathOverridden: Boolean(flags.store) });
 
   const serviceScope = command === 'project-panel' || command === 'app-wiki' ? (flags.scope ?? 'project') : flags.scope;
   const service = createKnowledgeService({ scope: serviceScope });

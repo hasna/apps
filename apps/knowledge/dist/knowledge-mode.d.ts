@@ -64,6 +64,37 @@ export declare function resolveKnowledgeModeSelection(env?: NodeJS.ProcessEnv): 
  * put the backend choice back in a second layer.
  */
 export declare function pinnedTransportEnv(env: NodeJS.ProcessEnv, mode: KnowledgeMode): NodeJS.ProcessEnv;
+/**
+ * Raised when the environment names a store but never says to use it.
+ *
+ * Carries a `code` so callers can branch on the condition without matching on
+ * message text.
+ */
+export declare class HalfConfiguredKnowledgeClientError extends Error {
+    readonly code = "knowledge_mode_unset_with_api_url";
+    constructor(urlKeysPresent: readonly string[]);
+}
+/**
+ * Gate a store-touching command on an UNAMBIGUOUS environment.
+ *
+ * Deliberately separate from {@link resolveKnowledgeModeSelection}, which stays
+ * total and non-throwing. The resolver has to keep answering `local` in exactly
+ * the environment this rejects, because `knowledge mode` — the command whose
+ * whole job is explaining the situation — resolves through it. A guard fused
+ * into the resolver would kill the diagnostic along with the defect.
+ *
+ * Fires on an API URL only, never on a key alone. A key with no URL points at
+ * no store, so there is nothing to be ambiguous about; erroring there would
+ * fire on machines that could never have routed anywhere, and a check that
+ * cries wolf is a check somebody turns off.
+ *
+ * `storePathOverridden` (an explicit `--store <path>`) is an explicit local
+ * choice and passes for the same reason `MODE=local` does: the operator said
+ * which store they meant.
+ */
+export declare function assertKnowledgeModeSelected(env?: NodeJS.ProcessEnv, options?: {
+    storePathOverridden?: boolean;
+}): KnowledgeModeResolution;
 export interface KnowledgeModeReport extends KnowledgeModeResolution {
     /** `local` -> the on-box store; `api` -> the HTTP `/v1` transport. */
     store_transport: 'local' | 'api';

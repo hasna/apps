@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, join, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { migrateKnowledgeDb, openKnowledgeDb } from '../src/knowledge-db';
-import { KNOWLEDGE_API_KEY_ENV_KEYS, KNOWLEDGE_API_URL_ENV_KEYS } from '../src/knowledge-mode';
+import { KNOWLEDGE_API_KEY_ENV_KEYS, KNOWLEDGE_API_URL_ENV_KEYS, KNOWLEDGE_MODE_ENV_KEYS } from '../src/knowledge-mode';
 import { createKnowledgeService } from '../src/service';
 import { parseSourceRef } from '../src/source-ref';
 import { recordStorageObjects } from '../src/storage-contract';
@@ -3596,5 +3596,130 @@ describe('knowledge cli', () => {
     const items = (JSON.parse(readFileSync(store, 'utf8')) as { items: Array<{ id: string; archived: boolean }> }).items;
     expect(items.map((entry) => entry.id)).toEqual(['k_arch_1', 'k_live_1']);
     expect(items.find((entry) => entry.id === 'k_arch_1')!.archived).toBe(true);
+  });
+});
+
+/**
+ * The half-configured client, at the surface an operator actually touches.
+ *
+ * `knowledge mode` has reported this state correctly since the explicit-mode
+ * work landed. Every other command stayed silent about it, which is the half
+ * that matters: an agent runs `knowledge list --json`, gets
+ * `{"ok": true, "total": 0, "items": []}` and exit 0, and concludes the corpus
+ * is empty — on a machine whose HASNA_KNOWLEDGE_API_URL points at a store
+ * holding 869 entries.
+ *
+ * These spawn the CLI rather than calling the resolver, because the defect is
+ * the exit code and the stream contents, and only a real invocation measures
+ * those.
+ */
+describe('a half-configured CLI fails loudly instead of reading the wrong store', () => {
+  const decode = (buf: Uint8Array) => new TextDecoder().decode(buf);
+
+  /**
+   * The parent env minus BOTH pointer and mode vars, so the case under test is
+   * the one the overrides describe. `childEnv` only strips pointers, and this
+   * developer shell exports a mode var — inheriting it would silence the very
+   * error being asserted and the test would pass for the wrong reason.
+   */
+  function runCliNoMode(args: string[], env: Record<string, string>) {
+    const inherited = { ...process.env } as Record<string, string>;
+    for (const key of [...KNOWLEDGE_API_URL_ENV_KEYS, ...KNOWLEDGE_API_KEY_ENV_KEYS, ...KNOWLEDGE_MODE_ENV_KEYS]) {
+      delete inherited[key];
+    }
+    return Bun.spawnSync(['bun', CLI, ...args], {
+      env: { ...inherited, ...env },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+  }
+
+  /** A syntactically valid pointer at nothing. The outbound guard blocks it regardless. */
+  const FAKE_API_URL = 'https://knowledge.invalid';
+
+  function sandboxHome(): Record<string, string> {
+    const home = mkdtempSync(join(tmpdir(), 'knowledge-halfconf-'));
+    return { HOME: home, USERPROFILE: home };
+  }
+
+  test('REGRESSION: `list --json` with an API URL and no mode var exits non-zero', () => {
+    const result = runCliNoMode(['list', '--json'], {
+      ...sandboxHome(),
+      HASNA_KNOWLEDGE_API_URL: FAKE_API_URL,
+      HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
+    });
+    const stdout = decode(result.stdout);
+    const stderr = decode(result.stderr);
+
+    // On 0.2.92 this was exit 0 with a successful-looking empty page.
+    expect(result.exitCode).not.toBe(0);
+    expect(stderr).toContain('HASNA_KNOWLEDGE_API_URL');
+    expect(stderr).toContain('HASNA_KNOWLEDGE_STORAGE_MODE');
+
+    // The JSON contract must report the failure too. A consumer parsing stdout
+    // sees `ok: false` rather than an empty page it would read as "no entries".
+    const payload = JSON.parse(stdout) as { ok: boolean; error?: string };
+    expect(payload.ok).toBe(false);
+    expect(payload.error).toContain('HASNA_KNOWLEDGE_STORAGE_MODE');
+    // Positive control on the defect itself: no empty success page anywhere.
+    expect(stdout).not.toContain('"total": 0');
+  });
+
+  test('REGRESSION: the error names no pointer VALUE, only variable names', () => {
+    const secretish = 'k_super_secret_value';
+    const result = runCliNoMode(['list', '--json'], {
+      ...sandboxHome(),
+      HASNA_KNOWLEDGE_API_URL: FAKE_API_URL,
+      HASNA_KNOWLEDGE_API_KEY: secretish,
+    });
+    const combined = decode(result.stdout) + decode(result.stderr);
+    expect(combined).not.toContain(secretish);
+    expect(combined).not.toContain(FAKE_API_URL);
+  });
+
+  test('`mode` still answers in the environment the guard rejects', () => {
+    // The command whose entire job is explaining this state must survive it,
+    // or the error message points at a diagnostic that also fails.
+    const result = runCliNoMode(['mode', '--json'], {
+      ...sandboxHome(),
+      HASNA_KNOWLEDGE_API_URL: FAKE_API_URL,
+    });
+    expect(result.exitCode).toBe(0);
+    const report = JSON.parse(decode(result.stdout)) as { ok: boolean; mode: string; pointer_ignored: boolean };
+    expect(report.ok).toBe(true);
+    expect(report.mode).toBe('local');
+    expect(report.pointer_ignored).toBe(true);
+  });
+
+  test('an explicit local mode alongside the URL still lists, and stays local', () => {
+    const result = runCliNoMode(['list', '--json'], {
+      ...sandboxHome(),
+      HASNA_KNOWLEDGE_API_URL: FAKE_API_URL,
+      HASNA_KNOWLEDGE_STORAGE_MODE: 'local',
+    });
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(decode(result.stdout)) as { ok: boolean; total: number };
+    expect(payload.ok).toBe(true);
+    expect(payload.total).toBe(0);
+  });
+
+  test('an explicit --store override is an explicit local choice and still lists', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'knowledge-halfconf-store-'));
+    const store = join(dir, 'db.json');
+    writeFileSync(store, JSON.stringify({ items: [] }));
+    const result = runCliNoMode(['list', '--store', store, '--json'], {
+      ...sandboxHome(),
+      HASNA_KNOWLEDGE_API_URL: FAKE_API_URL,
+    });
+    expect(result.exitCode).toBe(0);
+    expect((JSON.parse(decode(result.stdout)) as { ok: boolean }).ok).toBe(true);
+  });
+
+  test('a clean environment with no pointer at all is untouched', () => {
+    // Positive control: the guard must not fire on the ordinary local install,
+    // which is the overwhelming majority of invocations.
+    const result = runCliNoMode(['list', '--json'], sandboxHome());
+    expect(result.exitCode).toBe(0);
+    expect((JSON.parse(decode(result.stdout)) as { ok: boolean }).ok).toBe(true);
   });
 });

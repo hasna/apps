@@ -164,6 +164,56 @@ export function pinnedTransportEnv(env: NodeJS.ProcessEnv, mode: KnowledgeMode):
   return { ...env, [KNOWLEDGE_MODE_ENV_KEYS[0]]: mode };
 }
 
+/**
+ * Raised when the environment names a store but never says to use it.
+ *
+ * Carries a `code` so callers can branch on the condition without matching on
+ * message text.
+ */
+export class HalfConfiguredKnowledgeClientError extends Error {
+  readonly code = 'knowledge_mode_unset_with_api_url';
+  constructor(urlKeysPresent: readonly string[]) {
+    const canonical = KNOWLEDGE_MODE_ENV_KEYS[0];
+    super(
+      `knowledge: ${urlKeysPresent.join(', ')} names an API store, but no mode variable says to use it, `
+        + 'so this command would silently read and write the on-box store instead. '
+        + `Set ${canonical}=cloud to use the API, or ${canonical}=local to confirm you want the on-box store. `
+        + `Run 'knowledge mode' to see the full resolution.`,
+    );
+    this.name = 'HalfConfiguredKnowledgeClientError';
+  }
+}
+
+/**
+ * Gate a store-touching command on an UNAMBIGUOUS environment.
+ *
+ * Deliberately separate from {@link resolveKnowledgeModeSelection}, which stays
+ * total and non-throwing. The resolver has to keep answering `local` in exactly
+ * the environment this rejects, because `knowledge mode` — the command whose
+ * whole job is explaining the situation — resolves through it. A guard fused
+ * into the resolver would kill the diagnostic along with the defect.
+ *
+ * Fires on an API URL only, never on a key alone. A key with no URL points at
+ * no store, so there is nothing to be ambiguous about; erroring there would
+ * fire on machines that could never have routed anywhere, and a check that
+ * cries wolf is a check somebody turns off.
+ *
+ * `storePathOverridden` (an explicit `--store <path>`) is an explicit local
+ * choice and passes for the same reason `MODE=local` does: the operator said
+ * which store they meant.
+ */
+export function assertKnowledgeModeSelected(
+  env: NodeJS.ProcessEnv = process.env,
+  options: { storePathOverridden?: boolean } = {},
+): KnowledgeModeResolution {
+  const resolution = resolveKnowledgeModeSelection(env);
+  if (options.storePathOverridden) return resolution;
+  if (resolution.source.kind !== 'default') return resolution;
+  const urlKeysPresent = presentEnvNames(env, KNOWLEDGE_API_URL_ENV_KEYS);
+  if (urlKeysPresent.length === 0) return resolution;
+  throw new HalfConfiguredKnowledgeClientError(urlKeysPresent);
+}
+
 export interface KnowledgeModeReport extends KnowledgeModeResolution {
   /** `local` -> the on-box store; `api` -> the HTTP `/v1` transport. */
   store_transport: 'local' | 'api';

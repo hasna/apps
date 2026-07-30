@@ -27900,6 +27900,26 @@ function pinnedTransportEnv(env, mode2) {
   return { ...env, [KNOWLEDGE_MODE_ENV_KEYS[0]]: mode2 };
 }
 
+class HalfConfiguredKnowledgeClientError extends Error {
+  code = "knowledge_mode_unset_with_api_url";
+  constructor(urlKeysPresent) {
+    const canonical = KNOWLEDGE_MODE_ENV_KEYS[0];
+    super(`knowledge: ${urlKeysPresent.join(", ")} names an API store, but no mode variable says to use it, ` + "so this command would silently read and write the on-box store instead. " + `Set ${canonical}=cloud to use the API, or ${canonical}=local to confirm you want the on-box store. ` + `Run 'knowledge mode' to see the full resolution.`);
+    this.name = "HalfConfiguredKnowledgeClientError";
+  }
+}
+function assertKnowledgeModeSelected(env = process.env, options = {}) {
+  const resolution = resolveKnowledgeModeSelection(env);
+  if (options.storePathOverridden)
+    return resolution;
+  if (resolution.source.kind !== "default")
+    return resolution;
+  const urlKeysPresent = presentEnvNames(env, KNOWLEDGE_API_URL_ENV_KEYS);
+  if (urlKeysPresent.length === 0)
+    return resolution;
+  throw new HalfConfiguredKnowledgeClientError(urlKeysPresent);
+}
+
 // src/cloud-store.ts
 function transportOverrides(env) {
   return {
@@ -42406,6 +42426,7 @@ function resolveStorePath(storePath, scope) {
   return defaultStorePath();
 }
 function itemStoreFor(storePath, scope) {
+  assertKnowledgeModeSelected(process.env, { storePathOverridden: Boolean(storePath) });
   const resolved = resolveStorePath(storePath, scope);
   return resolveItemStore({ storePath: resolved, storePathOverridden: Boolean(storePath) });
 }

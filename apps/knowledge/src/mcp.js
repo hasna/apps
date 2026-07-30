@@ -8,6 +8,7 @@ import { migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db.ts';
 import { defaultStorePath } from './store.ts';
 import { resolveItemStore } from './item-store.ts';
 import { isKnowledgeApiMode } from './cloud-store.ts';
+import { assertKnowledgeModeSelected } from './knowledge-mode.ts';
 import { parseSourceRef } from './source-ref.ts';
 import { createKnowledgeService } from './service.ts';
 import { getStorageStatus as getDatabaseStorageStatus } from './storage.ts';
@@ -43,6 +44,12 @@ function resolveStorePath(storePath, scope) {
  * Every MCP item tool routes through this Store — never the JSON file directly.
  */
 function itemStoreFor(storePath, scope) {
+  // Same gate the CLI applies, and this surface needs it more: an agent calling
+  // an MCP item tool never sees a `knowledge mode` line, so a half-configured
+  // client hands it an empty result it reads as "the corpus is empty". Throwing
+  // here surfaces as an MCP tool error naming the variable rather than a
+  // plausible empty list. An explicit `store_path` is an explicit local choice.
+  assertKnowledgeModeSelected(process.env, { storePathOverridden: Boolean(storePath) });
   const resolved = resolveStorePath(storePath, scope);
   return resolveItemStore({ storePath: resolved, storePathOverridden: Boolean(storePath) });
 }
