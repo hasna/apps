@@ -4,6 +4,7 @@ import chalk from "chalk";
 import { closeDb } from "../../lib/db.js";
 import { normalizeChannelName } from "../../lib/channel-names.js";
 import { emitCliError } from "../cli-error.js";
+import { printJson, printLine } from "../../lib/stdout.js";
 
 export function registerReceiptCommands(program: Command): void {
   program
@@ -38,26 +39,26 @@ export function registerReceiptCommands(program: Command): void {
         }
         const status = await getStore().getMessageReadStatus(id, channelArg);
         if (opts.json) {
-          console.log(JSON.stringify({ message_id: id, channel: channelArg, ...status, read_count: status.receipts.length, unread_count: status.unread_by.length }, null, 2));
+          printJson({ message_id: id, channel: channelArg, ...status, read_count: status.receipts.length, unread_count: status.unread_by.length });
         } else {
-          console.log(chalk.bold(`Message #${id}`) + chalk.dim(` in ${chalk.magenta(`#${channelArg}`)} — read by ${status.receipts.length}, unread by ${status.unread_by.length}`));
+          printLine(chalk.bold(`Message #${id}`) + chalk.dim(` in ${chalk.magenta(`#${channelArg}`)} — read by ${status.receipts.length}, unread by ${status.unread_by.length}`));
           for (const r of status.receipts) {
-            console.log(`  ${chalk.green("✓")} ${chalk.cyan(r.agent)} ${chalk.dim(`read ${r.read_at}`)}`);
+            printLine(`  ${chalk.green("✓")} ${chalk.cyan(r.agent)} ${chalk.dim(`read ${r.read_at}`)}`);
           }
           for (const agent of status.unread_by) {
-            console.log(`  ${chalk.red("✗")} ${chalk.cyan(agent)} ${chalk.dim("unread")}`);
+            printLine(`  ${chalk.red("✗")} ${chalk.cyan(agent)} ${chalk.dim("unread")}`);
           }
         }
       } else {
         const receipts = await getStore().getReadReceipts(id);
         if (opts.json) {
-          console.log(JSON.stringify({ message_id: id, receipts, count: receipts.length }, null, 2));
+          printJson({ message_id: id, receipts, count: receipts.length });
         } else if (receipts.length === 0) {
-          console.log(chalk.dim(`No read receipts for message #${id}.`));
+          printLine(chalk.dim(`No read receipts for message #${id}.`));
         } else {
-          console.log(chalk.bold(`Message #${id}`) + chalk.dim(` — read by ${receipts.length}`));
+          printLine(chalk.bold(`Message #${id}`) + chalk.dim(` — read by ${receipts.length}`));
           for (const r of receipts) {
-            console.log(`  ${chalk.green("✓")} ${chalk.cyan(r.agent)} ${chalk.dim(`read ${r.read_at}`)}`);
+            printLine(`  ${chalk.green("✓")} ${chalk.cyan(r.agent)} ${chalk.dim(`read ${r.read_at}`)}`);
           }
         }
       }

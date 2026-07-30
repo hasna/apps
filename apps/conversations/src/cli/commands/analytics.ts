@@ -8,6 +8,7 @@ import { isCloudStore, cloudApiUrl } from "../../lib/store/index.js";
 import { checkForUpdate } from "../../lib/version-check.js";
 import { getCliWindow, printCompactFooter } from "../compact.js";
 import { emitCliError } from "../cli-error.js";
+import { printErrorLine, printJson, printLine } from "../../lib/stdout.js";
 
 export function registerAnalyticsCommands(program: Command): void {
   // ---- graph ----
@@ -20,9 +21,9 @@ export function registerAnalyticsCommands(program: Command): void {
     .action(async (opts) => {
       const result = await getStore().buildGraph();
       if (opts.json) {
-        console.log(JSON.stringify(result, null, 2));
+        printJson(result);
       } else {
-        console.log(chalk.green(`Graph built: ${result.edges_created} created, ${result.edges_updated} updated`));
+        printLine(chalk.green(`Graph built: ${result.edges_created} created, ${result.edges_updated} updated`));
       }
       closeDb();
     });
@@ -34,11 +35,11 @@ export function registerAnalyticsCommands(program: Command): void {
     .action(async (opts) => {
       const stats = await getStore().getGraphStats();
       if (opts.json) {
-        console.log(JSON.stringify(stats, null, 2));
+        printJson(stats);
       } else {
-        console.log(chalk.bold(`Knowledge Graph: ${stats.total_edges} edges\n`));
+        printLine(chalk.bold(`Knowledge Graph: ${stats.total_edges} edges\n`));
         for (const [relation, count] of Object.entries(stats.by_relation)) {
-          console.log(`  ${chalk.cyan(relation.padEnd(20))} ${count}`);
+          printLine(`  ${chalk.cyan(relation.padEnd(20))} ${count}`);
         }
       }
       closeDb();
@@ -52,23 +53,23 @@ export function registerAnalyticsCommands(program: Command): void {
     .action(async (name, opts) => {
       const network = await getStore().getAgentNetwork(name);
       if (opts.json) {
-        console.log(JSON.stringify(network, null, 2));
+        printJson(network);
       } else {
-        console.log(chalk.bold(`Network for ${chalk.cyan(name)}\n`));
+        printLine(chalk.bold(`Network for ${chalk.cyan(name)}\n`));
         if (network.communicates_with.length > 0) {
-          console.log(chalk.bold("  Communicates with:"));
+          printLine(chalk.bold("  Communicates with:"));
           for (const c of network.communicates_with) {
-            console.log(`    ${chalk.cyan(c.agent.padEnd(20))} ${chalk.dim(`${c.message_count} msgs`)}`);
+            printLine(`    ${chalk.cyan(c.agent.padEnd(20))} ${chalk.dim(`${c.message_count} msgs`)}`);
           }
         }
         if (network.channels.length > 0) {
-          console.log(chalk.bold("  Active channels:"));
+          printLine(chalk.bold("  Active channels:"));
           for (const s of network.channels) {
-            console.log(`    ${chalk.magenta("#" + s.channel.padEnd(19))} ${chalk.dim(`${s.message_count} msgs`)}`);
+            printLine(`    ${chalk.magenta("#" + s.channel.padEnd(19))} ${chalk.dim(`${s.message_count} msgs`)}`);
           }
         }
         if (network.projects.length > 0) {
-          console.log(chalk.bold("  Projects:") + " " + network.projects.join(", "));
+          printLine(chalk.bold("  Projects:") + " " + network.projects.join(", "));
         }
       }
       closeDb();
@@ -87,29 +88,29 @@ export function registerAnalyticsCommands(program: Command): void {
       }
 
       if (opts.json) {
-        console.log(JSON.stringify(summary, null, 2));
+        printJson(summary);
       } else {
-        console.log(chalk.bold(`Summary: ${target}\n`));
-        console.log(`  ${chalk.bold("Participants:")} ${summary.participants.join(", ")}`);
-        console.log(`  ${chalk.bold("Messages:")} ${summary.message_count}`);
-        console.log(`  ${chalk.bold("Date range:")} ${summary.date_range.first.slice(0, 16)} → ${summary.date_range.last.slice(0, 16)}`);
-        console.log(`  ${chalk.bold("Replies:")} ${summary.activity.reply_count}  ${chalk.bold("Reactions:")} ${summary.activity.reaction_count}`);
+        printLine(chalk.bold(`Summary: ${target}\n`));
+        printLine(`  ${chalk.bold("Participants:")} ${summary.participants.join(", ")}`);
+        printLine(`  ${chalk.bold("Messages:")} ${summary.message_count}`);
+        printLine(`  ${chalk.bold("Date range:")} ${summary.date_range.first.slice(0, 16)} → ${summary.date_range.last.slice(0, 16)}`);
+        printLine(`  ${chalk.bold("Replies:")} ${summary.activity.reply_count}  ${chalk.bold("Reactions:")} ${summary.activity.reaction_count}`);
 
         if (summary.topics.length > 0) {
-          console.log(`\n  ${chalk.bold("Topics:")} ${summary.topics.slice(0, 5).map((t) => t.topic).join(", ")}`);
+          printLine(`\n  ${chalk.bold("Topics:")} ${summary.topics.slice(0, 5).map((t) => t.topic).join(", ")}`);
         }
 
         if (summary.key_messages.length > 0) {
-          console.log(`\n  ${chalk.bold("Key messages:")}`);
+          printLine(`\n  ${chalk.bold("Key messages:")}`);
           for (const k of summary.key_messages.slice(0, 5)) {
-            console.log(`    [#${k.id}] ${chalk.cyan(k.from)} (${chalk.yellow(k.reason)}): ${k.content.slice(0, 80)}`);
+            printLine(`    [#${k.id}] ${chalk.cyan(k.from)} (${chalk.yellow(k.reason)}): ${k.content.slice(0, 80)}`);
           }
         }
 
         if (summary.unresolved_blockers.length > 0) {
-          console.log(`\n  ${chalk.red.bold("Unresolved blockers:")}`);
+          printLine(`\n  ${chalk.red.bold("Unresolved blockers:")}`);
           for (const b of summary.unresolved_blockers) {
-            console.log(`    ${chalk.red("[BLOCKER]")} [#${b.id}] ${chalk.cyan(b.from)}: ${b.content.slice(0, 80)}`);
+            printLine(`    ${chalk.red("[BLOCKER]")} [#${b.id}] ${chalk.cyan(b.from)}: ${b.content.slice(0, 80)}`);
           }
         }
       }
@@ -135,16 +136,16 @@ export function registerAnalyticsCommands(program: Command): void {
       }
 
       if (opts.json) {
-        console.log(JSON.stringify(topics, null, 2));
+        printJson(topics);
       } else {
         if (topics.length === 0) {
-          console.log(chalk.dim("No topics found."));
+          printLine(chalk.dim("No topics found."));
         } else {
           const label = opts.channel ? `#${opts.channel}` : opts.session ? opts.session : `last ${opts.hours ?? 24}h`;
-          console.log(chalk.bold(`Topics for ${label}\n`));
+          printLine(chalk.bold(`Topics for ${label}\n`));
           for (const t of topics) {
             const bar = "█".repeat(Math.min(Math.round(t.weight * 50), 30));
-            console.log(`  ${chalk.cyan(t.topic.padEnd(20))} ${chalk.dim(`×${t.count}`)}  ${chalk.green(bar)}`);
+            printLine(`  ${chalk.cyan(t.topic.padEnd(20))} ${chalk.dim(`×${t.count}`)}  ${chalk.green(bar)}`);
           }
         }
       }
@@ -167,19 +168,19 @@ export function registerAnalyticsCommands(program: Command): void {
       });
 
       if (opts.json) {
-        console.log(JSON.stringify(sessions, null, 2));
+        printJson(sessions);
       } else {
         if (sessions.length === 0) {
-          console.log(chalk.dim("No hot conversations."));
+          printLine(chalk.dim("No hot conversations."));
         } else {
-          console.log(chalk.bold("Hot Conversations\n"));
+          printLine(chalk.bold("Hot Conversations\n"));
           for (const s of sessions) {
             const score = s.hotness_score > 20 ? chalk.red(`🔥 ${s.hotness_score}`) : chalk.yellow(`  ${s.hotness_score}`);
             const where = s.channel ? chalk.magenta(`#${s.channel}`) : chalk.cyan(s.participants.join(", "));
             const time = chalk.dim(s.last_message_at.slice(11, 16));
             const msgs = chalk.dim(`${s.message_count} msgs`);
             const agents = chalk.dim(`${s.metrics.unique_agents} agents`);
-            console.log(`${score}  ${where}  ${time}  ${msgs}  ${agents}`);
+            printLine(`${score}  ${where}  ${time}  ${msgs}  ${agents}`);
           }
         }
       }
@@ -228,65 +229,65 @@ export function registerAnalyticsCommands(program: Command): void {
       };
 
       if (opts.json) {
-        console.log(JSON.stringify(context, null, 2));
+        printJson(context);
       } else {
-        console.log(chalk.bold(`Context for ${chalk.cyan(agent)}\n`));
+        printLine(chalk.bold(`Context for ${chalk.cyan(agent)}\n`));
 
         // Online agents
         if (onlineAgents.length > 0) {
           const onlinePage = windowItems(onlineAgents, window);
           const names = onlinePage.items.map((a) => chalk.green(a.agent)).join(", ");
-          console.log(`${chalk.bold("Online agents:")} ${names}`);
-          if (onlinePage.hasMore) console.log(chalk.dim(`  More agents: rerun with --limit ${Math.min(onlineAgents.length, window.limit + 10)}.`));
+          printLine(`${chalk.bold("Online agents:")} ${names}`);
+          if (onlinePage.hasMore) printLine(chalk.dim(`  More agents: rerun with --limit ${Math.min(onlineAgents.length, window.limit + 10)}.`));
         } else {
-          console.log(`${chalk.bold("Online agents:")} ${chalk.dim("none")}`);
+          printLine(`${chalk.bold("Online agents:")} ${chalk.dim("none")}`);
         }
 
         // Unread DMs
         if (unreadDMs.length > 0) {
-          console.log(`${chalk.bold("Unread DMs:")} ${chalk.yellow(unreadDMs.length + " message(s)")}`);
+          printLine(`${chalk.bold("Unread DMs:")} ${chalk.yellow(unreadDMs.length + " message(s)")}`);
           for (const msg of unreadDMs.slice(0, 3)) {
-            console.log(`  ${chalk.dim(msg.created_at.slice(11, 16))} ${chalk.cyan(msg.from_agent)}: ${msg.content.slice(0, 80)}`);
+            printLine(`  ${chalk.dim(msg.created_at.slice(11, 16))} ${chalk.cyan(msg.from_agent)}: ${msg.content.slice(0, 80)}`);
           }
         } else {
-          console.log(`${chalk.bold("Unread DMs:")} ${chalk.dim("none")}`);
+          printLine(`${chalk.bold("Unread DMs:")} ${chalk.dim("none")}`);
         }
 
         // Channels
         if (myChannels.length > 0) {
           const channelPage = windowItems(myChannels, window);
-          console.log(`${chalk.bold("My channels:")}`);
+          printLine(`${chalk.bold("My channels:")}`);
           for (const sp of channelPage.items) {
             const unread = sp.unread > 0 ? chalk.yellow(` (${sp.unread} unread)`) : "";
-            console.log(`  ${chalk.magenta("#" + sp.name)}${unread}`);
+            printLine(`  ${chalk.magenta("#" + sp.name)}${unread}`);
           }
-          if (channelPage.hasMore) console.log(chalk.dim(`  More channels: rerun with --limit ${Math.min(myChannels.length, window.limit + 10)}.`));
+          if (channelPage.hasMore) printLine(chalk.dim(`  More channels: rerun with --limit ${Math.min(myChannels.length, window.limit + 10)}.`));
         } else {
-          console.log(`${chalk.bold("My channels:")} ${chalk.dim("none")}`);
+          printLine(`${chalk.bold("My channels:")} ${chalk.dim("none")}`);
         }
 
         if (subscriptions.length > 0) {
           const subscriptionPage = windowItems(subscriptions, window);
-          console.log(`${chalk.bold("Subscribed channels:")}`);
+          printLine(`${chalk.bold("Subscribed channels:")}`);
           for (const row of subscriptionPage.items) {
-            console.log(`  ${chalk.magenta("#" + row.channel)} ${chalk.dim(`preview ${row.preview_chars} chars`)}`);
+            printLine(`  ${chalk.magenta("#" + row.channel)} ${chalk.dim(`preview ${row.preview_chars} chars`)}`);
           }
-          if (subscriptionPage.hasMore) console.log(chalk.dim(`  More subscriptions: rerun with --limit ${Math.min(subscriptions.length, window.limit + 10)}.`));
+          if (subscriptionPage.hasMore) printLine(chalk.dim(`  More subscriptions: rerun with --limit ${Math.min(subscriptions.length, window.limit + 10)}.`));
         } else {
-          console.log(`${chalk.bold("Subscribed channels:")} ${chalk.dim("none")}`);
+          printLine(`${chalk.bold("Subscribed channels:")} ${chalk.dim("none")}`);
         }
 
         if (channelNotifications.length > 0) {
-          console.log(`${chalk.bold("Channel notifications:")}`);
+          printLine(`${chalk.bold("Channel notifications:")}`);
           for (const notification of channelNotifications) {
-            console.log(
+            printLine(
               `  ${chalk.dim(notification.created_at.slice(11, 16))} ${chalk.cyan(notification.from_agent)} ${chalk.magenta("#" + notification.channel)} ${chalk.dim(`msg #${notification.message_id}`)}`
             );
-            console.log(`    ${chalk.dim(notification.preview)}`);
+            printLine(`    ${chalk.dim(notification.preview)}`);
           }
-          console.log(chalk.dim("  Inspect with: conversations show <message-id>"));
+          printLine(chalk.dim("  Inspect with: conversations show <message-id>"));
         } else {
-          console.log(`${chalk.bold("Channel notifications:")} ${chalk.dim("none")}`);
+          printLine(`${chalk.bold("Channel notifications:")} ${chalk.dim("none")}`);
         }
       }
       closeDb();
@@ -306,15 +307,15 @@ export function registerAnalyticsCommands(program: Command): void {
       const page = windowItems(sessions, window);
 
       if (opts.json) {
-        console.log(JSON.stringify(sessions, null, 2));
+        printJson(sessions);
       } else {
         if (sessions.length === 0) {
-          console.log(chalk.dim("No sessions found."));
+          printLine(chalk.dim("No sessions found."));
         } else {
           for (const s of page.items) {
             const unread = s.unread_count > 0 ? chalk.green(` (${s.unread_count} unread)`) : "";
             const participants = s.participants.join(", ");
-            console.log(
+            printLine(
               `${chalk.bold(s.session_id)} — ${participants} — ${s.message_count} messages${unread}`
             );
           }
@@ -372,21 +373,21 @@ export function registerAnalyticsCommands(program: Command): void {
       };
 
       if (opts.json) {
-        console.log(JSON.stringify(stats, null, 2));
+        printJson(stats);
       } else {
-        console.log(chalk.bold("Conversations Status"));
+        printLine(chalk.bold("Conversations Status"));
         if (cloud) {
-          console.log(`  Mode:       self_hosted (cloud API)`);
-          console.log(`  API URL:    ${stats.api_url ?? "(set)"}`);
+          printLine(`  Mode:       self_hosted (cloud API)`);
+          printLine(`  API URL:    ${stats.api_url ?? "(set)"}`);
         } else {
-          console.log(`  Mode:       local`);
-          console.log(`  DB Path:    ${stats.db_path}`);
+          printLine(`  Mode:       local`);
+          printLine(`  DB Path:    ${stats.db_path}`);
         }
-        console.log(`  Messages:   ${stats.total_messages}`);
-        console.log(`  Sessions:   ${stats.total_sessions}`);
-        console.log(`  Channels:   ${stats.total_channels}`);
-        console.log(`  Projects:   ${stats.total_projects}`);
-        console.log(`  Unread:     ${stats.unread_messages}`);
+        printLine(`  Messages:   ${stats.total_messages}`);
+        printLine(`  Sessions:   ${stats.total_sessions}`);
+        printLine(`  Channels:   ${stats.total_channels}`);
+        printLine(`  Projects:   ${stats.total_projects}`);
+        printLine(`  Unread:     ${stats.unread_messages}`);
       }
       closeDb();
     });
@@ -453,20 +454,20 @@ export function registerAnalyticsCommands(program: Command): void {
       const allOk = checks.every((c) => c.ok);
 
       if (opts.json) {
-        console.log(JSON.stringify({ ok: allOk, checks }, null, 2));
+        printJson({ ok: allOk, checks });
       } else {
-        console.log(chalk.bold("Conversations Doctor\n"));
+        printLine(chalk.bold("Conversations Doctor\n"));
         for (const check of checks) {
           const icon = check.ok ? chalk.green("✓") : chalk.red("✗");
           const label = chalk.bold(check.name.padEnd(16));
-          console.log(`  ${icon}  ${label}  ${check.message}`);
+          printLine(`  ${icon}  ${label}  ${check.message}`);
         }
-        console.log();
+        printLine();
         if (allOk) {
-          console.log(chalk.green("All checks passed."));
+          printLine(chalk.green("All checks passed."));
         } else {
           const failed = checks.filter((c) => !c.ok).length;
-          console.log(chalk.red(`${failed} check(s) failed.`));
+          printLine(chalk.red(`${failed} check(s) failed.`));
           process.exit(1);
         }
       }
@@ -482,11 +483,11 @@ export function registerAnalyticsCommands(program: Command): void {
     .option("-j, --json", "Output as JSON")
     .action(async (id, emoji, opts) => {
       if (!Number.isInteger(id) || id <= 0) {
-        console.error(chalk.red("Message ID must be a positive integer."));
+        printErrorLine(chalk.red("Message ID must be a positive integer."));
         process.exit(1);
       }
       if (!(await getStore().getMessageById(id))) {
-        console.error(chalk.red(`Message #${id} not found.`));
+        printErrorLine(chalk.red(`Message #${id} not found.`));
         process.exit(1);
       }
       const agent = resolveIdentity(opts.from);
@@ -497,9 +498,9 @@ export function registerAnalyticsCommands(program: Command): void {
         emitCliError(error instanceof Error ? error.message : String(error), opts);
       }
       if (opts.json) {
-        console.log(JSON.stringify(reaction, null, 2));
+        printJson(reaction);
       } else {
-        console.log(chalk.green(`${emoji} reaction added to message #${id}`));
+        printLine(chalk.green(`${emoji} reaction added to message #${id}`));
       }
       closeDb();
     });
@@ -516,12 +517,12 @@ export function registerAnalyticsCommands(program: Command): void {
       const agent = resolveIdentity(opts.from);
       const removed = await getStore().removeReaction(id, agent, emoji);
       if (opts.json) {
-        console.log(JSON.stringify({ removed }, null, 2));
+        printJson({ removed });
       } else {
         if (removed) {
-          console.log(chalk.green(`${emoji} reaction removed from message #${id}`));
+          printLine(chalk.green(`${emoji} reaction removed from message #${id}`));
         } else {
-          console.log(chalk.dim(`No ${emoji} reaction found on message #${id}`));
+          printLine(chalk.dim(`No ${emoji} reaction found on message #${id}`));
         }
       }
       closeDb();
@@ -536,13 +537,13 @@ export function registerAnalyticsCommands(program: Command): void {
     .action(async (id, opts) => {
       const summary = await getStore().getReactionSummary(id);
       if (opts.json) {
-        console.log(JSON.stringify(summary, null, 2));
+        printJson(summary);
       } else {
         if (summary.length === 0) {
-          console.log(chalk.dim(`No reactions on message #${id}`));
+          printLine(chalk.dim(`No reactions on message #${id}`));
         } else {
           const parts = summary.map((r) => `${r.emoji} ${r.count}`).join("  ");
-          console.log(`Message #${id}: ${parts}`);
+          printLine(`Message #${id}: ${parts}`);
         }
       }
       closeDb();

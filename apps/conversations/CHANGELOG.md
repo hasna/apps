@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Added
+- Run typechecking and tests in GitHub Actions for pull requests and pushes to `main`.
+
 ### Tests
 - Add unit coverage for the contracts client HTTP transport and storage adapter, including configuration refusal, request retries, CRUD normalization, and error handling.
 

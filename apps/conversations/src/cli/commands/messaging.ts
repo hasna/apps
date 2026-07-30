@@ -13,6 +13,7 @@ import { printMessageEntry } from "../message-output.js";
 import { checkForUpdate } from "../../lib/version-check.js";
 import { emitCliError } from "../cli-error.js";
 import type { DigestResult } from "../../lib/messages.js";
+import { printErrorLine, printJson, printJsonLine, printLine } from "../../lib/stdout.js";
 
 function quoteDigestCommandArg(value: string): string {
   return /^[A-Za-z0-9._:/@=-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
@@ -32,7 +33,7 @@ export function formatDigestContinuationCommand(result: Pick<DigestResult, "chan
 }
 
 function failCommand(error: unknown, fallback: string): never {
-  console.error(chalk.red(error instanceof Error ? error.message : fallback));
+  printErrorLine(chalk.red(error instanceof Error ? error.message : fallback));
   closeDb();
   process.exit(1);
 }
@@ -102,11 +103,11 @@ export function registerMessagingCommands(program: Command): void {
       }
 
       if (opts.json) {
-        console.log(JSON.stringify(msg, null, 2));
+        printJson(msg);
       } else if (channel) {
-        console.log(chalk.green(`Message sent to #${channel}`) + chalk.dim(` (id: ${msg.id})`));
+        printLine(chalk.green(`Message sent to #${channel}`) + chalk.dim(` (id: ${msg.id})`));
       } else {
-        console.log(chalk.green(`Message sent`) + chalk.dim(` (id: ${msg.id}, session: ${msg.session_id})`));
+        printLine(chalk.green(`Message sent`) + chalk.dim(` (id: ${msg.id}, session: ${msg.session_id})`));
       }
       closeDb();
     });
@@ -123,6 +124,7 @@ export function registerMessagingCommands(program: Command): void {
     .option("--limit <n>", "Max messages to return", parseInt)
     .option("--cursor <n>", "Skip first N messages for pagination", parseInt)
     .option("--unread", "Only unread messages")
+    .option("--unread-only", "Only unread messages")
     .option("--mark-read", "Mark returned messages as read")
     .option("--verbose", "Show full message bodies")
     .option("-j, --json", "Output as JSON")
@@ -136,7 +138,7 @@ export function registerMessagingCommands(program: Command): void {
         since: opts.since,
         limit: opts.json ? opts.limit : queryLimitFor(window),
         offset: opts.json ? opts.cursor : window.offset,
-        unread_only: opts.unread,
+        unread_only: opts.unread || opts.unreadOnly,
       });
       const page = opts.json
         ? { items: messages, hasMore: false, nextCursor: null, count: messages.length }
@@ -149,10 +151,10 @@ export function registerMessagingCommands(program: Command): void {
       }
 
       if (opts.json) {
-        console.log(JSON.stringify(messages, null, 2));
+        printJson(messages);
       } else {
         if (messages.length === 0) {
-          console.log(chalk.dim("No messages found."));
+          printLine(chalk.dim("No messages found."));
         } else {
           for (const msg of page.items) printMessageEntry(msg, { verbose: opts.verbose });
           printCompactFooter({
@@ -185,17 +187,17 @@ export function registerMessagingCommands(program: Command): void {
       }
 
       if (opts.json) {
-        console.log(JSON.stringify(msg, null, 2));
+        printJson(msg);
       } else {
         const time = chalk.dim(msg.created_at.slice(0, 19).replace("T", " "));
         const destination = msg.channel ? chalk.magenta(`#${msg.channel}`) : chalk.yellow(msg.to_agent);
         const priority = msg.priority !== "normal" ? chalk.red(` [${msg.priority}]`) : "";
         const unread = !msg.read_at ? chalk.green(" [unread]") : "";
-        console.log(`${chalk.cyan(msg.from_agent)} → ${destination}${priority}${unread} ${chalk.dim(`[#${msg.id}] ${time}`)}`);
+        printLine(`${chalk.cyan(msg.from_agent)} → ${destination}${priority}${unread} ${chalk.dim(`[#${msg.id}] ${time}`)}`);
         if (msg.attachments?.length) {
-          console.log(chalk.dim(`Attachments: ${msg.attachments.map((att) => att.name).join(", ")}`));
+          printLine(chalk.dim(`Attachments: ${msg.attachments.map((att) => att.name).join(", ")}`));
         }
-        console.log(renderContent(msg.content));
+        printLine(renderContent(msg.content));
       }
       closeDb();
     });
@@ -245,13 +247,13 @@ export function registerMessagingCommands(program: Command): void {
       }
 
       if (opts.json) {
-        console.log(JSON.stringify(result));
+        printJsonLine(result);
       } else {
         const target = result.channel ? `#${result.channel}` : result.session_id ?? result.to ?? "messages";
-        console.log(chalk.bold(`Digest ${result.digest_id} ${chalk.dim(`(${target})`)}`));
-        console.log(chalk.dim(`shown ${result.shown}/${result.total_available}, bytes ${result.byte_length}/${result.max_bytes}, next_cursor ${result.next_cursor ?? "-"}`));
+        printLine(chalk.bold(`Digest ${result.digest_id} ${chalk.dim(`(${target})`)}`));
+        printLine(chalk.dim(`shown ${result.shown}/${result.total_available}, bytes ${result.byte_length}/${result.max_bytes}, next_cursor ${result.next_cursor ?? "-"}`));
         if (result.messages.length === 0) {
-          console.log(chalk.dim("  No messages in this digest window."));
+          printLine(chalk.dim("  No messages in this digest window."));
         } else {
           for (const msg of result.messages) {
             const time = chalk.dim(msg.created_at.slice(11, 19));
@@ -260,11 +262,11 @@ export function registerMessagingCommands(program: Command): void {
             const priority = msg.priority !== "normal" ? chalk.red(` [${msg.priority}]`) : "";
             const att = msg.has_attachments ? chalk.dim(" 📎") : "";
             const unread = msg.unread ? chalk.green(" unread") : "";
-            console.log(`${time} ${from} → ${dest}${priority}${att}${unread} ${chalk.dim(`#${msg.id}`)}`);
-            console.log(`  ${chalk.dim(msg.snippet)}`);
+            printLine(`${time} ${from} → ${dest}${priority}${att}${unread} ${chalk.dim(`#${msg.id}`)}`);
+            printLine(`  ${chalk.dim(msg.snippet)}`);
           }
-          if (result.has_more) console.log(chalk.dim(`Continue with: ${formatDigestContinuationCommand(result)}`));
-          console.log(chalk.dim("Use conversations show <id> for one full message."));
+          if (result.has_more) printLine(chalk.dim(`Continue with: ${formatDigestContinuationCommand(result)}`));
+          printLine(chalk.dim("Use conversations show <id> for one full message."));
         }
       }
       closeDb();
@@ -302,12 +304,12 @@ export function registerMessagingCommands(program: Command): void {
         : pageFromQuery(messages, window);
 
       if (opts.json) {
-        console.log(JSON.stringify(messages, null, 2));
+        printJson(messages);
       } else {
         if (messages.length === 0) {
-          console.log(chalk.dim("No messages found."));
+          printLine(chalk.dim("No messages found."));
         } else {
-          console.log(chalk.dim(`Search results for "${q}":\n`));
+          printLine(chalk.dim(`Search results for "${q}":\n`));
           for (const msg of page.items) printMessageEntry(msg, { verbose: opts.verbose });
           printCompactFooter({
             shown: page.count,
@@ -353,12 +355,12 @@ export function registerMessagingCommands(program: Command): void {
         : pageFromQuery(messages, window);
 
       if (opts.json) {
-        console.log(JSON.stringify(messages, null, 2));
+        printJson(messages);
       } else {
         if (messages.length === 0) {
-          console.log(chalk.dim(`No activity in the last ${duration}.`));
+          printLine(chalk.dim(`No activity in the last ${duration}.`));
         } else {
-          console.log(chalk.bold(`Activity since ${duration} ago\n`));
+          printLine(chalk.bold(`Activity since ${duration} ago\n`));
           for (const msg of page.items) printMessageEntry(msg, { verbose: opts.verbose });
           printCompactFooter({
             shown: page.count,
@@ -441,9 +443,9 @@ export function registerMessagingCommands(program: Command): void {
       }
 
       if (opts.json) {
-        console.log(JSON.stringify(msg, null, 2));
+        printJson(msg);
       } else {
-        console.log(chalk.green(`Reply sent`) + chalk.dim(` (id: ${msg.id}, session: ${msg.session_id})`));
+        printLine(chalk.green(`Reply sent`) + chalk.dim(` (id: ${msg.id}, session: ${msg.session_id})`));
       }
       closeDb();
     });
@@ -475,9 +477,9 @@ export function registerMessagingCommands(program: Command): void {
       }
 
       if (opts.json) {
-        console.log(JSON.stringify({ marked_read: count }));
+        printJsonLine({ marked_read: count });
       } else {
-        console.log(chalk.green(`Marked ${count} message(s) as read.`));
+        printLine(chalk.green(`Marked ${count} message(s) as read.`));
       }
       closeDb();
     });
@@ -502,7 +504,7 @@ export function registerMessagingCommands(program: Command): void {
         until: opts.until,
         format,
       });
-      console.log(result);
+      printLine(result);
       closeDb();
     });
 
@@ -532,12 +534,12 @@ export function registerMessagingCommands(program: Command): void {
       }
 
       if (opts.json) {
-        console.log(JSON.stringify(msg, null, 2));
+        printJson(msg);
       } else {
         if (msg) {
-          console.log(chalk.green(`Message #${id} edited.`));
+          printLine(chalk.green(`Message #${id} edited.`));
         } else {
-          console.error(chalk.red(`Message #${id} not found or not your message.`));
+          printErrorLine(chalk.red(`Message #${id} not found or not your message.`));
           process.exit(1);
         }
       }
@@ -560,12 +562,12 @@ export function registerMessagingCommands(program: Command): void {
       const result = await await getStore().deleteMessage(id, agent);
 
       if (opts.json) {
-        console.log(JSON.stringify({ id, deleted: result }));
+        printJsonLine({ id, deleted: result });
       } else {
         if (result) {
-          console.log(chalk.green(`Message #${id} deleted.`));
+          printLine(chalk.green(`Message #${id} deleted.`));
         } else {
-          console.error(chalk.red(`Message #${id} not found or not your message.`));
+          printErrorLine(chalk.red(`Message #${id} not found or not your message.`));
           process.exit(1);
         }
       }
@@ -582,12 +584,12 @@ export function registerMessagingCommands(program: Command): void {
       const msg = await await getStore().pinMessage(id);
 
       if (opts.json) {
-        console.log(JSON.stringify(msg, null, 2));
+        printJson(msg);
       } else {
         if (msg) {
-          console.log(chalk.green(`Message #${id} pinned.`));
+          printLine(chalk.green(`Message #${id} pinned.`));
         } else {
-          console.error(chalk.red(`Message #${id} not found.`));
+          printErrorLine(chalk.red(`Message #${id} not found.`));
           process.exit(1);
         }
       }
@@ -604,12 +606,12 @@ export function registerMessagingCommands(program: Command): void {
       const msg = await await getStore().unpinMessage(id);
 
       if (opts.json) {
-        console.log(JSON.stringify(msg, null, 2));
+        printJson(msg);
       } else {
         if (msg) {
-          console.log(chalk.green(`Message #${id} unpinned.`));
+          printLine(chalk.green(`Message #${id} unpinned.`));
         } else {
-          console.error(chalk.red(`Message #${id} not found.`));
+          printErrorLine(chalk.red(`Message #${id} not found.`));
           process.exit(1);
         }
       }
@@ -638,12 +640,12 @@ export function registerMessagingCommands(program: Command): void {
         ? { items: messages, count: messages.length, total: messages.length, hasMore: false, nextCursor: null }
         : pageFromQuery(messages, window);
       if (opts.json) {
-        console.log(JSON.stringify(messages, null, 2));
+        printJson(messages);
       } else {
         if (messages.length === 0) {
-          console.log(chalk.dim("No pinned messages."));
+          printLine(chalk.dim("No pinned messages."));
         } else {
-          console.log(chalk.dim("Pinned messages:\n"));
+          printLine(chalk.dim("Pinned messages:\n"));
           for (const msg of page.items) printMessageEntry(msg, { verbose: opts.verbose });
           printCompactFooter({
             shown: page.count,
@@ -675,14 +677,14 @@ export function registerMessagingCommands(program: Command): void {
         : pageFromQuery(blockers, window);
 
       if (opts.json) {
-        console.log(JSON.stringify(blockers, null, 2));
+        printJson(blockers);
       } else {
         if (blockers.length === 0) {
-          console.log(chalk.dim("No blocking messages."));
+          printLine(chalk.dim("No blocking messages."));
         } else {
-          console.log(chalk.red.bold("Blocking messages:\n"));
+          printLine(chalk.red.bold("Blocking messages:\n"));
           for (const b of page.items) printMessageEntry(b, { verbose: opts.verbose, destination: b.channel ? chalk.magenta(`#${b.channel}`) : chalk.yellow("DM") });
-          console.log(chalk.dim(`Acknowledge shown blockers with: conversations mark-read ${page.items.map(b => b.id).join(" ")}`));
+          printLine(chalk.dim(`Acknowledge shown blockers with: conversations mark-read ${page.items.map(b => b.id).join(" ")}`));
           printCompactFooter({
             shown: page.count,
             hasMore: page.hasMore,
@@ -714,9 +716,9 @@ export function registerMessagingCommands(program: Command): void {
       if (opts.clear) {
         const cleared = await getStore().markAllChannelNotificationsRead(agent, opts.channel);
         if (opts.json) {
-          console.log(JSON.stringify({ cleared, agent, channel: opts.channel || null }, null, 2));
+          printJson({ cleared, agent, channel: opts.channel || null });
         } else {
-          console.log(chalk.green(`Cleared ${cleared} notification(s).`));
+          printLine(chalk.green(`Cleared ${cleared} notification(s).`));
         }
         closeDb();
         return;
@@ -732,18 +734,18 @@ export function registerMessagingCommands(program: Command): void {
       });
 
       if (opts.json) {
-        console.log(JSON.stringify(notifications, null, 2));
+        printJson(notifications);
       } else if (notifications.length === 0) {
-        console.log(chalk.dim("No channel notifications."));
+        printLine(chalk.dim("No channel notifications."));
       } else {
         for (const item of notifications) {
           const time = chalk.dim(item.created_at.slice(11, 19));
           const priority = item.priority !== "normal" ? chalk.red(` [${item.priority}]`) : "";
           const unread = item.unread ? chalk.yellow(" [unread]") : "";
-          console.log(`${time} ${chalk.cyan(item.from_agent)} ${chalk.magenta(`#${item.channel}`)}${priority}${unread} ${chalk.dim(`msg #${item.message_id}`)}`);
-          console.log(`  ${item.preview}`);
+          printLine(`${time} ${chalk.cyan(item.from_agent)} ${chalk.magenta(`#${item.channel}`)}${priority}${unread} ${chalk.dim(`msg #${item.message_id}`)}`);
+          printLine(`  ${item.preview}`);
         }
-        console.log(chalk.dim("\nInspect the full message later with: conversations show <message-id>"));
+        printLine(chalk.dim("\nInspect the full message later with: conversations show <message-id>"));
       }
       closeDb();
     });
@@ -773,11 +775,11 @@ export function registerMessagingCommands(program: Command): void {
         ? `DMs + ${agentChannels.length} channel(s)`
         : opts.channel ? `Channel: #${opts.channel}` : "All DMs";
 
-      console.log("");
-      console.log(chalk.bold(`  Conversations`) + chalk.dim(` — watching as ${chalk.cyan(agent)}`));
-      console.log(chalk.dim(`  ${modeLabel} · Poll: ${interval}ms · Ctrl+C to stop`));
-      console.log(chalk.dim("  " + "─".repeat(cols - 4)));
-      console.log("");
+      printLine("");
+      printLine(chalk.bold(`  Conversations`) + chalk.dim(` — watching as ${chalk.cyan(agent)}`));
+      printLine(chalk.dim(`  ${modeLabel} · Poll: ${interval}ms · Ctrl+C to stop`));
+      printLine(chalk.dim("  " + "─".repeat(cols - 4)));
+      printLine("");
 
       const { startPolling } = require("../../lib/poll.js");
       const { renderContent: renderContentLocal } = require("../../lib/terminal-markdown.js");
@@ -807,21 +809,21 @@ export function registerMessagingCommands(program: Command): void {
         const sender = chalk.cyan.bold(msg.from_agent);
 
         // Header line
-        console.log(`  ${sender}  ${where}  ${time}${priority}${blocking}`);
+        printLine(`  ${sender}  ${where}  ${time}${priority}${blocking}`);
 
         // Content with indent
         const content = opts.verbose
           ? renderContentLocal(msg.content) as string
           : previewText(msg.content);
         const indented = content.split("\n").map((l: string) => "    " + l).join("\n");
-        console.log(indented);
+        printLine(indented);
         if (!opts.verbose) {
-          console.log(chalk.dim(`    Inspect with: conversations show ${msg.id}`));
+          printLine(chalk.dim(`    Inspect with: conversations show ${msg.id}`));
         }
 
         // Separator
-        console.log(chalk.dim("    " + "·".repeat(Math.min(cols - 8, 60))));
-        console.log("");
+        printLine(chalk.dim("    " + "·".repeat(Math.min(cols - 8, 60))));
+        printLine("");
       };
 
       const renderNotification = (notification: import("../../types.js").ChannelNotification) => {
@@ -833,11 +835,11 @@ export function registerMessagingCommands(program: Command): void {
           : "";
         const sender = chalk.cyan.bold(notification.from_agent);
 
-        console.log(`  ${sender}  ${chalk.magenta(`#${notification.channel}`)}  ${time}${priority} ${chalk.dim(`[#${notification.message_id}]`)}`);
-        console.log(`    ${notification.preview}`);
-        console.log(chalk.dim(`    Preview only. Inspect with: conversations show ${notification.message_id}`));
-        console.log(chalk.dim("    " + "·".repeat(Math.min(cols - 8, 60))));
-        console.log("");
+        printLine(`  ${sender}  ${chalk.magenta(`#${notification.channel}`)}  ${time}${priority} ${chalk.dim(`[#${notification.message_id}]`)}`);
+        printLine(`    ${notification.preview}`);
+        printLine(chalk.dim(`    Preview only. Inspect with: conversations show ${notification.message_id}`));
+        printLine(chalk.dim("    " + "·".repeat(Math.min(cols - 8, 60))));
+        printLine("");
       };
 
       // Show recent messages first
@@ -851,15 +853,15 @@ export function registerMessagingCommands(program: Command): void {
         })).sort((left, right) => left.created_at.localeCompare(right.created_at) || left.message_id - right.message_id);
 
         if (dmRecent.length > 0) {
-          console.log(chalk.dim(`  ── Recent DMs (${dmRecent.length}) ──\n`));
+          printLine(chalk.dim(`  ── Recent DMs (${dmRecent.length}) ──\n`));
           for (const msg of dmRecent) { renderMessage(msg); }
         }
         if (pendingNotifications.length > 0) {
-          console.log(chalk.dim(`  ── Pending channel notifications (${pendingNotifications.length}) ──\n`));
+          printLine(chalk.dim(`  ── Pending channel notifications (${pendingNotifications.length}) ──\n`));
           for (const notification of pendingNotifications) { renderNotification(notification); }
         }
         if (dmRecent.length > 0 || pendingNotifications.length > 0) {
-          console.log(chalk.dim(`  ── Live ──\n`));
+          printLine(chalk.dim(`  ── Live ──\n`));
         }
       } else {
         const recent = await await getStore().readMessages({
@@ -869,9 +871,9 @@ export function registerMessagingCommands(program: Command): void {
           order: "asc",
         });
         if (recent.length > 0) {
-          console.log(chalk.dim(`  ── Recent messages (${recent.length}) ──\n`));
+          printLine(chalk.dim(`  ── Recent messages (${recent.length}) ──\n`));
           for (const msg of recent) { renderMessage(msg); }
-          console.log(chalk.dim(`  ── Live ──\n`));
+          printLine(chalk.dim(`  ── Live ──\n`));
         }
       }
 
@@ -930,7 +932,7 @@ export function registerMessagingCommands(program: Command): void {
 
       process.on("SIGINT", () => {
         for (const stop of stops) stop.stop();
-        console.log(chalk.dim("\n  Stopped watching."));
+        printLine(chalk.dim("\n  Stopped watching."));
         closeDb();
         process.exit(0);
       });
@@ -946,9 +948,9 @@ export function registerMessagingCommands(program: Command): void {
       const info = await checkForUpdate();
       if (info.latest === null) {
         if (opts.json) {
-          console.log(JSON.stringify({ error: "Failed to check npm registry" }));
+          printJsonLine({ error: "Failed to check npm registry" });
         } else {
-          console.error(chalk.red("Failed to check npm registry for updates."));
+          printErrorLine(chalk.red("Failed to check npm registry for updates."));
         }
         process.exit(1);
       }
@@ -957,22 +959,22 @@ export function registerMessagingCommands(program: Command): void {
 
       if (opts.check || !updateAvailable) {
         if (opts.json) {
-          console.log(JSON.stringify({ current, latest, updateAvailable }));
+          printJsonLine({ current, latest, updateAvailable });
         } else if (updateAvailable) {
-          console.log(`Current version: ${chalk.yellow(current)}`);
-          console.log(`Latest version:  ${chalk.green(latest)}`);
-          console.log(chalk.cyan(`Run ${chalk.bold("conversations update")} to install.`));
+          printLine(`Current version: ${chalk.yellow(current)}`);
+          printLine(`Latest version:  ${chalk.green(latest)}`);
+          printLine(chalk.cyan(`Run ${chalk.bold("conversations update")} to install.`));
         } else {
-          console.log(chalk.green(`Already on latest version (${current})`));
+          printLine(chalk.green(`Already on latest version (${current})`));
         }
         return;
       }
 
       // Install update
       if (opts.json) {
-        console.log(JSON.stringify({ current, latest, updateAvailable, status: "updating" }));
+        printJsonLine({ current, latest, updateAvailable, status: "updating" });
       } else {
-        console.log(`Updating from ${chalk.yellow(current)} to ${chalk.green(latest)}...`);
+        printLine(`Updating from ${chalk.yellow(current)} to ${chalk.green(latest)}...`);
       }
 
       const proc = Bun.spawn(["bun", "install", "-g", `@hasna/conversations@${latest}`], {
@@ -983,13 +985,13 @@ export function registerMessagingCommands(program: Command): void {
 
       if (exitCode === 0) {
         if (!opts.json) {
-          console.log(chalk.green(`\nSuccessfully updated to v${latest}`));
+          printLine(chalk.green(`\nSuccessfully updated to v${latest}`));
         }
       } else {
         if (opts.json) {
-          console.log(JSON.stringify({ error: "Update failed", exitCode }));
+          printJsonLine({ error: "Update failed", exitCode });
         } else {
-          console.error(chalk.red(`\nUpdate failed (exit code ${exitCode})`));
+          printErrorLine(chalk.red(`\nUpdate failed (exit code ${exitCode})`));
         }
         process.exit(1);
       }

@@ -6,7 +6,6 @@ import { render } from "ink";
 import React from "react";
 import { resolveIdentity } from "../lib/identity.js";
 import { isCloudStore } from "../lib/store/index.js";
-import { HasnaHttpError } from "../lib/contracts-client/index.js";
 import { App } from "./components/App.js";
 import { registerBrainsCommand } from "./brains.js";
 import { registerMessagingCommands } from "./commands/messaging.js";
@@ -19,6 +18,7 @@ import { registerLockCommands } from "./commands/locks.js";
 import { registerTmuxCommands } from "./commands/tmux.js";
 import { registerAdminCommands } from "./commands/admin.js";
 import pkg from "../../package.json";
+import { printErrorLine } from "../lib/stdout.js";
 
 const program = new Command();
 
@@ -79,14 +79,14 @@ registerBrainsCommand(program);
 program
   .action(() => {
     if (isCloudStore()) {
-      console.error(chalk.red("The interactive TUI is local-mode only."));
-      console.error(chalk.dim("This client is in api mode (HASNA_CONVERSATIONS_API_URL/_API_KEY set)."));
-      console.error(chalk.dim("Use the routed subcommands (send, read, sessions, channels, etc.) which talk to the cloud API."));
+      printErrorLine(chalk.red("The interactive TUI is local-mode only."));
+      printErrorLine(chalk.dim("This client is in api mode (HASNA_CONVERSATIONS_API_URL/_API_KEY set)."));
+      printErrorLine(chalk.dim("Use the routed subcommands (send, read, sessions, channels, etc.) which talk to the cloud API."));
       process.exit(1);
     }
     if (!process.stdin.isTTY) {
-      console.error(chalk.red("Interactive mode requires a TTY terminal."));
-      console.error(chalk.dim("Use subcommands (send, read, sessions, etc.) for non-interactive use."));
+      printErrorLine(chalk.red("Interactive mode requires a TTY terminal."));
+      printErrorLine(chalk.dim("Use subcommands (send, read, sessions, etc.) for non-interactive use."));
       process.exit(1);
     }
     const agent = resolveIdentity();
@@ -98,20 +98,41 @@ registerEventsCommands(program, { source: "conversations" });
 // Commander actions are async; `program.parse()` returns before they settle, so a
 // rejected action would otherwise surface as an unhandled rejection with a raw
 // (minified) stack trace. Route every failure through one clean formatter instead.
+type HttpFailure = {
+  name: "HasnaHttpError";
+  status: number;
+  method: string;
+  path: string;
+  body: unknown;
+};
+
+function isHttpFailure(err: unknown): err is HttpFailure {
+  if (!err || typeof err !== "object") return false;
+  const candidate = err as Partial<HttpFailure>;
+  return candidate.name === "HasnaHttpError"
+    && typeof candidate.status === "number"
+    && typeof candidate.method === "string"
+    && typeof candidate.path === "string";
+}
+
 function reportCliError(err: unknown): never {
-  if (err instanceof HasnaHttpError) {
-    const body = err.body as { error?: string; message?: string } | undefined;
-    const detail = body?.error || body?.message;
-    console.error(chalk.red(`Request failed: ${err.method} ${err.path} -> ${err.status}`));
-    if (detail) console.error(chalk.dim(detail));
+  if (isHttpFailure(err)) {
+    const body = err.body && typeof err.body === "object"
+      ? err.body as { error?: string; message?: string; reason?: string; hint?: string }
+      : undefined;
+    const detail = body?.error || body?.message || (typeof err.body === "string" ? err.body : undefined);
+    printErrorLine(chalk.red(`Request failed: ${err.method} ${err.path} -> ${err.status}`));
+    if (detail) printErrorLine(chalk.dim(detail));
+    if (body?.reason && body.reason !== detail) printErrorLine(chalk.dim(body.reason));
+    if (body?.hint) printErrorLine(chalk.dim(`Hint: ${body.hint}`));
     if (err.status === 404) {
-      console.error(
+      printErrorLine(
         chalk.dim("The cloud API did not recognize this route. Ensure the server is up to date."),
       );
     }
     process.exit(1);
   }
-  console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+  printErrorLine(chalk.red(err instanceof Error ? err.message : String(err)));
   process.exit(1);
 }
 
