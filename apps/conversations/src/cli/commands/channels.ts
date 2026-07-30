@@ -102,13 +102,14 @@ export function registerChannelCommands(program: Command): void {
           const clsLabel = channelClassOf(sp.metadata);
           printLine(chalk.green(`Channel #${sp.name} created`) + (clsLabel ? chalk.cyan(` [${clsLabel}]`) : "") + (sp.description ? chalk.dim(` — ${sp.description}`) : ""));
         }
-      } catch (e: any) {
-        if (e.message?.includes("UNIQUE constraint")) {
+      } catch (e) {
+        if (e instanceof Error && e.message.includes("UNIQUE constraint")) {
           printErrorLine(chalk.red(`Channel #${channelName} already exists.`));
           process.exit(1);
         }
-        printErrorLine(chalk.red(e.message));
-        process.exit(1);
+        // Anything else goes to the central reportCliError formatter, which knows
+        // how to render an HTTP failure with its reason/hint instead of a bare message.
+        throw e;
       }
       closeDb();
     });
