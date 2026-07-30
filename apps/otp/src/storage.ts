@@ -52,8 +52,13 @@ function assertStore(value: unknown): asserts value is OtpStoreFile {
 function readStore(home?: string): OtpStoreFile {
   const path = storePath(home);
   if (!existsSync(path)) return emptyStore();
-  chmodSync(path, 0o600);
-  const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  const contents = readFileSync(path, "utf8");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(contents) as unknown;
+  } catch {
+    throw new Error(`OTP store at "${path}" is malformed`);
+  }
   assertStore(parsed);
   return parsed;
 }

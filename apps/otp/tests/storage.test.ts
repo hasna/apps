@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -125,6 +125,37 @@ describe("storage", () => {
 
     writeFileSync(getOtpStorePath({ home }), JSON.stringify({ schema: "open-otp.store.v1", entries: "not-array" }), { mode: 0o600 });
     expect(() => listOtpEntries({ home })).toThrow("unsupported");
+  });
+
+  test("reads the store without changing its permissions", () => {
+    bootstrapOtpStorage({ home });
+    const path = getOtpStorePath({ home });
+    chmodSync(path, 0o444);
+
+    expect(listOtpEntries({ home })).toEqual([]);
+    expect(statSync(path).mode & 0o777).toBe(0o444);
+  });
+
+  test("identifies invalid JSON as a malformed store", () => {
+    const path = getOtpStorePath({ home });
+    writeFileSync(path, "{\n", { mode: 0o600 });
+
+    let thrown: unknown;
+    try {
+      listOtpEntries({ home });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown).not.toBeInstanceOf(SyntaxError);
+    expect((thrown as Error).message).toContain(path);
+    expect((thrown as Error).message).toContain("malformed");
+  });
+
+  test("writes the store with owner-only permissions", () => {
+    bootstrapOtpStorage({ home });
+    expect(statSync(getOtpStorePath({ home })).mode & 0o777).toBe(0o600);
   });
 
   test("throws when generating code for missing entry", () => {
