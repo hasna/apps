@@ -6,6 +6,8 @@
     "moduleResolution": "Bundler",
     "types": ["bun"],
     "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "declaration": true,
     "declarationMap": false,
     "sourceMap": true,
