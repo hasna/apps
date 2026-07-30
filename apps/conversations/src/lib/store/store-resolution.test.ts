@@ -86,6 +86,13 @@ describe("store resolution — cloud expected but unbuildable must ERROR, not fa
     expect(() => getStore(env)).toThrow(new RegExp(URL_VAR));
   });
 
+  test("a non-http cloud URL is rejected, matching what the transport can actually use", () => {
+    const env = { [MODE_VAR]: "cloud", [URL_VAR]: "ftp://conversations.hasna.xyz", [KEY_VAR]: FAKE_KEY };
+
+    expect(() => getStore(env)).toThrow(new RegExp(URL_VAR));
+    expect(() => getStore(env)).toThrow(/http/);
+  });
+
   test("an unknown storage mode throws naming the variable and the legal values", () => {
     const env = { [MODE_VAR]: "hybird" };
 
@@ -132,6 +139,27 @@ describe("store resolution — explicit, unambiguous local configuration keeps w
     expect(isCloudStore({})).toBe(false);
     expect(cloudApiUrl({})).toBeNull();
   });
+
+  // Blank and whitespace-only values must count as UNSET, exactly as the transport
+  // resolver's own `firstEnv` treats them. A guard that classified these differently
+  // from the resolver it guards would become its own source of wrong-store bugs —
+  // e.g. refusing to start for an exported-but-empty variable the resolver ignores.
+  for (const [label, blank] of [
+    ["empty", ""],
+    ["whitespace-only", "   "],
+  ] as const) {
+    test(`${label} store variables count as unset, not as a partial configuration`, () => {
+      const env = { [URL_VAR]: blank, [KEY_VAR]: blank, [MODE_VAR]: blank, [DB_VAR]: blank };
+
+      expect(getStore(env).transport).toBe("local");
+    });
+
+    test(`an ${label} API key alongside a real URL is still a missing key`, () => {
+      const env = { [URL_VAR]: API_URL, [KEY_VAR]: blank };
+
+      expect(() => getStore(env)).toThrow(new RegExp(KEY_VAR));
+    });
+  }
 });
 
 describe("store resolution — a complete cloud configuration still routes to cloud", () => {

@@ -91,11 +91,18 @@ const ENV_KEYS = clientTransportEnvKeys(APP);
 /** Local SQLite path overrides, highest-precedence signal. */
 const DB_PATH_KEYS = [`HASNA_${envToken(APP)}_DB_PATH`, `${envToken(APP)}_DB_PATH`] as const;
 
-/** First key in `keys` that has a non-empty value in `env`, else null. */
+/**
+ * First key in `keys` with a non-blank value in `env`, else null.
+ *
+ * Trims and treats a blank value as unset, matching `firstEnv` in the transport
+ * resolver EXACTLY. If the two disagreed, this guard would classify an env the
+ * resolver classifies differently — which is how a guard becomes its own source of
+ * wrong-store bugs.
+ */
 function firstSet(env: Env, keys: readonly string[]): { key: string; value: string } | null {
   for (const key of keys) {
-    const value = env[key];
-    if (value !== undefined && value !== "") return { key, value };
+    const value = env[key]?.trim();
+    if (value) return { key, value };
   }
   return null;
 }
@@ -169,14 +176,26 @@ export function assertUnambiguousStoreEnv(env: Env = process.env): void {
   // 4. Nothing configured: the documented single-operator default is local SQLite.
 }
 
-/** Refuse a cloud URL that cannot be parsed rather than quietly reading local data. */
+/**
+ * Refuse a cloud URL the transport could not use, rather than quietly reading local
+ * data. Applies the same two conditions as `toV1BaseUrl`: it must parse, and it must
+ * be http(s). Kept in step with that function so the guard and the resolver agree.
+ */
 function assertUsableApiUrl(urlHit: { key: string; value: string } | null): void {
   if (!urlHit) return; // Absent URL is legal: the transport falls back to the default host.
+  let parsed: URL;
   try {
-    new URL(urlHit.value);
+    parsed = new URL(urlHit.value);
   } catch {
     throw new ConversationsStoreConfigError(
       `${urlHit.key} is not a parseable URL, so the cloud store cannot be reached. Refusing to ` +
+        `serve the on-box SQLite store in its place, because it holds a different dataset. ` +
+        `Correct ${urlHit.key}. ${LOCAL_ESCAPE_HATCH}`,
+    );
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new ConversationsStoreConfigError(
+      `${urlHit.key} must use http or https, so the cloud store cannot be reached. Refusing to ` +
         `serve the on-box SQLite store in its place, because it holds a different dataset. ` +
         `Correct ${urlHit.key}. ${LOCAL_ESCAPE_HATCH}`,
     );
