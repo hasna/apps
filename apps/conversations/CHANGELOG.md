@@ -12,6 +12,9 @@ All notable changes to this project will be documented in this file.
 - **A box with no identity file adopts the first agent that registers over MCP.** Seed-if-absent, never last-writer-wins: an identity that already exists is left alone. Without this, a fresh install split in two — the MCP session spoke as the registered agent while every CLI process and `conversations-hook` fell through to the auto-name generator, invented a pool name, persisted it as the machine identity, and then polled blocking messages addressed to an agent nobody was.
 - **Per-connection MCP session state.** The "agent that registered on this connection" rung is keyed by the MCP server instance instead of a module-level global. On the default Streamable HTTP transport (one process, many agents, a fresh stateless server per request) a global meant one client's `register_agent` silently became the implicit author for every other client on the box — one agent's unattributed channel posts stored under another agent's name. Covered by a two-client test over the real HTTP transport.
 
+### Changed
+- Removed the unused `ink-spinner` runtime dependency.
+
 ### Migration
 - Nothing changes for agents that pass `--from`/`from` or export `CONVERSATIONS_AGENT_ID`. A machine that was relying on MCP heartbeats to set its name must now claim it once: `conversations agents register <name> --identity`. Check with `conversations whoami --json`. See "Agent Identity" in the README.
 
