@@ -4,6 +4,7 @@ import { readFileSync } from "fs";
 import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { redactMessagesById } from "../../lib/admin-redaction.js";
+import { printErrorLine, printJson, printLine } from "../../lib/stdout.js";
 
 function parseMessageIds(values: string[], idsFile?: string): number[] {
   const tokens = [...values];
@@ -24,12 +25,12 @@ function parseMessageIds(values: string[], idsFile?: string): number[] {
 
 function printRedactionSummary(result: ReturnType<typeof redactMessagesById>): void {
   const mode = result.applied ? chalk.red("APPLIED") : chalk.yellow("DRY RUN");
-  console.log(`${mode} message redaction report`);
-  console.log(chalk.dim(`matched ${result.matched_count}/${result.requested_ids.length}; missing ${result.missing_ids.length}; redacted ${result.redacted_count}`));
-  console.log(chalk.dim(`surfaces: ${result.surfaces.join(", ")}`));
+  printLine(`${mode} message redaction report`);
+  printLine(chalk.dim(`matched ${result.matched_count}/${result.requested_ids.length}; missing ${result.missing_ids.length}; redacted ${result.redacted_count}`));
+  printLine(chalk.dim(`surfaces: ${result.surfaces.join(", ")}`));
   for (const message of result.messages) {
     if (!message.exists) {
-      console.log(chalk.dim(`#${message.id}: missing`));
+      printLine(chalk.dim(`#${message.id}: missing`));
       continue;
     }
     const classes = message.secret_classes.length > 0 ? message.secret_classes.join(",") : "unclassified";
@@ -37,10 +38,10 @@ function printRedactionSummary(result: ReturnType<typeof redactMessagesById>): v
     const fileSummary = message.attachment_file_count > 0
       ? ` attachment_files=${message.attachment_file_count} deleted=${message.attachment_files_deleted} unsafe=${message.unsafe_attachment_file_count}`
       : "";
-    console.log(`#${message.id}: ${fields} classes=${classes}${fileSummary}`);
+    printLine(`#${message.id}: ${fields} classes=${classes}${fileSummary}`);
   }
   if (!result.applied) {
-    console.log(chalk.dim("No data was changed. Apply requires --apply --backup-confirmed --dry-run-confirmed --authority <ref>."));
+    printLine(chalk.dim("No data was changed. Apply requires --apply --backup-confirmed --dry-run-confirmed --authority <ref>."));
   }
 }
 
@@ -67,7 +68,7 @@ export function registerAdminCommands(program: Command): void {
         const messageIds = parseMessageIds(ids, opts.idsFile);
         const actor = resolveIdentity(opts.actor).trim();
         if (!actor) {
-          console.error(chalk.red("Actor identity is required."));
+          printErrorLine(chalk.red("Actor identity is required."));
           process.exit(1);
         }
 
@@ -83,12 +84,12 @@ export function registerAdminCommands(program: Command): void {
         });
 
         if (opts.json) {
-          console.log(JSON.stringify(result, null, 2));
+          printJson(result);
         } else {
           printRedactionSummary(result);
         }
       } catch (error) {
-        console.error(chalk.red(error instanceof Error ? error.message : String(error)));
+        printErrorLine(chalk.red(error instanceof Error ? error.message : String(error)));
         process.exit(1);
       } finally {
         closeDb();

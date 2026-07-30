@@ -5,13 +5,14 @@ import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { windowItems } from "../../lib/compact-output.js";
 import { getCliWindow, printCompactFooter } from "../compact.js";
+import { printErrorLine, printJson, printJsonLine, printLine } from "../../lib/stdout.js";
 
 const DEFAULT_RESOURCE_TYPE = "resource";
 
 function resolveKey(key: unknown): string {
   const resourceId = typeof key === "string" ? key.trim() : "";
   if (!resourceId) {
-    console.error(chalk.red("Lock key cannot be empty."));
+    printErrorLine(chalk.red("Lock key cannot be empty."));
     process.exit(1);
   }
   return resourceId;
@@ -26,7 +27,7 @@ function resolveTtlMs(ttl: unknown): number | undefined {
   if (ttl === undefined) return undefined;
   const seconds = Number(ttl);
   if (!Number.isFinite(seconds) || seconds <= 0) {
-    console.error(chalk.red("--ttl must be a positive number of seconds."));
+    printErrorLine(chalk.red("--ttl must be a positive number of seconds."));
     process.exit(1);
   }
   return Math.round(seconds * 1000);
@@ -53,7 +54,7 @@ export function registerLockCommands(program: Command): void {
       const expiryMs = resolveTtlMs(opts.ttl);
       const agent = resolveIdentity(opts.from).trim();
       if (!agent) {
-        console.error(chalk.red("Agent identity is required."));
+        printErrorLine(chalk.red("Agent identity is required."));
         process.exit(1);
       }
       const lockType = opts.exclusive ? "exclusive" : "advisory";
@@ -74,11 +75,11 @@ export function registerLockCommands(program: Command): void {
       }
 
       if (opts.json) {
-        console.log(JSON.stringify(result, null, 2));
+        printJson(result);
       } else if (result.acquired && result.lock) {
-        console.log(chalk.green(`Lock acquired: ${resourceType}/${resourceId}`) + chalk.dim(` by ${agent} (${lockType}, expires ${result.lock.expires_at})`));
+        printLine(chalk.green(`Lock acquired: ${resourceType}/${resourceId}`) + chalk.dim(` by ${agent} (${lockType}, expires ${result.lock.expires_at})`));
       } else {
-        console.log(chalk.yellow(`Lock held by ${result.held_by}: ${resourceType}/${resourceId}`));
+        printLine(chalk.yellow(`Lock held by ${result.held_by}: ${resourceType}/${resourceId}`));
       }
 
       closeDb();
@@ -97,18 +98,18 @@ export function registerLockCommands(program: Command): void {
       const resourceType = resolveType(opts.type);
       const agent = resolveIdentity(opts.from).trim();
       if (!agent) {
-        console.error(chalk.red("Agent identity is required."));
+        printErrorLine(chalk.red("Agent identity is required."));
         process.exit(1);
       }
 
       const released = await getStore().releaseLock(resourceType, resourceId, agent);
 
       if (opts.json) {
-        console.log(JSON.stringify({ released }));
+        printJsonLine({ released });
       } else if (released) {
-        console.log(chalk.green(`Lock released: ${resourceType}/${resourceId}`));
+        printLine(chalk.green(`Lock released: ${resourceType}/${resourceId}`));
       } else {
-        console.log(chalk.dim(`No lock on ${resourceType}/${resourceId} was held by ${agent}.`));
+        printLine(chalk.dim(`No lock on ${resourceType}/${resourceId} was held by ${agent}.`));
       }
       closeDb();
     });
@@ -126,11 +127,11 @@ export function registerLockCommands(program: Command): void {
       const lock = await getStore().checkLock(resourceType, resourceId);
 
       if (opts.json) {
-        console.log(JSON.stringify(lock ? { locked: true, ...lock } : { locked: false }, null, 2));
+        printJson(lock ? { locked: true, ...lock } : { locked: false });
       } else if (lock) {
-        console.log(chalk.yellow(`Locked: ${resourceType}/${resourceId}`) + chalk.dim(` by ${lock.agent_id} (${lock.lock_type}, expires ${lock.expires_at})`));
+        printLine(chalk.yellow(`Locked: ${resourceType}/${resourceId}`) + chalk.dim(` by ${lock.agent_id} (${lock.lock_type}, expires ${lock.expires_at})`));
       } else {
-        console.log(chalk.green(`Not locked: ${resourceType}/${resourceId}`));
+        printLine(chalk.green(`Not locked: ${resourceType}/${resourceId}`));
       }
 
       closeDb();
@@ -155,19 +156,19 @@ export function registerLockCommands(program: Command): void {
       const page = windowItems(locksList, window);
 
       if (opts.json) {
-        console.log(JSON.stringify({
+        printJson({
           locks: page.items,
           count: page.count,
           total: page.total,
           next_cursor: page.nextCursor,
           has_more: page.hasMore,
-        }, null, 2));
+        });
       } else if (locksList.length === 0) {
-        console.log(chalk.dim("No active locks."));
+        printLine(chalk.dim("No active locks."));
       } else {
         for (const lock of page.items) {
           const online = lock.agent?.online ? chalk.green(" [online]") : "";
-          console.log(`${chalk.magenta(`${lock.resource_type}/${lock.resource_id}`)} held by ${chalk.cyan(lock.agent_id)}${online} ${chalk.dim(`(${lock.lock_type}, expires in ${lock.expires_in_seconds}s, locked ${lock.locked_seconds_ago}s ago)`)}`);
+          printLine(`${chalk.magenta(`${lock.resource_type}/${lock.resource_id}`)} held by ${chalk.cyan(lock.agent_id)}${online} ${chalk.dim(`(${lock.lock_type}, expires in ${lock.expires_in_seconds}s, locked ${lock.locked_seconds_ago}s ago)`)}`);
         }
         printCompactFooter({
           shown: page.count,
@@ -190,9 +191,9 @@ export function registerLockCommands(program: Command): void {
       const total = released_stale_agent + released_expired;
 
       if (opts.json) {
-        console.log(JSON.stringify({ released_stale_agent, released_expired, total }));
+        printJsonLine({ released_stale_agent, released_expired, total });
       } else {
-        console.log(chalk.green(`Cleaned ${total} lock(s)`) + chalk.dim(` (${released_expired} expired, ${released_stale_agent} stale-agent)`));
+        printLine(chalk.green(`Cleaned ${total} lock(s)`) + chalk.dim(` (${released_expired} expired, ${released_stale_agent} stale-agent)`));
       }
       closeDb();
     });
