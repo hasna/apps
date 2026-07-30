@@ -26,11 +26,11 @@ function effectiveFor(overlays: string[] = []) {
   return resolveStationTemplate(overlays, { templatesDir: SHIPPED });
 }
 
-/** Build a fixture root that matches the ec2-rendered template exactly. */
-function buildCleanFixture() {
+/** Build a fixture root that matches the rendered template exactly (ec2 by default). */
+function buildCleanFixture(overlays: string[] = ["ec2"]) {
   const root = mkdtempSync(join(tmpdir(), "station-template-check-"));
   const home = join(root, "home", "hasna");
-  const effective = effectiveFor(["ec2"]);
+  const effective = effectiveFor(overlays);
   for (const file of effective.files) {
     const target = file.target.startsWith("~/") ? join(home, file.target.slice(2)) : join(root, file.target.slice(1));
     mkdirSync(join(target, ".."), { recursive: true });
@@ -126,6 +126,11 @@ describe("overlay merge", () => {
     const aws = effective.commands.find((command) => command.command === "aws");
     expect(aws).toBeDefined();
     expect(aws!.install).toContain("awscli.amazonaws.com");
+    // station17 build 2 (2026-07-29): the 8G swapfile met an 8G AMI-default
+    // root volume. The overlay now declares the root-volume floor the launcher
+    // must honor and the drift check enforces.
+    expect(effective.disk?.rootMinGb).toBe(64);
+    expect(effective.disk?.lesson).toContain("i-0f522f0138a0411e1");
   });
 
   test("REGRESSION: no layer may declare an apt package that noble does not ship", () => {
@@ -142,6 +147,13 @@ describe("overlay merge", () => {
     expect(agentsSlice?.content).toContain("MemoryHigh=54G");
     expect(agentsSlice?.content).toContain("MemoryMax=60G");
     expect(effective.swap.sizeGb).toBe(0);
+  });
+
+  test("physical overlay keeps tailscale — the 2026-07-30 ruling routes it, it does not delete it", () => {
+    const effective = effectiveFor(["dgx-spark"]);
+    expect(effective.tailscale?.join).toBe(true);
+    expect(effective.tailscale?.authKeySecretName).toBe("stations/prod/tailscale/authkey");
+    expect(effective.services.some((service) => service.name === "tailscaled")).toBe(true);
   });
 });
 
@@ -168,14 +180,26 @@ describe("cloud-init render", () => {
     expect(userData.startsWith("#cloud-config")).toBe(true);
     expect(userData).toContain("hostname: station17");
     expect(userData).toContain("- earlyoom");
-    expect(userData).toContain("--hostname station17");
     expect(userData).toContain("swapon /swapfile");
     // write_files carries the sysctl content base64-encoded
     const sysctl = effective.files.find((file) => file.kind === "sysctl")!;
     expect(userData).toContain(Buffer.from(sysctl.content, "utf8").toString("base64"));
-    // secret is referenced by NAME through Secrets Manager, value never rendered
-    expect(userData).toContain("secretsmanager get-secret-value --secret-id stations/prod/tailscale/authkey");
+    // no secret value has any path into a render
     expect(userData).not.toContain("tskey-");
+  });
+
+  test("swapfile entry is convergent and space-guarded, not the test -f trap that stranded build 2", () => {
+    const userData = renderCloudInit(effectiveFor(["ec2"]), { station: "station17" });
+    // The guard is ACTIVE swap, never file existence: build 2's partial 4.2G
+    // fallocate leftover satisfied `test -f` forever while swapon stayed empty.
+    expect(userData).not.toContain("test -f /swapfile");
+    expect(userData).toContain("swapon --noheadings --show=NAME");
+    expect(userData).toContain("rm -f /swapfile");
+    // 8G swap + 2G headroom = 10485760 KB must be free before allocating.
+    expect(userData).toContain("-ge 10485760");
+    // fstab append is deduplicated, and failure is loud but non-fatal.
+    expect(userData).toContain("grep -q '^/swapfile ' /etc/fstab");
+    expect(userData).toContain("swapfile skipped");
   });
 });
 
@@ -222,8 +246,10 @@ describe("drift check", () => {
     expect(result.items.find((candidate) => candidate.id === "swap:size")?.status).toBe("ok");
   });
 
-  test("POSITIVE CONTROL: tailscaled active+enabled but logged out is drift, not ok (station17)", () => {
-    const { root, home, effective } = buildCleanFixture();
+  test("POSITIVE CONTROL: tailscaled active+enabled but logged out is drift, not ok (physical classes)", () => {
+    // dgx-spark: since the 2026-07-30 ruling only physical layers carry
+    // tailscale, so only a physical check can exercise tailscale:join.
+    const { root, home, effective } = buildCleanFixture(["dgx-spark"]);
     // Exactly what station17 returned on 2026-07-29: the daemon is healthy and
     // the node holds no key. Note the real CLI EXITS 0 here — ok:true is
     // faithful, and only BackendState may decide.
@@ -244,8 +270,8 @@ describe("drift check", () => {
     expect(result.verdict).toBe("drift");
   });
 
-  test("tailscale join reports ok only when the backend is actually Running", () => {
-    const { root, home, effective } = buildCleanFixture();
+  test("tailscale join reports ok only when the backend is actually Running (physical classes)", () => {
+    const { root, home, effective } = buildCleanFixture(["dgx-spark"]);
     const probe: CommandProbe = (command, args) => {
       if (command === "systemctl") {
         return { ok: true, stdout: args.includes("is-active") ? "active\n" : "enabled\n" };
@@ -531,6 +557,363 @@ describe("drift check", () => {
     checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: null });
     const after = require("node:child_process").execSync(`find ${root} -type f | sort | xargs sha256sum`, { encoding: "utf8" });
     expect(after).toBe(before);
+  });
+});
+
+describe("boot criticality (owner ruling 2026-07-29: tailscale must never be boot-critical)", () => {
+  /**
+   * Parse the runcmd entries out of rendered cloud-init user-data. yamlQuote
+   * escapes exactly backslash and double-quote, so each `  - "..."` line is a
+   * valid JSON string.
+   */
+  function runcmdEntries(userData: string): string[] {
+    const lines = userData.split("\n");
+    const start = lines.indexOf("runcmd:");
+    expect(start).toBeGreaterThan(-1);
+    const entries: string[] = [];
+    for (const line of lines.slice(start + 1)) {
+      if (!line.startsWith("  - ")) break;
+      entries.push(JSON.parse(line.slice(4)) as string);
+    }
+    return entries;
+  }
+
+  function writeStub(dir: string, name: string, body: string) {
+    writeFileSync(join(dir, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+  }
+
+  test("ec2 overlay declares the SSM agent as its access floor; physical layers do not", () => {
+    const effective = effectiveFor(["ec2"]);
+    // The floor must depend only on identity the platform already grants (the
+    // instance profile) — never on a credential fetched at boot.
+    expect(effective.accessFloor?.service).toBe("snap.amazon-ssm-agent.amazon-ssm-agent");
+    expect(effective.accessFloor?.lesson).toContain("station17");
+    // A physical box's floor is its out-of-band path, not a template service.
+    expect(effectiveFor(["dgx-spark"]).accessFloor).toBeUndefined();
+  });
+
+  test("runcmd order: access floor first, aws-cli install kept and early (0.2.4 fix is load-bearing)", () => {
+    const entries = runcmdEntries(renderCloudInit(effectiveFor(["ec2"]), { station: "station17" }));
+    const floor = entries.findIndex((entry) => entry.includes("amazon-ssm-agent"));
+    const awsInstall = entries.findIndex((entry) => entry.includes("awscli.amazonaws.com"));
+    // The floor is guaranteed before anything below it can fail. With
+    // tailscale gone from EC2 (owner ruling 2026-07-30), SSM is not a floor
+    // beneath something else — it is the whole access path.
+    expect(floor).toBe(0);
+    // The aws-cli command requirement survives the tailscale removal — it is
+    // expressed as a command (never apt `awscli`, which noble does not ship)
+    // and installs right after the floor.
+    expect(awsInstall).toBe(1);
+  });
+
+  test("POSITIVE CONTROL: forced join failure (aws absent) cannot abort boot; floor enabled; failure loud — via a planted opt-in overlay, since no shipped cloud layer joins", () => {
+    // Owner ruling 2026-07-30: station,ec2 renders no tailscale at all. The
+    // cloud-init join path survives ONLY for a future deliberately-argued
+    // single-box overlay, so exercise it from a planted template copy — which
+    // keeps the never-boot-critical guarantee (2026-07-29 ruling) proven for
+    // that path without putting tailscale back in any shipped layer.
+    const planted = mkdtempSync(join(tmpdir(), "station-template-optin-"));
+    cpSync(join(SHIPPED, "station"), join(planted, "station"), { recursive: true });
+    const templatePath = join(planted, "station", "template.json");
+    const template = JSON.parse(readFileSync(templatePath, "utf8"));
+    template.overlays.ec2.tailscale = {
+      join: true,
+      authKeySecretName: "stations/prod/tailscale/authkey",
+      hostnameFromStation: true,
+      ssh: true,
+    };
+    writeFileSync(templatePath, JSON.stringify(template));
+    const entries = runcmdEntries(
+      renderCloudInit(resolveStationTemplate(["ec2"], { templatesDir: planted }), { station: "stationtest" })
+    );
+    const floorEntry = entries.find((entry) => entry.includes("amazon-ssm-agent"));
+    const installEntries = entries.filter((entry) => entry.includes("awscli.amazonaws.com") || entry.includes("tailscale.com/install.sh"));
+    const joinEntry = entries.find((entry) => entry.includes("secretsmanager get-secret-value"));
+    expect(floorEntry).toBeDefined();
+    expect(joinEntry).toBeDefined();
+
+    const stubs = mkdtempSync(join(tmpdir(), "station-boot-stubs-"));
+    const log = join(stubs, "invocations.log");
+    writeFileSync(log, "");
+    writeStub(stubs, "systemctl", `echo "systemctl $*" >> "${log}"`);
+    writeStub(stubs, "snap", `echo "snap $*" >> "${log}"`);
+    // IMDS answers; every other download (awscli installer, tailscale
+    // installer) fails — a plain network hiccup at boot.
+    writeStub(
+      stubs,
+      "curl",
+      `case "$*" in *api/token*) echo dummy-imds-token ;; *placement/region*) echo us-east-1 ;; *) exit 7 ;; esac`
+    );
+    writeStub(stubs, "tailscale", `echo "tailscale $*" >> "${log}"\ncase "$1" in up) exit 1 ;; *) exit 0 ;; esac`);
+    // `aws` is deliberately ABSENT from PATH — the exact station17 failure.
+
+    // Only the entries this ruling governs are executed; the untouched middle
+    // entries (sysctl/tmpfiles/swap/services) are exercised by the real boot
+    // prove loop on station17. `sh -e` is the strictest shell semantics a
+    // cloud-init change could ever run these under: surviving it proves the
+    // entries cannot abort a boot.
+    const script = [floorEntry!, ...installEntries, joinEntry!, "echo BOOT-CONTINUED-PAST-JOIN"].join("\n");
+    const scriptPath = join(stubs, "runcmd-under-test.sh");
+    writeFileSync(scriptPath, script);
+    const result = spawnSync("sh", ["-e", scriptPath], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${stubs}:/usr/bin:/bin` },
+    });
+    // Reachability: the script survives every planted failure.
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("BOOT-CONTINUED-PAST-JOIN");
+    // Never silent: the join failure is named on stderr (cloud-init logs it).
+    expect(result.stderr).toContain("tailscale join failed");
+    expect(result.stderr).toContain("NON-FATAL");
+    // The floor was enabled before the join had any chance to fail.
+    expect(readFileSync(log, "utf8")).toContain("enable --now snap.amazon-ssm-agent");
+    // No secret material has a path into the exercised output.
+    expect(result.stdout + result.stderr).not.toContain("tskey-");
+  });
+
+  test("POSITIVE CONTROL of the instrument: the sh -e harness detects a fatal entry", () => {
+    // If this harness could not fail, the forced-join-failure control above
+    // would be no evidence. Plant a fatal entry and assert it is fatal.
+    const stubs = mkdtempSync(join(tmpdir(), "station-boot-harness-control-"));
+    const scriptPath = join(stubs, "fatal.sh");
+    writeFileSync(scriptPath, ["sh -c 'exit 3'", "echo BOOT-CONTINUED-PAST-JOIN"].join("\n"));
+    const result = spawnSync("sh", ["-e", scriptPath], { encoding: "utf8", env: { ...process.env } });
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).not.toContain("BOOT-CONTINUED-PAST-JOIN");
+  });
+
+  test("POSITIVE CONTROL: access-floor service down is a violation naming the stranding risk", () => {
+    const { root, home, effective } = buildCleanFixture();
+    const probe: CommandProbe = (command, args) => {
+      if (command === "systemctl" && args.includes("snap.amazon-ssm-agent.amazon-ssm-agent")) {
+        return { ok: false, stdout: "inactive\n" };
+      }
+      if (command === "systemctl") {
+        return { ok: true, stdout: args.includes("is-active") ? "active\n" : "enabled\n" };
+      }
+      if (command === "tailscale") {
+        return { ok: true, stdout: JSON.stringify({ BackendState: "Running", Self: { HostName: "stationtest" } }) };
+      }
+      if (command === "sh") return { ok: true, stdout: "/usr/local/bin/aws\n" };
+      return { ok: true, stdout: "install ok installed" };
+    };
+    const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: probe });
+    const item = result.items.find((candidate) => candidate.id === "access-floor:snap.amazon-ssm-agent.amazon-ssm-agent");
+    expect(item?.status).toBe("violation");
+    expect(item?.detail).toContain("access floor");
+    expect(result.verdict).toBe("drift");
+  });
+
+  test("ec2 end-state: floor healthy, and NO tailscale item exists to be un-joined (2026-07-30 ruling)", () => {
+    const { root, home, effective } = buildCleanFixture();
+    const probe: CommandProbe = (command, args) => {
+      if (command === "systemctl") {
+        return { ok: true, stdout: args.includes("is-active") ? "active\n" : "enabled\n" };
+      }
+      if (command === "sh") return { ok: true, stdout: "/usr/local/bin/aws\n" };
+      if (command === "df") {
+        return { ok: true, stdout: "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/root 66060288 4000000 62060288 6% /\n" };
+      }
+      return { ok: true, stdout: "install ok installed" };
+    };
+    const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: probe });
+    expect(result.items.find((candidate) => candidate.id === "access-floor:snap.amazon-ssm-agent.amazon-ssm-agent")?.status).toBe("ok");
+    // A check for a thing we deliberately do not run is noise — an EC2 report
+    // must carry no tailscale item in ANY status.
+    expect(result.items.filter((candidate) => candidate.kind === "tailscale")).toEqual([]);
+    expect(result.verdict).toBe("clean");
+  });
+
+  test("setup-steps render: ec2 floor step is first and carries NO tailscale steps; dgx-spark is the inverse", () => {
+    const steps = buildStationTemplateSteps(effectiveFor(["ec2"]), { station: "station17" });
+    expect(steps[0]!.id).toBe("template-access-floor");
+    expect(steps[0]!.command).toContain("NON-FATAL");
+    expect(steps.some((step) => step.id.includes("tailscale"))).toBe(false);
+    // dgx-spark declares no floor service, and keeps its tailscale steps.
+    const physical = buildStationTemplateSteps(effectiveFor(["dgx-spark"]), { station: "station01" });
+    expect(physical.some((step) => step.id === "template-access-floor")).toBe(false);
+    expect(physical.findIndex((step) => step.id === "template-tailscale-join")).toBeGreaterThan(0);
+  });
+
+  test("POSITIVE CONTROL: swap entry on a too-small disk skips loudly, cleans the stale file, and cannot abort boot (station17 build 2)", () => {
+    const entries = runcmdEntries(renderCloudInit(effectiveFor(["ec2"]), { station: "stationtest" }));
+    const swapEntry = entries.find((entry) => entry.includes("swapon --noheadings"));
+    expect(swapEntry).toBeDefined();
+
+    const stubs = mkdtempSync(join(tmpdir(), "station-swap-stubs-"));
+    const log = join(stubs, "invocations.log");
+    writeFileSync(log, "");
+    // No active swap (empty --show), a stale partial file to clean up, and a
+    // build-2-sized disk: 364K available on a 6.8G filesystem.
+    writeStub(stubs, "swapon", `echo "swapon $*" >> "${log}"`);
+    writeStub(stubs, "rm", `echo "rm $*" >> "${log}"`);
+    writeStub(
+      stubs,
+      "df",
+      `echo "Filesystem 1024-blocks Used Available Capacity Mounted on"\necho "/dev/root 7096304 7095940 364 100% /"`
+    );
+    writeStub(stubs, "fallocate", `echo "fallocate $*" >> "${log}"`);
+    const result = spawnSync("sh", ["-e", "-c", swapEntry!], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${stubs}:/usr/bin:/bin` },
+    });
+    // Reachability: the strictest shell semantics cannot abort on this entry.
+    expect(result.status).toBe(0);
+    // Never silent: the refusal is named, with where to look.
+    expect(result.stderr).toContain("swapfile skipped");
+    expect(result.stderr).toContain("NON-FATAL");
+    const invocations = readFileSync(log, "utf8");
+    // The stale partial file (build 2's 4.2G fallocate leftover) is removed...
+    expect(invocations).toContain("rm -f /swapfile");
+    // ...and allocation is refused rather than re-filling the disk.
+    expect(invocations).not.toContain("fallocate");
+  });
+
+  test("POSITIVE CONTROL: physical join step survives a vault hiccup, exits 0, and warns", () => {
+    // runSetupPlan aborts the whole setup on the first non-zero step — so a
+    // vault hiccup during the join must exit 0 or it takes the rest of the
+    // provisioning down with it. And it must WARN, or the failure is silent.
+    const steps = buildStationTemplateSteps(effectiveFor(["dgx-spark"]), { station: "station01" });
+    const joinStep = steps.find((step) => step.id === "template-tailscale-join");
+    expect(joinStep).toBeDefined();
+    const stubs = mkdtempSync(join(tmpdir(), "station-setup-stubs-"));
+    writeStub(stubs, "tailscale", "exit 1"); // not joined, and `up` fails
+    writeStub(stubs, "secrets", "exit 1"); // the vault hiccup
+    writeStub(stubs, "sudo", 'exec "$@"');
+    const result = spawnSync("sh", ["-e", "-c", joinStep!.command], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${stubs}:/usr/bin:/bin` },
+    });
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("tailscale join failed");
+    expect(result.stderr).toContain("NON-FATAL");
+  });
+});
+
+describe("no tailscale on AWS stations (owner ruling 2026-07-30 — supersedes the 2026-07-29 non-critical ruling)", () => {
+  // One pattern for every absence assertion in this suite, so the positive
+  // control below proves the exact instrument the assertions use can go red.
+  const TAILSCALE_PATTERN = /tailscale|tailnet|tailscaled|ts-authkey|tskey/i;
+
+  test("the base layer carries no tailscale — the auth-key secret name is structurally unreachable from an EC2 render", () => {
+    const { template } = loadStationTemplate("station", { templatesDir: SHIPPED });
+    expect(template.base.tailscale).toBeUndefined();
+    expect(template.base.services.some((service) => service.name === "tailscaled")).toBe(false);
+    expect(template.overlays["ec2"]!.tailscale).toBeUndefined();
+    expect(JSON.stringify(template.overlays["ec2"])).not.toContain("authKeySecretName");
+  });
+
+  test("ABSENCE: the station,ec2 cloud-init render contains no tailscale install, no join, no auth-key fetch", () => {
+    const userData = renderCloudInit(effectiveFor(["ec2"]), { station: "station17" });
+    expect(userData).not.toMatch(TAILSCALE_PATTERN);
+    // The join was the only Secrets Manager consumer at boot; with it gone,
+    // NOTHING on the boot path fetches a secret (the 2026-07-29 lesson, now
+    // structural instead of guarded).
+    expect(userData).not.toContain("secretsmanager");
+  });
+
+  test("ABSENCE: the station,ec2 setup-steps render and drift report carry no tailscale in any status", () => {
+    const steps = buildStationTemplateSteps(effectiveFor(["ec2"]), { station: "station17" });
+    expect(steps.map((step) => `${step.id} ${step.command}`).join("\n")).not.toMatch(TAILSCALE_PATTERN);
+    const { root, home, effective } = buildCleanFixture();
+    // Both probe modes — no-probe (skipped items are still noise) AND a live
+    // probe (an ok/drift item would be worse). Reviewer finding P3-1: an
+    // earlier version iterated [null, undefined] and tested null twice.
+    const liveProbe: CommandProbe = (command, args) => {
+      if (command === "systemctl") return { ok: true, stdout: args.includes("is-active") ? "active\n" : "enabled\n" };
+      if (command === "sh") return { ok: true, stdout: "/usr/local/bin/aws\n" };
+      if (command === "df") {
+        return { ok: true, stdout: "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/root 66060288 4000000 62060288 6% /\n" };
+      }
+      return { ok: true, stdout: "install ok installed" };
+    };
+    for (const probe of [null, liveProbe]) {
+      const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: probe });
+      expect(result.items.filter((item) => item.kind === "tailscale")).toEqual([]);
+      expect(result.items.filter((item) => item.id.includes("tailscale") || item.id.includes("tailscaled"))).toEqual([]);
+    }
+  });
+
+  test("POSITIVE CONTROL: tailscale planted into a copied template turns every absence assertion red", () => {
+    // An absence assertion that cannot fail is worth nothing (~10 vacuous
+    // passes measured on this fleet in one day). Plant tailscale back into a
+    // COPY of the shipped template — base first, the realistic regression
+    // (uniformity argument re-adding it for everyone) — and prove the same
+    // pattern and the same item filters the ABSENCE tests use now detect it.
+    const planted = mkdtempSync(join(tmpdir(), "station-template-planted-"));
+    cpSync(join(SHIPPED, "station"), join(planted, "station"), { recursive: true });
+    const templatePath = join(planted, "station", "template.json");
+    const template = JSON.parse(readFileSync(templatePath, "utf8"));
+    template.base.tailscale = {
+      join: true,
+      authKeySecretName: "stations/prod/tailscale/authkey",
+      hostnameFromStation: true,
+      ssh: true,
+    };
+    template.base.services.push({ name: "tailscaled", scope: "system", expectEnabled: true, expectActive: true });
+    writeFileSync(templatePath, JSON.stringify(template));
+
+    const effective = resolveStationTemplate(["ec2"], { templatesDir: planted });
+    const userData = renderCloudInit(effective, { station: "station17" });
+    expect(userData).toMatch(TAILSCALE_PATTERN);
+    expect(userData).toContain("secretsmanager get-secret-value --secret-id stations/prod/tailscale/authkey");
+    const steps = buildStationTemplateSteps(effective, { station: "station17" });
+    expect(steps.map((step) => `${step.id} ${step.command}`).join("\n")).toMatch(TAILSCALE_PATTERN);
+    const report = checkStationTemplate(effective, { rootDir: mkdtempSync(join(tmpdir(), "planted-root-")), homeDir: mkdtempSync(join(tmpdir(), "planted-home-")), commandProbe: null });
+    expect(report.items.filter((item) => item.kind === "tailscale").length).toBeGreaterThan(0);
+  });
+});
+
+describe("root-volume floor (station17 build 2: 8G swapfile on an 8G AMI-default volume)", () => {
+  test("POSITIVE CONTROL: a build-2-sized root filesystem is a violation naming the relaunch", () => {
+    const { root, home, effective } = buildCleanFixture();
+    const probe: CommandProbe = (command, args) => {
+      if (command === "df") {
+        // Verbatim shape of build 2: 6.8G filesystem, 364K available.
+        return { ok: true, stdout: "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/root 7096304 7095940 364 100% /\n" };
+      }
+      if (command === "systemctl") return { ok: true, stdout: args.includes("is-active") ? "active\n" : "enabled\n" };
+      if (command === "sh") return { ok: true, stdout: "/usr/local/bin/aws\n" };
+      return { ok: true, stdout: "install ok installed" };
+    };
+    const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: probe });
+    const item = result.items.find((candidate) => candidate.id === "disk:root");
+    expect(item?.status).toBe("violation");
+    expect(item?.detail).toContain("under the 64G floor");
+    expect(item?.detail).toContain("relaunch");
+    expect(result.verdict).toBe("drift");
+  });
+
+  test("a 64G-class root passes at the 90% filesystem-overhead tolerance; unreadable df is skipped, never guessed", () => {
+    const { root, home, effective } = buildCleanFixture();
+    const okProbe: CommandProbe = (command, args) => {
+      if (command === "df") {
+        // 62G filesystem on a 64G volume — partitioning/reserved-block overhead.
+        return { ok: true, stdout: "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/root 65011712 4000000 61011712 7% /\n" };
+      }
+      if (command === "systemctl") return { ok: true, stdout: args.includes("is-active") ? "active\n" : "enabled\n" };
+      if (command === "sh") return { ok: true, stdout: "/usr/local/bin/aws\n" };
+      return { ok: true, stdout: "install ok installed" };
+    };
+    const passing = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: okProbe });
+    expect(passing.items.find((candidate) => candidate.id === "disk:root")?.status).toBe("ok");
+
+    const brokenDf: CommandProbe = (command, args) => {
+      if (command === "df") return { ok: false, stdout: "" };
+      if (command === "systemctl") return { ok: true, stdout: args.includes("is-active") ? "active\n" : "enabled\n" };
+      if (command === "sh") return { ok: true, stdout: "/usr/local/bin/aws\n" };
+      return { ok: true, stdout: "install ok installed" };
+    };
+    const skipped = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: brokenDf });
+    expect(skipped.items.find((candidate) => candidate.id === "disk:root")?.status).toBe("skipped");
+  });
+
+  test("physical layers declare no disk floor — no disk item for dgx-spark", () => {
+    const effective = effectiveFor(["dgx-spark"]);
+    expect(effective.disk).toBeUndefined();
+    const { root, home } = buildCleanFixture(["dgx-spark"]);
+    const result = checkStationTemplate(effectiveFor(["dgx-spark"]), { rootDir: root, homeDir: home, commandProbe: null });
+    expect(result.items.filter((item) => item.kind === "disk")).toEqual([]);
   });
 });
 

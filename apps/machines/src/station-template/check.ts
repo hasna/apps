@@ -19,9 +19,11 @@ export interface TemplateCheckItem {
     | "package"
     | "command"
     | "service"
+    | "access-floor"
     | "unit-convention"
     | "tailscale"
-    | "swap";
+    | "swap"
+    | "disk";
   status: CheckStatus;
   detail: string;
 }
@@ -360,6 +362,37 @@ export function checkStationTemplate(effective: EffectiveTemplate, options: Chec
     );
   }
 
+  // The access floor is the guaranteed way into the box (EC2: the SSM agent,
+  // authorized purely by the instance profile — no boot-time secret). A down
+  // floor is not mere drift: it means the next tailscale failure reproduces
+  // exactly the stranded-station17 state, so it reports as a violation.
+  if (effective.accessFloor) {
+    const floor = effective.accessFloor;
+    if (!probe) {
+      items.push({ id: `access-floor:${floor.service}`, kind: "access-floor", status: "skipped", detail: "no command probe" });
+    } else {
+      const active = probe("systemctl", ["is-active", floor.service]);
+      const enabled = probe("systemctl", ["is-enabled", floor.service]);
+      const floorUp = active.ok && active.stdout.trim() === "active" && enabled.ok && enabled.stdout.trim() === "enabled";
+      items.push(
+        floorUp
+          ? { id: `access-floor:${floor.service}`, kind: "access-floor", status: "ok", detail: `${floor.service} active/enabled — floor access path present` }
+          : {
+              id: `access-floor:${floor.service}`,
+              kind: "access-floor",
+              status: "violation",
+              detail: `access floor ${floor.service} not active+enabled (found ${active.stdout.trim() || "unknown"}/${enabled.stdout.trim() || "unknown"}) — one tailscale failure away from an unreachable station`,
+            }
+      );
+    }
+  }
+
+  // Owner ruling 2026-07-30: this block never fires for a station,ec2 render —
+  // no shipped cloud layer declares tailscale (asserted with a positive
+  // control in station-template.test.ts), so an EC2 drift report carries no
+  // tailscale:join item. A check for a thing we deliberately do not run is
+  // noise, and noise is how real drift gets ignored. Physical classes keep it.
+  //
   // `tailscaled active/enabled` is NOT tailnet membership. station17 reported
   // service:tailscaled ok on 2026-07-29 while `tailscale status` said "Logged
   // out" — the daemon runs fine with no node key, so the service check alone
@@ -416,6 +449,58 @@ export function checkStationTemplate(effective: EffectiveTemplate, options: Chec
           ? { id: "swap:size", kind: "swap", status: "ok", detail: `${totalGb.toFixed(2)}G swap active (expected ${effective.swap.sizeGb}G)` }
           : { id: "swap:size", kind: "swap", status: "drift", detail: `expected ${effective.swap.sizeGb}G swap, found ${totalGb.toFixed(2)}G` }
       );
+    }
+  }
+
+  // Root-volume floor. station17 build 2 (2026-07-29) launched on the 8G
+  // AMI-default volume, and the ec2 overlay's 8G swapfile filled it to 364K
+  // free: journald down, cloud-final FAILED. Setup cannot converge an
+  // undersized volume — the fix is a relaunch with explicit
+  // BlockDeviceMappings — so an undersized root is a violation, not drift.
+  if (effective.disk) {
+    const disk = effective.disk;
+    if (!probe) {
+      items.push({ id: "disk:root", kind: "disk", status: "skipped", detail: "no command probe" });
+    } else {
+      const result = probe("df", ["-kP", rootDir]);
+      const row = result.stdout.split("\n")[1]?.trim().split(/\s+/) ?? [];
+      const totalKb = row[1] && /^\d+$/.test(row[1]) ? Number(row[1]) : null;
+      const availKb = row[3] && /^\d+$/.test(row[3]) ? Number(row[3]) : null;
+      if (!result.ok || totalKb === null) {
+        items.push({ id: "disk:root", kind: "disk", status: "skipped", detail: `df -kP ${rootDir} unreadable` });
+      } else {
+        const totalGb = totalKb / 1024 / 1024;
+        // A 64G EBS volume presents a slightly smaller filesystem once
+        // partitioning and reserved blocks are taken out — require 90%.
+        items.push(
+          totalGb >= disk.rootMinGb * 0.9
+            ? { id: "disk:root", kind: "disk", status: "ok", detail: `root filesystem ${totalGb.toFixed(1)}G (floor ${disk.rootMinGb}G)` }
+            : {
+                id: "disk:root",
+                kind: "disk",
+                status: "violation",
+                detail: `root filesystem ${totalGb.toFixed(1)}G is under the ${disk.rootMinGb}G floor — undersized at launch; setup cannot converge this, relaunch with explicit BlockDeviceMappings (station17 build 2 filled an 8G AMI-default root and lost cloud-final)`,
+              }
+        );
+        // Free-space floor: at hard-0 free, SSM commands return EMPTY output
+        // instead of errors (measured on station17 build 2 mid-capture) — a
+        // full disk silently degrades the only access path, so report it
+        // while there is still room to act. Drift, not violation: cleanup
+        // converges it.
+        if (disk.minFreeGb !== undefined && availKb !== null) {
+          const availGb = availKb / 1024 / 1024;
+          items.push(
+            availGb >= disk.minFreeGb
+              ? { id: "disk:free", kind: "disk", status: "ok", detail: `${availGb.toFixed(1)}G free (floor ${disk.minFreeGb}G)` }
+              : {
+                  id: "disk:free",
+                  kind: "disk",
+                  status: "drift",
+                  detail: `${availGb.toFixed(1)}G free is under the ${disk.minFreeGb}G floor — at 0 free the SSM agent returns empty output instead of errors, silently degrading the only access path (station17 build 2)`,
+                }
+          );
+        }
+      }
     }
   }
 
