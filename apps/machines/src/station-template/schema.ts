@@ -13,7 +13,7 @@ export const STATION_TEMPLATE_SCHEMA_ID = "hasna.station_template.v1";
 const semverPattern = /^\d+\.\d+\.\d+$/;
 
 /** Files that participate in lexicographic-ordering directories must sort last. */
-export const ORDERING_SENSITIVE_KINDS = ["sysctl", "tmpfiles"] as const;
+export const ORDERING_SENSITIVE_KINDS = ["sysctl", "tmpfiles", "journald-dropin"] as const;
 export const ORDERING_PREFIX = "99-zz-";
 
 export const templateFileSchema = z.object({
@@ -26,7 +26,9 @@ export const templateFileSchema = z.object({
    */
   target: z.string().min(1),
   mode: z.string().regex(/^0[0-7]{3}$/).default("0644"),
-  kind: z.enum(["sysctl", "tmpfiles", "systemd-dropin", "systemd-user-unit", "plain", "bashrc-block"]).default("plain"),
+  kind: z
+    .enum(["sysctl", "tmpfiles", "systemd-dropin", "systemd-user-unit", "journald-dropin", "plain", "bashrc-block"])
+    .default("plain"),
   /** Which measured failure this file exists to prevent. */
   lesson: z.string().min(1),
 });

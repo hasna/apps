@@ -6,6 +6,34 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.9] - 2026-07-30
+
+### Added
+
+- **`journald-dropin` template file kind + base-layer journal size cap**
+  (template 1.5.0 → 1.6.0). station17 build 2 (2026-07-29) died of disk
+  exhaustion with journald logging "Failed to create new system journal: No
+  space left on device" — yet the rebuilt stations shipped with a stock
+  `journald.conf`, an absent `journald.conf.d`, and NO drift item covering
+  the axis (found by the 2026-07-30 item-4 box audit; re-measured on both
+  station17 and station18 with a positive control). The bound in force was
+  the accidental journald default of 10% of the filesystem (~6G on the 61G
+  ec2-class root). The base layer now ships
+  `/etc/systemd/journald.conf.d/99-zz-hasna-station.conf` with
+  `SystemMaxUse=2G` (two orders of magnitude above the measured 16M of use)
+  and `SystemKeepFree=8G` (mirrors the ec2 overlay's `disk.minFreeGb` floor,
+  so journald backs off before the drift-checked free-space floor is
+  breached). Both renders restart `systemd-journald` after writing the
+  drop-in — journald reads config only at start, so a written-but-unrestarted
+  cap is on disk but not in force. The drift check covers the axis twice:
+  the automatic byte-exact `file:journald-cap` item, and new semantic
+  `journald:<Directive>` items that compute the EFFECTIVE value across the
+  /etc stock conf plus sorted drop-ins with systemd merge semantics — so a
+  later-sorting override drop-in that defeats the cap is named
+  expected-vs-found rather than slipping past the byte check. The kind is
+  ordering-sensitive (`99-zz-` prefix enforced at load), since
+  `journald.conf.d` is lexicographic and later files win.
+
 ## [0.2.8] - 2026-07-30
 
 ### Added

@@ -1,8 +1,8 @@
 {
   "$schema": "hasna.station_template.v1",
   "name": "station",
-  "version": "1.5.0",
-  "description": "Hasna station contract v1. Every item traces to a measured 2026-07-28 failure on station01 (designs/station-contract-design.md §8). Layers: base + dgx-spark (121G physical Spark) + ec2 (32G Graviton cloud station). Owner ruling 2026-07-30: AWS stations carry NO tailscale and are not connected to the physical fleet — tailscale lives only in physical overlays, and SSM (the ec2 accessFloor) is the whole access path for cloud stations. 1.3.0 adds the machines-roster user service (roster reconciler) to the dgx-spark overlay. 1.4.0 adds the base-layer non-interactive PATH profile (station17 build 3: SSM automation could not resolve bun-installed CLIs). 1.5.0 adds the base-layer ~/.bashrc non-interactive block (station17 2026-07-30: `mosh station17 codewith` could not resolve bun CLIs — ssh/mosh remote commands are non-login non-interactive, profile.d never runs for them, and sshd-spawned bash sources ~/.bashrc instead of BASH_ENV, so the PATH must be spliced above the stock interactive guard).",
+  "version": "1.6.0",
+  "description": "Hasna station contract v1. Every item traces to a measured 2026-07-28 failure on station01 (designs/station-contract-design.md §8). Layers: base + dgx-spark (121G physical Spark) + ec2 (32G Graviton cloud station). Owner ruling 2026-07-30: AWS stations carry NO tailscale and are not connected to the physical fleet — tailscale lives only in physical overlays, and SSM (the ec2 accessFloor) is the whole access path for cloud stations. 1.3.0 adds the machines-roster user service (roster reconciler) to the dgx-spark overlay. 1.4.0 adds the base-layer non-interactive PATH profile (station17 build 3: SSM automation could not resolve bun-installed CLIs). 1.5.0 adds the base-layer ~/.bashrc non-interactive block (station17 2026-07-30: `mosh station17 codewith` could not resolve bun CLIs — ssh/mosh remote commands are non-login non-interactive, profile.d never runs for them, and sshd-spawned bash sources ~/.bashrc instead of BASH_ENV, so the PATH must be spliced above the stock interactive guard). 1.6.0 adds the base-layer journald size cap (station17 build 2 died of disk exhaustion with journald unable to create its journal, yet the rebuilt boxes carried the accidental 10%-of-filesystem default and no drift item covered the axis).",
   "base": {
     "files": [
       {
@@ -36,6 +36,14 @@
         "mode": "0644",
         "kind": "bashrc-block",
         "lesson": "2026-07-30 station17: `mosh station17 codewith` (and every `ssh stationN <cmd>`) found no bun-installed CLI — those shells are NON-LOGIN and NON-INTERACTIVE, so the 1.4.0 profile.d fix never runs for them, and the sshd-spawned bash sources ~/.bashrc INSTEAD of $BASH_ENV (measured: with ~/.bashrc hidden and sshd SetEnv pointing BASH_ENV at the PATH profile, resolution still failed). Ubuntu's stock ~/.bashrc early-returns before its own PATH exports, so the block must be spliced ABOVE the interactive guard — the only hook those shells read."
+      },
+      {
+        "id": "journald-cap",
+        "source": "files/base/etc/systemd/journald.conf.d/99-zz-hasna-station.conf",
+        "target": "/etc/systemd/journald.conf.d/99-zz-hasna-station.conf",
+        "mode": "0644",
+        "kind": "journald-dropin",
+        "lesson": "2026-07-29 station17 build 2: the box died of disk exhaustion and journald logged 'Failed to create new system journal: No space left on device' — yet the rebuilt stations shipped with NO journal cap (stock journald.conf, empty conf.d), leaving the bound at the accidental 10%-of-filesystem default (~6G on the 61G root) with no drift item covering the axis (found by the 2026-07-30 item-4 box audit). SystemMaxUse=2G is a chosen bound two orders of magnitude above measured usage (16M); SystemKeepFree=8G mirrors disk.minFreeGb so journald backs off before the drift-checked free-space floor is breached."
       },
       {
         "id": "earlyoom-dropin",

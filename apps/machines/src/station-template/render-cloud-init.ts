@@ -104,6 +104,12 @@ export function renderCloudInit(effective: EffectiveTemplate, options: CloudInit
   if (effective.files.some((file) => file.kind === "systemd-dropin")) {
     runcmd.push("systemctl daemon-reload");
   }
+  if (effective.files.some((file) => file.kind === "journald-dropin")) {
+    // journald starts before cloud-init writes the drop-in and reads its
+    // config only at start — without this restart the cap is on disk but not
+    // in force until the next reboot.
+    runcmd.push("systemctl restart systemd-journald");
+  }
   if (effective.swap.sizeGb > 0) {
     // Convergent and never fatal. station17 build 2 (2026-07-29): the old
     // `test -f /swapfile ||` guard met an 8G AMI-default root volume —

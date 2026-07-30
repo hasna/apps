@@ -1256,3 +1256,96 @@ describe("bashrc-block (station17 2026-07-30: ssh/mosh remote commands found no 
     expect(() => resolveStationTemplate([], { templatesDir: dir })).toThrow(/home-relative/);
   });
 });
+
+describe("journald cap (template 1.6.0)", () => {
+  test("base layer ships the journal size cap as an ordering-safe drop-in", () => {
+    const effective = effectiveFor(["ec2"]);
+    const file = effective.files.find((candidate) => candidate.id === "journald-cap");
+    expect(file?.kind).toBe("journald-dropin");
+    expect(file?.target).toBe("/etc/systemd/journald.conf.d/99-zz-hasna-station.conf");
+    expect(file?.content).toContain("SystemMaxUse=2G");
+    expect(file?.content).toContain("SystemKeepFree=8G");
+    // The physical class gets the same cap — journald is journald on 121G too.
+    expect(effectiveFor(["dgx-spark"]).files.some((candidate) => candidate.id === "journald-cap")).toBe(true);
+  });
+
+  test("ordering rule: journald drop-in without the 99-zz- prefix is rejected at load", () => {
+    const dir = mkdtempSync(join(tmpdir(), "station-template-journald-ordering-"));
+    cpSync(join(SHIPPED, "station"), join(dir, "station"), { recursive: true });
+    const templatePath = join(dir, "station", "template.json");
+    const template = JSON.parse(readFileSync(templatePath, "utf8"));
+    const entry = template.base.files.find((candidate: { id: string }) => candidate.id === "journald-cap");
+    entry.target = "/etc/systemd/journald.conf.d/50-hasna-station.conf";
+    writeFileSync(templatePath, JSON.stringify(template));
+    expect(() => resolveStationTemplate([], { templatesDir: dir })).toThrow(/99-zz-/);
+  });
+
+  test("cloud-init render writes the drop-in and restarts journald (config is read only at start)", () => {
+    const userData = renderCloudInit(effectiveFor(["ec2"]), { station: "station17" });
+    expect(userData).toContain("/etc/systemd/journald.conf.d/99-zz-hasna-station.conf");
+    expect(userData).toContain("systemctl restart systemd-journald");
+  });
+
+  test("physical render restarts journald AFTER writing the drop-in", () => {
+    const steps = buildStationTemplateSteps(effectiveFor(["dgx-spark"]), { station: "station01" });
+    const writeIndex = steps.findIndex((step) => step.id === "template-file-journald-cap");
+    const restartIndex = steps.findIndex((step) => step.id === "template-journald-restart");
+    expect(writeIndex).toBeGreaterThanOrEqual(0);
+    expect(restartIndex).toBeGreaterThan(writeIndex);
+    expect(steps[restartIndex]!.command).toContain("systemctl restart systemd-journald");
+  });
+
+  test("clean fixture reports the byte item AND both semantic directive items ok", () => {
+    const { root, home, effective } = buildCleanFixture();
+    const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: null });
+    expect(result.items.find((candidate) => candidate.id === "file:journald-cap")?.status).toBe("ok");
+    expect(result.items.find((candidate) => candidate.id === "journald:SystemMaxUse")?.status).toBe("ok");
+    expect(result.items.find((candidate) => candidate.id === "journald:SystemKeepFree")?.status).toBe("ok");
+  });
+
+  test("POSITIVE CONTROL: a later-sorting override defeats the cap and is NAMED while the byte check still reads ok", () => {
+    const { root, home, effective } = buildCleanFixture();
+    // The vacuous-pass shape this check exists to kill: OUR drop-in is intact
+    // byte for byte, but a file sorting after it wins the systemd merge.
+    writeFileSync(join(root, "etc/systemd/journald.conf.d/zz-zz-override.conf"), "[Journal]\nSystemMaxUse=8G\n");
+    const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: null });
+    expect(result.verdict).toBe("drift");
+    expect(result.items.find((candidate) => candidate.id === "file:journald-cap")?.status).toBe("ok");
+    const item = result.items.find((candidate) => candidate.id === "journald:SystemMaxUse");
+    expect(item?.status).toBe("drift");
+    expect(item?.detail).toContain("expected 2G");
+    expect(item?.detail).toContain("8G");
+    // And the untouched directive stays ok — the check names the axis, not the file.
+    expect(result.items.find((candidate) => candidate.id === "journald:SystemKeepFree")?.status).toBe("ok");
+  });
+
+  test("stock journald.conf does NOT defeat the drop-in — drop-ins win the merge", () => {
+    const { root, home, effective } = buildCleanFixture();
+    mkdirSync(join(root, "etc/systemd"), { recursive: true });
+    writeFileSync(join(root, "etc/systemd/journald.conf"), "[Journal]\nSystemMaxUse=9G\n");
+    const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: null });
+    expect(result.items.find((candidate) => candidate.id === "journald:SystemMaxUse")?.status).toBe("ok");
+  });
+
+  test("POSITIVE CONTROL: the station17/18 as-found state (no drop-in at all) is drift on BOTH layers", () => {
+    const { root, home, effective } = buildCleanFixture();
+    rmSync(join(root, "etc/systemd/journald.conf.d"), { recursive: true, force: true });
+    const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: null });
+    expect(result.verdict).toBe("drift");
+    expect(result.items.find((candidate) => candidate.id === "file:journald-cap")?.status).toBe("drift");
+    const item = result.items.find((candidate) => candidate.id === "journald:SystemMaxUse");
+    expect(item?.status).toBe("drift");
+    expect(item?.detail).toContain("unset");
+  });
+
+  test("a directive commented out in our drop-in is not asserted", () => {
+    // declaredDirectiveNames must skip comments: only real assignments in the
+    // [Journal] section become semantic items.
+    const shipped = effectiveFor([]).files.find((candidate) => candidate.id === "journald-cap");
+    expect(shipped).toBeDefined();
+    const { root, home, effective } = buildCleanFixture();
+    const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: null });
+    const journaldItems = result.items.filter((candidate) => candidate.kind === "journald");
+    expect(journaldItems.map((candidate) => candidate.id).sort()).toEqual(["journald:SystemKeepFree", "journald:SystemMaxUse"]);
+  });
+});

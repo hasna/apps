@@ -24,7 +24,8 @@ export interface TemplateCheckItem {
     | "unit-convention"
     | "tailscale"
     | "swap"
-    | "disk";
+    | "disk"
+    | "journald";
   status: CheckStatus;
   detail: string;
 }
@@ -186,6 +187,23 @@ export function sortSystemdDropinNames(names: readonly string[]): string[] {
   return names.filter((name) => name.endsWith(".conf")).sort();
 }
 
+/** Directive names declared in the given section of one config file, in declaration order, deduped. */
+function declaredDirectiveNames(content: string, section: string): string[] {
+  const names: string[] = [];
+  let currentSection: string | null = null;
+  for (const line of content.split(/\r?\n/)) {
+    const sectionMatch = /^\s*\[([^\]]+)\]\s*$/.exec(line);
+    if (sectionMatch) {
+      currentSection = sectionMatch[1]!;
+      continue;
+    }
+    if (currentSection !== section) continue;
+    const directiveMatch = /^\s*([A-Za-z][A-Za-z0-9]*)\s*=/.exec(line);
+    if (directiveMatch && !names.includes(directiveMatch[1]!)) names.push(directiveMatch[1]!);
+  }
+  return names;
+}
+
 function defaultCommandProbe(): CommandProbe {
   return (command, args) => {
     try {
@@ -301,6 +319,53 @@ export function checkStationTemplate(effective: EffectiveTemplate, options: Chec
         ? { id: `ordering:${file.id}`, kind: "ordering", status: "ok", detail: `${ourName} wins ordering for ${file.sysctlKeys.join(", ")}` }
         : { id: `ordering:${file.id}`, kind: "ordering", status: "violation", detail: conflicts.join("; ") }
     );
+  }
+
+  // Effective journald directives. The byte check above only proves OUR
+  // drop-in is intact; systemd merges <conf>.conf with every *.conf in
+  // <conf>.conf.d sorted by filename, later files winning — so a
+  // later-sorting override defeats the cap while file:journald-cap still
+  // reads ok. This names the directive with expected-vs-found. Scope: the
+  // /etc-level merge only (vendor /usr/lib and runtime /run drop-ins are not
+  // read); and config ON DISK, not config in force — a journald never
+  // restarted after an edit is invisible here, which is why both renders
+  // restart it at apply time.
+  for (const file of effective.files.filter((candidate) => candidate.kind === "journald-dropin")) {
+    const dropinDir = dirname(resolveTarget(file.target));
+    if (!dropinDir.endsWith(".conf.d")) continue;
+    const contents: string[] = [];
+    const stockConf = dropinDir.slice(0, -2);
+    if (existsSync(stockConf)) {
+      try {
+        contents.push(readFileSync(stockConf, "utf8"));
+      } catch {
+        /* unreadable stock conf: judged on the drop-ins alone */
+      }
+    }
+    if (existsSync(dropinDir)) {
+      for (const entry of sortSystemdDropinNames(readdirSync(dropinDir))) {
+        try {
+          contents.push(readFileSync(join(dropinDir, entry), "utf8"));
+        } catch {
+          /* unreadable drop-in: judged on the readable set */
+        }
+      }
+    }
+    for (const name of declaredDirectiveNames(file.content, "Journal")) {
+      const expected = effectiveScalarDirective([file.content], "Journal", name);
+      if (expected === null) continue;
+      const actual = effectiveScalarDirective(contents, "Journal", name);
+      items.push(
+        actual === expected
+          ? { id: `journald:${name}`, kind: "journald", status: "ok", detail: `${name}=${actual} effective across ${basename(stockConf)} + drop-ins` }
+          : {
+              id: `journald:${name}`,
+              kind: "journald",
+              status: "drift",
+              detail: `${name} expected ${expected}, effective value across ${basename(stockConf)} + sorted drop-ins is ${actual ?? "unset (journald's built-in default applies — for SystemMaxUse, 10% of the filesystem)"}`,
+            }
+      );
+    }
   }
 
   for (const [key, expected] of Object.entries(effective.sysctls)) {
