@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 
 const root = process.cwd();
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
@@ -9,6 +9,54 @@ const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
 };
 
 const DEPRECATION = "uptime is renamed to uptimemon";
+
+/**
+ * Build-freshness gate.
+ *
+ * Every assertion below runs the *built* artifacts named in `package.json#bin`,
+ * because that is what an installed bin symlink actually executes. But `dist/`
+ * is gitignored and the bare `bun test` runner never builds, so without this
+ * gate the whole file happily asserts against a previous build: a fresh
+ * checkout fails with an inscrutable "module not found", and — far worse — a
+ * tree whose source has regressed still passes green against a stale `dist/`.
+ * A test that cannot fail when the behaviour it guards is removed is not a
+ * guard, so this runs at module scope and takes the entire file down with a
+ * named cause rather than letting any test report a result it did not earn.
+ */
+function newestSourceFile(dir: string): { path: string; mtimeMs: number } {
+  let newest = { path: dir, mtimeMs: 0 };
+  for (const entry of readdirSync(dir, { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    // `parentPath` is the current Node/Bun field; `path` is its deprecated alias.
+    const parent = (entry as unknown as { parentPath?: string; path?: string }).parentPath ?? entry.path;
+    const full = join(parent, entry.name);
+    const { mtimeMs } = statSync(full);
+    if (mtimeMs > newest.mtimeMs) newest = { path: full, mtimeMs };
+  }
+  return newest;
+}
+
+const REBUILD = 'Run "bun run build" (or "bun run test", which now builds first) and re-run.';
+const newestSource = newestSourceFile(join(root, "src"));
+
+for (const [name, binPath] of Object.entries(pkg.bin)) {
+  const absolute = join(root, binPath);
+  if (!existsSync(absolute)) {
+    throw new Error(
+      `STALE BUILD: bin "${name}" -> ${binPath} does not exist.\n` +
+        `These tests execute built artifacts, and dist/ is gitignored and not built by "bun test".\n` +
+        REBUILD,
+    );
+  }
+  if (statSync(absolute).mtimeMs < newestSource.mtimeMs) {
+    throw new Error(
+      `STALE BUILD: bin "${name}" -> ${binPath} is older than ${relative(root, newestSource.path)}.\n` +
+        `dist/ does not reflect current src/, so these tests would assert against a previous build ` +
+        `and could pass while the behaviour under test is regressed.\n` +
+        REBUILD,
+    );
+  }
+}
 
 function runEntry(entry: string, args: string[], dbPath: string) {
   const result = Bun.spawnSync({

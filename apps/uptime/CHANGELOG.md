@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.70] - 2026-07-31
+
 ### Changed
 
 - Renamed the CLI binary from `uptime` to `uptimemon`. The old name shadowed the

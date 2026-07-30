@@ -9,6 +9,17 @@
  * It prints a single deprecation line to **stderr** — never stdout — so that
  * `--json` output stays machine-parseable, and then runs the real CLI
  * unchanged. A deprecation notice that breaks the command is not a transition.
+ *
+ * Why a dedicated entry file rather than one entry that sniffs the name it was
+ * invoked under: bun installs bins as symlinks and resolves them before
+ * `process.argv` is populated, so both names yield an identical argv. The
+ * invoked name is not lost everywhere — on Linux `/proc/self/cmdline` still
+ * retains it — but `/proc` does not exist on macOS, so recovering the name is a
+ * *portability* problem rather than an impossibility. A separate entry avoids
+ * the question entirely and behaves identically on every platform.
+ *
+ * The shim is bundled rather than transpile-only because transpile-only strips
+ * the shebang, which a bin symlink requires.
  */
 process.stderr.write(
   "uptime is renamed to uptimemon; the 'uptime' name will stop shadowing the system command in a future release\n",

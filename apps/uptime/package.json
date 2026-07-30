@@ -110,7 +110,7 @@
   "scripts": {
     "build": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun --external @modelcontextprotocol/sdk && bun build src/cli/deprecated-uptime.ts --outdir dist/cli --target bun --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/index.ts src/api.ts src/service.ts src/store.ts src/checks.ts src/imports.ts src/report.ts src/probes.ts src/cloud-plan.ts src/postgres-plan.ts src/postgres.ts src/postgres-runtime.ts src/postgres-report-runtime.ts src/workers.ts src/worker-metrics.ts src/edge-smoke.ts src/evidence-sanitizer.ts src/types.ts src/paths.ts src/dashboard.ts src/version.ts --root src --outdir dist --target bun && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist && chmod +x dist/cli/index.js dist/cli/deprecated-uptime.js dist/mcp/index.js",
     "typecheck": "tsc --noEmit",
-    "test": "bun test ./tests",
+    "test": "bun run build && bun test ./tests",
     "release:oss:audit": "node scripts/oss-release-gate.mjs --verify-recorded-state",
     "release:oss:check": "node scripts/oss-release-gate.mjs",
     "release:oss:verify": "node scripts/oss-release-gate.mjs --verify-published",
