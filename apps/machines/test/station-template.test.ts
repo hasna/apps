@@ -396,6 +396,63 @@ describe("drift check", () => {
     expect(result.verdict).toBe("drift");
   });
 
+  test("POSITIVE CONTROL: unit directives in the wrong systemd sections are flagged", () => {
+    const { root, home, effective } = buildCleanFixture();
+    const unitDir = join(home, ".config/systemd/user");
+    mkdirSync(unitDir, { recursive: true });
+    writeFileSync(
+      join(unitDir, "hasna-wrong-sections.service"),
+      "[Unit]\nExecStart=/bin/true\n[Service]\nStartLimitIntervalSec=300\nStartLimitBurst=5\nOnFailure=hasna-unit-failure-notify@%n.service\n"
+    );
+    const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: null });
+    const item = result.items.find((candidate) => candidate.id === "unit:hasna-wrong-sections.service");
+    expect(item?.status).toBe("violation");
+    expect(item?.detail).toContain("missing StartLimitIntervalSec");
+    expect(item?.detail).toContain("missing StartLimitBurst");
+    expect(item?.detail).toContain("missing OnFailure");
+    expect(item?.detail).toContain("missing ExecStart");
+  });
+
+  test("systemd section names are not normalized", () => {
+    const { root, home, effective } = buildCleanFixture();
+    const unitDir = join(home, ".config/systemd/user");
+    mkdirSync(unitDir, { recursive: true });
+    // systemd treats these as unknown sections, including the spaces inside
+    // the brackets. The drift parser must not accept them as Unit/Service.
+    writeFileSync(
+      join(unitDir, "hasna-invalid-sections.service"),
+      "[ Unit ]\nStartLimitIntervalSec=300\nStartLimitBurst=5\nOnFailure=hasna-unit-failure-notify@%n.service\n[ Service ]\nExecStart=/bin/true\n"
+    );
+    const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: null });
+    const item = result.items.find((candidate) => candidate.id === "unit:hasna-invalid-sections.service");
+    expect(item?.status).toBe("violation");
+    expect(item?.detail).toContain("missing StartLimitIntervalSec");
+    expect(item?.detail).toContain("missing StartLimitBurst");
+    expect(item?.detail).toContain("missing OnFailure");
+    expect(item?.detail).toContain("missing ExecStart");
+  });
+
+  test("drop-ins do not inherit the main unit's last section", () => {
+    const { root, home, effective } = buildCleanFixture();
+    const unitDir = join(home, ".config/systemd/user");
+    mkdirSync(join(unitDir, "hasna-headerless-dropin.service.d"), { recursive: true });
+    writeFileSync(
+      join(unitDir, "hasna-headerless-dropin.service"),
+      "[Service]\nExecStart=/bin/true\n[Unit]\nDescription=ends in Unit\n"
+    );
+    // A new file starts outside every section; systemd ignores these lines.
+    writeFileSync(
+      join(unitDir, "hasna-headerless-dropin.service.d", "10-invalid.conf"),
+      "StartLimitIntervalSec=300\nStartLimitBurst=5\nOnFailure=hasna-unit-failure-notify@%n.service\n"
+    );
+    const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: null });
+    const item = result.items.find((candidate) => candidate.id === "unit:hasna-headerless-dropin.service");
+    expect(item?.status).toBe("violation");
+    expect(item?.detail).toContain("missing StartLimitIntervalSec");
+    expect(item?.detail).toContain("missing StartLimitBurst");
+    expect(item?.detail).toContain("missing OnFailure");
+  });
+
   test("unit conventions accept equivalent systemd time spellings but not equivalent-looking wrong ones", () => {
     const { root, home, effective } = buildCleanFixture();
     const unitDir = join(home, ".config/systemd/user");
