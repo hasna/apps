@@ -211,7 +211,7 @@ export function sanitizeEvidenceInput(input: string | unknown, options: Evidence
       ? [
         "Use the sanitized field from this report for shared evidence.",
         "Keep raw Terraform plans, state, tfvars, URLs, ARNs, account ids, image digests, local paths, recipients, and secret values in private operator storage only.",
-        "Re-run uptime evidence sanitize --fail-on-unsafe on the final evidence artifact before posting it to docs, todos, project metadata, or release notes.",
+        "Re-run uptimemon evidence sanitize --fail-on-unsafe on the final evidence artifact before posting it to docs, todos, project metadata, or release notes.",
       ]
       : ["Shared evidence passed the Open Uptime sanitizer; still keep raw private terminal output out of public docs."],
   };

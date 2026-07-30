@@ -6,6 +6,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.70] - 2026-07-31
+
+### Changed
+
+- Renamed the CLI binary from `uptime` to `uptimemon`. The old name shadowed the
+  system `uptime` command (procps) on `PATH`, and this package is a monitor
+  management CLI rather than a system-uptime reporter. The Docker images now
+  install `/usr/local/bin/uptimemon` alongside the retained `uptime` shim, and
+  the documented command in the README and `docs/` is `uptimemon`. `uptime-mcp`
+  is already namespaced and is unchanged.
+
+### Deprecated
+
+- Deprecated the `uptime` binary name. It is still installed and fully
+  functional for this transition release, and now prints a single deprecation
+  line to **stderr** — never stdout, so `--json` output stays machine-readable —
+  before running the CLI normally. The name will be removed in a future release
+  once known callers have moved to `uptimemon`.
+
 ### Added
 
 - Added a fail-closed public OSS release gate with a machine-readable `HOLD`

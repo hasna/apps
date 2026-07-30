@@ -23,10 +23,15 @@ test("Dockerfile builds a hosted non-root Bun runtime without plaintext secrets"
   expect(packageDockerfile).toContain("COPY dist ./dist");
   expect(packageDockerfile).toContain("COPY package.json bun.lock ./");
   expect(packageDockerfile).toContain("bun install --production --frozen-lockfile");
-  expect(dockerfile).toContain("/usr/local/bin/uptime");
+  expect(dockerfile).toContain("/usr/local/bin/uptimemon");
   expect(dockerfile).toContain('exec bun /app/dist/cli/index.js "$@"');
-  expect(packageDockerfile).toContain("/usr/local/bin/uptime");
+  expect(packageDockerfile).toContain("/usr/local/bin/uptimemon");
   expect(packageDockerfile).toContain('exec bun /app/dist/cli/index.js "$@"');
+  // Transition release: the retired `uptime` name keeps working via the shim.
+  expect(dockerfile).toContain("/usr/local/bin/uptime");
+  expect(dockerfile).toContain('exec bun /app/dist/cli/deprecated-uptime.js "$@"');
+  expect(packageDockerfile).toContain("/usr/local/bin/uptime");
+  expect(packageDockerfile).toContain('exec bun /app/dist/cli/deprecated-uptime.js "$@"');
   expect(packageDockerfile).toContain("-u 10001");
   expect(packageDockerfile).not.toContain("FROM oven/bun");
   expect(packageDockerfile).not.toContain("node:22-slim");

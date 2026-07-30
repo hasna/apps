@@ -311,8 +311,8 @@ secret-bearing URLs, and private DNS suffixes. The SDK also exposes
 `runHostedHttpCheck` for hosted public HTTP probes; it resolves DNS at
 execution time, denies unsafe answers, pins the validated address into the
 request, validates redirects, and records target-policy decisions. The bounded
-`uptime cloud postgres-scheduler run` review command can create public-safe
-Postgres `check_jobs`, and `uptime cloud postgres-public-probe run` can claim
+`uptimemon cloud postgres-scheduler run` review command can create public-safe
+Postgres `check_jobs`, and `uptimemon cloud postgres-public-probe run` can claim
 existing jobs and run HTTP/TCP checks through that policy, but generic scheduler
 and public-probe ECS execution remain disabled until the service/API scheduler
 contracts, scheduler lease ownership, deploy drain, backlog/stale-lease alarms,
@@ -532,11 +532,11 @@ required before browser evidence or public probe scale-out.
 - ECS task definitions use secret refs, not plaintext secret values.
 - ECS task definitions include explicit container health checks: web checks
   `/health`, while disabled non-web roles run
-  `uptime cloud workers preflight --role <role> --healthcheck` and fail their
+  `uptimemon cloud workers preflight --role <role> --healthcheck` and fail their
   readiness health check while `canStart=false`, including when hosted mode,
   component identity, workspace env, or role-specific cloud prerequisites are
   invalid. Their main commands call fail-closed
-  `uptime cloud workers run --role <role>` entrypoints until the real cloud data
+  `uptimemon cloud workers run --role <role>` entrypoints until the real cloud data
   paths are implemented. Reporter preflight also names the report-run store,
   delivery-attempt state machine, provider idempotency, retry/backoff,
   redacted artifact storage, audit export, and delivery alarms as explicit

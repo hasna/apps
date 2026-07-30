@@ -14,7 +14,8 @@ npm install -g @hasna/uptime
 
 The published CLI and MCP binaries run on Bun. The `npm install` path is useful
 for npm-managed global packages, but `bun` must still be installed and available
-on `PATH` before running `uptime` or `uptime-mcp`.
+on `PATH` before running `uptimemon` or `uptime-mcp`. (The `uptime` name still
+works for one transition release.)
 
 Update an existing global install with the same command and an explicit version
 or `latest` tag:
@@ -22,7 +23,7 @@ or `latest` tag:
 ```bash
 bun install -g @hasna/uptime@latest
 npm install -g @hasna/uptime@latest
-uptime --version
+uptimemon --version
 ```
 
 Local data is stored in `~/.hasna/uptime/uptime.db`. Set
@@ -32,33 +33,33 @@ profile.
 ## CLI
 
 ```bash
-uptime init
-uptime add api --url https://example.com/health --interval 60 --timeout 5000
-uptime add postgres --tcp db.internal --port 5432
-uptime list
-uptime check --all
-uptime summary
-uptime report --dry-run
-uptime report --email ops@example.com --from alerts@example.com --send-key "$MAILERY_SEND_KEY"
-uptime report --sms +15550000001 --logs
-uptime report-schedules create ops --interval 3600 --email ops@example.com --from alerts@example.com
-uptime report-schedules run-due
-uptime report-schedules runs
-uptime audit
-uptime cloud plan --json
-uptime cloud memory-preflight --healthcheck --json
-uptime cloud postgres-plan --json
-uptime cloud postgres-plan --sql
-uptime cloud workers preflight --role public-probe --json
-uptime cloud postgres-scheduler run --workspace-id ws_internal --max-jobs 100 --json
-uptime cloud postgres-public-probe run --workspace-id ws_internal --probe-id prb_public_01 --max-jobs 10 --json
-uptime cloud postgres-private-probe preflight --workspace-id ws_internal --probe-id prb_private_01 --machine-id private-probe-01 --healthcheck --json
-uptime cloud public-checks worker --workspace-id ws_internal --max-iterations 1 --hosted-sqlite-db /data/uptime/uptime.db --allow-public-checks-bridge
-uptime cloud private-probe-config --probe-id prb_private_01 --machine-id private-probe-01 --json
-uptime cloud private-probe-config --probe-id prb_private_01 --machine-id private-probe-01 --env --allow-blocked-env
-uptime evidence sanitize --file rollout-evidence.json --fail-on-unsafe
-uptime incidents
-uptime serve --port 3899 --check
+uptimemon init
+uptimemon add api --url https://example.com/health --interval 60 --timeout 5000
+uptimemon add postgres --tcp db.internal --port 5432
+uptimemon list
+uptimemon check --all
+uptimemon summary
+uptimemon report --dry-run
+uptimemon report --email ops@example.com --from alerts@example.com --send-key "$MAILERY_SEND_KEY"
+uptimemon report --sms +15550000001 --logs
+uptimemon report-schedules create ops --interval 3600 --email ops@example.com --from alerts@example.com
+uptimemon report-schedules run-due
+uptimemon report-schedules runs
+uptimemon audit
+uptimemon cloud plan --json
+uptimemon cloud memory-preflight --healthcheck --json
+uptimemon cloud postgres-plan --json
+uptimemon cloud postgres-plan --sql
+uptimemon cloud workers preflight --role public-probe --json
+uptimemon cloud postgres-scheduler run --workspace-id ws_internal --max-jobs 100 --json
+uptimemon cloud postgres-public-probe run --workspace-id ws_internal --probe-id prb_public_01 --max-jobs 10 --json
+uptimemon cloud postgres-private-probe preflight --workspace-id ws_internal --probe-id prb_private_01 --machine-id private-probe-01 --healthcheck --json
+uptimemon cloud public-checks worker --workspace-id ws_internal --max-iterations 1 --hosted-sqlite-db /data/uptime/uptime.db --allow-public-checks-bridge
+uptimemon cloud private-probe-config --probe-id prb_private_01 --machine-id private-probe-01 --json
+uptimemon cloud private-probe-config --probe-id prb_private_01 --machine-id private-probe-01 --env --allow-blocked-env
+uptimemon evidence sanitize --file rollout-evidence.json --fail-on-unsafe
+uptimemon incidents
+uptimemon serve --port 3899 --check
 ```
 
 Scheduled reports persist endpoint and recipient configuration, but not send
@@ -67,7 +68,7 @@ keys or API tokens. Configure `MAILERY_SEND_KEY`, `HASNA_MAILERY_SEND_KEY`,
 Private probe env output is blocked by default while hosted probe routes remain
 fail-closed; `--allow-blocked-env` is for review artifacts only, not startup.
 
-The `uptime cloud plan` and `uptime cloud private-probe-config` commands
+The `uptimemon cloud plan` and `uptimemon cloud private-probe-config` commands
 generate dry-run AWS/private-probe planning artifacts. They do not call AWS,
 write secrets, or produce an approved deploy script; current output is
 intentionally blocked until the repository deployment runbook, infra, and
@@ -75,18 +76,18 @@ cloud-store evidence are satisfied. The `cloud public-checks` and
 `cloud edge-smoke` commands are operational smokes: they perform bounded hosted
 checks or HTTP requests and must be run only with approved private evidence
 handling.
-`uptime evidence sanitize` is the shared-evidence gate for rollout notes, task
+`uptimemon evidence sanitize` is the shared-evidence gate for rollout notes, task
 comments, project metadata, and runbook snippets. It emits sanitized JSON and
 can fail operator scripts with `--fail-on-unsafe` when raw ARNs, account ids,
 CloudFront/ALB hosts, private URLs, Terraform artifacts, image digests, local
 paths, recipients, database URLs, tokens, or unsafe object keys are found.
-`uptime cloud evidence-sanitize` is the fail-closed cloud rollout alias and
+`uptimemon cloud evidence-sanitize` is the fail-closed cloud rollout alias and
 exits non-zero on unsafe evidence unless `--allow-unsafe` is used for private
 operator inspection. Passing this sanitizer does not make infrastructure live;
 it only proves the evidence artifact is safe to share.
 
 Deployment review artifacts live in `Dockerfile` and `infra/aws`. The Terraform
-desired counts default to zero, and `uptime cloud plan --json` exposes the
+desired counts default to zero, and `uptimemon cloud plan --json` exposes the
 format/init/validate/plan commands with `applyAllowed: false`. The first
 protected access path uses the CloudFront default HTTPS domain with ALB origin
 ingress restricted to CloudFront. The hosted web task must set
@@ -97,7 +98,7 @@ token-bearing live traffic needs `https-only` with an origin hostname that
 resolves to the ALB and matches `certificate_arn`, or an explicit risk
 acceptance. Hosted AWS runtime state currently uses explicit EFS-backed SQLite via
 `HASNA_UPTIME_HOSTED_SQLITE_DB=/data/uptime/uptime.db` for one protected web
-task maximum; do not set `HASNA_UPTIME_DATABASE_URL` for `uptime serve` or
+task maximum; do not set `HASNA_UPTIME_DATABASE_URL` for `uptimemon serve` or
 hosted ECS scale-out until the full hosted Postgres runtime adapter is wired
 through `UptimeService` and worker loops. `0.1.67` includes an explicit
 `hostedPostgresRuntime` API option for a bounded hosted monitor control plane:
@@ -124,14 +125,14 @@ loopback, metadata, private DNS, private/reserved IP, secret-bearing URL, and
 unsafe TCP targets are rejected at ingestion. Enabled `browser_page` rows remain
 blocked until browser evidence workers are configured, and private targets still
 need future inventory-backed provenance. It is SDK/runtime groundwork, not a
-hosted service-store promotion gate. `uptime cloud postgres-scheduler run`
+hosted service-store promotion gate. `uptimemon cloud postgres-scheduler run`
 creates one bounded batch of deterministic Postgres `check_jobs` for due
 public-safe HTTP/TCP monitors with producer-side hosted target-policy checks.
-`uptime cloud postgres-public-probe run` runs one bounded Postgres public-probe
+`uptimemon cloud postgres-public-probe run` runs one bounded Postgres public-probe
 review batch from existing `check_jobs`, filtered to the selected public probe
 identity's class and location before claim. Denied scheduler targets are
 deferred for the current monitor interval so repeated review batches can reach
-later public-safe monitors. `uptime cloud postgres-private-probe preflight`
+later public-safe monitors. `uptimemon cloud postgres-private-probe preflight`
 reads a private probe identity, expected machine/location/fingerprint bindings,
 and private job/lease counts from Postgres for review while keeping hosted
 private-probe startup blocked. These commands are not the EFS SQLite `cloud
@@ -149,7 +150,7 @@ report-run reads, and audit reads; it still rejects hosted report execution
 until reporter worker promotion evidence and delivery wiring are reviewed.
 Hosted report schedules must select explicit approved
 `channelRefIds`, never raw provider URLs, recipients, tokens, or boolean
-fan-out selectors. `uptime cloud postgres-plan` exposes the reviewed target schema,
+fan-out selectors. `uptimemon cloud postgres-plan` exposes the reviewed target schema,
 workspace RLS policy shape, tombstones, audit tables, idempotency fields, and
 check-job lease tables for private review without connecting to Postgres or
 printing credentials.
@@ -157,7 +158,7 @@ The interim hosted SQLite bridge now also requires explicit workspace context
 for hosted store/API reads and mutations, hides tombstoned monitors from active
 queries, records hosted monitor deletes in `sync_tombstones`, and keeps active
 monitor names unique only among non-deleted rows.
-`uptime cloud workers preflight --role <role>` reports machine-checkable
+`uptimemon cloud workers preflight --role <role>` reports machine-checkable
 blockers for hosted scheduler, public-probe, reporter, and migration roles.
 `--healthcheck` is readiness-like and exits non-zero while `canStart=false`.
 Their generic `run` entrypoints fail closed until Postgres service integration,
@@ -179,11 +180,11 @@ startup remains blocked until channel secret loading, approved S3/object
 artifact writer wiring and smoke evidence, approved Open Logs audit export
 wiring and smoke evidence, delivery alarms, and live worker liveness evidence
 are proven.
-`uptime cloud public-checks run-due` and `worker` are only bounded EFS SQLite
+`uptimemon cloud public-checks run-due` and `worker` are only bounded EFS SQLite
 bridge paths around hosted HTTP/TCP smoke checks, and they require
 `--allow-public-checks-bridge` or `HASNA_UPTIME_ALLOW_PUBLIC_CHECKS_BRIDGE=1`.
 They are not the final cloud `check_jobs`/lease/fencing protocol.
-`uptime cloud edge-smoke` is the repeatable protected-web promotion smoke. It
+`uptimemon cloud edge-smoke` is the repeatable protected-web promotion smoke. It
 checks `/health`, authenticated `/ready`, unauthenticated denial, scoped reads,
 wrong-workspace denial, wrong-scope and denied-origin mutations, fail-closed
 hosted report/probe/import/check routes, optional write-token create/delete
@@ -202,9 +203,9 @@ operator runbooks and cloud architecture notes are generic templates. Concrete
 deployment evidence, private account choices, local machine names, and operator
 state belong in private deployment metadata, not in public docs or packages.
 
-`uptime cloud memory-preflight --json` prints a redacted report and exits `0`
+`uptimemon cloud memory-preflight --json` prints a redacted report and exits `0`
 for inspection even when blocked. Use
-`uptime cloud memory-preflight --healthcheck --json` as the fail-closed gate for
+`uptimemon cloud memory-preflight --healthcheck --json` as the fail-closed gate for
 calling an operator machine or a companion project/task memory stack
 cloud-primary. It reports only service names, configured environment variable
 names, booleans, and
@@ -225,18 +226,18 @@ malformed machine IDs are rejected and rendered only as `invalid-machine-id`.
 Private/local probes can submit signed results from another machine:
 
 ```bash
-uptime probes create private-probe-01 \
+uptimemon probes create private-probe-01 \
   --private-key-file ./private-probe-01.key.pem \
   --probe-class private \
   --probe-location private-site-01 \
   --machine-id operator-01
-uptime probes jobs create \
+uptimemon probes jobs create \
   --monitor <monitor-id> \
   --schedule-slot 2026-06-28T12:00:00Z \
   --probe-class private \
   --probe-locations private-site-01
-uptime probes jobs claim <job-id> --probe <probe-id>
-uptime probes submit \
+uptimemon probes jobs claim <job-id> --probe <probe-id>
+uptimemon probes submit \
   --probe <probe-id> \
   --job <job-id> \
   --schedule-slot 2026-06-28T12:00:00Z \
@@ -262,7 +263,7 @@ open http://127.0.0.1:3899
 
 State-changing API requests reject cross-origin browser requests and
 non-loopback mutation hosts by default. For a trusted remote bind, set
-`HASNA_UPTIME_API_TOKEN` or pass `uptime serve --api-token <token>` and send
+`HASNA_UPTIME_API_TOKEN` or pass `uptimemon serve --api-token <token>` and send
 `Authorization: Bearer <token>` or `X-Uptime-Token: <token>`.
 Hosted mode additionally accepts comma-separated public origins from
 `HASNA_UPTIME_ALLOWED_ORIGINS` for deployments behind a TLS-terminating edge.
@@ -359,7 +360,7 @@ Probe agents can import signing helpers from `@hasna/uptime/probes`.
 
 ## API
 
-Run `uptime serve` and use:
+Run `uptimemon serve` and use:
 
 - `GET /health`
 - `GET /ready`

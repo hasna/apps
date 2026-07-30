@@ -29,7 +29,7 @@ import type { CreateMonitorInput, Monitor, ProbePolicy, ProbeResultSubmission, R
 const program = new Command();
 
 program
-  .name("uptime")
+  .name("uptimemon")
   .description("Local-first uptime and downtime monitoring")
   .version(packageVersion())
   .option("-j, --json", "print JSON");
@@ -1979,7 +1979,7 @@ function cloudMemoryServiceDefinitions(): CloudMemoryServiceDefinition[] {
       name: "uptime",
       label: "Open Uptime",
       owner: "open-uptime",
-      statusCommand: "uptime cloud postgres-plan --json && uptime cloud workers preflight --role <role> --json",
+      statusCommand: "uptimemon cloud postgres-plan --json && uptimemon cloud workers preflight --role <role> --json",
       envGroups: [{ name: "database", anyOf: ["HASNA_UPTIME_DATABASE_URL"] }],
       proofEnv: "HASNA_UPTIME_POSTGRES_RUNTIME_READY",
       acceptsProof: false,
@@ -2240,7 +2240,7 @@ function buildHostedWorkerPreflight(role: HostedWorkerRole): HostedWorkerPreflig
     { name: "hosted-mode", ok: mode === "hosted", detail: mode || "<unset>" },
     { name: "component", ok: !component || component === role, detail: component || "<unset>" },
     { name: "workspace", ok: Boolean(workspaceId), detail: workspaceId || "<unset>" },
-    { name: "postgres-schema-plan", ok: true, detail: "available through uptime cloud postgres-plan" },
+    { name: "postgres-schema-plan", ok: true, detail: "available through uptimemon cloud postgres-plan" },
     {
       name: "postgres-adapter",
       ok: false,
@@ -2264,10 +2264,10 @@ function buildHostedWorkerPreflight(role: HostedWorkerRole): HostedWorkerPreflig
     checks.push(...hostedReporterReadinessChecks());
   }
   if (role === "public-probe") {
-    checks.push({ name: "public-probe-job-claims", ok: true, detail: "bounded uptime cloud postgres-public-probe run can claim, run, and submit existing Postgres check_jobs; live ECS promotion is still blocked" });
+    checks.push({ name: "public-probe-job-claims", ok: true, detail: "bounded uptimemon cloud postgres-public-probe run can claim, run, and submit existing Postgres check_jobs; live ECS promotion is still blocked" });
   }
   if (role === "scheduler") {
-    checks.push({ name: "scheduler-job-creation", ok: true, detail: "bounded uptime cloud postgres-scheduler run can create public-safe deterministic Postgres check_jobs; live ECS promotion is still blocked" });
+    checks.push({ name: "scheduler-job-creation", ok: true, detail: "bounded uptimemon cloud postgres-scheduler run can create public-safe deterministic Postgres check_jobs; live ECS promotion is still blocked" });
   }
   if (role === "migration") {
     const migration = buildPostgresMigrationDryRun();
@@ -2414,7 +2414,7 @@ function hostedReporterReadinessChecks(): Array<{ name: string; ok: boolean; det
 function hostedWorkerNextActions(role: HostedWorkerRole): string[] {
   const shared = [
     "Keep the ECS service desired count at 0 until this preflight reports canStart=true.",
-    "Review uptime cloud postgres-plan, then move authoritative hosted state from the EFS SQLite bridge to the async Postgres store with transactional leases.",
+    "Review uptimemon cloud postgres-plan, then move authoritative hosted state from the EFS SQLite bridge to the async Postgres store with transactional leases.",
   ];
   if (role === "scheduler") {
     return [
@@ -2437,7 +2437,7 @@ function hostedWorkerNextActions(role: HostedWorkerRole): string[] {
   }
   return [
     ...shared,
-    "Run uptime cloud postgres-migrate in dry-run mode, then apply with --apply --confirm-schema only from the migration task after backup and rollback evidence are current.",
+    "Run uptimemon cloud postgres-migrate in dry-run mode, then apply with --apply --confirm-schema only from the migration task after backup and rollback evidence are current.",
   ];
 }
 

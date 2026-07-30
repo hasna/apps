@@ -22,7 +22,9 @@ COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 
-RUN printf '#!/bin/sh\nexec bun /app/dist/cli/index.js "$@"\n' > /usr/local/bin/uptime \
+RUN printf '#!/bin/sh\nexec bun /app/dist/cli/index.js "$@"\n' > /usr/local/bin/uptimemon \
+  && chmod +x /usr/local/bin/uptimemon \
+  && printf '#!/bin/sh\nexec bun /app/dist/cli/deprecated-uptime.js "$@"\n' > /usr/local/bin/uptime \
   && chmod +x /usr/local/bin/uptime
 
 USER uptime

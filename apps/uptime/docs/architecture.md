@@ -3,9 +3,9 @@
 Open Uptime has four public surfaces over one local service model:
 
 - SDK: `createUptimeClient()`
-- CLI: `uptime`
+- CLI: `uptimemon`
 - MCP: `uptime-mcp`
-- API/dashboard: `uptime serve`
+- API/dashboard: `uptimemon serve`
 
 State is stored in SQLite through `UptimeStore`. `UptimeService` owns monitor
 checks, retry policy, incident reconciliation, scheduler ticks, and summaries.
