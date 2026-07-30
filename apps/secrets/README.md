@@ -71,29 +71,106 @@ console.log(status.counts.byType.api_key);
 
 Deterministic automations and action manifests must reference secrets by key,
 not embed raw values. In `@hasna/actions` manifests this appears as
-`secrets[].ref`; in lower-level payloads it may be named `secretRef`. The
-reference value is the same slash-delimited key used by this vault:
+`secrets[].ref`; the scoped resolver request below names it `secretRef`. A
+reference is the exact, case-sensitive, slash-delimited vault key. It has no URI
+scheme, query, fragment, embedded value, or authority of its own. Access comes
+from a separate resolver-side grant.
+
+The persistable request contract is:
 
 ```json
 {
+  "contractVersion": 1,
   "secretRef": "example/connectors/prod/github",
-  "scope": "repo:issues:write",
+  "grantId": "github-issue-writer-prod",
+  "automationId": "issue-triage",
+  "action": "issue.create",
+  "connector": "github",
+  "scopes": ["repo:issues:write"],
   "reason": "Create a GitHub issue from an approved automation action"
 }
 ```
 
-Minimum contract for OpenAutomations and `@hasna/actions` consumers:
+`reason` is audit context, not authorization. `grantId` is a non-secret policy
+selector, not a bearer token. The grant itself is configured in the trusted
+resolver and must not be accepted from an automation payload:
 
-- automation specs, queued action payloads, todos comments, and run evidence
-  store `secretRef` strings only
-- the runtime that resolves a reference must check the requested scope before
-  handing a value to a connector or command
-- audit records may include the secret key, type, scope, resolver package,
-  and decision, but never the decrypted value
+```json
+{
+  "contractVersion": 1,
+  "grantId": "github-issue-writer-prod",
+  "policyRevision": 3,
+  "secretRef": "example/connectors/prod/github",
+  "automationId": "issue-triage",
+  "allowedBindings": [
+    {
+      "action": "issue.create",
+      "connector": "github",
+      "allowedScopes": ["repo:issues:write"]
+    }
+  ],
+  "allowedRuntimes": [
+    {"machine": "runner-prod-01", "profile": "production"}
+  ],
+  "notBefore": "2026-07-01T00:00:00Z",
+  "expiresAt": "2026-08-01T00:00:00Z"
+}
+```
+
+The resolver obtains `machine` from an authenticated workload or host identity
+and `profile` from trusted runner configuration. Those values are execution
+context and are never trusted when supplied by a queued action. Profile here
+means the named automation execution profile, not an AWS credential profile.
+
+Before every invocation, the resolver must deny unless all of these checks pass:
+
+1. The contract version, grant ID, secret reference, and automation ID match.
+2. The action/connector pair exactly matches one `allowedBindings` entry, and the
+   authenticated machine/profile pair exactly matches one `allowedRuntimes`
+   entry. Keeping pairs intact prevents unintended cross-product permissions.
+3. Every requested scope is present in the matched binding's `allowedScopes`;
+   grants cannot be widened by a request.
+4. The current time is in the half-open grant interval
+   `notBefore <= now < expiresAt`. `expiresAt` is required; `notBefore` may be
+   omitted to make the grant valid immediately.
+5. The referenced secret exists and its own `expires_at`, if set, has not passed.
+
+Timestamps are RFC 3339 UTC instants. Invalid timestamps and unavailable runtime
+identity are authorization failures. Comparisons are exact and case-sensitive.
+All request fields except `reason` are required; `scopes` and all grant allowlists
+must be non-empty. Omitted bindings and wildcard values deny. `policyRevision` is
+a monotonically increasing, non-secret audit value and is not client-selected.
+The resolver should audit the decision, grant ID, secret key, requested bindings,
+scopes, machine, profile, and policy revision, but never the decrypted value.
+
+#### Persistence and rotation
+
+- automation specs, action manifests, queued payloads, retries, todo comments,
+  and run evidence may persist the reference request, but never a decrypted
+  value or a raw value encoded into another field
+- grants persist bindings and metadata only; they never contain the raw secret
+- resolve immediately before connector invocation, inject the value directly
+  into that invocation, discard it afterwards, and never place it in a durable
+  cache, event, log, error, or audit record
+- re-resolve on every retry and replay; do not copy the historical value from an
+  earlier attempt
+- rotate a credential by atomically replacing the value under the same stable
+  `secretRef`; the next invocation receives the new value without changing the
+  automation or grant
+- secret expiry and grant expiry are independent and the earlier one wins; renew
+  a grant by issuing a new policy revision, and revoke a grant or secret to deny
+  all subsequent resolutions immediately
+- a resolver may return an opaque invocation handle instead of plaintext; if a
+  connector requires plaintext, it may exist only in invocation-scoped memory
+
+Minimum integration boundary for OpenAutomations and `@hasna/actions` consumers:
+
 - redaction must treat keys named `secretRef`, `secret`, `token`, `apiKey`,
   `authorization`, and provider credential fields as sensitive
-- replay should re-resolve the reference at execution time instead of storing a
-  historical secret value in the automation queue
+- scoped consumers must use the resolver boundary rather than the generic
+  `get`/`get_secret` plaintext APIs
+- authorization failure must not reveal whether the reference exists or include
+  a value in its error
 
 Export redacted compact JSON for review:
 
