@@ -798,6 +798,9 @@ describe("boot criticality (owner ruling 2026-07-29: tailscale must never be boo
     cpSync(join(SHIPPED, "station"), join(planted, "station"), { recursive: true });
     const templatePath = join(planted, "station", "template.json");
     const template = JSON.parse(readFileSync(templatePath, "utf8"));
+    // Opting this overlay into tailscale retracts its declared absence — a
+    // template that both forbids and requires it is refused at load.
+    delete template.overlays.ec2.absences;
     template.overlays.ec2.tailscale = {
       join: true,
       authKeySecretName: "stations/prod/tailscale/authkey",
@@ -1110,13 +1113,20 @@ describe("no tailscale on AWS stations (owner ruling 2026-07-30 — supersedes t
     expect(userData).not.toContain("secretsmanager");
   });
 
-  test("ABSENCE: the station,ec2 setup-steps render and drift report carry no tailscale in any status", () => {
+  // REWRITTEN 2026-07-31. This test used to assert that an ec2 drift report
+  // contained NO item mentioning tailscale in any status, and that was the
+  // whole implementation of ruling item 3. It made the absence unfalsifiable:
+  // measured 2026-07-30 22:02Z, an ec2 render emitted `tailscale_items=[]`, and
+  // station18 — running a live tailscale, BackendState=Running — read clean
+  // 42/42 while this test was green. No tailnet-HEALTH item is still correct;
+  // no item AT ALL is what left the ruling unchecked.
+  test("ABSENCE: the station,ec2 render carries no tailscale, and the report ASSERTS its absence", () => {
     const steps = buildStationTemplateSteps(effectiveFor(["ec2"]), { station: "station17" });
     expect(steps.map((step) => `${step.id} ${step.command}`).join("\n")).not.toMatch(TAILSCALE_PATTERN);
     const { root, home, effective } = buildCleanFixture();
-    // Both probe modes — no-probe (skipped items are still noise) AND a live
-    // probe (an ok/drift item would be worse). Reviewer finding P3-1: an
-    // earlier version iterated [null, undefined] and tested null twice.
+    // A probe that claims every binary resolves and every unit is up: i.e. a
+    // box that HAS tailscale. Reviewer finding P3-1: an earlier version
+    // iterated [null, undefined] and tested null twice.
     const liveProbe: CommandProbe = (command, args) => {
       if (command === "systemctl") return { ok: true, stdout: args.includes("is-active") ? "active\n" : "enabled\n" };
       if (command === "sh") return { ok: true, stdout: "/usr/local/bin/aws\n" };
@@ -1127,8 +1137,14 @@ describe("no tailscale on AWS stations (owner ruling 2026-07-30 — supersedes t
     };
     for (const probe of [null, liveProbe]) {
       const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: probe });
+      // No tailnet-health item: that question is noise on this station class.
       expect(result.items.filter((item) => item.kind === "tailscale")).toEqual([]);
-      expect(result.items.filter((item) => item.id.includes("tailscale") || item.id.includes("tailscaled"))).toEqual([]);
+      // But exactly one item speaks to tailscale, and it is the absence.
+      const mentions = result.items.filter((item) => item.id.includes("tailscale"));
+      expect(mentions.map((item) => item.id)).toEqual(["absence:tailscale"]);
+      // Under the live probe the box HAS tailscale and the report says so;
+      // with no probe it cannot tell, and refuses to say ok either way.
+      expect(mentions[0]!.status).toBe(probe === null ? "skipped" : "violation");
     }
   });
 
@@ -1158,10 +1174,16 @@ describe("no tailscale on AWS stations (owner ruling 2026-07-30 — supersedes t
     // refused by the schema (previous test), so plant into the ec2 OVERLAY —
     // the deliberate-opt-in path that remains schema-legal — and prove the
     // same pattern and the same item filters the ABSENCE tests use detect it.
+    //
+    // Opting in means RETRACTING the declared absence, which is the point of
+    // declaring it: the ruling's one-box exception now has to be written down
+    // in the overlay rather than arrived at by deleting a check. A template
+    // that both forbids and requires tailscale does not load at all.
     const planted = mkdtempSync(join(tmpdir(), "station-template-planted-"));
     cpSync(join(SHIPPED, "station"), join(planted, "station"), { recursive: true });
     const templatePath = join(planted, "station", "template.json");
     const template = JSON.parse(readFileSync(templatePath, "utf8"));
+    delete template.overlays.ec2.absences;
     template.overlays.ec2.tailscale = {
       join: true,
       authKeySecretName: "stations/prod/tailscale/authkey",
