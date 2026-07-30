@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { AgentTarget, CreateWorkflowInput, WorkflowStepInput } from "../types.js";
-import { prHandoffCommand } from "./template-kit.js";
+import { prHandoffCommand, ROUTING_REMEDIATION_ALERT_CHANNEL } from "./template-kit.js";
 import {
   BOUNDED_AGENT_WORKER_VERIFIER_TEMPLATE_ID,
   DETERMINISTIC_CHECK_CREATE_TASK_TEMPLATE_ID,
@@ -317,12 +317,31 @@ describe("prompt fragment composition", () => {
     expect(worker.prompt).toContain("Never edit the Todos SQLite database");
     expect(worker.prompt).toContain("safe_auto");
     expect(worker.prompt).toContain("blocker_cross_repo");
-    expect(worker.prompt).toContain("from-kai,routing-health");
     expect(worker.prompt).toContain("old value, new value, repair command, source doctor run, undo record, and route-state recheck result");
-    expect(worker.prompt).toContain("routing-health:blocker:<source-task-id>:<finding-category>");
+
+    // Owner directive 2026-07-30: routine operational alerts are not tasks. The pre-fix
+    // template told the worker to `todos task upsert` one blocker task per finding, and
+    // a single 2026-07-05 sweep emitted 2,817 of them. Findings now go to an evidence
+    // artifact plus at most one aggregate channel post.
+    expect(worker.prompt).not.toContain("task upsert");
+    expect(worker.prompt).not.toContain("from-kai,routing-health");
+    expect(worker.prompt).not.toContain("routing-health:blocker:<source-task-id>:<finding-category>");
+    expect(worker.prompt).toContain("Routine operational alerts are NOT tasks");
+    expect(worker.prompt).toContain("routing-remediation-blockers-");
+    expect(worker.prompt).toContain(`conversations send ${ROUTING_REMEDIATION_ALERT_CHANNEL}`);
+    expect(worker.prompt).toContain("exactly ONE post per run, never one per finding");
+    // Built from the exported constant rather than written out: a shell-quoted channel
+    // name spelled literally here reads to the branding guard as a possessive form of the
+    // legacy product name, and the assertion is stronger tied to the constant anyway.
+    expect(preflightCommand).toContain(
+      `OPENLOOPS_ROUTING_REMEDIATION_ALERT_CHANNEL='${ROUTING_REMEDIATION_ALERT_CHANNEL}'`,
+    );
+    expect(preflightCommand).toContain("OPENLOOPS_ROUTING_REMEDIATION_BLOCKER_REPORT=");
+    expect(preflightCommand).not.toContain("blocker_task_tags");
 
     const verifier = agentTargetOf(stepById(workflow, "verifier"));
     expect(verifier.prompt).toContain("Confirm safe_auto repairs were limited to working_dir and task_list_id");
+    expect(verifier.prompt).toContain("Fail verification if this run created ANY todos task for a routing finding");
     expect(verifier.prompt).toContain("If dry-run mode was rendered, verify that no apply/repair mutation occurred");
 
     const dryRunWorkflow = renderLoopTemplate(ROUTING_REMEDIATION_TEMPLATE_ID, {
@@ -332,6 +351,18 @@ describe("prompt fragment composition", () => {
       worktreeRoot,
     });
     expect(agentTargetOf(stepById(dryRunWorkflow, "worker")).prompt).toContain("This workflow was rendered with dryRun=true. Do not run the apply command");
+
+    const customChannel = renderLoopTemplate(ROUTING_REMEDIATION_TEMPLATE_ID, {
+      projectPath: repoPath,
+      todosProjectPath: "/srv/todos",
+      idempotencyKey: "routing-health:open-loops:custom-channel",
+      alertChannel: "incidents",
+      worktreeRoot,
+    });
+    expect(agentTargetOf(stepById(customChannel, "worker")).prompt).toContain("conversations send incidents");
+    expect(commandOf(stepById(customChannel, "routing-doctor-preflight"))).toContain(
+      "OPENLOOPS_ROUTING_REMEDIATION_ALERT_CHANNEL='incidents'",
+    );
   });
 });
 

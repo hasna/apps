@@ -35,6 +35,8 @@ import {
   PR_REVIEW_TEMPLATE_ID,
   prHandoffCommand,
   REPORT_ONLY_TEMPLATE_ID,
+  ROUTING_HEALTH_ALERTS_ARE_NOT_TASKS_FRAGMENT,
+  ROUTING_REMEDIATION_ALERT_CHANNEL,
   ROUTING_REMEDIATION_TEMPLATE_ID,
   routingRemediationDoctorCommand,
   routingRemediationPreflightCommand,
@@ -177,6 +179,11 @@ export interface RoutingRemediationWorkflowTemplateInput extends AgentWorkflowTe
   idempotencyKey?: string;
   evidenceDir?: string;
   undoDir?: string;
+  /**
+   * Conversations channel that routing-health blocker findings are summarised to.
+   * Defaults to {@link ROUTING_REMEDIATION_ALERT_CHANNEL}. They are never filed as tasks.
+   */
+  alertChannel?: string;
 }
 
 export type LoopTemplateSourceFilter = LoopTemplateSource | "all";
@@ -1035,6 +1042,8 @@ export function renderRoutingRemediationWorkflow(input: RoutingRemediationWorkfl
   const preflightOutputPath = join(evidenceDir, `routing-remediation-preflight-${runId}.json`);
   const applyOutputPath = join(evidenceDir, `routing-remediation-apply-${runId}.json`);
   const recheckOutputPath = join(evidenceDir, `routing-remediation-recheck-${runId}.json`);
+  const blockerReportPath = join(evidenceDir, `routing-remediation-blockers-${runId}.json`);
+  const alertChannel = input.alertChannel?.trim() || ROUTING_REMEDIATION_ALERT_CHANNEL;
   const undoRecordPath = join(undoDir, `routing-remediation-${runId}.undo.json`);
   const applyCommand = routingRemediationDoctorCommand({
     todosProjectPath,
@@ -1055,6 +1064,8 @@ export function renderRoutingRemediationWorkflow(input: RoutingRemediationWorkfl
     dryRun,
     idempotencyKey,
     applyCommand,
+    blockerReportPath,
+    alertChannel,
     ...scope,
   });
   const context = {
@@ -1076,8 +1087,10 @@ export function renderRoutingRemediationWorkflow(input: RoutingRemediationWorkfl
       preflightOutputPath,
       applyOutputPath,
       recheckOutputPath,
+      blockerReportPath,
       undoRecordPath,
     },
+    alertChannel,
     worktree: worktreeContextFragment(plan),
   };
   const shared = [
@@ -1092,10 +1105,13 @@ export function renderRoutingRemediationWorkflow(input: RoutingRemediationWorkfl
     `- Preflight JSON: ${preflightOutputPath}`,
     `- Apply JSON target: ${applyOutputPath}`,
     `- Recheck JSON target: ${recheckOutputPath}`,
+    `- Blocker findings report (evidence, NOT tasks): ${blockerReportPath}`,
+    `- Blocker alert conversations channel: ${alertChannel}`,
     `- Undo record target: ${undoRecordPath}`,
     "Never edit the Todos SQLite database, raw DB files, or task JSON storage directly. Do not use sqlite3, ad hoc SQL, or filesystem mutations as a repair mechanism.",
     "Only supported Todos CLI/API commands may mutate tasks. Safe repairs are limited to doctor findings classified safe_auto whose suggested_repair.field is working_dir or task_list_id.",
-    "Refuse blocker_human, blocker_cross_repo, blocker_invalid_path, unsupported, legal, and other human-judgement findings as mutations. File or update blocker tasks instead.",
+    "Refuse blocker_human, blocker_cross_repo, blocker_invalid_path, unsupported, legal, and other human-judgement findings as mutations. Report them as evidence; never mutate them.",
+    ROUTING_HEALTH_ALERTS_ARE_NOT_TASKS_FRAGMENT(alertChannel, blockerReportPath),
     NO_TMUX_DISPATCH_FRAGMENT,
     "",
     `Routing remediation context JSON: ${compactJson(context)}`,
@@ -1109,21 +1125,23 @@ export function renderRoutingRemediationWorkflow(input: RoutingRemediationWorkfl
       : `If preflight permits apply, run the supported repair command and capture stdout JSON to ${applyOutputPath}: ${applyCommand}`,
     `After any apply run, recheck route state and capture stdout JSON to ${recheckOutputPath}: ${recheckCommand}`,
     "For every modified task, ensure a task comment records old value, new value, repair command, source doctor run, undo record, and route-state recheck result. If the Todos CLI already wrote a complete per-task repair comment, verify it; otherwise add the missing evidence with todos comment.",
-    "Create or update deduped blocker tasks for every blocker_human, blocker_cross_repo, blocker_invalid_path, unsupported, legal, or otherwise unsupported finding.",
+    `Every blocker_human, blocker_cross_repo, blocker_invalid_path, unsupported, or legal finding is already recorded in the blocker report at ${blockerReportPath} by the preflight step. Verify it is complete; do not re-file any of it anywhere else.`,
     [
-      "Blocker task command shape:",
-      `todos --project ${todosProjectPath} task upsert --fingerprint "routing-health:blocker:<source-task-id>:<finding-category>" --title "Routing remediation blocker: <finding-category> for <source-task-id>" -d "<source task id, finding category, repair_class, old value, new value, source doctor run, and why automation refused mutation>" -p high -t from-kai,routing-health`,
+      "Aggregate alert command shape — exactly ONE post per run, never one per finding:",
+      `conversations send ${alertChannel} "routing-health ${idempotencyKey}: <N> blocker findings (<category>=<count>, ...). Evidence: ${blockerReportPath}"`,
+      "Skip the post entirely when the run produced zero blocker findings — silence is the correct output for a clean run.",
     ].join("\n"),
     "Do not change cross-repo task intent. A cross-repo finding can only be changed when the doctor itself classifies the exact field repair as safe_auto and the supported Todos repair command applies it.",
-    "Record compact workflow evidence: changed tasks, blocker fingerprints, apply/recheck artifact paths, undo record path, validation results, and residual risks.",
+    "Record compact workflow evidence: changed tasks, blocker report path, apply/recheck artifact paths, undo record path, validation results, and residual risks.",
   ].join("\n");
   const verifierPrompt = [
     ...boundedStepHeaderFragment("Verify bounded routing-doctor remediation evidence.", "verifier", "bounded"),
     shared,
-    adversarialReviewFragment("the preflight artifact, apply output, undo record, blocker tasks, per-task comments, and route-state recheck", TASK_REVIEW_FOCUS),
+    adversarialReviewFragment("the preflight artifact, apply output, undo record, blocker report, per-task comments, and route-state recheck", TASK_REVIEW_FOCUS),
     verifierRuntimeGuidance(input),
     `Re-run or inspect the route-state recheck command as needed: ${recheckCommand}`,
-    "Confirm safe_auto repairs were limited to working_dir and task_list_id, raw DB edits were not used, cross-repo/human/legal/unsupported findings became from-kai,routing-health blocker tasks, and every changed task has old/new/command/source/recheck evidence.",
+    `Confirm safe_auto repairs were limited to working_dir and task_list_id, raw DB edits were not used, cross-repo/human/legal/unsupported findings landed in ${blockerReportPath} and at most one aggregate post on ${alertChannel}, and every changed task has old/new/command/source/recheck evidence.`,
+    "Fail verification if this run created ANY todos task for a routing finding. Routine operational alerts are not tasks (owner directive 2026-07-30); one task per finding is the exact defect this workflow was changed to remove.",
     "If dry-run mode was rendered, verify that no apply/repair mutation occurred and that the output is clearly preflight-only.",
     "If invalid, record precise blocker evidence and create follow-up tasks rather than broad fixes.",
     VERIFIER_TINY_FIXES_FRAGMENT,
@@ -1150,7 +1168,7 @@ export function renderRoutingRemediationWorkflow(input: RoutingRemediationWorkfl
         plan,
         workerPrompt,
         verifierPrompt,
-        workerDescription: "Apply only supported Todos CLI safe_auto repairs and file blocker tasks.",
+        workerDescription: "Apply only supported Todos CLI safe_auto repairs and report blocker findings as evidence; never as tasks.",
         verifierDescription: "Adversarially verify routing remediation evidence and safety boundaries.",
         workerDependsOn: ["routing-doctor-preflight"],
       }),
@@ -1485,6 +1503,7 @@ function renderRoutingRemediationTemplate(values: Record<string, string | undefi
     idempotencyKey: values.idempotencyKey,
     evidenceDir: values.evidenceDir,
     undoDir: values.undoDir,
+    alertChannel: values.alertChannel,
     worktreeMode: base.worktreeMode ?? "required",
   });
 }

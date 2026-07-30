@@ -197,6 +197,45 @@ const BASE_OPTS = {
 // text with no `gh` probe (hermetic, deterministic).
 const MERGED_PR_DESCRIPTION = "please merge https://github.com/hasna/example/pull/7 pr_state=MERGED";
 
+/**
+ * Environment keys that point the Todos CLI/SDK at a SHARED store. A test that
+ * inherits any of them writes into production.
+ *
+ * This is not hypothetical. Between 2026-07-05 and 2026-07-15 this very describe
+ * block leaked 943 `Merge the release PR` rows into the shared hosted store,
+ * under a project id of `/tmp/loops-drain-src-XXXXXX` — the temp
+ * directory registered below. Every fleet shell exports HASNA_TODOS_API_URL and
+ * HASNA_TODOS_API_KEY, and `{ ...process.env }` carried them into every child.
+ *
+ * The fake `todos` binary installed on PATH stops the bleeding, but PATH shadowing
+ * is a single point of failure: an absolute invocation, a shell that resets PATH,
+ * or a code path that reaches the SDK in-process all bypass it. Blanking the
+ * routing credentials means the child physically cannot reach the shared store,
+ * so the two defenses fail independently.
+ *
+ * Kept as a named local fixture rather than imported from @hasna/todos because the
+ * helper there (`localRoutingTestEnv`) lives inside a *.test.ts file and is not part
+ * of the published package; promoting it is tracked separately.
+ */
+const SHARED_TODOS_STORE_ENV_KEYS = [
+  "HASNA_TODOS_API_URL",
+  "HASNA_TODOS_API_KEY",
+  "HASNA_TODOS_DATABASE_URL",
+  "TODOS_API_URL",
+  "TODOS_API_KEY",
+] as const;
+
+/** process.env with every shared-store pointer blanked and storage pinned local. */
+function scrubbedTodosEnv(dbPathOverride: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const key of SHARED_TODOS_STORE_ENV_KEYS) env[key] = "";
+  env.HASNA_TODOS_STORAGE_MODE = "local";
+  env.TODOS_STORAGE_MODE = "local";
+  env.HASNA_TODOS_DB_PATH = dbPathOverride;
+  env.TODOS_DB_PATH = dbPathOverride;
+  return env;
+}
+
 describe.serial("drainTodosTaskRoutes freshness close", () => {
   let todosProject: string;
   let taskListId: string;
@@ -207,7 +246,7 @@ describe.serial("drainTodosTaskRoutes freshness close", () => {
   let createdTaskIds: string[];
 
   function todosEnv(): NodeJS.ProcessEnv {
-    return { ...process.env };
+    return scrubbedTodosEnv(join(fakeTodosRoot, "todos.db"));
   }
 
   beforeEach(() => {
@@ -273,6 +312,22 @@ describe.serial("drainTodosTaskRoutes freshness close", () => {
     const result = spawnSync("todos", ["--project", todosProject, "--json", "ready", "--limit", "20"], { encoding: "utf8", timeout: 30_000, env: todosEnv() });
     return (JSON.parse(result.stdout || "[]") as unknown[]).length;
   }
+
+  // Regression for the 943 `Merge the release PR` rows this block leaked into the
+  // live hosted store between 2026-07-05 and 2026-07-15. Two independent defenses
+  // must hold: the fake `todos` on PATH, and an env that cannot reach a shared store.
+  test("never hands a child process a pointer to a shared todos store", () => {
+    const env = todosEnv();
+    for (const key of SHARED_TODOS_STORE_ENV_KEYS) {
+      expect(env[key] ?? "").toBe("");
+    }
+    expect(env.HASNA_TODOS_STORAGE_MODE).toBe("local");
+    expect(env.HASNA_TODOS_DB_PATH).toStartWith(tmpdir());
+
+    // And PATH still resolves `todos` to the hermetic fixture, not the real CLI.
+    const which = spawnSync("sh", ["-c", "command -v todos"], { encoding: "utf8", env, timeout: 10_000 });
+    expect((which.stdout || "").trim()).toBe(join(fakeTodosRoot, "bin", "todos"));
+  });
 
   test("closes a merged-PR task out of the queue instead of re-skipping it", () => {
     const taskId = addTask(MERGED_PR_DESCRIPTION);

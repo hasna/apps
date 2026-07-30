@@ -517,7 +517,9 @@ The catalog also includes `task-lifecycle`, `pr-review`, `scheduled-audit`,
 `routing-remediation` for bounded routing-doctor repair runs: it dry-runs by
 default, gates `safe_auto` capacity, applies only supported
 `todos doctor routing --apply` repairs when explicitly enabled, and files
-blocker tasks for human/cross-repo/unsupported findings.
+a blocker evidence report plus one aggregate conversations post for
+human/cross-repo/unsupported findings — never one task per finding (owner directive
+2026-07-30, "routine operational alerts are not tasks").
 
 ```bash
 loops templates list

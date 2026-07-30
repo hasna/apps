@@ -21,6 +21,32 @@ export const INCIDENT_RESPONSE_TEMPLATE_ID = "incident-response";
 export const DETERMINISTIC_CHECK_CREATE_TASK_TEMPLATE_ID = "deterministic-check-create-task";
 export const ROUTING_REMEDIATION_TEMPLATE_ID = "routing-remediation";
 
+/**
+ * Conversations channel that routing-health findings are reported to.
+ *
+ * Owner directive 2026-07-30 ("routine operational alerts are not tasks"): a routing
+ * failure is a measurement, not a claim on someone's attention, so it must not be
+ * filed as a todos task. Before that directive this template told the worker to
+ * `todos task upsert` one blocker task per finding, and a single sweep on 2026-07-05
+ * emitted 2,817 of them — none ever assigned, actioned, or commented on. Findings now
+ * go to a run evidence artifact plus ONE aggregate post on this channel.
+ */
+export const ROUTING_REMEDIATION_ALERT_CHANNEL = "open-loops";
+
+/**
+ * Instruction fragment forbidding a routing-health worker from turning findings into
+ * todos rows. Owner directive 2026-07-30: the task store is for work someone intends
+ * to do; a routing failure is a measurement and belongs in evidence plus one aggregate
+ * channel post.
+ */
+export function ROUTING_HEALTH_ALERTS_ARE_NOT_TASKS_FRAGMENT(alertChannel: string, blockerReportPath: string): string {
+  return [
+    "Routine operational alerts are NOT tasks (owner directive 2026-07-30). Do not create, upsert, or fingerprint a todos task for any routing finding, blocker, or health signal — not one per finding, not one per category, not one per run.",
+    `Findings go to the blocker report artifact ${blockerReportPath} and to at most ONE aggregate summary post on the ${alertChannel} conversations channel.`,
+    "The only todos writes this workflow may make are comments on the tasks it actually repaired.",
+  ].join("\n");
+}
+
 export type AgentWorkflowRole = "triage" | "planner" | "worker" | "verifier";
 
 // ---------------------------------------------------------------------------
@@ -253,7 +279,7 @@ export const BUILTIN_TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
     id: ROUTING_REMEDIATION_TEMPLATE_ID,
     name: "Routing Remediation",
     description:
-      "Run a bounded routing-doctor remediation workflow: deterministic preflight, safe Todos CLI repair, blocker task filing, and adversarial verification.",
+      "Run a bounded routing-doctor remediation workflow: deterministic preflight, safe Todos CLI repair, blocker evidence reporting to a conversations channel, and adversarial verification.",
     kind: "workflow",
     variables: [
       projectPathVariable("Repository/project path used for workflow evidence artifacts."),
@@ -464,6 +490,10 @@ export interface RoutingRemediationPreflightCommandOptions extends RoutingRemedi
   dryRun: boolean;
   idempotencyKey: string;
   applyCommand: string;
+  /** Where blocker findings are written as evidence instead of being filed as tasks. */
+  blockerReportPath: string;
+  /** Conversations channel the aggregate blocker summary is posted to. */
+  alertChannel?: string;
 }
 
 export function routingRemediationDoctorScopeArgs(opts: RoutingRemediationScopeOptions): string[] {
@@ -526,6 +556,8 @@ const ROUTING_REMEDIATION_PREFLIGHT_SCRIPT = [
   "const preflightOutputPath = required('OPENLOOPS_ROUTING_REMEDIATION_PREFLIGHT_OUTPUT');",
   "const idempotencyKey = required('OPENLOOPS_ROUTING_REMEDIATION_IDEMPOTENCY_KEY');",
   "const applyCommand = required('OPENLOOPS_ROUTING_REMEDIATION_APPLY_COMMAND');",
+  "const blockerAlertChannel = required('OPENLOOPS_ROUTING_REMEDIATION_ALERT_CHANNEL');",
+  "const blockerReportPath = required('OPENLOOPS_ROUTING_REMEDIATION_BLOCKER_REPORT');",
   "const scopeArgs = parseJson(env.OPENLOOPS_ROUTING_REMEDIATION_SCOPE_ARGS || '[]', 'scope args');",
   "if (!Array.isArray(scopeArgs) || !scopeArgs.every((entry) => typeof entry === 'string')) throw new Error('scope args must be a string array');",
   "const maxRepairs = Number(env.OPENLOOPS_ROUTING_REMEDIATION_MAX_REPAIRS || '25');",
@@ -575,11 +607,28 @@ const ROUTING_REMEDIATION_PREFLIGHT_SCRIPT = [
   "  capacity: { max_repairs: maxRepairs, requested_repairs: safeFindings.length, allowed: safeFindings.length <= maxRepairs },",
   "  apply_allowed: !dryRun && unsupportedSafeFields.length === 0 && safeFindings.length <= maxRepairs,",
   "  apply_command: applyCommand,",
-  "  blocker_task_tags: ['from-kai', 'routing-health'],",
+  "  blocker_alert_channel: blockerAlertChannel,",
+  "  blocker_report_path: blockerReportPath,",
   "  blocker_repair_classes: [...blockerClasses],",
   "};",
   "writeJson(doctorOutputPath, doctor);",
   "writeJson(preflightOutputPath, preflight);",
+  "// Blocker findings are telemetry, not work: they land in this artifact and are",
+  "// summarised once to the alert channel. They must never become todos rows.",
+  "const blockerByCategory = blockerFindings.reduce((acc, finding) => {",
+  "  const category = String(finding?.category || 'unknown');",
+  "  acc[category] = (acc[category] || 0) + 1;",
+  "  return acc;",
+  "}, {});",
+  "writeJson(blockerReportPath, {",
+  "  schema_version: 'openloops.routing_remediation_blockers.v1',",
+  "  generated_at: preflight.generated_at,",
+  "  idempotency_key: idempotencyKey,",
+  "  alert_channel: blockerAlertChannel,",
+  "  count: blockerFindings.length,",
+  "  by_category: blockerByCategory,",
+  "  findings: blockerFindings,",
+  "});",
   "console.log(JSON.stringify({",
   "  ok: preflight.ok,",
   "  dry_run: preflight.dry_run,",
@@ -588,6 +637,8 @@ const ROUTING_REMEDIATION_PREFLIGHT_SCRIPT = [
   "  preflight_output_path: preflightOutputPath,",
   "  safe_auto: preflight.safe_auto,",
   "  blocker_findings: preflight.blocker_findings,",
+  "  blocker_report_path: blockerReportPath,",
+  "  blocker_alert_channel: blockerAlertChannel,",
   "  unsupported_safe_fields: preflight.unsupported_safe_fields,",
   "  capacity: preflight.capacity,",
   "}));",
@@ -613,6 +664,8 @@ export function routingRemediationPreflightCommand(opts: RoutingRemediationPrefl
     `export OPENLOOPS_ROUTING_REMEDIATION_DRY_RUN=${shellQuote(opts.dryRun ? "true" : "false")}`,
     `export OPENLOOPS_ROUTING_REMEDIATION_SCOPE_ARGS=${shellQuote(JSON.stringify(routingRemediationDoctorScopeArgs(opts)))}`,
     `export OPENLOOPS_ROUTING_REMEDIATION_APPLY_COMMAND=${shellQuote(opts.applyCommand)}`,
+    `export OPENLOOPS_ROUTING_REMEDIATION_BLOCKER_REPORT=${shellQuote(opts.blockerReportPath)}`,
+    `export OPENLOOPS_ROUTING_REMEDIATION_ALERT_CHANNEL=${shellQuote(opts.alertChannel ?? ROUTING_REMEDIATION_ALERT_CHANNEL)}`,
     "bun - <<'BUN'",
     ROUTING_REMEDIATION_PREFLIGHT_SCRIPT,
     "BUN",

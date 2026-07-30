@@ -1594,7 +1594,7 @@ exports[`builtin rendered workflow snapshots builtin template summaries 1`] = `
   {
     "id": "routing-remediation",
     "name": "Routing Remediation",
-    "description": "Run a bounded routing-doctor remediation workflow: deterministic preflight, safe Todos CLI repair, blocker task filing, and adversarial verification.",
+    "description": "Run a bounded routing-doctor remediation workflow: deterministic preflight, safe Todos CLI repair, blocker evidence reporting to a conversations channel, and adversarial verification.",
     "kind": "workflow",
     "variables": [
       {
