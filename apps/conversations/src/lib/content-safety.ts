@@ -130,6 +130,76 @@ const SENSITIVE_PATTERNS: PatternRule[] = [
 const ENV_ASSIGNMENT = /^\s*(?:export\s+)?([A-Z][A-Z0-9_]{2,})\s*=\s*(.+?)\s*$/;
 const MIN_ENV_DUMP_LINES = 3;
 
+/**
+ * Verdict tokens from a credential PRESENCE test, which is the idiom the
+ * credential-hygiene rules prescribe *instead of* printing a value:
+ *
+ *   [ -n "${SOME_KEY:-}" ] && echo set || echo unset
+ *
+ * `SOME_KEY=set` is the opposite of a leak — it is the documented way to avoid
+ * one — so treating it as an env dump punished authors for following the rule
+ * this guard exists to enforce, and destroyed an incident report that did
+ * (message #609657).
+ *
+ * This narrows detection and cannot mask a credential: a real secret value is
+ * never exactly the literal token `set`, `unset`, or `missing`. The exclusion is
+ * a fixed, closed list of verdict words — never a length, entropy, or
+ * looks-random heuristic, which is where a guard silently stops catching things.
+ *
+ * STRICTLY the output of a presence test, and nothing else. An earlier revision
+ * of this list also carried `true`, `false`, `yes`, `no`, `none`, `null`,
+ * `undefined`, `empty`, `ok` and `redacted`. Those are ordinary FLAG VALUES that
+ * a real `.env` file is full of, and excluding them from the count silently
+ * weakened the guard: a dump of two real secrets beside three boolean flags
+ * stopped reaching MIN_ENV_DUMP_LINES, so it was neither redacted NOR blocked at
+ * send — `assertNoSensitiveContent` throws only when a finding exists, so the
+ * credential was accepted and persisted.
+ *
+ * The distinction that was lost, and is the reason this list stays short: a flag
+ * line must not TERMINATE a run, but it must still COUNT toward one. Those are
+ * different questions, and classifying `DEBUG=true` as a `value` answers both
+ * correctly — exactly as the pre-fix code did.
+ */
+const PRESENCE_VERDICTS = new Set([
+  "set",
+  "unset",
+  "present",
+  "absent",
+  "missing",
+]);
+
+function isPresenceVerdict(rawValue: string): boolean {
+  const bare = rawValue
+    .trim()
+    .replace(/^["'`]|["'`]$/g, "")
+    .replace(/^[<(\[]|[>)\]]$/g, "")
+    .trim()
+    .toLowerCase();
+  return PRESENCE_VERDICTS.has(bare);
+}
+
+type EnvLineKind = "value" | "verdict" | "other";
+
+/**
+ * Classify a line for env-dump detection.
+ *
+ *  - "value"   — `NAME=<something that could be a real value>`, INCLUDING flag
+ *                values like `DEBUG=true`. A flag is still a value: it counts
+ *                toward a dump, because real `.env` pastes mix flags and secrets.
+ *  - "verdict" — `NAME=set` / `NAME=unset`: the output of a presence test, which
+ *                is definitionally not a value
+ *  - "other"   — anything else, including prose and comments
+ */
+function classifyEnvLine(rawLine: string): EnvLineKind {
+  const trimmed = rawLine.trim();
+  if (trimmed.length === 0 || trimmed.startsWith("#")) return "other";
+
+  const match = ENV_ASSIGNMENT.exec(rawLine);
+  if (!match) return "other";
+
+  return isPresenceVerdict(match[2] ?? "") ? "verdict" : "value";
+}
+
 function lineNumberAt(text: string, index: number): number {
   let line = 1;
   for (let i = 0; i < index && i < text.length; i++) {
@@ -161,15 +231,27 @@ function envDumpRanges(text: string): Array<{ start: number; end: number; line: 
     if (rawLine === "") break;
     const start = match.index ?? 0;
     const end = start + rawLine.length;
-    const trimmed = rawLine.trim();
-    const isEnvLine = trimmed.length > 0 && !trimmed.startsWith("#") && ENV_ASSIGNMENT.test(rawLine);
+    const kind = classifyEnvLine(rawLine);
 
-    if (isEnvLine) {
+    if (kind === "value") {
       if (!current) current = { start, end, count: 1, line };
       else {
         current.end = end;
         current.count++;
       }
+    } else if (kind === "verdict") {
+      // NEUTRAL, deliberately: a presence verdict neither counts toward a dump
+      // nor breaks one.
+      //
+      // Not counting is what lets the sanctioned presence test survive.
+      // Not breaking is what keeps a report that MIXES a presence check into a
+      // genuine paste from splitting into runs too short to detect.
+      //
+      // Only true presence verdicts (`set`/`unset`/...) reach this branch.
+      // Ordinary flag values such as `DEBUG=true` are classified "value" and
+      // COUNT, which is what the pre-fix code did and what must not regress:
+      // a real .env paste is mostly flags, and a threshold that ignores them
+      // stops firing on the dumps it exists to catch.
     } else {
       if (current && current.count >= MIN_ENV_DUMP_LINES) {
         ranges.push({ start: current.start, end: current.end, line: current.line });
@@ -326,15 +408,121 @@ export function redactSensitiveValue<T>(value: T): T {
     const result: Record<string, unknown> = {};
     for (const [key, nested] of Object.entries(value)) {
       const redactedKey = redactSensitiveText(key);
-      const keyFindings = metadataKeyFindings(key);
-      const keyValueText = scalarKeyValueText(key, nested);
-      const contextualFindings = keyValueText ? scanSensitiveContent(keyValueText) : [];
-      const findings = [...keyFindings, ...contextualFindings];
-      result[redactedKey] = findings.length > 0
-        ? redactionForFindings(findings)
-        : redactSensitiveValue(nested);
+
+      // Whole-value replacement applies in exactly ONE case: the KEY itself
+      // declares the field to be a credential (DATABASE_URL, AWS_SECRET_ACCESS_KEY,
+      // authorization, ...). There the entire value IS the secret, so partial
+      // survival would leak it.
+      //
+      // In every other case the value is ordinary content that merely CONTAINS
+      // something sensitive-looking, and it is redacted span-by-span via
+      // redactSensitiveText. Replacing it wholesale is what silently destroyed
+      // real messages: a message body carrying one connection string was stored
+      // as nothing but "[REDACTED:DATABASE_URL]", taking an entire incident
+      // report with it (#608243, #609657).
+      //
+      // This does not weaken detection. The span redactor still replaces every
+      // match; the difference is blast radius, not whether the secret survives.
+      if (metadataKeyFindings(key).length > 0) {
+        result[redactedKey] = redactionForFindings(metadataKeyFindings(key));
+        continue;
+      }
+
+      result[redactedKey] = redactSensitiveValue(nested);
     }
     return result as T;
   }
   return value;
+}
+
+/**
+ * Outcome of a redaction pass: the redacted payload plus what fired.
+ *
+ * Redaction that nobody can observe is how three messages were destroyed before
+ * anyone noticed. Every redacting entry point has a reporting twin so the caller
+ * can tell the author their message was rewritten.
+ */
+export interface RedactionOutcome<T> {
+  value: T;
+  findings: SensitiveContentFinding[];
+  redacted: boolean;
+}
+
+export function redactSensitiveTextWithFindings(text: string): { text: string; findings: SensitiveContentFinding[]; redacted: boolean } {
+  const findings = scanSensitiveContent(text);
+  return { text: redactSensitiveText(text), findings, redacted: findings.length > 0 };
+}
+
+export function redactSensitiveValueWithFindings<T>(value: T): RedactionOutcome<T> {
+  const findings = scanSensitiveValue(value);
+  return { value: redactSensitiveValue(value), findings, redacted: findings.length > 0 };
+}
+
+/**
+ * Attach a redaction notice to a just-written message, at the STORE FUNNEL.
+ *
+ * Every body-persisting path — CLI send/reply/edit/broadcast, MCP send_message /
+ * send_to_channel / reply / edit_message / send_to_session, the HTTP routes and
+ * the TUI — goes through ConversationsStore.sendMessage or .editMessage. Doing
+ * the check here means a new send path inherits it instead of having to remember
+ * it.
+ *
+ * Hand-applying the notice per call site is what left `broadcast` reporting
+ * `total: N` successes while every one of the N bodies had been replaced.
+ *
+ * The field is set only when the body actually changed, so absence is a positive
+ * statement: the funnel checked, and nothing was rewritten.
+ */
+export function attachSendRedaction<T extends { content?: string | null }>(
+  submitted: string,
+  msg: T,
+): T & { redaction?: SendRedactionNotice } {
+  const notice = describeSendRedaction(submitted, msg?.content ?? null);
+  if (!notice.redacted) return msg;
+  return { ...msg, redaction: notice };
+}
+
+export interface SendRedactionNotice {
+  redacted: boolean;
+  findings: SensitiveContentFinding[];
+  labels: string[];
+  message: string;
+}
+
+/**
+ * Compare what an author submitted against what readers will actually see.
+ *
+ * This is deliberately a DIFF of the stored/rendered content rather than a
+ * re-run of the patterns, so it reports honestly no matter which layer did the
+ * rewriting — local SQLite, the cloud API response redactor, or a server on an
+ * older build. A notice derived from re-scanning would agree with itself and
+ * miss exactly the divergence that made this silent.
+ *
+ * The failure this closes: a send returned success and a real message id while
+ * the body had been replaced wholesale, so the author had no way to know. All
+ * three known losses were found by a different agent reading the channel.
+ */
+export function describeSendRedaction(submitted: string, stored: string | null | undefined): SendRedactionNotice {
+  const rendered = stored ?? "";
+  if (submitted === rendered) {
+    return { redacted: false, findings: [], labels: [], message: "" };
+  }
+
+  const findings = scanSensitiveContent(submitted);
+  const labels = [...new Set(findings.map((finding) => finding.label))];
+  const wholeMessage = rendered.trim().startsWith("[REDACTED") && !rendered.includes("\n");
+  const detail = labels.length > 0 ? ` (${labels.join(", ")})` : "";
+
+  // Wording matters here: the row is written RAW and rewritten when rendered, so
+  // "stored as" would teach the opposite of what is true and send anyone chasing
+  // a recovery down the wrong path. What the author needs to know is what
+  // READERS get.
+  return {
+    redacted: true,
+    findings,
+    labels,
+    message: wholeMessage
+      ? `Readers will see only "${rendered.trim()}" — your ENTIRE body was replaced${detail}.`
+      : `Readers will see this message with redactions applied${detail}. Part of what you wrote will not reach them.`,
+  };
 }

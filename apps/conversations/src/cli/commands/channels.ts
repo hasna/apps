@@ -9,6 +9,7 @@ import { assertNoSensitiveContent } from "../../lib/content-safety.js";
 import { getCliWindow, pageFromQuery, printCompactFooter, queryLimitFor } from "../compact.js";
 import { printMessageEntry } from "../message-output.js";
 import { emitCliError } from "../cli-error.js";
+import { warnIfRedacted } from "../redaction-notice.js";
 import { printErrorLine, printJson, printJsonLine, printLine } from "../../lib/stdout.js";
 
 /**
@@ -346,8 +347,10 @@ export function registerChannelCommands(program: Command): void {
         return failCommand(error, "Failed to send channel message.");
       }
 
+      const redaction = warnIfRedacted(content, msg.content);
+
       if (opts.json) {
-        printJson(msg);
+        printJson({ ...msg, redaction });
       } else {
         printLine(chalk.green(`Message sent to #${channelArg}`) + chalk.dim(` (id: ${msg.id})`));
       }

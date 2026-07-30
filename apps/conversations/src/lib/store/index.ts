@@ -44,6 +44,7 @@ import * as notificationsLib from "../channel-notifications.js";
 import * as summaryLib from "../summary.js";
 import * as hotLib from "../hot.js";
 import * as messagesLib from "../messages.js";
+import { attachSendRedaction } from "../content-safety.js";
 
 const APP = "conversations";
 
@@ -584,10 +585,13 @@ export class LocalStore implements ConversationsStore {
   listHotSessions: ConversationsStore["listHotSessions"] = async (...a) => hotLib.listHotSessions(...a);
 
   // messages
-  sendMessage: ConversationsStore["sendMessage"] = async (...a) => messagesLib.sendMessage(...a);
+  sendMessage: ConversationsStore["sendMessage"] = async (...a) => attachSendRedaction(a[0]?.content ?? "", messagesLib.sendMessage(...a));
   getMessageById: ConversationsStore["getMessageById"] = async (...a) => messagesLib.getMessageById(...a);
   deleteMessage: ConversationsStore["deleteMessage"] = async (...a) => messagesLib.deleteMessage(...a);
-  editMessage: ConversationsStore["editMessage"] = async (...a) => messagesLib.editMessage(...a);
+  editMessage: ConversationsStore["editMessage"] = async (...a) => {
+    const edited = messagesLib.editMessage(...a);
+    return edited ? attachSendRedaction(a[2] ?? "", edited) : edited;
+  };
   readMessages: ConversationsStore["readMessages"] = async (...a) => messagesLib.readMessages(...a);
   countMessages: ConversationsStore["countMessages"] = async (...a) => messagesLib.countMessages(...a);
   searchMessages: ConversationsStore["searchMessages"] = async (...a) => messagesLib.searchMessages(...a);

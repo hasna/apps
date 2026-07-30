@@ -12,6 +12,7 @@ import { getCliWindow, pageFromQuery, printCompactFooter, queryLimitFor } from "
 import { printMessageEntry } from "../message-output.js";
 import { checkForUpdate } from "../../lib/version-check.js";
 import { emitCliError } from "../cli-error.js";
+import { warnIfRedacted } from "../redaction-notice.js";
 import type { DigestResult } from "../../lib/messages.js";
 import { printErrorLine, printJson, printJsonLine, printLine } from "../../lib/stdout.js";
 
@@ -102,8 +103,10 @@ export function registerMessagingCommands(program: Command): void {
         return failCommand(error, "Failed to send message.");
       }
 
+      const redaction = warnIfRedacted(content, msg.content);
+
       if (opts.json) {
-        printJson(msg);
+        printJson({ ...msg, redaction });
       } else if (channel) {
         printLine(chalk.green(`Message sent to #${channel}`) + chalk.dim(` (id: ${msg.id})`));
       } else {
@@ -442,8 +445,10 @@ export function registerMessagingCommands(program: Command): void {
         );
       }
 
+      const redaction = warnIfRedacted(content, msg.content);
+
       if (opts.json) {
-        printJson(msg);
+        printJson({ ...msg, redaction });
       } else {
         printLine(chalk.green(`Reply sent`) + chalk.dim(` (id: ${msg.id}, session: ${msg.session_id})`));
       }
@@ -533,8 +538,12 @@ export function registerMessagingCommands(program: Command): void {
         return failCommand(error, "Failed to edit message.");
       }
 
+      // An edit persists a body exactly like a send does, so it can be rewritten
+      // exactly like a send — and "Message #N edited." was just as silent about it.
+      const redaction = msg ? warnIfRedacted(content, msg.content) : undefined;
+
       if (opts.json) {
-        printJson(msg);
+        printJson(msg ? { ...msg, redaction } : msg);
       } else {
         if (msg) {
           printLine(chalk.green(`Message #${id} edited.`));

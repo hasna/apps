@@ -22,7 +22,18 @@ export interface Message {
   reply_to: number | null;
   reply_count?: number;
   truncated?: boolean;
+  /**
+   * Present ONLY when the stored body differs from what the author submitted.
+   * Set by the store funnel on every write path, so absence means "checked and
+   * clean" rather than "never checked". Never persisted — it describes this
+   * write, not the row.
+   */
+  redaction?: SendRedactionNotice;
 }
+
+/** Re-exported from content-safety so `Message` stays self-describing. */
+export type { SendRedactionNotice } from "./lib/content-safety.js";
+import type { SendRedactionNotice } from "./lib/content-safety.js";
 
 export interface Reaction {
   id: number;

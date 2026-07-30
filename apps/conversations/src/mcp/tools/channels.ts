@@ -12,6 +12,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod/v3";
 import { registerMcpTool } from "../tool-compat.js";
+import { sendResult } from "../redaction-result.js";
 import { getStore } from "../../lib/store/index.js";
 import { identityFor } from "../identity.js";
 import { assertNoSensitiveContent, redactSensitiveText } from "../../lib/content-safety.js";
@@ -135,9 +136,7 @@ export function registerChannelTools(server: McpServer): void {
       return toolError(error, "Failed to send channel message.");
     }
 
-    return {
-      content: [{ type: "text", text: JSON.stringify(msg) }],
-    };
+    return sendResult(content, msg);
   });
 
   registerMcpTool(server, "read_channel", {

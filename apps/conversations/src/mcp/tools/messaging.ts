@@ -8,6 +8,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod/v3";
 import { registerMcpTool } from "../tool-compat.js";
+import { sendResult } from "../redaction-result.js";
 import { getStore } from "../../lib/store/index.js";
 // Reads/writes route through getStore(): ApiStore when HASNA_CONVERSATIONS_API_URL
 // + _API_KEY are set (self_hosted/cloud), else LocalStore.
@@ -62,9 +63,7 @@ export function registerMessagingTools(
       return toolError(error, "Failed to send message.");
     }
 
-    return {
-      content: [{ type: "text", text: JSON.stringify(msg) }],
-    };
+    return sendResult(content, msg);
   });
 
   // Send a message targeted at a specific agent-claude session ID
@@ -112,9 +111,7 @@ export function registerMessagingTools(
       return toolError(error, "Failed to send session message.");
     }
 
-    return {
-      content: [{ type: "text", text: JSON.stringify(msg) }],
-    };
+    return sendResult(content, msg);
   });
 
   registerMcpTool(server, "read_messages", {
@@ -235,9 +232,7 @@ export function registerMessagingTools(
       return toolError(error, "Failed to send reply.");
     }
 
-    return {
-      content: [{ type: "text", text: JSON.stringify(msg) }],
-    };
+    return sendResult(content, msg);
   });
 
   registerMcpTool(server, "mark_read", {
@@ -451,9 +446,7 @@ export function registerMessagingTools(
       };
     }
 
-    return {
-      content: [{ type: "text", text: JSON.stringify(msg) }],
-    };
+    return sendResult(content, msg);
   });
 
   registerMcpTool(server, "pin_message", {
@@ -533,20 +526,41 @@ export function registerMessagingTools(
   }, async (args: Record<string, any>) => {
     const { channels, content, from: fromParam, priority } = args;
     const from = resolveIdentity(fromParam);
-    const results: Array<{ channel: string; id: number }> = [];
+    const results: Array<{ channel: string; id: number; redacted?: boolean }> = [];
     const errors: string[] = [];
+    // Broadcast previously kept only {channel, id} and threw msg.content away,
+    // so N destroyed bodies still reported `total: N` as a clean success — the
+    // silent-failure shape this whole change exists to remove, multiplied by N.
+    const redactedChannels: string[] = [];
 
     for (const channel of (channels as string[])) {
       try {
         const msg = await await getStore().sendMessage({ from, to: channel, content, channel, priority });
-        results.push({ channel, id: msg.id });
+        const redacted = Boolean(msg.redaction?.redacted);
+        if (redacted) redactedChannels.push(channel);
+        results.push({ channel, id: msg.id, ...(redacted ? { redacted: true } : {}) });
       } catch (e) {
         errors.push(e instanceof Error ? e.message : "Failed to send broadcast message.");
       }
     }
 
+    const payload = {
+      sent: results,
+      errors,
+      total: results.length,
+      ...(redactedChannels.length > 0
+        ? {
+            redacted_channels: redactedChannels,
+            warning:
+              `CONTENT ALTERED IN ${redactedChannels.length} OF ${results.length} CHANNELS ` +
+              `(${redactedChannels.join(", ")}). Re-read those before treating the broadcast as delivered.`,
+          }
+        : {}),
+    };
+
     return {
-      content: [{ type: "text", text: JSON.stringify({ sent: results, errors, total: results.length }) }],
+      content: [{ type: "text", text: JSON.stringify(payload) }],
+      ...(redactedChannels.length > 0 ? { isError: true as const } : {}),
     };
   });
 }

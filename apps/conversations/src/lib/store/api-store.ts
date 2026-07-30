@@ -15,6 +15,7 @@ import type { ConversationsStore } from "./index.js";
 import { normalizeChannelName } from "../channel-names.js";
 import { normalizeSince } from "../since.js";
 import { parseProject } from "../projects.js";
+import { attachSendRedaction } from "../content-safety.js";
 import {
   parseMessage,
   compactMessage,
@@ -503,7 +504,7 @@ export class ApiStore implements ConversationsStore {
       // SQLite path (and its tests) stayed correct.
       reply_to: opts.reply_to ?? undefined,
     });
-    return parseMessage(body.message) as never;
+    return attachSendRedaction(opts.content, parseMessage(body.message)) as never;
   };
   getMessageById: ConversationsStore["getMessageById"] = async (id) => {
     const body = await this.client.get<{ message: Record<string, unknown> }>("messages", String(id));
@@ -521,7 +522,7 @@ export class ApiStore implements ConversationsStore {
   editMessage: ConversationsStore["editMessage"] = async (id, agent, newContent) => {
     try {
       const body = await this.client.update<{ message: Record<string, unknown> }>("messages", String(id), { from: agent, content: newContent });
-      return (body ? parseMessage(body.message) : null) as never;
+      return (body ? attachSendRedaction(newContent, parseMessage(body.message)) : null) as never;
     } catch (e) {
       if (isHttpStatus(e, 404)) return null as never;
       throw e;
