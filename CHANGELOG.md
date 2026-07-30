@@ -6,6 +6,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.96]
+
+Release-only version bump. The changes below were merged in
+[#41](https://github.com/hasna/projects/pull/41) without a version bump, so the
+published `0.1.95` — and therefore every machine on the fleet — still shipped
+`KIND_CHANNEL_RULES` and kept minting `internal-<slug>` channel names for kinds
+`generic`, `project`, `docs`, `scaffold` and `remote-only`. Verified 2026-07-30:
+`npm view @hasna/projects version` reported `0.1.95` while the installed
+`dist/cli/index.js` at that version still contained the table, and the merged
+regression test `derivation never IMPOSES an "internal-" prefix, for any kind`
+fails against that build.
+
 ### Changed
 
 - **BREAKING — channel derivation no longer imposes a prefix.** `deriveProjectChannel`
