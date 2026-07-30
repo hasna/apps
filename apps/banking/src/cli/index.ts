@@ -48,15 +48,21 @@ Usage:
   banking transactions list --provider <provider> [--account <id>] [--live true --environment <sandbox|production> --secret-key <key>] [--limit <n>] [--order <asc|desc>] [--start-after <id>|--end-before <id>|--start-at <id>] [--json]
   banking payments quote --provider <provider> --account <id> --amount <decimal> --currency <code> --to <name> [--recipient <provider-recipient-id>] [--rail <rail>] [--json]
   banking payments request --provider <provider> --account <id> --amount <decimal> --currency <code> --to <name> [--recipient <provider-recipient-id>] [--rail <rail>] [--json]
-  banking payments status --provider <provider> --request <id> [--json]
+  banking payments status --provider <provider> --request <id> [--provider-payment <id>] [--json]
   banking cards list --provider <provider> [--account <id>] [--live true --environment <sandbox|production> --secret-key <key>] [--limit <n>] [--order <asc|desc>] [--start-after <id>|--end-before <id>] [--json]
   banking cards request --provider <provider> --account <id> --label <label> [--limit-month <decimal> --currency <code>] [--json]
   banking cards update --provider <provider> --card <id> [--label <label>] [--json]
   banking cards freeze|unfreeze|terminate --provider <provider> --card <id> [--json]
   banking admin --help
 
+Common envelope options:
+  --actor <id>       Requester id (default: agent-cli)
+  --reason <text>    Audit reason (command-specific default)
+  --live true        Evaluate the envelope as live mode; never executes it
+  --environment <sandbox|production>  Policy environment (default: sandbox)
+
 Live reads are currently implemented for Mercury only and require --live true, explicit --environment, and MERCURY_API_KEY or optional local --secret-key.
-All mutation commands create request envelopes only. Provider-side mutations are still gated.`);
+All payment and card mutation commands create request envelopes only. Provider-side mutations are still gated.`);
 }
 
 function emit(value: unknown, json: boolean): void {

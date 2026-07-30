@@ -6,6 +6,11 @@ registry. It intentionally separates verified provider capabilities from
 implementation decisions so the CLI, SDK, and MCP server can grow through
 descriptors instead of ad hoc command branches.
 
+This is a dated research and roadmap artifact, not the current command
+reference. Commands under “Scalable CLI Architecture Requirements” are design
+targets unless they also appear in the current [CLI reference](../CLI.md). Use
+the [SDK](../SDK.md) and [MCP](../MCP.md) references for present behavior.
+
 ## Sources Checked
 
 | Provider | Source | Status |
@@ -223,7 +228,7 @@ advertise or implement:
 
 These are not PSD2 AIS/PIS capabilities in the public source set.
 
-## Scalable CLI Architecture Requirements
+## Historical Scalable CLI Architecture Requirements
 
 The implementation now uses a provider operation registry with typed
 descriptors. The descriptor drives CLI, SDK, MCP, docs, tests, and policy gates

@@ -2,17 +2,16 @@
 
 Agent-safe banking control plane for infrastructure and AI agents.
 
-`@hasna/banking` is the public OSS package for a provider-capability model,
-typed SDK, `banking` CLI, and `banking-mcp` entrypoint. It is request-oriented:
-agents can inspect banking state and request payment/card actions, but live
-money movement must pass policy, idempotency, approval, audit, and
-reconciliation gates.
+`@hasna/banking` provides a provider-capability model, typed SDK, `banking`
+CLI, and `banking-mcp` descriptor entrypoint. It is request-oriented: Mercury
+state can be read through the explicit live-read adapter, while payment and
+card commands create local intent envelopes. No provider-side mutation path is
+enabled.
 
 ## Target Surfaces
 
 | Surface | Target |
 | --- | --- |
-| Local folder | `open-banking` |
 | GitHub repo | `hasna/banking` |
 | npm package | `@hasna/banking` |
 | CLI | `banking` |
@@ -44,13 +43,16 @@ provider conformance task.
 | Mercury mutations | Descriptor and request-envelope only. Payments, internal transfers, card lifecycle, webhooks, recipients, attachments, categories, customers, invoices, onboarding, and metadata writes do not execute provider side effects. |
 | Erste BCR PSD2 AIS/PIS | Descriptor and conformance-fixture only. Consent, SCA, account, transaction, payment, cancellation, and creditor-confirmation flows are modeled but not executed against sandbox or production. |
 | Erste BCR non-PSD2 extras | Unsupported. Direct card control, card-account AIS, funds confirmation, signing baskets, party verification, sensitive card data, and Mercury-style webhooks fail closed. |
-| MCP tools | Local descriptors and request envelopes only. Generic card MCP helpers deny unsupported providers such as Erste BCR through policy. |
+| Generic SDK reads | Return `provider_backed_pending`; use `createMercuryReadClient` or the live CLI commands for implemented Mercury reads. |
+| MCP tools | Callable as local library helpers for descriptors and request envelopes. The binary lists tools but does not implement the MCP wire protocol. |
 
 ## Install
 
 ```bash
 bun add @hasna/banking
 ```
+
+Runtime and source-development commands require Bun 1.3 or newer.
 
 ## State and paths
 
@@ -80,7 +82,10 @@ banking cards list --provider mercury --account acct_123 --live true --environme
 banking transactions list --provider mercury --live true --environment sandbox --limit 10 --order desc --json
 banking transactions list --provider mercury --account acct_123 --live true --environment sandbox --limit 10 --order desc --json
 banking payments request --provider mercury --account acct_123 --amount 10.00 --currency USD --to "Vendor" --recipient recipient_123 --rail ach --json
+banking payments status --provider mercury --request req_123 --provider-payment mercury_123 --json
 banking cards request --provider mercury --account acct_123 --label "Ops" --limit-month 250.00 --currency USD --json
+banking cards update --provider mercury --card card_123 --label "Travel" --json
+banking cards freeze --provider mercury --card card_123 --json
 ```
 
 Mercury live reads are available for accounts, balances, transactions, and
@@ -103,6 +108,9 @@ For source checkouts:
 ```bash
 BANKING_MERCURY_LIVE_SMOKE=true BANKING_MERCURY_ENVIRONMENT=sandbox BANKING_MERCURY_LIVE_SMOKE_LIMIT=1 bun run smoke:mercury:live
 ```
+
+See the [CLI reference](docs/CLI.md) for the complete command, option,
+credential, output, and exit-status contract.
 
 `banking ops list`, `banking ops describe`, and `banking ops plan` expose the
 shared provider operation registry used to expand CLI, SDK, and MCP surfaces.
@@ -143,7 +151,9 @@ const banking = createBankingClient();
 console.log(banking.listProviders());
 ```
 
-The SDK exports provider capability cards and provider-agnostic primitives for:
+See the [SDK reference](docs/SDK.md) for the current exported surfaces and
+execution boundaries. The SDK exports provider capability cards and
+provider-agnostic primitives for:
 
 - exact minor-unit money values;
 - request-oriented payment and card intents;
@@ -165,6 +175,8 @@ See [`docs/migration/iapp-payments-to-banking.md`](docs/migration/iapp-payments-
 for the migration checklist from existing payment integrations to the
 provider-operation model.
 
+For all current and historical pages, see the [documentation index](docs/README.md).
+
 ## MCP
 
 ```bash
@@ -172,6 +184,9 @@ banking-mcp --help
 banking-mcp --list-tools
 ```
 
-The MCP entrypoint exposes stable tool descriptors and local request-envelope
-dispatch helpers. The full MCP protocol server lands after the store and
-provider adapter nodes.
+See the [MCP reference](docs/MCP.md) for every tool and dispatch input. The
+MCP module exposes stable tool descriptors and local request-envelope
+dispatch helpers. `banking-mcp --list-tools` prints descriptors and provider
+cards as JSON. Invoking `banking-mcp` without one of the implemented flags
+prints an error and exits with status 1 because the MCP protocol server is not
+implemented.

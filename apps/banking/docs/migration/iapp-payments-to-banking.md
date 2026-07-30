@@ -3,8 +3,7 @@
 Date: 2026-06-29
 
 This note is for moving existing payment or bank-integration code, including
-`iapp-payments`-style flows, onto the public `hasna/banking` OSS package while
-keeping the local checkout folder named `open-banking`.
+`iapp-payments`-style flows, onto the public `hasna/banking` OSS package.
 
 ## Naming
 
@@ -14,7 +13,6 @@ keeping the local checkout folder named `open-banking`.
 | npm package | `@hasna/banking` |
 | CLI binary | `banking` |
 | MCP binary | `banking-mcp` |
-| Local folder | `open-banking` |
 
 Do not keep a separate plain-provider integration path. Provider behavior should
 flow through the operation registry, SDK policy primitives, CLI commands, and
@@ -49,6 +47,8 @@ MCP descriptors.
    and enqueue outbox work in one serializable transaction.
 6. Keep provider execution behind conformance, approval, idempotency, audit,
    reconciliation, and adversarial review gates.
+
+See the [CLI reference](../CLI.md) for the complete current command contract.
 
 ## Smoke And Verification
 
