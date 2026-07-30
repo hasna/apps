@@ -1,47 +1,14 @@
-import { describe, test, expect, mock } from "bun:test";
+import { describe, test, expect } from "bun:test";
 import type { EvalCase, AdapterConfig } from "../types/index.js";
+import { runEvals, runSingleCase } from "./runner.js";
 
-// Mock adapters
-mock.module("../adapters/http.js", () => ({
-  callHttpAdapter: mock(async () => ({ output: "mock response", durationMs: 50 })),
-}));
-mock.module("../adapters/anthropic.js", () => ({
-  callAnthropicAdapter: mock(async () => ({ output: "mock response", durationMs: 50 })),
-}));
-mock.module("../adapters/openai.js", () => ({
-  callOpenAIAdapter: mock(async () => ({ output: "mock response", durationMs: 50 })),
-}));
-mock.module("../adapters/mcp.js", () => ({
-  callMcpAdapter: mock(async () => ({ output: "mock response", durationMs: 50 })),
-}));
-mock.module("../adapters/function.js", () => ({
-  callFunctionAdapter: mock(async () => ({ output: "mock response", durationMs: 50 })),
-}));
-mock.module("../adapters/cli.js", () => ({
-  callCliAdapter: mock(async () => ({ output: "mock response", durationMs: 50 })),
-}));
-
-// Mock judge
-mock.module("../core/judge.js", () => ({
-  runJudge: mock(async () => ({
-    verdict: "PASS",
-    reasoning: "Looks good",
-    durationMs: 100,
-    inputTokens: 50,
-    outputTokens: 20,
-    costUsd: 0.001,
-  })),
-}));
-
-const { runEvals, runSingleCase } = await import("./runner.js");
-
-const adapter: AdapterConfig = { type: "http", url: "http://localhost:9999" };
+const modulePath = "data:text/javascript,export%20default%20async%20function()%7Breturn%20%22mock%20response%22%7D";
+const adapter: AdapterConfig = { type: "function", modulePath };
 
 const basicCase: EvalCase = {
   id: "test-001",
   input: "hello",
   assertions: [{ type: "min_length", value: 1 }],
-  judge: { rubric: "Should respond" },
 };
 
 describe("runSingleCase", () => {
@@ -55,7 +22,11 @@ describe("runSingleCase", () => {
   });
 
   test("skips judge when skipJudge=true", async () => {
-    const result = await runSingleCase(basicCase, adapter, true);
+    const result = await runSingleCase(
+      { ...basicCase, judge: { rubric: "Should respond" } },
+      adapter,
+      true,
+    );
     expect(result.judgeResult).toBeUndefined();
   });
 
@@ -96,12 +67,11 @@ describe("runEvals", () => {
   });
 
   test("redacts adapter apiKey from run metadata", async () => {
-    const secretAdapter: AdapterConfig = {
-      type: "openai",
-      model: "gpt-4o",
-      baseURL: "https://gateway.example.com/v1",
+    const secretAdapter = {
+      type: "function",
+      modulePath,
       apiKey: "provider-secret",
-    };
+    } as unknown as AdapterConfig;
 
     const run = await runEvals(
       [{ id: "secret-case", input: "hello" }],
@@ -109,9 +79,8 @@ describe("runEvals", () => {
     );
 
     expect(run.adapterConfig).toEqual({
-      type: "openai",
-      model: "gpt-4o",
-      baseURL: "https://gateway.example.com/v1",
+      type: "function",
+      modulePath,
     });
     expect(JSON.stringify(run)).not.toContain("provider-secret");
   });

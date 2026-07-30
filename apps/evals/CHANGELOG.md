@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deterministic assertions, LLM judge details, artifact references, per-case
   verdicts, residual risks, verifier identity, and freshness without copying
   provider API keys or judge reasoning.
+- GitHub Actions now runs the typecheck and full test suite on pull requests and
+  pushes to `main`.
+
+### Fixed
+- Test-only module mocks no longer leak into later integration tests when the full
+  suite runs in one Bun process.
 
 ## [0.2.0] - 2026-07-27
 
