@@ -22,8 +22,9 @@ secrets — local secrets vault for AI agents
 
 Commands:
   docs                        show a practical usage guide
-  set <key> <value> [--type <type>] [--label <label>] [--ttl <ttl>]
-  get <key>
+  set <key> [<value>] [--stdin] [--type <type>] [--label <label>] [--ttl <ttl>]
+  get <key> [--show|--plaintext|--check]   redacted by default; --check prints length+sha256
+  exec <key> [--as <VAR>] -- <cmd> [args...]   run <cmd> with the value in its env only
   delete <key>               (aliases: remove, rm, uninstall)
   items list [kind] [--json]  list structured vault items
   items search <query> [--json]  search structured vault item metadata
@@ -76,8 +77,9 @@ TTL examples: 30d, 24h, 60m
 
 Examples:
   secrets set openai/api_key "$OPENAI_API_KEY" --type api_key
-  secrets set gmail/password "$GMAIL_PASSWORD" --type password --label "Gmail"
-  secrets get openai/api_key
+  secrets set gmail/password --stdin < /path/to/value   # value never enters argv
+  secrets exec openai/api_key --as OPENAI_API_KEY -- my-tool sync
+  secrets get openai/api_key --check
   secrets list openai
   secrets search gmail
   secrets users register my-agent "My Agent" --type agent
@@ -116,8 +118,18 @@ Common CLI workflows
   Store a secret:
     secrets set example/anthropic/test/api_key "$ANTHROPIC_API_KEY" --type api_key --label "Anthropic API Key (test)"
 
-  Read a secret value:
-    secrets get example/anthropic/test/api_key
+  Consume a secret without printing it (preferred — the value only ever exists
+  in the child's environment):
+    secrets exec example/anthropic/test/api_key --as ANTHROPIC_API_KEY -- my-tool sync
+
+  Prove a secret exists or compare values without revealing them:
+    secrets get example/anthropic/test/api_key --check
+
+  Store a value without putting it in argv (ps/shell-history safe):
+    secrets set example/anthropic/test/api_key --stdin < value-file
+
+  Explicitly print a plaintext value (escape hatch; never in captured output):
+    secrets get example/anthropic/test/api_key --show
 
   List or search without revealing values:
     secrets list example/anthropic
@@ -198,9 +210,14 @@ Self-hosted (api mode)
   A raw database URL is NEVER used on the client.
 
 Safety
-  list, search, export, and scan commands do not print secret values by default.
-  export --show and export --plaintext are explicit plaintext escape hatches.
-  get and get_secret return raw secret values. Use them only when needed.
+  NO command prints a secret value to stdout without an explicit --show or
+  --plaintext flag. get is redacted by default: it refuses captured (non-TTY)
+  output entirely, and prints metadata only in a terminal.
+  Consume values with "secrets exec <key> -- <cmd>" (child env only), prove them
+  with "secrets get <key> --check" (length + sha256), and store them with
+  "secrets set <key> --stdin" so they never enter argv.
+  export --show, export --plaintext, and get --show are the explicit escape hatches.
+  The MCP get_secret tool still returns the raw value to the calling agent.
   Never paste secrets into commits, logs, issues, PRs, or chat messages.
 `);
 }
@@ -214,6 +231,8 @@ const BOOLEAN_FLAGS = new Set([
   "overwrite",
   "show",
   "plaintext",
+  "check",
+  "stdin",
   "pretty",
   "favorite",
   "json",
@@ -377,7 +396,11 @@ if (!command || command === "--help" || command === "-h") {
 // command. Previously these tokens were ignored (or, for `-h`, treated as a
 // positional), so side-effecting subcommands (aws push/pull/sync, mcp install)
 // executed anyway. Scan raw args because `parseArgs` only recognizes `--` flags.
-if (rest.includes("--help") || rest.includes("-h")) {
+// Never scan past a bare `--`: everything after it belongs to `exec`'s child
+// command (`secrets exec k -- tool --help` must run the tool, not print usage).
+const helpScanEnd = rest.indexOf("--") === -1 ? rest.length : rest.indexOf("--");
+const helpScanArgs = rest.slice(0, helpScanEnd);
+if (helpScanArgs.includes("--help") || helpScanArgs.includes("-h")) {
   usage();
   process.exit(0);
 }
@@ -408,8 +431,29 @@ switch (command) {
   }
 
   case "set": {
-    const [key, value] = positional;
-    if (!key || !value) { console.error("Usage: secrets set <key> <value>"); process.exit(1); }
+    const [key, argvValue] = positional;
+    const useStdin = flags.stdin === "true";
+    if (!key || (!argvValue && !useStdin)) {
+      console.error("Usage: secrets set <key> <value>  |  secrets set <key> --stdin");
+      process.exit(1);
+    }
+    // An argv value is visible in `ps` output and shell history for as long as the
+    // process runs; --stdin is the leak-free path. Refuse the ambiguous combination
+    // instead of silently picking one.
+    if (argvValue && useStdin) {
+      console.error("Pass the value either as an argument or via --stdin, not both.");
+      process.exit(1);
+    }
+    let value = argvValue;
+    if (useStdin) {
+      // Strip exactly ONE trailing newline (the echo/heredoc convention); every
+      // other byte is stored verbatim.
+      value = (await Bun.stdin.text()).replace(/\r?\n$/, "");
+      if (!value) {
+        console.error("No value on stdin. Usage: secrets set <key> --stdin < value-file");
+        process.exit(1);
+      }
+    }
     const type = (flags.type as SecretEntry["type"]) ?? "other";
     if (!SECRET_TYPES.includes(type)) {
       console.error(`Invalid type "${type}". Valid: ${SECRET_TYPES.join(", ")}`);
@@ -456,12 +500,90 @@ switch (command) {
       process.exit(1);
     }
     if (!entry) { console.error(`Not found: ${key}`); process.exit(1); }
-    if (process.stdout.isTTY) {
-      console.log(formatEntry(entry, true));
-    } else {
-      process.stdout.write(entry.value);
+
+    // DEFAULT-DENY (todos da0ef2ed, 2026-07-30 leak): `get` printed plaintext to
+    // stdout, agent tool output is persisted verbatim to session transcripts, and
+    // four credentials leaked. No code path may write a vault value to stdout
+    // without an explicit --show/--plaintext.
+    const showPlaintext = flags.show === "true" || flags.plaintext === "true";
+    if (flags.check === "true") {
+      if (showPlaintext) {
+        console.error("Usage: secrets get <key> [--show|--plaintext|--check]. --check excludes plaintext flags.");
+        process.exit(1);
+      }
+      // Existence/equality proof: length + sha256, never the value. Enough to
+      // compare two secrets or verify a rotation landed, useless to an attacker.
+      const digest = (await import("node:crypto")).createHash("sha256").update(entry.value).digest("hex");
+      console.log(`key=${entry.key} length=${entry.value.length} sha256=${digest}`);
+      break;
     }
-    break;
+    if (showPlaintext) {
+      if (process.stdout.isTTY) {
+        console.log(formatEntry(entry, true));
+      } else {
+        process.stdout.write(entry.value);
+      }
+      break;
+    }
+    if (process.stdout.isTTY) {
+      // Interactive terminal: show metadata, keep the value redacted.
+      console.log(formatEntry(entry, false));
+      console.error("Value redacted. Use --show to print it, --check for length+sha256, or `secrets exec` to consume it without printing.");
+      break;
+    }
+    // Captured (non-TTY) output is exactly the transcript-leak context. Fail LOUDLY
+    // instead of substituting a redaction marker: `VAR=$(secrets get k)` must break
+    // visibly here, never poison VAR with "***" and fail mysteriously downstream.
+    console.error(
+      `Refusing to print the value of "${key}" to captured output. ` +
+        "Use `secrets exec <key> [--as VAR] -- <cmd>` to consume it via a child environment, " +
+        "`secrets get <key> --check` for length+sha256, or `secrets get <key> --show` to explicitly print plaintext.",
+    );
+    process.exit(1);
+  }
+
+  case "exec": {
+    // Consume a secret WITHOUT it ever existing on this process's stdout: the value
+    // goes into the child's environment and nowhere else. This is the strong
+    // primitive behind the `get` default-deny above — it removes the value from the
+    // calling agent's reach entirely instead of trusting it not to print.
+    //
+    // Parse from the RAW arg list, not `flags`/`positional`: everything after the
+    // first bare `--` belongs to the child verbatim.
+    const execUsage = "Usage: secrets exec <key> [--as <VAR>] -- <cmd> [args...]";
+    const sepIndex = rest.indexOf("--");
+    if (sepIndex === -1) { console.error(`Missing "--" separator. ${execUsage}`); process.exit(1); }
+    const childCmd = rest.slice(sepIndex + 1);
+    const { flags: execFlags, positional: execPositional } = parseArgs(rest.slice(0, sepIndex));
+    const [execKey] = execPositional;
+    if (!execKey || childCmd.length === 0) { console.error(execUsage); process.exit(1); }
+
+    // Default env var name mirrors the vault path per the secrets naming standard:
+    // example/anthropic/test/api_key → EXAMPLE_ANTHROPIC_TEST_API_KEY.
+    const envName = execFlags.as ?? execKey.toUpperCase().replace(/[^A-Z0-9]+/g, "_");
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(envName)) {
+      console.error(`Invalid env var name "${envName}". Use --as <VAR> with letters, digits, and underscores.`);
+      process.exit(1);
+    }
+
+    let execEntry;
+    try {
+      execEntry = await store().getSecret(execKey);
+    } catch (e: any) {
+      // Same clean one-line surface as `get`; the message is value-free.
+      console.error(`Unable to read secret "${execKey}": ${e?.message ?? String(e)}`);
+      process.exit(1);
+    }
+    if (!execEntry) { console.error(`Not found: ${execKey}`); process.exit(1); }
+
+    const child = Bun.spawn({
+      cmd: childCmd,
+      env: { ...process.env, [envName]: execEntry.value },
+      stdin: "inherit",
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+    process.exit(await child.exited);
   }
 
   case "delete":

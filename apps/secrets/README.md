@@ -30,10 +30,30 @@ secrets set example/anthropic/test/api_key "$ANTHROPIC_API_KEY" \
   --label "Anthropic API Key (test)"
 ```
 
-Read a secret value:
+Consume a secret without ever printing it (the value only exists in the child
+process's environment):
 
 ```bash
-secrets get example/anthropic/test/api_key
+secrets exec example/anthropic/test/api_key --as ANTHROPIC_API_KEY -- my-tool sync
+```
+
+Prove a secret exists or compare values without revealing them:
+
+```bash
+secrets get example/anthropic/test/api_key --check   # prints length + sha256 only
+```
+
+Store a value without putting it in argv (ps/shell-history safe):
+
+```bash
+secrets set example/anthropic/test/api_key --stdin < value-file
+```
+
+Explicitly print a plaintext value (escape hatch — `get` is redacted by default
+and refuses captured, non-TTY output entirely):
+
+```bash
+secrets get example/anthropic/test/api_key --show
 ```
 
 List and search without printing secret values:
