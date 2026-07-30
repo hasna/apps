@@ -114,6 +114,63 @@ function createTables(db: Database): void {
     CREATE INDEX IF NOT EXISTS mutation_approval_nonces_expires_at_idx
     ON mutation_approval_nonces (expires_at)
   `);
+
+  // The roster controller deliberately uses SQLite for exclusion. Do not
+  // replace this with a pid/flock file: an inherited fd caused the station's
+  // previous controller to remain wedged after its parent died.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS roster_leases (
+      name TEXT PRIMARY KEY,
+      owner TEXT NOT NULL,
+      acquired_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS roster_entry_state (
+      entry_id TEXT PRIMARY KEY,
+      status TEXT NOT NULL,
+      failed_attempts_json TEXT NOT NULL DEFAULT '[]',
+      first_missing_at INTEGER,
+      last_attempt_at INTEGER,
+      last_error TEXT,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS roster_launch_records (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      entry_id TEXT NOT NULL,
+      target TEXT NOT NULL,
+      attempted_at TEXT NOT NULL,
+      outcome TEXT NOT NULL,
+      error TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS roster_launch_records_entry_idx
+    ON roster_launch_records (entry_id, attempted_at DESC);
+
+    CREATE TABLE IF NOT EXISTS roster_gate_samples (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id TEXT NOT NULL,
+      sampled_at INTEGER NOT NULL,
+      swap_used_gb REAL NOT NULL,
+      phase TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS roster_runs (
+      id TEXT PRIMARY KEY,
+      machine_id TEXT NOT NULL,
+      classification TEXT NOT NULL,
+      status TEXT NOT NULL,
+      mode TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      finished_at TEXT NOT NULL,
+      gate_json TEXT NOT NULL,
+      plan_json TEXT NOT NULL,
+      result_json TEXT NOT NULL,
+      mttr_ms INTEGER
+    );
+  `);
 }
 
 function migrateAgentHeartbeats(db: Database): void {
