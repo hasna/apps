@@ -22,8 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   environment, and every shell on a fleet machine exports the shared-store pointers.
 
   The export is `SHARED_TODOS_STORE_ENV_KEYS` (the routing variables, held as **one
-  constant shared with the resolver that reads them** — including the legacy
-  `TODOS_API_URL` / `TODOS_API_KEY` aliases a hand-rolled consumer copy reliably misses),
+  constant shared with the resolver that reads them** — including the legacy unprefixed
+  API URL and key aliases a hand-rolled consumer copy reliably misses),
   plus `localTodosTestEnv()`, `applyLocalTodosTestEnv()` (with exact restore) and
   `assertLocalTodosTestEnv()`. It is published as a subpath so the list lives next to the
   resolver: a consumer-side reimplementation stops protecting anything the day this package

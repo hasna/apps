@@ -146,6 +146,38 @@ describe("public release gate", () => {
     expect(publishedFailures.map((failure) => failure.check)).toContain("public-text-boundary");
   });
 
+  test("the test-isolation module may name the legacy routing aliases it exists to blank", () => {
+    // src/testing.ts is the one shipped module that must SPELL the legacy unprefixed
+    // hosted-routing variables, because blanking them is the whole point of the module —
+    // a scrub list that cannot name a variable cannot scrub it. src/no-cloud-boundary.test.ts
+    // already carries exactly this exemption for the source file; the packed artifacts are
+    // the same text after compilation and need the same one, or the export can be built,
+    // merged and tested but never published.
+    // Scoped to the boundary check: validatePublicTextSurfaces also enforces readme-install
+    // across whatever set it is handed, which is not what this test is about.
+    const boundaryFailures = (files: { path: string; text: string }[]) =>
+      validatePublicTextSurfaces(files).filter((failure) => failure.check === "public-text-boundary");
+
+    for (const path of ["package/dist/testing.js", "package/dist/testing.d.ts", "dist/testing.js"]) {
+      expect(
+        boundaryFailures([{ path, text: 'const SHARED = ["HASNA_TODOS_API_URL", "TODOS_API_URL"];' }]),
+      ).toEqual([]);
+    }
+
+    // The exemption is by exact file AND exact pattern. It must not turn dist/testing.js
+    // into a hole for everything else the boundary forbids...
+    const otherViolation = validatePublicTextSurfaces([
+      { path: "package/dist/testing.js", text: `const region = "AWS_REGION";` },
+    ]);
+    expect(otherViolation.map((failure) => failure.check)).toContain("public-text-boundary");
+
+    // ...nor may any OTHER shipped file name the legacy alias.
+    const otherFile = validatePublicTextSurfaces([
+      { path: "package/dist/index.js", text: 'const url = env["TODOS_API_URL"];' },
+    ]);
+    expect(otherFile.map((failure) => failure.check)).toContain("public-text-boundary");
+  });
+
   test("checks generated npm package contents", () => {
     expect(
       validatePackedPackageFiles([

@@ -126,6 +126,39 @@ const FORBIDDEN_TEXT_PATTERNS: RegExp[] = [
   new RegExp(`platform${"-"}todos`, "i"),
 ];
 
+/**
+ * Narrow, named exemptions from {@link FORBIDDEN_TEXT_PATTERNS}. Each entry names ONE
+ * module and ONE pattern and says why the match is the OPPOSITE of what the boundary is
+ * looking for. Never widen a pattern to make a file pass; add a line here or fix the file.
+ *
+ * This mirrors, for the published artifacts, the exemption `src/no-cloud-boundary.test.ts`
+ * already carries for the corresponding source file. The boundary is enforced at two
+ * points — that test and this release gate — and an exemption applied to only one of them
+ * produces a module that builds, typechecks, tests and merges but can never be published.
+ */
+const TEXT_BOUNDARY_EXEMPTIONS: { module: string; pattern: RegExp; reason: string }[] = [
+  {
+    module: "dist/testing",
+    pattern: /\bTODOS_API_URL\b/,
+    reason:
+      "the test-store scrub list must NAME the legacy unprefixed hosted-routing aliases in " +
+      "order to blank them, and those aliases are live — src/lib/config.ts, src/server/serve.ts, " +
+      "src/server/cloud.ts and the SDK client all still read the unprefixed forms. This module " +
+      "exists to keep consumer tests OFF a hosted store, never to reach one.",
+  },
+];
+
+function isExemptTextMatch(path: string, pattern: RegExp): boolean {
+  // Match on the module path so the packed form ("package/dist/testing.js") and the built
+  // form ("dist/testing.d.ts") resolve to the same entry, without letting a substring like
+  // "dist/testing-helpers.js" inherit the exemption.
+  return TEXT_BOUNDARY_EXEMPTIONS.some(
+    (exemption) =>
+      pattern.source === exemption.pattern.source &&
+      /^(?:package\/)?(.+?)(?:\.d)?\.[cm]?[jt]s$/.exec(path)?.[1] === exemption.module,
+  );
+}
+
 const SECRET_PATTERNS: RegExp[] = [
   /AKIA[0-9A-Z]{16}/,
   /ASIA[0-9A-Z]{16}/,
@@ -219,6 +252,7 @@ export function validatePublicTextSurfaces(files: TextFile[]): ReleaseGateFailur
   const failures: ReleaseGateFailure[] = [];
   for (const file of files) {
     for (const pattern of FORBIDDEN_TEXT_PATTERNS) {
+      if (isExemptTextMatch(file.path, pattern)) continue;
       addIf(failures, pattern.test(file.text), "public-text-boundary", `${file.path} matches forbidden pattern ${pattern}`);
     }
     for (const pattern of SECRET_PATTERNS) {
