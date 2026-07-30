@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## Unreleased
+## 0.5.13 - 2026-07-31
 
 ### Added
 - Run typechecking and tests in GitHub Actions for pull requests and pushes to `main`.
