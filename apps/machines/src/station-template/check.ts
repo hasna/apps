@@ -11,7 +11,19 @@ export type CheckStatus = "ok" | "drift" | "violation" | "skipped";
 
 export interface TemplateCheckItem {
   id: string;
-  kind: "file" | "ordering" | "sysctl" | "runtime-value" | "package" | "service" | "unit-convention";
+  kind:
+    | "file"
+    | "ordering"
+    | "sysctl"
+    | "runtime-value"
+    | "package"
+    | "command"
+    | "service"
+    | "access-floor"
+    | "unit-convention"
+    | "tailscale"
+    | "swap"
+    | "disk";
   status: CheckStatus;
   detail: string;
 }
@@ -49,6 +61,11 @@ export interface CheckOptions {
   commandProbe?: CommandProbe | null;
   /** Additional systemd unit dirs to scan for unit conventions. */
   unitDirs?: string[];
+  /**
+   * Root of bun's global install tree. Defaults to $BUN_INSTALL or ~/.bun,
+   * matching bun's own resolution, so `bun install -g` results are checkable.
+   */
+  bunInstallDir?: string;
   /** Identity stamped into the result. Defaults to the local machine id. */
   machineId?: string;
 }
@@ -106,14 +123,41 @@ function parseSystemdSeconds(value: string): number | null {
 }
 
 /**
+ * Directive assignments from the requested systemd section, in declaration
+ * order. Directives in another section are ignored by systemd even when their
+ * names and values are otherwise valid.
+ */
+function directiveAssignments(contents: readonly string[], section: string, name: string): string[] {
+  const assignments: string[] = [];
+  const directivePattern = new RegExp(`^\\s*${name}\\s*=[ \\t]*(.*)$`);
+  for (const content of contents) {
+    // systemd parses each unit/drop-in as a separate file. In particular, a
+    // drop-in without a section header must not inherit the unit's last one.
+    let currentSection: string | null = null;
+    for (const line of content.split(/\r?\n/)) {
+      const sectionMatch = /^\s*\[([^\]]+)\]\s*$/.exec(line);
+      if (sectionMatch) {
+        // Whitespace inside the brackets is part of the section name: systemd
+        // reports `[ Unit ]` as unknown rather than treating it as `[Unit]`.
+        currentSection = sectionMatch[1]!;
+        continue;
+      }
+      if (currentSection !== section) continue;
+      const directiveMatch = directivePattern.exec(line);
+      if (directiveMatch) assignments.push(directiveMatch[1]!.trim());
+    }
+  }
+  return assignments;
+}
+
+/**
  * Effective value of a scalar directive across unit file + drop-ins: systemd
  * takes the last assignment, and an empty assignment resets it to the default
  * — which, for a directive we require to be declared, means unset.
  */
-function effectiveScalarDirective(content: string, name: string): string | null {
+function effectiveScalarDirective(contents: readonly string[], section: string, name: string): string | null {
   let value: string | null = null;
-  for (const match of content.matchAll(new RegExp(`^\\s*${name}\\s*=[ \\t]*(.*)$`, "gm"))) {
-    const raw = match[1]!.trim();
+  for (const raw of directiveAssignments(contents, section, name)) {
     value = raw.length === 0 ? null : raw;
   }
   return value;
@@ -124,10 +168,9 @@ function effectiveScalarDirective(content: string, name: string): string | null 
  * and its drop-ins, and an empty assignment resets the list — the same rule
  * already applied to ExecStart.
  */
-function effectiveListDirective(content: string, name: string): string[] {
+function effectiveListDirective(contents: readonly string[], section: string, name: string): string[] {
   let values: string[] = [];
-  for (const match of content.matchAll(new RegExp(`^\\s*${name}\\s*=[ \\t]*(.*)$`, "gm"))) {
-    const raw = match[1]!.trim();
+  for (const raw of directiveAssignments(contents, section, name)) {
     if (raw.length === 0) {
       values = [];
     } else {
@@ -255,6 +298,48 @@ export function checkStationTemplate(effective: EffectiveTemplate, options: Chec
     );
   }
 
+  // Binaries the template requires on PATH. An apt name cannot express this:
+  // the ec2 overlay's `awscli` had no installation candidate on noble, so the
+  // requirement was permanently unsatisfiable AND the box that DID have AWS
+  // CLI v2 at /usr/local/bin/aws still reported drift.
+  for (const command of effective.commands) {
+    if (!probe) {
+      items.push({ id: `command:${command.id}`, kind: "command", status: "skipped", detail: "no command probe" });
+      continue;
+    }
+    const result = probe("sh", ["-c", `command -v -- ${command.command}`]);
+    const resolved = result.stdout.trim();
+    items.push(
+      result.ok && resolved.length > 0
+        ? { id: `command:${command.id}`, kind: "command", status: "ok", detail: `${command.command} -> ${resolved}` }
+        : { id: `command:${command.id}`, kind: "command", status: "drift", detail: `${command.command} not on PATH` }
+    );
+  }
+
+  // Bun globals were declared by the template from day one and checked by
+  // nothing: the shipped station lists 12 hasna CLIs, and a station missing
+  // every one of them still reported clean on this axis.
+  // $BUN_INSTALL is honoured only for a real check. Letting the ambient env win
+  // during a fixture check would point the probe at the coordinator's own bun
+  // tree — the same mis-attribution the machineId field exists to prevent.
+  const bunRoot =
+    options.bunInstallDir ??
+    (rootDir === "/" ? process.env["BUN_INSTALL"] ?? join(homeDir, ".bun") : join(homeDir, ".bun"));
+  for (const pkg of effective.packages.bun) {
+    const manifest = join(bunRoot, "install/global/node_modules", pkg, "package.json");
+    if (!existsSync(manifest)) {
+      items.push({ id: `package:bun:${pkg}`, kind: "package", status: "drift", detail: `${pkg} not installed globally (${manifest} missing)` });
+      continue;
+    }
+    let version = "unknown";
+    try {
+      version = (JSON.parse(readFileSync(manifest, "utf8")) as { version?: string }).version ?? "unknown";
+    } catch {
+      /* unreadable manifest: presence is still the contract */
+    }
+    items.push({ id: `package:bun:${pkg}`, kind: "package", status: "ok", detail: `${pkg}@${version} installed globally` });
+  }
+
   for (const service of effective.services) {
     if (!probe) {
       items.push({ id: `service:${service.name}`, kind: "service", status: "skipped", detail: "no command probe" });
@@ -277,6 +362,148 @@ export function checkStationTemplate(effective: EffectiveTemplate, options: Chec
     );
   }
 
+  // The access floor is the guaranteed way into the box (EC2: the SSM agent,
+  // authorized purely by the instance profile — no boot-time secret). A down
+  // floor is not mere drift: it means the next tailscale failure reproduces
+  // exactly the stranded-station17 state, so it reports as a violation.
+  if (effective.accessFloor) {
+    const floor = effective.accessFloor;
+    if (!probe) {
+      items.push({ id: `access-floor:${floor.service}`, kind: "access-floor", status: "skipped", detail: "no command probe" });
+    } else {
+      const active = probe("systemctl", ["is-active", floor.service]);
+      const enabled = probe("systemctl", ["is-enabled", floor.service]);
+      const floorUp = active.ok && active.stdout.trim() === "active" && enabled.ok && enabled.stdout.trim() === "enabled";
+      items.push(
+        floorUp
+          ? { id: `access-floor:${floor.service}`, kind: "access-floor", status: "ok", detail: `${floor.service} active/enabled — floor access path present` }
+          : {
+              id: `access-floor:${floor.service}`,
+              kind: "access-floor",
+              status: "violation",
+              detail: `access floor ${floor.service} not active+enabled (found ${active.stdout.trim() || "unknown"}/${enabled.stdout.trim() || "unknown"}) — one tailscale failure away from an unreachable station`,
+            }
+      );
+    }
+  }
+
+  // Owner ruling 2026-07-30: this block never fires for a station,ec2 render —
+  // no shipped cloud layer declares tailscale (asserted with a positive
+  // control in station-template.test.ts), so an EC2 drift report carries no
+  // tailscale:join item. A check for a thing we deliberately do not run is
+  // noise, and noise is how real drift gets ignored. Physical classes keep it.
+  //
+  // `tailscaled active/enabled` is NOT tailnet membership. station17 reported
+  // service:tailscaled ok on 2026-07-29 while `tailscale status` said "Logged
+  // out" — the daemon runs fine with no node key, so the service check alone
+  // says clean about a station nothing can reach. Note also that
+  // `tailscale status --json` EXITS 0 when logged out: only BackendState is
+  // the verdict.
+  if (effective.tailscale?.join) {
+    if (!probe) {
+      items.push({ id: "tailscale:join", kind: "tailscale", status: "skipped", detail: "no command probe" });
+    } else {
+      const result = probe("tailscale", ["status", "--json"]);
+      let backendState: string | null = null;
+      let selfName: string | null = null;
+      try {
+        const parsed = JSON.parse(result.stdout) as { BackendState?: string; Self?: { HostName?: string } };
+        backendState = parsed.BackendState ?? null;
+        selfName = parsed.Self?.HostName ?? null;
+      } catch {
+        backendState = null;
+      }
+      if (backendState === null) {
+        items.push({ id: "tailscale:join", kind: "tailscale", status: "drift", detail: "tailscale status --json unreadable (is tailscale installed?)" });
+      } else if (backendState === "Running") {
+        items.push({ id: "tailscale:join", kind: "tailscale", status: "ok", detail: `joined tailnet as ${selfName ?? "unknown"} (BackendState=Running)` });
+      } else {
+        items.push({
+          id: "tailscale:join",
+          kind: "tailscale",
+          status: "drift",
+          detail: `not on the tailnet: BackendState=${backendState} (tailscaled can be active+enabled and still hold no node key)`,
+        });
+      }
+    }
+  }
+
+  // The ec2 overlay asks for an 8G swapfile because earlyoom's SIGTERM
+  // condition is MemAvailable AND free-swap; with no swap the backstop the
+  // template exists to provide never trips on the axis that killed station01.
+  if (effective.swap.sizeGb > 0) {
+    const swapsPath = join(rootDir, "proc/swaps");
+    if (!existsSync(swapsPath)) {
+      items.push({ id: "swap:size", kind: "swap", status: "skipped", detail: `${swapsPath} not readable` });
+    } else {
+      let totalKb = 0;
+      for (const line of readFileSync(swapsPath, "utf8").split("\n").slice(1)) {
+        const size = line.trim().split(/\s+/)[2];
+        if (size && /^\d+$/.test(size)) totalKb += Number(size);
+      }
+      const totalGb = totalKb / 1024 / 1024;
+      // fallocate -l 8G yields slightly under 8 GiB of usable swap once the
+      // header is taken out, so require 95% rather than an exact match.
+      items.push(
+        totalGb >= effective.swap.sizeGb * 0.95
+          ? { id: "swap:size", kind: "swap", status: "ok", detail: `${totalGb.toFixed(2)}G swap active (expected ${effective.swap.sizeGb}G)` }
+          : { id: "swap:size", kind: "swap", status: "drift", detail: `expected ${effective.swap.sizeGb}G swap, found ${totalGb.toFixed(2)}G` }
+      );
+    }
+  }
+
+  // Root-volume floor. station17 build 2 (2026-07-29) launched on the 8G
+  // AMI-default volume, and the ec2 overlay's 8G swapfile filled it to 364K
+  // free: journald down, cloud-final FAILED. Setup cannot converge an
+  // undersized volume — the fix is a relaunch with explicit
+  // BlockDeviceMappings — so an undersized root is a violation, not drift.
+  if (effective.disk) {
+    const disk = effective.disk;
+    if (!probe) {
+      items.push({ id: "disk:root", kind: "disk", status: "skipped", detail: "no command probe" });
+    } else {
+      const result = probe("df", ["-kP", rootDir]);
+      const row = result.stdout.split("\n")[1]?.trim().split(/\s+/) ?? [];
+      const totalKb = row[1] && /^\d+$/.test(row[1]) ? Number(row[1]) : null;
+      const availKb = row[3] && /^\d+$/.test(row[3]) ? Number(row[3]) : null;
+      if (!result.ok || totalKb === null) {
+        items.push({ id: "disk:root", kind: "disk", status: "skipped", detail: `df -kP ${rootDir} unreadable` });
+      } else {
+        const totalGb = totalKb / 1024 / 1024;
+        // A 64G EBS volume presents a slightly smaller filesystem once
+        // partitioning and reserved blocks are taken out — require 90%.
+        items.push(
+          totalGb >= disk.rootMinGb * 0.9
+            ? { id: "disk:root", kind: "disk", status: "ok", detail: `root filesystem ${totalGb.toFixed(1)}G (floor ${disk.rootMinGb}G)` }
+            : {
+                id: "disk:root",
+                kind: "disk",
+                status: "violation",
+                detail: `root filesystem ${totalGb.toFixed(1)}G is under the ${disk.rootMinGb}G floor — undersized at launch; setup cannot converge this, relaunch with explicit BlockDeviceMappings (station17 build 2 filled an 8G AMI-default root and lost cloud-final)`,
+              }
+        );
+        // Free-space floor: at hard-0 free, SSM commands return EMPTY output
+        // instead of errors (measured on station17 build 2 mid-capture) — a
+        // full disk silently degrades the only access path, so report it
+        // while there is still room to act. Drift, not violation: cleanup
+        // converges it.
+        if (disk.minFreeGb !== undefined && availKb !== null) {
+          const availGb = availKb / 1024 / 1024;
+          items.push(
+            availGb >= disk.minFreeGb
+              ? { id: "disk:free", kind: "disk", status: "ok", detail: `${availGb.toFixed(1)}G free (floor ${disk.minFreeGb}G)` }
+              : {
+                  id: "disk:free",
+                  kind: "disk",
+                  status: "drift",
+                  detail: `${availGb.toFixed(1)}G free is under the ${disk.minFreeGb}G floor — at 0 free the SSM agent returns empty output instead of errors, silently degrading the only access path (station17 build 2)`,
+                }
+          );
+        }
+      }
+    }
+  }
+
   if (effective.unitConventions) {
     const conventions = effective.unitConventions;
     const pattern = new RegExp(`^${conventions.match.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`);
@@ -285,9 +512,9 @@ export function checkStationTemplate(effective: EffectiveTemplate, options: Chec
       if (!existsSync(unitDir)) continue;
       for (const entry of readdirSync(unitDir)) {
         if (!entry.endsWith(".service") || !pattern.test(entry)) continue;
-        let content = "";
+        let contents: string[] = [];
         try {
-          content = readFileSync(join(unitDir, entry), "utf8");
+          contents = [readFileSync(join(unitDir, entry), "utf8")];
         } catch {
           continue;
         }
@@ -295,7 +522,7 @@ export function checkStationTemplate(effective: EffectiveTemplate, options: Chec
         if (existsSync(dropinDir)) {
           for (const dropin of readdirSync(dropinDir).filter((name) => name.endsWith(".conf"))) {
             try {
-              content += `\n${readFileSync(join(dropinDir, dropin), "utf8")}`;
+              contents.push(readFileSync(join(dropinDir, dropin), "utf8"));
             } catch {
               /* unreadable drop-in: judged on the unit file alone */
             }
@@ -306,20 +533,20 @@ export function checkStationTemplate(effective: EffectiveTemplate, options: Chec
         // carries the systemd default 10s/5 window is the exact shape that
         // looped ~290k restarts on 2026-07-28, and an OnFailure pointing at a
         // unit we do not ship means no failure notification ever fires.
-        const intervalRaw = effectiveScalarDirective(content, "StartLimitIntervalSec");
+        const intervalRaw = effectiveScalarDirective(contents, "Unit", "StartLimitIntervalSec");
         if (intervalRaw === null) {
           problems.push("missing StartLimitIntervalSec");
         } else if (parseSystemdSeconds(intervalRaw) !== conventions.startLimitIntervalSec) {
           problems.push(`StartLimitIntervalSec=${intervalRaw}, convention is ${conventions.startLimitIntervalSec}`);
         }
-        const burstRaw = effectiveScalarDirective(content, "StartLimitBurst");
+        const burstRaw = effectiveScalarDirective(contents, "Unit", "StartLimitBurst");
         if (burstRaw === null) {
           problems.push("missing StartLimitBurst");
         } else if (Number(burstRaw) !== conventions.startLimitBurst) {
           problems.push(`StartLimitBurst=${burstRaw}, convention is ${conventions.startLimitBurst}`);
         }
         // OnFailure is a list with systemd reset semantics, like ExecStart.
-        const onFailure = effectiveListDirective(content, "OnFailure");
+        const onFailure = effectiveListDirective(contents, "Unit", "OnFailure");
         if (onFailure.length === 0) {
           problems.push("missing OnFailure");
         } else if (!onFailure.includes(conventions.onFailureUnit)) {
@@ -330,15 +557,16 @@ export function checkStationTemplate(effective: EffectiveTemplate, options: Chec
           // drop-in can replace a bare ExecStart with an absolute one. Judge
           // only the effective list, in unit-file-then-drop-ins order.
           let effectiveExecStarts: string[] = [];
-          for (const match of content.matchAll(/^\s*ExecStart\s*=[ \t]*(.*)$/gm)) {
-            const value = match[1]!.trim();
+          for (const value of directiveAssignments(contents, "Service", "ExecStart")) {
             if (value.length === 0) {
               effectiveExecStarts = [];
             } else {
               effectiveExecStarts.push(value);
             }
           }
-          if (effectiveExecStarts.some((value) => !value.replace(/^[-@:+!]+/, "").startsWith("/"))) {
+          if (effectiveExecStarts.length === 0) {
+            problems.push("missing ExecStart");
+          } else if (effectiveExecStarts.some((value) => !value.replace(/^[-@:+!]+/, "").startsWith("/"))) {
             problems.push("ExecStart is not an absolute path (203/EXEC class)");
           }
         }

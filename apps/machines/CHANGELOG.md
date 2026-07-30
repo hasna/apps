@@ -6,7 +6,121 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- GitHub Actions CI now runs typechecking and the test suite on pull requests
+  and pushes to `main`.
+
 ### Fixed
+
+- Dashboard servers now preserve an explicit ephemeral port (`port: 0`),
+  keeping server tests isolated in CI.
+
+## [0.2.5] - 2026-07-30
+
+### Changed
+
+- **No tailscale on AWS stations** (owner ruling 2026-07-30, supersedes the
+  2026-07-29 "never boot-critical" ruling). The `tailscale` block and the
+  `tailscaled` service moved from the station template's `base` layer into the
+  `dgx-spark` physical overlay: a `station,ec2` render now contains no
+  tailscale install, no join, and no auth-key fetch — nothing on the EC2 boot
+  path fetches a secret at all — and the EC2 drift report carries no
+  `tailscale:join` item in any status. Asserted in tests with a positive
+  control that plants tailscale into a copied template and proves the absence
+  assertions go red. Physical classes keep tailscale unchanged (routing, not
+  deletion); SSM (the ec2 `accessFloor`, unchanged from 0.2.4) is the whole
+  access path for cloud stations. Template version 1.1.0 → 1.2.0.
+
+### Added
+
+- **`disk.minFreeGb` free-space floor** (ec2: 8), reported as `disk:free`
+  drift. Measured on build 2: at hard-0 bytes free the SSM agent could not
+  write its orchestration files and returned EMPTY output instead of errors —
+  a full disk silently degrades the only access path, so the drift check now
+  names it while there is still room to act.
+- **`disk.rootMinGb` root-volume floor** (ec2: 64). station17 build 2
+  (`i-0f522f0138a0411e1`, 2026-07-29) launched on the 8G AMI-default gp3 root
+  volume; the overlay's `fallocate -l 8G` swapfile allocated 4.2G until
+  ENOSPC, filled `/` to 364K free, took journald down, and failed
+  `cloud-final` 43.8s into `modules-final`. The launcher must request the
+  declared size explicitly; the drift check reads `df -kP` and reports an
+  undersized root as a `disk:root` **violation**, since setup cannot converge
+  it — the fix is a relaunch.
+
+### Fixed
+
+- **Swapfile creation is convergent, space-guarded, and never fatal** in both
+  renders. The old `test -f /swapfile ||` guard treated build 2's partial
+  fallocate leftover as success forever (file present, `swapon --show` empty).
+  The guard is now *active* swap; a stale/partial file is removed before
+  retrying; allocation is refused with a loud `NON-FATAL` warning unless
+  `sizeGb + 2G` of headroom is free; the fstab entry is deduplicated.
+
+## [0.2.4] - 2026-07-29
+
+### Changed
+
+- **Tailscale is never boot-critical** (owner ruling 2026-07-29, PR #37). The
+  station template now declares a schema-level `accessFloor` (service +
+  idempotent ensure + lesson); the `ec2` overlay declares the snap SSM agent as
+  its floor, and both renderers (cloud-init and physical setup) emit the floor's
+  ensure first and non-fatally. Physical layers declare no floor — their access
+  floor is out-of-band.
+- The tailscale join is non-fatal in both renderers: a failed auth-key fetch or
+  `tailscale up` (station17's exact failure mode, `runcmd: 8: aws: not found`)
+  can no longer abort a boot or a setup plan. The failure is loud — a `NON-FATAL`
+  warning on stderr — and the drift check reports the unjoined station as
+  `tailscale:join` drift, so the non-fatal join cannot become a silent one. A
+  down access-floor service is reported as a `violation` naming the stranding
+  risk.
+
+### Fixed
+
+- The old cloud-init join entry silently masked its exit code (`; rm -f` after
+  `tailscale up` made the entry always exit 0), and leaked `umask 077` into
+  later runcmd entries. The join is now a scoped subshell with an explicit
+  `||` warning.
+
+## [0.2.3] - 2026-07-29
+
+### Added
+
+- **Station template v1 (`hasna.station_template.v1`)** — a versioned, layered
+  station contract (`templates/station/template.json`) with two renderers over
+  one source: `machines setup --template station,dgx-spark` for physical boxes
+  and `machines setup --template station,ec2 --render cloud-init --station
+  <name>` for EC2 user-data. Every template item carries a `lesson` field naming
+  the measured 2026-07-28 station01 failure it exists to prevent.
+- **Read-only drift check** — `machines setup --template <spec> --check` emits a
+  JSON verdict (`clean` / `drift`) without mutating anything: file sha256,
+  `/proc/sys` runtime values, MGLRU runtime value, apt packages, services, unit
+  conventions (StartLimit values, `OnFailure` target, absolute `ExecStart`, with
+  systemd drop-in reset semantics honoured), and the ordering rule — a managed
+  sysctl file must sort last among the files defining its keys, which is the
+  exact bug that shipped on 2026-07-28. `--check` refuses `--machine <other>`
+  rather than reporting the local box under a remote name.
+- Release gate now asserts the station template ships in the tarball, so
+  `templates/` cannot silently fall out of the published package.
+
+### Changed
+
+- **BREAKING: retired deployment-mode vocabulary is rejected, not remapped.**
+  `self_hosted`, `self-hosted`, `remote` and `hybrid` now throw with an error
+  naming the fix. `HASNA_MACHINES_STORAGE_MODE` / `MACHINES_STORAGE_MODE` accept
+  exactly `local` or `cloud`; `machines flip --mode` accepts `api` or `local`
+  (`FlipMode` is `api | local`); `hasna.contract.json` no longer declares a
+  client `mode`. `getStorageMode()` no longer infers `hybrid` from the presence
+  of a `DATABASE_URL` — a DSN is a pointer, not a mode, and the default is now
+  `local`. Sync push/pull was always gated on the DSN rather than the mode, so
+  no sync behaviour changes; only the `mode` field of `machines storage status`
+  moves.
+
+### Fixed
+
+- `buildFlipScript` no longer discards stderr on both attempts of its
+  `secrets get` fallback, so cross-machine key provisioning failures are visible
+  on the remote box where they happen.
 
 - **BrowserPlan `app_install_update` no longer depends on a git checkout.** The
   hook's `command_template` was

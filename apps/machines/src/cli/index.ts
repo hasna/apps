@@ -1540,7 +1540,10 @@ manifestCommand
   .option("--hostname <hostname>", "Machine hostname")
   .option("--ssh-address <sshAddress>", "Machine SSH address")
   .option("--tailscale-name <tailscaleName>", "Machine Tailscale DNS name")
-  .option("--connection <connection>", "local | ssh | tailscale")
+  .option(
+    "--connection <connection>",
+    "local | ssh | tailscale. An SSM-reached AWS station is `ssh` with --ssh-address set to its VPC-private DNS: SSM carries real SSH (AWS-StartSSHSession) via a client-side ProxyCommand, which is ssh config, not registry data (ruling 2026-07-30)"
+  )
   .option("--bun-path <path>", "Bun executable directory")
   .option("--tag <tag...>", "Machine tags")
   .option("--package <name...>", "Desired packages")

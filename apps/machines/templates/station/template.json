@@ -1,8 +1,8 @@
 {
   "$schema": "hasna.station_template.v1",
   "name": "station",
-  "version": "1.1.0",
-  "description": "Hasna station contract v1. Every item traces to a measured 2026-07-28 failure on station01 (designs/station-contract-design.md §8). Layers: base + dgx-spark (121G physical Spark) + ec2 (32G Graviton cloud station).",
+  "version": "1.3.0",
+  "description": "Hasna station contract v1. Every item traces to a measured 2026-07-28 failure on station01 (designs/station-contract-design.md §8). Layers: base + dgx-spark (121G physical Spark) + ec2 (32G Graviton cloud station). Owner ruling 2026-07-30: AWS stations carry NO tailscale and are not connected to the physical fleet — tailscale lives only in physical overlays, and SSM (the ec2 accessFloor) is the whole access path for cloud stations. 1.3.0 adds the machines-roster user service (roster reconciler) to the dgx-spark overlay.",
   "base": {
     "files": [
       {
@@ -48,8 +48,7 @@
       ]
     },
     "services": [
-      { "name": "earlyoom", "scope": "system", "expectEnabled": true, "expectActive": true },
-      { "name": "tailscaled", "scope": "system", "expectEnabled": true, "expectActive": true }
+      { "name": "earlyoom", "scope": "system", "expectEnabled": true, "expectActive": true }
     ],
     "sysctls": {
       "vm.swappiness": "60",
@@ -71,12 +70,6 @@
       "onFailureUnit": "hasna-unit-failure-notify@%n.service",
       "requireAbsoluteExecStart": true,
       "lesson": "2026-07-28: bare ExecStart PATH bug caused 203/EXEC (snapshots-agent); 0/40 hasna units had StartLimit keys; a missing-binary unit looped ~290k restarts because the default 10s/5 window resets at >2s spacing."
-    },
-    "tailscale": {
-      "join": true,
-      "authKeySecretName": "stations/prod/tailscale/authkey",
-      "hostnameFromStation": true,
-      "ssh": true
     },
     "secretsBootstrap": {
       "envSecretName": "stations/prod/station-env",
@@ -113,8 +106,15 @@
         }
       ],
       "services": [
-        { "name": "machines-roster.service", "scope": "user", "expectEnabled": true, "expectActive": true }
-      ]
+        { "name": "machines-roster.service", "scope": "user", "expectEnabled": true, "expectActive": true },
+        { "name": "tailscaled", "scope": "system", "expectEnabled": true, "expectActive": true }
+      ],
+      "tailscale": {
+        "join": true,
+        "authKeySecretName": "stations/prod/tailscale/authkey",
+        "hostnameFromStation": true,
+        "ssh": true
+      }
     },
     "ec2": {
       "files": [
@@ -136,10 +136,28 @@
         }
       ],
       "packages": {
-        "apt": ["awscli"],
+        "apt": [],
         "bun": []
       },
-      "swap": { "sizeGb": 8 }
+      "accessFloor": {
+        "service": "snap.amazon-ssm-agent.amazon-ssm-agent",
+        "ensure": "( snap list amazon-ssm-agent >/dev/null 2>&1 || snap install amazon-ssm-agent --classic ) && systemctl enable --now snap.amazon-ssm-agent.amazon-ssm-agent.service",
+        "lesson": "2026-07-29 station17: the tailscale join died at boot (runcmd: aws: not found) on a box with zero SG ingress, no keypair, and no authorized SSH keys — SSM, authorized purely by the instance profile stations-prod-ec2-profile with no boot-time secret, was the only way back in. Owner ruling: nothing that requires fetching a secret at boot may sit on the critical path to a machine's reachability; the floor must be explicit and drift-checked, never incidental."
+      },
+      "commands": [
+        {
+          "id": "aws-cli",
+          "command": "aws",
+          "install": "curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip -o /tmp/awscliv2.zip && unzip -q -o /tmp/awscliv2.zip -d /tmp && /tmp/aws/install --update && rm -rf /tmp/aws /tmp/awscliv2.zip",
+          "lesson": "2026-07-29 station17: the ec2 overlay declared apt package 'awscli', which has NO installation candidate on Ubuntu 24.04 — noble dropped the deb (apt-cache policy awscli -> Candidate: (none), while htop resolves from the same sources, so it is the package and not the apt config). Two measured consequences: cloud-init's package_update_upgrade_install module FAILED on every launch (cloud-init status: error), and the tailscale-join runcmd — which shells out to 'aws secretsmanager get-secret-value' — ran with no aws on PATH and left station17 off the tailnet. AWS CLI v2 ships only as the official installer, never as a distro package, so the requirement has to be expressed as a command, not an apt name."
+        }
+      ],
+      "swap": { "sizeGb": 8 },
+      "disk": {
+        "rootMinGb": 64,
+        "minFreeGb": 8,
+        "lesson": "2026-07-29 station17 build 2 (i-0f522f0138a0411e1): launched with no BlockDeviceMappings, so the AMI-default 8G gp3 root volume shipped. Measured over SSM: / 6.8G total with 364K available (100%), /swapfile a PARTIAL 4,439,506,944-byte file — fallocate -l 8G allocated extents until ENOSPC and the old test -f guard then skipped it forever — swapon --show empty, journald 'Failed to create new system journal: No space left on device', cloud-final FAILED 43.8s into modules-final. The launch must request at least this root volume size explicitly; setup cannot converge an undersized volume, so the drift check reports it as a violation, not drift."
+      }
     }
   }
 }
