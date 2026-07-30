@@ -301,7 +301,7 @@ export async function addWebhook(url: string, events: string[], agent?: string):
   if (!config.webhooks) config.webhooks = [];
 
   // Prevent duplicates
-  if (config.webhooks.some(w => w.url === url && w.agent === agent && JSON.stringify(w.events.sort()) === JSON.stringify(events.sort()))) {
+  if (config.webhooks.some(w => w.url === url && w.agent === agent && JSON.stringify([...w.events].sort()) === JSON.stringify([...events].sort()))) {
     return { success: false, error: "Webhook already exists" };
   }
 

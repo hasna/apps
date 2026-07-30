@@ -80,11 +80,48 @@ describe("addWebhook", () => {
     expect(result.webhook?.agent).toBe("bob");
   });
 
-  test("rejects duplicate webhook", async () => {
+  test("preserves existing webhook event order when adding a different webhook", async () => {
+    writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
+      webhooks: [{ url: "https://example.com/hook", events: ["task", "dm"] }],
+    }));
+
+    const result = await addWebhook("https://example.com/hook", ["channel"]);
+
+    expect(result.success).toBe(true);
+    const config = JSON.parse(readFileSync(TEST_CONFIG_PATH, "utf-8"));
+    expect(config.webhooks[0].events).toEqual(["task", "dm"]);
+  });
+
+  test("does not mutate the caller's events array", async () => {
+    writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
+      webhooks: [{ url: "https://example.com/hook", events: ["channel"] }],
+    }));
+    const events = ["task", "dm"];
+
+    const result = await addWebhook("https://example.com/hook", events);
+
+    expect(result.success).toBe(true);
+    expect(events).toEqual(["task", "dm"]);
+  });
+
+  test("rejects an exact duplicate webhook", async () => {
     await addWebhook("https://example.com/hook", ["dm", "task"]);
     const result = await addWebhook("https://example.com/hook", ["dm", "task"]);
     expect(result.success).toBe(false);
     expect(result.error).toBe("Webhook already exists");
+  });
+
+  test("rejects a duplicate webhook with events in a different order", async () => {
+    await addWebhook("https://example.com/hook", ["dm", "task"]);
+    const result = await addWebhook("https://example.com/hook", ["task", "dm"]);
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("Webhook already exists");
+  });
+
+  test("allows a webhook with a genuinely different event set", async () => {
+    await addWebhook("https://example.com/hook", ["dm", "task"]);
+    const result = await addWebhook("https://example.com/hook", ["dm", "channel"]);
+    expect(result.success).toBe(true);
   });
 
   test("rejects empty events array", async () => {
