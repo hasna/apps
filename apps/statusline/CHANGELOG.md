@@ -2,6 +2,20 @@
 
 All notable changes to `@hasna/statusline` are documented here.
 
+## 0.0.5 - 2026-07-30
+
+- Show the account actually occupying a config dir after an in-place
+  `accounts switch-account`. The switch swaps the live auth files inside the
+  config dir and records the new occupant in
+  `.accounts-auth/switched-account.json` without moving the dir, so the
+  registry entry and the dir's path name both keep describing the dir's
+  owner; the `auth-profile` segment kept rendering the old account until a
+  fresh login landed. The occupant marker now wins over both the registry and
+  the layout name, for the profile segment and the registry-email fallback
+  alike; the session's own live state file still wins for the email, and a
+  cleared marker (owner restored / fresh login) falls back to the owner as
+  before.
+
 ## 0.0.4 - 2026-07-28
 
 - Lowercase model labels everywhere: `model-with-reasoning` now lowercases the
