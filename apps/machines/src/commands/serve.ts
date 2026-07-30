@@ -56,7 +56,7 @@ function escapeHtml(value: string): string {
 
 export function getServeInfo(options: ServeOptions = {}): ServeInfo {
   const host = options.host || "127.0.0.1";
-  const port = options.port || 7676;
+  const port = options.port ?? 7676;
   return {
     host,
     port,

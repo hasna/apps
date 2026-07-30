@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- GitHub Actions CI now runs typechecking and the test suite on pull requests
+  and pushes to `main`.
+
+### Fixed
+
+- Dashboard servers now preserve an explicit ephemeral port (`port: 0`),
+  keeping server tests isolated in CI.
+
 ## [0.2.5] - 2026-07-30
 
 ### Changed
