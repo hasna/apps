@@ -9,6 +9,7 @@
  * connection string, and the client never opens Postgres directly.
  */
 import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
+import { normalizeStorageMode } from "@hasna/contracts/mode";
 import { resolve as resolvePath } from "node:path";
 import type { Agent, CreatePlanInput, CreateTaskListInput, CreateTemplateInput, Plan, Project, RegisterAgentInput, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList, TaskTemplate, TemplateWithTasks, UpdatePlanInput, UpdateTaskListInput } from "../types/index.js";
 import { isBlockingDependencyStatus } from "../types/index.js";
@@ -249,15 +250,104 @@ export function getTodosRemoteAuthorityConfigStatus(
   };
 }
 
-function requireTodosRemoteAuthorityEnv(env: Env): Env {
+/**
+ * Server-side tokens for the LIVE @hasna/contracts, in probe order:
+ * newest generation first, then CANONICAL BEFORE DEPRECATED.
+ *
+ *   postgres     the current canonical server token
+ *   cloud        the previous canonical server token — what this repo injects today
+ *   self_hosted  a DEPRECATED alias of `cloud`, last resort only
+ *
+ * Both halves are load-bearing. Newest-first stops a transitional contracts
+ * release — one that still honours the old words — from pinning us to the old
+ * generation. Canonical-before-deprecated stops us pinning `self_hosted` on the
+ * enum where `cloud` is the real answer: both are accepted there, but only one
+ * is the token this repo already injects, and switching to the alias would be a
+ * live behaviour change dressed up as a refactor.
+ *
+ * This list is DERIVED from what this repo injects on the installed generation,
+ * NOT copied from a sibling repo. Sibling repos whose literal is `self_hosted`
+ * correctly list it ahead of `cloud`; copying their array to here would
+ * silently deprecate this one.
+ */
+const SERVER_MODE_CANDIDATES = ["postgres", "cloud", "self_hosted"] as const;
+
+/** Accepts a mode token or throws. Injectable so both enum generations are testable. */
+export type ModeNormalizer = (value: string) => unknown;
+
+let cachedServerMode: string | null = null;
+
+/**
+ * The token meaning "use the server" in the INSTALLED @hasna/contracts.
+ *
+ * This replaces a hardcoded `"cloud"` whose own comment said it "collapses when
+ * contracts lands the no-modes shape" — this is that collapse, done by deriving
+ * rather than by widening.
+ *
+ * Derived, never hardcoded, and that is load-bearing rather than tidy. The enum
+ * has already changed once and the two valid sets are DISJOINT: contracts
+ * <=0.8.5 accepts `cloud` plus the deprecated aliases and THROWS on
+ * `postgres`/`sqlite`; contracts after the placement-axis removal accepts ONLY
+ * `sqlite`/`postgres` and THROWS on everything else. A literal pinned here is a
+ * bet on which side of that change a machine is on, and the bet loses on one
+ * side or the other — and a todos CLI that cannot reach its own authority is
+ * how the fleet loses the ability to coordinate its own recovery.
+ *
+ * Probing goes through the library's own `normalizeStorageMode`, so the answer
+ * comes from the installed code rather than from our belief about it. It is the
+ * right discriminator precisely because it THROWS rather than returning a
+ * sentinel, which makes a try/catch probe exact instead of heuristic.
+ *
+ * SCOPE: this is the token handed to the contracts resolver. It is NOT the
+ * operator vocabulary — `VALID_STORAGE_MODES` still governs what a person may
+ * put in `HASNA_TODOS_STORAGE_MODE`, and that list is deliberately untouched
+ * here (tracked separately as todos b856fa08).
+ */
+export function serverStorageMode(normalize: ModeNormalizer = normalizeStorageMode): string {
+  // Only the default normalizer may use the cache: memoising an injected one
+  // would poison every later call, including the real one.
+  const useCache = normalize === (normalizeStorageMode as ModeNormalizer);
+  if (useCache && cachedServerMode !== null) return cachedServerMode;
+  for (const candidate of SERVER_MODE_CANDIDATES) {
+    try {
+      normalize(candidate);
+      if (useCache) cachedServerMode = candidate;
+      return candidate;
+    } catch {
+      // Not a token this generation of @hasna/contracts understands.
+    }
+  }
+  // Every candidate was rejected: the enum changed again and this list is stale.
+  // Fail loudly rather than guess — a wrong token routes this CLI at the wrong
+  // dataset, and silently reading the wrong todos store is worse than not
+  // starting at all.
+  throw new Error(
+    `REMOTE_STORAGE_MODE_UNSUPPORTED: no known server storage mode is accepted by the installed ` +
+      `@hasna/contracts (tried ${SERVER_MODE_CANDIDATES.join(", ")}); the storage-mode enum has changed. ` +
+      `Add the new server token to SERVER_MODE_CANDIDATES in src/cli/cloud-router.ts; ` +
+      `local SQLite fallback is disabled.`,
+  );
+}
+
+/**
+ * The env handed to the contracts resolver once the authority is known good.
+ *
+ * THREE keys, and only the first is this migration's business:
+ *   - the storage mode, now DERIVED rather than the literal `"cloud"`
+ *   - the API URL, with the `/v1` suffix stripped back off (the status object
+ *     appends it; the client re-appends it, so it must not be doubled)
+ *   - the API key, trimmed
+ * The URL rewrite and the key trim are orthogonal to the mode and are unchanged.
+ *
+ * Exported so the derived stamp is directly testable, rather than only
+ * observable through a constructed HTTP client.
+ */
+export function requireTodosRemoteAuthorityEnv(env: Env): Env {
   const status = getTodosRemoteAuthorityConfigStatus(env);
   if (!status.ok) throw new Error(status.issues[0]);
   return {
     ...env,
-    // Seam with the pinned @hasna/contracts 0.5.2 client resolver, whose
-    // normalizeStorageMode still expects its own local|cloud enum. Collapses
-    // when contracts lands the no-modes shape; do not widen from here.
-    HASNA_TODOS_STORAGE_MODE: "cloud",
+    HASNA_TODOS_STORAGE_MODE: serverStorageMode(),
     HASNA_TODOS_API_URL: status.v1_base_url!.replace(/\/v1$/, ""),
     HASNA_TODOS_API_KEY: env.HASNA_TODOS_API_KEY!.trim(),
   };

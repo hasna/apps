@@ -41,6 +41,8 @@ import {
   cloudResolvePlan,
   cloudResolveTaskListRef,
   cloudResolveTaskRef,
+  requireTodosRemoteAuthorityEnv,
+  serverStorageMode,
 } from "./cloud-router.js";
 
 const CLOUD_ENV = {
@@ -1138,5 +1140,128 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
     const client = getTodosCloudClient(CLOUD_ENV)!;
     await expect(cloudUnlockTask(client, "task-1", undefined, true)).resolves.toBe(true);
     expect(calls[0]!.body).toEqual({ force: true });
+  });
+});
+
+// -- The injected storage mode is derived, not hardcoded -----------------------
+//
+// The storage-mode enum has already changed once and the two valid sets are
+// DISJOINT:
+//
+//   contracts <= 0.8.5   accepts cloud + the deprecated aliases self_hosted,
+//                        remote, hybrid; THROWS on postgres/sqlite
+//   post-removal         accepts ONLY sqlite/postgres; THROWS on everything
+//                        else, including cloud and self_hosted
+//
+// So a literal pinned in source is a bet on which side of that change a machine
+// is on, and the bet loses on one side or the other. In this repo specifically,
+// losing it means a todos CLI that cannot reach its own authority — which is how
+// the fleet loses the ability to coordinate its own recovery.
+//
+// `normalize` is injectable because only one contracts generation can be
+// installed at a time; without that seam, forward compatibility here would be an
+// assertion rather than a test.
+
+describe("serverStorageMode", () => {
+  const acceptOnly = (accepted: readonly string[]) => (value: string) => {
+    if (!accepted.includes(value)) throw new Error(`Unknown storage mode: ${value}`);
+    return value;
+  };
+
+  const PRE_REMOVAL = ["local", "cloud", "self_hosted", "remote", "hybrid"];
+  const POST_REMOVAL = ["sqlite", "postgres", "postgresql"];
+
+  test("derives cloud on the pre-removal contracts enum", () => {
+    expect(serverStorageMode(acceptOnly(PRE_REMOVAL))).toBe("cloud");
+  });
+
+  test("derives postgres on the post-removal contracts enum", () => {
+    // The whole point: after the bump `cloud` throws at the resolver, and this
+    // is the token that does not.
+    expect(serverStorageMode(acceptOnly(POST_REMOVAL))).toBe("postgres");
+  });
+
+  test("prefers the newest accepted token when several are valid", () => {
+    // A transitional release that still honours the old words must not pin us
+    // to the old generation.
+    expect(serverStorageMode(acceptOnly([...POST_REMOVAL, ...PRE_REMOVAL]))).toBe("postgres");
+  });
+
+  test("never prefers a deprecated alias over the canonical token of the same generation", () => {
+    // `self_hosted` and `cloud` are BOTH accepted pre-removal, and `self_hosted`
+    // is the deprecated one. Preferring it would silently move this repo onto a
+    // deprecated token — a live behaviour change dressed up as a refactor, which
+    // would pass any test that only asked "does it resolve".
+    expect(serverStorageMode(acceptOnly(["self_hosted", "cloud"]))).toBe("cloud");
+  });
+
+  test("still resolves when the alias is the only server token on offer", () => {
+    // Canonical-before-deprecated is a preference, not a refusal.
+    expect(serverStorageMode(acceptOnly(["self_hosted"]))).toBe("self_hosted");
+  });
+
+  test("throws an actionable REMOTE_STORAGE_MODE_UNSUPPORTED when the enum changes again", () => {
+    // Guessing is the defect class this derivation removes, so an unrecognised
+    // enum must fail loudly rather than route at the wrong dataset.
+    const rejectAll = acceptOnly([]);
+
+    expect(() => serverStorageMode(rejectAll)).toThrow("REMOTE_STORAGE_MODE_UNSUPPORTED");
+    expect(() => serverStorageMode(rejectAll)).toThrow(/SERVER_MODE_CANDIDATES/);
+    expect(() => serverStorageMode(rejectAll)).toThrow(/local SQLite fallback is disabled/);
+  });
+
+  test("an injected normalizer never poisons the cached default", () => {
+    // The cache is only read/written for the default normalizer. Without that
+    // guard the first injected probe would fix the value for the whole process —
+    // and every later real call would return it.
+    const real = serverStorageMode();
+
+    expect(serverStorageMode(acceptOnly(POST_REMOVAL))).toBe("postgres");
+    expect(serverStorageMode()).toBe(real);
+  });
+
+  test("agrees with the contracts version actually installed", () => {
+    // Not a tautology: this is the assertion that fails the day a dependency
+    // bump lands a generation the candidate list does not cover.
+    expect(["postgres", "cloud", "self_hosted"]).toContain(serverStorageMode());
+  });
+});
+
+describe("requireTodosRemoteAuthorityEnv", () => {
+  test("stamps the derived mode rather than a literal", () => {
+    const env = requireTodosRemoteAuthorityEnv(CLOUD_ENV);
+
+    expect(env.HASNA_TODOS_STORAGE_MODE).toBe(serverStorageMode());
+  });
+
+  test("leaves the URL rewrite and the key trim untouched", () => {
+    // This function returns THREE keys and only the mode is this change's
+    // business. The `/v1` suffix must be stripped back off (the status object
+    // appends it and the client re-appends it, so a doubled suffix would point
+    // the CLI at /v1/v1), and the key must still be trimmed.
+    const env = requireTodosRemoteAuthorityEnv({
+      ...CLOUD_ENV,
+      HASNA_TODOS_API_KEY: `  ${CLOUD_ENV.HASNA_TODOS_API_KEY}  `,
+    });
+
+    expect(env.HASNA_TODOS_API_URL).toBe("https://todos.example.com");
+    expect(env.HASNA_TODOS_API_URL).not.toMatch(/\/v1$/);
+    expect(env.HASNA_TODOS_API_KEY).toBe(CLOUD_ENV.HASNA_TODOS_API_KEY);
+  });
+
+  test("still refuses a half-configured authority", () => {
+    // Deriving the mode must not weaken the no-local-fallback guarantee.
+    expect(() =>
+      requireTodosRemoteAuthorityEnv({
+        HASNA_TODOS_STORAGE_MODE: "cloud",
+        HASNA_TODOS_API_URL: "https://todos.example.com",
+      }),
+    ).toThrow(/REMOTE_API_KEY_MISSING/);
+  });
+
+  test("passes every other variable through unchanged", () => {
+    const env = requireTodosRemoteAuthorityEnv({ ...CLOUD_ENV, UNRELATED_VAR: "kept" });
+
+    expect(env.UNRELATED_VAR).toBe("kept");
   });
 });
