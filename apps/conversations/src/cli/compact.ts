@@ -5,6 +5,7 @@ import {
   resolveOutputWindow,
   type OutputWindow,
 } from "../lib/compact-output.js";
+import { printLine } from "../lib/stdout.js";
 
 export function getCliWindow(opts: {
   limit?: unknown;
@@ -52,5 +53,5 @@ export function printCompactFooter(opts: {
     lines.push(`More available: rerun with --cursor ${opts.nextCursor}.`);
   }
   if (opts.detailHint) lines.push(opts.detailHint);
-  console.log(chalk.dim(lines.join(" ")));
+  printLine(chalk.dim(lines.join(" ")));
 }

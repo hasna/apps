@@ -9,6 +9,7 @@ import { assertNoSensitiveContent } from "../../lib/content-safety.js";
 import { getCliWindow, pageFromQuery, printCompactFooter, queryLimitFor } from "../compact.js";
 import { printMessageEntry } from "../message-output.js";
 import { emitCliError } from "../cli-error.js";
+import { printErrorLine, printJson, printJsonLine, printLine } from "../../lib/stdout.js";
 
 /**
  * Merge a channel class into existing channel metadata at `metadata.channel_schema.class`,
@@ -48,7 +49,7 @@ export function channelClassOf(metadata: Record<string, unknown> | null | undefi
 }
 
 function failCommand(error: unknown, fallback: string): never {
-  console.error(chalk.red(error instanceof Error ? error.message : fallback));
+  printErrorLine(chalk.red(error instanceof Error ? error.message : fallback));
   closeDb();
   process.exit(1);
 }
@@ -72,11 +73,11 @@ export function registerChannelCommands(program: Command): void {
       const agent = resolveIdentity(opts.from).trim();
       const channelName = typeof name === "string" ? name.trim() : "";
       if (!agent) {
-        console.error(chalk.red("Creator identity is required."));
+        printErrorLine(chalk.red("Creator identity is required."));
         process.exit(1);
       }
       if (!channelName) {
-        console.error(chalk.red("Channel name cannot be empty."));
+        printErrorLine(chalk.red("Channel name cannot be empty."));
         process.exit(1);
       }
       try {
@@ -96,17 +97,17 @@ export function registerChannelCommands(program: Command): void {
           metadata: channelClass ? mergeChannelClassMetadata(null, channelClass) ?? undefined : undefined,
         });
         if (opts.json) {
-          console.log(JSON.stringify(sp, null, 2));
+          printJson(sp);
         } else {
           const clsLabel = channelClassOf(sp.metadata);
-          console.log(chalk.green(`Channel #${sp.name} created`) + (clsLabel ? chalk.cyan(` [${clsLabel}]`) : "") + (sp.description ? chalk.dim(` — ${sp.description}`) : ""));
+          printLine(chalk.green(`Channel #${sp.name} created`) + (clsLabel ? chalk.cyan(` [${clsLabel}]`) : "") + (sp.description ? chalk.dim(` — ${sp.description}`) : ""));
         }
       } catch (e: any) {
         if (e.message?.includes("UNIQUE constraint")) {
-          console.error(chalk.red(`Channel #${channelName} already exists.`));
+          printErrorLine(chalk.red(`Channel #${channelName} already exists.`));
           process.exit(1);
         }
-        console.error(chalk.red(e.message));
+        printErrorLine(chalk.red(e.message));
         process.exit(1);
       }
       closeDb();
@@ -130,10 +131,10 @@ export function registerChannelCommands(program: Command): void {
       const page = windowItems(channels, window);
 
       if (opts.json) {
-        console.log(JSON.stringify(channels, null, 2));
+        printJson(channels);
       } else {
         if (channels.length === 0) {
-          console.log(chalk.dim("No channels found."));
+          printLine(chalk.dim("No channels found."));
         } else {
           for (const sp of page.items) {
             const desc = sp.description ? chalk.dim(` - ${previewText(sp.description, 90)}`) : "";
@@ -141,7 +142,7 @@ export function registerChannelCommands(program: Command): void {
             const archived = sp.archived_at ? chalk.yellow(" [archived]") : "";
             const clsLabel = channelClassOf(sp.metadata);
             const cls = clsLabel ? chalk.cyan(` [${clsLabel}]`) : "";
-            console.log(`${chalk.magenta(`#${sp.name}`)}${cls}${desc}${archived}  ${sp.member_count} members, ${sp.message_count} messages${topic}`);
+            printLine(`${chalk.magenta(`#${sp.name}`)}${cls}${desc}${archived}  ${sp.member_count} members, ${sp.message_count} messages${topic}`);
           }
           printCompactFooter({
             shown: page.count,
@@ -169,7 +170,7 @@ export function registerChannelCommands(program: Command): void {
     .action(async (name, opts) => {
       const channelName = typeof name === "string" ? name.trim() : "";
       if (!channelName) {
-        console.error(chalk.red("Channel name cannot be empty."));
+        printErrorLine(chalk.red("Channel name cannot be empty."));
         process.exit(1);
       }
 
@@ -177,7 +178,7 @@ export function registerChannelCommands(program: Command): void {
       if (opts.name !== undefined) {
         const newName = typeof opts.name === "string" ? opts.name.trim() : "";
         if (!newName) {
-          console.error(chalk.red("New channel name cannot be empty."));
+          printErrorLine(chalk.red("New channel name cannot be empty."));
           process.exit(1);
         }
         updates.name = newName;
@@ -188,7 +189,7 @@ export function registerChannelCommands(program: Command): void {
       if (opts.class !== undefined) {
         const existing = await getStore().getChannel(channelName);
         if (!existing) {
-          console.error(chalk.red(`Channel not found: ${channelName}`));
+          printErrorLine(chalk.red(`Channel not found: ${channelName}`));
           process.exit(1);
         }
         updates.metadata = mergeChannelClassMetadata(existing.metadata, String(opts.class));
@@ -197,12 +198,12 @@ export function registerChannelCommands(program: Command): void {
       try {
         const sp = await getStore().updateChannel(channelName, updates);
         if (opts.json) {
-          console.log(JSON.stringify(sp, null, 2));
+          printJson(sp);
         } else {
-          console.log(chalk.green(`Channel #${sp.name} updated.`));
+          printLine(chalk.green(`Channel #${sp.name} updated.`));
         }
       } catch (e: any) {
-        console.error(chalk.red(e.message));
+        printErrorLine(chalk.red(e.message));
         process.exit(1);
       }
       closeDb();
@@ -218,23 +219,23 @@ export function registerChannelCommands(program: Command): void {
       const channelName = typeof name === "string" ? name.trim() : "";
       const target = typeof newName === "string" ? newName.trim() : "";
       if (!channelName) {
-        console.error(chalk.red("Channel name cannot be empty."));
+        printErrorLine(chalk.red("Channel name cannot be empty."));
         process.exit(1);
       }
       if (!target) {
-        console.error(chalk.red("New channel name cannot be empty."));
+        printErrorLine(chalk.red("New channel name cannot be empty."));
         process.exit(1);
       }
 
       try {
         const sp = await getStore().renameChannel(channelName, target);
         if (opts.json) {
-          console.log(JSON.stringify(sp, null, 2));
+          printJson(sp);
         } else {
-          console.log(chalk.green(`Channel renamed to #${sp.name}.`));
+          printLine(chalk.green(`Channel renamed to #${sp.name}.`));
         }
       } catch (e: any) {
-        console.error(chalk.red(e.message));
+        printErrorLine(chalk.red(e.message));
         process.exit(1);
       }
       closeDb();
@@ -248,19 +249,19 @@ export function registerChannelCommands(program: Command): void {
     .action(async (name, opts) => {
       const channelName = typeof name === "string" ? name.trim() : "";
       if (!channelName) {
-        console.error(chalk.red("Channel name cannot be empty."));
+        printErrorLine(chalk.red("Channel name cannot be empty."));
         process.exit(1);
       }
 
       try {
         const sp = await getStore().archiveChannel(channelName);
         if (opts.json) {
-          console.log(JSON.stringify(sp, null, 2));
+          printJson(sp);
         } else {
-          console.log(chalk.green(`Channel #${sp.name} archived.`));
+          printLine(chalk.green(`Channel #${sp.name} archived.`));
         }
       } catch (e: any) {
-        console.error(chalk.red(e.message));
+        printErrorLine(chalk.red(e.message));
         process.exit(1);
       }
       closeDb();
@@ -274,19 +275,19 @@ export function registerChannelCommands(program: Command): void {
     .action(async (name, opts) => {
       const channelName = typeof name === "string" ? name.trim() : "";
       if (!channelName) {
-        console.error(chalk.red("Channel name cannot be empty."));
+        printErrorLine(chalk.red("Channel name cannot be empty."));
         process.exit(1);
       }
 
       try {
         const sp = await getStore().unarchiveChannel(channelName);
         if (opts.json) {
-          console.log(JSON.stringify(sp, null, 2));
+          printJson(sp);
         } else {
-          console.log(chalk.green(`Channel #${sp.name} unarchived.`));
+          printLine(chalk.green(`Channel #${sp.name} unarchived.`));
         }
       } catch (e: any) {
-        console.error(chalk.red(e.message));
+        printErrorLine(chalk.red(e.message));
         process.exit(1);
       }
       closeDb();
@@ -306,15 +307,15 @@ export function registerChannelCommands(program: Command): void {
       const content = typeof message === "string" ? message : "";
 
       if (!from) {
-        console.error(chalk.red("Sender identity is required."));
+        printErrorLine(chalk.red("Sender identity is required."));
         process.exit(1);
       }
       if (!channelArg) {
-        console.error(chalk.red("Channel name cannot be empty."));
+        printErrorLine(chalk.red("Channel name cannot be empty."));
         process.exit(1);
       }
       if (!content.trim()) {
-        console.error(chalk.red("Message content cannot be empty."));
+        printErrorLine(chalk.red("Message content cannot be empty."));
         process.exit(1);
       }
 
@@ -326,7 +327,7 @@ export function registerChannelCommands(program: Command): void {
 
       const sp = await getStore().getChannel(channelArg);
       if (!sp) {
-        console.error(chalk.red("Channel not found."));
+        printErrorLine(chalk.red("Channel not found."));
         process.exit(1);
       }
 
@@ -345,9 +346,9 @@ export function registerChannelCommands(program: Command): void {
       }
 
       if (opts.json) {
-        console.log(JSON.stringify(msg, null, 2));
+        printJson(msg);
       } else {
-        console.log(chalk.green(`Message sent to #${channelArg}`) + chalk.dim(` (id: ${msg.id})`));
+        printLine(chalk.green(`Message sent to #${channelArg}`) + chalk.dim(` (id: ${msg.id})`));
       }
       closeDb();
     });
@@ -365,7 +366,7 @@ export function registerChannelCommands(program: Command): void {
     .action(async (channelName, opts) => {
       const channelArg = typeof channelName === "string" ? channelName.trim() : "";
       if (!channelArg) {
-        console.error(chalk.red("Channel name cannot be empty."));
+        printErrorLine(chalk.red("Channel name cannot be empty."));
         process.exit(1);
       }
       const store = getStore();
@@ -386,7 +387,7 @@ export function registerChannelCommands(program: Command): void {
       if (opts.from && page.items.length > 0) {
         const agent = resolveIdentity(opts.from).trim();
         if (!agent) {
-          console.error(chalk.red("Agent identity is required."));
+          printErrorLine(chalk.red("Agent identity is required."));
           process.exit(1);
         }
         await store.recordReadReceiptsBatch(page.items.map((m) => m.id), agent);
@@ -394,10 +395,10 @@ export function registerChannelCommands(program: Command): void {
       }
 
       if (opts.json) {
-        console.log(JSON.stringify(messages, null, 2));
+        printJson(messages);
       } else {
         if (messages.length === 0) {
-          console.log(chalk.dim(`No messages in #${channelArg}.`));
+          printLine(chalk.dim(`No messages in #${channelArg}.`));
         } else {
           for (const msg of page.items) printMessageEntry(msg, { verbose: opts.verbose, destination: chalk.magenta(`#${channelArg}`) });
           printCompactFooter({
@@ -423,25 +424,25 @@ export function registerChannelCommands(program: Command): void {
       const channelArg = typeof channelName === "string" ? channelName.trim() : "";
 
       if (!agent) {
-        console.error(chalk.red("Agent identity is required."));
+        printErrorLine(chalk.red("Agent identity is required."));
         process.exit(1);
       }
       if (!channelArg) {
-        console.error(chalk.red("Channel name cannot be empty."));
+        printErrorLine(chalk.red("Channel name cannot be empty."));
         process.exit(1);
       }
 
       const ok = await getStore().joinChannel(channelArg, agent);
 
       if (!ok) {
-        console.error(chalk.red(`Channel #${channelArg} not found.`));
+        printErrorLine(chalk.red(`Channel #${channelArg} not found.`));
         process.exit(1);
       }
 
       if (opts.json) {
-        console.log(JSON.stringify({ channel: channelArg, agent, joined: true }));
+        printJsonLine({ channel: channelArg, agent, joined: true });
       } else {
-        console.log(chalk.green(`${agent} joined #${channelArg}`));
+        printLine(chalk.green(`${agent} joined #${channelArg}`));
       }
       closeDb();
     });
@@ -457,23 +458,23 @@ export function registerChannelCommands(program: Command): void {
       const channelArg = typeof channelName === "string" ? channelName.trim() : "";
 
       if (!agent) {
-        console.error(chalk.red("Agent identity is required."));
+        printErrorLine(chalk.red("Agent identity is required."));
         process.exit(1);
       }
       if (!channelArg) {
-        console.error(chalk.red("Channel name cannot be empty."));
+        printErrorLine(chalk.red("Channel name cannot be empty."));
         process.exit(1);
       }
 
       const ok = await getStore().leaveChannel(channelArg, agent);
 
       if (opts.json) {
-        console.log(JSON.stringify({ channel: channelArg, agent, left: ok }));
+        printJsonLine({ channel: channelArg, agent, left: ok });
       } else {
         if (ok) {
-          console.log(chalk.green(`${agent} left #${channelArg}`));
+          printLine(chalk.green(`${agent} left #${channelArg}`));
         } else {
-          console.log(chalk.dim(`${agent} was not a member of #${channelArg}`));
+          printLine(chalk.dim(`${agent} was not a member of #${channelArg}`));
         }
       }
       closeDb();
@@ -491,23 +492,23 @@ export function registerChannelCommands(program: Command): void {
       const channelArg = typeof channelName === "string" ? channelName.trim() : "";
 
       if (!agent) {
-        console.error(chalk.red("Agent identity is required."));
+        printErrorLine(chalk.red("Agent identity is required."));
         process.exit(1);
       }
       if (!channelArg) {
-        console.error(chalk.red("Channel name cannot be empty."));
+        printErrorLine(chalk.red("Channel name cannot be empty."));
         process.exit(1);
       }
 
       try {
         const subscription = await getStore().subscribeToChannelNotifications(channelArg, agent, { preview_chars: opts.previewChars });
         if (opts.json) {
-          console.log(JSON.stringify(subscription, null, 2));
+          printJson(subscription);
         } else {
-          console.log(chalk.green(`${agent} subscribed to #${channelArg} notifications`) + chalk.dim(` (${subscription.preview_chars} chars)`));
+          printLine(chalk.green(`${agent} subscribed to #${channelArg} notifications`) + chalk.dim(` (${subscription.preview_chars} chars)`));
         }
       } catch (e: any) {
-        console.error(chalk.red(e.message));
+        printErrorLine(chalk.red(e.message));
         process.exit(1);
       }
       closeDb();
@@ -524,21 +525,21 @@ export function registerChannelCommands(program: Command): void {
       const channelArg = typeof channelName === "string" ? channelName.trim() : "";
 
       if (!agent) {
-        console.error(chalk.red("Agent identity is required."));
+        printErrorLine(chalk.red("Agent identity is required."));
         process.exit(1);
       }
       if (!channelArg) {
-        console.error(chalk.red("Channel name cannot be empty."));
+        printErrorLine(chalk.red("Channel name cannot be empty."));
         process.exit(1);
       }
 
       const unsubscribed = await getStore().unsubscribeFromChannelNotifications(channelArg, agent);
       if (opts.json) {
-        console.log(JSON.stringify({ channel: channelArg, agent, unsubscribed }));
+        printJsonLine({ channel: channelArg, agent, unsubscribed });
       } else if (unsubscribed) {
-        console.log(chalk.green(`${agent} unsubscribed from #${channelArg} notifications`));
+        printLine(chalk.green(`${agent} unsubscribed from #${channelArg} notifications`));
       } else {
-        console.log(chalk.dim(`${agent} had no notification subscription for #${channelArg}`));
+        printLine(chalk.dim(`${agent} had no notification subscription for #${channelArg}`));
       }
       closeDb();
     });
@@ -554,7 +555,7 @@ export function registerChannelCommands(program: Command): void {
     .action(async (opts) => {
       const agent = resolveIdentity(opts.from).trim();
       if (!agent) {
-        console.error(chalk.red("Agent identity is required."));
+        printErrorLine(chalk.red("Agent identity is required."));
         process.exit(1);
       }
 
@@ -566,13 +567,13 @@ export function registerChannelCommands(program: Command): void {
       const page = windowItems(subscriptions, window);
 
       if (opts.json) {
-        console.log(JSON.stringify(subscriptions, null, 2));
+        printJson(subscriptions);
       } else if (subscriptions.length === 0) {
-        console.log(chalk.dim(`No notification subscriptions for ${agent}.`));
+        printLine(chalk.dim(`No notification subscriptions for ${agent}.`));
       } else {
-        console.log(chalk.bold(`${agent} notification subscriptions:`));
+        printLine(chalk.bold(`${agent} notification subscriptions:`));
         for (const row of page.items) {
-          console.log(`  ${chalk.magenta(`#${row.channel}`)} ${chalk.dim(`preview ${row.preview_chars} chars`)}`);
+          printLine(`  ${chalk.magenta(`#${row.channel}`)} ${chalk.dim(`preview ${row.preview_chars} chars`)}`);
         }
         printCompactFooter({
           shown: page.count,
@@ -595,7 +596,7 @@ export function registerChannelCommands(program: Command): void {
     .action(async (channelName, opts) => {
       const channelArg = typeof channelName === "string" ? channelName.trim() : "";
       if (!channelArg) {
-        console.error(chalk.red("Channel name cannot be empty."));
+        printErrorLine(chalk.red("Channel name cannot be empty."));
         process.exit(1);
       }
       const members = await getStore().getChannelMembers(channelArg);
@@ -603,14 +604,14 @@ export function registerChannelCommands(program: Command): void {
       const page = windowItems(members, window);
 
       if (opts.json) {
-        console.log(JSON.stringify(members, null, 2));
+        printJson(members);
       } else {
         if (members.length === 0) {
-          console.log(chalk.dim(`No members in #${channelArg}.`));
+          printLine(chalk.dim(`No members in #${channelArg}.`));
         } else {
-          console.log(chalk.magenta(`#${channelArg}`) + chalk.dim(` — ${members.length} member(s)`));
+          printLine(chalk.magenta(`#${channelArg}`) + chalk.dim(` — ${members.length} member(s)`));
           for (const m of page.items) {
-            console.log(`  ${chalk.cyan(m.agent)} ${chalk.dim(`joined ${m.joined_at.slice(0, 10)}`)}`);
+            printLine(`  ${chalk.cyan(m.agent)} ${chalk.dim(`joined ${m.joined_at.slice(0, 10)}`)}`);
           }
           printCompactFooter({
             shown: page.count,

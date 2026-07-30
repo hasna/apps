@@ -7,6 +7,7 @@ import { resolveIdentity } from "../../lib/identity.js";
 import { previewText } from "../../lib/compact-output.js";
 import { getCliWindow, pageFromQuery, printCompactFooter, queryLimitFor } from "../compact.js";
 import { emitCliError } from "../cli-error.js";
+import { printErrorLine, printJson, printJsonLine, printLine } from "../../lib/stdout.js";
 
 export function requireDeleteConfirmation(confirmed?: boolean): void {
   if (!confirmed) {
@@ -42,18 +43,18 @@ export function registerProjectCommands(program: Command): void {
       try {
         const panel = await createConversationsProjectPanel(opts.project, { limit: opts.limit });
         if (opts.json || opts.contract) {
-          console.log(JSON.stringify(panel, null, 2));
+          printJson(panel);
         } else {
-          console.log(chalk.bold(panel.title));
-          if (panel.summary) console.log(`  ${panel.summary}`);
-          console.log(`  State: ${panel.state}`);
-          console.log(`  Items: ${panel.items.length}`);
+          printLine(chalk.bold(panel.title));
+          if (panel.summary) printLine(`  ${panel.summary}`);
+          printLine(`  State: ${panel.state}`);
+          printLine(`  Items: ${panel.items.length}`);
         }
       } catch (e: any) {
         if (opts.json || opts.contract) {
-          console.log(JSON.stringify({ error: e.message }));
+          printJsonLine({ error: e.message });
         } else {
-          console.error(chalk.red(e.message));
+          printErrorLine(chalk.red(e.message));
         }
         process.exit(1);
       } finally {
@@ -104,9 +105,9 @@ export function registerProjectCommands(program: Command): void {
           tags,
         });
         if (opts.json) {
-          console.log(JSON.stringify(p, null, 2));
+          printJson(p);
         } else {
-          console.log(chalk.green(`Project "${p.name}" created`) + chalk.dim(` (id: ${p.id})`));
+          printLine(chalk.green(`Project "${p.name}" created`) + chalk.dim(` (id: ${p.id})`));
         }
       } catch (e: any) {
         if (e.message?.includes("UNIQUE constraint")) {
@@ -147,15 +148,15 @@ export function registerProjectCommands(program: Command): void {
         : pageFromQuery(projects, window);
 
       if (opts.json) {
-        console.log(JSON.stringify(projects, null, 2));
+        printJson(projects);
       } else {
         if (projects.length === 0) {
-          console.log(chalk.dim("No projects found."));
+          printLine(chalk.dim("No projects found."));
         } else {
           for (const p of page.items) {
             const desc = p.description ? chalk.dim(` - ${previewText(p.description, 90)}`) : "";
             const statusBadge = p.status === "archived" ? chalk.yellow(" [archived]") : "";
-            console.log(`${chalk.bold(p.name)}${desc}${statusBadge}  ${p.channel_count} channels`);
+            printLine(`${chalk.bold(p.name)}${desc}${statusBadge}  ${p.channel_count} channels`);
           }
           printCompactFooter({
             shown: page.count,
@@ -183,16 +184,16 @@ export function registerProjectCommands(program: Command): void {
       }
 
       if (opts.json) {
-        console.log(JSON.stringify(p, null, 2));
+        printJson(p);
       } else {
-        console.log(chalk.bold(p.name));
-        if (p.description) console.log(`  Description: ${p.description}`);
-        if (p.path) console.log(`  Path: ${p.path}`);
-        if (p.repository) console.log(`  Repository: ${p.repository}`);
-        console.log(`  Status: ${p.status}`);
-        console.log(`  Channels: ${p.channel_count}`);
-        if (p.tags.length > 0) console.log(`  Tags: ${p.tags.join(", ")}`);
-        console.log(`  Created by: ${p.created_by} on ${p.created_at.slice(0, 10)}`);
+        printLine(chalk.bold(p.name));
+        if (p.description) printLine(`  Description: ${p.description}`);
+        if (p.path) printLine(`  Path: ${p.path}`);
+        if (p.repository) printLine(`  Repository: ${p.repository}`);
+        printLine(`  Status: ${p.status}`);
+        printLine(`  Channels: ${p.channel_count}`);
+        if (p.tags.length > 0) printLine(`  Tags: ${p.tags.join(", ")}`);
+        printLine(`  Created by: ${p.created_by} on ${p.created_at.slice(0, 10)}`);
       }
       closeDb();
     });
@@ -229,9 +230,9 @@ export function registerProjectCommands(program: Command): void {
         const resolvedId = isUuid ? id : ((await getStore().getProjectByName(id))?.id ?? id);
         const p = await getStore().updateProject(resolvedId, updates as any);
         if (opts.json) {
-          console.log(JSON.stringify(p, null, 2));
+          printJson(p);
         } else {
-          console.log(chalk.green(`Project "${p.name}" updated.`));
+          printLine(chalk.green(`Project "${p.name}" updated.`));
         }
       } catch (e: any) {
         emitCliError(e.message, opts);
@@ -255,15 +256,15 @@ export function registerProjectCommands(program: Command): void {
           throw new Error(`Project "${id}" not found.`);
         }
         if (opts.json) {
-          console.log(JSON.stringify({ id, deleted: true }));
+          printJsonLine({ id, deleted: true });
         } else {
-          console.log(chalk.green(`Project deleted.`));
+          printLine(chalk.green(`Project deleted.`));
         }
       } catch (e: any) {
         if (opts.json) {
-          console.log(JSON.stringify({ id, deleted: false, error: e.message }));
+          printJsonLine({ id, deleted: false, error: e.message });
         } else {
-          console.error(chalk.red(e.message));
+          printErrorLine(chalk.red(e.message));
         }
         process.exit(1);
       }

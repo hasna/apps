@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import chalk from "chalk";
 import { execSync } from "child_process";
+import { printErrorLine, printJsonLine, printLine } from "../../lib/stdout.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -95,11 +96,11 @@ export function registerTmuxCommands(program: Command): void {
       const message = opts.message;
 
       if (!target) {
-        console.error(chalk.red("--target is required."));
+        printErrorLine(chalk.red("--target is required."));
         process.exit(1);
       }
       if (!message || !message.trim()) {
-        console.error(chalk.red("--message cannot be empty."));
+        printErrorLine(chalk.red("--message cannot be empty."));
         process.exit(1);
       }
 
@@ -111,14 +112,14 @@ export function registerTmuxCommands(program: Command): void {
         });
 
         if (opts.json) {
-          console.log(JSON.stringify({ target, result }));
+          printJsonLine({ target, result });
         } else if (result.success) {
-          console.log(
+          printLine(
             chalk.green(`Sent to ${target}`) +
             chalk.dim(` (attempt ${result.attempts})`),
           );
         } else {
-          console.error(
+          printErrorLine(
             chalk.red(`Failed to confirm delivery to ${target}`) +
             chalk.dim(` after ${result.attempts} attempt(s)`),
           );
@@ -127,9 +128,9 @@ export function registerTmuxCommands(program: Command): void {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         if (opts.json) {
-          console.log(JSON.stringify({ target, error: msg }));
+          printJsonLine({ target, error: msg });
         } else {
-          console.error(chalk.red(`tmux error: ${msg}`));
+          printErrorLine(chalk.red(`tmux error: ${msg}`));
         }
         process.exit(1);
       }
@@ -155,11 +156,11 @@ export function registerTmuxCommands(program: Command): void {
       const stagger = Number.isFinite(opts.stagger) && opts.stagger >= 0 ? opts.stagger : 500;
 
       if (targets.length === 0) {
-        console.error(chalk.red("--targets must be a non-empty comma-separated list."));
+        printErrorLine(chalk.red("--targets must be a non-empty comma-separated list."));
         process.exit(1);
       }
       if (!message || !message.trim()) {
-        console.error(chalk.red("--message cannot be empty."));
+        printErrorLine(chalk.red("--message cannot be empty."));
         process.exit(1);
       }
 
@@ -177,16 +178,16 @@ export function registerTmuxCommands(program: Command): void {
           results[i] = { target, ...result };
           if (!opts.json) {
             if (result.success) {
-              console.log(chalk.green(`  ✓ ${target}`) + chalk.dim(` (attempt ${result.attempts})`));
+              printLine(chalk.green(`  ✓ ${target}`) + chalk.dim(` (attempt ${result.attempts})`));
             } else {
-              console.log(chalk.red(`  ✗ ${target}`) + chalk.dim(` (failed after ${result.attempts} attempts)`));
+              printLine(chalk.red(`  ✗ ${target}`) + chalk.dim(` (failed after ${result.attempts} attempts)`));
             }
           }
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
           results[i] = { target, success: false, attempts: 0, error: errMsg };
           if (!opts.json) {
-            console.log(chalk.red(`  ✗ ${target}: ${errMsg}`));
+            printLine(chalk.red(`  ✗ ${target}: ${errMsg}`));
           }
         }
       }));
@@ -195,9 +196,9 @@ export function registerTmuxCommands(program: Command): void {
       const failed = results.length - succeeded;
 
       if (opts.json) {
-        console.log(JSON.stringify({ results, succeeded, failed, total: results.length }));
+        printJsonLine({ results, succeeded, failed, total: results.length });
       } else {
-        console.log(chalk.dim(`\nBroadcast complete: ${chalk.green(succeeded)} succeeded, ${failed > 0 ? chalk.red(failed) : chalk.dim(failed)} failed`));
+        printLine(chalk.dim(`\nBroadcast complete: ${chalk.green(succeeded)} succeeded, ${failed > 0 ? chalk.red(failed) : chalk.dim(failed)} failed`));
       }
 
       if (failed > 0) process.exit(1);
