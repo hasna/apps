@@ -125,6 +125,36 @@ here, because both need their own change and review:
   0.1.13 does not. Check `node_modules/@hasna/events/package.json` before concluding
   a bundle is out of sync.
 
+## 0.2.92
+
+Release-only bump. No source change: this ships work already merged to `main`
+that no published artifact carried.
+
+The headline is the `-t/--tag` silent data-loss fix from **#34**
+(`fix(cli): stop silently dropping repeated -t tags on add/update/upsert`,
+merged 2026-07-27T19:39:04Z). That fix landed three days *after* 0.2.91 was
+published (2026-07-24T15:52:10Z) and `package.json` was never bumped, so `main`
+and the registry both reported `0.2.91` while behaving differently — `main`
+stored all five tags, the published artifact stored only the last one — and
+`npm publish` could not ship the fix at all, because that version already
+existed. Measured against installed 0.2.91:
+`knowledge add … -t convention -t naming -t repos -t github -t proposed`
+stored `["proposed"]` at exit 0. Because tags are the retrieval surface, such an
+entry is invisible to every `--tag` query, which is indistinguishable from never
+having been written.
+
+Since the version number was identical, nothing signalled the difference. The
+same gap held back **31 other commits** merged since the 0.2.91 publish,
+including the request-boundary guard, the platform-agnostic redaction fix, the
+`ok_untag` truthful-removal fix and the generated-artifact checks described under
+"Unreleased" above; they ship here too.
+
+- Bump `0.2.91` → `0.2.92` and regenerate the shipped bundles, which embed the
+  version string. The bundle diff is provably the version string alone:
+  `bin/knowledge.js` and `bin/knowledge-mcp.js` are byte-identical to their
+  predecessors once `0.2.92` is reverted to `0.2.91`, and
+  `verify:generated` reports all 6 bundles rebuilding byte-identically.
+
 ## 0.2.91
 
 Harden the local JSON item-store against lock corruption and add a sanctioned
