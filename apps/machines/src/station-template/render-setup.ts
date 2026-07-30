@@ -169,16 +169,18 @@ export function buildStationTemplateSteps(effective: EffectiveTemplate, options:
     });
     const hostnameFlag = station && effective.tailscale.hostnameFromStation ? ` --hostname ${quote(station)}` : "";
     const sshFlag = effective.tailscale.ssh ? " --ssh" : "";
-    // Secret NAME only; the value is pulled at runtime into a 0600 file and
-    // referenced via file: so it never appears in argv or logs. The key file
-    // is removed on both the success and the failure arm.
+    // Secret NAME only; the value is pulled at runtime into a securely created
+    // 0600 temporary file (mktemp, never a predictable /tmp path) and
+    // referenced via file: so it never appears in argv or logs. The subshell's
+    // EXIT trap removes the key file on both the success and the failure arm.
     steps.push({
       id: "template-tailscale-join",
       title: "Join tailnet if not already joined (auth key via secrets vault, name only; never boot-critical)",
       command:
-        `tailscale status >/dev/null 2>&1 || ( umask 077 && secrets get ${quote(effective.tailscale.authKeySecretName)} | tr -d '\\r\\n' > /tmp/ts-authkey && ` +
-        `sudo tailscale up --auth-key file:/tmp/ts-authkey${hostnameFlag}${sshFlag} && rm -f /tmp/ts-authkey ) || ` +
-        `{ rm -f /tmp/ts-authkey; echo 'hasna-station: tailscale join failed (NON-FATAL) — the box stays reachable by its floor path; drift check reports tailscale:join' >&2; }`,
+        `tailscale status >/dev/null 2>&1 || ( umask 077 && auth_key_file=$(mktemp) && ` +
+        `trap 'rm -f "$auth_key_file"' EXIT && secrets get ${quote(effective.tailscale.authKeySecretName)} | tr -d '\\r\\n' > "$auth_key_file" && ` +
+        `sudo tailscale up --auth-key "file:$auth_key_file"${hostnameFlag}${sshFlag} ) || ` +
+        `echo 'hasna-station: tailscale join failed (NON-FATAL) — the box stays reachable by its floor path; drift check reports tailscale:join' >&2`,
       manager: "custom",
       privileged: true,
     });
