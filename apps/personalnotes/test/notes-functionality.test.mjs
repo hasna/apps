@@ -844,7 +844,11 @@ test('web chat streams sidecar events and applies approvals through the sidecar'
       return ndjsonResponse([
         { type: 'text-delta', text: 'Reviewing the note.' },
         { type: 'tool-call', toolCallId: 'tool-1', toolName: 'trash_note', input: { id: 'chat-1' } },
-        { type: 'tool-result', toolCallId: 'tool-1', output: { requiresConfirmation: true, approval } },
+        { type: 'tool-result', toolCallId: 'tool-1', output: {
+          requiresConfirmation: true,
+          approval,
+          sources: [{ id: 'chat-1', title: 'Alpha Plan', labels: ['alpha'], machine: 'studio-mac' }],
+        } },
         { type: 'confirmation', approval },
         { type: 'finish', text: 'Reviewing the note.', pendingConfirmations: [approval] },
       ]);
@@ -854,7 +858,7 @@ test('web chat streams sidecar events and applies approvals through the sidecar'
     }
     throw new Error(`unexpected sidecar url ${url}`);
   };
-  const { windowTarget } = loadWebAppWithFakeDOM(app, {
+  const { windowTarget, document } = loadWebAppWithFakeDOM(app, {
     __AI__: { port: 4222, available: true },
     fetch: fetchStub,
     TextDecoder,
@@ -877,6 +881,16 @@ test('web chat streams sidecar events and applies approvals through the sidecar'
   assert.equal(windowTarget.PersonalNotes.chat.state().status, 'awaiting_confirmation');
   assert.ok(events.some(event => event.name === 'hasna:chat-tool-call' && event.detail.toolCall.name === 'trash_note'));
   assert.ok(events.some(event => event.name === 'hasna:chat-confirmation' && event.detail.approval.id === approval.id));
+  assert.equal(document.getElementById('chat-log').children[0].classList.contains('chat-user'), true);
+  assert.equal(document.getElementById('chat-tools').children.length, 1, 'tool activity renders in the conversation');
+  assert.equal(document.getElementById('chat-outputs').children.length, 1, 'tool activity also renders in Outputs');
+  assert.equal(document.getElementById('chat-sources').children.length, 1, 'source notes render in the Sources panel');
+  document.getElementById('chat-panel-close').click();
+  assert.equal(document.getElementById('chat-panel').hidden, true);
+  document.getElementById('chat-panel-toggle').click();
+  assert.equal(document.getElementById('chat-panel').hidden, false);
+  document.getElementById('chat-view-toggle').click();
+  assert.equal(document.getElementById('chat-stage').classList.contains('chat-wide'), true);
 
   const approved = await windowTarget.PersonalNotes.chat.approve(approval.id, true);
   assert.equal(approved.approved, true);
@@ -913,6 +927,57 @@ test('web chat is honest when the AI sidecar is unavailable — no fake local an
   assert.equal(chatState.toolCalls.length, 0, 'no fabricated tool calls');
 });
 
+test('web chat composer: an Enter that only commits an IME candidate must not send', async () => {
+  const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
+  const chatCalls = [];
+  const fetchStub = async (url, init) => {
+    if (!String(url).endsWith('/chat')) throw new Error(`unexpected sidecar url ${url}`);
+    chatCalls.push(JSON.parse(init.body));
+    return ndjsonResponse([{ type: 'finish', text: 'Sent.' }]);
+  };
+  const { windowTarget, document } = loadWebAppWithFakeDOM(app, {
+    __AI__: { port: 4222, available: true },
+    fetch: fetchStub,
+    TextDecoder,
+  });
+  windowTarget.PersonalNotes.hydrate({ thisMachine: 'studio-mac', notes: [], machines: [{ id: 'studio-mac' }] });
+
+  const input = document.getElementById('chat-input');
+  const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+  const enter = extra => {
+    const event = { type: 'keydown', key: 'Enter', defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, ...extra };
+    input.dispatchEvent(event);
+    return event;
+  };
+
+  // macOS Japanese/Chinese/Korean input: this Enter commits the candidate, nothing more.
+  input.value = 'hello there';
+  const composing = enter({ isComposing: true });
+  await settle();
+  assert.equal(composing.defaultPrevented, false, 'the input method must keep its own Enter');
+  assert.equal(chatCalls.length, 0, 'a composition Enter must not post to /chat');
+  assert.equal(input.value, 'hello there', 'the in-progress composition must survive');
+
+  // Older WebKit reports the same key as keyCode 229 with no isComposing flag.
+  enter({ keyCode: 229 });
+  await settle();
+  assert.equal(chatCalls.length, 0, 'keyCode 229 must not post to /chat');
+  assert.equal(input.value, 'hello there');
+
+  // Shift+Enter is still a newline, never a send.
+  enter({ shiftKey: true });
+  await settle();
+  assert.equal(chatCalls.length, 0, 'Shift+Enter must not post to /chat');
+
+  // The committed text still sends — the guard must not break the normal path.
+  const send = enter({});
+  await settle();
+  assert.equal(send.defaultPrevented, true);
+  assert.equal(chatCalls.length, 1, 'a plain Enter still sends');
+  assert.equal(chatCalls[0].prompt, 'hello there');
+  assert.equal(input.value, '', 'sending clears the composer');
+});
+
 test('web navigation: chat is a header button, labels manage in Settings, machines dropdown on top', async () => {
   const html = await readFile(join(repoRoot, 'web', 'index.html'), 'utf8');
   const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
@@ -933,6 +998,14 @@ test('web navigation: chat is a header button, labels manage in Settings, machin
   assert.match(html, /id="slash-menu"/);
   assert.doesNotMatch(html, /id="md-toolbar"|class="toolbar"/);
   assert.match(html, /id="chat-page"/);
+  assert.match(html, /id="chat-more"/);
+  assert.match(html, /id="chat-view-toggle"/);
+  assert.match(html, /id="chat-panel-toggle"/);
+  assert.match(html, /id="chat-outputs"/);
+  assert.match(html, /id="chat-sources"/);
+  assert.match(html, /<textarea[^>]+id="chat-input"/);
+  assert.match(app, /Loaded a tool/);
+  assert.match(app, /Reading SKILL\.md/);
   // Labels MANAGEMENT page lives inside Settings; the sidebar keeps filter rows only.
   assert.match(html, /data-tab="labels"[^>]*id="labels-page-main"/);
   // Search is a Cmd+K popover, not a page or sidebar field.
