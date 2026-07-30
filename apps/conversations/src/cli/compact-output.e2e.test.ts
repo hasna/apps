@@ -72,6 +72,21 @@ describe("compact CLI output", () => {
     expect(messages[0].content).toBe("second page message");
   });
 
+  test("read accepts --unread-only after agent registration", () => {
+    const agent = "unread-only-reader";
+    const register = runCli(["agents", "register", agent, "--session", "unread-only-session"], agent);
+    expect(register.exitCode).toBe(0);
+
+    runCli(["send", "already read", "--to", agent], "alice");
+    const marked = runCli(["read", "--to", agent, "--mark-read"], agent);
+    expect(marked.exitCode).toBe(0);
+    runCli(["send", "still unread", "--to", agent], "alice");
+
+    const unread = runCli(["read", "--to", agent, "--unread-only", "--json"], agent);
+    expect(unread.exitCode).toBe(0);
+    expect(JSON.parse(unread.stdout).map((message: { content: string }) => message.content)).toEqual(["still unread"]);
+  });
+
   test("send exits nonzero for sensitive content without echoing the value", () => {
     const blocked = syntheticDatabaseUrl();
     const send = runCli(["send", `blocked ${blocked}`, "--to", "blocked-target"], "alice");

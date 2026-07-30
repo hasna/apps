@@ -124,6 +124,7 @@ export function registerMessagingCommands(program: Command): void {
     .option("--limit <n>", "Max messages to return", parseInt)
     .option("--cursor <n>", "Skip first N messages for pagination", parseInt)
     .option("--unread", "Only unread messages")
+    .option("--unread-only", "Only unread messages")
     .option("--mark-read", "Mark returned messages as read")
     .option("--verbose", "Show full message bodies")
     .option("-j, --json", "Output as JSON")
@@ -137,7 +138,7 @@ export function registerMessagingCommands(program: Command): void {
         since: opts.since,
         limit: opts.json ? opts.limit : queryLimitFor(window),
         offset: opts.json ? opts.cursor : window.offset,
-        unread_only: opts.unread,
+        unread_only: opts.unread || opts.unreadOnly,
       });
       const page = opts.json
         ? { items: messages, hasMore: false, nextCursor: null, count: messages.length }
