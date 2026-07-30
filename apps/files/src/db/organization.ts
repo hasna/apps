@@ -523,7 +523,7 @@ export function bootstrapGoogleDriveOrganizationQueues(): GoogleDriveOrganizatio
         );
       }
     }
-  })();
+  });
 
   result.collections_created = collectionsCreated;
   return result;
@@ -1199,7 +1199,7 @@ export function updateFileOrganizationReview(idOrFileId: string, updates: {
       after_state: { ...after },
       note: updates.note,
     });
-  })();
+  });
 
   const after = getFileOrganizationReview(existingRow.id)!;
   refreshFileFts(existingRow.file_id);

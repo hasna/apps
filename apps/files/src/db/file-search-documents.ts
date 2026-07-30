@@ -133,7 +133,7 @@ export function upsertFileSearchDocument(input: UpsertFileSearchDocumentInput): 
 
     refreshFileSearchDocumentFts(id);
     return getFileSearchDocument(id)!;
-  })();
+  });
 }
 
 export function getFileSearchDocument(id: string): FileSearchDocument | null {
@@ -182,7 +182,7 @@ export function deleteFileSearchDocument(id: string): boolean {
     db.run("DELETE FROM file_search_documents_fts WHERE document_id = ?", [id]);
     const result = db.run("DELETE FROM file_search_documents WHERE id = ?", [id]);
     return result.changes > 0;
-  })();
+  });
 }
 
 export function deleteFileSearchDocumentsForFile(fileId: string): number {
@@ -191,7 +191,7 @@ export function deleteFileSearchDocumentsForFile(fileId: string): number {
     db.run("DELETE FROM file_search_documents_fts WHERE file_id = ?", [fileId]);
     const result = db.run("DELETE FROM file_search_documents WHERE file_id = ?", [fileId]);
     return result.changes;
-  })();
+  });
 }
 
 export function refreshFileSearchDocumentFts(id: string): void {
