@@ -1,29 +1,65 @@
 {
-  "$schema": "hasna.service_contract.v1",
-  "class": "service",
-  "kitVersion": "0.8.0",
-  "name": "@hasna/sandboxes",
+  "$schema": "./node_modules/@hasna/contracts/src/hasna.contract.schema.json",
+  "schema": "hasna.service_contract.v1",
+  "name": "sandboxes",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "0.8.5",
+  "description": "Managed E2B / Daytona sandbox adapters plus a sandboxes CLI and a sandboxes-mcp MCP server. The 1.0.0 rebuild removed the sandboxes-serve HTTP server and the broad Postgres-backed sandbox store, so this repo declares no HTTP service surface and owns no configured database of its own.",
   "bins": [
     "sandboxes",
     "sandboxes-mcp"
   ],
-  "serviceSurfaces": [
-    "http",
-    "cli",
-    "mcp"
+  "hosting": [
+    "user-hosted"
   ],
   "storage": {
-    "engines": [
-      "sqlite",
-      "postgres"
-    ]
+    "mode": "postgres"
   },
-  "hosting": {
-    "model": "systemd",
-    "entrypoint": "sandboxes-mcp",
-    "transport": "http",
-    "host": "127.0.0.1",
-    "port": 8875,
-    "path": "/mcp"
+  "serviceSurfaces": [
+    {
+      "name": "managed-adapters-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "none",
+      "exportSubpath": "."
+    },
+    {
+      "name": "sandboxes-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "sandboxes",
+      "authMode": "local-only"
+    },
+    {
+      "name": "sandboxes-mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "sandboxes-mcp",
+      "authMode": "local-only"
+    }
+  ],
+  "metadata": {
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
+    },
+    "runtime": {
+      "mcp": {
+        "transport": "streamable-http",
+        "defaultBindHost": "loopback",
+        "defaultPort": 8875,
+        "defaultPath": "/mcp",
+        "stdioSwitch": "--stdio",
+        "supervisor": "systemd unit running the sandboxes-mcp bin"
+      },
+      "storage": {
+        "ownsConfiguredBackend": false,
+        "localSandboxRecords": "JSON files under SANDBOXES_HOME (default ~/.hasna/sandboxes/instances)",
+        "postgres": "The optional durable task journal and its independent witness run against a PostgresClientV1 the caller supplies; sandboxes resolves no connection string of its own.",
+        "sqlite": "Not implemented. No SQLite store ships in this repo, so storage.engines deliberately claims none."
+      }
+    }
   }
 }

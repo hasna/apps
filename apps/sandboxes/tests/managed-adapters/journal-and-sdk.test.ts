@@ -108,7 +108,10 @@ describe("managed package boundary", () => {
       "migrations/durable-journal-witness",
     ])
     expect(manifest.dependencies?.["@types/ws"]).toBe("8.18.1")
-    expect(manifest.scripts?.prepack).toBe("bun run build")
+    // prepack must still build first so `dist/` reaches the tarball, and it now
+    // also runs the packed-artifact scan the service contract names.
+    expect(manifest.scripts?.prepack).toStartWith("bun run build")
+    expect(manifest.scripts?.prepack).toContain("bun run scan:artifact")
     expect(managedPublicApi.DAYTONA_GUEST_BROKER_PTY_ID).toBe("hasna-sandboxes-broker-v1")
     expect(MANAGED_GUEST_BROKER_MAX_FRAME_BYTES).toBe(16 * 1024 * 1024)
     expect(DAYTONA_GUEST_BROKER_MAX_IN_FLIGHT_DELIVERIES).toBe(8)
