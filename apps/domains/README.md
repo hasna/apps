@@ -1,6 +1,6 @@
 # @hasna/domains
 
-Domain portfolio, registrar, marketplace, and DNS management for AI agents — CLI + MCP server with SQLite. Core registrar/DNS commands load by default; heavier integrations are optional command groups.
+Domain portfolio, registrar, marketplace, and DNS management for AI agents. The package ships a CLI, MCP server, authenticated HTTP API, generated SDK, and library exports. CLI workflows use local SQLite by default and can use the shared HTTP API in cloud mode; `domains-serve` connects directly to cloud Postgres.
 
 ## Features
 
@@ -24,6 +24,7 @@ Domain portfolio, registrar, marketplace, and DNS management for AI agents — C
 - **Brand monitoring** — optional typosquat/threat detection via Brandsight API
 - **MCP server** — Model Context Protocol support for AI agents
 - **MCP safe mode** — expose read-only tools only with `DOMAINS_MCP_SAFE_MODE=1`
+- **HTTP API + SDK** — authenticated `/v1` API through `domains-serve` and a typed `@hasna/domains/sdk` client
 - **Interactive TUI** — optional portfolio browser in the terminal with `domains interactive`
 
 ## Installation
@@ -40,11 +41,11 @@ The default CLI keeps core portfolio, registrar, DNS, provider, Route 53, doctor
 
 ```bash
 domains extras
-DOMAINS_COMMAND_GROUPS=marketplace,storage domains --help
+DOMAINS_COMMAND_GROUPS=marketplace,owner domains --help
 DOMAINS_ENABLE_EXTRAS=1 domains --help
 ```
 
-Available groups: `brandsight`, `events`, `history`, `interactive`, `marketplace`, `outreach`, `owner`, `provision`, `research`, `storage`, `wallet`.
+Available groups: `brandsight`, `events`, `history`, `interactive`, `marketplace`, `outreach`, `owner`, `provision`, `research`, `wallet`.
 
 ## Quick Start
 
@@ -229,17 +230,19 @@ domains doctor --json
 
 Route 53 sync imports registered domains when the selected AWS account permits `route53domains:ListDomains`, and hosted zones when the account permits Route 53 hosted-zone reads. Domain-looking names from unrelated systems such as SSM parameters or Secrets Manager should only be imported after review because they do not prove registrar ownership.
 
-## Storage Sync
+## Storage Modes
 
-Set one of these environment variables to sync with a remote PostgreSQL storage database:
+The CLI and library use local SQLite by default. Client cloud mode is pure HTTP: configure the service URL and API key rather than exposing a database DSN to clients.
 
 ```bash
-export DOMAINS_DATABASE_URL="postgres://..."
-
-DOMAINS_COMMAND_GROUPS=storage domains storage status
-DOMAINS_COMMAND_GROUPS=storage domains storage push
-DOMAINS_COMMAND_GROUPS=storage domains storage pull
+export HASNA_DOMAINS_STORAGE_MODE=cloud
+export HASNA_DOMAINS_API_URL=https://domains.example.com
+export HASNA_DOMAINS_API_KEY=dom_...
 ```
+
+The unprefixed `DOMAINS_API_URL` and `DOMAINS_API_KEY` aliases are also accepted. When both URL and key are present, the store selects cloud HTTP automatically unless an explicit storage mode overrides it.
+
+The standalone `domains-serve` process is the server-side exception: it connects directly to Postgres using `HASNA_DOMAINS_DATABASE_URL` and requires `HASNA_DOMAINS_API_SIGNING_KEY`. Apply owner-role migrations first with `domains db migrate`.
 
 ## MCP Server
 
@@ -255,26 +258,31 @@ Add to your Claude/agent config:
 {
   "mcpServers": {
     "domains": {
-      "command": "domains-mcp"
+      "command": "domains-mcp",
+      "args": ["--stdio"]
     }
   }
 }
 ```
 
-## HTTP mode
+## MCP Transports
 
-Long-lived Streamable HTTP transport for shared agent sessions (binds `127.0.0.1` only):
+Streamable HTTP is the default transport for shared agent sessions and binds to `127.0.0.1`:
 
 ```bash
-domains-mcp --http              # default port 8814
-domains-mcp --http --port 8814
-MCP_HTTP=1 MCP_HTTP_PORT=8814 domains-mcp
+domains-mcp                     # default port 8859
+domains-mcp --port 9000
+MCP_HTTP_PORT=9000 domains-mcp
 ```
 
 - `GET /health` returns `{"status":"ok","name":"domains"}`
 - `POST /mcp` is the Streamable HTTP MCP endpoint
 
-Stdio remains the default transport for gradual rollout.
+Use stdio for clients that launch one MCP child process per session:
+
+```bash
+domains-mcp --stdio
+```
 
 For read-only agent sessions:
 
@@ -283,7 +291,28 @@ DOMAINS_MCP_SAFE_MODE=1 domains-mcp
 DOMAINS_MCP_SAFE_MODE=1 domains-mcp --http
 ```
 
-Safe mode registers only read-only/list/check/export tools. Mutating tools such as domain creation, DNS writes, provider sync, Route 53 registration, and storage push/pull are withheld.
+Safe mode registers only read-only/list/check/export tools. Mutating tools such as domain creation, DNS writes, provider sync, and Route 53 registration are withheld.
+
+## HTTP API And SDK
+
+`domains-serve` exposes public health, readiness, version, and OpenAPI endpoints plus API-key-authenticated `/v1` portfolio routes. Read operations require the `domains:read` scope; writes require `domains:write`. Send keys through `x-api-key` or `Authorization: Bearer`.
+
+```bash
+domains-serve --host 0.0.0.0 --port 8080
+curl http://127.0.0.1:8080/health
+curl -H "x-api-key: $DOMAINS_API_KEY" http://127.0.0.1:8080/v1/domains
+```
+
+The package also exports the generated client:
+
+```ts
+import { createDomainsClientFromEnv } from "@hasna/domains/sdk";
+
+const domains = createDomainsClientFromEnv();
+const portfolio = await domains.listDomains({ status: "active" });
+```
+
+`domains serve` is a separate, unauthenticated local-development server over the local store. Use `domains-serve` for the cloud Postgres API.
 
 ## Environment Variables
 
@@ -298,10 +327,11 @@ Safe mode registers only read-only/list/check/export tools. Mutating tools such 
 | `DOMAINS_COMMAND_GROUPS` | Comma-separated optional command groups to load, or `all` |
 | `DOMAINS_ENABLE_EXTRAS` | Set to `1` to load all optional command groups |
 | `DOMAINS_MCP_SAFE_MODE` | Set to `1` to expose only read-only MCP tools |
-| `DOMAINS_DATABASE_URL` | Remote storage PostgreSQL database URL |
-| `HASNA_DOMAINS_DATABASE_URL` | Legacy remote storage PostgreSQL database URL fallback |
-| `DOMAINS_STORAGE_MODE` | Storage mode: `local`, `remote`, or `hybrid` |
-| `HASNA_DOMAINS_STORAGE_MODE` | Legacy storage mode fallback |
+| `HASNA_DOMAINS_STORAGE_MODE`, `DOMAINS_STORAGE_MODE` | Client storage mode: `local` or `cloud` |
+| `HASNA_DOMAINS_API_URL`, `DOMAINS_API_URL` | Cloud HTTP API base URL for the CLI/library store |
+| `HASNA_DOMAINS_API_KEY`, `DOMAINS_API_KEY` | Cloud HTTP API key for the CLI/library store and SDK |
+| `HASNA_DOMAINS_DATABASE_URL` | Server-side Postgres DSN used by `domains-serve` and DB migrations |
+| `HASNA_DOMAINS_API_SIGNING_KEY` | HMAC signing secret used by `domains-serve` to verify API keys |
 | `AWS_PROFILE` | AWS profile for Route 53 Domains and hosted zones |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | AWS credential fallback |
 | `DOMAINS_PURCHASE_AWS_PROFILE` | Purchase profile fallback when config has no `purchase_aws_profile` |
