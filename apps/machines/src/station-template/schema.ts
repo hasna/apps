@@ -33,10 +33,42 @@ export const templateFileSchema = z.object({
   lesson: z.string().min(1),
 });
 
+/**
+ * A bun global the station must carry, and the MINIMUM version it must be at.
+ *
+ * Presence alone was the contract until 2026-07-30, and it made 12 of the 42
+ * drift items version-blind: a station carrying a year-old `@hasna/todos`
+ * reported `ok` on the same axis as a station updated an hour ago. The defect
+ * was pinned by a test that asserted a 9.9.9 fixture read `ok`
+ * (station-template.test.ts, now inverted), so the blindness was load-bearing
+ * rather than accidental.
+ *
+ * `minVersion` is a FLOOR, never a pin: the fleet updates continuously and a
+ * template that pinned exact versions would report drift on every publish.
+ * The floor is the version published when the template version shipped, so
+ * "clean" means "not running an older CLI than the one we shipped with".
+ *
+ * The bare-string form stays valid so an out-of-tree template keeps loading,
+ * but it carries no floor and the check says so in the item detail. The
+ * shipped template must never use it — pinned by
+ * `test("every bun global in the shipped template declares a minVersion floor")`.
+ */
+export const bunPackageSchema = z.union([
+  z.string().min(1).transform((name) => ({ name, minVersion: undefined as string | undefined, lesson: undefined as string | undefined })),
+  z.object({
+    name: z.string().min(1),
+    /** Minimum acceptable installed version (semver x.y.z). Floor, not pin. */
+    minVersion: z.string().regex(semverPattern, "minVersion must be semver x.y.z").optional(),
+    lesson: z.string().min(1).optional(),
+  }),
+]);
+
 export const templatePackagesSchema = z.object({
   apt: z.array(z.string().min(1)).default([]),
-  bun: z.array(z.string().min(1)).default([]),
+  bun: z.array(bunPackageSchema).default([]),
 });
+
+export type BunPackage = z.infer<typeof bunPackageSchema>;
 
 /**
  * A binary the station must be able to resolve on PATH, plus the idempotent
@@ -127,6 +159,50 @@ export const tailscaleSchema = z.object({
   ssh: z.boolean().default(true),
 });
 
+/**
+ * A DECLARED ABSENCE — something this station class must NOT have, asserted so
+ * that its presence can go red.
+ *
+ * Owner ruling 2026-07-30 removed tailscale from AWS stations. The first
+ * implementation of that ruling deleted the tailscale check from the EC2 path
+ * and stopped there, which is how the ruling became UNASSERTED: `check.ts`
+ * guarded the whole tailscale block on `effective.tailscale?.join`, so an EC2
+ * render emitted no tailscale item at all (`tailscale_items=[]`, station17,
+ * 2026-07-30 22:02Z) and a station18 running a LIVE tailscale
+ * (`BackendState=Running`) still read clean 42/42. An absence that nothing
+ * checks is a claim, not a control.
+ *
+ * This is deliberately NOT a `tailscale:join` check. Asking "is the tailnet
+ * healthy" on a box that must not be on a tailnet is noise, and noise is how
+ * real drift gets ignored. The item asks one question — "is it here?" — and
+ * the only acceptable answer is no.
+ *
+ * At least one probe (command / service / paths) must be declared, or the
+ * item would be vacuously ok: exactly the shape being fixed.
+ */
+export const absenceSchema = z
+  .object({
+    id: z.string().min(1),
+    /** Binary that must NOT resolve on PATH. */
+    command: z.string().min(1).optional(),
+    /** systemd unit that must NOT be known to systemd (LoadState=not-found). */
+    service: z.string().min(1).optional(),
+    /** Absolute paths (binaries, state dirs, config) none of which may exist. */
+    paths: z.array(z.string().min(1)).default([]),
+    /** Which measured failure this absence exists to prevent. */
+    lesson: z.string().min(1),
+  })
+  .superRefine((absence, ctx) => {
+    if (!absence.command && !absence.service && absence.paths.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          `absence "${absence.id}" declares no command, service, or paths — it could only ever report ok, ` +
+          `which is the unasserted-absence defect it exists to prevent`,
+      });
+    }
+  });
+
 export const secretsBootstrapSchema = z.object({
   /** Secret NAME only. */
   envSecretName: z.string().min(1),
@@ -190,6 +266,8 @@ export const templateLayerSchema = z.object({
   runtimeValues: z.array(runtimeValueSchema).default([]),
   unitConventions: unitConventionsSchema.optional(),
   accessFloor: accessFloorSchema.optional(),
+  /** Things this station class must NOT have, asserted so presence goes red. */
+  absences: z.array(absenceSchema).default([]),
   tailscale: tailscaleSchema.optional(),
   secretsBootstrap: secretsBootstrapSchema.optional(),
   swap: swapSchema.optional(),
@@ -235,6 +313,7 @@ export type StationTemplate = z.infer<typeof stationTemplateSchema>;
 export type TemplateService = z.infer<typeof templateServiceSchema>;
 export type TemplateCommand = z.infer<typeof templateCommandSchema>;
 export type AccessFloor = z.infer<typeof accessFloorSchema>;
+export type TemplateAbsence = z.infer<typeof absenceSchema>;
 export type TemplateDisk = z.infer<typeof diskSchema>;
 export type UnitConventions = z.infer<typeof unitConventionsSchema>;
 
@@ -252,13 +331,14 @@ export interface EffectiveTemplate {
   version: string;
   layers: string[];
   files: LoadedTemplateFile[];
-  packages: { apt: string[]; bun: string[] };
+  packages: { apt: string[]; bun: BunPackage[] };
   commands: TemplateCommand[];
   services: TemplateService[];
   sysctls: Record<string, string>;
   runtimeValues: z.infer<typeof runtimeValueSchema>[];
   unitConventions?: UnitConventions;
   accessFloor?: AccessFloor;
+  absences: TemplateAbsence[];
   tailscale?: z.infer<typeof tailscaleSchema>;
   secretsBootstrap?: z.infer<typeof secretsBootstrapSchema>;
   swap: { sizeGb: number };

@@ -1,8 +1,8 @@
 {
   "$schema": "hasna.station_template.v1",
   "name": "station",
-  "version": "1.6.0",
-  "description": "Hasna station contract v1. Every item traces to a measured 2026-07-28 failure on station01 (designs/station-contract-design.md §8). Layers: base + dgx-spark (121G physical Spark) + ec2 (32G Graviton cloud station). Owner ruling 2026-07-30: AWS stations carry NO tailscale and are not connected to the physical fleet — tailscale lives only in physical overlays, and SSM (the ec2 accessFloor) is the whole access path for cloud stations. 1.3.0 adds the machines-roster user service (roster reconciler) to the dgx-spark overlay. 1.4.0 adds the base-layer non-interactive PATH profile (station17 build 3: SSM automation could not resolve bun-installed CLIs). 1.5.0 adds the base-layer ~/.bashrc non-interactive block (station17 2026-07-30: `mosh station17 codewith` could not resolve bun CLIs — ssh/mosh remote commands are non-login non-interactive, profile.d never runs for them, and sshd-spawned bash sources ~/.bashrc instead of BASH_ENV, so the PATH must be spliced above the stock interactive guard). 1.6.0 adds the base-layer journald size cap (station17 build 2 died of disk exhaustion with journald unable to create its journal, yet the rebuilt boxes carried the accidental min(10%-of-filesystem, 4G) default and no drift item covered the axis).",
+  "version": "1.7.0",
+  "description": "Hasna station contract v1. Every item traces to a measured 2026-07-28 failure on station01 (designs/station-contract-design.md §8). Layers: base + dgx-spark (121G physical Spark) + ec2 (32G Graviton cloud station). Owner ruling 2026-07-30: AWS stations carry NO tailscale and are not connected to the physical fleet — tailscale lives only in physical overlays, and SSM (the ec2 accessFloor) is the whole access path for cloud stations. 1.3.0 adds the machines-roster user service (roster reconciler) to the dgx-spark overlay. 1.4.0 adds the base-layer non-interactive PATH profile (station17 build 3: SSM automation could not resolve bun-installed CLIs). 1.5.0 adds the base-layer ~/.bashrc non-interactive block (station17 2026-07-30: `mosh station17 codewith` could not resolve bun CLIs — ssh/mosh remote commands are non-login non-interactive, profile.d never runs for them, and sshd-spawned bash sources ~/.bashrc instead of BASH_ENV, so the PATH must be spliced above the stock interactive guard). 1.6.0 adds the base-layer journald size cap (station17 build 2 died of disk exhaustion with journald unable to create its journal, yet the rebuilt boxes carried the accidental min(10%-of-filesystem, 4G) default and no drift item covered the axis). 1.7.0 makes the check itself able to fail: every bun global carries a minVersion FLOOR (12 of 42 items reported ok at any version, pinned by a test that asserted a 9.9.9 fixture was ok), and the ec2 overlay declares tailscale ABSENT as a checkable item (the 2026-07-30 ruling removed tailscale from the ec2 render but nothing asserted its absence — an ec2 render emitted no tailscale item at all, and station18 running a live tailscale read clean 42/42).",
   "base": {
     "files": [
       {
@@ -57,18 +57,18 @@
     "packages": {
       "apt": ["earlyoom", "git", "curl", "unzip", "build-essential", "tmux", "sqlite3", "jq"],
       "bun": [
-        "@hasna/machines",
-        "@hasna/todos",
-        "@hasna/conversations",
-        "@hasna/mementos",
-        "@hasna/secrets",
-        "@hasna/monitor",
-        "@hasna/loops",
-        "@hasna/repos",
-        "@hasna/projects",
-        "@hasna/snapshots",
-        "@hasna/accounts",
-        "@hasna/knowledge"
+        { "name": "@hasna/machines", "minVersion": "0.2.9", "lesson": "2026-07-30: package:bun:* reported ok at ANY version, so 12 of 42 drift items were version-blind — a station carrying a CLI from before a fix read identical to one updated an hour ago, and a test asserted a 9.9.9 fixture was ok. Each floor is the version published on 2026-07-31, when template 1.7.0 shipped: clean means 'not running an older CLI than the one we shipped with'. It is a FLOOR, never a pin — a newer version is ok, and the renders install latest." },
+        { "name": "@hasna/todos", "minVersion": "0.13.3", "lesson": "Task state is fleet-shared: an old todos CLI on one station writes state every other station reads." },
+        { "name": "@hasna/conversations", "minVersion": "0.5.13", "lesson": "Version floor for the shipped CLI set (published 2026-07-31)." },
+        { "name": "@hasna/mementos", "minVersion": "0.14.69", "lesson": "Version floor for the shipped CLI set (published 2026-07-31)." },
+        { "name": "@hasna/secrets", "minVersion": "0.2.9", "lesson": "Secret handling is the one CLI where running a stale build is a security question, not only a feature question." },
+        { "name": "@hasna/monitor", "minVersion": "0.1.25", "lesson": "Version floor for the shipped CLI set (published 2026-07-31)." },
+        { "name": "@hasna/loops", "minVersion": "0.4.30", "lesson": "Version floor for the shipped CLI set (published 2026-07-31)." },
+        { "name": "@hasna/repos", "minVersion": "0.1.37", "lesson": "Version floor for the shipped CLI set (published 2026-07-31)." },
+        { "name": "@hasna/projects", "minVersion": "0.1.96", "lesson": "Version floor for the shipped CLI set (published 2026-07-31)." },
+        { "name": "@hasna/snapshots", "minVersion": "0.1.3", "lesson": "Version floor for the shipped CLI set (published 2026-07-31)." },
+        { "name": "@hasna/accounts", "minVersion": "0.2.27", "lesson": "Version floor for the shipped CLI set (published 2026-07-31)." },
+        { "name": "@hasna/knowledge", "minVersion": "0.2.92", "lesson": "Version floor for the shipped CLI set (published 2026-07-31)." }
       ]
     },
     "services": [
@@ -163,6 +163,21 @@
         "apt": [],
         "bun": []
       },
+      "absences": [
+        {
+          "id": "tailscale",
+          "command": "tailscale",
+          "service": "tailscaled",
+          "paths": [
+            "/usr/sbin/tailscaled",
+            "/usr/bin/tailscale",
+            "/var/lib/tailscale",
+            "/etc/default/tailscaled",
+            "/etc/apt/sources.list.d/tailscale.list"
+          ],
+          "lesson": "Owner ruling 2026-07-30: AWS stations do not run tailscale, and AWS is not connected to the physical fleet at all — SSM is the whole access path, not a floor beneath a mesh. The first implementation of that ruling removed tailscale from the ec2 render and stopped, which left the ruling CLAIMED and UNCHECKED: check.ts guarded its whole tailscale block on `effective.tailscale?.join`, so an ec2 render emitted NO tailscale item (measured 2026-07-30 22:02Z: tailscale_items=[] on station17) and station18 — running a live tailscale with BackendState=Running — still read clean 42/42. This is a declared ABSENCE, not a `tailscale:join` check: asking whether the tailnet is healthy on a box that must not be on one is noise, and noise is how real drift gets ignored. It asks only 'is it here', and any yes is a violation, because `setup --apply` does not uninstall. The narrow future exception the ruling allows — a single AWS box granted tailscale as an access path — is expressed by giving that box its own overlay, which then fails to load alongside this absence rather than silently contradicting it."
+        }
+      ],
       "accessFloor": {
         "service": "snap.amazon-ssm-agent.amazon-ssm-agent",
         "ensure": "( snap list amazon-ssm-agent >/dev/null 2>&1 || snap install amazon-ssm-agent --classic ) && systemctl enable --now snap.amazon-ssm-agent.amazon-ssm-agent.service",

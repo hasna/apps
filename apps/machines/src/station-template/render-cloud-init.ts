@@ -181,7 +181,9 @@ export function renderCloudInit(effective: EffectiveTemplate, options: CloudInit
   runcmd.push(`runuser -l ${user} -c 'command -v bun >/dev/null 2>&1 || curl -fsSL https://bun.sh/install | bash'`);
   if (effective.packages.bun.length > 0) {
     runcmd.push(
-      `runuser -l ${user} -c 'export PATH="$HOME/.bun/bin:$PATH"; bun install -g ${effective.packages.bun.join(" ")}'`
+      // Names only — see the render-setup note: minVersion is a floor for the
+      // drift check, not an install pin.
+      `runuser -l ${user} -c 'export PATH="$HOME/.bun/bin:$PATH"; bun install -g ${effective.packages.bun.map((pkg) => pkg.name).join(" ")}'`
     );
   }
   if (effective.secretsBootstrap) {

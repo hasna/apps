@@ -113,7 +113,25 @@ function mergeLayer(effective: EffectiveTemplate, layer: TemplateLayer, template
     }
   }
   effective.packages.apt = [...new Set([...effective.packages.apt, ...layer.packages.apt])];
-  effective.packages.bun = [...new Set([...effective.packages.bun, ...layer.packages.bun])];
+  // Bun globals carry a minVersion floor, so dedupe by NAME and let the later
+  // layer win the floor — a plain Set would keep two entries for the same
+  // package the moment an overlay raised its floor.
+  for (const pkg of layer.packages.bun) {
+    const existingIndex = effective.packages.bun.findIndex((candidate) => candidate.name === pkg.name);
+    if (existingIndex >= 0) {
+      effective.packages.bun[existingIndex] = pkg;
+    } else {
+      effective.packages.bun.push(pkg);
+    }
+  }
+  for (const absence of layer.absences) {
+    const existingIndex = effective.absences.findIndex((candidate) => candidate.id === absence.id);
+    if (existingIndex >= 0) {
+      effective.absences[existingIndex] = absence;
+    } else {
+      effective.absences.push(absence);
+    }
+  }
   for (const command of layer.commands) {
     const existingIndex = effective.commands.findIndex((candidate) => candidate.command === command.command);
     if (existingIndex >= 0) {
@@ -167,6 +185,7 @@ export function resolveStationTemplate(
     services: [],
     sysctls: {},
     runtimeValues: [],
+    absences: [],
     swap: { sizeGb: 0 },
   };
   mergeLayer(effective, template.base, templateDir, templatePath);
@@ -178,7 +197,36 @@ export function resolveStationTemplate(
     }
     mergeLayer(effective, overlay, templateDir, templatePath);
   }
+  assertNoContradictoryAbsence(effective);
   return effective;
+}
+
+/**
+ * A layer combination that both REQUIRES a thing and declares it ABSENT would
+ * emit two items about it that can never both be ok, and the render would
+ * install what the check then reports as drift. That is not a report to
+ * interpret — it is a template bug, so it fails at load rather than at 03:00
+ * on a station. Reachable today by `--template station,dgx-spark,ec2`.
+ */
+function assertNoContradictoryAbsence(effective: EffectiveTemplate): void {
+  for (const absence of effective.absences) {
+    const conflicts: string[] = [];
+    if (absence.service && effective.services.some((service) => service.name === absence.service)) {
+      conflicts.push(`service "${absence.service}" is also a required service`);
+    }
+    if (absence.command && effective.commands.some((command) => command.command === absence.command)) {
+      conflicts.push(`command "${absence.command}" is also a required command`);
+    }
+    if (absence.id === "tailscale" && effective.tailscale?.join) {
+      conflicts.push("the layer set also declares tailscale.join");
+    }
+    if (conflicts.length > 0) {
+      throw new Error(
+        `Station template invalid: layers ${effective.layers.join(",")} declare absence "${absence.id}" ` +
+          `while also requiring it — ${conflicts.join("; ")}. A station class cannot both run and not run it.`
+      );
+    }
+  }
 }
 
 /** Parse a CLI layer spec like "station" or "station,ec2" into name + overlays. */

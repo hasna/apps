@@ -23,6 +23,7 @@ export interface TemplateCheckItem {
     | "access-floor"
     | "unit-convention"
     | "tailscale"
+    | "absence"
     | "swap"
     | "disk"
     | "journald";
@@ -41,13 +42,44 @@ export interface TemplateCheckResult {
   template: string;
   version: string;
   layers: string[];
-  /** "clean" only when no drift AND no violation. Read the JSON, never the rc. */
+  /**
+   * "clean" only when no drift AND no violation.
+   *
+   * The rc is now load-bearing too — see `checkExitCode`. Until 0.3.0 it was
+   * always 0 and every caller in the fleet had to parse this field and
+   * explicitly distrust the exit code ("check_rc=0 (NOT trusted)" in every
+   * driver measurement). Both are now truthful; the JSON stays the richer
+   * answer because it names WHICH item failed.
+   */
   verdict: "clean" | "drift";
   checkedAt: string;
   items: TemplateCheckItem[];
 }
 
 export type CommandProbe = (command: string, args: string[]) => { ok: boolean; stdout: string };
+
+/**
+ * Process exit code for a drift check.
+ *
+ * `0 clean / 1 findings / 2 incomplete`, matching the exit-code contract on the
+ * table for `todos doctor` (task 71f7faba). That contract is scoped to the
+ * todos CLI and has not landed, so it does not bind this one — but the estate
+ * gets ONE numeric language for "did the check pass", not two, so this
+ * conforms rather than inventing a second convention.
+ *
+ * Findings outrank incompleteness: if something was found, that is the answer,
+ * regardless of what else could not be probed.
+ *
+ * 2 matters as much as 1. A check with `skipped` items has not proven the box
+ * clean, it has proven it could not look — and "could not look" reported as
+ * success is how the previous version of this gate passed a station running a
+ * live tailscale it was supposed to assert was absent.
+ */
+export function checkExitCode(result: TemplateCheckResult): 0 | 1 | 2 {
+  if (result.items.some((item) => item.status === "drift" || item.status === "violation")) return 1;
+  if (result.items.some((item) => item.status === "skipped")) return 2;
+  return 0;
+}
 
 export interface CheckOptions {
   /** Filesystem root for all absolute targets (tests use a fixture dir). */
@@ -74,6 +106,31 @@ export interface CheckOptions {
 
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+/**
+ * Compare two semver core versions. Returns <0, 0, >0, or null when either
+ * side is not readable as x.y.z — an unreadable version is never silently
+ * treated as satisfying a floor.
+ *
+ * Prerelease handling follows semver: 1.2.3-rc.1 sorts BELOW 1.2.3, so a
+ * release candidate does not satisfy a floor of the release it precedes.
+ * Build metadata (+sha) is ignored, as semver requires.
+ */
+export function compareVersions(left: string, right: string): number | null {
+  const parse = (value: string): { core: number[]; prerelease: boolean } | null => {
+    const match = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(value.trim());
+    if (!match) return null;
+    return { core: [Number(match[1]), Number(match[2]), Number(match[3])], prerelease: match[4] !== undefined };
+  };
+  const a = parse(left);
+  const b = parse(right);
+  if (!a || !b) return null;
+  for (let index = 0; index < 3; index += 1) {
+    if (a.core[index]! !== b.core[index]!) return a.core[index]! - b.core[index]!;
+  }
+  if (a.prerelease === b.prerelease) return 0;
+  return a.prerelease ? -1 : 1;
 }
 
 /** systemd time-span units, longest spelling first so prefixes do not shadow. */
@@ -219,7 +276,10 @@ function defaultCommandProbe(): CommandProbe {
 /**
  * Read-only drift check of a box against the effective template. NEVER
  * mutates anything — every probe is a read. The verdict lives in the returned
- * JSON (exit codes from hasna CLIs are unreliable; station contract §2).
+ * JSON, and since 0.3.0 the CLI's exit code carries it too (`checkExitCode`):
+ * station contract §2 said exit codes from hasna CLIs are unreliable, and the
+ * answer to that was to fix the exit code, not to keep writing gates that
+ * distrust it.
  */
 export function checkStationTemplate(effective: EffectiveTemplate, options: CheckOptions = {}): TemplateCheckResult {
   const rootDir = options.rootDir ?? "/";
@@ -437,18 +497,59 @@ export function checkStationTemplate(effective: EffectiveTemplate, options: Chec
     options.bunInstallDir ??
     (rootDir === "/" ? process.env["BUN_INSTALL"] ?? join(homeDir, ".bun") : join(homeDir, ".bun"));
   for (const pkg of effective.packages.bun) {
-    const manifest = join(bunRoot, "install/global/node_modules", pkg, "package.json");
+    const manifest = join(bunRoot, "install/global/node_modules", pkg.name, "package.json");
     if (!existsSync(manifest)) {
-      items.push({ id: `package:bun:${pkg}`, kind: "package", status: "drift", detail: `${pkg} not installed globally (${manifest} missing)` });
+      items.push({ id: `package:bun:${pkg.name}`, kind: "package", status: "drift", detail: `${pkg.name} not installed globally (${manifest} missing)` });
       continue;
     }
-    let version = "unknown";
+    let version: string | null = null;
     try {
-      version = (JSON.parse(readFileSync(manifest, "utf8")) as { version?: string }).version ?? "unknown";
+      version = (JSON.parse(readFileSync(manifest, "utf8")) as { version?: string }).version ?? null;
     } catch {
-      /* unreadable manifest: presence is still the contract */
+      version = null;
     }
-    items.push({ id: `package:bun:${pkg}`, kind: "package", status: "ok", detail: `${pkg}@${version} installed globally` });
+    // PRESENCE WAS THE WHOLE CONTRACT until 2026-07-30, and it made these 12
+    // items version-blind: any version at all read ok, including a fixture
+    // planted at 9.9.9 that a test asserted was ok. A station running a CLI
+    // from before a fix is not converged just because the directory exists.
+    if (!pkg.minVersion) {
+      items.push({
+        id: `package:bun:${pkg.name}`,
+        kind: "package",
+        status: "ok",
+        detail: `${pkg.name}@${version ?? "unknown"} installed globally (no minVersion declared — presence only, version NOT asserted)`,
+      });
+      continue;
+    }
+    if (version === null) {
+      items.push({
+        id: `package:bun:${pkg.name}`,
+        kind: "package",
+        status: "drift",
+        detail: `${pkg.name} installed but its package.json declares no readable version — cannot prove it meets the ${pkg.minVersion} floor`,
+      });
+      continue;
+    }
+    const comparison = compareVersions(version, pkg.minVersion);
+    if (comparison === null) {
+      items.push({
+        id: `package:bun:${pkg.name}`,
+        kind: "package",
+        status: "drift",
+        detail: `${pkg.name}@${version} is not readable as semver — cannot prove it meets the ${pkg.minVersion} floor`,
+      });
+      continue;
+    }
+    items.push(
+      comparison >= 0
+        ? { id: `package:bun:${pkg.name}`, kind: "package", status: "ok", detail: `${pkg.name}@${version} installed globally (floor ${pkg.minVersion})` }
+        : {
+            id: `package:bun:${pkg.name}`,
+            kind: "package",
+            status: "drift",
+            detail: `${pkg.name}@${version} is BELOW the declared floor ${pkg.minVersion} — present but stale; run bun install -g ${pkg.name}`,
+          }
+    );
   }
 
   for (const service of effective.services) {
@@ -495,6 +596,78 @@ export function checkStationTemplate(effective: EffectiveTemplate, options: Chec
               detail: `access floor ${floor.service} not active+enabled (found ${active.stdout.trim() || "unknown"}/${enabled.stdout.trim() || "unknown"}) — one tailscale failure away from an unreachable station`,
             }
       );
+    }
+  }
+
+  // DECLARED ABSENCES. Owner ruling 2026-07-30 took tailscale out of the EC2
+  // path; the first implementation deleted the check along with it and left the
+  // ruling UNASSERTED. Measured 2026-07-30 22:02Z: an EC2 render emitted
+  // `tailscale_items=[]`, and station18 — with a LIVE tailscale reporting
+  // BackendState=Running — read clean 42/42. The absence was claimed by a
+  // directive and checked by nothing.
+  //
+  // So the question this item asks is not "is the tailnet healthy" (noise on a
+  // box that must not have a tailnet) but "is it here at all", and any yes is a
+  // violation: `setup --apply` does not uninstall things, so this cannot be
+  // converged by re-running setup — it needs a human or a rebuild, which is
+  // what `violation` means everywhere else in this file. Either way the
+  // top-level verdict is `drift` and the CLI exits 1.
+  for (const absence of effective.absences) {
+    const found: string[] = [];
+    const unprobed: string[] = [];
+    for (const path of absence.paths) {
+      if (existsSync(resolveTarget(path))) found.push(`${path} exists`);
+    }
+    if (absence.command) {
+      if (!probe) {
+        unprobed.push(`command ${absence.command}`);
+      } else {
+        const result = probe("sh", ["-c", `command -v -- ${absence.command}`]);
+        const resolved = result.stdout.trim();
+        if (result.ok && resolved.length > 0) found.push(`${absence.command} resolves on PATH -> ${resolved}`);
+      }
+    }
+    if (absence.service) {
+      if (!probe) {
+        unprobed.push(`service ${absence.service}`);
+      } else {
+        // LoadState, not is-active: a unit that exists but is stopped is still
+        // installed, and "inactive" would read as absent. systemd answers
+        // "not-found" only when it has no such unit at all.
+        const load = probe("systemctl", ["show", "-p", "LoadState", "--value", absence.service]);
+        const state = load.stdout.trim();
+        if (load.ok && state.length > 0 && state !== "not-found") {
+          found.push(`unit ${absence.service} is known to systemd (LoadState=${state})`);
+        }
+      }
+    }
+    if (found.length > 0) {
+      items.push({
+        id: `absence:${absence.id}`,
+        kind: "absence",
+        status: "violation",
+        detail: `${absence.id} must NOT be present on this station class but was found: ${found.join("; ")}`,
+      });
+    } else if (unprobed.length > 0) {
+      // Never `ok` on the strength of the probes we could not run — that is the
+      // vacuous-absence shape this item exists to end.
+      items.push({
+        id: `absence:${absence.id}`,
+        kind: "absence",
+        status: "skipped",
+        detail: `${absence.id} absent from ${absence.paths.length} checked path(s), but ${unprobed.join(" and ")} could not be probed (no command probe)`,
+      });
+    } else {
+      items.push({
+        id: `absence:${absence.id}`,
+        kind: "absence",
+        status: "ok",
+        detail: `${absence.id} absent as declared (${[
+          ...absence.paths.map((path) => `${path} missing`),
+          ...(absence.command ? [`${absence.command} not on PATH`] : []),
+          ...(absence.service ? [`${absence.service} unknown to systemd`] : []),
+        ].join("; ")})`,
+      });
     }
   }
 

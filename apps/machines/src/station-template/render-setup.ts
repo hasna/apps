@@ -240,7 +240,10 @@ export function buildStationTemplateSteps(effective: EffectiveTemplate, options:
     steps.push({
       id: "template-bun-packages",
       title: `Install hasna CLI set (${effective.packages.bun.length} bun globals)`,
-      command: `bun install -g ${effective.packages.bun.map(quote).join(" ")}`,
+      // Names only, never `name@minVersion`: minVersion is a FLOOR the drift
+      // check enforces, and installing at the floor would pin every station to
+      // the oldest acceptable release instead of the current one.
+      command: `bun install -g ${effective.packages.bun.map((pkg) => quote(pkg.name)).join(" ")}`,
       manager: "bun",
     });
   }

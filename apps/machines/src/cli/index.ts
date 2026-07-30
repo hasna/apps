@@ -36,6 +36,7 @@ import {
 import { buildSetupPlan, runSetupPlan } from "../commands/setup.js";
 import {
   buildStationTemplateSteps,
+  checkExitCode,
   checkStationTemplate,
   parseTemplateSpec,
   renderCloudInit,
@@ -1679,6 +1680,10 @@ program
   .option("--template <spec>", "Station template layers, e.g. 'station' or 'station,ec2' or 'station,dgx-spark'")
   .option("--station <name>", "Station identity for template renders (hostname/tailscale name, e.g. station17)")
   .option("--check", "Report LOCAL template drift as JSON without mutating anything (requires --template)", false)
+  .option(
+    "--no-fail-on-findings",
+    "With --check, always exit 0 (pre-0.3.0 behaviour) instead of 1 for findings / 2 for an incomplete check"
+  )
   .option("--render <target>", "Render the template for a target ('cloud-init') instead of executing (requires --template)")
   .option("--apply", "Execute provisioning commands instead of previewing the plan", false)
   .option("--yes", "Confirm execution when using --apply", false)
@@ -1689,6 +1694,7 @@ program
     template?: string;
     station?: string;
     check?: boolean;
+    failOnFindings?: boolean;
     render?: string;
     apply?: boolean;
     yes?: boolean;
@@ -1723,6 +1729,12 @@ program
         }
         const result = checkStationTemplate(effective, { machineId: localMachineId });
         console.log(JSON.stringify(result, null, 2));
+        // A gate that cannot fail is not a gate (defect 2bfe61b0). Until 0.3.0
+        // this exited 0 whether the verdict was clean or drift, so every caller
+        // in the fleet parsed the JSON and recorded "check_rc=0 (NOT trusted)".
+        // 0 clean / 1 findings / 2 incomplete — see checkExitCode.
+        // process.exitCode, not process.exit(): the JSON above must flush.
+        if (options.failOnFindings !== false) process.exitCode = checkExitCode(result);
         return;
       }
       templateSteps = buildStationTemplateSteps(effective, { station: options.station });
