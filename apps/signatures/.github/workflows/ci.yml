@@ -17,6 +17,13 @@ jobs:
       - run: bun run typecheck
       - run: bun test
       - run: bun run build
+      # The release gate lives in prepack, so nothing but a real pack exercises
+      # it. Both packers run it, and a gate that exits non-zero here would
+      # otherwise only surface at `npm publish`.
+      - name: Packed-artifact release gate (npm pack)
+        run: npm pack --dry-run
+      - name: Packed-artifact release gate (bun pm pack)
+        run: bun pm pack --dry-run
       - run: bun install
         working-directory: dashboard
       - run: bun run build
