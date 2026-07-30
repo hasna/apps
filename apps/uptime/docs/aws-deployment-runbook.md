@@ -7,9 +7,9 @@ call AWS or mutate infrastructure.
 ## Generate The Plan
 
 ```bash
-uptime cloud plan --json > open-uptime-aws-plan.json
-uptime cloud private-probe-config --probe-id prb_private_01 --machine-id private-probe-01 --json > private-probe-01-preflight.json
-uptime cloud private-probe-config --probe-id prb_private_01 --machine-id private-probe-01 --env --allow-blocked-env > private-probe-01-review-only.env
+uptimemon cloud plan --json > open-uptime-aws-plan.json
+uptimemon cloud private-probe-config --probe-id prb_private_01 --machine-id private-probe-01 --json > private-probe-01-preflight.json
+uptimemon cloud private-probe-config --probe-id prb_private_01 --machine-id private-probe-01 --env --allow-blocked-env > private-probe-01-review-only.env
 ```
 
 Public package defaults are placeholders:
@@ -34,7 +34,7 @@ The app repo includes a hosted runtime `Dockerfile` and Terraform/OpenTofu
 starter files in `infra/aws`. The plan output points to these files and keeps
 `applyAllowed: false`.
 
-`uptime cloud private-probe-config --env` is blocked by default while hosted
+`uptimemon cloud private-probe-config --env` is blocked by default while hosted
 probe routes remain fail-closed. It requires both a real `--probe-id` and the
 explicit `--allow-blocked-env` review override; do not use that env output to
 start a private probe until the JSON output says `canStart: true`.
@@ -110,7 +110,7 @@ proves those gates for the exact pinned package, image, Terraform backend, and
 alert/backup/evidence path.
 
 Provision these through the approved infrastructure repository and reviewed
-plan/apply flow. The local `uptime cloud plan` output intentionally avoids
+plan/apply flow. The local `uptimemon cloud plan` output intentionally avoids
 copy-pastable AWS mutation commands.
 
 Plan the included Terraform/OpenTofu starter without a backend:
@@ -312,7 +312,7 @@ DIRECT_ORIGIN_URL="http://$(terraform -chdir="$TF_DIR" output -raw alb_dns_name)
 : "${HASNA_UPTIME_EDGE_PROBE_TOKEN:?set from operator secret store}"
 : "${HASNA_UPTIME_EDGE_REPORT_TOKEN:?set from operator secret store}"
 
-uptime cloud edge-smoke \
+uptimemon cloud edge-smoke \
   --url "$EDGE_URL" \
   --workspace-id "$WORKSPACE_ID" \
   --mutation \
@@ -333,7 +333,7 @@ into shared docs, todos, project metadata, or release notes, run the evidence
 sanitizer:
 
 ```bash
-uptime cloud evidence-sanitize --file rollout-evidence.json
+uptimemon cloud evidence-sanitize --file rollout-evidence.json
 ```
 
 The cloud alias fails on unsafe evidence by default. Use `--allow-unsafe` only
@@ -365,7 +365,7 @@ Expected results:
   evidence run; by default, unreachable direct-origin checks fail the smoke.
 
 Manual curls are acceptable only as extra diagnostics; the deployment evidence
-must include the `uptime cloud edge-smoke --json` report because it records the
+must include the `uptimemon cloud edge-smoke --json` report because it records the
 full protected-access matrix without leaking token values.
 
 The CloudFront origin request path must forward `Authorization`,
@@ -618,11 +618,11 @@ until the service/API/worker loops are wired to the runtime, live RLS/schema
 verification passes against the approved DB, and scheduler/probe/reporter
 alarms plus deploy-drain evidence exist.
 
-`0.1.44` adds `uptime cloud postgres-scheduler run` for bounded private review
+`0.1.44` adds `uptimemon cloud postgres-scheduler run` for bounded private review
 of deterministic Postgres `check_jobs` creation. It requires an explicit
 workspace id, uses producer-side hosted target-policy checks, supports only
 public probe policy, and caps catch-up slots. `0.1.43` adds
-`uptime cloud postgres-public-probe run` for bounded private review of existing
+`uptimemon cloud postgres-public-probe run` for bounded private review of existing
 Postgres `check_jobs`. It requires an explicit workspace id and probe id, uses
 the hosted target policy for HTTP/TCP execution, and fenced-cancels stale or
 unsupported claimed jobs. Use both only against a disposable or approved
@@ -632,7 +632,7 @@ rollback evidence exist. They are not the EFS SQLite `cloud public-checks`
 bridge and do not permit changing the ECS scheduler or public-probe command or
 desired count.
 
-`uptime cloud workers preflight --role reporter --json` validates
+`uptimemon cloud workers preflight --role reporter --json` validates
 `HASNA_UPTIME_REPORT_CHANNEL_REFS_JSON` as an operator-provided, server-owned
 Mailery, Telephony, and Open Logs channel-ref catalog. This environment value is
 runtime configuration, not a client request, MCP input, or schedule payload. A
@@ -658,7 +658,7 @@ object keys, or provider payloads.
 explicit `hostedPostgresRuntime`; `0.1.67` corrects it with monitor-list offset
 paging, expected-revision PATCH guards, and audit-key PATCH replay conflict
 checks. Treat it as control-plane wiring only. Do not set
-`HASNA_UPTIME_DATABASE_URL` for `uptime serve`, do not scale ECS services, and
+`HASNA_UPTIME_DATABASE_URL` for `uptimemon serve`, do not scale ECS services, and
 do not treat report, incident, result, import, probe, scheduler, browser, or
 reporter routes as cloud-primary until their Postgres-backed contracts and live
 evidence exist.
@@ -759,7 +759,7 @@ are all recorded.
 `0.1.59` adds a read-only Postgres private-probe preflight for identity review:
 
 ```bash
-uptime cloud postgres-private-probe preflight \
+uptimemon cloud postgres-private-probe preflight \
   --workspace-id "$HASNA_UPTIME_WORKSPACE_ID" \
   --probe-id "$HASNA_UPTIME_PRIVATE_PROBE_ID" \
   --machine-id "$HASNA_UPTIME_MACHINE_ID" \
@@ -786,7 +786,7 @@ in this output.
   mount path `/data/uptime/uptime.db`. Do not set `HASNA_UPTIME_DATABASE_URL`
   until the full hosted Postgres runtime adapter is wired through
   `UptimeService`, the API, and worker loops.
-- Use `uptime cloud postgres-migrate` only from the reviewed migration path.
+- Use `uptimemon cloud postgres-migrate` only from the reviewed migration path.
   Dry-run output is safe for redacted review. Actual DDL requires
   `--apply --confirm-schema <schema>`, a TLS database URL, current backup and
   rollback evidence, and a migration task/operator context. A successful
@@ -803,14 +803,14 @@ in this output.
   through the hosted service/API contracts, records target-policy decision
   evidence, and passes AWS smokes for denied DNS answers, redirect-to-denied
   targets, address pinning, deploy drain, backlog metrics, stale leases, and
-  rollback. The SDK and `uptime cloud public-checks run-due` path handle
+  rollback. The SDK and `uptimemon cloud public-checks run-due` path handle
   execution-time DNS and redirect enforcement for bounded EFS SQLite smokes. The
-  `uptime cloud public-checks run-due` and `worker` commands are blocked unless
+  `uptimemon cloud public-checks run-due` and `worker` commands are blocked unless
   `--allow-public-checks-bridge` or
   `HASNA_UPTIME_ALLOW_PUBLIC_CHECKS_BRIDGE=1` is set for a reviewed EFS SQLite
   bridge smoke. They are not the final cloud `check_jobs`/lease/fencing
-  protocol. The separate `uptime cloud postgres-scheduler run` and
-  `uptime cloud postgres-public-probe run` commands can review bounded Postgres
+  protocol. The separate `uptimemon cloud postgres-scheduler run` and
+  `uptimemon cloud postgres-public-probe run` commands can review bounded Postgres
   job production and consumption, but they do not make the generic ECS
   scheduler or public-probe workers startable.
 - Do not enable scheduler, public-probe, reporter, or migration workers against
@@ -919,7 +919,7 @@ A deployment record is not complete until it contains:
 - source commit, package version, published package integrity, and image digest;
 - Terraform plan summary and zero-count desired-count proof;
 - secret metadata proof showing `AWSCURRENT` without secret values;
-- redacted `uptime cloud edge-smoke --json` results with `promotionReady=true`,
+- redacted `uptimemon cloud edge-smoke --json` results with `promotionReady=true`,
   plus fixed-403 or explicitly unreachable direct-origin denial evidence;
 - ECS service/task definition evidence;
 - CloudWatch log tail and alarm-state readback;

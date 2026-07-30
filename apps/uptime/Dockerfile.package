@@ -20,7 +20,9 @@ COPY package.json bun.lock ./
 COPY dist ./dist
 
 RUN bun install --production --frozen-lockfile \
-  && printf '#!/bin/sh\nexec bun /app/dist/cli/index.js "$@"\n' > /usr/local/bin/uptime \
+  && printf '#!/bin/sh\nexec bun /app/dist/cli/index.js "$@"\n' > /usr/local/bin/uptimemon \
+  && chmod +x /usr/local/bin/uptimemon \
+  && printf '#!/bin/sh\nexec bun /app/dist/cli/deprecated-uptime.js "$@"\n' > /usr/local/bin/uptime \
   && chmod +x /usr/local/bin/uptime \
   && chown -R uptime:uptime /app
 

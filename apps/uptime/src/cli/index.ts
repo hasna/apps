@@ -29,7 +29,7 @@ import type { CreateMonitorInput, Monitor, ProbePolicy, ProbeResultSubmission, R
 const program = new Command();
 
 program
-  .name("uptime")
+  .name("uptimemon")
   .description("Local-first uptime and downtime monitoring")
   .version(packageVersion())
   .option("-j, --json", "print JSON");

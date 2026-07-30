@@ -83,14 +83,14 @@ or backfill, but it is not the runtime data store for checks, probes, incidents,
 reports, or operator actions.
 
 The repository now exposes the blocked target schema as
-`uptime cloud postgres-plan`. The command emits redacted review metadata and
+`uptimemon cloud postgres-plan`. The command emits redacted review metadata and
 optional SQL for the intended Postgres schema, including workspace-scoped
 tables, `version`/`deleted_at` tombstone fields, `actor`/`origin`/
 `idempotency_key` metadata, `audit_events`, `sync_tombstones`, `check_jobs`,
 fencing-token lease fields, and RLS policies based on a session workspace
 setting.
 
-The `uptime cloud postgres-migrate` command is the reviewed migration-runner
+The `uptimemon cloud postgres-migrate` command is the reviewed migration-runner
 surface for that schema. It defaults to dry-run metadata, requires TLS database
 URLs, requires `--apply --confirm-schema <schema>` for DDL, wraps statements in
 a transaction, uses idempotent policy creation plus `FORCE ROW LEVEL SECURITY`,
@@ -115,7 +115,7 @@ with monitor-list offset paging, expected-revision PATCH guards, and audit-key
 PATCH replay conflict checks. The adapter uses Postgres monitor rows for
 create/list/get/update/delete, carries actor/origin/idempotency metadata, writes
 monitor mutation audit rows, and tombstones deletes. It does not make
-`uptime serve` use `HASNA_UPTIME_DATABASE_URL`, does not promote workers, and
+`uptimemon serve` use `HASNA_UPTIME_DATABASE_URL`, does not promote workers, and
 deliberately leaves reports, incidents, results, import apply, probes, browser
 checks, scheduler loops, and reporter delivery fail-closed until their
 Postgres-backed contracts are implemented and reviewed.
@@ -141,11 +141,11 @@ private probes cloud-primary or live: probe listing, API-created jobs,
 heartbeat, revocation, rotation, inventory-backed private target refs, alarms,
 deploy drain, and live worker evidence are still separate gates.
 
-`0.1.44` adds a bounded `uptime cloud postgres-scheduler run` review command
+`0.1.44` adds a bounded `uptimemon cloud postgres-scheduler run` review command
 that creates deterministic Postgres `check_jobs` for due public-safe HTTP/TCP
 monitors with interval-aligned slots, bounded catch-up, and producer-side hosted
 target-policy checks. `0.1.43` adds a bounded
-`uptime cloud postgres-public-probe run` review command over existing Postgres
+`uptimemon cloud postgres-public-probe run` review command over existing Postgres
 `check_jobs`. It requires an explicit workspace and probe id, claims jobs with
 fencing tokens, runs HTTP/TCP checks through the hosted target policy, records
 probe results, and fenced-cancels unsupported, disabled, missing, or
@@ -418,9 +418,9 @@ An operator/probe machine should become cloud-primary only after a preflight pro
 - local `~/.hasna` databases are backed up before migration and then treated as
   cache/fallback, not active authority.
 
-`uptime cloud memory-preflight --json` prints a redacted report for this
+`uptimemon cloud memory-preflight --json` prints a redacted report for this
 checklist and exits `0` for inspection even when blocked. Use
-`uptime cloud memory-preflight --healthcheck --json` as the current fail-closed
+`uptimemon cloud memory-preflight --healthcheck --json` as the current fail-closed
 operator gate. It intentionally reports only redacted evidence such as service
 names, configured environment variable names, booleans, and blocker text. It
 checks env presence but does not retain or print database URLs, API keys, secret
@@ -553,12 +553,12 @@ ECS/API/RDS/S3/probe lag/job backlog/delivery failures, and rollback commands.
   smokes, and the hosted dashboard shell still fails closed; production-grade
   identity/RBAC is not implemented yet.
 - Outbound target policy for hosted HTTP/TCP checks exists in the SDK and the
-  `uptime cloud public-checks run-due` operator path. A bounded
-  `uptime cloud public-checks worker` EFS SQLite bridge loop exists for
+  `uptimemon cloud public-checks run-due` operator path. A bounded
+  `uptimemon cloud public-checks worker` EFS SQLite bridge loop exists for
   controlled smokes only when `--allow-public-checks-bridge` or
   `HASNA_UPTIME_ALLOW_PUBLIC_CHECKS_BRIDGE=1` is explicitly set. A separate
-  bounded `uptime cloud postgres-scheduler run` command can create public-safe
-  deterministic Postgres `check_jobs`, and `uptime cloud postgres-public-probe
+  bounded `uptimemon cloud postgres-scheduler run` command can create public-safe
+  deterministic Postgres `check_jobs`, and `uptimemon cloud postgres-public-probe
   run` can review existing jobs with lease fencing, but sustained ECS worker
   readiness is not wired yet.
 - `@hasna/cloud` hybrid mode still returns SQLite, so it is not cloud-primary.

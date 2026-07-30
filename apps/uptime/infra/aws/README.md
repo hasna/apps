@@ -133,10 +133,10 @@ the lock.
 
 Every ECS task definition includes an explicit container health check. The web
 task checks `GET /health` through Bun's built-in `fetch`; disabled non-web roles
-run `uptime cloud workers preflight --role <role> --healthcheck`, which verifies
+run `uptimemon cloud workers preflight --role <role> --healthcheck`, which verifies
 hosted mode, component identity, and workspace env before reporting blocked
 cloud prerequisites. Their main container commands call fail-closed
-`uptime cloud workers run --role <role>` entrypoints so scheduler,
+`uptimemon cloud workers run --role <role>` entrypoints so scheduler,
 public-probe, reporter, and migration tasks no longer use `cloud plan` as a
 placeholder.
 
@@ -190,7 +190,7 @@ Parameter Store instead of Secrets Manager, add `ssm` to
 - Public probe runtime has SDK-level hosted HTTP target-policy enforcement, but
   the public-probe cloud check-job lease path is still disabled until it is
   wired to that runner and validated in AWS. The
-  `uptime cloud public-checks worker` command is an EFS SQLite bridge smoke loop,
+  `uptimemon cloud public-checks worker` command is an EFS SQLite bridge smoke loop,
   not the final cloud worker protocol.
 - Hosted private-probe enrollment/heartbeat/revocation is still
   fail-closed.
