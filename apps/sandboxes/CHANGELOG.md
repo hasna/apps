@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **TypeScript now rejects implicit returns and switch fallthrough.** The
+  project compiler configuration enables `noImplicitReturns` alongside the
+  existing `noFallthroughCasesInSwitch` control-flow check.
+
 ## 1.1.0 - 2026-07-24
 
 ### Added
