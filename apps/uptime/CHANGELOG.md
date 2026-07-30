@@ -12,6 +12,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   decision, online GitHub/npm state checks, runtime dependency notice and
   license verification, full-history credential scanning, and an explicit
   approval/provenance requirement.
+- Added `release:oss:verify`, the post-publish half of the release gate. It
+  verifies on the registry the provenance attestation, signature, and `gitHead`
+  that only a completed publish can produce, and the release workflow runs it
+  immediately after `npm publish`. The pre-publish gate treats the absent
+  version as expected state and requires the capability to mint provenance
+  instead, so an approved `GO` candidate can actually be published.
 
 ### Security
 

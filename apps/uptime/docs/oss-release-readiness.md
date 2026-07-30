@@ -56,14 +56,39 @@ decision to `GO`; editing the decision file is not itself approval.
    `id-token: write`. The `--provenance` request deliberately lives in that
    workflow and not in `publishConfig`: npm only generates an attestation from a
    supported CI provider and refuses to publish at all when `provenance` is set
-   outside one, which would break local and patch releases. After publication,
-   verify that npm exposes `dist.attestations`. If trusted publishing cannot be
-   used, record and approve alternate evidence containing the immutable source
-   commit — the same commit recorded as `releaseCandidateCommit` — and the
-   package SHA-512 before setting `GO`.
-5. Record the final `GO` or `HOLD` decision, reviewer, release version, commit,
+   outside one, which would break local and patch releases. If trusted
+   publishing cannot be used, record and approve alternate evidence containing
+   the immutable source commit — the same commit recorded as
+   `releaseCandidateCommit` — and the package SHA-512 before setting `GO`.
+5. Verify the attestation the publish minted with `bun run release:oss:verify`,
+   which the release workflow runs immediately after `npm publish`.
+6. Record the final `GO` or `HOLD` decision, reviewer, release version, commit,
    visibility observation, provenance evidence, and scan results. A registry
    signature or checksum alone is not alternate source provenance.
+
+## The gate runs in two phases
+
+A publish gate cannot demand evidence that only the publish it gates can create.
+Before publication npm holds no integrity, `gitHead`, or `dist.attestations` for
+the version being published, and `npm view` answers E404 for it. Requiring that
+evidence up front would make `GO` unreachable and would block every later
+release, including a security patch, so the gate splits the requirement:
+
+- **Pre-publish** (`release:oss:check`, and `prepublishOnly`): an absent version
+  is the expected state, not an audit error. The recorded `provenance` block is
+  compared against the registry only when the recorded version is already
+  published. `provenance.status: VERIFIED` is satisfied by the *capability* to
+  mint an attestation — the `id-token: write` plus `npm publish --provenance`
+  workflow audited by the gate — or by approved alternate evidence.
+- **Post-publish** (`release:oss:verify`, run by the release workflow straight
+  after `npm publish`): the version must be on the registry, carry a registry
+  signature, carry an SLSA provenance attestation or approved alternate
+  evidence, and report a `gitHead` that is the approved release candidate
+  commit.
+
+The gate reads repository visibility with `gh`, which needs a token. Every
+workflow step that runs it is given `GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}`, and
+the gate fails its own static audit if a gate-running step lacks one.
 
 ## Commands
 
@@ -75,6 +100,7 @@ bun run typecheck
 bun test
 bun pm pack --dry-run
 bun run release:oss:check
+bun run release:oss:verify   # after `npm publish`, not before
 ```
 
 `release:oss:audit` succeeds when the recorded state is accurate, including a

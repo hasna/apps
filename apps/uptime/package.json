@@ -112,6 +112,7 @@
     "test": "bun test ./tests",
     "release:oss:audit": "node scripts/oss-release-gate.mjs --verify-recorded-state",
     "release:oss:check": "node scripts/oss-release-gate.mjs",
+    "release:oss:verify": "node scripts/oss-release-gate.mjs --verify-published",
     "dev:cli": "bun run src/cli/index.ts",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:server": "bun run src/cli/index.ts serve",

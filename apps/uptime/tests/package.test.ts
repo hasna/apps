@@ -11,6 +11,7 @@ const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
   license: string;
   publishConfig: { access: string; provenance?: boolean };
   repository: { type: string; url: string };
+  scripts: Record<string, string>;
 };
 
 function jsonRequest(url: string, method: string, body: unknown, headers: Record<string, string> = {}): Request {
@@ -401,6 +402,18 @@ function registryStateFor(decision: ReleaseDecision, overrides: Record<string, a
   };
 }
 
+// The state npm reports for a version it does not hold, which is necessarily the
+// state of the version any publish is about to create.
+function unpublishedRegistryState(overrides: Record<string, any> = {}): Record<string, any> {
+  return {
+    githubVisibility: "PUBLIC",
+    githubPrivate: false,
+    npmVersionPublished: false,
+    npm: { version: null, repository: null, dist: {} },
+    ...overrides,
+  };
+}
+
 function evaluateApprovedRelease(
   gate: Record<string, any>,
   overrides: {
@@ -409,6 +422,7 @@ function evaluateApprovedRelease(
     clean?: boolean;
     provenancePublishing?: boolean;
     online?: Record<string, any>;
+    phase?: string;
   } = {},
 ): Record<string, any> {
   const decision = overrides.decision ?? approvedReleaseDecision();
@@ -424,7 +438,55 @@ function evaluateApprovedRelease(
     clean: overrides.clean ?? true,
     provenancePublishing: overrides.provenancePublishing ?? true,
     secretFindings: [],
+    ...(overrides.phase ? { phase: overrides.phase } : {}),
   });
+}
+
+// Writes throwaway `gh`/`npm` executables so a test can drive the real registry
+// probe in the gate rather than hand-feeding it a response it could never get.
+function stubExecutables(scripts: Record<string, string>): { dir: string; cleanup: () => void } {
+  const dir = mkdtempSync(join(tmpdir(), "uptime-release-stub-bin-"));
+  for (const [name, body] of Object.entries(scripts)) {
+    writeFileSync(join(dir, name), body, { mode: 0o755 });
+  }
+  return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+const npmVersionNotFoundStub = `#!/usr/bin/env bash
+printf '%s\\n' '{"error":{"code":"E404","summary":"No match found for version"}}'
+exit 1
+`;
+
+function ghVisibilityStub(visibility: string): string {
+  return `#!/usr/bin/env bash
+printf '%s\\n' '{"visibility":"${visibility}","isPrivate":${visibility === "PRIVATE"}}'
+`;
+}
+
+// How `npm view --json` fails for a version the registry does not hold: non-zero
+// exit with the reason as JSON on stdout.
+function npmVersionNotFound(): string {
+  throw Object.assign(new Error("Command failed: npm view"), {
+    status: 1,
+    stdout: JSON.stringify({ error: { code: "E404", summary: "No match found for version" } }),
+    stderr: "npm error code E404\n",
+  });
+}
+
+function npmUnreachable(): string {
+  throw Object.assign(new Error("npm error network request to https://registry.npmjs.org failed"), {
+    status: 1,
+    stdout: "",
+    stderr: "npm error network request to https://registry.npmjs.org failed\n",
+  });
+}
+
+function registryRunner(visibility: string, npmView: () => string): (name: string, args: string[]) => string {
+  return (name: string) => {
+    if (name === "gh") return JSON.stringify({ visibility, isPrivate: visibility === "PRIVATE" });
+    if (name === "npm") return npmView();
+    throw new Error(`unexpected command ${name}`);
+  };
 }
 
 test("public OSS release decision stays fail-closed while visibility and provenance are unresolved", async () => {
@@ -471,13 +533,167 @@ test("public OSS release decision stays fail-closed while visibility and provena
   expect(result.blockers).toContain("npm provenance or approved alternate source evidence is not verified");
 });
 
-test("a fully approved release candidate is allowed, so the gate is reachable and not permanently closed", async () => {
+test("every release blocker clears for an approved candidate whose version is already on the registry", async () => {
   const gate = await import(join(root, "scripts/oss-release-gate.mjs")) as Record<string, any>;
   const result = evaluateApprovedRelease(gate);
 
   expect(result.auditErrors).toEqual([]);
   expect(result.blockers).toEqual([]);
   expect(result.releaseAllowed).toBe(true);
+});
+
+test("the registry probe reports the version under publish as absent instead of failing the audit", async () => {
+  const gate = await import(join(root, "scripts/oss-release-gate.mjs")) as Record<string, any>;
+  const probe = { name: "@hasna/uptime" };
+  const version = { releaseVersion: "9.9.9" };
+
+  expect(gate.inspectOnlineState(probe, version, registryRunner("PUBLIC", npmVersionNotFound))).toEqual({
+    githubVisibility: "PUBLIC",
+    githubPrivate: false,
+    npmVersionPublished: false,
+    npm: { version: null, repository: null, dist: {} },
+  });
+
+  // Only a missing version is expected. A registry that cannot be reached at all
+  // is still an audit failure, or the gate would pass on no evidence.
+  expect(() => gate.inspectOnlineState(probe, version, registryRunner("PUBLIC", npmUnreachable)))
+    .toThrow("npm error network request to https://registry.npmjs.org failed");
+
+  expect(gate.inspectOnlineState(probe, version, registryRunner("PRIVATE", () => JSON.stringify({ version: "9.9.9", dist: {} })))).toMatchObject({
+    githubVisibility: "PRIVATE",
+    githubPrivate: true,
+    npmVersionPublished: true,
+  });
+});
+
+test("an approved candidate whose version the registry does not hold yet is allowed to publish", async () => {
+  const gate = await import(join(root, "scripts/oss-release-gate.mjs")) as Record<string, any>;
+  // The honest pre-publish record: no integrity, no gitHead, no attestation,
+  // because only the publish being gated can produce them. Provenance is
+  // verified as a capability — the trusted-publishing workflow.
+  const decision = approvedReleaseDecision({
+    provenance: {
+      status: "VERIFIED",
+      npmAttestations: false,
+      npmGitHead: null,
+      alternateEvidence: null,
+      registryIntegrity: null,
+      registrySignature: true,
+    },
+  });
+  const result = evaluateApprovedRelease(gate, { decision, online: unpublishedRegistryState() });
+
+  expect(result.auditErrors).toEqual([]);
+  expect(result.blockers).toEqual([]);
+  expect(result.releaseAllowed).toBe(true);
+
+  // Without the capability there is nothing to stand in for the attestation.
+  const withoutWorkflow = evaluateApprovedRelease(gate, {
+    decision,
+    online: unpublishedRegistryState(),
+    provenancePublishing: false,
+  });
+  expect(withoutWorkflow.blockers).toContain("npm provenance or approved alternate source evidence is not verified");
+  expect(withoutWorkflow.releaseAllowed).toBe(false);
+});
+
+test("post-publish verification demands the attestation the publish minted", async () => {
+  const gate = await import(join(root, "scripts/oss-release-gate.mjs")) as Record<string, any>;
+  const decision = approvedReleaseDecision();
+  const attestationMissing = "published release has neither an npm provenance attestation nor approved alternate source evidence";
+
+  const absent = evaluateApprovedRelease(gate, { decision, online: unpublishedRegistryState(), phase: gate.postPublishPhase });
+  expect(absent.auditErrors).toContain("the npm registry has no 9.9.9, so the published release cannot be verified");
+  expect(absent.auditErrors).toContain(attestationMissing);
+
+  // A published release with no attestation, recorded honestly. The pre-publish
+  // phase accepts it on capability alone; the post-publish phase must not.
+  const unattestedDecision = approvedReleaseDecision({
+    provenance: { ...approvedReleaseDecision().provenance, npmAttestations: false },
+  });
+  const unattested = registryStateFor(unattestedDecision);
+  delete unattested.npm.dist.attestations;
+  expect(evaluateApprovedRelease(gate, { decision: unattestedDecision, online: unattested }).releaseAllowed).toBe(true);
+  expect(evaluateApprovedRelease(gate, { decision: unattestedDecision, online: unattested, phase: gate.postPublishPhase }).auditErrors)
+    .toContain(attestationMissing);
+
+  const unsigned = registryStateFor(decision);
+  unsigned.npm.dist.signatures = [];
+  expect(evaluateApprovedRelease(gate, { decision, online: unsigned, phase: gate.postPublishPhase }).auditErrors)
+    .toContain("published release has no npm registry signature");
+
+  const drifted = registryStateFor(decision);
+  drifted.npm.gitHead = "0".repeat(40);
+  expect(evaluateApprovedRelease(gate, { decision, online: drifted, phase: gate.postPublishPhase }).auditErrors)
+    .toContain("published npm gitHead is not the approved release candidate commit");
+
+  const verified = evaluateApprovedRelease(gate, { decision, phase: gate.postPublishPhase });
+  expect(verified.auditErrors).toEqual([]);
+});
+
+test("the recorded-state audit succeeds when the npm registry does not hold the recorded version", async () => {
+  const stub = stubExecutables({ gh: ghVisibilityStub("PRIVATE"), npm: npmVersionNotFoundStub });
+  try {
+    const result = Bun.spawnSync({
+      cmd: ["node", "scripts/oss-release-gate.mjs", "--verify-recorded-state"],
+      cwd: root,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, PATH: `${stub.dir}:${process.env.PATH ?? ""}` },
+    });
+    const stdout = new TextDecoder().decode(result.stdout);
+    const stderr = new TextDecoder().decode(result.stderr);
+
+    // A gate that cannot tolerate an absent version reports it as an audit error
+    // and exits non-zero, which is what deadlocks `prepublishOnly`.
+    expect(`exit ${result.exitCode}: ${stderr}`).toStartWith("exit 0:");
+    expect(stderr).not.toContain("AUDIT ERROR");
+    expect(stdout).toContain("Gate phase: pre-publish");
+    // Proof the gate actually ran rather than exiting before the audit.
+    expect(stdout).toContain(`OSS release decision: ${JSON.parse(readFileSync(join(root, "docs/oss-release-decision.json"), "utf8")).decision}`);
+    expect(stderr).toContain("BLOCKED: ");
+  } finally {
+    stub.cleanup();
+  }
+}, 120_000);
+
+test("the release workflow authenticates every step that runs the release gate", async () => {
+  const gate = await import(join(root, "scripts/oss-release-gate.mjs")) as Record<string, any>;
+  const workflow = readFileSync(join(root, ".github/workflows/release.yml"), "utf8");
+
+  expect(gate.auditReleaseWorkflowAuthentication(root)).toEqual({ errors: [] });
+  expect(pkg.scripts["release:oss:verify"]).toBe("node scripts/oss-release-gate.mjs --verify-published");
+  expect(workflow).toContain("bun run release:oss:verify");
+
+  const gateSteps = gate.releaseWorkflowSteps(workflow).filter((step: Record<string, string>) => /release:oss:|npm publish/.test(step.body));
+  expect(gateSteps.map((step: Record<string, string>) => step.name)).toEqual([
+    "Verify the recorded OSS release decision",
+    "Publish to npm with provenance",
+    "Verify the published provenance attestation",
+  ]);
+  for (const step of gateSteps) {
+    expect(`${step.name}: ${/^\s*GH_TOKEN:/m.test(step.body)}`).toBe(`${step.name}: true`);
+  }
+
+  const fixture = mkdtempSync(join(tmpdir(), "uptime-release-workflow-auth-"));
+  const fixtureWorkflow = join(fixture, ".github/workflows/release.yml");
+  try {
+    mkdirSync(join(fixture, ".github/workflows"), { recursive: true });
+    // `gh` exits 4 with "populate the GH_TOKEN environment variable" here, so the
+    // release job dies at this step on every tag push.
+    writeFileSync(fixtureWorkflow, "jobs:\n  publish:\n    steps:\n      - name: Verify\n        run: bun run release:oss:audit\n");
+    expect(gate.auditReleaseWorkflowAuthentication(fixture)).toEqual({
+      errors: ['.github/workflows/release.yml step "Verify" runs the release gate without GH_TOKEN, so the gate cannot read GitHub visibility'],
+    });
+
+    // A workflow that never runs the gate must not pass this audit vacuously.
+    writeFileSync(fixtureWorkflow, "jobs:\n  publish:\n    steps:\n      - name: Checkout\n        uses: actions/checkout@v4\n");
+    expect(gate.auditReleaseWorkflowAuthentication(fixture)).toEqual({
+      errors: [".github/workflows/release.yml never runs the release gate"],
+    });
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
 });
 
 test("approved alternate source evidence substitutes for npm attestations", async () => {
@@ -599,19 +815,29 @@ test("recording the approved release candidate commit is reachable in real Git h
   const repository = mkdtempSync(join(tmpdir(), "uptime-release-candidate-"));
   const git = (...args: string[]): string => {
     const result = Bun.spawnSync({
-      cmd: ["git", ...args],
+      // -c core.hooksPath= and an empty global config insulate the fixture from
+      // ambient configuration. Hasna machines set a global core.hooksPath whose
+      // hooks write to stderr, and an unrelated global config must never decide
+      // whether this test passes.
+      cmd: ["git", "-c", "core.hooksPath=", ...args],
       cwd: repository,
       stdout: "pipe",
       stderr: "pipe",
       env: {
         ...process.env,
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_CONFIG_SYSTEM: "/dev/null",
         GIT_AUTHOR_NAME: "Release Gate Test",
         GIT_AUTHOR_EMAIL: "release-gate@example.invalid",
         GIT_COMMITTER_NAME: "Release Gate Test",
         GIT_COMMITTER_EMAIL: "release-gate@example.invalid",
       },
     });
-    expect(`git ${args[0]}: ${new TextDecoder().decode(result.stderr)}`).toBe(`git ${args[0]}: `);
+    // Assert the exit code, never the stderr text: git writes advice and hook
+    // output to stderr on success, so an empty-stderr assertion fails for
+    // reasons that have nothing to do with the behaviour under test. stderr is
+    // carried into the failure message instead of being asserted on.
+    expect(`git ${args[0]} exited ${result.exitCode}: ${new TextDecoder().decode(result.stderr)}`).toStartWith(`git ${args[0]} exited 0:`);
     return new TextDecoder().decode(result.stdout).trim();
   };
 

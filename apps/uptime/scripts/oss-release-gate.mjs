@@ -19,6 +19,16 @@ const releaseWorkflowPath = ".github/workflows/release.yml";
 // record itself. Anything else means unapproved code is being published.
 const releaseDecisionPaths = ["docs/oss-release-decision.json", "docs/oss-release-readiness.md"];
 
+// A publish gate cannot demand evidence that only the publish it gates can
+// create. Before publication npm holds no integrity, gitHead, or provenance
+// attestation for the version being published, so requiring them there closes
+// the gate permanently. The gate therefore runs in two phases: `pre-publish`
+// requires the *capability* to mint provenance, and `post-publish` re-checks the
+// attestation the publish actually produced.
+export const prePublishPhase = "pre-publish";
+export const postPublishPhase = "post-publish";
+const provenancePredicateType = "https://slsa.dev/provenance/v1";
+
 const secretPatterns = [
   ["private key", /-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----\s+[A-Za-z0-9+/=\r\n]{80,}-----END (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/g],
   ["AWS access key", /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g],
@@ -140,6 +150,7 @@ export function auditStaticRepository(repositoryRoot = root) {
 
   const provenancePublishing = auditProvenancePublishing(repositoryRoot);
   errors.push(...provenancePublishing.errors);
+  errors.push(...auditReleaseWorkflowAuthentication(repositoryRoot).errors);
 
   for (const file of requiredLegalFiles) {
     check(existsSync(join(repositoryRoot, file)), `${file} is missing`, errors);
@@ -202,6 +213,40 @@ export function auditProvenancePublishing(repositoryRoot = root) {
   return { configured: errors.length === 0, errors };
 }
 
+// The gate reads repository visibility with `gh`, which needs a token. A GitHub
+// Actions step gets one only if the workflow passes it, so a gate step without
+// GH_TOKEN fails on every tag push with "populate the GH_TOKEN environment
+// variable" and takes the release job with it.
+const gateInvocationPattern = /release:oss:(?:audit|check|verify)|oss-release-gate\.mjs|npm publish/;
+
+export function releaseWorkflowSteps(workflow) {
+  const steps = [];
+  for (const line of workflow.split("\n")) {
+    const start = line.match(/^\s*-\s+name:\s*(.+)$/);
+    if (start) steps.push({ name: start[1].trim(), lines: [] });
+    else steps[steps.length - 1]?.lines.push(line);
+  }
+  return steps.map((step) => ({ name: step.name, body: step.lines.join("\n") }));
+}
+
+export function auditReleaseWorkflowAuthentication(repositoryRoot = root) {
+  const workflowPath = join(repositoryRoot, releaseWorkflowPath);
+  // A missing workflow is already reported by auditProvenancePublishing.
+  if (!existsSync(workflowPath)) return { errors: [] };
+
+  const errors = [];
+  const gateSteps = releaseWorkflowSteps(readFileSync(workflowPath, "utf8")).filter((step) => gateInvocationPattern.test(step.body));
+  check(gateSteps.length > 0, `${releaseWorkflowPath} never runs the release gate`, errors);
+  for (const step of gateSteps) {
+    check(
+      /^\s*(?:GH_TOKEN|GITHUB_TOKEN):/m.test(step.body),
+      `${releaseWorkflowPath} step "${step.name}" runs the release gate without GH_TOKEN, so the gate cannot read GitHub visibility`,
+      errors,
+    );
+  }
+  return { errors };
+}
+
 function scanText(text, scope) {
   const findings = [];
   for (const [label, pattern] of secretPatterns) {
@@ -260,13 +305,37 @@ export function inspectReleaseCandidate(recordedCommit, repositoryRoot = root) {
   return { resolved, containedInHead, changedPaths };
 }
 
-function inspectOnlineState(pkg, decision) {
-  const github = JSON.parse(command("gh", ["repo", "view", expectedRepository, "--json", "visibility,isPrivate"]));
-  const npm = JSON.parse(command("npm", ["view", `${pkg.name}@${decision.releaseVersion}`, "--json"]));
+// `npm view --json` exits non-zero for a version the registry does not hold and
+// reports the reason as machine-readable JSON on stdout. The version being
+// published necessarily is not there yet, so E404 for it is the expected
+// pre-publish state and not an audit failure; every other failure still throws.
+function npmErrorCode(stdout) {
+  try {
+    return JSON.parse(String(stdout ?? "")).error?.code ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function viewPublishedVersion(name, version, run) {
+  try {
+    return { published: true, view: JSON.parse(run("npm", ["view", `${name}@${version}`, "--json"])) };
+  } catch (error) {
+    if (npmErrorCode(error.stdout) !== "E404") throw error;
+    return { published: false, view: { version: null, repository: null, dist: {} } };
+  }
+}
+
+// `run` is the seam a test uses to drive this against a registry that does not
+// hold the version yet, which is the state of every version being published.
+export function inspectOnlineState(pkg, decision, run = command) {
+  const github = JSON.parse(run("gh", ["repo", "view", expectedRepository, "--json", "visibility,isPrivate"]));
+  const registry = viewPublishedVersion(pkg.name, decision.releaseVersion, run);
   return {
     githubVisibility: github.visibility,
     githubPrivate: github.isPrivate,
-    npm,
+    npmVersionPublished: registry.published,
+    npm: registry.view,
   };
 }
 
@@ -285,32 +354,27 @@ export function releaseCandidateBlockers(recordedCommit, candidate) {
   return [];
 }
 
-export function evaluateReleaseDecision({ decision, staticErrors = [], online, candidate, clean, provenancePublishing = false, secretFindings = [] }) {
+export function evaluateReleaseDecision({
+  decision,
+  staticErrors = [],
+  online,
+  candidate,
+  clean,
+  provenancePublishing = false,
+  secretFindings = [],
+  phase = prePublishPhase,
+}) {
   const auditErrors = [...staticErrors, ...secretFindings];
   const blockers = [];
-  const npmDist = online.npm.dist ?? {};
-  const npmRepositoryUrl = typeof online.npm.repository === "string" ? online.npm.repository : online.npm.repository?.url;
+  const npmDist = online.npm?.dist ?? {};
+  const npmRepositoryUrl = typeof online.npm?.repository === "string" ? online.npm.repository : online.npm?.repository?.url;
   const npmAttestations = Boolean(
     npmDist.attestations?.url
-      && npmDist.attestations?.provenance?.predicateType === "https://slsa.dev/provenance/v1",
+      && npmDist.attestations?.provenance?.predicateType === provenancePredicateType,
   );
-  const npmGitHead = online.npm.gitHead ?? null;
+  const npmGitHead = online.npm?.gitHead ?? null;
   const npmRegistrySignature = Array.isArray(npmDist.signatures) && npmDist.signatures.length > 0;
-
-  check(online.githubVisibility === decision.observed.githubVisibility, "recorded GitHub visibility does not match GitHub", auditErrors);
-  check(online.githubPrivate === (decision.observed.githubVisibility === "PRIVATE"), "recorded GitHub private state is inconsistent", auditErrors);
-  check(online.npm.version === decision.releaseVersion, "recorded npm version does not match the registry", auditErrors);
-  check(npmRepositoryUrl === decision.observed.npmRepositoryUrl, "recorded npm repository URL does not match the registry", auditErrors);
-  check(npmDist.integrity === decision.provenance.registryIntegrity, "recorded npm integrity does not match the registry", auditErrors);
-  check(npmRegistrySignature === decision.provenance.registrySignature, "recorded npm registry-signature state does not match the registry", auditErrors);
-  check(npmAttestations === decision.provenance.npmAttestations, "recorded npm attestation state does not match the registry", auditErrors);
-  check(npmGitHead === decision.provenance.npmGitHead, "recorded npm gitHead does not match the registry", auditErrors);
-
-  if (decision.decision !== "GO") blockers.push("recorded public-release decision is HOLD");
-  if (decision.explicitPublicApproval !== true) blockers.push("explicit repository-public approval is absent");
-  if (online.githubVisibility !== "PUBLIC") blockers.push("GitHub repository is not public, so public package metadata is unresolved");
-  if (!clean) blockers.push("release candidate worktree is not clean");
-  blockers.push(...releaseCandidateBlockers(decision.releaseCandidateCommit, candidate));
+  const versionPublished = online.npmVersionPublished ?? online.npm?.version === decision.releaseVersion;
 
   const alternate = decision.provenance.alternateEvidence;
   const alternateValid = Boolean(
@@ -320,7 +384,42 @@ export function evaluateReleaseDecision({ decision, staticErrors = [], online, c
       && /^sha512-[A-Za-z0-9+/]+={0,2}$/.test(alternate.packageIntegrity ?? "")
       && alternate.approvedBy,
   );
-  if (!(npmAttestations || alternateValid) || decision.provenance.status !== "VERIFIED") {
+
+  check(online.githubVisibility === decision.observed.githubVisibility, "recorded GitHub visibility does not match GitHub", auditErrors);
+  check(online.githubPrivate === (decision.observed.githubVisibility === "PRIVATE"), "recorded GitHub private state is inconsistent", auditErrors);
+
+  if (phase === postPublishPhase) {
+    // Run after `npm publish`, against the release the publish just created.
+    check(versionPublished, `the npm registry has no ${decision.releaseVersion}, so the published release cannot be verified`, auditErrors);
+    check(npmRepositoryUrl === decision.observed.npmRepositoryUrl, "published npm repository URL does not match the release decision", auditErrors);
+    check(npmRegistrySignature, "published release has no npm registry signature", auditErrors);
+    check(npmAttestations || alternateValid, "published release has neither an npm provenance attestation nor approved alternate source evidence", auditErrors);
+    check(npmGitHead === null || npmGitHead === decision.releaseCandidateCommit, "published npm gitHead is not the approved release candidate commit", auditErrors);
+  } else if (versionPublished) {
+    // The recorded provenance block describes registry state, so it can only be
+    // compared once the recorded version is actually on the registry.
+    check(online.npm.version === decision.releaseVersion, "recorded npm version does not match the registry", auditErrors);
+    check(npmRepositoryUrl === decision.observed.npmRepositoryUrl, "recorded npm repository URL does not match the registry", auditErrors);
+    check(npmDist.integrity === decision.provenance.registryIntegrity, "recorded npm integrity does not match the registry", auditErrors);
+    check(npmRegistrySignature === decision.provenance.registrySignature, "recorded npm registry-signature state does not match the registry", auditErrors);
+    check(npmAttestations === decision.provenance.npmAttestations, "recorded npm attestation state does not match the registry", auditErrors);
+    check(npmGitHead === decision.provenance.npmGitHead, "recorded npm gitHead does not match the registry", auditErrors);
+  }
+
+  if (decision.decision !== "GO") blockers.push("recorded public-release decision is HOLD");
+  if (decision.explicitPublicApproval !== true) blockers.push("explicit repository-public approval is absent");
+  if (online.githubVisibility !== "PUBLIC") blockers.push("GitHub repository is not public, so public package metadata is unresolved");
+  if (!clean) blockers.push("release candidate worktree is not clean");
+  blockers.push(...releaseCandidateBlockers(decision.releaseCandidateCommit, candidate));
+
+  // Pre-publish, the attestation the publish will mint cannot exist yet, so what
+  // has to be in place is the capability to mint one: the trusted-publishing
+  // workflow audited by auditProvenancePublishing. Post-publish, and for a
+  // version already on the registry, the attestation itself is required.
+  const provenanceEvidence = phase === postPublishPhase
+    ? npmAttestations || alternateValid
+    : npmAttestations || alternateValid || provenancePublishing === true;
+  if (!provenanceEvidence || decision.provenance.status !== "VERIFIED") {
     blockers.push("npm provenance or approved alternate source evidence is not verified");
   }
   if (provenancePublishing !== true) blockers.push("npm provenance publishing is not configured");
@@ -333,15 +432,19 @@ export function evaluateReleaseDecision({ decision, staticErrors = [], online, c
   };
 }
 
-function printResult(result, decision) {
+function printResult(result, decision, phase) {
   console.log(`OSS release decision: ${decision.decision}`);
-  console.log(`Release allowed: ${result.releaseAllowed ? "YES" : "NO"}`);
+  console.log(`Gate phase: ${phase}`);
+  if (phase === postPublishPhase) console.log(`Published release verified: ${result.auditErrors.length === 0 ? "YES" : "NO"}`);
+  else console.log(`Release allowed: ${result.releaseAllowed ? "YES" : "NO"}`);
   for (const error of result.auditErrors) console.error(`AUDIT ERROR: ${error}`);
   for (const blocker of result.blockers) console.error(`BLOCKED: ${blocker}`);
 }
 
 function main() {
   const verifyRecordedState = process.argv.includes("--verify-recorded-state");
+  const verifyPublished = process.argv.includes("--verify-published");
+  const phase = verifyPublished ? postPublishPhase : prePublishPhase;
   const staticAudit = auditStaticRepository();
   let online;
   let candidate = { resolved: null, containedInHead: false, changedPaths: [] };
@@ -349,13 +452,18 @@ function main() {
   const operationalErrors = [];
   const secretFindings = [];
 
-  try {
-    candidate = inspectReleaseCandidate(staticAudit.decision.releaseCandidateCommit);
-    clean = command("git", ["status", "--porcelain=v1"]) === "";
-    secretFindings.push(...scanTrackedWorktree(), ...scanGitHistory());
-    if (staticAudit.decision.decision === "GO") runGitleaks();
-  } catch (error) {
-    operationalErrors.push(`could not inspect Git state: ${error.message}`);
+  // Post-publish verification asks the registry what the publish produced. The
+  // Git-side candidate, cleanliness, and credential scans gated that publish and
+  // are not repeated against a worktree the build has since written to.
+  if (!verifyPublished) {
+    try {
+      candidate = inspectReleaseCandidate(staticAudit.decision.releaseCandidateCommit);
+      clean = command("git", ["status", "--porcelain=v1"]) === "";
+      secretFindings.push(...scanTrackedWorktree(), ...scanGitHistory());
+      if (staticAudit.decision.decision === "GO") runGitleaks();
+    } catch (error) {
+      operationalErrors.push(`could not inspect Git state: ${error.message}`);
+    }
   }
 
   try {
@@ -365,6 +473,7 @@ function main() {
     online = {
       githubVisibility: "UNKNOWN",
       githubPrivate: false,
+      npmVersionPublished: false,
       npm: { version: null, repository: null, dist: {} },
     };
   }
@@ -377,10 +486,11 @@ function main() {
     clean,
     provenancePublishing: staticAudit.provenancePublishing,
     secretFindings,
+    phase,
   });
-  printResult(result, staticAudit.decision);
+  printResult(result, staticAudit.decision, phase);
 
-  if (verifyRecordedState && result.auditErrors.length === 0) return;
+  if ((verifyRecordedState || verifyPublished) && result.auditErrors.length === 0) return;
   if (!result.releaseAllowed) process.exitCode = 1;
 }
 

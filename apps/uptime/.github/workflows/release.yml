@@ -61,12 +61,24 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # Fail before touching npm if the release is not approved and clean.
+      # Fail before touching npm if the release is not approved and clean. The
+      # gate reads repository visibility with `gh`, which exits 4 without a
+      # token, so every step that runs it is given the job's GITHUB_TOKEN.
       - name: Verify the recorded OSS release decision
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bun run release:oss:audit
 
       # `npm publish` runs prepublishOnly: release gate, build, typecheck, tests.
       - name: Publish to npm with provenance
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --provenance --access public
+
+      # The provenance attestation only exists once the publish has minted it, so
+      # the pre-publish gate cannot assert it. This step does, after the fact.
+      - name: Verify the published provenance attestation
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bun run release:oss:verify
