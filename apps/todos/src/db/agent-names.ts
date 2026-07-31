@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import type { Agent } from "../types/index.js";
+import { normalizeAgentNameInput } from "../lib/agent-name-normalize.js";
 
 export class InvalidAgentNameError extends Error {
   readonly suggestions: string[];
@@ -153,9 +154,9 @@ const RESERVED_GENERIC_NAMES = new Set([
 const NUMERIC_SUFFIX_RE = /[-_]\d+$/;
 const ONE_WORD_NAME_RE = /^[a-z]+$/;
 
-export function normalizeAgentNameInput(name: string): string {
-  return name.trim().toLowerCase();
-}
+// Re-exported from lib/ so the SQLite and Postgres engines share ONE definition.
+// See lib/agent-name-normalize.ts for why it cannot simply live here.
+export { normalizeAgentNameInput };
 
 export function hasGeneratedNumericSuffix(name: string): boolean {
   return NUMERIC_SUFFIX_RE.test(normalizeAgentNameInput(name));
