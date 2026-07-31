@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { LoopRun } from "../types.js";
 import type { RunFailureClassification } from "./health.js";
-import { buildHealthReport, buildHealthScan, classifyRunFailure, RESTART_INTERRUPTED_RUN_PREFIX } from "./health.js";
+import { buildHealthReport, buildHealthScan, classifyRunFailure, RESTART_INTERRUPTED_RUN_PREFIX, scheduleOverdue } from "./health.js";
 import { Store } from "./store.js";
 
 function run(patch: Partial<LoopRun>): LoopRun {
@@ -465,5 +465,33 @@ describe("loop health classification", () => {
     } finally {
       store.close();
     }
+  });
+});
+
+describe("scheduleOverdue in-flight suppression", () => {
+  const SLOT = "2026-01-01T00:00:00.000Z";
+  const NOW = new Date("2026-01-01T01:00:00.000Z"); // 60min past the slot, well over the 10min grace
+
+  function activeLoop(nextRunAt: string | undefined = SLOT) {
+    return { id: "loop", name: "loop", status: "active", nextRunAt } as unknown as Parameters<typeof scheduleOverdue>[0];
+  }
+
+  test("reports overdue when no run exists for the passed slot", () => {
+    expect(scheduleOverdue(activeLoop(), NOW, undefined, undefined)?.nextRunAt).toBe(SLOT);
+  });
+
+  test("reports overdue when the latest run for the slot has finished", () => {
+    const finished = { status: "succeeded", scheduledFor: SLOT } as const;
+    expect(scheduleOverdue(activeLoop(), NOW, undefined, finished)?.nextRunAt).toBe(SLOT);
+  });
+
+  test("suppresses overdue while a run for that exact slot is in flight", () => {
+    const inFlight = { status: "running", scheduledFor: SLOT } as const;
+    expect(scheduleOverdue(activeLoop(), NOW, undefined, inFlight)).toBeUndefined();
+  });
+
+  test("still reports overdue when the in-flight run belongs to an older slot", () => {
+    const wedged = { status: "running", scheduledFor: "2025-01-01T00:00:00.000Z" } as const;
+    expect(scheduleOverdue(activeLoop(), NOW, undefined, wedged)?.nextRunAt).toBe(SLOT);
   });
 });

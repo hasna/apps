@@ -1,12 +1,77 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Loop, LoopRun, LoopStatus } from "../types.js";
+import type { Loop, LoopRun, LoopStatus, RunStatus } from "../types.js";
 import type { DaemonStatus } from "../daemon/control.js";
 import type { DoctorCheck, DoctorReport } from "./doctor.js";
 import { redact } from "./format.js";
 import { dataDir } from "./paths.js";
 import type { Store } from "./store.js";
+
+/**
+ * The entire read surface the loop-health classifier needs: loops, and the
+ * runs belonging to a loop. The local sqlite {@link Store} satisfies it
+ * structurally, and so can an in-memory snapshot pre-fetched from the hosted
+ * `/v1` API — which is what lets `loops health` answer against the hosted
+ * control plane instead of refusing (task e3b6f1d4).
+ *
+ * Deliberately narrow: widening it re-couples the classifier to sqlite and
+ * silently un-implements the hosted path.
+ */
+export interface HealthSource {
+  listLoops(opts?: { status?: LoopStatus; includeArchived?: boolean; limit?: number }): Loop[];
+  listRuns(opts?: { loopId?: string; status?: RunStatus; limit?: number }): LoopRun[];
+}
+
+/**
+ * Grace period before an active loop whose scheduled slot has passed counts as
+ * unclaimed. Matches the floor already used for stale-running detection.
+ */
+export const DEFAULT_OVERDUE_GRACE_MS = 10 * 60_000;
+
+/**
+ * A scheduled slot that came and went without the scheduler claiming it.
+ *
+ * This is the one signal that separates "the scheduler is alive" from "the
+ * scheduler stopped claiming": every other check in this file classifies the
+ * *outcome of the last run*, so a dead scheduler reports as uniformly healthy —
+ * the last run of every loop succeeded, because it ran before the scheduler
+ * died. That is exactly what an operator saw during the 2026-07-31 incident.
+ *
+ * Passing state: the loop is not active, has no nextRunAt, its nextRunAt is
+ * still ahead of `now` (or within `graceMs` of it), or a run for that exact
+ * slot is still in flight. Failing state: an active loop whose nextRunAt is
+ * more than `graceMs` in the past with no run in flight for that slot. Both are
+ * reachable from the same input by moving `nextRunAt` across `now - graceMs`,
+ * or by flipping `latestRun` between running-at-slot and terminal.
+ *
+ * `latestRun` is load-bearing, not a refinement. `nextRunAt` is advanced only
+ * AFTER a run finishes (`advanceLoop` in src/daemon/daemon.ts), so a loop whose
+ * run is legitimately executing has its slot sitting in the past for the entire
+ * run. Without this, a healthy 20-minute run reports as an unclaimed slot —
+ * measured on this fleet, where 20 of 200 recent runs exceed 10 minutes. The
+ * check would then manufacture the incident it exists to detect.
+ *
+ * The slot must match. A run wedged on an OLDER slot is not evidence the
+ * scheduler is alive — the current slot still went unclaimed — so suppressing
+ * on any running run would silence the dead-scheduler case instead.
+ */
+export function scheduleOverdue(
+  loop: Loop,
+  now: Date,
+  graceMs: number = DEFAULT_OVERDUE_GRACE_MS,
+  latestRun?: Pick<LoopRun, "status" | "scheduledFor">,
+): { nextRunAt: string; byMs: number } | undefined {
+  if (loop.status !== "active") return undefined;
+  const nextRunAt = loop.nextRunAt;
+  if (!nextRunAt) return undefined;
+  const due = Date.parse(nextRunAt);
+  if (!Number.isFinite(due)) return undefined;
+  const byMs = now.getTime() - due;
+  if (byMs <= graceMs) return undefined;
+  if (latestRun?.status === "running" && latestRun.scheduledFor === nextRunAt) return undefined;
+  return { nextRunAt, byMs };
+}
 
 export type RunFailureClassification =
   | "rate_limit"
@@ -66,6 +131,12 @@ export interface LoopExpectationResult {
   };
   latestRun?: LoopRun;
   failure?: RunFailureSignal;
+  /**
+   * Set when the loop's scheduled slot passed without being claimed. Additive
+   * and independent of `check`/`ok`, so restoring this signal cannot change an
+   * existing verdict or exit code — see {@link scheduleOverdue}.
+   */
+  overdue?: { nextRunAt: string; byMs: number };
   route: {
     source: "openloops";
     kind: "loop_expectation";
@@ -85,6 +156,8 @@ export interface LoopsHealthReport {
     healthy: number;
     unhealthy: number;
     warnings: number;
+    /** Active loops whose scheduled slot passed unclaimed. */
+    overdue: number;
   };
   classifications: Record<RunFailureClassification, number>;
   expectations: LoopExpectationResult[];
@@ -378,7 +451,7 @@ function compareLoopsForScan(left: Loop, right: Loop): number {
   return (left.nextRunAt ?? "").localeCompare(right.nextRunAt ?? "");
 }
 
-function scanLoops(store: Store, statuses: LoopStatus[], opts: Pick<BuildHealthScanOptions, "includeArchived" | "limit">): Loop[] {
+function scanLoops(store: HealthSource, statuses: LoopStatus[], opts: Pick<BuildHealthScanOptions, "includeArchived" | "limit">): Loop[] {
   const limit = opts.limit ?? DEFAULT_SCAN_LIMIT;
   return statuses
     .flatMap((status) => store.listLoops({ includeArchived: opts.includeArchived, status, limit }))
@@ -386,14 +459,20 @@ function scanLoops(store: Store, statuses: LoopStatus[], opts: Pick<BuildHealthS
     .slice(0, limit);
 }
 
-function healthReportForLoops(store: Store, loops: Loop[], generatedAt: string): LoopsHealthReport {
-  const expectations = loops.map((loop) => expectationForLoop(store, loop));
+function healthReportForLoops(
+  store: HealthSource,
+  loops: Loop[],
+  generatedAt: string,
+  opts: ExpectationOptions = {},
+): LoopsHealthReport {
+  const expectations = loops.map((loop) => expectationForLoop(store, loop, { now: new Date(generatedAt), ...opts }));
   const classifications = Object.fromEntries(CLASSIFICATIONS.map((key) => [key, 0])) as Record<RunFailureClassification, number>;
   for (const expectation of expectations) {
     if (expectation.failure) classifications[expectation.failure.classification] += 1;
   }
   const unhealthy = expectations.filter((expectation) => !expectation.ok).length;
   const warnings = expectations.filter((expectation) => expectation.check.status === "warn").length;
+  const overdue = expectations.filter((expectation) => expectation.overdue).length;
   return {
     ok: unhealthy === 0,
     generatedAt,
@@ -402,6 +481,7 @@ function healthReportForLoops(store: Store, loops: Loop[], generatedAt: string):
       healthy: expectations.length - unhealthy,
       unhealthy,
       warnings,
+      overdue,
     },
     classifications,
     expectations,
@@ -732,7 +812,7 @@ function routeResultTaskState(result: Record<string, unknown>): { taskId?: strin
   };
 }
 
-function detectRouteFunctionalFailure(store: Store, loop: Loop, run: LoopRun): RunFailureSignal | undefined {
+function detectRouteFunctionalFailure(store: HealthSource, loop: Loop, run: LoopRun): RunFailureSignal | undefined {
   if (run.status !== "succeeded") return undefined;
   if (!isRouteDrainLoop(loop)) return undefined;
   const report = routeEvidenceReport(run);
@@ -888,7 +968,31 @@ function recommendedTask(loop: Loop, run: LoopRun, failure: RunFailureSignal, ro
   };
 }
 
-export function expectationForLoop(store: Store, loop: Loop): LoopExpectationResult {
+export interface ExpectationOptions {
+  now?: Date;
+  overdueGraceMs?: number;
+}
+
+/**
+ * Classify a loop, then attach the unclaimed-slot observation. The two are kept
+ * separate on purpose: `classifyExpectation` decides `ok`/`check` exactly as it
+ * always has, and `overdue` rides alongside without touching either.
+ *
+ * `result.latestRun` is the run `classifyExpectation` already fetched, so
+ * feeding it to `scheduleOverdue` costs no extra round trip — this matters on
+ * the hosted path, where each loop's latest run is one HTTP request.
+ */
+export function expectationForLoop(
+  store: HealthSource,
+  loop: Loop,
+  opts: ExpectationOptions = {},
+): LoopExpectationResult {
+  const result = classifyExpectation(store, loop);
+  const overdue = scheduleOverdue(loop, opts.now ?? new Date(), opts.overdueGraceMs, result.latestRun);
+  return overdue ? { ...result, overdue } : result;
+}
+
+function classifyExpectation(store: HealthSource, loop: Loop): LoopExpectationResult {
   const latestRun = store.listRuns({ loopId: loop.id, limit: 1 })[0];
   const route = targetRoute(loop);
   if (!latestRun) {
@@ -979,25 +1083,31 @@ export function expectationForLoop(store: Store, loop: Loop): LoopExpectationRes
   };
 }
 
-export function buildHealthReport(store: Store, opts: { includeArchived?: boolean; includeInactive?: boolean; limit?: number } = {}): LoopsHealthReport {
+export function buildHealthReport(
+  store: HealthSource,
+  opts: { includeArchived?: boolean; includeInactive?: boolean; limit?: number } & ExpectationOptions = {},
+): LoopsHealthReport {
+  const now = opts.now ?? new Date();
   const loops = store
     .listLoops({ includeArchived: opts.includeArchived, limit: opts.limit ?? 200 })
     .filter((loop) => opts.includeInactive || loop.status === "active" || loop.status === "paused");
-  const expectations = loops.map((loop) => expectationForLoop(store, loop));
+  const expectations = loops.map((loop) => expectationForLoop(store, loop, { now, overdueGraceMs: opts.overdueGraceMs }));
   const classifications = Object.fromEntries(CLASSIFICATIONS.map((key) => [key, 0])) as Record<RunFailureClassification, number>;
   for (const expectation of expectations) {
     if (expectation.failure) classifications[expectation.failure.classification] += 1;
   }
   const unhealthy = expectations.filter((expectation) => !expectation.ok).length;
   const warnings = expectations.filter((expectation) => expectation.check.status === "warn").length;
+  const overdue = expectations.filter((expectation) => expectation.overdue).length;
   return {
     ok: unhealthy === 0,
-    generatedAt: new Date().toISOString(),
+    generatedAt: now.toISOString(),
     summary: {
       loops: expectations.length,
       healthy: expectations.length - unhealthy,
       unhealthy,
       warnings,
+      overdue,
     },
     classifications,
     expectations,

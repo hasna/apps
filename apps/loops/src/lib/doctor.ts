@@ -16,6 +16,13 @@ export interface DoctorCheck {
   status: DoctorSeverity;
   message: string;
   detail?: string;
+  /**
+   * Which runtime the check actually looked at. Left unset on the local path,
+   * where there is only one runtime; stamped on the hosted path, where a
+   * scope-less check is precisely how a clean report about the wrong runtime
+   * gets read as a clean report about the failing one.
+   */
+  scope?: "machine" | "control-plane";
 }
 
 export interface DoctorReport {
@@ -46,7 +53,14 @@ function commandVersion(command: string): string | undefined {
   return (result.stdout || result.stderr).trim().split(/\r?\n/)[0];
 }
 
-export function runDoctor(store: Store): DoctorReport {
+/**
+ * Checks that describe THIS MACHINE's ability to execute a loop: data dir,
+ * toolchain, machine topology, provider binaries, and the resolved deployment
+ * wiring. They are valid whether the client reads a local sqlite file or a
+ * hosted control plane, because they answer "can work run here", not "what does
+ * the scheduler hold".
+ */
+export function localRuntimeChecks(): DoctorCheck[] {
   const checks: DoctorCheck[] = [];
   try {
     const dir = ensureDataDir();
@@ -100,6 +114,12 @@ export function runDoctor(store: Store): DoctorReport {
         : { id: `provider:${command}`, status: "warn", message: `${command} is not on PATH` },
     );
   }
+
+  return checks;
+}
+
+export function runDoctor(store: Store): DoctorReport {
+  const checks: DoctorCheck[] = [...localRuntimeChecks()];
 
   const status = daemonStatus(store);
   checks.push(

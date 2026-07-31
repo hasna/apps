@@ -48,6 +48,7 @@ import { enableStartup, installStartup } from "../daemon/install.js";
 import { normalizeGoalSpec } from "../lib/workflow-spec.js";
 import { runDoctor } from "../lib/doctor.js";
 import { buildHealthReport, buildHealthScan, expectationForLoop, writeHealthScanReports } from "../lib/health.js";
+import { buildHostedDoctorReport, buildHostedHealthReport } from "../lib/hosted-diagnostics.js";
 import { runLoopsUiApp } from "./ui.js";
 import {
   applyImportMigrationBundle,
@@ -287,6 +288,80 @@ function assertLocalOnlyCommand(command: string): void {
       `'loops ${command}' operates on this machine's local runtime and is not available while flipped to the hosted Loops API. ` +
         `Unset HASNA_LOOPS_API_URL/HASNA_LOOPS_API_KEY (or set HASNA_LOOPS_STORAGE_MODE=local) to run it here.`,
     );
+  }
+}
+
+/** `123456` -> `2m3s`, so an operator reads an unclaimed slot without doing arithmetic. */
+function humanDuration(ms: number): string {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h${minutes}m`;
+  if (minutes > 0) return `${minutes}m${seconds}s`;
+  return `${seconds}s`;
+}
+
+function printUnchecked(unchecked: Array<{ id: string; reason: string }>): void {
+  console.log("not checked:");
+  for (const entry of unchecked) console.log(`  ${entry.id}: ${entry.reason}`);
+}
+
+/**
+ * `loops health` against the hosted control plane. The banner and the
+ * `not checked` block are not decoration: a hosted summary that does not say
+ * which runtime it read, and what it did not read, is the defect this command
+ * was refused for.
+ */
+async function hostedHealth(): Promise<void> {
+  const store = getStore();
+  try {
+    const hosted = await buildHostedHealthReport(store);
+    if (isJson()) console.log(JSON.stringify(hosted, null, 2));
+    else {
+      console.log(`backend  hosted control plane ${hosted.backend.apiUrl ?? "(url unavailable)"} (transport=${hosted.backend.transport})`);
+      const summary = hosted.report.summary;
+      console.log(
+        `loops=${summary.loops} healthy=${summary.healthy} unhealthy=${summary.unhealthy} warnings=${summary.warnings} overdue=${summary.overdue}`,
+      );
+      for (const expectation of hosted.report.expectations.filter((entry) => !entry.ok || entry.check.status === "warn")) {
+        const status = expectation.ok ? "warn" : "fail";
+        console.log(
+          `${status}  ${expectation.loop.name}  ${expectation.failure?.classification ?? "unknown"}  ${expectation.failure?.fingerprint ?? "-"}`,
+        );
+      }
+      for (const expectation of hosted.report.expectations.filter((entry) => entry.overdue)) {
+        console.log(
+          `overdue  ${expectation.loop.name}  scheduled slot ${expectation.overdue!.nextRunAt} unclaimed for ${humanDuration(expectation.overdue!.byMs)}`,
+        );
+      }
+      printUnchecked(hosted.unchecked);
+    }
+    if (!hosted.report.ok) process.exitCode = 1;
+  } finally {
+    await store.close();
+  }
+}
+
+/** `loops doctor` against the hosted control plane; each check states its scope. */
+async function hostedDoctor(): Promise<void> {
+  const store = getStore();
+  try {
+    const hosted = await buildHostedDoctorReport(store);
+    if (isJson()) console.log(JSON.stringify(hosted, null, 2));
+    else {
+      console.log(`backend  hosted control plane ${hosted.backend.apiUrl ?? "(url unavailable)"} (transport=${hosted.backend.transport})`);
+      for (const check of hosted.report.checks) {
+        const marker = check.status === "ok" ? "ok" : check.status === "warn" ? "warn" : "fail";
+        console.log(
+          `${marker.padEnd(4)} ${(check.scope ?? "-").padEnd(14)} ${check.id.padEnd(22)} ${check.message}${check.detail ? ` (${check.detail})` : ""}`,
+        );
+      }
+      printUnchecked(hosted.unchecked);
+    }
+    if (!hosted.report.ok) process.exitCode = 1;
+  } finally {
+    await store.close();
   }
 }
 
@@ -2038,8 +2113,8 @@ program
 const health = program
   .command("health")
   .description("summarize loop health and latest-run expectation status")
-  .action(runAction(() => {
-    assertLocalOnlyCommand("health");
+  .action(runAction(async () => {
+    if (isCloudStore()) return await hostedHealth();
     const store = new Store();
     try {
       const report = buildHealthReport(store);
@@ -2579,8 +2654,8 @@ program.command("tick").description("run one scheduler tick").action(runAction(a
   }
 }));
 
-program.command("doctor").description("check local Loops runtime dependencies and state").action(runAction(() => {
-  assertLocalOnlyCommand("doctor");
+program.command("doctor").description("check Loops runtime dependencies and state").action(runAction(async () => {
+  if (isCloudStore()) return await hostedDoctor();
   const store = new Store();
   try {
     const report = runDoctor(store);
