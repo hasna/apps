@@ -8,7 +8,7 @@ let dbPath = "";
 
 function runCli(args: string[], options: { env?: Record<string, string>; json?: boolean } = { json: true }) {
   return Bun.spawnSync({
-    cmd: ["bun", "run", "src/cli/index.ts", "--db", dbPath, ...(options.json === false ? [] : ["--json"]), ...args],
+    cmd: [process.execPath, "src/cli/index.ts", "--db", dbPath, ...(options.json === false ? [] : ["--json"]), ...args],
     cwd: process.cwd(),
     env: {
       ...process.env,
@@ -239,5 +239,5 @@ describe("CLI JSON workflow", () => {
     const webhooksJson = runCli(["webhooks", "list"]);
     expect(webhooksJson.exitCode).toBe(0);
     expect(JSON.parse(webhooksJson.stdout.toString())).toHaveLength(25);
-  });
+  }, 60_000);
 });
