@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Add GitHub Actions CI for pull requests and pushes to `main`, covering frozen
+  dependency installation, typechecking, builds, and tests.
+
 ## 0.1.22
 
 - Publish the compact CLI and MCP list output landed in #1: `servers`, `agents`,
