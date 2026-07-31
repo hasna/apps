@@ -6,12 +6,13 @@ import { openDatabase, upsertCostCenter, upsertRequest, upsertSession } from '..
 
 const root = new URL('../../', import.meta.url).pathname.replace(/\/$/, '')
 const tempRoots: string[] = []
-const localEconomyEnv = {
+const localStorageEnv = {
+  HASNA_ACCOUNTS_STORAGE_MODE: 'local',
   HASNA_ECONOMY_STORAGE_MODE: 'local',
   HASNA_ECONOMY_MODE: 'local',
   ECONOMY_STORAGE_MODE: 'local',
   ECONOMY_MODE: 'local',
-}
+} as const
 
 async function runCli(
   args: string[],
@@ -21,7 +22,7 @@ async function runCli(
   tempRoots.push(tempRoot)
   const proc = Bun.spawn(['bun', 'run', 'src/cli/index.ts', ...args], {
     cwd: root,
-    env: { ...process.env, ...localEconomyEnv, HASNA_ECONOMY_DB_PATH: join(tempRoot, 'economy.db'), ...env },
+    env: { ...process.env, ...localStorageEnv, HASNA_ECONOMY_DB_PATH: join(tempRoot, 'economy.db'), ...env },
     stdout: 'pipe',
     stderr: 'pipe',
   })

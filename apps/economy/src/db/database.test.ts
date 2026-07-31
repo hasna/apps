@@ -3,7 +3,7 @@ import { Database as BunDatabase } from 'bun:sqlite'
 import {
   openDatabase, getDataDir, getDbPath, upsertRequest, upsertSession, rollupSession,
   querySummary, querySessions, queryTopSessions,
-  queryModelBreakdown, queryAgentBreakdown, queryProjectBreakdown, queryAccountBreakdown, queryDailyBreakdown, queryHourlyBreakdown,
+  queryModelBreakdown, queryAgentBreakdown, queryProjectBreakdown, queryProjectBreakdownSince, queryAccountBreakdown, queryDailyBreakdown, queryHourlyBreakdown,
   queryRequestsSince, getIngestState, setIngestState,
   upsertProject, getProject, listProjects, deleteProject,
   upsertBudget, listBudgets, deleteBudget, getBudgetStatuses,
@@ -764,6 +764,161 @@ describe('queryProjectBreakdown', () => {
 
     expect(row?.sessions).toBe(2)
     expect(row?.cost_usd).toBeCloseTo(5)
+  })
+
+  it('uses project name or path attribution for since-scoped sessions', () => {
+    const db = makeDb()
+    upsertSession(db, sampleSession({
+      id: 'codex-path-only',
+      agent: 'codex',
+      project_path: '/Users/hasna/Workspace/machines',
+      project_name: '',
+      total_cost_usd: 2,
+    }))
+    upsertSession(db, sampleSession({
+      id: 'codex-name-only-hasna',
+      agent: 'codex',
+      project_path: '',
+      project_name: 'hasna',
+      total_cost_usd: 3,
+    }))
+    upsertSession(db, sampleSession({
+      id: 'codex-name-only-loops',
+      agent: 'codex',
+      project_path: '',
+      project_name: 'loops',
+      total_cost_usd: 4,
+    }))
+
+    const rows = queryProjectBreakdownSince(db, '2020-01-01T00:00:00.000Z')
+    const pathOnly = rows.find(row => row.project_path === '/Users/hasna/Workspace/machines')
+
+    expect(pathOnly?.project_name).toBe('machines')
+    expect(rows.map(row => row.project_name).sort()).toEqual(['hasna', 'loops', 'machines'])
+  })
+
+  it('uses request timestamps and totals for since-scoped project breakdowns', () => {
+    const db = makeDb()
+    upsertSession(db, sampleSession({
+      id: 'old-codex-session',
+      agent: 'codex',
+      project_path: '/Users/hasna/Workspace/loops',
+      project_name: 'loops',
+      started_at: '2000-01-01T00:00:00.000Z',
+      total_cost_usd: 99,
+      total_tokens: 99,
+      request_count: 99,
+    }))
+    upsertRequest(db, sampleRequest({
+      id: 'recent-codex-request',
+      agent: 'codex',
+      session_id: 'old-codex-session',
+      cost_usd: 3,
+      timestamp: NOW,
+    }))
+
+    const row = queryProjectBreakdownSince(db, '2020-01-01T00:00:00.000Z')[0]
+
+    expect(row?.project_name).toBe('loops')
+    expect(row?.sessions).toBe(1)
+    expect(row?.requests).toBe(1)
+    expect(row?.cost_usd).toBe(3)
+  })
+
+  it('combines since and machine filters for project breakdowns', () => {
+    const db = makeDb()
+    upsertSession(db, sampleSession({
+      id: 'spark-session',
+      agent: 'codex',
+      project_path: '/workspace/spark-project',
+      project_name: 'spark-project',
+      machine_id: 'spark01',
+      total_cost_usd: 1,
+    }))
+    upsertRequest(db, sampleRequest({
+      id: 'spark-request',
+      agent: 'codex',
+      session_id: 'spark-session',
+      machine_id: 'spark01',
+      cost_usd: 1,
+      timestamp: NOW,
+    }))
+    upsertSession(db, sampleSession({
+      id: 'apple-session',
+      agent: 'codex',
+      project_path: '/workspace/apple-project',
+      project_name: 'apple-project',
+      machine_id: 'apple01',
+      total_cost_usd: 2,
+    }))
+    upsertRequest(db, sampleRequest({
+      id: 'apple-request',
+      agent: 'codex',
+      session_id: 'apple-session',
+      machine_id: 'apple01',
+      cost_usd: 2,
+      timestamp: NOW,
+    }))
+
+    const rows = queryProjectBreakdownSince(db, '2020-01-01T00:00:00.000Z', 'spark01')
+
+    expect(rows.map(row => row.project_name)).toEqual(['spark-project'])
+    expect(rows[0]?.cost_usd).toBeCloseTo(1)
+  })
+
+  it('issues a fixed number of queries regardless of how many projects exist', () => {
+    // A per-project query shape scans the whole requests table once per project, which
+    // on the fleet database (233 projects, 877k requests) took ~34s. Assert the query
+    // count stays flat as projects grow rather than timing it, which would be flaky.
+    const buildDb = (projectCount: number) => {
+      const db = makeDb()
+      for (let i = 0; i < projectCount; i++) {
+        upsertSession(db, sampleSession({
+          id: `sess-${i}`,
+          project_path: `/home/user/open-proj${i}`,
+          project_name: `open-proj${i}`,
+          total_cost_usd: 1,
+        }))
+        upsertRequest(db, sampleRequest({ id: `req-${i}`, session_id: `sess-${i}`, cost_usd: 1 }))
+        // A second session with no requests exercises the session-only aggregate path.
+        upsertSession(db, sampleSession({
+          id: `sess-empty-${i}`,
+          project_path: `/home/user/open-proj${i}`,
+          project_name: `open-proj${i}`,
+          total_cost_usd: 2,
+          request_count: 0,
+        }))
+      }
+      return db
+    }
+
+    const countQueries = (db: ReturnType<typeof makeDb>): { queries: number; rows: ReturnType<typeof queryProjectBreakdownSince> } => {
+      let queries = 0
+      const counting = new Proxy(db, {
+        get(target, prop, receiver) {
+          if (prop === 'prepare') {
+            return (...args: Parameters<typeof db.prepare>) => {
+              queries++
+              return target.prepare(...args)
+            }
+          }
+          const value = Reflect.get(target, prop, receiver)
+          return typeof value === 'function' ? value.bind(target) : value
+        },
+      })
+      const rows = queryProjectBreakdownSince(counting, '2020-01-01T00:00:00.000Z')
+      return { queries, rows }
+    }
+
+    const small = countQueries(buildDb(3))
+    const large = countQueries(buildDb(40))
+
+    expect(small.rows).toHaveLength(3)
+    expect(large.rows).toHaveLength(40)
+    expect(large.queries).toBe(small.queries)
+    // Totals must still combine the request-backed and session-only sessions.
+    expect(large.rows[0]?.sessions).toBe(2)
+    expect(large.rows[0]?.cost_usd).toBeCloseTo(3)
   })
 })
 

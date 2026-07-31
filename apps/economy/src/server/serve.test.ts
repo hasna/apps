@@ -397,6 +397,9 @@ describe('REST API server', () => {
     const projects = (response.data as Record<string, unknown>)['data'] as Array<Record<string, unknown>>
     expect(projects[0]?.['project_path']).toBe('/proj/a')
 
+    response = await req(handler, '/api/breakdown?by=project&since=2999-01-01T00:00:00.000Z')
+    expect((response.data as Record<string, unknown>)['data']).toEqual([])
+
     response = await req(handler, '/api/breakdown?by=agent&period=all')
     expect(response.status).toBe(200)
     const agents = (response.data as Record<string, unknown>)['data'] as Array<Record<string, unknown>>
@@ -418,6 +421,69 @@ describe('REST API server', () => {
     expect(response.status).toBe(200)
     const loops = (response.data as Record<string, unknown>)['data'] as Array<Record<string, unknown>>
     expect(loops.every(row => row['kind'] === 'loop')).toBe(true)
+  })
+
+  it('GET /api/breakdown applies machine filters to since-scoped project aliases', async () => {
+    upsertSession(db, {
+      id: 'spark-session',
+      agent: 'codex',
+      project_path: '/proj/spark',
+      project_name: 'spark-project',
+      started_at: NOW,
+      ended_at: null,
+      total_cost_usd: 1,
+      total_tokens: 2,
+      request_count: 1,
+      machine_id: 'spark01',
+    })
+    upsertRequest(db, {
+      id: 'spark-request',
+      agent: 'codex',
+      session_id: 'spark-session',
+      model: 'gpt-5',
+      input_tokens: 1,
+      output_tokens: 1,
+      cache_read_tokens: 0,
+      cache_create_tokens: 0,
+      cost_usd: 1,
+      duration_ms: 1,
+      timestamp: NOW,
+      source_request_id: 'spark-request',
+      machine_id: 'spark01',
+    })
+    upsertSession(db, {
+      id: 'apple-session',
+      agent: 'codex',
+      project_path: '/proj/apple',
+      project_name: 'apple-project',
+      started_at: NOW,
+      ended_at: null,
+      total_cost_usd: 2,
+      total_tokens: 2,
+      request_count: 1,
+      machine_id: 'apple01',
+    })
+    upsertRequest(db, {
+      id: 'apple-request',
+      agent: 'codex',
+      session_id: 'apple-session',
+      model: 'gpt-5',
+      input_tokens: 1,
+      output_tokens: 1,
+      cache_read_tokens: 0,
+      cache_create_tokens: 0,
+      cost_usd: 2,
+      duration_ms: 1,
+      timestamp: NOW,
+      source_request_id: 'apple-request',
+      machine_id: 'apple01',
+    })
+
+    const response = await req(handler, '/api/breakdown?by=project&since=2020-01-01T00:00:00.000Z&machine=spark01')
+    const projects = (response.data as Record<string, unknown>)['data'] as Array<Record<string, unknown>>
+
+    expect(response.status).toBe(200)
+    expect(projects.map(row => row['project_name'])).toEqual(['spark-project'])
   })
 
   it('manages project registry records', async () => {
