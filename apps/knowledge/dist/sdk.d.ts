@@ -3,8 +3,8 @@ import type { KnowledgeItem } from './store.js';
 import type { ItemStore, ItemCreateInput, ItemPatch, ItemListResult } from './item-store.js';
 /**
  * The unified knowledge-item Store surface, mirrored on the SDK so app code
- * routes item CRUD through the SAME Store as the CLI and MCP in all three modes
- * (local db.json, self_hosted, cloud). No SDK item method touches sqlite or the
+ * routes item CRUD through the SAME Store as the CLI and MCP in both modes
+ * (local db.json, cloud). No SDK item method touches sqlite or the
  * raw HTTP client — the mode is resolved from the environment by the Store.
  */
 export interface KnowledgeItemsSdk {
@@ -97,7 +97,7 @@ export interface KnowledgeClient {
     readonly items: KnowledgeItemsSdk;
     /**
      * Inventory of the knowledge corpus. Routes to the shared cloud item corpus in
-     * api mode (self_hosted/cloud) and the local sqlite/JSON catalog otherwise, so
+     * cloud (api) mode and the local sqlite/JSON catalog otherwise, so
      * the SDK never diverges from the CLI/MCP. Always async.
      */
     readonly inventory: (options?: KnowledgeInventoryOptions) => ReturnType<KnowledgeService['resolveInventory']>;

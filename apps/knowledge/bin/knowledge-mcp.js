@@ -27870,10 +27870,10 @@ function resolveKnowledgeModeSelection(env = process.env) {
       const message = error51 instanceof Error ? error51.message : String(error51);
       throw new Error(`knowledge: ${name}=${value} is not a valid mode. ${message}`);
     }
-    const warnings = [];
     if (normalized.deprecatedAlias) {
-      warnings.push(`Deprecated mode '${normalized.deprecatedAlias}' from ${name} is treated as 'cloud'. Prefer ${canonicalModeKey}=cloud.`);
+      throw new Error(`knowledge: ${name}=${value} is a retired deployment-mode word. ` + `Deployment modes were removed; set ${canonicalModeKey}=local for the on-box store or ${canonicalModeKey}=cloud for the HTTP API.`);
     }
+    const warnings = [];
     if (name !== canonicalModeKey) {
       warnings.push(`Using alias env ${name}; the canonical key is ${canonicalModeKey}.`);
     }
@@ -40785,7 +40785,7 @@ function normalizeMode(value) {
   const normalized = value.trim().toLowerCase();
   if (normalized === "local" || normalized === "offline")
     return "local";
-  if (normalized === "hosted" || normalized === "remote" || normalized === "knowledge.md")
+  if (normalized === "hosted" || normalized === "knowledge.md")
     return "hosted";
   throw new Error("Invalid setup mode. Use hosted or local.");
 }
@@ -42249,22 +42249,21 @@ var STORAGE_TABLES = [
   "knowledge_sync_table_clocks",
   "knowledge_sync_imports"
 ];
-var DEPRECATED_CLOUD_ALIASES = ["remote", "hybrid", "self_hosted"];
 var KNOWLEDGE_STORAGE_MODE_ENV = "HASNA_KNOWLEDGE_STORAGE_MODE";
 var KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV = "KNOWLEDGE_STORAGE_MODE";
 function readEnv(name) {
   const value = process.env[name]?.trim();
   return value || undefined;
 }
-function normalizeStorageMode3(value) {
+function normalizeStorageMode3(value, envName) {
   const normalized = value?.trim().toLowerCase().replace(/-/g, "_");
+  if (!normalized)
+    return;
   if (normalized === "local")
     return "local";
   if (normalized === "cloud")
     return "cloud";
-  if (normalized && DEPRECATED_CLOUD_ALIASES.includes(normalized))
-    return "cloud";
-  return;
+  throw new Error(`knowledge: ${envName}=${value} is not a valid storage mode. Use local (on-box store) or cloud (HTTP API).`);
 }
 function openScopedDb(options = {}) {
   const workspace = ensureKnowledgeWorkspace(resolveScopedWorkspace(options.scope, options.cwd).home);
@@ -42276,7 +42275,7 @@ function openScopedDb(options = {}) {
   };
 }
 function getStorageMode() {
-  const mode2 = normalizeStorageMode3(readEnv(KNOWLEDGE_STORAGE_MODE_ENV)) ?? normalizeStorageMode3(readEnv(KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV));
+  const mode2 = normalizeStorageMode3(readEnv(KNOWLEDGE_STORAGE_MODE_ENV), KNOWLEDGE_STORAGE_MODE_ENV) ?? normalizeStorageMode3(readEnv(KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV), KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV);
   if (mode2)
     return mode2;
   return "local";

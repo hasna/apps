@@ -1531,7 +1531,7 @@ function knowledgeOpenApi(version) {
   };
   return {
     openapi: "3.0.3",
-    info: { title: "Knowledge", version, description: "@hasna/knowledge self-hosted HTTP API" },
+    info: { title: "Knowledge", version, description: "@hasna/knowledge HTTP API" },
     components: {
       securitySchemes: { apiKey: { type: "apiKey", in: "header", name: "x-api-key" } },
       schemas: {

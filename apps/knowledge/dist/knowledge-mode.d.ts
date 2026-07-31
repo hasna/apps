@@ -19,7 +19,7 @@ export interface KnowledgeModeSource {
     kind: 'env' | 'default';
     /** The env key that selected the mode, or null for the default. */
     name: string | null;
-    /** The mode var's own value (`local` / `cloud` / a deprecated alias). Never a pointer value. */
+    /** The mode var's own value (`local` / `cloud`). Never a pointer value. */
     value: string | null;
 }
 export interface KnowledgeModeResolution {
