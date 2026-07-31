@@ -131,7 +131,7 @@ describe("ambient creator identity", () => {
   it("prefers an explicit value over everything else", () => {
     process.env["TODOS_AGENT_ID"] = "from-env";
     persistIdentity({ agent_id: "from-file" });
-    expect(resolveCreatorIdentity("explicit")).toEqual({ agent_id: "explicit", source: "explicit" });
+    expect(resolveCreatorIdentity("Explicit")).toEqual({ agent_id: "explicit", source: "explicit" });
   });
 
   it("prefers the environment over the persisted file", () => {
@@ -144,7 +144,8 @@ describe("ambient creator identity", () => {
     persistIdentity({ agent_id: "uuid-from-file", agent_name: "Cassius" });
     // The NAME, not the UUID — the fleet populates assigned_to/agent_id with names,
     // so attributing to the UUID would produce a created_by nothing else matches.
-    expect(resolveCreatorIdentity()).toEqual({ agent_id: "Cassius", source: "persisted" });
+    // Canonicalised to lower case, matching what registerAgent stores.
+    expect(resolveCreatorIdentity()).toEqual({ agent_id: "cassius", source: "persisted" });
     expect(readPersistedIdentity()?.agent_id).toBe("uuid-from-file");
   });
 
@@ -243,7 +244,41 @@ describe("concurrent sessions must not silently steal each other's identity", ()
     persistIdentity({ agent_id: "id-brutus", agent_name: "Brutus" });
     process.env["TODOS_AGENT_ID"] = "Cassius";
     // The env var outranks the file, so a second session attributes to itself even
-    // while another session's identity holds the machine-wide file.
-    expect(resolveCreatorIdentity()).toEqual({ agent_id: "Cassius", source: "env" });
+    // while another session's identity holds the machine-wide file. Canonicalised, so
+    // it matches what `todos init` would have written for the same agent.
+    expect(resolveCreatorIdentity()).toEqual({ agent_id: "cassius", source: "env" });
+  });
+});
+
+describe("one agent, two sanctioned identity sources, one author string", () => {
+  // Reviewer's finding on PR #138, reproduced. The persisted file returns the
+  // registered name (already lower-cased by registerAgent) while the flag and the
+  // env var were taken verbatim, so the SAME agent filed some tasks as "cassius" and
+  // others as "Cassius". `not_created_by` is a SQL string inequality, so half of the
+  // agent's own filings survived the filter and leaked into its own inbox.
+  it("resolves the same author string whether the identity came from init, the env, or a flag", () => {
+    persistIdentity({ agent_id: "uuid", agent_name: "cassius" });
+    const viaFile = resolveCreatorIdentity().agent_id;
+    clearPersistedIdentity();
+
+    process.env["TODOS_AGENT_ID"] = "Cassius";
+    const viaEnv = resolveCreatorIdentity().agent_id;
+    delete process.env["TODOS_AGENT_ID"];
+
+    const viaFlag = resolveCreatorIdentity("CASSIUS").agent_id;
+
+    expect(viaFile).toBe("cassius");
+    expect(viaEnv).toBe("cassius");
+    expect(viaFlag).toBe("cassius");
+  });
+
+  it("does not leak the agent's own mixed-case filing back into its own inbox", () => {
+    // Both rows are the same real agent filing for itself, resolved by different means.
+    createTask({ title: "filed via init", created_by: resolveCreatorIdentity("cassius").agent_id!, assigned_to: "cassius" }, db);
+    createTask({ title: "filed via env", created_by: resolveCreatorIdentity("Cassius").agent_id!, assigned_to: "cassius" }, db);
+    createTask({ title: "routed by brutus", created_by: "brutus", assigned_to: "cassius" }, db);
+
+    const inbox = listTasks({ assigned_to: "cassius", not_created_by: resolveCreatorIdentity("Cassius").agent_id! }, db);
+    expect(inbox.map((t) => t.title)).toEqual(["routed by brutus"]);
   });
 });

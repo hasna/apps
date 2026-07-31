@@ -65,8 +65,8 @@ export interface IdentityCollision {
 export function detectIdentityCollision(agentId: string, agentName?: string): IdentityCollision | null {
   const existing = readPersistedIdentity();
   if (!existing) return null;
-  const sameId = existing.agent_id === agentId;
-  const sameName = Boolean(agentName) && existing.agent_name === agentName;
+  const sameId = canonicalAgentRef(existing.agent_id) === canonicalAgentRef(agentId);
+  const sameName = Boolean(agentName) && canonicalAgentRef(existing.agent_name || "") === canonicalAgentRef(agentName!);
   if (sameId || sameName) return null;
   return { existing };
 }
@@ -96,12 +96,29 @@ export function clearPersistedIdentity(): boolean {
   }
 }
 
+/**
+ * Canonicalise exactly as `registerAgent` does (src/db/agents.ts: trim + lower-case).
+ *
+ * Without this the three sources disagree about the SAME agent: the persisted file
+ * returns the registered name, which is already lower-cased, while the flag and the
+ * environment variable were taken verbatim. An agent that registered with `todos init`
+ * in one session and `TODOS_AGENT_ID=Cassius` in another — both sanctioned, and the
+ * env var is the very escape hatch this module recommends for concurrent sessions —
+ * would file some tasks as "cassius" and others as "Cassius". The comparison is a SQL
+ * string inequality, so `not_created_by` would fail to exclude half of the agent's own
+ * filings and leak them back into its own inbox: exactly the self-noise the filter
+ * exists to remove.
+ */
+function canonicalAgentRef(value: string): string {
+  return value.trim().toLowerCase();
+}
+
 export function resolveCreatorIdentity(explicit?: string | null): ResolvedCreatorIdentity {
   const fromExplicit = explicit?.trim();
-  if (fromExplicit) return { agent_id: fromExplicit, source: "explicit" };
+  if (fromExplicit) return { agent_id: canonicalAgentRef(fromExplicit), source: "explicit" };
 
   const fromEnv = (process.env["TODOS_AGENT_ID"] || process.env["HASNA_TODOS_AGENT_ID"] || "").trim();
-  if (fromEnv) return { agent_id: fromEnv, source: "env" };
+  if (fromEnv) return { agent_id: canonicalAgentRef(fromEnv), source: "env" };
 
   const persisted = readPersistedIdentity();
   if (persisted) {
@@ -111,7 +128,7 @@ export function resolveCreatorIdentity(explicit?: string | null): ResolvedCreato
     // instead would write a created_by that matches nothing any other agent
     // filters on, and `--inbox` would silently return an empty list. `agents.name`
     // is UNIQUE, so the name is a stable key rather than a display label.
-    return { agent_id: persisted.agent_name || persisted.agent_id, source: "persisted" };
+    return { agent_id: canonicalAgentRef(persisted.agent_name || persisted.agent_id), source: "persisted" };
   }
 
   return { agent_id: null, source: "none" };

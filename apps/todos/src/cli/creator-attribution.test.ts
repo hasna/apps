@@ -193,10 +193,11 @@ describe("todos init — a second session must not silently take over the identi
 
   it("a concurrent session can attribute to itself via the environment without touching the file", async () => {
     await runCli(["init", "Brutus"]);
-    // The env var is taken verbatim — it is the caller's own declaration, not a
-    // registry lookup, so it is not canonicalised.
+    // Canonicalised to lower case, exactly as `todos init` would have stored it for
+    // the same agent — so the two sanctioned ways of declaring an identity produce ONE
+    // author string, and not_created_by can actually exclude the agent's own filings.
     const task = await addJson(["filed by the other session"], { TODOS_AGENT_ID: "Cassius" });
-    expect(task.created_by).toBe("Cassius");
+    expect(task.created_by).toBe("cassius");
     // The file still belongs to Brutus, canonicalised by registration.
     const brutusTask = await addJson(["filed by the file owner"]);
     expect(brutusTask.created_by).toBe("brutus");
