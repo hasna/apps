@@ -1,4 +1,5 @@
 import { getDb } from "./db.js";
+import { LOCKS_LIST_ORDER, simpleOrderByClause } from "./list-order.js";
 
 export interface ResourceLock {
   resource_type: string;
@@ -222,7 +223,7 @@ export function listLocks(opts?: { resource_type?: string; agent_id?: string }):
     params.push(opts.agent_id);
   }
 
-  query += " ORDER BY locked_at ASC";
+  query += ` ${simpleOrderByClause(LOCKS_LIST_ORDER)}`;
   return db.prepare(query).all(...params) as ResourceLock[];
 }
 

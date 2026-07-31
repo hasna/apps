@@ -13,7 +13,7 @@ import {
 import { emitCliError } from "../cli-error.js";
 import { isAgentConflict, normalizeAgentName } from "../../lib/presence.js";
 import { windowItems } from "../../lib/compact-output.js";
-import { getCliWindow, printCompactFooter } from "../compact.js";
+import { getCliWindow, printCompactFooter, printJsonDisclosure, windowJsonList } from "../compact.js";
 import { printErrorLine, printJson, printJsonLine, printLine } from "../../lib/stdout.js";
 
 type PresenceView = {
@@ -89,11 +89,20 @@ export function registerAgentCommands(program: Command): void {
       if (agent) await getStore().heartbeat(agent);
 
       const agentsList = await getStore().listAgents({ online_only: opts.online });
+      const sort = getStore().describeListOrder("agents");
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
       const page = windowItems(agentsList, window);
 
       if (opts.json) {
-        printJson(agentsList);
+        const listing = windowJsonList(agentsList, opts);
+        printJson(listing.rows);
+        printJsonDisclosure({
+          shown: listing.rows.length,
+          total: listing.page.total,
+          hasMore: listing.bounded && listing.page.hasMore,
+          nextCursor: listing.page.nextCursor,
+          sort,
+        });
       } else {
         if (agentsList.length === 0) {
           printLine(chalk.dim("No agents found."));
@@ -110,6 +119,7 @@ export function registerAgentCommands(program: Command): void {
             hasMore: page.hasMore,
             nextCursor: page.nextCursor,
             limitCapped: window.limitCapped,
+            sort,
             detailHint: "Use --online to filter active agents.",
           });
         }

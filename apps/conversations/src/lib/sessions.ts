@@ -1,5 +1,6 @@
 import { getDb } from "./db.js";
 import type { Session } from "../types.js";
+import { SESSION_LIST_ORDER, simpleOrderByClause } from "./list-order.js";
 
 export interface SessionActivity {
   session_id: string;
@@ -34,7 +35,7 @@ export function listSessions(agent?: string): Session[] {
     FROM messages
     ${agentFilter}
     GROUP BY session_id
-    ORDER BY last_message_at DESC
+    ${simpleOrderByClause(SESSION_LIST_ORDER)}
   `).all(...params, ...(agent ? [agent] : [])) as Record<string, unknown>[];
 
   return rows.map((row) => {

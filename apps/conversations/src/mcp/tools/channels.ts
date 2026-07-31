@@ -17,6 +17,7 @@ import { getStore } from "../../lib/store/index.js";
 import { identityFor } from "../identity.js";
 import { assertNoSensitiveContent, redactSensitiveText } from "../../lib/content-safety.js";
 import { compactQueriedMessages, compactWindowedChannels, jsonText, resolveMcpWindow } from "../compact.js";
+import { describeReadMessagesOrder } from "../../lib/list-order.js";
 
 function toolError(error: unknown, fallback: string) {
   return {
@@ -183,7 +184,7 @@ export function registerChannelTools(server: McpServer): void {
     }
 
     return {
-      content: [{ type: "text", text: jsonText(verbose ? messages : compactQueriedMessages(messages, args)) }],
+      content: [{ type: "text", text: jsonText(verbose ? messages : compactQueriedMessages(messages, args, describeReadMessagesOrder(args))) }],
     };
   });
 

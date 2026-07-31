@@ -7,6 +7,14 @@ import { fireWebhooks } from "./webhooks.js";
 import { normalizeChannelName } from "./channel-names.js";
 import { markChannelNotificationsRead } from "./channel-notifications.js";
 import { assertNoSensitiveContent, assertNoSensitiveValue, redactSensitiveText, redactSensitiveValue } from "./content-safety.js";
+import {
+  BLOCKERS_LIST_ORDER,
+  PINNED_LIST_ORDER,
+  SEARCH_RECENT_ORDER,
+  SEARCH_RELEVANCE_ORDER,
+  simpleOrderByClause,
+  type SortDescriptor,
+} from "./list-order.js";
 
 /** Strip null/undefined fields from a message for compact output. */
 export function compactMessage(msg: Message): Partial<Message> {
@@ -1091,7 +1099,7 @@ export function getPinnedMessages(opts?: { channel?: string; session_id?: string
   const offsetClause = safeOffset > 0 ? `OFFSET ${safeOffset}` : "";
 
   const rows = db.prepare(
-    `SELECT * FROM messages ${where} ORDER BY pinned_at DESC, id DESC ${limitClause} ${offsetClause}`
+    `SELECT * FROM messages ${where} ${simpleOrderByClause(PINNED_LIST_ORDER)}, id DESC ${limitClause} ${offsetClause}`
   ).all(...params) as Record<string, unknown>[];
 
   return rows.map(parseMessage);
@@ -1114,7 +1122,7 @@ export function getUnreadBlockers(agent: string, opts?: { limit?: number; offset
       to_agent = ?
       OR channel IN (SELECT channel FROM channel_members WHERE agent = ?)
     )
-    ORDER BY created_at ASC, id ASC
+    ${simpleOrderByClause(BLOCKERS_LIST_ORDER)}, id ASC
     ${limitClause} ${offsetClause}
   `).all(agent, agent) as Record<string, unknown>[];
   return rows.map(parseMessage);
@@ -1126,6 +1134,16 @@ export function getThreadReplies(messageId: number): Message[] {
     "SELECT * FROM messages WHERE reply_to = ? ORDER BY created_at ASC, id ASC"
   ).all(messageId) as Record<string, unknown>[];
   return rows.map(parseMessage);
+}
+
+/**
+ * Which ordering `searchMessages` will actually apply, so a caller can DISCLOSE
+ * it instead of guessing. Kept beside the query it describes and asserted
+ * end-to-end against real row order in `src/cli/list-ordering.e2e.test.ts`,
+ * because a disclosure that can drift from its query is a lie with a delay.
+ */
+export function describeSearchOrder(sort?: string | null): SortDescriptor {
+  return sort === "recent" ? SEARCH_RECENT_ORDER : SEARCH_RELEVANCE_ORDER;
 }
 
 export function searchMessages(opts: SearchMessagesOptions): SearchResult[] {

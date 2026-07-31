@@ -5,6 +5,7 @@ import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { windowItems } from "../../lib/compact-output.js";
 import { getCliWindow, printCompactFooter } from "../compact.js";
+import { LOCKS_LIST_ORDER, formatSortDescriptor } from "../../lib/list-order.js";
 import { printErrorLine, printJson, printJsonLine, printLine } from "../../lib/stdout.js";
 
 const DEFAULT_RESOURCE_TYPE = "resource";
@@ -162,6 +163,8 @@ export function registerLockCommands(program: Command): void {
           total: page.total,
           next_cursor: page.nextCursor,
           has_more: page.hasMore,
+          sort: LOCKS_LIST_ORDER.sort,
+          direction: LOCKS_LIST_ORDER.direction,
         });
       } else if (locksList.length === 0) {
         printLine(chalk.dim("No active locks."));
@@ -176,6 +179,7 @@ export function registerLockCommands(program: Command): void {
           hasMore: page.hasMore,
           nextCursor: page.nextCursor,
           limitCapped: window.limitCapped,
+          sort: LOCKS_LIST_ORDER,
         });
       }
       closeDb();

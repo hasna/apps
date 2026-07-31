@@ -6,7 +6,8 @@ import { resolveIdentity } from "../../lib/identity.js";
 import { windowItems } from "../../lib/compact-output.js";
 import { isCloudStore, cloudApiUrl } from "../../lib/store/index.js";
 import { checkForUpdate } from "../../lib/version-check.js";
-import { getCliWindow, printCompactFooter } from "../compact.js";
+import { getCliWindow, printCompactFooter, printJsonDisclosure, windowJsonList } from "../compact.js";
+import { SESSION_LIST_ORDER } from "../../lib/list-order.js";
 import { emitCliError } from "../cli-error.js";
 import { printErrorLine, printJson, printLine } from "../../lib/stdout.js";
 
@@ -167,6 +168,10 @@ export function registerAnalyticsCommands(program: Command): void {
         channel: opts.channel,
       });
 
+      // `hot` is deliberately NOT given a sort disclosure: its rows are ranked by
+      // a composite hotness score, not by a single column, so `sort=<field>` has
+      // nothing truthful to say about it. Its `--limit` is applied in the query
+      // rather than after it, so the JSON path is already bounded.
       if (opts.json) {
         printJson(sessions);
       } else {
@@ -307,7 +312,15 @@ export function registerAnalyticsCommands(program: Command): void {
       const page = windowItems(sessions, window);
 
       if (opts.json) {
-        printJson(sessions);
+        const listing = windowJsonList(sessions, opts);
+        printJson(listing.rows);
+        printJsonDisclosure({
+          shown: listing.rows.length,
+          total: listing.page.total,
+          hasMore: listing.bounded && listing.page.hasMore,
+          nextCursor: listing.page.nextCursor,
+          sort: SESSION_LIST_ORDER,
+        });
       } else {
         if (sessions.length === 0) {
           printLine(chalk.dim("No sessions found."));
@@ -325,6 +338,7 @@ export function registerAnalyticsCommands(program: Command): void {
             hasMore: page.hasMore,
             nextCursor: page.nextCursor,
             limitCapped: window.limitCapped,
+            sort: SESSION_LIST_ORDER,
             detailHint: "Use conversations read --session <id> --verbose for message bodies.",
           });
         }

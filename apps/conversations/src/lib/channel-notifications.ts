@@ -2,6 +2,7 @@ import { getDb } from "./db.js";
 import type { ChannelNotification, ChannelNotificationSubscription } from "../types.js";
 import { normalizeChannelName } from "./channel-names.js";
 import { redactSensitiveText } from "./content-safety.js";
+import { CHANNEL_SUBSCRIPTION_AGENT_ORDER, CHANNEL_SUBSCRIPTION_ALL_ORDER, simpleOrderByClause } from "./list-order.js";
 
 const DEFAULT_PREVIEW_CHARS = 140;
 
@@ -57,12 +58,12 @@ export function listChannelNotificationSubscriptions(agent?: string): ChannelNot
   const db = getDb();
   if (agent) {
     return db.prepare(
-      "SELECT channel, agent, created_at, preview_chars, since_message_id FROM channel_subscriptions WHERE agent = ? ORDER BY created_at ASC, channel ASC"
+      `SELECT channel, agent, created_at, preview_chars, since_message_id FROM channel_subscriptions WHERE agent = ? ${simpleOrderByClause(CHANNEL_SUBSCRIPTION_AGENT_ORDER)}, channel ASC`
     ).all(agent) as ChannelNotificationSubscription[];
   }
 
   return db.prepare(
-    "SELECT channel, agent, created_at, preview_chars, since_message_id FROM channel_subscriptions ORDER BY agent ASC, channel ASC"
+    `SELECT channel, agent, created_at, preview_chars, since_message_id FROM channel_subscriptions ${simpleOrderByClause(CHANNEL_SUBSCRIPTION_ALL_ORDER)}, channel ASC`
   ).all() as ChannelNotificationSubscription[];
 }
 

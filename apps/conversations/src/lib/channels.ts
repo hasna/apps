@@ -1,6 +1,7 @@
 import { getDb } from "./db.js";
 import { normalizeChannelName } from "./channel-names.js";
 import type { Channel, ChannelInfo, ChannelMember } from "../types.js";
+import { CHANNEL_LIST_ORDER, CHANNEL_MEMBER_ORDER, simpleOrderByClause } from "./list-order.js";
 
 function parseJsonObject(value: unknown): Record<string, unknown> | null {
   if (typeof value !== "string" || !value) return null;
@@ -110,7 +111,7 @@ export function listChannels(options?: {
       (SELECT COUNT(*) FROM messages WHERE channel = c.name) AS message_count
     FROM channels c
     ${where}
-    ORDER BY c.name ASC
+    ${simpleOrderByClause(CHANNEL_LIST_ORDER, "c.")}
   `).all(...params) as Record<string, unknown>[];
 
   return rows.map(parseChannelInfo);
@@ -175,7 +176,7 @@ export function leaveChannel(channelName: string, agent: string): boolean {
 export function getChannelMembers(channelName: string): ChannelMember[] {
   const db = getDb();
   return db.prepare(
-    "SELECT channel, agent, joined_at FROM channel_members WHERE channel = ? ORDER BY joined_at ASC"
+    `SELECT channel, agent, joined_at FROM channel_members WHERE channel = ? ${simpleOrderByClause(CHANNEL_MEMBER_ORDER)}`
   ).all(normalizeChannelName(channelName)) as ChannelMember[];
 }
 

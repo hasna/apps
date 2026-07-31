@@ -14,6 +14,7 @@ import { getStore } from "../../lib/store/index.js";
 // + _API_KEY are set (self_hosted/cloud), else LocalStore.
 import { identityFor } from "../identity.js";
 import { compactQueriedMessages, compactQueriedSearchMessages, compactWindowedSessions, jsonText, resolveMcpWindow } from "../compact.js";
+import { PINNED_LIST_ORDER, describeReadMessagesOrder } from "../../lib/list-order.js";
 
 function toolError(error: unknown, fallback: string) {
   return {
@@ -153,7 +154,7 @@ export function registerMessagingTools(
 
     const payload = verbose
       ? { messages, count: messages.length, offset: args.offset ?? args.cursor ?? 0, compact: false }
-      : compactQueriedMessages(messages, args);
+      : compactQueriedMessages(messages, args, describeReadMessagesOrder(args));
     return {
       content: [{ type: "text", text: jsonText(payload) }],
     };
@@ -509,7 +510,10 @@ export function registerMessagingTools(
       offset: verbose ? args.cursor : window.offset,
     });
 
-    const payload = verbose ? messages : compactQueriedMessages(messages, args);
+    // `get_pinned_messages` queries getPinnedMessages(), which orders by
+    // pinned_at DESC — a different FIELD and a different DIRECTION from a
+    // message read. Disclosing the message descriptor here was wrong in both.
+    const payload = verbose ? messages : compactQueriedMessages(messages, args, PINNED_LIST_ORDER);
     return {
       content: [{ type: "text", text: jsonText(payload) }],
     };

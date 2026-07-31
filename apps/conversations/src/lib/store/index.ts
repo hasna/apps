@@ -30,6 +30,13 @@ import { envToken, normalizeStorageMode } from "../contracts-client/mode.js";
 import { normalizeChannelName } from "../channel-names.js";
 import { localHealthChecks } from "../db.js";
 import { ApiStore } from "./api-store.js";
+import {
+  AGENT_LIST_ORDER,
+  CHANNEL_LIST_ORDER,
+  describeMessageOrder,
+  type ListOrderKind,
+  type SortDescriptor,
+} from "../list-order.js";
 
 import * as channelsLib from "../channels.js";
 import * as tasksLib from "../tasks.js";
@@ -323,6 +330,17 @@ export interface ConversationsStore {
   readonly transport: "local" | "cloud-http";
 
   /**
+   * Which rows a list verb will hand back, so a caller can DISCLOSE the
+   * ordering instead of assuming it.
+   *
+   * This belongs to the store and not to the caller because the two transports
+   * genuinely disagree: LocalStore ranks `search` by FTS relevance, while
+   * ApiStore asks the server for `created_at DESC`. A CLI footer that hardcoded
+   * either one would be truthful on one transport and a lie on the other.
+   */
+  describeListOrder: (kind: ListOrderKind, opts?: { order?: string; sort?: string }) => SortDescriptor;
+
+  /**
    * Transport-appropriate health probe for the `doctor` diagnostic. LocalStore
    * checks the on-box sqlite (opens + WAL); ApiStore checks cloud API reachability
    * + auth. Routed through the Store so `doctor` never touches sqlite directly and
@@ -475,6 +493,15 @@ export interface ConversationsStore {
 
 export class LocalStore implements ConversationsStore {
   readonly transport = "local" as const;
+
+  describeListOrder: ConversationsStore["describeListOrder"] = (kind, opts) => {
+    switch (kind) {
+      case "messages": return describeMessageOrder(opts?.order);
+      case "search": return messagesLib.describeSearchOrder(opts?.sort);
+      case "channels": return CHANNEL_LIST_ORDER;
+      case "agents": return AGENT_LIST_ORDER;
+    }
+  };
 
   health: ConversationsStore["health"] = async () => localHealthChecks();
 

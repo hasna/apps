@@ -6,7 +6,8 @@ import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { previewText, windowItems } from "../../lib/compact-output.js";
 import { assertNoSensitiveContent } from "../../lib/content-safety.js";
-import { getCliWindow, pageFromQuery, printCompactFooter, queryLimitFor } from "../compact.js";
+import { getCliWindow, pageFromQuery, printCompactFooter, printJsonDisclosure, queryLimitFor, windowJsonList } from "../compact.js";
+import { CHANNEL_MEMBER_ORDER, CHANNEL_SUBSCRIPTION_AGENT_ORDER } from "../../lib/list-order.js";
 import { printMessageEntry } from "../message-output.js";
 import { emitCliError } from "../cli-error.js";
 import { warnIfRedacted } from "../redaction-notice.js";
@@ -129,11 +130,20 @@ export function registerChannelCommands(program: Command): void {
       if (opts.archived) listOpts.include_archived = true;
 
       const channels = await getStore().listChannels(listOpts);
+      const sort = getStore().describeListOrder("channels");
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
       const page = windowItems(channels, window);
 
       if (opts.json) {
-        printJson(channels);
+        const listing = windowJsonList(channels, opts);
+        printJson(listing.rows);
+        printJsonDisclosure({
+          shown: listing.rows.length,
+          total: listing.page.total,
+          hasMore: listing.bounded && listing.page.hasMore,
+          nextCursor: listing.page.nextCursor,
+          sort,
+        });
       } else {
         if (channels.length === 0) {
           printLine(chalk.dim("No channels found."));
@@ -152,6 +162,7 @@ export function registerChannelCommands(program: Command): void {
             hasMore: page.hasMore,
             nextCursor: page.nextCursor,
             limitCapped: window.limitCapped,
+            sort: sort,
             detailHint: "Use conversations channel read <name> --verbose for message bodies.",
           });
         }
@@ -410,6 +421,7 @@ export function registerChannelCommands(program: Command): void {
             hasMore: page.hasMore,
             nextCursor: page.nextCursor,
             limitCapped: window.limitCapped,
+            sort: getStore().describeListOrder("messages"),
             detailHint: opts.verbose ? "Use conversations show <id> for one message." : "Use --verbose for full bodies or conversations show <id> for one message.",
           });
         }
@@ -571,7 +583,15 @@ export function registerChannelCommands(program: Command): void {
       const page = windowItems(subscriptions, window);
 
       if (opts.json) {
-        printJson(subscriptions);
+        const listing = windowJsonList(subscriptions, opts);
+        printJson(listing.rows);
+        printJsonDisclosure({
+          shown: listing.rows.length,
+          total: listing.page.total,
+          hasMore: listing.bounded && listing.page.hasMore,
+          nextCursor: listing.page.nextCursor,
+          sort: CHANNEL_SUBSCRIPTION_AGENT_ORDER,
+        });
       } else if (subscriptions.length === 0) {
         printLine(chalk.dim(`No notification subscriptions for ${agent}.`));
       } else {
@@ -585,6 +605,7 @@ export function registerChannelCommands(program: Command): void {
           hasMore: page.hasMore,
           nextCursor: page.nextCursor,
           limitCapped: window.limitCapped,
+          sort: CHANNEL_SUBSCRIPTION_AGENT_ORDER,
         });
       }
       closeDb();
@@ -608,7 +629,15 @@ export function registerChannelCommands(program: Command): void {
       const page = windowItems(members, window);
 
       if (opts.json) {
-        printJson(members);
+        const listing = windowJsonList(members, opts);
+        printJson(listing.rows);
+        printJsonDisclosure({
+          shown: listing.rows.length,
+          total: listing.page.total,
+          hasMore: listing.bounded && listing.page.hasMore,
+          nextCursor: listing.page.nextCursor,
+          sort: CHANNEL_MEMBER_ORDER,
+        });
       } else {
         if (members.length === 0) {
           printLine(chalk.dim(`No members in #${channelArg}.`));
@@ -623,6 +652,7 @@ export function registerChannelCommands(program: Command): void {
             hasMore: page.hasMore,
             nextCursor: page.nextCursor,
             limitCapped: window.limitCapped,
+            sort: CHANNEL_MEMBER_ORDER,
           });
         }
       }

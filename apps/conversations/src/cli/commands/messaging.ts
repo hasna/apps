@@ -9,6 +9,7 @@ import { renderContent } from "../../lib/terminal-markdown.js";
 import { buildMessagePreview } from "../../lib/channel-notifications.js";
 import { previewText } from "../../lib/compact-output.js";
 import { getCliWindow, pageFromQuery, printCompactFooter, queryLimitFor } from "../compact.js";
+import { BLOCKERS_LIST_ORDER, PINNED_LIST_ORDER } from "../../lib/list-order.js";
 import { printMessageEntry } from "../message-output.js";
 import { checkForUpdate } from "../../lib/version-check.js";
 import { emitCliError } from "../cli-error.js";
@@ -165,6 +166,7 @@ export function registerMessagingCommands(program: Command): void {
             hasMore: page.hasMore,
             nextCursor: page.nextCursor,
             limitCapped: window.limitCapped,
+            sort: getStore().describeListOrder("messages"),
             detailHint: opts.verbose ? "Use conversations show <id> for one message." : "Use --verbose for full bodies or conversations show <id> for one message.",
           });
         }
@@ -319,6 +321,7 @@ export function registerMessagingCommands(program: Command): void {
             hasMore: page.hasMore,
             nextCursor: page.nextCursor,
             limitCapped: window.limitCapped,
+            sort: getStore().describeListOrder("search"),
             detailHint: opts.verbose ? "Use conversations show <id> for one message." : "Use --verbose for full bodies or conversations show <id> for one message.",
           });
         }
@@ -370,6 +373,7 @@ export function registerMessagingCommands(program: Command): void {
             hasMore: page.hasMore,
             nextCursor: page.nextCursor,
             limitCapped: window.limitCapped,
+            sort: getStore().describeListOrder("messages", { order: "asc" }),
             detailHint: opts.verbose ? "Use conversations show <id> for one message." : "Use --verbose for full bodies or conversations show <id> for one message.",
           });
         }
@@ -661,6 +665,7 @@ export function registerMessagingCommands(program: Command): void {
             hasMore: page.hasMore,
             nextCursor: page.nextCursor,
             limitCapped: window.limitCapped,
+            sort: PINNED_LIST_ORDER,
             detailHint: opts.verbose ? "Use conversations show <id> for one message." : "Use --verbose for full bodies or conversations show <id> for one message.",
           });
         }
@@ -699,6 +704,7 @@ export function registerMessagingCommands(program: Command): void {
             hasMore: page.hasMore,
             nextCursor: page.nextCursor,
             limitCapped: window.limitCapped,
+            sort: BLOCKERS_LIST_ORDER,
             detailHint: opts.verbose ? "Use conversations show <id> for one blocker." : "Use --verbose for full bodies or conversations show <id> for one blocker.",
           });
         }

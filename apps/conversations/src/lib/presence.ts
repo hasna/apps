@@ -1,5 +1,6 @@
 import { getDb } from "./db.js";
 import type { AgentPresence, AgentConflictError, RegisterAgentResult } from "../types.js";
+import { AGENT_LIST_ORDER, simpleOrderByClause } from "./list-order.js";
 
 const ONLINE_THRESHOLD_SECONDS = 60;
 const CONFLICT_THRESHOLD_SECONDS = 30 * 60; // 30 minutes
@@ -233,7 +234,7 @@ export function listAgents(opts?: { online_only?: boolean }): AgentPresence[] {
     query += " WHERE last_seen_at > strftime('%Y-%m-%dT%H:%M:%f', 'now', '-60 seconds')";
   }
 
-  query += " ORDER BY last_seen_at DESC";
+  query += ` ${simpleOrderByClause(AGENT_LIST_ORDER)}`;
 
   const rows = db.prepare(query).all() as Record<string, unknown>[];
   return rows.map(parsePresence);

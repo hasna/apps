@@ -13,6 +13,7 @@
 import type { HasnaStorageClient } from "../contracts-client/storage.js";
 import type { ConversationsStore } from "./index.js";
 import { normalizeChannelName } from "../channel-names.js";
+import { AGENT_LIST_ORDER, CHANNEL_LIST_ORDER, SEARCH_RECENT_ORDER, describeMessageOrder } from "../list-order.js";
 import { normalizeSince } from "../since.js";
 import { parseProject } from "../projects.js";
 import { attachSendRedaction } from "../content-safety.js";
@@ -47,6 +48,24 @@ function isHttpStatus(error: unknown, status: number): boolean {
 export class ApiStore implements ConversationsStore {
   readonly transport = "cloud-http" as const;
   constructor(private readonly client: HasnaStorageClient) {}
+
+  /**
+   * The ordering this client ASKS the server for, which is what a caller must
+   * disclose. Note the divergence from LocalStore on `search`: the `/messages`
+   * search path offers no relevance ranking, so this transport requests
+   * `created_at DESC` and says so rather than repeating LocalStore's
+   * "relevance". A CLI footer that hardcoded either one would be true on one
+   * transport and a lie on the other, which is why the descriptor is asked of
+   * the store.
+   */
+  describeListOrder: ConversationsStore["describeListOrder"] = (kind, opts) => {
+    switch (kind) {
+      case "messages": return describeMessageOrder(opts?.order);
+      case "search": return SEARCH_RECENT_ORDER;
+      case "channels": return CHANNEL_LIST_ORDER;
+      case "agents": return AGENT_LIST_ORDER;
+    }
+  };
 
   private get t() {
     return this.client.transport;

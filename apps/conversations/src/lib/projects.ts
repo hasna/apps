@@ -1,6 +1,7 @@
 import { getDb } from "./db.js";
 import { randomUUID } from "crypto";
 import type { Project, ProjectInfo } from "../types.js";
+import { PROJECT_LIST_ORDER, simpleOrderByClause } from "./list-order.js";
 
 /**
  * Coerce a raw project DB/API row into the client-facing {@link Project} shape:
@@ -125,7 +126,7 @@ export function listProjects(opts?: {
       (SELECT COUNT(*) FROM channels WHERE project_id = p.id) AS channel_count
     FROM projects p
     ${where}
-    ORDER BY p.name ASC
+    ${simpleOrderByClause(PROJECT_LIST_ORDER, "p.")}
     ${pagination}
   `).all(...params) as Record<string, unknown>[];
 

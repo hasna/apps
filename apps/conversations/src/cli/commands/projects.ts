@@ -5,7 +5,8 @@ import { createConversationsProjectPanel } from "../../lib/project-panel.js";
 import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { previewText } from "../../lib/compact-output.js";
-import { getCliWindow, pageFromQuery, printCompactFooter, queryLimitFor } from "../compact.js";
+import { getCliWindow, pageFromQuery, printCompactFooter, printJsonDisclosure, queryLimitFor, windowJsonList } from "../compact.js";
+import { PROJECT_LIST_ORDER } from "../../lib/list-order.js";
 import { emitCliError } from "../cli-error.js";
 import { printErrorLine, printJson, printJsonLine, printLine } from "../../lib/stdout.js";
 
@@ -148,7 +149,15 @@ export function registerProjectCommands(program: Command): void {
         : pageFromQuery(projects, window);
 
       if (opts.json) {
-        printJson(projects);
+        const listing = windowJsonList(projects, opts);
+        printJson(listing.rows);
+        printJsonDisclosure({
+          shown: listing.rows.length,
+          total: listing.page.total,
+          hasMore: listing.bounded && listing.page.hasMore,
+          nextCursor: listing.page.nextCursor,
+          sort: PROJECT_LIST_ORDER,
+        });
       } else {
         if (projects.length === 0) {
           printLine(chalk.dim("No projects found."));
@@ -163,6 +172,7 @@ export function registerProjectCommands(program: Command): void {
             hasMore: page.hasMore,
             nextCursor: page.nextCursor,
             limitCapped: window.limitCapped,
+            sort: PROJECT_LIST_ORDER,
             detailHint: "Use conversations project get <id-or-name> for details.",
           });
         }

@@ -12,6 +12,7 @@ import { identityFor } from "../identity.js";
 import { normalizeAgentName } from "../../lib/presence.js";
 import { getSessionAgent, setSessionAgent, setClaudeSessionId } from "../channel.js";
 import { compactQueriedMessages, compactWindowedAgents, jsonText, resolveMcpWindow } from "../compact.js";
+import { BLOCKERS_LIST_ORDER } from "../../lib/list-order.js";
 
 export function registerAgentTools(
   server: McpServer,
@@ -284,7 +285,9 @@ export function registerAgentTools(
     );
 
     return {
-      content: [{ type: "text", text: jsonText(args.verbose ? blockers : compactQueriedMessages(blockers, args)) }],
+      // getUnreadBlockers() orders created_at ASC — oldest blocker first,
+      // because it is a backlog and not a recency window.
+      content: [{ type: "text", text: jsonText(args.verbose ? blockers : compactQueriedMessages(blockers, args, BLOCKERS_LIST_ORDER)) }],
     };
   });
 }
