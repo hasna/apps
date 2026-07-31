@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, setDefaultTimeout } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -36,6 +36,11 @@ const GITHUB_ACTOR_SOURCE: IdentitySourceLineage = {
   source_entity_type: "user",
   source_record_id: "actor-42",
 };
+
+// The legacy migration coverage applies 64 historical SQLite migrations before
+// opening the database through the current schema path. On loaded runners that
+// legitimate migration work can exceed Bun's 5s default per-test timeout.
+setDefaultTimeout(15_000);
 
 function expectIdentityAmbiguity(run: () => unknown): void {
   try {
