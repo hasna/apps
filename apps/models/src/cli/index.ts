@@ -703,4 +703,8 @@ program
     }
   });
 
-program.parseAsync().catch(commandError);
+export { program };
+
+if (import.meta.main) {
+  program.parseAsync().catch(commandError);
+}
