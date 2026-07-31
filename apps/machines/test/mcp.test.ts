@@ -73,9 +73,11 @@ test("exports expected MCP tool surface", () => {
 
 test("MCP dispatch fleet smoke is read-only and redacted", async () => {
   const dir = mkdtempSync(join(tmpdir(), "machines-mcp-dispatch-smoke-"));
-  const binDir = join(dir, "bin");
+  const homeDir = join(dir, "home");
+  const binDir = join(homeDir, ".bun", "bin");
   const marker = join(dir, "restart-called");
   const previousPath = process.env.PATH;
+  const previousHome = process.env.HOME;
   const syntheticSecret = `${"secret"}-token:abcdef`;
   process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
   process.env["HASNA_MACHINES_DB_PATH"] = join(dir, "machines.db");
@@ -100,6 +102,7 @@ fi
 exit 2
 `);
     chmodSync(dispatch, 0o755);
+    process.env.HOME = homeDir;
     process.env.PATH = `${binDir}:${previousPath ?? ""}`;
 
     const server = createMcpServer("0.0.1");
@@ -136,6 +139,11 @@ exit 2
     }
   } finally {
     process.env.PATH = previousPath;
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
     rmSync(dir, { recursive: true, force: true });
   }
 });
