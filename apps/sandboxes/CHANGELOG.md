@@ -7,6 +7,8 @@
 - **TypeScript now rejects implicit returns and switch fallthrough.** The
   project compiler configuration enables `noImplicitReturns` alongside the
   existing `noFallthroughCasesInSwitch` control-flow check.
+- Removed the unused `@types/ws` runtime dependency and declared the supported
+  Bun and Node.js engine versions.
 
 ## 1.1.0 - 2026-07-24
 
