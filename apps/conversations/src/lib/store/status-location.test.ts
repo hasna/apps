@@ -50,10 +50,15 @@ describe("storeStatusLocation", () => {
   // split is what makes a silent downgrade to the on-box SQLite store visible in
   // a status response instead of having to be inferred from a channel count.
   test("it still says which store answered", () => {
-    const local = storeStatusLocation({ [DB_VAR]: "/tmp/conversations-status-location-probe.db" });
+    const probeDb = "/tmp/conversations-status-location-probe.db";
+    const local = storeStatusLocation({ [DB_VAR]: probeDb });
     expect(local.mode).toBe("local");
     expect("db_path" in local).toBe(true);
     expect("api_url" in local).toBe(false);
+    // Asserting the injected path comes back, not merely that the field exists.
+    // Until `getDbPath` took an env, this injection was inert — it reached
+    // nothing, and a test that asserted only presence could not have noticed.
+    expect("db_path" in local ? local.db_path : null).toBe(probeDb);
 
     const cloud = storeStatusLocation({ [URL_VAR]: RAW, [KEY_VAR]: FAKE_KEY });
     expect("api_url" in cloud).toBe(true);

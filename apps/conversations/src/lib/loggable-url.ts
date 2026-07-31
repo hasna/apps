@@ -52,11 +52,21 @@ export const UNLOGGABLE_URL = "(unparseable URL)";
  * one remaining component carrying an operator-supplied string that no rule can
  * distinguish from a secret embedded in one.
  *
- * `origin` is NOT used to do this, even though it looks equivalent. Its value
- * for a non-special scheme is runtime-dependent — Bun returns
- * `ftp://host` where Node returns the string `"null"` — so relying on it would
- * make the output differ between the bundled CLI and an SDK consumer on Node.
- * Composing the three components explicitly behaves the same on both.
+ * `origin` is NOT used to do this, even though it looks equivalent for the two
+ * schemes that reach here. It answers a different question: for a scheme the URL
+ * spec does not classify as "special" it is the literal string `"null"`, so its
+ * result depends on a spec-maintained table of schemes rather than on the
+ * components being copied. Composing scheme, host and port by name says what
+ * this function means and cannot change underneath it.
+ *
+ * CORRECTED: this comment previously claimed the value of `origin` was
+ * RUNTIME-DEPENDENT — "Bun returns `ftp://host` where Node returns `null`". That
+ * is false and was never measured. Both runtimes agree on every scheme tested
+ * (bun 1.3.14 and node v22.22.3: `ftp` → `ftp://host` on both, `postgres` and
+ * `file` → `"null"` on both). It is recorded here rather than quietly reworded
+ * because a false claim written in the confident register of a measurement is
+ * the failure this file exists to prevent, and it was caught by a reviewer
+ * re-measuring rather than by its author re-reading.
  */
 export function loggableUrl(raw: string | null | undefined): string | null {
   // Blank counts as unset, matching how the transport resolver's own `firstEnv`

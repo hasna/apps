@@ -13,7 +13,7 @@
 // have no knowledge of the cloud transport. That is not a latent risk: on the
 // owner's Mac it rendered 358 of the fleet's 1124 channels with no error shown.
 import { getDbPath } from "../lib/db.js";
-import { getStore, isCloudStore, ConversationsStoreConfigError } from "../lib/store/index.js";
+import { getStore, ConversationsStoreConfigError } from "../lib/store/index.js";
 import { storeStatusLocation } from "../lib/store/status-location.js";
 import { handleMcpRequest, healthPayload } from "../mcp/http.js";
 import { buildServer } from "../mcp/index.js";
