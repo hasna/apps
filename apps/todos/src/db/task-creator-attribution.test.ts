@@ -282,3 +282,30 @@ describe("one agent, two sanctioned identity sources, one author string", () => 
     expect(inbox.map((t) => t.title)).toEqual(["routed by brutus"]);
   });
 });
+
+describe("the READ side must be case-insensitive too", () => {
+  // Write-time canonicalisation cannot reach two real populations: rows stored before
+  // it existed, and a filter value a human typed. Both were reproduced by the reviewer
+  // against a tree that had only the write-side fix.
+  it("excludes a legacy mixed-case row that predates write-time canonicalisation", () => {
+    // Exactly what TODOS_AGENT_ID=Cassius stored before the resolver canonicalised.
+    createTask({ title: "legacy self-filing", created_by: "Cassius", assigned_to: "cassius" }, db);
+    createTask({ title: "routed by brutus", created_by: "brutus", assigned_to: "cassius" }, db);
+
+    const inbox = listTasks({ assigned_to: "cassius", not_created_by: "cassius" }, db);
+    expect(inbox.map((t) => t.title)).toEqual(["routed by brutus"]);
+  });
+
+  it("finds a canonical row from a filter value typed with different casing", () => {
+    createTask({ title: "filed today", created_by: "cassius" }, db);
+    expect(listTasks({ created_by: "Cassius" }, db).map((t) => t.title)).toEqual(["filed today"]);
+    expect(listTasks({ created_by: "CASSIUS" }, db).map((t) => t.title)).toEqual(["filed today"]);
+  });
+
+  it("still distinguishes genuinely different agents — the filter is case-blind, not blind", () => {
+    createTask({ title: "brutus filed", created_by: "brutus" }, db);
+    expect(listTasks({ created_by: "cassius" }, db)).toHaveLength(0);
+    const kept = listTasks({ not_created_by: "cassius" }, db);
+    expect(kept.map((t) => t.title)).toEqual(["brutus filed"]);
+  });
+});

@@ -109,7 +109,7 @@ export function clearPersistedIdentity(): boolean {
  * filings and leak them back into its own inbox: exactly the self-noise the filter
  * exists to remove.
  */
-function canonicalAgentRef(value: string): string {
+export function canonicalAgentRef(value: string): string {
   return value.trim().toLowerCase();
 }
 

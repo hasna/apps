@@ -379,9 +379,11 @@ class PostgresJsonRecordStore {
     if (filter.priority !== undefined) conds.push(inClause("payload->>'priority'", toFilterArray(filter.priority)));
     if (filter.assigned_to !== undefined) conds.push(`payload->>'assigned_to' = ${p(filter.assigned_to)}`);
     if (filter.agent_id !== undefined) conds.push(`payload->>'agent_id' = ${p(filter.agent_id)}`);
-    if (filter.created_by !== undefined) conds.push(`payload->>'created_by' = ${p(filter.created_by)}`);
+    // Case-insensitive for the same reason as the SQLite path: write-time
+    // canonicalisation does not reach rows written before it, nor a hand-typed filter.
+    if (filter.created_by !== undefined) conds.push(`LOWER(payload->>'created_by') = LOWER(${p(filter.created_by)})`);
     // NULL created_by means unattributable, not "someone else" — keep those rows.
-    if (filter.not_created_by !== undefined) conds.push(`(payload->>'created_by' IS NULL OR payload->>'created_by' <> ${p(filter.not_created_by)})`);
+    if (filter.not_created_by !== undefined) conds.push(`(payload->>'created_by' IS NULL OR LOWER(payload->>'created_by') <> LOWER(${p(filter.not_created_by)}))`);
     if (filter.session_id !== undefined) conds.push(`payload->>'session_id' = ${p(filter.session_id)}`);
     if (filter.tags?.length) {
       // ANY-of tag matching, parity with the SQLite path (src/db/task-crud.ts:

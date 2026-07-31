@@ -203,3 +203,29 @@ describe("todos init — a second session must not silently take over the identi
     expect(brutusTask.created_by).toBe("brutus");
   });
 });
+
+describe("todos list --created-by is case-insensitive from the command line", () => {
+  it("finds a canonically-stored task from a capitalised filter value", async () => {
+    await addJson(["filed by cassius"], { TODOS_AGENT_ID: "cassius" });
+
+    const result = await runCli(["--json", "list", "--created-by", "Cassius"]);
+    expect(result.exitCode).toBe(0);
+    const titles = (JSON.parse(result.stdout) as Array<{ title: string }>).map((t) => t.title);
+    expect(titles).toEqual(["filed by cassius"]);
+  });
+
+  // BEHAVIOUR LOCK, not a defect control: this already passed with only the
+  // write-side fix, because both the stored value and the filter value went through
+  // the resolver. It pins that the two fixes agree; the read-side defect is
+  // demonstrated by the test above it and by the two DB-level tests.
+  it("--inbox excludes the caller's own filing regardless of the casing it was filed under", async () => {
+    // Same real agent, two sanctioned identity paths, historically two casings.
+    await addJson(["my own filing"], { TODOS_AGENT_ID: "Cassius" });
+    await addJson(["--assign", "cassius", "routed to me"], { TODOS_AGENT_ID: "brutus" });
+
+    const result = await runCli(["--json", "list", "--inbox"], { TODOS_AGENT_ID: "CASSIUS" });
+    expect(result.exitCode).toBe(0);
+    const titles = (JSON.parse(result.stdout) as Array<{ title: string }>).map((t) => t.title);
+    expect(titles).toEqual(["routed to me"]);
+  });
+});

@@ -308,8 +308,14 @@ export function listTasks(filter: TaskFilter = {}, db?: Database): Task[] {
     params.push(filter.agent_id);
   }
 
+  // Compared case-insensitively, matching how agent names are already resolved
+  // elsewhere (`getAgentByNameProjection` uses `WHERE LOWER(name) = ?`).
+  // Canonicalising only at WRITE time is not enough: rows stored before that fix
+  // carry whatever case they were written with, and a hand-typed
+  // `--created-by Cassius` never passes through the resolver at all. Both would
+  // silently return the wrong set against an exact-match comparison.
   if (filter.created_by) {
-    conditions.push("created_by = ?");
+    conditions.push("LOWER(created_by) = LOWER(?)");
     params.push(filter.created_by);
   }
 
@@ -317,7 +323,7 @@ export function listTasks(filter: TaskFilter = {}, db?: Database): Task[] {
     // Rows with a NULL created_by predate the field and are unattributable — they
     // are kept rather than silently dropped, because "we don't know who filed it"
     // is not the same claim as "someone else filed it".
-    conditions.push("(created_by IS NULL OR created_by != ?)");
+    conditions.push("(created_by IS NULL OR LOWER(created_by) != LOWER(?))");
     params.push(filter.not_created_by);
   }
 
@@ -535,8 +541,14 @@ export function countTasks(filter: Omit<TaskFilter, 'limit' | 'offset'> = {}, db
     params.push(filter.agent_id);
   }
 
+  // Compared case-insensitively, matching how agent names are already resolved
+  // elsewhere (`getAgentByNameProjection` uses `WHERE LOWER(name) = ?`).
+  // Canonicalising only at WRITE time is not enough: rows stored before that fix
+  // carry whatever case they were written with, and a hand-typed
+  // `--created-by Cassius` never passes through the resolver at all. Both would
+  // silently return the wrong set against an exact-match comparison.
   if (filter.created_by) {
-    conditions.push("created_by = ?");
+    conditions.push("LOWER(created_by) = LOWER(?)");
     params.push(filter.created_by);
   }
 
@@ -544,7 +556,7 @@ export function countTasks(filter: Omit<TaskFilter, 'limit' | 'offset'> = {}, db
     // Rows with a NULL created_by predate the field and are unattributable — they
     // are kept rather than silently dropped, because "we don't know who filed it"
     // is not the same claim as "someone else filed it".
-    conditions.push("(created_by IS NULL OR created_by != ?)");
+    conditions.push("(created_by IS NULL OR LOWER(created_by) != LOWER(?))");
     params.push(filter.not_created_by);
   }
 

@@ -38,7 +38,7 @@ import {
 } from "../cloud-router.js";
 import type { CloudTaskRelations } from "../cloud-router.js";
 import type { TaskPriority, TaskStatus } from "../../types/index.js";
-import { resolveCreatorIdentity } from "../../lib/creator-identity.js";
+import { canonicalAgentRef, resolveCreatorIdentity } from "../../lib/creator-identity.js";
 import {
   formatTaskLine,
   resolveTaskId,
@@ -726,8 +726,12 @@ export function registerTaskCommands(program: Command) {
       }
       if (opts.priority) filter["priority"] = opts.priority;
       if (opts.assigned) filter["assigned_to"] = opts.assigned;
-      if (opts.createdBy) filter["created_by"] = opts.createdBy;
-      if (opts.notCreatedBy) filter["not_created_by"] = opts.notCreatedBy;
+      // A hand-typed `--created-by Cassius` never goes through the identity resolver,
+      // so canonicalise it here too. Both backends also compare case-insensitively —
+      // this is the cheap half, that is the one that reaches rows written before the
+      // resolver was canonicalising at all.
+      if (opts.createdBy) filter["created_by"] = canonicalAgentRef(opts.createdBy);
+      if (opts.notCreatedBy) filter["not_created_by"] = canonicalAgentRef(opts.notCreatedBy);
       // --inbox is the query operating rule 29 mandates and the store could not
       // answer until created_by existed: assigned to me, filed by someone else.
       if (opts.inbox) {
@@ -797,11 +801,13 @@ export function registerTaskCommands(program: Command) {
         const wantCreatedBy = filter["created_by"] as string | undefined;
         const excludeCreatedBy = filter["not_created_by"] as string | undefined;
         tasks = tasks.filter((t) => {
-          const author = (t as { created_by?: string | null }).created_by ?? null;
-          if (wantCreatedBy && author !== wantCreatedBy) return false;
-          // NULL author is unattributable, not "someone else" — keep it, matching
-          // the SQL both backends use.
-          if (excludeCreatedBy && author !== null && author === excludeCreatedBy) return false;
+          const raw = (t as { created_by?: string | null }).created_by ?? null;
+          // Case-insensitive, matching the SQL on both backends — a row stored before
+          // write-time canonicalisation carries whatever case it was written with.
+          const author = raw === null ? null : canonicalAgentRef(raw);
+          if (wantCreatedBy && author !== canonicalAgentRef(wantCreatedBy)) return false;
+          // NULL author is unattributable, not "someone else" — keep it.
+          if (excludeCreatedBy && author !== null && author === canonicalAgentRef(excludeCreatedBy)) return false;
           return true;
         });
         if (requestedLimit !== undefined) tasks = tasks.slice(0, requestedLimit);
