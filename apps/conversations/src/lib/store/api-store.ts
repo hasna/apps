@@ -13,6 +13,7 @@
 import type { HasnaStorageClient } from "../contracts-client/storage.js";
 import type { ConversationsStore } from "./index.js";
 import { normalizeChannelName } from "../channel-names.js";
+import { loggableUrl } from "../loggable-url.js";
 import { AGENT_LIST_ORDER, CHANNEL_LIST_ORDER, SEARCH_RECENT_ORDER, describeMessageOrder } from "../list-order.js";
 import { normalizeSince } from "../since.js";
 import { resolveReadLimit, resolveReadWindow } from "../message-window.js";
@@ -88,13 +89,22 @@ export class ApiStore implements ConversationsStore {
   // ── health ──────────────────────────────────────────────────────────────────
   // Cloud-mode probe for `doctor`: an authenticated, cheap count round-trips the
   // /v1 API so a flipped client verifies reachability AND that its bearer key
-  // works. The base URL (no secret) is surfaced; the key never leaves the transport.
+  // works. The bearer key never leaves the transport.
+  //
+  // `baseUrl` IS NOT SAFE TO PRINT and this comment used to claim it was. It is
+  // produced by `toV1BaseUrl`, which clears `search` and `hash` and re-emits
+  // everything else — a strip-list — so it turns
+  // `https://user:pw@host` into `https://user:pw@host/v1`, measured. `doctor`
+  // therefore printed embedded basic-auth credentials to stdout on both the OK
+  // and the failure path. `loggableUrl` is an allow-list and cannot carry a
+  // component it did not copy.
   health: ConversationsStore["health"] = async () => {
+    const where = loggableUrl(this.client.baseUrl) ?? "the configured API";
     try {
       await this.get<{ count?: number }>("/messages", { count: 1, limit: 1 });
-      return [{ name: "Cloud API", ok: true, message: `OK — reachable at ${this.client.baseUrl}` }];
+      return [{ name: "Cloud API", ok: true, message: `OK — reachable at ${where}` }];
     } catch (e) {
-      return [{ name: "Cloud API", ok: false, message: `Unreachable/unauthorized at ${this.client.baseUrl}: ${(e as Error).message}` }];
+      return [{ name: "Cloud API", ok: false, message: `Unreachable/unauthorized at ${where}: ${(e as Error).message}` }];
     }
   };
 
