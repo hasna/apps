@@ -5,7 +5,13 @@
 // (verifyApiKey), scoped projects:read for reads and projects:write for writes.
 
 import { verifyApiKey, type ApiKeyVerifier, type AuthAuditHook } from "@hasna/contracts/auth";
-import { NotFoundError, ProjectsPgStore, ValidationError } from "./pg-store.js";
+import {
+  NotFoundError,
+  ProjectsPgStore,
+  ValidationError,
+  WORKSPACE_LIST_DEFAULT_LIMIT,
+  WORKSPACE_LIST_MAX_LIMIT,
+} from "./pg-store.js";
 import { buildOpenApiSpec } from "./openapi.js";
 
 export interface ServeAppOptions {
@@ -135,7 +141,7 @@ async function route(
       if (method === "GET") {
         const q = url.searchParams;
         const tag = q.get("tag");
-        const workspaces = await store.listWorkspaces({
+        const filter = {
           ...(q.get("status") ? { status: q.get("status") as never } : {}),
           ...(q.get("kind") ? { kind: q.get("kind") as never } : {}),
           ...(q.get("root_id") ? { root_id: q.get("root_id")! } : {}),
@@ -143,8 +149,22 @@ async function route(
           ...(tag ? { tags: [tag] } : {}),
           ...(q.get("limit") ? { limit: Number(q.get("limit")) } : {}),
           ...(q.get("offset") ? { offset: Number(q.get("offset")) } : {}),
+        };
+        const workspaces = await store.listWorkspaces(filter);
+        // `count` is the page length and always was; a client comparing it to
+        // its requested limit cannot tell a full page from the last page. Report
+        // the match `total` and an explicit `has_more` so a bounded response can
+        // never again pass for a complete one.
+        const offset = Math.max(Number(q.get("offset") ?? 0) || 0, 0);
+        const total = await store.countWorkspaces(filter);
+        return jsonResponse({
+          workspaces,
+          count: workspaces.length,
+          total,
+          offset,
+          limit: Math.min(Math.max(filter.limit ?? WORKSPACE_LIST_DEFAULT_LIMIT, 1), WORKSPACE_LIST_MAX_LIMIT),
+          has_more: offset + workspaces.length < total,
         });
-        return jsonResponse({ workspaces, count: workspaces.length });
       }
       if (method === "POST") {
         const body = await readJsonBody(req);

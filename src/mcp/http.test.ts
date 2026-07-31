@@ -15,13 +15,14 @@ describe("projects MCP HTTP transport", () => {
   let port: number;
   let root: string;
   let previousDbPath: string | undefined;
-  const previousApiEnv = new Map<string, string | undefined>();
+  let previousApiEnv: Partial<Record<(typeof API_MODE_ENV_KEYS)[number], string | undefined>>;
 
   beforeAll(() => {
     root = mkdtempSync(join(tmpdir(), "projects-mcp-http-"));
     previousDbPath = process.env.HASNA_PROJECTS_DB_PATH;
+    previousApiEnv = {};
     for (const key of API_MODE_ENV_KEYS) {
-      previousApiEnv.set(key, process.env[key]);
+      previousApiEnv[key] = process.env[key];
       delete process.env[key];
     }
     process.env.HASNA_PROJECTS_DB_PATH = join(root, "projects.db");
@@ -54,7 +55,7 @@ describe("projects MCP HTTP transport", () => {
       process.env.HASNA_PROJECTS_DB_PATH = previousDbPath;
     }
     for (const key of API_MODE_ENV_KEYS) {
-      const value = previousApiEnv.get(key);
+      const value = previousApiEnv[key];
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }

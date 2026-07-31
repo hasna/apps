@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { runMigrations } from "./schema.js";
+import { MIGRATIONS, runMigrations } from "./schema.js";
 import {
   acquireWorkspaceLock,
   addWorkspaceLocation,
@@ -22,6 +22,7 @@ import {
   getWorkspaceBySlug,
   inferWorkspaceKind,
   listAgentRuns,
+  listMachines,
   listRoots,
   listTmuxProfileWindows,
   listWorkspaceLocks,
@@ -63,19 +64,49 @@ function tmpDir(): string {
 }
 
 describe("workspace schema", () => {
-  test("creates generic workspace tables", () => {
+  test("creates generic workspace tables and seeds the machine registry", () => {
     const db = makeDb();
     const tables = db
-      .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('roots', 'workspaces', 'agents', 'recipes', 'workspace_events', 'agent_runs')")
+      .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('roots', 'workspaces', 'agents', 'recipes', 'workspace_events', 'agent_runs', 'machines')")
       .all() as { name: string }[];
     expect(tables.map((table) => table.name).sort()).toEqual([
       "agent_runs",
       "agents",
+      "machines",
       "recipes",
       "roots",
       "workspace_events",
       "workspaces",
     ]);
+    const columns = db.query("PRAGMA table_info(workspaces)").all() as Array<{ name: string }>;
+    expect(columns.map((column) => column.name)).toContain("canonical_machine");
+    const machines = listMachines(db);
+    expect(machines).toHaveLength(16);
+    expect(machines.find((machine) => machine.slug === "spark02")?.role).toBe("mirror-hub");
+    expect(machines.find((machine) => machine.slug === "apple06")?.role).toBe("avoid");
+    expect(machines.find((machine) => machine.slug === "machine011")?.role).toBe("assignable");
+    db.close();
+  });
+
+  test("migrates canonical_machine metadata into the first-class column", () => {
+    const db = new Database(":memory:");
+    db.run(`
+      CREATE TABLE _migrations (
+        id INTEGER PRIMARY KEY,
+        applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+    for (const migration of MIGRATIONS.slice(0, 6)) db.run(migration);
+    db.run(
+      "INSERT INTO workspaces (id, slug, name, metadata) VALUES (?, ?, ?, ?)",
+      ["wks_legacy_owner", "legacy-owner", "Legacy Owner", JSON.stringify({ canonical_machine: "spark01", retained: true })],
+    );
+
+    runMigrations(db);
+
+    const workspace = getWorkspaceBySlug("legacy-owner", db);
+    expect(workspace?.canonical_machine).toBe("spark01");
+    expect(workspace?.metadata).toEqual({ retained: true });
     db.close();
   });
 });
