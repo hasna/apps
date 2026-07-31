@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.5.15 - 2026-07-31
+
 ### Fixed
 - **Every recency read returned the OLDEST messages, not the newest — `--limit`, `--since`, and `conversations since` alike.** Three call shapes were affected, and all three are the recommended way to answer "what happened recently", so any watcher, digest, or situational-awareness monitor built on them reported "nothing new" forever while looking perfectly healthy. Measured against the hosted API on 2026-07-30 at 0.5.11:
   - `read --channel internal-ea --limit 5 --json` returned ids `586455…586462` while `--since 6h` at the same moment reached `607377`.
