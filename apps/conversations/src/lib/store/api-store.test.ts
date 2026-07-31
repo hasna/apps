@@ -356,3 +356,48 @@ describe("ApiStore.readMessages recency window", () => {
     expect(msgs.map((m) => m.id)).toEqual([607254, 607250]);
   });
 });
+
+// `doctor` prints ApiStore.health()'s message to stdout, and `baseUrl` comes
+// from `toV1BaseUrl`, which is a STRIP-LIST: it clears `search` and `hash` and
+// re-emits everything else, so embedded basic-auth userinfo survives into it
+// (measured — `https://u:pw@host` becomes `https://u:pw@host/v1`). The fix
+// redacts at the output site with an allow-list. Values below are invented.
+describe("ApiStore health does not print credentials embedded in the base URL", () => {
+  const LEAKY_BASE = "https://SYNTHUSER:SYNTHPASS@conv.example.invalid:8443/v1";
+  const MARKERS = ["SYNTHUSER", "SYNTHPASS"];
+
+  function clientWithBase(baseUrl: string, reject: boolean): HasnaStorageClient {
+    const err = Object.assign(new Error("Not Found"), { name: "HasnaHttpError", status: 404 });
+    const respond = reject
+      ? async () => {
+          throw err;
+        }
+      : async () => ({ count: 1 });
+    const transport = { baseUrl, get: respond, post: respond, patch: respond, del: respond } as unknown as HasnaStorageClient["transport"];
+    return { name: "conversations", baseUrl, transport } as unknown as HasnaStorageClient;
+  }
+
+  test("the OK path names only scheme, host and port", async () => {
+    // Positive control on the same predicate: the markers ARE in the base URL.
+    expect(MARKERS.filter((m) => LEAKY_BASE.includes(m))).toEqual(MARKERS);
+
+    const checks = await new ApiStore(clientWithBase(LEAKY_BASE, false)).health();
+    const text = JSON.stringify(checks);
+    expect(MARKERS.filter((m) => text.includes(m))).toEqual([]);
+    expect(checks[0]?.ok).toBe(true);
+    expect(checks[0]?.message).toContain("https://conv.example.invalid:8443");
+  });
+
+  test("the failure path names only scheme, host and port", async () => {
+    const checks = await new ApiStore(clientWithBase(LEAKY_BASE, true)).health();
+    const text = JSON.stringify(checks);
+    expect(MARKERS.filter((m) => text.includes(m))).toEqual([]);
+    expect(checks[0]?.ok).toBe(false);
+    expect(checks[0]?.message).toContain("https://conv.example.invalid:8443");
+  });
+
+  test("a clean base URL is still reported, so the check stays useful", async () => {
+    const checks = await new ApiStore(clientWithBase("https://conversations.hasna.xyz/v1", false)).health();
+    expect(checks[0]?.message).toContain("https://conversations.hasna.xyz");
+  });
+});

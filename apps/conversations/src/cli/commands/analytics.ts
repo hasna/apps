@@ -4,7 +4,8 @@ import chalk from "chalk";
 import { getDbPath, closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { windowItems } from "../../lib/compact-output.js";
-import { isCloudStore, cloudApiUrl } from "../../lib/store/index.js";
+import { isCloudStore } from "../../lib/store/index.js";
+import { storeStatusLocation, type StoreStatusLocation } from "../../lib/store/status-location.js";
 import { checkForUpdate } from "../../lib/version-check.js";
 import { getCliWindow, printCompactFooter, printJsonDisclosure, windowJsonList } from "../compact.js";
 import { SESSION_LIST_ORDER } from "../../lib/list-order.js";
@@ -368,7 +369,6 @@ export function registerAnalyticsCommands(program: Command): void {
       // verifying a flip see the store agents actually read/write — never raw sqlite,
       // never the stale local db while cloud is active.
       const store = getStore();
-      const cloud = isCloudStore();
 
       const [totalMessages, sessions, channels, projects, totalUnread] = await Promise.all([
         store.countMessages(),
@@ -378,18 +378,17 @@ export function registerAnalyticsCommands(program: Command): void {
         store.countMessages({ unread_only: true }),
       ]);
 
-      const stats: {
-        mode: "self_hosted" | "local";
-        api_url?: string | null;
-        db_path?: string;
+      // The store-location fields come from ONE shared builder, which redacts the
+      // API URL down to scheme/host/port. They used to be spread inline here and
+      // identically in server/serve.ts, and both spread the raw env value.
+      const stats: StoreStatusLocation & {
         total_messages: number;
         total_sessions: number;
         total_channels: number;
         total_projects: number;
         unread_messages: number;
       } = {
-        mode: cloud ? "self_hosted" : "local",
-        ...(cloud ? { api_url: cloudApiUrl() } : { db_path: getDbPath() }),
+        ...storeStatusLocation(),
         total_messages: totalMessages,
         total_sessions: sessions.length,
         total_channels: channels.length,
@@ -401,7 +400,10 @@ export function registerAnalyticsCommands(program: Command): void {
         printJson(stats);
       } else {
         printLine(chalk.bold("Conversations Status"));
-        if (cloud) {
+        // Branching on the payload's own discriminant rather than a second
+        // `isCloudStore()` call: the printed lines and the JSON body can no
+        // longer disagree about which store answered.
+        if (stats.mode === "self_hosted") {
           printLine(`  Mode:       self_hosted (cloud API)`);
           printLine(`  API URL:    ${stats.api_url ?? "(set)"}`);
         } else {

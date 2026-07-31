@@ -13,7 +13,8 @@
 // have no knowledge of the cloud transport. That is not a latent risk: on the
 // owner's Mac it rendered 358 of the fleet's 1124 channels with no error shown.
 import { getDbPath } from "../lib/db.js";
-import { getStore, isCloudStore, cloudApiUrl, ConversationsStoreConfigError } from "../lib/store/index.js";
+import { getStore, isCloudStore, ConversationsStoreConfigError } from "../lib/store/index.js";
+import { storeStatusLocation } from "../lib/store/status-location.js";
 import { handleMcpRequest, healthPayload } from "../mcp/http.js";
 import { buildServer } from "../mcp/index.js";
 import { join, resolve, sep } from "path";
@@ -88,7 +89,6 @@ function jsonResponse(data: unknown, status = 200): Response {
 // visible in the response instead of having to be inferred from a channel count.
 async function getStatus() {
   const store = getStore();
-  const cloud = isCloudStore();
 
   const [totalMessages, sessions, channels, projects, totalUnread] = await Promise.all([
     store.countMessages(),
@@ -99,8 +99,10 @@ async function getStatus() {
   ]);
 
   return {
-    mode: cloud ? "self_hosted" : "local",
-    ...(cloud ? { api_url: cloudApiUrl() } : { db_path: getDbPath() }),
+    // Shared with `conversations status`, and REDACTED: this body is served by
+    // an unauthenticated GET, so the raw API URL that used to appear here was
+    // readable by anything that could reach the port.
+    ...storeStatusLocation(),
     total_messages: totalMessages,
     total_sessions: sessions.length,
     total_channels: channels.length,
