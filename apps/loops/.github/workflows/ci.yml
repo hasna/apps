@@ -29,7 +29,11 @@ jobs:
         run: bun run typecheck
 
       - name: Test
-        run: bun test
+        # `bun run test`, not bare `bun test`: the suite's per-test timeout
+        # policy lives on the `test` script, and CI is the merge gate, so it
+        # has to exercise the same path. A bare invocation inherits bun's
+        # 5000ms framework default, which is the defect this repo just removed.
+        run: bun run test
         env:
           LOOPS_DATA_DIR: ${{ runner.temp }}/loops-ci-data
 

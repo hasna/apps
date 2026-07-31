@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
+import { CLI_SPAWN_TIMEOUT_MS } from "../test-timeout-policy.js";
 import { Store } from "../lib/store.js";
 import { createSqliteLoopStorage } from "../lib/storage/sqlite.js";
 import { applySelfHostedPush } from "../lib/migration.js";
@@ -47,7 +48,17 @@ function maybeAutoSourceTaskEnv(dataDir: string, args: string[], env: Record<str
   return { PATH: `${binDir}:${env.PATH ?? process.env.PATH ?? ""}` };
 }
 
-function runCli(dataDir: string, args: string[], input?: string, env: Record<string, string> = {}) {
+/**
+ * Spawn options for a CLI subprocess, including the hard per-spawn ceiling
+ * that replaces the old per-test wall-clock kill. Split out from runCli so the
+ * timeout is stated once rather than buried in a call site.
+ */
+function cliSpawnOptions(
+  dataDir: string,
+  args: string[],
+  input?: string,
+  env: Record<string, string> = {},
+) {
   const isolatedEnv = {
     HASNA_LOOPS_STORAGE_MODE: "local",
     HASNA_LOOPS_API_URL: "",
@@ -55,11 +66,24 @@ function runCli(dataDir: string, args: string[], input?: string, env: Record<str
     LOOPS_MACHINE_ID: "cli-test-machine",
   };
   const autoSourceTaskEnv = maybeAutoSourceTaskEnv(dataDir, args, env);
-  return spawnSync(process.execPath, [cliPath, ...args], {
+  return {
     env: { ...process.env, ...isolatedEnv, ...env, ...autoSourceTaskEnv, LOOPS_DATA_DIR: dataDir },
     input,
-    encoding: "utf8",
-  });
+    encoding: "utf8" as const,
+    timeout: CLI_SPAWN_TIMEOUT_MS,
+  };
+}
+
+function runCli(dataDir: string, args: string[], input?: string, env: Record<string, string> = {}) {
+  const result = spawnSync(process.execPath, [cliPath, ...args], cliSpawnOptions(dataDir, args, input, env));
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") {
+    // Name the command that hung. "this test timed out after 5000ms" told you
+    // nothing about which of a test's spawns was responsible.
+    throw new Error(
+      `loops CLI invocation exceeded ${CLI_SPAWN_TIMEOUT_MS}ms and was killed: loops ${args.join(" ")}`,
+    );
+  }
+  return result;
 }
 
 function isolatedRouteEnv(dataDir: string, env: Record<string, string> = {}): Record<string, string> {

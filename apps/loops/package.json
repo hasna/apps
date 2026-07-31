@@ -78,15 +78,15 @@
     "build": "rm -rf dist && bun build src/cli/index.ts src/daemon/index.ts src/api/index.ts src/serve/index.ts src/runner/index.ts src/mcp/index.ts src/index.ts src/sdk/index.ts src/sdk/http.ts src/lib/store.ts src/lib/mode.ts src/lib/storage/index.ts src/lib/storage/contract.ts src/lib/storage/sqlite.ts src/lib/storage/postgres.ts src/lib/storage/postgres-schema.ts --root src --outdir dist --target bun --packages external && chmod +x dist/cli/index.js dist/daemon/index.js dist/api/index.js dist/serve/index.js dist/runner/index.js dist/mcp/index.js && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
     "build:bin": "bun build src/cli/index.ts --compile --outfile dist/loops",
     "typecheck": "tsc --noEmit",
-    "test": "bun test",
-    "check:branding": "bun test scripts/check-branding.test.mjs && bun run scripts/check-branding.mjs",
+    "test": "bun test --timeout 120000",
+    "check:branding": "bun test --timeout 120000 scripts/check-branding.test.mjs && bun run scripts/check-branding.mjs",
     "test:boundary": "bun run scripts/no-private-cloud-boundary.mjs",
     "check:contracts": "bun run scripts/check-storage-kit.mjs && bun run scripts/check-contract-conformance.mjs",
     "check:supply-chain": "bun audit && bun audit --production && bun run check:contracts && bun run check:branding && bun pm pack --dry-run --ignore-scripts && bun run test:boundary && bun run scripts/check-packed-boundary.mjs",
     "prepare": "test -d dist || bun run build",
     "dev:cli": "bun run src/cli/index.ts",
     "dev:daemon": "bun run src/daemon/index.ts",
-    "prepublishOnly": "bun run build && bun run typecheck && bun test && bun run test:boundary && bun run check:supply-chain"
+    "prepublishOnly": "bun run build && bun run typecheck && bun test --timeout 120000 && bun run test:boundary && bun run check:supply-chain"
   },
   "keywords": [
     "loops",
