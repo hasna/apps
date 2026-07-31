@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Fixed
+- **Every recency read returned the OLDEST messages, not the newest — `--limit`, `--since`, and `conversations since` alike.** Three call shapes were affected, and all three are the recommended way to answer "what happened recently", so any watcher, digest, or situational-awareness monitor built on them reported "nothing new" forever while looking perfectly healthy. Measured against the hosted API on 2026-07-30 at 0.5.11:
+  - `read --channel internal-ea --limit 5 --json` returned ids `586455…586462` while `--since 6h` at the same moment reached `607377`.
+  - `read --channel incidents --since 3h` returned the 20 **oldest** rows of a 110-row window, stopping at id `607270` against a true newest of `608099`.
+  - `conversations since 3h --limit 5000` returned 500 rows stopping at `607592`, blind by 529 ids.
+
+  There were **two distinct defects**. The first is ordering: both stores defaulted to `ORDER BY created_at ASC LIMIT N` whenever `latest` was unset (`src/lib/messages.ts`, `src/lib/store/api-store.ts`), and `--since` inherited it with the cap *defaulted* rather than passed. `conversations since` additionally hardcoded `order: "asc"` at its own call site, so it survived the store-layer fix untouched and had to be fixed separately. Ordering is now decided once, in a shared `resolveReadWindow` (`src/lib/message-window.ts`) used by the sqlite store, the HTTP store, and the CLI/MCP paging that windows their answer. A bare `limit` or a `since` filter selects the newest N and hands them back chronologically ascending, so a transcript still reads oldest-to-newest; over-fetched (`limit + 1`) pages now keep the tail rather than the head, which is what was dropping the newest message. A `since_id` is a genuine cursor and keeps ascending selection, so a catch-up walk cannot skip the middle of a backlog.
+
+  The second defect is silent truncation. A capped read reported exit code 0 with no cursor and no signal, and three separate caps can do the truncating: an explicit `--limit`, the store default, and the server's own hard clamp of a `/messages` read at 500 rows (`clampLimit` in `src/server/api.ts`), which `--limit` cannot raise. `--json` reads bypass the compact footer entirely, so they printed a truncated array with nothing to distinguish it from a complete answer. They now emit a notice on **stderr** when a page comes back full, leaving stdout a parseable JSON array and the exit code unchanged.
+
+  Note on the 500-row server clamp: this PR does not move it, and does not need to. Asking `asc` meant "the oldest 500 of the window", so a window over 500 could never reach the newest at any limit. Asking `desc` means the clamped page is the *newest* 500, so the ceiling now only bounds how far **back** a single page reaches — ordinary pagination rather than blindness. Everything here is a client-side fix: the `/v1` server already defaults to `DESC` and honours `?order=asc`, so **no server deploy is required**.
+
+### Migration
+- `--limit` / `limit` and `--since` now mean "the newest N". A caller that relied
+  on the old behaviour to walk a backlog forward should pass `order: "asc"`
+  (unchanged semantics) or anchor with `since_id`, which is treated as a cursor
+  and still selects ascending. `--cursor`/`offset` now pages backwards into older
+  messages, which is what a recency window's page 2 means.
+- `--json` reads print a truncation notice on stderr when the page comes back
+  full. Anything parsing stdout is unaffected; anything that treated stderr as
+  fatal should check the exit code instead, which is still 0.
+
 ## 0.5.13 - 2026-07-31
 
 ### Added

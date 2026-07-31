@@ -58,18 +58,25 @@ describe("compact CLI output", () => {
     expect(JSON.parse(json.stdout)[0].content).toContain("TAIL_ONLY_IN_VERBOSE");
   });
 
+  // `--limit 1` is a recency window, so the displayed page is the NEWEST message
+  // and that is the one marked. This test previously asserted the opposite —
+  // that the OLDEST was displayed and marked — which pinned the ordering defect
+  // in todos 2c25973b rather than the intended contract. The contract the name
+  // states, "only the displayed page is marked", is unchanged and still checked.
   test("mark-read marks only the displayed compact page", () => {
-    runCli(["send", "first page message", "--to", "mark-target"], "alice");
-    runCli(["send", "second page message", "--to", "mark-target"], "alice");
+    runCli(["send", "older page message", "--to", "mark-target"], "alice");
+    runCli(["send", "newer page message", "--to", "mark-target"], "alice");
 
     const marked = runCli(["read", "--to", "mark-target", "--limit", "1", "--mark-read"], "mark-target");
     expect(marked.exitCode).toBe(0);
+    expect(marked.stdout).toContain("newer page message");
+    expect(marked.stdout).not.toContain("older page message");
 
     const unread = runCli(["read", "--to", "mark-target", "--unread", "--json"], "mark-target");
     expect(unread.exitCode).toBe(0);
     const messages = JSON.parse(unread.stdout);
     expect(messages).toHaveLength(1);
-    expect(messages[0].content).toBe("second page message");
+    expect(messages[0].content).toBe("older page message");
   });
 
   test("read accepts --unread-only after agent registration", () => {

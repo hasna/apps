@@ -1,3 +1,9 @@
+// This file is a secret-DETECTION fixture: every credential-shaped value in it
+// is assembled from fragments at runtime so the scanner has something to find,
+// and the one literal is a PEM banner line with no key material after it. The
+// staged-secrets hook cannot tell a detection fixture from a leak, so the
+// sanctioned per-file escape is declared here rather than per line.
+// hasna:allow-secret-file
 import { describe, test, expect } from "bun:test";
 import {
   attachSendRedaction,

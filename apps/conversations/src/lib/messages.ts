@@ -7,6 +7,7 @@ import { fireWebhooks } from "./webhooks.js";
 import { normalizeChannelName } from "./channel-names.js";
 import { markChannelNotificationsRead } from "./channel-notifications.js";
 import { assertNoSensitiveContent, assertNoSensitiveValue, redactSensitiveText, redactSensitiveValue } from "./content-safety.js";
+import { resolveReadLimit, resolveReadWindow } from "./message-window.js";
 import {
   BLOCKERS_LIST_ORDER,
   PINNED_LIST_ORDER,
@@ -331,14 +332,13 @@ export function readMessages(opts: ReadMessagesOptions = {}): Message[] {
   }
 
   // latest: N — return the N most recent messages (newest first), overrides limit + order
-  const isLatest = opts.latest && opts.latest > 0;
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-  const resolvedLimit = isLatest
-    ? Math.floor(opts.latest as number)
-    : Number.isFinite(opts.limit) && (opts.limit as number) > 0
-      ? Math.floor(opts.limit as number)
-      : 20;
-  const order = isLatest ? "DESC" : (opts.order?.toLowerCase() === "desc" ? "DESC" : "ASC");
+  const resolvedLimit = resolveReadLimit(opts);
+  // A bare `limit` — and a bare `--since`, which falls back to the same default
+  // cap — is a recency window: SELECT the newest N and hand them back
+  // chronologically. Selecting ascending returned the OLDEST N (todos 2c25973b).
+  const window = resolveReadWindow(opts);
+  const order = window.select === "desc" ? "DESC" : "ASC";
 
   // SQLite LIMIT/OFFSET require literal integers — validated and bounded here
   const resolvedOffset = Number.isFinite(opts.offset) ? Math.floor(opts.offset as number) : 0;
@@ -347,6 +347,7 @@ export function readMessages(opts: ReadMessagesOptions = {}): Message[] {
   const rows = db.prepare(
     `SELECT * FROM messages ${where} ORDER BY created_at ${order}, id ${order} LIMIT ${safeLimit} OFFSET ${safeOffset}`
   ).all(...params) as Record<string, unknown>[];
+  if (window.reverse) rows.reverse();
 
   let messages = rows.map(parseMessage);
 

@@ -8,6 +8,7 @@ import type {
   Session,
   TaskInfo,
 } from "../types.js";
+import { takeWindow } from "./message-window.js";
 
 export const DEFAULT_COMPACT_LIMIT = 10;
 export const DEFAULT_PREVIEW_CHARS = 160;
@@ -78,8 +79,15 @@ export function windowItems<T>(items: T[], opts: OutputWindow): WindowedItems<T>
   };
 }
 
-export function pageQueriedItems<T>(items: T[], opts: OutputWindow) {
-  const page = items.slice(0, opts.limit);
+/**
+ * Window an over-fetched (`limit + 1`) query result.
+ *
+ * `newestWindow` says the rows are the newest N+1 in chronological order, so the
+ * page asked for is the TAIL — keeping the head would drop the newest row, which
+ * is the whole point of a recency read (todos 2c25973b).
+ */
+export function pageQueriedItems<T>(items: T[], opts: OutputWindow, pageOpts: { newestWindow?: boolean } = {}) {
+  const page = takeWindow(items, opts.limit, pageOpts.newestWindow === true);
   const hasMore = items.length > opts.limit;
   return {
     items: page,

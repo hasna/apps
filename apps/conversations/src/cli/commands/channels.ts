@@ -6,12 +6,13 @@ import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { previewText, windowItems } from "../../lib/compact-output.js";
 import { assertNoSensitiveContent } from "../../lib/content-safety.js";
-import { getCliWindow, pageFromQuery, printCompactFooter, printJsonDisclosure, queryLimitFor, windowJsonList } from "../compact.js";
+import { getCliWindow, pageFromQuery, printCompactFooter, printJsonDisclosure, queryLimitFor, warnIfPageFull, windowJsonList } from "../compact.js";
 import { CHANNEL_MEMBER_ORDER, CHANNEL_SUBSCRIPTION_AGENT_ORDER } from "../../lib/list-order.js";
 import { printMessageEntry } from "../message-output.js";
 import { emitCliError } from "../cli-error.js";
 import { warnIfRedacted } from "../redaction-notice.js";
 import { printErrorLine, printJson, printJsonLine, printLine } from "../../lib/stdout.js";
+import { resolveReadWindow } from "../../lib/message-window.js";
 
 /**
  * Merge a channel class into existing channel metadata at `metadata.channel_schema.class`,
@@ -389,15 +390,16 @@ export function registerChannelCommands(program: Command): void {
         emitCliError(`Channel #${channelArg} not found.`, opts);
       }
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
-      const messages = await store.readMessages({
+      const query = {
         channel: channelArg,
         since: opts.since,
         limit: opts.json ? opts.limit : queryLimitFor(window),
         offset: opts.json ? opts.cursor : window.offset,
-      });
+      };
+      const messages = await store.readMessages(query);
       const page = opts.json
         ? { items: messages, count: messages.length, hasMore: false, nextCursor: null }
-        : pageFromQuery(messages, window);
+        : pageFromQuery(messages, window, { newestWindow: resolveReadWindow(query).newestWindow });
 
       if (opts.from && page.items.length > 0) {
         const agent = resolveIdentity(opts.from).trim();
@@ -411,6 +413,7 @@ export function registerChannelCommands(program: Command): void {
 
       if (opts.json) {
         printJson(messages);
+        warnIfPageFull(messages.length, query.limit);
       } else {
         if (messages.length === 0) {
           printLine(chalk.dim(`No messages in #${channelArg}.`));

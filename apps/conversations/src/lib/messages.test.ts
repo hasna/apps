@@ -3,6 +3,7 @@ import { sendMessage, readMessages, readDigest, markRead, markReadByIds, markSes
 import { createChannel, joinChannel } from "./channels";
 import { readChannelNotifications, subscribeToChannelNotifications } from "./channel-notifications";
 import { closeDb, getDb } from "./db";
+import { DEFAULT_READ_LIMIT } from "./message-window";
 import { redactSensitiveText } from "./content-safety";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
@@ -292,6 +293,81 @@ describe("readMessages", () => {
     sendMessage({ from: "a", to: "b", content: "3" });
     const msgs = readMessages({ limit: 2 });
     expect(msgs).toHaveLength(2);
+  });
+
+  // Regression: `limit` alone used to mean "the OLDEST N" (ORDER BY created_at
+  // ASC LIMIT N), so every recency read — a watcher, a digest, `read --channel X
+  // --limit 40` — silently answered with ancient history and looked healthy.
+  describe("recency window (regression: limit returned the oldest N)", () => {
+    test("limit alone returns the NEWEST N, in chronological order", () => {
+      for (const n of ["1", "2", "3", "4", "5"]) sendMessage({ from: "a", to: "b", content: n });
+      const msgs = readMessages({ limit: 3 });
+      expect(msgs.map((m) => m.content)).toEqual(["3", "4", "5"]);
+    });
+
+    test("limit alone on a channel returns the NEWEST N, in chronological order", () => {
+      for (const n of ["1", "2", "3", "4", "5"]) sendMessage({ from: "a", to: "watch", content: n, channel: "watch" });
+      const msgs = readMessages({ channel: "watch", limit: 2 });
+      expect(msgs.map((m) => m.content)).toEqual(["4", "5"]);
+    });
+
+    test("offset pages backwards through older messages, each page chronological", () => {
+      for (const n of ["1", "2", "3", "4", "5"]) sendMessage({ from: "a", to: "b", content: n });
+      expect(readMessages({ limit: 2, offset: 0 }).map((m) => m.content)).toEqual(["4", "5"]);
+      expect(readMessages({ limit: 2, offset: 2 }).map((m) => m.content)).toEqual(["2", "3"]);
+    });
+
+    test("explicit order:asc still selects the OLDEST N (forward paging preserved)", () => {
+      for (const n of ["1", "2", "3", "4", "5"]) sendMessage({ from: "a", to: "b", content: n });
+      const msgs = readMessages({ limit: 3, order: "asc" });
+      expect(msgs.map((m) => m.content)).toEqual(["1", "2", "3"]);
+    });
+
+    test("explicit order:desc still returns newest-first", () => {
+      for (const n of ["1", "2", "3"]) sendMessage({ from: "a", to: "b", content: n });
+      const msgs = readMessages({ limit: 2, order: "desc" });
+      expect(msgs.map((m) => m.content)).toEqual(["3", "2"]);
+    });
+
+    // A since_id is a CURSOR — "the next page after this exact id". Flipping that
+    // to a newest-N window would silently skip the middle of a backlog for anyone
+    // paging with a cursor, so it keeps ascending selection.
+    test("since_id cursor keeps forward paging: the OLDEST N after the anchor", () => {
+      const seeded = ["1", "2", "3", "4", "5"].map((n) => sendMessage({ from: "a", to: "b", content: n }));
+      const msgs = readMessages({ since_id: seeded[0].id, limit: 2 });
+      expect(msgs.map((m) => m.content)).toEqual(["2", "3"]);
+    });
+
+    // `since` is a TIME FILTER, not a cursor, and it had the same defect with the
+    // cap defaulted rather than passed: on #incidents at 0.5.11 `--since 3h`
+    // returned the 20 OLDEST rows of a 110-row window.
+    test("a since filter returns the NEWEST N of the window, chronologically", () => {
+      const seeded = ["1", "2", "3", "4", "5"].map((n) => sendMessage({ from: "a", to: "b", content: n }));
+      const anchor = readMessages({ latest: 5 }).find((m) => m.content === "1")!.created_at;
+      void seeded;
+      const msgs = readMessages({ since: anchor, limit: 2 });
+      expect(msgs.map((m) => m.content)).toEqual(["4", "5"]);
+    });
+
+    test("a since filter with no limit falls back to the shared default cap", () => {
+      for (let n = 1; n <= DEFAULT_READ_LIMIT + 5; n++) sendMessage({ from: "a", to: "b", content: String(n) });
+      const msgs = readMessages({ since: "1970-01-01T00:00:00.000Z" });
+      expect(msgs).toHaveLength(DEFAULT_READ_LIMIT);
+      // The newest message must be present: its absence is the whole defect.
+      expect(msgs[msgs.length - 1].content).toBe(String(DEFAULT_READ_LIMIT + 5));
+    });
+
+    test("latest:N is unchanged — newest N, newest first", () => {
+      for (const n of ["1", "2", "3", "4"]) sendMessage({ from: "a", to: "b", content: n });
+      const msgs = readMessages({ latest: 2 });
+      expect(msgs.map((m) => m.content)).toEqual(["4", "3"]);
+    });
+
+    test("fewer messages than the limit still reads chronologically", () => {
+      sendMessage({ from: "a", to: "b", content: "1" });
+      sendMessage({ from: "a", to: "b", content: "2" });
+      expect(readMessages({ limit: 10 }).map((m) => m.content)).toEqual(["1", "2"]);
+    });
   });
 
   test("orders by created_at ASC", () => {

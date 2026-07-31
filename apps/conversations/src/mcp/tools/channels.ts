@@ -17,6 +17,7 @@ import { getStore } from "../../lib/store/index.js";
 import { identityFor } from "../identity.js";
 import { assertNoSensitiveContent, redactSensitiveText } from "../../lib/content-safety.js";
 import { compactQueriedMessages, compactWindowedChannels, jsonText, resolveMcpWindow } from "../compact.js";
+import { resolveReadWindow, takeWindow } from "../../lib/message-window.js";
 import { describeReadMessagesOrder } from "../../lib/list-order.js";
 
 function toolError(error: unknown, fallback: string) {
@@ -160,7 +161,7 @@ export function registerChannelTools(server: McpServer): void {
     const { channel, from: fromParam, since, limit, mark_read, max_content_length, threads_only, include_reply_counts, latest } = args;
     const window = resolveMcpWindow(args);
     const verbose = args.verbose === true;
-    const messages = await store.readMessages({
+    const query = {
       channel,
       since,
       limit: verbose ? limit : window.limit + 1,
@@ -169,8 +170,12 @@ export function registerChannelTools(server: McpServer): void {
       threads_only,
       include_reply_counts,
       latest,
-    });
-    const visible = verbose ? messages : messages.slice(0, window.limit);
+    };
+    const messages = await store.readMessages(query);
+    // A recency window arrives newest-anchored but chronological, so the page is
+    // the tail of the over-fetched rows (todos 2c25973b).
+    const newestWindow = resolveReadWindow(query).newestWindow;
+    const visible = verbose ? messages : takeWindow(messages, window.limit, newestWindow);
 
     if (mark_read !== false && visible.length > 0) {
       await store.markReadByIds(visible.map((m) => m.id));
@@ -184,7 +189,7 @@ export function registerChannelTools(server: McpServer): void {
     }
 
     return {
-      content: [{ type: "text", text: jsonText(verbose ? messages : compactQueriedMessages(messages, args, describeReadMessagesOrder(args))) }],
+      content: [{ type: "text", text: jsonText(verbose ? messages : compactQueriedMessages(messages, args, describeReadMessagesOrder(args), { newestWindow })) }],
     };
   });
 

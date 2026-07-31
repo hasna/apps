@@ -69,10 +69,22 @@ export function resolveMcpWindow(args: Record<string, unknown>, defaultLimit = D
  * what let a shared helper state one query's ordering over another's, so the
  * caller that issues the query must now name the ordering it issued, and a new
  * call site cannot compile without doing so.
+ *
+ * `pageOpts.newestWindow` says the rows are a NEWEST-anchored window, so an
+ * over-fetched page keeps its TAIL rather than its head. Keeping the head is
+ * what dropped the newest message a recency read had just gone to fetch
+ * (todos 2c25973b). It is separate from `sort`: `sort` states the direction the
+ * returned rows are in, `newestWindow` states which end of the window they came
+ * from, and a reader needs both.
  */
-export function compactQueriedMessages(messages: Message[], args: Record<string, unknown>, sort: SortDescriptor) {
+export function compactQueriedMessages(
+  messages: Message[],
+  args: Record<string, unknown>,
+  sort: SortDescriptor,
+  pageOpts: { newestWindow?: boolean } = {},
+) {
   const window = resolveMcpWindow(args);
-  const page = pageQueriedItems(messages, window);
+  const page = pageQueriedItems(messages, window, pageOpts);
   return {
     messages: page.items.map((message) => summarizeMessage(message)),
     ...orderFields(sort),

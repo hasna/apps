@@ -15,6 +15,7 @@ import type { ConversationsStore } from "./index.js";
 import { normalizeChannelName } from "../channel-names.js";
 import { AGENT_LIST_ORDER, CHANNEL_LIST_ORDER, SEARCH_RECENT_ORDER, describeMessageOrder } from "../list-order.js";
 import { normalizeSince } from "../since.js";
+import { resolveReadLimit, resolveReadWindow } from "../message-window.js";
 import { parseProject } from "../projects.js";
 import { attachSendRedaction } from "../content-safety.js";
 import {
@@ -550,9 +551,15 @@ export class ApiStore implements ConversationsStore {
   readMessages: ConversationsStore["readMessages"] = async (opts) => {
     const o = opts ?? {};
     const since = normalizeSince(o.since);
-    const isLatest = Boolean(o.latest && o.latest > 0);
-    const limit = isLatest ? Math.floor(o.latest as number) : Number.isFinite(o.limit) && (o.limit as number) > 0 ? Math.floor(o.limit as number) : 20;
-    const order = isLatest ? "desc" : o.order?.toLowerCase() === "desc" ? "desc" : "asc";
+    const limit = resolveReadLimit(o);
+    // A bare `limit` — and a bare `since`, which falls back to the same default
+    // cap — is a recency window: the server must SELECT the newest N. Asking for
+    // `asc` returned the oldest N and no client-side sort could have repaired it:
+    // the newest rows never left the server (todos 2c25973b).
+    // Resolved against the NORMALIZED since, so the ordering decision matches the
+    // filter the server actually receives ("7d" → an ISO stamp, blank → no filter).
+    const window = resolveReadWindow({ ...o, since });
+    const order = window.select;
     const res = await this.get<{ messages?: Record<string, unknown>[] }>("/messages", {
       limit, order, offset: o.offset, session: o.session_id, from: o.from, to: o.to,
       channel: o.channel ? normalizeChannelName(o.channel) : undefined, project_id: o.project_id,
@@ -560,7 +567,9 @@ export class ApiStore implements ConversationsStore {
       threads_only: o.threads_only ? true : undefined,
       include_reply_counts: o.include_reply_counts ? true : undefined, mentions_only: o.mentions_only,
     });
-    let messages = (res?.messages ?? []).map(parseMessage);
+    const rows = res?.messages ?? [];
+    if (window.reverse) rows.reverse();
+    let messages = rows.map(parseMessage);
     if (o.max_content_length && o.max_content_length > 0) {
       const max = o.max_content_length;
       messages = messages.map((m) => (m.content.length > max ? { ...m, content: m.content.slice(0, max) + "…", truncated: true } : m));

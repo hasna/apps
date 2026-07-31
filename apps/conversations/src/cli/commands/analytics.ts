@@ -207,8 +207,14 @@ export function registerAnalyticsCommands(program: Command): void {
       // Online agents
       const onlineAgents = await store.listAgents({ online_only: true });
 
-      // Unread DMs
-      const unreadDMs = await store.readMessages({ to: agent, unread_only: true, limit: 5 });
+      // Unread DMs — a backlog summary, not a recency window: order is stated
+      // explicitly (asc = oldest unread first) rather than inherited from the
+      // shared readMessages recency-window default (message-window.ts). With
+      // more unread than the limit, "newest N" would silently hide the older
+      // unread backlog forever — the same class of defect todos 2c25973b fixed
+      // elsewhere, reintroduced here if this call site ever drifted with the
+      // default instead of stating its own intent (PR #39 review).
+      const unreadDMs = await store.readMessages({ to: agent, unread_only: true, limit: 5, order: "asc" });
 
       // Channels I'm in (with per-channel unread counts) — routed through the Store
       const myChannels = await store.getMemberChannels(agent);
@@ -220,8 +226,13 @@ export function registerAnalyticsCommands(program: Command): void {
         limit: 5,
       });
 
-      // Recent DMs (last 3 messages to me)
-      const recentDMs = await store.readMessages({ to: agent, limit: 3 });
+      // Recent DMs (last 3 messages to me) — "recent" means newest N. Requested
+      // explicitly (desc, then reversed to a chronological transcript) instead
+      // of relying on the shared recency-window default: the result is the
+      // same newest-N-chronological answer the default already gave, but this
+      // call site can no longer be silently flipped by a future default change
+      // (PR #39 review — this site was unenumerated and untested).
+      const recentDMs = (await store.readMessages({ to: agent, limit: 3, order: "desc" })).reverse();
 
       const context = {
         agent,

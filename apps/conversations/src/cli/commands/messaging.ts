@@ -8,9 +8,10 @@ import { resolveIdentity } from "../../lib/identity.js";
 import { renderContent } from "../../lib/terminal-markdown.js";
 import { buildMessagePreview } from "../../lib/channel-notifications.js";
 import { previewText } from "../../lib/compact-output.js";
-import { getCliWindow, pageFromQuery, printCompactFooter, queryLimitFor } from "../compact.js";
+import { getCliWindow, pageFromQuery, printCompactFooter, queryLimitFor, warnIfPageFull, SINCE_JSON_LIMIT } from "../compact.js";
 import { BLOCKERS_LIST_ORDER, PINNED_LIST_ORDER } from "../../lib/list-order.js";
 import { printMessageEntry } from "../message-output.js";
+import { resolveReadWindow } from "../../lib/message-window.js";
 import { checkForUpdate } from "../../lib/version-check.js";
 import { emitCliError } from "../cli-error.js";
 import { warnIfRedacted } from "../redaction-notice.js";
@@ -134,7 +135,7 @@ export function registerMessagingCommands(program: Command): void {
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
-      const messages = await await getStore().readMessages({
+      const query = {
         session_id: opts.session,
         from: opts.from,
         to: opts.to,
@@ -143,10 +144,11 @@ export function registerMessagingCommands(program: Command): void {
         limit: opts.json ? opts.limit : queryLimitFor(window),
         offset: opts.json ? opts.cursor : window.offset,
         unread_only: opts.unread || opts.unreadOnly,
-      });
+      };
+      const messages = await getStore().readMessages(query);
       const page = opts.json
         ? { items: messages, hasMore: false, nextCursor: null, count: messages.length }
-        : pageFromQuery(messages, window);
+        : pageFromQuery(messages, window, { newestWindow: resolveReadWindow(query).newestWindow });
 
       if (opts.markRead) {
         const reader = resolveIdentity(opts.to);
@@ -156,6 +158,7 @@ export function registerMessagingCommands(program: Command): void {
 
       if (opts.json) {
         printJson(messages);
+        warnIfPageFull(messages.length, query.limit);
       } else {
         if (messages.length === 0) {
           printLine(chalk.dim("No messages found."));
@@ -350,18 +353,25 @@ export function registerMessagingCommands(program: Command): void {
       const since = new Date(Date.now() - value * msMap[unit]).toISOString().replace("T", "T").slice(0, 23);
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
 
-      const messages = await await getStore().readMessages({
+      // `order: "asc"` used to be hardcoded here. The store-layer recency fix
+      // could not reach it — an explicit order is honoured by design — so this
+      // command stayed blind to the newest messages after both stores were
+      // fixed, and `--limit` could not rescue it because the server clamps a
+      // /messages read at 500 rows (todos 2c25973b). Ordering is now the
+      // resolver's decision, so `since` answers with the NEWEST N of the window.
+      const query = {
         since,
-        order: "asc",
-        limit: opts.json ? (opts.limit ?? 200) : queryLimitFor(window),
+        limit: opts.json ? (opts.limit ?? SINCE_JSON_LIMIT) : queryLimitFor(window),
         offset: opts.json ? opts.cursor : window.offset,
-      });
+      };
+      const messages = await getStore().readMessages(query);
       const page = opts.json
         ? { items: messages, count: messages.length, hasMore: false, nextCursor: null }
-        : pageFromQuery(messages, window);
+        : pageFromQuery(messages, window, { newestWindow: resolveReadWindow(query).newestWindow });
 
       if (opts.json) {
         printJson(messages);
+        warnIfPageFull(messages.length, query.limit);
       } else {
         if (messages.length === 0) {
           printLine(chalk.dim(`No activity in the last ${duration}.`));

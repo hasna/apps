@@ -8,6 +8,34 @@ import {
 } from "../lib/compact-output.js";
 import { formatSortDescriptor, type SortDescriptor } from "../lib/list-order.js";
 import { printErrorLine, printLine } from "../lib/stdout.js";
+import { DEFAULT_READ_LIMIT, takeWindow } from "../lib/message-window.js";
+
+/**
+ * The row cap `conversations since <duration> --json` falls back to. Larger than
+ * a single-channel read because the command spans every DM and channel at once.
+ */
+export const SINCE_JSON_LIMIT = 200;
+
+/**
+ * Warn — on STDERR — when a `--json` read came back exactly full, because a full
+ * page is indistinguishable from a complete answer.
+ *
+ * The `--json` paths bypass the compact footer, so they printed a silently
+ * truncated array with exit code 0 and no cursor. Three separate caps can do the
+ * truncating: an explicit `--limit`, the store default, and the server's own
+ * hard clamp of a `/messages` read at 500 rows — which `--limit` cannot raise
+ * (todos 2c25973b). It goes to stderr so stdout stays a parseable JSON array and
+ * the exit code stays 0; a full page is "there may be more", not an error.
+ */
+export function warnIfPageFull(returned: number, limit: number | undefined, cursorFlag = "--cursor"): void {
+  const cap = typeof limit === "number" && Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : DEFAULT_READ_LIMIT;
+  if (returned < cap) return;
+  printErrorLine(
+    chalk.yellow(
+      `Note: returned ${returned} messages, the maximum for this read. More may exist — page further back with ${cursorFlag} ${returned}, or narrow the window.`,
+    ),
+  );
+}
 
 export function getCliWindow(opts: {
   limit?: unknown;
@@ -49,8 +77,15 @@ export function queryLimitFor(window: OutputWindow): number {
   return window.limit + 1;
 }
 
-export function pageFromQuery<T>(items: T[], window: OutputWindow) {
-  const page = items.slice(0, window.limit);
+/**
+ * Window an over-fetched (`limit + 1`) query result.
+ *
+ * `newestWindow` says the store returned the newest N+1 rows in chronological
+ * order, so the page the caller asked for is the TAIL. Keeping the head there
+ * would drop the newest message — the one a recency read exists to show.
+ */
+export function pageFromQuery<T>(items: T[], window: OutputWindow, opts: { newestWindow?: boolean } = {}) {
+  const page = takeWindow(items, window.limit, opts.newestWindow === true);
   const hasMore = items.length > window.limit;
   return {
     items: page,

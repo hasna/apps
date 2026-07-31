@@ -14,6 +14,7 @@ import { getStore } from "../../lib/store/index.js";
 // + _API_KEY are set (self_hosted/cloud), else LocalStore.
 import { identityFor } from "../identity.js";
 import { compactQueriedMessages, compactQueriedSearchMessages, compactWindowedSessions, jsonText, resolveMcpWindow } from "../compact.js";
+import { resolveReadWindow, takeWindow } from "../../lib/message-window.js";
 import { PINNED_LIST_ORDER, describeReadMessagesOrder } from "../../lib/list-order.js";
 
 function toolError(error: unknown, fallback: string) {
@@ -140,21 +141,25 @@ export function registerMessagingTools(
     const agent = resolveIdentity(args.from);
     const window = resolveMcpWindow(args);
     const verbose = args.verbose === true;
-    const messages = await await getStore().readMessages({
+    const query = {
       ...args,
       limit: verbose ? args.limit : window.limit + 1,
       offset: verbose ? (args.offset ?? args.cursor) : window.offset,
       project_id: args.project_id ?? (await resolveProjectId(undefined, agent)),
-    });
+    };
+    const messages = await await getStore().readMessages(query);
+    // A recency window arrives newest-anchored but chronological, so the page is
+    // the tail of the over-fetched rows (todos 2c25973b).
+    const newestWindow = resolveReadWindow(query).newestWindow;
 
     if (args.mark_read !== false && messages.length > 0) {
-      const visible = verbose ? messages : messages.slice(0, window.limit);
+      const visible = verbose ? messages : takeWindow(messages, window.limit, newestWindow);
       await await getStore().markReadByIds(visible.map((m) => m.id), agent);
     }
 
     const payload = verbose
       ? { messages, count: messages.length, offset: args.offset ?? args.cursor ?? 0, compact: false }
-      : compactQueriedMessages(messages, args, describeReadMessagesOrder(args));
+      : compactQueriedMessages(messages, args, describeReadMessagesOrder(args), { newestWindow });
     return {
       content: [{ type: "text", text: jsonText(payload) }],
     };

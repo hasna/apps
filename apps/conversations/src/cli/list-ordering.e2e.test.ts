@@ -72,25 +72,38 @@ afterAll(() => {
 });
 
 describe("item 1 — ordering is disclosed on the text surface, and the disclosure is true", () => {
-  test("read discloses created_at asc and does return the oldest rows", () => {
+  /**
+   * AMENDED (todos 2c25973b): this case previously asserted that a bare
+   * `--limit` returns the OLDEST rows — it named the defect and pinned it as
+   * intended behaviour, so the fix could not land without failing here.
+   *
+   * The disclosure was never the broken part and is unchanged: the returned
+   * rows really are `created_at asc`, because a recency window selects the
+   * newest N and hands them back chronologically. What changed is WHICH rows
+   * the window contains, so that is what the assertions now check.
+   */
+  test("read discloses created_at asc and returns the NEWEST rows, chronologically", () => {
     const res = runCli(["read", "--to", "ord-reader", "--limit", "2"], "ord-reader");
     expect(res.exitCode).toBe(0);
-    // The disclosure.
+    // The disclosure — still true of the array that comes back.
     expect(res.stdout).toContain("sort=created_at asc");
-    // The reality it must match: oldest two, newest absent.
-    expect(res.stdout).toContain("ord-first-message");
-    expect(res.stdout).not.toContain("ord-third-message");
-    expect(res.stdout.indexOf("ord-first-message")).toBeLessThan(res.stdout.indexOf("ord-second-message"));
+    // The reality it must match: the newest two, oldest absent.
+    expect(res.stdout).toContain("ord-third-message");
+    expect(res.stdout).not.toContain("ord-first-message");
+    // Ascending within the window, so it still reads as a transcript.
+    expect(res.stdout.indexOf("ord-second-message")).toBeLessThan(res.stdout.indexOf("ord-third-message"));
     // The pre-existing truncation footer must survive the change.
     expect(res.stdout).toContain("More available: rerun with --cursor 2.");
   }, CASE_TIMEOUT_MS);
 
-  test("channel read discloses created_at asc and returns the oldest rows", () => {
+  /** AMENDED (todos 2c25973b) — see the case above. */
+  test("channel read discloses created_at asc and returns the NEWEST rows, chronologically", () => {
     const res = runCli(["channel", "read", "ord-alpha", "--limit", "2"]);
     expect(res.exitCode).toBe(0);
     expect(res.stdout).toContain("sort=created_at asc");
-    expect(res.stdout).toContain("ord-chan-first");
-    expect(res.stdout).not.toContain("ord-chan-third");
+    expect(res.stdout).toContain("ord-chan-third");
+    expect(res.stdout).not.toContain("ord-chan-first");
+    expect(res.stdout.indexOf("ord-chan-second")).toBeLessThan(res.stdout.indexOf("ord-chan-third"));
   }, CASE_TIMEOUT_MS);
 
   test("since discloses created_at asc", () => {
