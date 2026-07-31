@@ -7,7 +7,7 @@ export OPEN_SIGNATURES_ADMIN_TOKEN="$(openssl rand -hex 32)"
 signatures-serve
 ```
 
-The default port is `19440`; set `PORT` or use `open-signatures serve --port`.
+The default port is `19440`; set `PORT` or use `signatures serve --port`.
 `SIGNATURES_ADMIN_TOKEN` is accepted as a legacy admin-token variable.
 
 ## Authentication and Requests

@@ -30,7 +30,7 @@ process.on("exit", () => {
 
 child.on("error", (error) => {
   childExited = true;
-  console.error(`Failed to start open-signatures with Bun: ${error.message}`);
+  console.error(`Failed to start signatures with Bun: ${error.message}`);
   process.exit(1);
 });
 

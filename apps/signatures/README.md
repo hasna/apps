@@ -48,7 +48,7 @@ npm install -g @hasna/signatures
 ```
 
 The command-line tools require [Bun](https://bun.sh/) 1.0 or newer. The npm
-package exposes `open-signatures` and `signatures` for the CLI,
+package exposes `signatures` for the CLI,
 `signatures-serve` for the REST server, and `signatures-mcp` for MCP.
 
 Local development:
@@ -71,7 +71,7 @@ bun run build
 Create a text signature:
 
 ```bash
-open-signatures signature create --name "Ada Lovelace" --type text --text "Ada Lovelace"
+signatures signature create --name "Ada Lovelace" --type text --text "Ada Lovelace"
 ```
 
 Render a Markdown agreement with variables and a signature anchor:
@@ -85,7 +85,7 @@ Please sign here: {{signature:client}}
 ```
 
 ```bash
-open-signatures document from-markdown ./agreement.md \
+signatures document from-markdown ./agreement.md \
   --signer-name "Ada Lovelace" \
   --signer-email ada@example.com
 ```
@@ -93,7 +93,7 @@ open-signatures document from-markdown ./agreement.md \
 Sign at the generated field and create a local evidence certificate:
 
 ```bash
-open-signatures document sign <document-id> \
+signatures document sign <document-id> \
   --signature <signature-id> \
   --field <field-id> \
   --signer-name "Ada Lovelace" \
@@ -143,7 +143,7 @@ Agent review: {{signature:review|type=agent|role=Reviewer|order=2}}
 Create a signing session and local URL:
 
 ```bash
-open-signatures document send <document-id> \
+signatures document send <document-id> \
   --signer-name "Ada Lovelace" \
   --signer-email ada@example.com \
   --base-url https://sign.example.com
@@ -156,7 +156,7 @@ text signature when the signer does not already have one.
 Send with open-emails if the `emails` CLI is configured:
 
 ```bash
-open-signatures document send <document-id> \
+signatures document send <document-id> \
   --person ada@example.com \
   --from contracts@example.com \
   --base-url https://sign.example.com
@@ -171,11 +171,11 @@ URLs still work and the session records the share-link fallback.
 ## People
 
 ```bash
-open-signatures person add "Ada Lovelace" --email ada@example.com --phone "+1..."
-open-signatures signer add "Sagan" --type agent --agent-id agent-sagan --agent-provider codewith --role Reviewer
-open-signatures person list
-open-signatures person list --type agent
-open-signatures document send <document-id> --person ada@example.com
+signatures person add "Ada Lovelace" --email ada@example.com --phone "+1..."
+signatures signer add "Sagan" --type agent --agent-id agent-sagan --agent-provider codewith --role Reviewer
+signatures person list
+signatures person list --type agent
+signatures document send <document-id> --person ada@example.com
 ```
 
 Signer records can be humans or agents. Agent signatures are recorded as local
@@ -189,7 +189,7 @@ field/session.
 Sign as an agent:
 
 ```bash
-open-signatures document sign <document-id> \
+signatures document sign <document-id> \
   --field <field-id> \
   --signer-type agent \
   --signer-name "Sagan" \
@@ -206,7 +206,7 @@ local attestation signature automatically.
 List signing sessions:
 
 ```bash
-open-signatures sessions list --signer-type agent
+signatures sessions list --signer-type agent
 ```
 
 ## Domains
@@ -216,13 +216,13 @@ Open Signatures delegates domain setup to open-domains through the `domains` CLI
 Preview commands:
 
 ```bash
-open-signatures domain setup example.com --subdomain sign --target cname.example.net --dry-run
+signatures domain setup example.com --subdomain sign --target cname.example.net --dry-run
 ```
 
 Run setup:
 
 ```bash
-open-signatures domain setup example.com --subdomain sign --target cname.example.net
+signatures domain setup example.com --subdomain sign --target cname.example.net
 ```
 
 Use `--buy` to ask open-domains to run its full domain setup flow.
@@ -246,7 +246,7 @@ evidence.
 Dry-run a PandaDoc QES request:
 
 ```bash
-open-signatures provider send <document-id> \
+signatures provider send <document-id> \
   --provider pandadoc \
   --signature-level qes \
   --recipient ada@example.com \
@@ -258,7 +258,7 @@ open-signatures provider send <document-id> \
 Dry-run a Yousign QES request:
 
 ```bash
-open-signatures provider send <document-id> \
+signatures provider send <document-id> \
   --provider yousign \
   --signature-level qes \
   --recipient ada@example.com \
@@ -270,21 +270,21 @@ open-signatures provider send <document-id> \
 List stored provider evidence:
 
 ```bash
-open-signatures provider evidence <document-id>
+signatures provider evidence <document-id>
 ```
 
 For live connector-backed provider execution, configure either a hosted or local
 Hasna connectors endpoint:
 
 ```bash
-open-signatures config set connectors_api_url "https://connectors.example"
-open-signatures config set connectors_api_key "$CONNECTORS_API_KEY"
+signatures config set connectors_api_url "https://connectors.example"
+signatures config set connectors_api_key "$CONNECTORS_API_KEY"
 ```
 
 or:
 
 ```bash
-open-signatures config set connectors_server_url "http://localhost:9876"
+signatures config set connectors_server_url "http://localhost:9876"
 ```
 
 The provider layer uses `@hasna/connectors-sdk` and can route to `pandadoc` or
@@ -294,8 +294,8 @@ Without provider credentials, use `--dry-run` to verify requests and evidence lo
 For direct PandaDoc API calls without connectors:
 
 ```bash
-open-signatures config set pandadoc_api_key "$PANDADOC_API_KEY"
-open-signatures provider send <document-id> \
+signatures config set pandadoc_api_key "$PANDADOC_API_KEY"
+signatures provider send <document-id> \
   --provider pandadoc \
   --signature-level qes \
   --recipient ada@example.com \

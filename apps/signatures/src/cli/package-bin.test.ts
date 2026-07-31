@@ -23,8 +23,8 @@ const packageRoot = dirname(packagePath);
 const packageManifest = JSON.parse(
   readFileSync(packagePath, "utf8"),
 ) as PackageManifest;
-const launcherBin = join(packageRoot, packageManifest.bin["open-signatures"]!);
-const scratchDir = mkdtempSync(join(tmpdir(), "open-signatures-cli-"));
+const launcherBin = join(packageRoot, packageManifest.bin.signatures!);
+const scratchDir = mkdtempSync(join(tmpdir(), "signatures-cli-"));
 const childPidPath = join(scratchDir, "cli.pid");
 
 function isRunning(pid: number): boolean {
@@ -71,15 +71,12 @@ afterAll(() => {
 });
 
 describe("package CLI binaries", () => {
-  test("exposes both CLI names through the Node-safe launcher", () => {
-    expect(packageManifest.bin["open-signatures"]).toBe(
-      "dist/cli/launcher.js",
-    );
-    expect(packageManifest.bin["signatures"]).toBe("dist/cli/launcher.js");
-    expect(packageManifest.bin["signatures-mcp"]).toBe("dist/mcp/index.js");
-    expect(packageManifest.bin["signatures-serve"]).toBe(
-      "dist/server/index.js",
-    );
+  test("exposes exactly the canonical package binaries", () => {
+    expect(packageManifest.bin).toEqual({
+      signatures: "dist/cli/launcher.js",
+      "signatures-mcp": "dist/mcp/index.js",
+      "signatures-serve": "dist/server/index.js",
+    });
   });
 
   test("emits every declared bin from the package build", () => {

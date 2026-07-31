@@ -4,7 +4,6 @@
   "description": "Open-source agreement and e-signature workflows for Markdown, PDFs, local signing, providers, CLI, API, and MCP",
   "type": "module",
   "bin": {
-    "open-signatures": "dist/cli/launcher.js",
     "signatures": "dist/cli/launcher.js",
     "signatures-mcp": "dist/mcp/index.js",
     "signatures-serve": "dist/server/index.js"

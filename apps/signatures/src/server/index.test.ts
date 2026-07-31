@@ -26,7 +26,7 @@ describe("server auth boundaries", () => {
       body: JSON.stringify({ key: "pandadoc_api_key", value: "probe" }),
     });
     expect(config.status).toBe(503);
-    expect(config.headers.get("www-authenticate")).toContain("open-signatures-admin");
+    expect(config.headers.get("www-authenticate")).toContain("signatures-admin");
 
     const signApi = await fetch(`${server.baseUrl}/api/sign/not-a-token`, {
       method: "POST",
@@ -163,7 +163,7 @@ describe("server auth boundaries", () => {
 
 async function startServer(overrides: Record<string, string> = {}): Promise<TestServer> {
   const port = await getFreePort();
-  const dir = mkdtempSync(join(tmpdir(), "open-signatures-server-"));
+  const dir = mkdtempSync(join(tmpdir(), "signatures-server-"));
   const dbPath = join(dir, "signatures.db");
   const env = cleanEnv({
     PORT: String(port),

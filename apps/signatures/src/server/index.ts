@@ -49,7 +49,7 @@ const PORT = parseInt(process.env["PORT"] ?? "19440", 10);
 
 if (handleMetadataArgs(process.argv.slice(2), {
   command: "signatures-serve",
-  description: "Start the open-signatures HTTP API server.",
+  description: "Start the signatures HTTP API server.",
   usage: "signatures-serve",
   options: [
     "  PORT=<n>       HTTP port environment override (default 19440)",
@@ -62,7 +62,7 @@ const ADMIN_TOKEN_ENV_KEYS = ["OPEN_SIGNATURES_ADMIN_TOKEN", "SIGNATURES_ADMIN_T
 const ALLOWED_ORIGINS_ENV_KEYS = ["OPEN_SIGNATURES_ALLOWED_ORIGINS", "SIGNATURES_ALLOWED_ORIGINS"] as const;
 const CORS_ALLOW_METHODS = "GET, POST, PUT, DELETE, OPTIONS";
 const CORS_ALLOW_HEADERS = "Content-Type, Authorization, X-Open-Signatures-Admin-Token";
-const ADMIN_AUTH_CHALLENGE = "Bearer realm=\"open-signatures-admin\"";
+const ADMIN_AUTH_CHALLENGE = "Bearer realm=\"signatures-admin\"";
 const ADMIN_API_TOKEN = readFirstEnv(ADMIN_TOKEN_ENV_KEYS);
 const ALLOWED_CORS_ORIGINS = resolveAllowedOrigins();
 const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
@@ -901,4 +901,4 @@ Bun.serve({
   },
 });
 
-console.log(`open-signatures server running on http://localhost:${PORT}`);
+console.log(`signatures server running on http://localhost:${PORT}`);

@@ -19,7 +19,7 @@ beforeEach(() => closeDatabase());
 
 describe("workflow", () => {
   test("renders markdown document and creates signature field anchors", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "open-signatures-"));
+    const dir = mkdtempSync(join(tmpdir(), "signatures-"));
     const md = join(dir, "agreement.md");
     writeFileSync(md, "# Agreement\n\nSigner: {{ signer.name }}\n\nSignature: {{signature:client}}\n");
 
@@ -35,7 +35,7 @@ describe("workflow", () => {
   });
 
   test("signs a markdown field and writes a certificate", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "open-signatures-"));
+    const dir = mkdtempSync(join(tmpdir(), "signatures-"));
     const md = join(dir, "agreement.md");
     writeFileSync(md, "# Agreement\n\nSignature: {{signature}}\n");
     const doc = await createDocumentFromMarkdown({ filePath: md });
@@ -55,7 +55,7 @@ describe("workflow", () => {
   });
 
   test("signs an agent-routed markdown field with agent evidence metadata", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "open-signatures-"));
+    const dir = mkdtempSync(join(tmpdir(), "signatures-"));
     const md = join(dir, "agent-review.md");
     writeFileSync(md, "# Agent Review\n\nApproval: {{signature:review|type=agent|role=Reviewer|order=2}}\n");
     const doc = await createDocumentFromMarkdown({ filePath: md });
@@ -85,7 +85,7 @@ describe("workflow", () => {
   });
 
   test("keeps multi-signer documents open until all required fields are signed", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "open-signatures-"));
+    const dir = mkdtempSync(join(tmpdir(), "signatures-"));
     const md = join(dir, "multi.md");
     writeFileSync(md, "# Multi\n\nClient: {{signature:client|type=human|role=Client|order=1}}\n\nReview: {{signature:review|type=agent|role=Reviewer|order=2}}\n");
     const doc = await createDocumentFromMarkdown({ filePath: md });
@@ -129,7 +129,7 @@ describe("workflow", () => {
   });
 
   test("completes the session-bound field when no field is passed", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "open-signatures-"));
+    const dir = mkdtempSync(join(tmpdir(), "signatures-"));
     const md = join(dir, "session-field.md");
     writeFileSync(md, "# Session Field\n\nClient: {{signature:client|type=human|role=Client|order=1}}\n\nReview: {{signature:review|type=agent|role=Reviewer|order=2}}\n");
     const doc = await createDocumentFromMarkdown({ filePath: md });
@@ -168,7 +168,7 @@ describe("workflow", () => {
   });
 
   test("keeps fieldless multi-session documents open until all sessions are signed", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "open-signatures-"));
+    const dir = mkdtempSync(join(tmpdir(), "signatures-"));
     const md = join(dir, "fieldless.md");
     writeFileSync(md, "# Fieldless Agreement\n\nThis agreement is signed by explicit coordinates.\n");
     const doc = await createDocumentFromMarkdown({ filePath: md });
@@ -226,7 +226,7 @@ describe("workflow", () => {
   });
 
   test("records an agent input hash for the PDF the agent actually signs", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "open-signatures-"));
+    const dir = mkdtempSync(join(tmpdir(), "signatures-"));
     const md = join(dir, "agent-input.md");
     writeFileSync(md, "# Agent Input\n\nClient: {{signature:client|type=human|role=Client|order=1}}\n\nReview: {{signature:review|type=agent|role=Reviewer|order=2}}\n");
     const doc = await createDocumentFromMarkdown({ filePath: md });
@@ -258,7 +258,7 @@ describe("workflow", () => {
   });
 
   test("creates PandaDoc provider dry-run evidence", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "open-signatures-"));
+    const dir = mkdtempSync(join(tmpdir(), "signatures-"));
     const md = join(dir, "provider.md");
     writeFileSync(md, "# Provider Agreement\n\nSignature: {{signature}}\n");
     const doc = await createDocumentFromMarkdown({ filePath: md });
@@ -279,7 +279,7 @@ describe("workflow", () => {
   });
 
   test("creates Yousign connector dry-run evidence", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "open-signatures-"));
+    const dir = mkdtempSync(join(tmpdir(), "signatures-"));
     const md = join(dir, "yousign.md");
     writeFileSync(md, "# Yousign Agreement\n\nSignature: {{signature}}\n");
     const doc = await createDocumentFromMarkdown({ filePath: md });
@@ -299,7 +299,7 @@ describe("workflow", () => {
   });
 
   test("requires explicit provider signature level", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "open-signatures-"));
+    const dir = mkdtempSync(join(tmpdir(), "signatures-"));
     const md = join(dir, "missing-level.md");
     writeFileSync(md, "# Missing Level\n\nSignature: {{signature}}\n");
     const doc = await createDocumentFromMarkdown({ filePath: md });
@@ -314,7 +314,7 @@ describe("workflow", () => {
   });
 
   test("routes eSeal dry-runs to legal-entity seal operations", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "open-signatures-"));
+    const dir = mkdtempSync(join(tmpdir(), "signatures-"));
     const md = join(dir, "seal.md");
     writeFileSync(md, "# Company Record\n\nIssued by Hasna.\n");
     const doc = await createDocumentFromMarkdown({ filePath: md });

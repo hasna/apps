@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react";
 
 const adminToken = process.env.OPEN_SIGNATURES_ADMIN_TOKEN ?? process.env.SIGNATURES_ADMIN_TOKEN;
 const loopbackApiProxyGuard: Plugin = {
-  name: "open-signatures-loopback-api-proxy-guard",
+  name: "signatures-loopback-api-proxy-guard",
   configureServer(server) {
     server.middlewares.use("/api", (req, res, next) => {
       if (isLoopbackAddress(req.socket.remoteAddress)) {

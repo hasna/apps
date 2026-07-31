@@ -86,7 +86,7 @@ function createAgentAttestationSignature(opts: Record<string, unknown>): string 
 }
 
 program
-  .name("open-signatures")
+  .name("signatures")
   .description("Open-source agreement and e-signature workflows")
   .version(getPackageVersion());
 
@@ -244,7 +244,7 @@ documentCmd
       if (!sigId) {
         const sigs = listSignatures();
         if (sigs.length === 0) {
-          console.error(chalk.red("No signatures found. Create one with: open-signatures signature create"));
+          console.error(chalk.red("No signatures found. Create one with: signatures signature create"));
           process.exit(1);
         }
         console.error(chalk.red("--signature is required. Available signatures:"));

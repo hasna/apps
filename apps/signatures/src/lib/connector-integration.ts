@@ -1,5 +1,5 @@
 /**
- * Connector integration for open-signatures.
+ * Connector integration for signatures.
  *
  * Provides hooks for external connectors (e.g. browseruse) to initiate and
  * record signing sessions.  The module deliberately avoids a hard dependency

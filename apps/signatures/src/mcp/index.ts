@@ -1075,7 +1075,7 @@ async function main() {
   const args = process.argv.slice(2);
   if (handleMetadataArgs(args, {
     command: "signatures-mcp",
-    description: "Start the open-signatures MCP server.",
+    description: "Start the signatures MCP server.",
     usage: "signatures-mcp [--stdio] [--http] [--port <n>]",
     options: [
       "  --stdio        Use stdio transport",

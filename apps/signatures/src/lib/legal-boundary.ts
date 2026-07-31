@@ -2,7 +2,7 @@ export type FilingScope = "workflow_only" | "prepared_packet" | "provider_submit
 export type LegalReviewStatus = "not_required" | "required" | "approved" | "rejected";
 
 export interface DocumentProvenanceRef {
-  sourceApp: "open-signatures" | "iapp-ip" | "iapp-trademarks" | "open-contracts" | "open-files" | string;
+  sourceApp: "signatures" | "iapp-ip" | "iapp-trademarks" | "open-contracts" | "open-files" | string;
   sourceId: string;
   documentHash: string;
   storageUri?: string;

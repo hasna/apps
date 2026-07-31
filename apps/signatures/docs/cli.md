@@ -1,12 +1,11 @@
 # CLI Reference
 
-The package exposes the same CLI through `open-signatures` and `signatures`.
-Both package shims start the Bun-based CLI, so Bun 1.0 or newer must be
-available on `PATH`.
+The package exposes the CLI through `signatures`. The package shim starts
+the Bun-based CLI, so Bun 1.0 or newer must be available on `PATH`.
 
 ```bash
-open-signatures --help
-open-signatures --version
+signatures --help
+signatures --version
 ```
 
 Most data-producing commands support `--json`. IDs shown below may also accept
