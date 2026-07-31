@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildServer } from "./index.js";
 import { handleMcpRequest, resolveMcpHttpPort, DEFAULT_MCP_HTTP_PORT } from "./http.js";
+import { closeDatabase } from "../db/database.js";
 import { __resetProjectStore } from "../store/project-store.js";
 import { API_MODE_ENV_KEYS } from "../testing/spawn-env.js";
 
@@ -26,6 +27,7 @@ describe("projects MCP HTTP transport", () => {
     }
     process.env.HASNA_PROJECTS_DB_PATH = join(root, "projects.db");
     __resetProjectStore();
+    closeDatabase();
     httpServer = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -45,6 +47,8 @@ describe("projects MCP HTTP transport", () => {
 
   afterAll(() => {
     httpServer.stop();
+    closeDatabase();
+    __resetProjectStore();
     if (previousDbPath === undefined) {
       delete process.env.HASNA_PROJECTS_DB_PATH;
     } else {
