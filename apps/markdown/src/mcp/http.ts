@@ -143,7 +143,7 @@ export function startHttpServer(options: StartHttpServerOptions = {}): Server {
   httpServer.listen(port, host, () => {
     const address = httpServer.address();
     const boundPort = typeof address === "object" && address ? address.port : port;
-    console.error(`omp-mcp HTTP listening on http://${host}:${boundPort}`);
+    console.error(`markdown-mcp HTTP listening on http://${host}:${boundPort}`);
   });
 
   return httpServer;

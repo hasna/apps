@@ -10,7 +10,7 @@ function makeCard(overrides: Partial<OmpCard> = {}): OmpCard {
     headers: { method: "GET", path: "/api/notes" },
     body: { raw: "Return all notes.", text: "Return all notes.", tables: [], inlineDirectives: [] },
     accepts: ["only user's notes returned"],
-    sourceFile: "test.omp.md",
+    sourceFile: "test.markdown.md",
     lineNumber: 1,
     ...overrides,
   };

@@ -14,26 +14,26 @@ npm install -g @hasna/markdown
 ## CLI Usage
 
 ```bash
-omp --help
+markdown --help
 ```
 
-- `omp validate <file>`
-- `omp run <file>`
-- `omp compile <file>`
-- `omp lint <file>`
-- `omp inspect <file>`
-- `omp init`
+- `markdown validate <file>`
+- `markdown run <file>`
+- `markdown compile <file>`
+- `markdown lint <file>`
+- `markdown inspect <file>`
+- `markdown init`
 
 CLI output is compact by default for agent-friendly terminals. Commands that can
 produce large structures show summaries and hints first:
 
 ```bash
-omp inspect app.omp.md --limit 10
-omp inspect app.omp.md --verbose
-omp inspect app.omp.md --json
+markdown inspect app.markdown.md --limit 10
+markdown inspect app.markdown.md --verbose
+markdown inspect app.markdown.md --json
 
-omp compile app.omp.md
-omp compile app.omp.md --json
+markdown compile app.markdown.md
+markdown compile app.markdown.md --json
 ```
 
 - Use `--limit <n>` to increase or reduce compact rows.
@@ -43,7 +43,7 @@ omp compile app.omp.md --json
 ## MCP Server
 
 ```bash
-omp-mcp
+markdown-mcp
 ```
 
 MCP tool outputs are also compact by default. Pass `json=true` for full
@@ -55,8 +55,8 @@ larger compact previews.
 Long-lived Streamable HTTP transport for shared agent connections (stdio remains the default):
 
 ```bash
-omp-mcp --http
-# or: MCP_HTTP=1 omp-mcp
+markdown-mcp --http
+# or: MCP_HTTP=1 markdown-mcp
 # default port: 8822 (override with --port or MCP_HTTP_PORT)
 ```
 
@@ -68,7 +68,7 @@ Endpoints on `127.0.0.1` only:
 ## REST API
 
 ```bash
-omp-serve
+markdown-serve
 ```
 
 ## Data Directory
@@ -84,10 +84,10 @@ Optional remote mirroring uses Postgres directly:
 
 ```bash
 export HASNA_MARKDOWN_DATABASE_URL="postgres://user:pass@example.com/markdown?sslmode=require"
-omp storage status
-omp storage push
-omp storage pull
-omp storage sync
+markdown storage status
+markdown storage push
+markdown storage pull
+markdown storage sync
 ```
 
 The local SQLite database remains the runtime source. The remote database is an

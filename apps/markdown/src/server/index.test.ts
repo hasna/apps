@@ -11,7 +11,7 @@ describe("server CLI flags", () => {
     expect(parsed.handled).toBe(true);
     expect(out).toHaveLength(1);
     expect(out[0]).toBe(getServerHelpText());
-    expect(out[0]).toContain("Usage: omp-serve [options]");
+    expect(out[0]).toContain("Usage: markdown-serve [options]");
   });
 
   test("prints version and exits when --version is used", () => {

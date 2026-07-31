@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { registerEventsCommands } from "@hasna/events/commander";
-// OMP CLI — omp validate|run|compile|lint|init|inspect
+// OMP CLI — markdown validate|run|compile|lint|init|inspect
 import { Command } from "commander";
 import chalk from "chalk";
 import { parseFromFile, validate, compile, run } from "../lib/pipeline.js";
@@ -20,8 +20,8 @@ import type { OmpError, LLMClientOptions } from "../types/index.js";
 const program = new Command();
 
 program
-  .name("omp")
-  .description("Open Markdown Protocol — parse, validate, and execute .omp.md files")
+  .name("markdown")
+  .description("Open Markdown Protocol — parse, validate, and execute .markdown.md files")
   .version(getPackageVersion());
 
 // ─── validate ────────────────────────────────────────────────
@@ -250,9 +250,9 @@ program
 
 program
   .command("init [name]")
-  .description("Create a starter .omp.md file")
+  .description("Create a starter .markdown.md file")
   .action(async (name: string = "app") => {
-    const filename = `${name}.omp.md`;
+    const filename = `${name}.markdown.md`;
 
     if (existsSync(filename)) {
       console.error(chalk.red(`File ${filename} already exists`));
@@ -328,9 +328,9 @@ accepts: items created; visible in list endpoint
 
     writeFileSync(filename, template);
     console.log(chalk.green(`✓ Created ${filename}`));
-    console.log(`  Run ${chalk.cyan(`omp validate ${filename}`)} to check it`);
-    console.log(`  Run ${chalk.cyan(`omp inspect ${filename}`)} to see the structure`);
-    console.log(`  Run ${chalk.cyan(`omp run ${filename}`)} to execute it`);
+    console.log(`  Run ${chalk.cyan(`markdown validate ${filename}`)} to check it`);
+    console.log(`  Run ${chalk.cyan(`markdown inspect ${filename}`)} to see the structure`);
+    console.log(`  Run ${chalk.cyan(`markdown run ${filename}`)} to execute it`);
   });
 
 // ─── storage ─────────────────────────────────────────────────

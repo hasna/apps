@@ -4,7 +4,7 @@ import { MockLLMClient } from "./llm-client.js";
 import { existsSync, mkdirSync, writeFileSync, rmSync } from "fs";
 import { join } from "path";
 
-const TMP = "/tmp/omp-pipeline-test";
+const TMP = "/tmp/markdown-pipeline-test";
 
 beforeEach(() => {
   mkdirSync(TMP, { recursive: true });
@@ -175,7 +175,7 @@ API.`);
 
 describe("run (e2e)", () => {
   test("runs a simple document with dry-run", async () => {
-    const filePath = join(TMP, "test.omp.md");
+    const filePath = join(TMP, "test.markdown.md");
     writeFileSync(filePath, `# TestApp
 
 ---
@@ -207,7 +207,7 @@ Configure the database connection.`);
   });
 
   test("rejects tree paths that escape outputDir", async () => {
-    const filePath = join(TMP, "escape.omp.md");
+    const filePath = join(TMP, "escape.markdown.md");
     const outputDir = join(TMP, "out");
     writeFileSync(filePath, `# Escape
 

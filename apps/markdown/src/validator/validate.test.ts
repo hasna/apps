@@ -10,7 +10,7 @@ function makeCard(overrides: Partial<OmpCard> = {}): OmpCard {
     headers: {},
     body: { raw: "Some body.", text: "Some body.", tables: [], inlineDirectives: [] },
     accepts: [],
-    sourceFile: "test.omp.md",
+    sourceFile: "test.markdown.md",
     lineNumber: 1,
     ...overrides,
   };

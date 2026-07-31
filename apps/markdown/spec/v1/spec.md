@@ -14,7 +14,7 @@ The Open Markdown Protocol (OMP) is an open standard for structured markdown tha
 
 OMP is not a programming language. It contains no code. It is a specification format that blends deterministic machine-parseable data with natural language instructions, producing documents that are simultaneously:
 
-- **Human-readable** -- any developer can open the `.omp.md` file and understand the project
+- **Human-readable** -- any developer can open the `.markdown.md` file and understand the project
 - **Machine-parseable** -- a regex parser extracts all structured data without an LLM
 - **LLM-executable** -- a cheap model follows the natural language instructions card by card
 
@@ -39,7 +39,7 @@ The planner has full application context and produces a complete OMP document sp
 - Renders natively in every code editor, GitHub, GitLab, and documentation tool
 - Developers already know how to read and write it
 - Tables, lists, and headers provide natural structure without inventing new syntax
-- The `.omp.md` extension means any markdown viewer renders it as readable documentation
+- The `.markdown.md` extension means any markdown viewer renders it as readable documentation
 - Diff-friendly for version control
 
 ---
@@ -62,7 +62,7 @@ Every OMP document consists of three layers, each processed by a different mecha
 
 ### 3.1 File Extension and Encoding
 
-OMP documents use the double extension `.omp.md` (e.g., `app.omp.md`, `api/endpoints.omp.md`). The `.md` suffix ensures standard rendering; the `.omp` prefix identifies the file for tooling. Documents MUST be UTF-8 encoded. MIME type: `text/markdown`.
+OMP documents use the double extension `.markdown.md` (e.g., `app.markdown.md`, `api/endpoints.markdown.md`). The `.md` suffix ensures standard rendering; the `.markdown` prefix identifies the file for tooling. Documents MUST be UTF-8 encoded. MIME type: `text/markdown`.
 
 ### 3.2 Title
 
@@ -168,7 +168,7 @@ For the complete specification with regex patterns, processing rules, and exampl
 
 | Directive | Purpose | Example |
 |-----------|---------|---------|
-| `@import` | Include another OMP file | `@import ./auth.omp.md` |
+| `@import` | Include another OMP file | `@import ./auth.markdown.md` |
 | `@pattern` | Define a reusable card template | `@pattern crud-api(entity, fields)` |
 | `@name(args)` | Instantiate a defined pattern | `@crud-api(notes, title\|content)` |
 | `@repeat N` | Repeat the next card N times | `@repeat 3` |
@@ -305,12 +305,12 @@ For the full specification, see [directives.md](directives.md).
 ## 9. Imports
 
 ```
-@import ./path/to/file.omp.md
+@import ./path/to/file.markdown.md
 ```
 
 Path is resolved relative to the importing file's directory.
 
-**Rules**: relative paths only (`./` or `../`); `.omp.md` extension required; recursive resolution supported; circular imports rejected; imported cards appear at the `@import` position.
+**Rules**: relative paths only (`./` or `../`); `.markdown.md` extension required; recursive resolution supported; circular imports rejected; imported cards appear at the `@import` position.
 
 **Merging**: all IDs must be unique across the combined document. Imported and parent cards may freely reference each other's IDs in `depends`. The DAG is built from the merged set.
 
@@ -456,7 +456,7 @@ Processing: parse 3 cards + `@use` directive; no imports or patterns to resolve;
 | Unique IDs | All IDs unique across merged document; case-sensitive; should be kebab-case |
 | Dependency integrity | Every `depends` ID must exist; no self-references; no cycles |
 | Inline directive integrity | `{{` must have `}}`; `ref` must point to valid card.key; `env` must be defined; `index` only inside `@repeat` |
-| Import integrity | Paths must resolve to `.omp.md` files; no circular imports |
+| Import integrity | Paths must resolve to `.markdown.md` files; no circular imports |
 | Type-specific (warnings) | `endpoint` expects `method`/`path`; `page` expects `path`; `table` expects `db`; `database` expects `engine`; `auth` expects `method` |
 
 ---

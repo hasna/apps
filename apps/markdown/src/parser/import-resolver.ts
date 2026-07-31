@@ -140,8 +140,8 @@ function resolveImportPath(
     return undefined;
   }
 
-  if (!importPath.endsWith(".omp.md")) {
-    errors.push(`Invalid import path "${imp.path}" at line ${imp.lineNumber}: imports must target .omp.md files`);
+  if (!importPath.endsWith(".markdown.md")) {
+    errors.push(`Invalid import path "${imp.path}" at line ${imp.lineNumber}: imports must target .markdown.md files`);
     return undefined;
   }
 

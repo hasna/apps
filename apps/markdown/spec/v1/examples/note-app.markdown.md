@@ -1,7 +1,7 @@
 # NoteApp
 
 @use mcp:filesystem
-@import ./shared/auth-form.omp.md
+@import ./shared/auth-form.markdown.md
 
 ---
 

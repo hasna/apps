@@ -13,8 +13,8 @@ Includes another OMP file at the location of the directive. The imported file's 
 ### Syntax
 
 ```
-@import ./relative/path/to/file.omp.md
-@import ../shared/auth-cards.omp.md
+@import ./relative/path/to/file.markdown.md
+@import ../shared/auth-cards.markdown.md
 ```
 
 ### Regex
@@ -39,7 +39,7 @@ Nothing. The `@import` directive is fully resolved by the script. By the time an
 
 ### Example
 
-File: `app.omp.md`
+File: `app.markdown.md`
 ```
 # MyApp
 
@@ -56,12 +56,12 @@ Set up the project.
 
 ---
 
-@import ./database/schema.omp.md
-@import ./api/endpoints.omp.md
-@import ./ui/pages.omp.md
+@import ./database/schema.markdown.md
+@import ./api/endpoints.markdown.md
+@import ./ui/pages.markdown.md
 ```
 
-File: `database/schema.omp.md`
+File: `database/schema.markdown.md`
 ```
 type: database
 id: db

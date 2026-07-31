@@ -43,7 +43,7 @@ describe("mcp CLI flags", () => {
     expect(handled).toBe(true);
     expect(out).toHaveLength(1);
     expect(out[0]).toBe(getMcpHelpText());
-    expect(out[0]).toContain("Usage: omp-mcp [options]");
+    expect(out[0]).toContain("Usage: markdown-mcp [options]");
     expect(out[0]).toContain("--http");
   });
 

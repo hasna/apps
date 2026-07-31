@@ -3,8 +3,8 @@ import { resolveImports } from "./import-resolver";
 import { mkdirSync, writeFileSync, rmSync, symlinkSync } from "fs";
 import { dirname, join } from "path";
 
-const TMP = "/tmp/omp-test-imports";
-const OUTSIDE = "/tmp/omp-test-imports-outside";
+const TMP = "/tmp/markdown-test-imports";
+const OUTSIDE = "/tmp/markdown-test-imports-outside";
 
 beforeEach(() => {
   mkdirSync(TMP, { recursive: true });
@@ -32,7 +32,7 @@ id: init
 
 Set up the project.`;
 
-    const result = resolveImports(doc, join(TMP, "main.omp.md"));
+    const result = resolveImports(doc, join(TMP, "main.markdown.md"));
     expect(result.errors).toHaveLength(0);
     expect(result.cards).toHaveLength(1);
     expect(result.cards[0].type).toBe("project");
@@ -40,7 +40,7 @@ Set up the project.`;
   });
 
   test("resolves a single @import", () => {
-    writeOmp("schema.omp.md", `type: table
+    writeOmp("schema.markdown.md", `type: table
 id: users
 
 | column | type |
@@ -65,10 +65,10 @@ id: init
 
 ---
 
-@import ./schema.omp.md`;
+@import ./schema.markdown.md`;
 
-    writeOmp("main.omp.md", doc);
-    const result = resolveImports(doc, join(TMP, "main.omp.md"));
+    writeOmp("main.markdown.md", doc);
+    const result = resolveImports(doc, join(TMP, "main.markdown.md"));
     expect(result.errors).toHaveLength(0);
     expect(result.cards).toHaveLength(3); // init + users + notes
     expect(result.cards.map((c) => c.id)).toContain("users");
@@ -76,19 +76,19 @@ id: init
   });
 
   test("resolves nested imports (A imports B which imports C)", () => {
-    writeOmp("c.omp.md", `type: table
+    writeOmp("c.markdown.md", `type: table
 id: tags
 
 Tags table.`);
 
-    writeOmp("b.omp.md", `type: table
+    writeOmp("b.markdown.md", `type: table
 id: notes
 
 Notes table.
 
 ---
 
-@import ./c.omp.md`);
+@import ./c.markdown.md`);
 
     const doc = `# App
 
@@ -99,38 +99,38 @@ id: init
 
 ---
 
-@import ./b.omp.md`;
+@import ./b.markdown.md`;
 
-    writeOmp("main.omp.md", doc);
-    const result = resolveImports(doc, join(TMP, "main.omp.md"));
+    writeOmp("main.markdown.md", doc);
+    const result = resolveImports(doc, join(TMP, "main.markdown.md"));
     expect(result.errors).toHaveLength(0);
     expect(result.cards).toHaveLength(3); // init + notes + tags
     expect(result.cards.map((c) => c.id)).toContain("tags");
   });
 
   test("detects circular imports", () => {
-    writeOmp("a.omp.md", `type: table
+    writeOmp("a.markdown.md", `type: table
 id: a-table
 
 ---
 
-@import ./b.omp.md`);
+@import ./b.markdown.md`);
 
-    writeOmp("b.omp.md", `type: table
+    writeOmp("b.markdown.md", `type: table
 id: b-table
 
 ---
 
-@import ./a.omp.md`);
+@import ./a.markdown.md`);
 
     const doc = `# App
 
 ---
 
-@import ./a.omp.md`;
+@import ./a.markdown.md`;
 
-    writeOmp("main.omp.md", doc);
-    const result = resolveImports(doc, join(TMP, "main.omp.md"));
+    writeOmp("main.markdown.md", doc);
+    const result = resolveImports(doc, join(TMP, "main.markdown.md"));
     expect(result.errors.length).toBeGreaterThan(0);
     expect(result.errors[0]).toContain("Circular import");
   });
@@ -140,15 +140,15 @@ id: b-table
 
 ---
 
-@import ./nonexistent.omp.md`;
+@import ./nonexistent.markdown.md`;
 
-    const result = resolveImports(doc, join(TMP, "main.omp.md"));
+    const result = resolveImports(doc, join(TMP, "main.markdown.md"));
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain("Import not found");
   });
 
   test("rejects absolute imports", () => {
-    const importedPath = join(TMP, "absolute.omp.md");
+    const importedPath = join(TMP, "absolute.markdown.md");
     writeFileSync(importedPath, `type: table
 id: imported`);
 
@@ -158,39 +158,39 @@ id: imported`);
 
 @import ${importedPath}`;
 
-    const result = resolveImports(doc, join(TMP, "main.omp.md"));
+    const result = resolveImports(doc, join(TMP, "main.markdown.md"));
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain("absolute imports are not allowed");
     expect(result.cards).toHaveLength(0);
   });
 
-  test("rejects non-.omp.md imports", () => {
-    writeFileSync(join(TMP, "not-omp.txt"), `type: table
+  test("rejects non-.markdown.md imports", () => {
+    writeFileSync(join(TMP, "not-markdown.txt"), `type: table
 id: imported`);
 
     const doc = `# App
 
 ---
 
-@import ./not-omp.txt`;
+@import ./not-markdown.txt`;
 
-    const result = resolveImports(doc, join(TMP, "main.omp.md"));
+    const result = resolveImports(doc, join(TMP, "main.markdown.md"));
     expect(result.errors).toHaveLength(1);
-    expect(result.errors[0]).toContain(".omp.md");
+    expect(result.errors[0]).toContain(".markdown.md");
     expect(result.cards).toHaveLength(0);
   });
 
   test("rejects imports without explicit relative prefix", () => {
-    writeOmp("schema.omp.md", `type: table
+    writeOmp("schema.markdown.md", `type: table
 id: imported`);
 
     const doc = `# App
 
 ---
 
-@import schema.omp.md`;
+@import schema.markdown.md`;
 
-    const result = resolveImports(doc, join(TMP, "main.omp.md"));
+    const result = resolveImports(doc, join(TMP, "main.markdown.md"));
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain("imports must start with ./ or ../");
     expect(result.cards).toHaveLength(0);
@@ -198,16 +198,16 @@ id: imported`);
 
   test("rejects imports that escape the root document boundary", () => {
     mkdirSync(OUTSIDE, { recursive: true });
-    writeFileSync(join(OUTSIDE, "shared.omp.md"), `type: table
+    writeFileSync(join(OUTSIDE, "shared.markdown.md"), `type: table
 id: outside`);
 
     const doc = `# App
 
 ---
 
-@import ../omp-test-imports-outside/shared.omp.md`;
+@import ../markdown-test-imports-outside/shared.markdown.md`;
 
-    const result = resolveImports(doc, join(TMP, "main.omp.md"));
+    const result = resolveImports(doc, join(TMP, "main.markdown.md"));
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain("escapes the allowed boundary");
     expect(result.cards).toHaveLength(0);
@@ -215,7 +215,7 @@ id: outside`);
 
   test("rejects symlinked imports that escape the root document boundary", () => {
     mkdirSync(OUTSIDE, { recursive: true });
-    writeFileSync(join(OUTSIDE, "shared.omp.md"), `type: table
+    writeFileSync(join(OUTSIDE, "shared.markdown.md"), `type: table
 id: outside`);
     try {
       symlinkSync(OUTSIDE, join(TMP, "link"), "dir");
@@ -227,56 +227,56 @@ id: outside`);
 
 ---
 
-@import ./link/shared.omp.md`;
+@import ./link/shared.markdown.md`;
 
-    const result = resolveImports(doc, join(TMP, "main.omp.md"));
+    const result = resolveImports(doc, join(TMP, "main.markdown.md"));
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain("escapes the allowed boundary");
     expect(result.cards).toHaveLength(0);
   });
 
   test("allows nested imports to traverse within the root document boundary", () => {
-    writeOmp("shared/table.omp.md", `type: table
+    writeOmp("shared/table.markdown.md", `type: table
 id: shared-table
 
 Shared table.`);
 
-    writeOmp("features/feature.omp.md", `@import ../shared/table.omp.md`);
+    writeOmp("features/feature.markdown.md", `@import ../shared/table.markdown.md`);
 
     const doc = `# App
 
 ---
 
-@import ./features/feature.omp.md`;
+@import ./features/feature.markdown.md`;
 
-    const result = resolveImports(doc, join(TMP, "main.omp.md"));
+    const result = resolveImports(doc, join(TMP, "main.markdown.md"));
     expect(result.errors).toHaveLength(0);
     expect(result.cards.map((card) => card.id)).toContain("shared-table");
   });
 
   test("collects patterns from imported files", () => {
-    writeOmp("patterns.omp.md", `@pattern crud(entity)
+    writeOmp("patterns.markdown.md", `@pattern crud(entity)
 Standard CRUD for {{entity}}.`);
 
     const doc = `# App
 
 ---
 
-@import ./patterns.omp.md
+@import ./patterns.markdown.md
 
 ---
 
 type: project
 id: init`;
 
-    writeOmp("main.omp.md", doc);
-    const result = resolveImports(doc, join(TMP, "main.omp.md"));
+    writeOmp("main.markdown.md", doc);
+    const result = resolveImports(doc, join(TMP, "main.markdown.md"));
     expect(result.patterns).toHaveLength(1);
     expect(result.patterns[0].name).toBe("crud");
   });
 
   test("tracks source file on each card", () => {
-    writeOmp("extra.omp.md", `type: table
+    writeOmp("extra.markdown.md", `type: table
 id: extra-table
 
 Extra table.`);
@@ -290,15 +290,15 @@ id: init
 
 ---
 
-@import ./extra.omp.md`;
+@import ./extra.markdown.md`;
 
-    writeOmp("main.omp.md", doc);
-    const mainPath = join(TMP, "main.omp.md");
+    writeOmp("main.markdown.md", doc);
+    const mainPath = join(TMP, "main.markdown.md");
     const result = resolveImports(doc, mainPath);
 
     const initCard = result.cards.find((c) => c.id === "init");
     const extraCard = result.cards.find((c) => c.id === "extra-table");
     expect(initCard?.sourceFile).toBe(mainPath);
-    expect(extraCard?.sourceFile).toContain("extra.omp.md");
+    expect(extraCard?.sourceFile).toContain("extra.markdown.md");
   });
 });

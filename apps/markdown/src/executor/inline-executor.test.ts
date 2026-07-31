@@ -24,7 +24,7 @@ function makeCard(overrides: Partial<OmpCard> = {}): OmpCard {
     headers: {},
     body: { raw: "", text: "", tables: [], inlineDirectives: [] },
     accepts: [],
-    sourceFile: "test.omp.md",
+    sourceFile: "test.markdown.md",
     lineNumber: 1,
     ...overrides,
   };

@@ -42,7 +42,7 @@ export function parseFromFile(filePath: string): OmpDocument {
 /**
  * Parse an OMP document from a string.
  */
-export function parseFromString(raw: string, filePath: string = "inline.omp.md"): OmpDocument {
+export function parseFromString(raw: string, filePath: string = "inline.markdown.md"): OmpDocument {
   // Step 1: Resolve imports recursively
   const resolved = resolveImports(raw, filePath);
 

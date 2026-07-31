@@ -14,7 +14,7 @@ function makeCard(overrides: Partial<OmpCard> = {}): OmpCard {
     headers: {},
     body: { raw: "Do something.", text: "Do something.", tables: [], inlineDirectives: [] },
     accepts: [],
-    sourceFile: "test.omp.md",
+    sourceFile: "test.markdown.md",
     lineNumber: 1,
     ...overrides,
   };
@@ -37,7 +37,7 @@ describe("executeCard", () => {
       },
     });
 
-    const result = await executeCard(card, makeDoc([card]), undefined, "/tmp/omp-test-exec", true);
+    const result = await executeCard(card, makeDoc([card]), undefined, "/tmp/markdown-test-exec", true);
     expect(result.success).toBe(true);
     expect(result.llmCalls).toBe(0); // fully deterministic
     expect(result.actions.length).toBeGreaterThan(0);
@@ -46,7 +46,7 @@ describe("executeCard", () => {
   });
 
   test("tree card rejects parent traversal without writing outside output dir", async () => {
-    const root = mkdtempSync(join(tmpdir(), "omp-exec-"));
+    const root = mkdtempSync(join(tmpdir(), "markdown-exec-"));
     const outputDir = join(root, "out");
     try {
       const card = makeCard({
@@ -83,7 +83,7 @@ describe("executeCard", () => {
         },
       });
 
-      const result = await executeCard(card, makeDoc([card]), undefined, "/tmp/omp-test-exec", true);
+      const result = await executeCard(card, makeDoc([card]), undefined, "/tmp/markdown-test-exec", true);
       expect(result.success).toBe(false);
       expect(result.error).toContain("absolute paths are not allowed");
     }
@@ -101,13 +101,13 @@ describe("executeCard", () => {
       },
     });
 
-    const result = await executeCard(card, makeDoc([card]), undefined, "/tmp/omp-test-exec", true);
+    const result = await executeCard(card, makeDoc([card]), undefined, "/tmp/markdown-test-exec", true);
     expect(result.success).toBe(false);
     expect(result.error).toContain("parent directory traversal");
   });
 
   test("tree card rejects symlink escapes beneath output dir", async () => {
-    const root = mkdtempSync(join(tmpdir(), "omp-symlink-"));
+    const root = mkdtempSync(join(tmpdir(), "markdown-symlink-"));
     const outputDir = join(root, "out");
     const outsideDir = join(root, "outside");
     try {
@@ -226,7 +226,7 @@ describe("executeCard", () => {
   });
 
   test("functions card rejects unsafe file paths before calling the LLM", async () => {
-    const root = mkdtempSync(join(tmpdir(), "omp-functions-"));
+    const root = mkdtempSync(join(tmpdir(), "markdown-functions-"));
     try {
       for (const file of ["../escaped.ts", "..\\escaped.ts", "/tmp/escaped.ts", "C:\\tmp\\escaped.ts"]) {
         const card = makeCard({
@@ -249,7 +249,7 @@ describe("executeCard", () => {
   });
 
   test("functions card rejects symlink escapes before calling the LLM", async () => {
-    const root = mkdtempSync(join(tmpdir(), "omp-functions-link-"));
+    const root = mkdtempSync(join(tmpdir(), "markdown-functions-link-"));
     const outputDir = join(root, "out");
     const outsideDir = join(root, "outside");
     try {

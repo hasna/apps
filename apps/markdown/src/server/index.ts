@@ -22,7 +22,7 @@ class HttpError extends Error {
 
 export function getServerHelpText(): string {
   return [
-    "Usage: omp-serve [options]",
+    "Usage: markdown-serve [options]",
     "",
     "OMP HTTP Server — REST API for OMP operations",
     "",
@@ -75,7 +75,7 @@ function parsePortArg(args: string[]): number | undefined {
     if (arg === "-p" || arg === "--port") {
       const next = args[i + 1];
       if (!next || next.startsWith("-")) {
-        throw new Error("Missing value for --port. Example: omp-serve --port 8080");
+        throw new Error("Missing value for --port. Example: markdown-serve --port 8080");
       }
       return parseAndValidatePort(next);
     }

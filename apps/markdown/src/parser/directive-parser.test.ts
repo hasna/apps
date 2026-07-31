@@ -3,10 +3,10 @@ import { parseDirectives } from "./directive-parser";
 
 describe("parseDirectives", () => {
   test("parses @import", () => {
-    const { directives } = parseDirectives("@import ./schema.omp.md");
+    const { directives } = parseDirectives("@import ./schema.markdown.md");
     expect(directives).toHaveLength(1);
     expect(directives[0].kind).toBe("import");
-    expect((directives[0] as any).path).toBe("./schema.omp.md");
+    expect((directives[0] as any).path).toBe("./schema.markdown.md");
   });
 
   test("parses @repeat", () => {
@@ -85,7 +85,7 @@ It spans multiple lines.`;
   test("ignores non-directive lines", () => {
     const raw = `Some text
 not a directive
-@import ./file.omp.md
+@import ./file.markdown.md
 more text
 @use stripe`;
 
@@ -97,7 +97,7 @@ more text
 
   test("tracks line numbers", () => {
     const raw = `some text
-@import ./a.omp.md
+@import ./a.markdown.md
 more text
 @use tool`;
 
@@ -107,7 +107,7 @@ more text
   });
 
   test("does not treat reserved names as pattern instantiation", () => {
-    const raw = `@import ./file.omp.md
+    const raw = `@import ./file.markdown.md
 @repeat 3`;
 
     const { directives } = parseDirectives(raw);
@@ -119,7 +119,7 @@ more text
   });
 
   test("parses multiple directives in one block", () => {
-    const raw = `@import ./base.omp.md
+    const raw = `@import ./base.markdown.md
 @use mcp:todos
 @emit setup-complete
 @hook before deploy

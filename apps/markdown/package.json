@@ -6,9 +6,9 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "omp": "dist/cli/index.js",
-    "omp-mcp": "dist/mcp/index.js",
-    "omp-serve": "dist/server/index.js"
+    "markdown": "dist/cli/index.js",
+    "markdown-mcp": "dist/mcp/index.js",
+    "markdown-serve": "dist/server/index.js"
   },
   "exports": {
     ".": {
@@ -37,7 +37,6 @@
     "postinstall": "install -d -m 700 \"$HOME/.hasna/markdown\" 2>/dev/null || (mkdir -p \"$HOME/.hasna/markdown\" && chmod 700 \"$HOME/.hasna/markdown\")"
   },
   "keywords": [
-    "omp",
     "markdown",
     "ai",
     "llm",

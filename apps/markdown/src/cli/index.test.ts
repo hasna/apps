@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 
 const fixtureDir = join(process.cwd(), ".tmp", "cli-tests");
-const fixtureFile = join(fixtureDir, "valid.omp.md");
+const fixtureFile = join(fixtureDir, "valid.markdown.md");
 
 const validDoc = `# CliJson
 
@@ -39,7 +39,7 @@ function runCli(args: string[]) {
   });
 }
 
-describe("omp CLI metadata", () => {
+describe("markdown CLI metadata", () => {
   test("prints the package version", () => {
     const pkg = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8")) as { version: string };
     const result = runCli(["--version"]);
@@ -50,7 +50,7 @@ describe("omp CLI metadata", () => {
   });
 });
 
-describe("omp CLI JSON output", () => {
+describe("markdown CLI JSON output", () => {
   test("validate --json outputs machine-readable payload", () => {
     mkdirSync(fixtureDir, { recursive: true });
     writeFileSync(fixtureFile, validDoc);
@@ -149,7 +149,7 @@ describe("omp CLI JSON output", () => {
   });
 });
 
-describe("omp CLI compact output", () => {
+describe("markdown CLI compact output", () => {
   test("compile defaults to compact text and keeps --json for full plans", () => {
     mkdirSync(fixtureDir, { recursive: true });
     writeFileSync(fixtureFile, makeLargeDoc());

@@ -34,7 +34,7 @@ export function buildServer(version: string = getPackageVersion()): Server {
         inputSchema: {
           type: "object" as const,
           properties: {
-            file: { type: "string", description: "Path to .omp.md file" },
+            file: { type: "string", description: "Path to .markdown.md file" },
             content: { type: "string", description: "Raw OMP document content (alternative to file)" },
             json: { type: "boolean", description: "Return full machine-readable JSON instead of compact text" },
             verbose: { type: "boolean", description: "Show all issues in compact text" },
@@ -48,7 +48,7 @@ export function buildServer(version: string = getPackageVersion()): Server {
         inputSchema: {
           type: "object" as const,
           properties: {
-            file: { type: "string", description: "Path to .omp.md file" },
+            file: { type: "string", description: "Path to .markdown.md file" },
             content: { type: "string", description: "Raw OMP document content" },
             json: { type: "boolean", description: "Return full machine-readable JSON instead of compact text" },
             verbose: { type: "boolean", description: "Show all cards and execution steps" },
@@ -62,7 +62,7 @@ export function buildServer(version: string = getPackageVersion()): Server {
         inputSchema: {
           type: "object" as const,
           properties: {
-            file: { type: "string", description: "Path to .omp.md file" },
+            file: { type: "string", description: "Path to .markdown.md file" },
             content: { type: "string", description: "Raw OMP document content" },
             json: { type: "boolean", description: "Return the full execution plan JSON" },
             verbose: { type: "boolean", description: "Show all execution steps" },
@@ -76,7 +76,7 @@ export function buildServer(version: string = getPackageVersion()): Server {
         inputSchema: {
           type: "object" as const,
           properties: {
-            file: { type: "string", description: "Path to .omp.md file" },
+            file: { type: "string", description: "Path to .markdown.md file" },
             content: { type: "string", description: "Raw OMP document content" },
             json: { type: "boolean", description: "Return full machine-readable JSON instead of compact text" },
             verbose: { type: "boolean", description: "Show all issues in compact text" },
@@ -90,7 +90,7 @@ export function buildServer(version: string = getPackageVersion()): Server {
         inputSchema: {
           type: "object" as const,
           properties: {
-            file: { type: "string", description: "Path to .omp.md file" },
+            file: { type: "string", description: "Path to .markdown.md file" },
             output_dir: { type: "string", description: "Output directory (default: .)" },
             dry_run: { type: "boolean", description: "Preview without executing (default: true)" },
             json: { type: "boolean", description: "Return full machine-readable JSON instead of compact text" },

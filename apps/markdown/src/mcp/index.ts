@@ -8,7 +8,7 @@ export { isHttpMode, resolveHttpPort, startHttpServer, DEFAULT_HTTP_PORT, HTTP_N
 
 export function getMcpHelpText(): string {
   return [
-    "Usage: omp-mcp [options]",
+    "Usage: markdown-mcp [options]",
     "",
     "OMP MCP Server — stdio transport for OMP tools",
     "",
