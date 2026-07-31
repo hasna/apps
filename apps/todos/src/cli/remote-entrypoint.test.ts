@@ -11,6 +11,18 @@ import {
 import { resetTodosCloudClient } from "./cloud-router.js";
 import { builtCliSpawnBudgetMs } from "../test/spawn-budget.js";
 
+/** `todos add` warns on stderr when a task ends up both unassigned and unattributed —
+ *  that warning is the point of the fix, not incidental noise, so it is stripped here
+ *  rather than tolerated wholesale. Any OTHER stderr output still fails the assertion. */
+function stderrWithoutAttributionWarning(stderr: string): string {
+  return stderr
+    .split("\n")
+    .filter((line) => !line.includes("ownerless and unattributable"))
+    .join("\n")
+    .trim();
+}
+
+
 const REPO_ROOT = join(import.meta.dir, "../..");
 
 /**
@@ -83,11 +95,25 @@ function recursiveInventory(root: string, relative = ""): string[] {
   });
 }
 
+/** Files the CLI may legitimately keep under ~/.hasna/todos in remote mode.
+ *  `identity.json` is client-side session state — "who am I in this shell" — written
+ *  by `todos init` and removed by `todos release`. It carries no task data and is
+ *  not an authority store, so it does not breach the remote-authority boundary.
+ *  Everything else must still be absent. */
+const REMOTE_SAFE_TODOS_HOME_ENTRIES = new Set(["identity.json"]);
+
 function expectNoLocalDatabase(root: string, explicitPath: string): void {
   expect(existsSync(explicitPath)).toBe(false);
   expect(existsSync(join(root, ".todos"))).toBe(false);
   expect(existsSync(join(root, ".hasna", "todos", "todos.db"))).toBe(false);
-  expect(existsSync(join(root, ".hasna", "todos"))).toBe(false);
+  // Assert on the CONTENTS rather than the directory's existence: the old check
+  // used "the directory must not exist" as a proxy for "no local store was
+  // created", which stopped being equivalent once a config file lived there.
+  // Enumerating is strictly tighter — it also catches a stray .db under any name.
+  const todosHome = join(root, ".hasna", "todos");
+  if (!existsSync(todosHome)) return;
+  const unexpected = readdirSync(todosHome).filter((entry) => !REMOTE_SAFE_TODOS_HOME_ENTRIES.has(entry));
+  expect(unexpected).toEqual([]);
 }
 
 function registeredCliNames(): Set<string> {
@@ -631,7 +657,7 @@ describe("remote CLI entrypoint authority boundary", () => {
         ["--json", "timeline"],
       ]) {
         const result = await runCli(executable, args, env, cwd);
-        expect({ args, exitCode: result.exitCode, stderr: result.stderr }).toEqual({ args, exitCode: 0, stderr: "" });
+        expect({ args, exitCode: result.exitCode, stderr: stderrWithoutAttributionWarning(result.stderr) }).toEqual({ args, exitCode: 0, stderr: "" });
         expect(() => JSON.parse(result.stdout)).not.toThrow();
         expect(recursiveInventory(cwd)).toEqual(before);
         expectNoLocalDatabase(home, localDbPath);
@@ -717,7 +743,7 @@ describe("remote CLI entrypoint authority boundary", () => {
       ]) {
         const requestCount = requests.length;
         const result = await runCli(executable, args, env, cwd);
-        expect({ args, exitCode: result.exitCode, stderr: result.stderr }).toEqual({ args, exitCode: 0, stderr: "" });
+        expect({ args, exitCode: result.exitCode, stderr: stderrWithoutAttributionWarning(result.stderr) }).toEqual({ args, exitCode: 0, stderr: "" });
         // Every variant reaches HTTP (no Stage-A rejection, no local fallback)
         // and the edge read is the FIRST call for the flag combination.
         expect(requests[requestCount]).toBe(`GET /v1/tasks/${TASK_ID}/dependencies`);
@@ -1140,7 +1166,7 @@ describe("remote CLI entrypoint authority boundary", () => {
 
       const runRemoteOk = async (invocation: string[]): Promise<string> => {
         const result = await runCli(executable, invocation, env, cwd);
-        expect({ invocation, exitCode: result.exitCode, stderr: result.stderr }).toEqual({
+        expect({ invocation, exitCode: result.exitCode, stderr: stderrWithoutAttributionWarning(result.stderr) }).toEqual({
           invocation,
           exitCode: 0,
           stderr: "",

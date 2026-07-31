@@ -95,7 +95,12 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
   const tags = input.tags || [];
   const machineId = currentStorageMachineId(d);
 
-  // assigned_by = who created this task (always the calling agent)
+  // created_by = who FILED this task. Write-once here and never touched again by
+  // start/claim/steal/update, so "who put this in the system" stays answerable
+  // for the life of the row. Falls back to agent_id because every existing caller
+  // that bothered to identify itself did so through agent_id.
+  const createdBy = input.created_by || input.agent_id || null;
+  // assigned_by = who handed this task over
   // assigned_from_project = which project they were in when they assigned it
   const assignedBy = input.assigned_by || input.agent_id;
   const assignedFromProject = input.assigned_from_project || null;
@@ -105,8 +110,8 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       d.run(
-        `INSERT INTO tasks (id, short_id, project_id, parent_id, plan_id, task_list_id, cycle_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at, due_at, estimated_minutes, sla_minutes, confidence, retry_count, max_retries, retry_after, requires_approval, approved_by, approved_at, recurrence_rule, recurrence_parent_id, spawns_template_id, reason, spawned_from_session, assigned_by, assigned_from_project, task_type, machine_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO tasks (id, short_id, project_id, parent_id, plan_id, task_list_id, cycle_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at, due_at, estimated_minutes, sla_minutes, confidence, retry_count, max_retries, retry_after, requires_approval, approved_by, approved_at, recurrence_rule, recurrence_parent_id, spawns_template_id, reason, spawned_from_session, assigned_by, created_by, assigned_from_project, task_type, machine_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           null,
@@ -143,6 +148,7 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
           input.reason || null,
           input.spawned_from_session || null,
           assignedBy || null,
+          createdBy,
           assignedFromProject || null,
           input.task_type || null,
           machineId,
@@ -300,6 +306,19 @@ export function listTasks(filter: TaskFilter = {}, db?: Database): Task[] {
   if (filter.agent_id) {
     conditions.push("agent_id = ?");
     params.push(filter.agent_id);
+  }
+
+  if (filter.created_by) {
+    conditions.push("created_by = ?");
+    params.push(filter.created_by);
+  }
+
+  if (filter.not_created_by) {
+    // Rows with a NULL created_by predate the field and are unattributable — they
+    // are kept rather than silently dropped, because "we don't know who filed it"
+    // is not the same claim as "someone else filed it".
+    conditions.push("(created_by IS NULL OR created_by != ?)");
+    params.push(filter.not_created_by);
   }
 
   if (filter.session_id) {
@@ -514,6 +533,19 @@ export function countTasks(filter: Omit<TaskFilter, 'limit' | 'offset'> = {}, db
   if (filter.agent_id) {
     conditions.push("agent_id = ?");
     params.push(filter.agent_id);
+  }
+
+  if (filter.created_by) {
+    conditions.push("created_by = ?");
+    params.push(filter.created_by);
+  }
+
+  if (filter.not_created_by) {
+    // Rows with a NULL created_by predate the field and are unattributable — they
+    // are kept rather than silently dropped, because "we don't know who filed it"
+    // is not the same claim as "someone else filed it".
+    conditions.push("(created_by IS NULL OR created_by != ?)");
+    params.push(filter.not_created_by);
   }
 
   if (filter.session_id) {

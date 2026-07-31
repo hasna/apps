@@ -508,6 +508,10 @@ export async function handleV1Request(
             ...(url.searchParams.get("task_list_id") ? { task_list_id: url.searchParams.get("task_list_id")! } : {}),
             ...(url.searchParams.get("assigned_to") ? { assigned_to: url.searchParams.get("assigned_to")! } : {}),
             ...(url.searchParams.get("agent_id") ? { agent_id: url.searchParams.get("agent_id")! } : {}),
+            ...(url.searchParams.get("created_by") ? { created_by: url.searchParams.get("created_by")! } : {}),
+            // `assigned_to=<me>&not_created_by=<me>` is the inbox query operating rule 29
+            // requires: work routed to me by someone ELSE, with my own filings dropped.
+            ...(url.searchParams.get("not_created_by") ? { not_created_by: url.searchParams.get("not_created_by")! } : {}),
             // Comma-separated tags; matches tasks carrying ANY of the requested
             // tags (parity with the local CLI's `list --tags`).
             ...(url.searchParams.get("tags") ? {

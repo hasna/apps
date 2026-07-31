@@ -38,6 +38,7 @@ import {
 } from "../cloud-router.js";
 import type { CloudTaskRelations } from "../cloud-router.js";
 import type { TaskPriority, TaskStatus } from "../../types/index.js";
+import { resolveCreatorIdentity } from "../../lib/creator-identity.js";
 import {
   formatTaskLine,
   resolveTaskId,
@@ -326,10 +327,28 @@ export function registerTaskCommands(program: Command) {
     .option("--due <date>", "Due date (ISO string or YYYY-MM-DD)")
     .option("--reason <text>", "Why this task exists")
     .option("--project <id>", "Assign to project by ID or slug (overrides auto-detect)")
+    .option("--unassigned", "Deliberately file this task with no assignee")
+    .option("--created-by <agent>", "Record a different filer than the resolved agent identity")
     .action(async (title: string, opts) => {
       const globalOpts = program.opts();
       opts.tags = opts.tags || opts.tag;
       opts.list = opts.list || opts.taskList;
+
+      // Who is FILING this task. `todos init` now persists the identity, so a
+      // registered session no longer has to re-supply --agent on every command —
+      // that omission is why creator attribution was empty on 92% of rows.
+      const creator = resolveCreatorIdentity(opts.createdBy || globalOpts.agent);
+      // Part 2: an unassigned task must be DELIBERATE. Left alone, `todos add`
+      // produced an ownerless row silently, so the filer read "filed and
+      // announced, therefore routed" while no seat was ever queued.
+      const assignee: string | undefined = opts.assign || (opts.unassigned ? undefined : creator.agent_id || undefined);
+      if (!assignee && !opts.unassigned) {
+        // One line, not two: this fires on every add from an unregistered caller,
+        // and a warning people scroll past is a warning that does not work.
+        console.error(chalk.yellow(
+          "Warning: task is ownerless and unattributable — run `todos init <name>`, or pass --assign <agent> or --unassigned.",
+        ));
+      }
 
       // http authority routing: create straight against <app-host>/v1.
       const cloud = getTodosCloudClient();
@@ -359,10 +378,11 @@ export function registerTaskCommands(program: Command) {
             parent_id: opts.parent ? await resolveTaskIdForCommand(opts.parent, cloud) : undefined,
             tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
             plan_id: cloudPlan?.id,
-            assigned_to: opts.assign,
+            assigned_to: assignee,
             status: parseStatus(opts.status),
             task_list_id: cloudTaskListId,
-            agent_id: globalOpts.agent,
+            agent_id: globalOpts.agent || creator.agent_id || undefined,
+            created_by: creator.agent_id || undefined,
             session_id: globalOpts.session,
             project_id: cloudProjectId,
             estimated_minutes: opts.estimated !== undefined ? parseIntOption(opts.estimated, "--estimated") : undefined,
@@ -411,10 +431,11 @@ export function registerTaskCommands(program: Command) {
           parent_id: opts.parent ? resolveTaskId(opts.parent) : undefined,
           tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
           plan_id: opts.plan ? resolvePlanId(opts.plan) : undefined,
-          assigned_to: opts.assign,
+          assigned_to: assignee,
           status: parseStatus(opts.status),
           task_list_id: taskListId,
-          agent_id: globalOpts.agent,
+          agent_id: globalOpts.agent || creator.agent_id || undefined,
+          created_by: creator.agent_id || undefined,
           session_id: globalOpts.session,
           project_id: projectId,
           working_dir: process.cwd(),
@@ -640,6 +661,9 @@ export function registerTaskCommands(program: Command) {
     .option("-s, --status <status>", "Filter by status")
     .option("-p, --priority <priority>", "Filter by priority")
     .option("--assigned <agent>", "Filter by assigned agent")
+    .option("--created-by <agent>", "Filter by the agent who FILED the task")
+    .option("--not-created-by <agent>", "Exclude tasks filed by this agent")
+    .option("--inbox", "Work assigned to my identity that a DIFFERENT agent filed")
     .option("--tags <tags>", "Filter by tags (comma-separated)")
     .option("--tag <tags>", "Filter by tags (alias for --tags)")
     .option("-a, --all", "Show all tasks (including completed/cancelled)")
@@ -666,7 +690,9 @@ export function registerTaskCommands(program: Command) {
         : cloud
           ? undefined
           : autoProject(globalOpts);
-      const hasAssignedFilter = Boolean(opts.assigned || opts.agentName);
+      // --inbox is an assigned filter too. Omitting it here would auto-scope the
+      // inbox to the cwd's project and silently hide work assigned to me elsewhere.
+      const hasAssignedFilter = Boolean(opts.assigned || opts.agentName || opts.inbox);
       const hasExplicitProjectFilter = Boolean(globalOpts.project || opts.projectName);
       const allowedSortFields = new Set(["updated", "created", "priority", "status"]);
       if (opts.sort && !allowedSortFields.has(opts.sort)) {
@@ -700,6 +726,19 @@ export function registerTaskCommands(program: Command) {
       }
       if (opts.priority) filter["priority"] = opts.priority;
       if (opts.assigned) filter["assigned_to"] = opts.assigned;
+      if (opts.createdBy) filter["created_by"] = opts.createdBy;
+      if (opts.notCreatedBy) filter["not_created_by"] = opts.notCreatedBy;
+      // --inbox is the query operating rule 29 mandates and the store could not
+      // answer until created_by existed: assigned to me, filed by someone else.
+      if (opts.inbox) {
+        const me = resolveCreatorIdentity(program.opts().agent);
+        if (!me.agent_id) {
+          console.error(chalk.red("--inbox needs an agent identity. Run `todos init <name>` or pass --agent <id>."));
+          process.exit(1);
+        }
+        filter["assigned_to"] = me.agent_id;
+        filter["not_created_by"] = me.agent_id;
+      }
       if (opts.tags) filter["tags"] = opts.tags.split(",").map((t: string) => t.trim());
       if (opts.projectName && !cloud) {
         const { listProjects } = require("../../db/projects.js") as any;
@@ -724,6 +763,24 @@ export function registerTaskCommands(program: Command) {
       }
 
       let tasks = cloud ? await cloudListTasks(cloud, filter as any) : listTasks(filter as any);
+      if (cloud && (filter["created_by"] || filter["not_created_by"])) {
+        // A server that predates created_by IGNORES these query params and returns
+        // an unfiltered list at 200 — measured against the deployed 0.13.0 API,
+        // which drops created_by entirely. An unenforced filter is worse than an
+        // unavailable one: --inbox would look like it worked and quietly include
+        // the caller's own filings, which is the self-noise it exists to remove.
+        // Re-applying client-side is a no-op once the server does support it.
+        const wantCreatedBy = filter["created_by"] as string | undefined;
+        const excludeCreatedBy = filter["not_created_by"] as string | undefined;
+        tasks = tasks.filter((t) => {
+          const author = (t as { created_by?: string | null }).created_by ?? null;
+          if (wantCreatedBy && author !== wantCreatedBy) return false;
+          // NULL author is unattributable, not "someone else" — keep it, matching
+          // the SQL both backends use.
+          if (excludeCreatedBy && author !== null && author === excludeCreatedBy) return false;
+          return true;
+        });
+      }
       if (opts.dueToday) {
         const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
         tasks = tasks.filter(t => t.due_at && t.due_at <= todayEnd.toISOString());

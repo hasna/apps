@@ -3,6 +3,18 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+/** `todos add` warns on stderr when a task ends up both unassigned and unattributed —
+ *  that warning is the point of the fix, not incidental noise, so it is stripped here
+ *  rather than tolerated wholesale. Any OTHER stderr output still fails the assertion. */
+function stderrWithoutAttributionWarning(stderr: string): string {
+  return stderr
+    .split("\n")
+    .filter((line) => !line.includes("ownerless and unattributable"))
+    .join("\n")
+    .trim();
+}
+
+
 const REPO_ROOT = join(import.meta.dir, "../..");
 const TASK_ID = "11111111-1111-4111-8111-111111111111";
 const PARENT_ID = "22222222-2222-4222-8222-222222222222";
@@ -154,7 +166,8 @@ describe("cloud task detail comments", () => {
     const baseUrl = `http://127.0.0.1:${server.port}`;
     try {
       const add = await runCli(["add", "Cloud short id regression"], root, baseUrl);
-      expect(add).toMatchObject({ exitCode: 0, stderr: "" });
+      expect(add).toMatchObject({ exitCode: 0 });
+      expect(stderrWithoutAttributionWarning(add.stderr)).toBe("");
       expect(add.stdout).toContain(shortId);
 
       const alternateDb = { TODOS_DB_PATH: join(root, "different-local-mirror.db") };
@@ -216,7 +229,8 @@ describe("cloud task detail comments", () => {
         root,
         `http://127.0.0.1:${server.port}`,
       );
-      expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+      expect(result).toMatchObject({ exitCode: 0 });
+      expect(stderrWithoutAttributionWarning(result.stderr)).toBe("");
       expect(createBody).toMatchObject({ title: "Cloud child", parent_id: PARENT_ID });
       expect(JSON.parse(result.stdout)).toMatchObject({ id: TASK_ID, parent_id: PARENT_ID });
     } finally {

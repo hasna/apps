@@ -1638,6 +1638,7 @@ function unresolvedRelatedTask(id: string): Task {
     reason: null,
     spawned_from_session: null,
     assigned_by: null,
+    created_by: null,
     assigned_from_project: null,
     task_type: null,
     cost_tokens: 0,
