@@ -34543,6 +34543,68 @@ VALUES (9, datetime('now'));
 
 COMMIT;
 `;
+var MIGRATION_10_PROMOTION_INBOX = `
+CREATE TABLE IF NOT EXISTS knowledge_promotion_candidates (
+  id TEXT PRIMARY KEY,
+  record_kind TEXT NOT NULL,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  canonical_key TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  source_kind TEXT NOT NULL,
+  source_refs_json TEXT NOT NULL DEFAULT '[]',
+  evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL DEFAULT 'pending',
+  requires_approval INTEGER NOT NULL DEFAULT 0,
+  checks_json TEXT NOT NULL DEFAULT '{}',
+  idempotency_key TEXT NOT NULL UNIQUE,
+  duplicate_of TEXT,
+  approved_by TEXT,
+  promoted_record_id TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  reviewed_at TEXT,
+  promoted_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS durable_knowledge_records (
+  id TEXT PRIMARY KEY,
+  record_kind TEXT NOT NULL,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  canonical_key TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  source_refs_json TEXT NOT NULL DEFAULT '[]',
+  evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+  confidence REAL,
+  valid_from TEXT NOT NULL,
+  valid_to TEXT,
+  promoted_from_candidate_id TEXT NOT NULL UNIQUE
+    REFERENCES knowledge_promotion_candidates(id) ON DELETE RESTRICT,
+  approved_by TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_promotion_candidates_status
+  ON knowledge_promotion_candidates(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_promotion_candidates_kind_key
+  ON knowledge_promotion_candidates(record_kind, canonical_key);
+CREATE INDEX IF NOT EXISTS idx_promotion_candidates_hash
+  ON knowledge_promotion_candidates(record_kind, content_hash);
+CREATE INDEX IF NOT EXISTS idx_durable_records_kind_key
+  ON durable_knowledge_records(record_kind, canonical_key, status);
+CREATE INDEX IF NOT EXISTS idx_durable_records_hash
+  ON durable_knowledge_records(record_kind, content_hash, status);
+CREATE INDEX IF NOT EXISTS idx_durable_records_validity
+  ON durable_knowledge_records(status, valid_to);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (10, datetime('now'));
+`;
 function openKnowledgeDb(path) {
   assertLocalCatalogMode("opening the local knowledge.db catalog");
   ensureParentDir(path);
@@ -34575,6 +34637,8 @@ function migrateKnowledgeDb(path) {
       applyMigration8(db);
     if (needsMigration9(db))
       applyMigration9(db);
+    if (needsMigration10(db))
+      applyMigration10(db);
     return { path, schema_version: getSchemaVersion(db) };
   } finally {
     db.close();
@@ -34655,6 +34719,12 @@ function applyMigration9(db) {
   }
   db.exec(MIGRATION_9_REBUILD_FTS);
 }
+function needsMigration10(db) {
+  return getSchemaVersion(db) < 10 || !tableExists(db, "knowledge_promotion_candidates") || !tableExists(db, "durable_knowledge_records");
+}
+function applyMigration10(db) {
+  db.exec(MIGRATION_10_PROMOTION_INBOX);
+}
 function getKnowledgeDbStats(path) {
   const db = openKnowledgeDb(path);
   try {
@@ -34680,7 +34750,9 @@ function getKnowledgeDbStats(path) {
       sync_changes: count(db, "knowledge_sync_changes"),
       sync_conflicts: count(db, "knowledge_sync_conflicts"),
       sync_table_clocks: count(db, "knowledge_sync_table_clocks"),
-      sync_imports: count(db, "knowledge_sync_imports")
+      sync_imports: count(db, "knowledge_sync_imports"),
+      promotion_candidates: count(db, "knowledge_promotion_candidates"),
+      durable_records: count(db, "durable_knowledge_records")
     };
   } finally {
     db.close();
@@ -35448,7 +35520,7 @@ function createArtifactStore(config2, workspace) {
 }
 
 // src/service.ts
-import { createHash as createHash18 } from "crypto";
+import { createHash as createHash19 } from "crypto";
 import { spawnSync as spawnSync2 } from "child_process";
 import { existsSync as existsSync14, readFileSync as readFileSync12 } from "fs";
 import { hostname as hostname5 } from "os";
@@ -36045,6 +36117,23 @@ function recordRedactionFindings(db, input) {
     ]);
   }
   return input.findings.length;
+}
+function createApprovalGate(db, input) {
+  const now = input.created_at ?? new Date().toISOString();
+  const id = `approval_${randomUUID3()}`;
+  db.run(`INSERT INTO approval_gates (id, action, target_uri, status, reason, approved_by, metadata_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+    id,
+    input.action,
+    input.target_uri ?? null,
+    "approved",
+    input.reason ?? null,
+    input.approved_by ?? "local-cli",
+    JSON.stringify(input.metadata ?? {}),
+    now,
+    now
+  ]);
+  return { id, status: "approved" };
 }
 var COMMON_BARE_TOKEN_PATTERNS = [
   { type: "github_token", severity: "high", regex: /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g, replacement: "[REDACTED:github_token]" },
@@ -43592,10 +43681,503 @@ async function preflightKnowledgeMachine(options = {}) {
   }
 }
 
+// src/promotion-inbox.ts
+import { createHash as createHash12 } from "crypto";
+function stableId7(prefix, value, length = 24) {
+  return `${prefix}_${createHash12("sha256").update(value).digest("hex").slice(0, length)}`;
+}
+function normalizedText(value) {
+  return value.normalize("NFKC").trim().replace(/\s+/g, " ");
+}
+function normalizedKey(value) {
+  return normalizedText(value).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "");
+}
+function parseJson3(value, fallback) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+function asCandidate(row) {
+  return {
+    ...row,
+    record_kind: row.record_kind,
+    source_kind: row.source_kind,
+    status: row.status,
+    source_refs: parseJson3(row.source_refs_json, []),
+    evidence_refs: parseJson3(row.evidence_refs_json, []),
+    requires_approval: row.requires_approval === 1,
+    checks: parseJson3(row.checks_json, emptyChecks()),
+    metadata: parseJson3(row.metadata_json, {})
+  };
+}
+function asDurableRecord(row) {
+  return {
+    ...row,
+    record_kind: row.record_kind,
+    source_refs: parseJson3(row.source_refs_json, []),
+    evidence_refs: parseJson3(row.evidence_refs_json, []),
+    metadata: parseJson3(row.metadata_json, {})
+  };
+}
+function emptyChecks() {
+  return {
+    citations: { provided: 0, valid: 0, invalid: 0, entries: [] },
+    invalid_source_refs: [],
+    stale_refs: [],
+    duplicate_record_ids: [],
+    duplicate_candidate_ids: [],
+    conflicting_record_ids: [],
+    conflicting_candidate_ids: [],
+    approval_reasons: []
+  };
+}
+function normalizeEvidenceRef(input) {
+  const value = typeof input === "string" ? { ref: input } : input;
+  return {
+    ref: normalizedText(value.ref),
+    citation_id: value.citation_id ?? null,
+    chunk_id: value.chunk_id ?? null,
+    revision: value.revision ?? null,
+    hash: value.hash ?? null,
+    observed_at: value.observed_at ?? null,
+    expires_at: value.expires_at ?? null,
+    status: value.status ?? null
+  };
+}
+function validReference(ref) {
+  try {
+    const parsed = new URL(ref);
+    return parsed.protocol.length > 1 && (parsed.hostname.length > 0 || parsed.pathname.length > 0);
+  } catch {
+    return /^(?:cite|citation|chunk|run):[A-Za-z0-9._:-]+$/.test(ref);
+  }
+}
+function staleStatus(status) {
+  return ["deleted", "stale", "invalidated", "reindex_required", "expired", "superseded"].includes((status ?? "").toLowerCase());
+}
+function metadataStatus(value) {
+  if (!value)
+    return null;
+  const metadata = parseJson3(value, {});
+  if (metadata.stale === true)
+    return "stale";
+  return typeof metadata.status === "string" ? metadata.status : null;
+}
+function citationIdentifier(evidence) {
+  if (evidence.citation_id)
+    return evidence.citation_id;
+  const match = evidence.ref.match(/^(?:cite|citation):(.+)$/);
+  return match?.[1] ?? null;
+}
+function chunkIdentifier(evidence) {
+  if (evidence.chunk_id)
+    return evidence.chunk_id;
+  const match = evidence.ref.match(/^chunk:(.+)$/);
+  return match?.[1] ?? null;
+}
+function inspectCitation(db, evidence, now) {
+  const explicitStale = staleStatus(evidence.status) || Boolean(evidence.expires_at && evidence.expires_at <= now);
+  if (!evidence.ref || !validReference(evidence.ref)) {
+    return { ref: evidence.ref, valid: false, resolved_by: "none", stale: explicitStale, reason: "invalid_reference" };
+  }
+  const citationId = citationIdentifier(evidence);
+  const citation = db.query(`SELECT c.id, c.source_uri, c.chunk_id, ch.metadata_json AS chunk_metadata_json,
+            sr.hash AS revision_hash, sr.revision, sr.id AS source_revision_id,
+            sr.source_id, sr.created_at AS revision_created_at,
+            (SELECT MAX(newest.created_at) FROM source_revisions newest WHERE newest.source_id = sr.source_id) AS latest_revision_at
+     FROM citations c
+     LEFT JOIN chunks ch ON ch.id = c.chunk_id
+     LEFT JOIN source_revisions sr ON sr.id = ch.source_revision_id
+     WHERE c.id = ? OR c.source_uri = ?
+     ORDER BY c.created_at DESC
+     LIMIT 1`).get(citationId, evidence.ref);
+  if (citation) {
+    const hashMismatch = Boolean(evidence.hash && citation.revision_hash && evidence.hash !== citation.revision_hash);
+    const revisionMismatch = Boolean(evidence.revision && citation.revision && evidence.revision !== citation.revision);
+    const oldRevision = Boolean(citation.revision_created_at && citation.latest_revision_at && citation.revision_created_at < citation.latest_revision_at);
+    const stale = explicitStale || staleStatus(metadataStatus(citation.chunk_metadata_json)) || hashMismatch || revisionMismatch || oldRevision;
+    return {
+      ref: evidence.ref,
+      valid: true,
+      resolved_by: "citation",
+      stale,
+      reason: hashMismatch ? "hash_mismatch" : revisionMismatch ? "revision_mismatch" : oldRevision ? "newer_source_revision" : stale ? "stale_citation" : null
+    };
+  }
+  const chunkId = chunkIdentifier(evidence);
+  if (chunkId) {
+    const chunk = db.query(`SELECT ch.metadata_json, sr.hash, sr.revision
+       FROM chunks ch LEFT JOIN source_revisions sr ON sr.id = ch.source_revision_id
+       WHERE ch.id = ?`).get(chunkId);
+    if (!chunk)
+      return { ref: evidence.ref, valid: false, resolved_by: "none", stale: explicitStale, reason: "chunk_not_found" };
+    const mismatch = Boolean(evidence.hash && chunk.hash && evidence.hash !== chunk.hash || evidence.revision && chunk.revision && evidence.revision !== chunk.revision);
+    const stale = explicitStale || staleStatus(metadataStatus(chunk.metadata_json)) || mismatch;
+    return { ref: evidence.ref, valid: true, resolved_by: "chunk", stale, reason: mismatch ? "source_version_mismatch" : stale ? "stale_chunk" : null };
+  }
+  const source = db.query("SELECT metadata_json FROM sources WHERE uri = ? LIMIT 1").get(evidence.ref);
+  if (source) {
+    const stale = explicitStale || staleStatus(metadataStatus(source.metadata_json));
+    return { ref: evidence.ref, valid: true, resolved_by: "source", stale, reason: stale ? "stale_source" : null };
+  }
+  const runMatch = evidence.ref.match(/^knowledge:\/\/project\/runs\/([^/?#]+)/);
+  if (runMatch) {
+    const run = db.query("SELECT id FROM runs WHERE id = ?").get(decodeURIComponent(runMatch[1]));
+    if (!run)
+      return { ref: evidence.ref, valid: false, resolved_by: "none", stale: explicitStale, reason: "run_not_found" };
+    return { ref: evidence.ref, valid: true, resolved_by: "run", stale: explicitStale, reason: explicitStale ? "expired_evidence" : null };
+  }
+  return {
+    ref: evidence.ref,
+    valid: true,
+    resolved_by: "external_uri",
+    stale: explicitStale,
+    reason: explicitStale ? "expired_evidence" : null
+  };
+}
+function candidateById(db, id) {
+  return db.query("SELECT * FROM knowledge_promotion_candidates WHERE id = ?").get(id) ?? null;
+}
+function assessCandidate(db, row, now) {
+  const evidence = parseJson3(row.evidence_refs_json, []);
+  const sourceRefs = parseJson3(row.source_refs_json, []);
+  const metadata = parseJson3(row.metadata_json, {});
+  const checks3 = emptyChecks();
+  checks3.invalid_source_refs = sourceRefs.filter((ref) => !validReference(ref));
+  checks3.citations.entries = evidence.map((entry) => inspectCitation(db, entry, now));
+  checks3.citations.provided = evidence.length;
+  checks3.citations.valid = checks3.citations.entries.filter((entry) => entry.valid).length;
+  checks3.citations.invalid = checks3.citations.entries.length - checks3.citations.valid;
+  checks3.stale_refs = checks3.citations.entries.filter((entry) => entry.stale).map((entry) => entry.ref);
+  checks3.duplicate_record_ids = db.query(`SELECT id FROM durable_knowledge_records
+     WHERE record_kind = ? AND content_hash = ? AND status IN ('active', 'conflicted')
+     ORDER BY created_at`).all(row.record_kind, row.content_hash).map((entry) => entry.id);
+  checks3.duplicate_candidate_ids = db.query(`SELECT id FROM knowledge_promotion_candidates
+     WHERE id <> ? AND record_kind = ? AND content_hash = ? AND status NOT IN ('rejected')
+     ORDER BY created_at`).all(row.id, row.record_kind, row.content_hash).map((entry) => entry.id);
+  checks3.conflicting_record_ids = db.query(`SELECT id FROM durable_knowledge_records
+     WHERE record_kind = ? AND canonical_key = ? AND content_hash <> ? AND status IN ('active', 'conflicted')
+     ORDER BY created_at`).all(row.record_kind, row.canonical_key, row.content_hash).map((entry) => entry.id);
+  checks3.conflicting_candidate_ids = db.query(`SELECT id FROM knowledge_promotion_candidates
+     WHERE id <> ? AND record_kind = ? AND canonical_key = ? AND content_hash <> ?
+       AND status IN ('ready', 'needs_approval', 'promoted')
+     ORDER BY created_at`).all(row.id, row.record_kind, row.canonical_key, row.content_hash).map((entry) => entry.id);
+  const duplicateOf = checks3.duplicate_record_ids[0] ?? checks3.duplicate_candidate_ids[0] ?? null;
+  const blocked = sourceRefs.length === 0 || evidence.length === 0 || checks3.invalid_source_refs.length > 0 || checks3.citations.invalid > 0;
+  if (row.record_kind === "decision" || row.record_kind === "claim")
+    checks3.approval_reasons.push(`${row.record_kind}_requires_review`);
+  if (metadata.requested_approval === true)
+    checks3.approval_reasons.push("explicit_approval_request");
+  if (checks3.stale_refs.length > 0)
+    checks3.approval_reasons.push("stale_evidence");
+  if (checks3.conflicting_record_ids.length > 0 || checks3.conflicting_candidate_ids.length > 0) {
+    checks3.approval_reasons.push("conflicting_knowledge");
+  }
+  const requiresApproval = checks3.approval_reasons.length > 0;
+  const status = duplicateOf ? "duplicate" : blocked ? "blocked" : requiresApproval ? "needs_approval" : "ready";
+  db.run(`UPDATE knowledge_promotion_candidates
+     SET status = ?, requires_approval = ?, checks_json = ?, duplicate_of = ?, updated_at = ?, reviewed_at = ?
+     WHERE id = ?`, [status, requiresApproval ? 1 : 0, JSON.stringify(checks3), duplicateOf, now, now, row.id]);
+  return asCandidate(candidateById(db, row.id));
+}
+function enqueueKnowledgePromotion(dbPath, input) {
+  const kinds = ["lesson", "decision", "claim"];
+  const sourceKinds = ["memento", "session", "report"];
+  if (!kinds.includes(input.kind))
+    throw new Error("Promotion kind must be lesson, decision, or claim.");
+  if (!sourceKinds.includes(input.sourceKind))
+    throw new Error("Promotion source kind must be memento, session, or report.");
+  const titleResult = redactSecrets(normalizedText(input.title));
+  const contentResult = redactSecrets(normalizedText(input.content));
+  if (!titleResult.text)
+    throw new Error("Promotion title is required.");
+  if (!contentResult.text)
+    throw new Error("Promotion content is required.");
+  const sourceRefs = Array.from(new Set(input.sourceRefs.map(normalizedText).filter(Boolean))).sort();
+  const evidenceRefs = input.evidenceRefs.map(normalizeEvidenceRef).filter((entry) => entry.ref.length > 0).sort((a, b) => a.ref.localeCompare(b.ref));
+  const canonicalKey = normalizedKey(input.canonicalKey ?? titleResult.text);
+  if (!canonicalKey)
+    throw new Error("Promotion canonical key is empty after normalization.");
+  const contentHash = `sha256:${createHash12("sha256").update(`${input.kind}\x00${normalizedText(contentResult.text).toLowerCase()}`).digest("hex")}`;
+  const idempotencyKey = stableId7("promote", [
+    input.sourceKind,
+    input.kind,
+    canonicalKey,
+    contentHash,
+    ...sourceRefs
+  ].join("\x00"));
+  const id = stableId7("promotion", idempotencyKey);
+  const now = (input.now ?? new Date).toISOString();
+  const metadata = {
+    ...input.metadata ?? {},
+    requested_approval: input.requiresApproval === true,
+    confidence: input.confidence ?? null,
+    valid_from: input.validFrom ?? now,
+    valid_to: input.validTo ?? null,
+    redactions: titleResult.findings.length + contentResult.findings.length
+  };
+  migrateKnowledgeDb(dbPath);
+  const db = openKnowledgeDb(dbPath);
+  try {
+    const existing = db.query("SELECT * FROM knowledge_promotion_candidates WHERE idempotency_key = ?").get(idempotencyKey);
+    if (existing)
+      return { created: false, candidate: asCandidate(existing) };
+    db.run(`INSERT INTO knowledge_promotion_candidates (
+        id, record_kind, title, content, canonical_key, content_hash, source_kind,
+        source_refs_json, evidence_refs_json, status, requires_approval, checks_json,
+        idempotency_key, metadata_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, '{}', ?, ?, ?, ?)`, [
+      id,
+      input.kind,
+      titleResult.text,
+      contentResult.text,
+      canonicalKey,
+      contentHash,
+      input.sourceKind,
+      JSON.stringify(sourceRefs),
+      JSON.stringify(evidenceRefs),
+      idempotencyKey,
+      JSON.stringify(metadata),
+      now,
+      now
+    ]);
+    const findings = [...titleResult.findings, ...contentResult.findings];
+    if (findings.length > 0) {
+      recordRedactionFindings(db, {
+        source_uri: sourceRefs[0] ?? `knowledge://promotion/${id}`,
+        findings,
+        metadata: { promotion_candidate_id: id },
+        created_at: now
+      });
+    }
+    recordAuditEvent(db, {
+      event_type: "knowledge_promotion",
+      action: "enqueue_promotion",
+      target_uri: `knowledge://promotion/${id}`,
+      decision: "info",
+      metadata: { record_kind: input.kind, source_kind: input.sourceKind, source_refs: sourceRefs },
+      created_at: now
+    });
+    return { created: true, candidate: assessCandidate(db, candidateById(db, id), now) };
+  } finally {
+    db.close();
+  }
+}
+function getKnowledgePromotion(dbPath, id) {
+  migrateKnowledgeDb(dbPath);
+  const db = openKnowledgeDb(dbPath);
+  try {
+    const row = candidateById(db, id);
+    return row ? asCandidate(row) : null;
+  } finally {
+    db.close();
+  }
+}
+function listKnowledgePromotions(dbPath, options = {}) {
+  migrateKnowledgeDb(dbPath);
+  const limit = Math.max(1, Math.min(options.limit ?? 50, 200));
+  const conditions = [];
+  const params = [];
+  if (options.status === "inbox" || !options.status) {
+    conditions.push("status IN ('ready', 'needs_approval', 'blocked')");
+  } else {
+    conditions.push("status = ?");
+    params.push(options.status);
+  }
+  if (options.kind) {
+    conditions.push("record_kind = ?");
+    params.push(options.kind);
+  }
+  const db = openKnowledgeDb(dbPath);
+  try {
+    return db.query(`SELECT * FROM knowledge_promotion_candidates
+       WHERE ${conditions.join(" AND ")}
+       ORDER BY updated_at DESC, created_at DESC
+       LIMIT ?`).all(...params, limit).map(asCandidate);
+  } finally {
+    db.close();
+  }
+}
+function reviewKnowledgePromotion(dbPath, id, now = new Date) {
+  migrateKnowledgeDb(dbPath);
+  const db = openKnowledgeDb(dbPath);
+  try {
+    const row = candidateById(db, id);
+    if (!row)
+      throw new Error(`Promotion candidate not found: ${id}`);
+    if (row.status === "promoted" || row.status === "rejected")
+      return asCandidate(row);
+    return assessCandidate(db, row, now.toISOString());
+  } finally {
+    db.close();
+  }
+}
+function promoteKnowledgeCandidate(dbPath, id, options = {}) {
+  migrateKnowledgeDb(dbPath);
+  const db = openKnowledgeDb(dbPath);
+  const now = (options.now ?? new Date).toISOString();
+  try {
+    const row = candidateById(db, id);
+    if (!row)
+      throw new Error(`Promotion candidate not found: ${id}`);
+    if (row.status === "promoted" && row.promoted_record_id) {
+      const existingRecord = db.query("SELECT * FROM durable_knowledge_records WHERE id = ?").get(row.promoted_record_id);
+      return {
+        ok: true,
+        promoted: false,
+        requires_approval: row.requires_approval === 1,
+        candidate: asCandidate(row),
+        record: existingRecord ? asDurableRecord(existingRecord) : null,
+        approval_id: null,
+        reason: "already_promoted"
+      };
+    }
+    if (row.status === "rejected")
+      throw new Error(`Promotion candidate ${id} was rejected.`);
+    const candidate = assessCandidate(db, row, now);
+    if (candidate.status === "duplicate") {
+      return { ok: true, promoted: false, requires_approval: false, candidate, record: null, approval_id: null, reason: "duplicate" };
+    }
+    if (candidate.status === "blocked") {
+      return { ok: false, promoted: false, requires_approval: false, candidate, record: null, approval_id: null, reason: "citation_check_failed" };
+    }
+    if (candidate.requires_approval && !options.approveWrite) {
+      return { ok: false, promoted: false, requires_approval: true, candidate, record: null, approval_id: null, reason: "approval_required" };
+    }
+    if (candidate.requires_approval && !options.approvedBy?.trim()) {
+      throw new Error("Promotion approval requires --approved-by <name>.");
+    }
+    const approvedBy = candidate.requires_approval ? options.approvedBy.trim() : null;
+    let approvalId = null;
+    if (candidate.requires_approval) {
+      approvalId = createApprovalGate(db, {
+        action: "promote_durable_knowledge",
+        target_uri: `knowledge://promotion/${candidate.id}`,
+        reason: candidate.checks.approval_reasons.join(", "),
+        approved_by: approvedBy,
+        metadata: { promotion_candidate_id: candidate.id, checks: candidate.checks },
+        created_at: now
+      }).id;
+    }
+    const recordId = stableId7("durable", candidate.id);
+    const metadata = {
+      ...candidate.metadata,
+      promotion_candidate_id: candidate.id,
+      source_kind: candidate.source_kind,
+      checks: candidate.checks,
+      approval_id: approvalId,
+      provenance: generatedArtifactProvenance({
+        generated_from: `knowledge://promotion/${candidate.id}`,
+        artifact_key: `durable/${candidate.record_kind}/${candidate.canonical_key}`,
+        source_refs: candidate.source_refs,
+        citation_required: true
+      })
+    };
+    db.run(`INSERT INTO durable_knowledge_records (
+        id, record_kind, title, content, canonical_key, content_hash, status,
+        source_refs_json, evidence_refs_json, confidence, valid_from, valid_to,
+        promoted_from_candidate_id, approved_by, metadata_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+      recordId,
+      candidate.record_kind,
+      candidate.title,
+      candidate.content,
+      candidate.canonical_key,
+      candidate.content_hash,
+      candidate.checks.conflicting_record_ids.length > 0 ? "conflicted" : "active",
+      JSON.stringify(candidate.source_refs),
+      JSON.stringify(candidate.evidence_refs),
+      typeof candidate.metadata.confidence === "number" ? candidate.metadata.confidence : null,
+      typeof candidate.metadata.valid_from === "string" ? candidate.metadata.valid_from : now,
+      typeof candidate.metadata.valid_to === "string" ? candidate.metadata.valid_to : null,
+      candidate.id,
+      approvedBy,
+      JSON.stringify(metadata),
+      now,
+      now
+    ]);
+    db.run(`UPDATE knowledge_promotion_candidates
+       SET status = 'promoted', approved_by = ?, promoted_record_id = ?, promoted_at = ?, updated_at = ?
+       WHERE id = ?`, [approvedBy, recordId, now, now, candidate.id]);
+    recordAuditEvent(db, {
+      event_type: "knowledge_promotion",
+      action: "promote_durable_knowledge",
+      target_uri: `knowledge://durable/${recordId}`,
+      decision: "allow",
+      metadata: { promotion_candidate_id: candidate.id, approval_id: approvalId, source_refs: candidate.source_refs },
+      created_at: now
+    });
+    const promotedCandidate = asCandidate(candidateById(db, candidate.id));
+    const record2 = db.query("SELECT * FROM durable_knowledge_records WHERE id = ?").get(recordId);
+    return {
+      ok: true,
+      promoted: true,
+      requires_approval: candidate.requires_approval,
+      candidate: promotedCandidate,
+      record: asDurableRecord(record2),
+      approval_id: approvalId,
+      reason: null
+    };
+  } finally {
+    db.close();
+  }
+}
+function rejectKnowledgePromotion(dbPath, id, options = {}) {
+  migrateKnowledgeDb(dbPath);
+  const db = openKnowledgeDb(dbPath);
+  const now = (options.now ?? new Date).toISOString();
+  try {
+    const row = candidateById(db, id);
+    if (!row)
+      throw new Error(`Promotion candidate not found: ${id}`);
+    if (row.status === "promoted")
+      throw new Error(`Promotion candidate ${id} is already promoted.`);
+    db.run(`UPDATE knowledge_promotion_candidates
+       SET status = 'rejected', approved_by = ?, updated_at = ?, reviewed_at = ?
+       WHERE id = ?`, [options.rejectedBy?.trim() || null, now, now, id]);
+    recordAuditEvent(db, {
+      event_type: "knowledge_promotion",
+      action: "reject_promotion",
+      target_uri: `knowledge://promotion/${id}`,
+      decision: "deny",
+      metadata: { rejected_by: options.rejectedBy ?? null },
+      created_at: now
+    });
+    return asCandidate(candidateById(db, id));
+  } finally {
+    db.close();
+  }
+}
+function listDurableKnowledgeRecords(dbPath, options = {}) {
+  migrateKnowledgeDb(dbPath);
+  const conditions = [];
+  const params = [];
+  if (options.kind) {
+    conditions.push("record_kind = ?");
+    params.push(options.kind);
+  }
+  if (options.status) {
+    conditions.push("status = ?");
+    params.push(options.status);
+  }
+  const limit = Math.max(1, Math.min(options.limit ?? 50, 200));
+  const db = openKnowledgeDb(dbPath);
+  try {
+    return db.query(`SELECT * FROM durable_knowledge_records
+       ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""}
+       ORDER BY updated_at DESC, created_at DESC
+       LIMIT ?`).all(...params, limit).map(asDurableRecord);
+  } finally {
+    db.close();
+  }
+}
+
 // src/reindex.ts
-import { createHash as createHash12, randomUUID as randomUUID10 } from "crypto";
-function stableId7(prefix, value) {
-  return `${prefix}_${createHash12("sha256").update(value).digest("hex").slice(0, 20)}`;
+import { createHash as createHash13, randomUUID as randomUUID10 } from "crypto";
+function stableId8(prefix, value) {
+  return `${prefix}_${createHash13("sha256").update(value).digest("hex").slice(0, 20)}`;
 }
 function queueCounts(dbPath) {
   const db = openKnowledgeDb(dbPath);
@@ -43655,7 +44237,7 @@ function enqueueMissingEmbeddings(options) {
   try {
     const write = db.transaction(() => {
       for (const row of rows) {
-        const id = stableId7("rq", `embedding\x00${row.chunk_id}\x00${reason}`);
+        const id = stableId8("rq", `embedding\x00${row.chunk_id}\x00${reason}`);
         const before = db.query("SELECT id FROM reindex_queue WHERE kind = ? AND target_id = ? AND reason = ?").get("embedding", row.chunk_id, reason);
         if (before) {
           alreadyQueued += 1;
@@ -43780,7 +44362,7 @@ async function refreshEmbeddingIndex(options) {
 }
 
 // src/rules-provenance.ts
-import { createHash as createHash13 } from "crypto";
+import { createHash as createHash14 } from "crypto";
 import { existsSync as existsSync12, lstatSync as lstatSync2, readdirSync as readdirSync2, readFileSync as readFileSync10, statSync as statSync2 } from "fs";
 import { basename as basename5, extname as extname2, join as join6, relative as relative4, resolve as resolve4, sep as sep4 } from "path";
 import { pathToFileURL as pathToFileURL3 } from "url";
@@ -43812,10 +44394,10 @@ var SKIP_DIRECTORIES = new Set([
 var SENSITIVE_PATH_RE = /(^|[._-])(secret|secrets|token|tokens|credential|credentials|password|passwd|private[_-]?key|id_rsa)([._-]|$)/i;
 var SELECTED_PROMPT_OR_PLAN_RE = /(agent|rule|rules|instruction|instructions|global|operating|standard|knowledge)/i;
 function sha256Text2(text) {
-  return `sha256:${createHash13("sha256").update(text).digest("hex")}`;
+  return `sha256:${createHash14("sha256").update(text).digest("hex")}`;
 }
 function sha256Bytes(bytes) {
-  return `sha256:${createHash13("sha256").update(bytes).digest("hex")}`;
+  return `sha256:${createHash14("sha256").update(bytes).digest("hex")}`;
 }
 function normalizePath(value) {
   return value.split(sep4).join("/");
@@ -44332,9 +44914,9 @@ async function importRulesProvenance(options = {}) {
 }
 
 // src/web-search.ts
-import { createHash as createHash14, randomUUID as randomUUID11 } from "crypto";
+import { createHash as createHash15, randomUUID as randomUUID11 } from "crypto";
 function stableHash(value) {
-  return `sha256:${createHash14("sha256").update(value).digest("hex")}`;
+  return `sha256:${createHash15("sha256").update(value).digest("hex")}`;
 }
 function estimateTokens3(text) {
   const words = text.trim().split(/\s+/).filter(Boolean).length;
@@ -44583,9 +45165,9 @@ async function runProviderWebSearch(options) {
 }
 
 // src/wiki-compiler.ts
-import { createHash as createHash15, randomUUID as randomUUID12 } from "crypto";
-function stableId8(prefix, value) {
-  return `${prefix}_${createHash15("sha256").update(value).digest("hex").slice(0, 20)}`;
+import { createHash as createHash16, randomUUID as randomUUID12 } from "crypto";
+function stableId9(prefix, value) {
+  return `${prefix}_${createHash16("sha256").update(value).digest("hex").slice(0, 20)}`;
 }
 function slugify3(value) {
   const slug = value.normalize("NFKC").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
@@ -44758,7 +45340,7 @@ function upsertWikiPage(db, input) {
   for (const row of existing)
     db.run("DELETE FROM chunks_fts WHERE chunk_id = ?", [row.id]);
   db.run("DELETE FROM chunks WHERE wiki_page_id = ?", [input.pageId]);
-  const chunkId = stableId8("chk", `${input.pageId}\x00${input.contentHash}`);
+  const chunkId = stableId9("chk", `${input.pageId}\x00${input.contentHash}`);
   db.run(`INSERT INTO chunks (id, wiki_page_id, kind, ordinal, text, token_count, start_offset, end_offset, metadata_json, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
     chunkId,
@@ -44789,7 +45371,7 @@ function replacePageCitations(db, pageId, citations, now) {
   for (const citation of citations) {
     db.run(`INSERT INTO citations (id, wiki_page_id, chunk_id, source_uri, quote, start_offset, end_offset, metadata_json, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-      stableId8("cit", `${pageId}\x00${citation.source_uri}\x00${citation.chunk_id ?? randomUUID12()}`),
+      stableId9("cit", `${pageId}\x00${citation.source_uri}\x00${citation.chunk_id ?? randomUUID12()}`),
       pageId,
       citation.chunk_id,
       citation.source_uri,
@@ -44809,7 +45391,7 @@ function upsertIndex(db, input) {
        artifact_uri = excluded.artifact_uri,
        metadata_json = excluded.metadata_json,
        updated_at = excluded.updated_at`, [
-    stableId8("idx", `wiki-topic\x00${input.path}`),
+    stableId9("idx", `wiki-topic\x00${input.path}`),
     "wiki_topic",
     input.title,
     input.artifactUri,
@@ -44858,7 +45440,7 @@ async function compileWikiPage(options) {
     content_type: "text/markdown",
     metadata: { generated_from: "wiki_compile" }
   });
-  const pageId = stableId8("wiki", path);
+  const pageId = stableId9("wiki", path);
   const citations = rows.map((row) => ({
     chunk_id: row.chunk_id,
     source_uri: row.source_uri ?? "unknown",
@@ -44887,7 +45469,7 @@ async function compileWikiPage(options) {
     content_type: "text/markdown",
     metadata: { generated_from: "wiki_compile_concept" }
   });
-  const conceptPageId = stableId8("wiki", conceptPath);
+  const conceptPageId = stableId9("wiki", conceptPath);
   const log = await appendLog2(options.store, {
     ts: now,
     event: "wiki_compile_completed",
@@ -44993,7 +45575,7 @@ async function fileAnswerToWiki(options) {
     prompt: options.prompt,
     citations: citations.length
   }, nowDate);
-  const pageId = stableId8("wiki", path);
+  const pageId = stableId9("wiki", path);
   const db = openKnowledgeDb(options.dbPath);
   try {
     recordStorageObjects(db, [artifact, log], nowDate);
@@ -45129,15 +45711,15 @@ function lintWiki(options) {
 }
 
 // src/wiki-layout.ts
-import { createHash as createHash16 } from "crypto";
+import { createHash as createHash17 } from "crypto";
 function todayParts2(now) {
   const year = String(now.getUTCFullYear());
   const month = String(now.getUTCMonth() + 1).padStart(2, "0");
   const day = String(now.getUTCDate()).padStart(2, "0");
   return { year, month, day };
 }
-function stableId9(prefix, value) {
-  return `${prefix}_${createHash16("sha256").update(value).digest("hex").slice(0, 20)}`;
+function stableId10(prefix, value) {
+  return `${prefix}_${createHash17("sha256").update(value).digest("hex").slice(0, 20)}`;
 }
 function estimateTokenCount4(text) {
   const words = text.trim().split(/\s+/).filter(Boolean).length;
@@ -45256,7 +45838,7 @@ function provenanceFor(artifact) {
 }
 function recordWikiChunk(db, pageId, title, artifact, body, now) {
   const provenance = provenanceFor(artifact);
-  const chunkId = stableId9("chk", `${pageId}\x00${artifact.hash ?? artifact.uri}`);
+  const chunkId = stableId10("chk", `${pageId}\x00${artifact.hash ?? artifact.uri}`);
   const existing = db.query("SELECT id FROM chunks WHERE wiki_page_id = ?").all(pageId);
   for (const row of existing)
     db.run("DELETE FROM chunks_fts WHERE chunk_id = ?", [row.id]);
@@ -45292,7 +45874,7 @@ function recordWikiLayoutCatalog(db, artifacts, now = new Date) {
          artifact_uri = excluded.artifact_uri,
          metadata_json = excluded.metadata_json,
          updated_at = excluded.updated_at`, [
-      stableId9("idx", "root:indexes/root.md"),
+      stableId10("idx", "root:indexes/root.md"),
       "root",
       "root",
       rootIndex.uri,
@@ -45307,7 +45889,7 @@ function recordWikiLayoutCatalog(db, artifacts, now = new Date) {
     ]);
   }
   if (wikiReadme) {
-    const wikiPageId = stableId9("wiki", "wiki/README.md");
+    const wikiPageId = stableId10("wiki", "wiki/README.md");
     db.run(`INSERT INTO wiki_pages (id, path, title, artifact_uri, content_hash, status, metadata_json, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(path) DO UPDATE SET
@@ -45335,7 +45917,7 @@ function recordWikiLayoutCatalog(db, artifacts, now = new Date) {
 }
 
 // src/workspace-migration.ts
-import { createHash as createHash17 } from "crypto";
+import { createHash as createHash18 } from "crypto";
 import {
   cpSync,
   chmodSync as chmodSync4,
@@ -45362,12 +45944,12 @@ function walkFiles(root, base = root) {
 function hashFiles(root, files) {
   if (files.length === 0)
     return { sha256: null, bytes: 0 };
-  const tree = createHash17("sha256");
+  const tree = createHash18("sha256");
   let bytes = 0;
   for (const file2 of files) {
     const path = join7(root, file2);
     const body = readFileSync11(path);
-    const fileHash = createHash17("sha256").update(body).digest("hex");
+    const fileHash = createHash18("sha256").update(body).digest("hex");
     bytes += body.byteLength;
     tree.update(file2);
     tree.update("\x00");
@@ -45982,7 +46564,7 @@ function resolvePeerWorkspace(input) {
   return ensureKnowledgeWorkspace(workspaceForHome(projectKnowledgeHome(target)).home);
 }
 function workspaceMachineId(workspace) {
-  return `${hostname5()}:${createHash18("sha256").update(workspace.home).digest("hex").slice(0, 12)}`;
+  return `${hostname5()}:${createHash19("sha256").update(workspace.home).digest("hex").slice(0, 12)}`;
 }
 function shellQuote2(value) {
   return `'${value.replace(/'/g, "'\\''")}'`;
@@ -46272,6 +46854,44 @@ function rowsWithJsonFields(rows, fields = ["metadata_json"]) {
     return next;
   });
 }
+function parseInventoryJsonArray(value) {
+  if (typeof value !== "string")
+    return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+function parseInventoryJsonObject(value) {
+  if (typeof value !== "string")
+    return {};
+  return parseMetadataJson(value);
+}
+function promotionCandidateInventoryRow(row) {
+  const next = { ...row };
+  next.source_refs = parseInventoryJsonArray(next.source_refs_json);
+  next.evidence_refs = parseInventoryJsonArray(next.evidence_refs_json);
+  next.requires_approval = next.requires_approval === 1 || next.requires_approval === true;
+  next.checks = parseInventoryJsonObject(next.checks_json);
+  next.metadata = parseInventoryJsonObject(next.metadata_json);
+  delete next.source_refs_json;
+  delete next.evidence_refs_json;
+  delete next.checks_json;
+  delete next.metadata_json;
+  return next;
+}
+function durableRecordInventoryRow(row) {
+  const next = { ...row };
+  next.source_refs = parseInventoryJsonArray(next.source_refs_json);
+  next.evidence_refs = parseInventoryJsonArray(next.evidence_refs_json);
+  next.metadata = parseInventoryJsonObject(next.metadata_json);
+  delete next.source_refs_json;
+  delete next.evidence_refs_json;
+  delete next.metadata_json;
+  return next;
+}
 function selectInventoryRows(db, sql, params = []) {
   return db.query(sql).all(...params);
 }
@@ -46329,7 +46949,9 @@ function emptyKnowledgeDbStats() {
     sync_changes: 0,
     sync_conflicts: 0,
     sync_table_clocks: 0,
-    sync_imports: 0
+    sync_imports: 0,
+    promotion_candidates: 0,
+    durable_records: 0
   };
 }
 function emptySearchResult(query2, limit, semantic = false) {
@@ -46418,7 +47040,7 @@ function legacyAgentContextPack(options, context, policy) {
     redactions += quote.redactions;
     const ref = citation.source_ref ?? citation.source_uri ?? citation.artifact_path ?? citation.artifact_uri ?? citation.id;
     return {
-      id: `cite_${createHash18("sha256").update(`${citation.id}\x00${ref}`).digest("hex").slice(0, 12)}`,
+      id: `cite_${createHash19("sha256").update(`${citation.id}\x00${ref}`).digest("hex").slice(0, 12)}`,
       kind: citation.artifact_uri || citation.artifact_path ? "artifact" : "source",
       ref,
       source_ref: citation.source_ref,
@@ -46444,7 +47066,7 @@ function legacyAgentContextPack(options, context, policy) {
     const preview2 = redactPreviewForPack(excerpt2.text, policy, 520);
     redactions += preview2.redactions;
     return {
-      id: `ev_${createHash18("sha256").update(`${excerpt2.kind}\x00${excerpt2.result_id}\x00${excerpt2.citation_id ?? ""}`).digest("hex").slice(0, 14)}`,
+      id: `ev_${createHash19("sha256").update(`${excerpt2.kind}\x00${excerpt2.result_id}\x00${excerpt2.citation_id ?? ""}`).digest("hex").slice(0, 14)}`,
       kind: excerpt2.kind,
       title: compactText(result?.title ?? citation?.ref ?? excerpt2.kind, 100),
       text_preview: preview2.text,
@@ -46462,7 +47084,7 @@ function legacyAgentContextPack(options, context, policy) {
   const usedCitationIds = new Set(evidence.flatMap((entry) => entry.citation_ids));
   const usedCitations = citations.filter((citation) => usedCitationIds.has(citation.id));
   const warnings = Array.from(new Set(context.warnings));
-  const idempotencyKey = `ctx_${createHash18("sha256").update([source, purpose, query2, warnings.join(","), evidence.map((entry) => entry.id).join(",")].join("\x00")).digest("hex").slice(0, 20)}`;
+  const idempotencyKey = `ctx_${createHash19("sha256").update([source, purpose, query2, warnings.join(","), evidence.map((entry) => entry.id).join(",")].join("\x00")).digest("hex").slice(0, 20)}`;
   const pack = {
     ok: true,
     format: "knowledge-agent-context-pack",
@@ -46575,7 +47197,7 @@ function emptyAgentContextPack(options) {
   const query2 = (options.query ?? options.topic ?? "").normalize("NFKC").trim().replace(/\s+/g, " ");
   const maxItems = Math.max(1, Math.min(options.maxItems ?? options.limit ?? 8, 50));
   const maxTokens = Math.max(500, Math.min(options.maxTokens ?? 6000, 1e5));
-  const idempotencyKey = `ctx_${createHash18("sha256").update(["empty", source, purpose, query2, options.topic ?? "", options.since ?? ""].join("\x00")).digest("hex").slice(0, 20)}`;
+  const idempotencyKey = `ctx_${createHash19("sha256").update(["empty", source, purpose, query2, options.topic ?? "", options.since ?? ""].join("\x00")).digest("hex").slice(0, 20)}`;
   return {
     ok: true,
     format: "knowledge-agent-context-pack",
@@ -47118,6 +47740,27 @@ class KnowledgeService {
       return emptyKnowledgeDbStats();
     return getKnowledgeDbStats(workspace.knowledgeDbPath);
   }
+  enqueuePromotion(input) {
+    return enqueueKnowledgePromotion(this.ensureWorkspace().knowledgeDbPath, input);
+  }
+  promotionInbox(options = {}) {
+    return listKnowledgePromotions(this.ensureWorkspace().knowledgeDbPath, options);
+  }
+  getPromotion(id) {
+    return getKnowledgePromotion(this.ensureWorkspace().knowledgeDbPath, id);
+  }
+  reviewPromotion(id, now) {
+    return reviewKnowledgePromotion(this.ensureWorkspace().knowledgeDbPath, id, now);
+  }
+  promoteCandidate(id, options = {}) {
+    return promoteKnowledgeCandidate(this.ensureWorkspace().knowledgeDbPath, id, options);
+  }
+  rejectPromotion(id, options = {}) {
+    return rejectKnowledgePromotion(this.ensureWorkspace().knowledgeDbPath, id, options);
+  }
+  durableRecords(options = {}) {
+    return listDurableKnowledgeRecords(this.ensureWorkspace().knowledgeDbPath, options);
+  }
   itemOnlyInventory(params) {
     const workspace = this.workspace;
     const { items, limit, includeArchived, storePath, storeExists, storeReadError } = params;
@@ -47149,7 +47792,9 @@ class KnowledgeService {
       sync_changes: stats.sync_changes,
       sync_conflicts: stats.sync_conflicts,
       sync_table_clocks: stats.sync_table_clocks,
-      sync_imports: stats.sync_imports
+      sync_imports: stats.sync_imports,
+      promotion_candidates: stats.promotion_candidates,
+      durable_records: stats.durable_records
     };
     return {
       ok: true,
@@ -47190,6 +47835,8 @@ class KnowledgeService {
       sync_conflicts: [],
       approval_gates: [],
       audit_events: [],
+      promotion_candidates: [],
+      durable_records: [],
       message: `${items.length} item(s), 0 source(s), 0 chunk(s), 0 wiki page(s), 0 artifact(s)`
     };
   }
@@ -47380,6 +48027,55 @@ class KnowledgeService {
         ORDER BY created_at DESC
         LIMIT ?
       `, [limit]));
+      const promotionCandidates = selectInventoryRows(db, `
+        SELECT
+          id,
+          record_kind,
+          title,
+          substr(content, 1, 220) AS content_preview,
+          canonical_key,
+          content_hash,
+          source_kind,
+          source_refs_json,
+          evidence_refs_json,
+          status,
+          requires_approval,
+          checks_json,
+          duplicate_of,
+          approved_by,
+          promoted_record_id,
+          metadata_json,
+          created_at,
+          updated_at,
+          reviewed_at,
+          promoted_at
+        FROM knowledge_promotion_candidates
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT ?
+      `, [limit]).map(promotionCandidateInventoryRow);
+      const durableRecords = selectInventoryRows(db, `
+        SELECT
+          id,
+          record_kind,
+          title,
+          substr(content, 1, 220) AS content_preview,
+          canonical_key,
+          content_hash,
+          status,
+          source_refs_json,
+          evidence_refs_json,
+          confidence,
+          valid_from,
+          valid_to,
+          promoted_from_candidate_id,
+          approved_by,
+          metadata_json,
+          created_at,
+          updated_at
+        FROM durable_knowledge_records
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT ?
+      `, [limit]).map(durableRecordInventoryRow);
       const summary = {
         legacy_items: legacyStore.items.length,
         active_items: activeItems.length,
@@ -47405,7 +48101,9 @@ class KnowledgeService {
         sync_changes: stats.sync_changes,
         sync_conflicts: stats.sync_conflicts,
         sync_table_clocks: stats.sync_table_clocks,
-        sync_imports: stats.sync_imports
+        sync_imports: stats.sync_imports,
+        promotion_candidates: stats.promotion_candidates,
+        durable_records: stats.durable_records
       };
       return {
         ok: true,
@@ -47446,6 +48144,8 @@ class KnowledgeService {
         sync_conflicts: syncConflicts,
         approval_gates: approvalGates,
         audit_events: auditEvents,
+        promotion_candidates: promotionCandidates,
+        durable_records: durableRecords,
         message: `${legacyStore.items.length} item(s), ${stats.sources} source(s), ${stats.chunks} chunk(s), ${stats.wiki_pages} wiki page(s), ${stats.storage_objects} artifact(s)`
       };
     } finally {

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { getKnowledgeDbStats, migrateKnowledgeDb, openKnowledgeDb } from '../src/knowledge-db';
+import { CURRENT_SCHEMA_VERSION, getKnowledgeDbStats, migrateKnowledgeDb, openKnowledgeDb } from '../src/knowledge-db';
 import { ingestOpenFilesManifest } from '../src/manifest-ingest';
 import { ingestSourceRef } from '../src/source-ingest';
 import { consumeOpenFilesOutbox } from '../src/outbox-consume';
@@ -48,7 +48,7 @@ describe('knowledge sqlite store', () => {
     const dbPath = join(dir, 'knowledge.db');
 
     const migration = migrateKnowledgeDb(dbPath);
-    expect(migration.schema_version).toBe(9);
+    expect(migration.schema_version).toBe(CURRENT_SCHEMA_VERSION);
 
     const db = openKnowledgeDb(dbPath);
     try {
@@ -75,6 +75,8 @@ describe('knowledge sqlite store', () => {
       expect(tables).toContain('knowledge_sync_conflicts');
       expect(tables).toContain('knowledge_sync_table_clocks');
       expect(tables).toContain('knowledge_sync_imports');
+      expect(tables).toContain('knowledge_promotion_candidates');
+      expect(tables).toContain('durable_knowledge_records');
       const wikiColumns = db.query<{ name: string }, []>('PRAGMA table_info(wiki_pages)').all()
         .map((row) => row.name);
       expect(wikiColumns).toContain('valid_from');
@@ -88,7 +90,7 @@ describe('knowledge sqlite store', () => {
     }
 
     const stats = getKnowledgeDbStats(dbPath);
-    expect(stats.schema_version).toBe(9);
+    expect(stats.schema_version).toBe(CURRENT_SCHEMA_VERSION);
     expect(stats.sources).toBe(0);
     expect(stats.runs).toBe(0);
     expect(stats.redaction_findings).toBe(0);
@@ -137,7 +139,7 @@ describe('knowledge sqlite store', () => {
     }
 
     const migration = migrateKnowledgeDb(dbPath);
-    expect(migration.schema_version).toBe(9);
+    expect(migration.schema_version).toBe(CURRENT_SCHEMA_VERSION);
 
     const migrated = openKnowledgeDb(dbPath);
     try {
@@ -268,7 +270,7 @@ describe('knowledge sqlite store', () => {
     }
 
     const migration = migrateKnowledgeDb(dbPath);
-    expect(migration.schema_version).toBe(9);
+    expect(migration.schema_version).toBe(CURRENT_SCHEMA_VERSION);
 
     const recovered = openKnowledgeDb(dbPath);
     try {
@@ -306,7 +308,7 @@ describe('knowledge sqlite store', () => {
     }
 
     const migration = migrateKnowledgeDb(dbPath);
-    expect(migration.schema_version).toBe(9);
+    expect(migration.schema_version).toBe(CURRENT_SCHEMA_VERSION);
 
     const stats = getKnowledgeDbStats(dbPath);
     expect(stats.sync_table_clocks).toBe(0);
@@ -370,7 +372,7 @@ describe('knowledge sqlite store', () => {
     });
 
     const stats = getKnowledgeDbStats(dbPath);
-    expect(stats.schema_version).toBe(9);
+    expect(stats.schema_version).toBe(CURRENT_SCHEMA_VERSION);
     expect(stats.sources).toBe(2);
     expect(stats.source_revisions).toBe(2);
     expect(stats.chunks).toBe(1);

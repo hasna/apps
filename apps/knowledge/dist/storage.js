@@ -19367,7 +19367,7 @@ function assertLocalCatalogMode(operation = "catalog") {
     throw new Error(`knowledge: ${operation} builds/reads the on-box sqlite RAG catalog (source ingestion, chunk embeddings, ` + `wiki compilation, cross-machine sync, machine registry). That local indexing pipeline is not available in ` + `cloud mode. In cloud mode the shared corpus is the cloud knowledge-items: 'add/list/get/update/delete' item ` + `commands AND 'search/ask/build/context' over that shared corpus all route to the cloud. Set ${modeKey}=local ` + `(or unset it \u2014 local is the default) to use the full local catalog pipeline; run 'knowledge mode' to see ` + `which variable selected the current backend.`);
   }
 }
-var CURRENT_SCHEMA_VERSION = 9;
+var CURRENT_SCHEMA_VERSION = 10;
 var CHUNKS_FTS_TOKENIZE = "porter unicode61 remove_diacritics 2";
 var MIGRATION_1 = `
 PRAGMA journal_mode = WAL;
@@ -19789,6 +19789,68 @@ VALUES (9, datetime('now'));
 
 COMMIT;
 `;
+var MIGRATION_10_PROMOTION_INBOX = `
+CREATE TABLE IF NOT EXISTS knowledge_promotion_candidates (
+  id TEXT PRIMARY KEY,
+  record_kind TEXT NOT NULL,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  canonical_key TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  source_kind TEXT NOT NULL,
+  source_refs_json TEXT NOT NULL DEFAULT '[]',
+  evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL DEFAULT 'pending',
+  requires_approval INTEGER NOT NULL DEFAULT 0,
+  checks_json TEXT NOT NULL DEFAULT '{}',
+  idempotency_key TEXT NOT NULL UNIQUE,
+  duplicate_of TEXT,
+  approved_by TEXT,
+  promoted_record_id TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  reviewed_at TEXT,
+  promoted_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS durable_knowledge_records (
+  id TEXT PRIMARY KEY,
+  record_kind TEXT NOT NULL,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  canonical_key TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  source_refs_json TEXT NOT NULL DEFAULT '[]',
+  evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+  confidence REAL,
+  valid_from TEXT NOT NULL,
+  valid_to TEXT,
+  promoted_from_candidate_id TEXT NOT NULL UNIQUE
+    REFERENCES knowledge_promotion_candidates(id) ON DELETE RESTRICT,
+  approved_by TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_promotion_candidates_status
+  ON knowledge_promotion_candidates(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_promotion_candidates_kind_key
+  ON knowledge_promotion_candidates(record_kind, canonical_key);
+CREATE INDEX IF NOT EXISTS idx_promotion_candidates_hash
+  ON knowledge_promotion_candidates(record_kind, content_hash);
+CREATE INDEX IF NOT EXISTS idx_durable_records_kind_key
+  ON durable_knowledge_records(record_kind, canonical_key, status);
+CREATE INDEX IF NOT EXISTS idx_durable_records_hash
+  ON durable_knowledge_records(record_kind, content_hash, status);
+CREATE INDEX IF NOT EXISTS idx_durable_records_validity
+  ON durable_knowledge_records(status, valid_to);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (10, datetime('now'));
+`;
 function openKnowledgeDb(path) {
   assertLocalCatalogMode("opening the local knowledge.db catalog");
   ensureParentDir(path);
@@ -19821,6 +19883,8 @@ function migrateKnowledgeDb(path) {
       applyMigration8(db);
     if (needsMigration9(db))
       applyMigration9(db);
+    if (needsMigration10(db))
+      applyMigration10(db);
     return { path, schema_version: getSchemaVersion(db) };
   } finally {
     db.close();
@@ -19901,6 +19965,12 @@ function applyMigration9(db) {
   }
   db.exec(MIGRATION_9_REBUILD_FTS);
 }
+function needsMigration10(db) {
+  return getSchemaVersion(db) < 10 || !tableExists(db, "knowledge_promotion_candidates") || !tableExists(db, "durable_knowledge_records");
+}
+function applyMigration10(db) {
+  db.exec(MIGRATION_10_PROMOTION_INBOX);
+}
 function getKnowledgeDbStats(path) {
   const db = openKnowledgeDb(path);
   try {
@@ -19926,7 +19996,9 @@ function getKnowledgeDbStats(path) {
       sync_changes: count(db, "knowledge_sync_changes"),
       sync_conflicts: count(db, "knowledge_sync_conflicts"),
       sync_table_clocks: count(db, "knowledge_sync_table_clocks"),
-      sync_imports: count(db, "knowledge_sync_imports")
+      sync_imports: count(db, "knowledge_sync_imports"),
+      promotion_candidates: count(db, "knowledge_promotion_candidates"),
+      durable_records: count(db, "durable_knowledge_records")
     };
   } finally {
     db.close();

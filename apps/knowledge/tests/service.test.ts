@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { CURRENT_SCHEMA_VERSION } from '../src/knowledge-db';
 import { createKnowledgeService } from '../src/service';
 
 function normalizeDarwinPath(path: string): string {
@@ -23,7 +24,7 @@ describe('knowledge service facade', () => {
     expect(service.validateStorage().ok).toBe(true);
 
     const migration = service.initDb();
-    expect(migration.schema_version).toBe(9);
+    expect(migration.schema_version).toBe(CURRENT_SCHEMA_VERSION);
 
     const ingest = await service.ingestSource(sourceRef, 'knowledge_index');
     expect(ingest.chunks_inserted).toBe(1);
@@ -37,6 +38,40 @@ describe('knowledge service facade', () => {
     const stats = service.dbStats();
     expect(stats.sources).toBe(1);
     expect(stats.chunks).toBe(1);
+
+    const candidate = service.enqueuePromotion({
+      kind: 'lesson',
+      title: 'Service Inventory Durable Lesson',
+      content: 'Inventory should list promoted durable knowledge records without dumping full content.',
+      sourceKind: 'session',
+      sourceRefs: [sourceRef],
+      evidenceRefs: [sourceRef],
+      confidence: 0.9,
+    });
+    const promoted = service.promoteCandidate(candidate.candidate.id);
+    expect(promoted.promoted).toBe(true);
+
+    const inventory = service.inventory({ limit: 10 });
+    expect(inventory.summary.promotion_candidates).toBe(1);
+    expect(inventory.summary.durable_records).toBe(1);
+    expect(inventory.promotion_candidates[0]).toMatchObject({
+      id: candidate.candidate.id,
+      record_kind: 'lesson',
+      status: 'promoted',
+      source_refs: [sourceRef],
+      requires_approval: false,
+    });
+    expect(inventory.promotion_candidates[0].content).toBeUndefined();
+    expect(inventory.promotion_candidates[0].content_preview).toContain('Inventory should list promoted');
+    expect(inventory.durable_records[0]).toMatchObject({
+      record_kind: 'lesson',
+      status: 'active',
+      source_refs: [sourceRef],
+      confidence: 0.9,
+      promoted_from_candidate_id: candidate.candidate.id,
+    });
+    expect(inventory.durable_records[0].content).toBeUndefined();
+    expect(inventory.durable_records[0].content_preview).toContain('Inventory should list promoted');
 
     const wiki = await service.initWiki();
     expect(wiki.artifacts).toHaveLength(4);

@@ -6,6 +6,7 @@ import { type KnowledgeSyncConflictAiProposalOptions } from './conflict-agent';
 import { type EmbeddingIndexOptions, type EmbeddingSearchOptions } from './embeddings';
 import { type KnowledgeMachinePreflightOptions, type KnowledgeMachineRouteResolution, type KnowledgeMachineWorkspaceResolution, type KnowledgeMachineTopologyOptions } from './machines';
 import { type ProviderStatusResult, type ModelRegistryEntry } from './providers';
+import { type DurableKnowledgeRecord, type EnqueueKnowledgePromotionInput, type KnowledgePromotionCandidate, type KnowledgePromotionKind, type KnowledgePromotionStatus, type PromoteKnowledgeCandidateOptions } from './promotion-inbox';
 import { type ReindexRuntimeOptions } from './reindex';
 import { type KnowledgeContextPack, type RetrievalOptions } from './retrieval';
 import { type RulesProvenanceImportResult } from './rules-provenance';
@@ -99,6 +100,8 @@ export interface KnowledgeInventoryResult {
     sync_conflicts: Array<Record<string, unknown>>;
     approval_gates: Array<Record<string, unknown>>;
     audit_events: Array<Record<string, unknown>>;
+    promotion_candidates: Array<Record<string, unknown>>;
+    durable_records: Array<Record<string, unknown>>;
     message: string;
 }
 export interface KnowledgeSetupResult {
@@ -423,6 +426,35 @@ export declare class KnowledgeService {
         schema_version: number;
     };
     dbStats(): import("./knowledge-db").KnowledgeDbStats;
+    enqueuePromotion(input: EnqueueKnowledgePromotionInput): {
+        created: boolean;
+        candidate: KnowledgePromotionCandidate;
+    };
+    promotionInbox(options?: {
+        status?: KnowledgePromotionStatus | 'inbox';
+        kind?: KnowledgePromotionKind;
+        limit?: number;
+    }): KnowledgePromotionCandidate[];
+    getPromotion(id: string): KnowledgePromotionCandidate | null;
+    reviewPromotion(id: string, now?: Date): KnowledgePromotionCandidate;
+    promoteCandidate(id: string, options?: PromoteKnowledgeCandidateOptions): {
+        ok: boolean;
+        promoted: boolean;
+        requires_approval: boolean;
+        candidate: KnowledgePromotionCandidate;
+        record: DurableKnowledgeRecord | null;
+        approval_id: string | null;
+        reason: string | null;
+    };
+    rejectPromotion(id: string, options?: {
+        rejectedBy?: string;
+        now?: Date;
+    }): KnowledgePromotionCandidate;
+    durableRecords(options?: {
+        kind?: KnowledgePromotionKind;
+        status?: string;
+        limit?: number;
+    }): DurableKnowledgeRecord[];
     /**
      * Build a knowledge inventory from a bare item list (no local sqlite catalog).
      * Shared by the local no-db path and the cloud path so both produce the exact

@@ -11,6 +11,7 @@ import {
   recordKnowledgeSyncConflict,
   type KnowledgeClient,
 } from '../src/index';
+import { CURRENT_SCHEMA_VERSION } from '../src/knowledge-db';
 
 function writeWindowsCmdShim(bin: string, name: string): void {
   writeFileSync(join(bin, `${name}.cmd`), [
@@ -326,7 +327,7 @@ describe('public knowledge sdk', () => {
     expect(parsed.kind).toBe('file');
 
     const migration = client.db.init();
-    expect(migration.schema_version).toBe(9);
+    expect(migration.schema_version).toBe(CURRENT_SCHEMA_VERSION);
 
     const ingest = await client.ingest.source(`file://${source}`, 'knowledge_index');
     expect(ingest.sources_upserted).toBe(1);

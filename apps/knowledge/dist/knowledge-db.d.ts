@@ -10,7 +10,7 @@ import { Database } from 'bun:sqlite';
  * directly — so this guard applies to CLI/MCP/SDK clients only.
  */
 export declare function assertLocalCatalogMode(operation?: string): void;
-export declare const CURRENT_SCHEMA_VERSION = 9;
+export declare const CURRENT_SCHEMA_VERSION = 10;
 /**
  * FTS5 tokenizer for the chunk index. `porter` keeps English stemming; the
  * wrapped `unicode61 remove_diacritics 2` folds accents/diacritics fully
@@ -41,6 +41,8 @@ export interface KnowledgeDbStats {
     sync_conflicts: number;
     sync_table_clocks: number;
     sync_imports: number;
+    promotion_candidates: number;
+    durable_records: number;
 }
 export declare function openKnowledgeDb(path: string): Database;
 /**

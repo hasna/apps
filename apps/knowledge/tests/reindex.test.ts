@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { getKnowledgeDbStats } from '../src/knowledge-db';
+import { CURRENT_SCHEMA_VERSION, getKnowledgeDbStats } from '../src/knowledge-db';
 import { enqueueMissingEmbeddings, refreshEmbeddingIndex, reindexHealth } from '../src/reindex';
 import { ingestSourceRef } from '../src/source-ingest';
 
@@ -22,7 +22,7 @@ describe('knowledge reindex queue and refresh jobs', () => {
     expect(ingest.chunks_inserted).toBe(1);
 
     const initial = reindexHealth({ dbPath, fake: true, dimensions: 8 });
-    expect(initial.schema_version).toBe(9);
+    expect(initial.schema_version).toBe(CURRENT_SCHEMA_VERSION);
     expect(initial.chunks).toBe(1);
     expect(initial.vector_entries).toBe(0);
     expect(initial.missing_embeddings).toBe(1);

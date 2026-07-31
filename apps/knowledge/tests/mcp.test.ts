@@ -5,6 +5,7 @@ import { delimiter, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { CURRENT_SCHEMA_VERSION } from '../src/knowledge-db';
 import { ingestOpenFilesManifest } from '../src/manifest-ingest';
 import { createKnowledgeService } from '../src/service';
 import { recordKnowledgeSyncConflict } from '../src/sync';
@@ -353,7 +354,7 @@ describe('knowledge MCP', () => {
 
       const syncResource = parseResourceJson(await client.readResource({ uri: 'knowledge://project/sync' }));
       expect(syncResource.ok).toBe(true);
-      expect(syncResource.sqlite_schema_version).toBe(9);
+      expect(syncResource.sqlite_schema_version).toBe(CURRENT_SCHEMA_VERSION);
 
       const sourceResource = parseResourceJson(await client.readResource({ uri: 'knowledge://project/sources' }));
       expect(sourceResource.sources[0].uri).toBe('open-files://file/file_mcp');

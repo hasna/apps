@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { normalizeArtifactKey, type ArtifactStore, type ArtifactWrite } from '../src/artifact-store';
-import { openKnowledgeDb } from '../src/knowledge-db';
+import { CURRENT_SCHEMA_VERSION, openKnowledgeDb } from '../src/knowledge-db';
 import { createKnowledgeService } from '../src/service';
 import { recordStorageObjects } from '../src/storage-contract';
 import {
@@ -239,7 +239,7 @@ describe('knowledge machine sync ledger', () => {
     expect(syncArtifactsFromSnapshot(snapshot.snapshot)).toHaveLength(1);
 
     const status = service.syncStatus();
-    expect(status.sqlite_schema_version).toBe(9);
+    expect(status.sqlite_schema_version).toBe(CURRENT_SCHEMA_VERSION);
     expect(status.machines.total).toBe(2);
     expect(status.snapshots.total).toBe(1);
     expect(status.clocks.total).toBeGreaterThan(0);
