@@ -18,6 +18,7 @@ describe("local agent adapter docs", () => {
       "todos project-bootstrap",
       "todos mcp --register codex --global",
       "todos mcp --register claude --global",
+      "todos mcp --register cursor --global",
       "todos mcp",
       "Takumi-style adapters",
       "todos workflows show goal-planning",
