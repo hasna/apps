@@ -71,6 +71,7 @@ export type {
   ProviderAccountId,
 } from "./domain/ids";
 export {
+  ACCOUNTS_CAPACITY_REDACTED_SCHEMA_VERSION,
   ACCOUNTS_CAPACITY_SCHEMA_VERSION,
   ELIGIBILITY_REASON_CODES,
 } from "./domain/models";
@@ -123,14 +124,18 @@ export {
 } from "./domain/state";
 export {
   decodeRecordEnvelope,
+  decodeRedactedRecordEnvelope,
   deserializeRecordEnvelope,
   encodeRecordEnvelope,
+  encodeRedactedRecordEnvelope,
+  redactRecord,
   serializeRecordEnvelope,
   validateEntity,
   validateEligibilityRequest,
+  validateRedactedRecord,
   validateSlotEligibility,
 } from "./serialization/dto";
-export type { RecordEnvelope } from "./serialization/dto";
+export type { RecordEnvelope, RedactedRecord, RedactedRecordEnvelope } from "./serialization/dto";
 export { canonicalJson, parseClosedJson, parseClosedJsonBytes } from "./serialization/json";
 export {
   AUTHORITY_EVIDENCE_SCHEMA_VERSION,

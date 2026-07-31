@@ -73,9 +73,10 @@ HASNA_ACCOUNTS_DEPLOYMENT=local capacity eligibility <account-lane-uuidv7> \
 ```
 
 `validate`, `probe-native`, `help`, and `version` do not open the catalog.
-Catalog commands currently support only explicit local deployment. CLI
-eligibility is diagnostic evidence, never a reservation or production Infinity
-authority. See [`docs/cli.md`](docs/cli.md).
+Catalog commands require an explicit deployment — `local` against the on-box
+SQLite catalog, or `self_hosted` against an API origin with a configured
+credential resolver. CLI eligibility is diagnostic evidence, never a
+reservation or production Infinity authority. See [`docs/cli.md`](docs/cli.md).
 
 ## HTTP
 
