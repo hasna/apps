@@ -322,4 +322,28 @@ describe("shared loop advancement policy", () => {
     });
     expect(consecutiveFailureCountFromRuns([marker, ...failures], 2)).toBe(0);
   });
+
+  test("does not open the breaker for transient Bun signal-exit interop failures", () => {
+    const interopError =
+      "SyntaxError: Missing 'default' export in module /home/hasna/.bun/install/global/node_modules/signal-exit/dist/mjs/index.js";
+    const failures = [
+      runFixture({ id: "f3", attempt: 2, scheduledFor: "2026-01-01T00:02:00.000Z", stderr: interopError }),
+      runFixture({ id: "f2", attempt: 2, scheduledFor: "2026-01-01T00:01:00.000Z", stderr: interopError }),
+      runFixture({ id: "f1", attempt: 2, scheduledFor: "2026-01-01T00:00:00.000Z", stderr: interopError }),
+    ];
+
+    expect(consecutiveFailureCountFromRuns(failures, 2)).toBe(0);
+    expect(planLoopAdvancement({
+      current: loopFixture({ maxAttempts: 2, nextRunAt: "2026-01-01T00:02:00.000Z" }),
+      run: failures[0]!,
+      finishedAt: new Date("2026-01-01T00:02:10.000Z"),
+      succeeded: false,
+      recentRuns: failures,
+      circuitBreakerThreshold: 3,
+    })).toMatchObject({
+      kind: "update",
+      reason: "recurrence",
+      patch: { status: "active" },
+    });
+  });
 });

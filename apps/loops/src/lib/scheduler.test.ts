@@ -813,6 +813,48 @@ describe("scheduler", () => {
     }
   });
 
+  test("transient Bun signal-exit loader failures stay scheduled and self-heal", async () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "signal-exit-drain",
+          schedule: { type: "interval", everyMs: 1_000 },
+          target: { type: "command", command: "nopen" },
+          catchUp: "none",
+          maxAttempts: 1,
+        },
+        new Date("2026-01-01T00:00:00Z"),
+      );
+      const loaderError =
+        "SyntaxError: Missing 'default' export in module /home/hasna/.bun/install/global/node_modules/signal-exit/dist/mjs/index.js";
+      const runTick = async (status: ExecutorResult["status"]): Promise<void> => {
+        await Bun.sleep(2);
+        const due = store.getLoop(loop.id)!.nextRunAt!;
+        await tick({
+          store,
+          runnerId: "test",
+          now: () => new Date(due),
+          random: noJitter,
+          circuitBreakerThreshold: 3,
+          execute: async () => result(status, due, loaderError),
+        });
+      };
+
+      await runTick("failed");
+      await runTick("failed");
+      await runTick("failed");
+      expect(store.getLoop(loop.id)?.status).toBe("active");
+      expect(consecutiveFailureCount(store, loop.id)).toBe(0);
+
+      await runTick("succeeded");
+      expect(store.getLoop(loop.id)?.status).toBe("active");
+      expect(store.listRuns({ loopId: loop.id })[0]?.status).toBe("succeeded");
+    } finally {
+      store.close();
+    }
+  });
+
   test("circuit breaker does not trip while deferred backlog retries are owed", async () => {
     const store = new Store(":memory:");
     try {

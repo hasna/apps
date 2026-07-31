@@ -282,6 +282,18 @@ function searchableText(run: LoopRun): string {
   return [run.error, run.stderr, run.stdout].filter(Boolean).join("\n");
 }
 
+/**
+ * Bun can briefly resolve a globally installed signal-exit package whose ESM
+ * shape does not match the importing CLI. The command has not run yet and the
+ * same invocation succeeds once the global install settles, so this specific
+ * loader failure must not be treated as a deterministic workload failure.
+ */
+export function isTransientSignalExitInteropFailure(run: LoopRun): boolean {
+  return /missing\s+['"]default['"]\s+export\s+in\s+module\s+.*signal-exit[\\/]dist[\\/]mjs[\\/]index\.js/i.test(
+    searchableText(run),
+  );
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -703,7 +715,10 @@ export function classifyRunFailure(run: LoopRun): RunFailureSignal | undefined {
   else if (/model .*not found|model_not_found|unknown model|invalid model|404.*model/.test(text)) classification = "model_not_found";
   else if (/context length|context_length|context window|maximum context|token limit|too many tokens/.test(text)) classification = "context_length";
   else if (/response_format|json schema|schema validation|invalid schema|structured output/.test(text)) classification = "schema_response_format";
-  else if (/cannot find module|module not found|node:internal|bun: command not found|node: command not found|npm err!|err_module_not_found/.test(text)) classification = "node_init";
+  else if (
+    isTransientSignalExitInteropFailure(run) ||
+    /cannot find module|module not found|node:internal|bun: command not found|node: command not found|npm err!|err_module_not_found/.test(text)
+  ) classification = "node_init";
   else if (/sigsegv|segmentation fault|signal 11/.test(text)) classification = "sigsegv";
 
   return {

@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import type { LoopRun } from "../types.js";
 import type { RunFailureClassification } from "./health.js";
-import { buildHealthReport, buildHealthScan, classifyRunFailure, RESTART_INTERRUPTED_RUN_PREFIX, scheduleOverdue } from "./health.js";
+import {
+  buildHealthReport,
+  buildHealthScan,
+  classifyRunFailure,
+  isTransientSignalExitInteropFailure,
+  RESTART_INTERRUPTED_RUN_PREFIX,
+  scheduleOverdue,
+} from "./health.js";
 import { Store } from "./store.js";
 
 function run(patch: Partial<LoopRun>): LoopRun {
@@ -41,6 +48,13 @@ describe("loop health classification", () => {
       ["context_length", { stderr: "maximum context length exceeded" }],
       ["schema_response_format", { error: "response_format json schema validation failed" }],
       ["node_init", { stderr: "Error [ERR_MODULE_NOT_FOUND]: Cannot find module" }],
+      [
+        "node_init",
+        {
+          stderr:
+            "SyntaxError: Missing 'default' export in module /home/hasna/.bun/install/global/node_modules/signal-exit/dist/mjs/index.js",
+        },
+      ],
       ["preflight", { error: "runtime preflight failed: Executable not found in PATH: codewith" }],
       ["timeout", { status: "timed_out", error: "timed out after 1000ms" }],
       ["sigsegv", { error: "terminated by SIGSEGV" }],
@@ -54,6 +68,19 @@ describe("loop health classification", () => {
       expect(signal?.classification).toBe(classification);
       expect(signal?.fingerprint).toMatch(/^[a-f0-9]{16}$/);
     }
+  });
+
+  test("narrowly identifies the transient Bun signal-exit ESM interop failure", () => {
+    expect(isTransientSignalExitInteropFailure(run({
+      stderr:
+        "SyntaxError: Missing 'default' export in module /home/hasna/.bun/install/global/node_modules/signal-exit/dist/mjs/index.js",
+    }))).toBe(true);
+    expect(isTransientSignalExitInteropFailure(run({
+      stderr: "SyntaxError: Missing 'default' export in module /app/node_modules/another-package/index.js",
+    }))).toBe(false);
+    expect(isTransientSignalExitInteropFailure(run({
+      stderr: "Error [ERR_MODULE_NOT_FOUND]: Cannot find module signal-exit",
+    }))).toBe(false);
   });
 
   test("surfaces safe provider-unavailable evidence for Cursor DNS failures", () => {

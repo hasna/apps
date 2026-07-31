@@ -1,5 +1,5 @@
 import type { Loop, LoopRun } from "../types.js";
-import { classifyRunFailure } from "./health.js";
+import { classifyRunFailure, isTransientSignalExitInteropFailure } from "./health.js";
 import { computeNextAfter } from "./recurrence.js";
 
 export const MAX_RETRY_DELAY_MS = 6 * 60 * 60 * 1000;
@@ -84,9 +84,9 @@ export function resolveBreakerThreshold(loop: Loop, override?: CircuitBreakerThr
 /**
  * Count consecutive final failures from newest-first run history.
  *
- * Retryable failures are neutral, a success resets the streak, and the newest
- * circuit-breaker marker is a watermark so a manual resume starts a fresh
- * streak.
+ * Retryable failures and the known transient Bun/signal-exit loader mismatch
+ * are neutral, a success resets the streak, and the newest circuit-breaker
+ * marker is a watermark so a manual resume starts a fresh streak.
  */
 export function consecutiveFailureCountFromRuns(
   runs: readonly LoopRun[],
@@ -104,6 +104,7 @@ export function consecutiveFailureCountFromRuns(
     if (watermark !== undefined && new Date(run.scheduledFor).getTime() <= watermark) continue;
     if (run.status === "succeeded") break;
     if (run.attempt < maxAttempts) continue;
+    if (isTransientSignalExitInteropFailure(run)) continue;
     count += 1;
   }
   return count;
