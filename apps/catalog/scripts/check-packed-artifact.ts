@@ -147,7 +147,8 @@ const NON_TLD_LABELS = new Set([
 
 function isFilenameNotDomain(match: string): boolean {
   const labels = match.toLowerCase().split(".");
-  const last = labels[labels.length - 1]!;
+  const last = labels.at(-1);
+  if (!last) return false;
   if (labels.length > 2 && FILE_EXTENSION_LABELS.has(last)) return true;
   return NON_TLD_LABELS.has(last);
 }
@@ -510,7 +511,8 @@ function insideQuotes(line: string, index: number): boolean {
   let quote: string | null = null;
   const limit = Math.min(index, line.length);
   for (let i = 0; i < limit; i++) {
-    const ch = line[i]!;
+    const ch = line[i];
+    if (ch === undefined) break;
     if (ch === "\\") {
       i++;
       continue;
@@ -542,7 +544,9 @@ function honoredIgnoreReason(line: string, file: string): string | null {
   if (!match) return null;
   if (!supportsComments(file)) return null;
   if (insideQuotes(line, match.index)) return null;
-  const reason = match[1]!.trim();
+  const [, rawReason] = match;
+  if (!rawReason) return null;
+  const reason = rawReason.trim();
   if (/["'`]/.test(reason)) return null;
   return reason;
 }
@@ -592,16 +596,19 @@ export function scanTextDetailed(text: string, file = "<memory>", encoding?: str
   // may use CRLF — a rule must not lose its line anchor because of either.
   const lines = text.split(/\r\n|\r|\n/);
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
+    const line = lines[i];
+    if (line === undefined) continue;
     const ignoreReason = honoredIgnoreReason(line, file);
     let lineHits = 0;
     for (const rule of RULES) {
       rule.pattern.lastIndex = 0;
       for (const match of line.matchAll(rule.pattern)) {
-        if (rule.ignoreMatch?.(match[0])) continue;
-        const allowed = allowedLiteral(match[0], file);
+        const [matchedText] = match;
+        if (matchedText === undefined) continue;
+        if (rule.ignoreMatch?.(matchedText)) continue;
+        const allowed = allowedLiteral(matchedText, file);
         if (allowed) {
-          ignored.push({ file, line: i + 1, reason: `allowed literal \`${match[0]}\` — ${allowed}` });
+          ignored.push({ file, line: i + 1, reason: `allowed literal \`${matchedText}\` — ${allowed}` });
           continue;
         }
         lineHits++;
@@ -612,7 +619,7 @@ export function scanTextDetailed(text: string, file = "<memory>", encoding?: str
           ruleId: rule.id,
           severity: rule.severity,
           description: rule.description,
-          excerpt: rule.redact ? mask(match[0]) : match[0],
+          excerpt: rule.redact ? mask(matchedText) : matchedText,
           ...(encoding ? { encoding } : {}),
         });
       }
@@ -621,13 +628,15 @@ export function scanTextDetailed(text: string, file = "<memory>", encoding?: str
       for (const pattern of assetClass.patterns) {
         pattern.lastIndex = 0;
         for (const match of line.matchAll(pattern)) {
-          const identifier = (assetClass.normalize?.(match[0]) ?? match[0]).toLowerCase();
+          const [matchedText] = match;
+          if (matchedText === undefined) continue;
+          const identifier = (assetClass.normalize?.(matchedText) ?? matchedText).toLowerCase();
           if (ALLOWED_ORG_IDENTIFIERS.has(identifier)) continue;
-          const allowedHere = allowedLiteral(match[0], file);
+          const allowedHere = allowedLiteral(matchedText, file);
           if (allowedHere) {
             // Recorded, not swallowed: the header promises every use is printed,
             // and a suppression nobody sees is a suppression that outlives its reason.
-            ignored.push({ file, line: i + 1, reason: `allowed literal \`${match[0]}\` — ${allowedHere}` });
+            ignored.push({ file, line: i + 1, reason: `allowed literal \`${matchedText}\` — ${allowedHere}` });
             continue;
           }
           lineHits++;
@@ -877,7 +886,8 @@ function newestTarball(cwd: string): string | null {
     .filter((name) => name.endsWith(".tgz"))
     .map((name) => ({ name, mtime: statSync(join(cwd, name)).mtimeMs }))
     .sort((a, b) => b.mtime - a.mtime);
-  return tarballs[0] ? join(cwd, tarballs[0].name) : null;
+  const [newest] = tarballs;
+  return newest ? join(cwd, newest.name) : null;
 }
 
 function main(): number {
@@ -957,7 +967,8 @@ function main(): number {
         `[${finding.classId}] identifiers (threshold ${ORG_ASSET_THRESHOLD}) — ${finding.description}:\n`,
     );
     for (const identifier of finding.identifiers.slice(0, 20)) {
-      const where = finding.sightings.find((s) => s.identifier === identifier)!;
+      const where = finding.sightings.find((s) => s.identifier === identifier);
+      if (!where) throw new Error(`inventory finding has no sighting for identifier: ${identifier}`);
       console.error(`    ${identifier}  (first seen ${where.file}:${where.line})`);
     }
     if (finding.identifiers.length > 20) {

@@ -116,7 +116,8 @@ export function readSeedCandidate(root: string, folder: string): SeedCandidate |
   const bins: string[] = [];
   const bin = pkg["bin"];
   if (typeof bin === "string" && npmName) {
-    bins.push(npmName.includes("/") ? npmName.split("/")[1]! : npmName);
+    const [, unscopedName = npmName] = npmName.split("/");
+    bins.push(unscopedName);
   } else if (bin && typeof bin === "object" && !Array.isArray(bin)) {
     for (const key of Object.keys(bin as Record<string, unknown>)) {
       if (key.trim().length > 0) bins.push(key);
@@ -158,14 +159,20 @@ export function dedupeByNpmName(candidates: SeedCandidate[]): { kept: SeedCandid
   const dropped: SeedSkip[] = [];
   for (const [name, group] of byName) {
     if (group.length === 1) {
-      kept.push(group[0]!);
+      const [onlyCandidate] = group;
+      if (!onlyCandidate) throw new Error(`candidate group unexpectedly empty: ${name}`);
+      kept.push(onlyCandidate);
       continue;
     }
-    const unscoped = name.includes("/") ? name.split("/")[1]! : name;
+    const [, unscoped = name] = name.split("/");
     const expectedFolder = `open-${unscoped}`;
+    const [shortestCandidate] = [...group].sort(
+      (a, b) => a.folder.length - b.folder.length || a.folder.localeCompare(b.folder),
+    );
+    if (!shortestCandidate) throw new Error(`candidate group unexpectedly empty: ${name}`);
     const winner =
       group.find((candidate) => candidate.folder === expectedFolder) ??
-      [...group].sort((a, b) => a.folder.length - b.folder.length || a.folder.localeCompare(b.folder))[0]!;
+      shortestCandidate;
     kept.push(winner);
     for (const candidate of group) {
       if (candidate !== winner) {

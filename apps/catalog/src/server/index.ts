@@ -48,8 +48,10 @@ export function createCatalogHandler(options: CatalogApiOptions = {}): (request:
     }
     const appMatch = url.pathname.match(/^\/v1\/apps\/([a-z0-9-]+)$/);
     if (appMatch) {
-      const app = store.getApp(appMatch[1]!);
-      if (!app) return json({ error: `app not found: ${appMatch[1]}` }, 404);
+      const [, appId] = appMatch;
+      if (!appId) throw new Error("matched app route without an app id");
+      const app = store.getApp(appId);
+      if (!app) return json({ error: `app not found: ${appId}` }, 404);
       return json({ app });
     }
     if (url.pathname === "/v1/search") {
