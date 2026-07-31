@@ -7,16 +7,13 @@
  *   conversations dashboard          # Start dashboard server
  */
 
-import { readMessages, sendMessage, markRead, searchMessages, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages } from "../lib/messages.js";
-import { listSessions, getSession } from "../lib/sessions.js";
-import { listChannels, getChannel, createChannel, updateChannel, archiveChannel, unarchiveChannel, joinChannel, leaveChannel, getChannelMembers } from "../lib/channels.js";
-import { listProjects, getProject, getProjectByName, createProject, updateProject, deleteProject } from "../lib/projects.js";
-import { getDb, getDbPath } from "../lib/db.js";
-import { listAgents } from "../lib/presence.js";
-import { getReactions, getReactionSummary } from "../lib/reactions.js";
-import { listHotSessions } from "../lib/hot.js";
-import { getRelated, getAgentNetwork, getGraphStats } from "../lib/graph.js";
-import { listLocks } from "../lib/locks.js";
+// Every data read goes through getStore(). Importing the sync helpers from
+// ../lib/* directly — as this file did until task d211f560 — makes the dashboard
+// local-SQLite-only BY CONSTRUCTION, because those helpers ARE the sqlite path and
+// have no knowledge of the cloud transport. That is not a latent risk: on the
+// owner's Mac it rendered 358 of the fleet's 1124 channels with no error shown.
+import { getDbPath } from "../lib/db.js";
+import { getStore, isCloudStore, cloudApiUrl, ConversationsStoreConfigError } from "../lib/store/index.js";
 import { handleMcpRequest, healthPayload } from "../mcp/http.js";
 import { buildServer } from "../mcp/index.js";
 import { join, resolve, sep } from "path";
@@ -78,21 +75,36 @@ function jsonResponse(data: unknown, status = 200): Response {
   });
 }
 
-function getStatus() {
-  const db = getDb();
-  const dbPath = getDbPath();
-  const totalMessages = (db.prepare("SELECT COUNT(*) as count FROM messages").get() as { count: number }).count;
-  const totalSessions = (db.prepare("SELECT COUNT(DISTINCT session_id) as count FROM messages").get() as { count: number }).count;
-  const totalUnread = (db.prepare("SELECT COUNT(*) as count FROM messages WHERE read_at IS NULL").get() as { count: number }).count;
-  const totalChannels = (db.prepare("SELECT COUNT(*) as count FROM channels").get() as { count: number }).count;
-  const totalProjects = (db.prepare("SELECT COUNT(*) as count FROM projects").get() as { count: number }).count;
+// ONE path through the Store, exactly as the `status` CLI command does it. These
+// counts previously came from five raw `db.prepare("SELECT COUNT(*) ...")` calls
+// against local sqlite, so this endpoint reported the on-box database even when the
+// client was configured for the hosted service — measured on station06, where it
+// answered 2 channels while the hosted service held 1124, with a valid cloud
+// configuration present. That is what made the macOS app look like it worked while
+// showing a fraction of the fleet's conversations.
+//
+// The `mode` field and the api_url/db_path split are load-bearing, not cosmetic:
+// they make this endpoint say which store answered it, so a regression to local is
+// visible in the response instead of having to be inferred from a channel count.
+async function getStatus() {
+  const store = getStore();
+  const cloud = isCloudStore();
+
+  const [totalMessages, sessions, channels, projects, totalUnread] = await Promise.all([
+    store.countMessages(),
+    store.listSessions(),
+    store.listChannels({ include_archived: true }),
+    store.listProjects(),
+    store.countMessages({ unread_only: true }),
+  ]);
 
   return {
-    db_path: dbPath,
+    mode: cloud ? "self_hosted" : "local",
+    ...(cloud ? { api_url: cloudApiUrl() } : { db_path: getDbPath() }),
     total_messages: totalMessages,
-    total_sessions: totalSessions,
-    total_channels: totalChannels,
-    total_projects: totalProjects,
+    total_sessions: sessions.length,
+    total_channels: channels.length,
+    total_projects: projects.length,
     unread_messages: totalUnread,
   };
 }
@@ -187,6 +199,57 @@ function resolveDashboardDist(): string | null {
   return null;
 }
 
+/**
+ * Turn a store CONFIGURATION refusal into a 503 the dashboard can render.
+ *
+ * `getStore()` already refuses to guess when the environment is half-configured —
+ * an API URL with no key, a pinned cloud mode with no key (see
+ * `assertUnambiguousStoreEnv`) — because the on-box SQLite store holds a DIFFERENT
+ * dataset and answering from it is a wrong answer, not a fallback. Without this
+ * boundary that refusal surfaces as an unhandled rejection and a bare 500 with no
+ * body, which tells the operator nothing about which variable is missing.
+ *
+ * Deliberately narrow: only `ConversationsStoreConfigError` is converted, and every
+ * other error keeps its existing behaviour. The message names environment VARIABLES
+ * only and never a credential value — a property of the store errors themselves,
+ * asserted in serve-store.e2e.test.ts rather than assumed here.
+ */
+/**
+ * The 400 a mutation handler returns for a bad request — but never for a store
+ * CONFIGURATION refusal.
+ *
+ * Those handlers wrap `JSON.parse` and the store call in one `try`, so without
+ * this a half-configured client got `400 Bad Request` carrying the store's
+ * refusal text: the server blaming the caller for its own misconfiguration.
+ * Measured on the built bundle before this was added — `GET /api/channels`
+ * answered 503 while `POST /api/messages` answered 400 with the identical
+ * message. Fail-closed held either way (neither served local data), but the
+ * status code is what a dashboard renders and what a monitor keys on, so the two
+ * must not disagree.
+ *
+ * Rethrowing hands it to {@link withStoreErrorBoundary} instead of giving every
+ * handler its own copy of the check.
+ */
+function badRequest(e: unknown): Response {
+  if (e instanceof ConversationsStoreConfigError) throw e;
+  return jsonResponse({ error: (e as Error).message }, 400);
+}
+
+function withStoreErrorBoundary(
+  handler: (req: Request) => Promise<Response>
+): (req: Request) => Promise<Response> {
+  return async (req) => {
+    try {
+      return await handler(req);
+    } catch (e) {
+      if (e instanceof ConversationsStoreConfigError) {
+        return jsonResponse({ error: e.message, code: "store_config" }, 503);
+      }
+      throw e;
+    }
+  };
+}
+
 export function startDashboardServer(port = 0, host?: string) {
   const resolvedPort = normalizePort(port, 0);
   const resolvedHost = normalizeHost(host ?? process.env.CONVERSATIONS_DASHBOARD_HOST);
@@ -195,7 +258,7 @@ export function startDashboardServer(port = 0, host?: string) {
   const server = Bun.serve({
     port: resolvedPort,
     hostname: resolvedHost,
-    async fetch(req) {
+    fetch: withStoreErrorBoundary(async (req) => {
       const url = new URL(req.url);
       const path = url.pathname;
 
@@ -208,7 +271,7 @@ export function startDashboardServer(port = 0, host?: string) {
 
       // ---- API Routes ----
       if (path === "/api/status") {
-        return jsonResponse(getStatus());
+        return jsonResponse(await getStatus());
       }
 
       if (path === "/api/messages" && req.method === "GET") {
@@ -221,7 +284,7 @@ export function startDashboardServer(port = 0, host?: string) {
         const from = url.searchParams.get("from") || undefined;
         const to = url.searchParams.get("to") || undefined;
         const compact = url.searchParams.get("compact") === "true";
-        const messages = readMessages({ session_id: session, channel, from, to, limit, order: "desc", compact });
+        const messages = await getStore().readMessages({ session_id: session, channel, from, to, limit, order: "desc", compact });
         return jsonResponse(applyFields(messages, url.searchParams.get("fields")));
       }
 
@@ -244,7 +307,7 @@ export function startDashboardServer(port = 0, host?: string) {
           if (priority && !["low", "normal", "high", "urgent"].includes(priority)) {
             return jsonResponse({ error: "Invalid priority" }, 400);
           }
-          const msg = sendMessage({
+          const msg = await getStore().sendMessage({
             from,
             to,
             content,
@@ -252,8 +315,8 @@ export function startDashboardServer(port = 0, host?: string) {
             priority: priority as any,
           });
           return jsonResponse(msg);
-        } catch (e: any) {
-          return jsonResponse({ error: e.message }, 400);
+        } catch (e) {
+          return badRequest(e);
         }
       }
 
@@ -269,7 +332,7 @@ export function startDashboardServer(port = 0, host?: string) {
         const channel = url.searchParams.get("channel") || undefined;
         const from = url.searchParams.get("from") || undefined;
         const to = url.searchParams.get("to") || undefined;
-        const messages = searchMessages({ query: q.trim(), channel, from, to, limit });
+        const messages = await getStore().searchMessages({ query: q.trim(), channel, from, to, limit });
         return jsonResponse(messages);
       }
 
@@ -280,7 +343,7 @@ export function startDashboardServer(port = 0, host?: string) {
         const since = url.searchParams.get("since") || undefined;
         const until = url.searchParams.get("until") || undefined;
         const format = url.searchParams.get("format") === "csv" ? "csv" : "json";
-        const result = exportMessages({ channel, session_id: session, from, since, until, format });
+        const result = await getStore().exportMessages({ channel, session_id: session, from, since, until, format });
 
         if (format === "csv") {
           return new Response(result, {
@@ -305,7 +368,7 @@ export function startDashboardServer(port = 0, host?: string) {
           if (!Number.isFinite(limit) || limit <= 0) limit = 50;
           if (limit > 500) limit = 500;
         }
-        const messages = getPinnedMessages({ channel, session_id, limit });
+        const messages = await getStore().getPinnedMessages({ channel, session_id, limit });
         return jsonResponse(messages);
       }
 
@@ -317,7 +380,7 @@ export function startDashboardServer(port = 0, host?: string) {
           if (!isSameOrigin(req)) {
             return jsonResponse({ error: "Invalid origin" }, 403);
           }
-          const msg = pinMessage(messageId);
+          const msg = await getStore().pinMessage(messageId);
           if (!msg) return jsonResponse({ error: "Message not found" }, 404);
           return jsonResponse(msg);
         }
@@ -325,7 +388,7 @@ export function startDashboardServer(port = 0, host?: string) {
           if (!isSameOrigin(req)) {
             return jsonResponse({ error: "Invalid origin" }, 403);
           }
-          const msg = unpinMessage(messageId);
+          const msg = await getStore().unpinMessage(messageId);
           if (!msg) return jsonResponse({ error: "Message not found" }, 404);
           return jsonResponse(msg);
         }
@@ -343,7 +406,7 @@ export function startDashboardServer(port = 0, host?: string) {
           if (!from) {
             return jsonResponse({ error: "'from' query parameter is required" }, 400);
           }
-          const deleted = deleteMessage(messageId, from);
+          const deleted = await getStore().deleteMessage(messageId, from);
           if (!deleted) return jsonResponse({ error: "Message not found or not your message" }, 404);
           return jsonResponse({ id: messageId, deleted: true });
         }
@@ -359,18 +422,18 @@ export function startDashboardServer(port = 0, host?: string) {
             if (!content || !from) {
               return jsonResponse({ error: "content and from are required" }, 400);
             }
-            const msg = editMessage(messageId, from, content);
+            const msg = await getStore().editMessage(messageId, from, content);
             if (!msg) return jsonResponse({ error: "Message not found or not your message" }, 404);
             return jsonResponse(msg);
-          } catch (e: any) {
-            return jsonResponse({ error: e.message }, 400);
+          } catch (e) {
+            return badRequest(e);
           }
         }
       }
 
       if (path === "/api/sessions") {
         const agent = url.searchParams.get("agent") || undefined;
-        return jsonResponse(applyFields(listSessions(agent), url.searchParams.get("fields")));
+        return jsonResponse(applyFields(await getStore().listSessions(agent), url.searchParams.get("fields")));
       }
 
       if (path === "/api/channels" && req.method === "GET") {
@@ -379,7 +442,8 @@ export function startDashboardServer(port = 0, host?: string) {
         const listOpts: { project_id?: string; include_archived?: boolean } = {};
         if (projectId) listOpts.project_id = projectId;
         if (includeArchived) listOpts.include_archived = true;
-        return jsonResponse(applyFields(listChannels(Object.keys(listOpts).length > 0 ? listOpts : undefined), url.searchParams.get("fields")));
+        const channels = await getStore().listChannels(Object.keys(listOpts).length > 0 ? listOpts : undefined);
+        return jsonResponse(applyFields(channels, url.searchParams.get("fields")));
       }
 
       if (path === "/api/channels" && req.method === "POST") {
@@ -397,10 +461,10 @@ export function startDashboardServer(port = 0, host?: string) {
           if (!name || !createdBy) {
             return jsonResponse({ error: "name and created_by are required" }, 400);
           }
-          const sp = createChannel(name, createdBy, { description, topic, project_id });
+          const sp = await getStore().createChannel(name, createdBy, { description, topic, project_id });
           return jsonResponse(sp);
-        } catch (e: any) {
-          return jsonResponse({ error: e.message }, 400);
+        } catch (e) {
+          return badRequest(e);
         }
       }
 
@@ -411,10 +475,10 @@ export function startDashboardServer(port = 0, host?: string) {
           return jsonResponse({ error: "Invalid origin" }, 403);
         }
         try {
-          const sp = archiveChannel(decodeURIComponent(channelArchiveMatch[1]));
+          const sp = await getStore().archiveChannel(decodeURIComponent(channelArchiveMatch[1]));
           return jsonResponse(sp);
-        } catch (e: any) {
-          return jsonResponse({ error: e.message }, 400);
+        } catch (e) {
+          return badRequest(e);
         }
       }
 
@@ -424,10 +488,10 @@ export function startDashboardServer(port = 0, host?: string) {
           return jsonResponse({ error: "Invalid origin" }, 403);
         }
         try {
-          const sp = unarchiveChannel(decodeURIComponent(channelUnarchiveMatch[1]));
+          const sp = await getStore().unarchiveChannel(decodeURIComponent(channelUnarchiveMatch[1]));
           return jsonResponse(sp);
-        } catch (e: any) {
-          return jsonResponse({ error: e.message }, 400);
+        } catch (e) {
+          return badRequest(e);
         }
       }
 
@@ -435,7 +499,7 @@ export function startDashboardServer(port = 0, host?: string) {
       if (channelMatch) {
         const channelName = decodeURIComponent(channelMatch[1]);
         if (req.method === "GET") {
-          const sp = getChannel(channelName);
+          const sp = await getStore().getChannel(channelName);
           if (!sp) return jsonResponse({ error: "Channel not found" }, 404);
           return jsonResponse(sp);
         }
@@ -450,17 +514,18 @@ export function startDashboardServer(port = 0, host?: string) {
             if (body.description !== undefined) updates.description = body.description;
             if (body.topic !== undefined) updates.topic = body.topic;
             if (body.project_id !== undefined) updates.project_id = body.project_id;
-            const sp = updateChannel(channelName, updates);
+            const sp = await getStore().updateChannel(channelName, updates);
             return jsonResponse(sp);
-          } catch (e: any) {
-            return jsonResponse({ error: e.message }, 400);
+          } catch (e) {
+            return badRequest(e);
           }
         }
       }
 
       if (path === "/api/projects" && req.method === "GET") {
         const status = url.searchParams.get("status") as "active" | "archived" | null;
-        return jsonResponse(applyFields(listProjects(status ? { status } : undefined), url.searchParams.get("fields")));
+        const projects = await getStore().listProjects(status ? { status } : undefined);
+        return jsonResponse(applyFields(projects, url.searchParams.get("fields")));
       }
 
       if (path === "/api/projects" && req.method === "POST") {
@@ -479,7 +544,7 @@ export function startDashboardServer(port = 0, host?: string) {
           if (!name || !createdBy) {
             return jsonResponse({ error: "name and created_by are required" }, 400);
           }
-          const project = createProject({
+          const project = await getStore().createProject({
             name,
             created_by: createdBy,
             description: body.description,
@@ -490,8 +555,8 @@ export function startDashboardServer(port = 0, host?: string) {
             settings: body.settings,
           });
           return jsonResponse(project);
-        } catch (e: any) {
-          return jsonResponse({ error: e.message }, 400);
+        } catch (e) {
+          return badRequest(e);
         }
       }
 
@@ -500,8 +565,9 @@ export function startDashboardServer(port = 0, host?: string) {
       if (projectMatch) {
         const projectId = projectMatch[1];
         if (req.method === "GET") {
-          let project = getProject(projectId);
-          if (!project) project = getProjectByName(projectId);
+          const store = getStore();
+          let project = await store.getProject(projectId);
+          if (!project) project = await store.getProjectByName(projectId);
           if (!project) return jsonResponse({ error: "Project not found" }, 404);
           return jsonResponse(project);
         }
@@ -512,10 +578,10 @@ export function startDashboardServer(port = 0, host?: string) {
           try {
             const text = await req.text();
             const body = JSON.parse(text);
-            const project = updateProject(projectId, body);
+            const project = await getStore().updateProject(projectId, body);
             return jsonResponse(project);
-          } catch (e: any) {
-            return jsonResponse({ error: e.message }, 400);
+          } catch (e) {
+            return badRequest(e);
           }
         }
         if (req.method === "DELETE") {
@@ -523,18 +589,18 @@ export function startDashboardServer(port = 0, host?: string) {
             return jsonResponse({ error: "Invalid origin" }, 403);
           }
           try {
-            const deleted = deleteProject(projectId);
+            const deleted = await getStore().deleteProject(projectId);
             if (!deleted) return jsonResponse({ error: "Project not found" }, 404);
             return jsonResponse({ id: projectId, deleted: true });
-          } catch (e: any) {
-            return jsonResponse({ error: e.message }, 400);
+          } catch (e) {
+            return badRequest(e);
           }
         }
       }
 
       if (path === "/api/agents" && req.method === "GET") {
         const onlineOnly = url.searchParams.get("online_only") === "true";
-        const agents = listAgents({ online_only: onlineOnly });
+        const agents = await getStore().listAgents({ online_only: onlineOnly });
         return jsonResponse(applyFields(agents, url.searchParams.get("fields")));
       }
 
@@ -544,7 +610,7 @@ export function startDashboardServer(port = 0, host?: string) {
         const min_score = url.searchParams.get("min_score") ? parseInt(url.searchParams.get("min_score")!) : undefined;
         const channel = url.searchParams.get("channel") ?? undefined;
         const project_id = url.searchParams.get("project_id") ?? undefined;
-        const sessions = listHotSessions({ limit, min_score, channel, project_id });
+        const sessions = await getStore().listHotSessions({ limit, min_score, channel, project_id });
         return jsonResponse(sessions);
       }
 
@@ -552,16 +618,17 @@ export function startDashboardServer(port = 0, host?: string) {
       if (path === "/api/graph" && req.method === "GET") {
         const entityType = url.searchParams.get("entity_type");
         const entityId = url.searchParams.get("entity_id");
+        const store = getStore();
         if (entityType && entityId) {
-          return jsonResponse(getRelated(entityType, entityId));
+          return jsonResponse(await store.getRelated(entityType, entityId));
         }
-        return jsonResponse(getGraphStats());
+        return jsonResponse(await store.getGraphStats());
       }
 
       // GET /api/graph/agent/:name
       const agentNetMatch = path.match(/^\/api\/graph\/agent\/(.+)$/);
       if (agentNetMatch && req.method === "GET") {
-        return jsonResponse(getAgentNetwork(decodeURIComponent(agentNetMatch[1])));
+        return jsonResponse(await getStore().getAgentNetwork(decodeURIComponent(agentNetMatch[1])));
       }
 
       // GET /api/reactions?message_id=X[&summary=true]
@@ -571,7 +638,8 @@ export function startDashboardServer(port = 0, host?: string) {
         const messageId = parseInt(messageIdStr);
         if (isNaN(messageId)) return jsonResponse({ error: "message_id must be a number" }, 400);
         const summary = url.searchParams.get("summary") === "true";
-        const result = summary ? getReactionSummary(messageId) : getReactions(messageId);
+        const store = getStore();
+        const result = summary ? await store.getReactionSummary(messageId) : await store.getReactions(messageId);
         return jsonResponse(result);
       }
 
@@ -579,7 +647,7 @@ export function startDashboardServer(port = 0, host?: string) {
       if (path === "/api/locks" && req.method === "GET") {
         const resource_type = url.searchParams.get("resource_type") ?? undefined;
         const agent_id = url.searchParams.get("agent_id") ?? undefined;
-        const locks = listLocks({ resource_type, agent_id });
+        const locks = await getStore().listLocks({ resource_type, agent_id });
         return jsonResponse(locks);
       }
 
@@ -654,7 +722,7 @@ export function startDashboardServer(port = 0, host?: string) {
         status: 404,
         headers: securityHeaders({ "Content-Type": "text/plain; charset=utf-8" }),
       });
-    },
+    }),
   });
 
   console.log(`Dashboard running at http://localhost:${server.port}`);
