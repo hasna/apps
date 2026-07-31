@@ -210,6 +210,14 @@ describe("concurrent sessions must not silently steal each other's identity", ()
   // keyed on HOME alone. A silent clobber leaves the losing session attributing its
   // work to the winner — a WRONG author, which is worse than a missing one, because
   // a null is visibly absent while a name is simply believed.
+  //
+  // BEHAVIOUR LOCKS, NOT DEFECT CONTROLS. `detectIdentityCollision` is a new pure
+  // function, so these pass against the pre-fix bytes the moment that file is copied
+  // across — they cannot demonstrate the defect and must not be cited as proof of it.
+  // The claim is carried by the two discriminating CLI tests in
+  // src/cli/creator-attribution.test.ts ("refuses to overwrite a different agent's
+  // persisted identity" and "--force takes it over deliberately"), which fail at the
+  // pre-remediation commit because `todos init` clobbered silently and exited 0.
   it("reports a collision when a different identity already holds the file", () => {
     persistIdentity({ agent_id: "id-brutus", agent_name: "Brutus" });
     const collision = detectIdentityCollision("id-cassius", "Cassius");

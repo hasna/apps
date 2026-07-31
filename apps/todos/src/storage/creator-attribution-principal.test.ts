@@ -35,6 +35,8 @@ describe("SQLite storage adapter honours the calling principal", () => {
     expect(task.agent_id).toBe("cassius");
   });
 
+  // BEHAVIOUR LOCK, not a defect control — this already worked before the fix,
+  // because an explicit created_by was passed straight through to createTask.
   it("lets an explicit author in the request body win over the principal", async () => {
     const store = createLocalSqliteTodosStorageAdapter({ db });
     const task = await store.tasks.create(
@@ -44,6 +46,8 @@ describe("SQLite storage adapter honours the calling principal", () => {
     expect(task.created_by).toBe("brutus");
   });
 
+  // BEHAVIOUR LOCK, not a defect control — null was the pre-fix behaviour in every
+  // case. It is kept to pin that a missing principal is not backfilled with a guess.
   it("leaves the author null when there is no principal and no explicit author", async () => {
     const store = createLocalSqliteTodosStorageAdapter({ db });
     const task = await store.tasks.create({ title: "anonymous" }, {});

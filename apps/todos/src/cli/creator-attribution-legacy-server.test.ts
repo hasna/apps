@@ -102,6 +102,51 @@ async function runCli(args: string[], root: string, baseUrl: string, extraEnv: R
   return { exitCode: await proc.exited, stdout, stderr };
 }
 
+describe("--inbox against a server that cannot attribute at all", () => {
+  test("warns that results are unfiltered when the server omits created_by entirely", async () => {
+    // A server predating the field omits the key, so every row reads as unattributed
+    // and the filter excludes nothing. Measured against the deployed 0.13.0 API.
+    // Returning that silently would be an inbox that looks filtered and is not.
+    const rows = Array.from({ length: 3 }, (_, i) => {
+      const r = legacyTask(i + 1, null);
+      delete r["created_by"];
+      return r;
+    });
+    const { server } = startLegacyServer(rows);
+    const root = mkdtempSync(join(tmpdir(), "todos-legacy-noattr-"));
+    tempRoots.push(root);
+    try {
+      const result = await runCli(["--json", "list", "--inbox"], root, `http://127.0.0.1:${server.port}`, {
+        TODOS_AGENT_ID: "cassius",
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toContain("does not record task authorship");
+      // The rows are still returned — unfiltered but honest, not silently dropped.
+      expect(JSON.parse(result.stdout)).toHaveLength(3);
+    } finally {
+      server.stop(true);
+    }
+  }, 30000);
+
+  test("does NOT warn when the server records authorship and simply has unattributed rows", async () => {
+    // created_by present but null is a genuinely unattributed row, not a server that
+    // cannot attribute — conflating the two would train agents to ignore the warning.
+    const rows = [legacyTask(1, null), legacyTask(2, "brutus")];
+    const { server } = startLegacyServer(rows);
+    const root = mkdtempSync(join(tmpdir(), "todos-legacy-nullattr-"));
+    tempRoots.push(root);
+    try {
+      const result = await runCli(["--json", "list", "--inbox"], root, `http://127.0.0.1:${server.port}`, {
+        TODOS_AGENT_ID: "cassius",
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).not.toContain("does not record task authorship");
+    } finally {
+      server.stop(true);
+    }
+  }, 30000);
+});
+
 describe("--inbox against a server that ignores the creator filter", () => {
   test("returns a full --limit page of OTHERS' tasks, not a truncated one", async () => {
     // 10 of the caller's own filings first, then 5 filed by someone else. A server

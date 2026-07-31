@@ -780,6 +780,20 @@ export function registerTaskCommands(program: Command) {
 
       let tasks = cloud ? await cloudListTasks(cloud, serverFilter as any) : listTasks(serverFilter as any);
       if (cloud && creatorFilterActive) {
+        // Enforcing the filter is not the same as the filter being USEFUL. A server
+        // that predates created_by omits the key entirely, so every row reads as
+        // unattributed and the filter — correctly, per the NULL rule below — excludes
+        // nothing. Measured against the deployed 0.13.0 API: `--inbox` returned the
+        // caller's own filing alongside everyone else's. Silently handing back an
+        // unfiltered inbox is the failure this flag exists to prevent, so say so.
+        // A row where the key is PRESENT and null is genuinely unattributed and is
+        // not a server-capability problem — only a missing key indicates the latter.
+        if (tasks.length > 0 && tasks.every((t) => !("created_by" in (t as object)))) {
+          console.error(chalk.yellow(
+            "Warning: this server does not record task authorship, so the creator filter matched nothing to exclude.\n" +
+            "         Results are unfiltered. The API needs upgrading past the release that added created_by.",
+          ));
+        }
         const wantCreatedBy = filter["created_by"] as string | undefined;
         const excludeCreatedBy = filter["not_created_by"] as string | undefined;
         tasks = tasks.filter((t) => {
