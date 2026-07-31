@@ -151,11 +151,11 @@ describe("machines screen", () => {
       },
     });
     const plan = buildScreenEnableCommand("demo-mac-005", { topology, secretsCommand: "secrets" });
-    expect(plan.secretsCommandArgs).toEqual(["secrets", "get", "machines/screen-sharing/screen-demo-mac-005-vnc-password"]);
+    expect(plan.secretsCommandArgs).toEqual(["secrets", "get", "machines/screen-sharing/screen-demo-mac-005-vnc-password", "--show"]);
     expect(plan.sshCommand).toBe("ssh");
     expect(plan.sshCommandArgs[0]).toBe("operator@demo-mac-005");
     expect(plan.sshCommandArgs[1]).toContain("IFS= read -r vnc_pw");
-    expect(plan.command).toContain("secrets' 'get' 'machines/screen-sharing/screen-demo-mac-005-vnc-password'");
+    expect(plan.command).toContain("secrets' 'get' 'machines/screen-sharing/screen-demo-mac-005-vnc-password' '--show'");
     expect(plan.command).toContain("| ssh 'operator@demo-mac-005' ");
     expect(plan.command).not.toContain("example-vnc-password");
   });

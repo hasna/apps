@@ -215,7 +215,7 @@ export function buildStationTemplateSteps(effective: EffectiveTemplate, options:
       title: "Join tailnet if not already joined (auth key via secrets vault, name only; never boot-critical)",
       command:
         `tailscale status >/dev/null 2>&1 || ( umask 077 && auth_key_file=$(mktemp) && ` +
-        `trap 'rm -f "$auth_key_file"' EXIT && secrets get ${quote(effective.tailscale.authKeySecretName)} | tr -d '\\r\\n' > "$auth_key_file" && ` +
+        `trap 'rm -f "$auth_key_file"' EXIT && secrets get ${quote(effective.tailscale.authKeySecretName)} --show | tr -d '\\r\\n' > "$auth_key_file" && ` +
         `sudo tailscale up --auth-key "file:$auth_key_file"${hostnameFlag}${sshFlag} ) || ` +
         `echo 'hasna-station: tailscale join failed (NON-FATAL) — the box stays reachable by its floor path; drift check reports tailscale:join' >&2`,
       manager: "custom",
@@ -250,7 +250,7 @@ export function buildStationTemplateSteps(effective: EffectiveTemplate, options:
       id: "template-secrets-bootstrap",
       title: `Bootstrap station env from vault secret ${effective.secretsBootstrap.envSecretName} (name only${effective.secretsBootstrap.optional ? ", optional" : ""})`,
       command:
-        `secrets get ${quote(effective.secretsBootstrap.envSecretName)} > "$HOME/.hasna/station.env" 2>/dev/null && chmod 600 "$HOME/.hasna/station.env"` +
+        `secrets get ${quote(effective.secretsBootstrap.envSecretName)} --show > "$HOME/.hasna/station.env" 2>/dev/null && chmod 600 "$HOME/.hasna/station.env"` +
         (effective.secretsBootstrap.optional ? " || true" : ""),
       manager: "custom",
     });

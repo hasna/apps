@@ -252,7 +252,7 @@ export function buildScreenEnableCommand(machineId: string, options: ScreenEnabl
   }
   const secretsCommand = options.secretsCommand || "secrets";
   const remoteCommand = buildScreenEnableRemoteCommandFromStdin(credentials.user);
-  const secretsCommandArgs = [secretsCommand, "get", credentials.passwordSecretKey];
+  const secretsCommandArgs = [secretsCommand, "get", credentials.passwordSecretKey, "--show"];
   const sshPlan = buildSshCommandPlan(machineId, remoteCommand, options);
   return {
     machineId: credentials.machineId,

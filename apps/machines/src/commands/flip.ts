@@ -317,7 +317,7 @@ export function buildFlipScript(spec: FlipAppSpec, mode: FlipMode, options: Buil
     // discarding both streams turned every provisioning failure into a silent
     // empty key with no cause attached.
     lines.push(
-      `API_KEY="$(secrets get ${sq(spec.apiKeySecretPath)} --raw 2>/dev/null || secrets get ${sq(spec.apiKeySecretPath)})"`,
+      `API_KEY="$(secrets get ${sq(spec.apiKeySecretPath)} --raw --show 2>/dev/null || secrets get ${sq(spec.apiKeySecretPath)} --show)"`,
       'if [ -z "${API_KEY:-}" ]; then echo "FLIP_ERROR: could not resolve API key secret" >&2; exit 3; fi',
       'TMP_ENV="$(mktemp "${ENV_DIR}/.${APP}.env.XXXXXX")"',
       `printf '%s\\n' ${sq(`${spec.apiUrlEnv}=${spec.apiUrl}`)} >> "$TMP_ENV"`,

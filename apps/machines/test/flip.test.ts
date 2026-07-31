@@ -124,7 +124,7 @@ describe("script generation", () => {
 
   test("api script writes API_URL + API_KEY, fetches the key from the secret store, never a DSN", () => {
     const script = buildFlipScript(spec, "api");
-    expect(script).toContain("secrets get 'hasna/oss/todos/api-key'");
+    expect(script).toContain("secrets get 'hasna/oss/todos/api-key' --raw --show");
     expect(script).toContain("HASNA_TODOS_API_URL=https://todos.your-deployment.example");
     expect(script).toContain("HASNA_TODOS_API_KEY");
     // Forbidden legacy surfaces must never appear.
@@ -149,7 +149,7 @@ describe("script generation", () => {
     // The --raw probe may silence its own stderr (older secrets CLIs lack the
     // flag), but the fallback attempt must NOT: this script runs on a remote
     // machine, and a swallowed error there reads as an empty key with no cause.
-    expect(script).toMatch(/\|\| secrets get 'hasna\/oss\/todos\/api-key'\)"/);
+    expect(script).toMatch(/\|\| secrets get 'hasna\/oss\/todos\/api-key' --show\)"/);
     expect(script).not.toMatch(/\|\| secrets get [^\n]*2>\/dev\/null/);
   });
 

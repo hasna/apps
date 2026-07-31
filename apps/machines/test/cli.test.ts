@@ -571,7 +571,7 @@ describe("cli command handling", () => {
     }
   });
 
-  test("screen-credentials reports secret references without printing secret values", () => {
+  test("screen-credentials explicitly shows guarded secrets without printing their values", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-cli-screen-credentials-"));
     try {
       const env = {
@@ -583,7 +583,7 @@ describe("cli command handling", () => {
         [MUTATION_APPROVAL_FLAG_ENV]: "1",
       };
       const fakeSecrets = join(dir, "fake-secrets");
-      writeFileSync(fakeSecrets, "#!/bin/sh\n[ \"$1\" = get ] && [ \"$2\" = machines/screen-sharing/screen-demo-mac-001-vnc-password ] && { printf '%s\\n' super-secret-value; exit 0; }\nexit 1\n", { mode: 0o700 });
+      writeFileSync(fakeSecrets, "#!/bin/sh\nif [ \"$1\" = get ] && [ \"$2\" = machines/screen-sharing/screen-demo-mac-001-vnc-password ]; then\n  [ \"$3\" = --show ] && printf '%s\\n' super-secret-value\n  exit 0\nfi\nexit 1\n", { mode: 0o700 });
       expect(runCli(["manifest", "init"], env).status).toBe(0);
       const machine = {
         id: "demo-mac-001",

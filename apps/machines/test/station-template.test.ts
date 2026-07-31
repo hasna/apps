@@ -198,7 +198,8 @@ describe("physical render", () => {
     expect(commands).toContain("bun install -g");
     expect(commands).toContain("systemctl --user enable --now 'machines-roster.service'");
     // secret NAMES are allowed; secret VALUES have no path into a render
-    expect(commands).toContain("stations/prod/tailscale/authkey");
+    expect(commands).toContain("secrets get 'stations/prod/tailscale/authkey' --show");
+    expect(commands).toContain("secrets get 'stations/prod/station-env' --show");
     expect(commands).not.toContain("tskey-");
   });
 
@@ -206,6 +207,7 @@ describe("physical render", () => {
     const steps = buildStationTemplateSteps(effectiveFor(["dgx-spark"]));
     const join = steps.find((step) => step.id === "template-tailscale-join");
     expect(join?.command).toContain("auth_key_file=$(mktemp)");
+    expect(join?.command).toContain("secrets get 'stations/prod/tailscale/authkey' --show");
     expect(join?.command).toContain('trap \'rm -f "$auth_key_file"\' EXIT');
     expect(join?.command).toContain('--auth-key "file:$auth_key_file"');
     expect(join?.command).not.toContain("/tmp/ts-authkey");
@@ -220,6 +222,7 @@ describe("cloud-init render", () => {
     expect(userData).toContain("hostname: station17");
     expect(userData).toContain("- earlyoom");
     expect(userData).toContain("swapon /swapfile");
+    expect(userData).toContain("secrets get stations/prod/station-env --show > ~/.hasna/station.env");
     // write_files carries the sysctl content base64-encoded
     const sysctl = effective.files.find((file) => file.kind === "sysctl")!;
     expect(userData).toContain(Buffer.from(sysctl.content, "utf8").toString("base64"));

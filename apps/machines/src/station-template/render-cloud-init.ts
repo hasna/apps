@@ -187,7 +187,7 @@ export function renderCloudInit(effective: EffectiveTemplate, options: CloudInit
   if (effective.secretsBootstrap) {
     // Optional on first boot: the secrets CLI needs its own auth before this works.
     runcmd.push(
-      `runuser -l ${user} -c 'mkdir -p ~/.hasna && (command -v secrets >/dev/null 2>&1 && umask 077 && secrets get ${effective.secretsBootstrap.envSecretName} > ~/.hasna/station.env) || true'`
+      `runuser -l ${user} -c 'mkdir -p ~/.hasna && (command -v secrets >/dev/null 2>&1 && umask 077 && secrets get ${effective.secretsBootstrap.envSecretName} --show > ~/.hasna/station.env) || true'`
     );
   }
   for (const file of bashrcBlocks) {

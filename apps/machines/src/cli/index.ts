@@ -415,7 +415,7 @@ function renderSelfTestResult(result: SelfTestResult): string {
 }
 
 function checkSecretPresence(secretsCommand: string, key: string): { checked: true; present: boolean; error?: string } {
-  const result = Bun.spawnSync([secretsCommand, "get", key], {
+  const result = Bun.spawnSync([secretsCommand, "get", key, "--show"], {
     stdout: "pipe",
     stderr: "pipe",
     env: process.env,
