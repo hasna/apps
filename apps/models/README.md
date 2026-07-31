@@ -141,6 +141,9 @@ Future MCP consumers should expose the same contract as read-only tools first.
 Mutation tools should remain local/operator-gated until provider probes and
 capability refresh jobs exist.
 
+The complete parser-derived command inventory and backend-scope audit is in
+[docs/CLI_AUDIT.md](docs/CLI_AUDIT.md).
+
 ## License
 
 Apache-2.0.

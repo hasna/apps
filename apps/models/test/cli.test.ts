@@ -4,6 +4,8 @@ import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import type { Command } from "commander";
+import { program } from "../src/cli/index.js";
 import { ModelsStore } from "../src/storage.js";
 import type { InstalledArtifact } from "../src/types.js";
 
@@ -31,6 +33,31 @@ function testArtifact(overrides: Partial<InstalledArtifact> = {}): InstalledArti
     ...overrides,
   };
 }
+
+function registeredLeaves(command: Command): Command[] {
+  return command.commands.flatMap((child) => child.commands.length > 0 ? registeredLeaves(child) : [child]);
+}
+
+function registeredCommandName(command: Command): string {
+  const names: string[] = [];
+  for (let current: Command | null = command; current; current = current.parent) {
+    names.unshift(current.name());
+  }
+  return names.join(" ");
+}
+
+test("CLI audit inventories every registered actionable leaf command", () => {
+  const leaves = registeredLeaves(program);
+  const registered = leaves.map(registeredCommandName).sort();
+  const audit = readFileSync(join(repoRoot, "docs", "CLI_AUDIT.md"), "utf8");
+  const documented = [...audit.matchAll(/^\| `(models .+?)` \|/gm)].map((match) => match[1]).sort();
+
+  expect(leaves).toHaveLength(23);
+  for (const leaf of leaves) {
+    expect(typeof (leaf as unknown as { _actionHandler?: unknown })._actionHandler).toBe("function");
+  }
+  expect(documented).toEqual(registered);
+});
 
 test("CLI --version matches package metadata", () => {
   const result = spawnSync(process.execPath, [
