@@ -363,6 +363,12 @@ describe("readMessages", () => {
       expect(msgs.map((m) => m.content)).toEqual(["4", "3"]);
     });
 
+    test("latest:N still overrides explicit order:asc", () => {
+      for (const n of ["1", "2", "3", "4"]) sendMessage({ from: "a", to: "b", content: n });
+      const msgs = readMessages({ latest: 2, order: "asc" });
+      expect(msgs.map((m) => m.content)).toEqual(["4", "3"]);
+    });
+
     test("fewer messages than the limit still reads chronologically", () => {
       sendMessage({ from: "a", to: "b", content: "1" });
       sendMessage({ from: "a", to: "b", content: "2" });

@@ -115,6 +115,17 @@ beforeAll(async () => {
         if (p === "/messages") return Response.json({ message: { id: 901, content: "cloud-written-message" } });
         if (p === "/channels") return Response.json({ channel: { id: 902, name: "cloud-written-channel" } });
         if (p === "/projects") return Response.json({ project: { id: 903, name: "cloud-written-project" } });
+        if (/^\/channels\/[^/]+\/(un)?archive$/.test(p)) {
+          return Response.json({ channel: { id: 902, name: "cloud-written-channel" } });
+        }
+      }
+      // Edit/delete. Matched by path across PATCH/PUT/DELETE rather than pinned to
+      // one verb, so the stub does not encode an assumption about which the client
+      // uses — that is the transport's business, not this fixture's.
+      if (["PATCH", "PUT", "DELETE"].includes(request.method)) {
+        if (/^\/messages\/\d+$/.test(p)) return Response.json({ message: { id: 901, content: "cloud-edited" } });
+        if (/^\/channels\/[^/]+$/.test(p)) return Response.json({ channel: { id: 902, name: "cloud-edited" } });
+        if (/^\/projects\/[^/]+$/.test(p)) return Response.json({ project: { id: 903, name: "cloud-edited" } });
       }
       if (p === "/messages") {
         if (url.searchParams.get("count")) return Response.json({ count: CLOUD.messages });
@@ -206,7 +217,18 @@ describe("dashboard server — hosted store answers every endpoint class", () =>
 
   // Writes are the half a read-only test cannot speak for: a mutation that landed
   // in the local SQLite store would still return 200 with a plausible row.
-  for (const endpointClass of ["write.messages", "write.channels", "write.projects"]) {
+  for (const endpointClass of [
+    "write.messages",
+    "write.channels",
+    "write.projects",
+    "write.messages.edit",
+    "write.messages.delete",
+    "write.channels.update",
+    "write.channels.archive",
+    "write.channels.unarchive",
+    "write.projects.update",
+    "write.projects.delete",
+  ]) {
     test(`${endpointClass} is accepted by the hosted store`, () => {
       const row = hosted[endpointClass];
       expect(row, `no result for ${endpointClass}`).toBeDefined();
@@ -232,7 +254,18 @@ describe("dashboard server — a half-configured client refuses instead of servi
   // blaming the caller for its own misconfiguration. Measured on the built bundle:
   // GET /api/channels answered 503 while POST /api/messages answered 400 carrying
   // the identical message.
-  const WRITE_CLASSES = ["write.messages", "write.channels", "write.projects"];
+  const WRITE_CLASSES = [
+    "write.messages",
+    "write.channels",
+    "write.projects",
+    "write.messages.edit",
+    "write.messages.delete",
+    "write.channels.update",
+    "write.channels.archive",
+    "write.channels.unarchive",
+    "write.projects.update",
+    "write.projects.delete",
+  ];
 
   for (const endpointClass of WRITE_CLASSES) {
     test(`${endpointClass} refuses with 503, not 400`, () => {

@@ -345,4 +345,14 @@ describe("ApiStore.readMessages recency window", () => {
     expect(queries[0].order).toBe("desc");
     expect(msgs.map((m) => m.id)).toEqual([607254, 607250]);
   });
+
+  test("latest:N still overrides explicit order=asc on the wire", async () => {
+    const { client, queries } = queryCapturingClient([
+      row(607254, "2026-07-30T12:03:00.000Z"),
+      row(607250, "2026-07-30T12:02:00.000Z"),
+    ]);
+    const msgs = await new ApiStore(client).readMessages({ channel: "internal-ea", latest: 2, order: "asc" });
+    expect(queries[0].order).toBe("desc");
+    expect(msgs.map((m) => m.id)).toEqual([607254, 607250]);
+  });
 });

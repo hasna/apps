@@ -68,10 +68,10 @@ export function resolveReadLimit(input: object = {}): number {
 /**
  * Decide how to order a `readMessages` query.
  *
- * - An explicit `order` wins and is passed through untouched, so existing
- *   callers (polling with `order: "asc"`, `serve` with `order: "desc"`) and the
- *   `--order` flag keep their exact semantics.
- * - `latest: N` is unchanged: the newest N, newest first.
+ * - `latest: N` is unchanged: the newest N, newest first, overriding `order`.
+ * - Otherwise, an explicit `order` wins and is passed through untouched, so
+ *   existing callers (polling with `order: "asc"`, `serve` with `order: "desc"`)
+ *   and the `--order` flag keep their exact semantics.
  * - A `since_id` anchor is a CURSOR — "the next page after this exact id" — and
  *   keeps ascending selection. A newest-N window there would let a catch-up walk
  *   skip the middle of a backlog and never notice.
@@ -85,12 +85,12 @@ export function resolveReadWindow(input: object = {}): ResolvedReadWindow {
   // `object` rather than `ReadWindowInput` so both the typed store options and a
   // loose MCP argument bag are accepted; every field is checked at runtime below.
   const opts = input as ReadWindowInput;
+  if (typeof opts.latest === "number" && opts.latest > 0) {
+    return { select: "desc", reverse: false, newestWindow: false };
+  }
   const explicit = typeof opts.order === "string" ? opts.order.toLowerCase() : "";
   if (explicit === "asc" || explicit === "desc") {
     return { select: explicit, reverse: false, newestWindow: false };
-  }
-  if (typeof opts.latest === "number" && opts.latest > 0) {
-    return { select: "desc", reverse: false, newestWindow: false };
   }
   if (typeof opts.since_id === "number" && Number.isFinite(opts.since_id)) {
     return { select: "asc", reverse: false, newestWindow: false };

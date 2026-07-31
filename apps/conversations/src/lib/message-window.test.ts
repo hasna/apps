@@ -26,6 +26,10 @@ describe("resolveReadWindow", () => {
     expect(resolveReadWindow({ latest: 5 })).toEqual({ select: "desc", reverse: false, newestWindow: false });
   });
 
+  test("latest:N overrides an explicit order, matching readMessages", () => {
+    expect(resolveReadWindow({ latest: 5, order: "asc" })).toEqual({ select: "desc", reverse: false, newestWindow: false });
+  });
+
   test("latest:0 is not a latest query", () => {
     expect(resolveReadWindow({ latest: 0 }).newestWindow).toBe(true);
   });

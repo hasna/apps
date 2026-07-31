@@ -63,6 +63,42 @@ const CASES: Array<{ endpointClass: string; path: string; method?: string; body?
     method: "POST",
     body: { name: "probe-written-project", created_by: "probe-agent" },
   },
+  // Most of these carry their own try/catch and so refuse through `badRequest()`,
+  // the same route as POST — which is what makes them regression cases for the
+  // 400-instead-of-503 defect.
+  //
+  // `write.messages.delete` is the EXCEPTION and is labelled rather than left to
+  // look like the others: `DELETE /api/messages/:id` has no try/catch around its
+  // store call, so it refuses through `withStoreErrorBoundary` unconditionally and
+  // there is no 400 path for it to regress to. It still pins route existence and
+  // fail-closed, and it must keep both — but reverting `badRequest()` cannot turn
+  // it red, so it is not evidence about that defect. Saying so here because a
+  // reader counting nine green write cases would otherwise credit it with a
+  // guarantee it does not provide.
+  {
+    endpointClass: "write.messages.edit",
+    path: "/api/messages/901",
+    method: "PUT",
+    body: { content: "probe-edited", from: "probe-agent" },
+  },
+  { endpointClass: "write.messages.delete", path: "/api/messages/901?from=probe-agent", method: "DELETE" },
+  {
+    endpointClass: "write.channels.update",
+    path: "/api/channels/probe-written-channel",
+    method: "PUT",
+    body: { description: "probe-edited" },
+  },
+  { endpointClass: "write.channels.archive", path: "/api/channels/probe-written-channel/archive", method: "POST" },
+  // The ninth and last `badRequest()` site. Without this case one of them has no
+  // regression test at all, which is the gap that lets a partial revert pass.
+  { endpointClass: "write.channels.unarchive", path: "/api/channels/probe-written-channel/unarchive", method: "POST" },
+  {
+    endpointClass: "write.projects.update",
+    path: "/api/projects/903",
+    method: "PUT",
+    body: { description: "probe-edited" },
+  },
+  { endpointClass: "write.projects.delete", path: "/api/projects/903", method: "DELETE" },
 ];
 
 /**
