@@ -216,6 +216,16 @@ exit 2
       const env = {
         ...process.env,
         PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        // dispatch-smoke builds its own PATH as
+        //   PATH="$HOME/.bun/bin:$HOME/.local/bin:...:$PATH"
+        // so $HOME/.bun/bin is searched BEFORE the binDir prepended above. On
+        // any machine with a real @hasna/dispatch installed there, that binary
+        // wins and reports its own version instead of the 0.0.22 stub —
+        // measured on station01 against @hasna/dispatch 0.0.25, where this
+        // test failed with version_ok:false while CI (no dispatch installed)
+        // passed. Point HOME at the sandbox so the product's own PATH prefix
+        // resolves inside it and the stub is the only dispatch reachable.
+        HOME: dir,
         HASNA_MACHINES_DB_PATH: join(dir, "machines.db"),
         HASNA_MACHINES_MANIFEST_PATH: join(dir, "machines.json"),
         HASNA_MACHINES_MACHINE_ID: "spark02",

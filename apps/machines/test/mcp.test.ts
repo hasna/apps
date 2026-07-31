@@ -76,6 +76,16 @@ test("MCP dispatch fleet smoke is read-only and redacted", async () => {
   const binDir = join(dir, "bin");
   const marker = join(dir, "restart-called");
   const previousPath = process.env.PATH;
+  // dispatch-smoke builds its own PATH as
+  //   PATH="$HOME/.bun/bin:$HOME/.local/bin:...:$PATH"
+  // so $HOME/.bun/bin is searched BEFORE the binDir this test prepends to
+  // $PATH. On any machine with a real @hasna/dispatch installed there, that
+  // real binary wins the lookup and reports its own version instead of the
+  // 0.0.22 stub below — measured on station01 against @hasna/dispatch 0.0.25,
+  // where this test failed with version_ok:false while CI (no dispatch
+  // installed) passed. Point HOME at the sandbox so the product's own PATH
+  // prefix resolves inside it and the stub is the only dispatch reachable.
+  const previousHome = process.env.HOME;
   const syntheticSecret = `${"secret"}-token:abcdef`;
   process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
   process.env["HASNA_MACHINES_DB_PATH"] = join(dir, "machines.db");
@@ -101,6 +111,7 @@ exit 2
 `);
     chmodSync(dispatch, 0o755);
     process.env.PATH = `${binDir}:${previousPath ?? ""}`;
+    process.env.HOME = dir;
 
     const server = createMcpServer("0.0.1");
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -136,6 +147,11 @@ exit 2
     }
   } finally {
     process.env.PATH = previousPath;
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
     rmSync(dir, { recursive: true, force: true });
   }
 });
