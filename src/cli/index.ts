@@ -37,7 +37,7 @@ const promptOptions: {
   runBudgetTotalTokens?: string;
 } = {};
 
-function firstPositionalArg(argv: string[]): string | undefined {
+function firstPositional(argv: string[]): { value: string; index: number } | undefined {
   const optionsWithValues = new Set([
     "--model",
     "--max-steps",
@@ -52,27 +52,43 @@ function firstPositionalArg(argv: string[]): string | undefined {
   ]);
   for (let i = 2; i < argv.length; i++) {
     const arg = argv[i]!;
-    if (arg === "--") return argv[i + 1];
+    if (arg === "--") {
+      const value = argv[i + 1];
+      return value ? { value, index: i + 1 } : undefined;
+    }
     if (optionsWithValues.has(arg)) {
       i++;
       continue;
     }
     if (arg.startsWith("-")) continue;
-    return arg;
+    return { value: arg, index: i };
   }
   return undefined;
 }
 
+function hasAnyFlag(argv: string[], flags: string[]): boolean {
+  return argv.slice(2).some((arg) => flags.includes(arg));
+}
+
+function shouldRouteToCommand(firstArg: string, firstArgIndex: number, argv: string[]): boolean {
+  const delimiterIndex = argv.indexOf("--", 2);
+  if (delimiterIndex !== -1 && delimiterIndex < firstArgIndex) return false;
+  if (hasAnyFlag(argv, ["--help", "-h", "--version", "-V"])) return true;
+  if (firstArg === "create" && !hasAnyFlag(argv, ["--name"])) return false;
+  return true;
+}
+
 function preparePromptFlags(): void {
-  const firstArg = firstPositionalArg(process.argv);
-  if (!firstArg) return;
+  const first = firstPositional(process.argv);
+  if (!first) return;
+  const firstArg = first.value;
 
   const commandNames = new Set<string>();
   for (const command of program.commands) {
     commandNames.add(command.name());
     for (const alias of command.aliases()) commandNames.add(alias);
   }
-  if (commandNames.has(firstArg)) return;
+  if (commandNames.has(firstArg) && shouldRouteToCommand(firstArg, first.index, process.argv)) return;
 
   const nextArgv = process.argv.slice(0, 2);
   const promptStartsWithCommand = commandNames.has(firstArg);

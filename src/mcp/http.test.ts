@@ -4,6 +4,9 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { closeDatabase } from "../db/database.js";
+import { __resetProjectStore } from "../store/project-store.js";
+import { API_MODE_ENV_KEYS } from "../testing/spawn-env.js";
 import { buildServer } from "./index.js";
 import { handleMcpRequest, resolveMcpHttpPort, DEFAULT_MCP_HTTP_PORT } from "./http.js";
 
@@ -11,12 +14,18 @@ describe("projects MCP HTTP transport", () => {
   let httpServer: ReturnType<typeof Bun.serve>;
   let port: number;
   let root: string;
-  let previousDbPath: string | undefined;
+  let previousEnv: Map<string, string | undefined>;
 
   beforeAll(() => {
     root = mkdtempSync(join(tmpdir(), "projects-mcp-http-"));
-    previousDbPath = process.env.HASNA_PROJECTS_DB_PATH;
+    previousEnv = new Map<string, string | undefined>();
+    for (const key of [...API_MODE_ENV_KEYS, "HASNA_PROJECTS_DB_PATH"]) {
+      previousEnv.set(key, process.env[key]);
+      delete process.env[key];
+    }
     process.env.HASNA_PROJECTS_DB_PATH = join(root, "projects.db");
+    closeDatabase();
+    __resetProjectStore();
     httpServer = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -35,11 +44,12 @@ describe("projects MCP HTTP transport", () => {
   });
 
   afterAll(() => {
-    httpServer.stop();
-    if (previousDbPath === undefined) {
-      delete process.env.HASNA_PROJECTS_DB_PATH;
-    } else {
-      process.env.HASNA_PROJECTS_DB_PATH = previousDbPath;
+    httpServer.stop(true);
+    closeDatabase();
+    __resetProjectStore();
+    for (const [key, value] of previousEnv) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
     }
     rmSync(root, { recursive: true, force: true });
   });
