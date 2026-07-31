@@ -109,7 +109,7 @@ export function appendKnowledgeSourceOutboxEvent(input: AppendKnowledgeSourceOut
         input.created_at ?? new Date().toISOString(),
       ],
     );
-  });
+  })();
 
   return getKnowledgeSourceOutboxEvent(id)!;
 }

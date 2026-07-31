@@ -1,11 +1,7 @@
-import { SqliteAdapter } from "@hasna/cloud";
+import { Database } from "bun:sqlite";
 import { join } from "path";
 import { mkdirSync, existsSync, cpSync } from "fs";
 import { homedir } from "os";
-
-type Database = Omit<SqliteAdapter, "query"> & {
-  query: SqliteAdapter["raw"]["query"];
-};
 
 function resolveDataDir(): string {
   const explicit = process.env.HASNA_FILES_DATA_DIR ?? process.env.FILES_DATA_DIR;
@@ -42,7 +38,7 @@ export function getDb(): Database {
   const dbPath = getDbPath();
   if (_db && _dbPath === dbPath) return _db;
   _db?.close();
-  _db = new SqliteAdapter(dbPath) as Database;
+  _db = new Database(dbPath, { create: true });
   _dbPath = dbPath;
   _db.exec("PRAGMA busy_timeout=5000");
   _db.exec("PRAGMA journal_mode=WAL");
@@ -102,7 +98,7 @@ function migrate(db: Database): void {
       if (m.version === 15) applyMigrationV15(db);
       else db.exec(m.sql);
       db.run("INSERT INTO schema_migrations (version) VALUES (?)", [m.version]);
-    });
+    })();
   }
 }
 
