@@ -462,6 +462,11 @@ export interface WorkflowStepRun {
   finishedAt?: string;
   exitCode?: number;
   pid?: number;
+  /**
+   * Start time of {@link pid}, recorded at spawn (migration 0014). Pairs with
+   * the pid to survive pid recycling; absent on rows written before 0014.
+   */
+  processStartedAt?: string;
   durationMs?: number;
   stdout?: string;
   stderr?: string;

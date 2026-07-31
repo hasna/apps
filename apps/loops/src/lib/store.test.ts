@@ -2301,10 +2301,13 @@ exit 0
         "0011_work_item_gate_deaths",
         "0012_workflow_run_provenance",
         "0013_loop_labels",
+        "0014_run_defer_ceiling_and_step_process_fingerprint",
       ]);
       const version = store["db"].query("PRAGMA user_version").get() as { user_version: number };
-      // 0011/0012 are additive and deliberately do NOT bump
+      // 0011/0012/0014 are additive and deliberately do NOT bump
       // the schema user_version — older v8 binaries keep opening this database.
+      // 0014 adds two nullable/defaulted columns an older binary simply ignores,
+      // so it must not lock the fleet's CLIs out mid-rollout.
       expect(version.user_version).toBe(8);
     } finally {
       store.close();
@@ -2667,6 +2670,210 @@ exit 0
       expect(store.claimRun(loop, "2026-01-01T00:20:00.000Z", "runner-d", new Date("2026-01-01T00:21:00Z"))).toBeUndefined();
       const deferredResult = store.recoverExpiredRunLeasesDetailed(new Date("2026-01-01T00:22:00Z"));
       expect(deferredResult.deferred.map((run) => run.id)).toEqual([genuine!.run.id]);
+    } finally {
+      store.close();
+    }
+  });
+
+  // Regression (da94588c, OWNER-BLOCKING 2026-07-31): expired-lease recovery
+  // re-deferred a "live" run every LIVE_EXPIRED_RUN_GRACE_MS forever. Nothing
+  // counted the deferrals and nothing ever gave up, so the run was never
+  // abandoned, never advanced, and blocked everything queued behind it — a
+  // wall of codewith "Loop run deferred" toasts once a minute.
+  test("lease recovery abandons a still-live run once the deferral ceiling is exhausted", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "defer-ceiling",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+          leaseMs: 10,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      // This test process: genuinely alive, fingerprint genuinely matching.
+      // The ONLY thing that ends this run is the ceiling.
+      const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"));
+      store.recordRunProcess(claim!.run.id, { pid: process.pid, pgid: process.pid }, { claimToken: claim!.claimToken });
+
+      // ARM 3 (the discriminating one): a genuinely live run must STILL be
+      // deferred inside the grace window. A fix that simply abandoned
+      // everything would pass the two arms below and break the feature.
+      for (let attempt = 1; attempt <= 10; attempt += 1) {
+        const at = new Date(Date.parse("2026-01-01T00:02:00Z") + attempt * 60_000);
+        const result = store.recoverExpiredRunLeasesDetailed(at);
+        expect(result.deferred.map((run) => run.id)).toEqual([claim!.run.id]);
+        expect(result.abandoned).toEqual([]);
+        expect(store.getRun(claim!.run.id)?.status).toBe("running");
+      }
+
+      // The 11th pass is past the ceiling: abandoned despite still looking alive.
+      const past = store.recoverExpiredRunLeasesDetailed(new Date("2026-01-01T00:14:00Z"));
+      expect(past.abandoned.map((run) => run.id)).toEqual([claim!.run.id]);
+      expect(past.deferred).toEqual([]);
+      const abandoned = store.getRun(claim!.run.id);
+      expect(abandoned?.status).toBe("abandoned");
+      // The error distinguishes an exhausted grace from a plainly dead run, so
+      // an operator can tell "wedged runner" from "process gone".
+      expect(abandoned?.error).toContain("deferral ceiling");
+    } finally {
+      store.close();
+    }
+  });
+
+  // NOTE ON WHAT THIS TEST IS AND IS NOT: unlike the four around it, this one
+  // also PASSES on pre-fix bytes — before the ceiling existed, "ten more
+  // deferrals are available" was trivially true. So it is not a regression
+  // control for the reported defect; it is a behaviour lock on the reset,
+  // and it does guard that: deleting `defer_count=0` from heartbeatRunLease
+  // fails it. Recorded here so nobody later cites it as evidence the ceiling
+  // works — the other four tests carry that.
+  test("a successful lease heartbeat resets the deferral ceiling", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "defer-ceiling-reset",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+          leaseMs: 10,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"));
+      store.recordRunProcess(claim!.run.id, { pid: process.pid, pgid: process.pid }, { claimToken: claim!.claimToken });
+
+      // Burn most of the ceiling.
+      for (let attempt = 1; attempt <= 9; attempt += 1) {
+        const at = new Date(Date.parse("2026-01-01T00:02:00Z") + attempt * 60_000);
+        expect(store.recoverExpiredRunLeasesDetailed(at).deferred).toHaveLength(1);
+      }
+      // A renewal proves the runner is alive and holding its lease: the count
+      // is CONSECUTIVE failures to renew, so a recovered run starts over.
+      const renewed = store.heartbeatRunLease(claim!.run.id, "runner", 60_000, new Date("2026-01-01T00:11:30Z"), {
+        claimToken: claim!.claimToken,
+      });
+      expect(renewed).toBeDefined();
+
+      // Ten more deferrals must now be available rather than one.
+      for (let attempt = 1; attempt <= 10; attempt += 1) {
+        const at = new Date(Date.parse("2026-01-01T00:13:00Z") + attempt * 60_000);
+        expect(store.recoverExpiredRunLeasesDetailed(at).deferred).toHaveLength(1);
+      }
+      expect(store.getRun(claim!.run.id)?.status).toBe("running");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("lease recovery abandons a run whose workflow step pid was recycled", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "recycled-step-pid",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+          leaseMs: 10,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"));
+      // The run's own process is plainly dead, so the ONLY thing that could
+      // hold this run open is the step-level probe.
+      store.recordRunProcess(claim!.run.id, { pid: DEAD_PID, pgid: DEAD_PID }, { claimToken: claim!.claimToken });
+
+      const workflow = store.createWorkflow({
+        name: "recycled-step",
+        steps: [{ id: "work", target: { type: "command", command: "true" } }],
+      });
+      const workflowRun = store.createWorkflowRun({ workflow, loop, loopRun: claim!.run });
+      store.startWorkflowStepRun(workflowRun.id, "work");
+      store.markWorkflowStepPid(workflowRun.id, "work", process.pid);
+
+      // Recycled pid: the number is alive (it is this test process) but it is
+      // not the process the step spawned. Overwrite the fingerprint with one a
+      // day off — the OS handed this pid to something else.
+      const internal = store as unknown as { db: Database };
+      internal.db
+        .query("UPDATE workflow_step_runs SET process_started_at = ? WHERE workflow_run_id = ? AND step_id = ?")
+        .run(new Date(Date.now() - 24 * 60 * 60 * 1_000).toISOString(), workflowRun.id, "work");
+
+      // Abandoned on the FIRST pass — identity is decidable here, so this
+      // must not consume the ceiling at all.
+      const result = store.recoverExpiredRunLeasesDetailed(new Date("2026-01-01T00:02:00Z"));
+      expect(result.abandoned.map((run) => run.id)).toEqual([claim!.run.id]);
+      expect(result.deferred).toEqual([]);
+      expect(store.getRun(claim!.run.id)?.status).toBe("abandoned");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("a workflow step with an unparseable start hits the ceiling instead of deferring forever", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "unparseable-step-start",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+          leaseMs: 10,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"));
+      store.recordRunProcess(claim!.run.id, { pid: DEAD_PID, pgid: DEAD_PID }, { claimToken: claim!.claimToken });
+
+      const workflow = store.createWorkflow({
+        name: "unparseable-step",
+        steps: [{ id: "work", target: { type: "command", command: "true" } }],
+      });
+      const workflowRun = store.createWorkflowRun({ workflow, loop, loopRun: claim!.run });
+      store.startWorkflowStepRun(workflowRun.id, "work");
+
+      // A legacy-shaped row: the pid is written WITHOUT going through
+      // markWorkflowStepPid, so it carries no fingerprint (exactly a row
+      // written before migration 0014), and its started_at is unparseable.
+      // The probe cannot decide either way and stays lenient — which is
+      // precisely the state that used to wedge the runner forever.
+      //
+      // Deliberately schema-agnostic: this UPDATE names no column added by
+      // this fix, so the test runs unchanged against the pre-fix binary and
+      // fails there on BEHAVIOUR (deferred forever, never abandoned) rather
+      // than on a missing column.
+      const internal = store as unknown as { db: Database };
+      internal.db
+        .query("UPDATE workflow_step_runs SET pid = ?, started_at = 'not-a-timestamp' WHERE workflow_run_id = ? AND step_id = ?")
+        .run(process.pid, workflowRun.id, "work");
+
+      for (let attempt = 1; attempt <= 10; attempt += 1) {
+        const at = new Date(Date.parse("2026-01-01T00:02:00Z") + attempt * 60_000);
+        expect(store.recoverExpiredRunLeasesDetailed(at).deferred).toHaveLength(1);
+      }
+      const past = store.recoverExpiredRunLeasesDetailed(new Date("2026-01-01T00:14:00Z"));
+      expect(past.abandoned.map((run) => run.id)).toEqual([claim!.run.id]);
+      expect(store.getRun(claim!.run.id)?.status).toBe("abandoned");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("markWorkflowStepPid records the step pid start-time fingerprint", () => {
+    const store = new Store(":memory:");
+    try {
+      const workflow = store.createWorkflow({
+        name: "step-fingerprint",
+        steps: [{ id: "work", target: { type: "command", command: "true" } }],
+      });
+      const workflowRun = store.createWorkflowRun({ workflow });
+      store.startWorkflowStepRun(workflowRun.id, "work");
+      const marked = store.markWorkflowStepPid(workflowRun.id, "work", process.pid);
+      expect(marked.pid).toBe(process.pid);
+      // Without this, a recycled step pid is undetectable and the step probe
+      // is a one-sided guess.
+      expect(marked.processStartedAt).toBeDefined();
     } finally {
       store.close();
     }
