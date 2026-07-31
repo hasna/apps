@@ -181,4 +181,24 @@ describe('SplitIo API wrapper', () => {
     expect(capturedUrl).toBe(`${BASE_URL}/segments/prod%20env/beta%20users/uploadKeys?replace=false`);
     expect(capturedBody).toBe(JSON.stringify({ keys: ['user-1'], comment: 'sync' }));
   });
+
+  test('removeKeysFromSegment uses documented PUT remove endpoint', async () => {
+    let capturedUrl = '';
+    let capturedMethod = '';
+    let capturedBody = '';
+
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      capturedUrl = String(input);
+      capturedMethod = init?.method || '';
+      capturedBody = String(init?.body || '');
+      return new Response(null, { status: 204 });
+    }) as unknown as typeof fetch;
+
+    const api = new SplitIo({ apiKey: API_KEY });
+    await api.removeKeysFromSegment('beta users', 'prod env', ['user-1']);
+
+    expect(capturedMethod).toBe('PUT');
+    expect(capturedUrl).toBe(`${BASE_URL}/segments/prod%20env/beta%20users/removeKeys`);
+    expect(capturedBody).toBe(JSON.stringify({ keys: ['user-1'] }));
+  });
 });

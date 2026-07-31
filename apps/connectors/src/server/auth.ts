@@ -494,8 +494,12 @@ function guessKeyField(name: string): string {
   if (keyVar) {
     // Convert STRIPE_API_KEY -> apiKey
     const parts = keyVar.variable.toLowerCase().split("_");
-    // Remove the connector prefix (e.g., "stripe")
-    const withoutPrefix = parts.slice(1);
+    // Remove the connector prefix (e.g., "stripe" or "split_io")
+    const connectorParts = name.toLowerCase().split(/[-_]/);
+    const prefixLength = connectorParts.every((part, index) => parts[index] === part)
+      ? connectorParts.length
+      : 1;
+    const withoutPrefix = parts.slice(prefixLength);
     if (withoutPrefix.length > 0) {
       return withoutPrefix
         .map((p, i) => (i === 0 ? p : p.charAt(0).toUpperCase() + p.slice(1)))
