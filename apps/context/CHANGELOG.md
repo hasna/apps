@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Run typechecking, builds, and tests in GitHub Actions for pushes and pull requests.
+
 ## 0.1.53
 
 - Publish previously-merged work from the PR drain (npm `latest` was stuck at 0.1.52 from
