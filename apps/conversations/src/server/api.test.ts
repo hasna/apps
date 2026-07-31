@@ -472,5 +472,17 @@ describe("conversations-serve", () => {
     const b = await (await fetch(`${base}/v1/openapi.json`)).json();
     expect(b.openapi).toBeTruthy();
     expect(Object.keys(b.paths).length).toBeGreaterThan(5);
+
+    // The typed SDK is generated from this schema. A server implementation
+    // that accepts reply_to is not sufficient if the public contract omits it:
+    // generated clients then cannot express a threaded send without escaping
+    // their types, and the linkage is lost before the request is made.
+    const sendProperties = b.paths["/v1/messages"].post.requestBody
+      .content["application/json"].schema.properties;
+    expect(sendProperties.reply_to).toEqual({ type: "integer" });
+    expect(b.components.schemas.Message.properties.reply_to).toEqual({
+      type: "integer",
+      nullable: true,
+    });
   });
 });

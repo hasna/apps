@@ -50,7 +50,9 @@ const header =
   "// @generated from src/server/openapi.ts by scripts/generate-sdk.ts — DO NOT EDIT.\n" +
   "// Regenerate: bun run sdk:generate\n\n";
 
-writeFileSync(join(outDir, "index.ts"), header + withActionableErrors(result.code));
+const generated = withActionableErrors(result.code).trimEnd();
+const identityExport = 'export { IdentityError } from "../lib/identity.js";';
+writeFileSync(join(outDir, "index.ts"), `${header}${generated}\n\n${identityExport}\n`);
 
 console.log(`ok generated SDK -> src/sdk/index.ts (${result.operations.length} operations)`);
 if (result.warnings.length) {
