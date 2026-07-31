@@ -147,6 +147,49 @@ describe("storage adapter contracts", () => {
     expect(report.conditions.every((condition) => condition.verified)).toBe(true);
   });
 
+  test("resolves agent names case-insensitively on BOTH storage engines", async () => {
+    // Regression: todos task 0bf5d979. The Postgres/cloud roster compared agent
+    // names with `===`, so registering a case-variant of an existing name minted
+    // a SECOND record instead of heartbeating the first. Measured on station01
+    // 2026-07-31: `fabricius` (01d4cc12, fresh) and `Fabricius` (4d77b218, 24h
+    // stale) were two rows for one agent, and BOTH lookups returned rc=0.
+    //
+    // Why that is not cosmetic: a coordinator deciding whether to REPLACE a
+    // dispatched agent reads last_seen_at. Landing on the stale twin shows 24h of
+    // silence — far past the ~30min replace threshold — so the rule-following
+    // action becomes killing a live agent and discarding its context.
+    //
+    // SQLite already normalised (validateAgentName lowercases, getAgentByName
+    // uses LOWER(name)). Behaviour must be identical on both backends, so this
+    // asserts the contract on each engine rather than on the one that was broken.
+    for (const [engine, adapter] of [
+      ["sqlite", createLocalSqliteTodosStorageAdapter({ db })],
+      ["postgres", createPostgresTodosStorageAdapter({ client: createMemoryPostgresClient().client })],
+    ] as const) {
+      const first = await adapter.agents.register({ name: "fabricius", force: true });
+      if ("conflict" in first) throw new Error(`${engine}: ${first.message}`);
+
+      // Lookup must not care about case.
+      expect(await adapter.agents.getByName("Fabricius"), `${engine}: getByName("Fabricius")`).toMatchObject({ id: first.id });
+      expect(await adapter.agents.getByName("FABRICIUS"), `${engine}: getByName("FABRICIUS")`).toMatchObject({ id: first.id });
+      expect(await adapter.agents.getByName("fabricius"), `${engine}: getByName("fabricius")`).toMatchObject({ id: first.id });
+
+      // Registering a case-variant must reuse the record, never mint a second identity.
+      const again = await adapter.agents.register({ name: "Fabricius", force: true });
+      if ("conflict" in again) throw new Error(`${engine}: ${again.message}`);
+      expect(again.id, `${engine}: case-variant register must reuse the existing id`).toBe(first.id);
+
+      const roster = (await adapter.agents.list()).filter(
+        (agent) => agent.name.toLowerCase() === "fabricius",
+      );
+      expect(roster.length, `${engine}: one agent must occupy exactly one roster row`).toBe(1);
+
+      // The canonical stored form is lowercase, so the roster cannot drift back
+      // into two spellings of one identity.
+      expect(roster[0]!.name, `${engine}: stored name is normalised`).toBe("fabricius");
+    }
+  });
+
   test("tasks.list/count route a free-text query through FTS on the local adapter", async () => {
     const adapter = createLocalSqliteTodosStorageAdapter({ db });
     await adapter.tasks.create({ title: "Fix login authentication bug" });

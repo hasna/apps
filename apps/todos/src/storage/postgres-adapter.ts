@@ -26,6 +26,7 @@ import type {
   UpdateTaskInput,
   UpdateTaskListInput,
 } from "../types/index.js";
+import { normalizeAgentNameInput } from "../lib/agent-name-normalize.js";
 import type {
   ActiveWorkItem,
   TodosActiveWorkFilter,
@@ -180,7 +181,7 @@ export function createPostgresTodosStorageAdapter(
     agents: {
       register: (input, context) => registerAgent(input, store, context),
       get: (id) => store.get<Agent>("agents", id),
-      getByName: async (name) => (await store.list<Agent>("agents")).find((agent) => agent.name === name) ?? null,
+      getByName: async (name) => matchAgentByName(await store.list<Agent>("agents"), name),
       list: async (options) => (await store.list<Agent>("agents"))
         .filter((agent) => options?.include_archived || agent.status !== "archived")
         .sort((a, b) => a.name.localeCompare(b.name)),
@@ -1592,19 +1593,58 @@ async function updatePlan(id: string, input: UpdatePlanInput, store: PostgresJso
   return store.upsert("plans", { ...plan, ...patch, updated_at: new Date().toISOString() });
 }
 
+/**
+ * Resolve an agent by name, case-insensitively.
+ *
+ * Agent names are a case-INSENSITIVE identity. The SQLite engine has always
+ * enforced this (`validateAgentName` lowercases on the way in, `getAgentByName`
+ * matches on `LOWER(name)`); this adapter compared with `===` and so let one
+ * agent occupy two roster rows — `fabricius` and `Fabricius` — with independent
+ * `last_seen_at`. Both lookups returned success, so nothing reported a fault.
+ *
+ * When historical rows already hold both spellings, the FRESHEST record wins.
+ * That is the safe tie-break rather than an arbitrary one: the caller most
+ * likely to be reading a name is a coordinator deciding whether a dispatched
+ * agent is still alive, and handing it the stale twin makes "kill the live
+ * agent" the rule-following answer. Preferring the freshest row also lets the
+ * defect heal without deleting anyone else's record.
+ */
+function matchAgentByName(
+  agents: readonly Agent[],
+  name: string,
+  options?: { includeArchived?: boolean },
+): Agent | null {
+  const target = normalizeAgentNameInput(name);
+  if (!target) return null;
+  const matches = agents.filter(
+    (agent) =>
+      normalizeAgentNameInput(agent.name) === target &&
+      (options?.includeArchived !== false || agent.status !== "archived"),
+  );
+  if (matches.length === 0) return null;
+  return matches.reduce((freshest, candidate) =>
+    new Date(candidate.last_seen_at).getTime() > new Date(freshest.last_seen_at).getTime()
+      ? candidate
+      : freshest,
+  );
+}
+
 async function registerAgent(
   input: RegisterAgentInput,
   store: PostgresJsonRecordStore,
   context?: TodosStorageContext,
 ): Promise<Agent | { conflict: true; message: string }> {
-  const existing = (await store.list<Agent>("agents")).find((agent) => agent.name === input.name && agent.status !== "archived");
+  const canonicalName = normalizeAgentNameInput(input.name);
+  const existing = matchAgentByName(await store.list<Agent>("agents"), canonicalName, {
+    includeArchived: false,
+  });
   if (existing && !input.force && existing.session_id && existing.session_id !== input.session_id) {
-    return { conflict: true, message: `Agent name '${input.name}' is already active` };
+    return { conflict: true, message: `Agent name '${canonicalName}' is already active` };
   }
   const timestamp = new Date().toISOString();
   const agent: Agent = {
     id: existing?.id ?? randomUUID().slice(0, 8),
-    name: input.name,
+    name: canonicalName,
     description: input.description ?? existing?.description ?? null,
     role: input.role ?? existing?.role ?? null,
     title: input.title ?? existing?.title ?? null,
@@ -1643,7 +1683,7 @@ async function updateAgent(id: string, input: TodosAgentUpdateInput, store: Post
 async function resolveAgent(idOrName: string, store: PostgresJsonRecordStore): Promise<Agent | null> {
   const byId = await store.get<Agent>("agents", idOrName);
   if (byId) return byId;
-  return (await store.list<Agent>("agents")).find((agent) => agent.name === idOrName) ?? null;
+  return matchAgentByName(await store.list<Agent>("agents"), idOrName);
 }
 
 /** Refresh an agent's last_seen_at in the shared cloud roster (heartbeat). */
