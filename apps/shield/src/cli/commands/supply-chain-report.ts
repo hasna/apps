@@ -59,6 +59,19 @@ function validateSince(value: string): string {
   return value;
 }
 
+function gitSinceSpec(value: string): string {
+  const match = /^([1-9]\d*)(m|h|d|w)$/.exec(validateSince(value));
+  if (!match) throw new Error("Invalid --since value");
+  const amount = Number.parseInt(match[1], 10);
+  const unit = {
+    m: "minute",
+    h: "hour",
+    d: "day",
+    w: "week",
+  }[match[2]];
+  return `${amount} ${unit}${amount === 1 ? "" : "s"} ago`;
+}
+
 function findLockfiles(workspace: string): string[] {
   const lockfiles: string[] = [];
 
@@ -160,7 +173,7 @@ function findRecentChanges(workspace: string, lockfiles: string[], since: string
   try {
     const output = execFileSync(
       "git",
-      ["log", `--since=${since}`, "--format=COMMIT:%H", "--name-only", "--", ...lockfiles],
+      ["log", `--since=${gitSinceSpec(since)}`, "--format=COMMIT:%H", "--name-only", "--", ...lockfiles],
       {
         cwd: workspace,
         encoding: "utf-8",
