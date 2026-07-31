@@ -397,6 +397,11 @@ Agents connect over stdio by running:
 secrets mcp
 ```
 
+`secrets mcp` is the canonical MCP entry used by generated agent
+configuration. The package also exposes `secrets-mcp` as an explicit direct
+binary; it uses stdio by default and accepts `--http --port 8848` for the
+Streamable HTTP transport.
+
 Start the shared Streamable HTTP MCP server explicitly:
 
 ```bash
@@ -419,10 +424,7 @@ delete_vault_item(id)
 audit_log(key?, limit?)
 register_user(id, name, type?)
 list_users(type?)
-storage_status()
-storage_push(tables?)
-storage_pull(tables?)
-storage_sync(tables?)
+send_feedback(message, email?, category?)
 scan_workspace_exposures(root?, limit?, maxFileBytes?, maxFiles?, maxBytesScanned?, timeoutMs?)
 scan_history_exposures(root?, limit?, maxCommits?, timeoutMs?)
 ```
@@ -574,8 +576,9 @@ typed SDK. Four surfaces cover the same core:
   versioned `/v1` surface (secrets + vault-item CRUD, search, audit, users)
   behind **strict API-key auth** (`@hasna/contracts`). Scopes: `secrets:read`,
   `secrets:write`.
-- **`@hasna/secrets/sdk`** — a typed, dependency-free fetch client generated
-  from the serve OpenAPI. Client `self_hosted` mode uses `SECRETS_API_URL` +
+- **`@hasna/secrets`** — the typed, dependency-free SDK package root generated
+  from the serve OpenAPI. The compatibility subpath `@hasna/secrets/sdk`
+  exports the same API. Client `self_hosted` mode uses `SECRETS_API_URL` +
   `SECRETS_API_KEY` (never a DSN).
 
 Storage is **PURE REMOTE (Amendment A1)** in cloud mode: `secrets-serve` reads
@@ -597,10 +600,15 @@ bunx @hasna/contracts issue-key --app secrets --agent my-agent --scopes 'secrets
 ```
 
 ```ts
-import { createSecretsClientFromEnv } from "@hasna/secrets/sdk";
+import { createSecretsClientFromEnv, type SecretInput } from "@hasna/secrets";
 const client = createSecretsClientFromEnv(); // SECRETS_API_URL + SECRETS_API_KEY
-await client.putSecret({ key: "openai/api_key", value: "sk-…", type: "api_key" });
-const secret = await client.getSecret({ key: "openai/api_key" });
+const input: SecretInput = {
+  key: "example/service/dev/api_key",
+  value: process.env.EXAMPLE_SERVICE_API_KEY!,
+  type: "api_key",
+};
+await client.putSecret(input);
+const secret = await client.getSecret({ key: input.key });
 ```
 
 Migrations live in [`migrations/`](migrations) (canonical checksummed set in

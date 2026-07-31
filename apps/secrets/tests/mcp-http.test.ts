@@ -52,19 +52,39 @@ describe("secrets MCP HTTP transport", () => {
     expect(await res.json()).toEqual({ status: "ok", name: "secrets" });
   });
 
-  test("MCP initialize + set/get a secret over Streamable HTTP", async () => {
+  test("MCP initialize + tool listing + set/get over Streamable HTTP", async () => {
     const client = new Client({ name: "secrets-http-test", version: "0.0.0" });
     const transport = new StreamableHTTPClientTransport(
       new URL(`http://127.0.0.1:${port}/mcp`),
     );
     await client.connect(transport);
     const tools = await client.listTools();
-    expect(tools.tools.some((t) => t.name === "get_secret")).toBe(true);
+    expect(tools.tools.map((tool) => tool.name).sort()).toEqual([
+      "audit_log",
+      "delete_secret",
+      "delete_vault_item",
+      "get_secret",
+      "get_vault_item",
+      "list_secrets",
+      "list_users",
+      "list_vault_items",
+      "register_user",
+      "scan_history_exposures",
+      "scan_workspace_exposures",
+      "search_secrets",
+      "search_vault_items",
+      "send_feedback",
+      "set_secret",
+      "set_vault_item",
+    ]);
 
-    await client.callTool({ name: "set_secret", arguments: { key: "test/key", value: "s3cret" } });
+    const fixtureValue = "fixture-value-not-a-credential";
+    await client.callTool({ name: "set_secret", arguments: { key: "test/key", value: fixtureValue } });
+    const listed = await client.callTool({ name: "list_secrets", arguments: {} });
+    expect(JSON.stringify(listed)).not.toContain(fixtureValue);
     const got = await client.callTool({ name: "get_secret", arguments: { key: "test/key" } });
     const content = got.content as Array<{ type: string; text: string }>;
-    expect(content[0]?.text).toContain("s3cret");
+    expect(content[0]?.text).toContain(fixtureValue);
     await client.close();
   });
 });

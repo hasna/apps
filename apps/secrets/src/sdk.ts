@@ -1,5 +1,6 @@
 /**
- * @hasna/secrets/sdk — typed client for the secrets serve API.
+ * @hasna/secrets — typed client for the secrets serve API.
+ * Also available from the compatibility subpath @hasna/secrets/sdk.
  *
  * The method surface mirrors the serve OpenAPI document (src/server/openapi.ts)
  * and routes through the one shared Hasna HTTP transport (no raw fetch). It speaks
