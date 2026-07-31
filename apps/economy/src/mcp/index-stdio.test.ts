@@ -6,10 +6,15 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 
 const roots: string[] = []
+const localStorageEnv = {
+  HASNA_ACCOUNTS_STORAGE_MODE: 'local',
+  HASNA_ECONOMY_STORAGE_MODE: 'local',
+} as const
 
 function envWith(overrides: Record<string, string>): Record<string, string> {
   return {
     ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === 'string')),
+    ...localStorageEnv,
     ...overrides,
   }
 }
