@@ -52,7 +52,9 @@ export function registerAgentCommands(program: Command) {
   // init
   program
     .command("init <name>")
-    .description("Register an agents and get a short UUID")
+    // `register` mirrors the MCP `register_agent` verb.
+    .alias("register")
+    .description("Register an agent and get a short UUID (alias: register)")
     .option("-d, --description <text>", "Agent description")
     .action(async (name: string, opts) => {
       const globalOpts = program.opts();

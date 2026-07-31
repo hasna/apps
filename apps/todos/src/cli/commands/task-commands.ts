@@ -1336,7 +1336,10 @@ export function registerTaskCommands(program: Command) {
   // done
   program
     .command("done <id>")
-    .description("Mark a task as completed")
+    // `complete` mirrors the MCP `complete_task` verb, which the agent rule
+    // corpus tells agents to use; without it they hit an unknown-command error.
+    .alias("complete")
+    .description("Mark a task as completed (alias: complete)")
     .option("--attach-ids <ids>", "Comma-separated @hasna/attachments IDs to link as evidence")
     .option("--files-changed <files>", "Comma-separated list of files changed")
     .option("--test-results <results>", "Test results summary")
