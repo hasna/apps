@@ -260,6 +260,42 @@ const AGENT_NO_OUTPUT_ERROR =
   "agent exited 0 with no output on stdout or stderr: the provider produced nothing, " +
   "so the run did no work and is not reported as succeeded";
 
+const BWRAP_LOOPBACK_SETUP_ERROR = /\bbwrap:\s*loopback:\s*Failed RTM_NEWADDR:\s*Operation not permitted\b/i;
+
+function jsonValueContainsExecutedCommand(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(jsonValueContainsExecutedCommand);
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  const completedCommand =
+    record.type === "command_execution" &&
+    (record.status === "completed" || typeof record.exit_code === "number" || typeof record.exitCode === "number");
+  if (completedCommand && !BWRAP_LOOPBACK_SETUP_ERROR.test(JSON.stringify(record))) {
+    return true;
+  }
+  return Object.values(record).some(jsonValueContainsExecutedCommand);
+}
+
+function jsonlContainsExecutedCommand(stdout: string): boolean {
+  for (const line of stdout.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || !trimmed.startsWith("{")) continue;
+    try {
+      if (jsonValueContainsExecutedCommand(JSON.parse(trimmed))) return true;
+    } catch {
+      continue;
+    }
+  }
+  return false;
+}
+
+function agentCommandExecutionFailure(spec: CommandSpec, fields: ResultFields): string | undefined {
+  if (spec.agentProvider !== "codewith" && spec.agentProvider !== "codex") return undefined;
+  const output = `${fields.stdout ?? ""}\n${fields.stderr ?? ""}`;
+  if (!BWRAP_LOOPBACK_SETUP_ERROR.test(output) || jsonlContainsExecutedCommand(fields.stdout ?? "")) return undefined;
+  return "agent could not execute any command because sandbox setup failed: " +
+    "bwrap loopback address setup was not permitted";
+}
+
 function codewithJsonlHasTerminalSuccess(stdout: string): boolean {
   for (const line of stdout.split(/\r?\n/)) {
     const trimmed = line.trim();
@@ -1297,6 +1333,8 @@ async function executeRemoteSpec(
         fields,
       );
     }
+    const commandExecutionFailure = agentCommandExecutionFailure(spec, fields);
+    if (commandExecutionFailure) return failureResult(startedAt, commandExecutionFailure, fields);
     if (!error && exitCode !== 0 && codewithJsonlReconciledSuccess(spec, fields)) {
       return successResult(startedAt, fields);
     }
@@ -1475,6 +1513,8 @@ export async function executeTarget(
         fields,
       );
     }
+    const commandExecutionFailure = agentCommandExecutionFailure(spec, fields);
+    if (commandExecutionFailure) return failureResult(startedAt, commandExecutionFailure, fields);
     if (!error && exitCode !== 0 && codewithJsonlReconciledSuccess(spec, fields)) {
       return successResult(startedAt, fields);
     }

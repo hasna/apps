@@ -125,6 +125,40 @@ class ServerDerivedContractStore extends Store {
   readonly serverDerivedAgentSessionContracts = true;
 }
 
+function installFakeCodex(root: string, jsonl: Record<string, unknown>[]): { binDir: string; invocationsFile: string } {
+  const binDir = join(root, "bin");
+  const invocationsFile = join(root, "codex-invocations");
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(
+    join(binDir, "codex"),
+    [
+      "#!/bin/sh",
+      "cat >/dev/null",
+      `printf 'invoked\\n' >> ${JSON.stringify(invocationsFile)}`,
+      ...jsonl.map((event) => `printf '%s\\n' ${JSON.stringify(JSON.stringify(event))}`),
+    ].join("\n"),
+  );
+  chmodSync(join(binDir, "codex"), 0o755);
+  return { binDir, invocationsFile };
+}
+
+function workerVerifierWorkflow(store: Store, cwd: string) {
+  return store.createWorkflow({
+    name: "worker-verifier-execution-evidence",
+    steps: [
+      {
+        id: "worker",
+        target: { type: "agent", provider: "codex", prompt: "perform the task", cwd, sandbox: "workspace-write" },
+      },
+      {
+        id: "verifier",
+        dependsOn: ["worker"],
+        target: { type: "agent", provider: "codex", prompt: "verify the worker", cwd, sandbox: "workspace-write" },
+      },
+    ],
+  });
+}
+
 describe("workflow runner", () => {
   test("runs dependent command steps and records step runs and events", async () => {
     const store = new Store(":memory:");
@@ -253,6 +287,94 @@ describe("workflow runner", () => {
     } finally {
       store.close();
       rmSync(binDir, { recursive: true, force: true });
+    }
+  });
+
+  test("fails a worker-verifier workflow when sandbox setup prevents every command", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-workflow-sandbox-blocked-"));
+    const { binDir, invocationsFile } = installFakeCodex(root, [
+      {
+        type: "item.started",
+        item: {
+          type: "command_execution",
+          command: "git status --short",
+          status: "in_progress",
+        },
+      },
+      {
+        type: "item.completed",
+        item: {
+          type: "command_execution",
+          command: "git status --short",
+          aggregated_output: "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted",
+          exit_code: 1,
+          status: "failed",
+        },
+      },
+      {
+        type: "item.completed",
+        item: {
+          type: "agent_message",
+          text: "No local command could execute: bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted",
+        },
+      },
+    ]);
+    try {
+      const workflow = workerVerifierWorkflow(store, root);
+      const result = await executeWorkflow(store, workflow, {
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
+      });
+
+      expect(result.status).toBe("failed");
+      const run = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0]!;
+      expect(run.status).toBe("failed");
+      const steps = store.listWorkflowStepRuns(run.id);
+      expect(steps.map((step) => [step.stepId, step.status])).toEqual([
+        ["worker", "failed"],
+        ["verifier", "skipped"],
+      ]);
+      expect(steps[0]?.error).toContain("could not execute any command because sandbox setup failed");
+      expect(readFileSync(invocationsFile, "utf8").trim().split("\n")).toHaveLength(1);
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("succeeds a worker-verifier workflow when a real command executed", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-workflow-command-executed-"));
+    const { binDir, invocationsFile } = installFakeCodex(root, [
+      {
+        type: "item.completed",
+        item: {
+          type: "command_execution",
+          command: "git status --short",
+          aggregated_output: "",
+          exit_code: 0,
+          status: "completed",
+        },
+      },
+      { type: "item.completed", item: { type: "agent_message", text: "The command completed successfully." } },
+    ]);
+    try {
+      const workflow = workerVerifierWorkflow(store, root);
+      const result = await executeWorkflow(store, workflow, {
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
+      });
+
+      expect(result.status).toBe("succeeded");
+      const run = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0]!;
+      expect(run.status).toBe("succeeded");
+      expect(store.listWorkflowStepRuns(run.id).map((step) => [step.stepId, step.status])).toEqual([
+        ["worker", "succeeded"],
+        ["verifier", "succeeded"],
+      ]);
+      expect(readFileSync(invocationsFile, "utf8").trim().split("\n")).toHaveLength(2);
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
