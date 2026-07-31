@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- ci: run install, typecheck, build, and tests for pull requests and pushes to
+  `main`.
+
 ## 0.2.7
 
 - feat(cli): compact human output by default across shortlinks-owned
