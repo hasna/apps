@@ -109,7 +109,7 @@ describe("managed package boundary", () => {
       "migrations/durable-journal-witness",
     ])
     expect(manifest.dependencies?.["@types/ws"]).toBeUndefined()
-    expect(manifest.engines).toEqual({ bun: ">=1.1.7", node: ">=18" })
+    expect(manifest.engines).toEqual({ bun: ">=1.2.0", node: ">=18" })
     // prepack must still build first so `dist/` reaches the tarball, and it now
     // also runs the packed-artifact scan the service contract names.
     expect(manifest.scripts?.prepack).toStartWith("bun run build")
