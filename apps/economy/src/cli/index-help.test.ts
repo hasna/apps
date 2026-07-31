@@ -9,6 +9,9 @@ const tempRoots: string[] = []
 const localStorageEnv = {
   HASNA_ACCOUNTS_STORAGE_MODE: 'local',
   HASNA_ECONOMY_STORAGE_MODE: 'local',
+  HASNA_ECONOMY_MODE: 'local',
+  ECONOMY_STORAGE_MODE: 'local',
+  ECONOMY_MODE: 'local',
 } as const
 
 async function runCli(
@@ -80,12 +83,23 @@ afterEach(() => {
 })
 
 describe('economy CLI help', () => {
+  test('root help lists every supported coding agent', async () => {
+    const { stdout, stderr, exitCode } = await runCli(['--help'])
+
+    expect(exitCode).toBe(0)
+    for (const agent of ['Claude', 'Takumi', 'Codex', 'Gemini', 'OpenCode', 'Cursor', 'Pi', 'Hermes']) {
+      expect(stdout).toContain(agent)
+    }
+    expect(stderr).toBe('')
+  })
+
   test('todos --help documents usage vs savings roadmap', async () => {
     const { stdout, stderr, exitCode } = await runCli(['todos', '--help'])
 
     expect(exitCode).toBe(0)
     expect(stdout).toContain('fleet sync, usage tracking, subscription savings')
-    expect(stdout).toContain('Multi-machine (current vs target)')
+    expect(stdout).toContain('Multi-machine storage')
+    expect(stdout).toContain('shared /v1 API directly with URL + key')
     expect(stdout).toContain('included_consumed_usd')
     expect(stdout).toContain('opencode')
     expect(stdout).toContain('cursor')
@@ -207,6 +221,7 @@ describe('economy CLI help', () => {
     expect(exitCode).toBe(0)
     expect(stdout).toContain('--account <query>')
     expect(stdout).toContain('Filter by account key, name, or email')
+    expect(stdout).toContain('opencode|cursor|pi|hermes')
     expect(stderr).toBe('')
   })
 

@@ -22,7 +22,7 @@ const program = new Command()
 
 program
   .name('economy')
-  .description('AI coding cost tracker — Claude, Codex, Gemini, OpenCode, Cursor, Pi, Hermes')
+  .description('AI coding cost tracker — Claude, Takumi, Codex, Gemini, OpenCode, Cursor, Pi, Hermes')
   .version(packageMetadata.version)
 
 // ── Auto-sync helper ──────────────────────────────────────────────────────────
@@ -382,7 +382,7 @@ program.command('month').description('Cost summary for this month').action(async
 program
   .command('sessions')
   .description('List coding sessions with costs')
-  .option('--agent <agent>', 'Filter by agent (claude|takumi|codex|gemini)')
+  .option('--agent <agent>', `Filter by agent (${AGENTS.join('|')})`)
   .option('--project <path>', 'Filter by project path')
   .option('--account <query>', 'Filter by account key, name, or email')
   .option('--machine <id>', 'Filter by machine hostname (e.g. spark01, apple01)')
@@ -438,7 +438,7 @@ program
   .command('top')
   .description('Most expensive sessions')
   .option('-n <n>', 'Number of sessions', '10')
-  .option('--agent <agent>', 'Filter by agent')
+  .option('--agent <agent>', `Filter by agent (${AGENTS.join('|')})`)
   .option('--since <date>', 'Filter sessions since date or relative (e.g. 2026-03-01, 7d, 30d)')
   .action(async (opts: { n?: string; agent?: string; since?: string }) => {
     const count = parsePositiveCliInteger(opts.n ?? '10', '-n')
@@ -618,7 +618,7 @@ program
   .description('Live stream of incoming costs')
   .option('--interval <seconds>', 'Poll interval in seconds', '10')
   .option('--daemon', 'Watch agent data directories and sync on change')
-  .option('--agent <agent>', 'Filter by agent')
+  .option('--agent <agent>', `Filter by agent (${AGENTS.join('|')})`)
   .option('--notify <amount>', 'Fire macOS notification when cumulative cost crosses this USD threshold')
   .action(async (opts: { interval?: string; daemon?: boolean; agent?: string; notify?: string }) => {
     const { watchCosts } = await import('./commands/watch.js')
@@ -642,7 +642,7 @@ budgetCmd
   .option('--period <period>', 'Period: daily|weekly|monthly', 'monthly')
   .option('--limit <usd>', 'Budget limit in USD')
   .option('--alert <percent>', 'Alert threshold %', '80')
-  .option('--agent <agent>', 'Limit to agent (claude|takumi|codex|gemini)')
+  .option('--agent <agent>', `Limit to agent (${AGENTS.join('|')})`)
   .action(async (opts: { project?: string; costCenter?: string; period?: string; limit?: string; alert?: string; agent?: string }) => {
     const limitUsd = parsePositiveCliNumber(opts.limit, '--limit')
     const alertAtPercent = parsePositiveCliNumber(opts.alert ?? '80', '--alert')
@@ -1319,7 +1319,7 @@ goalCmd
   .option('--period <period>', 'Period: day|week|month|year', 'month')
   .option('--limit <usd>', 'Goal limit in USD')
   .option('--project <path>', 'Scope to project path')
-  .option('--agent <agent>', 'Scope to agent')
+  .option('--agent <agent>', `Scope to agent (${AGENTS.join('|')})`)
   .action(async (opts: { period?: string; limit?: string; project?: string; agent?: string }) => {
     const limitUsd = parsePositiveCliNumber(opts.limit, '--limit')
     const period = requireCliChoice(opts.period, '--period', ['day', 'week', 'month', 'year'] as const)

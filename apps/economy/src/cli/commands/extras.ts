@@ -94,7 +94,7 @@ export function registerExtendedCommands(program: Command): void {
   program
     .command('savings [period]')
     .description('Subscription vs API-equivalent savings breakdown')
-    .option('--agent <agent>', 'Filter by agent')
+    .option('--agent <agent>', `Filter by agent (${AGENTS.join('|')})`)
     .option('--json', 'Output JSON')
     .action(async (periodArg: string | undefined, opts: { agent?: string; json?: boolean }) => {
       const period = parsePeriod(periodArg, 'month')
@@ -124,7 +124,7 @@ export function registerExtendedCommands(program: Command): void {
     .description('Set a subscription plan')
     .requiredOption('--provider <name>', 'Provider name')
     .requiredOption('--plan <name>', 'Plan name')
-    .option('--agent <agent>', 'Agent scope')
+    .option('--agent <agent>', `Agent scope (${AGENTS.join('|')})`)
     .option('--fee <usd>', 'Monthly fee USD', '0')
     .option('--included <usd>', 'Included usage USD', '0')
     .action(async (opts: { provider: string; plan: string; agent?: string; fee?: string; included?: string }) => {

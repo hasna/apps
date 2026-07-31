@@ -39,6 +39,15 @@ Open the dashboard with:
 economy dashboard --port 3456
 ```
 
+## Documentation
+
+- [CLI reference](docs/cli.md)
+- [Ingestion sources and attribution](docs/ingestion.md)
+- [Configuration, storage modes, and deployment](docs/configuration.md)
+- [REST API](docs/rest-api.md)
+- [MCP server](docs/mcp.md)
+- [OTLP/HTTP sidecar](docs/otel.md)
+
 ## CLI Output Defaults
 
 Economy CLI commands are compact by default so agent terminals do not fill their context with full records. High-cardinality list and status commands show essential columns, cap row counts, and print a hint when more rows are available.
@@ -55,7 +64,7 @@ economy todos list --verbose
 economy todos show 9.7
 ```
 
-`--json` remains the machine-readable path for commands that support it. Human output may truncate rows or long text; use `--json`, `--verbose`, `--limit`, or a `show`/detail command for complete data.
+`--json` remains the machine-readable path for commands that support it. Human output may truncate rows or long text; use `--json`, `--limit`, or a `show`/detail command for complete data. `--verbose` expands output where supported; its exact limit is command-specific (for example, `economy session --verbose` shows up to 50 requests).
 
 Status subcommands follow the same rule. For example, `economy goal status` prints a compact human summary by default and `economy goal status --limit 5` or `--verbose` controls how many goals are listed.
 
@@ -91,7 +100,7 @@ Gemini settings:
 }
 ```
 
-The MCP server exposes read tools for summaries, sessions, machines, pricing, daily spend, budgets, goals, provider billing, usage snapshots, savings, project/account/agent/cost-center breakdowns, and subscriptions. MCP tools are compact by default for agent context safety; high-cardinality tools accept `limit`, `verbose`, or `json=true` where raw structured output is useful. It also exposes mutation tools for budgets, pricing rows, goals, and subscriptions so coding agents can manage Economy data through the same validated surface as the CLI and REST API.
+The MCP server exposes read tools for summaries, sessions, machines, pricing, daily spend, budgets, goals, provider billing, usage snapshots, savings, project/account/agent/cost-center breakdowns, and subscriptions. MCP tools are compact by default for agent context safety; high-cardinality tools accept `limit`, `verbose`, or `json=true` where raw structured output is useful. It also exposes mutation tools for budgets, pricing rows, goals, and subscriptions so coding agents can manage Economy data through the same validated surface as the CLI and REST API. See the [MCP guide](docs/mcp.md) for HTTP mode and the complete tool list.
 
 ## Ingest
 
@@ -125,7 +134,7 @@ economy sync --recalculate
 economy sync --backfill-machine
 ```
 
-Full sync also imports active project metadata from `@hasna/projects` when the registry is available. The Codex source reads both legacy `~/.codex/state_5.sqlite` and current Codewith `~/.codewith/state_5.sqlite` usage stores by default; explicit `HASNA_ECONOMY_CODEX_DB_PATH` and `HASNA_ECONOMY_CODEWITH_DB_PATH` values override those locations.
+Full sync also imports active project metadata from `@hasna/projects` when the registry is available. The Codex source reads both `~/.codex/state_5.sqlite` and the Codewith store at `~/.codewith/state_5.sqlite` by default; explicit `HASNA_ECONOMY_CODEX_DB_PATH` and `HASNA_ECONOMY_CODEWITH_DB_PATH` values override those locations.
 
 Account attribution is automatic when `@hasna/accounts` has a matching active, applied, or env-dir profile for the agent. Account identity is the email address plus coding agent, so `work@example.com` under Codex and Claude is reported as two accounts. You can also force attribution for a process with `ECONOMY_ACCOUNT=tool:name` or agent-specific overrides such as `ECONOMY_CODEX_ACCOUNT=codex:work`.
 
@@ -157,7 +166,7 @@ curl -X POST http://127.0.0.1:4318/ingest \
   -d '{"source":"app","cost_center":"alumia","cost_center_kind":"app","project_path":"/workspace/alumia","model":"gpt-5-mini","cost_usd":0.12,"input_tokens":1200,"output_tokens":300}'
 ```
 
-Accepted `/ingest` attribution fields include `cost_center`, `cost_center_kind`, `cost_center_id`, `attribution_tag`, `project_path`, `repo`, `account_key`, `account_tool`, `account_name`, `account_email`, and explicit `cost_usd`.
+Accepted `/ingest` attribution fields include `cost_center`, `cost_center_kind`, `cost_center_id`, `attribution_tag`, `project_path`, `repo`, `account_key`, `account_tool`, `account_name`, `account_email`, and explicit `cost_usd`. The [OTLP guide](docs/otel.md) documents both payload formats and all aliases.
 
 Subscription plans can be configured locally and are used by savings calculations:
 
@@ -187,7 +196,7 @@ OpenRouter-style model IDs ending in `:free` are treated as zero-cost variants e
 
 ## Billing
 
-Estimated costs can be reconciled with provider billing:
+Estimated costs can be reconciled with provider billing in local mode:
 
 ```bash
 economy billing sync --days 31
@@ -228,37 +237,16 @@ Start the server:
 economy-serve --port 3456
 ```
 
-Common endpoints:
+The canonical API uses `/v1`; `/api` remains a legacy alias for the dashboard and older clients. For example:
 
-- `GET /health`
-- `GET /api/summary?period=today`
-- `GET /api/sessions?agent=codex&account=work@example.com&limit=20`
-- `GET /api/sessions/:id/requests`
-- `GET /api/models`
-- `GET /api/projects?period=month`
-- `GET /api/breakdown?by=agent&period=month`
-- `GET /api/breakdown?by=cost-center&period=month`
-- `GET /api/breakdown?by=loop&period=month`
-- `GET /api/accounts?period=month`
-- `GET /api/usage?period=month`
-- `GET /api/savings?period=month`
-- `GET /api/subscriptions`
-- `POST /api/subscriptions`
-- `DELETE /api/subscriptions/:id`
-- `GET /api/budgets`
-- `POST /api/budgets`
-- `DELETE /api/budgets/:id`
-- `GET /api/pricing`
-- `POST /api/pricing`
-- `DELETE /api/pricing/:model`
-- `GET /api/goals`
-- `POST /api/goals`
-- `DELETE /api/goals/:id`
-- `GET /api/billing?period=month`
-- `POST /api/sync`
-- `POST /api/billing/sync`
+- `GET /health`, `/ready`, `/version`, and `/openapi.json`
+- `GET /v1/summary?period=today`
+- `GET /v1/sessions?agent=codex&account=work@example.com&limit=20`
+- `GET /v1/breakdown?by=cost-center&period=month`
+- `POST /v1/budgets`, `/v1/goals`, `/v1/pricing`, and `/v1/subscriptions`
+- `POST /v1/sync`, `/v1/billing/sync`, and `/v1/ingest`
 
-Budget, goal, and subscription mutation endpoints validate agent scopes against `claude`, `takumi`, `codex`, `gemini`, `opencode`, `cursor`, `pi`, and `hermes`.
+See the [REST API reference](docs/rest-api.md) for every route, response envelopes, authentication, and legacy aliases. The server publishes the current generated contract at `/openapi.json`.
 
 The server also serves the built dashboard when `dashboard/dist` is present. The dashboard includes account-scoped session filtering, subscription plan create/update/delete controls in Savings, and savings/usage/account tables for subscription-aware cost analysis.
 
@@ -286,7 +274,9 @@ economy menubar uninstall
 
 Data is stored in `~/.hasna/economy/`.
 
-The main SQLite database lives at `~/.hasna/economy/economy.db`. Older `~/.economy/` data is auto-migrated on first open. Override the database path with `HASNA_ECONOMY_DB_PATH` or `ECONOMY_DB`.
+The main SQLite database lives at `~/.hasna/economy/economy.db`. Older `~/.economy/` data is copied on first open when the new directory does not exist. Override the database path with `HASNA_ECONOMY_DB_PATH` or `ECONOMY_DB`.
+
+For shared deployments, CLI and MCP can use a remote `/v1` API instead of local SQLite by setting `HASNA_ECONOMY_API_URL` and `HASNA_ECONOMY_API_KEY`. See [configuration](docs/configuration.md) for client resolution, server auth, Postgres mode, and all environment variables.
 
 ## Development
 
@@ -294,6 +284,7 @@ The main SQLite database lives at `~/.hasna/economy/economy.db`. Older `~/.econo
 bun test
 bun run typecheck
 bun run build
+bun scripts/sync-openapi.ts
 cd dashboard && bun run lint
 cd menubar && swift build -c release
 ```
@@ -301,19 +292,6 @@ cd menubar && swift build -c release
 ## Open Source
 
 Economy is published under the Apache-2.0 license. See [CONTRIBUTING.md](CONTRIBUTING.md) for local development and release hygiene, [SECURITY.md](SECURITY.md) for vulnerability reporting, [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community expectations, and [CHANGELOG.md](CHANGELOG.md) for release notes.
-
-## HTTP mode
-
-Shared Streamable HTTP transport for multi-agent sessions (stdio remains the default):
-
-```bash
-economy-mcp --http              # http://127.0.0.1:8860/mcp
-MCP_HTTP=1 economy-mcp            # same
-economy-mcp --http --port 8815    # explicit port
-```
-
-- Health: `GET http://127.0.0.1:8860/health` -> `{"status":"ok","name":"economy"}`
-- Override port with `MCP_HTTP_PORT` or `--port`
 
 ## License
 

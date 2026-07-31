@@ -9,6 +9,9 @@ const roots: string[] = []
 const localStorageEnv = {
   HASNA_ACCOUNTS_STORAGE_MODE: 'local',
   HASNA_ECONOMY_STORAGE_MODE: 'local',
+  HASNA_ECONOMY_MODE: 'local',
+  ECONOMY_STORAGE_MODE: 'local',
+  ECONOMY_MODE: 'local',
 } as const
 
 function envWith(overrides: Record<string, string>): Record<string, string> {
