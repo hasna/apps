@@ -11,30 +11,49 @@ import {
   csvToWorkbook,
   getCellValue,
   loadWorkbook,
+  parseA1,
   recalc,
   resolveSheet,
   serializeWorkbook,
   setCell,
   sheetToCsv,
+  toA1,
   VERSION,
   workbookToXlsx,
   xlsxToWorkbook,
 } from "../index.js";
 
+const cliArgs = process.argv.slice(2);
+const optionsEnd = cliArgs.indexOf("--");
+const jsonRequested = (optionsEnd === -1 ? cliArgs : cliArgs.slice(0, optionsEnd)).includes("--json");
+const program = new Command();
+if (jsonRequested) {
+  program.exitOverride();
+  program.configureOutput({ writeErr: () => undefined });
+}
+
+function jsonEnabled(): boolean {
+  return Boolean(program.opts().json);
+}
+
+function emitResult(human: string, json: unknown): void {
+  console.log(jsonEnabled() ? JSON.stringify(json) : human);
+}
+
 async function emit(content: string, out: string | undefined): Promise<void> {
   if (out) {
     await writeFile(out, content);
-    console.log(`Wrote ${out}`);
+    emitResult(`Wrote ${out}`, { out });
   } else {
     console.log(content);
   }
 }
 
-const program = new Command();
 program
   .name("sheets")
   .description("Headless spreadsheet workbook toolkit (@hasna/sheets)")
-  .version(VERSION);
+  .version(VERSION)
+  .option("--json", "output structured JSON");
 
 program
   .command("new")
@@ -52,6 +71,22 @@ program
   .argument("<file>", "workbook JSON file")
   .action(async (file: string) => {
     const workbook = loadWorkbook(await readFile(file, "utf8"));
+    if (jsonEnabled()) {
+      console.log(
+        JSON.stringify({
+          workbookId: workbook.id,
+          sheets: workbook.sheets.map((sheet) => ({
+            id: sheet.id,
+            name: sheet.name,
+            rows: sheet.rows,
+            columns: sheet.columns,
+            cellCount: Object.keys(sheet.cells).length,
+            active: sheet.id === workbook.activeSheetId,
+          })),
+        }),
+      );
+      return;
+    }
     console.log(`Workbook ${workbook.id} (${workbook.sheets.length} sheet(s))`);
     for (const sheet of workbook.sheets) {
       const count = Object.keys(sheet.cells).length;
@@ -68,8 +103,13 @@ program
   .option("--sheet <name>", "sheet id or name")
   .action(async (file: string, cell: string, opts: { sheet?: string }) => {
     const workbook = loadWorkbook(await readFile(file, "utf8"));
+    const sheet = resolveSheet(workbook, opts.sheet);
     const value = getCellValue(workbook, cell, opts.sheet);
-    console.log(value === null ? "" : String(value));
+    emitResult(value === null ? "" : String(value), {
+      sheet: { id: sheet.id, name: sheet.name },
+      cell: toA1(parseA1(cell)),
+      value,
+    });
   });
 
 program
@@ -82,9 +122,17 @@ program
   .option("-o, --out <file>", "output file (defaults to input)")
   .action(async (file: string, cell: string, value: string, opts: { sheet?: string; out?: string }) => {
     const workbook = loadWorkbook(await readFile(file, "utf8"));
+    const sheet = resolveSheet(workbook, opts.sheet);
     setCell(workbook, cell, value, { sheet: opts.sheet });
-    await writeFile(opts.out ?? file, serializeWorkbook(workbook, true));
-    console.log(`${cell} = ${String(getCellValue(workbook, cell, opts.sheet))}`);
+    const out = opts.out ?? file;
+    const computedValue = getCellValue(workbook, cell, opts.sheet);
+    await writeFile(out, serializeWorkbook(workbook, true));
+    emitResult(`${cell} = ${String(computedValue)}`, {
+      sheet: { id: sheet.id, name: sheet.name },
+      cell: toA1(parseA1(cell)),
+      value: computedValue,
+      out,
+    });
   });
 
 program
@@ -95,8 +143,9 @@ program
   .action(async (file: string, opts: { out?: string }) => {
     const workbook = loadWorkbook(await readFile(file, "utf8"));
     recalc(workbook);
-    await writeFile(opts.out ?? file, serializeWorkbook(workbook, true));
-    console.log("Recalculated");
+    const out = opts.out ?? file;
+    await writeFile(out, serializeWorkbook(workbook, true));
+    emitResult("Recalculated", { workbookId: workbook.id, out });
   });
 
 program
@@ -144,10 +193,21 @@ program
     const bytes = await workbookToXlsx(workbook);
     const out = opts.out ?? `${file.replace(/\.json$/, "")}.xlsx`;
     await writeFile(out, bytes);
-    console.log(`Wrote ${out}`);
+    emitResult(`Wrote ${out}`, { out });
   });
 
+if (jsonRequested) {
+  for (const command of program.commands) {
+    command.exitOverride();
+    command.configureOutput({ writeErr: () => undefined });
+  }
+}
+
 program.parseAsync(process.argv).catch((err: unknown) => {
-  console.error(err instanceof Error ? err.message : String(err));
+  if (typeof err === "object" && err !== null && "exitCode" in err && err.exitCode === 0) {
+    process.exit(0);
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  console.error(jsonRequested ? JSON.stringify({ error: message }) : message);
   process.exit(1);
 });
