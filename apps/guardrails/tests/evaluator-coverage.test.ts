@@ -62,7 +62,11 @@ describe("engine precedence and decision metadata", () => {
       now: new Date("2026-07-01T00:00:00.000Z"),
     });
     expect(decision.reason).toBe("deny-rule reason");
-    expect(decision.audit).toEqual({
+    // decisionFingerprint is a content hash of the input, so it is asserted by
+    // shape here; the surrounding toEqual stays exhaustive over every other field.
+    const { decisionFingerprint, ...auditWithoutFingerprint } = decision.audit;
+    expect(decisionFingerprint).toMatch(/^[a-f0-9]{32}$/);
+    expect(auditWithoutFingerprint).toEqual({
       decisionId: "decision-id",
       evaluatedAt: "2026-07-01T00:00:00.000Z",
       engineVersion: "test-engine",
@@ -73,17 +77,19 @@ describe("engine precedence and decision metadata", () => {
       subject: "precedence",
       actorId: "actor-id",
       traceId: "trace-id",
-      labels: ["existing", "allow-rule", "warn-rule", "redact-rule", "approval-rule", "deny-rule"],
+      // Labels are now sorted deterministically by the engine, so this asserts the
+      // same set in the order the engine guarantees rather than in declaration order.
+      labels: ["allow-rule", "approval-rule", "deny-rule", "existing", "redact-rule", "warn-rule"],
     });
   });
 
   test("uses each default decision and its corresponding default reason", () => {
     const cases: Array<[GuardrailDecisionStatus, boolean, string]> = [
-      ["allow", true, "No guardrail policies matched."],
-      ["warn", true, "One or more guardrail policies produced warnings."],
-      ["redact", true, "One or more guardrail policies require redaction."],
-      ["approval_required", false, "One or more guardrail policies require approval."],
-      ["deny", false, "One or more guardrail policies denied the operation."],
+      ["allow", true, "No guardrail rules matched; the policy set default allows the operation."],
+      ["warn", true, "No guardrail rules matched; the policy set default decision is warn."],
+      ["redact", true, "No guardrail rules matched; the policy set default decision is redact."],
+      ["approval_required", false, "No guardrail rules matched; the policy set default decision is approval_required."],
+      ["deny", false, "No guardrail rules matched; the policy set default decision is deny."],
     ];
 
     for (const [status, allowed, reason] of cases) {

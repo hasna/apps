@@ -1,6 +1,6 @@
 {
   "name": "@hasna/guardrails",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Local-first guardrail and policy decisions for agentic systems.",
   "type": "module",
   "engines": {

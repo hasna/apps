@@ -58,10 +58,29 @@ const decision = evaluateGuardrail(input, defaultGuardrailPolicySet);
 Every decision includes:
 
 - `status`: `allow`, `deny`, `warn`, `redact`, or `approval_required`.
-- `reason` and `matchedPolicies`.
+- `reason`, the selected `matchedRule`, and all effective `matchedPolicies`.
+- `rationaleTrace`, including each rule's match result, specificity, failed
+  matcher groups, and selection rationale.
 - `evidence`, `obligations`, `redactions`, and `approvalRequirements`.
-- `audit` metadata with decision id, evaluated time, policy set, operation type,
-  actor, trace id, and labels.
+- `audit` metadata with a per-evaluation `decisionId`, an `evaluatedAt`
+  timestamp, policy set, operation type, actor, trace id, and labels. Pass
+  `options.decisionId` or `options.now` to supply either yourself.
+- `audit.decisionFingerprint`: a deterministic hash of the input, policy set,
+  and engine version. Two evaluations of the same request share a fingerprint
+  while keeping distinct decision ids, so audit rows stay both correlatable and
+  individually addressable.
+
+Matched rules are ranked by effect (`deny` > `approval_required` > `redact` >
+`warn` > `allow`), then by the number of matcher constraints, then by the
+number of alternatives those constraints accept. Policy id is the final
+deterministic tie-break.
+
+`policySet.defaultDecision` is a **fallback, not a floor**: it applies only when
+no rule matches. A single matching rule of any effect — including `warn` or
+`allow` — overrides it. To express a deny-by-default posture, write the denial
+as a broad rule and let more specific `allow` rules outrank it; setting
+`defaultDecision: "deny"` alone will not block a request that any advisory rule
+happens to match.
 
 ## Examples
 

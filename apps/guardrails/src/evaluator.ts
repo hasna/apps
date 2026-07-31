@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { defaultGuardrailPolicySet } from "./default-policy";
-import { collectSearchText, detectRedactions } from "./redaction";
+import { collectSearchText, detectRedactions, sha256 } from "./redaction";
 import { parseGuardrailInput, parseGuardrailPolicySet } from "./schemas";
 import type {
   EvaluateGuardrailOptions,
@@ -11,7 +11,9 @@ import type {
   GuardrailPolicy,
   GuardrailPolicyMatcher,
   GuardrailPolicySet,
+  GuardrailRationaleTraceEntry,
   GuardrailSeverity,
+  MatchedGuardrailPolicy,
 } from "./types";
 import { guardrailsVersion } from "./version";
 
@@ -21,6 +23,16 @@ const STATUS_PRECEDENCE: Record<GuardrailDecisionStatus, number> = {
   redact: 2,
   approval_required: 3,
   deny: 4,
+};
+
+type PolicyMatch = {
+  policy: GuardrailPolicy;
+  matched: boolean;
+  effective: boolean;
+  specificity: number;
+  alternatives: number;
+  constraints: string[];
+  failedConstraints: string[];
 };
 
 const DESTRUCTIVE_COMMAND_PATTERNS = [
@@ -228,33 +240,165 @@ function computerMatcher(input: GuardrailInput, matcher: GuardrailPolicyMatcher)
   return true;
 }
 
-function policyMatches(input: GuardrailInput, policy: GuardrailPolicy): boolean {
-  if (policy.enabled === false) return false;
-  const matcher = policy.when;
-  if (!matcher) return true;
-  if (matcher.operationTypes?.length && !matcher.operationTypes.includes(input.operationType)) return false;
-  if (!includesAny(input.tags, matcher.tagsAny)) return false;
-  if (!includesAny(input.actor?.roles, matcher.actorRolesAny)) return false;
-  return (
-    textMatcher(input, matcher) &&
-    commandMatcher(input, matcher) &&
-    modelMatcher(input, matcher) &&
-    sourceMatcher(input, matcher) &&
-    businessMatcher(input, matcher) &&
-    mcpMatcher(input, matcher) &&
-    actionMatcher(input, matcher) &&
-    secretMatcher(input, matcher) &&
-    runtimeMatcher(input, matcher) &&
-    browserMatcher(input, matcher) &&
-    computerMatcher(input, matcher)
-  );
+function matcherSpecificity(matcher: GuardrailPolicyMatcher | undefined): {
+  constraints: string[];
+  alternatives: number;
+} {
+  const constraints: string[] = [];
+  let alternatives = 0;
+
+  function visit(value: unknown, path: string): void {
+    if (value === undefined) return;
+    if (Array.isArray(value)) {
+      if (value.length === 0) return;
+      constraints.push(path);
+      alternatives += value.length;
+      return;
+    }
+    if (value !== null && typeof value === "object") {
+      for (const key of Object.keys(value).sort()) {
+        visit((value as Record<string, unknown>)[key], `${path}.${key}`);
+      }
+      return;
+    }
+    constraints.push(path);
+    alternatives += 1;
+  }
+
+  if (matcher) visit(matcher, "when");
+  return { constraints, alternatives };
 }
 
-function strongestStatus(statuses: GuardrailDecisionStatus[], fallback: GuardrailDecisionStatus): GuardrailDecisionStatus {
-  return statuses.reduce(
-    (strongest, status) => (STATUS_PRECEDENCE[status] > STATUS_PRECEDENCE[strongest] ? status : strongest),
-    fallback,
-  );
+function matchPolicy(input: GuardrailInput, policy: GuardrailPolicy): PolicyMatch {
+  const { constraints, alternatives } = matcherSpecificity(policy.when);
+  if (policy.enabled === false) {
+    return {
+      policy,
+      matched: false,
+      effective: false,
+      specificity: constraints.length,
+      alternatives,
+      constraints,
+      failedConstraints: ["policy.enabled"],
+    };
+  }
+
+  const matcher = policy.when;
+  const failedConstraints: string[] = [];
+  if (matcher) {
+    if (matcher.operationTypes?.length && !matcher.operationTypes.includes(input.operationType)) {
+      failedConstraints.push("when.operationTypes");
+    }
+    if (!includesAny(input.tags, matcher.tagsAny)) failedConstraints.push("when.tagsAny");
+    if (!includesAny(input.actor?.roles, matcher.actorRolesAny)) failedConstraints.push("when.actorRolesAny");
+    if ((matcher.textIncludes?.length || matcher.textPatterns?.length) && !textMatcher(input, matcher)) {
+      failedConstraints.push("when.text");
+    }
+    if (matcher.command && !commandMatcher(input, matcher)) failedConstraints.push("when.command");
+    if (matcher.model && !modelMatcher(input, matcher)) failedConstraints.push("when.model");
+    if (matcher.source && !sourceMatcher(input, matcher)) failedConstraints.push("when.source");
+    if (matcher.business && !businessMatcher(input, matcher)) failedConstraints.push("when.business");
+    if (matcher.mcp && !mcpMatcher(input, matcher)) failedConstraints.push("when.mcp");
+    if (matcher.action && !actionMatcher(input, matcher)) failedConstraints.push("when.action");
+    if (matcher.secret && !secretMatcher(input, matcher)) failedConstraints.push("when.secret");
+    if (matcher.runtime && !runtimeMatcher(input, matcher)) failedConstraints.push("when.runtime");
+    if (matcher.browser && !browserMatcher(input, matcher)) failedConstraints.push("when.browser");
+    if (matcher.computer && !computerMatcher(input, matcher)) failedConstraints.push("when.computer");
+  }
+
+  const matched = failedConstraints.length === 0;
+  return {
+    policy,
+    matched,
+    effective: matched,
+    specificity: constraints.length,
+    alternatives,
+    constraints,
+    failedConstraints,
+  };
+}
+
+function compareStrings(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
+function comparePolicyMatches(left: PolicyMatch, right: PolicyMatch): number {
+  const precedence = STATUS_PRECEDENCE[right.policy.effect] - STATUS_PRECEDENCE[left.policy.effect];
+  if (precedence !== 0) return precedence;
+  if (left.specificity !== right.specificity) return right.specificity - left.specificity;
+  if (left.alternatives !== right.alternatives) return left.alternatives - right.alternatives;
+  return compareStrings(left.policy.id, right.policy.id);
+}
+
+function matchedPolicy(policy: GuardrailPolicy): MatchedGuardrailPolicy {
+  const base = {
+    id: policy.id,
+    effect: policy.effect,
+    reason: policy.reason,
+    severity: policy.severity ?? ("medium" as GuardrailSeverity),
+  };
+  return policy.description ? { ...base, description: policy.description } : base;
+}
+
+function rationaleForMatch(match: PolicyMatch, winner: PolicyMatch | undefined): string {
+  if (!match.matched) {
+    if (match.policy.enabled === false) return "Rule is disabled.";
+    return `Rule did not match: ${match.failedConstraints.join(", ")}.`;
+  }
+  if (!match.effective) return "Rule matcher passed, but no configured redaction pattern matched the request.";
+  if (match === winner) {
+    return `Selected ${match.policy.effect} rule with ${match.specificity} matching constraint(s).`;
+  }
+  if (!winner) return "Rule matched.";
+  if (STATUS_PRECEDENCE[match.policy.effect] < STATUS_PRECEDENCE[winner.policy.effect]) {
+    return `Rule matched, but ${winner.policy.id} won because ${winner.policy.effect} outranks ${match.policy.effect}.`;
+  }
+  if (match.specificity < winner.specificity) {
+    return `Rule matched, but ${winner.policy.id} won with ${winner.specificity} constraints versus ${match.specificity}.`;
+  }
+  if (match.alternatives > winner.alternatives) {
+    return `Rule matched, but ${winner.policy.id} won because its matcher has fewer alternatives.`;
+  }
+  return `Rule matched, but ${winner.policy.id} won the deterministic policy-id tie-break.`;
+}
+
+function rationaleTrace(matches: PolicyMatch[], winner: PolicyMatch | undefined): GuardrailRationaleTraceEntry[] {
+  return [...matches]
+    .sort((left, right) => compareStrings(left.policy.id, right.policy.id))
+    .map((match) => ({
+      policyId: match.policy.id,
+      effect: match.policy.effect,
+      matched: match.matched,
+      effective: match.effective,
+      selected: match === winner,
+      specificity: match.specificity,
+      constraints: match.constraints,
+      failedConstraints: match.failedConstraints,
+      rationale: rationaleForMatch(match, winner),
+    }));
+}
+
+function stableSerialize(value: unknown, ancestors = new Set<object>()): string {
+  if (value === null) return "null";
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : JSON.stringify(String(value));
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "undefined") return "undefined";
+  if (typeof value === "bigint") return JSON.stringify(value.toString());
+  if (typeof value !== "object") return JSON.stringify(String(value));
+  if (ancestors.has(value)) return JSON.stringify("[Circular]");
+
+  ancestors.add(value);
+  const serialized = Array.isArray(value)
+    ? `[${value.map((item) => stableSerialize(item, ancestors)).join(",")}]`
+    : `{${Object.keys(value)
+        .sort()
+        .map((key) => `${JSON.stringify(key)}:${stableSerialize((value as Record<string, unknown>)[key], ancestors)}`)
+        .join(",")}}`;
+  ancestors.delete(value);
+  return serialized;
 }
 
 function allowedForStatus(status: GuardrailDecisionStatus): boolean {
@@ -275,11 +419,8 @@ function evidenceForPolicy(policy: GuardrailPolicy, input: GuardrailInput): Guar
 }
 
 function defaultReason(status: GuardrailDecisionStatus): string {
-  if (status === "allow") return "No guardrail policies matched.";
-  if (status === "deny") return "One or more guardrail policies denied the operation.";
-  if (status === "approval_required") return "One or more guardrail policies require approval.";
-  if (status === "redact") return "One or more guardrail policies require redaction.";
-  return "One or more guardrail policies produced warnings.";
+  if (status === "allow") return "No guardrail rules matched; the policy set default allows the operation.";
+  return `No guardrail rules matched; the policy set default decision is ${status}.`;
 }
 
 export function evaluateGuardrail(
@@ -289,31 +430,38 @@ export function evaluateGuardrail(
 ): GuardrailDecision {
   const input = parseGuardrailInput(inputValue);
   const policySet = parseGuardrailPolicySet(policySetValue);
-  const matched = policySet.policies.filter((policy) => policyMatches(input, policy));
-  const redactions = matched.flatMap((policy) => detectRedactions(input, policy.id, policy.redactions ?? []));
-  const effectivePolicies = matched.filter(
-    (policy) => policy.effect !== "redact" || redactions.some((redaction) => redaction.policyId === policy.id),
-  );
-  const effectiveStatuses = effectivePolicies.map((policy) => policy.effect);
-  const status = strongestStatus(effectiveStatuses, policySet.defaultDecision ?? "allow");
-  const reason = effectivePolicies.find((policy) => policy.effect === status)?.reason ?? defaultReason(status);
-  const now = options.now ?? new Date();
+  const initialMatches = policySet.policies.map((policy) => matchPolicy(input, policy));
+  // Redactions belong to the rule at this position, never to its id: a policy set
+  // may repeat an id, and keying by it would let one rule's result overwrite
+  // another's and silently drop a redaction that actually fired.
+  const matches = initialMatches.map((match) => {
+    const redactions = match.matched ? detectRedactions(input, match.policy.id, match.policy.redactions ?? []) : [];
+    return {
+      ...match,
+      redactions,
+      effective: match.matched && (match.policy.effect !== "redact" || redactions.length > 0),
+    };
+  });
+  const rankedMatches = matches.filter((match) => match.effective).sort(comparePolicyMatches);
+  const winner = rankedMatches[0];
+  const effectivePolicies = rankedMatches.map((match) => match.policy);
+  const status = winner?.policy.effect ?? policySet.defaultDecision ?? "allow";
+  const reason = winner?.policy.reason ?? defaultReason(status);
+  const engineVersion = options.engineVersion ?? guardrailsVersion;
+  const evaluatedAt = options.now ?? new Date();
+  const decisionFingerprint = sha256(stableSerialize({ input, policySet, engineVersion })).slice(0, 32);
   const decisionId = options.decisionId ?? randomUUID();
-  const labels = Array.from(new Set([...(input.tags ?? []), ...effectivePolicies.map((policy) => policy.id)]));
+  const labels = Array.from(new Set([...(input.tags ?? []), ...effectivePolicies.map((policy) => policy.id)])).sort(compareStrings);
+  const selectedRule = winner ? matchedPolicy(winner.policy) : null;
+  const redactions = rankedMatches.flatMap((match) => match.redactions);
 
   return {
     status,
     allowed: allowedForStatus(status),
     reason,
-    matchedPolicies: effectivePolicies.map((policy) => {
-      const base = {
-        id: policy.id,
-        effect: policy.effect,
-        reason: policy.reason,
-        severity: policy.severity ?? ("medium" as GuardrailSeverity),
-      };
-      return policy.description ? { ...base, description: policy.description } : base;
-    }),
+    matchedRule: selectedRule,
+    matchedPolicies: effectivePolicies.map(matchedPolicy),
+    rationaleTrace: rationaleTrace(matches, winner),
     evidence: effectivePolicies.flatMap((policy) => evidenceForPolicy(policy, input)),
     obligations: effectivePolicies.flatMap((policy) => policy.obligations ?? []),
     redactions,
@@ -324,8 +472,9 @@ export function evaluateGuardrail(
     }),
     audit: {
       decisionId,
-      evaluatedAt: now.toISOString(),
-      engineVersion: options.engineVersion ?? guardrailsVersion,
+      decisionFingerprint,
+      evaluatedAt: evaluatedAt.toISOString(),
+      engineVersion,
       policySetId: policySet.id,
       ...(policySet.version ? { policySetVersion: policySet.version } : {}),
       ...(input.id ? { inputId: input.id } : {}),

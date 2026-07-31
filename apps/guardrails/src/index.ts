@@ -52,6 +52,7 @@ export type {
   GuardrailPromptMessage,
   GuardrailRedaction,
   GuardrailRedactionRule,
+  GuardrailRationaleTraceEntry,
   GuardrailRuntimeMatcher,
   GuardrailRuntimeOperationContext,
   GuardrailSecretAccessContext,
