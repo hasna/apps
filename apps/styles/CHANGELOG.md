@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Run install, typecheck, build, and tests in GitHub Actions for pull requests
+  and pushes to `main`.
+
 ## 0.1.15
 
 - Publish the compact CLI/MCP output feature merged in PR #1: list/status/detail
