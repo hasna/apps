@@ -463,7 +463,7 @@ describe("restore planning", () => {
     const socket = `snapshots-base-index-${Date.now()}`;
     process.env.HASNA_SNAPSHOTS_TMUX_SOCKET = socket;
     try {
-      runCommand("tmux", ["-L", socket, "start-server"], 5_000);
+      runCommand("tmux", ["-L", socket, "new-session", "-d", "-s", "snapshots-anchor"], 5_000);
       runCommand("tmux", ["-L", socket, "set-option", "-g", "base-index", "1"], 5_000);
       runCommand("tmux", ["-L", socket, "set-option", "-g", "pane-base-index", "0"], 5_000);
       const session: StoredSnapshotResource = {
