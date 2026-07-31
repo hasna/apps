@@ -1,9 +1,9 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { ProjectPanelSchema } from "@hasna/contracts/schemas";
-import { runActionsCli } from "./index.js";
+import { createProgram, runActionsCli } from "./index.js";
 import { JsonActionsStore } from "../storage.js";
 import type { ActionManifest, ActionRun } from "../types.js";
 
@@ -94,6 +94,37 @@ async function captureCli(dir: string, args: string[]): Promise<string> {
 }
 
 describe("actions CLI compact output", () => {
+  test("registers the complete audited command inventory", () => {
+    const commandPaths: string[] = [];
+    const collect = (command: ReturnType<typeof createProgram>, parent: string[] = []): void => {
+      for (const child of command.commands) {
+        const path = [...parent, child.name()];
+        commandPaths.push(path.join(" "));
+        collect(child, path);
+      }
+    };
+
+    collect(createProgram());
+
+    expect(commandPaths).toEqual([
+      "status",
+      "project-panel",
+      "manifests",
+      "manifests validate",
+      "manifests list",
+      "manifests show",
+      "manifests inspect",
+      "run",
+      "runs",
+      "runs list",
+      "runs show",
+      "runs inspect",
+      "approve",
+      "deny",
+      "execute",
+    ]);
+  });
+
   test("emits a bounded project dashboard panel contract", async () => {
     const dir = mkdtempSync(join(tmpdir(), "actions-cli-panel-"));
     try {
@@ -116,7 +147,7 @@ describe("actions CLI compact output", () => {
         metadata: { projectId: "swiss-bank-account" },
       });
 
-      const json = await captureCli(dir, ["project-panel", "--project", "swiss-bank-account", "--json", "--contract"]);
+      const json = await captureCli(dir, ["project-panel", "--project", "swiss-bank-account", "--contract"]);
       const panel = ProjectPanelSchema.parse(JSON.parse(json));
 
       expect(panel.schema).toBe("hasna.project_panel.v1");
@@ -172,6 +203,94 @@ describe("actions CLI compact output", () => {
       expect(verbose).toContain("input:");
       expect(verbose).toContain("events:");
       expect(verbose).not.toContain(longText);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("supports role-gated run, approval, denial, and execution commands", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "actions-cli-lifecycle-"));
+    const manifestPath = join(dir, "manifest.json");
+    const roleManifest = {
+      ...manifest("examples.local-shell.roles"),
+      requiredApprovals: [{ kind: "manual" as const, count: 1, roles: ["maintainer"] }],
+      dryRun: { supported: true, default: false },
+      executorBindings: [{
+        kind: "local-shell" as const,
+        command: "bun",
+        args: ["-e", "console.log(JSON.stringify({ message: 'ok' }))"],
+      }],
+    };
+    writeFileSync(manifestPath, JSON.stringify(roleManifest));
+
+    try {
+      expect(JSON.parse(await captureCli(dir, ["status", "--json"]))).toMatchObject({ counts: { manifests: 0, runs: 0 } });
+      expect(JSON.parse(await captureCli(dir, ["manifests", "validate", manifestPath, "--json"]))).toMatchObject({ ok: true });
+
+      const autoApproved = JSON.parse(await captureCli(dir, [
+        "run",
+        manifestPath,
+        "--input",
+        '{"name":"automatic"}',
+        "--approve",
+        "--actor",
+        "alice",
+        "--actor-role",
+        "maintainer",
+        "--json",
+      ])) as ActionRun;
+      expect(autoApproved.status).toBe("succeeded");
+      expect(autoApproved.approvals[0]?.actor).toMatchObject({ id: "alice", roles: ["maintainer"] });
+
+      const awaitingApproval = JSON.parse(await captureCli(dir, [
+        "run",
+        manifestPath,
+        "--input",
+        '{"name":"manual"}',
+        "--json",
+      ])) as ActionRun;
+      expect(awaitingApproval.status).toBe("awaiting_approval");
+
+      const approved = JSON.parse(await captureCli(dir, [
+        "approve",
+        awaitingApproval.id,
+        "--actor",
+        "bob",
+        "--actor-role",
+        "maintainer",
+        "--json",
+      ])) as ActionRun;
+      expect(approved.status).toBe("approved");
+      expect(approved.approvals[0]?.actor).toMatchObject({ id: "bob", roles: ["maintainer"] });
+
+      const executed = JSON.parse(await captureCli(dir, ["execute", approved.id, manifestPath, "--json"])) as ActionRun;
+      expect(executed.status).toBe("succeeded");
+
+      const denialCandidate = JSON.parse(await captureCli(dir, [
+        "run",
+        manifestPath,
+        "--input",
+        '{"name":"denied"}',
+        "--json",
+      ])) as ActionRun;
+      const denied = JSON.parse(await captureCli(dir, [
+        "deny",
+        denialCandidate.id,
+        "--actor-role",
+        "security",
+        "--reason",
+        "audit regression",
+        "--json",
+      ])) as ActionRun;
+      expect(denied).toMatchObject({ status: "denied", error: "audit regression" });
+      expect(denied.approvals.at(-1)?.actor.roles).toEqual(["security"]);
+
+      expect(JSON.parse(await captureCli(dir, ["manifests", "list", "--json"]))).toHaveLength(1);
+      expect(JSON.parse(await captureCli(dir, ["manifests", "show", roleManifest.id, "--json"]))).toMatchObject({ id: roleManifest.id });
+      expect(JSON.parse(await captureCli(dir, ["manifests", "inspect", roleManifest.id, "--json"]))).toMatchObject({ id: roleManifest.id });
+      expect(JSON.parse(await captureCli(dir, ["runs", "list", "--json"]))).toHaveLength(3);
+      expect(JSON.parse(await captureCli(dir, ["runs", "show", executed.id, "--json"]))).toMatchObject({ id: executed.id });
+      expect(JSON.parse(await captureCli(dir, ["runs", "inspect", executed.id, "--json"]))).toMatchObject({ id: executed.id });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

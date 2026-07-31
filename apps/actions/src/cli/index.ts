@@ -44,8 +44,8 @@ function inputFromOptions(options: { input?: string; inputFile?: string }): unkn
   return {};
 }
 
-function actorFromOption(actor: string | undefined): ActorRef {
-  return { id: actor ?? "cli", type: "human" };
+function actorFromOption(actor: string | undefined, roles?: string[]): ActorRef {
+  return { id: actor ?? "cli", type: "human", roles };
 }
 
 function output(json: boolean | undefined, value: unknown, human: () => string): void {
@@ -191,7 +191,7 @@ export function createProgram(): Command {
     .action(async (options: { project: string; limit?: number; contract?: boolean; json?: boolean }) => {
       const client = clientFor(program.opts<{ dir?: string }>().dir);
       const panel = await buildProjectPanel(client, options.project, options.limit ?? DEFAULT_LIST_LIMIT);
-      output(options.json, panel, () => `actions panel ${options.project}: ${panel.metrics[0]?.value ?? 0} actions, ${panel.metrics[1]?.value ?? 0} recent runs`);
+      output(options.json || options.contract, panel, () => `actions panel ${options.project}: ${panel.metrics[0]?.value ?? 0} actions, ${panel.metrics[1]?.value ?? 0} recent runs`);
     });
 
   const manifests = program.command("manifests").description("Manage action manifests");
@@ -245,15 +245,16 @@ export function createProgram(): Command {
     .option("--input-file <path>", "Read input JSON from a file")
     .option("--idempotency-key <key>", "Idempotency key")
     .option("--actor <id>", "Actor id")
+    .option("--actor-role <role...>", "Actor role(s)")
     .option("--dry-run", "Preview without executing", false)
     .option("--approve", "Auto-approve this CLI run", false)
     .option("--verbose", "Show compact run detail after planning/execution", false)
     .option("-j, --json", "Print JSON output", false)
-    .action(async (manifestPath: string, options: { input?: string; inputFile?: string; idempotencyKey?: string; actor?: string; dryRun?: boolean; approve?: boolean; verbose?: boolean; json?: boolean }) => {
+    .action(async (manifestPath: string, options: { input?: string; inputFile?: string; idempotencyKey?: string; actor?: string; actorRole?: string[]; dryRun?: boolean; approve?: boolean; verbose?: boolean; json?: boolean }) => {
       const manifest = readManifest(manifestPath);
       const client = clientFor(program.opts<{ dir?: string }>().dir);
       await registerShellManifest(client, manifest);
-      const actor = actorFromOption(options.actor);
+      const actor = actorFromOption(options.actor, options.actorRole);
       const run = await client.run(
         {
           actionId: manifest.id,
@@ -310,13 +311,14 @@ export function createProgram(): Command {
     .command("approve <run-id>")
     .description("Approve a planned action run")
     .option("--actor <id>", "Actor id")
+    .option("--actor-role <role...>", "Actor role(s)")
     .option("--reason <text>", "Approval reason")
     .option("--verbose", "Show compact run detail after approval", false)
     .option("-j, --json", "Print JSON output", false)
-    .action(async (runId: string, options: { actor?: string; reason?: string; verbose?: boolean; json?: boolean }) => {
+    .action(async (runId: string, options: { actor?: string; actorRole?: string[]; reason?: string; verbose?: boolean; json?: boolean }) => {
       const client = clientFor(program.opts<{ dir?: string }>().dir);
       const run = await client.approve(runId, {
-        actor: actorFromOption(options.actor),
+        actor: actorFromOption(options.actor, options.actorRole),
         decision: "approved",
         reason: options.reason,
       });
@@ -327,13 +329,14 @@ export function createProgram(): Command {
     .command("deny <run-id>")
     .description("Deny a planned action run")
     .option("--actor <id>", "Actor id")
+    .option("--actor-role <role...>", "Actor role(s)")
     .option("--reason <text>", "Denial reason")
     .option("--verbose", "Show compact run detail after denial", false)
     .option("-j, --json", "Print JSON output", false)
-    .action(async (runId: string, options: { actor?: string; reason?: string; verbose?: boolean; json?: boolean }) => {
+    .action(async (runId: string, options: { actor?: string; actorRole?: string[]; reason?: string; verbose?: boolean; json?: boolean }) => {
       const client = clientFor(program.opts<{ dir?: string }>().dir);
       const run = await client.deny(runId, {
-        actor: actorFromOption(options.actor),
+        actor: actorFromOption(options.actor, options.actorRole),
         decision: "denied",
         reason: options.reason,
       });

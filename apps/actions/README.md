@@ -190,16 +190,18 @@ output preserves the stored manifest/run shape.
 ```text
 actions status
 actions status --verbose
+actions project-panel --project <slug> --contract
 actions manifests validate <file>
 actions manifests list --limit 20
 actions manifests show <id> --verbose
 actions manifests inspect <id>
 actions run <manifest-file> --input <json> --dry-run
-actions run <manifest-file> --input-file input.json --approve --verbose
+actions run <manifest-file> --input-file input.json --approve --actor-role maintainer --verbose
 actions runs list --status previewed --limit 20 --cursor 20
 actions runs show <run-id>
 actions runs inspect <run-id>
-actions approve <run-id> --reason "reviewed"
+actions approve <run-id> --actor-role maintainer --reason "reviewed"
+actions deny <run-id> --reason "rejected"
 actions execute <run-id> <manifest-file> --verbose
 actions runs list --json
 actions runs show <run-id> --json
