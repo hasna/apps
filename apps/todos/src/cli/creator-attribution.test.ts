@@ -122,7 +122,38 @@ describe("todos init — persists the identity so later commands inherit it", ()
 
     const task = await addJson(["inherits the registered identity"]);
     expect(task.created_by).not.toBeNull();
-    expect(task.assigned_to).toBe(task.created_by);
+  });
+
+  // AMENDED 2026-07-31 (todos task 64131fb1). This case previously also asserted
+  // `assigned_to === created_by` — that a bare `add` AUTO-ASSIGNS to the persisted
+  // identity. That assertion encoded the defect as a requirement.
+  //
+  // identity.json is one file keyed on $HOME and this fleet runs many agent
+  // sessions per station under one HOME, so it names the STATION, not the caller.
+  // Auto-assigning from it queued one agent's work onto another: on station01,
+  // `titus-skill-corpus` registered at 17:31:04Z and every unregistered session on
+  // the box filed against it from 17:37:36Z, still producing at 19:37:00Z.
+  //
+  // Attribution (`created_by`) still inherits the file, which is what this
+  // describe-block is about and is unchanged above. ROUTING does not.
+  it("does not auto-assign from the station-shared identity file", async () => {
+    expect((await runCli(["init", "Cassius"])).exitCode).toBe(0);
+
+    const result = await runCli(["--json", "add", "attributable but not routed"]);
+    expect(result.exitCode).toBe(0);
+    const task = JSON.parse(result.stdout) as { created_by: string | null; assigned_to: string | null };
+    expect(task.created_by).toBe("cassius");
+    expect(task.assigned_to).toBeNull();
+    // and the omission is not silent
+    expect(result.stderr).toContain("ownerless");
+  });
+
+  it("auto-assigns from a PROCESS-bound identity, which cannot leak between sessions", async () => {
+    expect((await runCli(["init", "Cassius"])).exitCode).toBe(0);
+
+    const task = await addJson(["routed by the env identity"], { TODOS_AGENT_ID: "Cassius" });
+    expect(task.created_by).toBe("cassius");
+    expect(task.assigned_to).toBe("cassius");
   });
 
   it("stops attributing once the identity is released", async () => {

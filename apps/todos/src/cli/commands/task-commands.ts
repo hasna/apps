@@ -38,7 +38,7 @@ import {
 } from "../cloud-router.js";
 import type { CloudTaskRelations } from "../cloud-router.js";
 import type { TaskPriority, TaskStatus } from "../../types/index.js";
-import { canonicalAgentRef, resolveCreatorIdentity } from "../../lib/creator-identity.js";
+import { canonicalAgentRef, resolveCreatorIdentity, resolveWritableIdentity } from "../../lib/creator-identity.js";
 import {
   formatTaskLine,
   resolveTaskId,
@@ -337,16 +337,28 @@ export function registerTaskCommands(program: Command) {
       // Who is FILING this task. `todos init` now persists the identity, so a
       // registered session no longer has to re-supply --agent on every command —
       // that omission is why creator attribution was empty on 92% of rows.
+      // `creator` may come from the identity file, which is keyed on $HOME and is
+      // therefore shared by every agent session on the station — it names the box,
+      // not the caller. It still supplies `created_by`, which is provenance and is
+      // documented write-once.
+      //
+      // `router` is the narrower one, and the two ROUTING columns take it instead:
+      // only `--agent` and TODOS_AGENT_ID, which travel with the process and cannot
+      // be handed to two concurrent sessions by accident. Stamping the shared file
+      // into `assigned_to` and `agent_id` is what queued one agent's work onto
+      // another — 43+ rows on station01 on 2026-07-31, one of them this fix's own
+      // tracking task.
       const creator = resolveCreatorIdentity(opts.createdBy || globalOpts.agent);
+      const router = resolveWritableIdentity(opts.createdBy || globalOpts.agent);
       // Part 2: an unassigned task must be DELIBERATE. Left alone, `todos add`
       // produced an ownerless row silently, so the filer read "filed and
       // announced, therefore routed" while no seat was ever queued.
-      const assignee: string | undefined = opts.assign || (opts.unassigned ? undefined : creator.agent_id || undefined);
+      const assignee: string | undefined = opts.assign || (opts.unassigned ? undefined : router.agent_id || undefined);
       if (!assignee && !opts.unassigned) {
         // One line, not two: this fires on every add from an unregistered caller,
         // and a warning people scroll past is a warning that does not work.
         console.error(chalk.yellow(
-          "Warning: task is ownerless and unattributable — run `todos init <name>`, or pass --assign <agent> or --unassigned.",
+          "Warning: task is ownerless and unattributable — export TODOS_AGENT_ID=<name> for this session, or pass --agent/--assign <agent> or --unassigned.",
         ));
       }
 
@@ -381,7 +393,7 @@ export function registerTaskCommands(program: Command) {
             assigned_to: assignee,
             status: parseStatus(opts.status),
             task_list_id: cloudTaskListId,
-            agent_id: globalOpts.agent || creator.agent_id || undefined,
+            agent_id: globalOpts.agent || router.agent_id || undefined,
             created_by: creator.agent_id || undefined,
             session_id: globalOpts.session,
             project_id: cloudProjectId,
@@ -434,7 +446,7 @@ export function registerTaskCommands(program: Command) {
           assigned_to: assignee,
           status: parseStatus(opts.status),
           task_list_id: taskListId,
-          agent_id: globalOpts.agent || creator.agent_id || undefined,
+          agent_id: globalOpts.agent || router.agent_id || undefined,
           created_by: creator.agent_id || undefined,
           session_id: globalOpts.session,
           project_id: projectId,
@@ -1229,6 +1241,7 @@ export function registerTaskCommands(program: Command) {
     .option("-s, --status <status>", "New status")
     .option("-p, --priority <priority>", "New priority")
     .option("--assign <agent>", "Assign to agent")
+    .option("--set-agent <agent>", "Repair the agent_id stamped on this row (use \"\" to clear it as unattributable)")
     .option("--tags <tags>", "New tags (comma-separated)")
     .option("--tag <tags>", "New tags (alias for --tags)")
     .option("--list <id>", "Move to a task list (UUID authoritative; project-scoped slug accepted)")
@@ -1285,6 +1298,7 @@ export function registerTaskCommands(program: Command) {
             status: parseStatus(opts.status),
             priority: parsePriority(opts.priority),
             assigned_to: opts.assign,
+            agent_id: opts.setAgent !== undefined ? (opts.setAgent === "" ? null : canonicalAgentRef(opts.setAgent)) : undefined,
             tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
             plan_id: plan?.id ?? (opts.clearPlan ? null : undefined),
             ...reparent,
@@ -1328,6 +1342,7 @@ export function registerTaskCommands(program: Command) {
           status: parseStatus(opts.status),
           priority: parsePriority(opts.priority),
           assigned_to: opts.assign,
+          agent_id: opts.setAgent !== undefined ? (opts.setAgent === "" ? null : canonicalAgentRef(opts.setAgent)) : undefined,
           tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
           plan_id: planId,
           ...reparent,

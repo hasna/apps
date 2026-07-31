@@ -608,6 +608,12 @@ export interface UpdateTaskInput {
   priority?: TaskPriority;
   project_id?: string | null;
   assigned_to?: string;
+  /** Repair the agent attributed to this row, or null it out as unattributable.
+   *  There was previously NO write path for this column after creation, so a row
+   *  stamped with the wrong agent at creation could not be corrected by any CLI or
+   *  API call — which is why the 2026-07-31 misattribution had no remedy. This is a
+   *  deliberate repair input: it is never set implicitly by assignment or claim. */
+  agent_id?: string | null;
   working_dir?: string | null;
   plan_id?: string | null;
   task_list_id?: string | null;

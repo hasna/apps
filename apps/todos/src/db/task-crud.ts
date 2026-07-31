@@ -638,6 +638,13 @@ export function updateTask(
     sets.push("description = ?");
     params.push(input.description);
   }
+  if (input.agent_id !== undefined) {
+    // The repair path. `created_by` stays write-once — correcting a bad stamp must
+    // not become a way to rewrite authorship — but `agent_id` had no write path at
+    // all after creation, so a row misattributed at creation was uncorrectable.
+    sets.push("agent_id = ?");
+    params.push(input.agent_id);
+  }
   if (input.status !== undefined) {
     // Completion guard when transitioning to completed
     if (input.status === "completed") {

@@ -10,7 +10,7 @@ import type { Task } from "../../types/index.js";
 import { createTask, listTasks, getTask, updateTask, upsertTaskByFingerprint, deleteTask } from "../../db/tasks.js";
 import { TaskNotFoundError, VersionConflictError } from "../../types/index.js";
 import { compactJson, compactTask, truncateText } from "../token-utils.js";
-import { resolveCreatorIdentity } from "../../lib/creator-identity.js";
+import { resolveCreatorIdentity, resolveWritableIdentity } from "../../lib/creator-identity.js";
 import {
   getTodosCloudClient,
   cloudCreateTask,
@@ -90,17 +90,20 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
           // Same two-part fix as the CLI: record who FILED the task, and make an
           // unassigned task deliberate rather than the silent default.
           const creator = resolveCreatorIdentity(created_by);
-          const assignee = assigned_to || (unassigned ? undefined : creator.agent_id || undefined);
+          // Same split as the CLI add path: the identity file is keyed on $HOME and is
+          // shared by every agent session on the station, so it may supply provenance
+          // but must never ROUTE. Leaving MCP on `creator` here kept the whole defect
+          // reachable through a second door.
+          const router = resolveWritableIdentity(created_by);
+          const assignee = assigned_to || (unassigned ? undefined : router.agent_id || undefined);
           // http authority routing: create straight against <app-host>/v1.
           // Skip local id-resolution (it hits local SQLite); pass ids through so the
           // cloud dataset is authoritative. Reversible: unset the flip env -> local.
           const cloud = getTodosCloudClient();
           if (cloud) {
             const payload: Record<string, unknown> = { ...rest };
-            if (creator.agent_id) {
-              payload.created_by = creator.agent_id;
-              payload.agent_id = payload.agent_id ?? creator.agent_id;
-            }
+            if (creator.agent_id) payload.created_by = creator.agent_id;
+            if (router.agent_id) payload.agent_id = payload.agent_id ?? router.agent_id;
             if (assignee) payload.assigned_to = assignee;
             if (project_id) payload.project_id = project_id;
             if (task_list_id) payload.task_list_id = task_list_id;
@@ -114,10 +117,8 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
             return { content: [{ type: "text" as const, text: mutationTaskResponse(created) }] };
           }
           const resolved: Record<string, unknown> = { ...rest };
-          if (creator.agent_id) {
-            resolved.created_by = creator.agent_id;
-            resolved.agent_id = resolved.agent_id ?? creator.agent_id;
-          }
+          if (creator.agent_id) resolved.created_by = creator.agent_id;
+          if (router.agent_id) resolved.agent_id = resolved.agent_id ?? router.agent_id;
           if (assignee) resolved.assigned_to = resolveAssignee(assignee);
           if (project_id) resolved.project_id = resolveId(project_id, "projects");
           if (task_list_id) resolved.task_list_id = resolveId(task_list_id, "task_lists");

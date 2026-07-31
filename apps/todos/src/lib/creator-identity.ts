@@ -113,6 +113,44 @@ export function canonicalAgentRef(value: string): string {
   return value.trim().toLowerCase();
 }
 
+/**
+ * Is this identity bound to THIS PROCESS, or merely lying around on the disk?
+ *
+ * `explicit` (--agent) and `env` (TODOS_AGENT_ID) travel with the process, so two
+ * concurrent sessions cannot be handed the same one by accident. `persisted` is a
+ * single file keyed on $HOME, and this fleet runs many named agent sessions per
+ * station under one HOME — so it identifies the STATION, never the caller.
+ *
+ * The write side was already guarded: `todos init` refuses to clobber a foreign
+ * identity (detectIdentityCollision). Nothing guarded the read side, and that is
+ * the whole defect — refusing to record session B's identity silently converted
+ * into attributing B's work to A. Measured on station01 2026-07-31: one agent ran
+ * `todos init` at 17:31:04Z and every unregistered session on the box filed as it
+ * from 17:37:36Z onward.
+ *
+ * So an ambient identity may be DISPLAYED, but it must never be written into a
+ * task. A wrong name is worse than a missing one — this module's own doctrine —
+ * and it is worse here in the direction that costs most: `assigned_to` is the
+ * queue every seat reads, and `agent_id` is a filterable column
+ * (task-crud.ts `filter.agent_id`) that also stands in as the acting agent
+ * wherever `assigned_to` is null (`task.assigned_to || task.agent_id`).
+ */
+export function isProcessBoundSource(source: CreatorIdentitySource): boolean {
+  return source === "explicit" || source === "env";
+}
+
+/**
+ * The identity this process may WRITE onto a task, or null when it has none.
+ *
+ * Deliberately narrower than `resolveCreatorIdentity`, which still reports the
+ * ambient identity so that `todos init`/diagnostics can show what is on disk.
+ */
+export function resolveWritableIdentity(explicit?: string | null): ResolvedCreatorIdentity {
+  const resolved = resolveCreatorIdentity(explicit);
+  if (!isProcessBoundSource(resolved.source)) return { agent_id: null, source: "none" };
+  return resolved;
+}
+
 export function resolveCreatorIdentity(explicit?: string | null): ResolvedCreatorIdentity {
   const fromExplicit = explicit?.trim();
   if (fromExplicit) return { agent_id: canonicalAgentRef(fromExplicit), source: "explicit" };
