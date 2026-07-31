@@ -1414,14 +1414,15 @@ async function handleV1(
     const name = rawName.toLowerCase();
     const role = str(body.role) ?? "agent";
     const projectId = str(body.project_id) ?? "";
+    const force = body.force === true;
     const existing = await client.get<Record<string, unknown>>(
       `SELECT *, (EXTRACT(EPOCH FROM (NOW() - last_seen_at)) < 1800) AS active FROM agent_presence WHERE LOWER(agent) = $1`,
       [name],
     );
     if (existing) {
       const existingSession = (existing.session_id as string | null) ?? null;
-      // Active session held by a different session id => conflict (no takeover).
-      if (existing.active === true && existingSession && existingSession !== sessionId) {
+      // Active session held by a different session id => conflict unless takeover is forced.
+      if (!force && existing.active === true && existingSession && existingSession !== sessionId) {
         return json({
           result: {
             conflict: true,

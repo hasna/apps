@@ -84,7 +84,8 @@ export function registerAgent(
   name: string,
   sessionId: string,
   role?: string,
-  projectId?: string
+  projectId?: string,
+  force = false,
 ): RegisterAgentResult | AgentConflictError {
   const db = getDb();
   const normalizedName = normalizeAgentName(name);
@@ -99,7 +100,7 @@ export function registerAgent(
       const existingSessionId = existing.session_id as string | null;
 
       // Active session with a different session_id — conflict
-      if (isActiveSession(lastSeenAt) && existingSessionId && existingSessionId !== sessionId) {
+      if (!force && isActiveSession(lastSeenAt) && existingSessionId && existingSessionId !== sessionId) {
         return {
           conflict: true as const,
           error: "agent_conflict" as const,

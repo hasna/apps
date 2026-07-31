@@ -230,7 +230,7 @@ export function registerAgentCommands(program: Command): void {
       }
 
       const sessionId = opts.session || crypto.randomUUID();
-      const result = await getStore().registerAgent(agentName, sessionId, opts.role, opts.project);
+      const result = await getStore().registerAgent(agentName, sessionId, opts.role, opts.project, opts.force);
 
       if (isAgentConflict(result)) {
         if (opts.json) {

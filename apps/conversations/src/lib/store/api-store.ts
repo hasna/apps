@@ -342,8 +342,8 @@ export class ApiStore implements ConversationsStore {
   };
 
   // ── presence / agents ─────────────────────────────────────────────────────────
-  registerAgent: ConversationsStore["registerAgent"] = async (name, sessionId, role, projectId) => {
-    const body = await this.post<{ result: unknown }>("/agents", { name, session_id: sessionId, role, project_id: projectId });
+  registerAgent: ConversationsStore["registerAgent"] = async (name, sessionId, role, projectId, force) => {
+    const body = await this.post<{ result: unknown }>("/agents", { name, session_id: sessionId, role, project_id: projectId, force });
     return body.result as never;
   };
   heartbeat: ConversationsStore["heartbeat"] = async (agent, status, metadata, sessionId, projectId) => {
