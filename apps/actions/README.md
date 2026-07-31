@@ -12,10 +12,13 @@ An open action says what will run, who is allowed to run it, what it touches, ho
 to preview it, how to approve it, how to dedupe retries, where audit events go,
 and what rollback or compensating action is available.
 
+See the [documentation index](docs/README.md) for focused CLI, manifest, SDK,
+MCP, storage/executor, and project dashboard references.
+
 ## Install
 
 ```bash
-bun install @hasna/actions
+bun add @hasna/actions
 ```
 
 The CLI, the MCP server, and the default SQLite store require Bun (`engines.bun
@@ -97,7 +100,7 @@ const client = new ActionsClient({
   ]
 });
 
-client.register(action);
+await client.register(action);
 
 const preview = await client.run({
   actionId: "projects.metadata.update",
@@ -111,7 +114,8 @@ const run = await client.run({
   actionId: "projects.metadata.update",
   input: { project: "open-actions", metadata: { stage: "active" } },
   actor: { id: "hasna", type: "human" },
-  idempotencyKey: "open-actions-stage-active-v2"
+  idempotencyKey: "open-actions-stage-active-v2",
+  dryRun: false
 });
 
 await client.approve(run.id, {
@@ -187,10 +191,14 @@ when more rows are available. Use `show`/`inspect` or `--verbose` for bounded
 detail. Use `--json` only when a full machine-readable record is needed; JSON
 output preserves the stored manifest/run shape.
 
+See [the CLI reference](docs/cli.md) for every command, option, default, output
+mode, and failure behavior.
+
 ```text
 actions status
 actions status --verbose
-actions project-panel --project <slug> --contract
+actions --dir /path/to/data status
+actions project-panel --project <slug> --limit 20 --contract
 actions manifests validate <file>
 actions manifests list --limit 20
 actions manifests show <id> --verbose
@@ -206,6 +214,12 @@ actions execute <run-id> <manifest-file> --verbose
 actions runs list --json
 actions runs show <run-id> --json
 ```
+
+`run` always plans and previews first. A dry-run remains `previewed`; a non-dry
+run executes immediately only when its approval requirements are already
+satisfied, including through `--approve`. Otherwise it remains
+`awaiting_approval` for a later `approve` and `execute` sequence. The `--dir`
+option overrides the storage directory for every command.
 
 ## MCP
 
@@ -267,7 +281,8 @@ Default local data directory:
 ~/.hasna/actions
 ```
 
-Override with `HASNA_ACTIONS_DIR` or `HASNA_ACTIONS_HOME`.
+Override with `HASNA_ACTIONS_DIR` or the fallback `HASNA_ACTIONS_HOME`. The CLI
+`--dir` option takes precedence over both environment variables.
 
 The default store is SQLite at `~/.hasna/actions/actions.db`. On first use it
 imports any existing `manifests.json`, `runs.json`, and `audit-events.json`

@@ -6,6 +6,7 @@
   "license": "Apache-2.0",
   "files": [
     "dist",
+    "docs",
     "examples",
     "README.md",
     "LICENSE"
