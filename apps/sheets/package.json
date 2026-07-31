@@ -1,6 +1,6 @@
 {
   "name": "@hasna/sheets",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Headless spreadsheet SDK for Hasna-coded apps — a framework-agnostic workbook model with an MIT formula engine (fast-formula-parser), CSV/XLSX/JSON import-export, plus a react-spreadsheet editor shipped from the ./react export",
   "type": "module",
   "main": "dist/index.js",
