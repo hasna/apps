@@ -1486,6 +1486,7 @@ describe("workflow runner", () => {
 });
 
 describe("pr-handoff direct-PR integration", () => {
+  // This integration test spawns real processes, so loaded machines need more than Bun's 5s default.
   test("cursor pattern (worker opens PR, no artifact): pr-handoff exits 0 so the verifier still runs", async () => {
     const store = new Store(":memory:");
     const home = mkdtempSync(join(tmpdir(), "loops-prh-int-home-"));
@@ -1582,5 +1583,5 @@ describe("pr-handoff direct-PR integration", () => {
       rmSync(bin, { recursive: true, force: true });
       rmSync(wt, { recursive: true, force: true });
     }
-  });
+  }, 90_000);
 });
