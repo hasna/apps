@@ -15,3 +15,24 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun test
+
+  # The macOS shell in Sources/ is 500+ lines of Swift the job above cannot see:
+  # it runs on ubuntu and never invokes `swift`, so its green tick was green
+  # regardless of what Sources/ contained — up to and including code that does not
+  # compile. Until this job existed, the only evidence the app built at all was
+  # one manual `swift build` on one machine, reported in prose.
+  #
+  # `swift test` covers resolveStore(), the fail-closed guard that decides which
+  # store the bundled server is handed. Note the division of labour: the drift
+  # check keeping the Swift env-key contract in step with src/lib/store/index.ts
+  # runs in the ubuntu job above, so a key added to the resolver without
+  # regenerating the Swift fails CI even when no macOS runner is available.
+  swift:
+    name: swift (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain versions
+        run: swift --version && xcodebuild -version
+      - run: swift build
+      - run: swift test

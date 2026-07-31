@@ -53,7 +53,15 @@ import * as hotLib from "../hot.js";
 import * as messagesLib from "../messages.js";
 import { attachSendRedaction } from "../content-safety.js";
 
-const APP = "conversations";
+/**
+ * App slug for the client-flip env contract.
+ *
+ * Exported because the macOS shell's guard (`Sources/HasnaConversationsCore`) is
+ * generated from the same contract rather than restating its key names. A guard
+ * that classifies an env differently from this resolver is how a guard becomes
+ * its own source of wrong-store bugs — see {@link firstSet}.
+ */
+export const APP = "conversations";
 
 type Env = Record<string, string | undefined>;
 
@@ -95,9 +103,12 @@ export class ConversationsStoreConfigError extends Error {
 }
 
 /** Env var names for this app, from the shared transport contract (never hardcoded). */
-const ENV_KEYS = clientTransportEnvKeys(APP);
+export const ENV_KEYS = clientTransportEnvKeys(APP);
 /** Local SQLite path overrides, highest-precedence signal. */
-const DB_PATH_KEYS = [`HASNA_${envToken(APP)}_DB_PATH`, `${envToken(APP)}_DB_PATH`] as const;
+export const DB_PATH_KEYS = [
+  `HASNA_${envToken(APP)}_DB_PATH`,
+  `${envToken(APP)}_DB_PATH`,
+] as const;
 
 /**
  * First key in `keys` with a non-blank value in `env`, else null.
