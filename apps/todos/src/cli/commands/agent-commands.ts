@@ -7,6 +7,7 @@ import { normalizeAgentNameInput } from "../../lib/agent-name-normalize.js";
 import { createTaskList, getTaskList, listTaskLists, updateTaskList, deleteTaskList } from "../../db/task-lists.js";
 import { listTasks } from "../../db/tasks.js";
 import { getPackageVersion, handleError, autoProject, output } from "../helpers.js";
+import { clearPersistedIdentity, detectIdentityCollision, persistIdentity, readPersistedIdentity } from "../../lib/creator-identity.js";
 import {
   getTodosCloudClient,
   cloudCreateTaskList,
@@ -48,6 +49,17 @@ function resolveCloudAgentByNameOrId<T extends { id: string; name: string; last_
   );
 }
 
+
+/** Drop the persisted identity only when the agent being released IS the persisted one —
+ *  releasing some other agent must not silently un-identify this session. */
+function clearIdentityIfMine(agentId: string, agentName?: string): void {
+  const persisted = readPersistedIdentity();
+  if (!persisted) return;
+  if (persisted.agent_id === agentId || (agentName && persisted.agent_name === agentName)) {
+    clearPersistedIdentity();
+  }
+}
+
 export function registerAgentCommands(program: Command) {
   // init
   program
@@ -56,6 +68,7 @@ export function registerAgentCommands(program: Command) {
     .alias("register")
     .description("Register an agent and get a short UUID (alias: register)")
     .option("-d, --description <text>", "Agent description")
+    .option("--force", "Take over the machine-wide persisted identity even if another session holds it")
     .action(async (name: string, opts) => {
       const globalOpts = program.opts();
       try {
@@ -72,13 +85,33 @@ export function registerAgentCommands(program: Command) {
           console.error(chalk.red("CONFLICT:"), result.message);
           process.exit(1);
         }
+        // Persist the identity. Without this, `init` printed "use --agent <id>"
+        // and every later command had to re-supply it by hand — which nothing did,
+        // leaving creator attribution empty on 92% of rows.
+        //
+        // Refuse to silently replace a DIFFERENT identity: many named sessions share
+        // one HOME on this fleet, and a clobber would leave the other session quietly
+        // attributing its work to this one.
+        const collision = detectIdentityCollision(result.id, result.name);
+        if (collision && !opts.force) {
+          const held = collision.existing.agent_name || collision.existing.agent_id;
+          console.error(chalk.red(`This machine already has a persisted todos identity: ${held} (registered ${collision.existing.registered_at}).`));
+          console.error(chalk.yellow(
+            "Overwriting it would make that session attribute its tasks to you.\n" +
+            `For a concurrent session, set a per-process identity instead — it outranks the file and cannot collide:\n` +
+            `  export TODOS_AGENT_ID=${result.name}\n` +
+            "Or pass --force to take over the machine-wide identity.",
+          ));
+          process.exit(2);
+        }
+        persistIdentity({ agent_id: result.id, agent_name: result.name, ...(globalOpts.session ? { session_id: globalOpts.session } : {}) });
         if (globalOpts.json) {
-          output(result, true);
+          output({ ...result, identity_persisted: true }, true);
         } else {
           console.log(chalk.green("Agent registered:"));
           console.log(`  ${chalk.dim("ID:")}   ${result.id}`);
           console.log(`  ${chalk.dim("Name:")} ${result.name}`);
-          console.log(`\nUse ${chalk.cyan(`--agent ${result.id}`)} on future commands.`);
+          console.log(`\n${chalk.dim("Identity saved — later commands attribute to this agent automatically.")}`);
         }
       } catch (e) {
         handleError(e);
@@ -135,6 +168,7 @@ export function registerAgentCommands(program: Command) {
           if (!result.released) {
             handleError(new Error("Release denied: session_id does not match agent's current session."));
           }
+          clearIdentityIfMine(result.agent.id, result.agent.name);
           if (globalOpts.json) {
             console.log(JSON.stringify({ agent_id: result.agent.id, name: result.agent.name, released: true }));
           } else {
@@ -149,6 +183,7 @@ export function registerAgentCommands(program: Command) {
         if (!released) {
           handleError(new Error("Release denied: session_id does not match agent's current session."));
         }
+        clearIdentityIfMine(a.id, a.name);
         if (globalOpts.json) {
           console.log(JSON.stringify({ agent_id: a.id, name: a.name, released: true }));
         } else {

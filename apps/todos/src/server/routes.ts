@@ -252,13 +252,24 @@ export async function handleListTasks(_req: Request, url: URL, _ctx: RouteContex
 
 export async function handleCreateTask(req: Request, ctx: RouteContext, json: (data: unknown, status?: number) => Response, taskToSummary: (task: Task, fields?: string[]) => unknown): Promise<Response> {
   try {
-    const body = await req.json() as { title: string; description?: string; priority?: string; project_id?: string };
+    const body = await req.json() as {
+      title: string; description?: string; priority?: string; project_id?: string;
+      agent_id?: string; created_by?: string; assigned_to?: string;
+    };
     if (!body.title) return json({ error: "Missing 'title'" }, 400);
+    // Authorship was dropped entirely on this route, so every task filed from the
+    // dashboard was unattributable regardless of what the caller sent. The
+    // dashboard has no API-key principal, so fall back to a literal marker rather
+    // than to null — "filed from the dashboard" is a real answer, and null is not.
+    const createdBy = body.created_by ?? body.agent_id ?? "dashboard";
     const task = createTask({
       title: body.title,
       description: body.description,
       priority: body.priority as Task["priority"] | undefined,
       project_id: body.project_id,
+      agent_id: body.agent_id ?? createdBy,
+      created_by: createdBy,
+      ...(body.assigned_to ? { assigned_to: body.assigned_to } : {}),
     });
     ctx.broadcastEvent({ type: "task", task_id: task.id, action: "created", agent_id: task.agent_id, project_id: task.project_id });
     return json(taskToSummary(task), 201);

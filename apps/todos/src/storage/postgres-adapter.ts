@@ -379,6 +379,11 @@ class PostgresJsonRecordStore {
     if (filter.priority !== undefined) conds.push(inClause("payload->>'priority'", toFilterArray(filter.priority)));
     if (filter.assigned_to !== undefined) conds.push(`payload->>'assigned_to' = ${p(filter.assigned_to)}`);
     if (filter.agent_id !== undefined) conds.push(`payload->>'agent_id' = ${p(filter.agent_id)}`);
+    // Case-insensitive for the same reason as the SQLite path: write-time
+    // canonicalisation does not reach rows written before it, nor a hand-typed filter.
+    if (filter.created_by !== undefined) conds.push(`LOWER(payload->>'created_by') = LOWER(${p(filter.created_by)})`);
+    // NULL created_by means unattributable, not "someone else" — keep those rows.
+    if (filter.not_created_by !== undefined) conds.push(`(payload->>'created_by' IS NULL OR LOWER(payload->>'created_by') <> LOWER(${p(filter.not_created_by)}))`);
     if (filter.session_id !== undefined) conds.push(`payload->>'session_id' = ${p(filter.session_id)}`);
     if (filter.tags?.length) {
       // ANY-of tag matching, parity with the SQLite path (src/db/task-crud.ts:
@@ -1090,7 +1095,11 @@ async function createTask(input: CreateTaskInput, store: PostgresJsonRecordStore
     description: input.description ?? null,
     status: input.status ?? "pending",
     priority: input.priority ?? "medium",
-    agent_id: input.agent_id ?? null,
+    // The server knows who called it — the API-key principal arrives as
+    // context.agentId. Dropping it here is why agent_id was populated on 8% of
+    // rows and assigned_by on 0%: only clients that passed --agent by hand were
+    // ever attributed.
+    agent_id: input.agent_id ?? context?.agentId ?? null,
     assigned_to: input.assigned_to ?? null,
     session_id: input.session_id ?? context?.sessionId ?? null,
     working_dir: input.working_dir ?? null,
@@ -1115,7 +1124,9 @@ async function createTask(input: CreateTaskInput, store: PostgresJsonRecordStore
     confidence: input.confidence ?? null,
     reason: input.reason ?? null,
     spawned_from_session: input.spawned_from_session ?? null,
-    assigned_by: input.assigned_by ?? null,
+    assigned_by: input.assigned_by ?? input.agent_id ?? context?.agentId ?? null,
+    // created_by — who FILED it. Write-once; the storage update path never touches it.
+    created_by: input.created_by ?? input.agent_id ?? context?.agentId ?? null,
     assigned_from_project: input.assigned_from_project ?? null,
     task_type: input.task_type ?? null,
     cost_tokens: 0,
@@ -1157,6 +1168,11 @@ async function updateTask(id: string, input: UpdateTaskInput, store: PostgresJso
     // making a task un-detachable and re-parenting leave a dangling cross-project
     // reference. Only fall back when the field is absent from the patch.
     task_list_id: input.task_list_id !== undefined ? input.task_list_id : existing.task_list_id,
+    // created_by is write-once. `definedPatch` spreads whatever keys the caller
+    // actually sent — and the /v1 PATCH route forwards the raw request body — so
+    // without this pin an API client could rewrite a task's authorship after the
+    // fact, which would make the field worthless as an audit signal.
+    created_by: existing.created_by,
   };
   await store.upsert("tasks", task);
   return task;

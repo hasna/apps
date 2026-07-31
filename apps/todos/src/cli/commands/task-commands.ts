@@ -38,6 +38,7 @@ import {
 } from "../cloud-router.js";
 import type { CloudTaskRelations } from "../cloud-router.js";
 import type { TaskPriority, TaskStatus } from "../../types/index.js";
+import { canonicalAgentRef, resolveCreatorIdentity } from "../../lib/creator-identity.js";
 import {
   formatTaskLine,
   resolveTaskId,
@@ -326,10 +327,28 @@ export function registerTaskCommands(program: Command) {
     .option("--due <date>", "Due date (ISO string or YYYY-MM-DD)")
     .option("--reason <text>", "Why this task exists")
     .option("--project <id>", "Assign to project by ID or slug (overrides auto-detect)")
+    .option("--unassigned", "Deliberately file this task with no assignee")
+    .option("--created-by <agent>", "Record a different filer than the resolved agent identity")
     .action(async (title: string, opts) => {
       const globalOpts = program.opts();
       opts.tags = opts.tags || opts.tag;
       opts.list = opts.list || opts.taskList;
+
+      // Who is FILING this task. `todos init` now persists the identity, so a
+      // registered session no longer has to re-supply --agent on every command —
+      // that omission is why creator attribution was empty on 92% of rows.
+      const creator = resolveCreatorIdentity(opts.createdBy || globalOpts.agent);
+      // Part 2: an unassigned task must be DELIBERATE. Left alone, `todos add`
+      // produced an ownerless row silently, so the filer read "filed and
+      // announced, therefore routed" while no seat was ever queued.
+      const assignee: string | undefined = opts.assign || (opts.unassigned ? undefined : creator.agent_id || undefined);
+      if (!assignee && !opts.unassigned) {
+        // One line, not two: this fires on every add from an unregistered caller,
+        // and a warning people scroll past is a warning that does not work.
+        console.error(chalk.yellow(
+          "Warning: task is ownerless and unattributable — run `todos init <name>`, or pass --assign <agent> or --unassigned.",
+        ));
+      }
 
       // http authority routing: create straight against <app-host>/v1.
       const cloud = getTodosCloudClient();
@@ -359,10 +378,11 @@ export function registerTaskCommands(program: Command) {
             parent_id: opts.parent ? await resolveTaskIdForCommand(opts.parent, cloud) : undefined,
             tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
             plan_id: cloudPlan?.id,
-            assigned_to: opts.assign,
+            assigned_to: assignee,
             status: parseStatus(opts.status),
             task_list_id: cloudTaskListId,
-            agent_id: globalOpts.agent,
+            agent_id: globalOpts.agent || creator.agent_id || undefined,
+            created_by: creator.agent_id || undefined,
             session_id: globalOpts.session,
             project_id: cloudProjectId,
             estimated_minutes: opts.estimated !== undefined ? parseIntOption(opts.estimated, "--estimated") : undefined,
@@ -411,10 +431,11 @@ export function registerTaskCommands(program: Command) {
           parent_id: opts.parent ? resolveTaskId(opts.parent) : undefined,
           tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
           plan_id: opts.plan ? resolvePlanId(opts.plan) : undefined,
-          assigned_to: opts.assign,
+          assigned_to: assignee,
           status: parseStatus(opts.status),
           task_list_id: taskListId,
-          agent_id: globalOpts.agent,
+          agent_id: globalOpts.agent || creator.agent_id || undefined,
+          created_by: creator.agent_id || undefined,
           session_id: globalOpts.session,
           project_id: projectId,
           working_dir: process.cwd(),
@@ -640,6 +661,9 @@ export function registerTaskCommands(program: Command) {
     .option("-s, --status <status>", "Filter by status")
     .option("-p, --priority <priority>", "Filter by priority")
     .option("--assigned <agent>", "Filter by assigned agent")
+    .option("--created-by <agent>", "Filter by the agent who FILED the task")
+    .option("--not-created-by <agent>", "Exclude tasks filed by this agent")
+    .option("--inbox", "Work assigned to my identity that a DIFFERENT agent filed")
     .option("--tags <tags>", "Filter by tags (comma-separated)")
     .option("--tag <tags>", "Filter by tags (alias for --tags)")
     .option("-a, --all", "Show all tasks (including completed/cancelled)")
@@ -666,7 +690,9 @@ export function registerTaskCommands(program: Command) {
         : cloud
           ? undefined
           : autoProject(globalOpts);
-      const hasAssignedFilter = Boolean(opts.assigned || opts.agentName);
+      // --inbox is an assigned filter too. Omitting it here would auto-scope the
+      // inbox to the cwd's project and silently hide work assigned to me elsewhere.
+      const hasAssignedFilter = Boolean(opts.assigned || opts.agentName || opts.inbox);
       const hasExplicitProjectFilter = Boolean(globalOpts.project || opts.projectName);
       const allowedSortFields = new Set(["updated", "created", "priority", "status"]);
       if (opts.sort && !allowedSortFields.has(opts.sort)) {
@@ -700,6 +726,23 @@ export function registerTaskCommands(program: Command) {
       }
       if (opts.priority) filter["priority"] = opts.priority;
       if (opts.assigned) filter["assigned_to"] = opts.assigned;
+      // A hand-typed `--created-by Cassius` never goes through the identity resolver,
+      // so canonicalise it here too. Both backends also compare case-insensitively —
+      // this is the cheap half, that is the one that reaches rows written before the
+      // resolver was canonicalising at all.
+      if (opts.createdBy) filter["created_by"] = canonicalAgentRef(opts.createdBy);
+      if (opts.notCreatedBy) filter["not_created_by"] = canonicalAgentRef(opts.notCreatedBy);
+      // --inbox is the query operating rule 29 mandates and the store could not
+      // answer until created_by existed: assigned to me, filed by someone else.
+      if (opts.inbox) {
+        const me = resolveCreatorIdentity(program.opts().agent);
+        if (!me.agent_id) {
+          console.error(chalk.red("--inbox needs an agent identity. Run `todos init <name>` or pass --agent <id>."));
+          process.exit(1);
+        }
+        filter["assigned_to"] = me.agent_id;
+        filter["not_created_by"] = me.agent_id;
+      }
       if (opts.tags) filter["tags"] = opts.tags.split(",").map((t: string) => t.trim());
       if (opts.projectName && !cloud) {
         const { listProjects } = require("../../db/projects.js") as any;
@@ -723,7 +766,52 @@ export function registerTaskCommands(program: Command) {
         filter["limit"] = parsedLimit;
       }
 
-      let tasks = cloud ? await cloudListTasks(cloud, filter as any) : listTasks(filter as any);
+      const creatorFilterActive = Boolean(filter["created_by"] || filter["not_created_by"]);
+      // A server that predates created_by IGNORES these query params and returns an
+      // unfiltered list at 200 — measured against the deployed 0.13.0 API, which
+      // drops created_by entirely. So the client must enforce the filter itself.
+      //
+      // But enforcing it AFTER the server applied `limit` reads a truncated page and
+      // then shrinks it further: `--inbox --limit 20` could return 3 rows, or none,
+      // while the real inbox was larger, with nothing to indicate it. So when the
+      // creator filter is client-enforced, the limit is withheld from the request and
+      // applied here instead — filter first, then truncate, which is the order the
+      // SQL does it in.
+      const requestedLimit = filter["limit"] as number | undefined;
+      const serverFilter = creatorFilterActive && cloud && requestedLimit !== undefined
+        ? (() => { const { limit: _dropped, ...rest } = filter; return rest; })()
+        : filter;
+
+      let tasks = cloud ? await cloudListTasks(cloud, serverFilter as any) : listTasks(serverFilter as any);
+      if (cloud && creatorFilterActive) {
+        // Enforcing the filter is not the same as the filter being USEFUL. A server
+        // that predates created_by omits the key entirely, so every row reads as
+        // unattributed and the filter — correctly, per the NULL rule below — excludes
+        // nothing. Measured against the deployed 0.13.0 API: `--inbox` returned the
+        // caller's own filing alongside everyone else's. Silently handing back an
+        // unfiltered inbox is the failure this flag exists to prevent, so say so.
+        // A row where the key is PRESENT and null is genuinely unattributed and is
+        // not a server-capability problem — only a missing key indicates the latter.
+        if (tasks.length > 0 && tasks.every((t) => !("created_by" in (t as object)))) {
+          console.error(chalk.yellow(
+            "Warning: this server does not record task authorship, so the creator filter matched nothing to exclude.\n" +
+            "         Results are unfiltered. The API needs upgrading past the release that added created_by.",
+          ));
+        }
+        const wantCreatedBy = filter["created_by"] as string | undefined;
+        const excludeCreatedBy = filter["not_created_by"] as string | undefined;
+        tasks = tasks.filter((t) => {
+          const raw = (t as { created_by?: string | null }).created_by ?? null;
+          // Case-insensitive, matching the SQL on both backends — a row stored before
+          // write-time canonicalisation carries whatever case it was written with.
+          const author = raw === null ? null : canonicalAgentRef(raw);
+          if (wantCreatedBy && author !== canonicalAgentRef(wantCreatedBy)) return false;
+          // NULL author is unattributable, not "someone else" — keep it.
+          if (excludeCreatedBy && author !== null && author === canonicalAgentRef(excludeCreatedBy)) return false;
+          return true;
+        });
+        if (requestedLimit !== undefined) tasks = tasks.slice(0, requestedLimit);
+      }
       if (opts.dueToday) {
         const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
         tasks = tasks.filter(t => t.due_at && t.due_at <= todayEnd.toISOString());

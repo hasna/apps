@@ -745,6 +745,10 @@ export function ensureSchema(db: Database): void {
   ensureColumn("tasks", "reason", "TEXT");
   ensureColumn("tasks", "spawned_from_session", "TEXT");
   ensureColumn("tasks", "assigned_by", "TEXT");
+  // created_by — who FILED the task, write-once at creation and never mutated by
+  // start/claim/steal/update. Distinct from assigned_by ("who handed it to me")
+  // and from agent_id, which callers overload as "the acting agent".
+  ensureColumn("tasks", "created_by", "TEXT");
   ensureColumn("tasks", "assigned_from_project", "TEXT");
   ensureColumn("tasks", "started_at", "TEXT");
   ensureColumn("tasks", "task_type", "TEXT");
@@ -932,6 +936,10 @@ export function ensureSchema(db: Database): void {
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_project_sources_project ON project_sources(project_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_project_sources_type ON project_sources(type)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_tasks_assigned_by ON tasks(assigned_by)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_tasks_created_by ON tasks(created_by)");
+  // The inbox query operating rule 29 mandates: "tasks assigned to me that a
+  // DIFFERENT agent created". Both columns are needed together.
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_tasks_assigned_created ON tasks(assigned_to, created_by)");
 
   // Task relationships indexes
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_rel_source ON task_relationships(source_task_id)");

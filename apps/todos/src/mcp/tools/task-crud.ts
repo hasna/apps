@@ -10,6 +10,7 @@ import type { Task } from "../../types/index.js";
 import { createTask, listTasks, getTask, updateTask, upsertTaskByFingerprint, deleteTask } from "../../db/tasks.js";
 import { TaskNotFoundError, VersionConflictError } from "../../types/index.js";
 import { compactJson, compactTask, truncateText } from "../token-utils.js";
+import { resolveCreatorIdentity } from "../../lib/creator-identity.js";
 import {
   getTodosCloudClient,
   cloudCreateTask,
@@ -72,6 +73,8 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
         project_id: z.string().optional().describe("Project ID"),
         task_list_id: z.string().optional().describe("Task list ID"),
         assigned_to: z.string().optional().describe("Agent ID or name to assign to"),
+        created_by: z.string().optional().describe("Agent who FILED this task. Defaults to the ambient agent identity (todos init / TODOS_AGENT_ID)."),
+        unassigned: z.boolean().optional().describe("Deliberately file with no assignee. Without it, the task defaults to the filer."),
         depends_on: z.array(z.string()).optional().describe("Array of task IDs this task depends on"),
         short_id: z.string().nullable().optional().describe("Short ID (auto-generated if not provided, disabled if null)"),
         tags: z.array(z.string()).optional().describe("Tags for the task"),
@@ -83,14 +86,22 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
       },
       async (params) => {
         try {
-          const { depends_on, assigned_to, project_id, task_list_id, tags, estimate, confidence, retry_count, deadline, ...rest } = params;
+          const { depends_on, assigned_to, project_id, task_list_id, tags, estimate, confidence, retry_count, deadline, created_by, unassigned, ...rest } = params;
+          // Same two-part fix as the CLI: record who FILED the task, and make an
+          // unassigned task deliberate rather than the silent default.
+          const creator = resolveCreatorIdentity(created_by);
+          const assignee = assigned_to || (unassigned ? undefined : creator.agent_id || undefined);
           // http authority routing: create straight against <app-host>/v1.
           // Skip local id-resolution (it hits local SQLite); pass ids through so the
           // cloud dataset is authoritative. Reversible: unset the flip env -> local.
           const cloud = getTodosCloudClient();
           if (cloud) {
             const payload: Record<string, unknown> = { ...rest };
-            if (assigned_to) payload.assigned_to = assigned_to;
+            if (creator.agent_id) {
+              payload.created_by = creator.agent_id;
+              payload.agent_id = payload.agent_id ?? creator.agent_id;
+            }
+            if (assignee) payload.assigned_to = assignee;
             if (project_id) payload.project_id = project_id;
             if (task_list_id) payload.task_list_id = task_list_id;
             if (depends_on) payload.depends_on = depends_on;
@@ -103,7 +114,11 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
             return { content: [{ type: "text" as const, text: mutationTaskResponse(created) }] };
           }
           const resolved: Record<string, unknown> = { ...rest };
-          if (assigned_to) resolved.assigned_to = resolveAssignee(assigned_to);
+          if (creator.agent_id) {
+            resolved.created_by = creator.agent_id;
+            resolved.agent_id = resolved.agent_id ?? creator.agent_id;
+          }
+          if (assignee) resolved.assigned_to = resolveAssignee(assignee);
           if (project_id) resolved.project_id = resolveId(project_id, "projects");
           if (task_list_id) resolved.task_list_id = resolveId(task_list_id, "task_lists");
           if (depends_on) resolved.depends_on = depends_on.map(resolveId);
@@ -186,6 +201,8 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
         project_id: z.string().optional().describe("Filter by project"),
         task_list_id: z.string().optional().describe("Filter by task list"),
         assigned_to: z.string().optional().describe("Filter by assignee (agent ID or name, empty string = unassigned)"),
+        created_by: z.string().optional().describe("Filter by the agent who FILED the task"),
+        not_created_by: z.string().optional().describe("Exclude tasks filed by this agent. With assigned_to=<me> this is the \"my inbox, minus my own filings\" query."),
         tags: z.array(z.string()).optional().describe("Filter by tags (AND logic)"),
         created_after: z.string().optional().describe("ISO date — tasks created after this date"),
         created_before: z.string().optional().describe("ISO date — tasks created before this date"),
