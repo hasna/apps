@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- ci: run typechecking, builds, and tests on pull requests and pushes to `main`.
+
 ## 0.0.35 — 2026-07-24
 
 - fix(cli): compact default CLI and MCP output (#1) — collections, data, finetune, and
