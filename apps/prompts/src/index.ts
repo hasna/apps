@@ -25,6 +25,17 @@ export { importFromJson, exportToJson } from "./lib/importer.js"
 export { findDuplicates } from "./lib/duplicates.js"
 export type { DuplicateMatch } from "./lib/duplicates.js"
 
+// Runbook lint
+export { analyzeRunbookPrompts, parseRunbookDetections, RUNBOOK_DETECTION_KINDS } from "./lib/runbook-lint.js"
+export type {
+  RunbookDetectionKind,
+  RunbookFindingFile,
+  RunbookLineSpan,
+  RunbookLintFinding,
+  RunbookLintReport,
+  RunbookPromptFile,
+} from "./lib/runbook-lint.js"
+
 // IDs
 export { generateSlug, uniqueSlug, generatePromptId } from "./lib/ids.js"
 
