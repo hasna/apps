@@ -220,7 +220,7 @@
   function activeQuery() {
     if (!state.active) return null;
     if (state.active.kind === "channel") return "/api/messages?channel=" + encodeURIComponent(state.active.id) + "&limit=200";
-    if (state.active.kind === "dm") return "/api/messages?session=" + encodeURIComponent(state.active.session) + "&limit=200";
+    if (state.active.kind === "dm" && state.active.session) return "/api/messages?session=" + encodeURIComponent(state.active.session) + "&limit=200";
     return null;
   }
 
@@ -369,7 +369,11 @@
     dom.composerInput.value = "";
     autosize();
     try {
-      await api("/api/messages", { method: "POST", body: JSON.stringify(payload) });
+      const sent = await api("/api/messages", { method: "POST", body: JSON.stringify(payload) });
+      if (a.kind === "dm" && !a.session && sent && sent.session_id) {
+        state.active = { ...a, session: sent.session_id };
+        await refreshData();
+      }
       await loadMessages();
       dom.messages.scrollTop = dom.messages.scrollHeight;
     } catch (e) {
