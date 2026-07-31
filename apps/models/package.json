@@ -32,10 +32,13 @@
   ],
   "scripts": {
     "build": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun && bun build src/index.ts src/storage.ts src/capabilities.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
+    "contract:check": "bun run build && contracts repo-conformance .",
+    "scan-artifact": "bun scripts/scan-artifact.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev": "bun run src/cli/index.ts",
     "pack:local": "bun pm pack",
+    "prepack": "bun run build && bun run scan-artifact",
     "prepublishOnly": "bun run build && bun test"
   },
   "keywords": [
@@ -64,6 +67,7 @@
     "commander": "^13.1.0"
   },
   "devDependencies": {
+    "@hasna/contracts": "0.8.5",
     "@types/bun": "latest",
     "@types/node": "^20.14.0",
     "typescript": "^5.7.3"
