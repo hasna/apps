@@ -32,12 +32,6 @@ const MODE_KEYS = [
   "LOGS_STORAGE_MODE",
   "LOGS_MODE",
 ] as const;
-const API_URL_KEYS = ["HASNA_LOGS_API_URL", "LOGS_API_URL"] as const;
-const API_KEY_KEYS = ["HASNA_LOGS_API_KEY", "LOGS_API_KEY"] as const;
-
-function firstSet(env: NodeJS.ProcessEnv, keys: readonly string[]): boolean {
-  return keys.some((k) => (env[k]?.trim() ?? "") !== "");
-}
 
 function firstValue(
   env: NodeJS.ProcessEnv,
@@ -51,36 +45,43 @@ function firstValue(
 }
 
 /**
- * The fleet flip writes exactly two vars per app — `HASNA_LOGS_API_URL` and
- * `HASNA_LOGS_API_KEY` — and deliberately does NOT set a storage-mode var.
- * Presence of both API vars therefore *is* self_hosted intent: synthesize
- * `HASNA_LOGS_STORAGE_MODE=self_hosted` so the @hasna/contracts client-flip
- * resolves to `cloud-http`. An explicit mode var is always respected.
+ * @hasna/logs keeps `self_hosted` / `cloud` as product-placement terms, while
+ * @hasna/contracts' npm client resolver uses the storage-engine term
+ * `postgres` for the same HTTP transport. Adapt only the env passed to
+ * contracts; keep the public StoreMode vocabulary unchanged here.
  */
-function withImpliedSelfHostedMode(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  if (firstSet(env, MODE_KEYS)) return env;
-  if (firstSet(env, API_URL_KEYS) && firstSet(env, API_KEY_KEYS)) {
-    return { ...env, HASNA_LOGS_STORAGE_MODE: "self_hosted" };
+function withContractsStorageMode(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  for (const key of MODE_KEYS) {
+    const raw = env[key]?.trim();
+    if (!raw) continue;
+    const normalized = raw.toLowerCase().replace(/-/g, "_");
+    const mapped =
+      normalized === "self_hosted" || normalized === "cloud"
+        ? "postgres"
+        : normalized === "local"
+          ? "sqlite"
+          : raw;
+    return mapped === raw ? env : { ...env, [key]: mapped };
   }
   return env;
 }
 
 function resolvedMode(env: NodeJS.ProcessEnv): StoreMode {
-  const raw = firstValue(env, MODE_KEYS)?.toLowerCase();
+  const raw = firstValue(env, MODE_KEYS)?.toLowerCase().replace(/-/g, "_");
   return raw === "cloud" ? "cloud" : "self_hosted";
 }
 
 /**
  * Resolve the live {@link Store} from the environment. Returns an {@link ApiStore}
- * when the client-flip resolves to cloud-http (API_URL + API_KEY present), else a
+ * when the client-flip resolves to HTTP (API_URL + API_KEY present), else a
  * {@link LocalStore}. Throws if cloud was requested but misconfigured (never a
  * silent fallback to local).
  */
 export function resolveStore(env: NodeJS.ProcessEnv = process.env): Store {
-  const effective = withImpliedSelfHostedMode(env);
+  const effective = withContractsStorageMode(env);
   const resolved = resolveStorageClient(LOGS_APP_SLUG, effective);
-  if (resolved.transport === "cloud-http") {
-    return new ApiStore(resolved.client, resolvedMode(effective));
+  if (resolved.transport === "http") {
+    return new ApiStore(resolved.client, resolvedMode(env));
   }
   return new LocalStore();
 }
@@ -89,9 +90,9 @@ export function resolveStore(env: NodeJS.ProcessEnv = process.env): Store {
 export function isApiMode(env: NodeJS.ProcessEnv = process.env): boolean {
   const resolved = resolveStorageClient(
     LOGS_APP_SLUG,
-    withImpliedSelfHostedMode(env),
+    withContractsStorageMode(env),
   );
-  return resolved.transport === "cloud-http";
+  return resolved.transport === "http";
 }
 
 /**

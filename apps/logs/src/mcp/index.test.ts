@@ -33,7 +33,18 @@ function testEnv(extra: Record<string, string> = {}): Record<string, string> {
   for (const [key, value] of Object.entries(process.env)) {
     if (typeof value === "string") env[key] = value;
   }
-  return { ...env, ...extra };
+  return {
+    ...env,
+    HASNA_LOGS_API_URL: "",
+    HASNA_LOGS_API_KEY: "",
+    HASNA_LOGS_STORAGE_MODE: "",
+    HASNA_LOGS_MODE: "",
+    LOGS_API_URL: "",
+    LOGS_API_KEY: "",
+    LOGS_STORAGE_MODE: "",
+    LOGS_MODE: "",
+    ...extra,
+  };
 }
 
 function textContent(result: unknown): string {

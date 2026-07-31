@@ -2368,9 +2368,10 @@ function detectRunType(
 }
 
 function normalizeCommandToken(value: string): string {
-  return basename(value)
+  const token = basename(value)
     .replace(/\.(?:exe|cmd)$/i, "")
     .toLowerCase();
+  return token === "bun-real" ? "bun" : token;
 }
 
 function defaultServiceName(
