@@ -149,6 +149,14 @@ describe("reply from parameter", () => {
     const msg = parseResult(result as any) as any;
     expect(msg.from_agent).toBe("bob");
     expect(msg.session_id).toBe(sent.session_id);
+    expect(msg.reply_to).toBe(sent.id);
+
+    // Read back through the shared store rather than trusting the MCP response
+    // echo. This pins the MCP surface to the same persistence contract as the
+    // CLI and HTTP API regression tests.
+    const stored = readMessages({ session_id: sent.session_id })
+      .find((message) => message.id === msg.id);
+    expect(stored?.reply_to).toBe(sent.id);
   });
 
   // Identity is no longer invented or borrowed when `from` is omitted: the tool

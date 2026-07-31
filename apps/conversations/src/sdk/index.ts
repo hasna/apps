@@ -2,9 +2,9 @@
 // Regenerate: bun run sdk:generate
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: ConversationsClient 0.5.7
+// Source: ConversationsClient 0.5.13
 
-export interface Message { "id"?: number; "uuid"?: string; "session_id"?: string; "from_agent"?: string; "to_agent"?: string; "channel"?: string | null; "project_id"?: string | null; "content"?: string; "priority"?: string; "blocking"?: boolean; "created_at"?: string }
+export interface Message { "id"?: number; "uuid"?: string; "session_id"?: string; "from_agent"?: string; "to_agent"?: string; "channel"?: string | null; "project_id"?: string | null; "content"?: string; "priority"?: string; "blocking"?: boolean; "reply_to"?: number | null; "created_at"?: string }
 
 export interface Channel { "name"?: string; "description"?: string | null; "topic"?: string | null; "project_id"?: string | null; "created_by"?: string; "created_at"?: string; "archived_at"?: string | null; "metadata"?: Record<string, unknown> | null; "tags"?: Array<string> }
 
@@ -165,7 +165,7 @@ export class ConversationsClient {
     }
 
     /** Send a message */
-    async sendMessage(body: { "from"?: string; "to": string; "content": string; "channel"?: string; "project_id"?: string; "session_id"?: string; "priority"?: string; "blocking"?: boolean }, init?: RequestInit): Promise<Record<string, unknown>> {
+    async sendMessage(body: { "from"?: string; "to": string; "content": string; "channel"?: string; "project_id"?: string; "session_id"?: string; "priority"?: string; "blocking"?: boolean; "reply_to"?: number }, init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("POST", `/v1/messages`, {
         body,
         query: undefined,
