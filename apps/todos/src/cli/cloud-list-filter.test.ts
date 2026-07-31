@@ -3,6 +3,18 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+/** `todos add` warns on stderr when a task ends up both unassigned and unattributed.
+ *  That warning is the fix, not incidental noise, so it is stripped here rather than
+ *  tolerated wholesale — any OTHER stderr output still fails the assertion. */
+function stderrWithoutAttributionWarning(stderr: string): string {
+  return stderr
+    .split("\n")
+    .filter((line) => !line.includes("ownerless and unattributable"))
+    .join("\n")
+    .trim();
+}
+
+
 const REPO_ROOT = join(import.meta.dir, "../..");
 const TEST_API_KEY = "hasna_todos_test_key";
 const PROJECT_ID = "99999999-9999-4999-8999-999999999999";
@@ -136,7 +148,8 @@ describe("cloud CLI task-list filtering", () => {
     tempRoots.push(root);
     try {
       const result = await runCli(args, root, `http://127.0.0.1:${server.port}`);
-      expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+      expect(result).toMatchObject({ exitCode: 0 });
+      expect(stderrWithoutAttributionWarning(result.stderr)).toBe("");
       expect(JSON.parse(result.stdout)).toMatchObject({
         id: TASK_ID,
         project_id: PROJECT_ID,

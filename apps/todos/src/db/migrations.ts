@@ -1674,14 +1674,4 @@ export const MIGRATIONS = [
   COMMIT;
   PRAGMA foreign_keys = ON;
   `,
-
-  // 69 — created_by (task authorship). Records who FILED a task, as distinct from
-  // assigned_to (who it is FOR) and assigned_by (who handed it over). Write-once
-  // at creation; never mutated by start/claim/steal/update.
-  `
-  ALTER TABLE tasks ADD COLUMN created_by TEXT;
-  CREATE INDEX IF NOT EXISTS idx_tasks_created_by ON tasks(created_by);
-  CREATE INDEX IF NOT EXISTS idx_tasks_assigned_created ON tasks(assigned_to, created_by);
-  INSERT OR IGNORE INTO _migrations (id) VALUES (69);
-  `,
 ];

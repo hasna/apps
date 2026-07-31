@@ -173,8 +173,8 @@ describe("upgrading a database that predates created_by", () => {
     // hand-rolled minimal table instead would test a schema we never shipped.
     const legacy = new Database(":memory:");
     runMigrations(legacy);
-    // The indexes reference the column, so they go first — same order the column
-    // was introduced in, reversed.
+    // Remove the column to reproduce a store written by the previous release. The
+    // indexes reference it, so they go first.
     legacy.exec("DROP INDEX IF EXISTS idx_tasks_created_by");
     legacy.exec("DROP INDEX IF EXISTS idx_tasks_assigned_created");
     legacy.exec("ALTER TABLE tasks DROP COLUMN created_by");
