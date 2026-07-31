@@ -20,6 +20,8 @@ All notable changes to `@hasna/actions` are documented here.
 
 ### Changed
 
+- Added CI checks for typechecking, building, and testing on pull requests and pushes
+  to `main`.
 - **One-time import of legacy JSON records.** The first time the SQLite store opens a
   data directory it imports existing `manifests.json`, `runs.json`, and
   `audit-events.json` records inside a single immediate transaction, using
