@@ -2722,6 +2722,13 @@ exit 0
     }
   });
 
+  // NOTE ON WHAT THIS TEST IS AND IS NOT: unlike the four around it, this one
+  // also PASSES on pre-fix bytes — before the ceiling existed, "ten more
+  // deferrals are available" was trivially true. So it is not a regression
+  // control for the reported defect; it is a behaviour lock on the reset,
+  // and it does guard that: deleting `defer_count=0` from heartbeatRunLease
+  // fails it. Recorded here so nobody later cites it as evidence the ceiling
+  // works — the other four tests carry that.
   test("a successful lease heartbeat resets the deferral ceiling", () => {
     const store = new Store(":memory:");
     try {
