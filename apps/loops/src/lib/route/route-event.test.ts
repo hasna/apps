@@ -829,6 +829,29 @@ describe("routeTodosTaskEvent least-loaded auth-profile pool", () => {
     }
   }
 
+  function seedRunningAccount(profile: string, tag: string): void {
+    const store = new Store(dbPath());
+    try {
+      const workflow = store.createWorkflow({
+        name: `seed-account-${tag}`,
+        steps: [{
+          id: "worker",
+          target: {
+            type: "agent",
+            provider: "codewith",
+            prompt: "seeded",
+            sandbox: "workspace-write",
+            account: { profile, tool: "codewith" },
+          },
+        }],
+      });
+      const run = store.createWorkflowRun({ workflow });
+      store.startWorkflowStepRun(run.id, "worker");
+    } finally {
+      store.close();
+    }
+  }
+
   test("spreads the worker to the least-loaded pool account", () => {
     // acctA has 2 running, acctC has 1, acctB is idle -> least loaded is acctB.
     seedRunningStep("acctA", "s1");
@@ -853,6 +876,27 @@ describe("routeTodosTaskEvent least-loaded auth-profile pool", () => {
     // Neutralization: without the guard this is "created" and stacks a 3rd run.
     expect(result.kind).toBe("throttled");
     expect(String(result.value.reason)).toContain("per-profile active limit reached");
+  });
+
+  test("dry-run reports load-aware worker and verifier accounts without dispatching", () => {
+    seedRunningAccount("acctB", "a1");
+    seedRunningAccount("acctB", "a2");
+    seedRunningAccount("acctC", "a3");
+    const result = routeTodosTaskEvent(plainTaskEvent("account-dry-run"), {
+      ...ROUTE_OPTS,
+      accountPool: "acctA,acctB,acctC",
+      workerAccount: "acctA",
+      accountTool: "codewith",
+      dryRun: true,
+    });
+
+    expect(result.kind).toBe("created");
+    expect(result.value.accountSelection).toEqual({
+      worker: { profile: "acctA", tool: "codewith" },
+      verifier: { profile: "acctC", tool: "codewith" },
+      loads: { acctA: 0, acctB: 2, acctC: 1 },
+    });
+    expect(loopCount()).toBe(0);
   });
 });
 

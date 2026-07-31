@@ -3,6 +3,7 @@ import { hostname } from "node:os";
 import { resolve } from "node:path";
 import type { EventEnvelope } from "@hasna/events";
 import type {
+  AccountRef,
   AgentProvider,
   AgentSandbox,
   AgentWorktreeMode,
@@ -30,7 +31,7 @@ import { eventData, eventMetadata, slugSegment, stableSuffix, stringField, taskE
 import { routePolicyEvidenceFromOptions } from "./policies.js";
 import { normalizeWorkflowForStorage, preflightStoredWorkflow, workflowSpecForPreflight } from "./gates.js";
 import { idleTimeoutDuration, listFromRepeatedOpts, nonNegativeInteger, timeoutDuration } from "./parse.js";
-import { assignPoolAuthProfiles, type PoolAuthProfileAssignment } from "./profile-pool.js";
+import { assignPoolAuthProfiles, selectVerifierAccount, type PoolAuthProfileAssignment } from "./profile-pool.js";
 import { prFingerprintFromTask, prReviewRoutingDecision } from "./pr-review.js";
 import {
   permissionModeFromOpts,
@@ -307,6 +308,7 @@ interface RouteEventPlan {
   /** codewith auth-profile pool context for least-loaded selection + the
    *  --max-per-profile guard, resolved once the store is live. */
   poolRouting?: PoolRoutingPlan;
+  accountRouting?: AccountRoutingPlan;
   providerAdmission?: ProviderAdmissionPlan;
   subjectRef: string;
   loopName: string;
@@ -319,6 +321,18 @@ interface RouteEventPlan {
   valueExtras: Record<string, unknown>;
   /** Extra fields merged into deduped outputs. */
   dedupeValueExtras: Record<string, unknown>;
+}
+
+interface AccountRoutingPlan {
+  pool: AccountRef[];
+  workerAccount: AccountRef;
+  verifierStepIds: string[];
+}
+
+interface AccountSelection {
+  worker: AccountRef;
+  verifier: AccountRef;
+  loads: Record<string, number>;
 }
 
 interface PoolRoutingPlan {
@@ -574,6 +588,43 @@ function buildPoolRoutingPlan(
   return { pool, seed, maxPerProfile: maxPerProfile > 0 ? maxPerProfile : undefined, rolesByStepId };
 }
 
+function buildAccountRoutingPlan(
+  opts: TodosTaskRouteOptions,
+  accountPool: AccountRef[] | undefined,
+  workflowBody: CreateWorkflowInput,
+): AccountRoutingPlan | undefined {
+  const pool = (accountPool ?? []).filter((account) => account.profile.trim().length > 0);
+  if (pool.length < 2 || opts.verifierAccount) return undefined;
+  let workerAccount: AccountRef | undefined;
+  const verifierStepIds: string[] = [];
+  for (const step of workflowBody.steps) {
+    const target = step.target;
+    if (target.type !== "agent") continue;
+    if (target.routing?.role === "worker") workerAccount = target.account;
+    if (target.routing?.role === "verifier") verifierStepIds.push(step.id);
+  }
+  if (!workerAccount || verifierStepIds.length === 0) return undefined;
+  return { pool, workerAccount, verifierStepIds };
+}
+
+function applyAccountRouting(
+  plan: AccountRoutingPlan | undefined,
+  workflowBody: CreateWorkflowInput,
+  loadCounts: Record<string, number>,
+): AccountSelection | undefined {
+  if (!plan) return undefined;
+  const verifier = selectVerifierAccount(plan.pool, loadCounts, plan.workerAccount);
+  if (!verifier) throw new ValidationError("verifier account pool must include an account different from the worker account");
+  for (const step of workflowBody.steps) {
+    if (plan.verifierStepIds.includes(step.id) && step.target.type === "agent") step.target.account = verifier;
+  }
+  return {
+    worker: plan.workerAccount,
+    verifier,
+    loads: Object.fromEntries(plan.pool.map((account) => [account.profile, loadCounts[account.profile] ?? 0])),
+  };
+}
+
 function nonEmptyStrings(values: Array<string | undefined>): string[] | undefined {
   const entries = values.map((entry) => entry?.trim()).filter((entry): entry is string => Boolean(entry));
   return entries.length ? entries : undefined;
@@ -651,6 +702,16 @@ function routeEvent(plan: RouteEventPlan): TodosTaskRoutePrint {
     leaseMs: 90 * 60_000,
   };
   if (opts.dryRun) {
+    let loadCounts: Record<string, number> = {};
+    if (plan.accountRouting) {
+      const store = new Store();
+      try {
+        loadCounts = store.countRunningWorkflowStepsByAuthProfile();
+      } finally {
+        store.close();
+      }
+    }
+    const accountSelection = applyAccountRouting(plan.accountRouting, workflowBody, loadCounts);
     const throttle = hasThrottleLimits(plan.throttleLimits)
       ? routeThrottleDryRunPreview({
           projectPath: plan.routeProjectPath,
@@ -677,6 +738,7 @@ function routeEvent(plan: RouteEventPlan): TodosTaskRoutePrint {
         loop: loopInput,
         throttle,
         providerAdmission,
+        accountSelection,
         sandboxPreflight,
         preflight,
       },
@@ -690,9 +752,9 @@ function routeEvent(plan: RouteEventPlan): TodosTaskRoutePrint {
     const preflight = opts.preflight
       ? preflightStoredWorkflow(workflowPreflightSpec, plan.workflowContext, {})
       : undefined;
+    const loadCounts = plan.poolRouting || plan.accountRouting ? store.countRunningWorkflowStepsByAuthProfile() : {};
     let poolAssignment: PoolAuthProfileAssignment | undefined;
     if (plan.poolRouting) {
-      const loadCounts = store.countRunningWorkflowStepsByAuthProfile();
       poolAssignment = assignPoolAuthProfiles({
         pool: plan.poolRouting.pool,
         seed: plan.poolRouting.seed,
@@ -708,6 +770,7 @@ function routeEvent(plan: RouteEventPlan): TodosTaskRoutePrint {
         if (chosen && step.target.type === "agent") step.target.authProfile = chosen;
       }
     }
+    const accountSelection = applyAccountRouting(plan.accountRouting, workflowBody, loadCounts);
     const workflowProfiles = codewithAuthProfilesFromWorkflow(workflowBody);
     const providerAdmissionPlan = workflowProfiles
       ? providerAdmissionPlanWithAuthProfiles(plan.providerAdmission, workflowProfiles)
@@ -844,6 +907,7 @@ function routeEvent(plan: RouteEventPlan): TodosTaskRoutePrint {
         ...(poolAssignment && !poolAssignment.deferred && Object.keys(poolAssignment.profiles).length
           ? { accountProfiles: poolAssignment.profiles, routeScope: plan.routeScope }
           : {}),
+        accountSelection,
         sandboxPreflight,
         preflight,
       },
@@ -1113,6 +1177,7 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
     projectGroup,
     routeScope,
     poolRouting: buildPoolRoutingPlan(opts, provider, providerRouting.authProfilePool, workflowBody, taskId),
+    accountRouting: buildAccountRoutingPlan(opts, providerRouting.accountPool, workflowBody),
     providerAdmission: providerAdmissionPlanFromOpts(opts, {
       provider,
       authProfile,
@@ -1265,6 +1330,7 @@ export function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOpti
     projectGroup,
     routeScope,
     poolRouting: buildPoolRoutingPlan(opts, provider, providerRouting.authProfilePool, workflowBody, `${event.source}:${event.type}:${event.id}`),
+    accountRouting: buildAccountRoutingPlan(opts, providerRouting.accountPool, workflowBody),
     providerAdmission: providerAdmissionPlanFromOpts(opts, {
       provider,
       authProfile,

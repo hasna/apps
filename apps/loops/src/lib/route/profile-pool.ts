@@ -1,3 +1,4 @@
+import type { AccountRef } from "../../types.js";
 import type { AgentWorkflowRole } from "../template-kit.js";
 
 /**
@@ -75,6 +76,25 @@ export function selectLeastLoadedProfile(
     }
   }
   return best!;
+}
+
+/** Select the least-loaded verifier account without ever reusing the worker account. */
+export function selectVerifierAccount(
+  pool: readonly AccountRef[],
+  loadCounts: Readonly<Record<string, number>>,
+  workerAccount: AccountRef | undefined,
+): AccountRef | undefined {
+  let selected: AccountRef | undefined;
+  let selectedLoad = Number.POSITIVE_INFINITY;
+  for (const account of pool) {
+    if (!account.profile.trim() || account.profile === workerAccount?.profile) continue;
+    const load = loadCounts[account.profile] ?? 0;
+    if (load < selectedLoad) {
+      selected = account;
+      selectedLoad = load;
+    }
+  }
+  return selected;
 }
 
 export interface PoolAuthProfileAssignmentInput {
