@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.5.16 - 2026-07-31
+
+### Fixed
+- `conversations agents register --force` was declared as a flag and silently ignored: the CLI never passed it to `registerAgent`, so an active-session conflict was returned even when takeover was explicitly requested. Threaded through the CLI, `presence.ts`, the HTTP store and the server handler (#42). The sqlite path is fixed on install; the hosted arm needs a server deploy.
+
+### Added
+- `.cursor/mcp.json` registering the `conversations` MCP server for Cursor, with a test tying the registration to `package.json`'s `bin` entry so a bin rename cannot silently break it (#30).
+
 ## 0.5.15 - 2026-07-31
 
 ### Fixed
