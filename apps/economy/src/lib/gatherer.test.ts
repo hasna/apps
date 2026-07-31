@@ -10,6 +10,7 @@ import {
   upsertRequest,
   upsertSession,
 } from '../db/database.js'
+import { resetEconomyCloudStorageCache } from './cloud-storage.js'
 import { gatherTrainingData } from './gatherer.js'
 import type { EconomyRequest, EconomySession } from '../types/index.js'
 
@@ -17,6 +18,7 @@ const NOW = new Date().toISOString()
 
 let root: string
 let originalDbPath: string | undefined
+let originalStorageMode: string | undefined
 
 function restoreEnv(name: string, value: string | undefined): void {
   if (value === undefined) delete process.env[name]
@@ -26,11 +28,16 @@ function restoreEnv(name: string, value: string | undefined): void {
 beforeEach(() => {
   root = join(tmpdir(), `economy-gatherer-test-${Date.now()}-${Math.random().toString(16).slice(2)}`)
   originalDbPath = process.env['HASNA_ECONOMY_DB_PATH']
+  originalStorageMode = process.env['HASNA_ECONOMY_STORAGE_MODE']
   process.env['HASNA_ECONOMY_DB_PATH'] = join(root, 'economy.db')
+  process.env['HASNA_ECONOMY_STORAGE_MODE'] = 'local'
+  resetEconomyCloudStorageCache()
 })
 
 afterEach(() => {
   restoreEnv('HASNA_ECONOMY_DB_PATH', originalDbPath)
+  restoreEnv('HASNA_ECONOMY_STORAGE_MODE', originalStorageMode)
+  resetEconomyCloudStorageCache()
   if (existsSync(root)) rmSync(root, { recursive: true, force: true })
 })
 

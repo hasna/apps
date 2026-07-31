@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -6,10 +6,14 @@ import { resolveAccountForAgent, withAccount } from './accounts.js'
 
 const roots: string[] = []
 const envKeys = [
+  'ACCOUNTS_API_KEY',
+  'ACCOUNTS_API_URL',
+  'ACCOUNTS_STORAGE_MODE',
   'ACCOUNTS_STORE_PATH',
   'CODEX_HOME',
   'ECONOMY_CODEX_ACCOUNT',
   'ECONOMY_ACCOUNT',
+  'HASNA_ACCOUNTS_MODE',
   'HASNA_ACCOUNTS_API_KEY',
   'HASNA_ACCOUNTS_API_URL',
   'HASNA_ACCOUNTS_STORAGE_MODE',
@@ -25,6 +29,11 @@ function makeRoot(): string {
   roots.push(root)
   return root
 }
+
+beforeEach(() => {
+  globalThis.fetch = originalFetch
+  for (const key of envKeys) delete process.env[key]
+})
 
 afterEach(() => {
   globalThis.fetch = originalFetch
