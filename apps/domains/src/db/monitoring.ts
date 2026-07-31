@@ -97,7 +97,21 @@ export interface BulkCheckResult {
   dns_validation?: { valid: boolean; issue_count: number; errors: string[] };
 }
 
-export async function checkAllDomains(): Promise<BulkCheckResult[]> {
+export interface BulkCheckDependencies {
+  whoisLookup: typeof whoisLookup;
+  checkSsl: typeof checkSsl;
+  validateDns: typeof validateDns;
+}
+
+const liveBulkCheckDependencies: BulkCheckDependencies = {
+  whoisLookup,
+  checkSsl,
+  validateDns,
+};
+
+export async function checkAllDomains(
+  dependencies: BulkCheckDependencies = liveBulkCheckDependencies
+): Promise<BulkCheckResult[]> {
   const domains = await getStore().listDomains();
   const results: BulkCheckResult[] = [];
 
@@ -109,7 +123,7 @@ export async function checkAllDomains(): Promise<BulkCheckResult[]> {
 
     // WHOIS check
     try {
-      const whois = await whoisLookup(domain.name);
+      const whois = await dependencies.whoisLookup(domain.name);
       result.whois = {
         registrar: whois.registrar,
         expires_at: whois.expires_at,
@@ -124,7 +138,7 @@ export async function checkAllDomains(): Promise<BulkCheckResult[]> {
 
     // SSL check
     try {
-      const ssl = await checkSsl(domain.name);
+      const ssl = await dependencies.checkSsl(domain.name);
       result.ssl = {
         issuer: ssl.issuer,
         expires_at: ssl.expires_at,
@@ -139,7 +153,7 @@ export async function checkAllDomains(): Promise<BulkCheckResult[]> {
     }
 
     // DNS validation
-    const validation = await validateDns(domain.id);
+    const validation = await dependencies.validateDns(domain.id);
     if (validation) {
       result.dns_validation = {
         valid: validation.valid,

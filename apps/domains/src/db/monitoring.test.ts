@@ -9,7 +9,8 @@ process.env["DOMAINS_DIR"] = tempDir;
 
 import { createDomain } from "./domains";
 import { closeDatabase } from "./database";
-import { exportPortfolio, checkAllDomains } from "./monitoring";
+import { whoisLookup, checkSsl } from "./dns-tools";
+import { exportPortfolio, checkAllDomains, type BulkCheckDependencies } from "./monitoring";
 
 afterAll(() => {
   closeDatabase();
@@ -134,16 +135,51 @@ describe("Portfolio Export", () => {
 // ============================================================
 
 describe("Bulk Domain Check", () => {
-  test("checkAllDomains returns empty array when no domains", async () => {
-    const results = await checkAllDomains();
+  const fakeWhoisLookup = mock(async (domain: string) => ({
+    domain,
+    registrar: "Test Registrar",
+    expires_at: "2030-01-01T00:00:00.000Z",
+    nameservers: ["ns1.example.com"],
+    raw: "",
+    source: "rdap" as const,
+    registrant: { name: null, email: null, phone: null, organization: null },
+  }));
+  const fakeCheckSsl = mock(async (domain: string) => ({
+    domain,
+    issuer: "Test CA",
+    expires_at: "2030-01-01T00:00:00.000Z",
+    subject: domain,
+  }));
+  const fakeValidateDns = mock(async (domainId: string) => ({
+    domain_id: domainId,
+    domain_name: "example.com",
+    issues: [],
+    valid: true,
+  }));
+  const dependencies: BulkCheckDependencies = {
+    whoisLookup: fakeWhoisLookup,
+    checkSsl: fakeCheckSsl,
+    validateDns: fakeValidateDns,
+  };
+
+  beforeEach(() => {
+    fakeWhoisLookup.mockClear();
+    fakeCheckSsl.mockClear();
+    fakeValidateDns.mockClear();
+  });
+
+  test("checkAllDomains uses injected clients", async () => {
+    const results = await checkAllDomains(dependencies);
     expect(Array.isArray(results)).toBe(true);
-    // May have results from other test domains, just check structure
+    expect(fakeWhoisLookup).toHaveBeenCalledTimes(results.length);
+    expect(fakeCheckSsl).toHaveBeenCalledTimes(results.length);
+    expect(fakeValidateDns).toHaveBeenCalledTimes(results.length);
   });
 
   test("checkAllDomains returns structured results", async () => {
     await createDomain({ name: "bulk-check-test.com" });
 
-    const results = await checkAllDomains();
+    const results = await checkAllDomains(dependencies);
     expect(results.length).toBeGreaterThan(0);
 
     const result = results.find((r) => r.domain === "bulk-check-test.com");
@@ -159,7 +195,7 @@ describe("Bulk Domain Check", () => {
   test("checkAllDomains whois result structure", async () => {
     await createDomain({ name: "whois-check-test.com" });
 
-    const results = await checkAllDomains();
+    const results = await checkAllDomains(dependencies);
     const result = results.find((r) => r.domain === "whois-check-test.com");
 
     if (result?.whois) {
@@ -171,7 +207,7 @@ describe("Bulk Domain Check", () => {
   test("checkAllDomains ssl result structure", async () => {
     await createDomain({ name: "ssl-check-test.com" });
 
-    const results = await checkAllDomains();
+    const results = await checkAllDomains(dependencies);
     const result = results.find((r) => r.domain === "ssl-check-test.com");
 
     if (result?.ssl) {
@@ -185,7 +221,12 @@ describe("Bulk Domain Check", () => {
     const name = `example.com; touch ${marker} #`;
     await createDomain({ name });
 
-    const results = await checkAllDomains();
+    const invalidDomainDependencies: BulkCheckDependencies = {
+      ...dependencies,
+      whoisLookup: (domain) => domain === name ? whoisLookup(domain) : fakeWhoisLookup(domain),
+      checkSsl: (domain) => domain === name ? checkSsl(domain) : fakeCheckSsl(domain),
+    };
+    const results = await checkAllDomains(invalidDomainDependencies);
     const result = results.find((r) => r.domain === name);
 
     expect(result?.whois?.error).toMatch(/Invalid domain name/);
@@ -196,7 +237,7 @@ describe("Bulk Domain Check", () => {
   test("checkAllDomains dns_validation result structure", async () => {
     await createDomain({ name: "dns-val-check-test.com" });
 
-    const results = await checkAllDomains();
+    const results = await checkAllDomains(dependencies);
     const result = results.find((r) => r.domain === "dns-val-check-test.com");
 
     if (result?.dns_validation) {
@@ -205,5 +246,5 @@ describe("Bulk Domain Check", () => {
       expect(result.dns_validation).toHaveProperty("errors");
       expect(Array.isArray(result.dns_validation.errors)).toBe(true);
     }
-  }, 30_000);
+  });
 });
