@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ## 0.5.18 - 2026-07-31
 
+> **Addendum, written after this version was published.** The entry below was authored against the release commit and documents two commits; the tarball actually on npm carries **three**. `#60` merged four seconds after the release commit, and 0.5.18 was published from the resulting `main` tip rather than from the release commit itself — deliberately, so that a freshly-merged fix would not be stranded unpublished, which was the condition this release existed to clear. Recording the delta rather than leaving the changelog quietly one commit short. The extra commit is listed under "Also in this release" below.
+
 ### Fixed
 - **The store API URL was printed verbatim — userinfo, query and fragment included — at four output sites.** `HASNA_CONVERSATIONS_API_URL` reached output unmasked from `conversations status` (human and `--json`), from `conversations doctor` (both the ok and the failure message), and from the server's `GET /api/status`. The last of those is the sharpest: `isSameOrigin` is applied only to mutating routes, so that GET was unauthenticated and anything able to reach the dashboard port could read the URL. A `user:password@` credential or a magic-link token in the `#fragment` of that variable was disclosed in full (#58).
 
@@ -13,6 +15,14 @@ All notable changes to this project will be documented in this file.
 
   Scope, stated plainly: this was **pre-existing and live in 0.5.16 and 0.5.17**, not a regression introduced by either. Blast radius on a store URL with no userinfo, query or fragment is nil — on station01 the configured value has none, so nothing was disclosed there. The exposure is real for any deployment whose URL carries credentials.
 - **New direct messages could display unrelated conversation content.** The dashboard's New Direct Message flow created a temporary DM with an empty session id and then reloaded `/api/messages?session=`; the server read that empty session as *missing* and answered with unfiltered recent messages. The dashboard now adopts the server-returned `session_id` after the first send and will not issue a DM query while the active DM has no session id (#57).
+
+### Also in this release (added by addendum)
+- **A false claim in `loggable-url.ts` was corrected, and `env` now reaches both branches of `storeStatusLocation`.** The doc comment shipped by #58 asserted that `URL.origin` is *runtime-dependent* between Bun and Node — "Bun returns `ftp://host` where Node returns `null`". That was never measured and is false; both agree on every scheme tested. The comment now records the retraction in place rather than being quietly reworded, because a false claim written in the confident register of a measurement is the exact failure that module exists to prevent. Separately, `storeStatusLocation(env)` passed `env` only to the cloud branch while the local branch called `getDbPath()` against `process.env` directly, so an injected DB path produced an answer the injection had not influenced; it now calls `getDbPath(env)` (#60).
+
+  `loggableUrl()`'s **behaviour is unchanged** by this commit — the redaction shipped here is identical to the one reviewed on #58.
+
+### Known gap — this release does NOT close every leak surface
+A fifth surface is filed and **unfixed**: the server writes the raw URL to stderr through Bun's enumerable `path` property on fetch errors (task `73021220`). It is pre-existing and is not a remote disclosure. Do not describe 0.5.18 as closing every path by which the store URL can reach output.
 
 ### Note on scope — this release still does NOT carry the macOS URL-redaction fix
 The Swift allow-list rebuilt in `Sources/HasnaConversationsCore/StoreResolution.swift` (#55) **cannot travel on npm at any version number.** `package.json`'s `files` list ships `dist/`, `bin/`, `dashboard/dist/`, `LICENSE` and `README.md`; `Sources/` is not in the tarball, and a packed 0.5.18 contains no `.swift` file — verified against the packed artifact, not assumed. Its only carrier is a built macOS app. Do not cite this npm release as evidence that the macOS half has shipped to anyone.
