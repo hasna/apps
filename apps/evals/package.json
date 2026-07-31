@@ -69,7 +69,6 @@
     "@hasna/events": "^0.1.6",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "ajv": "^8.18.0",
-    "chalk": "^5.4.1",
     "commander": "^14.0.3",
     "openai": "^6.33.0",
     "zod": "^4.3.6"
