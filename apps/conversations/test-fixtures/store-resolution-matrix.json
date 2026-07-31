@@ -15,7 +15,7 @@
         "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
       },
       "shell": "cloud",
-      "announcedUrl": "https://conversations.hasna.xyz/v1",
+      "announcedUrl": "https://conversations.hasna.xyz",
       "childStoreEnv": {
         "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
         "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
@@ -32,6 +32,7 @@
         "HASNA_CONVERSATIONS_DB_PATH": "/tmp/fixture-conversations.db"
       },
       "shell": "local",
+      "expectedSelectedBy": "HASNA_CONVERSATIONS_DB_PATH",
       "childStoreEnv": {
         "HASNA_CONVERSATIONS_STORAGE_MODE": "local",
         "HASNA_CONVERSATIONS_DB_PATH": "/tmp/fixture-conversations.db"
@@ -48,6 +49,7 @@
         "CONVERSATIONS_DB_PATH": "/tmp/fixture-conversations.db"
       },
       "shell": "local",
+      "expectedSelectedBy": "CONVERSATIONS_DB_PATH",
       "childStoreEnv": {
         "HASNA_CONVERSATIONS_STORAGE_MODE": "local",
         "HASNA_CONVERSATIONS_DB_PATH": "/tmp/fixture-conversations.db"
@@ -64,6 +66,7 @@
         "CONVERSATIONS_MODE": "local"
       },
       "shell": "local",
+      "expectedSelectedBy": "CONVERSATIONS_MODE",
       "childStoreEnv": {
         "HASNA_CONVERSATIONS_STORAGE_MODE": "local"
       },
@@ -79,6 +82,23 @@
         "HASNA_CONVERSATIONS_MODE": "local"
       },
       "shell": "local",
+      "expectedSelectedBy": "HASNA_CONVERSATIONS_MODE",
+      "childStoreEnv": {
+        "HASNA_CONVERSATIONS_STORAGE_MODE": "local"
+      },
+      "childStore": "local"
+    },
+    {
+      "name": "arm19-inherited-unprefixed-storage-mode-local",
+      "note": "CONVERSATIONS_STORAGE_MODE is the sixth and last key that can select local, and it was the one key with no arm. Selection is a uniform firstSet lookup, so the risk was low - but 'low risk' is what an untested branch always looks like, and this is the arm that proves the announcement names THIS key rather than a higher-precedence one that is not set.",
+      "configFile": null,
+      "environment": {
+        "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
+        "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential",
+        "CONVERSATIONS_STORAGE_MODE": "local"
+      },
+      "shell": "local",
+      "expectedSelectedBy": "CONVERSATIONS_STORAGE_MODE",
       "childStoreEnv": {
         "HASNA_CONVERSATIONS_STORAGE_MODE": "local"
       },
@@ -93,7 +113,7 @@
         "CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
       },
       "shell": "cloud",
-      "announcedUrl": "https://conversations.hasna.xyz/v1",
+      "announcedUrl": "https://conversations.hasna.xyz",
       "childStoreEnv": {
         "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
         "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
@@ -111,7 +131,7 @@
         "HASNA_CONVERSATIONS_DB_PATH": "/tmp/fixture-conversations.db"
       },
       "shell": "cloud",
-      "announcedUrl": "https://conversations.hasna.xyz/v1",
+      "announcedUrl": "https://conversations.hasna.xyz",
       "childStoreEnv": {
         "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
         "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
@@ -128,7 +148,7 @@
         "CONVERSATIONS_DB_PATH": "/tmp/fixture-conversations.db"
       },
       "shell": "cloud",
-      "announcedUrl": "https://conversations.hasna.xyz/v1",
+      "announcedUrl": "https://conversations.hasna.xyz",
       "childStoreEnv": {
         "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
         "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
@@ -145,7 +165,7 @@
         "CONVERSATIONS_MODE": "local"
       },
       "shell": "cloud",
-      "announcedUrl": "https://conversations.hasna.xyz/v1",
+      "announcedUrl": "https://conversations.hasna.xyz",
       "childStoreEnv": {
         "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
         "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
@@ -162,7 +182,7 @@
         "HASNA_CONVERSATIONS_MODE": "local"
       },
       "shell": "cloud",
-      "announcedUrl": "https://conversations.hasna.xyz/v1",
+      "announcedUrl": "https://conversations.hasna.xyz",
       "childStoreEnv": {
         "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
         "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
@@ -177,6 +197,7 @@
       },
       "environment": {},
       "shell": "local",
+      "expectedSelectedBy": "HASNA_CONVERSATIONS_STORAGE_MODE",
       "childStoreEnv": {
         "HASNA_CONVERSATIONS_STORAGE_MODE": "local"
       },
@@ -192,7 +213,7 @@
       },
       "environment": {},
       "shell": "cloud",
-      "announcedUrl": "https://conversations.hasna.xyz/v1",
+      "announcedUrl": "https://conversations.hasna.xyz",
       "childStoreEnv": {
         "HASNA_CONVERSATIONS_STORAGE_MODE": "self_hosted",
         "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",

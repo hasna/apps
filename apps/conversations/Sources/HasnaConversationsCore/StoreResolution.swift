@@ -98,11 +98,23 @@ public func parseEnvFile(at path: String) throws -> [String: String] {
 /// stripped of every store-selecting key and carrying only the resolved
 /// selection. It is not the inherited environment.
 public enum StoreResolution: Equatable {
-    /// Hosted service, fully configured. `url` is what will be announced — the
-    /// configured URL, or the transport's default host when only a key was given.
+    /// Hosted service, fully configured.
+    ///
+    /// `url` is the LOGGABLE form of the configured URL — scheme, host and port,
+    /// and NOTHING else: no userinfo, no path, no query, no fragment. It is what
+    /// the shell announces, and it must never be the raw configured value,
+    /// because every component of a URL except the scheme and the authority's
+    /// host and port is a place an operator can put a credential, and everything
+    /// this process logs is persisted. The raw value goes into `env` for the
+    /// child and nowhere else.
+    ///
+    /// See `loggableURL` for why this is stated as what is KEPT rather than as
+    /// what is removed.
     case cloud(env: [String: String], url: String)
-    /// Local SQLite, but only because it was asked for by name.
-    case explicitLocal(env: [String: String])
+    /// Local SQLite, but only because it was asked for by name. `selectedBy` is
+    /// the env-var NAME that chose it, so the log can say which variable was
+    /// actually read rather than naming one the operator may never have set.
+    case explicitLocal(env: [String: String], selectedBy: String)
     /// Nothing unambiguous — the app refuses to start the server.
     case unresolved(reason: String)
 }
@@ -114,8 +126,8 @@ extension StoreResolution: CustomDebugStringConvertible {
         switch self {
         case .cloud(let env, let url):
             return "cloud(url: \(url), envKeys: \(redactedKeys(env)))"
-        case .explicitLocal(let env):
-            return "explicitLocal(envKeys: \(redactedKeys(env)))"
+        case .explicitLocal(let env, let selectedBy):
+            return "explicitLocal(selectedBy: \(selectedBy), envKeys: \(redactedKeys(env)))"
         case .unresolved(let reason):
             return "unresolved(\(reason))"
         }
@@ -134,7 +146,7 @@ enum StoreSelection {
     /// This source says nothing about the store.
     case nothing
     /// The on-box SQLite store, chosen deliberately.
-    case local(dbPath: String?)
+    case local(dbPath: String?, selectedBy: String)
     /// The hosted service. `url` is nil when only a key was given, in which case
     /// the transport uses its default host.
     case cloud(url: String?, apiKey: String, modeValue: String?)
@@ -158,6 +170,58 @@ private func normalizeModeToken(_ raw: String) -> String {
         .replacingOccurrences(of: "-", with: "_")
 }
 
+/// Reduce a URL to the parts that say WHICH SERVER is being contacted, so it is
+/// safe to log: scheme, host, port. Nothing else survives.
+///
+/// A base URL is not automatically a non-secret, and it has more than one place
+/// to hide a credential:
+///
+///   - `userinfo` — `https://svc:SECRET@host/v1`, the shape a basic-auth proxy
+///     in front of the service needs. `toV1BaseUrl` (transport.ts) clears
+///     `search` and `hash` but not `username`/`password`, so a userinfo URL
+///     survives into the transport and actually authenticates. It is a working
+///     configuration, which is exactly why an operator would write one.
+///   - `query` — the familiar `?access_token=` shape.
+///   - `fragment` — where one-time and delegated credentials most often live,
+///     precisely because fragments are never sent to servers or written to
+///     server logs, which is what makes them the part a naive redactor skips.
+///   - `path` — the webhook shape, `https://host/services/T0/B0/SECRET`.
+///
+/// BUILT AS AN ALLOW-LIST, AND THAT IS THE POINT. An earlier version cleared
+/// `query` and `fragment` and re-emitted the rest, which leaked userinfo
+/// verbatim into `NSLog` while this file's own comments asserted it did not.
+/// Removing the components someone thought of leaves every component they did
+/// not think of — including any that a future URL grammar or a future Foundation
+/// adds — in the output by default. Copying only the components that are
+/// definitionally not credentials inverts that: a component nobody considered is
+/// absent because it was never copied, not because it was remembered.
+///
+/// THE COST, STATED SO IT IS NOT REDISCOVERED AS A BUG: the path is dropped, so
+/// a deployment served under a path prefix announces only its origin. That is a
+/// deliberate trade. The announcement exists to answer "is this app talking to
+/// the fleet's hosted service or to something else", which the host answers on
+/// its own; the path is the one remaining component carrying an operator-supplied
+/// string, and no rule can tell a route prefix from a secret inside one.
+///
+/// A URL that does not parse, or that names no host, cannot reach here —
+/// `unusableURLReason` refuses it first — but if one ever did, the safe answer
+/// is to name nothing rather than echo an unparsed string back into the log.
+public func loggableURL(_ raw: String) -> String {
+    guard let parsed = URLComponents(string: raw),
+          let scheme = parsed.scheme,
+          let host = parsed.host, !host.isEmpty
+    else { return "(unparseable URL)" }
+
+    var safe = URLComponents()
+    safe.scheme = scheme
+    // An IPv6 literal must keep its brackets or the port becomes part of the
+    // address. Foundation has returned this component both bracketed and bare
+    // across versions, so re-add them only when they are missing.
+    safe.host = host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host
+    safe.port = parsed.port
+    return safe.string ?? "(unparseable URL)"
+}
+
 /// Refuse a URL the transport could not use, rather than quietly reading local
 /// data. Same two conditions the resolver applies: it must parse, and it must be
 /// http(s).
@@ -179,7 +243,7 @@ private func unusableURLReason(_ hit: (key: String, value: String)) -> String? {
 func storeSelection(from env: [String: String], source: String) -> StoreSelection {
     // 1. An explicit local SQLite path is the narrowest, most specific signal.
     if let dbHit = firstSet(env, StoreEnvContract.dbPathKeys) {
-        return .local(dbPath: dbHit.value)
+        return .local(dbPath: dbHit.value, selectedBy: dbHit.key)
     }
 
     let urlHit = firstSet(env, StoreEnvContract.apiUrlKeys)
@@ -188,7 +252,9 @@ func storeSelection(from env: [String: String], source: String) -> StoreSelectio
     // 2. An explicit mode is authoritative — but must be spelled correctly.
     if let modeHit = firstSet(env, StoreEnvContract.modeKeys) {
         let token = normalizeModeToken(modeHit.value)
-        if token == StoreEnvContract.localModeToken { return .local(dbPath: nil) }
+        if token == StoreEnvContract.localModeToken {
+            return .local(dbPath: nil, selectedBy: modeHit.key)
+        }
         guard StoreEnvContract.cloudModeTokens.contains(token) else {
             return .refuse(reason: "\(modeHit.key) in \(source) is set to an unrecognised value. "
                 + "Valid values are 'local' and 'cloud'. Refusing to guess which store to use.")
@@ -281,13 +347,13 @@ public func resolveStore(
         // shell's. With url + key present and no mode, src/lib/store/index.ts
         // resolves the API transport on its own.
         if let modeValue { env[StoreEnvContract.modeKeys[0]] = modeValue }
-        return .cloud(env: env, url: url ?? StoreEnvContract.defaultCloudBaseUrl)
+        return .cloud(env: env, url: loggableURL(url ?? StoreEnvContract.defaultCloudBaseUrl))
 
-    case .local(let dbPath):
+    case .local(let dbPath, let selectedBy):
         var env = withoutStoreSelectingKeys(environment)
         env[StoreEnvContract.modeKeys[0]] = StoreEnvContract.localModeToken
         if let dbPath { env[StoreEnvContract.dbPathKeys[0]] = dbPath }
-        return .explicitLocal(env: env)
+        return .explicitLocal(env: env, selectedBy: selectedBy)
 
     case .refuse(let reason):
         return .unresolved(reason: reason)

@@ -43,7 +43,7 @@ function storeFor(env: Record<string, string>): "cloud" | "local" {
 describe("store resolution matrix (shared with the macOS shell)", () => {
   test("the fixture actually loaded", () => {
     // A matrix-driven suite that loads zero arms passes vacuously.
-    expect(matrix.arms.length).toBeGreaterThanOrEqual(18);
+    expect(matrix.arms.length).toBeGreaterThanOrEqual(19);
   });
 
   const started = matrix.arms.filter((a) => a.childStoreEnv && a.childStore);
@@ -51,7 +51,7 @@ describe("store resolution matrix (shared with the macOS shell)", () => {
   test("every arm that starts a child is covered", () => {
     // Guards the same vacuity from the other direction: if a future edit drops
     // `childStoreEnv` from the arms, the loop below would silently assert nothing.
-    expect(started.length).toBeGreaterThanOrEqual(13);
+    expect(started.length).toBeGreaterThanOrEqual(14);
   });
 
   for (const arm of started) {

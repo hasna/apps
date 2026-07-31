@@ -24,6 +24,10 @@ struct MatrixArm: Decodable {
     let configFile: [String: String]?
     let environment: [String: String]
     let shell: String
+    /// For a `local` arm: the env-var NAME that must have chosen local. Optional
+    /// in the model because non-local arms have none — but a `local` arm that
+    /// omits it FAILS rather than skipping, in `testEveryArm`.
+    let expectedSelectedBy: String?
     let announcedUrl: String?
     let childStoreEnv: [String: String]?
     let childStore: String?
@@ -71,7 +75,35 @@ final class StoreResolutionMatrixTests: XCTestCase {
     func testFixtureIsNotEmpty() throws {
         // A matrix-driven suite that silently loads zero arms passes vacuously.
         let matrix = try loadMatrix()
-        XCTAssertGreaterThanOrEqual(matrix.arms.count, 18, "fixture lost arms")
+        XCTAssertGreaterThanOrEqual(matrix.arms.count, 19, "fixture lost arms")
+
+        // The arm count alone is not enough. `assertChildStoreEnv` returns early
+        // when an arm carries no `childStoreEnv`, so stripping that field from
+        // every arm would leave `testEveryArm` asserting only the classification
+        // and never the environment handed to the child — which is the half the
+        // divergence lived in. The TypeScript side guards the same floor; each
+        // suite must hold its own, because either can be run alone.
+        let started = matrix.arms.filter { $0.childStoreEnv != nil }
+        XCTAssertGreaterThanOrEqual(started.count, 14, "fixture lost its child-env expectations")
+
+        // And the fixture must not be satisfiable by a constant.
+        XCTAssertEqual(Set(matrix.arms.map(\.shell)), ["cloud", "local", "unresolved"])
+    }
+
+    /// EVERY key that can select local has an arm — stated against the contract
+    /// rather than as a count, so a seventh key added to `StoreEnvContract` fails
+    /// here until someone writes its arm. One key (`CONVERSATIONS_STORAGE_MODE`)
+    /// had no arm at all, which is the shape this replaces: a coverage claim that
+    /// nothing re-derives goes stale the moment the contract grows.
+    func testEveryLocalSelectingKeyHasAnArm() throws {
+        let covered = Set(try loadMatrix().arms.compactMap {
+            $0.shell == "local" ? $0.expectedSelectedBy : nil
+        })
+        let selectable = Set(StoreEnvContract.modeKeys + StoreEnvContract.dbPathKeys)
+        XCTAssertEqual(
+            selectable.subtracting(covered), [],
+            "these keys can select local and no fixture arm exercises them"
+        )
     }
 
     func testEveryArm() throws {
@@ -86,7 +118,23 @@ final class StoreResolutionMatrixTests: XCTestCase {
                 }
                 assertChildStoreEnv(env, equals: arm.childStoreEnv, arm: arm.name)
 
-            case ("local", .explicitLocal(let env)):
+            case ("local", .explicitLocal(let env, let selectedBy)):
+                // EQUALITY, not membership. This assertion used to read
+                // `storeSelectingKeys.contains(selectedBy)` — a 10-key set that
+                // includes the URL and API-key names — so it asserted "it is some
+                // store key" while the fix claims "it is the key that ACTUALLY
+                // chose local". Measured: planting `apiUrlKeys[0]` in the DB-path
+                // branch left the whole suite green. The DB-path branch is also
+                // the commit's own motivating example, so the one case that had
+                // to be pinned was the one nothing could fail on.
+                guard let expected = arm.expectedSelectedBy else {
+                    XCTFail("\(arm.name): a local arm must state expectedSelectedBy")
+                    break
+                }
+                XCTAssertEqual(
+                    selectedBy, expected,
+                    "\(arm.name): local must name the key that actually chose it"
+                )
                 assertChildStoreEnv(env, equals: arm.childStoreEnv, arm: arm.name)
 
             case ("unresolved", .unresolved(let reason)):
@@ -183,10 +231,12 @@ final class StoreGuardPropertyTests: XCTestCase {
     /// ambiguity, not local storage.
     func testExplicitLocalIsAnnouncedAsLocal() throws {
         let configPath = try writeConfigFile(["HASNA_CONVERSATIONS_STORAGE_MODE": "local"])
-        guard case .explicitLocal(let env) = resolveStore(environment: [:], configPath: configPath) else {
+        guard case .explicitLocal(let env, let selectedBy) =
+            resolveStore(environment: [:], configPath: configPath) else {
             return XCTFail("explicit local must resolve to explicitLocal")
         }
         XCTAssertEqual(env["HASNA_CONVERSATIONS_STORAGE_MODE"], "local")
+        XCTAssertEqual(selectedBy, "HASNA_CONVERSATIONS_STORAGE_MODE")
     }
 
     /// A debug description must never carry the API key value: XCTest prints it
@@ -199,6 +249,145 @@ final class StoreGuardPropertyTests: XCTestCase {
         let described = resolveStore(environment: [:], configPath: configPath).debugDescription
         XCTAssertFalse(described.contains("fixture-not-a-real-credential"))
         XCTAssertTrue(described.contains("HASNA_CONVERSATIONS_API_KEY"), "key NAMES are fine")
+    }
+}
+
+// MARK: - What the shell announces about the hosted URL
+
+/// A synthetic marker, never a real credential. It is planted into a URL and the
+/// assertions below look for its ABSENCE from what the shell would log. It has to
+/// be synthetic because a failing assertion prints the announced string, and test
+/// output is persisted and served.
+private let plantedSecret = "planted-control-not-a-real-credential"
+
+/// The host every arm points at, asserted to SURVIVE — a mask that returns the
+/// empty string, or any constant, satisfies every absence check below.
+private let announcedHost = "conversations.hasna.xyz"
+
+/// Every position the URL grammar lets an operator put a string into, other than
+/// the scheme, host and port that name the server itself.
+///
+/// Written as one property applied to a list of positions, deliberately, rather
+/// than as a case per shape. Enumerating the shapes the author happened to think
+/// of IS the defect this suite exists to close: the previous mask cleared `query`
+/// and `fragment` — the two shapes its author had in mind — and re-emitted
+/// `user:password@` verbatim into `NSLog`, while the doc comment above it claimed
+/// scheme, host, port and path were all that survived. A position nobody listed
+/// has to fail here rather than ship.
+private let secretBearingURLs: [(position: String, url: String)] = [
+    ("userinfo (user)",
+     "https://\(plantedSecret)@\(announcedHost)/v1"),
+    ("userinfo (password)",
+     "https://svc:\(plantedSecret)@\(announcedHost)/v1"),
+    ("path segment",
+     "https://\(announcedHost)/v1/\(plantedSecret)"),
+    ("query",
+     "https://\(announcedHost)/v1?access_token=\(plantedSecret)"),
+    ("fragment",
+     "https://\(announcedHost)/v1#access_token=\(plantedSecret)"),
+    ("every position at once",
+     "https://svc:\(plantedSecret)@\(announcedHost):8443"
+        + "/v1/\(plantedSecret)?access_token=\(plantedSecret)#access_token=\(plantedSecret)"),
+]
+
+final class AnnouncedUrlRedactionTests: XCTestCase {
+
+    /// POSITIVE CONTROL. The absence assertions below are only evidence if the
+    /// probe can see the marker when it IS there — otherwise "not found" means
+    /// the check is blind, not that the output is clean.
+    func testTheProbeDetectsThePlantedSecretWhenPresent() {
+        for arm in secretBearingURLs {
+            XCTAssertTrue(
+                arm.url.contains(plantedSecret),
+                "\(arm.position): the probe cannot see the marker in its own input"
+            )
+        }
+    }
+
+    /// THE PROPERTY: whatever an operator put in the URL, it is not in the log.
+    func testAnnouncedUrlDropsTheSecretInEveryGrammarPosition() {
+        for arm in secretBearingURLs {
+            let announced = loggableURL(arm.url)
+            XCTAssertFalse(
+                announced.contains(plantedSecret),
+                "\(arm.position): the app would NSLog a credential — announced: \(announced)"
+            )
+        }
+    }
+
+    /// The other direction. Every assertion above is satisfied by a mask that
+    /// returns "" or a fixed string, so the announcement must still identify the
+    /// server it was written to identify.
+    func testAnnouncedUrlStillNamesTheServer() {
+        for arm in secretBearingURLs {
+            XCTAssertTrue(
+                loggableURL(arm.url).contains(announcedHost),
+                "\(arm.position): the announcement no longer names the host"
+            )
+        }
+        // Scheme, host and port are kept, exactly and only.
+        XCTAssertEqual(loggableURL("https://\(announcedHost)/v1"), "https://\(announcedHost)")
+        XCTAssertEqual(
+            loggableURL("https://\(announcedHost):8443/v1?a=1#b=2"),
+            "https://\(announcedHost):8443",
+            "a non-default port distinguishes one deployment from another and must survive"
+        )
+        XCTAssertEqual(loggableURL("http://127.0.0.1:3000/"), "http://127.0.0.1:3000")
+        XCTAssertEqual(
+            loggableURL("https://[::1]:8443/v1"), "https://[::1]:8443",
+            "an IPv6 literal must keep its brackets or the port reads as part of the address"
+        )
+        // And it is not a constant: a different server announces differently.
+        XCTAssertNotEqual(
+            loggableURL("https://\(announcedHost)/v1"),
+            loggableURL("https://someone-elses-host.example/v1")
+        )
+        // A URL the transport could never use names nothing rather than echoing
+        // an unparsed string straight back into the log.
+        XCTAssertEqual(loggableURL("not a url at all"), "(unparseable URL)")
+    }
+
+    /// END TO END, through the shipped path: the value comes out of a real config
+    /// file, through `resolveStore`, to the string `main.swift` hands to `NSLog`.
+    /// The child must STILL receive the URL in full — a mask that also breaks the
+    /// connection is a different bug.
+    func testEndToEndAnnouncementDropsTheSecretAndTheChildStillGetsTheUrl() throws {
+        for arm in secretBearingURLs {
+            let configPath = try writeConfigFile([
+                "HASNA_CONVERSATIONS_API_URL": arm.url,
+                "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential",
+            ])
+            guard case .cloud(let env, let announced) =
+                resolveStore(environment: [:], configPath: configPath) else {
+                XCTFail("\(arm.position): a usable https URL must still resolve to cloud")
+                continue
+            }
+            XCTAssertFalse(
+                announced.contains(plantedSecret),
+                "\(arm.position): the app would NSLog a credential — announced: \(announced)"
+            )
+            XCTAssertEqual(
+                env["HASNA_CONVERSATIONS_API_URL"], arm.url,
+                "\(arm.position): the child must still receive the configured URL in full"
+            )
+        }
+    }
+
+    /// `debugDescription` prints the same announced URL, and XCTest prints it on
+    /// any failure — so it inherits the property and is asserted directly rather
+    /// than assumed to follow.
+    func testDebugDescriptionDropsTheSecretInEveryGrammarPosition() throws {
+        for arm in secretBearingURLs {
+            let configPath = try writeConfigFile([
+                "HASNA_CONVERSATIONS_API_URL": arm.url,
+                "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential",
+            ])
+            let described = resolveStore(environment: [:], configPath: configPath).debugDescription
+            XCTAssertFalse(
+                described.contains(plantedSecret),
+                "\(arm.position): debugDescription leaked a credential — \(described)"
+            )
+        }
     }
 }
 
@@ -238,7 +427,7 @@ final class EnvFileTests: XCTestCase {
         guard case .cloud(_, let url) = resolveStore(environment: [:], configPath: path) else {
             return XCTFail("CRLF config must still resolve to cloud")
         }
-        XCTAssertEqual(url, "https://conversations.hasna.xyz/v1")
+        XCTAssertEqual(url, "https://conversations.hasna.xyz")
     }
 
     func testAbsentFileIsNotAnError() throws {

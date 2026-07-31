@@ -245,8 +245,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             NSLog("HasnaConversations: configured store=hosted url=%@", url)
             configuredStore = "hosted"
             started = backend.start(storeEnv: env)
-        case .explicitLocal(let env):
-            NSLog("HasnaConversations: configured store=local (explicitly requested via \(StoreEnvContract.modeKeys[0])=local)")
+        case .explicitLocal(let env, let selectedBy):
+            // Name the variable that ACTUALLY selected local. Claiming a fixed
+            // one is the same defect class this commit's sibling fixed: an
+            // operator who chose local through HASNA_CONVERSATIONS_DB_PATH was
+            // told it came from a storage-mode variable they never set, and
+            // would go looking for it.
+            NSLog("HasnaConversations: configured store=local (explicitly requested via %@)", selectedBy)
             configuredStore = "local"
             started = backend.start(storeEnv: env)
         case .unresolved(let reason):

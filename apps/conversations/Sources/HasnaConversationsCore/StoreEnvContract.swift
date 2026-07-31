@@ -46,11 +46,13 @@ public enum StoreEnvContract {
     /// Base URL the transport uses when an API key is present but no URL is set.
     public static let defaultCloudBaseUrl = "https://conversations.hasna.xyz"
 
-    /// Mode token selecting the on-box SQLite store.
+    /// Mode token selecting the on-box SQLite store. Observed from the resolver
+    /// itself rather than written by hand — see localModeToken() in
+    /// src/lib/store/swift-env-contract.ts for why a literal here would be a bet.
     public static let localModeToken = "local"
 
-    /// Mode tokens selecting the hosted service, including deprecated aliases
-    /// the resolver still accepts.
+    /// Mode tokens selecting the hosted service, including the deprecated
+    /// aliases this generation of the vendored contracts client still accepts.
     public static let cloudModeTokens: [String] = [
         "cloud",
         "remote",
