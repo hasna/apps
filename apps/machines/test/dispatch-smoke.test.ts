@@ -191,7 +191,7 @@ describe("dispatch fleet smoke API", () => {
 
   test("dispatch-smoke CLI emits JSON and does not call daemon restart", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-dispatch-smoke-cli-"));
-    const binDir = join(dir, "bin");
+    const binDir = join(dir, ".bun", "bin");
     const marker = join(dir, "restart-called");
     try {
       const dispatch = join(binDir, "dispatch");

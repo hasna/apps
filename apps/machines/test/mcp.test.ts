@@ -73,7 +73,7 @@ test("exports expected MCP tool surface", () => {
 
 test("MCP dispatch fleet smoke is read-only and redacted", async () => {
   const dir = mkdtempSync(join(tmpdir(), "machines-mcp-dispatch-smoke-"));
-  const binDir = join(dir, "bin");
+  const binDir = join(dir, ".bun", "bin");
   const marker = join(dir, "restart-called");
   const previousPath = process.env.PATH;
   // dispatch-smoke builds its own PATH as

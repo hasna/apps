@@ -1,5 +1,6 @@
 import { SWAP_FILE_PATH, SWAP_HEADROOM_GB, type EffectiveTemplate } from "./schema.js";
 import { buildBashrcSpliceCommand } from "./bashrc-block.js";
+import { renderTemplateState } from "./template-state.js";
 
 export interface CloudInitOptions {
   /** Station identity, e.g. station17 — becomes hostname and tailscale name. */
@@ -197,8 +198,9 @@ export function renderCloudInit(effective: EffectiveTemplate, options: CloudInit
     const splice = buildBashrcSpliceCommand(file.target, file.content);
     runcmd.push(`runuser -l ${user} -c '${splice.replace(/'/g, `'\\''`)}'`);
   }
+  const templateState = renderTemplateState(effective, station ?? "unknown", "cloud-init");
   runcmd.push(
-    `mkdir -p ${home}/.hasna/machines && printf '%s' '{"template":"${effective.name}","version":"${effective.version}","layers":"${effective.layers.join(",")}","renderedFor":"${station ?? "unknown"}","appliedBy":"cloud-init"}' > ${home}/.hasna/machines/template-state.json && chown -R ${user}:${user} ${home}/.hasna`
+    `mkdir -p ${home}/.hasna/machines && printf '%s' '${templateState}' > ${home}/.hasna/machines/template-state.json && chown -R ${user}:${user} ${home}/.hasna`
   );
 
   lines.push("runcmd:");

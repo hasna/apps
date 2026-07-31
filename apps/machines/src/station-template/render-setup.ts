@@ -2,6 +2,7 @@ import { dirname } from "node:path";
 import type { SetupStep } from "../types.js";
 import { buildBashrcSpliceCommand } from "./bashrc-block.js";
 import { SWAP_FILE_PATH, SWAP_HEADROOM_GB, type EffectiveTemplate, type LoadedTemplateFile } from "./schema.js";
+import { renderTemplateState } from "./template-state.js";
 
 function quote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
@@ -255,6 +256,18 @@ export function buildStationTemplateSteps(effective: EffectiveTemplate, options:
       manager: "custom",
     });
   }
+
+  const templateState = renderTemplateState(effective, station ?? "unknown", "setup");
+  steps.push({
+    id: "template-state",
+    title: "Record applied station template (never convergence-critical)",
+    command:
+      `( mkdir -p "$HOME/.hasna/machines" && printf '%s' ${quote(templateState)} > "$HOME/.hasna/machines/template-state.json" && ` +
+      `sudo chown -R "$(id -un)":"$(id -gn)" "$HOME/.hasna" ) || ` +
+      `echo 'hasna-station: template-state write failed (NON-FATAL) — fleet state may be stale' >&2`,
+    manager: "shell",
+    privileged: true,
+  });
 
   return steps;
 }

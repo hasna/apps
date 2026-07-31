@@ -682,6 +682,35 @@ describe("boot criticality (owner ruling 2026-07-29: tailscale must never be boo
     expect(awsInstall).toBe(1);
   });
 
+  test("setup writes the final template-state stamp with the same effective-template payload as cloud-init", () => {
+    const effective = effectiveFor(["ec2"]);
+    const station = "station17";
+    const steps = buildStationTemplateSteps(effective, { station });
+    const setupStamp = steps.at(-1);
+    const cloudStamp = runcmdEntries(renderCloudInit(effective, { station })).at(-1);
+    const payloadFrom = (command: string | undefined) => {
+      const match = command?.match(/printf '%s' '(\{[^']+\})'/);
+      expect(match).toBeDefined();
+      return match![1]!;
+    };
+
+    expect(setupStamp?.id).toBe("template-state");
+    expect(setupStamp?.command).toContain('"$HOME/.hasna/machines/template-state.json"');
+    expect(setupStamp?.command).toContain("chown -R");
+    expect(setupStamp?.command).toContain("NON-FATAL");
+
+    const setupPayload = payloadFrom(setupStamp?.command);
+    const cloudPayload = payloadFrom(cloudStamp);
+    expect(JSON.parse(setupPayload)).toEqual({
+      template: effective.name,
+      version: effective.version,
+      layers: effective.layers.join(","),
+      renderedFor: station,
+      appliedBy: "setup",
+    });
+    expect(setupPayload).toBe(cloudPayload.replace('"appliedBy":"cloud-init"', '"appliedBy":"setup"'));
+  });
+
   test("POSITIVE CONTROL: forced join failure (aws absent) cannot abort boot; floor enabled; failure loud — via a planted opt-in overlay, since no shipped cloud layer joins", () => {
     // Owner ruling 2026-07-30: station,ec2 renders no tailscale at all. The
     // cloud-init join path survives ONLY for a future deliberately-argued
