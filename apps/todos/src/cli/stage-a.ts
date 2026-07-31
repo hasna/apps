@@ -52,6 +52,13 @@ export const TODOS_CLI_COMMAND_ALIASES = {
   "template-history": ["templates-history"],
   "agents-normalize": ["normalize-agents"],
   "agent-update": ["agents-update"],
+  // The MCP surface calls these operations `complete_task` and
+  // `register_agent`, and the agent rule corpus instructs agents to use those
+  // names, so the CLI accepts its own vocabulary instead of rejecting it.
+  // `bulk complete` and the status normaliser already treat "complete" as a
+  // synonym for "done"; this makes the top-level verb agree with them.
+  done: ["complete"],
+  init: ["register"],
   upgrade: ["self-update"],
   roadmaps: ["roadmap"],
   "env-snapshot": ["environment-snapshot"],
@@ -237,57 +244,190 @@ function isMetadataInvocation(args: string[], invocation: ParsedInvocation): boo
     (HELP_FLAGS.has(invocation.commandArgs[0]!) || VERSION_FLAGS.has(invocation.commandArgs[0]!));
 }
 
-function commandSupportsRemote(invocation: ParsedInvocation): boolean {
-  const command = invocation.command;
-  if (!command || COMMAND_CAPABILITY_MATRIX.get(command) !== "remote-http") return false;
+/** First option in `candidates` present on `args`, for blaming the right token. */
+function firstPresentOption(args: readonly string[], candidates: readonly string[]): Disqualification | null {
+  const option = candidates.find((candidate) => hasOption(args, candidate));
+  return option ? dropIt(option) : null;
+}
+
+/**
+ * For a verb that IS remote-capable, the specific token that disqualifies this
+ * invocation — or null when the invocation is serviceable. Naming the token
+ * matters: "list is not supported" sends the reader to debug the wrong thing
+ * when `list` works and only `--recurring` does not.
+ */
+interface Disqualification {
+  /** The token to blame, rendered into the message. */
+  blame: string;
+  /** What the caller should actually do about it. */
+  remedy: string;
+}
+
+const dropIt = (blame: string): Disqualification => ({ blame, remedy: "re-run without it" });
+
+function disqualifyingArgument(invocation: ParsedInvocation): Disqualification | null {
+  const command = invocation.command!;
   const args = invocation.commandArgs;
   switch (command) {
     case "task":
-      return positionalArgs(args)[0] === "upsert";
+      return positionalArgs(args)[0] === "upsert"
+        ? null
+        : { blame: "any subcommand other than `upsert`", remedy: "use `todos task upsert`" };
     case "doctor":
-      return positionalArgs(args)[0] !== "routing" && !hasOption(args, "--apply") && !hasOption(args, "--fix");
+      if (positionalArgs(args)[0] === "routing") return dropIt("the `routing` subcommand");
+      return firstPresentOption(args, ["--apply", "--fix"]);
     case "projects":
-      return !hasOption(args, "--deregister") && !hasOption(args, "--path-prefix") && !hasOption(args, "--dry-run");
+      return firstPresentOption(args, ["--deregister", "--path-prefix", "--dry-run"]);
     case "plans":
-      return !hasOption(args, "--artifact") && !hasOption(args, "--write-artifacts");
+      return firstPresentOption(args, ["--artifact", "--write-artifacts"]);
     // `list --tags/--tag` is serviced remotely: the /v1 list route filters by
     // tag server-side and the cloud router preflights the capability against
     // the authority's OpenAPI contract (task 90c0b178).
     case "list":
-      return !hasOption(args, "--recurring");
+      return firstPresentOption(args, ["--recurring"]);
     case "claim":
-      return !invocation.globalOptions.has("--project") && !hasOption(args, "--project") &&
-        !hasOption(args, "--stale-minutes") && !hasOption(args, "--steal-stale");
+      if (invocation.globalOptions.has("--project")) return dropIt("--project");
+      return firstPresentOption(args, ["--project", "--stale-minutes", "--steal-stale"]);
     case "status":
-      return !invocation.globalOptions.has("--agent") && !hasOption(args, "--agent");
-    // `deps <id>` (read edges), `--needs`/`--remove` (write edges), and the
-    // presentation-only `--graph`/`--direction` flags are all serviced remotely:
-    // the cloud handler renders the shared dependency/blocked-by edges and, since
-    // the recursive graph is a local-only view, gracefully falls back to those
-    // same flat edges for `--graph`/`--direction` instead of failing closed.
-    case "deps":
-      return true;
+      if (invocation.globalOptions.has("--agent")) return dropIt("--agent");
+      return firstPresentOption(args, ["--agent"]);
     case "bulk": {
       const action = positionalArgs(args)[0];
       // `bulk plan|move-plan` reassigns tasks through the shared /v1 dataset
       // (plan ref resolved remotely, then PATCH /v1/tasks/<id>), so it is
       // serviced remotely. The other actions carry no plan semantics, so the
       // plan flags stay rejected there rather than being silently ignored.
-      if (action === "plan" || action === "move-plan") return true;
-      return Boolean(action && ["done", "complete", "start", "delete"].includes(action)) &&
-        !hasOption(args, "--plan") && !hasOption(args, "--clear-plan");
+      if (action === "plan" || action === "move-plan") return null;
+      if (!action) {
+        // "re-run without it" does not parse when nothing was given.
+        return { blame: "a missing action", remedy: "pass one of done, complete, start, delete, plan, move-plan" };
+      }
+      if (!["done", "complete", "start", "delete"].includes(action)) {
+        return {
+          blame: `the \`${action}\` action`,
+          remedy: "use one of done, complete, start, delete, plan, move-plan",
+        };
+      }
+      return firstPresentOption(args, ["--plan", "--clear-plan"]);
     }
+    // Everything else — `deps` included — is serviced remotely in full.
+    // `deps <id>` (read edges), `--needs`/`--remove` (write edges), and the
+    // presentation-only `--graph`/`--direction` flags all reach the cloud
+    // handler, which renders the shared dependency/blocked-by edges and, since
+    // the recursive graph is a local-only view, gracefully falls back to those
+    // same flat edges for `--graph`/`--direction` instead of failing closed.
     default:
-      return true;
+      return null;
   }
 }
 
+function commandSupportsRemote(invocation: ParsedInvocation): boolean {
+  const command = invocation.command;
+  if (!command || COMMAND_CAPABILITY_MATRIX.get(command) !== "remote-http") return false;
+  return disqualifyingArgument(invocation) === null;
+}
+
+/** Restricted Damerau-Levenshtein distance, capped so long words exit early. */
+function editDistance(a: string, b: string): number {
+  const rows = a.length + 1;
+  const cols = b.length + 1;
+  // Transposition needs the row TWO back, not one; keeping only a single
+  // previous row silently degrades this to plain Levenshtein and `dnoe` stops
+  // matching `done`.
+  let twoBack: number[] = new Array<number>(cols).fill(0);
+  let previous = Array.from({ length: cols }, (_, index) => index);
+  for (let row = 1; row < rows; row += 1) {
+    const current = [row, ...new Array<number>(cols - 1).fill(0)];
+    for (let col = 1; col < cols; col += 1) {
+      const substitution = previous[col - 1]! + (a[row - 1] === b[col - 1] ? 0 : 1);
+      current[col] = Math.min(current[col - 1]! + 1, previous[col]! + 1, substitution);
+      if (row > 1 && col > 1 && a[row - 1] === b[col - 2] && a[row - 2] === b[col - 1]) {
+        current[col] = Math.min(current[col]!, twoBack[col - 2]! + 1);
+      }
+    }
+    twoBack = previous;
+    previous = current;
+  }
+  return previous[cols - 1]!;
+}
+
+/**
+ * Closest real verbs to an unrecognised one. The threshold scales with length
+ * so short words do not match everything and long words tolerate a typo.
+ */
+function nearestCommands(command: string, limit = 3): string[] {
+  const threshold = command.length <= 4 ? 1 : command.length <= 8 ? 2 : 3;
+  // Suggest only what this route can actually run. Pointing a typo at a
+  // local-only verb just buys the caller a second, different refusal — the
+  // suggestion has to be a way out, not another dead end.
+  return [...COMMAND_CAPABILITY_MATRIX.entries()]
+    .filter(([, owner]) => owner !== "local-only")
+    .map(([candidate]) => candidate)
+    .map((candidate) => ({ candidate, distance: editDistance(command, candidate) }))
+    .filter(({ distance }) => distance <= threshold)
+    .sort((left, right) => left.distance - right.distance || left.candidate.localeCompare(right.candidate))
+    .slice(0, limit)
+    .map(({ candidate }) => candidate);
+}
+
+/**
+ * Explain a Stage A refusal in terms of what the caller can actually change.
+ *
+ * Three unrelated conditions used to collapse into one string that asserted a
+ * transport limitation ("not supported by the Todos /v1 CLI; local SQLite
+ * fallback is disabled"). For a verb that does not exist, both of those
+ * clauses are false — it is unsupported everywhere and no fallback would
+ * accept it — so readers went and debugged their connection, storage mode and
+ * credentials instead of their command. Every branch below names a remedy in
+ * its own text.
+ */
 function assertRemoteCommandSupported(invocation: ParsedInvocation): void {
-  if (invocation.invalidGlobalOption || invocation.unknownLeadingOption || !commandSupportsRemote(invocation)) {
+  if (invocation.invalidGlobalOption) {
     throw new Error(
-      `REMOTE_COMMAND_UNSUPPORTED: ${invocationLabel(invocation)} is not supported by the Todos /v1 CLI; ` +
-        "local SQLite fallback is disabled",
+      `REMOTE_COMMAND_UNSUPPORTED: the global option ${invocation.invalidGlobalOption} was given without a value; ` +
+        `pass one as \`${invocation.invalidGlobalOption} <value>\``,
     );
+  }
+  if (invocation.unknownLeadingOption) {
+    throw new Error(
+      `REMOTE_COMMAND_UNSUPPORTED: unknown option ${invocation.unknownLeadingOption} before the command; ` +
+        "run `todos --help` for the global options",
+    );
+  }
+
+  const command = invocation.command;
+  const owner = command ? COMMAND_CAPABILITY_MATRIX.get(command) : undefined;
+
+  if (command && !owner) {
+    // Stage A runs before any command module loads, so all it can know is that
+    // this verb is absent from the static registry. That covers two cases: a
+    // typo, and a command that an OPTIONAL package (e.g. `@hasna/events`,
+    // which contributes `channels`) registers later in the boot. Neither is
+    // reachable on the /v1 route, so the message is framed on the route rather
+    // than asserting the verb does not exist — claiming that about a real
+    // command would be a worse lie than the one this fix removes.
+    const suggestions = nearestCommands(command);
+    const didYouMean = suggestions.length > 0 ? ` Did you mean: ${suggestions.join(", ")}?` : "";
+    throw new Error(
+      `UNKNOWN_COMMAND: \`${command}\` is not a built-in todos command on the /v1 route.${didYouMean} ` +
+        "Run `todos --help` for the commands available here; verbs contributed by optional packages are local-only. " +
+        "(This is not a connectivity, storage-mode or credential problem.)",
+    );
+  }
+
+  if (command && owner === "local-only") {
+    throw new Error(
+      `REMOTE_COMMAND_UNSUPPORTED: \`${command}\` is a local-only command and the Todos /v1 authority does not ` +
+        "serve it; local SQLite fallback is disabled. Run `todos --help` to see the commands this route supports.",
+    );
+  }
+
+  if (!command || !commandSupportsRemote(invocation)) {
+    const blame = command ? disqualifyingArgument(invocation) : null;
+    const detail = blame
+      ? `\`${command}\` is served by the Todos /v1 authority but ${blame.blame} is not; ${blame.remedy}`
+      : `${invocationLabel(invocation)} is not supported by the Todos /v1 CLI; local SQLite fallback is disabled`;
+    throw new Error(`REMOTE_COMMAND_UNSUPPORTED: ${detail}`);
   }
 }
 
