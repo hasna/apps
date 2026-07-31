@@ -92,8 +92,8 @@ function cliError(args: string[]): ErrorEnvelope {
   try {
     cliJson(args);
   } catch (error) {
-    const stdout = String((error as { stdout?: Buffer | string }).stdout ?? "").trim();
-    const parsed = JSON.parse(stdout) as ErrorEnvelope;
+    const stderr = String((error as { stderr?: Buffer | string }).stderr ?? "").trim();
+    const parsed = JSON.parse(stderr) as ErrorEnvelope;
     return { code: parsed.code, message: parsed.message, suggestion: parsed.suggestion };
   }
   throw new Error("Expected CLI command to fail.");

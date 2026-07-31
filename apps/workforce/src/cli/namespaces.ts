@@ -20,7 +20,11 @@ function handle(json: boolean, fn: () => unknown): void {
     emit(fn(), json);
   } catch (error) {
     const env = toErrorEnvelope(error);
-    console.log(JSON.stringify({ ...env, error: env.message }));
+    if (json) {
+      console.error(JSON.stringify({ ...env, error: env.message }));
+    } else {
+      console.error([env.message, env.suggestion].filter(Boolean).join(" "));
+    }
     process.exitCode = 1;
   }
 }

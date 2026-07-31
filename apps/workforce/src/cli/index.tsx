@@ -66,6 +66,12 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  console.log(JSON.stringify({ code: "INTERNAL_ERROR", message: error instanceof Error ? error.message : String(error), suggestion: "", error: error instanceof Error ? error.message : String(error) }));
+  const message = error instanceof Error ? error.message : String(error);
+  const env = { code: "INTERNAL_ERROR", message, suggestion: "", error: message };
+  if (globalJson()) {
+    console.error(JSON.stringify(env));
+  } else {
+    console.error([env.message, env.suggestion].filter(Boolean).join(" "));
+  }
   process.exit(1);
 });
