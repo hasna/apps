@@ -57,7 +57,7 @@
     "packages": {
       "apt": ["earlyoom", "git", "curl", "unzip", "build-essential", "tmux", "sqlite3", "jq"],
       "bun": [
-        { "name": "@hasna/machines", "minVersion": "0.2.9", "lesson": "2026-07-30: package:bun:* reported ok at ANY version, so 12 of 42 drift items were version-blind — a station carrying a CLI from before a fix read identical to one updated an hour ago, and a test asserted a 9.9.9 fixture was ok. Each floor is the version published on 2026-07-31, when template 1.7.0 shipped: clean means 'not running an older CLI than the one we shipped with'. It is a FLOOR, never a pin — a newer version is ok, and the renders install latest." },
+        { "name": "@hasna/machines", "minVersion": "0.3.0", "lesson": "2026-07-30: package:bun:* reported ok at ANY version, so 12 of 42 drift items were version-blind — a station carrying a CLI from before a fix read identical to one updated an hour ago, and a test asserted a 9.9.9 fixture was ok. Each floor is the version published on 2026-07-31, when template 1.7.0 shipped: clean means 'not running an older CLI than the one we shipped with'. It is a FLOOR, never a pin — a newer version is ok, and the renders install latest." },
         { "name": "@hasna/todos", "minVersion": "0.13.3", "lesson": "Task state is fleet-shared: an old todos CLI on one station writes state every other station reads." },
         { "name": "@hasna/conversations", "minVersion": "0.5.13", "lesson": "Version floor for the shipped CLI set (published 2026-07-31)." },
         { "name": "@hasna/mementos", "minVersion": "0.14.69", "lesson": "Version floor for the shipped CLI set (published 2026-07-31)." },

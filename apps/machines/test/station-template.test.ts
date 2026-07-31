@@ -23,6 +23,7 @@ import { sortSystemdDropinNames } from "../src/station-template/check.js";
 const SHIPPED = defaultTemplatesDir();
 const repoRoot = resolve(import.meta.dir, "..");
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
+const packageVersion = (JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as { version: string }).version;
 
 function runCli(args: string[], env: NodeJS.ProcessEnv) {
   return spawnSync(process.execPath, [cliPath, ...args], { cwd: repoRoot, env, encoding: "utf8" });
@@ -374,6 +375,18 @@ describe("drift check", () => {
           minVersion: expect.stringMatching(/^\d+\.\d+\.\d+$/),
         });
       }
+    }
+  });
+
+  test("the shipped machines floor tracks this package version", () => {
+    for (const overlays of [[], ["ec2"], ["dgx-spark"]]) {
+      const pkg = effectiveFor(overlays).packages.bun.find((candidate) => candidate.name === "@hasna/machines");
+      expect({ layers: overlays, pkg: pkg?.name, minVersion: pkg?.minVersion, packageVersion }).toEqual({
+        layers: overlays,
+        pkg: "@hasna/machines",
+        minVersion: packageVersion,
+        packageVersion,
+      });
     }
   });
 
