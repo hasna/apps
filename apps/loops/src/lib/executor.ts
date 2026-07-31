@@ -1251,10 +1251,11 @@ async function executeRemoteSpec(
     return failureResult(startedAt, err instanceof Error ? err.message : String(err));
   }
 
+  const stderr = new BoundedOutputBuffer(maxOutputBytes);
   for (let attemptIndex = 0; ; attemptIndex += 1) {
     const attemptStartedAt = attemptIndex === 0 ? startedAt : nowIso();
     const stdout = new BoundedOutputBuffer(maxOutputBytes);
-    const stderr = new BoundedOutputBuffer(maxOutputBytes);
+    const attemptStderr = new BoundedOutputBuffer(maxOutputBytes);
     let timedOut = false;
     let idleTimedOut = false;
     let exitCode: number | undefined;
@@ -1309,6 +1310,7 @@ async function executeRemoteSpec(
     });
     child.stderr?.on("data", (chunk: string) => {
       stderr.append(chunk);
+      attemptStderr.append(chunk);
       resetIdleTimer();
     });
 
@@ -1326,6 +1328,7 @@ async function executeRemoteSpec(
 
     const attemptFinishedAt = nowIso();
     const fields: ResultFields = { exitCode, stdout: stdout.value(), stderr: stderr.value(), pid: child.pid, finishedAt: attemptFinishedAt };
+    const attemptFields: ResultFields = { ...fields, stderr: attemptStderr.value() };
     if (timedOut || idleTimedOut) {
       return timeoutResult(
         startedAt,
@@ -1339,14 +1342,17 @@ async function executeRemoteSpec(
       return successResult(startedAt, fields);
     }
     if (error || exitCode !== 0) {
-      if (shouldRetryCodewithStartFailure(spec, fields, error, attemptStartedAt, attemptFinishedAt, attemptIndex)) {
-        opts.log?.(`retrying codewith agent after transient fast start failure (${attemptIndex + 1}/${CODEWITH_START_RETRY_DELAYS_MS.length + 1})`);
+      if (shouldRetryCodewithStartFailure(spec, attemptFields, error, attemptStartedAt, attemptFinishedAt, attemptIndex)) {
+        const retryMessage = `retrying codewith agent after transient fast start failure (${attemptIndex + 1}/${CODEWITH_START_RETRY_DELAYS_MS.length + 1})`;
+        opts.log?.(retryMessage);
+        stderr.append(`\n${retryMessage}\n`);
+        fields.stderr = stderr.value();
         if (await waitForRetryDelay(CODEWITH_START_RETRY_DELAYS_MS[attemptIndex]!, opts.signal)) continue;
         return failureResult(startedAt, "cancelled", fields);
       }
       return failureResult(startedAt, error ?? `remote process on ${machine.id} exited with code ${exitCode ?? "unknown"}`, fields);
     }
-    if (agentProducedNoOutput(spec, fields)) return failureResult(startedAt, AGENT_NO_OUTPUT_ERROR, fields);
+    if (agentProducedNoOutput(spec, attemptFields)) return failureResult(startedAt, AGENT_NO_OUTPUT_ERROR, fields);
     return successResult(startedAt, fields);
   }
 }
@@ -1427,10 +1433,11 @@ export async function executeTarget(
     Object.assign(env, allowlistEnv(spec.allowlist, spec.sessionContract));
   }
 
+  const stderr = new BoundedOutputBuffer(maxOutputBytes);
   for (let attemptIndex = 0; ; attemptIndex += 1) {
     const attemptStartedAt = attemptIndex === 0 ? startedAt : nowIso();
     const stdout = new BoundedOutputBuffer(maxOutputBytes);
-    const stderr = new BoundedOutputBuffer(maxOutputBytes);
+    const attemptStderr = new BoundedOutputBuffer(maxOutputBytes);
     let timedOut = false;
     let idleTimedOut = false;
     let exitCode: number | undefined;
@@ -1489,6 +1496,7 @@ export async function executeTarget(
     });
     child.stderr?.on("data", (chunk: string) => {
       stderr.append(chunk);
+      attemptStderr.append(chunk);
       resetIdleTimer();
     });
 
@@ -1506,6 +1514,7 @@ export async function executeTarget(
 
     const attemptFinishedAt = nowIso();
     const fields: ResultFields = { exitCode, stdout: stdout.value(), stderr: stderr.value(), pid: child.pid, finishedAt: attemptFinishedAt };
+    const attemptFields: ResultFields = { ...fields, stderr: attemptStderr.value() };
     if (timedOut || idleTimedOut) {
       return timeoutResult(
         startedAt,
@@ -1519,14 +1528,17 @@ export async function executeTarget(
       return successResult(startedAt, fields);
     }
     if (error || exitCode !== 0) {
-      if (shouldRetryCodewithStartFailure(spec, fields, error, attemptStartedAt, attemptFinishedAt, attemptIndex)) {
-        opts.log?.(`retrying codewith agent after transient fast start failure (${attemptIndex + 1}/${CODEWITH_START_RETRY_DELAYS_MS.length + 1})`);
+      if (shouldRetryCodewithStartFailure(spec, attemptFields, error, attemptStartedAt, attemptFinishedAt, attemptIndex)) {
+        const retryMessage = `retrying codewith agent after transient fast start failure (${attemptIndex + 1}/${CODEWITH_START_RETRY_DELAYS_MS.length + 1})`;
+        opts.log?.(retryMessage);
+        stderr.append(`\n${retryMessage}\n`);
+        fields.stderr = stderr.value();
         if (await waitForRetryDelay(CODEWITH_START_RETRY_DELAYS_MS[attemptIndex]!, opts.signal)) continue;
         return failureResult(startedAt, "cancelled", fields);
       }
       return failureResult(startedAt, error ?? `process exited with code ${exitCode ?? "unknown"}`, fields);
     }
-    if (agentProducedNoOutput(spec, fields)) return failureResult(startedAt, AGENT_NO_OUTPUT_ERROR, fields);
+    if (agentProducedNoOutput(spec, attemptFields)) return failureResult(startedAt, AGENT_NO_OUTPUT_ERROR, fields);
     return successResult(startedAt, fields);
   }
 }

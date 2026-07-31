@@ -182,6 +182,7 @@ describe("agent adapters", () => {
       expect(execArgs).not.toContain("say ok");
       expect(result.stdout).toContain("item.completed");
       expect(result.stdout).toContain("stdin:say ok");
+      expect(result.stderr).not.toContain("retrying codewith agent");
     } finally {
       store.close();
     }
@@ -204,7 +205,7 @@ describe("agent adapters", () => {
         "  attempt=$((attempt + 1))",
         "  printf '%s' \"$attempt\" > \"$OPENLOOPS_FAKE_CODEWITH_ATTEMPTS\"",
         "  if [[ \"$attempt\" -lt 3 ]]; then",
-        "    echo 'codewith agent start exited with code 1' >&2",
+        "    echo \"attempt $attempt: codewith agent start exited with code 1\" >&2",
         "    exit 1",
         "  fi",
         "  printf '%s\\n' '{\"type\":\"task_complete\"}'",
@@ -244,8 +245,75 @@ describe("agent adapters", () => {
       });
       expect(result.status).toBe("succeeded");
       expect(result.stdout).toContain("task_complete");
+      expect(result.stderr).toContain("retrying codewith agent after transient fast start failure (1/3)");
+      expect(result.stderr).toContain("retrying codewith agent after transient fast start failure (2/3)");
+      expect(result.stderr).toContain("attempt 1: codewith agent start exited with code 1");
+      expect(result.stderr).toContain("attempt 2: codewith agent start exited with code 1");
       const execInvocations = codewithInvocations(invocationsFile).filter((args) => args.includes("exec"));
       expect(execInvocations).toHaveLength(3);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("does not count codewith retry diagnostics as final agent output", async () => {
+    const binDir = mkdtempSync(join(tmpdir(), "loops-codewith-retry-silent-"));
+    const invocationsFile = join(binDir, "invocations");
+    const attemptsFile = join(binDir, "attempts");
+    const fake = join(binDir, "codewith");
+    await Bun.write(
+      fake,
+      [
+        "#!/usr/bin/env bash",
+        "printf '%s\\0' \"$@\" >> \"$OPENLOOPS_FAKE_CODEWITH_INVOCATIONS\"",
+        "printf '\\n' >> \"$OPENLOOPS_FAKE_CODEWITH_INVOCATIONS\"",
+        "if [[ \" $* \" == *\" exec \"* ]]; then",
+        "  attempt=0",
+        "  if [[ -f \"$OPENLOOPS_FAKE_CODEWITH_ATTEMPTS\" ]]; then attempt=\"$(cat \"$OPENLOOPS_FAKE_CODEWITH_ATTEMPTS\")\"; fi",
+        "  attempt=$((attempt + 1))",
+        "  printf '%s' \"$attempt\" > \"$OPENLOOPS_FAKE_CODEWITH_ATTEMPTS\"",
+        "  if [[ \"$attempt\" -eq 1 ]]; then",
+        "    echo 'codewith agent start exited with code 1' >&2",
+        "    exit 1",
+        "  fi",
+        "  exit 0",
+        "fi",
+        "printf 'unexpected codewith invocation: %s\\n' \"$*\" >&2",
+        "exit 64",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(fake, 0o755);
+
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "codewith-retry-silent-agent",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "agent",
+          provider: "codewith",
+          prompt: "say ok",
+          cwd: ".",
+          configIsolation: "safe",
+        },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, {
+        env: {
+          ...process.env,
+          PATH: `${binDir}:${process.env.PATH}`,
+          OPENLOOPS_FAKE_CODEWITH_ATTEMPTS: attemptsFile,
+          OPENLOOPS_FAKE_CODEWITH_INVOCATIONS: invocationsFile,
+        },
+      });
+      expect(result.status).toBe("failed");
+      expect(result.error).toContain("agent exited 0 with no output");
+      expect(result.stderr).toContain("retrying codewith agent after transient fast start failure (1/3)");
+      expect(result.stderr).toContain("codewith agent start exited with code 1");
+      const execInvocations = codewithInvocations(invocationsFile).filter((args) => args.includes("exec"));
+      expect(execInvocations).toHaveLength(2);
     } finally {
       store.close();
     }
