@@ -37,6 +37,8 @@ const GITHUB_ACTOR_SOURCE: IdentitySourceLineage = {
   source_record_id: "actor-42",
 };
 
+const FILE_BACKED_LEGACY_MIGRATION_TIMEOUT_MS = 15_000;
+
 function expectIdentityAmbiguity(run: () => unknown): void {
   try {
     run();
@@ -226,7 +228,7 @@ describe("agent identity projection contract", () => {
       process.env["TODOS_DB_PATH"] = ":memory:";
       db = getDatabase();
     }
-  });
+  }, FILE_BACKED_LEGACY_MIGRATION_TIMEOUT_MS);
 
   it("quarantines name-similarity candidates and never infers identity_id from a name", () => {
     ensureAgentIdentitySchema(db);

@@ -3,15 +3,77 @@
   "name": "todos",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.4.1",
+  "kitVersion": "0.8.4",
   "description": "Universal task management for AI coding agents. CLI + MCP + HTTP API (todos-serve) + generated SDK. One data-backend switch, two arms: the server stores in the local SQLite file by default, or in PostgreSQL when HASNA_TODOS_DATABASE_URL is set (serving the authenticated /v1 API per Amendment A1, API-key auth via @hasna/contracts). The client connects to its local SQLite file or to the /v1 authority over HTTP; it never opens Postgres directly.",
-  "bins": ["todos", "todos-mcp", "todos-serve"],
+  "bins": [
+    "todos",
+    "todos-mcp",
+    "todos-serve"
+  ],
+  "hosting": [
+    "user-hosted"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "http-api",
+      "kind": "api",
+      "status": "supported",
+      "bin": "todos-serve",
+      "authMode": "api-key",
+      "health": {
+        "method": "GET",
+        "path": "/health",
+        "public": true
+      },
+      "readiness": {
+        "method": "GET",
+        "path": "/ready",
+        "public": false
+      },
+      "version": {
+        "method": "GET",
+        "path": "/version",
+        "public": true
+      },
+      "apiBasePath": "/v1",
+      "openApiPath": "/openapi.json"
+    },
+    {
+      "name": "typescript-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "api-key",
+      "exportSubpath": "./sdk",
+      "generatedFrom": "/openapi.json"
+    },
+    {
+      "name": "mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "todos-mcp",
+      "authMode": "local-only"
+    },
+    {
+      "name": "cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "todos",
+      "authMode": "local-only"
+    }
+  ],
   "storage": {
-    "mode": "local",
+    "mode": "sqlite",
+    "engines": [
+      "sqlite",
+      "postgres"
+    ],
     "envPrefix": "HASNA_TODOS_",
     "aliasEnvPrefix": "TODOS_",
-    "databaseUrlSecretRef": "hasna/oss/todos/database-url",
-    "sqlitePath": "~/.hasna/todos/todos.db"
+    "sqlitePath": "~/.hasna/todos/todos.db",
+    "pgTestGate": {
+      "envVar": "TODOS_TEST_DATABASE_URL",
+      "command": "bun test"
+    }
   },
   "metadata": {
     "service": {
@@ -21,8 +83,7 @@
       "versionPath": "/version",
       "openapiPath": "/openapi.json",
       "apiVersion": "v1",
-      "auth": "api-key",
-      "signingSecretSecretRef": "hasna/oss/todos/api-key-signing-secret"
+      "auth": "api-key"
     },
     "client": {
       "apiUrlEnv": "HASNA_TODOS_API_URL",
