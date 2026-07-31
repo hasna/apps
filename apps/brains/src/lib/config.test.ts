@@ -21,13 +21,13 @@ mkdirSync(join(testHome, ".hasna", "brains"), { recursive: true });
 const savedHome = process.env.HOME;
 const savedEnv: Record<string, string | undefined> = {
   OPENAI_API_KEY: process.env.OPENAI_API_KEY,
-  THINKER_LABS_API_KEY: process.env.THINKER_LABS_API_KEY,
-  THINKER_LABS_BASE_URL: process.env.THINKER_LABS_BASE_URL,
+  TINKER_API_KEY: process.env.TINKER_API_KEY,
+  TINKER_BASE_URL: process.env.TINKER_BASE_URL,
 };
 process.env.HOME = testHome;
 delete process.env.OPENAI_API_KEY;
-delete process.env.THINKER_LABS_API_KEY;
-delete process.env.THINKER_LABS_BASE_URL;
+delete process.env.TINKER_API_KEY;
+delete process.env.TINKER_BASE_URL;
 
 const { getConfigValue, setConfigValue, listConfig, deleteConfigValue } = await import("./config.js");
 
@@ -55,8 +55,8 @@ beforeEach(() => {
   // Clear config file and all relevant env vars before each test
   if (existsSync(configPath)) rmSync(configPath);
   delete process.env.OPENAI_API_KEY;
-  delete process.env.THINKER_LABS_API_KEY;
-  delete process.env.THINKER_LABS_BASE_URL;
+  delete process.env.TINKER_API_KEY;
+  delete process.env.TINKER_BASE_URL;
 });
 
 afterAll(() => {
@@ -89,14 +89,14 @@ describe("config", () => {
   });
 
   test("listConfig shows all keys with correct sources", () => {
-    setConfigValue("THINKER_LABS_API_KEY", "tl-123");
+    setConfigValue("TINKER_API_KEY", "tinker-123");
     process.env.OPENAI_API_KEY = "sk-env";
     const entries = listConfig();
     const openai = entries.find((e) => e.key === "OPENAI_API_KEY");
-    const thinker = entries.find((e) => e.key === "THINKER_LABS_API_KEY");
-    const baseUrl = entries.find((e) => e.key === "THINKER_LABS_BASE_URL");
+    const tinker = entries.find((e) => e.key === "TINKER_API_KEY");
+    const baseUrl = entries.find((e) => e.key === "TINKER_BASE_URL");
     expect(openai?.source).toBe("env");
-    expect(thinker?.source).toBe("file");
+    expect(tinker?.source).toBe("file");
     expect(baseUrl?.source).toBe("unset");
   });
 

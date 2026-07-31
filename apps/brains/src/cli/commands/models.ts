@@ -4,7 +4,7 @@ import { randomUUID } from "crypto";
 import { getDb, fineTunedModels, trainingJobs } from "../../db/index.js";
 import { parseTagList } from "../../lib/gatherers/tags.js";
 import * as openaiProvider from "../../lib/providers/openai.js";
-import { ThinkerLabsProvider } from "../../lib/providers/thinker-labs.js";
+import { TinkerProvider } from "../../lib/providers/tinker.js";
 import { printTable, printStatus, printJson, printError, printSuccess, printInfo, printHint } from "../ui.js";
 import {
   DEFAULT_LIST_LIMIT,
@@ -47,8 +47,8 @@ function parseListFilters(opts: ListModelsOptions): { provider?: Provider; statu
   const providerRaw = opts.provider?.trim();
   const statusRaw = opts.status?.trim();
 
-  if (providerRaw && providerRaw !== "openai" && providerRaw !== "thinker-labs") {
-    throw new Error(`Invalid --provider value: ${providerRaw}. Use openai or thinker-labs.`);
+  if (providerRaw && providerRaw !== "openai" && providerRaw !== "tinker") {
+    throw new Error(`Invalid --provider value: ${providerRaw}. Use openai or tinker.`);
   }
 
   if (statusRaw && !VALID_STATUSES.has(statusRaw as ModelStatus)) {
@@ -95,7 +95,7 @@ export function registerModelsCommands(program: Command): void {
   modelsCmd
     .command("list")
     .description("List all tracked fine-tuned models")
-    .option("--provider <provider>", "Filter by provider (openai|thinker-labs)")
+    .option("--provider <provider>", "Filter by provider (openai|tinker)")
     .option("--status <status>", "Filter by status (pending|running|succeeded|failed|cancelled)")
     .option("--limit <n>", `Maximum number of rows to show (default: ${DEFAULT_LIST_LIMIT} for human output)`)
     .option("--verbose", "Show full IDs and additional model columns")
@@ -300,7 +300,7 @@ export function registerModelsCommands(program: Command): void {
   modelsCmd
     .command("import <job-id>")
     .description("Import an externally created fine-tuned model into local tracking")
-    .option("--provider <provider>", "Provider (openai|thinker-labs)", "openai")
+    .option("--provider <provider>", "Provider (openai|tinker)", "openai")
     .option("--name <name>", "Display name for the model")
     .action(async (jobId: string, opts: { provider: string; name?: string }) => {
       try {
@@ -308,8 +308,8 @@ export function registerModelsCommands(program: Command): void {
         if (opts.provider === "openai") {
           result = await openaiProvider.getFineTuneStatus(jobId);
         } else {
-          const tl = new ThinkerLabsProvider();
-          result = await tl.getFineTuneStatus(jobId);
+          const tinker = new TinkerProvider();
+          result = await tinker.getFineTuneStatus(jobId);
         }
 
         const db = getDb();

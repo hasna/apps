@@ -4,7 +4,7 @@ import { randomUUID } from "crypto";
 import { existsSync } from "fs";
 import { getDb, fineTunedModels, trainingJobs, trainingDatasets } from "../../db/index.js";
 import * as openaiProvider from "../../lib/providers/openai.js";
-import { ThinkerLabsProvider } from "../../lib/providers/thinker-labs.js";
+import { TinkerProvider } from "../../lib/providers/tinker.js";
 import { printStatus, printJson, printError, printSuccess, printInfo, printTable, printHint } from "../ui.js";
 import {
   DEFAULT_LIST_LIMIT,
@@ -21,14 +21,14 @@ export function registerFinetuneCommands(program: Command): void {
   finetuneCmd
     .command("start")
     .description("Start a fine-tuning job")
-    .requiredOption("--provider <provider>", "Provider to use (openai|thinker-labs)")
+    .requiredOption("--provider <provider>", "Provider to use (openai|tinker)")
     .requiredOption("--base-model <model>", "Base model to fine-tune (e.g. gpt-4o-mini-2024-07-18)")
     .option("--dataset <path>", "Path to the JSONL training dataset (auto-detects latest if omitted)")
     .requiredOption("--name <name>", "Human-readable name for this fine-tuned model")
     .action(async (opts: { provider: string; baseModel: string; dataset?: string; name: string }) => {
       try {
-        if (opts.provider !== "openai" && opts.provider !== "thinker-labs") {
-          printError(`Unknown provider: ${opts.provider}. Use 'openai' or 'thinker-labs'.`);
+        if (opts.provider !== "openai" && opts.provider !== "tinker") {
+          printError(`Unknown provider: ${opts.provider}. Use 'openai' or 'tinker'.`);
           process.exit(1);
         }
 
@@ -68,11 +68,11 @@ export function registerFinetuneCommands(program: Command): void {
             opts.name
           ));
         } else {
-          const tl = new ThinkerLabsProvider();
-          ({ fileId } = await tl.uploadTrainingFile(datasetPath));
+          const tinker = new TinkerProvider();
+          ({ fileId } = await tinker.uploadTrainingFile(datasetPath));
           printSuccess(`File uploaded. fileId = ${fileId}`);
-          printInfo(`Creating fine-tune job on Thinker Labs …`);
-          ({ jobId, status: jobStatus } = await tl.createFineTuneJob(
+          printInfo(`Creating fine-tune job on Tinker …`);
+          ({ jobId, status: jobStatus } = await tinker.createFineTuneJob(
             fileId,
             opts.baseModel,
             opts.name
@@ -85,7 +85,7 @@ export function registerFinetuneCommands(program: Command): void {
         await db.insert(fineTunedModels).values({
           id: modelId,
           name: opts.name,
-          provider: opts.provider as "openai" | "thinker-labs",
+          provider: opts.provider as "openai" | "tinker",
           baseModel: opts.baseModel,
           status: "running",
           fineTuneJobId: jobId,
@@ -118,7 +118,7 @@ export function registerFinetuneCommands(program: Command): void {
   finetuneCmd
     .command("status <job-id>")
     .description("Get the status of a fine-tuning job")
-    .option("--provider <provider>", "Provider (openai|thinker-labs)", "openai")
+    .option("--provider <provider>", "Provider (openai|tinker)", "openai")
     .option("--verbose", "Show full model and error fields")
     .option("--json", "Output as JSON")
     .action(async (jobId: string, opts: { provider: string; verbose?: boolean; json?: boolean }) => {
@@ -128,8 +128,8 @@ export function registerFinetuneCommands(program: Command): void {
         if (opts.provider === "openai") {
           result = await openaiProvider.getFineTuneStatus(jobId);
         } else {
-          const tl = new ThinkerLabsProvider();
-          result = await tl.getFineTuneStatus(jobId);
+          const tinker = new TinkerProvider();
+          result = await tinker.getFineTuneStatus(jobId);
         }
 
         if (opts.json) { printJson(result); } else {
@@ -172,7 +172,7 @@ export function registerFinetuneCommands(program: Command): void {
   finetuneCmd
     .command("watch <job-id>")
     .description("Poll a fine-tuning job until it completes or fails")
-    .option("--provider <provider>", "Provider (openai|thinker-labs)", "openai")
+    .option("--provider <provider>", "Provider (openai|tinker)", "openai")
     .option("--interval <seconds>", "Poll interval in seconds", "30")
     .action(async (jobId: string, opts: { provider: string; interval: string }) => {
       const intervalMs = Math.max(5, parseInt(opts.interval, 10) || 30) * 1000;
@@ -187,8 +187,8 @@ export function registerFinetuneCommands(program: Command): void {
           if (opts.provider === "openai") {
             result = await openaiProvider.getFineTuneStatus(jobId);
           } else {
-            const tl = new ThinkerLabsProvider();
-            result = await tl.getFineTuneStatus(jobId);
+            const tinker = new TinkerProvider();
+            result = await tinker.getFineTuneStatus(jobId);
           }
 
           const ts = new Date().toISOString().replace("T", " ").slice(0, 19);
@@ -244,7 +244,7 @@ export function registerFinetuneCommands(program: Command): void {
   finetuneCmd
     .command("list")
     .description("List all fine-tuning jobs")
-    .option("--provider <provider>", "Provider to query (openai|thinker-labs)", "openai")
+    .option("--provider <provider>", "Provider to query (openai|tinker)", "openai")
     .option("--limit <n>", `Maximum rows to show (default: ${DEFAULT_LIST_LIMIT} for human output)`)
     .option("--verbose", "Show full model identifiers")
     .option("--json", "Output as JSON")
@@ -256,8 +256,8 @@ export function registerFinetuneCommands(program: Command): void {
         if (opts.provider === "openai") {
           jobs = await openaiProvider.listFineTunedModels();
         } else {
-          const tl = new ThinkerLabsProvider();
-          jobs = await tl.listFineTunedModels();
+          const tinker = new TinkerProvider();
+          jobs = await tinker.listFineTunedModels();
         }
 
         if (opts.json) {

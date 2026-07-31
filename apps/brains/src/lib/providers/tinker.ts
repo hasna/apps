@@ -1,6 +1,6 @@
-// Thinker Labs fine-tuning API adapter
-// API key from env: THINKER_LABS_API_KEY
-// Base URL from env: THINKER_LABS_BASE_URL (default: https://api.thinkerlabs.ai/v1)
+// Tinker fine-tuning API adapter
+// API key from env: TINKER_API_KEY
+// Base URL from env: TINKER_BASE_URL (default: https://api.thinkerlabs.ai/v1)
 // Note: Adapter based on standard fine-tuning REST conventions. Update endpoints when official docs are available.
 
 import { getConfigValue } from "../config.js";
@@ -9,9 +9,9 @@ import { withRetry } from "../retry.js";
 const DEFAULT_BASE_URL = "https://api.thinkerlabs.ai/v1";
 
 function getConfig() {
-  const apiKey = getConfigValue("THINKER_LABS_API_KEY");
-  const baseUrl = getConfigValue("THINKER_LABS_BASE_URL") ?? DEFAULT_BASE_URL;
-  if (!apiKey) throw new Error("THINKER_LABS_API_KEY is not set. Run: brains config set THINKER_LABS_API_KEY <key>");
+  const apiKey = getConfigValue("TINKER_API_KEY");
+  const baseUrl = getConfigValue("TINKER_BASE_URL") ?? DEFAULT_BASE_URL;
+  if (!apiKey) throw new Error("TINKER_API_KEY is not set. Run: brains config set TINKER_API_KEY <key>");
   return { apiKey, baseUrl };
 }
 
@@ -38,7 +38,7 @@ async function request<T>(method: string, path: string, body?: unknown, file?: {
     const res = await fetch(`${baseUrl}${path}`, { method, headers, body: fetchBody });
     if (!res.ok) {
       const text = await res.text();
-      throw new Error(`Thinker Labs API error ${res.status}: ${text}`);
+      throw new Error(`Tinker API error ${res.status}: ${text}`);
     }
     if (res.status === 204) return undefined as T;
     return res.json() as Promise<T>;
@@ -102,7 +102,7 @@ export async function cancelJob(jobId: string): Promise<void> {
   await request<void>("DELETE", `/fine-tunes/${jobId}`);
 }
 
-export class ThinkerLabsProvider {
+export class TinkerProvider {
   uploadTrainingData = uploadTrainingData;
   startFineTune = startFineTune;
   getStatus = getStatus;

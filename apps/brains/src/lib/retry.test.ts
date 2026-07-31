@@ -35,12 +35,12 @@ describe("withRetry", () => {
     expect(attempts).toBe(2);
   });
 
-  test("retries on Thinker Labs API error 503", async () => {
+  test("retries on Tinker API error 503", async () => {
     let attempts = 0;
     const result = await withRetry(
       async () => {
         attempts++;
-        if (attempts < 2) throw new Error("Thinker Labs API error 503: service unavailable");
+        if (attempts < 2) throw new Error("Tinker API error 503: service unavailable");
         return "recovered";
       },
       { maxAttempts: 3, baseDelayMs: 1 }
@@ -145,17 +145,17 @@ describe("withRetry", () => {
     expect(attempts).toBe(2);
   });
 
-  test("does NOT retry on Thinker Labs 401 error", async () => {
+  test("does NOT retry on Tinker 401 error", async () => {
     let attempts = 0;
     await expect(
       withRetry(
         async () => {
           attempts++;
-          throw new Error("Thinker Labs API error 401: unauthorized");
+          throw new Error("Tinker API error 401: unauthorized");
         },
         { maxAttempts: 3, baseDelayMs: 1 }
       )
-    ).rejects.toThrow("Thinker Labs API error 401");
+    ).rejects.toThrow("Tinker API error 401");
     expect(attempts).toBe(1);
   });
 

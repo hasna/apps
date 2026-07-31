@@ -18,7 +18,7 @@ import { randomUUID } from "crypto";
 import { join, dirname } from "path";
 import { homedir } from "os";
 
-export const CONFIG_KEYS = ["OPENAI_API_KEY", "THINKER_LABS_API_KEY", "THINKER_LABS_BASE_URL"] as const;
+export const CONFIG_KEYS = ["OPENAI_API_KEY", "TINKER_API_KEY", "TINKER_BASE_URL"] as const;
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
 
 const CONFIG_FILE_NAME = "config.json";

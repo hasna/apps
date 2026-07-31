@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { createMcpServer, buildServer, MCP_SERVER_INFO } from "./index.js";
+import { createMcpServer, buildServer, getProvider, MCP_SERVER_INFO } from "./index.js";
+import { TinkerProvider } from "../lib/providers/tinker.js";
 import { readFileSync } from "fs";
 import { resolve } from "path";
 
@@ -78,5 +79,29 @@ describe("MCP schema validation", () => {
     if (!result.success) {
       expect(result.error.issues[0]?.message).toContain("openai");
     }
+  });
+
+  test("tinker is the only Tinker provider name across schemas and dispatch", async () => {
+    const {
+      McpFinetuneStartSchema,
+      McpFinetuneStatusSchema,
+      ProviderSchema,
+    } = await import("../lib/schemas.js");
+
+    expect(ProviderSchema.options).toEqual(["openai", "tinker"]);
+    expect(ProviderSchema.safeParse("thinker-labs").success).toBe(false);
+
+    const start = McpFinetuneStartSchema.parse({
+      provider: "tinker",
+      base_model: "test-base-model",
+    });
+    const status = McpFinetuneStatusSchema.parse({
+      provider: "tinker",
+      job_id: "test-job",
+    });
+
+    expect(getProvider(start.provider)).toBeInstanceOf(TinkerProvider);
+    expect(getProvider(status.provider)).toBeInstanceOf(TinkerProvider);
+    expect(() => getProvider("thinker-labs")).toThrow("Unknown provider: thinker-labs");
   });
 });

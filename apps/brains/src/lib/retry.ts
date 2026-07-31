@@ -20,10 +20,10 @@ function isRetryableError(err: unknown): boolean {
       const status = parseInt(match[1]!, 10);
       return RETRYABLE_STATUS_CODES.has(status);
     }
-    // Thinker Labs errors: "Thinker Labs API error 429: ..."
-    const tlMatch = err.message.match(/API error (\d{3})/);
-    if (tlMatch) {
-      const status = parseInt(tlMatch[1]!, 10);
+    // Tinker errors: "Tinker API error 429: ..."
+    const tinkerMatch = err.message.match(/API error (\d{3})/);
+    if (tinkerMatch) {
+      const status = parseInt(tinkerMatch[1]!, 10);
       return RETRYABLE_STATUS_CODES.has(status);
     }
   }

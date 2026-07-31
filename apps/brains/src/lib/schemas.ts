@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { DEFAULT_GATHER_LIMIT } from "./compact-output.js";
 
-export const ProviderSchema = z.enum(["openai", "thinker-labs"], {
-  errorMap: () => ({ message: "Invalid provider. Must be one of: openai, thinker-labs" }),
+export const ProviderSchema = z.enum(["openai", "tinker"], {
+  errorMap: () => ({ message: "Invalid provider. Must be one of: openai, tinker" }),
 });
 
 export const FinetuneStartSchema = z.object({

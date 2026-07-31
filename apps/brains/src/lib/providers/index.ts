@@ -1,4 +1,4 @@
 export * from "./openai.js";
-export * from "./thinker-labs.js";
+export * from "./tinker.js";
 export { OpenAIProvider } from "./openai.js";
-export { ThinkerLabsProvider } from "./thinker-labs.js";
+export { TinkerProvider } from "./tinker.js";

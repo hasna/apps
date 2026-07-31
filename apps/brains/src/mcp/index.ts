@@ -11,7 +11,7 @@ import { homedir } from "os";
 import { eq, desc } from "drizzle-orm";
 import { getDb, getRawDb, fineTunedModels, trainingDatasets } from "../db/index.js";
 import { OpenAIProvider } from "../lib/providers/openai.js";
-import { ThinkerLabsProvider } from "../lib/providers/thinker-labs.js";
+import { TinkerProvider } from "../lib/providers/tinker.js";
 import { gatherFromTodos } from "../lib/gatherers/todos.js";
 import { gatherFromMementos } from "../lib/gatherers/mementos.js";
 import { gatherFromConversations } from "../lib/gatherers/conversations.js";
@@ -34,9 +34,9 @@ import { isStdioMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
 
 // --- helpers ---
 
-function getProvider(provider: string) {
+export function getProvider(provider: string) {
   if (provider === "openai") return new OpenAIProvider();
-  if (provider === "thinker-labs") return new ThinkerLabsProvider();
+  if (provider === "tinker") return new TinkerProvider();
   throw new Error(`Unknown provider: ${provider}`);
 }
 
@@ -115,7 +115,7 @@ export function buildServer() {
           properties: {
             provider: {
               type: "string",
-              enum: ["openai", "thinker-labs"],
+              enum: ["openai", "tinker"],
               description: "Provider to use for fine-tuning",
             },
             base_model: {
@@ -143,7 +143,7 @@ export function buildServer() {
             job_id: { type: "string", description: "Fine-tune job ID" },
             provider: {
               type: "string",
-              enum: ["openai", "thinker-labs"],
+              enum: ["openai", "tinker"],
               description: "Provider that owns the job",
             },
           },

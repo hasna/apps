@@ -4,7 +4,7 @@ export const fineTunedModels = sqliteTable("fine_tuned_models", {
   id: text("id").primaryKey(),
   baseModel: text("base_model").notNull(),
   name: text("name").notNull(),
-  provider: text("provider", { enum: ["openai", "thinker-labs"] }).notNull(),
+  provider: text("provider", { enum: ["openai", "tinker"] }).notNull(),
   status: text("status", {
     enum: ["pending", "running", "succeeded", "failed", "cancelled"],
   })

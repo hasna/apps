@@ -4,8 +4,8 @@ import { join } from "path";
 import { writeFileSync } from "fs";
 
 // Set fake config before importing
-process.env.THINKER_LABS_API_KEY = "tl-test-fake-key";
-process.env.THINKER_LABS_BASE_URL = "https://mock.thinkerlabs.test/v1";
+process.env.TINKER_API_KEY = "tinker-test-fake-key";
+process.env.TINKER_BASE_URL = "https://mock.tinker.test/v1";
 
 const {
   uploadTrainingData,
@@ -13,8 +13,8 @@ const {
   getStatus,
   listModels,
   cancelJob,
-  ThinkerLabsProvider,
-} = await import("./thinker-labs.js");
+  TinkerProvider,
+} = await import("./tinker.js");
 
 function mockFetch(responseData: unknown, status = 200) {
   const original = globalThis.fetch;
@@ -27,10 +27,10 @@ function mockFetch(responseData: unknown, status = 200) {
   return () => { globalThis.fetch = original; };
 }
 
-describe("Thinker Labs provider functions", () => {
+describe("Tinker provider functions", () => {
   test("uploadTrainingData uploads and returns datasetId", async () => {
     const restore = mockFetch({ id: "ds-abc" });
-    const tmpFile = join(tmpdir(), `tl-test-${Date.now()}.jsonl`);
+    const tmpFile = join(tmpdir(), `tinker-test-${Date.now()}.jsonl`);
     writeFileSync(tmpFile, '{"messages":[]}');
     try {
       const result = await uploadTrainingData(tmpFile);
@@ -106,23 +106,23 @@ describe("Thinker Labs provider functions", () => {
     }
   });
 
-  test("throws Thinker Labs API error on non-ok response", async () => {
+  test("throws Tinker API error on non-ok response", async () => {
     const restore = mockFetch("Unauthorized", 401);
     try {
-      await expect(getStatus("ft-job-1")).rejects.toThrow("Thinker Labs API error 401");
+      await expect(getStatus("ft-job-1")).rejects.toThrow("Tinker API error 401");
     } finally {
       restore();
     }
   });
 });
 
-describe("ThinkerLabsProvider class aliases", () => {
+describe("TinkerProvider class aliases", () => {
   test("uploadTrainingFile delegates to uploadTrainingData", async () => {
     const restore = mockFetch({ id: "ds-xyz" });
-    const tmpFile = join(tmpdir(), `tl-test2-${Date.now()}.jsonl`);
+    const tmpFile = join(tmpdir(), `tinker-test2-${Date.now()}.jsonl`);
     writeFileSync(tmpFile, '{"messages":[]}');
     try {
-      const provider = new ThinkerLabsProvider();
+      const provider = new TinkerProvider();
       const result = await provider.uploadTrainingFile(tmpFile);
       expect(result.fileId).toBe("ds-xyz");
     } finally {
@@ -133,7 +133,7 @@ describe("ThinkerLabsProvider class aliases", () => {
   test("createFineTuneJob delegates to startFineTune", async () => {
     const restore = mockFetch({ id: "ft-3", status: "queued" });
     try {
-      const provider = new ThinkerLabsProvider();
+      const provider = new TinkerProvider();
       const result = await provider.createFineTuneJob("ds-xyz", "llama-3", "suf");
       expect(result.jobId).toBe("ft-3");
     } finally {
@@ -144,7 +144,7 @@ describe("ThinkerLabsProvider class aliases", () => {
   test("getFineTuneStatus delegates to getStatus", async () => {
     const restore = mockFetch({ id: "ft-3", status: "running", model_id: undefined, error: undefined });
     try {
-      const provider = new ThinkerLabsProvider();
+      const provider = new TinkerProvider();
       const result = await provider.getFineTuneStatus("ft-3");
       expect(result.jobId).toBe("ft-3");
       expect(result.status).toBe("running");
@@ -156,7 +156,7 @@ describe("ThinkerLabsProvider class aliases", () => {
   test("listFineTunedModels maps to unified format", async () => {
     const restore = mockFetch({ data: [{ id: "ft-4", name: "m", status: "succeeded", base_model: "llama-3", created_at: 100 }] });
     try {
-      const provider = new ThinkerLabsProvider();
+      const provider = new TinkerProvider();
       const models = await provider.listFineTunedModels();
       expect(models[0]?.model).toBe("llama-3");
       expect(models[0]?.created).toBe(100);
@@ -168,7 +168,7 @@ describe("ThinkerLabsProvider class aliases", () => {
   test("cancelFineTuneJob delegates to cancelJob", async () => {
     const restore = mockFetch(null, 204);
     try {
-      const provider = new ThinkerLabsProvider();
+      const provider = new TinkerProvider();
       await expect(provider.cancelFineTuneJob("ft-4")).resolves.toBeUndefined();
     } finally {
       restore();
