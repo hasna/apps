@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- ci: run frozen dependency installation, typechecking, builds, and tests on
+  pull requests and pushes to `main`.
+
 ## 0.0.91
 
 - fix(security): run repo-native Playwright tests without a shell. `runPlaywright`
