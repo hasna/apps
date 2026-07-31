@@ -40,8 +40,12 @@ jobs:
       - name: Build
         run: bun run build
 
-      - name: Supply-chain checks
-        run: bun run check:supply-chain
+      - name: Dependency advisory audit
+        run: bun run check:supply-chain:audit
+
+      - name: Artifact, contract, branding, and boundary checks
+        if: ${{ !cancelled() }}
+        run: bun run check:supply-chain:artifacts
 
   postgres:
     name: postgres storage
