@@ -6,6 +6,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Added CI checks for typechecking, building, and testing pull requests and
+  pushes to the default branch.
+
 ## [0.1.70] - 2026-07-31
 
 ### Changed
