@@ -595,6 +595,30 @@ describe('knowledge cli', () => {
     expect(db.items.length).toBe(0);
   });
 
+  test('add accepts frontmatter content directly and after the end-of-options marker', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-cli-frontmatter-'));
+    const store = join(dir, 'db.json');
+    const decode = (buf: Uint8Array) => new TextDecoder().decode(buf);
+    const frontmatter = '---\ntags:\n  - strategy\n---\nBody';
+
+    const direct = runCli(['add', 'Direct frontmatter', frontmatter, '--store', store, '--json']);
+    expect(direct.exitCode).toBe(0);
+    const directOut = JSON.parse(decode(direct.stdout));
+    expect(directOut.item.content).toBe(frontmatter);
+
+    const terminated = runCli(['add', '--store', store, '--json', '--', 'Terminated frontmatter', frontmatter]);
+    expect(terminated.exitCode).toBe(0);
+    const terminatedOut = JSON.parse(decode(terminated.stdout));
+    expect(terminatedOut.item.content).toBe(frontmatter);
+
+    const listed = runCli(['list', '--store', store, '--json', '--sort', 'title']);
+    expect(listed.exitCode).toBe(0);
+    expect(JSON.parse(decode(listed.stdout)).items.map((item: { content: string }) => item.content)).toEqual([
+      frontmatter,
+      frontmatter,
+    ]);
+  });
+
   // Regression guard for the silent multi-tag data-loss defect: `add -t a -t b -t c`
   // exited 0, logged "Item added", and persisted ONLY the last tag; `-t "a,b,c"`
   // stored one literal comma string. Every assertion below reads the PERSISTED item

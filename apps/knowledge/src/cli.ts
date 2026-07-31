@@ -188,9 +188,22 @@ function collectTagFlag(current: string[] | undefined, raw: string | undefined):
 function parseArgs(argv: string[]): ParseResult {
   const positional: string[] = [];
   const flags: Flags = {};
+  let optionsTerminated = false;
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
-    if (!token.startsWith('-')) {
+    if (optionsTerminated) {
+      positional.push(token);
+      continue;
+    }
+    if (token === '--') {
+      optionsTerminated = true;
+      continue;
+    }
+    // Markdown with YAML frontmatter is a supported `add` body. The body is one
+    // argv token, so once the command and title are present a leading `---`
+    // identifies the content slot rather than a CLI option. Other dash-prefixed
+    // values remain errors unless the caller uses the conventional `--` marker.
+    if (!token.startsWith('-') || (positional[0] === 'add' && positional.length === 2 && token.startsWith('---'))) {
       positional.push(token);
       continue;
     }
