@@ -366,6 +366,7 @@ export async function runCli(argv = process.argv.slice(2)): Promise<void> {
       }
 
       case "enable": {
+        if (!args.length) throw new Error("usage: statusline enable <segment> [segment...]");
         let result;
         try {
           result = enableSegments(args, loadConfig());
@@ -379,6 +380,7 @@ export async function runCli(argv = process.argv.slice(2)): Promise<void> {
       }
 
       case "disable": {
+        if (!args.length) throw new Error("usage: statusline disable <segment> [segment...]");
         let result;
         try {
           result = disableSegments(args, loadConfig());

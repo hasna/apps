@@ -1,4 +1,4 @@
-import { describe, expect, test, beforeEach } from "bun:test";
+import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { hostname } from "node:os";
 import { tmpdir } from "node:os";
@@ -7,9 +7,17 @@ import { renderLine } from "../src/render";
 import { parseClaudeInput } from "../src/providers/claude";
 import fixture from "./fixtures/claude-input.json";
 
+const originalNoColor = process.env.NO_COLOR;
+
 beforeEach(() => {
   const dir = mkdtempSync(join(tmpdir(), "statusline-render-"));
   process.env.STATUSLINE_CONFIG = join(dir, "config.json");
+  delete process.env.NO_COLOR;
+});
+
+afterAll(() => {
+  if (originalNoColor === undefined) delete process.env.NO_COLOR;
+  else process.env.NO_COLOR = originalNoColor;
 });
 
 describe("renderLine", () => {

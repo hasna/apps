@@ -50,6 +50,15 @@ describe("CLI compatibility", () => {
     expect(result.stderr).toContain("usage: statusline order <segment> [segment...]");
   });
 
+  test("enable and disable require at least one segment", () => {
+    for (const command of ["enable", "disable"]) {
+      const result = runCli([command]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain(`usage: statusline ${command} <segment> [segment...]`);
+      expect(result.stdout).toBe("");
+    }
+  });
+
   test("list prints a compact enabled-first summary", () => {
     const result = runCli(["list"]);
     expect(result.exitCode).toBe(0);
