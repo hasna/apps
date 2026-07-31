@@ -32,6 +32,40 @@ function runCli(args: string[], env: NodeJS.ProcessEnv, input?: string) {
   });
 }
 
+interface SeedMachine {
+  id: string;
+  platform: string;
+  workspacePath: string;
+  updatedAt?: string;
+  friendlyName?: string;
+  sshAddress?: string;
+}
+
+/**
+ * Seed the manifest file directly, in the exact on-disk shape `manifest add`
+ * writes (version + generatedAt + machines, verified against the CLI's own
+ * output).
+ *
+ * Every runCli() call is a full `bun` cold start of src/cli/index.ts — measured
+ * at 245ms idle and 296-1205ms under station load. Building a 12-machine
+ * fixture through 12 `manifest add` invocations therefore spent ~13 process
+ * starts against bun's default 5000ms per-test budget before reaching the
+ * assertion, which is what made these tests time out on a loaded machine while
+ * passing on an idle CI runner.
+ *
+ * Manifest ingestion itself stays covered by the dedicated tests
+ * "manifest add --from-stdin bypasses option validation and writes the piped
+ * machine" and "manifest add rejects same-id argument tampering"; the tests
+ * that seed only assert read-side command behaviour.
+ */
+function seedManifest(manifestPath: string, machines: SeedMachine[]) {
+  writeFileSync(manifestPath, `${JSON.stringify({
+    version: 1,
+    generatedAt: "2026-06-26T00:00:00.000Z",
+    machines,
+  }, null, 2)}\n`, "utf8");
+}
+
 describe("cli command handling", () => {
   test("heartbeat collect requires scoped approval before route execution", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-cli-heartbeat-collect-"));
@@ -313,23 +347,20 @@ describe("cli command handling", () => {
   test("topology CLI defaults to latest 10 and exposes view-more offsets", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-cli-pagination-"));
     try {
+      const manifestPath = join(dir, "machines.json");
       const env = {
         ...process.env,
-        HASNA_MACHINES_MANIFEST_PATH: join(dir, "machines.json"),
+        HASNA_MACHINES_MANIFEST_PATH: manifestPath,
         HASNA_MACHINES_DB_PATH: join(dir, "machines.db"),
         HASNA_MACHINES_MACHINE_ID: "demo-node-02",
         [MUTATION_APPROVAL_FLAG_ENV]: "1",
       };
-      expect(runCli(["manifest", "init"], env).status).toBe(0);
-      for (let index = 0; index < 12; index += 1) {
-        const machine = {
-          id: `demo-node-${String(index).padStart(2, "0")}`,
-          platform: "linux",
-          workspacePath: `/workspace/${index}`,
-          updatedAt: `2026-06-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`,
-        };
-        expect(runCli(["manifest", "add", "--from-stdin"], env, JSON.stringify(machine)).status).toBe(0);
-      }
+      seedManifest(manifestPath, Array.from({ length: 12 }, (_unused, index) => ({
+        id: `demo-node-${String(index).padStart(2, "0")}`,
+        platform: "linux",
+        workspacePath: `/workspace/${index}`,
+        updatedAt: `2026-06-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`,
+      })));
 
       const first = runCli(["topology", "--no-tailscale", "--json"], env);
       expect(first.status).toBe(0);
@@ -954,30 +985,32 @@ describe("cli command handling", () => {
   test("agent abstraction CLIs print compact JSON by default", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-cli-agent-apis-"));
     try {
+      const manifestPath = join(dir, "machines.json");
       const env = {
         ...process.env,
-        HASNA_MACHINES_MANIFEST_PATH: join(dir, "machines.json"),
+        HASNA_MACHINES_MANIFEST_PATH: manifestPath,
         HASNA_MACHINES_DB_PATH: join(dir, "machines.db"),
         HASNA_MACHINES_MACHINE_ID: "control",
         HASNA_MACHINES_REACHABLE_HOSTS: "operator@worker",
         [MUTATION_APPROVAL_FLAG_ENV]: "1",
       };
-      expect(runCli(["manifest", "init"], env).status).toBe(0);
-      expect(runCli(["manifest", "add", "--from-stdin"], env, JSON.stringify({
-        id: "control",
-        friendlyName: "Control Node",
-        platform: "linux",
-        workspacePath: "/home/hasna/Workspace",
-        updatedAt: "2026-06-26T10:00:00.000Z",
-      })).status).toBe(0);
-      expect(runCli(["manifest", "add", "--from-stdin"], env, JSON.stringify({
-        id: "worker",
-        friendlyName: "Worker Node",
-        platform: "linux",
-        workspacePath: "/srv/workspace",
-        sshAddress: "operator@worker",
-        updatedAt: "2026-06-26T09:00:00.000Z",
-      })).status).toBe(0);
+      seedManifest(manifestPath, [
+        {
+          id: "control",
+          friendlyName: "Control Node",
+          platform: "linux",
+          workspacePath: "/home/hasna/Workspace",
+          updatedAt: "2026-06-26T10:00:00.000Z",
+        },
+        {
+          id: "worker",
+          friendlyName: "Worker Node",
+          platform: "linux",
+          workspacePath: "/srv/workspace",
+          sshAddress: "operator@worker",
+          updatedAt: "2026-06-26T09:00:00.000Z",
+        },
+      ]);
 
       const preflight = runCli(["loop-preflight", "--machine", "control,worker", "--cmd", "echo loop", "--no-tailscale"], env);
       expect(preflight.stderr).toBe("");
@@ -1019,23 +1052,21 @@ describe("cli command handling", () => {
       });
 
       const pageDir = mkdtempSync(join(tmpdir(), "machines-cli-agent-pagination-"));
+      const pageManifestPath = join(pageDir, "machines.json");
       const pageEnv = {
         ...process.env,
-        HASNA_MACHINES_MANIFEST_PATH: join(pageDir, "machines.json"),
+        HASNA_MACHINES_MANIFEST_PATH: pageManifestPath,
         HASNA_MACHINES_DB_PATH: join(pageDir, "machines.db"),
         HASNA_MACHINES_MACHINE_ID: "demo-node-00",
         [MUTATION_APPROVAL_FLAG_ENV]: "1",
       };
       try {
-        expect(runCli(["manifest", "init"], pageEnv).status).toBe(0);
-        for (let index = 0; index < 12; index += 1) {
-          expect(runCli(["manifest", "add", "--from-stdin"], pageEnv, JSON.stringify({
-            id: `demo-node-${String(index).padStart(2, "0")}`,
-            platform: "linux",
-            workspacePath: `/workspace/${index}`,
-            updatedAt: `2026-06-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`,
-          })).status).toBe(0);
-        }
+        seedManifest(pageManifestPath, Array.from({ length: 12 }, (_unused, index) => ({
+          id: `demo-node-${String(index).padStart(2, "0")}`,
+          platform: "linux",
+          workspacePath: `/workspace/${index}`,
+          updatedAt: `2026-06-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`,
+        })));
         const firstPage = JSON.parse(runCli(["machine-health", "--no-tailscale"], pageEnv).stdout);
         expect(firstPage.pagination).toMatchObject({ total: 12, count: 10, hasMore: true, nextOffset: 10 });
         const secondPage = JSON.parse(runCli(["machine-health", "--no-tailscale", "--offset", "10"], pageEnv).stdout);
