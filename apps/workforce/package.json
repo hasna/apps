@@ -1,6 +1,6 @@
 {
   "name": "@hasna/workforce",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Unified roster/HRIS: humans, contractors and agents as first-class org members — CLI + MCP + serve over a Hasna-contract store.",
   "type": "module",
   "main": "dist/index.js",
