@@ -584,9 +584,13 @@ export interface CreateTaskInput {
   spawns_template_id?: string;
   reason?: string;
   spawned_from_session?: string;
-  assigned_by?: string;
-  /** Who FILED this task. Resolved from the ambient agent identity when the caller omits it. */
-  created_by?: string;
+  /** Who handed this task over. Explicit `null` means "known to be unattributable" and
+   *  suppresses the agent_id fallback; omitting the field keeps the legacy inference. */
+  assigned_by?: string | null;
+  /** Who FILED this task. Resolved from the ambient agent identity when the caller omits it.
+   *  Explicit `null` means the caller established there is no identity to attribute — it is
+   *  NOT the same as omitting the field, which still falls back to agent_id for legacy callers. */
+  created_by?: string | null;
   assigned_from_project?: string;
   task_type?: string;
 }

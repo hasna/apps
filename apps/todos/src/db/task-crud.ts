@@ -99,10 +99,18 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
   // start/claim/steal/update, so "who put this in the system" stays answerable
   // for the life of the row. Falls back to agent_id because every existing caller
   // that bothered to identify itself did so through agent_id.
-  const createdBy = input.created_by || input.agent_id || null;
+  //
+  // OMITTED and NULL are deliberately different. agent_id is ambiguous — some callers
+  // pass the filer, `todos add` passes the assignee — so a caller that has actually
+  // established there is no identity passes null to say so, and the fallback is
+  // suppressed. Omitting the field keeps the legacy inference untouched. Without that
+  // distinction an unregistered `todos add --assign brutus` records brutus as the filer
+  // of a task he never touched, and a wrong name is worse than a missing one: a null is
+  // visibly absent, a name is simply believed.
+  const createdBy = input.created_by !== undefined ? input.created_by : (input.agent_id || null);
   // assigned_by = who handed this task over
   // assigned_from_project = which project they were in when they assigned it
-  const assignedBy = input.assigned_by || input.agent_id;
+  const assignedBy = input.assigned_by !== undefined ? input.assigned_by : input.agent_id;
   const assignedFromProject = input.assigned_from_project || null;
 
   // Retry with a fresh UUID on the rare chance of a nanoid collision
@@ -667,6 +675,13 @@ export function updateTask(
   }
   if (input.assigned_to !== undefined) {
     sets.push("assigned_to = ?");
+    params.push(input.assigned_to);
+    // Reassignment moves BOTH ownership columns, or it half-moves the row. Coupling
+    // them here rather than at each call site is deliberate: `todos update --assign`
+    // returned rc=0 having written one field of two, so the repair sweeps everyone
+    // ran to fix stale owners became the largest single source of the disagreement
+    // they were fixing. Every caller — CLI, MCP, SDK, server — inherits the invariant.
+    sets.push("agent_id = ?");
     params.push(input.assigned_to);
   }
   if (input.working_dir !== undefined) {

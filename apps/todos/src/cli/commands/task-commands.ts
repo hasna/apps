@@ -381,8 +381,18 @@ export function registerTaskCommands(program: Command) {
             assigned_to: assignee,
             status: parseStatus(opts.status),
             task_list_id: cloudTaskListId,
-            agent_id: globalOpts.agent || creator.agent_id || undefined,
-            created_by: creator.agent_id || undefined,
+            // agent_id is a legacy MIRROR of assigned_to, never the filer. Every
+            // reader treats it as the assignee (routes.ts "my tasks", cloud-router
+            // workload rollup, the MCP's own "Filter by assignee"), so stamping the
+            // creator here made the two columns disagree and hid the row from both
+            // an --assigned sweep and an unassigned sweep. The filer belongs in
+            // created_by, which is written on the next line and is its only home.
+            agent_id: assignee,
+            // Explicitly null rather than omitted when no identity resolved: agent_id now
+            // carries the assignee, so letting it be inferred would credit the assignee
+            // with filing the task.
+            created_by: creator.agent_id,
+            assigned_by: creator.agent_id,
             session_id: globalOpts.session,
             project_id: cloudProjectId,
             estimated_minutes: opts.estimated !== undefined ? parseIntOption(opts.estimated, "--estimated") : undefined,
@@ -434,8 +444,10 @@ export function registerTaskCommands(program: Command) {
           assigned_to: assignee,
           status: parseStatus(opts.status),
           task_list_id: taskListId,
-          agent_id: globalOpts.agent || creator.agent_id || undefined,
-          created_by: creator.agent_id || undefined,
+          // Mirrors assigned_to, never the filer — see the cloud branch above.
+          agent_id: assignee,
+          created_by: creator.agent_id,
+          assigned_by: creator.agent_id,
           session_id: globalOpts.session,
           project_id: projectId,
           working_dir: process.cwd(),
@@ -1285,6 +1297,12 @@ export function registerTaskCommands(program: Command) {
             status: parseStatus(opts.status),
             priority: parsePriority(opts.priority),
             assigned_to: opts.assign,
+            // Reassignment must move BOTH columns or it half-moves the row: rc=0 with
+            // assigned_to updated and agent_id still the previous owner. That is the
+            // single largest source of the two-column disagreement, because it is what
+            // every well-meaning repair sweep runs. undefined when --assign is absent,
+            // so an unrelated update never touches ownership.
+            agent_id: opts.assign,
             tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
             plan_id: plan?.id ?? (opts.clearPlan ? null : undefined),
             ...reparent,
@@ -1328,6 +1346,9 @@ export function registerTaskCommands(program: Command) {
           status: parseStatus(opts.status),
           priority: parsePriority(opts.priority),
           assigned_to: opts.assign,
+          // agent_id is coupled to assigned_to inside updateTask, so the local path
+          // needs nothing here. The cloud branch above must send it explicitly because
+          // the hosted API is a separately deployed build.
           tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
           plan_id: planId,
           ...reparent,
