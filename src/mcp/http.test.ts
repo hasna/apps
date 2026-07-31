@@ -6,17 +6,25 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildServer } from "./index.js";
 import { handleMcpRequest, resolveMcpHttpPort, DEFAULT_MCP_HTTP_PORT } from "./http.js";
+import { __resetProjectStore } from "../store/project-store.js";
+import { API_MODE_ENV_KEYS } from "../testing/spawn-env.js";
 
 describe("projects MCP HTTP transport", () => {
   let httpServer: ReturnType<typeof Bun.serve>;
   let port: number;
   let root: string;
   let previousDbPath: string | undefined;
+  const previousEnv = new Map<string, string | undefined>();
 
   beforeAll(() => {
     root = mkdtempSync(join(tmpdir(), "projects-mcp-http-"));
     previousDbPath = process.env.HASNA_PROJECTS_DB_PATH;
+    for (const key of API_MODE_ENV_KEYS) {
+      previousEnv.set(key, process.env[key]);
+      delete process.env[key];
+    }
     process.env.HASNA_PROJECTS_DB_PATH = join(root, "projects.db");
+    __resetProjectStore();
     httpServer = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -41,6 +49,11 @@ describe("projects MCP HTTP transport", () => {
     } else {
       process.env.HASNA_PROJECTS_DB_PATH = previousDbPath;
     }
+    for (const [key, value] of previousEnv) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    __resetProjectStore();
     rmSync(root, { recursive: true, force: true });
   });
 

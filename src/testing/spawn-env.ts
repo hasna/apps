@@ -11,7 +11,14 @@
  * So: strip the api-mode selectors from the inherited environment unless the
  * test explicitly opts into api mode by passing them in `overrides`.
  */
-export const API_MODE_ENV_KEYS = ["HASNA_PROJECTS_API_URL", "HASNA_PROJECTS_API_KEY"] as const;
+export const API_MODE_ENV_KEYS = [
+  "HASNA_PROJECTS_API_URL",
+  "HASNA_PROJECTS_API_KEY",
+  "HASNA_PROJECTS_STORAGE_MODE",
+  "HASNA_PROJECTS_MODE",
+  "PROJECTS_STORAGE_MODE",
+  "PROJECTS_MODE",
+] as const;
 
 export function testSpawnEnv(overrides: Record<string, string> = {}): Record<string, string> {
   const env: Record<string, string> = {};

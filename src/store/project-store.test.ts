@@ -149,10 +149,39 @@ describe("projects store api transport (roots/agents/recipes)", () => {
     expect(calls.at(-1)).toMatchObject({ method: "POST", path: "/v1/projects/proj1/events", auth: "Bearer secret-key" });
   });
 
+  test("registered locations read from the api endpoint in api mode", async () => {
+    const { store, calls } = stubStore(() => ({
+      locations: [{
+        id: "loc1",
+        workspace_id: "p",
+        path: "/projects/p",
+        machine_id: "machine01",
+        label: "main",
+        kind: "local",
+        is_primary: true,
+        exists_at_create: true,
+        metadata: {},
+        created_at: "2026-07-31 00:00:00",
+      }],
+    }));
+    expect(await store.getProjectLocations("p")).toEqual([{
+      id: "loc1",
+      workspace_id: "p",
+      path: "/projects/p",
+      machine_id: "machine01",
+      label: "main",
+      kind: "local",
+      is_primary: true,
+      exists_at_create: true,
+      metadata: {},
+      created_at: "2026-07-31 00:00:00",
+    }]);
+    expect(calls).toEqual([{ method: "GET", path: "/v1/projects/p/locations", auth: "Bearer secret-key" }]);
+  });
+
   test("on-box sub-resource reads return empty in api mode (no sqlite)", async () => {
     const { store, calls } = stubStore(() => ({}));
     expect(await store.getProjectAgents("p")).toEqual([]);
-    expect(await store.getProjectLocations("p")).toEqual([]);
     expect(await store.listLocks()).toEqual([]);
     expect(await store.listAgentRuns({ workspace_id: "p" })).toEqual([]);
     expect(await store.releaseLock("k")).toBe(false);

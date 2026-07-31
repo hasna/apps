@@ -511,7 +511,7 @@ describe("project-first CLI surface", () => {
     try {
       expect(runProjects(["create", "--name", "Served Dashboard", "--slug", "served-dashboard", "--path", projectPath, "--mkdir", "--json"], env).exitCode).toBe(0);
       const proc = Bun.spawn({
-        cmd: ["bun", "run", CLI_PATH, "dashboard", "serve", "served-dashboard", "--host", "127.0.0.1", "--port", String(port), "--json"],
+        cmd: ["bun", "run", CLI_PATH, "dashboard", "serve", "served-dashboard", "--host", "127.0.0.1", "--port", String(port), "--provider", "__none__", "--json"],
         stdout: "pipe",
         stderr: "pipe",
         env: testSpawnEnv(env),
