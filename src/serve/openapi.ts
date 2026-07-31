@@ -2,6 +2,8 @@
 // served /openapi.json and for the generated SDK (scripts/generate-sdk.ts uses
 // @hasna/contracts/sdk `generateSdkFromOpenApi` on this exact object).
 
+import { WORKSPACE_LIST_DEFAULT_LIMIT, WORKSPACE_LIST_MAX_LIMIT } from "./pg-store.js";
+
 export function buildOpenApiSpec(version: string): Record<string, unknown> {
   const ID_PARAM = {
     name: "id",
@@ -214,11 +216,17 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
         },
         WorkspaceList: {
           type: "object",
+          description:
+            "A single page of projects. `count` is the page length; `total` is how many rows match the filter. When `has_more` is true the caller must request the next page with `offset` — a full page is otherwise indistinguishable from the last one.",
           properties: {
             workspaces: { type: "array", items: ref("Workspace") },
-            count: { type: "integer" },
+            count: { type: "integer", description: "Rows in this page." },
+            total: { type: "integer", description: "Rows matching the filter, ignoring limit/offset." },
+            offset: { type: "integer", description: "Offset this page starts at." },
+            limit: { type: "integer", description: "Effective per-page limit after server clamping." },
+            has_more: { type: "boolean", description: "More rows exist past this page." },
           },
-          required: ["workspaces", "count"],
+          required: ["workspaces", "count", "total", "offset", "limit", "has_more"],
         },
         RootList: {
           type: "object",
@@ -312,7 +320,13 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
             { name: "root_id", in: "query", required: false, schema: { type: "string" } },
             { name: "query", in: "query", required: false, schema: { type: "string" } },
             { name: "tag", in: "query", required: false, schema: { type: "string" } },
-            { name: "limit", in: "query", required: false, schema: { type: "integer" } },
+            {
+              name: "limit",
+              in: "query",
+              required: false,
+              description: `Rows per page (default ${WORKSPACE_LIST_DEFAULT_LIMIT}, clamped to ${WORKSPACE_LIST_MAX_LIMIT}). A larger value is clamped, not honoured — page with offset and read has_more.`,
+              schema: { type: "integer" },
+            },
             { name: "offset", in: "query", required: false, schema: { type: "integer" } },
           ],
           responses: { "200": jsonResp("WorkspaceList") },

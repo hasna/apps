@@ -10,6 +10,7 @@ import { runMigrations } from "../db/schema.js";
 import { closeDatabase } from "../db/database.js";
 import { registerWorkspaceCommands } from "./commands/workspaces.js";
 import { API_MODE_ENV_KEYS, testSpawnEnv } from "../testing/spawn-env.js";
+import { __resetProjectStore } from "../store/project-store.js";
 
 const CLI_PATH = join(process.cwd(), "src/cli/index.ts");
 
@@ -41,6 +42,15 @@ async function runWorkspaceCommandInProcess(args: string[], env: Record<string, 
     previousEnv.set(key, process.env[key]);
     process.env[key] = value;
   }
+  // resolveProjectStore() memoises the store it built from process.env, and the
+  // module registry is shared across test files in one `bun test` run. Clearing
+  // the API env vars is therefore not enough: a store another file already
+  // resolved in api mode survives, and these local-store runs then read and
+  // report against the REAL production registry. Observed as
+  // "top-level list JSON output is not truncated above 64 KiB" returning live
+  // rows whenever this file ran alongside src/mcp. Reset on both sides of the
+  // swap so the run is pinned to the temp database it set up.
+  __resetProjectStore();
 
   const stdoutChunks: string[] = [];
   const stderrChunks: string[] = [];
@@ -77,6 +87,7 @@ async function runWorkspaceCommandInProcess(args: string[], env: Record<string, 
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
+    __resetProjectStore();
   }
 }
 
