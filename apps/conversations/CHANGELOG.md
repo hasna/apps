@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.5.18 - 2026-07-31
+
+### Fixed
+- **The store API URL was printed verbatim — userinfo, query and fragment included — at four output sites.** `HASNA_CONVERSATIONS_API_URL` reached output unmasked from `conversations status` (human and `--json`), from `conversations doctor` (both the ok and the failure message), and from the server's `GET /api/status`. The last of those is the sharpest: `isSameOrigin` is applied only to mutating routes, so that GET was unauthenticated and anything able to reach the dashboard port could read the URL. A `user:password@` credential or a magic-link token in the `#fragment` of that variable was disclosed in full (#58).
+
+  The fix is an **allow-list**, not a strip-list: `src/lib/loggable-url.ts` rebuilds the value from the only three components that cannot carry a secret — scheme, host and port — into a fresh string, so a component nobody thought of is absent because it was never copied rather than present because it was forgotten. This repo had already shipped the strip-list version twice and it failed both times, most recently in the Swift half where clearing query and fragment still left userinfo verbatim in `NSLog`. The two duplicated status payloads collapse into one `storeStatusLocation()` so a future third status surface inherits the redaction instead of re-leaking.
+
+  Scope, stated plainly: this was **pre-existing and live in 0.5.16 and 0.5.17**, not a regression introduced by either. Blast radius on a store URL with no userinfo, query or fragment is nil — on station01 the configured value has none, so nothing was disclosed there. The exposure is real for any deployment whose URL carries credentials.
+- **New direct messages could display unrelated conversation content.** The dashboard's New Direct Message flow created a temporary DM with an empty session id and then reloaded `/api/messages?session=`; the server read that empty session as *missing* and answered with unfiltered recent messages. The dashboard now adopts the server-returned `session_id` after the first send and will not issue a DM query while the active DM has no session id (#57).
+
+### Note on scope — this release still does NOT carry the macOS URL-redaction fix
+The Swift allow-list rebuilt in `Sources/HasnaConversationsCore/StoreResolution.swift` (#55) **cannot travel on npm at any version number.** `package.json`'s `files` list ships `dist/`, `bin/`, `dashboard/dist/`, `LICENSE` and `README.md`; `Sources/` is not in the tarball, and a packed 0.5.18 contains no `.swift` file — verified against the packed artifact, not assumed. Its only carrier is a built macOS app. Do not cite this npm release as evidence that the macOS half has shipped to anyone.
+
+The TypeScript fix above is a different artefact and **does** travel: `src/lib/loggable-url.ts` compiles into `dist/` and `bin/`, and its presence in the published tarball is verified by the string `(unparseable URL)`, which is absent from 0.5.17 and present in 0.5.18.
+
 ## 0.5.17 - 2026-07-31
 
 ### Fixed
