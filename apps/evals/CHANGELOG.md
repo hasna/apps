@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Test-only module mocks no longer leak into later integration tests when the full
   suite runs in one Bun process.
 
+### Changed
+- Enabled TypeScript checks for implicit returns and switch fallthrough.
+
 ## [0.2.0] - 2026-07-27
 
 ### Removed
