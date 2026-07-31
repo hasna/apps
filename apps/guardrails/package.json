@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "Local-first guardrail and policy decisions for agentic systems.",
   "type": "module",
+  "engines": {
+    "bun": ">=1.0.0"
+  },
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
