@@ -825,6 +825,47 @@ describe('queryProjectBreakdown', () => {
     expect(row?.cost_usd).toBe(3)
   })
 
+  it('combines since and machine filters for project breakdowns', () => {
+    const db = makeDb()
+    upsertSession(db, sampleSession({
+      id: 'spark-session',
+      agent: 'codex',
+      project_path: '/workspace/spark-project',
+      project_name: 'spark-project',
+      machine_id: 'spark01',
+      total_cost_usd: 1,
+    }))
+    upsertRequest(db, sampleRequest({
+      id: 'spark-request',
+      agent: 'codex',
+      session_id: 'spark-session',
+      machine_id: 'spark01',
+      cost_usd: 1,
+      timestamp: NOW,
+    }))
+    upsertSession(db, sampleSession({
+      id: 'apple-session',
+      agent: 'codex',
+      project_path: '/workspace/apple-project',
+      project_name: 'apple-project',
+      machine_id: 'apple01',
+      total_cost_usd: 2,
+    }))
+    upsertRequest(db, sampleRequest({
+      id: 'apple-request',
+      agent: 'codex',
+      session_id: 'apple-session',
+      machine_id: 'apple01',
+      cost_usd: 2,
+      timestamp: NOW,
+    }))
+
+    const rows = queryProjectBreakdownSince(db, '2020-01-01T00:00:00.000Z', 'spark01')
+
+    expect(rows.map(row => row.project_name)).toEqual(['spark-project'])
+    expect(rows[0]?.cost_usd).toBeCloseTo(1)
+  })
+
   it('issues a fixed number of queries regardless of how many projects exist', () => {
     // A per-project query shape scans the whole requests table once per project, which
     // on the fleet database (233 projects, 877k requests) took ~34s. Assert the query

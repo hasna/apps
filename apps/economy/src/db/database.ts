@@ -1237,13 +1237,14 @@ export function queryCostCenterBreakdown(
 // breakdowns above but filter by an ISO date lower bound so a single LocalStore
 // code path can serve both period and since queries (no inline SQL in the CLI).
 
-export function queryProjectBreakdownSince(db: Database, since: string): ProjectBreakdown[] {
+export function queryProjectBreakdownSince(db: Database, since: string, machine?: string): ProjectBreakdown[] {
   return queryProjectBreakdownScoped(
     db,
     'timestamp >= ?',
     'started_at >= ?',
     [since],
     [since],
+    machine,
   )
 }
 

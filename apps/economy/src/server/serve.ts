@@ -387,7 +387,7 @@ export function createHandler(db: Database, options: HandlerOptions = {}) {
       const period = (url.searchParams.get('period') ?? 'all') as Period
       const since = url.searchParams.get('since') ?? undefined
       const machine = url.searchParams.get('machine') ?? undefined
-      if (by === 'project') return ok(since ? queryProjectBreakdownSince(db, since) : queryProjectBreakdown(db, period, machine))
+      if (by === 'project') return ok(since ? queryProjectBreakdownSince(db, since, machine) : queryProjectBreakdown(db, period, machine))
       if (by === 'agent') return ok(queryAgentBreakdown(db, period, machine))
       if (by === 'account') return ok(queryAccountBreakdown(db, period, machine))
       if (by === 'cost-center') return ok(queryCostCenterBreakdown(db, period, { machine }))
