@@ -197,6 +197,8 @@ export interface AgentTargetBase {
   variant?: string;
   agent?: string;
   authProfile?: string;
+  /** Environment variables merged into the run's process environment, same as CommandTarget.env. */
+  env?: Record<string, string>;
   /**
    * Provider CLI passthrough arguments. Fail-closed: omitted or empty is valid,
    * while every non-empty or malformed entry is rejected until that exact

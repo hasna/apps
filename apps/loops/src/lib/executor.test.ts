@@ -250,6 +250,51 @@ describe("executeLoop", () => {
     }
   });
 
+  // Regression test for todos 9eca45d6: `loops create agent` had no way to
+  // declare environment variables for the run, so a loop-spawned agent could
+  // not carry e.g. CONVERSATIONS_AGENT_ID. This asserts the variable actually
+  // reaches the spawned process's environment — not merely that the target
+  // shape accepts an `env` field.
+  test("carries agent target env vars into the run environment", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-agent-env-"));
+    const bin = join(root, "bin");
+    mkdirSync(bin, { recursive: true });
+    const claude = join(bin, "claude");
+    writeFileSync(
+      claude,
+      [
+        "#!/usr/bin/env bash",
+        'printf \'seen=%s\\n\' "$LOOPS_TEST_AGENT_ENV_VAR"',
+        "cat >/dev/null",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(claude, 0o755);
+    try {
+      const loop = store.createLoop({
+        name: "agent-env-var",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "agent",
+          provider: "claude",
+          prompt: "work",
+          env: { LOOPS_TEST_AGENT_ENV_VAR: "custom-value" },
+        },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, {
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+      });
+      expect(result.status).toBe("succeeded");
+      expect(result.stdout).toContain("seen=custom-value");
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("exports the auditable advisory session contract without claiming enforcement", async () => {
     const store = new Store(":memory:");
     const root = mkdtempSync(join(tmpdir(), "loops-agent-session-contract-"));

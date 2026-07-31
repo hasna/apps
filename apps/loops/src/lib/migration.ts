@@ -147,14 +147,21 @@ function checksToBlockers(checks: StoreMigrationChecks, prefix: "source" | "dest
   return rows;
 }
 
+// Both target kinds that can carry an `env` map (command and agent) are
+// treated identically for migration export: env values are live-run
+// secrets exactly the same way for either, so neither can round-trip as a
+// no-loss row.
+const TARGET_KINDS_WITH_ENV = new Set(["command", "agent"]);
+
 function sanitizeCommandEnv<T extends { target?: unknown }>(value: T, blockers: LoopsMigrationPlanRow[], resource: LoopsMigrationResource, id: string, name?: string): T {
   const copy = structuredClone(value) as T;
   const target = (copy as { target?: unknown }).target;
-  if (target && typeof target === "object" && !Array.isArray(target) && (target as { type?: unknown }).type === "command") {
-    const commandTarget = target as { env?: Record<string, string> };
-    if (commandTarget.env && Object.keys(commandTarget.env).length > 0) {
-      commandTarget.env = Object.fromEntries(Object.keys(commandTarget.env).map((key) => [key, "[redacted]"]));
-      pushBlocker(blockers, resource, id, "command target env values are redacted and cannot be imported as a no-loss row", name);
+  if (target && typeof target === "object" && !Array.isArray(target) && TARGET_KINDS_WITH_ENV.has((target as { type?: unknown }).type as string)) {
+    const kind = (target as { type: string }).type;
+    const envTarget = target as { env?: Record<string, string> };
+    if (envTarget.env && Object.keys(envTarget.env).length > 0) {
+      envTarget.env = Object.fromEntries(Object.keys(envTarget.env).map((key) => [key, "[redacted]"]));
+      pushBlocker(blockers, resource, id, `${kind} target env values are redacted and cannot be imported as a no-loss row`, name);
     }
   }
   return copy;
@@ -163,8 +170,8 @@ function sanitizeCommandEnv<T extends { target?: unknown }>(value: T, blockers: 
 function sanitizeWorkflow(workflow: WorkflowSpec, blockers: LoopsMigrationPlanRow[]): WorkflowSpec {
   const copy = structuredClone(workflow) as WorkflowSpec;
   copy.steps = copy.steps.map((step) => {
-    if (step.target.type !== "command" || !step.target.env || Object.keys(step.target.env).length === 0) return step;
-    pushBlocker(blockers, "workflow", workflow.id, `workflow step ${step.id} command env values are redacted and cannot be imported as a no-loss row`, workflow.name);
+    if (!TARGET_KINDS_WITH_ENV.has(step.target.type) || !step.target.env || Object.keys(step.target.env).length === 0) return step;
+    pushBlocker(blockers, "workflow", workflow.id, `workflow step ${step.id} ${step.target.type} target env values are redacted and cannot be imported as a no-loss row`, workflow.name);
     return {
       ...step,
       target: {
@@ -337,14 +344,14 @@ export function buildImportMigrationPlan(
   const loopIds = new Set(bundle.data.loops.map((loop) => loop.id));
 
   for (const workflow of bundle.data.workflows) {
-    const redactedStep = workflow.steps.find((step) => step.target.type === "command" && step.target.env && Object.values(step.target.env).includes("[redacted]"));
+    const redactedStep = workflow.steps.find((step) => TARGET_KINDS_WITH_ENV.has(step.target.type) && step.target.env && Object.values(step.target.env).includes("[redacted]"));
     if (redactedStep) {
       rows.push({
         resource: "workflow",
         id: workflow.id,
         name: workflow.name,
         action: "blocked",
-        reason: `workflow step ${redactedStep.id} has redacted command env values`,
+        reason: `workflow step ${redactedStep.id} has redacted ${redactedStep.target.type} env values`,
         incomingHash: migrationHash(workflow),
       });
       continue;
@@ -366,13 +373,17 @@ export function buildImportMigrationPlan(
   }
 
   for (const loop of bundle.data.loops) {
-    if (loop.target.type === "command" && loop.target.env && Object.values(loop.target.env).includes("[redacted]")) {
+    if (
+      (loop.target.type === "command" || loop.target.type === "agent") &&
+      loop.target.env &&
+      Object.values(loop.target.env).includes("[redacted]")
+    ) {
       rows.push({
         resource: "loop",
         id: loop.id,
         name: loop.name,
         action: "blocked",
-        reason: "loop has redacted command env values",
+        reason: `loop has redacted ${loop.target.type} env values`,
         incomingHash: migrationHash(loop),
       });
       continue;

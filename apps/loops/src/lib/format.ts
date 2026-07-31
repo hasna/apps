@@ -89,7 +89,7 @@ export function publicLoop(loop: Loop): Record<string, unknown> {
     loop.target.type === "command"
       ? { ...loop.target, env: loop.target.env ? "[redacted]" : undefined }
       : loop.target.type === "agent"
-        ? { ...loop.target, prompt: redact(loop.target.prompt) }
+        ? { ...loop.target, prompt: redact(loop.target.prompt), env: loop.target.env ? "[redacted]" : undefined }
         : loop.target;
   return {
     ...loop,
@@ -126,7 +126,7 @@ export function publicWorkflow(workflow: WorkflowSpec): Record<string, unknown> 
       ...step,
       target:
         step.target.type === "agent"
-          ? { ...step.target, prompt: redact(step.target.prompt) }
+          ? { ...step.target, prompt: redact(step.target.prompt), env: step.target.env ? "[redacted]" : undefined }
           : step.target.type === "command" && step.target.env
             ? { ...step.target, env: "[redacted]" }
             : step.target,

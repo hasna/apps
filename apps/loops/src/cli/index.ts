@@ -675,14 +675,24 @@ function runtimePreflightFromOpts(opts: { preflightEachRun?: boolean }): { befor
   return opts.preflightEachRun ? { beforeRun: true } : undefined;
 }
 
-function parseVars(values: string[] | undefined): Record<string, string> {
-  const vars: Record<string, string> = {};
+function parseKeyValueList(values: string[] | undefined, flag: string): Record<string, string> {
+  const parsed: Record<string, string> = {};
   for (const value of values ?? []) {
     const index = value.indexOf("=");
-    if (index <= 0) throw new ValidationError(`invalid --var value, expected key=value: ${value}`);
-    vars[value.slice(0, index)] = value.slice(index + 1);
+    if (index <= 0) throw new ValidationError(`invalid ${flag} value, expected key=value: ${value}`);
+    parsed[value.slice(0, index)] = value.slice(index + 1);
   }
-  return vars;
+  return parsed;
+}
+
+function parseVars(values: string[] | undefined): Record<string, string> {
+  return parseKeyValueList(values, "--var");
+}
+
+/** Environment variables for a command/agent target's run; undefined (not `{}`) when none were passed, so the stored target omits the field like every other optional target property. */
+function envFromOpts(values: string[] | undefined): Record<string, string> | undefined {
+  const env = parseKeyValueList(values, "--env");
+  return Object.keys(env).length ? env : undefined;
 }
 
 function parseJsonFile(file: string): unknown {
@@ -784,6 +794,7 @@ addGoalOptions(
         .option("--variant <variant>", "provider-specific model variant or reasoning effort")
         .option("--agent <agent>", "provider-specific agent")
         .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
+        .option("--env <key=value>", "environment variable for the run; may be repeated", collectValues, [] as string[])
         .option("--add-dir <dir>", "additional writable directory for provider sandboxes; may be repeated or comma-separated", collectValues, [] as string[])
         .option("--timeout <duration>", "run timeout; use none/unlimited for no timeout")
         .option("--permission-mode <mode>", "provider permission mode: default, plan, auto, or bypass")
@@ -816,6 +827,7 @@ addGoalOptions(
     variant: opts.variant,
     agent: opts.agent,
     authProfile: providerAuthProfileFromOpts(opts, provider),
+    env: envFromOpts(opts.env),
     addDirs: listFromRepeatedOpts(opts.addDir),
     timeoutMs: timeoutDuration(opts.timeout, "--timeout"),
     configIsolation: opts.configIsolation,

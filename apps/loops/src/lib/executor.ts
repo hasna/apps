@@ -492,6 +492,7 @@ function commandSpec(target: ExecutableTarget, opts: ExecuteOptions): CommandSpe
     command: invocation.command,
     args: invocation.args,
     cwd: agentTarget.cwd,
+    env: agentTarget.env,
     timeoutMs: agentTarget.timeoutMs ?? null,
     idleTimeoutMs: agentTarget.idleTimeoutMs ?? defaultAgentIdleTimeoutMs(agentTarget, opts),
     account: agentTarget.account,

@@ -1426,6 +1426,68 @@ describe("loops CLI", () => {
     expect(JSON.parse(relaxed.stdout).validation.error).toContain("manualBreakGlass=true");
   });
 
+  test("create agent persists --env variables and rejects a malformed value", () => {
+    const dataDir = freshDataDir("loops-cli-agent-env-");
+    const create = runCli(dataDir, [
+      "--json",
+      "create",
+      "agent",
+      "env-agent",
+      "--provider",
+      "codewith",
+      "--at",
+      futureAt(),
+      "--prompt",
+      "inspect status",
+      "--env",
+      "CONVERSATIONS_AGENT_ID=agent-chief-marketing",
+      "--env",
+      "HASNA_KNOWLEDGE_STORAGE_MODE=cloud",
+    ]);
+    expect(create.status).toBe(0);
+    const value = JSON.parse(create.stdout);
+    // Every CLI-facing view (create/show/list) redacts env the same way it
+    // already redacts command-target env, so a credential passed via --env
+    // never appears verbatim in agent output either.
+    expect(value.target.env).toBe("[redacted]");
+    expect(create.stdout).not.toContain("agent-chief-marketing");
+
+    const malformed = runCli(dataDir, [
+      "--json",
+      "create",
+      "agent",
+      "malformed-env-agent",
+      "--provider",
+      "codewith",
+      "--at",
+      futureAt(),
+      "--prompt",
+      "inspect status",
+      "--env",
+      "NOT_A_KEY_VALUE_PAIR",
+    ]);
+    expect(malformed.status).toBe(1);
+    expect(JSON.parse(malformed.stdout).error.message).toContain("invalid --env value");
+
+    const show = runCli(dataDir, ["--json", "show", value.id]);
+    expect(show.status).toBe(0);
+    expect(JSON.parse(show.stdout).target.env).toBe("[redacted]");
+    expect(show.stdout).not.toContain("agent-chief-marketing");
+
+    // Confirm what actually landed in storage (bypassing CLI-side redaction),
+    // proving --env was parsed and persisted correctly rather than dropped.
+    const store = new Store(join(dataDir, "loops.db"));
+    try {
+      const stored = store.getLoop(value.id);
+      expect(stored?.target).toMatchObject({
+        type: "agent",
+        env: { CONVERSATIONS_AGENT_ID: "agent-chief-marketing", HASNA_KNOWLEDGE_STORAGE_MODE: "cloud" },
+      });
+    } finally {
+      store.close();
+    }
+  });
+
   test("create command, agent, and workflow accept explicit unlimited timeouts", () => {
     const dataDir = freshDataDir("loops-cli-timeout-none-");
     const command = runCli(dataDir, [

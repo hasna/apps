@@ -52,6 +52,17 @@ function optionalStringArray(value: unknown, label: string): string[] | undefine
   return values.length ? values : undefined;
 }
 
+function optionalStringRecord(value: unknown, label: string): Record<string, string> | undefined {
+  if (value === undefined) return undefined;
+  assertObject(value, label);
+  const result: Record<string, string> = {};
+  for (const [key, entryValue] of Object.entries(value)) {
+    if (typeof entryValue !== "string") throw new ValidationError(`${label}.${key} must be a string`);
+    result[key] = entryValue;
+  }
+  return Object.keys(result).length ? result : undefined;
+}
+
 function normalizeAllowlist(value: unknown, label: string): AgentAllowlistSpec | undefined {
   if (value === undefined) return undefined;
   assertObject(value, label);
@@ -162,6 +173,7 @@ function validateTarget(value: unknown, label: string, opts: WorkflowNormalizeOp
     optionalPositiveInteger(value.idleTimeoutMs, `${label}.idleTimeoutMs`);
     const extraArgs = optionalStringArray(value.extraArgs, `${label}.extraArgs`);
     optionalStringArray(value.addDirs, `${label}.addDirs`);
+    const env = optionalStringRecord(value.env, `${label}.env`);
     const allowlist = normalizeAllowlist(value.allowlist, `${label}.allowlist`);
     const manualBreakGlass = optionalBoolean(value.manualBreakGlass, `${label}.manualBreakGlass`);
     // Provider-specific option rules live in the shared provider adapters so the
@@ -193,8 +205,9 @@ function validateTarget(value: unknown, label: string, opts: WorkflowNormalizeOp
       if (value.routing.eventType !== undefined) assertString(value.routing.eventType, `${label}.routing.eventType`);
       if (value.routing.eventSource !== undefined) assertString(value.routing.eventSource, `${label}.routing.eventSource`);
     }
-    const target: Record<string, unknown> = { ...value, extraArgs, allowlist, manualBreakGlass };
+    const target: Record<string, unknown> = { ...value, extraArgs, env, allowlist, manualBreakGlass };
     if (!extraArgs) delete target.extraArgs;
+    if (!env) delete target.env;
     if (!allowlist) delete target.allowlist;
     if (manualBreakGlass === undefined) delete target.manualBreakGlass;
     delete target.promptFile;
