@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.5.17 - 2026-07-31
+
+### Fixed
+- **Dashboard `/api` endpoints bypassed the Store.** Every dashboard `/api` route now goes through the Store abstraction rather than reaching past it, so a dashboard served against the hosted service reports the same data the CLI does instead of silently answering from a different backend (#52).
+- **`latest: N` lost to an explicit `order`.** `resolveReadWindow` checked `order` before `latest`, so a caller passing both got the ordering it asked for and *not* the newest N. `latest` now takes precedence and the explicit-`order` passthrough is evaluated after it, which keeps polling (`order: "asc"`) and `serve` (`order: "desc"`) semantics untouched (#53). This completes the recency-read work started in 0.5.15.
+
+### Added
+- The macOS app connects to the hosted service and **fails closed**: if the store cannot be resolved it refuses to fall back to an on-box SQLite file, which is what let a Mac quietly display a fraction of the real channel list. Ships `Package.swift`, the `HasnaConversationsCore` store-resolution core with its test suite, a `swift build` / `swift test` CI job, and `scripts/build_conversations_app.sh` (#51).
+- Store-path `PUT`/`DELETE` end-to-end coverage on the server (#53).
+
+### Changed
+- The Swift store-env contract's mode tokens are now **derived from the resolver** rather than hardcoded. `renderSwiftStoreEnvContract` observes the local token by round-tripping a probe env through `conversationsCloudEnv`, and filters candidate hosted tokens through `normalizeStorageMode`, which throws on a token this generation does not accept. A literal would have been a bet that the storage-mode enum never changes, and it already has: this generation accepts `local`/`cloud` plus deprecated aliases, while contracts after hasna/contracts#63 accepts only `sqlite`/`postgres` — two disjoint sets, so a hardcoded token loses on one side or the other (#55).
+
+### Note on scope — this release does NOT carry the macOS URL-redaction fix
+PR #55 also rebuilt `loggableURL` in `Sources/HasnaConversationsCore/StoreResolution.swift` as an allow-list (scheme, host and port copied into a fresh `URLComponents`), replacing a strip-list that masked the query string but left the URL **fragment** and the **userinfo** section intact — so a magic-link token or a `user:password@` credential in a store URL was written verbatim into a log line.
+
+**That fix is Swift and cannot travel on npm at any version number.** `package.json`'s `files` list ships `dist/`, `bin/` and `dashboard/dist/` only; `Sources/` is not in the tarball, and a packed 0.5.17 tarball contains no `.swift` file and no `loggableURL` symbol. Its only carrier is a built macOS app. Do not cite this npm release as evidence that the redaction fix has shipped to anyone.
+
+
 ## 0.5.16 - 2026-07-31
 
 ### Fixed
