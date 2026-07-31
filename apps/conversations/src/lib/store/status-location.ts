@@ -37,6 +37,9 @@ export type StoreStatusLocation =
  * it must not blur which field is present, and the union above enforces that.
  */
 export function storeStatusLocation(env: Env = process.env): StoreStatusLocation {
-  if (!isCloudStore(env)) return { mode: "local", db_path: getDbPath() };
+  // `env` reaches BOTH branches. It previously reached only the cloud one, while
+  // `getDbPath()` read `process.env` directly — so a caller (or a test) that
+  // injected a DB path got an answer the injection had not influenced.
+  if (!isCloudStore(env)) return { mode: "local", db_path: getDbPath(env) };
   return { mode: "self_hosted", api_url: loggableUrl(cloudApiUrl(env)) };
 }

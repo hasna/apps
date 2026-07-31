@@ -4,7 +4,6 @@ import chalk from "chalk";
 import { getDbPath, closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { windowItems } from "../../lib/compact-output.js";
-import { isCloudStore } from "../../lib/store/index.js";
 import { storeStatusLocation, type StoreStatusLocation } from "../../lib/store/status-location.js";
 import { checkForUpdate } from "../../lib/version-check.js";
 import { getCliWindow, printCompactFooter, printJsonDisclosure, windowJsonList } from "../compact.js";
@@ -401,8 +400,8 @@ export function registerAnalyticsCommands(program: Command): void {
       } else {
         printLine(chalk.bold("Conversations Status"));
         // Branching on the payload's own discriminant rather than a second
-        // `isCloudStore()` call: the printed lines and the JSON body can no
-        // longer disagree about which store answered.
+        // store resolution: the printed lines and the JSON body can no longer
+        // disagree about which store answered.
         if (stats.mode === "self_hosted") {
           printLine(`  Mode:       self_hosted (cloud API)`);
           printLine(`  API URL:    ${stats.api_url ?? "(set)"}`);

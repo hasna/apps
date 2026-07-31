@@ -123,9 +123,17 @@ export function getDataDir(): string {
   return newDir;
 }
 
-export function getDbPath(): string {
-  if (process.env.HASNA_CONVERSATIONS_DB_PATH) return process.env.HASNA_CONVERSATIONS_DB_PATH;
-  if (process.env.CONVERSATIONS_DB_PATH) return process.env.CONVERSATIONS_DB_PATH;
+/**
+ * `env` is optional and defaults to the real environment, so every existing
+ * caller is unchanged. It exists because the store resolvers beside this one
+ * (`isCloudStore`, `cloudApiUrl`) already take an env, and a helper that
+ * threaded an env to those while this one silently read `process.env` produced a
+ * test that injected a DB path and asserted against a value the injection could
+ * not reach — a check that cannot fail.
+ */
+export function getDbPath(env: Record<string, string | undefined> = process.env): string {
+  if (env.HASNA_CONVERSATIONS_DB_PATH) return env.HASNA_CONVERSATIONS_DB_PATH;
+  if (env.CONVERSATIONS_DB_PATH) return env.CONVERSATIONS_DB_PATH;
   return join(getDataDir(), "messages.db");
 }
 
