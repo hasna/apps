@@ -56,6 +56,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Direct unit coverage for previously untested local task-runner and agent-task sync modules.**
+  The tests exercise successful execution and synchronization as well as missing tasks,
+  failed handlers, aborted runs, empty queues, malformed files, and unavailable paths.
 - **`GET /v1/integrity`** — per-condition referential-integrity counts computed by the backing
   storage engine, for **both** SQLite and the Postgres JSONB record store (which has no
   foreign keys and is therefore where these rows actually accumulate). A backend that cannot

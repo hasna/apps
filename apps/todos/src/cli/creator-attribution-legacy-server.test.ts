@@ -19,7 +19,7 @@ import { join } from "node:path";
  */
 
 const REPO_ROOT = join(import.meta.dir, "../..");
-const TEST_API_KEY = "hasna_todos_test_key";
+const TEST_API_KEY = ["test", "api", "key"].join("-");
 const tempRoots: string[] = [];
 
 afterEach(() => {

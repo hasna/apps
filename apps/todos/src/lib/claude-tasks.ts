@@ -9,10 +9,12 @@ import {
   appendSyncConflict,
   ensureDir,
   getFileMtimeMs,
+  hasSyncFingerprintChanged,
   listJsonFiles,
   parseTimestamp,
   readHighWaterMark,
   readJsonFile,
+  withSyncFingerprint,
   writeHighWaterMark,
   writeJsonFile,
 } from "./sync-utils.js";
@@ -135,15 +137,19 @@ export function pushToClaudeTaskList(
         const lastSyncedAt = parseTimestamp(existing.task.metadata?.["todos_updated_at"]);
         const localUpdatedAt = parseTimestamp(task.updated_at);
         const remoteUpdatedAt = existing.mtimeMs;
+        const remoteChanged = hasSyncFingerprintChanged(existing.task);
+        const remoteChangedSinceSync = remoteChanged ?? Boolean(
+          lastSyncedAt && remoteUpdatedAt && remoteUpdatedAt > lastSyncedAt,
+        );
         let recordConflict = false;
-        if (lastSyncedAt && localUpdatedAt && remoteUpdatedAt && localUpdatedAt > lastSyncedAt && remoteUpdatedAt > lastSyncedAt) {
+        if (lastSyncedAt && localUpdatedAt && localUpdatedAt > lastSyncedAt && remoteChangedSinceSync) {
           if (prefer === "remote") {
             const conflict = {
               agent: "claude",
               direction: "push" as const,
               prefer,
               local_updated_at: task.updated_at,
-              remote_updated_at: new Date(remoteUpdatedAt).toISOString(),
+              remote_updated_at: remoteUpdatedAt ? new Date(remoteUpdatedAt).toISOString() : undefined,
               detected_at: new Date().toISOString(),
             };
             const newMeta = appendSyncConflict(task.metadata, conflict);
@@ -159,7 +165,7 @@ export function pushToClaudeTaskList(
         updated.blocks = existing.task.blocks;
         updated.blockedBy = existing.task.blockedBy;
         updated.activeForm = existing.task.activeForm;
-        writeClaudeTask(dir, updated);
+        writeClaudeTask(dir, withSyncFingerprint(updated));
         if (recordConflict) {
           const latest = getTask(task.id);
           if (latest) {
@@ -187,7 +193,7 @@ export function pushToClaudeTaskList(
           ct.subject = formatPrefixedSubject(task.title, prefixConfig.prefix, prefixCounter);
         }
 
-        writeClaudeTask(dir, ct);
+        writeClaudeTask(dir, withSyncFingerprint(ct));
 
         // Store the mapping in SQLite metadata
         const current = getTask(task.id);

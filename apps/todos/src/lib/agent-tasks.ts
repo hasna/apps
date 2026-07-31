@@ -7,10 +7,12 @@ import {
   ensureDir,
   getFileMtimeMs,
   getTodosGlobalDir,
+  hasSyncFingerprintChanged,
   listJsonFiles,
   parseTimestamp,
   readHighWaterMark,
   readJsonFile,
+  withSyncFingerprint,
   writeHighWaterMark,
   writeJsonFile,
 } from "./sync-utils.js";
@@ -49,7 +51,7 @@ function writeAgentTask(dir: string, task: AgentTask): void {
 }
 
 function taskToAgentTask(task: Task, externalId: string, existingMeta?: Record<string, unknown>): AgentTask {
-  return {
+  return withSyncFingerprint({
     id: externalId,
     title: task.title,
     description: task.description || "",
@@ -64,7 +66,7 @@ function taskToAgentTask(task: Task, externalId: string, existingMeta?: Record<s
       todos_updated_at: task.updated_at,
       todos_version: task.version,
     },
-  };
+  });
 }
 
 function metadataKey(agent: string): string {
@@ -107,15 +109,19 @@ export function pushToAgentTaskList(
         const lastSyncedAt = parseTimestamp(existing.task.metadata?.["todos_updated_at"]);
         const localUpdatedAt = parseTimestamp(task.updated_at);
         const remoteUpdatedAt = existing.mtimeMs;
+        const remoteChanged = hasSyncFingerprintChanged(existing.task);
+        const remoteChangedSinceSync = remoteChanged ?? Boolean(
+          lastSyncedAt && remoteUpdatedAt && remoteUpdatedAt > lastSyncedAt,
+        );
         let recordConflict = false;
-        if (lastSyncedAt && localUpdatedAt && remoteUpdatedAt && localUpdatedAt > lastSyncedAt && remoteUpdatedAt > lastSyncedAt) {
+        if (lastSyncedAt && localUpdatedAt && localUpdatedAt > lastSyncedAt && remoteChangedSinceSync) {
           if (prefer === "remote") {
             const conflict = {
               agent,
               direction: "push" as const,
               prefer,
               local_updated_at: task.updated_at,
-              remote_updated_at: new Date(remoteUpdatedAt).toISOString(),
+              remote_updated_at: remoteUpdatedAt ? new Date(remoteUpdatedAt).toISOString() : undefined,
               detected_at: new Date().toISOString(),
             };
             const newMeta = appendSyncConflict(task.metadata, conflict);

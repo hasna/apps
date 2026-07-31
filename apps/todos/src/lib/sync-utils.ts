@@ -1,6 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { SyncConflict } from "./sync-types.js";
+
+export const TODO_SYNC_FINGERPRINT_KEY = "todos_sync_fingerprint";
 
 export const HOME = process.env["HOME"] || process.env["USERPROFILE"] || "~";
 
@@ -66,4 +69,41 @@ export function appendSyncConflict(
   const current = Array.isArray(metadata["sync_conflicts"]) ? metadata["sync_conflicts"] as SyncConflict[] : [];
   const next = [conflict, ...current].slice(0, limit);
   return { ...metadata, sync_conflicts: next };
+}
+
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (!value || typeof value !== "object") return value;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, entryValue]) => entryValue !== undefined)
+    .sort(([a], [b]) => a.localeCompare(b));
+  return Object.fromEntries(entries.map(([key, entryValue]) => [key, canonicalize(entryValue)]));
+}
+
+function withoutSyncFingerprintMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
+  const { [TODO_SYNC_FINGERPRINT_KEY]: _fingerprint, ...rest } = metadata;
+  return rest;
+}
+
+function syncFingerprint(record: { metadata?: Record<string, unknown> }): string {
+  const metadata = withoutSyncFingerprintMetadata(record.metadata || {});
+  const canonical = canonicalize({ ...record, metadata });
+  return `sha256:${createHash("sha256").update(JSON.stringify(canonical)).digest("hex")}`;
+}
+
+export function withSyncFingerprint<T extends { metadata: Record<string, unknown> }>(record: T): T {
+  const metadata = withoutSyncFingerprintMetadata(record.metadata);
+  return {
+    ...record,
+    metadata: {
+      ...metadata,
+      [TODO_SYNC_FINGERPRINT_KEY]: syncFingerprint({ ...record, metadata }),
+    },
+  };
+}
+
+export function hasSyncFingerprintChanged(record: { metadata?: Record<string, unknown> }): boolean | null {
+  const stored = record.metadata?.[TODO_SYNC_FINGERPRINT_KEY];
+  if (typeof stored !== "string" || stored.length === 0) return null;
+  return stored !== syncFingerprint(record);
 }
