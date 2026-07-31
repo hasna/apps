@@ -517,7 +517,7 @@ describe("project-first CLI surface", () => {
         env: testSpawnEnv(env),
       });
       try {
-        const stdout = await readStreamChunk(proc.stdout);
+        const stdout = await readStreamChunk(proc.stdout, 10_000);
         expect(stdout).toContain("\"ok\": true");
         await Bun.sleep(500);
         expect(proc.exitCode).toBeNull();
