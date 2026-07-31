@@ -49,7 +49,7 @@ import {
 } from "./errors.js";
 import { genId, nowIso } from "./ids.js";
 import { dbPath } from "./paths.js";
-import { processStartTimeMs, sameProcessStart, START_TIME_TOLERANCE_MS } from "./process-identity.js";
+import { processStartTimeMs, sameProcessStart, verifiedProcessStart, START_TIME_TOLERANCE_MS } from "./process-identity.js";
 import { scrubSecrets, scrubSecretsDeep } from "./redact.js";
 import { initialNextRun } from "./recurrence.js";
 import { assertGoalTransition, rollupSummary, updateReadyFlags } from "./goal/status.js";
@@ -96,6 +96,23 @@ export interface CircuitBreakerTransitionResult {
 const DEFAULT_RECOVERY_BATCH_LIMIT = 100;
 const DEFAULT_RECOVERY_SCAN_MULTIPLIER = 5;
 const LIVE_EXPIRED_RUN_GRACE_MS = 60_000;
+/**
+ * Ceiling on CONSECUTIVE lease-recovery deferrals for a single run. Past it the
+ * run is abandoned regardless of how alive its process still looks.
+ *
+ * A grace that cannot expire is not a grace. Without this ceiling a run whose
+ * process merely *looks* alive is re-deferred every
+ * {@link LIVE_EXPIRED_RUN_GRACE_MS} forever: never abandoned, never advanced,
+ * and blocking everything queued behind it (station01, 2026-07-31 — a wall of
+ * codewith "Loop run deferred" toasts once a minute and a stalled publish).
+ *
+ * A run only reaches recovery when its lease has ALREADY expired, which means
+ * the runner stopped renewing it — healthy work renews and never enters this
+ * path at all. So the ceiling costs a genuinely-live run nothing, and bounds
+ * total grace at MAX x GRACE (10 min), after which a wedged or
+ * recycled-pid run is released instead of wedging the queue.
+ */
+const MAX_LIVE_EXPIRED_RUN_DEFERRALS = 10;
 /**
  * Highest schema version this binary understands. Bump alongside every new
  * numbered migration so older binaries refuse to open newer databases instead
@@ -167,6 +184,8 @@ export interface RunRow {
   pid: number | null;
   pgid: number | null;
   process_started_at: string | null;
+  /** Nullable for rows read before migration 0014 backfills the column. */
+  defer_count: number | null;
   exit_code: number | null;
   duration_ms: number | null;
   stdout: string | null;
@@ -295,6 +314,8 @@ export interface WorkflowStepRunRow {
   finished_at: string | null;
   exit_code: number | null;
   pid: number | null;
+  /** Nullable for rows written before migration 0014 added the fingerprint. */
+  process_started_at: string | null;
   duration_ms: number | null;
   stdout: string | null;
   stderr: string | null;
@@ -563,6 +584,7 @@ export function rowToWorkflowStepRun(row: WorkflowStepRunRow): WorkflowStepRun {
     finishedAt: row.finished_at ?? undefined,
     exitCode: row.exit_code ?? undefined,
     pid: row.pid ?? undefined,
+    processStartedAt: row.process_started_at ?? undefined,
     durationMs: row.duration_ms ?? undefined,
     stdout: row.stdout ?? undefined,
     stderr: row.stderr ?? undefined,
@@ -673,21 +695,40 @@ function isRecordedProcessAlive(pid: number | null | undefined, processStartedAt
   return sameProcessStart(processStartedAt ?? undefined, processStartTimeMs(pid));
 }
 
-/**
- * Whether a workflow step's recorded pid is still the step's own process.
- * `workflow_step_runs` carries no start-time fingerprint, so use the step's
- * `started_at` as a lower bound: a genuine child was spawned at/after the
- * step started, while a recycled pid from before the step (e.g. after a
- * reboot) predates it. Unresolvable start times stay lenient.
- */
 function isoProcessStart(pid: number): string | undefined {
   const startedMs = processStartTimeMs(pid);
   return startedMs === undefined ? undefined : new Date(startedMs).toISOString();
 }
 
-export function isLiveStepProcess(pid: number, stepStartedAt: string | null | undefined): boolean {
+/**
+ * Whether a workflow step's recorded pid is still the step's own process.
+ *
+ * Two paths, because the answer is only as strong as the evidence on the row:
+ *
+ * - **Fingerprinted** (migration 0014 onward): `processStartedAt` holds the
+ *   child's real start time, so identity is a TWO-SIDED match via
+ *   {@link verifiedProcessStart} — the same strict comparison
+ *   `isRecordedProcessAlive` uses for runs, and it fails closed. This is what
+ *   rejects a recycled pid: the OS handing that number to an unrelated process
+ *   yields a start time that does not match, in either direction.
+ *
+ * - **Legacy** (rows written before 0014, no fingerprint): fall back to the
+ *   step's `started_at` as a lower bound. This is a guess, not an identity
+ *   check — it rejects a pid older than the step but cannot reject a newer
+ *   one — so it stays lenient on unresolvable data rather than killing live
+ *   work mid-upgrade. Leniency here is safe ONLY because
+ *   {@link MAX_LIVE_EXPIRED_RUN_DEFERRALS} bounds how long a "possibly alive"
+ *   answer can hold a run open. Before that ceiling existed, this branch
+ *   returning `true` on one unreadable timestamp wedged the runner forever.
+ */
+export function isLiveStepProcess(
+  pid: number,
+  stepStartedAt: string | null | undefined,
+  processStartedAt?: string | null,
+): boolean {
   if (!isProcessAlive(pid)) return false;
   const actualMs = processStartTimeMs(pid);
+  if (processStartedAt) return verifiedProcessStart(processStartedAt, actualMs);
   const stepStartMs = stepStartedAt ? Date.parse(stepStartedAt) : Number.NaN;
   if (actualMs === undefined || !Number.isFinite(stepStartMs)) return true;
   return actualMs >= stepStartMs - START_TIME_TOLERANCE_MS;
@@ -1198,6 +1239,24 @@ export class Store {
           this.addColumnIfMissing("loops", "labels_json", "TEXT NOT NULL DEFAULT '[]'");
         },
       },
+      {
+        id: "0014_run_defer_ceiling_and_step_process_fingerprint",
+        apply: () => {
+          // Additive on both counts; old binaries ignore the columns and keep
+          // their previous (unbounded, unfingerprinted) behaviour, so
+          // user_version and the compatibility floor stay unchanged.
+          //
+          // loop_runs.defer_count bounds lease-recovery deferrals
+          // (MAX_LIVE_EXPIRED_RUN_DEFERRALS).
+          this.addColumnIfMissing("loop_runs", "defer_count", "INTEGER NOT NULL DEFAULT 0");
+          // workflow_step_runs.process_started_at gives step pids the same
+          // start-time fingerprint loop_runs got in 0006, so a recycled step
+          // pid can be rejected by identity instead of by a one-sided
+          // lower-bound guess. Rows written before this migration have no
+          // fingerprint and stay lenient — bounded by the deferral ceiling.
+          this.addColumnIfMissing("workflow_step_runs", "process_started_at", "TEXT");
+        },
+      },
     ];
   }
 
@@ -1245,6 +1304,7 @@ export class Store {
         pid INTEGER,
         pgid INTEGER,
         process_started_at TEXT,
+        defer_count INTEGER NOT NULL DEFAULT 0,
         exit_code INTEGER,
         duration_ms INTEGER,
         stdout TEXT,
@@ -1405,6 +1465,7 @@ export class Store {
         finished_at TEXT,
         exit_code INTEGER,
         pid INTEGER,
+        process_started_at TEXT,
         duration_ms INTEGER,
         stdout TEXT,
         stderr TEXT,
@@ -3849,7 +3910,7 @@ export class Store {
     const now = (opts.now ?? new Date()).toISOString();
     this.db
       .query(
-        `UPDATE workflow_step_runs SET pid=$pid, updated_at=$updated
+        `UPDATE workflow_step_runs SET pid=$pid, process_started_at=$processStartedAt, updated_at=$updated
          WHERE workflow_run_id=$workflowRunId AND step_id=$stepId AND status='running'
            AND ($daemonLeaseId IS NULL OR EXISTS (
              SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
@@ -3859,6 +3920,9 @@ export class Store {
         $workflowRunId: workflowRunId,
         $stepId: stepId,
         $pid: pid,
+        // Pair the pid with its start time so a recycled pid can later be
+        // rejected by identity rather than by a lower-bound guess.
+        $processStartedAt: isoProcessStart(pid) ?? null,
         $updated: now,
         $daemonLeaseId: opts.daemonLeaseId ?? null,
         $now: now,
@@ -3928,7 +3992,9 @@ export class Store {
       const run = this.requireWorkflowRun(workflowRunId);
       if (run.status !== "running") throw new WorkflowRunNotRunningError();
       const before = this.listWorkflowStepRuns(workflowRunId).filter((step) => step.status === "running");
-      const live = before.filter((step) => step.pid !== undefined && isLiveStepProcess(step.pid, step.startedAt));
+      const live = before.filter(
+        (step) => step.pid !== undefined && isLiveStepProcess(step.pid, step.startedAt, step.processStartedAt),
+      );
       if (live.length > 0) {
         throw new WorkflowRunHasLiveStepsError();
       }
@@ -4337,8 +4403,12 @@ export class Store {
 
   private hasLiveWorkflowStepProcesses(loopRunId: string): boolean {
     const liveWorkflowSteps = this.db
-      .query<{ workflow_run_id: string; step_id: string; pid: number; started_at: string | null }, [string]>(
-        `SELECT wr.id AS workflow_run_id, wsr.step_id AS step_id, wsr.pid AS pid, wsr.started_at AS started_at
+      .query<
+        { workflow_run_id: string; step_id: string; pid: number; started_at: string | null; process_started_at: string | null },
+        [string]
+      >(
+        `SELECT wr.id AS workflow_run_id, wsr.step_id AS step_id, wsr.pid AS pid, wsr.started_at AS started_at,
+                wsr.process_started_at AS process_started_at
          FROM workflow_runs wr
          JOIN workflow_step_runs wsr ON wsr.workflow_run_id = wr.id
          WHERE wr.loop_run_id = ?
@@ -4347,7 +4417,7 @@ export class Store {
            AND wsr.pid IS NOT NULL`,
       )
       .all(loopRunId);
-    return liveWorkflowSteps.some((step) => isLiveStepProcess(step.pid, step.started_at));
+    return liveWorkflowSteps.some((step) => isLiveStepProcess(step.pid, step.started_at, step.process_started_at));
   }
 
   createSkippedRun(loop: Loop, scheduledFor: string, reason: string, opts: DaemonLeaseFence = {}): LoopRun {
@@ -4658,7 +4728,11 @@ export class Store {
     const expiresAt = new Date(now.getTime() + leaseMs).toISOString();
     const res = this.db
       .query(
-        `UPDATE loop_runs SET lease_expires_at=$expires, updated_at=$updated
+        // A successful renewal proves the runner is genuinely alive and
+        // holding its lease, so the deferral ceiling counts only CONSECUTIVE
+        // failures to renew — a run that recovers is not punished for an
+        // earlier hiccup.
+        `UPDATE loop_runs SET lease_expires_at=$expires, defer_count=0, updated_at=$updated
          WHERE id=$id AND status='running' AND claimed_by=$claimedBy AND lease_expires_at > $now
            AND claim_token=$claimToken
            AND ($daemonLeaseId IS NULL OR EXISTS (
@@ -4846,7 +4920,7 @@ export class Store {
     const deferredUntil = new Date(now.getTime() + LIVE_EXPIRED_RUN_GRACE_MS).toISOString();
     this.db
       .query(
-        `UPDATE loop_runs SET lease_expires_at=$deferredUntil, updated_at=$updated
+        `UPDATE loop_runs SET lease_expires_at=$deferredUntil, defer_count=defer_count+1, updated_at=$updated
          WHERE id=$id AND status='running' AND lease_expires_at <= $now
            AND ($daemonLeaseId IS NULL OR EXISTS (
              SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
@@ -4890,19 +4964,29 @@ export class Store {
     const deferred: LoopRun[] = [];
     for (const row of rows) {
       if (recovered.length >= limit) break;
-      if (isRecordedProcessAlive(row.pid, row.process_started_at) || this.hasLiveWorkflowStepProcesses(row.id)) {
+      const looksAlive = isRecordedProcessAlive(row.pid, row.process_started_at) || this.hasLiveWorkflowStepProcesses(row.id);
+      // "Looks alive" only buys a BOUNDED grace. Past the ceiling the run is
+      // abandoned regardless: an expired lease that keeps failing to renew is
+      // a wedged runner (or a pid the OS recycled under us), and deferring it
+      // forever blocks every run queued behind it.
+      const deferralsSoFar = row.defer_count ?? 0;
+      if (looksAlive && deferralsSoFar < MAX_LIVE_EXPIRED_RUN_DEFERRALS) {
         this.deferLiveExpiredRun(row.id, now, opts);
         const deferredRun = this.getRun(row.id);
         if (deferredRun) deferred.push(deferredRun);
         continue;
       }
+      const exhaustedGrace = looksAlive;
+      const abandonError = exhaustedGrace
+        ? `run lease expired and exceeded the live-process deferral ceiling (${MAX_LIVE_EXPIRED_RUN_DEFERRALS} deferrals, ${Math.round((MAX_LIVE_EXPIRED_RUN_DEFERRALS * LIVE_EXPIRED_RUN_GRACE_MS) / 60_000)}m grace); the recorded process still appears alive but never renewed its lease`
+        : "run lease expired before completion";
       const finished = now.toISOString();
       this.db.exec("BEGIN IMMEDIATE");
       try {
         const res = this.db
           .query(
             `UPDATE loop_runs SET status='abandoned', finished_at=$finished, lease_expires_at=NULL,
-             error='run lease expired before completion', updated_at=$updated
+             error=$abandonError, updated_at=$updated
              WHERE id=$id AND status='running' AND lease_expires_at <= $now
                AND ($daemonLeaseId IS NULL OR EXISTS (
                  SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
@@ -4913,6 +4997,7 @@ export class Store {
             $finished: finished,
             $updated: finished,
             $now: finished,
+            $abandonError: abandonError,
             $daemonLeaseId: opts.daemonLeaseId ?? null,
           });
         if (res.changes !== 1) {
