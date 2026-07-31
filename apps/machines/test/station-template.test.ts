@@ -1349,3 +1349,37 @@ describe("journald cap (template 1.6.0)", () => {
     expect(journaldItems.map((candidate) => candidate.id).sort()).toEqual(["journald:SystemKeepFree", "journald:SystemMaxUse"]);
   });
 });
+
+describe("apt archive cache bound (template 1.7.0)", () => {
+  test("base layer ships an AutocleanInterval drop-in that overrides 20auto-upgrades", () => {
+    const effective = effectiveFor(["ec2"]);
+    const file = effective.files.find((candidate) => candidate.id === "apt-cache-autoclean");
+    expect(file?.target).toBe("/etc/apt/apt.conf.d/99-zz-hasna-station-apt-cache.conf");
+    expect(file?.content).toContain('APT::Periodic::AutocleanInterval "7";');
+    // apt.conf.d is last-wins by lexical order: the 99-zz- prefix must sort
+    // after the 20auto-upgrades file the linux-update-downloads step writes,
+    // or the bound is written and then silently overridden.
+    const basename = file!.target.split("/").pop()!;
+    expect(basename.localeCompare("20auto-upgrades")).toBeGreaterThan(0);
+    expect(basename.startsWith("99-zz-")).toBe(true);
+    // The physical class accumulates .debs the same way.
+    expect(effectiveFor(["dgx-spark"]).files.some((candidate) => candidate.id === "apt-cache-autoclean")).toBe(true);
+  });
+
+  test("clean fixture reports the byte item ok", () => {
+    const { root, home, effective } = buildCleanFixture();
+    const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: null });
+    expect(result.items.find((candidate) => candidate.id === "file:apt-cache-autoclean")?.status).toBe("ok");
+  });
+
+  test("POSITIVE CONTROL: the station17 as-found state (no drop-in at all) is drift", () => {
+    // What station17 actually looked like on 2026-07-30: 20auto-upgrades alone,
+    // AutocleanInterval unset, 97,818,544 bytes of .deb in the archive cache,
+    // and a drift verdict of clean 42/42 because nothing covered the axis.
+    const { root, home, effective } = buildCleanFixture();
+    rmSync(join(root, "etc/apt/apt.conf.d/99-zz-hasna-station-apt-cache.conf"), { force: true });
+    const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: null });
+    expect(result.verdict).toBe("drift");
+    expect(result.items.find((candidate) => candidate.id === "file:apt-cache-autoclean")?.status).toBe("drift");
+  });
+});
