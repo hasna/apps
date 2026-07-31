@@ -1500,6 +1500,22 @@ function showGoal(idOrName: string): Promise<void> {
       print({ config: workflow.goal, workflow: publicWorkflow(workflow) }, `configured goal for workflow ${workflow.name}: ${workflow.goal.objective}`);
       return;
     }
+    const run = await store.getRun(idOrName);
+    if (run) {
+      const loop = await store.getLoop(run.loopId);
+      if (loop?.goal) {
+        print(
+          { config: loop.goal, loop: publicLoop(loop), run: publicRun(run) },
+          `configured goal for loop ${loop.name}: ${loop.goal.objective}`,
+        );
+        return;
+      }
+      print(
+        { run: publicRun(run), loop: loop ? publicLoop(loop) : undefined },
+        `loop run ${run.id}: ${run.status} ${run.loopName}`,
+      );
+      return;
+    }
     throw new Error(`goal not found: ${idOrName}`);
   });
 }
@@ -2006,7 +2022,17 @@ program
   .option("--show-output", "show stdout/stderr")
   .action(runAction((idOrName, opts) => withStore(async (store) => {
     const limit = positiveInteger(opts.limit, "--limit") ?? 50;
-    const loop = idOrName ? await store.requireLoop(idOrName) : undefined;
+    let loop: Loop | undefined;
+    if (idOrName) {
+      try {
+        loop = await store.requireLoop(idOrName);
+      } catch (error) {
+        if (error instanceof CodedError && error.code === "LOOP_NOT_FOUND" && await store.getRun(idOrName)) {
+          throw new CodedError("LOOP_NOT_FOUND", `loop not found: ${idOrName}; argument looks like a run id; use 'loops goal show ${idOrName}' to inspect it`);
+        }
+        throw error;
+      }
+    }
     const runs = await store.listRuns({ loopId: loop?.id, labels: normalizeLoopLabels(opts.label), limit });
     if (isJson()) print(runs.map((run) => publicRun(run, opts.showOutput)));
     else {

@@ -9516,6 +9516,31 @@ describe("loops CLI", () => {
     expect(human.stderr).not.toContain("    at ");
   });
 
+  test("runs rejects a run id with concise actionable stderr", () => {
+    const dataDir = freshDataDir("loops-cli-runs-run-id-");
+    const create = runCli(dataDir, ["create", "command", "run-id-target", "--at", futureAt(), "--cmd", "true"]);
+    expect(create.status).toBe(0);
+
+    const execute = runCli(dataDir, ["--json", "run-now", "run-id-target"]);
+    expect(execute.status).toBe(0);
+    const runId = JSON.parse(execute.stdout).id as string;
+
+    const result = runCli(dataDir, ["runs", runId, "--limit", "1", "--show-output"]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(`error: loop not found: ${runId}`);
+    expect(result.stderr).toContain("looks like a run id");
+    expect(result.stderr).toContain("loops goal show");
+    expect(result.stderr.trim().split("\n")).toHaveLength(1);
+    expect(result.stderr).not.toMatch(/^\s*at /m);
+    expect(result.stderr).not.toMatch(/(?:\/[^\s]+|[A-Za-z]:\\[^\s]+)/);
+
+    const suggested = runCli(dataDir, ["--json", "goal", "show", runId]);
+    expect(suggested.status).toBe(0);
+    const inspected = JSON.parse(suggested.stdout);
+    expect(inspected.run.id).toBe(runId);
+    expect(inspected.run.stdout).toBeUndefined();
+  });
+
   test("goal status is merged into goal show", () => {
     const dataDir = freshDataDir("loops-cli-goal-status-merged-");
     const create = runCli(dataDir, [
