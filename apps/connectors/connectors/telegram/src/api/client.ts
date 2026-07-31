@@ -119,6 +119,38 @@ export class TelegramClient {
   }
 
   /**
+   * Download a file returned by the Telegram Bot API
+   */
+  async downloadFile(filePath: string): Promise<Uint8Array> {
+    const normalizedPath = filePath.replace(/^\/+/, '');
+    if (!normalizedPath) {
+      throw new Error('Telegram file path is required');
+    }
+
+    const encodedPath = normalizedPath
+      .split('/')
+      .map(segment => encodeURIComponent(segment))
+      .join('/');
+    const url = `${TELEGRAM_API_BASE}/file/bot${this.botToken}/${encodedPath}`;
+
+    let response: Response;
+    try {
+      response = await fetch(url);
+    } catch {
+      throw new Error('Failed to download Telegram file');
+    }
+
+    if (!response.ok) {
+      throw new TelegramApiError(
+        `Telegram file download failed with HTTP ${response.status}`,
+        response.status
+      );
+    }
+
+    return new Uint8Array(await response.arrayBuffer());
+  }
+
+  /**
    * Get a preview of the bot token (for display/debugging)
    */
   getTokenPreview(): string {

@@ -156,6 +156,7 @@ export interface TelegramMessage {
   entities?: TelegramMessageEntity[];
   caption?: string;
   caption_entities?: TelegramMessageEntity[];
+  animation?: TelegramAnimation;
   audio?: TelegramAudio;
   document?: TelegramDocument;
   photo?: TelegramPhotoSize[];
@@ -200,6 +201,18 @@ export interface TelegramPhotoSize {
   file_unique_id: string;
   width: number;
   height: number;
+  file_size?: number;
+}
+
+export interface TelegramAnimation {
+  file_id: string;
+  file_unique_id: string;
+  width: number;
+  height: number;
+  duration: number;
+  thumbnail?: TelegramPhotoSize;
+  file_name?: string;
+  mime_type?: string;
   file_size?: number;
 }
 

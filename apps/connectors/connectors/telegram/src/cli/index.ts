@@ -4,6 +4,8 @@ import chalk from 'chalk';
 import { readFileSync, existsSync } from 'fs';
 import { basename } from 'path';
 import { Telegram } from '../api';
+import { resolveDownloadPath, writeDownloadedFile } from './files';
+import { formatUpdate } from './updates';
 import {
   getBotToken,
   setBotToken,
@@ -455,39 +457,34 @@ program
         return;
       }
 
-      // Format updates for display
-      const formatted = updates.map(u => {
-        const result: Record<string, unknown> = {
-          update_id: u.update_id,
-        };
-
-        if (u.message) {
-          result.type = 'message';
-          result.from = u.message.from?.username || u.message.from?.first_name || 'unknown';
-          result.chat_id = u.message.chat.id;
-          result.text = u.message.text || '[media]';
-          result.date = new Date(u.message.date * 1000).toISOString();
-        } else if (u.callback_query) {
-          result.type = 'callback_query';
-          result.from = u.callback_query.from.username || u.callback_query.from.first_name;
-          result.data = u.callback_query.data;
-        } else if (u.inline_query) {
-          result.type = 'inline_query';
-          result.from = u.inline_query.from.username || u.inline_query.from.first_name;
-          result.query = u.inline_query.query;
-        } else if (u.edited_message) {
-          result.type = 'edited_message';
-          result.chat_id = u.edited_message.chat.id;
-        } else if (u.channel_post) {
-          result.type = 'channel_post';
-          result.chat_id = u.channel_post.chat.id;
-        }
-
-        return result;
-      });
+      const formatted = updates.map(formatUpdate);
 
       print(formatted, getFormat(program));
       info(`Showing ${updates.length} update(s). Last update_id: ${updates[updates.length - 1].update_id}`);
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+program
+  .command('get-file <fileId>')
+  .description('Download a Telegram file by file ID')
+  .option('-o, --output <path>', 'Output file or directory (defaults to the Telegram file name)')
+  .action(async (fileId: string, opts: { output?: string }) => {
+    try {
+      const client = getClient();
+      const downloaded = await client.bot.downloadFile({ fileId });
+      const destination = resolveDownloadPath(downloaded.file.file_path!, opts.output);
+      writeDownloadedFile(destination, downloaded.data);
+
+      print({
+        file_id: downloaded.file.file_id,
+        file_unique_id: downloaded.file.file_unique_id,
+        file_path: downloaded.file.file_path,
+        output: destination,
+        bytes: downloaded.data.byteLength,
+      }, getFormat(program));
     } catch (err) {
       error(String(err));
       process.exit(1);
