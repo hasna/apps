@@ -191,7 +191,7 @@ describe("dispatch fleet smoke API", () => {
 
   test("dispatch-smoke CLI emits JSON and does not call daemon restart", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-dispatch-smoke-cli-"));
-    const binDir = join(dir, "bin");
+    const binDir = join(dir, ".bun", "bin");
     const marker = join(dir, "restart-called");
     try {
       const dispatch = join(binDir, "dispatch");
@@ -215,6 +215,7 @@ exit 2
       chmodSync(dispatch, 0o755);
       const env = {
         ...process.env,
+        HOME: dir,
         PATH: `${binDir}:${process.env.PATH ?? ""}`,
         HASNA_MACHINES_DB_PATH: join(dir, "machines.db"),
         HASNA_MACHINES_MANIFEST_PATH: join(dir, "machines.json"),
