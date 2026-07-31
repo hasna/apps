@@ -7,7 +7,7 @@ import {
   resolveConfiguredStorageMode,
 } from "./storage-mode.js";
 import { resolveClientTransport, resolveStorageClient } from "./http-storage.js";
-import { isCloudModeEnabled, resolveServiceMode } from "../server/cloud.js";
+import { isCloudModeEnabled, resolveCloudDatabaseUrl, resolveServiceMode } from "../server/cloud.js";
 
 /**
  * REGRESSION FENCE for defect 2: `HASNA_CALENDAR_STORAGE_MODE=remote` (the value
@@ -120,11 +120,30 @@ describe("server-side hosted detection uses the same vocabulary", () => {
     expect(isCloudModeEnabled({})).toBe(false);
   });
 
-  test("a DSN alone is hosted and reports the canonical self_hosted label", () => {
-    const env = { HASNA_CALENDAR_DATABASE_URL: "postgres://user@host:5432/db" };
-    expect(isCloudModeEnabled(env)).toBe(true);
-    expect(resolveServiceMode(env)).toBe("self_hosted");
+  test("only an app-scoped DSN enables hosted mode", () => {
+    const scopedEnv = { HASNA_CALENDAR_DATABASE_URL: "postgres://user@host:5432/db" };
+    expect(isCloudModeEnabled(scopedEnv)).toBe(true);
+    expect(resolveServiceMode(scopedEnv)).toBe("self_hosted");
+    expect(resolveCloudDatabaseUrl(scopedEnv)).toBe("postgres://user@host:5432/db");
+
+    const unscopedEnv = { DATABASE_URL: "postgres://user@host:5432/other" };
+    expect(isCloudModeEnabled(unscopedEnv)).toBe(false);
+    expect(resolveServiceMode(unscopedEnv)).toBe("local");
+    expect(resolveCloudDatabaseUrl(unscopedEnv)).toBeUndefined();
     expect(resolveServiceMode({})).toBe("local");
+  });
+
+  test("generic DATABASE_URL is available only with explicit hosted intent or migrate opt-in", () => {
+    const env = {
+      HASNA_CALENDAR_STORAGE_MODE: "cloud",
+      DATABASE_URL: "postgres://user@host:5432/db",
+    };
+
+    expect(isCloudModeEnabled(env)).toBe(true);
+    expect(resolveServiceMode(env)).toBe("cloud");
+    expect(resolveCloudDatabaseUrl(env)).toBe("postgres://user@host:5432/db");
+    expect(resolveCloudDatabaseUrl({ DATABASE_URL: env.DATABASE_URL }, { includeGenericDatabaseUrl: true }))
+      .toBe("postgres://user@host:5432/db");
   });
 
   test("the service mode label is never the retired 'remote' string", () => {

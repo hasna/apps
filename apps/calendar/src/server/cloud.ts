@@ -17,14 +17,30 @@ import { isRemoteMode, resolveConfiguredStorageMode, type StorageMode } from "..
 
 export const CALENDAR_APP_SLUG = "calendar";
 
-/** Resolve the remote DATABASE_URL from the supported env vars (priority order). */
-export function resolveCloudDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  return (
-    env.HASNA_CALENDAR_DATABASE_URL ||
-    env.CALENDAR_DATABASE_URL ||
-    env.DATABASE_URL ||
-    undefined
-  );
+/** Resolve an app-scoped database URL that opts this process into hosted mode. */
+function resolveHostedDatabaseUrl(env: NodeJS.ProcessEnv): string | undefined {
+  return env.HASNA_CALENDAR_DATABASE_URL || env.CALENDAR_DATABASE_URL || undefined;
+}
+
+function isExplicitHostedStorageMode(env: NodeJS.ProcessEnv): boolean {
+  const configured = resolveConfiguredStorageMode(CALENDAR_APP_SLUG, env as Record<string, string | undefined>);
+  return configured ? isRemoteMode(configured.mode) : false;
+}
+
+/**
+ * Resolve the remote database URL from the supported env vars (priority order).
+ *
+ * Runtime `/v1` accepts a generic DATABASE_URL only when hosted mode is explicit.
+ * `calendar-serve migrate` can opt into the generic fallback because that command
+ * is already an explicit database operation rather than a serve-mode signal.
+ */
+export function resolveCloudDatabaseUrl(
+  env: NodeJS.ProcessEnv = process.env,
+  options: { includeGenericDatabaseUrl?: boolean } = {},
+): string | undefined {
+  return resolveHostedDatabaseUrl(env)
+    || (options.includeGenericDatabaseUrl || isExplicitHostedStorageMode(env) ? env.DATABASE_URL : undefined)
+    || undefined;
 }
 
 /** Resolve the HMAC signing secret used to verify API keys. */
@@ -40,7 +56,7 @@ export function resolveSigningSecret(env: NodeJS.ProcessEnv = process.env): stri
 /**
  * True when this process is configured to serve the hosted `/v1` API.
  *
- * Hosted iff a remote DSN is configured OR the canonical storage mode is
+ * Hosted iff an app-scoped remote DSN is configured OR the canonical storage mode is
  * `self_hosted`/`cloud`. This used to test `STORAGE_MODE === "remote"`, a value
  * the client resolver rejects — so the two planes of the same process could
  * (and in calendar-prod did) disagree about which store they were on.
@@ -49,20 +65,20 @@ export function resolveSigningSecret(env: NodeJS.ProcessEnv = process.env): stri
  * value, so the process fails loudly at startup instead of degrading.
  */
 export function isCloudModeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  if (resolveCloudDatabaseUrl(env)) return true;
-  const configured = resolveConfiguredStorageMode(CALENDAR_APP_SLUG, env as Record<string, string | undefined>);
-  return configured ? isRemoteMode(configured.mode) : false;
+  if (resolveHostedDatabaseUrl(env)) return true;
+  return isExplicitHostedStorageMode(env);
 }
 
 /**
  * The canonical mode label this process reports on `/health`, `/ready` and
- * `/version`. `self_hosted`/`cloud` are reported verbatim; a process with a DSN
- * but no explicit mode is `self_hosted` (Hasna-owned infra), never "remote".
+ * `/version`. `self_hosted`/`cloud` are reported verbatim; a process with an
+ * app-scoped DSN but no explicit mode is `self_hosted` (Hasna-owned infra), never
+ * "remote".
  */
 export function resolveServiceMode(env: NodeJS.ProcessEnv = process.env): StorageMode {
   const configured = resolveConfiguredStorageMode(CALENDAR_APP_SLUG, env as Record<string, string | undefined>);
   if (configured) return configured.mode;
-  return resolveCloudDatabaseUrl(env) ? "self_hosted" : "local";
+  return resolveHostedDatabaseUrl(env) ? "self_hosted" : "local";
 }
 
 let cachedClient: CalendarCloudQueryClient | null = null;
@@ -76,7 +92,7 @@ function getClient(): CalendarCloudQueryClient {
   const url = resolveCloudDatabaseUrl();
   if (!url) {
     throw new Error(
-      "Cloud /v1 requires a remote database URL (HASNA_CALENDAR_DATABASE_URL / CALENDAR_DATABASE_URL / DATABASE_URL).",
+      "Cloud /v1 requires a remote database URL (HASNA_CALENDAR_DATABASE_URL / CALENDAR_DATABASE_URL / DATABASE_URL with explicit hosted storage mode).",
     );
   }
   const max = Number(process.env.HASNA_CALENDAR_DB_POOL_MAX) || 6;

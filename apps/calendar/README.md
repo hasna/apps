@@ -70,11 +70,12 @@ them up:**
   neither and is correct. Setting the client-flip pair on a serve process points it at
   *itself* — see the `SPLIT_STORE_PLANE` note under "Auth posture for `/mcp`".
 
-Known limitation (pre-existing, not changed here): `isCloudModeEnabled()` treats a
-**generic** `DATABASE_URL` as "hosted", so a developer who happens to have an
-unrelated `DATABASE_URL` exported will find `/mcp` disabled on a local
-`calendar-serve`. Workaround: unset `DATABASE_URL`, or set `CALENDAR_SERVE_API_KEY`.
-Narrowing that lookup to the app-scoped vars is tracked separately.
+Hosted-deployment detection only considers the app-scoped
+`HASNA_CALENDAR_DATABASE_URL` and `CALENDAR_DATABASE_URL` variables (or an explicit
+hosted storage mode). A generic `DATABASE_URL` from another project does not disable
+the local `/mcp` plane or feed the runtime `/v1` plane unless hosted storage mode is
+explicit. `calendar-serve migrate` still accepts `DATABASE_URL` because migration is
+already an explicit database operation.
 
 ## SDK
 
@@ -369,7 +370,7 @@ resolved **once at startup, before the socket is bound**:
 | Configuration | Posture | `/mcp` | `/v1` | probes |
 | --- | --- | --- | --- | --- |
 | `CALENDAR_SERVE_API_KEY` (or `--api-key`) | `enforce` | credential required | authenticated | public |
-| hosted (a database URL, or `HASNA_CALENDAR_STORAGE_MODE=self_hosted`/`cloud`) with no serve key | `local-plane-disabled` | **404 `LOCAL_PLANE_DISABLED`** — not mounted | authenticated | public |
+| hosted (an app-scoped database URL, or `HASNA_CALENDAR_STORAGE_MODE=self_hosted`/`cloud`) with no serve key | `local-plane-disabled` | **404 `LOCAL_PLANE_DISABLED`** — not mounted | authenticated | public |
 | loopback bind **and** `--allow-anonymous` (or `CALENDAR_ALLOW_ANONYMOUS=1`) | `anonymous-loopback` | anonymous, **loopback peers only** | authenticated | public |
 | anything else | — | **the server refuses to start, exit 1** | — | — |
 

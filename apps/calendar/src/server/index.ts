@@ -55,7 +55,7 @@ export function assertStorageModeValid(env: NodeJS.ProcessEnv = process.env): vo
 
 async function runMigrate(): Promise<void> {
   const { ensureCloudSchema, pingCloud, resolveCloudDatabaseUrl, closeCloud } = await import("./cloud.js");
-  if (!resolveCloudDatabaseUrl()) {
+  if (!resolveCloudDatabaseUrl(process.env, { includeGenericDatabaseUrl: true })) {
     console.error("migrate: no database URL (HASNA_CALENDAR_DATABASE_URL / CALENDAR_DATABASE_URL / DATABASE_URL)");
     process.exit(2);
   }

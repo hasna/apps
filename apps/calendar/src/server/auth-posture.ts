@@ -20,7 +20,7 @@
  *
  * Postures:
  *  - `enforce`              a serve credential exists; `/mcp` requires it.
- *  - `local-plane-disabled` hosted (a remote DSN / self_hosted|cloud mode) with
+ *  - `local-plane-disabled` hosted (an app-scoped remote DSN / self_hosted|cloud mode) with
  *                           NO serve credential: `/mcp` is not mounted at all.
  *                           `/v1` (self-authenticating) and the probes keep
  *                           working, so closing the hole cannot take the hosted
@@ -146,7 +146,7 @@ export interface AuthPostureInput {
   allowAnonymous: boolean;
   /**
    * Whether this process serves the hosted, self-authenticating `/v1` plane
-   * (a remote DSN or a `self_hosted`/`cloud` storage mode). Required: resolved
+   * (an app-scoped remote DSN or a `self_hosted`/`cloud` storage mode). Required: resolved
    * by the caller via `isCloudModeEnabled()` so this module stays import-free.
    */
   hosted: boolean;
