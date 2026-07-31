@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Run install, typecheck, build, and tests in GitHub Actions for pull requests and pushes to `main`.
+
 ## 0.0.8
 
 ### Security
