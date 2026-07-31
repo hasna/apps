@@ -104,6 +104,30 @@ describe("stage-a rejection messages distinguish why an invocation was refused",
     expect(message).not.toContain("UNKNOWN_COMMAND");
   });
 
+  test("a suggestion is always a verb the caller can actually run here", () => {
+    // Reviewer finding (P2): pointing a typo at a local-only verb buys the
+    // caller a second, different refusal instead of a way out.
+    const matrix = getTodosCliCommandCapabilityMatrix();
+    const localOnly = new Set(
+      [...matrix.entries()].filter(([, owner]) => owner === "local-only").map(([command]) => command),
+    );
+    // Positive control: `sprint` IS local-only, so this probe can fail.
+    expect(localOnly.has("sprint")).toBe(true);
+
+    const message = initFailure(["sprin"]);
+    const suggested = message.match(/Did you mean: ([^?]+)\?/)?.[1]?.split(", ") ?? [];
+    for (const suggestion of suggested) expect(localOnly.has(suggestion)).toBe(false);
+  });
+
+  test("a bulk invocation with no action says to ADD one, not to remove one", () => {
+    // Reviewer finding (P3): "re-run without it" does not parse when nothing
+    // was given.
+    const message = initFailure(["bulk"]);
+    expect(message).toContain("missing action");
+    expect(message).toContain("pass one of");
+    expect(message).not.toContain("re-run without it");
+  });
+
   test("every registered verb the remote gate refuses is refused as local-only, never as unknown", () => {
     // Guards the classifier against drift: a verb that is in the canonical
     // registry must never be reported as if it did not exist.

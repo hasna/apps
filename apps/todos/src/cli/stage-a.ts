@@ -245,8 +245,9 @@ function isMetadataInvocation(args: string[], invocation: ParsedInvocation): boo
 }
 
 /** First option in `candidates` present on `args`, for blaming the right token. */
-function firstPresentOption(args: readonly string[], candidates: readonly string[]): string | null {
-  return candidates.find((option) => hasOption(args, option)) ?? null;
+function firstPresentOption(args: readonly string[], candidates: readonly string[]): Disqualification | null {
+  const option = candidates.find((candidate) => hasOption(args, candidate));
+  return option ? dropIt(option) : null;
 }
 
 /**
@@ -255,14 +256,25 @@ function firstPresentOption(args: readonly string[], candidates: readonly string
  * matters: "list is not supported" sends the reader to debug the wrong thing
  * when `list` works and only `--recurring` does not.
  */
-function disqualifyingArgument(invocation: ParsedInvocation): string | null {
+interface Disqualification {
+  /** The token to blame, rendered into the message. */
+  blame: string;
+  /** What the caller should actually do about it. */
+  remedy: string;
+}
+
+const dropIt = (blame: string): Disqualification => ({ blame, remedy: "re-run without it" });
+
+function disqualifyingArgument(invocation: ParsedInvocation): Disqualification | null {
   const command = invocation.command!;
   const args = invocation.commandArgs;
   switch (command) {
     case "task":
-      return positionalArgs(args)[0] === "upsert" ? null : "a subcommand other than `upsert`";
+      return positionalArgs(args)[0] === "upsert"
+        ? null
+        : { blame: "any subcommand other than `upsert`", remedy: "use `todos task upsert`" };
     case "doctor":
-      if (positionalArgs(args)[0] === "routing") return "the `routing` subcommand";
+      if (positionalArgs(args)[0] === "routing") return dropIt("the `routing` subcommand");
       return firstPresentOption(args, ["--apply", "--fix"]);
     case "projects":
       return firstPresentOption(args, ["--deregister", "--path-prefix", "--dry-run"]);
@@ -274,10 +286,10 @@ function disqualifyingArgument(invocation: ParsedInvocation): string | null {
     case "list":
       return firstPresentOption(args, ["--recurring"]);
     case "claim":
-      if (invocation.globalOptions.has("--project")) return "--project";
+      if (invocation.globalOptions.has("--project")) return dropIt("--project");
       return firstPresentOption(args, ["--project", "--stale-minutes", "--steal-stale"]);
     case "status":
-      if (invocation.globalOptions.has("--agent")) return "--agent";
+      if (invocation.globalOptions.has("--agent")) return dropIt("--agent");
       return firstPresentOption(args, ["--agent"]);
     case "bulk": {
       const action = positionalArgs(args)[0];
@@ -286,8 +298,15 @@ function disqualifyingArgument(invocation: ParsedInvocation): string | null {
       // serviced remotely. The other actions carry no plan semantics, so the
       // plan flags stay rejected there rather than being silently ignored.
       if (action === "plan" || action === "move-plan") return null;
-      if (!action || !["done", "complete", "start", "delete"].includes(action)) {
-        return `the \`${action ?? "(missing)"}\` action`;
+      if (!action) {
+        // "re-run without it" does not parse when nothing was given.
+        return { blame: "a missing action", remedy: "pass one of done, complete, start, delete, plan, move-plan" };
+      }
+      if (!["done", "complete", "start", "delete"].includes(action)) {
+        return {
+          blame: `the \`${action}\` action`,
+          remedy: "use one of done, complete, start, delete, plan, move-plan",
+        };
       }
       return firstPresentOption(args, ["--plan", "--clear-plan"]);
     }
@@ -338,7 +357,12 @@ function editDistance(a: string, b: string): number {
  */
 function nearestCommands(command: string, limit = 3): string[] {
   const threshold = command.length <= 4 ? 1 : command.length <= 8 ? 2 : 3;
-  return [...COMMAND_CAPABILITY_MATRIX.keys()]
+  // Suggest only what this route can actually run. Pointing a typo at a
+  // local-only verb just buys the caller a second, different refusal — the
+  // suggestion has to be a way out, not another dead end.
+  return [...COMMAND_CAPABILITY_MATRIX.entries()]
+    .filter(([, owner]) => owner !== "local-only")
+    .map(([candidate]) => candidate)
     .map((candidate) => ({ candidate, distance: editDistance(command, candidate) }))
     .filter(({ distance }) => distance <= threshold)
     .sort((left, right) => left.distance - right.distance || left.candidate.localeCompare(right.candidate))
@@ -401,7 +425,7 @@ function assertRemoteCommandSupported(invocation: ParsedInvocation): void {
   if (!command || !commandSupportsRemote(invocation)) {
     const blame = command ? disqualifyingArgument(invocation) : null;
     const detail = blame
-      ? `\`${command}\` is served by the Todos /v1 authority but ${blame} is not; re-run without it`
+      ? `\`${command}\` is served by the Todos /v1 authority but ${blame.blame} is not; ${blame.remedy}`
       : `${invocationLabel(invocation)} is not supported by the Todos /v1 CLI; local SQLite fallback is disabled`;
     throw new Error(`REMOTE_COMMAND_UNSUPPORTED: ${detail}`);
   }
