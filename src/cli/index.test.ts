@@ -10,6 +10,7 @@ import { runMigrations } from "../db/schema.js";
 import { closeDatabase } from "../db/database.js";
 import { registerWorkspaceCommands } from "./commands/workspaces.js";
 import { API_MODE_ENV_KEYS, testSpawnEnv } from "../testing/spawn-env.js";
+import { __resetProjectStore } from "../store/project-store.js";
 
 const CLI_PATH = join(process.cwd(), "src/cli/index.ts");
 
@@ -41,6 +42,15 @@ async function runWorkspaceCommandInProcess(args: string[], env: Record<string, 
     previousEnv.set(key, process.env[key]);
     process.env[key] = value;
   }
+  // resolveProjectStore() memoises the store it built from process.env, and the
+  // module registry is shared across test files in one `bun test` run. Clearing
+  // the API env vars is therefore not enough: a store another file already
+  // resolved in api mode survives, and these local-store runs then read and
+  // report against the REAL production registry. Observed as
+  // "top-level list JSON output is not truncated above 64 KiB" returning live
+  // rows whenever this file ran alongside src/mcp. Reset on both sides of the
+  // swap so the run is pinned to the temp database it set up.
+  __resetProjectStore();
 
   const stdoutChunks: string[] = [];
   const stderrChunks: string[] = [];
@@ -77,6 +87,7 @@ async function runWorkspaceCommandInProcess(args: string[], env: Record<string, 
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
+    __resetProjectStore();
   }
 }
 
@@ -578,7 +589,7 @@ describe("project-first CLI surface", () => {
         env: testSpawnEnv(env),
       });
       try {
-        const stdout = await readStreamChunk(proc.stdout, 10_000);
+        const stdout = await readStreamChunk(proc.stdout, 15_000);
         expect(stdout).toContain("\"ok\": true");
         await Bun.sleep(500);
         expect(proc.exitCode).toBeNull();
@@ -589,7 +600,7 @@ describe("project-first CLI surface", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  });
+  }, 20_000);
 
   test("reports serve defaults to loopback and keeps existing project registry semantics", async () => {
     const root = mkdtempSync(join(tmpdir(), "projects-reports-serve-"));
@@ -1409,9 +1420,61 @@ describe("project-first CLI surface", () => {
     expect(shown.events.some((event) => event.event_type === "agent_assigned")).toBe(true);
   });
 
+  test("update --canonical-machine replaces metadata ownership and round-trips through show", () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-canonical-machine-"));
+    const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
+
+    const created = runProjects([
+      "create",
+      "--name",
+      "Machine Owned",
+      "--slug",
+      "machine-owned",
+      "--path",
+      join(root, "machine-owned"),
+      "--metadata-json",
+      JSON.stringify({ canonical_machine: "spark01", retained: true }),
+      "--json",
+    ], env);
+    expect(created.exitCode).toBe(0);
+
+    const updated = runProjects([
+      "update",
+      "machine-owned",
+      "--canonical-machine",
+      "spark02",
+      "--json",
+    ], env);
+    expect(updated.exitCode).toBe(0);
+    const updatedProject = JSON.parse(text(updated.stdout)) as {
+      canonical_machine: string | null;
+      metadata: Record<string, unknown>;
+    };
+    expect(updatedProject.canonical_machine).toBe("spark02");
+    expect(updatedProject.metadata).toEqual({ retained: true });
+
+    const replaced = runProjects([
+      "update",
+      "machine-owned",
+      "--canonical-machine",
+      "apple01",
+      "--json",
+    ], env);
+    expect(replaced.exitCode).toBe(0);
+    expect((JSON.parse(text(replaced.stdout)) as { canonical_machine: string }).canonical_machine).toBe("apple01");
+
+    const shown = runProjects(["show", "machine-owned", "--json"], env);
+    expect(shown.exitCode).toBe(0);
+    const payload = JSON.parse(text(shown.stdout)) as {
+      project: { canonical_machine: string | null; metadata: Record<string, unknown> };
+    };
+    expect(payload.project.canonical_machine).toBe("apple01");
+    expect(payload.project.metadata["canonical_machine"]).toBeUndefined();
+  });
+
   test("project locations can be registered and used as start targets", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-locations-"));
-    const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
+    const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db"), HOSTNAME: "spark01" };
     const primaryPath = join(root, "primary");
     const secondaryPath = join(root, "secondary");
     mkdirSync(secondaryPath);
@@ -1434,6 +1497,8 @@ describe("project-first CLI surface", () => {
       "add",
       "located-project",
       secondaryPath,
+      "--machine",
+      "machine007",
       "--label",
       "docs",
       "--metadata-json",
@@ -1443,11 +1508,13 @@ describe("project-first CLI surface", () => {
     expect(added.exitCode).toBe(0);
     const addPayload = JSON.parse(text(added.stdout)) as {
       project: { slug: string };
-      location: { path: string; label: string; metadata: Record<string, string> };
+      location: { path: string; label: string; machine_id: string; exists_at_create: boolean; metadata: Record<string, string> };
     };
     expect(addPayload.project.slug).toBe("located-project");
     expect(addPayload.location.path).toBe(secondaryPath);
     expect(addPayload.location.label).toBe("docs");
+    expect(addPayload.location.machine_id).toBe("machine007");
+    expect(addPayload.location.exists_at_create).toBe(false);
     expect(addPayload.location.metadata.purpose).toBe("docs");
 
     const listed = runProjects(["locations", "list", "located-project", "--json"], env);

@@ -1,7 +1,7 @@
 // @generated from the projects-serve OpenAPI document by scripts/generate-sdk.ts.
 // DO NOT EDIT BY HAND. Regenerate: bun run sdk:generate
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Projects API 0.1.79
+// Source: Projects API 0.1.95
 
 export interface Root { "id": string; "slug": string; "name": string; "base_path": string; "tags"?: Array<string>; "default_kind"?: string | null; "repo_visibility"?: string | null; "allowed_recipes"?: Array<string>; "allowed_agents"?: Array<string>; "metadata"?: Record<string, unknown>; "created_at"?: string; "updated_at"?: string }
 
@@ -17,11 +17,11 @@ export interface Recipe { "id": string; "slug": string; "name": string; "descrip
 
 export interface CreateRecipe { "name": string; "slug"?: string; "description"?: string; "kind"?: string; "version"?: number; "steps"?: Array<Record<string, unknown>>; "default_tags"?: Array<string>; "metadata"?: Record<string, unknown> }
 
-export interface Workspace { "id": string; "slug": string; "name": string; "description"?: string | null; "kind": string; "status": "active" | "archived" | "deleted"; "root_id"?: string | null; "recipe_id"?: string | null; "primary_path"?: string | null; "git_remote"?: string | null; "tags"?: Array<string>; "integrations"?: Record<string, unknown>; "metadata"?: Record<string, unknown>; "created_at"?: string; "updated_at"?: string }
+export interface Workspace { "id": string; "slug": string; "name": string; "description"?: string | null; "kind": string; "status": "active" | "archived" | "deleted"; "root_id"?: string | null; "recipe_id"?: string | null; "canonical_machine"?: string | null; "primary_path"?: string | null; "git_remote"?: string | null; "tags"?: Array<string>; "integrations"?: Record<string, unknown>; "metadata"?: Record<string, unknown>; "created_at"?: string; "updated_at"?: string }
 
 export interface CreateWorkspace { "name": string; "slug"?: string; "description"?: string; "kind"?: string; "root_id"?: string; "recipe_id"?: string; "primary_path"?: string; "git_remote"?: string; "tags"?: Array<string>; "integrations"?: Record<string, unknown>; "metadata"?: Record<string, unknown>; "agent_id"?: string }
 
-export interface UpdateWorkspace { "name"?: string; "slug"?: string; "description"?: string | null; "kind"?: string; "status"?: "active" | "archived" | "deleted"; "root_id"?: string | null; "recipe_id"?: string | null; "primary_path"?: string | null; "git_remote"?: string | null; "tags"?: Array<string>; "integrations"?: Record<string, unknown>; "metadata"?: Record<string, unknown>; "agent_id"?: string }
+export interface UpdateWorkspace { "name"?: string; "slug"?: string; "description"?: string | null; "kind"?: string; "status"?: "active" | "archived" | "deleted"; "root_id"?: string | null; "recipe_id"?: string | null; "canonical_machine"?: string | null; "primary_path"?: string | null; "git_remote"?: string | null; "tags"?: Array<string>; "integrations"?: Record<string, unknown>; "metadata"?: Record<string, unknown>; "agent_id"?: string }
 
 export interface WorkspaceEvent { "id": string; "workspace_id"?: string | null; "agent_id"?: string | null; "event_type": string; "source": string; "metadata"?: Record<string, unknown>; "created_at"?: string }
 
@@ -34,6 +34,10 @@ export interface AgentList { "agents": Array<Agent>; "count": number }
 export interface RecipeList { "recipes": Array<Recipe>; "count": number }
 
 export interface EventList { "events": Array<WorkspaceEvent>; "count": number }
+
+export interface RecordEvent { "event_type": string; "source"?: string; "agent_id"?: string; "prompt"?: string; "command"?: string; "before"?: Record<string, unknown> | null; "after"?: Record<string, unknown> | null; "metadata"?: Record<string, unknown> }
+
+export interface EventRecorded { "event": WorkspaceEvent }
 
 export interface DeleteResult { "deleted": boolean; "hard"?: boolean; "id"?: string }
 
@@ -200,6 +204,15 @@ export class ProjectsClient {
       return this.request("GET", `/v1/projects/${encodeURIComponent(String(id))}/events`, {
         body: undefined,
         query,
+        init,
+      });
+    }
+
+    /** Record a custom audit event for a project */
+    async recordProjectEvent(id: string, body: RecordEvent, init?: RequestInit): Promise<EventRecorded> {
+      return this.request("POST", `/v1/projects/${encodeURIComponent(String(id))}/events`, {
+        body,
+        query: undefined,
         init,
       });
     }

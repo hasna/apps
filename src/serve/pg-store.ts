@@ -82,6 +82,26 @@ function normalizeList(values: string[] | undefined): string[] {
   return [...new Set((values ?? []).map((v) => v.trim()).filter(Boolean))];
 }
 
+function hasOwn(metadata: JsonObject, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(metadata, key);
+}
+
+function canonicalMachineFromMetadata(metadata: JsonObject): string | null | undefined {
+  if (!hasOwn(metadata, "canonical_machine")) return undefined;
+  const value = metadata["canonical_machine"];
+  if (value === null) return null;
+  if (typeof value !== "string") {
+    throw new ValidationError("canonical_machine metadata must be a machine slug string");
+  }
+  return value.trim() || null;
+}
+
+function withoutCanonicalMachineMetadata(metadata: JsonObject): JsonObject {
+  const copy = { ...metadata };
+  delete copy["canonical_machine"];
+  return copy;
+}
+
 // ---------------------------------------------------------------------------
 // Row mappers (Postgres rows share the SQLite TEXT/JSON column shape)
 // ---------------------------------------------------------------------------
@@ -156,6 +176,16 @@ export class ValidationError extends Error {
     this.name = "ValidationError";
   }
 }
+
+/**
+ * Server-side bounds on a single `/v1/projects` page. These protect the
+ * database from an unbounded scan; they are NOT a statement that the caller may
+ * only ever see this many projects. The response reports `total` and `has_more`
+ * so a client can page the rest — the `@hasna/projects` store does so
+ * automatically.
+ */
+export const WORKSPACE_LIST_DEFAULT_LIMIT = 100;
+export const WORKSPACE_LIST_MAX_LIMIT = 1000;
 
 export interface WorkspaceFilter {
   status?: WorkspaceStatus;
@@ -360,7 +390,12 @@ export class ProjectsPgStore {
   }
 
   // --- workspaces (projects) -------------------------------------------
-  async listWorkspaces(filter: WorkspaceFilter = {}): Promise<Workspace[]> {
+  /**
+   * Shared predicate for listing and counting workspaces. Kept in one place so
+   * a reported total can never describe a different set than the rows beside
+   * it.
+   */
+  private workspaceFilterSql(filter: WorkspaceFilter): { where: string; params: unknown[] } {
     const conditions: string[] = [];
     const params: unknown[] = [];
     const push = (clause: (idx: number) => string, value: unknown) => {
@@ -383,8 +418,12 @@ export class ProjectsPgStore {
         conditions.push(`(tags::jsonb ? $${params.length})`);
       }
     }
-    const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-    params.push(Math.min(Math.max(filter.limit ?? 100, 1), 1000));
+    return { where: conditions.length ? `WHERE ${conditions.join(" AND ")}` : "", params };
+  }
+
+  async listWorkspaces(filter: WorkspaceFilter = {}): Promise<Workspace[]> {
+    const { where, params } = this.workspaceFilterSql(filter);
+    params.push(Math.min(Math.max(filter.limit ?? WORKSPACE_LIST_DEFAULT_LIMIT, 1), WORKSPACE_LIST_MAX_LIMIT));
     const limitIdx = params.length;
     params.push(Math.max(filter.offset ?? 0, 0));
     const offsetIdx = params.length;
@@ -393,6 +432,13 @@ export class ProjectsPgStore {
       params,
     );
     return rows.map(rowToWorkspace);
+  }
+
+  /** Rows matching `filter`, ignoring its limit/offset. */
+  async countWorkspaces(filter: WorkspaceFilter = {}): Promise<number> {
+    const { where, params } = this.workspaceFilterSql(filter);
+    const row = await this.db.get<{ n: string | number }>(`SELECT COUNT(*) AS n FROM workspaces ${where}`, params);
+    return Number(row?.n ?? 0);
   }
 
   async getWorkspace(idOrSlug: string): Promise<Workspace | null> {
@@ -473,6 +519,30 @@ export class ProjectsPgStore {
     const recipe = input.recipe_id ? await this.getRecipe(input.recipe_id) : null;
     if (input.recipe_id && !recipe) throw new ValidationError(`Recipe not found: ${input.recipe_id}`);
 
+    const inputMetadataMachine = input.metadata === undefined
+      ? undefined
+      : canonicalMachineFromMetadata(input.metadata);
+    const existingMetadataMachine = canonicalMachineFromMetadata(before.metadata);
+    let canonicalMachine = input.canonical_machine;
+    if (canonicalMachine === undefined && inputMetadataMachine !== undefined) {
+      canonicalMachine = inputMetadataMachine;
+    } else if (canonicalMachine === undefined && before.canonical_machine === null && existingMetadataMachine !== undefined) {
+      canonicalMachine = existingMetadataMachine;
+    }
+    if (typeof canonicalMachine === "string") {
+      canonicalMachine = canonicalMachine.trim();
+      if (!canonicalMachine) throw new ValidationError("Canonical machine must not be empty");
+      const machine = await this.db.get<{ slug: string }>("SELECT slug FROM machines WHERE slug = $1", [canonicalMachine]);
+      if (!machine) throw new ValidationError(`Machine not found: ${canonicalMachine}`);
+    }
+
+    let metadata = input.metadata;
+    if (metadata !== undefined && inputMetadataMachine !== undefined) {
+      metadata = withoutCanonicalMachineMetadata(metadata);
+    } else if (metadata === undefined && existingMetadataMachine !== undefined) {
+      metadata = withoutCanonicalMachineMetadata(before.metadata);
+    }
+
     const updates: string[] = [];
     const params: unknown[] = [];
     const set = (col: string, val: unknown) => {
@@ -486,13 +556,14 @@ export class ProjectsPgStore {
     if (input.status !== undefined) set("status", input.status);
     if (input.root_id !== undefined) set("root_id", input.root_id ? root!.id : null);
     if (input.recipe_id !== undefined) set("recipe_id", input.recipe_id ? recipe!.id : null);
+    if (canonicalMachine !== undefined) set("canonical_machine", canonicalMachine);
     if (input.primary_path !== undefined) set("primary_path", input.primary_path ?? null);
     if (input.git_remote !== undefined) set("git_remote", input.git_remote);
     if (input.s3_bucket !== undefined) set("s3_bucket", input.s3_bucket);
     if (input.s3_prefix !== undefined) set("s3_prefix", input.s3_prefix);
     if (input.tags !== undefined) set("tags", json(normalizeList(input.tags)));
     if (input.integrations !== undefined) set("integrations", json(input.integrations));
-    if (input.metadata !== undefined) set("metadata", json(input.metadata));
+    if (metadata !== undefined) set("metadata", json(metadata));
 
     if (updates.length > 0) {
       set("updated_at", nowIso());

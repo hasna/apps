@@ -3,15 +3,25 @@
  * process.
  *
  * Tests inherit `process.env`, and operator machines routinely export
- * `HASNA_PROJECTS_API_URL` / `HASNA_PROJECTS_API_KEY` so their shell talks to
- * the cloud registry. Inheriting those turns every "local mode" test into an
- * api-mode run against the *real* backend, which both masks local-store
- * regressions and creates real project rows as a side effect of `bun test`.
+ * `HASNA_PROJECTS_API_URL` / `HASNA_PROJECTS_API_KEY` / storage-mode aliases so
+ * their shell talks to the cloud registry. Inheriting those turns every "local
+ * mode" test into an api-mode run against the *real* backend, which both masks
+ * local-store regressions and creates real project rows as a side effect of
+ * `bun test`.
  *
  * So: strip the api-mode selectors from the inherited environment unless the
  * test explicitly opts into api mode by passing them in `overrides`.
  */
-export const API_MODE_ENV_KEYS = ["HASNA_PROJECTS_API_URL", "HASNA_PROJECTS_API_KEY"] as const;
+export const API_MODE_ENV_KEYS = [
+  "HASNA_PROJECTS_API_URL",
+  "HASNA_PROJECTS_API_KEY",
+  "HASNA_PROJECTS_STORAGE_MODE",
+  "HASNA_PROJECTS_MODE",
+  "PROJECTS_API_URL",
+  "PROJECTS_API_KEY",
+  "PROJECTS_STORAGE_MODE",
+  "PROJECTS_MODE",
+] as const;
 
 export function testSpawnEnv(overrides: Record<string, string> = {}): Record<string, string> {
   const env: Record<string, string> = {};
