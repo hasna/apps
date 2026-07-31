@@ -7,7 +7,7 @@ import { normalizeAgentNameInput } from "../../lib/agent-name-normalize.js";
 import { createTaskList, getTaskList, listTaskLists, updateTaskList, deleteTaskList } from "../../db/task-lists.js";
 import { listTasks } from "../../db/tasks.js";
 import { getPackageVersion, handleError, autoProject, output } from "../helpers.js";
-import { clearPersistedIdentity, persistIdentity, readPersistedIdentity } from "../../lib/creator-identity.js";
+import { clearPersistedIdentity, detectIdentityCollision, persistIdentity, readPersistedIdentity } from "../../lib/creator-identity.js";
 import {
   getTodosCloudClient,
   cloudCreateTaskList,
@@ -66,6 +66,7 @@ export function registerAgentCommands(program: Command) {
     .command("init <name>")
     .description("Register an agents and get a short UUID")
     .option("-d, --description <text>", "Agent description")
+    .option("--force", "Take over the machine-wide persisted identity even if another session holds it")
     .action(async (name: string, opts) => {
       const globalOpts = program.opts();
       try {
@@ -85,6 +86,22 @@ export function registerAgentCommands(program: Command) {
         // Persist the identity. Without this, `init` printed "use --agent <id>"
         // and every later command had to re-supply it by hand — which nothing did,
         // leaving creator attribution empty on 92% of rows.
+        //
+        // Refuse to silently replace a DIFFERENT identity: many named sessions share
+        // one HOME on this fleet, and a clobber would leave the other session quietly
+        // attributing its work to this one.
+        const collision = detectIdentityCollision(result.id, result.name);
+        if (collision && !opts.force) {
+          const held = collision.existing.agent_name || collision.existing.agent_id;
+          console.error(chalk.red(`This machine already has a persisted todos identity: ${held} (registered ${collision.existing.registered_at}).`));
+          console.error(chalk.yellow(
+            "Overwriting it would make that session attribute its tasks to you.\n" +
+            `For a concurrent session, set a per-process identity instead — it outranks the file and cannot collide:\n` +
+            `  export TODOS_AGENT_ID=${result.name}\n` +
+            "Or pass --force to take over the machine-wide identity.",
+          ));
+          process.exit(2);
+        }
         persistIdentity({ agent_id: result.id, agent_name: result.name, ...(globalOpts.session ? { session_id: globalOpts.session } : {}) });
         if (globalOpts.json) {
           output({ ...result, identity_persisted: true }, true);

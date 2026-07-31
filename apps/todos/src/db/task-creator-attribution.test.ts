@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import type { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -9,6 +8,7 @@ import { ensureSchema, runMigrations } from "./schema.js";
 import { createTask, getTask, listTasks, startTask, updateTask } from "./tasks.js";
 import {
   clearPersistedIdentity,
+  detectIdentityCollision,
   persistIdentity,
   readPersistedIdentity,
   resolveCreatorIdentity,
@@ -202,5 +202,40 @@ describe("upgrading a database that predates created_by", () => {
     const fresh = createTask({ title: "filed after the upgrade", created_by: "cassius" }, legacy);
     expect(fresh.created_by).toBe("cassius");
     legacy.close();
+  });
+});
+
+describe("concurrent sessions must not silently steal each other's identity", () => {
+  // Many named agent sessions share one HOME on a station, and the identity file is
+  // keyed on HOME alone. A silent clobber leaves the losing session attributing its
+  // work to the winner — a WRONG author, which is worse than a missing one, because
+  // a null is visibly absent while a name is simply believed.
+  it("reports a collision when a different identity already holds the file", () => {
+    persistIdentity({ agent_id: "id-brutus", agent_name: "Brutus" });
+    const collision = detectIdentityCollision("id-cassius", "Cassius");
+    expect(collision).not.toBeNull();
+    expect(collision!.existing.agent_name).toBe("Brutus");
+  });
+
+  it("reports no collision when the same identity re-registers", () => {
+    persistIdentity({ agent_id: "id-cassius", agent_name: "Cassius" });
+    expect(detectIdentityCollision("id-cassius", "Cassius")).toBeNull();
+  });
+
+  it("matches on the name even when init mints a fresh id for the same agent", () => {
+    persistIdentity({ agent_id: "old-uuid", agent_name: "Cassius" });
+    expect(detectIdentityCollision("new-uuid", "Cassius")).toBeNull();
+  });
+
+  it("reports no collision on a clean machine", () => {
+    expect(detectIdentityCollision("id-cassius", "Cassius")).toBeNull();
+  });
+
+  it("leaves the environment variable as the non-colliding per-session escape hatch", () => {
+    persistIdentity({ agent_id: "id-brutus", agent_name: "Brutus" });
+    process.env["TODOS_AGENT_ID"] = "Cassius";
+    // The env var outranks the file, so a second session attributes to itself even
+    // while another session's identity holds the machine-wide file.
+    expect(resolveCreatorIdentity()).toEqual({ agent_id: "Cassius", source: "env" });
   });
 });

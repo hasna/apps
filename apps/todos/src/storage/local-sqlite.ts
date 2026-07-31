@@ -185,7 +185,19 @@ export function createLocalSqliteTodosStorageAdapter(
       sync: true,
     },
     tasks: {
-      create: (input) => createTask(input, database()),
+      // The principal arrives as context.agentId — a self-hosted SQLite-backed /v1
+      // server is a supported deployment shape, and dropping the context here
+      // reproduced the exact defect this field exists to close: the server knowing
+      // who called and discarding it. Mirrors the Postgres adapter.
+      create: (input, context) =>
+        createTask(
+          {
+            ...input,
+            agent_id: input.agent_id ?? context?.agentId,
+            created_by: input.created_by ?? input.agent_id ?? context?.agentId,
+          },
+          database(),
+        ),
       get: (id) => getTask(id, database()),
       resolveRef: (ref) => resolveTaskRefLocal(database(), ref),
       list: (filter = {}) => listTasksMaybeSearch(filter, database()),

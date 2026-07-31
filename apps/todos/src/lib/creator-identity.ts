@@ -48,6 +48,29 @@ export function readPersistedIdentity(): PersistedIdentity | null {
   return parsed;
 }
 
+export interface IdentityCollision {
+  /** The identity already on disk that a new `init` would have overwritten. */
+  existing: PersistedIdentity;
+}
+
+/**
+ * The file is keyed on $HOME, and this fleet runs many named agent sessions per
+ * station under one HOME. Two sessions each running `todos init` would silently
+ * leave the loser attributing its tasks to the winner — and a WRONG author is
+ * worse than a missing one, because a null is visibly absent while a name is
+ * simply believed. So a second, different identity is refused rather than
+ * clobbered; the per-session escape hatch is the TODOS_AGENT_ID environment
+ * variable, which outranks this file and cannot collide between processes.
+ */
+export function detectIdentityCollision(agentId: string, agentName?: string): IdentityCollision | null {
+  const existing = readPersistedIdentity();
+  if (!existing) return null;
+  const sameId = existing.agent_id === agentId;
+  const sameName = Boolean(agentName) && existing.agent_name === agentName;
+  if (sameId || sameName) return null;
+  return { existing };
+}
+
 /** Persist the identity established by `todos init` so later commands inherit it. */
 export function persistIdentity(identity: { agent_id: string; agent_name?: string; session_id?: string }): PersistedIdentity {
   const record: PersistedIdentity = {

@@ -762,14 +762,24 @@ export function registerTaskCommands(program: Command) {
         filter["limit"] = parsedLimit;
       }
 
-      let tasks = cloud ? await cloudListTasks(cloud, filter as any) : listTasks(filter as any);
-      if (cloud && (filter["created_by"] || filter["not_created_by"])) {
-        // A server that predates created_by IGNORES these query params and returns
-        // an unfiltered list at 200 — measured against the deployed 0.13.0 API,
-        // which drops created_by entirely. An unenforced filter is worse than an
-        // unavailable one: --inbox would look like it worked and quietly include
-        // the caller's own filings, which is the self-noise it exists to remove.
-        // Re-applying client-side is a no-op once the server does support it.
+      const creatorFilterActive = Boolean(filter["created_by"] || filter["not_created_by"]);
+      // A server that predates created_by IGNORES these query params and returns an
+      // unfiltered list at 200 — measured against the deployed 0.13.0 API, which
+      // drops created_by entirely. So the client must enforce the filter itself.
+      //
+      // But enforcing it AFTER the server applied `limit` reads a truncated page and
+      // then shrinks it further: `--inbox --limit 20` could return 3 rows, or none,
+      // while the real inbox was larger, with nothing to indicate it. So when the
+      // creator filter is client-enforced, the limit is withheld from the request and
+      // applied here instead — filter first, then truncate, which is the order the
+      // SQL does it in.
+      const requestedLimit = filter["limit"] as number | undefined;
+      const serverFilter = creatorFilterActive && cloud && requestedLimit !== undefined
+        ? (() => { const { limit: _dropped, ...rest } = filter; return rest; })()
+        : filter;
+
+      let tasks = cloud ? await cloudListTasks(cloud, serverFilter as any) : listTasks(serverFilter as any);
+      if (cloud && creatorFilterActive) {
         const wantCreatedBy = filter["created_by"] as string | undefined;
         const excludeCreatedBy = filter["not_created_by"] as string | undefined;
         tasks = tasks.filter((t) => {
@@ -780,6 +790,7 @@ export function registerTaskCommands(program: Command) {
           if (excludeCreatedBy && author !== null && author === excludeCreatedBy) return false;
           return true;
         });
+        if (requestedLimit !== undefined) tasks = tasks.slice(0, requestedLimit);
       }
       if (opts.dueToday) {
         const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);

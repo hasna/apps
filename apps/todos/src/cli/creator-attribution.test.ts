@@ -156,3 +156,49 @@ describe("todos list --inbox — work others routed to me", () => {
     expect(titles.sort()).toEqual(["my own note to self", "routed to me by brutus"]);
   });
 });
+
+// `registerAgent` canonicalises the name to lower case (src/db/agents.ts), so the
+// persisted identity — and therefore created_by — is the lower-cased form. That is
+// deliberate: a single canonical spelling is what makes authorship comparable
+// between agents. Note the asymmetry it leaves: `--assign Cassius` stores the raw
+// string, so a mixed-case assignment will not match a lower-cased identity. That
+// is pre-existing behaviour of `--assigned` and is not widened here.
+describe("todos init — a second session must not silently take over the identity", () => {
+  it("refuses to overwrite a different agent's persisted identity, and names the escape hatch", async () => {
+    expect((await runCli(["init", "Brutus"])).exitCode).toBe(0);
+
+    const second = await runCli(["init", "Cassius"]);
+    expect(second.exitCode).toBe(2);
+    expect(second.stderr).toContain("already has a persisted todos identity");
+    expect(second.stderr).toContain("TODOS_AGENT_ID");
+
+    // And the first session's identity is intact — a refused takeover must not
+    // half-apply, or both sessions end up misattributed instead of one.
+    const task = await addJson(["still brutus"]);
+    expect(task.created_by).toBe("brutus");
+  });
+
+  it("--force takes it over deliberately", async () => {
+    await runCli(["init", "Brutus"]);
+    const forced = await runCli(["init", "Cassius", "--force"]);
+    expect(forced.exitCode).toBe(0);
+    const task = await addJson(["now cassius"]);
+    expect(task.created_by).toBe("cassius");
+  });
+
+  it("re-registering the same name is not a collision", async () => {
+    await runCli(["init", "Cassius"]);
+    expect((await runCli(["init", "Cassius"])).exitCode).toBe(0);
+  });
+
+  it("a concurrent session can attribute to itself via the environment without touching the file", async () => {
+    await runCli(["init", "Brutus"]);
+    // The env var is taken verbatim — it is the caller's own declaration, not a
+    // registry lookup, so it is not canonicalised.
+    const task = await addJson(["filed by the other session"], { TODOS_AGENT_ID: "Cassius" });
+    expect(task.created_by).toBe("Cassius");
+    // The file still belongs to Brutus, canonicalised by registration.
+    const brutusTask = await addJson(["filed by the file owner"]);
+    expect(brutusTask.created_by).toBe("brutus");
+  });
+});
