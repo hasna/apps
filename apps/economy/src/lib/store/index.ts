@@ -335,7 +335,7 @@ export class LocalStore implements EconomyStore {
 
   async projectBreakdown(query: BreakdownQuery = {}): Promise<ProjectBreakdown[]> {
     return query.since
-      ? queryProjectBreakdownSince(this.db(), query.since)
+      ? queryProjectBreakdownSince(this.db(), query.since, query.machine)
       : queryProjectBreakdown(this.db(), query.period ?? 'all', query.machine)
   }
 
@@ -593,7 +593,7 @@ export class ApiStore implements EconomyStore {
   }
 
   async projectBreakdown(query: BreakdownQuery = {}): Promise<ProjectBreakdown[]> {
-    return cloudListItems<ProjectBreakdown>(this.cloud, 'breakdown', q({ by: 'project', period: query.period, since: query.since }))
+    return cloudListItems<ProjectBreakdown>(this.cloud, 'breakdown', q({ by: 'project', period: query.period, since: query.since, machine: query.machine }))
   }
 
   async accountBreakdown(query: BreakdownQuery = {}): Promise<AccountBreakdown[]> {
