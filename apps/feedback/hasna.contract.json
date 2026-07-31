@@ -1,15 +1,63 @@
 {
-  "schema_version": 1,
-  "project": {
-    "name": "open-feedback",
-    "package": "@hasna/feedback",
-    "repository": "hasna/feedback"
-  },
-  "waivers": {
-    "storage": {
-      "reason": "Open Feedback intentionally persists user-submitted feedback in local JSONL storage by default.",
-      "paths": ["~/.hasna/feedback"],
-      "configuration": "FEEDBACK_DATA_DIR"
+  "schema": "hasna.service_contract.v1",
+  "name": "feedback",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "0.8.5",
+  "description": "Feedback collection for Hasna-coded apps: a local store, a CLI, an MCP server, an HTTP API, and a TypeScript client.",
+  "bins": [
+    "feedback",
+    "feedback-mcp",
+    "feedback-serve"
+  ],
+  "hosting": [
+    "user-hosted"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "feedback-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "feedback",
+      "authMode": "local-only"
+    },
+    {
+      "name": "feedback-mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "feedback-mcp",
+      "authMode": "local-only"
+    },
+    {
+      "name": "feedback-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "api-key",
+      "exportSubpath": "."
+    },
+    {
+      "name": "feedback-http-api",
+      "kind": "api",
+      "status": "deferred",
+      "bin": "feedback-serve",
+      "authMode": "api-key",
+      "apiBasePath": "/v1",
+      "health": {
+        "method": "GET",
+        "path": "/health",
+        "public": true
+      },
+      "deferReason": "The HTTP API ships and serves GET /health plus the /v1 routes, but it does not meet the v1 service topology: there is no GET /ready, no GET /version, and no /openapi.json. GET /health also returns { ok, service, version } rather than the contract's { status, version, mode }, and the mode field cannot be filled truthfully until the store moves onto a contract storage engine. Declaring this surface supported today would assert routes that do not exist."
+    }
+  ],
+  "metadata": {
+    "release": {
+      "artifactScan": {
+        "script": "artifact-scan"
+      }
+    },
+    "conformance": {
+      "notes": "storage is deliberately absent. The only implemented backend is an append-only JSONL file at ~/.hasna/feedback/feedback.jsonl; storage.mode admits sqlite | postgres only, and this package ships neither a SQLite database nor a PostgreSQL driver. No storage block can be written here that is both schema-valid and true, so this manifest is knowingly non-conformant and repo-conformance reports that as its first failure. The remedy is the storage migration recorded in docs/contract-conformance.md, not an edit to this file."
     }
   }
 }

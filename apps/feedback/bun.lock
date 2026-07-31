@@ -11,12 +11,15 @@
         "zod": "^3.25.76",
       },
       "devDependencies": {
+        "@hasna/contracts": "0.8.5",
         "@types/bun": "^1.2.4",
         "typescript": "^5.7.3",
       },
     },
   },
   "packages": {
+    "@hasna/contracts": ["@hasna/contracts@0.8.5", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-Iyk5srD6J3R7ci2g0gkyt+MCa6Da/lghPosGtgWBRgtJeGYCIAAnHF1yweoXnnqGAWZajFuDgJEWDVH11qpUhA=="],
+
     "@hasna/events": ["@hasna/events@0.1.13", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-DzmEiDrBoibxzCBeZPEmdpWsNh+5SXTSnilqCeHxi0Do3a9mQJ43ZSxq/Ipzw/xNa2rShAx48KzduCZrGDHi9g=="],
 
     "@hono/node-server": ["@hono/node-server@1.19.14", "", { "peerDependencies": { "hono": "^4" } }, "sha512-GwtvgtXxnWsucXvbQXkRgqksiH2Qed37H9xHZocE5sA3N8O8O8/8FA3uclQXxXVzc9XBZuEOMK7+r02FmSpHtw=="],
