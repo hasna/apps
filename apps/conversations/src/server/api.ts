@@ -910,7 +910,7 @@ async function handleV1(
       [sessionId, from, toAgent, channelName ?? null, projectId ?? null, content, priority, blocking, replyTo],
     );
     // @mentions in channel messages create mention rows + notification DMs, so
-    // mentions_only reads and mention counts work in cloud mode too.
+    // mentions_only reads and mention counts work through the server API too.
     if (channelName && row?.id != null) {
       try { await processMentions(client, Number(row.id), from, channelName, content); } catch { /* best-effort */ }
     }
@@ -957,13 +957,22 @@ async function handleV1(
       }
       let priority = str(m.priority)?.toLowerCase() ?? "normal";
       if (!VALID_PRIORITIES.includes(priority)) priority = "normal";
+      const sessionId = str(m.session_id) ?? `api:${from}`;
+      const channel = str(m.channel);
+      const projectId = str(m.project_id);
+      assertNoSensitiveContent(content, "Message content");
+      assertNoSensitiveContent(from, "Message sender");
+      assertNoSensitiveContent(to, "Message recipient");
+      assertNoSensitiveOptionalText(channel, "Message channel");
+      assertNoSensitiveOptionalText(projectId, "Message project");
+      assertNoSensitiveContent(sessionId, "Message session");
       const values: unknown[] = [
         uuid,
-        str(m.session_id) ?? `api:${from}`,
+        sessionId,
         from,
         to,
-        str(m.channel) ?? null,
-        str(m.project_id) ?? null,
+        channel ?? null,
+        projectId ?? null,
         content,
         priority,
         str(m.working_dir) ?? null,
@@ -986,11 +995,17 @@ async function handleV1(
       params.push(...values);
     }
 
-    const result = await client.query(
+    const result = await client.query<{ id: number; from_agent: string; channel: string | null; content: string }>(
       `INSERT INTO messages (${cols.join(", ")}) VALUES ${rowsSql.join(", ")}
-       ON CONFLICT (uuid) DO NOTHING`,
+       ON CONFLICT (uuid) DO NOTHING
+       RETURNING id, from_agent, channel, content`,
       params,
     );
+    for (const row of result.rows) {
+      if (row.channel && row.id != null) {
+        try { await processMentions(client, Number(row.id), row.from_agent, row.channel, row.content); } catch { /* best-effort */ }
+      }
+    }
     const inserted = result.rowCount;
     const total = await messageTotal(client);
     return json({ requested: items.length, inserted, skipped: items.length - inserted, total }, 200);
