@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
 import { getPackageVersion } from "../lib/package-version.js";
-import { canonicalAgentRef } from "../lib/creator-identity.js";
 import { applyTodosCliHelpVisibility, initializeTodosCliAuthority, type TodosCliAuthorityInitialization } from "./stage-a.js";
 
 const program = new Command();
@@ -104,19 +103,18 @@ program
   .version(getPackageVersion())
   .option("--project <path>", "Project path")
   .option("-j, --json", "Output as JSON")
-  // Canonicalised ONCE, at parse, so every consumer of `--agent` sees the same
-  // string. Without this the claim verbs and the release verbs disagree about
-  // the same flag value: `resolveClaimIdentity` folds case (as
-  // `resolveCreatorIdentity` and `registerAgent` already do), while `done`,
-  // `unlock`, `bulk done`, `claim` and `steal` pass the raw value straight into
-  // a `locked_by` string comparison. Measured: `start --agent Cassius` records
-  // `locked_by='cassius'`, and `done --agent Cassius` — the identical flag
-  // value — then fails with "is locked by cassius". `unlockTask` has no expiry
-  // term, so that lock stays unreleasable by the named form indefinitely. This
-  // fleet names agents in capitalised Roman form, so it would have fired
-  // constantly. Folding here rather than at each call site keeps the verbs from
-  // drifting apart again.
-  .option("--agent <name>", "Agent name", (value: string) => canonicalAgentRef(value))
+  // NOT canonicalised here, deliberately, and the reason is worth keeping: a
+  // parse-time fold on this flag was tried and reverted. It fixed the
+  // claim/release round trip for `--agent`, but the flag is the wrong layer —
+  // `claim <agent>` and `steal <agent>` take the agent POSITIONALLY, and the
+  // MCP, TUI and dashboard writers never see this option at all, so the same
+  // unreleasable-lock defect simply reappeared one verb over. It also broke a
+  // legitimate consumer: `inspect` with no id looks up the caller's active task
+  // by `assigned_to`, and folding the query made it miss rows stored with a
+  // capitalised name. Lock-holder identity is now compared at the STORE
+  // boundary instead (see `sameHolder` in src/db/task-lifecycle.ts), which
+  // covers every writer and leaves this flag's value untouched for queries.
+  .option("--agent <name>", "Agent name")
   .option("--session <id>", "Session ID");
 
 // Validate and select remote HTTP authority before importing command modules.

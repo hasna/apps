@@ -252,6 +252,36 @@ describe("todos start/done — the same --agent value must claim and release", (
     expect(done.exitCode).toBe(0);
   });
 
+  it("releases a lock taken by the POSITIONAL claim verb, using --agent", async () => {
+    // The cycle-2 blocking finding (hortensia), and the reason the fold moved
+    // from the `--agent` flag to the store. `claim <agent>` and `steal <agent>`
+    // take the agent POSITIONALLY, so a parse-time fold on the flag never
+    // reached them and the round trip broke one verb over — inside the CLI this
+    // PR owns, with no foreign client and no legacy data involved. Measured
+    // then: `claim Cassius` stored locked_by='Cassius', after which
+    // `--agent Cassius unlock` and `done` were both rc=1, permanently for
+    // unlock, which has no expiry term.
+    const task = await addTask("positional claim round trip");
+    const claimed = await runCli(["claim", "Cassius"]);
+    expect(claimed.exitCode).toBe(0);
+    const started = await runCli(["--agent", "Cassius", "start", task.id]);
+    expect(started.exitCode).toBe(0);
+    const unlocked = await runCli(["--agent", "Cassius", "unlock", task.id]);
+    expect(unlocked.exitCode).toBe(0);
+  });
+
+  it("lets the named owner release a lock stored with DIFFERENT case — the legacy rows", async () => {
+    // A non-folding writer (the MCP, the TUI, the dashboard, or any pre-fix CLI)
+    // can leave a capitalised holder. Measured on the live store: 10 of 357
+    // non-null locked_by values are capitalised — a floor, that read was
+    // page-capped. Before the store-boundary comparison those were unreleasable
+    // by their named owner, and `unlockTask` has no expiry term, so permanently.
+    const task = await addTask("legacy capitalised holder");
+    expect((await runCli(["--agent", "Cassius", "start", task.id])).exitCode).toBe(0);
+    const stored = await showTask(task.id);
+    expect((await runCli(["--agent", stored.locked_by!.toUpperCase(), "unlock", task.id])).exitCode).toBe(0);
+  });
+
   it("treats differently-cased spellings as ONE holder, not two — pins resolveClaimIdentity, NOT the global coercion", async () => {
     // Honest label: this case passes with the parse-time `--agent` coercion
     // REMOVED, because both verbs here route through `resolveClaimIdentity`,
