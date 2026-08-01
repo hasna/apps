@@ -1,5 +1,6 @@
 /**
- * The identity a CLAIM verb may write, shared by `start`, `lock` and `bulk start`.
+ * The identity a lock-sensitive verb may use, shared by `start`, `lock`,
+ * `bulk start`, and `unlock`.
  *
  * These verbs are different in kind from `add`. `add` may legitimately produce an
  * ownerless row — an unrouted task is a visible, recoverable state, and #142 chose
@@ -39,11 +40,15 @@
  * into an unreleasable-lock bug, and it still writes a meaningless name into the
  * queue column that `assigned_to` is.
  *
+ * `unlock` needs the same boundary for the inverse reason: omitting identity used
+ * to reach `unlockTask`'s internal force-release sentinel and clear another
+ * agent's live lock. Force release remains available to explicitly authorized
+ * server and stale-recovery paths; omission at the CLI is not force authorization.
+ *
  * So: refuse. The cost is real and is stated rather than glossed — a script or CI
- * job that ran `todos start` with no identity now exits non-zero where it used to
- * succeed. That is a behaviour change on a claim path, which is why it ships with
- * a [BREAKING] notice. The remedy is one line (`export TODOS_AGENT_ID=<name>`),
- * the error names it, and the alternative is a lock the fleet cannot trust.
+ * job that ran one of these verbs with no identity now exits non-zero where it
+ * used to succeed. The remedy is one line (`export TODOS_AGENT_ID=<name>`), the
+ * error names it, and the alternative is a lock the fleet cannot trust.
  */
 import { resolveWritableIdentity } from "../lib/creator-identity.js";
 import { handleError } from "./helpers.js";
@@ -54,7 +59,7 @@ export function resolveClaimIdentity(verb: string, explicit?: string | null): st
   if (!resolved.agent_id) {
     handleError(
       new Error(
-        `Cannot ${verb} a task without an agent identity: a claim writes locked_by, and a lock with no distinct holder is not a lock. ` +
+        `Cannot ${verb} a task without an agent identity: this operation changes a task lock, and a lock with no distinct caller is not a lock. ` +
           `Set TODOS_AGENT_ID=<name> for this session, or pass --agent <name>. ` +
           `An identity persisted by 'todos init' is deliberately not used here — it is keyed on $HOME and names the station, not this session.`,
       ),

@@ -1664,9 +1664,10 @@ export function registerTaskCommands(program: Command) {
       const globalOpts = program.opts();
       const cloud = getTodosCloudClient();
       const resolvedId = cloud ? await resolveTaskIdForCommand(id, cloud) : resolveTaskId(id);
+      const agentId = resolveClaimIdentity("unlock", globalOpts.agent);
       try {
-        if (cloud) await cloudUnlockTask(cloud, resolvedId, globalOpts.agent, !globalOpts.agent);
-        else unlockTask(resolvedId, globalOpts.agent);
+        if (cloud) await cloudUnlockTask(cloud, resolvedId, agentId);
+        else unlockTask(resolvedId, agentId);
       } catch (e) {
         handleError(e);
       }
