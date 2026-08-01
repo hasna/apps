@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.5.21 - 2026-08-01
+
+### Fixed
+- **Invalid top-level commands now fail instead of falling through to the interactive TUI or unrelated root help.** The CLI now rejects unregistered command names before Commander's root action can consume them, so nonexistent forms such as `conversations heartbeat`, `conversations heartbeat --from ...`, and `conversations heartbeat --help` exit nonzero while the supported `conversations agents heartbeat --from <agent>` contract remains unchanged. The dashboard hint now advertises the supported nested command (#65).
+
 ## 0.5.20 - 2026-08-01
 
 ### Fixed
