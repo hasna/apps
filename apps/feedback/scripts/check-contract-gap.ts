@@ -44,6 +44,7 @@ const update = process.argv.includes("--update");
 const PROBE_STORAGE = { mode: "sqlite", sqlitePath: "~/.hasna/feedback/feedback.db" };
 
 interface ConformanceCheck { id: string; status: string; detail: string }
+interface ConformanceFailure { id: string; detail: string }
 
 function conformance(root: string): ConformanceCheck[] {
   const result = Bun.spawnSync([scanner, "repo-conformance", root, "--json"], { stdout: "pipe", stderr: "pipe" });
@@ -55,8 +56,11 @@ function conformance(root: string): ConformanceCheck[] {
   return (JSON.parse(stdout).checks ?? []) as ConformanceCheck[];
 }
 
-function failingIds(checks: ConformanceCheck[]): string[] {
-  return checks.filter((check) => check.status === "fail").map((check) => check.id).sort();
+function failingChecks(checks: ConformanceCheck[]): ConformanceFailure[] {
+  return checks
+    .filter((check) => check.status === "fail")
+    .map(({ id, detail }) => ({ id, detail }))
+    .sort((left, right) => left.id.localeCompare(right.id) || left.detail.localeCompare(right.detail));
 }
 
 /** Copy the tracked tree somewhere disposable so the probe never touches the real manifest. */
@@ -82,28 +86,44 @@ function probeTree(): string {
   return workspace;
 }
 
-function diff(label: string, actual: string[], expected: string[]): string[] {
-  const appeared = actual.filter((id) => !expected.includes(id));
-  const cleared = expected.filter((id) => !actual.includes(id));
+function failureKey(failure: ConformanceFailure): string {
+  return JSON.stringify([failure.id, failure.detail]);
+}
+
+function failureLabel(failure: ConformanceFailure): string {
+  return `${failure.id} (${failure.detail})`;
+}
+
+function failureIds(failures: ConformanceFailure[]): string {
+  return failures.map((failure) => failure.id).join(", ") || "(none)";
+}
+
+function diff(label: string, actual: ConformanceFailure[], expected: ConformanceFailure[]): string[] {
+  const actualKeys = new Set(actual.map(failureKey));
+  const expectedKeys = new Set(expected.map(failureKey));
+  const appeared = actual.filter((failure) => !expectedKeys.has(failureKey(failure)));
+  const cleared = expected.filter((failure) => !actualKeys.has(failureKey(failure)));
   const problems: string[] = [];
-  if (appeared.length > 0) problems.push(`${label}: NEW conformance failures: ${appeared.join(", ")}`);
+  if (appeared.length > 0) {
+    problems.push(`${label}: NEW conformance failures: ${appeared.map(failureLabel).join("; ")}`);
+  }
   if (cleared.length > 0) {
     problems.push(
-      `${label}: these no longer fail: ${cleared.join(", ")} — progress. Rerun with --update and commit the smaller baseline alongside the fix.`,
+      `${label}: these no longer fail: ${cleared.map(failureLabel).join("; ")} — progress. Rerun with --update and commit the smaller baseline alongside the fix.`,
     );
   }
   return problems;
 }
 
-const reported = failingIds(conformance(repoRoot));
+const reported = failingChecks(conformance(repoRoot));
 
-let behindManifestGate: string[];
+let behindManifestGate: ConformanceFailure[];
 const workspace = probeTree();
 try {
-  const probed = failingIds(conformance(workspace));
+  const probed = failingChecks(conformance(workspace));
   // manifest_valid passes under the probe by construction; it is tracked by the
   // `reported` set and would otherwise show up here as a phantom improvement.
-  behindManifestGate = probed.filter((id) => id !== "manifest_valid");
+  behindManifestGate = probed.filter((failure) => failure.id !== "manifest_valid");
 } finally {
   rmSync(workspace, { recursive: true, force: true });
 }
@@ -114,15 +134,15 @@ if (update) {
   baseline.behindManifestGate = behindManifestGate;
   writeFileSync(baselinePath, `${JSON.stringify(baseline, null, 2)}\n`);
   console.log(`updated ${baselinePath}`);
-  console.log(`  reported:           ${reported.join(", ") || "(none)"}`);
-  console.log(`  behindManifestGate: ${behindManifestGate.join(", ") || "(none)"}`);
+  console.log(`  reported:           ${failureIds(reported)}`);
+  console.log(`  behindManifestGate: ${failureIds(behindManifestGate)}`);
   process.exit(0);
 }
 
 const baseline = JSON.parse(readFileSync(baselinePath, "utf8"));
 const problems = [
-  ...diff("reported", reported, (baseline.reported ?? []).slice().sort()),
-  ...diff("behind the manifest gate", behindManifestGate, (baseline.behindManifestGate ?? []).slice().sort()),
+  ...diff("reported", reported, baseline.reported ?? []),
+  ...diff("behind the manifest gate", behindManifestGate, baseline.behindManifestGate ?? []),
 ];
 
 if (problems.length > 0) {
@@ -133,5 +153,5 @@ if (problems.length > 0) {
 }
 
 console.log(`contract gap unchanged: ${reported.length} reported, ${behindManifestGate.length} behind the manifest gate`);
-console.log(`  reported:           ${reported.join(", ") || "(none)"}`);
-console.log(`  behindManifestGate: ${behindManifestGate.join(", ") || "(none)"}`);
+console.log(`  reported:           ${failureIds(reported)}`);
+console.log(`  behindManifestGate: ${failureIds(behindManifestGate)}`);
