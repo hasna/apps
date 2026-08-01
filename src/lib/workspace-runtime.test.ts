@@ -157,17 +157,16 @@ describe("workspace tmux runtime", () => {
     expect(tmux.commands.some((args) => args[0] === "send-keys" && args.some((arg) => arg.includes("cd --")))).toBe(false);
   });
 
-  // Regression: hasna/projects#2 (duplicate of #1). `createGroup()`/`createWindow()`
-  // anchor the groups Projects itself creates, but a session moved into a group
-  // by hand (`tmux new-session -t <project> -s <peer>`) keeps the cwd of the
-  // shell that ran the move, so grouped windows opened from that peer still
-  // start in $HOME.
+  // Regression: hasna/projects#1. On tmux 3.4, moving the project session into
+  // a group can leave only the renamed peer. The next start recreates the
+  // project-named session ungrouped, while the surviving peer still has the
+  // project name as its session_group and the cwd of the shell that moved it.
   test("realigns grouped sessions on the project path after a group move", () => {
     const tmux = createTmuxMock(
-      { "runtime-project": ["01", "02"], "runtime-project-grouped": ["01", "02"] },
+      { "runtime-project-grouped": ["01", "02"] },
       {
-        groups: { "runtime-project": "runtime-project", "runtime-project-grouped": "runtime-project" },
-        paths: { "runtime-project": "/tmp/runtime-project", "runtime-project-grouped": "/home/hasna" },
+        groups: { "runtime-project-grouped": "runtime-project" },
+        paths: { "runtime-project-grouped": "/home/hasna" },
       },
     );
 
@@ -180,6 +179,7 @@ describe("workspace tmux runtime", () => {
     }));
 
     expect(result.success).toBe(true);
+    expect(result.session_action).toBe("created");
     expect(tmux.paths.get("runtime-project-grouped")).toBe("/tmp/runtime-project");
     expect(tmux.commands.filter((args) => args[0] === "attach-session")).toEqual([
       ["attach-session", "-c", "/tmp/runtime-project", "-t", "runtime-project-grouped"],
