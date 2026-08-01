@@ -2,11 +2,11 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { createKnowledgeService } from '../src/service';
 
 /**
- * Cloud (self_hosted / api) mode `inventory` must route through the cloud item
- * transport and report the shared corpus — NOT read the local db.json and NOT
+ * Postgres/API mode `inventory` must route through the API item transport and
+ * report the shared corpus — NOT read the local db.json and NOT
  * open the local sqlite catalog (which would throw the local-catalog guard on a
  * flipped fleet machine that still has a leftover knowledge.db). This proves the
- * command routes to the cloud like every other item command.
+ * command routes to the API like every other item command.
  */
 const now = new Date().toISOString();
 const NOTES = [
@@ -38,9 +38,9 @@ beforeAll(() => {
   process.env.HASNA_KNOWLEDGE_API_KEY = 'k_fake_test_key';
   // Explicit, because presence of the URL + key no longer selects a backend.
   // The endpoint is 127.0.0.1, so the outbound guard permits these requests —
-  // this test doubles as the positive control that hermetic cloud-mode traffic
+  // this test doubles as the positive control that hermetic postgres/API traffic
   // still flows while the guard is armed.
-  process.env.HASNA_KNOWLEDGE_STORAGE_MODE = 'cloud';
+  process.env.HASNA_KNOWLEDGE_STORAGE_MODE = 'postgres';
 });
 
 afterAll(() => {
@@ -50,8 +50,8 @@ afterAll(() => {
   }
 });
 
-describe('cloud-mode inventory over the shared item corpus', () => {
-  test('cloudInventory reports cloud items with empty local catalog sections', async () => {
+describe('postgres/API inventory over the shared item corpus', () => {
+  test('cloudInventory reports API items with empty local catalog sections', async () => {
     const service = createKnowledgeService({ scope: 'global' });
     const inv = await service.cloudInventory({});
     expect(inv.ok).toBe(true);
@@ -66,7 +66,7 @@ describe('cloud-mode inventory over the shared item corpus', () => {
     expect(inv.chunks).toEqual([]);
     expect(inv.wiki_pages).toEqual([]);
     // The `paths` block reports the real on-box workspace layout and MUST agree
-    // with the `paths` command even in cloud mode — it is NOT the item transport
+    // with the `paths` command even in postgres/API mode — it is NOT the item transport
     // location. The cloud source is surfaced via `legacy_store` instead.
     const paths = service.paths();
     expect(inv.paths.json_store_path).toBe(paths.json_store_path);

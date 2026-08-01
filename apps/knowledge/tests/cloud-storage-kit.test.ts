@@ -3,7 +3,7 @@ import {
   KIT_VERSION,
   createKnowledgeCloudClient,
   defineMigration,
-  normalizeCloudStorageMode,
+  normalizeStorageMode,
   MigrationLedger,
   resolveTlsConfig,
   resolveStorageMode,
@@ -87,25 +87,24 @@ describe('vendored cloud storage kit surface', () => {
     expect(keys.modeKeys[0]).toBe('HASNA_KNOWLEDGE_STORAGE_MODE');
     expect(keys.databaseUrlKeys[0]).toBe('HASNA_KNOWLEDGE_DATABASE_URL');
 
-    expect(resolveStorageMode('knowledge', {}).mode).toBe('local');
+    expect(resolveStorageMode('knowledge', {}).mode).toBe('sqlite');
     expect(
       resolveStorageMode('knowledge', {
-        HASNA_KNOWLEDGE_STORAGE_MODE: 'cloud',
+        HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
         HASNA_KNOWLEDGE_DATABASE_URL: 'postgres://x/y',
       }).mode,
-    ).toBe('cloud');
+    ).toBe('postgres');
+    expect(resolveStorageMode('knowledge', { HASNA_KNOWLEDGE_DATABASE_URL: 'postgres://x/y' }).mode).toBe(
+      'postgres',
+    );
   });
 
-  test('maps sslmode prefer and allow to encrypted pg connections', () => {
+  test('maps sslmode according to the generated TLS contract', () => {
     const env = {};
     expect(resolveTlsConfig('postgres://user:pass@example.test/db', { env })).toBeUndefined();
     expect(resolveTlsConfig('postgres://user:pass@example.test/db?sslmode=disable', { env })).toBeUndefined();
-    expect(resolveTlsConfig('postgres://user:pass@example.test/db?sslmode=prefer', { env })).toEqual({
-      rejectUnauthorized: false,
-    });
-    expect(resolveTlsConfig('postgres://user:pass@example.test/db?sslmode=allow', { env })).toEqual({
-      rejectUnauthorized: false,
-    });
+    expect(resolveTlsConfig('postgres://user:pass@example.test/db?sslmode=prefer', { env })).toBeUndefined();
+    expect(resolveTlsConfig('postgres://user:pass@example.test/db?sslmode=allow', { env })).toBeUndefined();
     expect(resolveTlsConfig('postgres://user:pass@example.test/db?sslmode=require', { env })).toEqual({
       rejectUnauthorized: false,
     });
@@ -114,7 +113,7 @@ describe('vendored cloud storage kit surface', () => {
     );
   });
 
-  test('applies migration SQL and ledger writes in one transaction', async () => {
+  test('applies migration SQL and ledger writes through the generated ledger', async () => {
     const client = new FakeMigrationClient();
     const ledger = new MigrationLedger(client, [
       defineMigration('001_init', 'CREATE TABLE example (id TEXT PRIMARY KEY)'),
@@ -122,30 +121,31 @@ describe('vendored cloud storage kit surface', () => {
 
     await ledger.migrate();
 
-    expect(client.transactionCount).toBe(1);
+    expect(client.transactionCount).toBe(0);
     expect(client.executed).toEqual([
       expect.stringContaining('CREATE TABLE IF NOT EXISTS schema_migrations'),
-      'BEGIN',
       'CREATE TABLE example (id TEXT PRIMARY KEY)',
       expect.stringContaining('INSERT INTO schema_migrations'),
-      'COMMIT',
     ]);
   });
 
-  test('normalizes deprecated aliases to cloud', () => {
-    expect(normalizeCloudStorageMode('remote').mode).toBe('cloud');
-    expect(normalizeCloudStorageMode('hybrid').mode).toBe('cloud');
-    expect(normalizeCloudStorageMode('self_hosted').mode).toBe('cloud');
-    expect(normalizeCloudStorageMode('local').mode).toBe('local');
+  test('normalizes backend spellings and rejects removed placement aliases', () => {
+    expect(normalizeStorageMode('sqlite').mode).toBe('sqlite');
+    expect(normalizeStorageMode('postgres').mode).toBe('postgres');
+    expect(normalizeStorageMode('postgresql').mode).toBe('postgres');
+    expect(() => normalizeStorageMode('remote')).toThrow(/runtime-placement axis was removed/);
+    expect(() => normalizeStorageMode('hybrid')).toThrow(/runtime-placement axis was removed/);
+    expect(() => normalizeStorageMode('self_hosted')).toThrow(/runtime-placement axis was removed/);
+    expect(() => normalizeStorageMode('local')).toThrow(/runtime-placement axis was removed/);
   });
 
-  test('createKnowledgeCloudClient refuses non-cloud mode without leaking the URL', () => {
+  test('createKnowledgeCloudClient refuses non-postgres mode without leaking the URL', () => {
     const priorMode = process.env.HASNA_KNOWLEDGE_STORAGE_MODE;
     const priorUrl = process.env.HASNA_KNOWLEDGE_DATABASE_URL;
     try {
-      delete process.env.HASNA_KNOWLEDGE_STORAGE_MODE;
+      process.env.HASNA_KNOWLEDGE_STORAGE_MODE = 'sqlite';
       process.env.HASNA_KNOWLEDGE_DATABASE_URL = 'postgres://secret:secret@host/db';
-      expect(() => createKnowledgeCloudClient()).toThrow(/storage mode 'cloud'/);
+      expect(() => createKnowledgeCloudClient()).toThrow(/storage mode 'postgres'/);
       try {
         createKnowledgeCloudClient();
       } catch (error) {

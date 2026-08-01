@@ -1,16 +1,13 @@
-export declare const STORAGE_MODES: readonly ["local", "cloud"];
+export declare const STORAGE_MODES: readonly ["sqlite", "postgres"];
 export type StorageMode = (typeof STORAGE_MODES)[number];
-export declare const DEPRECATED_STORAGE_MODE_ALIASES: readonly ["remote", "hybrid", "self_hosted"];
 export type Env = Record<string, string | undefined>;
 export interface StorageModeNormalization {
     mode: StorageMode;
-    /** The deprecated alias that was normalized to `cloud`, if any. */
-    deprecatedAlias: string | null;
 }
 /**
- * Normalize a raw storage-mode string to the `local | cloud` runtime enum.
- * Accepts deprecated aliases (`remote`, `hybrid`, `self_hosted`) and maps them
- * to `cloud`. Throws on any other value.
+ * Normalize a raw storage-backend string to the `sqlite | postgres` enum.
+ * `postgresql` is accepted as the long spelling of `postgres`. Throws on any
+ * other value with a migration hint.
  */
 export declare function normalizeStorageMode(value: string): StorageModeNormalization;
 /** Upper-snake env token for an app name, e.g. `todos` -> `TODOS`. */
@@ -25,18 +22,18 @@ export interface StorageEnvKeys {
 export declare function storageEnvKeys(name: string): StorageEnvKeys;
 export interface StorageModeResolution {
     mode: StorageMode;
-    /** Env key the mode came from, or `"default"`. */
+    /** Env key the backend came from, or `"default"`. */
     source: string;
-    deprecatedAlias: string | null;
     databaseUrlPresent: boolean;
     /** Env key the database URL came from, or `null`. */
     databaseUrlSource: string | null;
     warning: string | null;
 }
 /**
- * Resolve an app's storage mode from the environment per the contract env spec.
- * Precedence: `HASNA_<NAME>_STORAGE_MODE`, then `<NAME>_STORAGE_MODE`, else
- * `local`. Never reads secret values — only detects DATABASE_URL presence.
+ * Resolve an app's storage backend from the environment per the contract env
+ * spec. Precedence: `HASNA_<NAME>_STORAGE_MODE`, then `<NAME>_STORAGE_MODE`;
+ * absent both, a present `DATABASE_URL` selects `postgres`, else `sqlite`.
+ * Never reads secret values — only detects DATABASE_URL presence.
  */
 export declare function resolveStorageMode(name: string, env?: Env): StorageModeResolution;
 /**

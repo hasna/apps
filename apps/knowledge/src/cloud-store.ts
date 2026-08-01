@@ -265,17 +265,22 @@ function isNotFound(error: unknown): boolean {
 
 /**
  * Resolve the cloud knowledge store from the environment. Returns a ready
- * {@link KnowledgeCloudStore} when the mode is explicitly cloud, else `null` so
- * the caller uses the local db.json store. Throws if cloud was requested but
+ * {@link KnowledgeCloudStore} when the backend is explicitly postgres, else
+ * `null` so the caller uses the local db.json store. Throws if postgres was
+ * requested but
  * misconfigured (never silent local drift).
  *
  * On the local path the contracts resolver is not called at all: no transport is
  * built, no key is read, and there is nothing for a second layer to infer from.
  */
 export function resolveKnowledgeCloudStore(env: NodeJS.ProcessEnv = process.env): KnowledgeCloudStore | null {
-  if (resolveKnowledgeModeSelection(env).mode !== 'cloud') return null;
-  const resolved = resolveStorageClient(KNOWLEDGE_APP_SLUG, pinnedTransportEnv(env, 'cloud'), transportOverrides(env));
-  if (resolved.transport !== 'cloud-http') return null;
+  if (resolveKnowledgeModeSelection(env).mode !== 'postgres') return null;
+  const resolved = resolveStorageClient(
+    KNOWLEDGE_APP_SLUG,
+    pinnedTransportEnv(env, 'postgres'),
+    transportOverrides(env),
+  );
+  if (resolved.transport !== 'http') return null;
   return wrap(resolved.client);
 }
 
@@ -284,14 +289,14 @@ export function resolveKnowledgeCloudStore(env: NodeJS.ProcessEnv = process.env)
  * The single mode signal the whole client uses: item commands route to the
  * ApiStore, and the local sqlite catalog is refused (never a silent split-brain
  * write). Local — the default, and the answer whenever no mode var says
- * otherwise — returns false. Throws only when cloud was explicitly requested
+ * otherwise — returns false. Throws only when postgres was explicitly requested
  * but misconfigured, matching the item Store: never silent drift.
  */
 export function isKnowledgeApiMode(env: NodeJS.ProcessEnv = process.env): boolean {
-  if (resolveKnowledgeModeSelection(env).mode !== 'cloud') return false;
+  if (resolveKnowledgeModeSelection(env).mode !== 'postgres') return false;
   return (
-    resolveStorageClient(KNOWLEDGE_APP_SLUG, pinnedTransportEnv(env, 'cloud'), transportOverrides(env)).transport
-    === 'cloud-http'
+    resolveStorageClient(KNOWLEDGE_APP_SLUG, pinnedTransportEnv(env, 'postgres'), transportOverrides(env)).transport
+    === 'http'
   );
 }
 

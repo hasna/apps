@@ -24,20 +24,18 @@ afterEach(() => {
 describe('knowledge database storage status (local, read-only)', () => {
   test('resolves the storage mode from the mode env only (no client DSN surface)', () => {
     for (const key of ENV_KEYS) delete process.env[key];
-    // Default is local; the client has NO DATABASE_URL/DSN surface at all.
-    expect(getStorageMode()).toBe('local');
+    // Default is sqlite; the client has NO DATABASE_URL/DSN surface at all.
+    expect(getStorageMode()).toBe('sqlite');
 
-    // Canonical cloud mode, plus deprecated aliases that normalize to cloud.
-    process.env[KNOWLEDGE_STORAGE_MODE_ENV] = 'cloud';
-    expect(getStorageMode()).toBe('cloud');
-    process.env[KNOWLEDGE_STORAGE_MODE_ENV] = 'remote';
-    expect(getStorageMode()).toBe('cloud');
-    process.env[KNOWLEDGE_STORAGE_MODE_ENV] = 'hybrid';
-    expect(getStorageMode()).toBe('cloud');
+    // Canonical postgres mode, plus the long spelling that normalizes to it.
+    process.env[KNOWLEDGE_STORAGE_MODE_ENV] = 'postgres';
+    expect(getStorageMode()).toBe('postgres');
+    process.env[KNOWLEDGE_STORAGE_MODE_ENV] = 'postgresql';
+    expect(getStorageMode()).toBe('postgres');
 
     process.env[KNOWLEDGE_STORAGE_MODE_ENV] = 'invalid';
-    process.env[KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV] = 'local';
-    expect(getStorageMode()).toBe('local');
+    process.env[KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV] = 'sqlite';
+    expect(getStorageMode()).toBe('sqlite');
   });
 
   test('exposes durable knowledge tables and excludes local FTS indexes', () => {
@@ -61,7 +59,7 @@ describe('knowledge database storage status (local, read-only)', () => {
     const status = getStorageStatus({ scope: 'project', cwd: dir });
 
     expect(status).toMatchObject({
-      mode: 'local',
+      mode: 'sqlite',
       service: 'knowledge',
       scope: 'project',
       sync: [],

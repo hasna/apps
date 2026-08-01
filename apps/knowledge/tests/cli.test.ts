@@ -26,16 +26,17 @@ const packageJson = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'
 };
 
 /**
- * The env every spawned CLI gets: the parent's, minus the cloud pointer vars,
- * plus the caller's overrides.
+ * The env every spawned CLI gets: the parent's, minus the knowledge mode and
+ * pointer vars, plus the caller's overrides.
  *
  * Those two variables are exported in a login shell on developer machines and
  * inherited by every pane from the tmux server, so a child that gets the parent
  * environment verbatim is configured differently from one run in CI. That is not
  * hypothetical: `auth whoami` reports `authenticated: true` purely from the
- * presence of an API key, so this suite's hosted-auth contract test measured the
- * developer's shell rather than the temp auth dir it had just created, and
- * failed for a reason that had nothing to do with the code under test.
+ * presence of an API key, and an old ambient storage mode can now be an
+ * intentionally rejected placement word. Without this stripping, the suite
+ * measures the developer's shell rather than the temp auth dir or mode it just
+ * created.
  *
  * This is DEFENCE IN DEPTH, not the control. The control is the outbound request
  * guard in src/net-guard.ts, which refuses non-loopback traffic under
@@ -46,7 +47,7 @@ const packageJson = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'
  */
 function childEnv(env?: Record<string, string>): Record<string, string> {
   const inherited = { ...process.env } as Record<string, string>;
-  for (const key of [...KNOWLEDGE_API_URL_ENV_KEYS, ...KNOWLEDGE_API_KEY_ENV_KEYS]) delete inherited[key];
+  for (const key of [...KNOWLEDGE_API_URL_ENV_KEYS, ...KNOWLEDGE_API_KEY_ENV_KEYS, ...KNOWLEDGE_MODE_ENV_KEYS]) delete inherited[key];
   return { ...inherited, ...(env ?? {}) };
 }
 
@@ -2395,7 +2396,7 @@ describe('knowledge cli', () => {
     expect(storage.exitCode).toBe(0);
     const storageOut = JSON.parse(new TextDecoder().decode(storage.stdout));
     expect(storageOut.service).toBe('knowledge');
-    expect(storageOut.mode).toBe('local');
+    expect(storageOut.mode).toBe('sqlite');
     expect(storageOut.tables).toContain('sources');
     expect(storageOut.tables).not.toContain('chunks_fts');
   });
@@ -3711,15 +3712,15 @@ describe('a half-configured CLI fails loudly instead of reading the wrong store'
     expect(result.exitCode).toBe(0);
     const report = JSON.parse(decode(result.stdout)) as { ok: boolean; mode: string; pointer_ignored: boolean };
     expect(report.ok).toBe(true);
-    expect(report.mode).toBe('local');
+    expect(report.mode).toBe('sqlite');
     expect(report.pointer_ignored).toBe(true);
   });
 
-  test('an explicit local mode alongside the URL still lists, and stays local', () => {
+  test('an explicit sqlite mode alongside the URL still lists, and stays local', () => {
     const result = runCliNoMode(['list', '--json'], {
       ...sandboxHome(),
       HASNA_KNOWLEDGE_API_URL: FAKE_API_URL,
-      HASNA_KNOWLEDGE_STORAGE_MODE: 'local',
+      HASNA_KNOWLEDGE_STORAGE_MODE: 'sqlite',
     });
     expect(result.exitCode).toBe(0);
     const payload = JSON.parse(decode(result.stdout)) as { ok: boolean; total: number };

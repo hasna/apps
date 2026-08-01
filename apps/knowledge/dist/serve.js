@@ -21,9 +21,48 @@ import { readFileSync as readFileSync4 } from "fs";
 
 // node_modules/@hasna/contracts/dist/auth/index.js
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
+var MAX_TENANT_ID_LENGTH = 64;
+var TENANT_ID_PATTERN = new RegExp(`^[A-Za-z0-9][A-Za-z0-9._-]{0,${MAX_TENANT_ID_LENGTH - 1}}$`);
+var UUID_HEX = "[0-9a-fA-F]";
+var UUID_PATTERN = new RegExp(`^\\{?(?:${UUID_HEX}{8}-${UUID_HEX}{4}-${UUID_HEX}{4}-${UUID_HEX}{4}-${UUID_HEX}{12}|${UUID_HEX}{32})\\}?$`);
+function isValidTenantId(value) {
+  return typeof value === "string" && TENANT_ID_PATTERN.test(value);
+}
+function isUuidTenantId(value) {
+  return typeof value === "string" && UUID_PATTERN.test(value);
+}
+function canonicalizeTenantId(value) {
+  if (!isUuidTenantId(value))
+    return value;
+  const hex = value.replace(/[{}-]/g, "").toLowerCase();
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+function normalizeTenantId(value) {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  const canonical = canonicalizeTenantId(trimmed);
+  if (!isValidTenantId(canonical)) {
+    throw new Error(`Invalid tenant id '${value}'. Expected 1-${MAX_TENANT_ID_LENGTH} characters matching ${TENANT_ID_PATTERN} (a UUID, ULID, slug, or prefixed id).`);
+  }
+  return canonical;
+}
+function tenantIdsEqual(left, right) {
+  const canonical = (value) => {
+    if (typeof value !== "string")
+      return null;
+    const folded = canonicalizeTenantId(value.trim());
+    return isValidTenantId(folded) ? folded : null;
+  };
+  const a = canonical(left);
+  const b = canonical(right);
+  return a !== null && b !== null && a === b;
+}
+function ownTenantId(source) {
+  return Object.hasOwn(source, "tid") ? source.tid : undefined;
+}
 var API_KEY_TOKEN_VERSION = 1;
 var API_KEY_NAMESPACE = "hasna";
-var TOKEN_PATTERN = /^hasna_([a-z][a-z0-9-]*)_([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/;
+var API_KEY_TOKEN_PATTERN = /^hasna_([a-z][a-z0-9-]*)_([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/;
+var TOKEN_PATTERN = API_KEY_TOKEN_PATTERN;
 var DEFAULT_API_KEY_TTL_SECONDS = 90 * 24 * 60 * 60;
 function toBuffer(secret) {
   return typeof secret === "string" ? Buffer.from(secret, "utf8") : secret;
@@ -50,6 +89,10 @@ function parseApiKey(token) {
     return null;
   }
   if (typeof claims !== "object" || claims === null || typeof claims.kid !== "string" || typeof claims.app !== "string" || !Array.isArray(claims.scopes)) {
+    return null;
+  }
+  const claimedTid = ownTenantId(claims);
+  if (claimedTid !== undefined && !isValidTenantId(claimedTid)) {
     return null;
   }
   return { app, body, sig, claims };
@@ -87,6 +130,28 @@ function verifyApiKeyToken(token, options) {
   if (claims.exp !== null && typeof claims.exp === "number" && now - leeway >= claims.exp) {
     return { ok: false, reason: "expired", message: "Token has expired." };
   }
+  const verifiedTid = ownTenantId(claims);
+  const tid = verifiedTid === undefined ? null : canonicalizeTenantId(verifiedTid);
+  const tenantRequired = Boolean(options.requireTenant) || options.expectedTid !== undefined;
+  if (tenantRequired && tid === null) {
+    return {
+      ok: false,
+      reason: "tenant_required",
+      message: "Token carries no tenant id ('tid') and this service requires one.",
+      kid: claims.kid,
+      tid: null
+    };
+  }
+  if (options.expectedTid !== undefined && !tenantIdsEqual(tid, options.expectedTid)) {
+    const expectationIsWellFormed = typeof options.expectedTid === "string" && isValidTenantId(options.expectedTid.trim());
+    return {
+      ok: false,
+      reason: "tenant_mismatch",
+      message: expectationIsWellFormed ? "Token is for a different tenant than the one this service accepts." : "Token tenant cannot be checked: the expected tenant id is not a valid tenant id.",
+      kid: claims.kid,
+      tid
+    };
+  }
   if (options.requiredScopes && options.requiredScopes.length > 0) {
     const granted = claims.scopes;
     const satisfies = (required) => granted.some((g) => {
@@ -108,7 +173,7 @@ function verifyApiKeyToken(token, options) {
       }
     }
   }
-  return { ok: true, claims, kid: claims.kid, app };
+  return { ok: true, claims, kid: claims.kid, app, tid };
 }
 var DEFAULT_API_KEYS_TABLE = "api_keys";
 function createTableSql(table) {
@@ -134,6 +199,11 @@ function apiKeyMigrations(table = DEFAULT_API_KEYS_TABLE) {
       id: `hasna_auth_0002_${table}_indexes`,
       sql: `CREATE INDEX IF NOT EXISTS ${table}_app_idx ON ${table} (app);
             CREATE INDEX IF NOT EXISTS ${table}_token_hash_idx ON ${table} (token_hash);`
+    },
+    {
+      id: `hasna_auth_0003_${table}_tenant`,
+      sql: `ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS tid TEXT;
+            CREATE INDEX IF NOT EXISTS ${table}_tid_idx ON ${table} (tid);`
     }
   ];
 }
@@ -158,10 +228,12 @@ function parseScopes(value) {
   return [];
 }
 function rowToRecord(row) {
+  const tid = ownTenantId(row);
   return {
     kid: String(row.kid),
     app: String(row.app),
     agent: row.agent === null || row.agent === undefined ? null : String(row.agent),
+    tid: tid === null || tid === undefined ? null : String(tid),
     scopes: parseScopes(row.scopes),
     tokenHash: String(row.token_hash),
     issuedAt: toIso(row.issued_at) ?? new Date(0).toISOString(),
@@ -192,12 +264,14 @@ class ApiKeyStore {
     }
   }
   async insert(input) {
+    const tid = ownTenantId(input);
     await this.client.execute(`INSERT INTO ${this.table}
-         (kid, app, agent, scopes, token_hash, issued_at, expires_at, created_by)
-       VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)`, [
+         (kid, app, agent, tid, scopes, token_hash, issued_at, expires_at, created_by)
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9)`, [
       input.kid,
       input.app,
       input.agent ?? null,
+      tid === undefined || tid === null ? null : normalizeTenantId(tid),
       JSON.stringify(input.scopes),
       input.tokenHash,
       input.issuedAt.toISOString(),
@@ -211,6 +285,7 @@ class ApiKeyStore {
       kid: minted.kid,
       app: claims.app,
       agent: claims.agent ?? null,
+      tid: ownTenantId(claims) ?? null,
       scopes: claims.scopes,
       tokenHash: minted.tokenHash,
       issuedAt: new Date(claims.iat * 1000),
@@ -268,11 +343,16 @@ class ApiKeyStore {
       params.push(options.app);
       clauses.push(`app = $${params.length}`);
     }
+    const tid = ownTenantId(options);
+    if (tid !== undefined) {
+      params.push(normalizeTenantId(tid));
+      clauses.push(`tid = $${params.length}`);
+    }
     if (!options.includeRevoked) {
       clauses.push("revoked_at IS NULL");
     }
     const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
-    const rows = await this.client.many(`SELECT * FROM ${this.table} ${where} ORDER BY issued_at DESC`);
+    const rows = await this.client.many(`SELECT * FROM ${this.table} ${where} ORDER BY issued_at DESC`, params);
     return rows.map(rowToRecord);
   }
   async revokedKids() {
@@ -315,6 +395,9 @@ function verifyApiKey(options) {
   if (!options.signingSecret) {
     throw new Error("verifyApiKey requires a 'signingSecret'. Set it from HASNA_<APP>_API_SIGNING_KEY.");
   }
+  if (options.expectedTid !== undefined && !isValidTenantId(options.expectedTid)) {
+    throw new Error(`verifyApiKey received an invalid 'expectedTid': '${options.expectedTid}'.`);
+  }
   const headerName = options.headerName ?? "x-api-key";
   const scheme = options.scheme ?? "Bearer";
   const clock = options.nowMs ?? (() => Date.now());
@@ -330,6 +413,17 @@ function verifyApiKey(options) {
     const path = context.path ?? null;
     const requiredScopes = [...options.requiredScopes ?? [], ...context.requiredScopes ?? []];
     const at = new Date(clock()).toISOString();
+    const perCallTid = Object.hasOwn(context, "expectedTid") ? context.expectedTid : undefined;
+    const expectedTid = perCallTid !== undefined ? perCallTid : options.expectedTid;
+    if (perCallTid !== undefined && options.expectedTid !== undefined && !tenantIdsEqual(perCallTid, options.expectedTid)) {
+      await emit({ outcome: "deny", app: options.app, kid: null, tid: null, reason: "tenant_mismatch", scopesRequired: requiredScopes, method, path, status: 403, at });
+      return {
+        ok: false,
+        status: 403,
+        reason: "tenant_mismatch",
+        message: "This route addresses a tenant other than the one this service is pinned to."
+      };
+    }
     const token = extractToken(headers, headerName, scheme);
     if (!token) {
       const decision = {
@@ -338,7 +432,7 @@ function verifyApiKey(options) {
         reason: "missing_token",
         message: `Missing API key. Send it as '${headerName}: <key>' or 'Authorization: ${scheme} <key>'.`
       };
-      await emit({ outcome: "deny", app: options.app, kid: null, reason: "missing_token", scopesRequired: requiredScopes, method, path, status: 401, at });
+      await emit({ outcome: "deny", app: options.app, kid: null, tid: null, reason: "missing_token", scopesRequired: requiredScopes, method, path, status: 401, at });
       return decision;
     }
     const verified = verifyApiKeyToken(token, {
@@ -346,17 +440,19 @@ function verifyApiKey(options) {
       expectedApp: options.app,
       nowMs: clock(),
       ...options.leewaySeconds !== undefined ? { leewaySeconds: options.leewaySeconds } : {},
+      ...options.requireTenant !== undefined ? { requireTenant: options.requireTenant } : {},
+      ...expectedTid !== undefined ? { expectedTid } : {},
       requiredScopes
     });
     if (!verified.ok) {
-      const status = verified.reason === "insufficient_scope" ? 403 : 401;
-      await emit({ outcome: "deny", app: options.app, kid: null, reason: verified.reason, scopesRequired: requiredScopes, method, path, status, at });
+      const status = verified.reason === "insufficient_scope" || verified.reason === "tenant_mismatch" || verified.reason === "tenant_required" ? 403 : 401;
+      await emit({ outcome: "deny", app: options.app, kid: verified.kid ?? null, tid: ownTenantId(verified) ?? null, reason: verified.reason, scopesRequired: requiredScopes, method, path, status, at });
       return { ok: false, status, reason: verified.reason, message: verified.message };
     }
     if (options.isRevoked) {
       const revoked = await options.isRevoked(verified.kid);
       if (revoked) {
-        await emit({ outcome: "deny", app: options.app, kid: verified.kid, reason: "revoked", scopesRequired: requiredScopes, method, path, status: 401, at });
+        await emit({ outcome: "deny", app: options.app, kid: verified.kid, tid: verified.tid, reason: "revoked", scopesRequired: requiredScopes, method, path, status: 401, at });
         return { ok: false, status: 401, reason: "revoked", message: "API key has been revoked." };
       }
     }
@@ -365,30 +461,24 @@ function verifyApiKey(options) {
       app: verified.app,
       scopes: verified.claims.scopes,
       agent: verified.claims.agent ?? null,
+      tid: verified.tid,
       claims: verified.claims
     };
-    await emit({ outcome: "allow", app: options.app, kid: verified.kid, reason: null, scopesRequired: requiredScopes, method, path, status: 200, at });
+    await emit({ outcome: "allow", app: options.app, kid: verified.kid, tid: verified.tid, reason: null, scopesRequired: requiredScopes, method, path, status: 200, at });
     return { ok: true, status: 200, principal };
   }
   return { authenticate, app: options.app };
 }
+var MAX_FLEET_TOKEN_TTL_SECONDS = 24 * 60 * 60;
 
 // src/generated/storage-kit/mode.ts
-var DEPRECATED_STORAGE_MODE_ALIASES = [
-  "remote",
-  "hybrid",
-  "self_hosted"
-];
 function normalizeStorageMode(value) {
   const normalized = value.trim().toLowerCase().replace(/-/g, "_");
-  if (normalized === "local")
-    return { mode: "local", deprecatedAlias: null };
-  if (normalized === "cloud")
-    return { mode: "cloud", deprecatedAlias: null };
-  if (DEPRECATED_STORAGE_MODE_ALIASES.includes(normalized)) {
-    return { mode: "cloud", deprecatedAlias: normalized };
-  }
-  throw new Error(`Unknown storage mode: ${value}. Use local or cloud.`);
+  if (normalized === "sqlite")
+    return { mode: "sqlite" };
+  if (normalized === "postgres" || normalized === "postgresql")
+    return { mode: "postgres" };
+  throw new Error(`Unknown storage mode '${value}'. The runtime-placement axis was removed; ` + `set sqlite for the on-box SQLite file or postgres for a PostgreSQL server (DATABASE_URL).`);
 }
 function envToken(name) {
   return name.toUpperCase().replace(/-/g, "_");
@@ -416,21 +506,17 @@ function resolveStorageMode(name, env = process.env) {
   const modeHit = firstEnv(env, modeKeys);
   if (!modeHit) {
     return {
-      mode: "local",
-      source: "default",
-      deprecatedAlias: null,
+      mode: databaseUrlPresent ? "postgres" : "sqlite",
+      source: databaseUrlPresent ? databaseUrlSource : "default",
       databaseUrlPresent,
       databaseUrlSource,
       warning: null
     };
   }
-  const { mode, deprecatedAlias } = normalizeStorageMode(modeHit.value);
+  const { mode } = normalizeStorageMode(modeHit.value);
   const warnings = [];
-  if (deprecatedAlias) {
-    warnings.push(`Deprecated storage mode '${deprecatedAlias}' from ${modeHit.key} is treated as 'cloud'. Set ${modeKeys[0]}=cloud instead.`);
-  }
-  if (mode === "cloud" && !databaseUrlPresent) {
-    warnings.push(`cloud mode needs ${databaseUrlKeys[0]} (PURE REMOTE: reads and writes go to cloud Postgres).`);
+  if (mode === "postgres" && !databaseUrlPresent) {
+    warnings.push(`postgres storage needs ${databaseUrlKeys[0]} (reads and writes go to PostgreSQL).`);
   }
   if (modeHit.key !== modeKeys[0]) {
     warnings.push(`Using alias env ${modeHit.key}; the canonical key is ${modeKeys[0]}.`);
@@ -438,7 +524,6 @@ function resolveStorageMode(name, env = process.env) {
   return {
     mode,
     source: modeHit.key,
-    deprecatedAlias,
     databaseUrlPresent,
     databaseUrlSource,
     warning: warnings.length > 0 ? warnings.join(" ") : null
@@ -485,11 +570,11 @@ function loadCaBundle(options) {
 }
 function resolveTlsConfig(connectionString, options = {}) {
   const mode = sslModeFromConnectionString(connectionString);
-  if (mode === "disable") {
+  if (mode === "disable" || mode === "prefer") {
     return;
   }
   const ca = loadCaBundle(options);
-  if (mode === "prefer" || mode === "require") {
+  if (mode === "require") {
     return ca ? { rejectUnauthorized: false, ca } : { rejectUnauthorized: false };
   }
   if (!ca) {
@@ -571,15 +656,15 @@ function createPgPool(options) {
     config.application_name = options.applicationName;
   return new pg.Pool(config);
 }
-function createCloudPoolFromEnv(appName, options = {}) {
+function createServerPoolFromEnv(appName, options = {}) {
   const env = options.env ?? process.env;
   const resolution = resolveStorageMode(appName, env);
-  if (resolution.mode !== "cloud") {
-    throw new Error(`createCloudPoolFromEnv requires ${appName} storage mode 'cloud', got '${resolution.mode}'. ` + `Set HASNA_${appName.toUpperCase().replace(/-/g, "_")}_STORAGE_MODE=cloud.`);
+  if (resolution.mode !== "postgres") {
+    throw new Error(`createServerPoolFromEnv requires ${appName} storage mode 'postgres', got '${resolution.mode}'. ` + `Set HASNA_${appName.toUpperCase().replace(/-/g, "_")}_STORAGE_MODE=postgres.`);
   }
   const connectionString = resolveDatabaseUrl(appName, env);
   if (!connectionString) {
-    throw new Error(`cloud mode for ${appName} needs a database URL. Set ` + `HASNA_${appName.toUpperCase().replace(/-/g, "_")}_DATABASE_URL.`);
+    throw new Error(`postgres storage for ${appName} needs a database URL. Set ` + `HASNA_${appName.toUpperCase().replace(/-/g, "_")}_DATABASE_URL.`);
   }
   const pool = createPgPool({
     connectionString,
@@ -606,9 +691,6 @@ function checksumSql(sql) {
 }
 function defineMigration(id, sql) {
   return Object.freeze({ id, sql: sql.trim(), checksum: checksumSql(sql) });
-}
-function hasTransaction(client) {
-  return typeof client.transaction === "function";
 }
 
 class MigrationLedger {
@@ -674,29 +756,10 @@ class MigrationLedger {
     for (const item of plan) {
       if (item.state === "already_applied")
         continue;
-      await this.applyPendingMigration(item.migration);
+      await this.client.execute(item.migration.sql);
+      await this.client.execute(`INSERT INTO ${this.ledgerTable} (id, checksum, applied_at) VALUES ($1, $2, now())`, [item.migration.id, item.migration.checksum]);
     }
     return { dryRun, applied: await this.readApplied(), plan };
-  }
-  async applyPendingMigration(migration) {
-    const apply = async (client) => {
-      await client.execute(migration.sql);
-      await client.execute(`INSERT INTO ${this.ledgerTable} (id, checksum, applied_at) VALUES ($1, $2, now())`, [migration.id, migration.checksum]);
-    };
-    if (hasTransaction(this.client)) {
-      await this.client.transaction(apply);
-      return;
-    }
-    await this.client.execute("BEGIN");
-    try {
-      await apply(this.client);
-      await this.client.execute("COMMIT");
-    } catch (error) {
-      try {
-        await this.client.execute("ROLLBACK");
-      } catch {}
-      throw error;
-    }
   }
 }
 function createMigrationLedger(client, migrations, options = {}) {
@@ -734,12 +797,12 @@ async function checkReady(client, migrations, options = {}) {
 }
 
 // src/generated/storage-kit/index.ts
-var KIT_VERSION = "0.4.0";
+var KIT_VERSION = "0.8.5";
 
 // src/db/remote-storage.ts
 var KNOWLEDGE_APP_NAME = "knowledge";
 function createKnowledgeCloudClient() {
-  return createCloudPoolFromEnv(KNOWLEDGE_APP_NAME, { applicationName: "@hasna/knowledge" }).client;
+  return createServerPoolFromEnv(KNOWLEDGE_APP_NAME, { applicationName: "@hasna/knowledge" }).client;
 }
 
 // src/registry-contract.ts
@@ -1836,7 +1899,7 @@ function parseExpectedVersion(req, body) {
 }
 function createServeHandler(deps) {
   const repo = new NoteRepo(deps.client);
-  const mode2 = "cloud";
+  const mode2 = "postgres";
   const authOrThrow = async (req, requiredScopes) => {
     const url = new URL(req.url);
     const decision = await deps.verifier.authenticate(req.headers, {
@@ -1987,7 +2050,7 @@ async function startKnowledgeServe(options = {}) {
     throw new Error("knowledge-serve requires the Bun runtime (Bun.serve unavailable).");
   }
   const server = BunGlobal.serve({ port, hostname, fetch: handler });
-  console.log(`[knowledge-serve] listening on http://${hostname}:${server.port} (mode=cloud, version=${version})`);
+  console.log(`[knowledge-serve] listening on http://${hostname}:${server.port} (mode=postgres, version=${version})`);
   return {
     port: server.port,
     hostname,

@@ -4,7 +4,7 @@
  * storage kit's MigrationLedger (checksum ledger + drift/downgrade guards).
  *
  * PURE REMOTE (Amendment A1): runs against the cloud Postgres only. Requires:
- *   HASNA_KNOWLEDGE_STORAGE_MODE=cloud
+ *   HASNA_KNOWLEDGE_STORAGE_MODE=postgres
  *   HASNA_KNOWLEDGE_DATABASE_URL=postgres://...   (never logged)
  *
  * Usage:

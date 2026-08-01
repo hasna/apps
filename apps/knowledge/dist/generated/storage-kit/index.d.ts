@@ -1,4 +1,4 @@
-export declare const KIT_VERSION = "0.4.0";
+export declare const KIT_VERSION = "0.8.5";
 export * from "./mode.js";
 export * from "./tls.js";
 export * from "./query.js";

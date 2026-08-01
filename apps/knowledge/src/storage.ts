@@ -38,6 +38,7 @@ export {
   resolveStorageMode,
   resolveDatabaseUrl,
   resolveTlsConfig,
+  normalizeStorageMode,
   normalizeStorageMode as normalizeCloudStorageMode,
   storageEnvKeys,
   MigrationLedger,

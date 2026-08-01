@@ -130,7 +130,7 @@ describe('knowledge-serve', () => {
       expect(res.status).toBe(200);
       const body = (await res.json()) as { status: string; version: string; mode: string };
       expect(body.version).toBe('9.9.9');
-      expect(body.mode).toBe('cloud');
+      expect(body.mode).toBe('postgres');
       expect(typeof body.status).toBe('string');
     }
   });

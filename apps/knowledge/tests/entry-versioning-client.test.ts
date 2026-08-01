@@ -40,7 +40,8 @@ beforeAll(async () => {
   server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: handler });
 
   cloudEnv = {
-    HASNA_KNOWLEDGE_STORAGE_MODE: 'cloud',
+    HOME: mkdtempSync(join(tmpdir(), 'ok-versions-home-')),
+    HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
     HASNA_KNOWLEDGE_API_URL: `http://127.0.0.1:${server.port}`,
     HASNA_KNOWLEDGE_API_KEY: mintApiKey({
       app: 'knowledge',
@@ -48,6 +49,7 @@ beforeAll(async () => {
       signingSecret: SIGNING,
     }).token,
   };
+  cloudEnv.USERPROFILE = cloudEnv.HOME;
 });
 
 afterAll(async () => {
@@ -290,6 +292,6 @@ describe('ItemStore (local transport) — a store with no history says so', () =
       message = (error as Error).message;
     }
     expect(message).toContain('db.json');
-    expect(message).toContain('HASNA_KNOWLEDGE_STORAGE_MODE=cloud');
+    expect(message).toContain('HASNA_KNOWLEDGE_STORAGE_MODE=postgres');
   });
 });

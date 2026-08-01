@@ -14,20 +14,21 @@ export interface CreatePgPoolOptions extends TlsResolveOptions {
 }
 /** Build a `pg.Pool` with fleet-standard TLS handling. */
 export declare function createPgPool(options: CreatePgPoolOptions): Pool;
-export interface CreateCloudPoolFromEnvOptions extends TlsResolveOptions {
+export interface CreateServerPoolFromEnvOptions extends TlsResolveOptions {
     max?: number;
     idleTimeoutMillis?: number;
     connectionTimeoutMillis?: number;
     applicationName?: string;
 }
-export interface CloudPoolFromEnv {
+export interface ServerPoolFromEnv {
     client: PoolQueryClient;
     connectionSource: string;
 }
 /**
- * Resolve mode + database URL from the environment and build a cloud pool.
+ * Resolve backend + database URL from the environment and build the server's
+ * PostgreSQL pool.
  *
- * Throws when the resolved mode is not `cloud` (PURE REMOTE has no Postgres in
- * `local` mode) or when the database URL is missing. Never logs the URL.
+ * Throws when the resolved backend is not `postgres` (the sqlite backend has
+ * no Postgres pool) or when the database URL is missing. Never logs the URL.
  */
-export declare function createCloudPoolFromEnv(appName: string, options?: CreateCloudPoolFromEnvOptions): CloudPoolFromEnv;
+export declare function createServerPoolFromEnv(appName: string, options?: CreateServerPoolFromEnvOptions): ServerPoolFromEnv;

@@ -1652,8 +1652,8 @@ export class KnowledgeService {
   /**
    * The single knowledge-item Store for this scope. One interface, two
    * transports resolved from the environment: LocalItemStore (on-box db.json)
-   * in local mode, ApiItemStore (HTTP `/v1` + bearer key) in self_hosted/cloud
-   * mode. EVERY item read/write — CLI, MCP, and SDK — routes through this one
+   * in sqlite mode, ApiItemStore (HTTP `/v1` + bearer key) in postgres mode.
+   * EVERY item read/write — CLI, MCP, and SDK — routes through this one
    * surface, so no path touches sqlite or the raw HTTP client directly.
    */
   itemStore(): ItemStore {
@@ -1695,8 +1695,8 @@ export class KnowledgeService {
   }
 
   /**
-   * Unified inventory dispatch: the shared cloud knowledge-item corpus in api
-   * mode (self_hosted/cloud), the local sqlite/JSON catalog otherwise. CLI, MCP,
+   * Unified inventory dispatch: the shared API knowledge-item corpus in
+   * postgres mode, the local sqlite/JSON catalog otherwise. CLI, MCP,
    * and SDK all call this so no surface reads a divergent store.
    */
   async resolveInventory(options: KnowledgeInventoryOptions = {}): Promise<KnowledgeInventoryResult> {

@@ -13,8 +13,8 @@ export declare const KNOWLEDGE_APP_NAME = "knowledge";
  * `PgAdapterAsync` client adapter — a DSN-on-client sync engine — has been
  * removed to eliminate that forbidden path.
  *
- * Requires `HASNA_KNOWLEDGE_STORAGE_MODE=cloud` and
+ * Requires `HASNA_KNOWLEDGE_STORAGE_MODE=postgres` and
  * `HASNA_KNOWLEDGE_DATABASE_URL`. Throws (without logging the URL) when the
- * mode is not `cloud` or the URL is missing.
+ * mode is not `postgres` or the URL is missing.
  */
 export declare function createKnowledgeCloudClient(): PoolQueryClient;

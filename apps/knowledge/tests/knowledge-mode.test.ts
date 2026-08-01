@@ -54,92 +54,98 @@ describe('knowledge mode selection is explicit, never inferred from a pointer', 
     expect([...KNOWLEDGE_API_KEY_ENV_KEYS]).toEqual(['HASNA_KNOWLEDGE_API_KEY', 'KNOWLEDGE_API_KEY']);
   });
 
-  test('an empty environment is local by default', () => {
+  test('an empty environment is sqlite by default', () => {
     const resolved = resolveKnowledgeModeSelection({} as NodeJS.ProcessEnv);
-    expect(resolved.mode).toBe('local');
+    expect(resolved.mode).toBe('sqlite');
     expect(resolved.source).toEqual({ kind: 'default', name: null, value: null });
     expect(resolved.pointer_env_present).toEqual([]);
     expect(resolved.pointer_ignored).toBe(false);
     expect(resolved.warning).toBeNull();
   });
 
-  test('REGRESSION: url + key with no mode var stays LOCAL and says the pointers were ignored', () => {
+  test('REGRESSION: url + key with no mode var stays sqlite and says the pointers were ignored', () => {
     // The defect. Under the old resolver this environment — which is what an
     // ambient exported pair looks like — selected the cloud backend, so a test
     // suite that believed it was isolated wrote to the live store.
     const resolved = resolveKnowledgeModeSelection(POINTER_ONLY);
-    expect(resolved.mode).toBe('local');
+    expect(resolved.mode).toBe('sqlite');
     expect(resolved.source.kind).toBe('default');
     expect(resolved.pointer_ignored).toBe(true);
     expect(resolved.pointer_env_present).toEqual(['HASNA_KNOWLEDGE_API_URL', 'HASNA_KNOWLEDGE_API_KEY']);
     // The note has to name the variable the operator must set, or "it went
     // local" is just as mysterious as "it went cloud" used to be.
-    expect(resolved.warning).toContain('HASNA_KNOWLEDGE_STORAGE_MODE=cloud');
+    expect(resolved.warning).toContain('HASNA_KNOWLEDGE_STORAGE_MODE=postgres');
     expect(resolved.warning).toContain('HASNA_KNOWLEDGE_API_URL');
   });
 
-  test('REGRESSION: the alias pointer keys do not select cloud either', () => {
+  test('REGRESSION: the alias pointer keys do not select postgres either', () => {
     const resolved = resolveKnowledgeModeSelection({
       KNOWLEDGE_API_URL: FAKE_URL,
       KNOWLEDGE_API_KEY: FAKE_KEY,
     } as NodeJS.ProcessEnv);
-    expect(resolved.mode).toBe('local');
+    expect(resolved.mode).toBe('sqlite');
     expect(resolved.pointer_env_present).toEqual(['KNOWLEDGE_API_URL', 'KNOWLEDGE_API_KEY']);
   });
 
-  test('an explicit cloud mode selects cloud and names the key that did it', () => {
+  test('an explicit postgres backend selects the API and names the key that did it', () => {
     const resolved = resolveKnowledgeModeSelection({
       ...POINTER_ONLY,
-      HASNA_KNOWLEDGE_STORAGE_MODE: 'cloud',
+      HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
     } as NodeJS.ProcessEnv);
-    expect(resolved.mode).toBe('cloud');
-    expect(resolved.source).toEqual({ kind: 'env', name: 'HASNA_KNOWLEDGE_STORAGE_MODE', value: 'cloud' });
+    expect(resolved.mode).toBe('postgres');
+    expect(resolved.source).toEqual({ kind: 'env', name: 'HASNA_KNOWLEDGE_STORAGE_MODE', value: 'postgres' });
     expect(resolved.pointer_ignored).toBe(false);
     expect(resolved.warning).toBeNull();
   });
 
-  test('an explicit local mode outranks the pointers', () => {
+  test('an explicit sqlite backend outranks the pointers', () => {
     const resolved = resolveKnowledgeModeSelection({
       ...POINTER_ONLY,
-      HASNA_KNOWLEDGE_STORAGE_MODE: 'local',
+      HASNA_KNOWLEDGE_STORAGE_MODE: 'sqlite',
     } as NodeJS.ProcessEnv);
-    expect(resolved.mode).toBe('local');
+    expect(resolved.mode).toBe('sqlite');
     expect(resolved.source.name).toBe('HASNA_KNOWLEDGE_STORAGE_MODE');
     expect(resolved.pointer_ignored).toBe(true);
   });
 
   test('the first mode key wins and the later ones are not consulted', () => {
     const resolved = resolveKnowledgeModeSelection({
-      HASNA_KNOWLEDGE_STORAGE_MODE: 'local',
-      HASNA_KNOWLEDGE_MODE: 'cloud',
-      KNOWLEDGE_MODE: 'cloud',
+      HASNA_KNOWLEDGE_STORAGE_MODE: 'sqlite',
+      HASNA_KNOWLEDGE_MODE: 'postgres',
+      KNOWLEDGE_MODE: 'postgres',
     } as NodeJS.ProcessEnv);
-    expect(resolved.mode).toBe('local');
+    expect(resolved.mode).toBe('sqlite');
     expect(resolved.source.name).toBe('HASNA_KNOWLEDGE_STORAGE_MODE');
   });
 
   test('an alias mode key still selects, and says it is an alias', () => {
-    const resolved = resolveKnowledgeModeSelection({ KNOWLEDGE_MODE: 'cloud' } as NodeJS.ProcessEnv);
-    expect(resolved.mode).toBe('cloud');
+    const resolved = resolveKnowledgeModeSelection({ KNOWLEDGE_MODE: 'postgres' } as NodeJS.ProcessEnv);
+    expect(resolved.mode).toBe('postgres');
     expect(resolved.source.name).toBe('KNOWLEDGE_MODE');
     expect(resolved.warning).toContain('canonical key is HASNA_KNOWLEDGE_STORAGE_MODE');
   });
 
-  test("the deprecated 'self_hosted' value normalizes to cloud with a note", () => {
-    const resolved = resolveKnowledgeModeSelection({
-      ...POINTER_ONLY,
-      HASNA_KNOWLEDGE_STORAGE_MODE: 'self_hosted',
-    } as NodeJS.ProcessEnv);
-    expect(resolved.mode).toBe('cloud');
-    expect(resolved.warning).toContain("Deprecated mode 'self_hosted'");
+  test('removed placement words are rejected instead of normalized', () => {
+    expect(() =>
+      resolveKnowledgeModeSelection({
+        ...POINTER_ONLY,
+        HASNA_KNOWLEDGE_STORAGE_MODE: 'self_hosted',
+      } as NodeJS.ProcessEnv),
+    ).toThrow(/runtime-placement axis was removed/);
+    expect(() =>
+      resolveKnowledgeModeSelection({ HASNA_KNOWLEDGE_STORAGE_MODE: 'cloud' } as NodeJS.ProcessEnv),
+    ).toThrow(/runtime-placement axis was removed/);
+    expect(() =>
+      resolveKnowledgeModeSelection({ HASNA_KNOWLEDGE_STORAGE_MODE: 'local' } as NodeJS.ProcessEnv),
+    ).toThrow(/runtime-placement axis was removed/);
   });
 
   test('whitespace-only mode vars are treated as unset, not as an error', () => {
     const resolved = resolveKnowledgeModeSelection({
       HASNA_KNOWLEDGE_STORAGE_MODE: '   ',
-      KNOWLEDGE_MODE: 'cloud',
+      KNOWLEDGE_MODE: 'postgres',
     } as NodeJS.ProcessEnv);
-    expect(resolved.mode).toBe('cloud');
+    expect(resolved.mode).toBe('postgres');
     expect(resolved.source.name).toBe('KNOWLEDGE_MODE');
   });
 
@@ -163,11 +169,11 @@ describe('the resolved mode reaches the real store resolvers', () => {
     expect(store.location).not.toMatch(/^https?:/);
   });
 
-  test('resolveItemStore returns the API transport when the mode is explicitly cloud', () => {
+  test('resolveItemStore returns the API transport when the backend is explicitly postgres', () => {
     const store = resolveItemStore({
       storePath: '/tmp/knowledge-mode-test-does-not-exist/db.json',
       storePathOverridden: false,
-      env: { ...POINTER_ONLY, HASNA_KNOWLEDGE_STORAGE_MODE: 'cloud' } as NodeJS.ProcessEnv,
+      env: { ...POINTER_ONLY, HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres' } as NodeJS.ProcessEnv,
     });
     expect(store.kind).toBe('api');
     expect(store.location).toBe(`${FAKE_URL}/v1`);
@@ -176,9 +182,9 @@ describe('the resolved mode reaches the real store resolvers', () => {
   test('isKnowledgeApiMode and resolveKnowledgeCloudStore agree with the selection', () => {
     expect(isKnowledgeApiMode(POINTER_ONLY)).toBe(false);
     expect(resolveKnowledgeCloudStore(POINTER_ONLY)).toBeNull();
-    const cloudEnv = { ...POINTER_ONLY, HASNA_KNOWLEDGE_STORAGE_MODE: 'cloud' } as NodeJS.ProcessEnv;
-    expect(isKnowledgeApiMode(cloudEnv)).toBe(true);
-    expect(resolveKnowledgeCloudStore(cloudEnv)).not.toBeNull();
+    const postgresEnv = { ...POINTER_ONLY, HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres' } as NodeJS.ProcessEnv;
+    expect(isKnowledgeApiMode(postgresEnv)).toBe(true);
+    expect(resolveKnowledgeCloudStore(postgresEnv)).not.toBeNull();
   });
 
   test('pinnedTransportEnv overwrites an ambient mode var in both directions', () => {
@@ -189,14 +195,14 @@ describe('the resolved mode reaches the real store resolvers', () => {
     // 'cloud' this test used to hardcode. Those literals are only correct on one
     // generation of @hasna/contracts, so asserting them would have turned this
     // test into a second place the enum change has to be edited.
-    expect(pinnedTransportEnv(POINTER_ONLY, 'local').HASNA_KNOWLEDGE_STORAGE_MODE).toBe(
+    expect(pinnedTransportEnv(POINTER_ONLY, 'sqlite').HASNA_KNOWLEDGE_STORAGE_MODE).toBe(
       localStorageMode(),
     );
     expect(
-      pinnedTransportEnv({ HASNA_KNOWLEDGE_STORAGE_MODE: 'cloud' } as NodeJS.ProcessEnv, 'local')
+      pinnedTransportEnv({ HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres' } as NodeJS.ProcessEnv, 'sqlite')
         .HASNA_KNOWLEDGE_STORAGE_MODE,
     ).toBe(localStorageMode());
-    expect(pinnedTransportEnv(POINTER_ONLY, 'cloud').HASNA_KNOWLEDGE_STORAGE_MODE).toBe(
+    expect(pinnedTransportEnv(POINTER_ONLY, 'postgres').HASNA_KNOWLEDGE_STORAGE_MODE).toBe(
       serverStorageMode(),
     );
     // The overwrite is real in both directions: local and server must not
@@ -208,7 +214,7 @@ describe('the resolved mode reaches the real store resolvers', () => {
 describe('the mode report is safe to print', () => {
   test('reports the resolved backend, the guard state, and pointer NAMES only', () => {
     const report = knowledgeModeReport({ ...POINTER_ONLY, NODE_ENV: 'test' } as NodeJS.ProcessEnv);
-    expect(report.mode).toBe('local');
+    expect(report.mode).toBe('sqlite');
     expect(report.store_transport).toBe('local');
     expect(report.api_key_present).toBe(true);
     expect(report.network_guard_active).toBe(true);
@@ -221,13 +227,13 @@ describe('the mode report is safe to print', () => {
     expect(serialized).toContain('HASNA_KNOWLEDGE_API_KEY');
   });
 
-  test('reports cloud when cloud is selected, and no guard outside test', () => {
+  test('reports api transport when postgres is selected, and no guard outside test', () => {
     const report = knowledgeModeReport({
       ...POINTER_ONLY,
-      HASNA_KNOWLEDGE_STORAGE_MODE: 'cloud',
+      HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
       NODE_ENV: 'production',
     } as NodeJS.ProcessEnv);
-    expect(report.mode).toBe('cloud');
+    expect(report.mode).toBe('postgres');
     expect(report.store_transport).toBe('api');
     expect(report.network_guard_active).toBe(false);
   });
@@ -270,11 +276,11 @@ describe('a half-configured client refuses to guess which store it is on', () =>
     const message = (caught as Error).message;
     // The URL var that provoked it, so the operator knows which config is live.
     expect(message).toContain('HASNA_KNOWLEDGE_API_URL');
-    // Both remedies. An error that only offers `=cloud` reads as "you must go
-    // cloud", and an operator who wanted the on-box store would unset a
+    // Both remedies. An error that only offers `=postgres` reads as "you must go
+    // to the API", and an operator who wanted the on-box store would unset a
     // variable they need for other tools instead of pinning the mode.
-    expect(message).toContain('HASNA_KNOWLEDGE_STORAGE_MODE=cloud');
-    expect(message).toContain('HASNA_KNOWLEDGE_STORAGE_MODE=local');
+    expect(message).toContain('HASNA_KNOWLEDGE_STORAGE_MODE=postgres');
+    expect(message).toContain('HASNA_KNOWLEDGE_STORAGE_MODE=sqlite');
     expect((caught as { code?: string }).code).toBe('knowledge_mode_unset_with_api_url');
   });
 
@@ -301,22 +307,22 @@ describe('a half-configured client refuses to guess which store it is on', () =>
     expect(message).toContain('KNOWLEDGE_API_URL');
   });
 
-  test('an explicit cloud mode is unambiguous and passes', () => {
+  test('an explicit postgres backend is unambiguous and passes', () => {
     const resolved = assertKnowledgeModeSelected({
       ...POINTER_ONLY,
-      HASNA_KNOWLEDGE_STORAGE_MODE: 'cloud',
+      HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
     } as NodeJS.ProcessEnv);
-    expect(resolved.mode).toBe('cloud');
+    expect(resolved.mode).toBe('postgres');
   });
 
-  test('an explicit local mode is unambiguous and passes — the pointer stays ignored', () => {
+  test('an explicit sqlite backend is unambiguous and passes — the pointer stays ignored', () => {
     // The escape hatch for a machine whose shell exports the URL for other
     // tooling. Saying `local` out loud is cheap; being guessed at is not.
     const resolved = assertKnowledgeModeSelected({
       ...POINTER_ONLY,
-      HASNA_KNOWLEDGE_STORAGE_MODE: 'local',
+      HASNA_KNOWLEDGE_STORAGE_MODE: 'sqlite',
     } as NodeJS.ProcessEnv);
-    expect(resolved.mode).toBe('local');
+    expect(resolved.mode).toBe('sqlite');
   });
 
   test('an API key with no URL is NOT ambiguous — there is no second store named', () => {
@@ -324,45 +330,33 @@ describe('a half-configured client refuses to guess which store it is on', () =>
     // that can never have routed anywhere, which is how a loud check gets
     // switched off.
     const resolved = assertKnowledgeModeSelected({ HASNA_KNOWLEDGE_API_KEY: FAKE_KEY } as NodeJS.ProcessEnv);
-    expect(resolved.mode).toBe('local');
+    expect(resolved.mode).toBe('sqlite');
   });
 
   test('an explicit --store override is an explicit local choice and passes', () => {
     const resolved = assertKnowledgeModeSelected(POINTER_ONLY, { storePathOverridden: true });
-    expect(resolved.mode).toBe('local');
+    expect(resolved.mode).toBe('sqlite');
   });
 
   test('an empty environment is still fine', () => {
-    expect(assertKnowledgeModeSelected({} as NodeJS.ProcessEnv).mode).toBe('local');
+    expect(assertKnowledgeModeSelected({} as NodeJS.ProcessEnv).mode).toBe('sqlite');
   });
 
   test('the pure resolver is UNCHANGED — it still answers local without throwing', () => {
     // The guard is a separate gate on top of the resolution, deliberately. The
     // `mode` reporter has to keep working in exactly the environment the guard
     // rejects, or the command that explains the problem dies with it.
-    expect(resolveKnowledgeModeSelection(POINTER_ONLY).mode).toBe('local');
+    expect(resolveKnowledgeModeSelection(POINTER_ONLY).mode).toBe('sqlite');
     expect(knowledgeModeReport(URL_ONLY).pointer_ignored).toBe(true);
   });
 });
 
-// -- The translation boundary -------------------------------------------------
+// -- The backend token boundary ----------------------------------------------
 //
-// This module holds TWO independent validators and they are allowed to disagree:
-// the vendored storage-kit validates what an OPERATOR typed (`local | cloud`),
-// while the live @hasna/contracts validates the token we hand its resolver.
-// After the placement axis was removed the live enum accepts ONLY
-// `sqlite | postgres` and THROWS on `local`/`cloud` — so the two valid sets are
-// DISJOINT.
-//
-// That is survivable because they were never required to be the same value:
-// `KnowledgeMode` types the INTERNAL semantic mode, while what reaches the
-// resolver is an env STRING. `pinnedTransportEnv` is the one place they meet, so
-// it translates. These tests exist to stop that translation being "simplified"
-// back into a pass-through, which would reintroduce the break.
-//
-// `normalize` is injectable because only one contracts generation can be
-// installed at a time — without the seam, forward compatibility would be an
-// assertion rather than a test.
+// The vendored kit and the live contracts package now share the same
+// sqlite|postgres backend vocabulary. These tests keep the tiny derivation seam
+// honest: the accepted tokens are checked against the installed normalizer, and
+// an unrecognized future enum fails loudly instead of guessing.
 
 describe('the live-contracts token is derived, never hardcoded', () => {
   const acceptOnly = (accepted: readonly string[]) => (value: string) => {
@@ -370,49 +364,15 @@ describe('the live-contracts token is derived, never hardcoded', () => {
     return value;
   };
 
-  const PRE_REMOVAL = ['local', 'cloud', 'self_hosted', 'remote', 'hybrid'];
-  const POST_REMOVAL = ['sqlite', 'postgres', 'postgresql'];
+  const CURRENT = ['sqlite', 'postgres', 'postgresql'];
 
   // Widened so `toContain` compares strings rather than narrowing to the tuple.
   const SERVER: readonly string[] = SERVER_MODE_CANDIDATES;
   const LOCAL: readonly string[] = LOCAL_MODE_CANDIDATES;
 
-  test('derives the pre-removal tokens on the old contracts enum', () => {
-    expect(serverStorageMode(acceptOnly(PRE_REMOVAL))).toBe('cloud');
-    expect(localStorageMode(acceptOnly(PRE_REMOVAL))).toBe('local');
-  });
-
-  test('derives the post-removal tokens on the new contracts enum', () => {
-    // The whole point: after the bump, `cloud` and `local` both throw at the
-    // resolver, and these are the tokens that do not.
-    expect(serverStorageMode(acceptOnly(POST_REMOVAL))).toBe('postgres');
-    expect(localStorageMode(acceptOnly(POST_REMOVAL))).toBe('sqlite');
-  });
-
-  test('prefers the newest accepted token when several are valid', () => {
-    // A transitional release that still honours the aliases must not pin a
-    // deprecated one.
-    const transitional = acceptOnly(['sqlite', 'postgres', 'local', 'cloud', 'self_hosted']);
-
-    expect(serverStorageMode(transitional)).toBe('postgres');
-    expect(localStorageMode(transitional)).toBe('sqlite');
-  });
-
-  test('never prefers a deprecated alias over the canonical token of the same generation', () => {
-    // `self_hosted` and `cloud` are BOTH accepted on the pre-removal enum, and
-    // `self_hosted` is the deprecated one. Picking it would be a live behaviour
-    // change — this package injects `cloud` today — disguised as a refactor.
-    // This is the assertion that caught exactly that mistake while writing this.
-    expect(serverStorageMode(acceptOnly(['self_hosted', 'cloud']))).toBe('cloud');
-    expect(SERVER_MODE_CANDIDATES.indexOf('cloud')).toBeLessThan(
-      SERVER_MODE_CANDIDATES.indexOf('self_hosted'),
-    );
-  });
-
-  test('the alias still works when it is the only server token on offer', () => {
-    // Canonical-before-deprecated is a preference, not a refusal: a generation
-    // that only understands the alias must still resolve rather than throw.
-    expect(serverStorageMode(acceptOnly(['self_hosted']))).toBe('self_hosted');
+  test('derives the current backend tokens', () => {
+    expect(serverStorageMode(acceptOnly(CURRENT))).toBe('postgres');
+    expect(localStorageMode(acceptOnly(CURRENT))).toBe('sqlite');
   });
 
   test('throws with an actionable message when the enum changes again', () => {
@@ -433,8 +393,8 @@ describe('the live-contracts token is derived, never hardcoded', () => {
     const realServer = serverStorageMode();
     const realLocal = localStorageMode();
 
-    expect(serverStorageMode(acceptOnly(POST_REMOVAL))).toBe('postgres');
-    expect(localStorageMode(acceptOnly(POST_REMOVAL))).toBe('sqlite');
+    expect(serverStorageMode(acceptOnly(CURRENT))).toBe('postgres');
+    expect(localStorageMode(acceptOnly(CURRENT))).toBe('sqlite');
 
     expect(serverStorageMode()).toBe(realServer);
     expect(localStorageMode()).toBe(realLocal);
@@ -448,27 +408,21 @@ describe('the live-contracts token is derived, never hardcoded', () => {
   });
 
   test('contractsStorageModeFor maps the semantic mode, not the literal', () => {
-    expect(contractsStorageModeFor('cloud')).toBe(serverStorageMode());
-    expect(contractsStorageModeFor('local')).toBe(localStorageMode());
-
-    // Across the change, both directions still translate — this is the property
-    // that a pass-through would lose.
-    expect(contractsStorageModeFor('cloud', acceptOnly(POST_REMOVAL))).toBe('postgres');
-    expect(contractsStorageModeFor('local', acceptOnly(POST_REMOVAL))).toBe('sqlite');
+    expect(contractsStorageModeFor('postgres')).toBe(serverStorageMode());
+    expect(contractsStorageModeFor('sqlite')).toBe(localStorageMode());
+    expect(contractsStorageModeFor('postgres', acceptOnly(CURRENT))).toBe('postgres');
+    expect(contractsStorageModeFor('sqlite', acceptOnly(CURRENT))).toBe('sqlite');
   });
 
-  test('the operator vocabulary is untouched by the translation', () => {
-    // The vendored kit still validates what a person types, and `cloud` stays
-    // the word in the docs and the env var. Translating at the boundary must not
-    // leak the live token into the operator surface.
+  test('the operator vocabulary is the generated backend vocabulary', () => {
     const resolution = resolveKnowledgeModeSelection({
-      HASNA_KNOWLEDGE_STORAGE_MODE: 'cloud',
+      HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
     } as NodeJS.ProcessEnv);
 
-    expect(resolution.mode).toBe('cloud');
-    expect(resolution.source.value).toBe('cloud');
-    expect(knowledgeModeReport({ HASNA_KNOWLEDGE_STORAGE_MODE: 'local' } as NodeJS.ProcessEnv).mode).toBe(
-      'local',
+    expect(resolution.mode).toBe('postgres');
+    expect(resolution.source.value).toBe('postgres');
+    expect(knowledgeModeReport({ HASNA_KNOWLEDGE_STORAGE_MODE: 'sqlite' } as NodeJS.ProcessEnv).mode).toBe(
+      'sqlite',
     );
   });
 });

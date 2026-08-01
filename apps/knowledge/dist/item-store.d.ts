@@ -83,7 +83,7 @@ export interface ResolveItemStoreOptions {
 }
 /**
  * Resolve the single item Store for this invocation. Returns the ApiItemStore
- * only when the mode is explicitly cloud, otherwise the LocalItemStore. An
+ * only when the mode is explicitly postgres, otherwise the LocalItemStore. An
  * explicit `--store` override always yields the local transport so the flip
  * stays fully reversible.
  */

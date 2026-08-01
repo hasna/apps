@@ -44,15 +44,13 @@ export const KNOWLEDGE_STORAGE_TABLES = STORAGE_TABLES;
 type StorageTable = (typeof STORAGE_TABLES)[number];
 
 /**
- * Runtime storage mode per Amendment A1 (PURE REMOTE):
- *   - `local`: SQLite knowledge.db is authoritative.
- *   - `cloud`: the shared store is reached through the HTTP ApiStore.
- * The legacy words `hybrid`, `remote`, and `self_hosted` are accepted only as
- * deprecated aliases that normalize to `cloud`.
+ * Runtime storage backend:
+ *   - `sqlite`: on-box SQLite knowledge.db is authoritative.
+ *   - `postgres`: the shared store is reached through the HTTP ApiStore.
+ * The removed runtime-placement words (`local`, `cloud`, `hybrid`, `remote`,
+ * and `self_hosted`) are not accepted here.
  */
-export type StorageMode = 'local' | 'cloud';
-
-const DEPRECATED_CLOUD_ALIASES = ['remote', 'hybrid', 'self_hosted'] as const;
+export type StorageMode = 'sqlite' | 'postgres';
 
 export interface StorageSyncOptions {
   tables?: string[];
@@ -98,9 +96,8 @@ function readEnv(name: string): string | undefined {
 
 function normalizeStorageMode(value: string | undefined): StorageMode | undefined {
   const normalized = value?.trim().toLowerCase().replace(/-/g, '_');
-  if (normalized === 'local') return 'local';
-  if (normalized === 'cloud') return 'cloud';
-  if (normalized && (DEPRECATED_CLOUD_ALIASES as readonly string[]).includes(normalized)) return 'cloud';
+  if (normalized === 'sqlite') return 'sqlite';
+  if (normalized === 'postgres' || normalized === 'postgresql') return 'postgres';
   return undefined;
 }
 
@@ -118,9 +115,9 @@ export function getStorageMode(): StorageMode {
   const mode = normalizeStorageMode(readEnv(KNOWLEDGE_STORAGE_MODE_ENV))
     ?? normalizeStorageMode(readEnv(KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV));
   if (mode) return mode;
-  // Presence of a DATABASE_URL no longer auto-enables cloud. Cloud mode must be
-  // requested explicitly; default is local.
-  return 'local';
+  // Presence of a DATABASE_URL no longer selects a backend. Postgres must be
+  // requested explicitly; default is sqlite.
+  return 'sqlite';
 }
 
 export function getSyncMetaAll(options: StorageStatusOptions = {}): SyncMeta[] {

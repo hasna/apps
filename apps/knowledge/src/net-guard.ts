@@ -136,7 +136,7 @@ export function assertOutboundRequestAllowed(
     `knowledge: refused a non-loopback ${url.protocol.replace(':', '')} request while ${NETWORK_GUARD_ENV}=test `
       + '(target host withheld on purpose). This process resolved to the cloud backend under test, which means a '
       + 'read or write was about to leave the machine and reach the live store. Select the mode explicitly '
-      + `(${'HASNA_KNOWLEDGE_STORAGE_MODE'}=local) or point the API URL at 127.0.0.1 for a hermetic test.`,
+      + `(${'HASNA_KNOWLEDGE_STORAGE_MODE'}=sqlite) or point the API URL at 127.0.0.1 for a hermetic test.`,
     { scheme: url.protocol.replace(':', ''), port: url.port },
   );
 }

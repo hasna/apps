@@ -608,7 +608,7 @@ describe('knowledge MCP', () => {
         arguments: { scope: 'project' },
       }));
       expect(databaseStorage.service).toBe('knowledge');
-      expect(databaseStorage.mode).toBe('local');
+      expect(databaseStorage.mode).toBe('sqlite');
       expect(databaseStorage.tables).toContain('sources');
       expect(databaseStorage.tables).not.toContain('chunks_fts');
 
@@ -857,7 +857,11 @@ describe('knowledge MCP', () => {
     } finally {
       await client.close();
     }
-  }, 10000);
+  // Windows CI measured this full stdio integration at 10025.10ms while the
+  // matrix job itself runs `bun test --timeout 20000`; keep the test aligned
+  // with that required gate instead of letting this file's older 10s override
+  // fail a passing end-to-end run on slower Windows hosts.
+  }, 20_000);
 
   // ok_untag had no MCP-side coverage at all, which is how it kept returning `ok: true` on
   // `removed: 0` through two PRs that fixed the same defect on the CLI side. Every assertion

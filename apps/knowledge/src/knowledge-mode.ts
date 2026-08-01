@@ -3,12 +3,12 @@
  * Copyright 2026 Hasna Inc.
  * Licensed under the Apache License, Version 2.0
  *
- * ONE question, answered in ONE place: does this process read and write the
- * on-box store, or the app's HTTP API?
+ * ONE question, answered in ONE place: does this process use the on-box sqlite
+ * backend, or the app's postgres backend reached by clients over HTTP?
  *
  * The rule is EXPLICIT-ONLY. A mode env var selects the mode; the presence of an
  * API URL or an API key never does. Those two are *pointers* — they say where
- * the cloud is and how to authenticate to it, not that we should be talking to
+ * the server is and how to authenticate to it, not that we should be talking to
  * it. Selection by presence is what made an ambient `HASNA_KNOWLEDGE_API_URL` +
  * `HASNA_KNOWLEDGE_API_KEY` exported in a login shell silently route a test
  * suite's writes to the live store: every pane inherited the variables from the
@@ -18,7 +18,7 @@
  * Two layers used to infer cloud from presence, and BOTH had to be closed:
  *   1. this package's own resolver (deleted — it lived in cloud-store.ts), and
  *   2. `resolveClientTransport` in @hasna/contracts, which independently maps
- *      "url and key are both set" to cloud.
+ *      "url and key are both set" to postgres.
  * So callers must not hand the raw environment to the contracts resolver. They
  * pass {@link pinnedTransportEnv}, which stamps the mode WE resolved over
  * whatever the ambient environment says, in both directions. With the mode
@@ -49,12 +49,12 @@ const ENV_KEYS = clientTransportEnvKeys(KNOWLEDGE_APP_SLUG);
  * transport underneath us.
  */
 export const KNOWLEDGE_MODE_ENV_KEYS: readonly string[] = ENV_KEYS.modeKeys;
-/** Pointer keys: where the cloud is. Never a mode selector. */
+/** Pointer keys: where the server is. Never a mode selector. */
 export const KNOWLEDGE_API_URL_ENV_KEYS: readonly string[] = ENV_KEYS.apiUrlKeys;
 /** Pointer keys: how to authenticate. Never a mode selector, never logged. */
 export const KNOWLEDGE_API_KEY_ENV_KEYS: readonly string[] = ENV_KEYS.apiKeyKeys;
 
-/** `local` = on-box store. `cloud` = the app's HTTP `/v1` API. */
+/** `sqlite` = on-box store. `postgres` = server data reached by clients over HTTP. */
 export type KnowledgeMode = StorageMode;
 
 export interface KnowledgeModeSource {
@@ -62,7 +62,7 @@ export interface KnowledgeModeSource {
   kind: 'env' | 'default';
   /** The env key that selected the mode, or null for the default. */
   name: string | null;
-  /** The mode var's own value (`local` / `cloud` / a deprecated alias). Never a pointer value. */
+  /** The mode var's own value (`sqlite` / `postgres` / `postgresql`). Never a pointer value. */
   value: string | null;
 }
 
@@ -94,8 +94,8 @@ function presentEnvNames(env: NodeJS.ProcessEnv, keys: readonly string[]): strin
  *
  * Precedence: the first mode key that carries a value wins and RETURNS — the
  * pointer keys are not even read on that path, which is what makes an explicit
- * `KNOWLEDGE_MODE=local` authoritative on a machine whose shell exports a URL
- * and a key. With no mode key set the answer is `local`, the safe default,
+ * `KNOWLEDGE_MODE=sqlite` authoritative on a machine whose shell exports a URL
+ * and a key. With no mode key set the answer is `sqlite`, the safe default,
  * regardless of what pointers exist.
  *
  * Throws only on an unusable mode value (never on pointer state) so a typo in
@@ -117,71 +117,49 @@ export function resolveKnowledgeModeSelection(env: NodeJS.ProcessEnv = process.e
     let normalized: ReturnType<typeof normalizeVendoredMode>;
     try {
       // The VENDORED normalizer, deliberately: this validates what an OPERATOR
-      // typed, and `local`/`cloud` is the operator-facing vocabulary. The live
-      // contracts token is derived separately, at the boundary — see
-      // {@link contractsStorageModeFor}.
+      // typed. Regenerating the kit is what moves the operator vocabulary, so
+      // there is no second hand-maintained enum here.
       normalized = normalizeVendoredMode(value);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(`knowledge: ${name}=${value} is not a valid mode. ${message}`);
     }
     const warnings: string[] = [];
-    if (normalized.deprecatedAlias) {
-      warnings.push(
-        `Deprecated mode '${normalized.deprecatedAlias}' from ${name} is treated as 'cloud'. Prefer ${canonicalModeKey}=cloud.`,
-      );
-    }
     if (name !== canonicalModeKey) {
       warnings.push(`Using alias env ${name}; the canonical key is ${canonicalModeKey}.`);
     }
-    if (normalized.mode === 'local' && pointers.length > 0) {
-      warnings.push(`${name}=local pins the on-box store; ${pointers.join(', ')} are set but ignored.`);
+    if (normalized.mode === 'sqlite' && pointers.length > 0) {
+      warnings.push(`${name}=sqlite pins the on-box store; ${pointers.join(', ')} are set but ignored.`);
     }
     return {
       mode: normalized.mode,
       source: { kind: 'env', name, value },
       pointer_env_present: pointers,
-      pointer_ignored: normalized.mode === 'local' && pointers.length > 0,
+      pointer_ignored: normalized.mode === 'sqlite' && pointers.length > 0,
       warning: warnings.length > 0 ? warnings.join(' ') : null,
     };
   }
 
   return {
-    mode: 'local',
+    mode: 'sqlite',
     source: { kind: 'default', name: null, value: null },
     pointer_env_present: pointers,
     pointer_ignored: pointers.length > 0,
     warning:
       pointers.length > 0
-        ? `${pointers.join(', ')} are set but do NOT select a backend: mode is local by default. `
-          + `Set ${canonicalModeKey}=cloud to route reads and writes to the API, or unset those vars to silence this note.`
+        ? `${pointers.join(', ')} are set but do NOT select a backend: mode is sqlite by default. `
+          + `Set ${canonicalModeKey}=postgres to route reads and writes to the API, or unset those vars to silence this note.`
         : null,
   };
 }
 
 /**
- * Server-side tokens, in probe order. The order is load-bearing, and it is
- * NEWEST-GENERATION FIRST, THEN CANONICAL BEFORE DEPRECATED:
- *
- *   postgres     the current canonical server token
- *   cloud        the previous canonical server token
- *   self_hosted  a DEPRECATED alias of `cloud`, last resort only
- *
- * Both halves matter. Newest-first is what stops a transitional contracts
- * release — one that still honours the old words — from pinning us to the old
- * generation. Canonical-before-deprecated is what stops us pinning
- * `self_hosted` on the enum where `cloud` is the real answer: both are accepted
- * there, but only one is the token this package already injects, and switching
- * to the alias would be a live behaviour change dressed up as a refactor.
- *
- * (Sibling repos list `self_hosted` ahead of `cloud` for exactly the same
- * reason inverted — `self_hosted` is the literal THEY replace. The rule is
- * "derive what this repo already injects on the installed generation", not
- * "copy the other repo's array".)
+ * Server-side tokens, in probe order. Kept as a small derivation seam so a
+ * future contracts enum change fails loudly instead of guessing a backend.
  */
-export const SERVER_MODE_CANDIDATES = ['postgres', 'cloud', 'self_hosted'] as const;
-/** On-box tokens, same rule: newest generation first. */
-export const LOCAL_MODE_CANDIDATES = ['sqlite', 'local'] as const;
+export const SERVER_MODE_CANDIDATES = ['postgres'] as const;
+/** On-box tokens. */
+export const LOCAL_MODE_CANDIDATES = ['sqlite'] as const;
 
 /** Accepts a mode token or throws. Injectable so both enum generations are testable. */
 export type ModeNormalizer = (value: string) => unknown;
@@ -230,62 +208,25 @@ export function localStorageMode(normalize: ModeNormalizer = normalizeContractsM
 }
 
 /**
- * Translate OUR semantic mode into the token the INSTALLED @hasna/contracts
- * accepts.
- *
- * THIS FUNCTION IS A TRANSLATION, NOT A PASS-THROUGH, AND THAT IS THE WHOLE
- * POINT — do not "simplify" it back. This module holds two independent
- * validators, and they are allowed to disagree:
- *
- *   - {@link normalizeVendoredMode}, from the vendored `src/generated/storage-kit`,
- *     validates what an OPERATOR typed. Its vocabulary is `local | cloud` and
- *     that is the vocabulary in the docs, the `knowledge mode` report, and the
- *     env vars people set. {@link KnowledgeMode} is that type.
- *   - the LIVE `@hasna/contracts` validates the token we hand its resolver.
- *     After the placement axis was removed it accepts ONLY `sqlite | postgres`
- *     and THROWS on `local`/`cloud`.
- *
- * Post-removal those two sets are DISJOINT, which reads at first like an
- * impossible constraint: the token that satisfies the type is the token the
- * resolver rejects. It is not impossible, because they never had to be the same
- * value. {@link KnowledgeMode} types the INTERNAL semantic mode; what reaches
- * the resolver is an ENV STRING, and `NodeJS.ProcessEnv` values are
- * `string | undefined` — nothing ever forced the stamped token to satisfy the
- * vendored type. The two vocabularies meet in exactly one place, here, so
- * translating here keeps the vendored kit, the operator vocabulary, and the
- * explicit-only no-inference guarantee all untouched. Re-vendoring the kit is
- * NOT required to make this forward-compatible.
- *
- * The tokens are DERIVED by probing the installed `normalizeStorageMode` rather
- * than hardcoded, because a literal is a bet on which contracts generation a
- * given machine has, and the bet loses on one side or the other. `normalize` is
- * injectable because only one generation can be installed at a time, so
- * forward-compatibility would otherwise be an assertion rather than a test.
- *
- * BOUNDARY: the returned token is for the contracts resolver ONLY. Do not feed
- * a pinned env back into {@link resolveKnowledgeModeSelection} — that validates
- * with the VENDORED normalizer, which will reject the live token once the two
- * enums diverge.
+ * Validate and return the installed-contracts token for a semantic backend.
  */
 export function contractsStorageModeFor(
   mode: KnowledgeMode,
   normalize: ModeNormalizer = normalizeContractsMode,
 ): string {
-  return mode === 'cloud' ? serverStorageMode(normalize) : localStorageMode(normalize);
+  return mode === 'postgres' ? serverStorageMode(normalize) : localStorageMode(normalize);
 }
 
 /**
  * The env to hand @hasna/contracts, with the mode we resolved stamped on top.
  *
  * Load-bearing in BOTH directions. Stamping the server token keeps the
- * transport from refusing a mode we deliberately chose; stamping the local
+ * transport from refusing a mode we deliberately chose; stamping the sqlite
  * token is what stops `resolveClientTransport` from re-deriving the server out
  * of the ambient pointer vars we just decided to ignore. Handing it the raw
  * environment instead would put the backend choice back in a second layer.
  *
- * The stamped VALUE is the live-contracts token, not our `KnowledgeMode` — see
- * {@link contractsStorageModeFor} for why those are deliberately different
- * things.
+ * The stamped VALUE is the live-contracts token.
  */
 export function pinnedTransportEnv(env: NodeJS.ProcessEnv, mode: KnowledgeMode): NodeJS.ProcessEnv {
   return { ...env, [KNOWLEDGE_MODE_ENV_KEYS[0]]: contractsStorageModeFor(mode) };
@@ -304,7 +245,7 @@ export class HalfConfiguredKnowledgeClientError extends Error {
     super(
       `knowledge: ${urlKeysPresent.join(', ')} names an API store, but no mode variable says to use it, `
         + 'so this command would silently read and write the on-box store instead. '
-        + `Set ${canonical}=cloud to use the API, or ${canonical}=local to confirm you want the on-box store. `
+        + `Set ${canonical}=postgres to use the API, or ${canonical}=sqlite to confirm you want the on-box store. `
         + `Run 'knowledge mode' to see the full resolution.`,
     );
     this.name = 'HalfConfiguredKnowledgeClientError';
@@ -315,7 +256,7 @@ export class HalfConfiguredKnowledgeClientError extends Error {
  * Gate a store-touching command on an UNAMBIGUOUS environment.
  *
  * Deliberately separate from {@link resolveKnowledgeModeSelection}, which stays
- * total and non-throwing. The resolver has to keep answering `local` in exactly
+ * total and non-throwing. The resolver has to keep answering `sqlite` in exactly
  * the environment this rejects, because `knowledge mode` — the command whose
  * whole job is explaining the situation — resolves through it. A guard fused
  * into the resolver would kill the diagnostic along with the defect.
@@ -325,8 +266,8 @@ export class HalfConfiguredKnowledgeClientError extends Error {
  * fire on machines that could never have routed anywhere, and a check that
  * cries wolf is a check somebody turns off.
  *
- * `storePathOverridden` (an explicit `--store <path>`) is an explicit local
- * choice and passes for the same reason `MODE=local` does: the operator said
+ * `storePathOverridden` (an explicit `--store <path>`) is an explicit sqlite
+ * choice and passes for the same reason `MODE=sqlite` does: the operator said
  * which store they meant.
  */
 export function assertKnowledgeModeSelected(
@@ -342,7 +283,7 @@ export function assertKnowledgeModeSelected(
 }
 
 export interface KnowledgeModeReport extends KnowledgeModeResolution {
-  /** `local` -> the on-box store; `api` -> the HTTP `/v1` transport. */
+  /** `sqlite` -> the on-box store; `api` -> the HTTP `/v1` transport. */
   store_transport: 'local' | 'api';
   /** Whether an API key is available at all. Presence only — never the value. */
   api_key_present: boolean;
@@ -361,7 +302,7 @@ export function knowledgeModeReport(env: NodeJS.ProcessEnv = process.env): Knowl
   const resolution = resolveKnowledgeModeSelection(env);
   return {
     ...resolution,
-    store_transport: resolution.mode === 'cloud' ? 'api' : 'local',
+    store_transport: resolution.mode === 'postgres' ? 'api' : 'local',
     api_key_present: presentEnvNames(env, KNOWLEDGE_API_KEY_ENV_KEYS).length > 0,
     network_guard_active: isNetworkGuardActive(env),
   };

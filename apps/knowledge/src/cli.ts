@@ -489,7 +489,7 @@ function printCommandHelp(command: string): void {
   if (command === 'inventory') { console.log('Usage: knowledge inventory [--scope local|global|project] [--limit <n>] [--include-archived] [--verbose] [--json]'); return; }
   if (command === 'project-panel') { console.log('Usage: knowledge project-panel --project <id|name|slug> [--scope project|local|global] [--limit <n>] [--include-archived] [--json|--contract]'); return; }
   if (command === 'paths') { console.log('Usage: knowledge paths [--scope local|global|project] [--verbose] [--json]'); return; }
-  if (command === 'mode') { console.log(`Usage: knowledge mode [--json]\n  Reports which backend this process would use — local (on-box store) or cloud (HTTP /v1) — and\n  which env var selected it. Reads the environment only: no store is opened, no config file is read,\n  and no request is made, so it is safe on a machine with no config and no network.\n  Selection is EXPLICIT-ONLY: set ${KNOWLEDGE_MODE_ENV_KEYS[0]}=local|cloud. Setting only\n  ${KNOWLEDGE_API_URL_ENV_KEYS[0]} / ${KNOWLEDGE_API_KEY_ENV_KEYS[0]} does NOT switch backends;\n  those are reported as present-but-ignored pointers. Env var NAMES are printed, never values.`); return; }
+  if (command === 'mode') { console.log(`Usage: knowledge mode [--json]\n  Reports which backend this process would use — sqlite (on-box store) or postgres (HTTP /v1) — and\n  which env var selected it. Reads the environment only: no store is opened, no config file is read,\n  and no request is made, so it is safe on a machine with no config and no network.\n  Selection is EXPLICIT-ONLY: set ${KNOWLEDGE_MODE_ENV_KEYS[0]}=sqlite|postgres. Setting only\n  ${KNOWLEDGE_API_URL_ENV_KEYS[0]} / ${KNOWLEDGE_API_KEY_ENV_KEYS[0]} does NOT switch backends;\n  those are reported as present-but-ignored pointers. Env var NAMES are printed, never values.`); return; }
   if (command === 'setup') { console.log('Usage: knowledge setup --mode local|hosted [--api-url https://...] [--canonical-example] [--scope local|global|project] [--json]'); return; }
   if (command === 'auth') { console.log('Usage: knowledge auth login|whoami|logout [--api-key <key>] [--email <email>] [--org <slug>] [--api-url https://...] [--scope local|global|project] [--json]'); return; }
   if (command === 'storage') { console.log('Usage: knowledge storage status|validate|repair-artifact-keys|migrate-legacy-path|merge-legacy-path [--approve-write --approved-by <name>] [--scope local|global|project] [--json]\n       knowledge storage import-legacy [--dry-run] [--scope global] [--json]'); return; }
@@ -559,10 +559,10 @@ function compactObjectFallback(data: unknown): string {
  * those variables holds an API key and another holds a URL.
  */
 function formatMode(report: KnowledgeModeReport): string {
-  const backend = report.mode === 'cloud' ? 'cloud (HTTP /v1 API)' : 'local (on-box store)';
+  const backend = report.mode === 'postgres' ? 'postgres (HTTP /v1 API)' : 'sqlite (on-box store)';
   const chose = report.source.kind === 'env'
     ? `selected by ${report.source.name}=${report.source.value}`
-    : `default (no mode var set; set ${KNOWLEDGE_MODE_ENV_KEYS[0]}=cloud to use the API)`;
+    : `default (no mode var set; set ${KNOWLEDGE_MODE_ENV_KEYS[0]}=postgres to use the API)`;
   const lines = [`Knowledge mode: ${backend}`, `  ${chose}`];
   if (report.pointer_env_present.length > 0) {
     const verb = report.pointer_ignored ? 'present but IGNORED for mode selection' : 'present';

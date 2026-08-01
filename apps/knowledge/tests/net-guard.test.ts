@@ -126,12 +126,12 @@ describe('assertOutboundRequestAllowed', () => {
 
 describe('the guard sits at the cloud transport boundary', () => {
   test('a cloud read against a non-loopback endpoint is refused, not attempted', async () => {
-    // Explicit cloud mode, so nothing about the mode fix is doing the work here:
+    // Explicit postgres backend, so nothing about the mode fix is doing the work here:
     // this is the transport refusing to emit the request. The failure must be
     // the guard, NOT an HTTP status and NOT a DNS error — either of those would
     // mean a socket was opened.
     const store = resolveKnowledgeCloudStore({
-      HASNA_KNOWLEDGE_STORAGE_MODE: 'cloud',
+      HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
       HASNA_KNOWLEDGE_API_URL: NON_LOOPBACK,
       HASNA_KNOWLEDGE_API_KEY: FAKE_KEY,
       NODE_ENV: 'test',
@@ -151,7 +151,7 @@ describe('the guard sits at the cloud transport boundary', () => {
 
   test('a cloud write against a non-loopback endpoint is refused too', async () => {
     const store = resolveKnowledgeCloudStore({
-      HASNA_KNOWLEDGE_STORAGE_MODE: 'cloud',
+      HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
       HASNA_KNOWLEDGE_API_URL: NON_LOOPBACK,
       HASNA_KNOWLEDGE_API_KEY: FAKE_KEY,
       NODE_ENV: 'test',
@@ -268,7 +268,7 @@ describe('loopback cloud traffic still works (positive control)', () => {
 
   test('the real HTTP transport reaches a 127.0.0.1 server while the guard is armed', async () => {
     const store = resolveKnowledgeCloudStore({
-      HASNA_KNOWLEDGE_STORAGE_MODE: 'cloud',
+      HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
       HASNA_KNOWLEDGE_API_URL: `http://127.0.0.1:${server.port}`,
       HASNA_KNOWLEDGE_API_KEY: FAKE_KEY,
       NODE_ENV: 'test',

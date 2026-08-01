@@ -3,11 +3,15 @@
   "name": "knowledge",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.4.1",
-  "description": "Agent-friendly knowledge store. CLI + MCP + HTTP API (knowledge-serve) + generated SDK. Local mode uses SQLite at ~/.hasna/knowledge/knowledge.db; cloud mode (HASNA_KNOWLEDGE_STORAGE_MODE=cloud) is PURE REMOTE per Amendment A1: the serve process reads/writes the shared cloud Postgres directly and stores artifacts in S3, with API-key auth via @hasna/contracts.",
-  "bins": ["knowledge", "knowledge-mcp", "knowledge-serve"],
+  "kitVersion": "0.8.5",
+  "description": "Agent-friendly knowledge store. CLI + MCP + HTTP API (knowledge-serve) + generated SDK. SQLite backend uses ~/.hasna/knowledge/knowledge.db; postgres backend (HASNA_KNOWLEDGE_STORAGE_MODE=postgres) routes clients through the HTTP API and lets knowledge-serve read/write the shared Postgres directly, with API-key auth via @hasna/contracts.",
+  "bins": [
+    "knowledge",
+    "knowledge-mcp",
+    "knowledge-serve"
+  ],
   "storage": {
-    "mode": "local",
+    "mode": "sqlite",
     "envPrefix": "HASNA_KNOWLEDGE_",
     "aliasEnvPrefix": "KNOWLEDGE_",
     "databaseUrlSecretRef": "hasna/oss/knowledge/database-url",
@@ -23,7 +27,10 @@
       "apiVersion": "v1",
       "auth": "api-key",
       "signingSecretSecretRef": "hasna/oss/knowledge/api-key-signing-secret",
-      "migrationCommand": ["bun", "scripts/apply-cloud-migrations.mjs"],
+      "migrationCommand": [
+        "bun",
+        "scripts/apply-cloud-migrations.mjs"
+      ],
       "ownerDatabaseUrlSecretRef": "hasna/oss/knowledge/database-url-owner"
     },
     "client": {

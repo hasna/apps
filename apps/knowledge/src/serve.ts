@@ -734,7 +734,7 @@ export interface ServeDeps {
 
 export function createServeHandler(deps: ServeDeps): (req: Request) => Promise<Response> {
   const repo = new NoteRepo(deps.client);
-  const mode = 'cloud';
+  const mode = 'postgres';
 
   const authOrThrow = async (
     req: Request,
@@ -938,7 +938,7 @@ export async function startKnowledgeServe(options: StartServeOptions = {}): Prom
     throw new Error('knowledge-serve requires the Bun runtime (Bun.serve unavailable).');
   }
   const server = BunGlobal.serve({ port, hostname, fetch: handler });
-  console.log(`[knowledge-serve] listening on http://${hostname}:${server.port} (mode=cloud, version=${version})`);
+  console.log(`[knowledge-serve] listening on http://${hostname}:${server.port} (mode=postgres, version=${version})`);
 
   return {
     port: server.port,
