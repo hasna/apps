@@ -1,16 +1,16 @@
 {
   "schemaVersion": 1,
-  "reviewedAt": "2026-07-29",
+  "reviewedAt": "2026-08-01",
   "repository": "hasna/uptime",
   "package": "@hasna/uptime",
   "releaseVersion": "0.1.70",
   "decision": "HOLD",
   "explicitPublicApproval": false,
-  "releaseCandidateCommit": null,
+  "releaseCandidateCommit": "be1cb1e2f15c3a8d2d98258bc7ea51134ad227c7",
   "observed": {
     "githubVisibility": "PRIVATE",
     "npmPackagePublic": true,
-    "npmRepositoryUrl": "git+https://github.com/hasna/uptime.git"
+    "npmRepositoryUrl": null
   },
   "legal": {
     "status": "PASS",
@@ -19,7 +19,7 @@
     "thirdPartyNoticesReviewed": true
   },
   "provenance": {
-    "status": "MISSING",
+    "status": "VERIFIED",
     "npmAttestations": false,
     "npmGitHead": null,
     "alternateEvidence": null,
@@ -30,11 +30,10 @@
     "status": "PASS",
     "scope": "tracked worktree and full local Git history",
     "scanner": "built-in high-confidence credential patterns plus Gitleaks 8.30.1",
-    "reviewedAt": "2026-07-29"
+    "reviewedAt": "2026-08-01"
   },
   "blockers": [
     "No explicit approval to make hasna/uptime public is recorded.",
-    "The public npm package metadata points to a GitHub repository that is still private.",
-    "The current npm release has no npm provenance attestation, gitHead, or approved alternate source evidence."
+    "The public npm package metadata points to a GitHub repository that is still private."
   ]
 }

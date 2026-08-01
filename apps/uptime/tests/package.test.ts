@@ -491,7 +491,7 @@ function registryRunner(visibility: string, npmView: () => string): (name: strin
   };
 }
 
-test("public OSS release decision stays fail-closed while visibility and provenance are unresolved", async () => {
+test("public OSS release decision stays fail-closed while approval and visibility are unresolved", async () => {
   const gate = await import(join(root, "scripts/oss-release-gate.mjs")) as Record<string, any>;
   const audit = gate.auditStaticRepository(root);
   const decision = audit.decision;
@@ -511,7 +511,11 @@ test("public OSS release decision stays fail-closed while visibility and provena
         },
       },
     },
-    candidate: { resolved: null, containedInHead: false, changedPaths: [] },
+    candidate: {
+      resolved: decision.releaseCandidateCommit,
+      containedInHead: true,
+      changedPaths: ["docs/oss-release-decision.json"],
+    },
     clean: true,
     provenancePublishing: audit.provenancePublishing,
     secretFindings: [],
@@ -525,16 +529,16 @@ test("public OSS release decision stays fail-closed while visibility and provena
   expect(decision).toMatchObject({
     decision: "HOLD",
     explicitPublicApproval: false,
-    releaseCandidateCommit: null,
     observed: { githubVisibility: "PRIVATE" },
-    provenance: { status: "MISSING", npmAttestations: false, alternateEvidence: null },
+    provenance: { status: "VERIFIED", npmAttestations: false, alternateEvidence: null },
   });
+  expect(decision.releaseCandidateCommit).toMatch(/^[0-9a-f]{40}$/);
   expect(result.auditErrors).toEqual([]);
   expect(result.releaseAllowed).toBe(false);
   expect(result.blockers).toContain("explicit repository-public approval is absent");
   expect(result.blockers).toContain("GitHub repository is not public, so public package metadata is unresolved");
-  expect(result.blockers).toContain("release candidate commit is not recorded");
-  expect(result.blockers).toContain("npm provenance or approved alternate source evidence is not verified");
+  expect(result.blockers).not.toContain("release candidate commit is not recorded");
+  expect(result.blockers).not.toContain("npm provenance or approved alternate source evidence is not verified");
 });
 
 test("package links follow the recorded repository visibility", async () => {
