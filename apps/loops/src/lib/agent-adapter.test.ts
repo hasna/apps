@@ -64,7 +64,7 @@ async function fakeRetryingCodewith(
       "  printf '%s' \"$attempt\" > \"$OPENLOOPS_FAKE_CODEWITH_ATTEMPTS\"",
       "  if [[ \"$attempt\" -lt 3 ]]; then",
       `    head -c ${failedPrefixBytes} </dev/zero | tr '\\0' 'F' >&2`,
-      "    printf '\\nattempt %s diagnostic: codewith agent start exited with code 1 %s\\n' \"$attempt\" \"${OPENLOOPS_FAKE_DIAGNOSTIC_SECRET:-}\" >&2",
+      "    printf '\\nattempt %s diagnostic: database is locked %s\\n' \"$attempt\" \"${OPENLOOPS_FAKE_DIAGNOSTIC_SECRET:-}\" >&2",
       "    exit 1",
       "  fi",
       "  printf '%s\\n' '{\"type\":\"task_complete\"}'",
@@ -233,8 +233,8 @@ describe("agent adapters", () => {
     }
   });
 
-  test("retries transient fast codewith agent start exits inside one run", async () => {
-    const binDir = mkdtempSync(join(tmpdir(), "loops-codewith-start-retry-"));
+  test("retries defence-in-depth transient fast codewith exec failures inside one run", async () => {
+    const binDir = mkdtempSync(join(tmpdir(), "loops-codewith-exec-retry-"));
     const invocationsFile = join(binDir, "invocations");
     const attemptsFile = join(binDir, "attempts");
     const fake = join(binDir, "codewith");
@@ -250,7 +250,7 @@ describe("agent adapters", () => {
         "  attempt=$((attempt + 1))",
         "  printf '%s' \"$attempt\" > \"$OPENLOOPS_FAKE_CODEWITH_ATTEMPTS\"",
         "  if [[ \"$attempt\" -lt 3 ]]; then",
-        "    echo \"attempt $attempt: codewith agent start exited with code 1\" >&2",
+        "    echo \"attempt $attempt: database is locked\" >&2",
         "    exit 1",
         "  fi",
         "  printf '%s\\n' '{\"type\":\"task_complete\"}'",
@@ -268,7 +268,7 @@ describe("agent adapters", () => {
     const store = new Store(":memory:");
     try {
       const loop = store.createLoop({
-        name: "codewith-start-retry-agent",
+        name: "codewith-exec-retry-agent",
         schedule: { type: "once", at: new Date().toISOString() },
         target: {
           type: "agent",
@@ -290,14 +290,54 @@ describe("agent adapters", () => {
       });
       expect(result.status).toBe("succeeded");
       expect(result.stdout).toContain("task_complete");
-      expect(result.stderr).toContain("retrying codewith agent after transient fast start failure (1/3)");
-      expect(result.stderr).toContain("retrying codewith agent after transient fast start failure (2/3)");
-      expect(result.stderr).toContain("attempt 1: codewith agent start exited with code 1");
-      expect(result.stderr).toContain("attempt 2: codewith agent start exited with code 1");
+      expect(result.stderr).toContain("retrying codewith agent after transient fast exec failure (1/3)");
+      expect(result.stderr).toContain("retrying codewith agent after transient fast exec failure (2/3)");
+      expect(result.stderr).toContain("attempt 1: database is locked");
+      expect(result.stderr).toContain("attempt 2: database is locked");
       const execInvocations = codewithInvocations(invocationsFile).filter((args) => args.includes("exec"));
       expect(execInvocations).toHaveLength(3);
     } finally {
       store.close();
+    }
+  });
+
+  test("does not retry removed codewith agent start wrapper failures", async () => {
+    for (const [suffix, removedWrapper] of [
+      ["prefixed", "codewith agent start exited with code 1"],
+      ["unprefixed", "agent start exited with code 1"],
+    ] as const) {
+      const binDir = mkdtempSync(join(tmpdir(), `loops-codewith-removed-start-wrapper-${suffix}-`));
+      const invocationsFile = join(binDir, "invocations");
+      await fakeCodewith(binDir, invocationsFile, {
+        execExitCode: 1,
+        execStdout: removedWrapper,
+      });
+
+      const store = new Store(":memory:");
+      try {
+        const loop = store.createLoop({
+          name: `codewith-removed-start-wrapper-${suffix}`,
+          schedule: { type: "once", at: new Date().toISOString() },
+          target: {
+            type: "agent",
+            provider: "codewith",
+            prompt: "say ok",
+            cwd: ".",
+            configIsolation: "safe",
+          },
+        });
+        const claim = store.claimRun(loop, new Date().toISOString(), "test");
+        expect(claim).toBeDefined();
+        const result = await executeLoop(loop, claim!.run, {
+          env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, OPENLOOPS_FAKE_CODEWITH_INVOCATIONS: invocationsFile },
+        });
+        expect(result.status).toBe("failed");
+        expect(result.error).toContain("process exited with code 1");
+        const execInvocations = codewithInvocations(invocationsFile).filter((args) => args.includes("exec"));
+        expect(execInvocations).toHaveLength(1);
+      } finally {
+        store.close();
+      }
     }
   });
 
@@ -328,10 +368,10 @@ describe("agent adapters", () => {
     );
 
     expect(result.status).toBe("succeeded");
-    expect(result.stderr).toContain("retrying codewith agent after transient fast start failure (1/3)");
-    expect(result.stderr).toContain("retrying codewith agent after transient fast start failure (2/3)");
-    expect(result.stderr).toContain("attempt 1 diagnostic: codewith agent start exited with code 1");
-    expect(result.stderr).toContain("attempt 2 diagnostic: codewith agent start exited with code 1");
+    expect(result.stderr).toContain("retrying codewith agent after transient fast exec failure (1/3)");
+    expect(result.stderr).toContain("retrying codewith agent after transient fast exec failure (2/3)");
+    expect(result.stderr).toContain("attempt 1 diagnostic: database is locked");
+    expect(result.stderr).toContain("attempt 2 diagnostic: database is locked");
     expect(result.stderr).toContain("[SCRUBBED]");
     expect(result.stderr).not.toContain(secret);
     expect(Buffer.byteLength(result.stderr, "utf8")).toBeLessThanOrEqual(256 * 1024);
@@ -358,10 +398,10 @@ describe("agent adapters", () => {
     );
 
     expect(result.status).toBe("succeeded");
-    expect(result.stderr).toContain("retrying codewith agent after transient fast start failure (1/3)");
-    expect(result.stderr).toContain("retrying codewith agent after transient fast start failure (2/3)");
-    expect(result.stderr).toContain("attempt 1 diagnostic: codewith agent start exited with code 1");
-    expect(result.stderr).toContain("attempt 2 diagnostic: codewith agent start exited with code 1");
+    expect(result.stderr).toContain("retrying codewith agent after transient fast exec failure (1/3)");
+    expect(result.stderr).toContain("retrying codewith agent after transient fast exec failure (2/3)");
+    expect(result.stderr).toContain("attempt 1 diagnostic: database is locked");
+    expect(result.stderr).toContain("attempt 2 diagnostic: database is locked");
     expect(Buffer.byteLength(result.stderr, "utf8")).toBeLessThanOrEqual(256 * 1024);
   });
 
@@ -392,8 +432,8 @@ describe("agent adapters", () => {
       },
     );
     expect(result.status).toBe("succeeded");
-    expect(result.stderr).toContain("attempt 1 diagnostic: codewith agent start exited with code 1");
-    expect(result.stderr).toContain("attempt 2 diagnostic: codewith agent start exited with code 1");
+    expect(result.stderr).toContain("attempt 1 diagnostic: database is locked");
+    expect(result.stderr).toContain("attempt 2 diagnostic: database is locked");
 
     const store = new Store(":memory:");
     try {
@@ -417,10 +457,10 @@ describe("agent adapters", () => {
         { claimedBy: "test", claimToken: claim!.claimToken },
       );
 
-      expect(stored.stderr).toContain("retrying codewith agent after transient fast start failure (1/3)");
-      expect(stored.stderr).toContain("retrying codewith agent after transient fast start failure (2/3)");
-      expect(stored.stderr).toContain("attempt 1 diagnostic: codewith agent start exited with code 1");
-      expect(stored.stderr).toContain("attempt 2 diagnostic: codewith agent start exited with code 1");
+      expect(stored.stderr).toContain("retrying codewith agent after transient fast exec failure (1/3)");
+      expect(stored.stderr).toContain("retrying codewith agent after transient fast exec failure (2/3)");
+      expect(stored.stderr).toContain("attempt 1 diagnostic: database is locked");
+      expect(stored.stderr).toContain("attempt 2 diagnostic: database is locked");
       expect(stored.stderr).toContain("truncated by loops run-output retention");
       expect(stored.stderr!.length).toBeLessThanOrEqual(64 * 1024 + 128);
     } finally {
@@ -445,7 +485,7 @@ describe("agent adapters", () => {
         "  attempt=$((attempt + 1))",
         "  printf '%s' \"$attempt\" > \"$OPENLOOPS_FAKE_CODEWITH_ATTEMPTS\"",
         "  if [[ \"$attempt\" -eq 1 ]]; then",
-        "    echo 'codewith agent start exited with code 1' >&2",
+        "    echo 'database is locked' >&2",
         "    exit 1",
         "  fi",
         "  exit 0",
@@ -482,8 +522,8 @@ describe("agent adapters", () => {
       });
       expect(result.status).toBe("failed");
       expect(result.error).toContain("agent exited 0 with no output");
-      expect(result.stderr).toContain("retrying codewith agent after transient fast start failure (1/3)");
-      expect(result.stderr).toContain("codewith agent start exited with code 1");
+      expect(result.stderr).toContain("retrying codewith agent after transient fast exec failure (1/3)");
+      expect(result.stderr).toContain("database is locked");
       const execInvocations = codewithInvocations(invocationsFile).filter((args) => args.includes("exec"));
       expect(execInvocations).toHaveLength(2);
     } finally {

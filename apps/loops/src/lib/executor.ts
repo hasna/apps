@@ -40,8 +40,8 @@ const DEFAULT_AGENT_IDLE_TIMEOUT_MS = 30 * 60_000;
 const BUFFERED_OUTPUT_PROVIDERS: ReadonlySet<AgentProvider> = new Set(["claude", "codewith", "opencode", "aicopilot"]);
 const DEFAULT_BUFFERED_AGENT_IDLE_TIMEOUT_MS = 4 * 60 * 60_000;
 const WORKTREE_GIT_TIMEOUT_MS = 5 * 60_000;
-const CODEWITH_START_FAST_FAILURE_MAX_MS = 2_000;
-const CODEWITH_START_RETRY_DELAYS_MS = [250, 750] as const;
+const CODEWITH_EXEC_FAST_FAILURE_MAX_MS = 2_000;
+const CODEWITH_EXEC_RETRY_DELAYS_MS = [250, 750] as const;
 const CODEWITH_RETRY_DIAGNOSTIC_MAX_BYTES = 2 * 1024;
 
 export interface SpawnedProcessInfo {
@@ -322,15 +322,22 @@ function codewithJsonlReconciledSuccess(spec: CommandSpec, fields: ResultFields)
   return spec.agentProvider === "codewith" && codewithJsonlHasTerminalSuccess(fields.stdout ?? "");
 }
 
-function codewithStartFailureLooksTransient(detail: string): boolean {
+/**
+ * Defence-in-depth for the current `codewith exec` path.
+ *
+ * Issue #144 verified that supported fast local `exec` failures and the
+ * installed Codewith binary no longer emit the removed `agent start` wrapper
+ * signatures. Keep only generic resource-contention signals that the current
+ * binary still carries; the existing exit-code, duration, success-event, and
+ * attempt caps continue to fail closed around this guard.
+ */
+function codewithExecFailureLooksTransient(detail: string): boolean {
   const normalized = detail.trim();
   if (!normalized) return false;
-  return /(?:codewith\s+agent\s+start\s+exited\s+with\s+code\s+1|agent\s+start\s+exited\s+with\s+code\s+1|SQLITE_BUSY|database is locked|Resource temporarily unavailable)/i.test(
-    normalized,
-  );
+  return /(?:SQLITE_BUSY|database is locked|Resource temporarily unavailable)/i.test(normalized);
 }
 
-function shouldRetryCodewithStartFailure(
+function shouldRetryCodewithExecFailure(
   spec: CommandSpec,
   fields: ResultFields,
   error: string | undefined,
@@ -338,13 +345,13 @@ function shouldRetryCodewithStartFailure(
   attemptFinishedAt: string,
   attemptIndex: number,
 ): boolean {
-  if (attemptIndex >= CODEWITH_START_RETRY_DELAYS_MS.length) return false;
+  if (attemptIndex >= CODEWITH_EXEC_RETRY_DELAYS_MS.length) return false;
   if (spec.agentProvider !== "codewith") return false;
   if (error || fields.exitCode !== 1) return false;
   if (codewithJsonlHasTerminalSuccess(fields.stdout ?? "")) return false;
   const durationMs = new Date(attemptFinishedAt).getTime() - new Date(attemptStartedAt).getTime();
-  if (!Number.isFinite(durationMs) || durationMs > CODEWITH_START_FAST_FAILURE_MAX_MS) return false;
-  return codewithStartFailureLooksTransient(`${fields.stderr ?? ""}\n${fields.stdout ?? ""}`);
+  if (!Number.isFinite(durationMs) || durationMs > CODEWITH_EXEC_FAST_FAILURE_MAX_MS) return false;
+  return codewithExecFailureLooksTransient(`${fields.stderr ?? ""}\n${fields.stdout ?? ""}`);
 }
 
 function utf8Tail(value: string, maxBytes: number): string {
@@ -366,7 +373,7 @@ function utf8Tail(value: string, maxBytes: number): string {
 }
 
 function codewithRetryMessage(attemptIndex: number): string {
-  return `retrying codewith agent after transient fast start failure (${attemptIndex + 1}/${CODEWITH_START_RETRY_DELAYS_MS.length + 1})`;
+  return `retrying codewith agent after transient fast exec failure (${attemptIndex + 1}/${CODEWITH_EXEC_RETRY_DELAYS_MS.length + 1})`;
 }
 
 function codewithRetrySummary(attemptFields: ResultFields, attemptIndex: number): string {
@@ -1400,12 +1407,12 @@ async function executeRemoteSpec(
       return successResult(startedAt, fields);
     }
     if (error || exitCode !== 0) {
-      if (shouldRetryCodewithStartFailure(spec, attemptFields, error, attemptStartedAt, attemptFinishedAt, attemptIndex)) {
+      if (shouldRetryCodewithExecFailure(spec, attemptFields, error, attemptStartedAt, attemptFinishedAt, attemptIndex)) {
         const retrySummary = codewithRetrySummary(attemptFields, attemptIndex);
         opts.log?.(codewithRetryMessage(attemptIndex));
         retrySummaries.push(retrySummary);
         fields.stderr = stderrWithRetrySummaries(stderr, retrySummaries, maxOutputBytes);
-        if (await waitForRetryDelay(CODEWITH_START_RETRY_DELAYS_MS[attemptIndex]!, opts.signal)) continue;
+        if (await waitForRetryDelay(CODEWITH_EXEC_RETRY_DELAYS_MS[attemptIndex]!, opts.signal)) continue;
         return failureResult(startedAt, "cancelled", fields);
       }
       return failureResult(startedAt, error ?? `remote process on ${machine.id} exited with code ${exitCode ?? "unknown"}`, fields);
@@ -1593,12 +1600,12 @@ export async function executeTarget(
       return successResult(startedAt, fields);
     }
     if (error || exitCode !== 0) {
-      if (shouldRetryCodewithStartFailure(spec, attemptFields, error, attemptStartedAt, attemptFinishedAt, attemptIndex)) {
+      if (shouldRetryCodewithExecFailure(spec, attemptFields, error, attemptStartedAt, attemptFinishedAt, attemptIndex)) {
         const retrySummary = codewithRetrySummary(attemptFields, attemptIndex);
         opts.log?.(codewithRetryMessage(attemptIndex));
         retrySummaries.push(retrySummary);
         fields.stderr = stderrWithRetrySummaries(stderr, retrySummaries, maxOutputBytes);
-        if (await waitForRetryDelay(CODEWITH_START_RETRY_DELAYS_MS[attemptIndex]!, opts.signal)) continue;
+        if (await waitForRetryDelay(CODEWITH_EXEC_RETRY_DELAYS_MS[attemptIndex]!, opts.signal)) continue;
         return failureResult(startedAt, "cancelled", fields);
       }
       return failureResult(startedAt, error ?? `process exited with code ${exitCode ?? "unknown"}`, fields);
