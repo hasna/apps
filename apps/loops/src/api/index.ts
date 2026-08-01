@@ -1329,7 +1329,9 @@ async function claimRuns(
   // ineligible machine cannot remain `running` forever. Keep this pass bounded
   // to the storage recovery batch and advance only rows recovered by this poll
   // (the operator maintenance route owns historical replay).
-  const recovered = await storage.recoverExpiredRunLeasesDetailed(opts.now);
+  const recovered = await storage.recoverExpiredRunLeasesDetailed(opts.now, {
+    excludeClaimedBy: runner.id,
+  });
   const advancementDeferred = await advanceRecoveredRuns(storage, recovered.abandoned, {
     random: opts.random,
     circuitBreakerThreshold: opts.circuitBreakerThreshold,

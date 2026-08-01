@@ -1596,8 +1596,9 @@ export class PostgresLoopStorage implements LoopStorageContract {
       `SELECT * FROM loop_runs
        WHERE tenant_id = open_loops_current_tenant_id() AND status='running' AND lease_expires_at <= $1
          AND ($2::text IS NULL OR id = $2)
-       ORDER BY lease_expires_at ASC LIMIT $3`,
-      [finished, opts.runId ?? null, scanLimit],
+         AND ($3::text IS NULL OR claimed_by IS DISTINCT FROM $3)
+       ORDER BY lease_expires_at ASC LIMIT $4`,
+      [finished, opts.runId ?? null, opts.excludeClaimedBy ?? null, scanLimit],
     );
     const recovered: LoopRun[] = [];
     for (const row of rows) {
