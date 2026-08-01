@@ -464,6 +464,14 @@ describe.serial("drainTodosTaskRoutes freshness close", () => {
     const first = drainTodosTaskRoutes({ ...BASE_OPTS, todosProject });
     expect(first.value.created).toBe(1);
     expect(first.value.deadLettered).toBe(0);
+    const firstRoute = (first.value.results as Array<Record<string, unknown>>)[0]!;
+    expect(firstRoute.idempotencyKey).toBe(`todos-task:${taskId}`);
+    expect(firstRoute.sourceTaskResolution).toMatchObject({
+      checked: false,
+      resolved: true,
+      taskId,
+      todosProjectPath: todosProject,
+    });
 
     // Simulate 8 prior runs that finished terminal without closing the task,
     // backdated past the backoff window — the redispatch cap is now reached.

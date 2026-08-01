@@ -689,7 +689,10 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
         ...opts,
         ...(explicitRouteProjectPath ? { projectPath: explicitRouteProjectPath } : {}),
         ...(sourceProject ? { sourceTodosProjectPath: sourceProject } : {}),
-        sourceTaskResolved: true,
+        // `todos ready` is the authoritative source read for this path. Carry
+        // its returned id as identity, rather than a boolean that lets any raw
+        // event id masquerade as canonical (#151).
+        sourceTaskResolvedId: taskField(task, ["id", "task_id", "taskId"]),
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

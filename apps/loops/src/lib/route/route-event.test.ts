@@ -263,13 +263,89 @@ describe("routeTodosTaskEvent dedupe re-admission", () => {
     const shortId = TASK_ID.slice(0, 8);
     const fakeTodos = withFakeTodosInspect(env.dataDir, { id: TASK_ID, status: "pending", title: "canonicalized" });
     try {
-      const result = routeTodosTaskEvent(pendingTaskEvent({ id: shortId }), { ...ROUTE_OPTS, todosProject: "/tmp/source-todos" });
+      const result = routeTodosTaskEvent(pendingTaskEvent({ id: shortId }), {
+        ...ROUTE_OPTS,
+        sourceTodosProjectPath: "/tmp/source-todos",
+      });
       expect(result.value.sourceUnavailable).toBeUndefined();
-      expect(result.value.sourceTaskResolution).toMatchObject({ checked: true, resolved: true, status: "pending" });
+      expect(result.value.sourceTaskResolution).toMatchObject({
+        checked: true,
+        resolved: true,
+        taskId: TASK_ID,
+        status: "pending",
+      });
       expect(result.kind).toBe("created");
+      expect(result.value.idempotencyKey).toBe(`todos-task:/tmp/source-todos:${TASK_ID}`);
+      expect((result.value.workItem as { subjectRef?: string }).subjectRef).toBe(TASK_ID);
+      expect((result.value.invocation as { subjectRef?: { id?: string } }).subjectRef?.id).toBe(TASK_ID);
+      expect((result.value.loop as { description?: string }).description).toContain(`task ${TASK_ID}`);
     } finally {
       fakeTodos.restore();
     }
+  });
+
+  test("short then full and case-variant events for one source task create one loop", () => {
+    const shortId = TASK_ID.slice(0, 8);
+    const fakeTodos = withFakeTodosInspect(env.dataDir, { id: TASK_ID, status: "pending", title: "canonicalized" });
+    const opts = { ...ROUTE_OPTS, sourceTodosProjectPath: "/tmp/source-todos" };
+    try {
+      const first = routeTodosTaskEvent(pendingTaskEvent({ id: shortId, title: undefined }), opts);
+      const second = routeTodosTaskEvent(pendingTaskEvent({ id: TASK_ID.toUpperCase(), title: undefined }), opts);
+
+      expect(first.kind).toBe("created");
+      expect(second.kind).toBe("deduped");
+      expect(first.value.idempotencyKey).toBe(`todos-task:/tmp/source-todos:${TASK_ID}`);
+      expect(second.value.idempotencyKey).toBe(first.value.idempotencyKey);
+      expect(loopCount()).toBe(1);
+
+      const firstWorkflow = first.value.workflow as { name?: string; description?: string; steps?: unknown[] };
+      const firstLoop = first.value.loop as { name?: string; description?: string };
+      expect(firstWorkflow.name).toStartWith(`event:todos-task:${TASK_ID.slice(0, 8)}:`);
+      expect(firstLoop.name).toStartWith(`event:todos-task:${TASK_ID.slice(0, 8)}:`);
+      expect(firstWorkflow.description).toContain(`workflow for ${TASK_ID}`);
+      expect(firstWorkflow.description).toContain(`idempotency=todos-task:/tmp/source-todos:${TASK_ID}`);
+      expect(firstLoop.description).toContain(`task ${TASK_ID}`);
+      expect(JSON.stringify(firstWorkflow.steps)).toContain(TASK_ID);
+    } finally {
+      fakeTodos.restore();
+    }
+  });
+
+  test("canonical routes dedupe a legacy work item stored under the raw short id", () => {
+    const shortId = TASK_ID.slice(0, 8);
+    const opts = { ...ROUTE_OPTS, sourceTodosProjectPath: "/tmp/source-todos" };
+    const legacy = routeTodosTaskEvent(pendingTaskEvent({ id: shortId }), {
+      ...opts,
+      sourceTaskResolvedId: shortId,
+    });
+    expect(legacy.kind).toBe("created");
+    expect(legacy.value.idempotencyKey).toBe(`todos-task:/tmp/source-todos:${shortId}`);
+
+    const fakeTodos = withFakeTodosInspect(env.dataDir, { id: TASK_ID, status: "pending" });
+    try {
+      const canonical = routeTodosTaskEvent(pendingTaskEvent({ id: shortId }), opts);
+      expect(canonical.kind).toBe("deduped");
+      expect(canonical.value.idempotencyKey).toBe(`todos-task:/tmp/source-todos:${TASK_ID}`);
+      expect(loopCount()).toBe(1);
+    } finally {
+      fakeTodos.restore();
+    }
+  });
+
+  test("the drain bypass carries an explicit authoritative task id", () => {
+    const shortId = TASK_ID.slice(0, 8);
+    const result = routeTodosTaskEvent(pendingTaskEvent({ id: shortId, title: undefined }), {
+      ...ROUTE_OPTS,
+      sourceTodosProjectPath: "/tmp/source-todos",
+      sourceTaskResolvedId: TASK_ID,
+      dryRun: true,
+    });
+
+    expect(result.kind).toBe("created");
+    expect(result.value.sourceTaskResolution).toMatchObject({ checked: false, resolved: true, taskId: TASK_ID });
+    expect(result.value.idempotencyKey).toBe(`todos-task:/tmp/source-todos:${TASK_ID}`);
+    expect((result.value.workItem as { subjectRef?: string }).subjectRef).toBe(TASK_ID);
+    expect((result.value.invocation as { subjectRef?: { id?: string } }).subjectRef?.id).toBe(TASK_ID);
   });
 
   test("an uppercase task id that todos canonicalizes still routes", () => {
@@ -509,7 +585,7 @@ describe("routeTodosTaskEvent PR fingerprint dedupe", () => {
     const first = routeTodosTaskEvent(prTaskEvent("task-checkout-a"), {
       ...ROUTE_OPTS,
       sourceTodosProjectPath: "/repos/example-checkout-a",
-      sourceTaskResolved: true,
+      sourceTaskResolvedId: "task-checkout-a",
     });
     expect(first.kind).toBe("created");
     expect(first.value.idempotencyKey).toBe("todos-task:pr:hasna/example#7");
@@ -517,7 +593,7 @@ describe("routeTodosTaskEvent PR fingerprint dedupe", () => {
     const second = routeTodosTaskEvent(prTaskEvent("task-checkout-b"), {
       ...ROUTE_OPTS,
       sourceTodosProjectPath: "/repos/example-checkout-b",
-      sourceTaskResolved: true,
+      sourceTaskResolvedId: "task-checkout-b",
     });
     // Regression: the old (source-path, task-id) key kept these distinct and
     // spawned a full worker per checkout; the fingerprint collapses them to one.
@@ -542,15 +618,15 @@ describe("routeTodosTaskEvent PR fingerprint dedupe", () => {
           project_path: process.cwd(),
         },
       } as never,
-      { ...ROUTE_OPTS, sourceTodosProjectPath: "/repos/a", sourceTaskResolved: true },
+      { ...ROUTE_OPTS, sourceTodosProjectPath: "/repos/a", sourceTaskResolvedId: "task-mixed-case" },
     );
     expect(first.kind).toBe("created");
     expect(first.value.idempotencyKey).toBe("todos-task:pr:hasna/example#7");
   });
 
   test("non-PR tasks from different checkouts keep independent keys (no false dedupe)", () => {
-    const first = routeTodosTaskEvent(plainTaskEvent("task-x"), { ...ROUTE_OPTS, sourceTodosProjectPath: "/repos/a", sourceTaskResolved: true });
-    const second = routeTodosTaskEvent(plainTaskEvent("task-y"), { ...ROUTE_OPTS, sourceTodosProjectPath: "/repos/b", sourceTaskResolved: true });
+    const first = routeTodosTaskEvent(plainTaskEvent("task-x"), { ...ROUTE_OPTS, sourceTodosProjectPath: "/repos/a", sourceTaskResolvedId: "task-x" });
+    const second = routeTodosTaskEvent(plainTaskEvent("task-y"), { ...ROUTE_OPTS, sourceTodosProjectPath: "/repos/b", sourceTaskResolvedId: "task-y" });
     expect(first.kind).toBe("created");
     // Two genuinely different tasks with no PR reference must NOT collapse.
     expect(second.kind).toBe("created");
