@@ -223,10 +223,12 @@ export function alignGroupedSessionWorkingDirectories(session: string, cwd: stri
     return [];
   }
   const current = locations.find((location) => location.name === session);
-  if (!current || !current.group) return [];
+  const group = current?.group
+    || (locations.some((location) => location.group === session) ? session : "");
+  if (!group) return [];
   const aligned: string[] = [];
   for (const location of locations) {
-    if (location.group !== current.group) continue;
+    if (location.group !== group) continue;
     if (location.path === cwd) continue;
     setSessionWorkingDirectory(location.name, cwd);
     aligned.push(location.name);
