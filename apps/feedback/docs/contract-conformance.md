@@ -74,3 +74,36 @@ Because `repo-conformance` returns early when the manifest is invalid, that gate
 is not visible in the report today. It was verified by running the check against
 a copy of this repo carrying a hypothetical `storage` block; the gate passed, and
 the same probe is what caught the declared script name being wrong.
+
+That probe is no longer a one-off — see below.
+
+## The measured gap, and the check that holds it
+
+`bun run contract-check` reports exactly one failure, because `repo-conformance`
+stops at `manifest_valid`. **Fixing the manifest does not leave the repo one step
+from conformant.** Running the check against a copy carrying the minimal
+schema-valid `storage` block shows what the early return hides:
+
+| check | status |
+| --- | --- |
+| `manifest_valid` | fails today; passes under the probe |
+| `surface_matrix` | fail — `missing supported surface declarations or eligible waivers: api` |
+| `service_api_topology` | fail — `a supported API surface is required` |
+| `surface_bindings` | fail — `generatedFrom is required for a supported service SDK` |
+| `self_host_artifact` | fail — no `Dockerfile` / `compose.yml` |
+| `storage_capabilities` | fail — `missing storage engines: sqlite, postgres`, plus `envPrefix` and `pgTestGate` |
+
+Everything else passes, including `published_artifact_gate`,
+`credential_seam_compliance`, `public_manifest_safety` and `hosting_story`.
+
+Note what ties four of those five together: **they are consequences of shipping
+`feedback-serve`.** The PostgreSQL waiver is refused for a service-capable repo,
+and the API topology, SDK binding and self-host artifact are all required because
+a serve bin is present. They are one decision's worth of work, not five
+independent ones, which is why the list above is not a checklist to nibble at.
+
+`bun run contract-gap` pins that set and runs in CI. It fails when a new
+violation appears **and** when an existing one is fixed without the baseline
+being lowered, so neither drift nor silent progress goes unrecorded. It probes
+behind the early return deliberately: a ratchet reading only the reported output
+would baseline one failure and pass forever while the other five sat unseen.

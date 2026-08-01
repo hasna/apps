@@ -1,0 +1,14 @@
+{
+  "note": "Measured failing checks from `contracts repo-conformance`. This file is a ratchet, not an excuse: `bun run contract-gap` fails when the real failure set differs from this one in EITHER direction, so a new violation is caught and a fixed violation forces the baseline down. Regenerate with `bun run contract-gap --update` and land the change with the fix that earned it.",
+  "contractsVersion": "0.8.5",
+  "reported": [
+    "manifest_valid"
+  ],
+  "behindManifestGate": [
+    "self_host_artifact",
+    "service_api_topology",
+    "storage_capabilities",
+    "surface_bindings",
+    "surface_matrix"
+  ]
+}
