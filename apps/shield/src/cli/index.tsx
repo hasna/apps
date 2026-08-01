@@ -14,6 +14,8 @@ import { registerAlertsCommand } from "./commands/alerts.js";
 import { registerSecretsCommand } from "./commands/secrets.js";
 import { registerFleetPackageCommand } from "./commands/fleet-package.js";
 import { registerOssSecretPolicyCommand } from "./commands/oss-secret-policy.js";
+import { registerExposureReportCommand } from "./commands/exposure-report.js";
+import { registerSupplyChainReportCommand } from "./commands/supply-chain-report.js";
 
 const program = new Command();
 
@@ -34,6 +36,8 @@ registerAlertsCommand(program);
 registerSecretsCommand(program);
 registerFleetPackageCommand(program);
 registerOssSecretPolicyCommand(program);
+registerExposureReportCommand(program);
+registerSupplyChainReportCommand(program);
 registerEventsCommands(program, { source: "shield" });
 
 program.parse();
