@@ -280,6 +280,7 @@ describe("remote CLI entrypoint authority boundary", () => {
       ["--agent=fixture-agent", "comment", TASK_FIXTURE_ID, "note"],
       ["history", TASK_FIXTURE_ID],
       ["approve", TASK_FIXTURE_ID],
+      ["complete", TASK_FIXTURE_ID],
       ["bulk", "done", TASK_FIXTURE_ID],
       // Bulk plan reassignment is serviced remotely (shared plan lookup + PATCH
       // per task), so it must not fail closed under remote authority.
@@ -773,7 +774,7 @@ describe("remote CLI entrypoint authority boundary", () => {
     }
   }, 45_000);
 
-  test("built remote done persists every evidence field and rejects invalid confidence before requests", async () => {
+  test("built remote done and complete alias persist completion through /v1", async () => {
     const TASK_ID = "33333333-3333-4333-8333-333333333333";
     const requests: Array<{ method: string; path: string; body: Record<string, unknown> }> = [];
     let advertiseEvidence = false;
@@ -881,10 +882,17 @@ describe("remote CLI entrypoint authority boundary", () => {
           confidence: 0.85,
         },
       });
+      const complete = await runCli(executable, ["--json", "complete", TASK_ID], env, cwd);
+      expect({ exitCode: complete.exitCode, stderr: complete.stderr }).toEqual({ exitCode: 0, stderr: "" });
+      expect(requests[2]).toEqual({
+        method: "POST",
+        path: `/v1/tasks/${TASK_ID}/complete`,
+        body: {},
+      });
       const invalid = await runCli(executable, ["--json", "done", TASK_ID, "--confidence", "1.5"], env, cwd);
       expect(invalid.exitCode).toBe(1);
       expect(invalid.stderr).toContain("--confidence must be a number between 0.0 and 1.0");
-      expect(requests).toHaveLength(2);
+      expect(requests).toHaveLength(3);
       expect(recursiveInventory(cwd)).toEqual(before);
       expectNoLocalDatabase(home, localDbPath);
     } finally {
