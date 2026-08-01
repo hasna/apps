@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { mintApiKey, verifyApiKey } from "@hasna/contracts/auth";
 import { createHandler } from "../src/server/serve.js";
-import { VaultDecryptionError } from "../src/server/cloud-crypto.js";
+import {
+  VaultDecryptionError,
+  decryptValue,
+  encryptValue,
+  _resetCloudMasterKey,
+} from "../src/server/cloud-crypto.js";
 import type { CloudSecretsStore } from "../src/server/cloud-store.js";
 
 const SIGNING = "test-signing-secret-please-rotate";
@@ -133,5 +138,39 @@ describe("secrets serve", () => {
     expect(body.code).toBe("VAULT_DECRYPTION_FAILED");
     expect(body.recovery).toContain("HASNA_SECRETS_MASTER_KEY");
     expect(body.error).not.toContain("authenticate data");
+  });
+
+  // The counterpart to the test above, and the reason the key lookup sits
+  // outside decryptValue's try. A deployment whose HASNA_SECRETS_MASTER_KEY is
+  // simply absent holds INTACT data; answering that with the 422 above hands the
+  // operator recovery text advising them to delete it. It must stay a server
+  // fault: 5xx, so it also pages someone instead of reading as a data problem.
+  test("a missing master key surfaces as a server fault, never the destructive 422", async () => {
+    // Encrypt under a real key, then read it back with the key gone — exactly
+    // what a service that lost its master key does. Synthetic canary only.
+    _resetCloudMasterKey();
+    const keyedEnv = {
+      HASNA_SECRETS_MASTER_KEY: Buffer.alloc(32, 5).toString("base64"),
+    } as NodeJS.ProcessEnv;
+    const stored = encryptValue("canary-not-a-real-credential", keyedEnv);
+    _resetCloudMasterKey();
+
+    const store = {
+      ...fakeStore(),
+      async getSecret(key: string) {
+        return { key, value: decryptValue(stored, {} as NodeJS.ProcessEnv), type: "api_key" };
+      },
+    } as unknown as CloudSecretsStore;
+
+    const res = await handler(store)(new Request("http://x/v1/secrets/get?key=openai/api_key", {
+      headers: { "x-api-key": keyWith(["secrets:read"]) },
+    }));
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body.code).not.toBe("VAULT_DECRYPTION_FAILED");
+    expect(body.error).toContain("HASNA_SECRETS_MASTER_KEY");
+    // No path may advise destroying an entry that is merely unreadable today.
+    expect(JSON.stringify(body)).not.toMatch(/delete|recreate|overwrite/i);
   });
 });

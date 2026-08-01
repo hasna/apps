@@ -94,6 +94,22 @@ export function encryptValue(plaintext: string, env: NodeJS.ProcessEnv = process
 
 export function decryptValue(stored: string, env: NodeJS.ProcessEnv = process.env): string {
   if (!isEncrypted(stored)) return stored; // legacy/plaintext passthrough
+
+  // Resolved OUTSIDE the try below, and it must stay there.
+  //
+  // getCloudMasterKey is the fail-closed accessor: it throws when NO master key
+  // is configured at all. That is a service misconfiguration — the stored data
+  // is intact and fully recoverable the moment the key comes back. Inside the
+  // try it is caught indiscriminately and rethrown as VaultDecryptionError,
+  // whose recovery text tells the operator to "overwrite/delete and recreate the
+  // affected entry". Following that advice destroys recoverable secrets.
+  //
+  // The two conditions must stay distinguishable AT THE THROW SITE, not in the
+  // wording: a message-only fix regresses the moment either string is edited.
+  // Regression cover: tests/cloud-crypto.test.ts, "a missing master key is NOT
+  // reported as a decryption failure".
+  const key = getCloudMasterKey(env);
+
   try {
     const rest = stored.slice(PREFIX.length);
     const sep = rest.indexOf(":");
@@ -102,7 +118,6 @@ export function decryptValue(stored: string, env: NodeJS.ProcessEnv = process.en
     const payload = Buffer.from(rest.slice(sep + 1), "hex");
     const tag = payload.subarray(payload.length - 16);
     const ciphertext = payload.subarray(0, payload.length - 16);
-    const key = getCloudMasterKey(env);
     const decipher = createDecipheriv(ALGO, key, iv);
     decipher.setAuthTag(tag);
     return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
