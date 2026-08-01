@@ -65,7 +65,7 @@ export function AgentsPage() {
         <h2 className="text-lg font-semibold mb-4">Agents</h2>
         <div className="rounded-xl border p-8 text-center text-muted-foreground">
           No agents registered yet. Agents appear here after sending a heartbeat via{" "}
-          <code className="text-xs bg-muted px-1.5 py-0.5 rounded">conversations heartbeat</code>
+          <code className="text-xs bg-muted px-1.5 py-0.5 rounded">conversations agents heartbeat</code>
         </div>
       </div>
     );

@@ -171,4 +171,31 @@ function reportCliError(err: unknown): never {
 
 process.on("unhandledRejection", reportCliError);
 
+/**
+ * Reject an unregistered command before Commander can route it to the root
+ * action.
+ *
+ * The root action is the no-argument interactive TUI. Commander otherwise
+ * treats a positional token such as `heartbeat` as an excess argument to that
+ * action, and its help option is processed before the action runs. The result
+ * is either an unrelated TUI error or successful top-level help for a command
+ * that does not exist. Derive the accepted names from the registered command
+ * tree so new commands and aliases do not need a parallel allowlist.
+ */
+function rejectUnknownTopLevelCommand(command: Command, argv: string[]): void {
+  const candidate = argv[0];
+  if (!candidate || candidate.startsWith("-") || candidate === "help") return;
+
+  const registered = command.commands.some((subcommand) =>
+    subcommand.name() === candidate || subcommand.aliases().includes(candidate)
+  );
+  if (!registered) {
+    command.error(`error: unknown command '${candidate}'`, {
+      code: "commander.unknownCommand",
+      exitCode: 1,
+    });
+  }
+}
+
+rejectUnknownTopLevelCommand(program, process.argv.slice(2));
 program.parseAsync().catch(reportCliError);
