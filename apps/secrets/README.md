@@ -303,6 +303,32 @@ Implementation plan:
    migration of existing rows, and the absence of sentinel secret material from
    every JSON and text output.
 
+### Redaction Before Persistence
+
+OpenLoops, OpenEvents, and OpenAutomations should create one redactor with all
+secret values resolved for a run, then invoke the matching hook immediately
+before every durable write or event publish. The hooks copy their input and
+deep-redact registered values, sensitive fields, credential-shaped text, error
+messages/stacks, stdout, and stderr.
+
+```ts
+import { createPersistenceRedactor } from "@hasna/secrets/redaction";
+
+const redactor = createPersistenceRedactor({
+  secretValues: resolvedSecrets.map((secret) => secret.value),
+});
+
+await runs.save(redactor.hooks.run({ stdout, stderr, error }));
+await runOutput.append(redactor.hooks.stdout(stdoutChunk));
+await audits.append(redactor.hooks.audit(auditEntry));
+await events.publish(redactor.hooks.event(event));
+```
+
+Pass registered raw values whenever possible: field-name and token-shape
+matching are defense in depth, not substitutes for registering arbitrary secret
+values. Apply the hook at the final persistence boundary so later formatting or
+error wrapping cannot reintroduce a raw value.
+
 Export redacted compact JSON for review:
 
 ```bash
