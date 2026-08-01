@@ -7,7 +7,7 @@ All notable changes to this project will be documented in this file.
 ## 0.5.22 - 2026-08-01
 
 ### Fixed
-- **Bulk message ingestion now matches single-message safety and mention behaviour.** Every persisted string field is validated before the one atomic insert, so a mixed batch containing sensitive content is rejected without partially writing its safe rows. Newly inserted channel messages now create the same case-insensitive, deduplicated mention records and notification direct messages as single-message sends, while idempotent retries fan out only the rows actually returned by the insert (#67).
+- **Bulk message ingestion now matches single-message safety and mention behaviour.** Message content plus sender, recipient, channel, project, and session routing fields are validated before the atomic insert, so a mixed batch containing sensitive content is rejected without partially writing its safe rows. Newly inserted channel messages now create the same case-insensitive, deduplicated mention records and notification direct messages as single-message sends, while idempotent retries fan out only the rows actually returned by the insert (#67).
 
 ## 0.5.21 - 2026-08-01
 
