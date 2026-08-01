@@ -3,9 +3,13 @@
   "name": "conversations",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.4.1",
+  "kitVersion": "0.4.2",
   "description": "Real-time messaging + coordination for AI agents: channels, messages, projects, presence, tasks. CLI + MCP + HTTP API (conversations-serve) + generated SDK. Cloud mode (HASNA_CONVERSATIONS_STORAGE_MODE=cloud / HASNA_CONVERSATIONS_DATABASE_URL set) is PURE REMOTE per Amendment A1: the serve process reads/writes the shared cloud Postgres directly with API-key auth via @hasna/contracts.",
-  "bins": ["conversations", "conversations-mcp", "conversations-serve"],
+  "bins": [
+    "conversations",
+    "conversations-mcp",
+    "conversations-serve"
+  ],
   "storage": {
     "mode": "local",
     "envPrefix": "HASNA_CONVERSATIONS_",
