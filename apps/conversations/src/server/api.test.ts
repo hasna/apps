@@ -10,6 +10,7 @@ function makeFakeClient() {
   const channelMembers = new Set<string>();
   const messages: any[] = [];
   const messageMentions: any[] = [];
+  const agentPresence = new Map<string, any>();
   const projects: Record<string, any> = {
     "proj-valid": { id: "proj-valid", name: "Chief of Harness" },
   };
@@ -85,6 +86,72 @@ function makeFakeClient() {
       if (/SELECT id FROM projects WHERE id/i.test(sql)) {
         return projects[(p as any[])[0]] ?? null;
       }
+      if (/FROM agent_presence WHERE LOWER\(agent\) = \$1/i.test(sql)) {
+        const row = agentPresence.get(String((p as any[])[0]).toLowerCase());
+        return row ? { ...row, active: true, online: true } : null;
+      }
+      if (/UPDATE agent_presence/i.test(sql) && /RETURNING id, agent/i.test(sql)) {
+        const [name, session_id, role, project_id] = p as any[];
+        const key = String(name).toLowerCase();
+        const row = agentPresence.get(key);
+        if (!row) return null;
+        Object.assign(row, {
+          session_id,
+          role,
+          project_id,
+          status: "online",
+          last_seen_at: new Date().toISOString(),
+          online: true,
+        });
+        return { ...row };
+      }
+      if (/INSERT INTO agent_presence/i.test(sql) && /ON CONFLICT/i.test(sql)) {
+        const [id, rawAgent, session_id, project_id, status, metadata] = p as any[];
+        const agent = String(rawAgent).toLowerCase();
+        const existing = agentPresence.get(agent);
+
+        // Production also has idx_agent_presence_agent_unique. An upsert whose
+        // arbiter is only the composite primary key does not handle that
+        // independent unique-agent conflict, which is the shipped failure.
+        if (existing && /ON CONFLICT \(agent, project_id\)/i.test(sql)) {
+          throw new Error("duplicate key value violates unique constraint idx_agent_presence_agent_unique");
+        }
+
+        const row = existing ?? {
+          id,
+          agent,
+          role: "agent",
+          created_at: new Date().toISOString(),
+        };
+        Object.assign(row, {
+          session_id: session_id ?? row.session_id ?? null,
+          project_id,
+          status,
+          metadata,
+          last_seen_at: new Date().toISOString(),
+          online: true,
+        });
+        agentPresence.set(agent, row);
+        return { ...row };
+      }
+      if (/INSERT INTO agent_presence/i.test(sql)) {
+        const [id, rawAgent, session_id, role, project_id] = p as any[];
+        const agent = String(rawAgent).toLowerCase();
+        const row = {
+          id,
+          agent,
+          session_id,
+          role,
+          project_id,
+          status: "online",
+          last_seen_at: new Date().toISOString(),
+          created_at: new Date().toISOString(),
+          metadata: null,
+          online: true,
+        };
+        agentPresence.set(agent, row);
+        return { ...row };
+      }
       // Match only the standalone message-count query, not channel/project
       // GETs that carry COUNT(*) subqueries for member_count/message_count.
       if (/count\(\*\)::bigint\s+as\s+n/i.test(sql)) return { n: messages.length };
@@ -148,7 +215,7 @@ function makeFakeClient() {
         channelMembers.add(`${channel}:${agent}`);
       }
     },
-    __debug: { messages, messageMentions },
+    __debug: { messages, messageMentions, agentPresence },
   };
   return client;
 }
@@ -222,6 +289,57 @@ describe("conversations-serve", () => {
       body: JSON.stringify({ name: "x", created_by: "ro" }),
     });
     expect(post.status).toBe(403);
+  });
+
+  test("register takeover can heartbeat immediately without creating a second presence row", async () => {
+    const name = "presence-takeover";
+    const projectId = "proj-valid";
+    const headers = { "x-api-key": rwKey, "content-type": "application/json" };
+
+    const first = await fetch(`${base}/v1/agents`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name, session_id: "session-old", project_id: projectId }),
+    });
+    expect(first.status).toBe(200);
+    expect((await first.json()).result).toMatchObject({ created: true, took_over: false });
+
+    const takeover = await fetch(`${base}/v1/agents`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name, session_id: "session-new", project_id: projectId, force: true }),
+    });
+    expect(takeover.status).toBe(200);
+    expect((await takeover.json()).result).toMatchObject({
+      created: false,
+      took_over: true,
+      agent: { agent: name, session_id: "session-new", project_id: projectId },
+    });
+
+    const heartbeat = await fetch(`${base}/v1/agents/heartbeat`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        agent: name,
+        session_id: "session-new",
+        project_id: projectId,
+        status: "busy",
+        metadata: { task: "f94cbd3d" },
+      }),
+    });
+
+    expect(heartbeat.status).toBe(200);
+    expect((await heartbeat.json()).agent).toMatchObject({
+      agent: name,
+      project_id: projectId,
+      status: "busy",
+    });
+    expect(activeFakeClient!.__debug.agentPresence.size).toBe(1);
+    expect(activeFakeClient!.__debug.agentPresence.get(name)).toMatchObject({
+      session_id: "session-new",
+      project_id: projectId,
+      status: "busy",
+    });
   });
 
   test("read-write key completes a channel + message roundtrip", async () => {

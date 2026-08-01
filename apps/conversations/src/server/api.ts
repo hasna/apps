@@ -1483,7 +1483,7 @@ async function handleV1(
     const row = await client.get(
       `INSERT INTO agent_presence (id, agent, session_id, role, project_id, status, last_seen_at, metadata)
        VALUES ($1,$2,$3,'agent',$4,$5,NOW(),$6)
-       ON CONFLICT (agent, project_id) DO UPDATE SET status=EXCLUDED.status, last_seen_at=NOW(),
+       ON CONFLICT (agent) DO UPDATE SET project_id=EXCLUDED.project_id, status=EXCLUDED.status, last_seen_at=NOW(),
          session_id=COALESCE(EXCLUDED.session_id, agent_presence.session_id), metadata=EXCLUDED.metadata
        RETURNING agent, project_id, status, last_seen_at`,
       [randomUUID().slice(0, 8), name.toLowerCase(), str(body.session_id) ?? null, projectId, str(body.status) ?? "online", metadata],
