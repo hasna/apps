@@ -53,7 +53,7 @@ import {
 import { s3CredentialsFromEnv } from "../cli/commands/storage-commands.js";
 import { handleV1Request, type V1RequestDependencies } from "../server/v1.js";
 import type { ApiKeyVerifier } from "@hasna/contracts/auth";
-import { LockError, type TaskComment } from "../types/index.js";
+import { LockError, type Task, type TaskComment } from "../types/index.js";
 
 let db: Database;
 
@@ -1480,6 +1480,90 @@ describe("storage adapter contracts", () => {
     });
     expect(emptyTask.locked_at).toBeTruthy();
     expect(emptyTask.started_at).toBeTruthy();
+  });
+
+  test("v1 Postgres reopen clears completed_at and permits a fresh completion", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client: postgres.client, sourceMachineId: "spark01" });
+    const verifier: ApiKeyVerifier = {
+      app: "todos",
+      authenticate: async () => ({
+        ok: true as const,
+        status: 200 as const,
+        principal: {
+          kid: "test-key-id",
+          app: "todos",
+          scopes: ["todos:*"],
+          agent: "lifecycle-agent",
+          claims: { v: 1, kid: "test-key-id", app: "todos", scopes: ["todos:*"], iat: 0, exp: null },
+        },
+      }),
+    };
+    const request = async (method: string, path: string, body?: Record<string, unknown>) => {
+      const url = new URL(`https://todos.test${path}`);
+      const response = await handleV1Request(
+        new Request(url, {
+          method,
+          headers: { "content-type": "application/json", authorization: "Bearer [REDACTED_SECRET]" },
+          body: body ? JSON.stringify(body) : undefined,
+        }),
+        url,
+        {
+          getVerifier: () => verifier,
+          ensureSchema: async () => {},
+          getStorageAdapter: () => adapter,
+        },
+      );
+      if (!response) throw new Error(`Expected ${path} to be handled by v1`);
+      return response;
+    };
+
+    const createdResponse = await request("POST", "/v1/tasks", {
+      title: "Postgres lifecycle task",
+      metadata: {
+        _evidence: { test_results: "first completion passed" },
+        _completion: { reviewer: "first reviewer" },
+      },
+    });
+    const created = (await createdResponse.json() as { task: Task }).task;
+
+    const startedResponse = await request("POST", `/v1/tasks/${created.id}/start`, { agent_id: "lifecycle-agent" });
+    expect(startedResponse.status).toBe(200);
+
+    const firstCompletionResponse = await request("POST", `/v1/tasks/${created.id}/complete`, {
+      agent_id: "lifecycle-agent",
+      notes: "first completion",
+    });
+    expect(firstCompletionResponse.status).toBe(200);
+    const firstCompletion = (await firstCompletionResponse.json() as { task: Task }).task;
+    expect(firstCompletion.completed_at).toBeTruthy();
+
+    const reopenResponse = await request("PATCH", `/v1/tasks/${created.id}`, {
+      status: "in_progress",
+      version: firstCompletion.version,
+    });
+    expect(reopenResponse.status).toBe(200);
+    const reopened = (await reopenResponse.json() as { task: Task }).task;
+    expect(reopened).toMatchObject({
+      status: "in_progress",
+      completed_at: null,
+      metadata: {
+        _evidence: { test_results: "first completion passed", notes: "first completion" },
+        _completion: { reviewer: "first reviewer" },
+      },
+    });
+    expect(await adapter.tasks.get(created.id)).toEqual(reopened);
+
+    await Bun.sleep(2);
+    const secondCompletionResponse = await request("POST", `/v1/tasks/${created.id}/complete`, {
+      agent_id: "lifecycle-agent",
+      notes: "second completion",
+    });
+    expect(secondCompletionResponse.status).toBe(200);
+    const secondCompletion = (await secondCompletionResponse.json() as { task: Task }).task;
+    expect(secondCompletion.status).toBe("completed");
+    expect(secondCompletion.completed_at).toBeTruthy();
+    expect(secondCompletion.completed_at).not.toBe(firstCompletion.completed_at);
   });
 
   test("v1 comments persist through a reopened Postgres adapter and redact new and historical content", async () => {

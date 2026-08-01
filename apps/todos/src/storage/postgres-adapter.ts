@@ -1174,6 +1174,10 @@ async function updateTask(id: string, input: UpdateTaskInput, store: PostgresJso
   if (existing.version !== input.version) {
     throw new Error(`Task ${id} version conflict: expected ${existing.version}, got ${input.version}`);
   }
+  const reopened = existing.status === "completed"
+    && input.status !== undefined
+    && input.status !== "completed"
+    && input.completed_at === undefined;
   const task: Task = {
     ...existing,
     ...definedPatch(input),
@@ -1191,6 +1195,11 @@ async function updateTask(id: string, input: UpdateTaskInput, store: PostgresJso
     // without this pin an API client could rewrite a task's authorship after the
     // fact, which would make the field worthless as an audit signal.
     created_by: existing.created_by,
+    // Match SQLite lifecycle semantics: reopening clears the current completion
+    // clock, while evidence and completion metadata remain as immutable history.
+    completed_at: reopened
+      ? null
+      : input.completed_at !== undefined ? input.completed_at : existing.completed_at,
   };
   await store.upsert("tasks", task);
   return task;
