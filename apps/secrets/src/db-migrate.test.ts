@@ -1,9 +1,125 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { Database } from "bun:sqlite";
 import { getDb, closeDb } from "./db.js";
+
+const rootDir = join(import.meta.dir, "..");
+
+describe("legacy dotfile migration", () => {
+  it("copies only service-owned files and leaves the ~/.secrets credential store alone", () => {
+    const home = mkdtempSync(join(tmpdir(), "secrets-dotfile-home-"));
+    const legacyDir = join(home, ".secrets");
+    const targetDir = join(home, ".hasna", "secrets");
+    const credentialDir = join(legacyDir, "example", "app");
+    mkdirSync(credentialDir, { recursive: true });
+    // The target commonly exists before first run because postinstall creates it.
+    mkdirSync(targetDir, { recursive: true });
+
+    const legacyDb = new Database(join(legacyDir, "vault.db"), { create: true });
+    legacyDb.exec("CREATE TABLE migration_marker (value TEXT NOT NULL); INSERT INTO migration_marker VALUES ('preserved')");
+    legacyDb.close();
+
+    writeFileSync(join(legacyDir, "vault.key"), "legacy-key-fixture");
+    writeFileSync(join(legacyDir, "kms.json"), '{"keyId":"fixture"}');
+    writeFileSync(join(legacyDir, ".serve-token"), "legacy-token-fixture");
+    writeFileSync(join(legacyDir, "aws.json"), '{"region":"legacy"}');
+    writeFileSync(join(targetDir, "aws.json"), '{"region":"current"}');
+    writeFileSync(join(credentialDir, "live.env"), "TOKEN=credential-store-fixture\n");
+    writeFileSync(join(legacyDir, "unrelated.env"), "TOKEN=top-level-fixture\n");
+    const linkedKey = join(home, "linked-key-fixture");
+    writeFileSync(linkedKey, "linked-key-fixture");
+    symlinkSync(linkedKey, join(legacyDir, "vault.key.enc"));
+
+    try {
+      const dbModule = pathToFileURL(join(rootDir, "src", "db.ts")).href;
+      const code = [
+        `const mod = await import(${JSON.stringify(dbModule)});`,
+        "mod.getDb();",
+        "mod.closeDb();",
+      ].join("\n");
+      const result = Bun.spawnSync({
+        cmd: ["bun", "-e", code],
+        cwd: rootDir,
+        env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: home },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+
+      expect(result.exitCode, new TextDecoder().decode(result.stderr)).toBe(0);
+      const migratedDb = new Database(join(targetDir, "vault.db"));
+      expect(migratedDb.query("SELECT value FROM migration_marker").get()).toEqual({ value: "preserved" });
+      migratedDb.close();
+      expect(readFileSync(join(targetDir, "vault.key"), "utf8")).toBe("legacy-key-fixture");
+      expect(readFileSync(join(targetDir, "kms.json"), "utf8")).toBe('{"keyId":"fixture"}');
+      expect(readFileSync(join(targetDir, ".serve-token"), "utf8")).toBe("legacy-token-fixture");
+      expect(readFileSync(join(targetDir, "aws.json"), "utf8")).toBe('{"region":"current"}');
+
+      expect(existsSync(join(targetDir, "example", "app", "live.env"))).toBe(false);
+      expect(existsSync(join(targetDir, "unrelated.env"))).toBe(false);
+      expect(existsSync(join(targetDir, "vault.key.enc"))).toBe(false);
+      expect(readFileSync(join(credentialDir, "live.env"), "utf8")).toBe("TOKEN=credential-store-fixture\n");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("does not copy legacy SQLite sidecars when target vault.db already exists", () => {
+    const home = mkdtempSync(join(tmpdir(), "secrets-dotfile-home-"));
+    const legacyDir = join(home, ".secrets");
+    const targetDir = join(home, ".hasna", "secrets");
+    mkdirSync(legacyDir, { recursive: true });
+    mkdirSync(targetDir, { recursive: true });
+
+    const legacyDb = new Database(join(legacyDir, "vault.db"), { create: true });
+    legacyDb.exec("CREATE TABLE migration_marker (value TEXT NOT NULL); INSERT INTO migration_marker VALUES ('legacy')");
+    legacyDb.close();
+
+    const targetDb = new Database(join(targetDir, "vault.db"), { create: true });
+    targetDb.exec("CREATE TABLE migration_marker (value TEXT NOT NULL); INSERT INTO migration_marker VALUES ('current')");
+    targetDb.close();
+
+    for (const name of ["vault.db-wal", "vault.db-shm", "vault.db-journal"]) {
+      writeFileSync(join(legacyDir, name), `${name}-legacy-fixture`);
+    }
+
+    try {
+      const dataDirModule = pathToFileURL(join(rootDir, "src", "data-dir.ts")).href;
+      const code = [
+        `const mod = await import(${JSON.stringify(dataDirModule)});`,
+        "mod.ensureOperatorDataDir();",
+      ].join("\n");
+      const result = Bun.spawnSync({
+        cmd: ["bun", "-e", code],
+        cwd: rootDir,
+        env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: home },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+
+      expect(result.exitCode, new TextDecoder().decode(result.stderr)).toBe(0);
+      for (const name of ["vault.db-wal", "vault.db-shm", "vault.db-journal"]) {
+        expect(existsSync(join(targetDir, name))).toBe(false);
+      }
+
+      const currentDb = new Database(join(targetDir, "vault.db"));
+      expect(currentDb.query("SELECT value FROM migration_marker").get()).toEqual({ value: "current" });
+      currentDb.close();
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 30_000);
+});
 
 // Regression: legacy vaults shipped a feedback table with `service TEXT NOT NULL`
 // (no default) and an `id` without a generator default. Canonical inserts omit

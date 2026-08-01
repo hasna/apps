@@ -13,6 +13,7 @@ import { randomUUID } from "node:crypto";
 import { chmodSync, readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from "fs";
 import { dirname, join } from "path";
 import { homedir } from "os";
+import { ensureOperatorDataDir } from "./data-dir.js";
 import { getStore } from "./store/index.js";
 import {
   assertTestVaultPathAllowed,
@@ -132,7 +133,8 @@ interface RemoteSecretMetadata {
 }
 
 function getAwsConfigPath(): string {
-  return join(homedir(), ".hasna", "secrets", "aws.json");
+  const dir = isTestVaultRedirectContext() ? testVaultDir() : ensureOperatorDataDir();
+  return join(dir, "aws.json");
 }
 
 export function loadAwsConfig(): AwsConfig | null {

@@ -1,22 +1,23 @@
 import { join } from "path";
-import { homedir } from "os";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { ensureOperatorDataDir } from "./data-dir.js";
 import { getStore } from "./store/index.js";
+import { isTestVaultRedirectContext, testVaultDir } from "./test-isolation.js";
 
 export const SERVE_PORT = 27462;
-const TOKEN_PATH = join(homedir(), ".hasna", "secrets", ".serve-token");
 const ALLOWED_EXTENSION_ORIGIN = process.env.HASNA_SECRETS_EXTENSION_ORIGIN?.trim() || "";
 
 export function getOrCreateServeToken(): string {
-  if (existsSync(TOKEN_PATH)) {
-    return readFileSync(TOKEN_PATH, "utf-8").trim();
+  const dir = isTestVaultRedirectContext() ? testVaultDir() : ensureOperatorDataDir();
+  const tokenPath = join(dir, ".serve-token");
+  if (existsSync(tokenPath)) {
+    return readFileSync(tokenPath, "utf-8").trim();
   }
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
   const token = Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
-  const dir = join(homedir(), ".hasna", "secrets");
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  writeFileSync(TOKEN_PATH, token, { mode: 0o600 });
+  writeFileSync(tokenPath, token, { mode: 0o600 });
   return token;
 }
 

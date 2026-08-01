@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { dirname, join } from "path";
-import { homedir } from "os";
-import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
+import { existsSync, mkdirSync } from "fs";
+import { ensureOperatorDataDir } from "./data-dir.js";
 import { assertTestVaultPathAllowed, isTestVaultRedirectContext, testVaultPath } from "./test-isolation.js";
 
 function getDbPath(): string {
@@ -24,11 +24,7 @@ function getDbPath(): string {
   // under a foreign test runner.
   if (isTestVaultRedirectContext()) return testVaultPath();
 
-  const home = homedir();
-  migrateLegacyDotfile("secrets");
-  const newDir = join(home, ".hasna", "secrets");
-  if (!existsSync(newDir)) mkdirSync(newDir, { recursive: true, mode: 0o700 });
-  return join(newDir, "vault.db");
+  return join(ensureOperatorDataDir(), "vault.db");
 }
 
 function getDbDir(): string {
@@ -200,28 +196,5 @@ function ensureColumns(db: Database, table: string, columns: Record<string, stri
   );
   for (const [name, def] of Object.entries(columns)) {
     if (!existing.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${def}`);
-  }
-}
-
-function migrateLegacyDotfile(name: string): void {
-  const home = homedir();
-  const legacyDir = join(home, `.${name}`);
-  const targetDir = join(home, ".hasna", name);
-  if (!existsSync(legacyDir) || existsSync(targetDir)) return;
-  copyTree(legacyDir, targetDir);
-}
-
-function copyTree(source: string, target: string): void {
-  const stat = statSync(source);
-  if (stat.isDirectory()) {
-    mkdirSync(target, { recursive: true, mode: 0o700 });
-    for (const entry of readdirSync(source)) {
-      copyTree(join(source, entry), join(target, entry));
-    }
-    return;
-  }
-  if (stat.isFile()) {
-    mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
-    if (!existsSync(target)) copyFileSync(source, target);
   }
 }

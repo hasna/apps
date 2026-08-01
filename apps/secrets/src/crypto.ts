@@ -17,7 +17,7 @@
 import { randomBytes, createCipheriv, createDecipheriv } from "crypto";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "fs";
 import { join } from "path";
-import { homedir } from "os";
+import { ensureOperatorDataDir } from "./data-dir.js";
 import { assertTestVaultPathAllowed, isTestVaultRedirectContext, testKeyDir } from "./test-isolation.js";
 
 const ALGO = "aes-256-gcm";
@@ -44,7 +44,7 @@ function getKeyDir(): string {
   // a fresh box would MINT the operator's key from test material (HC-00304).
   // Narrow predicate: see the note in src/db.ts on why a silent path swap must not
   // fire on bare NODE_ENV.
-  const dir = isTestVaultRedirectContext() ? testKeyDir() : join(homedir(), ".hasna", "secrets");
+  const dir = isTestVaultRedirectContext() ? testKeyDir() : ensureOperatorDataDir();
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
   return dir;
 }
