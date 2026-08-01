@@ -17,6 +17,15 @@ function runMcpCli(args: string[]) {
   });
 }
 
+function runMcpSession(messages: unknown[], env: Record<string, string>) {
+  return Bun.spawnSync({
+    cmd: ["node", "src/testing/mcp-stdio-client.mjs", JSON.stringify(messages)],
+    stdout: "pipe",
+    stderr: "pipe",
+    env,
+  });
+}
+
 describe("projects-mcp CLI flags", () => {
   test("prints help and exits successfully", () => {
     const result = runMcpCli(["--help"]);
@@ -58,24 +67,15 @@ describe("projects-mcp CLI flags", () => {
       { jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "projects_sync_roots", arguments: { dry_run: true } } },
       { jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "projects_sync_roots", arguments: {} } },
     ];
-    const child = Bun.spawn({
-      cmd: ["bun", "run", "src/mcp/index.ts"],
-      stdin: "pipe",
-      stdout: "pipe",
-      stderr: "pipe",
-      env: testSpawnEnv({ HASNA_PROJECTS_DB_PATH: join(root, "projects.db") }),
-    });
-    child.stdin.write(messages.map((message) => JSON.stringify(message)).join("\n") + "\n");
-    child.stdin.end();
-
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-      child.exited,
-    ]);
+    const result = runMcpSession(
+      messages,
+      testSpawnEnv({ HASNA_PROJECTS_DB_PATH: join(root, "projects.db") }),
+    );
+    const stdout = Buffer.from(result.stdout).toString("utf-8");
+    const stderr = Buffer.from(result.stderr).toString("utf-8");
     rmSync(root, { recursive: true, force: true });
 
-    expect(exitCode).toBe(0);
+    expect(result.exitCode).toBe(0);
     expect(stderr).toBe("");
     const responses = stdout.trim().split("\n").map((line) => JSON.parse(line)) as Array<{
       id?: number;
@@ -153,28 +153,15 @@ describe("projects-mcp project-first surface", () => {
       { jsonrpc: "2.0", method: "notifications/initialized", params: {} },
       { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
     ];
-    const child = Bun.spawn({
-      cmd: ["bun", "run", "src/mcp/index.ts"],
-      stdin: "pipe",
-      stdout: "pipe",
-      stderr: "pipe",
-      env: {
-        ...process.env,
-        HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
-      },
-    });
-
-    child.stdin.write(messages.map((message) => JSON.stringify(message)).join("\n") + "\n");
-    child.stdin.end();
-
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-      child.exited,
-    ]);
+    const result = runMcpSession(
+      messages,
+      testSpawnEnv({ HASNA_PROJECTS_DB_PATH: join(root, "projects.db") }),
+    );
+    const stdout = Buffer.from(result.stdout).toString("utf-8");
+    const stderr = Buffer.from(result.stderr).toString("utf-8");
     rmSync(root, { recursive: true, force: true });
 
-    expect(exitCode).toBe(0);
+    expect(result.exitCode).toBe(0);
     expect(stderr).toBe("");
     const responses = stdout.trim().split("\n").map((line) => JSON.parse(line)) as Array<{
       id?: number;
@@ -256,36 +243,12 @@ describe("projects-mcp project-first surface", () => {
       { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "projects_list", arguments: { query: "mcp-redaction" } } },
       { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "projects_events_list", arguments: { project: "mcp-redaction" } } },
     ];
-    // Force local-store mode so the child reads the fixture DB rather than any
-    // ambient cloud registry configured on the host machine.
-    const {
-      HASNA_PROJECTS_API_URL: _apiUrl,
-      HASNA_PROJECTS_API_KEY: _apiKey,
-      HASNA_PROJECTS_STORAGE_MODE: _storageMode,
-      ...cleanEnv
-    } = process.env;
-    const child = Bun.spawn({
-      cmd: ["bun", "run", "src/mcp/index.ts"],
-      stdin: "pipe",
-      stdout: "pipe",
-      stderr: "pipe",
-      env: {
-        ...cleanEnv,
-        HASNA_PROJECTS_DB_PATH: dbPath,
-      },
-    });
-
-    child.stdin.write(messages.map((message) => JSON.stringify(message)).join("\n") + "\n");
-    child.stdin.end();
-
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-      child.exited,
-    ]);
+    const result = runMcpSession(messages, testSpawnEnv({ HASNA_PROJECTS_DB_PATH: dbPath }));
+    const stdout = Buffer.from(result.stdout).toString("utf-8");
+    const stderr = Buffer.from(result.stderr).toString("utf-8");
     rmSync(root, { recursive: true, force: true });
 
-    expect(exitCode).toBe(0);
+    expect(result.exitCode).toBe(0);
     expect(stderr).toBe("");
     expect(stdout).toContain(PROJECT_REDACTED_VALUE);
     for (const leaked of [
