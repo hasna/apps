@@ -192,6 +192,117 @@ Minimum integration boundary for OpenAutomations and `@hasna/actions` consumers:
 - authorization failure must not reveal whether the reference exists or include
   a value in its error
 
+#### Secret access audit event contract
+
+The existing `get` / `set` / `delete` audit actions describe direct vault CRUD.
+They do not prove that a scoped grant was checked or that a resolved value was
+actually handed to a consumer. A grant-aware resolver must append the following
+versioned events. Event names are past tense because audit records describe facts
+that have already occurred.
+
+| `action` | Emit when | Required event metadata |
+| --- | --- | --- |
+| `secret.grant.created` | A grant is durably issued. | `grant_id`, `scopes`, `grant_expires_at`, `decision=allowed`, `reason_code=grant_created` |
+| `secret.grant.resolved` | The referenced secret exists and the grant, scope, and expiry checks pass. No value has crossed the vault boundary yet. | `grant_id`, `scopes`, `resolver_package`, `decision=allowed`, `reason_code=scope_allowed`, `secret_version` |
+| `secret.used` | The vault hands the value to the named resolver or connector. Emit once per hand-off, not once per downstream API call. | `grant_id`, `scopes`, `resolver_package`, `decision=allowed`, `reason_code=value_handed_off`, `secret_version` |
+| `secret.access.denied` | Resolution is rejected. Never emit `secret.used` for the same attempt. | Available identifiers, `decision=denied`, and a bounded `reason_code` |
+| `secret.grant.expired` | A sweeper or access attempt first transitions an issued grant to expired. | `grant_id`, `grant_expires_at`, `decision=denied`, `reason_code=grant_expired` |
+| `secret.rotated` | A new secret version is durably committed. | `decision=allowed`, `reason_code=secret_rotated`, `previous_secret_version`, `secret_version` |
+
+All six actions use the following output contract. It extends the current flat
+`AuditEntry` shape so old readers can continue to display `id`, `action`, `key`,
+`agent`, and `timestamp`. Optional fields are omitted rather than filled with
+values copied from request context.
+
+```ts
+interface SecretAccessAuditEventV1 {
+  id: number;
+  schema_version: 1;
+  action:
+    | "secret.grant.created"
+    | "secret.grant.resolved"
+    | "secret.used"
+    | "secret.access.denied"
+    | "secret.grant.expired"
+    | "secret.rotated";
+  key: string;                 // secretRef; metadata, never the secret value
+  agent: string;               // authenticated human or workload identifier
+  timestamp: string;           // UTC ISO 8601
+  correlation_id: string;      // joins events from one access attempt
+  grant_id?: string;           // opaque identifier, never a bearer grant/token
+  scopes?: string[];           // normalized, sorted requested scopes
+  resolver_package?: string;   // package/service name, not command arguments
+  resolver_version?: string;
+  decision: "allowed" | "denied";
+  reason_code: string;         // bounded enum; never free-form error text
+  grant_expires_at?: string;
+  secret_version?: string;     // opaque version id, not a value-derived hash
+  previous_secret_version?: string;
+}
+```
+
+Denials use a bounded reason code such as `grant_missing`, `grant_expired`,
+`scope_mismatch`, `secret_missing`, or `policy_denied`. Operator-facing clients
+may collapse these to `access_denied` when revealing whether a key or grant
+exists would create an oracle. Stack traces and provider responses belong in a
+separately protected diagnostic channel, not in the audit record.
+
+Example metadata-only output:
+
+```json
+{
+  "id": 184,
+  "schema_version": 1,
+  "action": "secret.access.denied",
+  "key": "example/connectors/prod/github",
+  "agent": "automation:issue-sync",
+  "timestamp": "2026-01-15T12:00:00.000Z",
+  "correlation_id": "request-example-184",
+  "grant_id": "grant-example-12",
+  "scopes": ["repo:issues:write"],
+  "resolver_package": "@example/issue-connector",
+  "decision": "denied",
+  "reason_code": "scope_mismatch"
+}
+```
+
+Audit serialization is an allowlist. It must never contain decrypted values,
+ciphertext, value hashes or fingerprints, bearer grants, API keys, session
+tokens, authorization headers, environment values, command arguments, connector
+request/response bodies, raw authentication claims, or free-form reasons and
+exceptions. Implementations must not accept an arbitrary `metadata` object and
+must not serialize request context with object spread. Identifiers and scope
+strings are length-bounded and control characters are rejected before storage.
+
+Emission and storage rules:
+
+- grant creation and rotation commit their event in the same transaction as the
+  state change; `secret.rotated` links opaque version ids only
+- allowed resolution is followed by use under the same `correlation_id`; a
+  resolution may have no use, but a use may not exist without a resolution
+- an allowed path fails closed if its audit event cannot be persisted before the
+  value leaves the vault; a denial stays denied even if denial logging fails
+- expiry uses the grant state transition as its idempotency boundary, so a
+  sweeper and concurrent access attempt cannot create duplicate expiry events
+- audit rows are append-only, use server-side UTC timestamps, and are subject to
+  the same tenant authorization as the referenced secret
+
+Implementation plan:
+
+1. Extend `AuditEntry` and both audit tables with the explicit nullable columns
+   above; do not add an unbounded JSON metadata column. Keep legacy CRUD rows and
+   actions readable.
+2. Add one typed store operation that accepts only the six event variants. Make
+   local and cloud implementations validate fields and write parameterized SQL.
+3. Emit from the future grant/resolver boundaries described in the table. Do not
+   reinterpret the current raw `get` action as proof of `secret.used`.
+4. Make `/v1/audit`, the CLI, MCP, SDK, and OpenAPI return an explicitly selected
+   audit DTO rather than `SELECT *`, preserving the allowlist end to end.
+5. Test all six actions in local and cloud stores, lifecycle ordering, denied
+   access producing no use event, expiry idempotency, rotation version linkage,
+   migration of existing rows, and the absence of sentinel secret material from
+   every JSON and text output.
+
 Export redacted compact JSON for review:
 
 ```bash
