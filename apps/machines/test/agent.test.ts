@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { closeDb } from "../src/db.js";
@@ -35,6 +35,24 @@ describe("agent runtime", () => {
     expect(statuses.length).toBeGreaterThan(0);
     expect(statuses[0]?.status).toBe("online");
     expect(statuses[0]?.toolVersions).toEqual(expect.objectContaining({ bun: expect.any(String) }));
+  });
+
+  test("keeps the running daemon version after an in-place upgrade", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-agent-version-"));
+    process.env["HASNA_MACHINES_DB_PATH"] = join(dir, "machines.db");
+    process.env["HASNA_MACHINES_MACHINE_ID"] = "demo-node-version";
+    const packageUrl = new URL("../package.json", import.meta.url);
+    const packageJson = readFileSync(packageUrl, "utf8");
+    const parsedPackage = JSON.parse(packageJson) as Record<string, unknown> & { version: string };
+    const runningVersion = parsedPackage.version;
+    const upgradedVersion = `${runningVersion}-upgraded`;
+
+    try {
+      writeFileSync(packageUrl, `${JSON.stringify({ ...parsedPackage, version: upgradedVersion }, null, 2)}\n`);
+      expect(writeHeartbeat("online").daemonVersion).toBe(runningVersion);
+    } finally {
+      writeFileSync(packageUrl, packageJson);
+    }
   });
 
   test("marks current process offline", () => {

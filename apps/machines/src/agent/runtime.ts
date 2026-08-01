@@ -6,6 +6,8 @@ import { isPrivateMetadataEnabled as isPrivateMetadataEnvEnabled, redactErrorMes
 import { storagePush } from "../storage-sync.js";
 import { getPackageVersion } from "../version.js";
 
+const daemonVersion = getPackageVersion();
+
 export interface AgentRuntimeStatus {
   machineId: string;
   pid: number;
@@ -162,7 +164,7 @@ function collectDoctorSummary(machineId: string, enabled: boolean): Record<strin
 function collectHeartbeatMetadata(machineId: string, options: AgentRuntimeOptions = {}): HeartbeatUpsertMetadata {
   const privateMetadata = resolvePrivateMetadata(options.privateMetadata);
   return {
-    daemonVersion: getPackageVersion(),
+    daemonVersion,
     agentMode: sanitizePublicString(options.mode?.trim() || "daemon", privateMetadata),
     platform: platform(),
     osVersion: sanitizePublicString(osVersion(), privateMetadata),

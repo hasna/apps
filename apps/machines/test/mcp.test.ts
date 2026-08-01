@@ -75,6 +75,7 @@ test("MCP dispatch fleet smoke is read-only and redacted", async () => {
   const dir = mkdtempSync(join(tmpdir(), "machines-mcp-dispatch-smoke-"));
   const binDir = join(dir, ".bun", "bin");
   const marker = join(dir, "restart-called");
+  const previousHome = process.env.HOME;
   const previousPath = process.env.PATH;
   // dispatch-smoke builds its own PATH as
   //   PATH="$HOME/.bun/bin:$HOME/.local/bin:...:$PATH"
@@ -110,6 +111,7 @@ fi
 exit 2
 `);
     chmodSync(dispatch, 0o755);
+    process.env.HOME = dir;
     process.env.PATH = `${binDir}:${previousPath ?? ""}`;
     process.env.HOME = dir;
 
@@ -146,6 +148,7 @@ exit 2
       await server.close();
     }
   } finally {
+    process.env.HOME = previousHome;
     process.env.PATH = previousPath;
     if (previousHome === undefined) {
       delete process.env.HOME;

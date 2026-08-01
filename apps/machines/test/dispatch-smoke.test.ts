@@ -215,6 +215,7 @@ exit 2
       chmodSync(dispatch, 0o755);
       const env = {
         ...process.env,
+        HOME: dir,
         PATH: `${binDir}:${process.env.PATH ?? ""}`,
         // dispatch-smoke builds its own PATH as
         //   PATH="$HOME/.bun/bin:$HOME/.local/bin:...:$PATH"
