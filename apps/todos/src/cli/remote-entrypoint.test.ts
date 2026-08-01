@@ -252,7 +252,7 @@ describe("remote CLI entrypoint authority boundary", () => {
       ["status", "--agent", "fixture-agent"],
       ["bulk", "unknown", TASK_FIXTURE_ID],
       ["bulk", "done", TASK_FIXTURE_ID, "--plan", "fixture-plan"],
-      ["projects", "--path-prefix", "/tmp", "--deregister", "fixture"],
+      ["projects", "--path-prefix", "/tmp"],
       ["plans", "--write-artifacts"],
     ]) {
       expect(() => initializeTodosCliAuthority(args, {
@@ -308,6 +308,8 @@ describe("remote CLI entrypoint authority boundary", () => {
       ["assign", TASK_FIXTURE_ID, "fixture-agent"],
       ["tag", TASK_FIXTURE_ID, "fixture-tag"],
       ["untag", TASK_FIXTURE_ID, "fixture-tag"],
+      ["projects", "--path-prefix", "/tmp", "--deregister", "fixture"],
+      ["projects", "--deregister=fixture", "--dry-run"],
     ]) {
       expect(() => initializeTodosCliAuthority(args, {
         HASNA_TODOS_STORAGE_MODE: "remote",
@@ -384,7 +386,7 @@ describe("remote CLI entrypoint authority boundary", () => {
         ["--agent", "fixture", "status"],
         ["bulk", "unknown", TASK_FIXTURE_ID],
         ["bulk", "done", TASK_FIXTURE_ID, "--plan", "fixture-plan"],
-        ["projects", "--deregister", "fixture", "--path-prefix", "/tmp"],
+        ["projects", "--path-prefix", "/tmp"],
         ["plans", "--write-artifacts"],
         ["agents-normalize"],
       ]) {
@@ -400,6 +402,108 @@ describe("remote CLI entrypoint authority boundary", () => {
       server.stop(true);
     }
   }, 45_000);
+
+  test("built projects --deregister applies its guards and deletes through /v1", async () => {
+    const PROJECT_ID = "77777777-7777-4777-8777-777777777777";
+    const project = { id: PROJECT_ID, name: "Disposable", path: "/tmp/disposable", task_list_id: null };
+    const completedTask = {
+      id: "88888888-8888-4888-8888-888888888888",
+      title: "Completed probe",
+      status: "completed",
+      project_id: PROJECT_ID,
+      parent_id: "99999999-9999-4999-8999-999999999999",
+    };
+    const tasks: Array<Record<string, unknown>> = [completedTask];
+    const requests: string[] = [];
+    let deleted = false;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        requests.push(`${request.method} ${url.pathname}${url.search}`);
+        if (url.pathname === "/v1/projects" && request.method === "GET") {
+          return Response.json({ projects: deleted ? [] : [project] });
+        }
+        if (url.pathname === "/v1/tasks" && request.method === "GET") {
+          const items = tasks.filter((task) => task.project_id === url.searchParams.get("project_id"));
+          return Response.json({ tasks: items, count: items.length, total: items.length });
+        }
+        if (url.pathname === `/v1/projects/${PROJECT_ID}` && request.method === "DELETE") {
+          deleted = true;
+          return Response.json({ deleted: true, id: PROJECT_ID });
+        }
+        return Response.json({ error: "fixture route missing" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-remote-deregister-"));
+    tempRoots.push(root);
+    const cwd = join(root, "cwd");
+    mkdirSync(cwd);
+    const localDbPath = join(root, "must-not-exist", "todos.db");
+    const env = {
+      PATH: process.env.PATH ?? "",
+      BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
+      HOME: root,
+      TMPDIR: root,
+      LANG: "C.UTF-8",
+      TODOS_AUTO_PROJECT: "false",
+      TODOS_DB_PATH: localDbPath,
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
+      HASNA_TODOS_API_KEY: "fixture-remote-key",
+    };
+    const before = recursiveInventory(cwd);
+    try {
+      const dryRun = await runCli(executable, [
+        "--json", "projects", "--deregister", PROJECT_ID, "--path-prefix", "/tmp", "--dry-run",
+      ], env, cwd);
+      expect({ exitCode: dryRun.exitCode, stderr: dryRun.stderr }).toEqual({ exitCode: 0, stderr: "" });
+      expect(JSON.parse(dryRun.stdout)).toMatchObject({
+        action: "would_deregister",
+        project_id: PROJECT_ID,
+        total_tasks: 1,
+        incomplete_tasks: 0,
+        tasks_preserved: true,
+      });
+      expect(deleted).toBe(false);
+      expect(requests).toContain(`GET /v1/tasks?project_id=${PROJECT_ID}&include_subtasks=true`);
+
+      tasks.push({ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", status: "pending", project_id: PROJECT_ID });
+      const incomplete = await runCli(executable, [
+        "projects", "--deregister", PROJECT_ID, "--path-prefix", "/tmp",
+      ], env, cwd);
+      expect(incomplete.exitCode).toBe(1);
+      expect(incomplete.stderr).toContain("1 incomplete task(s) remain");
+      expect(deleted).toBe(false);
+      tasks.pop();
+
+      const outsidePrefix = await runCli(executable, [
+        "projects", "--deregister", PROJECT_ID, "--path-prefix", "/tmp/disposable-sibling",
+      ], env, cwd);
+      expect(outsidePrefix.exitCode).toBe(1);
+      expect(outsidePrefix.stderr).toContain("is not within /tmp/disposable-sibling");
+      expect(deleted).toBe(false);
+
+      const deregistered = await runCli(executable, [
+        "--json", "projects", `--deregister=${PROJECT_ID}`, "--path-prefix=/tmp",
+      ], env, cwd);
+      expect({ exitCode: deregistered.exitCode, stderr: deregistered.stderr }).toEqual({ exitCode: 0, stderr: "" });
+      expect(JSON.parse(deregistered.stdout)).toMatchObject({
+        action: "deregistered",
+        project_id: PROJECT_ID,
+        total_tasks: 1,
+        incomplete_tasks: 0,
+        tasks_preserved: true,
+      });
+      expect(deleted).toBe(true);
+      expect(requests.at(-1)).toBe(`DELETE /v1/projects/${PROJECT_ID}`);
+      expect(recursiveInventory(cwd)).toEqual(before);
+      expectNoLocalDatabase(root, localDbPath);
+    } finally {
+      server.stop(true);
+    }
+  });
 
   test("every local-only command family rejects in the built entrypoint before HTTP or filesystem access", async () => {
     const requests: string[] = [];
@@ -1296,8 +1400,6 @@ describe("remote CLI entrypoint authority boundary", () => {
       expectNoLocalDatabase(root, localDbPath);
 
       for (const unsupported of [
-        ["--json", "projects", "--deregister", PROJECT_ID],
-        ["--json", "projects", `--deregister=${PROJECT_ID}`],
         ["--json", "doctor", "--apply"],
         ["--project", PROJECT_ID, "--json", "plans", "--artifact", PLAN_ID],
         [`--project=${PROJECT_ID}`, "--json", "plans", `--artifact=${PLAN_ID}`],

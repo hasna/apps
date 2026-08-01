@@ -277,7 +277,8 @@ function disqualifyingArgument(invocation: ParsedInvocation): Disqualification |
       if (positionalArgs(args)[0] === "routing") return dropIt("the `routing` subcommand");
       return firstPresentOption(args, ["--apply", "--fix"]);
     case "projects":
-      return firstPresentOption(args, ["--deregister", "--path-prefix", "--dry-run"]);
+      if (hasOption(args, "--deregister")) return null;
+      return firstPresentOption(args, ["--path-prefix", "--dry-run"]);
     case "plans":
       return firstPresentOption(args, ["--artifact", "--write-artifacts"]);
     // `list --tags/--tag` is serviced remotely: the /v1 list route filters by
