@@ -111,7 +111,7 @@ describe("channel notifications", () => {
     expect(notifications[0].unread).toBe(true);
   });
 
-  test("suppresses the registered sender id without hiding same-name peers", () => {
+  test("suppresses both registered and display-name self sender ids", () => {
     createChannel("ops", "creator");
     const registration = registerAgent("Herminia", "session-herminia");
     if (!("agent" in registration)) {
@@ -126,17 +126,24 @@ describe("channel notifications", () => {
       session_id: "channel:ops",
       content: "my registered sender traffic",
     });
-    const sameNamePeer = sendMessage({
+    sendMessage({
       from: "Herminia",
       to: "ops",
       channel: "ops",
       session_id: "channel:ops",
-      content: "a different session using the same display name",
+      content: "my display-name sender traffic",
+    });
+    const peer = sendMessage({
+      from: "Octavia",
+      to: "ops",
+      channel: "ops",
+      session_id: "channel:ops",
+      content: "a different sender should still notify",
     });
 
     const notifications = readChannelNotifications({ agent: "Herminia" });
     expect(notifications).toHaveLength(1);
-    expect(notifications[0].message_id).toBe(sameNamePeer.id);
+    expect(notifications[0].message_id).toBe(peer.id);
   });
 
   test("redacts legacy sensitive content from notification previews", () => {

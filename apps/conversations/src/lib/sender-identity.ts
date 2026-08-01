@@ -1,8 +1,10 @@
 import type { AgentPresence } from "../types.js";
 
-export function resolveSelfSenderId(
+export function resolveSelfSenderIds(
   agent: string,
   presence: Pick<AgentPresence, "id"> | null | undefined,
-): string {
-  return presence?.id || agent;
+): string[] {
+  const ids = [agent];
+  if (presence?.id && presence.id !== agent) ids.push(presence.id);
+  return ids;
 }

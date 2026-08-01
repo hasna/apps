@@ -7,7 +7,7 @@ import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { renderContent } from "../../lib/terminal-markdown.js";
 import { buildMessagePreview } from "../../lib/channel-notifications.js";
-import { resolveSelfSenderId } from "../../lib/sender-identity.js";
+import { resolveSelfSenderIds } from "../../lib/sender-identity.js";
 import { previewText } from "../../lib/compact-output.js";
 import { getCliWindow, pageFromQuery, printCompactFooter, queryLimitFor, warnIfPageFull, SINCE_JSON_LIMIT } from "../compact.js";
 import { BLOCKERS_LIST_ORDER, PINNED_LIST_ORDER } from "../../lib/list-order.js";
@@ -788,7 +788,7 @@ export function registerMessagingCommands(program: Command): void {
       const agent = resolveIdentity(opts.from);
       const store = getStore();
       await store.heartbeat(agent);
-      const selfSenderId = resolveSelfSenderId(agent, await store.getPresence(agent));
+      const selfSenderIds = new Set(resolveSelfSenderIds(agent, await store.getPresence(agent)));
 
       const interval = Number.isFinite(opts.interval) && opts.interval > 0 ? opts.interval : 1000;
       const cols = Math.min(process.stdout.columns || 80, 100);
@@ -873,7 +873,7 @@ export function registerMessagingCommands(program: Command): void {
       // Show recent messages first
       if (opts.all) {
         const dmRecent = (await store.readMessages({ to: agent, limit: 20, order: "asc" }))
-          .filter((msg) => msg.from_agent !== selfSenderId);
+          .filter((msg) => !selfSenderIds.has(msg.from_agent));
         const pendingNotifications = (await store.readChannelNotifications({
           agent,
           unread_only: true,
@@ -898,7 +898,7 @@ export function registerMessagingCommands(program: Command): void {
           channel: opts.channel,
           limit: 20,
           order: "asc",
-        })).filter((msg) => msg.from_agent !== selfSenderId);
+        })).filter((msg) => !selfSenderIds.has(msg.from_agent));
         if (recent.length > 0) {
           printLine(chalk.dim(`  ── Recent messages (${recent.length}) ──\n`));
           for (const msg of recent) { renderMessage(msg); }
@@ -908,7 +908,7 @@ export function registerMessagingCommands(program: Command): void {
 
       const onNewMessages = (messages: import("../../types.js").Message[]) => {
         for (const msg of messages) {
-          if (msg.from_agent === selfSenderId) continue;
+          if (selfSenderIds.has(msg.from_agent)) continue;
           renderMessage(msg);
 
           // Desktop notification (short preview)

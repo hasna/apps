@@ -7,7 +7,7 @@ All notable changes to this project will be documented in this file.
 ## 0.5.20 - 2026-08-01
 
 ### Fixed
-- **`conversations watch` no longer echoes a registered agent's own messages or hides same-name peers.** Self-filtering compared the stored sender ID with the agent's display name, so UUID-authored self traffic was emitted while a different session using the same display name could be suppressed. Local and hosted notification reads now resolve the active presence ID and fall back to the display name only when no presence is registered (#64).
+- **`conversations watch` no longer echoes a registered agent's own messages.** Self-filtering compared only one sender shape at a time, so registered-id self traffic or display-name self traffic could be emitted depending on the current presence row. Local and hosted notification reads now suppress both the active presence ID and the agent display name (#64).
 
 ## 0.5.19 - 2026-08-01
 
