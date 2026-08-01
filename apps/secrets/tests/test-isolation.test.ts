@@ -299,15 +299,33 @@ describe("test-vault isolation — the AWS client factory", () => {
 
       // POSITIVE CONTROL: with a fake installed the same call reaches the client,
       // so the rejection above is the reset default and not a broken code path.
+      //
+      // The fake models a remote where this key genuinely does not exist, which is
+      // what `never-pushed` describes: real DescribeSecret raises
+      // ResourceNotFoundException rather than returning an empty object, and a push
+      // onto an EXISTING remote is now refused unless --expect-version is supplied.
+      // Returning `{}` would model a secret that exists with no AWSCURRENT version,
+      // so the control would trip the refusal path instead of reaching the client.
       const sent: string[] = [];
       setAwsClientFactoryForTests(() => ({
         send: async (command: any) => {
           sent.push(command.constructor.name);
+          if (command.constructor.name === "DescribeSecretCommand") {
+            const notFound: any = new Error("Secrets Manager can't find the specified secret.");
+            notFound.name = "ResourceNotFoundException";
+            throw notFound;
+          }
+          if (command.constructor.name === "CreateSecretCommand") {
+            // A real CreateSecret returns the version it minted; the checkpoint
+            // is recorded from it, so an empty object is not a valid stand-in.
+            return { ARN: `arn:aws:secretsmanager:eu-west-1:000000000000:secret:${key}`, VersionId: "v-created" };
+          }
           return {};
         },
       }));
       await pushSecret(key, { profile: "example-aws-profile" });
-      expect(sent.length).toBeGreaterThan(0);
+      expect(sent).toContain("DescribeSecretCommand");
+      expect(sent).toContain("CreateSecretCommand");
     } finally {
       setAwsClientFactoryForTests();
       resetDb();

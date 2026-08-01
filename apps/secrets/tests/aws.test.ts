@@ -174,10 +174,14 @@ describe("AWS dry-run planning", () => {
     setAwsClientFactoryForTests(() => ({
       send: async (command: unknown) => {
         sent.push(command?.constructor?.name ?? "UnknownCommand");
+        // A real ListSecrets page carries SecretVersionsToStages, which is where
+        // the AWSCURRENT version is read from. Omitting it would model a vault
+        // whose versions cannot be determined and exercise the refusal path
+        // instead of the reconciliation path this test is about.
         return {
           SecretList: [
-            { Name: "example/app/prod/s3" },
-            { Name: "example/app/prod/rds" },
+            { Name: "example/app/prod/s3", SecretVersionsToStages: { "v-s3": ["AWSCURRENT"] } },
+            { Name: "example/app/prod/rds", SecretVersionsToStages: { "v-rds": ["AWSCURRENT"] } },
           ],
         };
       },
@@ -203,22 +207,30 @@ describe("AWS dry-run planning", () => {
 });
 
 describe("AWS live sync (non-dry-run)", () => {
-  it("pulls remote secrets that are missing locally", async () => {
+  it("pulls remote secrets that are missing locally, and refuses to push over an existing remote", async () => {
     // Regression guard: getLocalMetadata() is async, so `if (!getLocalMetadata(key))`
     // (a truthy Promise) silently skipped every pull and killed bidirectional sync.
+    //
+    // The push half of this test asserts the OPPOSITE of what it once did, and the
+    // change is deliberate rather than a relaxed assertion. `example/app/prod/s3`
+    // exists on both sides with no shared checkpoint. Sync used to resolve that by
+    // pushing local over the remote, which is the data-loss bug this suite now
+    // guards against, so the expected outcome is a conflict that mutates nothing.
     setAwsClientFactoryForTests(() => ({
       send: async (command: any) => {
         const name = command?.constructor?.name;
         if (name === "ListSecretsCommand") {
           return {
             SecretList: [
-              { Name: "example/app/prod/s3" },
-              { Name: "example/app/prod/rds" },
+              { Name: "example/app/prod/s3", SecretVersionsToStages: { "v-s3": ["AWSCURRENT"] } },
+              { Name: "example/app/prod/rds", SecretVersionsToStages: { "v-rds": ["AWSCURRENT"] } },
             ],
           };
         }
         if (name === "GetSecretValueCommand") {
-          return { SecretString: "remote-value" };
+          // VersionId is what pins the pulled value to the version that was
+          // planned; a real GetSecretValue always returns it.
+          return { SecretString: "remote-value", VersionId: "v-rds" };
         }
         return {};
       },
@@ -229,10 +241,14 @@ describe("AWS live sync (non-dry-run)", () => {
     const result = await syncAll({ profile: "example-aws-profile" });
 
     expect(result.errors).toEqual([]);
-    expect(result.pushed).toEqual(["example/app/prod/s3"]);
     expect(result.pulled).toEqual(["example/app/prod/rds"]);
 
+    // The pull actually landed — the guard this test was written for.
     const pulled = await _store.getSecret("example/app/prod/rds");
     expect(pulled?.value).toBe("remote-value");
+
+    // No remote value was replaced, and the collision is reported rather than silently resolved.
+    expect(result.pushed).toEqual([]);
+    expect(result.conflicts.map((c) => c.key)).toContain("example/app/prod/s3");
   });
 });
