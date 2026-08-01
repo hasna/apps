@@ -5,6 +5,16 @@ documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
 unless noted.
 
+## 0.4.35 (2026-08-02)
+
+### Fixed
+
+- **Durable Codewith retry evidence:** local and remote agent execution now
+  reserves a bounded, scrubbed summary for each transient start failure. Retry
+  numbers and failed-attempt diagnostics survive both the executor's 256 KiB
+  tail retention and the store's 64 KiB head-plus-tail clamp without making a
+  silent final attempt look productive.
+
 ## 0.4.34 (2026-08-01)
 
 ### Fixed

@@ -1,8 +1,8 @@
-import { chmodSync, mkdtempSync, readFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
-import type { AgentTarget } from "../types.js";
+import type { AgentTarget, LoopMachineRef } from "../types.js";
 import { agentSessionContract, BoundedOutputBuffer, PROVIDER_ADAPTERS, providerAdapter, spawnCapture } from "./agent-adapter.js";
 import { ValidationError } from "./errors.js";
 import { executeLoop, executeTarget } from "./executor.js";
@@ -45,6 +45,51 @@ async function fakeCodewith(
   );
   chmodSync(fake, 0o755);
   return fake;
+}
+
+async function fakeRetryingCodewith(
+  fake: string,
+  opts: { failedPrefixBytes?: number; successStderrBytes?: number } = {},
+): Promise<void> {
+  const failedPrefixBytes = opts.failedPrefixBytes ?? 0;
+  const successStderrBytes = opts.successStderrBytes ?? 0;
+  await Bun.write(
+    fake,
+    [
+      "#!/usr/bin/env bash",
+      "if [[ \" $* \" == *\" exec \"* ]]; then",
+      "  attempt=0",
+      "  if [[ -f \"$OPENLOOPS_FAKE_CODEWITH_ATTEMPTS\" ]]; then attempt=\"$(<\"$OPENLOOPS_FAKE_CODEWITH_ATTEMPTS\")\"; fi",
+      "  attempt=$((attempt + 1))",
+      "  printf '%s' \"$attempt\" > \"$OPENLOOPS_FAKE_CODEWITH_ATTEMPTS\"",
+      "  if [[ \"$attempt\" -lt 3 ]]; then",
+      `    head -c ${failedPrefixBytes} </dev/zero | tr '\\0' 'F' >&2`,
+      "    printf '\\nattempt %s diagnostic: codewith agent start exited with code 1 %s\\n' \"$attempt\" \"${OPENLOOPS_FAKE_DIAGNOSTIC_SECRET:-}\" >&2",
+      "    exit 1",
+      "  fi",
+      "  printf '%s\\n' '{\"type\":\"task_complete\"}'",
+      `  head -c ${successStderrBytes} </dev/zero | tr '\\0' 'S' >&2`,
+      "  exit 0",
+      "fi",
+      "printf 'unexpected codewith invocation: %s\\n' \"$*\" >&2",
+      "exit 64",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(fake, 0o755);
+}
+
+function remoteExecutionOptions(home: string) {
+  return {
+    machine: { id: "remote-test", local: false, route: "ssh" as const },
+    machineResolver: (machine: LoopMachineRef) => ({ ...machine, local: false, route: "ssh" as const }),
+    env: { HOME: home, PATH: "/usr/bin:/bin" },
+    machineCommandResolver: () => ({
+      command: "bash",
+      args: ["-c", `HOME=${JSON.stringify(home)} PATH=/usr/bin:/bin bash -s`],
+      source: "ssh" as const,
+    }),
+  };
 }
 
 function codewithInvocations(file: string): string[][] {
@@ -251,6 +296,133 @@ describe("agent adapters", () => {
       expect(result.stderr).toContain("attempt 2: codewith agent start exited with code 1");
       const execInvocations = codewithInvocations(invocationsFile).filter((args) => args.includes("exec"));
       expect(execInvocations).toHaveLength(3);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("keeps every local retry marker and diagnostic after a later attempt evicts the executor tail", async () => {
+    const binDir = mkdtempSync(join(tmpdir(), "loops-codewith-retry-retention-local-"));
+    const attemptsFile = join(binDir, "attempts");
+    const secret = ["sk", "proj", "AbCdEfGhIjKlMnOpQrStUvWxYz012345"].join("-");
+    await fakeRetryingCodewith(join(binDir, "codewith"), { successStderrBytes: 320 * 1024 });
+
+    const result = await executeTarget(
+      {
+        type: "agent",
+        provider: "codewith",
+        prompt: "say ok",
+        cwd: ".",
+        configIsolation: "safe",
+      },
+      {},
+      {
+        env: {
+          ...process.env,
+          PATH: `${binDir}:${process.env.PATH}`,
+          OPENLOOPS_FAKE_CODEWITH_ATTEMPTS: attemptsFile,
+          OPENLOOPS_FAKE_DIAGNOSTIC_SECRET: secret,
+        },
+        maxOutputBytes: 256 * 1024,
+      },
+    );
+
+    expect(result.status).toBe("succeeded");
+    expect(result.stderr).toContain("retrying codewith agent after transient fast start failure (1/3)");
+    expect(result.stderr).toContain("retrying codewith agent after transient fast start failure (2/3)");
+    expect(result.stderr).toContain("attempt 1 diagnostic: codewith agent start exited with code 1");
+    expect(result.stderr).toContain("attempt 2 diagnostic: codewith agent start exited with code 1");
+    expect(result.stderr).toContain("[SCRUBBED]");
+    expect(result.stderr).not.toContain(secret);
+    expect(Buffer.byteLength(result.stderr, "utf8")).toBeLessThanOrEqual(256 * 1024);
+  });
+
+  test("keeps every remote retry marker and diagnostic after a later attempt evicts the executor tail", async () => {
+    const home = mkdtempSync(join(tmpdir(), "loops-codewith-retry-retention-remote-"));
+    const binDir = join(home, ".local", "bin");
+    const attemptsFile = join(home, "attempts");
+    mkdirSync(binDir, { recursive: true });
+    await fakeRetryingCodewith(join(binDir, "codewith"), { successStderrBytes: 320 * 1024 });
+
+    const result = await executeTarget(
+      {
+        type: "agent",
+        provider: "codewith",
+        prompt: "say ok",
+        cwd: home,
+        configIsolation: "safe",
+        env: { OPENLOOPS_FAKE_CODEWITH_ATTEMPTS: attemptsFile },
+      },
+      {},
+      { ...remoteExecutionOptions(home), maxOutputBytes: 256 * 1024 },
+    );
+
+    expect(result.status).toBe("succeeded");
+    expect(result.stderr).toContain("retrying codewith agent after transient fast start failure (1/3)");
+    expect(result.stderr).toContain("retrying codewith agent after transient fast start failure (2/3)");
+    expect(result.stderr).toContain("attempt 1 diagnostic: codewith agent start exited with code 1");
+    expect(result.stderr).toContain("attempt 2 diagnostic: codewith agent start exited with code 1");
+    expect(Buffer.byteLength(result.stderr, "utf8")).toBeLessThanOrEqual(256 * 1024);
+  });
+
+  test("preserves retry summaries when finalizeRun clamps an otherwise complete executor result", async () => {
+    const binDir = mkdtempSync(join(tmpdir(), "loops-codewith-retry-retention-store-"));
+    const attemptsFile = join(binDir, "attempts");
+    await fakeRetryingCodewith(join(binDir, "codewith"), {
+      failedPrefixBytes: 40 * 1024,
+      successStderrBytes: 40 * 1024,
+    });
+
+    const result = await executeTarget(
+      {
+        type: "agent",
+        provider: "codewith",
+        prompt: "say ok",
+        cwd: ".",
+        configIsolation: "safe",
+      },
+      {},
+      {
+        env: {
+          ...process.env,
+          PATH: `${binDir}:${process.env.PATH}`,
+          OPENLOOPS_FAKE_CODEWITH_ATTEMPTS: attemptsFile,
+        },
+        maxOutputBytes: 256 * 1024,
+      },
+    );
+    expect(result.status).toBe("succeeded");
+    expect(result.stderr).toContain("attempt 1 diagnostic: codewith agent start exited with code 1");
+    expect(result.stderr).toContain("attempt 2 diagnostic: codewith agent start exited with code 1");
+
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "codewith-retry-retention",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: { type: "command", command: "true" },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const stored = store.finalizeRun(
+        claim!.run.id,
+        {
+          status: result.status,
+          finishedAt: result.finishedAt,
+          durationMs: result.durationMs,
+          stdout: result.stdout,
+          stderr: result.stderr,
+          exitCode: result.exitCode,
+        },
+        { claimedBy: "test", claimToken: claim!.claimToken },
+      );
+
+      expect(stored.stderr).toContain("retrying codewith agent after transient fast start failure (1/3)");
+      expect(stored.stderr).toContain("retrying codewith agent after transient fast start failure (2/3)");
+      expect(stored.stderr).toContain("attempt 1 diagnostic: codewith agent start exited with code 1");
+      expect(stored.stderr).toContain("attempt 2 diagnostic: codewith agent start exited with code 1");
+      expect(stored.stderr).toContain("truncated by loops run-output retention");
+      expect(stored.stderr!.length).toBeLessThanOrEqual(64 * 1024 + 128);
     } finally {
       store.close();
     }

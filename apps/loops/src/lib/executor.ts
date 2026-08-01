@@ -24,7 +24,7 @@ import { commandNotFoundMessage, executableExists, hasnaClientEnv, normalizeExec
 import { nowIso } from "./ids.js";
 import { refreshLoopMachine, resolveMachineCommand } from "./machines.js";
 import { processStartTimeMs } from "./process-identity.js";
-import { isRedactionPlaceholder } from "./redact.js";
+import { isRedactionPlaceholder, scrubSecrets } from "./redact.js";
 
 const DEFAULT_TIMEOUT_MS = 30 * 60_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 256 * 1024;
@@ -42,6 +42,7 @@ const DEFAULT_BUFFERED_AGENT_IDLE_TIMEOUT_MS = 4 * 60 * 60_000;
 const WORKTREE_GIT_TIMEOUT_MS = 5 * 60_000;
 const CODEWITH_START_FAST_FAILURE_MAX_MS = 2_000;
 const CODEWITH_START_RETRY_DELAYS_MS = [250, 750] as const;
+const CODEWITH_RETRY_DIAGNOSTIC_MAX_BYTES = 2 * 1024;
 
 export interface SpawnedProcessInfo {
   pid: number;
@@ -344,6 +345,48 @@ function shouldRetryCodewithStartFailure(
   const durationMs = new Date(attemptFinishedAt).getTime() - new Date(attemptStartedAt).getTime();
   if (!Number.isFinite(durationMs) || durationMs > CODEWITH_START_FAST_FAILURE_MAX_MS) return false;
   return codewithStartFailureLooksTransient(`${fields.stderr ?? ""}\n${fields.stdout ?? ""}`);
+}
+
+function utf8Tail(value: string, maxBytes: number): string {
+  const scrubbed = scrubSecrets(value);
+  const encoded = Buffer.from(scrubbed, "utf8");
+  if (encoded.length <= maxBytes) return scrubbed;
+  if (maxBytes <= 0) return "";
+
+  let marker = "";
+  let retainedBytes = maxBytes;
+  for (let pass = 0; pass < 3; pass += 1) {
+    const droppedBytes = Math.max(0, encoded.length - retainedBytes);
+    marker = `[truncated ${droppedBytes} bytes]\n`;
+    retainedBytes = Math.max(0, maxBytes - Buffer.byteLength(marker, "utf8"));
+  }
+  let start = Math.max(0, encoded.length - retainedBytes);
+  while (start < encoded.length && (encoded[start] & 0b1100_0000) === 0b1000_0000) start++;
+  return `${marker}${encoded.subarray(start).toString("utf8")}`;
+}
+
+function codewithRetryMessage(attemptIndex: number): string {
+  return `retrying codewith agent after transient fast start failure (${attemptIndex + 1}/${CODEWITH_START_RETRY_DELAYS_MS.length + 1})`;
+}
+
+function codewithRetrySummary(attemptFields: ResultFields, attemptIndex: number): string {
+  const diagnostic = utf8Tail(
+    `${attemptFields.stderr ?? ""}\n${attemptFields.stdout ?? ""}`.trim(),
+    CODEWITH_RETRY_DIAGNOSTIC_MAX_BYTES,
+  );
+  return `${codewithRetryMessage(attemptIndex)}\nfailed attempt ${attemptIndex + 1} diagnostic:\n${diagnostic || "(no output)"}`;
+}
+
+function stderrWithRetrySummaries(
+  stderr: BoundedOutputBuffer,
+  retrySummaries: readonly string[],
+  maxOutputBytes: number,
+): string {
+  const tail = stderr.value();
+  if (!retrySummaries.length) return tail;
+  const prefix = `${retrySummaries.join("\n")}\n`;
+  const tailBudget = Math.max(0, maxOutputBytes - Buffer.byteLength(prefix, "utf8"));
+  return `${prefix}${utf8Tail(tail, tailBudget)}`;
 }
 
 async function waitForRetryDelay(delayMs: number, signal: AbortSignal | undefined): Promise<boolean> {
@@ -1260,6 +1303,7 @@ async function executeRemoteSpec(
   }
 
   const stderr = new BoundedOutputBuffer(maxOutputBytes);
+  const retrySummaries: string[] = [];
   for (let attemptIndex = 0; ; attemptIndex += 1) {
     const attemptStartedAt = attemptIndex === 0 ? startedAt : nowIso();
     const stdout = new BoundedOutputBuffer(maxOutputBytes);
@@ -1335,7 +1379,13 @@ async function executeRemoteSpec(
     }
 
     const attemptFinishedAt = nowIso();
-    const fields: ResultFields = { exitCode, stdout: stdout.value(), stderr: stderr.value(), pid: child.pid, finishedAt: attemptFinishedAt };
+    const fields: ResultFields = {
+      exitCode,
+      stdout: stdout.value(),
+      stderr: stderrWithRetrySummaries(stderr, retrySummaries, maxOutputBytes),
+      pid: child.pid,
+      finishedAt: attemptFinishedAt,
+    };
     const attemptFields: ResultFields = { ...fields, stderr: attemptStderr.value() };
     if (timedOut || idleTimedOut) {
       return timeoutResult(
@@ -1351,10 +1401,10 @@ async function executeRemoteSpec(
     }
     if (error || exitCode !== 0) {
       if (shouldRetryCodewithStartFailure(spec, attemptFields, error, attemptStartedAt, attemptFinishedAt, attemptIndex)) {
-        const retryMessage = `retrying codewith agent after transient fast start failure (${attemptIndex + 1}/${CODEWITH_START_RETRY_DELAYS_MS.length + 1})`;
-        opts.log?.(retryMessage);
-        stderr.append(`\n${retryMessage}\n`);
-        fields.stderr = stderr.value();
+        const retrySummary = codewithRetrySummary(attemptFields, attemptIndex);
+        opts.log?.(codewithRetryMessage(attemptIndex));
+        retrySummaries.push(retrySummary);
+        fields.stderr = stderrWithRetrySummaries(stderr, retrySummaries, maxOutputBytes);
         if (await waitForRetryDelay(CODEWITH_START_RETRY_DELAYS_MS[attemptIndex]!, opts.signal)) continue;
         return failureResult(startedAt, "cancelled", fields);
       }
@@ -1442,6 +1492,7 @@ export async function executeTarget(
   }
 
   const stderr = new BoundedOutputBuffer(maxOutputBytes);
+  const retrySummaries: string[] = [];
   for (let attemptIndex = 0; ; attemptIndex += 1) {
     const attemptStartedAt = attemptIndex === 0 ? startedAt : nowIso();
     const stdout = new BoundedOutputBuffer(maxOutputBytes);
@@ -1521,7 +1572,13 @@ export async function executeTarget(
     }
 
     const attemptFinishedAt = nowIso();
-    const fields: ResultFields = { exitCode, stdout: stdout.value(), stderr: stderr.value(), pid: child.pid, finishedAt: attemptFinishedAt };
+    const fields: ResultFields = {
+      exitCode,
+      stdout: stdout.value(),
+      stderr: stderrWithRetrySummaries(stderr, retrySummaries, maxOutputBytes),
+      pid: child.pid,
+      finishedAt: attemptFinishedAt,
+    };
     const attemptFields: ResultFields = { ...fields, stderr: attemptStderr.value() };
     if (timedOut || idleTimedOut) {
       return timeoutResult(
@@ -1537,10 +1594,10 @@ export async function executeTarget(
     }
     if (error || exitCode !== 0) {
       if (shouldRetryCodewithStartFailure(spec, attemptFields, error, attemptStartedAt, attemptFinishedAt, attemptIndex)) {
-        const retryMessage = `retrying codewith agent after transient fast start failure (${attemptIndex + 1}/${CODEWITH_START_RETRY_DELAYS_MS.length + 1})`;
-        opts.log?.(retryMessage);
-        stderr.append(`\n${retryMessage}\n`);
-        fields.stderr = stderr.value();
+        const retrySummary = codewithRetrySummary(attemptFields, attemptIndex);
+        opts.log?.(codewithRetryMessage(attemptIndex));
+        retrySummaries.push(retrySummary);
+        fields.stderr = stderrWithRetrySummaries(stderr, retrySummaries, maxOutputBytes);
         if (await waitForRetryDelay(CODEWITH_START_RETRY_DELAYS_MS[attemptIndex]!, opts.signal)) continue;
         return failureResult(startedAt, "cancelled", fields);
       }
