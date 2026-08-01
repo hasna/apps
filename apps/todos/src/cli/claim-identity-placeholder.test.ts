@@ -297,6 +297,20 @@ describe("todos start/done — the same --agent value must claim and release", (
   });
 });
 
+describe("todos unlock — omitting identity must not become force release", () => {
+  it("refuses an unidentified caller and preserves another agent's live lock", async () => {
+    const task = await addTask("named lock must survive unidentified unlock");
+    const locked = await runCli(["--agent", "session-a", "lock", task.id]);
+    expect(locked.exitCode).toBe(0);
+    expect((await showTask(task.id)).locked_by).toBe("session-a");
+
+    const unlock = await runCli(["unlock", task.id]);
+    expect(unlock.exitCode).not.toBe(0);
+    expect(unlock.stderr).toContain("TODOS_AGENT_ID");
+    expect((await showTask(task.id)).locked_by).toBe("session-a");
+  });
+});
+
 describe("todos lock — the shared placeholder let one session take another's lock", () => {
   it("does not let two unidentified sessions both hold the same task", async () => {
     // The exploit, end to end, and it needs BOTH sessions unidentified — an
