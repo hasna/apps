@@ -66,7 +66,14 @@ ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=19427
 COPY --from=build /app/dist ./dist
-# The server bundle is self-contained. Keep only the standalone, pre-bundled
+# Disable Bun's runtime auto-install. Without it, a bare specifier left in the
+# bundle is fetched from the public npm registry at the `latest` tag on every
+# container start, ignoring bun.lock — which is how a contracts release broke
+# this image on 2026-08-01. See docker/runner-bunfig.toml for the full account.
+COPY docker/runner-bunfig.toml ./bunfig.toml
+# The server bundle is self-contained: dist/server/index.js resolves nothing but
+# Bun and Node builtins, which src/server-bundle-self-contained.test.ts asserts
+# against this exact filesystem shape. Keep only the standalone, pre-bundled
 # contracts CLI used to mint the ephemeral API key during controlled smoke and
 # operational workflows; do not ship the workspace dependency tree.
 COPY --from=deps /app/node_modules/@hasna/contracts/dist/cli/index.js ./bin/contracts-cli.js
