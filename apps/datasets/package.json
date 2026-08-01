@@ -54,7 +54,7 @@
     "contracts:conformance": "contracts conformance fixtures",
     "smoke:dist": "bun -e \"import('./dist/index.js').then((m)=>{ if (!m.createDatasetsClient) process.exit(1) })\"",
     "pack:check": "bun pm pack --dry-run --ignore-scripts",
-    "verify:release": "bun run typecheck && bun test && bun run contracts:conformance && bun run build && bun run smoke:dist && bun run pack:check",
+    "verify:release": "bun run typecheck && bun test && bun run contracts:conformance && contracts no-cloud-scan . && bun run build && bun run smoke:dist && bun run pack:check",
     "dev:cli": "bun run src/cli/index.ts",
     "dev:mcp": "bun run src/mcp/index.ts",
     "prepare": "bun run build",
