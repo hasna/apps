@@ -6,6 +6,55 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.97]
+
+### Fixed
+
+- **`projects list` returned one server-capped page and called it the whole
+  registry.** Every list path issued a single request and returned the body
+  verbatim. The API clamps a list response to 1000 rows and reports no `total`,
+  so a full page and a complete result were indistinguishable — and the local
+  CLI default compounded it, capping at 100. Measured on installed `0.1.96`:
+  `projects list --json` returned **100** rows containing **5** `iproj-*`
+  projects; the same command on this branch returns **2352** rows containing
+  **108** `iproj-*`, exit code 0. Callers were silently deciding that projects
+  did not exist.
+
+  List reads now walk `offset` until the server stops producing rows, via a new
+  `collectPages` helper ([`src/store/paginate.ts`](src/store/paginate.ts)). The
+  page stride is learned from the first response rather than hardcoded, so a
+  server that raises or lowers its cap needs no client change. A server that
+  ignores `offset` — which would otherwise spin forever handing back the same
+  page — is detected by row identity and raises `PaginationError` instead of
+  returning a quietly truncated list. `--limit N` still returns exactly N and
+  stops paging there.
+
+### Changed
+
+- List responses now carry `total`, `has_more` and `complete` so a caller can
+  tell a full page from a finished walk. `GET /v1/projects` reports the same
+  fields, and the OpenAPI document describes them.
+
+### Known limitation
+
+- This ships the **client** fix only. The deployed `/v1/projects` service still
+  returns at most 1000 rows with no `total`, so a direct HTTP caller that does
+  not page is still truncated. The service has been stuck on a 2026-07-23 image
+  since the deploy workflow began failing on 2026-07-24; that is tracked
+  separately and is not addressed here.
+
+## [0.1.96]
+
+Release-only version bump. The changes below were merged in
+[#41](https://github.com/hasna/projects/pull/41) without a version bump, so the
+published `0.1.95` — and therefore every machine on the fleet — still shipped
+`KIND_CHANNEL_RULES` and kept minting `internal-<slug>` channel names for kinds
+`generic`, `project`, `docs`, `scaffold` and `remote-only`. Verified 2026-07-30:
+`npm view @hasna/projects version` reported `0.1.95` while the installed
+`dist/cli/index.js` at that version still contained the table, and the merged
+regression test `derivation never IMPOSES an "internal-" prefix, for any kind`
+fails against that build.
+
 ### Changed
 
 - **BREAKING — channel derivation no longer imposes a prefix.** `deriveProjectChannel`

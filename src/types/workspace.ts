@@ -28,8 +28,23 @@ export type EventSource = (typeof EVENT_SOURCES)[number];
 export const AGENT_RUN_STATUSES = ["planned", "running", "completed", "failed"] as const;
 export type AgentRunStatus = (typeof AGENT_RUN_STATUSES)[number];
 
+export const MACHINE_ROLES = ["mirror-hub", "assignable", "avoid"] as const;
+export type MachineRole = (typeof MACHINE_ROLES)[number];
+
 export interface JsonObject {
   [key: string]: unknown;
+}
+
+export interface Machine {
+  slug: string;
+  status: string;
+  role: MachineRole;
+}
+
+export interface MachineRow {
+  slug: string;
+  status: string;
+  role: string;
 }
 
 export interface Root {
@@ -219,6 +234,7 @@ export interface Workspace {
   status: WorkspaceStatus;
   root_id: string | null;
   recipe_id: string | null;
+  canonical_machine: string | null;
   primary_path: string | null;
   git_remote: string | null;
   s3_bucket: string | null;
@@ -241,6 +257,7 @@ export interface WorkspaceRow {
   status: string;
   root_id: string | null;
   recipe_id: string | null;
+  canonical_machine: string | null;
   primary_path: string | null;
   git_remote: string | null;
   s3_bucket: string | null;
@@ -283,6 +300,7 @@ export interface UpdateWorkspaceInput {
   status?: WorkspaceStatus;
   root_id?: string | null;
   recipe_id?: string | null;
+  canonical_machine?: string | null;
   primary_path?: string | null;
   git_remote?: string | null;
   s3_bucket?: string | null;

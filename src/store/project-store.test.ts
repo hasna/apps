@@ -203,3 +203,126 @@ describe("projects store api transport (roots/agents/recipes)", () => {
     expect(await store.getProject("iproj-x")).toBeNull();
   });
 });
+
+// Regression for dc3ba294: the projects API hard-caps every list response at
+// 1000 rows and the client issued exactly one un-offset request, so
+// `projects list --json` silently returned 939 of 2399 registry rows with
+// rc=0, an empty stderr and no count/cursor a caller could inspect. The store
+// MUST walk the pages itself, MUST NOT assume the cap is 1000, and MUST make a
+// bounded result detectable rather than silent.
+describe("projects list pagination (server row cap)", () => {
+  const CLOUD_ENV = {
+    HASNA_PROJECTS_API_URL: "https://projects.hasna.xyz",
+    HASNA_PROJECTS_API_KEY: "secret-key",
+  };
+
+  /**
+   * A fake registry that behaves like the deployed server: it clamps any
+   * requested limit to `cap`, defaults to `defaultLimit` when none is sent,
+   * honours `offset`, and reports `count` as the PAGE length (not the total) —
+   * which is exactly why the truncation was undetectable.
+   */
+  function fakeRegistry(options: { total: number; cap: number; defaultLimit?: number; ignoreOffset?: boolean }) {
+    const rows = Array.from({ length: options.total }, (_, i) => ({
+      id: `wks_${String(i).padStart(5, "0")}`,
+      slug: `proj-${String(i).padStart(5, "0")}`,
+      name: `Project ${i}`,
+      status: "active",
+      tags: [],
+      metadata: {},
+      integrations: {},
+    }));
+    const requests: Array<{ limit: string | null; offset: string | null }> = [];
+    const fetchImpl = async (input: string, init?: RequestInit): Promise<Response> => {
+      const url = new URL(input);
+      if (url.pathname !== "/v1/projects" || (init?.method ?? "GET").toUpperCase() !== "GET") {
+        return new Response(JSON.stringify({}), { status: 200 });
+      }
+      const q = url.searchParams;
+      requests.push({ limit: q.get("limit"), offset: q.get("offset") });
+      const requested = q.get("limit") ? Number(q.get("limit")) : (options.defaultLimit ?? 100);
+      const limit = Math.min(Math.max(requested, 1), options.cap);
+      const offset = options.ignoreOffset ? 0 : Math.max(Number(q.get("offset") ?? 0), 0);
+      const page = rows.slice(offset, offset + limit);
+      return new Response(JSON.stringify({ workspaces: page, count: page.length }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    __resetProjectStore();
+    return { store: resolveProjectStore(CLOUD_ENV, fetchImpl), requests, rows };
+  }
+
+  test("no explicit limit returns every row, not the server's capped page", async () => {
+    const { store, requests } = fakeRegistry({ total: 2399, cap: 1000 });
+    const projects = await store.listProjects();
+    expect(projects).toHaveLength(2399);
+    expect(new Set(projects.map((p) => p.id)).size).toBe(2399);
+    expect(projects.at(-1)!.slug).toBe("proj-02398");
+    // walked the pages rather than trusting one response
+    expect(requests.length).toBeGreaterThan(1);
+    expect(requests.map((r) => r.offset)).toEqual(["0", "1000", "2000"]);
+  });
+
+  test("a status filter is paginated too (the cap applies to filtered queries)", async () => {
+    const { store } = fakeRegistry({ total: 2360, cap: 1000 });
+    const projects = await store.listProjects({ status: "active" });
+    expect(projects).toHaveLength(2360);
+  });
+
+  test("the page stride is learned from the response, not hardcoded to 1000", async () => {
+    const { store, requests } = fakeRegistry({ total: 640, cap: 250 });
+    const projects = await store.listProjects();
+    expect(projects).toHaveLength(640);
+    // 640 rows at a 250-row cap: the page at offset 500 comes back short (140),
+    // which is the tail signal — no fourth request is needed.
+    expect(requests.map((r) => r.offset)).toEqual(["0", "250", "500"]);
+  });
+
+  test("a total that is an exact multiple of the cap still terminates and is complete", async () => {
+    const { store } = fakeRegistry({ total: 2000, cap: 1000 });
+    const projects = await store.listProjects();
+    expect(projects).toHaveLength(2000);
+  });
+
+  test("an explicit limit under the cap is honoured in a single request", async () => {
+    const { store, requests } = fakeRegistry({ total: 2399, cap: 1000 });
+    const projects = await store.listProjects({ limit: 50 });
+    expect(projects).toHaveLength(50);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ limit: "50" });
+  });
+
+  test("an explicit limit above the cap is honoured by paginating, not clamped", async () => {
+    const { store } = fakeRegistry({ total: 2399, cap: 1000 });
+    const projects = await store.listProjects({ limit: 1500 });
+    expect(projects).toHaveLength(1500);
+  });
+
+  test("an explicit offset is respected as the starting point", async () => {
+    const { store } = fakeRegistry({ total: 2399, cap: 1000 });
+    const projects = await store.listProjects({ offset: 2390 });
+    expect(projects).toHaveLength(9);
+    expect(projects[0]!.slug).toBe("proj-02390");
+  });
+
+  test("a server that ignores offset fails loudly instead of truncating silently", async () => {
+    const { store } = fakeRegistry({ total: 2399, cap: 1000, ignoreOffset: true });
+    await expect(store.listProjects()).rejects.toThrow(/offset/i);
+  });
+
+  test("listProjectsPage exposes total and has_more so a bounded read is detectable", async () => {
+    const { store } = fakeRegistry({ total: 2399, cap: 1000 });
+    const page = await store.listProjectsPage({ limit: 25 });
+    expect(page.projects).toHaveLength(25);
+    expect(page.total).toBe(2399);
+    expect(page.has_more).toBe(true);
+    expect(page.complete).toBe(false);
+
+    const all = await store.listProjectsPage();
+    expect(all.projects).toHaveLength(2399);
+    expect(all.total).toBe(2399);
+    expect(all.has_more).toBe(false);
+    expect(all.complete).toBe(true);
+  });
+});

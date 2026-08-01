@@ -15,19 +15,21 @@ describe("projects MCP HTTP transport", () => {
   let port: number;
   let root: string;
   let previousDbPath: string | undefined;
-  let previousApiModeEnv: Map<string, string | undefined>;
+  let previousApiEnv: Partial<Record<(typeof API_MODE_ENV_KEYS)[number], string | undefined>>;
+
 
   beforeAll(() => {
     root = mkdtempSync(join(tmpdir(), "projects-mcp-http-"));
     previousDbPath = process.env.HASNA_PROJECTS_DB_PATH;
-    previousApiModeEnv = new Map();
+    previousApiEnv = {};
     for (const key of API_MODE_ENV_KEYS) {
-      previousApiModeEnv.set(key, process.env[key]);
+      previousApiEnv[key] = process.env[key];
       delete process.env[key];
     }
     process.env.HASNA_PROJECTS_DB_PATH = join(root, "projects.db");
-    closeDatabase();
     __resetProjectStore();
+    closeDatabase();
+
     httpServer = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -47,16 +49,19 @@ describe("projects MCP HTTP transport", () => {
 
   afterAll(() => {
     httpServer.stop();
+    closeDatabase();
+    __resetProjectStore();
     if (previousDbPath === undefined) {
       delete process.env.HASNA_PROJECTS_DB_PATH;
     } else {
       process.env.HASNA_PROJECTS_DB_PATH = previousDbPath;
     }
-    for (const [key, value] of previousApiModeEnv) {
+    for (const key of API_MODE_ENV_KEYS) {
+      const value = previousApiEnv[key];
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
-    closeDatabase();
+
     __resetProjectStore();
     rmSync(root, { recursive: true, force: true });
   });

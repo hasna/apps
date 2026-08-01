@@ -296,6 +296,50 @@ export const MIGRATIONS: string[] = [
 
   INSERT OR IGNORE INTO _migrations (id) VALUES (6);
   `,
+
+  // Migration 7: Canonical machine ownership and machine registry
+  `
+  ALTER TABLE workspaces ADD COLUMN canonical_machine TEXT NULL;
+
+  CREATE TABLE IF NOT EXISTS machines (
+    slug TEXT PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT 'active',
+    role TEXT NOT NULL CHECK(role IN ('mirror-hub', 'assignable', 'avoid'))
+  );
+
+  INSERT OR IGNORE INTO machines (slug, status, role) VALUES
+    ('spark01', 'active', 'mirror-hub'),
+    ('spark02', 'active', 'mirror-hub'),
+    ('apple01', 'active', 'assignable'),
+    ('apple03', 'active', 'assignable'),
+    ('apple06', 'active', 'avoid'),
+    ('machine001', 'active', 'assignable'),
+    ('machine002', 'active', 'assignable'),
+    ('machine003', 'active', 'assignable'),
+    ('machine004', 'active', 'assignable'),
+    ('machine005', 'active', 'assignable'),
+    ('machine006', 'active', 'assignable'),
+    ('machine007', 'active', 'assignable'),
+    ('machine008', 'active', 'assignable'),
+    ('machine009', 'active', 'assignable'),
+    ('machine010', 'active', 'assignable'),
+    ('machine011', 'active', 'assignable');
+
+  UPDATE workspaces
+  SET canonical_machine = NULLIF(trim(json_extract(metadata, '$.canonical_machine')), '')
+  WHERE canonical_machine IS NULL
+    AND json_valid(metadata)
+    AND json_type(metadata, '$.canonical_machine') = 'text';
+
+  UPDATE workspaces
+  SET metadata = json_remove(metadata, '$.canonical_machine')
+  WHERE json_valid(metadata)
+    AND json_type(metadata, '$.canonical_machine') IS NOT NULL;
+
+  CREATE INDEX IF NOT EXISTS idx_workspaces_canonical_machine ON workspaces(canonical_machine);
+
+  INSERT OR IGNORE INTO _migrations (id) VALUES (7);
+  `,
 ];
 
 export function runMigrations(db: Database): void {
