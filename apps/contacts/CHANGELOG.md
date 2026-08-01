@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- CI: run install, typecheck, build, and tests on pull requests and pushes to `main`
+
 ## 0.1.0 — 2026-03-20
 
 Initial release.

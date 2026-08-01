@@ -608,6 +608,7 @@ const MIGRATIONS = [
 export type ContactsDatabase = SqliteAdapter;
 
 let _db: ContactsDatabase | null = null;
+let lastNowMs = 0;
 
 export function getDatabase(path?: string): ContactsDatabase {
   if (_db) return _db;
@@ -632,7 +633,10 @@ export function uuid(): string {
 }
 
 export function now(): string {
-  return new Date().toISOString();
+  const currentMs = Date.now();
+  const nextMs = currentMs > lastNowMs ? currentMs : lastNowMs + 1;
+  lastNowMs = nextMs;
+  return new Date(nextMs).toISOString();
 }
 
 function quoteIdentifier(identifier: string): string {
