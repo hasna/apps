@@ -494,10 +494,11 @@ function inspectSourceTodosTask(todosProjectPath: string, taskId: string): Sourc
       error: redact(`todos inspect returned task ${inspectedId}`, 320),
     };
   }
+  const canonicalTaskId = inspectedId.trim();
   return {
     checked: true,
     resolved: true,
-    taskId,
+    taskId: canonicalTaskId,
     todosProjectPath,
     status: stringField(task.status)?.trim().toLowerCase(),
     title: stringField(task.title),
@@ -511,10 +512,17 @@ function resolveSourceTodosTask(
   opts: TodosTaskRouteOptions,
 ): SourceTaskResolution | undefined {
   if (opts.sourceTaskResolved) {
+    const canonicalTaskId = opts.sourceTaskCanonicalId?.trim();
+    if (!canonicalTaskId) {
+      throw new ValidationError("sourceTaskResolved requires sourceTaskCanonicalId from the active todos source");
+    }
+    if (!todosIdentifiesRequestedTask(canonicalTaskId, taskId)) {
+      throw new ValidationError(`sourceTaskCanonicalId ${canonicalTaskId} does not identify requested task ${taskId}`);
+    }
     return {
       checked: false,
       resolved: true,
-      taskId,
+      taskId: canonicalTaskId,
       todosProjectPath: opts.sourceTodosProjectPath?.trim() || opts.todosProject?.trim(),
     };
   }
@@ -961,26 +969,12 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
   const projectGroup = routeProjectGroup(opts.projectGroup, data, metadata);
   const throttleLimits = routeThrottleLimitsFromInputs(opts, data, metadata);
   const routeScope = resolveRouteScope(opts, "todos-task");
-  const sourceProjectIdempotencyPrefix = sourceTodosProjectPath
-    ? normalizeRoutePath(sourceTodosProjectPath) ?? resolve(sourceTodosProjectPath)
-    : undefined;
-  // PR-subject tasks dedupe by GitHub owner/repo#number so the duplicate tasks
-  // the repos registry mints (one per local checkout of the same repo) collapse
-  // to a single work item instead of spawning a worker per checkout. Non-PR
-  // tasks keep the (source-path, task-id) key so unrelated tasks never collide.
-  const prFingerprint = isPrBacklogTask(data, metadata) ? prFingerprintFromTask(data, metadata) : undefined;
-  const idempotencyKey = prFingerprint
-    ? `todos-task:pr:${prFingerprint}`
-    : sourceProjectIdempotencyPrefix
-      ? `todos-task:${sourceProjectIdempotencyPrefix}:${taskId}`
-      : `todos-task:${taskId}`;
-  const legacyTaskIdempotencyKey = `todos-task:${taskId}`;
-  const dedupeAliases = legacyTaskIdempotencyKey === idempotencyKey ? [] : [legacyTaskIdempotencyKey];
-  const idempotencySuffix = stableSuffix(idempotencyKey);
-  const namePrefix = opts.namePrefix ?? "event:todos-task";
-  const workflowName = `${namePrefix}:${taskId.slice(0, 8)}:${idempotencySuffix}:workflow`;
-  const loopName = `${namePrefix}:${taskId.slice(0, 8)}:${idempotencySuffix}:run`;
-  const sourceTaskResolution = opts.dryRun ? undefined : resolveSourceTodosTask(taskId, data, metadata, opts);
+  // Resolve source identity before constructing any persisted route identity.
+  // `todos inspect` turns abbreviated/case-variant input into the canonical task
+  // id; a drain bypass must supply the canonical id it obtained from `ready`.
+  const sourceTaskResolution = opts.dryRun && !opts.sourceTaskResolved
+    ? undefined
+    : resolveSourceTodosTask(taskId, data, metadata, opts);
   if (sourceTaskResolution && !sourceTaskResolution.resolved) {
     const reason = sourceTaskResolution.sourceUnavailable
       ? `could not ask the active todos source whether task ${taskId} exists: ${sourceTaskResolution.error ?? "todos inspect produced no exit status"}`
@@ -1003,6 +997,26 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
       human: `skipped task ${taskId}: ${reason}`,
     };
   }
+  const canonicalTaskId = sourceTaskResolution?.taskId ?? taskId;
+  const sourceProjectIdempotencyPrefix = sourceTodosProjectPath
+    ? normalizeRoutePath(sourceTodosProjectPath) ?? resolve(sourceTodosProjectPath)
+    : undefined;
+  // PR-subject tasks dedupe by GitHub owner/repo#number so the duplicate tasks
+  // the repos registry mints (one per local checkout of the same repo) collapse
+  // to a single work item instead of spawning a worker per checkout. Non-PR
+  // tasks keep the (source-path, task-id) key so unrelated tasks never collide.
+  const prFingerprint = isPrBacklogTask(data, metadata) ? prFingerprintFromTask(data, metadata) : undefined;
+  const idempotencyKey = prFingerprint
+    ? `todos-task:pr:${prFingerprint}`
+    : sourceProjectIdempotencyPrefix
+      ? `todos-task:${sourceProjectIdempotencyPrefix}:${canonicalTaskId}`
+      : `todos-task:${canonicalTaskId}`;
+  const legacyTaskIdempotencyKey = `todos-task:${taskId}`;
+  const dedupeAliases = legacyTaskIdempotencyKey === idempotencyKey ? [] : [legacyTaskIdempotencyKey];
+  const idempotencySuffix = stableSuffix(idempotencyKey);
+  const namePrefix = opts.namePrefix ?? "event:todos-task";
+  const workflowName = `${namePrefix}:${canonicalTaskId.slice(0, 8)}:${idempotencySuffix}:workflow`;
+  const loopName = `${namePrefix}:${canonicalTaskId.slice(0, 8)}:${idempotencySuffix}:run`;
   if (!opts.dryRun) {
     // Dedupe before worktree validation and provider checks so replayed task
     // events never fail on since-broken project paths or provider options.
@@ -1060,7 +1074,7 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
   const authProfile = providerAuthProfileFromOpts({ authProfile: providerRouting.authProfile }, provider);
   const templateId = todosTaskRouteTemplateId(opts);
   const workflowInput = {
-    taskId,
+    taskId: canonicalTaskId,
     taskTitle,
     taskDescription,
     projectPath,
@@ -1112,7 +1126,7 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
     : renderTodosTaskWorkerVerifierWorkflow(workflowInput);
   workflowBody.name = workflowName;
   workflowBody.description =
-    `Task-triggered ${templateId} workflow for ${taskTitle ?? taskId} from ${event.source}/${event.type}; ` +
+    `Task-triggered ${templateId} workflow for ${taskTitle ?? canonicalTaskId} from ${event.source}/${event.type}; ` +
     `idempotency=${idempotencyKey}; event=${event.id}; project=${projectPath}; projectGroup=${projectGroup ?? "-"}`;
   workflowBody = normalizeWorkflowForStorage(workflowBody, workflowContext);
   const routePolicy = routePolicyEvidenceFromOptions(opts);
@@ -1129,7 +1143,7 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
     },
     subjectRef: {
       kind: "task",
-      id: taskId,
+      id: canonicalTaskId,
       path: routeProjectPath,
       raw: { title: taskTitle, description: taskDescription },
     },
@@ -1176,7 +1190,7 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
     routeProjectPath,
     projectGroup,
     routeScope,
-    poolRouting: buildPoolRoutingPlan(opts, provider, providerRouting.authProfilePool, workflowBody, taskId),
+    poolRouting: buildPoolRoutingPlan(opts, provider, providerRouting.authProfilePool, workflowBody, canonicalTaskId),
     accountRouting: buildAccountRoutingPlan(opts, providerRouting.accountPool, workflowBody),
     providerAdmission: providerAdmissionPlanFromOpts(opts, {
       provider,
@@ -1188,12 +1202,12 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
         opts.verifierAuthProfile,
       ]) ?? providerRouting.authProfilePool,
     }),
-    subjectRef: taskId,
+    subjectRef: canonicalTaskId,
     loopName,
-    loopDescription: `Run ${workflowBody.name} once for task ${taskId}; idempotency=${idempotencyKey}; event=${event.id}`,
+    loopDescription: `Run ${workflowBody.name} once for task ${canonicalTaskId}; idempotency=${idempotencyKey}; event=${event.id}`,
     throttleLimits,
     admitReason: "admitted by todos-task route",
-    humanSubject: `task ${taskId}`,
+    humanSubject: `task ${canonicalTaskId}`,
     valueExtras: {
       providerRouting: providerRoutingPublic(providerRouting),
       prReviewRouting: prReviewRouting.required ? prReviewRouting : undefined,

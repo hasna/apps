@@ -58,6 +58,8 @@ export interface TodosTaskRouteOptions {
   sourceTodosProjectPath?: string;
   /** Internal drain proof that this task came from the active todos source queue. */
   sourceTaskResolved?: boolean;
+  /** Canonical task id returned by that source queue; required with sourceTaskResolved. */
+  sourceTaskCanonicalId?: string;
 }
 
 export interface TodosReadyTask {
