@@ -20,7 +20,7 @@ RUN bun build src/serve/index.ts --outdir dist/serve --target bun --external pg 
  && bun build src/serve/app.ts   --outdir dist/serve --target bun --external pg --external @hasna/contracts --external @hasna/contracts/auth --external @hasna/contracts/sdk \
  && bun build src/cli/index.ts   --outdir dist/cli   --target bun --external pg --external @hasna/contracts --external @hasna/contracts/auth --external @hasna/contracts/schemas \
  && bun build src/sdk/index.ts   --outdir dist/sdk   --target bun \
- && bun build src/index.ts src/project-store.ts src/project-dashboard.ts --outdir dist --target bun --external pg --external @hasna/contracts --external @hasna/contracts/auth --external @hasna/contracts/schemas
+ && bun build src/index.ts src/project-store.ts --outdir dist --target bun --external pg --external @hasna/contracts --external @hasna/contracts/auth --external @hasna/contracts/schemas
 
 # ---- runtime: production deps + built dist + migrations ----
 FROM --platform=linux/arm64 oven/bun:1.2-alpine AS runtime
