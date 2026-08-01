@@ -171,7 +171,9 @@ describe("cloud task detail comments", () => {
       expect(add.stdout).toContain(shortId);
 
       const alternateDb = { TODOS_DB_PATH: join(root, "different-local-mirror.db") };
-      const started = await runCli(["start", shortId], root, baseUrl, alternateDb);
+      // `--agent` is required on a claim verb (todos cf995f20). This case is about
+      // resolving a printed short prefix over HTTP, not about identity.
+      const started = await runCli(["--agent", "cloud-short-id", "start", shortId], root, baseUrl, alternateDb);
       expect(started).toMatchObject({ exitCode: 0, stderr: "" });
 
       const commented = await runCli(["comment", shortId, "started from printed prefix"], root, baseUrl, alternateDb);

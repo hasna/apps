@@ -39,6 +39,7 @@ import {
 import type { CloudTaskRelations } from "../cloud-router.js";
 import type { TaskPriority, TaskStatus } from "../../types/index.js";
 import { canonicalAgentRef, resolveCreatorIdentity, resolveWritableIdentity } from "../../lib/creator-identity.js";
+import { resolveClaimIdentity } from "../claim-guard.js";
 import { resolveValidatedAssignee } from "../assignee-guard.js";
 import {
   formatTaskLine,
@@ -1584,7 +1585,7 @@ export function registerTaskCommands(program: Command) {
     .description("Claim, lock, and start a task")
     .action(async (id: string) => {
       const globalOpts = program.opts();
-      const agentId = globalOpts.agent || "cli";
+      const agentId = resolveClaimIdentity("start", globalOpts.agent);
       const cloud = getTodosCloudClient();
       let task;
       if (cloud) {
@@ -1622,7 +1623,7 @@ export function registerTaskCommands(program: Command) {
     .description("Acquire exclusive lock on a task")
     .action(async (id: string) => {
       const globalOpts = program.opts();
-      const agentId = globalOpts.agent || "cli";
+      const agentId = resolveClaimIdentity("lock", globalOpts.agent);
       const cloud = getTodosCloudClient();
       const resolvedId = cloud ? await resolveTaskIdForCommand(id, cloud) : resolveTaskId(id);
       let result;
@@ -1732,6 +1733,12 @@ export function registerTaskCommands(program: Command) {
       if (!knownActions.has(action)) {
         handleError(new Error(`Unknown action: ${action}. Use: done, start, delete, plan (alias: move-plan)`));
       }
+      // Resolved ONCE, before either loop: `bulk start` is still a claim, and a
+      // missing identity is a property of the session rather than of any one row.
+      // Refusing per-row would report N identical failures for a single cause —
+      // and the per-id `catch` below turns exceptions into row results, so a
+      // refusal raised inside it would be recorded as a partial success.
+      const bulkClaimAgentId = action === "start" ? resolveClaimIdentity("start", globalOpts.agent) : undefined;
 
       // http authority routing: run each op against the SHARED dataset. The local
       // path resolved ids against this machine's sqlite — `bulk done` threw
@@ -1769,7 +1776,7 @@ export function registerTaskCommands(program: Command) {
             if (action === "done" || action === "complete") {
               await cloudCompleteTask(cloud, resolvedId, { ...(globalOpts.agent ? { agent_id: globalOpts.agent } : {}) });
             } else if (action === "start") {
-              await cloudTaskAction(cloud, resolvedId, "start", { agent_id: globalOpts.agent || "cli" });
+              await cloudTaskAction(cloud, resolvedId, "start", { agent_id: bulkClaimAgentId! });
             } else if (action === "delete") {
               await cloudDeleteTask(cloud, resolvedId);
             } else {
@@ -1806,7 +1813,7 @@ export function registerTaskCommands(program: Command) {
             completeTask(resolvedId, globalOpts.agent);
             results.push({ id: resolvedId, success: true });
           } else if (action === "start") {
-            startTask(resolvedId, globalOpts.agent || "cli");
+            startTask(resolvedId, bulkClaimAgentId!);
             results.push({ id: resolvedId, success: true });
           } else if (action === "delete") {
             deleteTask(resolvedId);
