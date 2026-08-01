@@ -73,8 +73,12 @@ describe("CLI QoL commands", () => {
     const t1 = JSON.parse(run("add 'Bulk done 1' --json"));
     const t2 = JSON.parse(run("add 'Bulk done 2' --json"));
 
-    // Tasks must be in_progress before completing
-    run(`--json bulk start ${t1.id} ${t2.id}`);
+    // Tasks must be in_progress before completing.
+    // `--agent` is required on a claim verb (todos cf995f20): `bulk start` used
+    // to fall back to the literal "cli", which every unidentified session on a
+    // station shared as a lock holder. This test is about bulk mechanics, not
+    // identity policy, so it simply supplies one.
+    run(`--agent qol-bulk --json bulk start ${t1.id} ${t2.id}`);
 
     const out = run(`--json bulk done ${t1.id} ${t2.id}`);
     const result = JSON.parse(out);
@@ -97,7 +101,8 @@ describe("CLI QoL commands", () => {
   it("bulk start should start a task", () => {
     const t = JSON.parse(run("add 'Bulk start task' --json"));
 
-    const out = run(`--json bulk start ${t.id}`);
+    // `--agent` required on a claim verb — see the note on bulk done above.
+    const out = run(`--agent qol-bulk --json bulk start ${t.id}`);
     const result = JSON.parse(out);
 
     expect(result.succeeded).toBe(1);

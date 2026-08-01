@@ -39,6 +39,7 @@ import {
 import type { CloudTaskRelations } from "../cloud-router.js";
 import type { TaskPriority, TaskStatus } from "../../types/index.js";
 import { canonicalAgentRef, resolveCreatorIdentity, resolveWritableIdentity } from "../../lib/creator-identity.js";
+import { resolveClaimIdentity } from "../claim-guard.js";
 import { resolveValidatedAssignee } from "../assignee-guard.js";
 import {
   formatTaskLine,
@@ -1584,12 +1585,20 @@ export function registerTaskCommands(program: Command) {
     .description("Claim, lock, and start a task")
     .action(async (id: string) => {
       const globalOpts = program.opts();
-      const agentId = globalOpts.agent || "cli";
       const cloud = getTodosCloudClient();
       let task;
+      // The task REFERENCE is resolved before the claim identity, and the order is
+      // load-bearing rather than incidental. An ambiguous short id must keep
+      // failing closed with its candidate project IDs — the diagnostic every other
+      // mutating verb reports — instead of being masked by an identity refusal.
+      // Resolving identity first regressed exactly that case while `done`,
+      // `update` and `comment` continued to report it, which is the kind of
+      // silent inconsistency that makes a safety diagnostic untrustworthy.
       if (cloud) {
+        const cloudResolvedId = await resolveTaskIdForCommand(id, cloud);
+        const agentId = resolveClaimIdentity("start", globalOpts.agent);
         try {
-          task = await cloudTaskAction(cloud, await resolveTaskIdForCommand(id, cloud), "start", { agent_id: agentId });
+          task = await cloudTaskAction(cloud, cloudResolvedId, "start", { agent_id: agentId });
         } catch (e) {
           handleError(e);
         }
@@ -1602,6 +1611,7 @@ export function registerTaskCommands(program: Command) {
         return;
       }
       const resolvedId = resolveTaskId(id);
+      const agentId = resolveClaimIdentity("start", globalOpts.agent);
       try {
         task = startTask(resolvedId, agentId);
       } catch (e) {
@@ -1622,9 +1632,12 @@ export function registerTaskCommands(program: Command) {
     .description("Acquire exclusive lock on a task")
     .action(async (id: string) => {
       const globalOpts = program.opts();
-      const agentId = globalOpts.agent || "cli";
       const cloud = getTodosCloudClient();
+      // Reference before identity, for the same reason as `start` above: an
+      // ambiguous or unknown id must report its own error rather than an
+      // identity refusal.
       const resolvedId = cloud ? await resolveTaskIdForCommand(id, cloud) : resolveTaskId(id);
+      const agentId = resolveClaimIdentity("lock", globalOpts.agent);
       let result;
       try {
         // http authority routing: lock on the SHARED dataset so every agent
@@ -1732,6 +1745,12 @@ export function registerTaskCommands(program: Command) {
       if (!knownActions.has(action)) {
         handleError(new Error(`Unknown action: ${action}. Use: done, start, delete, plan (alias: move-plan)`));
       }
+      // Resolved ONCE, before either loop: `bulk start` is still a claim, and a
+      // missing identity is a property of the session rather than of any one row.
+      // Refusing per-row would report N identical failures for a single cause —
+      // and the per-id `catch` below turns exceptions into row results, so a
+      // refusal raised inside it would be recorded as a partial success.
+      const bulkClaimAgentId = action === "start" ? resolveClaimIdentity("start", globalOpts.agent) : undefined;
 
       // http authority routing: run each op against the SHARED dataset. The local
       // path resolved ids against this machine's sqlite — `bulk done` threw
@@ -1769,7 +1788,7 @@ export function registerTaskCommands(program: Command) {
             if (action === "done" || action === "complete") {
               await cloudCompleteTask(cloud, resolvedId, { ...(globalOpts.agent ? { agent_id: globalOpts.agent } : {}) });
             } else if (action === "start") {
-              await cloudTaskAction(cloud, resolvedId, "start", { agent_id: globalOpts.agent || "cli" });
+              await cloudTaskAction(cloud, resolvedId, "start", { agent_id: bulkClaimAgentId! });
             } else if (action === "delete") {
               await cloudDeleteTask(cloud, resolvedId);
             } else {
@@ -1806,7 +1825,7 @@ export function registerTaskCommands(program: Command) {
             completeTask(resolvedId, globalOpts.agent);
             results.push({ id: resolvedId, success: true });
           } else if (action === "start") {
-            startTask(resolvedId, globalOpts.agent || "cli");
+            startTask(resolvedId, bulkClaimAgentId!);
             results.push({ id: resolvedId, success: true });
           } else if (action === "delete") {
             deleteTask(resolvedId);

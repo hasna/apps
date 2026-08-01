@@ -1173,7 +1173,14 @@ describe("remote CLI entrypoint authority boundary", () => {
         ["--json", "tag", "REMOTE-1", "urgent"],
         ["--json", "untag", "REMOTE-1", "urgent"],
         ["--json", "comment", "REMOTE-1", "remote comment"],
-        ["--json", "start", "REMOTE-1"],
+        // `--agent` is required on a claim verb (todos cf995f20): `start` used to
+        // fall back to the literal "cli", which every unidentified session on a
+        // station shared as a lock holder. This case asserts that the BUILT CLI
+        // keeps the whole lifecycle on HTTP, not anything about identity, so it
+        // simply supplies one. `done` deliberately keeps no --agent: completion
+        // does not claim, and an absent agent still skips the lock-ownership
+        // check, so this also exercises the release path against a named lock.
+        ["--agent", "fixture-agent", "--json", "start", "REMOTE-1"],
         ["--json", "done", "REMOTE-1"],
         ["--project", PROJECT_ID, "--json", "next"],
         ["--json", "claim", "fixture-worker"],

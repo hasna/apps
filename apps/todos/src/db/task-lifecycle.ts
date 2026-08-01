@@ -10,6 +10,8 @@ import {
   VersionConflictError,
 } from "../types/index.js";
 import { LOCK_EXPIRY_MINUTES, clearExpiredLocks, getDatabase, isLockExpired, lockExpiryCutoff, now } from "./database.js";
+import { canonicalAgentRef } from "../lib/creator-identity.js";
+
 import { checkCompletionGuard } from "../lib/completion-guard.js";
 import { databasePathFromDatabase } from "../lib/event-emission-safety.js";
 import { emitLocalEventHooksQuiet } from "../lib/event-hooks.js";
@@ -24,6 +26,37 @@ import { sanitizePreWriteText, sanitizePreWriteValue } from "../lib/prewrite-sec
 
 // Maximum depth for template-spawned task chains to prevent infinite loops
 const MAX_SPAWN_DEPTH = 10;
+
+/**
+ * Do these two strings name the SAME lock holder?
+ *
+ * Lock ownership is compared HERE, at the store, rather than trusted to each
+ * writer, because not every writer arrives through the CLI's `--agent` flag.
+ * `claim <agent>` and `steal <agent>` take the agent POSITIONALLY, the MCP tools
+ * pass `"mcp"`, the TUI passes `"tui"` and the dashboard routes pass
+ * `"dashboard"` — so a fold applied at the flag reaches none of them, and a
+ * capitalised holder written by any of them becomes unreleasable by a folded
+ * caller. Measured: `todos claim Cassius` stored `locked_by='Cassius'`, after
+ * which `--agent Cassius unlock` and `done` both failed with "is locked by
+ * Cassius", permanently for `unlock`, which has no expiry term.
+ *
+ * This also repairs the legacy rows nobody can rewrite: 10 of 357 non-null
+ * `locked_by` values on the live store are capitalised (a floor — that read was
+ * page-capped), and they become releasable by their named owner again.
+ *
+ * Comparison is canonicalised, and the STORED value is left as the caller wrote
+ * it: folding what is written would rewrite display case on every claim, while
+ * folding what is compared is all that lock correctness needs.
+ *
+ * Note the SQL side uses `LOWER(TRIM(...))`, which is ASCII-only in SQLite,
+ * whereas `canonicalAgentRef` uses JS `toLowerCase()`. Agent names on this fleet
+ * are ASCII, so the two agree; a non-ASCII agent name would be the case where
+ * they could diverge.
+ */
+function sameHolder(stored: string | null | undefined, incoming: string | null | undefined): boolean {
+  if (!stored || !incoming) return false;
+  return canonicalAgentRef(stored) === canonicalAgentRef(incoming);
+}
 function lockExpiresAt(lockedAt: string | null): string | null {
   if (!lockedAt) return null;
   return new Date(new Date(lockedAt).getTime() + LOCK_EXPIRY_MINUTES * 60 * 1000).toISOString();
@@ -79,7 +112,7 @@ export function startTask(
   const timestamp = now();
   const result = d.run(
     `UPDATE tasks SET status = 'in_progress', assigned_to = ?, locked_by = ?, locked_at = ?, started_at = COALESCE(started_at, ?), version = version + 1, updated_at = ?
-     WHERE id = ? AND status IN ('pending', 'in_progress') AND (locked_by IS NULL OR locked_by = ? OR locked_at < ?)`,
+     WHERE id = ? AND status IN ('pending', 'in_progress') AND (locked_by IS NULL OR LOWER(TRIM(locked_by)) = LOWER(TRIM(?)) OR locked_at < ?)`,
     [agentId, agentId, timestamp, timestamp, timestamp, id, agentId, cutoff],
   );
 
@@ -87,7 +120,7 @@ export function startTask(
     const current = getTask(id, d);
     if (!current) throw new TaskNotFoundError(id);
     assertStartable(current, agentId);
-    if (current.locked_by && current.locked_by !== agentId && !isLockExpired(current.locked_at)) {
+    if (current.locked_by && !sameHolder(current.locked_by, agentId) && !isLockExpired(current.locked_at)) {
       throw new LockError(id, current.locked_by);
     }
     throw new Error(`Task ${id} could not be started because it changed during claim`);
@@ -129,7 +162,7 @@ export function completeTask(
   if (
     agentId &&
     task.locked_by &&
-    task.locked_by !== agentId &&
+    !sameHolder(task.locked_by, agentId) &&
     !isLockExpired(task.locked_at)
   ) {
     throw new LockError(id, task.locked_by);
@@ -302,10 +335,10 @@ export function lockTask(
 
   // Same-agent locking is a lease renewal: refresh locked_at so long-running
   // local agents can keep ownership by periodically re-locking.
-  if (task.locked_by === agentId && !isLockExpired(task.locked_at)) {
+  if (sameHolder(task.locked_by, agentId) && !isLockExpired(task.locked_at)) {
     const timestamp = now();
     d.run(
-      `UPDATE tasks SET locked_at = ?, updated_at = ?, version = version + 1 WHERE id = ? AND locked_by = ?`,
+      `UPDATE tasks SET locked_at = ?, updated_at = ?, version = version + 1 WHERE id = ? AND LOWER(TRIM(locked_by)) = LOWER(TRIM(?))`,
       [timestamp, timestamp, id, agentId],
     );
     logTaskChange(id, "lock_renew", "locked_by", agentId, agentId, agentId, d);
@@ -317,7 +350,7 @@ export function lockTask(
   const timestamp = now();
   const result = d.run(
     `UPDATE tasks SET locked_by = ?, locked_at = ?, version = version + 1, updated_at = ?
-     WHERE id = ? AND status NOT IN ('completed', 'cancelled') AND (locked_by IS NULL OR locked_by = ? OR locked_at < ?)`,
+     WHERE id = ? AND status NOT IN ('completed', 'cancelled') AND (locked_by IS NULL OR LOWER(TRIM(locked_by)) = LOWER(TRIM(?)) OR locked_at < ?)`,
     [agentId, timestamp, timestamp, id, agentId, cutoff],
   );
 
@@ -358,7 +391,7 @@ export function unlockTask(
   if (!task) throw new TaskNotFoundError(id);
 
   // Only unlock if same agent or force (no agentId)
-  if (agentId && task.locked_by && task.locked_by !== agentId) {
+  if (agentId && task.locked_by && !sameHolder(task.locked_by, agentId)) {
     throw new LockError(id, task.locked_by);
   }
 

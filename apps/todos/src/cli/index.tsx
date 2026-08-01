@@ -103,6 +103,17 @@ program
   .version(getPackageVersion())
   .option("--project <path>", "Project path")
   .option("-j, --json", "Output as JSON")
+  // NOT canonicalised here, deliberately, and the reason is worth keeping: a
+  // parse-time fold on this flag was tried and reverted. It fixed the
+  // claim/release round trip for `--agent`, but the flag is the wrong layer —
+  // `claim <agent>` and `steal <agent>` take the agent POSITIONALLY, and the
+  // MCP, TUI and dashboard writers never see this option at all, so the same
+  // unreleasable-lock defect simply reappeared one verb over. It also broke a
+  // legitimate consumer: `inspect` with no id looks up the caller's active task
+  // by `assigned_to`, and folding the query made it miss rows stored with a
+  // capitalised name. Lock-holder identity is now compared at the STORE
+  // boundary instead (see `sameHolder` in src/db/task-lifecycle.ts), which
+  // covers every writer and leaves this flag's value untouched for queries.
   .option("--agent <name>", "Agent name")
   .option("--session <id>", "Session ID");
 

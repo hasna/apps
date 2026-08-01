@@ -133,7 +133,9 @@ describe("M5/L1: input validation instead of raw SQLite / NaN", () => {
 
   it("`done --confidence banana` is rejected (NaN not stored)", () => {
     const t = JSON.parse(run("add 'L1 confidence' --json"));
-    run(`start ${t.id}`);
+    // `--agent` is required on a claim verb (todos cf995f20). This case is about
+    // rejecting a non-numeric --confidence, so it just supplies an identity.
+    run(`--agent l1-confidence start ${t.id}`);
     const { code, output } = runExpectFail(`done ${t.id} --confidence banana`);
     expect(code).not.toBe(0);
     expect(output).toContain("--confidence must be a number");
