@@ -39,10 +39,7 @@ import {
 import type { CloudTaskRelations } from "../cloud-router.js";
 import type { TaskPriority, TaskStatus } from "../../types/index.js";
 import { canonicalAgentRef, resolveCreatorIdentity, resolveWritableIdentity } from "../../lib/creator-identity.js";
-import { validateAssignee } from "../../lib/assignee-validation.js";
-import { loadAssigneeContext } from "../../lib/assignee-context.js";
-import { listAgents } from "../../db/agents.js";
-import { cloudListAgents } from "../cloud-router.js";
+import { resolveValidatedAssignee } from "../assignee-guard.js";
 import {
   formatTaskLine,
   resolveTaskId,
@@ -139,34 +136,6 @@ function resolveProjectIdOrSlug(input: string): string {
 }
 
 /** Validate and normalize a status value, rejecting unknowns before the DB does. */
-/**
- * Validate an explicit `--assign <agent>` before it reaches the store.
- *
- * Only an EXPLICIT `--assign` is checked. The implicit fallback to the
- * caller's own resolved identity is left alone deliberately: self-assignment
- * from an unregistered session is legitimate and common, and refusing it would
- * turn a routing fix into an outage.
- *
- * See `lib/assignee-validation.ts` for the measured rationale and for why a
- * session-based "is this someone else's live agent" check is NOT implementable
- * against this store.
- */
-async function resolveValidatedAssignee(
-  value: string,
-  allowSeat: boolean,
-): Promise<string> {
-  const cloud = getTodosCloudClient();
-  const ctx = await loadAssigneeContext(() => (cloud ? cloudListAgents(cloud) : listAgents()), allowSeat);
-  const verdict = validateAssignee(value, ctx);
-  if (!verdict.ok) {
-    handleError(new Error(`Cannot assign to '${value}'. ${verdict.message}`));
-  }
-  if (verdict.warning) {
-    console.error(chalk.yellow(`Warning: ${verdict.warning}`));
-  }
-  return verdict.assignee;
-}
-
 function parseStatus(value: string | undefined): TaskStatus | undefined {
   if (!value) return undefined;
   const normalized = normalizeStatus(value);

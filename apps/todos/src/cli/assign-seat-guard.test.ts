@@ -101,6 +101,27 @@ describe("todos add --assign <seat> — refused end to end, with the roster actu
     expect(r.stderr).toContain("durable SEAT");
   }, SPAWN_BUDGET_MS);
 
+  it("REFUSES on the bare `todos assign <id> <agent>` subcommand", async () => {
+    // This surface was MISSED on the first pass and only surfaced when the
+    // failing-suite A/B against pristine main pointed at remote-entrypoint.test.ts,
+    // which drives it directly. It is the most literally-named assignment
+    // command, so an unguarded one made the whole rule bypassable.
+    const created = await runCli(["--json", "add", "--unassigned", "bare assign target"], {
+      TODOS_SEAT_ROSTER_PATH: rosterPath,
+    });
+    expect(created.exitCode).toBe(0);
+    const id = (JSON.parse(created.stdout) as { id: string }).id;
+
+    const refused = await runCli(["assign", id, "agent-ceo"], { TODOS_SEAT_ROSTER_PATH: rosterPath });
+    expect(refused.exitCode).toBe(1);
+    expect(refused.stderr).toContain("durable SEAT");
+
+    const allowed = await runCli(["assign", id, "agent-ceo", "--assign-seat"], {
+      TODOS_SEAT_ROSTER_PATH: rosterPath,
+    });
+    expect(allowed.exitCode).toBe(0);
+  }, SPAWN_BUDGET_MS);
+
   it("does NOT refuse a non-seat name — the guard must be able to not fire", async () => {
     // Without this the three assertions above would also pass if the CLI
     // refused everything.
