@@ -6,17 +6,28 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildServer } from "./index.js";
 import { handleMcpRequest, resolveMcpHttpPort, DEFAULT_MCP_HTTP_PORT } from "./http.js";
+import { closeDatabase } from "../db/database.js";
+import { __resetProjectStore } from "../store/project-store.js";
+import { API_MODE_ENV_KEYS } from "../testing/spawn-env.js";
 
 describe("projects MCP HTTP transport", () => {
   let httpServer: ReturnType<typeof Bun.serve>;
   let port: number;
   let root: string;
   let previousDbPath: string | undefined;
+  let previousApiModeEnv: Map<string, string | undefined>;
 
   beforeAll(() => {
     root = mkdtempSync(join(tmpdir(), "projects-mcp-http-"));
     previousDbPath = process.env.HASNA_PROJECTS_DB_PATH;
+    previousApiModeEnv = new Map();
+    for (const key of API_MODE_ENV_KEYS) {
+      previousApiModeEnv.set(key, process.env[key]);
+      delete process.env[key];
+    }
     process.env.HASNA_PROJECTS_DB_PATH = join(root, "projects.db");
+    closeDatabase();
+    __resetProjectStore();
     httpServer = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -41,6 +52,12 @@ describe("projects MCP HTTP transport", () => {
     } else {
       process.env.HASNA_PROJECTS_DB_PATH = previousDbPath;
     }
+    for (const [key, value] of previousApiModeEnv) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    closeDatabase();
+    __resetProjectStore();
     rmSync(root, { recursive: true, force: true });
   });
 
@@ -72,14 +89,14 @@ describe("projects MCP HTTP transport", () => {
     });
     expect(created.isError).not.toBe(true);
 
-    const result = await client.callTool({ name: "projects_list", arguments: { limit: 1 } });
+    const result = await client.callTool({ name: "projects_list", arguments: { query: "http-compact-project", limit: 1 } });
     expect(result.isError).not.toBe(true);
     const content = result.content as Array<{ type: string; text?: string }> | undefined;
     expect(content?.[0]?.type).toBe("text");
     const payload = JSON.parse(content?.[0]?.text ?? "[]") as Array<{ slug: string; metadata?: { notes?: string } }>;
     expect(payload.find((item) => item.slug === "http-compact-project")?.metadata?.notes).toHaveLength(500);
 
-    const compact = await client.callTool({ name: "projects_list", arguments: { compact: true, limit: 1 } });
+    const compact = await client.callTool({ name: "projects_list", arguments: { query: "http-compact-project", compact: true, limit: 1 } });
     expect(compact.isError).not.toBe(true);
     const compactContent = compact.content as Array<{ type: string; text?: string }> | undefined;
     const compactPayload = JSON.parse(compactContent?.[0]?.text ?? "{}") as {

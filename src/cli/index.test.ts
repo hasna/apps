@@ -163,373 +163,6 @@ describe("project-first CLI surface", () => {
     }
   });
 
-  test("dashboard validate emits structured JSON errors for malformed input", () => {
-    const root = mkdtempSync(join(tmpdir(), "projects-dashboard-invalid-"));
-    const invalidFile = join(root, "invalid.json");
-    try {
-      writeFileSync(invalidFile, "{");
-      const result = runProjects(["dashboard", "validate", invalidFile, "--json"]);
-      const stdout = text(result.stdout);
-      const stderr = text(result.stderr);
-      const payload = JSON.parse(stdout) as { ok: boolean; error?: { name: string; message: string } };
-
-      expect(result.exitCode).toBe(1);
-      expect(stderr).toBe("");
-      expect(payload.ok).toBe(false);
-      expect(payload.error?.message).toContain("JSON");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("dashboard JSON output is not truncated when captured through a pipe", () => {
-    const root = mkdtempSync(join(tmpdir(), "projects-dashboard-large-json-"));
-    const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
-    const projectPath = join(root, "large-dashboard");
-    const snapshotFile = join(root, "large.snapshot.json");
-    const generatedAt = "2026-06-29T00:00:00.000Z";
-    const largeItems = Array.from({ length: 900 }, (_, index) => ({
-      id: `item-${index}`,
-      title: `Dashboard item ${index}`,
-      summary: `Large dashboard payload segment ${index} ${"x".repeat(120)}`,
-    }));
-
-    try {
-      expect(runProjects(["create", "--name", "Large Dashboard", "--slug", "large-dashboard", "--path", projectPath, "--mkdir", "--json"], env).exitCode).toBe(0);
-      writeFileSync(snapshotFile, `${JSON.stringify({
-        schema: "hasna.project_snapshot.v1",
-        id: "snapshot-large-dashboard",
-        createdAt: generatedAt,
-        projectId: "large-dashboard",
-        generatedAt,
-        status: "succeeded",
-        manifestRef: { kind: "project", id: "large-dashboard", uri: "project://large-dashboard", tags: [] },
-        panels: [{
-          schema: "hasna.project_panel.v1",
-          id: "panel-large-dashboard",
-          createdAt: generatedAt,
-          projectId: "large-dashboard",
-          provider: { kind: "todos", id: "test-provider" },
-          kind: "tasks",
-          title: "Large Tasks",
-          state: "ready",
-          generatedAt,
-          freshness: "fresh",
-          items: largeItems,
-        }],
-      }, null, 2)}\n`);
-
-      const validate = runProjects(["dashboard", "validate", snapshotFile, "--json"], env);
-      const validateStdout = text(validate.stdout);
-      expect(validate.exitCode).toBe(0);
-      expect(Buffer.byteLength(validateStdout)).toBeGreaterThan(65_536);
-      expect(JSON.parse(validateStdout).snapshot.panels[0].items).toHaveLength(900);
-
-      const render = runProjects(["dashboard", "render", "large-dashboard", "--snapshot", snapshotFile, "--json"], env);
-      const renderStdout = text(render.stdout);
-      expect(render.exitCode).toBe(0);
-      expect(Buffer.byteLength(renderStdout)).toBeGreaterThan(65_536);
-      expect(JSON.parse(renderStdout).root).toBe("root");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("dashboard render --write preserves imports and exposes stored canvases", () => {
-    const root = mkdtempSync(join(tmpdir(), "projects-dashboard-render-imports-"));
-    const env = {
-      HASNA_PROJECTS_HOME: join(root, "home"),
-      HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
-    };
-    const projectPath = join(root, "render-imports-project");
-    const dashboardDir = join(projectPath, ".hasna/project/dashboard");
-    const snapshotFile = join(root, "render-imports.snapshot.json");
-    const generatedAt = "2026-06-29T00:00:00.000Z";
-
-    try {
-      const create = runProjects([
-        "create",
-        "--name",
-        "Render Imports",
-        "--slug",
-        "render-imports",
-        "--path",
-        projectPath,
-        "--mkdir",
-        "--json",
-      ], env);
-      expect(create.exitCode).toBe(0);
-
-      const createCanvas = runProjects([
-        "canvases",
-        "create",
-        "render-imports",
-        "--name",
-        "Agent Directory Table",
-        "--slug",
-        "agent-directory-table",
-        "--nodes-json",
-        JSON.stringify([
-          {
-            id: "agent_directory_summary",
-            type: "projectPanel",
-            position: { x: 0, y: 0 },
-            data: { title: "Agent Directory Table" },
-          },
-        ]),
-        "--json",
-      ], env);
-      expect(createCanvas.exitCode).toBe(0);
-
-      mkdirSync(dashboardDir, { recursive: true });
-      writeFileSync(join(dashboardDir, "agent-directory-table.json"), "{}\n");
-      writeFileSync(
-        join(dashboardDir, "render.json"),
-        `${JSON.stringify({
-          schema: "hasna.projects_dashboard_render.v1",
-          projectId: "render-imports",
-          defaultView: "canvas",
-          imports: [
-            {
-              id: "agent-directory-table",
-              path: "agent-directory-table.json",
-              kind: "canvas",
-            },
-          ],
-          updatedAt: "2026-06-28T00:00:00.000Z",
-        }, null, 2)}\n`,
-      );
-      writeFileSync(snapshotFile, `${JSON.stringify({
-        schema: "hasna.project_snapshot.v1",
-        id: "snapshot-render-imports",
-        createdAt: generatedAt,
-        projectId: "render-imports",
-        generatedAt,
-        status: "succeeded",
-        manifestRef: { kind: "project", id: "render-imports", uri: "project://render-imports", tags: [] },
-        panels: [],
-      }, null, 2)}\n`);
-
-      const render = runProjects([
-        "dashboard",
-        "render",
-        "render-imports",
-        "--snapshot",
-        snapshotFile,
-        "--write",
-        "--json",
-      ], env);
-      expect(render.exitCode).toBe(0);
-      const payload = JSON.parse(text(render.stdout)) as {
-        path: string;
-        render: {
-          elements: {
-            root?: {
-              props?: {
-                data?: {
-                  linked_canvases?: Array<{ slug: string }>;
-                  dashboard_imports?: Array<{ id: string }>;
-                };
-              };
-            };
-          };
-        };
-      };
-      const manifest = JSON.parse(readFileSync(payload.path, "utf-8")) as {
-        imports: Array<{ id: string; path: string; kind?: string }>;
-        updatedAt: string;
-      };
-
-      expect(manifest.imports).toEqual([
-        {
-          id: "agent-directory-table",
-          path: "agent-directory-table.json",
-          kind: "canvas",
-        },
-      ]);
-      expect(manifest.updatedAt).toBe(generatedAt);
-      expect(
-        payload.render.elements.root?.props?.data?.linked_canvases?.some(
-          (canvas) => canvas.slug === "agent-directory-table",
-        ),
-      ).toBe(true);
-      expect(
-        payload.render.elements.root?.props?.data?.dashboard_imports?.some(
-          (item) => item.id === "agent-directory-table",
-        ),
-      ).toBe(true);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  }, 60000);
-
-  test("canvases compose and upsert create scalable generic canvas records", () => {
-    const root = mkdtempSync(join(tmpdir(), "projects-canvas-blocks-"));
-    const env = {
-      HASNA_PROJECTS_HOME: join(root, "home"),
-      HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
-    };
-    const projectPath = join(root, "canvas-blocks-project");
-    const spec = {
-      slug: "agent-directory",
-      name: "Agent Directory",
-      description: "Generic directory and relationship canvas",
-      layout: { direction: "grid", columns: 2, origin: { x: 40, y: 40 } },
-      data: { source: "cli-test" },
-      metadata: { owner: "test" },
-      blocks: [
-        {
-          id: "team-summary",
-          title: "Team Summary",
-          kind: "summary",
-          metrics: [{ label: "People", value: 2, tone: "info" }],
-        },
-        {
-          id: "directory-table",
-          title: "Directory Table",
-          kind: "table",
-          columns: ["name", "role"],
-          rows: [
-            { name: "Ada", role: "Lead" },
-            { name: "Lin", role: "Contributor" },
-          ],
-        },
-      ],
-      links: [{ source: "team-summary", target: "directory-table", label: "details" }],
-    };
-
-    try {
-      expect(runProjects([
-        "create",
-        "--name",
-        "Canvas Blocks",
-        "--slug",
-        "canvas-blocks",
-        "--path",
-        projectPath,
-        "--mkdir",
-        "--json",
-      ], env).exitCode).toBe(0);
-
-      const composed = runProjects([
-        "canvases",
-        "compose",
-        "canvas-blocks",
-        "--spec-json",
-        JSON.stringify(spec),
-        "--json",
-      ], env);
-      expect(composed.exitCode).toBe(0);
-      const composePayload = JSON.parse(text(composed.stdout)) as {
-        canvas: {
-          id: string;
-          slug: string;
-          nodes: Array<{ id: string; data?: { items?: unknown[] } }>;
-          edges: Array<{ source: string; target: string }>;
-          data: { block_schema?: string; source?: string };
-          metadata: { composed_from?: string; owner?: string };
-        };
-      };
-      expect(composePayload.canvas.slug).toBe("agent-directory");
-      expect(composePayload.canvas.nodes.map((node) => node.id)).toEqual([
-        "team-summary",
-        "directory-table",
-      ]);
-      expect(composePayload.canvas.nodes[1]?.data?.items).toHaveLength(2);
-      expect(composePayload.canvas.edges).toEqual([
-        expect.objectContaining({ source: "team-summary", target: "directory-table" }),
-      ]);
-      expect(composePayload.canvas.data.block_schema).toBe("hasna.projects_canvas_blocks.v1");
-      expect(composePayload.canvas.data.source).toBe("cli-test");
-      expect(composePayload.canvas.metadata.composed_from).toBe("project-canvas-blocks");
-      expect(composePayload.canvas.metadata.owner).toBe("test");
-
-      const upserted = runProjects([
-        "canvases",
-        "upsert",
-        "canvas-blocks",
-        "--slug",
-        "agent-directory",
-        "--name",
-        "Agent Directory Updated",
-        "--nodes-json",
-        JSON.stringify([
-          { id: "single-card", type: "projectPanel", position: { x: 0, y: 0 }, data: { title: "Single Card" } },
-        ]),
-        "--edges-json",
-        "[]",
-        "--json",
-      ], env);
-      expect(upserted.exitCode).toBe(0);
-      const upsertPayload = JSON.parse(text(upserted.stdout)) as {
-        canvas: { id: string; name: string; nodes: Array<{ id: string }>; edges: unknown[] };
-      };
-      expect(upsertPayload.canvas.id).toBe(composePayload.canvas.id);
-      expect(upsertPayload.canvas.name).toBe("Agent Directory Updated");
-      expect(upsertPayload.canvas.nodes).toEqual([expect.objectContaining({ id: "single-card" })]);
-      expect(upsertPayload.canvas.edges).toEqual([]);
-
-      const invalidColumns = runProjects([
-        "canvases",
-        "compose",
-        "canvas-blocks",
-        "--slug",
-        "invalid-columns",
-        "--blocks-json",
-        JSON.stringify([{ id: "broken", title: "Broken" }]),
-        "--layout-json",
-        JSON.stringify({ columns: "2" }),
-        "--json",
-      ], env);
-      expect(invalidColumns.exitCode).toBe(1);
-      expect(text(invalidColumns.stderr)).toContain("layout.columns must be a finite number");
-
-      const invalidGap = runProjects([
-        "canvases",
-        "compose",
-        "canvas-blocks",
-        "--slug",
-        "invalid-gap",
-        "--blocks-json",
-        JSON.stringify([{ id: "broken", title: "Broken" }]),
-        "--layout-json",
-        JSON.stringify({ columnGap: "wide" }),
-        "--json",
-      ], env);
-      expect(invalidGap.exitCode).toBe(1);
-      expect(text(invalidGap.stderr)).toContain("layout.columnGap must be a finite number");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  }, 60000);
-
-  test("dashboard serve keeps the CLI process alive until terminated", async () => {
-    const root = mkdtempSync(join(tmpdir(), "projects-dashboard-serve-"));
-    const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
-    const projectPath = join(root, "served-dashboard");
-    const port = reserveFreePort();
-    try {
-      expect(runProjects(["create", "--name", "Served Dashboard", "--slug", "served-dashboard", "--path", projectPath, "--mkdir", "--json"], env).exitCode).toBe(0);
-      const proc = Bun.spawn({
-        cmd: ["bun", "run", CLI_PATH, "dashboard", "serve", "served-dashboard", "--host", "127.0.0.1", "--port", String(port), "--json"],
-        stdout: "pipe",
-        stderr: "pipe",
-        env: testSpawnEnv(env),
-      });
-      try {
-        const stdout = await readStreamChunk(proc.stdout);
-        expect(stdout).toContain("\"ok\": true");
-        await Bun.sleep(500);
-        expect(proc.exitCode).toBeNull();
-      } finally {
-        proc.kill("SIGTERM");
-        await proc.exited;
-      }
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
   test("reports serve defaults to loopback and keeps existing project registry semantics", async () => {
     const root = mkdtempSync(join(tmpdir(), "projects-reports-serve-"));
     const env = {
@@ -638,7 +271,7 @@ describe("project-first CLI surface", () => {
     }
 
     // Regression guard for the specific commands the static list dropped/misnamed.
-    for (const command of ["budgets", "dashboard", "webhooks", "hasna-events", "store"]) {
+    for (const command of ["budgets", "webhooks", "hasna-events", "store"]) {
       expect(offered.has(command)).toBe(true);
     }
     expect(offered.has("storage")).toBe(all.has("storage"));
@@ -654,7 +287,7 @@ describe("project-first CLI surface", () => {
     for (const command of primary) {
       expect(zshStdout).toContain(`'${command}:`);
     }
-    for (const command of ["budgets", "dashboard", "webhooks", "hasna-events"]) {
+    for (const command of ["budgets", "webhooks", "hasna-events"]) {
       expect(zshStdout).toContain(`'${command}:`);
     }
   });
@@ -838,7 +471,7 @@ describe("project-first CLI surface", () => {
     expect((JSON.parse(text(get.stdout)) as { project?: { slug: string } }).project?.slug).toBe("surface-app");
   });
 
-  test("workspace store, app store, canvases, loops, and labels use temp home", () => {
+  test("workspace store, app store, loops, and labels use temp home", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-store-"));
     const env = {
       HASNA_PROJECTS_HOME: join(root, "home"),
@@ -864,12 +497,12 @@ describe("project-first CLI surface", () => {
     const inspected = JSON.parse(text(inspect.stdout)) as {
       primary_is_canonical: boolean;
       paths: { data_path: string };
-      app_store: { paths: { db_path: string }; counts: { canvases: number } };
+      app_store: { paths: { db_path: string }; counts: { data_models: number; data_records: number; loop_links: number } };
     };
     expect(inspected.primary_is_canonical).toBe(true);
     expect(inspected.paths.data_path).toBe(join(env.HASNA_PROJECTS_HOME, "data", created.project.id));
     expect(inspected.app_store.paths.db_path).toBe(join(env.HASNA_PROJECTS_HOME, "data", created.project.id, "project.db"));
-    expect(inspected.app_store.counts.canvases).toBe(0);
+    expect(inspected.app_store.counts).toMatchObject({ data_models: 0, data_records: 0, loop_links: 0 });
 
     const migratePlan = runProjects(["store", "migrate", "store-work", "--json"], env);
     expect(migratePlan.exitCode).toBe(0);
@@ -877,18 +510,6 @@ describe("project-first CLI surface", () => {
     expect(planned.dry_run).toBe(true);
     expect(planned.no_op).toBe(true);
     expect(planned.target_path).toBe(created.project.primary_path);
-
-    const canvases = runProjects(["canvases", "list", "store-work", "--ensure-default", "--json"], env);
-    expect(canvases.exitCode).toBe(0);
-    const listed = JSON.parse(text(canvases.stdout)) as { canvases: Array<{ slug: string; layout_engine: string }> };
-    expect(listed.canvases[0]?.slug).toBe("dashboard");
-    expect(listed.canvases[0]?.layout_engine).toBe("react-flow");
-
-    const render = runProjects(["canvases", "show", "store-work", "dashboard", "--render-spec"], env);
-    expect(render.exitCode).toBe(0);
-    const spec = JSON.parse(text(render.stdout)) as { elements: { root?: { type?: string; props?: { ui_contract?: { canvas?: string } } } } };
-    expect(spec.elements.root?.type).toBe("Canvas");
-    expect(spec.elements.root?.props?.ui_contract?.canvas).toBe("react-flow");
 
     const link = runProjects(["loops", "link", "store-work", "loop_123", "--name", "Daily Check", "--json"], env);
     expect(link.exitCode).toBe(0);

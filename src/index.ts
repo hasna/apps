@@ -42,14 +42,10 @@ export { getDatabase } from "./db/database.js";
 export {
   PROJECT_STORE_SCHEMA_VERSION,
   PROJECT_STORE_TABLES,
-  createProjectCanvas,
   createProjectDataModel,
   createProjectDataRecord,
-  defaultProjectCanvasInput,
-  ensureDefaultProjectCanvas,
   ensureProjectStore as ensureProjectAppStore,
   ensureProjectStoreDirs as ensureProjectAppStoreDirs,
-  getProjectCanvas,
   getProjectDataModel,
   getProjectDataRecord,
   getProjectDatabase as getProjectAppDatabase,
@@ -58,27 +54,17 @@ export {
   inspectProjectStore as inspectProjectAppStore,
   inspectProjectStoreWithLoops as inspectProjectAppStoreWithLoops,
   linkProjectLoop,
-  listProjectCanvases,
   listProjectDataModels,
   listProjectDataRecords,
   listProjectLoopLinks,
   listProjectLoopSummaries,
   runProjectStoreMigrations,
-  updateProjectCanvasLayout,
-  upsertProjectCanvas,
 } from "./db/project-store.js";
 export type {
-  CreateProjectCanvasInput,
   CreateProjectDataModelInput,
   CreateProjectDataRecordInput,
   LinkProjectLoopInput,
   LoopsClientLike,
-  UpdateProjectCanvasLayoutInput,
-  UpsertProjectCanvasInput,
-  ProjectCanvas,
-  ProjectCanvasEdge,
-  ProjectCanvasNode,
-  ProjectCanvasStatus,
   ProjectDataModel,
   ProjectDataRecord,
   ProjectLoopLink,
@@ -89,26 +75,6 @@ export type {
   ProjectStoreSummary as ProjectAppStoreSummary,
   ProjectStoreTable as ProjectAppStoreTable,
 } from "./db/project-store.js";
-export {
-  PROJECT_CANVAS_BLOCK_SCHEMA,
-  composeProjectCanvasBlocks,
-  projectCanvasInputFromBlocks,
-} from "./lib/project-canvas-blocks.js";
-export type {
-  ComposeProjectCanvasBlocksResult,
-  ProjectCanvasBlock,
-  ProjectCanvasBlockAction,
-  ProjectCanvasBlockDirection,
-  ProjectCanvasBlockHandle,
-  ProjectCanvasBlockItem,
-  ProjectCanvasBlockLayout,
-  ProjectCanvasBlockLink,
-  ProjectCanvasBlockMetric,
-  ProjectCanvasBlockSize,
-  ProjectCanvasBlockSpec,
-  ProjectCanvasBlockTone,
-  ProjectCanvasInputFromBlocksOptions,
-} from "./lib/project-canvas-blocks.js";
 export {
   createRoot,
   getRoot,
@@ -235,32 +201,6 @@ export {
   resolveRegisteredProjectTarget,
   resolveRegisteredProjectTargetOrThrow,
 } from "./lib/project-resolver.js";
-export {
-  DEFAULT_PROJECT_DASHBOARD_PROVIDERS,
-  PROJECT_DASHBOARD_DIR,
-  PROJECT_DASHBOARD_RENDER_DIR,
-  PROJECT_DASHBOARD_SNAPSHOTS_DIR,
-  buildProjectDashboard,
-  buildProjectDashboardRender,
-  buildProjectDashboardSnapshot,
-  defaultProjectDashboardProviderRunner,
-  ensureProjectDashboardStructure,
-  loadProjectDashboardRenderManifest,
-  projectDashboardPaths,
-  resolveDashboardImports,
-  writeProjectDashboardSnapshot,
-} from "./lib/project-dashboard.js";
-export type {
-  BuildProjectDashboardSnapshotOptions,
-  ProjectDashboardPaths,
-  ProjectDashboardProvider,
-  ProjectDashboardProviderRunner,
-  ProjectDashboardRenderManifest,
-  ProviderRunRequest,
-  ProviderRunResult,
-} from "./lib/project-dashboard.js";
-export { projectDashboardHtml, serveProjectDashboard } from "./lib/project-dashboard-server.js";
-export type { ProjectDashboardServer, ProjectDashboardServerOptions } from "./lib/project-dashboard-server.js";
 export {
   PROJECTS_HOME_ENV,
   getProjectsHome,
@@ -449,13 +389,10 @@ export {
 
 export {
   PROJECT_RENDER_SCHEMA_VERSION,
-  PROJECT_RENDER_UI_CONTRACT,
   projectsJsonRenderCatalog,
   projectsJsonRenderSchema,
   validateProjectsRenderSpec,
   isProjectsRenderSpec,
-  buildProjectCanvasPayload,
-  buildProjectCanvasesPayload,
   buildProjectDataModelRender,
   buildProjectListRender,
   buildProjectDetailPayload,

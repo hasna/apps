@@ -125,6 +125,12 @@ describe("project management taxonomy", () => {
         path: briefPath,
         path_exists: true,
       },
+      canvases: {
+        linked: false,
+        status: "unlinked",
+        project_id: null,
+        default_canvas_id: null,
+      },
     });
   });
 });
