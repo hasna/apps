@@ -5,6 +5,16 @@ documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
 unless noted.
 
+## 0.4.36 (2026-08-02)
+
+### Fixed
+
+- **Reachable Codewith exec retries:** the bounded fast-failure guard now
+  identifies transient SQLite and process-contention failures on the supported
+  `codewith exec` path. Obsolete `codewith agent start` diagnostics no longer
+  trigger retries, and retry logs describe exec contention instead of the
+  removed start lifecycle.
+
 ## 0.4.35 (2026-08-02)
 
 ### Fixed
