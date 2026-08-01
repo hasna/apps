@@ -1,18 +1,79 @@
 {
-  "$schema": "./node_modules/@hasna/contracts/dist/hasna.contract.schema.json",
   "schema": "hasna.service_contract.v1",
   "name": "projects",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.4.1",
-  "description": "High-level project/workspace management: CLI, MCP server, HTTP API (projects-serve), and typed SDK. Amendment A1 pure-remote: the serve reads/writes cloud Postgres directly.",
-  "bins": ["projects", "projects-mcp", "projects-serve"],
+  "kitVersion": "0.8.4",
+  "description": "High-level project/workspace management: CLI, MCP server, HTTP API (projects-serve), and typed SDK. The server's data backend is a two-value switch, HASNA_PROJECTS_STORAGE_MODE=sqlite|postgres (a HASNA_PROJECTS_DATABASE_URL implies postgres); on postgres the serve process reads/writes that database directly.",
+  "bins": [
+    "projects",
+    "projects-mcp",
+    "projects-serve"
+  ],
+  "hosting": [
+    "user-hosted"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "http-api",
+      "kind": "api",
+      "status": "supported",
+      "bin": "projects-serve",
+      "authMode": "api-key",
+      "health": {
+        "method": "GET",
+        "path": "/health",
+        "public": true
+      },
+      "readiness": {
+        "method": "GET",
+        "path": "/ready",
+        "public": false
+      },
+      "version": {
+        "method": "GET",
+        "path": "/version",
+        "public": true
+      },
+      "apiBasePath": "/v1",
+      "openApiPath": "/openapi.json"
+    },
+    {
+      "name": "typescript-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "api-key",
+      "exportSubpath": "./sdk",
+      "generatedFrom": "/openapi.json"
+    },
+    {
+      "name": "mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "projects-mcp",
+      "authMode": "local-only"
+    },
+    {
+      "name": "cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "projects",
+      "authMode": "local-only"
+    }
+  ],
   "storage": {
-    "mode": "cloud",
+    "mode": "sqlite",
+    "engines": [
+      "sqlite",
+      "postgres"
+    ],
     "envPrefix": "HASNA_PROJECTS_",
     "aliasEnvPrefix": "PROJECTS_",
-    "databaseUrlSecretRef": "hasna/oss/projects/database-url",
-    "sqlitePath": "~/.hasna/projects/projects.db"
+    "sqlitePath": "~/.hasna/projects/projects.db",
+    "pgTestGate": {
+      "envVar": "PROJECTS_TEST_DATABASE_URL",
+      "command": "bun test"
+    }
   },
   "metadata": {
     "healthPath": "/health",
@@ -20,10 +81,10 @@
     "versionPath": "/version",
     "apiBasePath": "/v1",
     "auth": "api-key",
-    "authScopes": ["projects:read", "projects:write"],
-    "apiSigningSecretRef": "hasna/oss/projects/api-key-signing-secret",
-    "databaseUrlOwnerSecretRef": "hasna/oss/projects/database-url-owner",
-    "openapiPath": "/openapi.json",
-    "host": "projects.hasna.xyz"
+    "authScopes": [
+      "projects:read",
+      "projects:write"
+    ],
+    "openapiPath": "/openapi.json"
   }
 }
