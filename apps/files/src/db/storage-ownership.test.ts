@@ -1,7 +1,7 @@
 /**
  * Storage-ownership guard for @hasna/files.
  *
- * @hasna/cloud is RETIRED. Its npm deprecation notice reads: "is retired and no
+ * The former shared storage adapter is RETIRED. Its npm deprecation notice reads: "is retired and no
  * longer supported by Hasna. The source repo has been deleted. Do not add new
  * dependencies on it; services now own their storage (local SQLite /
  * self-hosted API)." Its GitHub repo is gone, so nothing can be patched there
@@ -9,7 +9,7 @@
  *
  * This package owns its storage directly through bun:sqlite. PR #18 (merged
  * 2026-07-30, six days AFTER the deprecation) replaced that with the
- * @hasna/cloud SqliteAdapter; this guard exists so the swap cannot land again
+ * retired package's SqliteAdapter; this guard exists so the swap cannot land again
  * unnoticed.
  *
  * NOTE ON PROVENANCE: PR #18 added src/db/database.test.ts, whose central
@@ -36,7 +36,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
-const RETIRED = "@hasna/cloud";
+const RETIRED = ["@hasna", "cloud"].join("/");
 /** A dependency this package genuinely declares — the control for the manifest reader. */
 const CONTROL_DEP = "@hasna/events";
 /** A token that genuinely appears in src/ — the control for the tree scanner. */
@@ -104,8 +104,8 @@ afterAll(async () => {
   rmSync(testDir, { recursive: true, force: true });
 });
 
-describe("storage ownership: no dependency on the retired @hasna/cloud", () => {
-  test("package.json declares no @hasna/cloud in any dependency field", () => {
+describe("storage ownership: no dependency on the retired shared adapter", () => {
+  test("package.json declares no retired adapter in any dependency field", () => {
     const declared = declaredDependencies();
 
     // POSITIVE CONTROL: the reader must actually see this manifest's contents.
@@ -114,7 +114,7 @@ describe("storage ownership: no dependency on the retired @hasna/cloud", () => {
     expect(declared).not.toContain(RETIRED);
   });
 
-  test("the lockfile resolves no @hasna/cloud", () => {
+  test("the lockfile resolves no retired adapter", () => {
     const lock = readFileSync(join(REPO_ROOT, "bun.lock"), "utf-8");
 
     // POSITIVE CONTROL: the lockfile was actually read and resolves real deps.
@@ -123,7 +123,7 @@ describe("storage ownership: no dependency on the retired @hasna/cloud", () => {
     expect(lock).not.toContain(RETIRED);
   });
 
-  test("no source file imports @hasna/cloud", () => {
+  test("no source file imports the retired adapter", () => {
     // POSITIVE CONTROL: the scanner must be able to find a token that IS there.
     expect(filesContaining(CONTROL_IMPORT).length).toBeGreaterThan(0);
 
