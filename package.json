@@ -47,10 +47,11 @@
     "sdk:generate": "bun run scripts/generate-sdk.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "contracts:conformance": "contracts conformance fixtures",
     "dev:cli": "bun run src/cli/index.ts",
     "dev:mcp": "bun run src/mcp/index.ts",
     "prepack": "bun run build",
-    "prepublishOnly": "bun run typecheck && bun test",
+    "prepublishOnly": "bun run typecheck && bun test && bun run contracts:conformance && contracts no-cloud-scan .",
     "postinstall": "mkdir -p $HOME/.hasna/projects 2>/dev/null || true"
   },
   "keywords": [
