@@ -47,7 +47,7 @@
     "sdk:generate": "bun run scripts/generate-sdk.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
-    "contracts:conformance": "contracts conformance fixtures",
+    "contracts:conformance": "./node_modules/.bin/contracts conformance fixtures",
     "dev:cli": "bun run src/cli/index.ts",
     "dev:mcp": "bun run src/mcp/index.ts",
     "prepack": "bun run build",
