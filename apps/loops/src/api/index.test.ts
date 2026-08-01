@@ -2940,6 +2940,127 @@ describe("loops-api foundation", () => {
     }
   });
 
+  test("runner claim capacity does not reap the polling runner's own expired eligible lease", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const startedAt = new Date("2026-01-01T00:00:00.000Z");
+    const recoveredAt = new Date("2026-01-01T00:00:05.000Z");
+    const server = createTestServer(
+      mod,
+      { host: "127.0.0.1", port: 0, storage, now: () => recoveredAt, random: () => 0.5 },
+      runnerPrincipal("runner-a"),
+    );
+
+    try {
+      const earlierLoop = await storage.createLoop(
+        {
+          name: "api-a-earlier-new-work",
+          schedule: { type: "once", at: "2025-12-31T23:59:58.000Z" },
+          target: { type: "command", command: "true" },
+          machine: { id: "runner-a" },
+        },
+        new Date("2025-12-31T23:59:57.000Z"),
+      );
+      const staleLoop = await storage.createLoop(
+        {
+          name: "api-b-own-expired-eligible",
+          schedule: { type: "interval", everyMs: 1_000 },
+          target: { type: "command", command: "true" },
+          machine: { id: "runner-a" },
+          catchUp: "latest",
+          overlap: "skip",
+          maxAttempts: 1,
+          leaseMs: 1_000,
+        },
+        new Date("2025-12-31T23:59:59.000Z"),
+      );
+      const staleCursor = staleLoop.nextRunAt;
+      const staleClaim = await storage.claimRun(staleLoop, staleCursor!, "runner-a", startedAt);
+      expect(staleClaim?.run).toMatchObject({ status: "running", claimedBy: "runner-a" });
+
+      const response = await fetch(apiUrl(server, "/v1/runners/claim"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ runnerId: "runner-a" }),
+      });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        claims: Array<{ loop: { id: string }; run: { status: string } }>;
+      };
+      expect(body.claims).toHaveLength(1);
+      expect(body.claims[0]).toMatchObject({
+        loop: { id: earlierLoop.id },
+        run: { status: "running" },
+      });
+      expect(await storage.getRun(staleClaim!.run.id)).toMatchObject({
+        status: "running",
+        claimedBy: "runner-a",
+        leaseExpiresAt: "2026-01-01T00:00:01.000Z",
+      });
+      expect(await storage.getLoop(staleLoop.id)).toMatchObject({
+        status: "active",
+        nextRunAt: staleCursor,
+      });
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("runner claim reaps an expired lease owned by an ineligible runner", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const startedAt = new Date("2026-01-01T00:00:00.000Z");
+    const recoveredAt = new Date("2026-01-01T00:00:05.000Z");
+    const server = createTestServer(
+      mod,
+      { host: "127.0.0.1", port: 0, storage, now: () => recoveredAt, random: () => 0.5 },
+      runnerPrincipal("healthy-runner"),
+    );
+
+    try {
+      const staleLoop = await storage.createLoop(
+        {
+          name: "api-hosted-expired-unrelated-runner",
+          schedule: { type: "interval", everyMs: 1_000 },
+          target: { type: "command", command: "true" },
+          machine: { id: "missing-runner" },
+          catchUp: "latest",
+          overlap: "skip",
+          maxAttempts: 1,
+          leaseMs: 1_000,
+        },
+        new Date("2025-12-31T23:59:59.000Z"),
+      );
+      const staleClaim = await storage.claimRun(
+        staleLoop,
+        staleLoop.nextRunAt!,
+        "missing-runner",
+        startedAt,
+      );
+      expect(staleClaim?.run).toMatchObject({ status: "running", claimedBy: "missing-runner" });
+
+      const response = await fetch(apiUrl(server, "/v1/runners/claim"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ runnerId: "healthy-runner", maxClaims: 1 }),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ ok: true, claims: [] });
+      expect(await storage.getRun(staleClaim!.run.id)).toMatchObject({
+        status: "abandoned",
+        error: "run lease expired before completion",
+      });
+      expect(await storage.getLoop(staleLoop.id)).toMatchObject({
+        status: "active",
+        nextRunAt: "2026-01-01T00:00:06.000Z",
+      });
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
   test("GET /v1/loops paginates with offset, clamps oversized limit, and filters by name", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");

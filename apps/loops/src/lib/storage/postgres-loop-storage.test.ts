@@ -27,6 +27,8 @@ import { assertTenantEnforcementBootstrap, assertTenantEnforcementBootstrapIfPen
 import type { CreateLoopInput, Loop, LoopRun, WorkflowSpec, WorkflowStepRun } from "../../types.js";
 import { waitUntil } from "../../test-helpers.js";
 import { planLoopAdvancement } from "../advancement.js";
+import { createLoopsApiServer } from "../../api/index.js";
+import type { TenantAuthContext } from "../auth/tenant-auth.js";
 
 const j = (...parts: string[]): string => parts.join("");
 const GH_PAT = j("ghp", "_AbCdEf0123456789AbCdEf0123456789");
@@ -2644,6 +2646,128 @@ suite("PostgresLoopStorage (live)", () => {
       error: "parent loop run lease expired before completion",
       loopRunId: claim!.run.id,
     });
+  });
+
+  test("hosted runner polling preserves its own capped claim while reaping another machine's expired PostgreSQL run", async () => {
+    const startedAt = new Date("2026-07-06T15:30:00.000Z");
+    const recoveredAt = new Date("2026-07-06T15:30:05.000Z");
+    const staleLoop = await storage.createLoop(
+      loopInput("pg-hosted-expired-unrelated-runner", {
+        schedule: { type: "interval", everyMs: 1_000 },
+        machine: { id: "missing-pg-runner" },
+        catchUp: "latest",
+        overlap: "skip",
+        maxAttempts: 1,
+        leaseMs: 1_000,
+      }),
+      new Date("2026-07-06T15:29:59.000Z"),
+    );
+    const staleClaim = await storage.claimRun(
+      staleLoop,
+      staleLoop.nextRunAt!,
+      "missing-pg-runner",
+      startedAt,
+    );
+    expect(staleClaim?.run).toMatchObject({ status: "running", claimedBy: "missing-pg-runner" });
+
+    const earlierLoop = await storage.createLoop(
+      loopInput("pg-a-earlier-new-work", {
+        schedule: { type: "once", at: "2026-07-06T15:29:58.000Z" },
+        machine: { id: "healthy-pg-runner" },
+      }),
+      new Date("2026-07-06T15:29:57.000Z"),
+    );
+    const ownStaleLoop = await storage.createLoop(
+      loopInput("pg-b-own-expired-eligible", {
+        schedule: { type: "interval", everyMs: 1_000 },
+        machine: { id: "healthy-pg-runner" },
+        catchUp: "latest",
+        overlap: "skip",
+        maxAttempts: 1,
+        leaseMs: 1_000,
+      }),
+      new Date("2026-07-06T15:30:00.000Z"),
+    );
+    const ownStaleCursor = ownStaleLoop.nextRunAt;
+    const ownStaleClaim = await storage.claimRun(
+      ownStaleLoop,
+      ownStaleCursor!,
+      "healthy-pg-runner",
+      new Date("2026-07-06T15:30:02.000Z"),
+    );
+    expect(ownStaleClaim?.run).toMatchObject({
+      status: "running",
+      claimedBy: "healthy-pg-runner",
+      leaseExpiresAt: "2026-07-06T15:30:03.000Z",
+    });
+
+    const principal: TenantAuthContext = {
+      tenantId: "tenant-test",
+      principalId: "healthy-pg-runner",
+      requestId: "pg-hosted-reaper",
+      kid: "pg-hosted-reaper",
+      agent: "healthy-pg-runner",
+      scopes: ["loops:runner"],
+      roles: ["worker"],
+      tokenKind: "machine",
+      claims: {
+        v: 1,
+        kid: "pg-hosted-reaper",
+        app: "loops",
+        agent: "healthy-pg-runner",
+        scopes: ["loops:runner"],
+        iat: 1,
+        exp: null,
+      },
+    };
+    const server = createLoopsApiServer({
+      host: "127.0.0.1",
+      port: 0,
+      storage,
+      now: () => recoveredAt,
+      random: () => 0.5,
+      authenticator: {
+        authenticate: async () => ({ ok: true, status: 200, principal }),
+      },
+      withTenantStorage: (_principal, fn) => fn(storage),
+    });
+
+    try {
+      expect(server.port).toBeNumber();
+      const response = await fetch(`http://127.0.0.1:${server.port}/v1/runners/claim`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ runnerId: "healthy-pg-runner" }),
+      });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        claims: Array<{ loop: { id: string }; run: { status: string } }>;
+      };
+      expect(body.claims).toHaveLength(1);
+      expect(body.claims[0]).toMatchObject({
+        loop: { id: earlierLoop.id },
+        run: { status: "running" },
+      });
+      expect(await storage.getRun(ownStaleClaim!.run.id)).toMatchObject({
+        status: "running",
+        claimedBy: "healthy-pg-runner",
+        leaseExpiresAt: "2026-07-06T15:30:03.000Z",
+      });
+      expect(await storage.getLoop(ownStaleLoop.id)).toMatchObject({
+        status: "active",
+        nextRunAt: ownStaleCursor,
+      });
+      expect(await storage.getRun(staleClaim!.run.id)).toMatchObject({
+        status: "abandoned",
+        error: "run lease expired before completion",
+      });
+      expect(await storage.getLoop(staleLoop.id)).toMatchObject({
+        status: "active",
+        nextRunAt: "2026-07-06T15:30:06.000Z",
+      });
+    } finally {
+      server.stop(true);
+    }
   });
 
   test("two connections never double-claim the same slot (contract claimRun)", async () => {
