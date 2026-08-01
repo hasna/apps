@@ -158,9 +158,18 @@ describe("todos start — a claim must carry a real, process-bound identity", ()
     expect(result.stderr).toContain("TODOS_AGENT_ID");
   });
 
-  it("does not overwrite an existing correct assignee with a placeholder", async () => {
-    // The audit-blinding shape: a real owner is replaced by "cli", and a
-    // coverage sweep then reads the row as routed and skips it.
+  it("does not replace an existing assignee with a placeholder WHEN THE CALLER IS UNIDENTIFIED", async () => {
+    // Name narrowed after adversarial review (hortensia). The original read
+    // "does not overwrite an existing correct assignee", which overstated it:
+    // this passes because the unidentified claim is REFUSED, not because
+    // `startTask` stopped reassigning. An IDENTIFIED caller still overwrites a
+    // correct assignee — measured, `owner-agent` -> `other-agent` — and that is
+    // unchanged by this PR and arguably correct for a claim verb, since taking
+    // a task is what `start` is for. Pinned with an accurate name so the
+    // residual stays visible instead of looking covered.
+    //
+    // The audit-blinding shape this DOES close: a real owner replaced by "cli",
+    // after which a coverage sweep reads the row as routed and skips it.
     const task = await addTask("work that belongs to someone", ["--assign", "owner-agent"]);
     expect(task.assigned_to).toBe("owner-agent");
     await runCli(["start", task.id]);
@@ -201,6 +210,60 @@ describe("todos start — a claim must carry a real, process-bound identity", ()
     expect(after.status).toBe("in_progress");
     expect(after.assigned_to).toBe("session-a");
     expect(after.locked_by).toBe("session-a");
+  });
+
+  it("reports an UNRESOLVABLE task reference as a task error, not as an identity refusal", async () => {
+    // Ordering guard. The first cut of this fix resolved identity BEFORE the task
+    // reference, which masked `start`'s "ambiguous short id -> candidate project
+    // IDs" diagnostic while `done`, `update` and `comment` kept reporting it.
+    // CI caught it; a local subset run did not. A safety diagnostic that only some
+    // verbs emit is worse than one none of them emit, because the gap is invisible.
+    //
+    // Scope of the guarantee, stated precisely because the first draft of THIS
+    // test got it wrong: it holds where resolution itself fails. A syntactically
+    // valid but nonexistent UUID resolves fine and is then correctly refused for
+    // want of an identity — that is not a masked diagnostic, and asserting
+    // otherwise made this case fail against the corrected code.
+    const result = await runCli(["start", "zzzzzzzz"]);
+    expect(result.exitCode).not.toBe(0);
+    const combined = result.stdout + result.stderr;
+    expect(combined).toContain("Could not resolve task ID");
+    expect(combined).not.toContain("TODOS_AGENT_ID");
+  });
+});
+
+describe("todos start/done — the same --agent value must claim and release", () => {
+  it("releases a lock taken with a capitalised --agent, using that same value", async () => {
+    // Found by adversarial review (hortensia) and it is a defect this fix
+    // CREATED rather than inherited. `resolveClaimIdentity` folds case, as
+    // `resolveCreatorIdentity` and `registerAgent` already do; `done`, `unlock`,
+    // `bulk done`, `claim` and `steal` passed the raw flag into a `locked_by`
+    // string comparison. So `start --agent Cassius` recorded locked_by='cassius'
+    // and `done --agent Cassius` — the identical flag value — was refused.
+    //
+    // It matters disproportionately here: the PR designates per-invocation
+    // `--agent` as the ONLY remedy that works on a Claude Code seat, and this
+    // fleet names agents in capitalised Roman form. `unlockTask` has no expiry
+    // term either, so the named form could never recover the lock.
+    const task = await addTask("case folding round trip");
+    const started = await runCli(["--agent", "Cassius", "start", task.id]);
+    expect(started.exitCode).toBe(0);
+    const done = await runCli(["--agent", "Cassius", "done", task.id]);
+    expect(done.exitCode).toBe(0);
+  });
+
+  it("treats differently-cased spellings as ONE holder, not two — pins resolveClaimIdentity, NOT the global coercion", async () => {
+    // Honest label: this case passes with the parse-time `--agent` coercion
+    // REMOVED, because both verbs here route through `resolveClaimIdentity`,
+    // which folds case on its own. Measured, so nobody reads it as evidence for
+    // the coercion — the case above is the one that discriminates. What this
+    // pins is that folding must stop two spellings becoming two holders, which
+    // would reintroduce a split-holder lock under new names.
+    const task = await addTask("case folding holder identity");
+    expect((await runCli(["--agent", "Cassius", "start", task.id])).exitCode).toBe(0);
+    expect((await showTask(task.id)).locked_by).toBe("cassius");
+    const renew = await runCli(["--agent", "cassius", "lock", task.id]);
+    expect(renew.exitCode).toBe(0);
   });
 });
 

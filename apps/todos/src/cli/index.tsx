@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
 import { getPackageVersion } from "../lib/package-version.js";
+import { canonicalAgentRef } from "../lib/creator-identity.js";
 import { applyTodosCliHelpVisibility, initializeTodosCliAuthority, type TodosCliAuthorityInitialization } from "./stage-a.js";
 
 const program = new Command();
@@ -103,7 +104,19 @@ program
   .version(getPackageVersion())
   .option("--project <path>", "Project path")
   .option("-j, --json", "Output as JSON")
-  .option("--agent <name>", "Agent name")
+  // Canonicalised ONCE, at parse, so every consumer of `--agent` sees the same
+  // string. Without this the claim verbs and the release verbs disagree about
+  // the same flag value: `resolveClaimIdentity` folds case (as
+  // `resolveCreatorIdentity` and `registerAgent` already do), while `done`,
+  // `unlock`, `bulk done`, `claim` and `steal` pass the raw value straight into
+  // a `locked_by` string comparison. Measured: `start --agent Cassius` records
+  // `locked_by='cassius'`, and `done --agent Cassius` — the identical flag
+  // value — then fails with "is locked by cassius". `unlockTask` has no expiry
+  // term, so that lock stays unreleasable by the named form indefinitely. This
+  // fleet names agents in capitalised Roman form, so it would have fired
+  // constantly. Folding here rather than at each call site keeps the verbs from
+  // drifting apart again.
+  .option("--agent <name>", "Agent name", (value: string) => canonicalAgentRef(value))
   .option("--session <id>", "Session ID");
 
 // Validate and select remote HTTP authority before importing command modules.
