@@ -4,6 +4,7 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { scanHistoryExposures, scanWorkspaceExposures } from "../src/scanner.js";
+import { hermeticGit } from "./setup/hermetic-git.js";
 
 let testDir: string;
 
@@ -29,20 +30,12 @@ function gitAvailable(): boolean {
 }
 
 function git(args: string[], cwd = testDir): void {
-  // Hermetic fixture git: ignore the operator's global/system git config. On a
-  // Hasna fleet machine the global core.hooksPath installs a staged-secrets
-  // pre-commit hook, which (correctly, for real repos) blocks these fixtures'
-  // deliberately fake credentials and made both history tests fail everywhere.
-  // The hook still governs real commits; only the throwaway fixture repo in
-  // tmpdir is exempt. This does not weaken the hook or the scanner under test.
-  const result = spawnSync("git", args, {
-    cwd,
-    encoding: "utf8",
-    env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" },
-  });
-  if (result.status !== 0) {
-    throw new Error(result.stderr || result.stdout || `git ${args.join(" ")} failed`);
-  }
+  // Hermetic fixture git — see tests/setup/hermetic-git.ts for why, and
+  // tests/hermetic-git.test.ts for the assertions that hold it to its word.
+  // Inlining the env here instead is what let two of the channels that carry
+  // core.hooksPath stay open, unnoticed and untested, so route every fixture
+  // git call through the shared helper.
+  hermeticGit(args, cwd);
 }
 
 describe("exposure scanner", () => {
