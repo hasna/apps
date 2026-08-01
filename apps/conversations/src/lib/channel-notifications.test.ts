@@ -5,6 +5,7 @@ import { join } from "path";
 import { closeDb, getDb } from "./db";
 import { sendMessage } from "./messages";
 import { createChannel } from "./channels";
+import { registerAgent } from "./presence";
 import { buildMessagePreview, listChannelNotificationSubscriptions, markAllChannelNotificationsRead, markChannelNotificationsRead, readChannelNotifications, subscribeToChannelNotifications, unsubscribeFromChannelNotifications } from "./channel-notifications";
 
 const TEST_DB = join(tmpdir(), `conversations-test-channel-notifications-${Date.now()}.db`);
@@ -108,6 +109,34 @@ describe("channel notifications", () => {
     expect(notifications[0].preview).not.toContain("#");
     expect(notifications[0].preview).not.toContain("_");
     expect(notifications[0].unread).toBe(true);
+  });
+
+  test("suppresses the registered sender id without hiding same-name peers", () => {
+    createChannel("ops", "creator");
+    const registration = registerAgent("Herminia", "session-herminia");
+    if (!("agent" in registration)) {
+      throw new Error("Expected agent registration to succeed");
+    }
+    subscribeToChannelNotifications("ops", "Herminia");
+
+    sendMessage({
+      from: registration.agent.id,
+      to: "ops",
+      channel: "ops",
+      session_id: "channel:ops",
+      content: "my registered sender traffic",
+    });
+    const sameNamePeer = sendMessage({
+      from: "Herminia",
+      to: "ops",
+      channel: "ops",
+      session_id: "channel:ops",
+      content: "a different session using the same display name",
+    });
+
+    const notifications = readChannelNotifications({ agent: "Herminia" });
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0].message_id).toBe(sameNamePeer.id);
   });
 
   test("redacts legacy sensitive content from notification previews", () => {
