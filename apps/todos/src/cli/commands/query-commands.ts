@@ -59,6 +59,7 @@ import {
 import { createLocalReport, renderLocalReportMarkdown } from "../../lib/local-reports.js";
 import type { BoardLane, BoardScope, CalendarEventKind, TaskPriority } from "../../types/index.js";
 import { autoProject, handleError, output, formatTaskLine, resolveTaskId, resolveTaskIdForCommand, resolveExplicitProject } from "../helpers.js";
+import { resolveValidatedAssignee } from "../assignee-guard.js";
 import {
   getTodosCloudClient,
   cloudGetTask,
@@ -683,8 +684,13 @@ export function registerQueryCommands(program: Command) {
     .command("assign <id> <agent>")
     .description("Assign a task to an agent")
     .option("-j, --json", "Output as JSON")
-    .action(async (id: string, agent: string, opts) => {
+    .option("--assign-seat", "Allow <agent> to name a durable seat (a seat queue has no session watching it)")
+    .action(async (id: string, agentInput: string, opts) => {
       const globalOpts = program.opts();
+      // Validated on the same terms as `add`/`update --assign`. This is the
+      // most literally-named assignment surface, so leaving it unguarded would
+      // make the whole rule bypassable. See `lib/assignee-validation.ts`.
+      const agent = await resolveValidatedAssignee(agentInput, Boolean(opts.assignSeat));
       // Remote authority routing: PATCH via /v1, mirroring `update --assign`.
       const cloud = getTodosCloudClient();
       if (cloud) {

@@ -39,6 +39,7 @@ import {
 import type { CloudTaskRelations } from "../cloud-router.js";
 import type { TaskPriority, TaskStatus } from "../../types/index.js";
 import { canonicalAgentRef, resolveCreatorIdentity, resolveWritableIdentity } from "../../lib/creator-identity.js";
+import { resolveValidatedAssignee } from "../assignee-guard.js";
 import {
   formatTaskLine,
   resolveTaskId,
@@ -328,6 +329,7 @@ export function registerTaskCommands(program: Command) {
     .option("--reason <text>", "Why this task exists")
     .option("--project <id>", "Assign to project by ID or slug (overrides auto-detect)")
     .option("--unassigned", "Deliberately file this task with no assignee")
+    .option("--assign-seat", "Allow --assign to name a durable seat (a seat queue has no session watching it)")
     .option("--created-by <agent>", "Record a different filer than the resolved agent identity")
     .action(async (title: string, opts) => {
       const globalOpts = program.opts();
@@ -353,7 +355,14 @@ export function registerTaskCommands(program: Command) {
       // Part 2: an unassigned task must be DELIBERATE. Left alone, `todos add`
       // produced an ownerless row silently, so the filer read "filed and
       // announced, therefore routed" while no seat was ever queued.
-      const assignee: string | undefined = opts.assign || (opts.unassigned ? undefined : router.agent_id || undefined);
+      // An EXPLICIT --assign is validated against the agent roster before it
+      // reaches the store: unvalidated, it accepted a seat (= nobody), a name
+      // no agent owns, and a name several agents share. See
+      // `lib/assignee-validation.ts`.
+      const requestedAssign = opts.assign
+        ? await resolveValidatedAssignee(opts.assign, Boolean(opts.assignSeat))
+        : undefined;
+      const assignee: string | undefined = requestedAssign || (opts.unassigned ? undefined : router.agent_id || undefined);
       if (!assignee && !opts.unassigned) {
         // One line, not two: this fires on every add from an unregistered caller,
         // and a warning people scroll past is a warning that does not work.
@@ -490,6 +499,7 @@ export function registerTaskCommands(program: Command) {
     .option("--working-dir <path>", "Working directory to store on create/update")
     .option("--project <id>", "Assign to project by ID, slug, or path")
     .option("--assign <agent>", "Assign to agent")
+    .option("--assign-seat", "Allow --assign to name a durable seat (a seat queue has no session watching it)")
     .option("--expectation-id <id>", "Expectation metadata ID")
     .option("--expectation-fingerprint <key>", "Expectation metadata fingerprint")
     .option("--evidence-paths <paths>", "Comma-separated evidence paths")
@@ -502,6 +512,12 @@ export function registerTaskCommands(program: Command) {
       const globalOpts = program.opts();
       opts.tags = opts.tags || opts.tag;
       opts.list = opts.list || opts.taskList;
+      // Same validation as `add` and `update`: an upsert is a create path too,
+      // and a loop-driven one, so an unvalidated assignee here mints the same
+      // bad rows on every run rather than once.
+      if (opts.assign) {
+        opts.assign = await resolveValidatedAssignee(opts.assign, Boolean(opts.assignSeat));
+      }
       const explicitProject = opts.project || globalOpts.project;
       // http authority routing: dedupe-and-upsert on the SHARED dataset. The
       // local path wrote the task to this machine's sqlite by fingerprint, so on a
@@ -1241,6 +1257,7 @@ export function registerTaskCommands(program: Command) {
     .option("-s, --status <status>", "New status")
     .option("-p, --priority <priority>", "New priority")
     .option("--assign <agent>", "Assign to agent")
+    .option("--assign-seat", "Allow --assign to name a durable seat (a seat queue has no session watching it)")
     .option("--set-agent <agent>", "Repair the agent_id stamped on this row (use \"\" to clear it as unattributable)")
     .option("--tags <tags>", "New tags (comma-separated)")
     .option("--tag <tags>", "New tags (alias for --tags)")
@@ -1275,6 +1292,12 @@ export function registerTaskCommands(program: Command) {
       }
       if (opts.workingDir !== undefined && opts.clearWorkingDir) {
         handleError(new Error("Use either --working-dir or --clear-working-dir, not both."));
+      }
+      // Reassignment is validated on the same terms as the initial assignment:
+      // this is the path that quietly moved a task onto another session's live
+      // agent at rc=0. See `lib/assignee-validation.ts`.
+      if (opts.assign) {
+        opts.assign = await resolveValidatedAssignee(opts.assign, Boolean(opts.assignSeat));
       }
 
       // http authority routing: PATCH straight against <app-host>/v1.

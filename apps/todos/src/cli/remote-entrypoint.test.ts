@@ -1106,6 +1106,19 @@ describe("remote CLI entrypoint authority boundary", () => {
           }
         }
 
+        // `assign`/`update --assign` validate the assignee against the agent
+        // roster before writing (todos 056f3597), so the remote path now reads
+        // this route. Serving it keeps the NON-degraded validation path under
+        // test: the guard falls back to an empty roster when the fetch fails,
+        // so a fixture that 404'd here would silently exercise only the
+        // degraded branch and prove nothing about the real one.
+        if (url.pathname === "/v1/agents" && request.method === "GET") {
+          return Response.json({
+            agents: [{ id: "fixture-agent", name: "fixture-agent" }],
+            count: 1,
+          });
+        }
+
         return Response.json({ error: `fixture route not present: ${route}` }, { status: 404 });
       },
     });
