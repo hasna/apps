@@ -20,7 +20,7 @@ import type {
 } from "../types.js";
 import { accountToolForProvider, resolveAccountEnv, resolveAccountEnvSync } from "./accounts.js";
 import { agentSessionContract, BoundedOutputBuffer, killProcessGroup, providerAdapter, spawnCapture, type AgentInvocation } from "./agent-adapter.js";
-import { commandNotFoundMessage, executableExists, normalizeExecutionPath } from "./env.js";
+import { commandNotFoundMessage, executableExists, hasnaClientEnv, normalizeExecutionPath } from "./env.js";
 import { nowIso } from "./ids.js";
 import { refreshLoopMachine, resolveMachineCommand } from "./machines.js";
 import { processStartTimeMs } from "./process-identity.js";
@@ -553,6 +553,14 @@ function composeExecutionEnv(
   accountEnv: Record<string, string> | undefined,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...(opts.env ?? process.env) };
+  // Machine-wide Hasna client config the runner's own process.env may be missing.
+  // Fill-if-absent, and deliberately so: an inherited or caller-supplied value is
+  // an explicit choice, while an absent one is the defect (todos de1f78af). This
+  // sits ABOVE the account block on purpose, so AUTH_ENV_KEYS scrubbing and
+  // per-target `spec.env` both still win over machine config.
+  for (const [key, value] of Object.entries(hasnaClientEnv(env))) {
+    if (!env[key]) env[key] = value;
+  }
   if (accountEnv) {
     for (const key of AUTH_ENV_KEYS) delete env[key];
     Object.assign(env, accountEnv);
