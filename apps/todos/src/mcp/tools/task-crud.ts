@@ -11,7 +11,8 @@ import { createTask, listTasks, getTask, updateTask, upsertTaskByFingerprint, de
 import { TaskNotFoundError, VersionConflictError } from "../../types/index.js";
 import { compactJson, compactTask, truncateText } from "../token-utils.js";
 import { resolveCreatorIdentity, resolveWritableIdentity } from "../../lib/creator-identity.js";
-import { validateAssignee, loadSeatSlugs } from "../../lib/assignee-validation.js";
+import { validateAssignee } from "../../lib/assignee-validation.js";
+import { loadAssigneeContext } from "../../lib/assignee-context.js";
 import { listAgents } from "../../db/agents.js";
 import {
   getTodosCloudClient,
@@ -49,12 +50,8 @@ interface TaskCrudContext {
  */
 async function validateMcpAssignee(value: string, allowSeat: boolean): Promise<string> {
   const cloud = getTodosCloudClient();
-  const agents = cloud ? await cloudListAgents(cloud) : listAgents();
-  const verdict = validateAssignee(value, {
-    agents: agents.map((a) => ({ id: a.id, name: a.name })),
-    seats: loadSeatSlugs(),
-    allowSeat,
-  });
+  const ctx = await loadAssigneeContext(() => (cloud ? cloudListAgents(cloud) : listAgents()), allowSeat);
+  const verdict = validateAssignee(value, ctx);
   if (!verdict.ok) throw new Error(`Cannot assign to '${value}'. ${verdict.message}`);
   return verdict.assignee;
 }

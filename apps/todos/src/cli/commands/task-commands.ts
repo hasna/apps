@@ -39,7 +39,8 @@ import {
 import type { CloudTaskRelations } from "../cloud-router.js";
 import type { TaskPriority, TaskStatus } from "../../types/index.js";
 import { canonicalAgentRef, resolveCreatorIdentity, resolveWritableIdentity } from "../../lib/creator-identity.js";
-import { validateAssignee, loadSeatSlugs } from "../../lib/assignee-validation.js";
+import { validateAssignee } from "../../lib/assignee-validation.js";
+import { loadAssigneeContext } from "../../lib/assignee-context.js";
 import { listAgents } from "../../db/agents.js";
 import { cloudListAgents } from "../cloud-router.js";
 import {
@@ -155,12 +156,8 @@ async function resolveValidatedAssignee(
   allowSeat: boolean,
 ): Promise<string> {
   const cloud = getTodosCloudClient();
-  const agents = cloud ? await cloudListAgents(cloud) : listAgents();
-  const verdict = validateAssignee(value, {
-    agents: agents.map((a) => ({ id: a.id, name: a.name })),
-    seats: loadSeatSlugs(),
-    allowSeat,
-  });
+  const ctx = await loadAssigneeContext(() => (cloud ? cloudListAgents(cloud) : listAgents()), allowSeat);
+  const verdict = validateAssignee(value, ctx);
   if (!verdict.ok) {
     handleError(new Error(`Cannot assign to '${value}'. ${verdict.message}`));
   }
