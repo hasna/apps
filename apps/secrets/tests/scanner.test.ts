@@ -55,14 +55,31 @@ describe("exposure scanner", () => {
     );
 
     const result = scanWorkspaceExposures({ root: testDir, limit: 1 });
+    const repeated = scanWorkspaceExposures({ root: testDir, limit: 1 });
     const serialized = JSON.stringify(result);
 
+    expect(result.schema).toBe("open-secrets.exposure-scan.v1");
     expect(result.redacted).toBe(true);
     expect(result.findingCount).toBe(1);
     expect(result.truncated).toBe(true);
     expect(result.truncatedReason).toBe("findings");
     expect(result.findings[0].path).toBe("app.env");
+    expect(result.findings[0].id).toMatch(/^secret-exposure:[0-9a-f]{24}$/);
+    expect(result.findings[0].id).toBe(repeated.findings[0].id);
     expect(result.findings[0].preview).toContain("***REDACTED***");
+    expect(result.findings[0].remediation).toEqual({
+      kind: "credential_exposure",
+      priority: "critical",
+      steps: [
+        "verify_finding",
+        "revoke_credential",
+        "rotate_credential",
+        "remove_from_source",
+        "update_dependents",
+        "rescan",
+      ],
+    });
+    expect(result).not.toHaveProperty("generated_at");
     expect(serialized).not.toContain(first);
     expect(serialized).not.toContain(second);
   });
@@ -86,6 +103,7 @@ describe("exposure scanner", () => {
     expect(result.findings[0].path).toBe("config.env");
     expect(result.findings[0].commit).toMatch(/^[0-9a-f]{40}$/);
     expect(result.findings[0].preview).toContain("***REDACTED***");
+    expect(result.findings[0].remediation.steps).toContain("purge_git_history");
     expect(serialized).not.toContain(value);
   });
 

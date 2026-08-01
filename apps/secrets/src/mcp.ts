@@ -322,6 +322,7 @@ function mcpScanRootError(source: "workspace" | "history", root: string, error: 
     content: [{
       type: "text" as const,
       text: JSON.stringify({
+        schema: "open-secrets.exposure-scan.v1",
         version: 1,
         source,
         root,

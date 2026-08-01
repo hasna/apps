@@ -319,6 +319,7 @@ function exposureTaskSuggestion(root: string, finding: ExposureScanResult["findi
     fingerprint: fingerprint("secret-exposure", `${root}:${finding.path}:${finding.line}:${finding.detector}:${finding.commit ?? ""}`),
     title: `Review possible leaked secret in ${finding.path}`,
     body: [
+      `Finding: ${finding.id}`,
       `Root: ${root}`,
       `Path: ${finding.path}:${finding.line}`,
       `Detector: ${finding.detector}`,
@@ -333,6 +334,8 @@ function exposureTaskSuggestion(root: string, finding: ExposureScanResult["findi
       path: finding.path,
       line: finding.line,
       detector: finding.detector,
+      finding_id: finding.id,
+      remediation: finding.remediation,
       source: "open-secrets.exposure-sweep.v1",
     },
   };

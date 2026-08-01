@@ -434,9 +434,17 @@ stored values. `get_secret` returns the raw value, so use it only when the agent
 needs to pass the secret into a tool or command.
 
 The scan tools return compact JSON with a stable schema, bounded redacted
-findings, and path/line/commit references only. They do not return raw matching
-values. MCP scan roots are constrained to the server working directory, and
-workspace scans include hard file, byte, and timeout bounds.
+findings, deterministic `secret-exposure:` ids, remediation metadata, and
+path/line/commit references only. They do not return raw matching values. MCP
+scan roots are constrained to the server working directory, and workspace scans
+include hard file, byte, and timeout bounds. The same scheduler-neutral contract
+is available programmatically:
+
+```ts
+import { scanWorkspaceExposures } from "@hasna/secrets/scanner";
+
+const result = scanWorkspaceExposures({ root: process.cwd(), limit: 50 });
+```
 
 ## Env-File Bridge
 

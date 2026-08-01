@@ -42,6 +42,8 @@ describe("security loop abstractions", () => {
 
     expect(result.summary.findings).toBe(1);
     expect(result.task_suggestions[0]!.fingerprint).toStartWith("secret-exposure:");
+    expect(result.task_suggestions[0]!.metadata.finding_id).toBe(result.scans[0]!.findings[0]!.id);
+    expect(result.task_suggestions[0]!.metadata.remediation).toEqual(result.scans[0]!.findings[0]!.remediation);
     expect(serialized).toContain("***REDACTED***");
     expect(serialized).not.toContain(leaked);
   });

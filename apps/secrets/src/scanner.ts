@@ -1,11 +1,28 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { relative, resolve, sep } from "node:path";
 
 export type ExposureScanKind = "workspace" | "history";
 export type ExposureSeverity = "high" | "medium";
+export type ExposureRemediationPriority = "critical" | "high";
+export type ExposureRemediationStep =
+  | "verify_finding"
+  | "revoke_credential"
+  | "rotate_credential"
+  | "remove_from_source"
+  | "purge_git_history"
+  | "update_dependents"
+  | "rescan";
+
+export interface ExposureRemediation {
+  kind: "credential_exposure";
+  priority: ExposureRemediationPriority;
+  steps: ExposureRemediationStep[];
+}
 
 export interface ExposureFinding {
+  id: string;
   source: ExposureScanKind;
   detector: string;
   severity: ExposureSeverity;
@@ -14,9 +31,11 @@ export interface ExposureFinding {
   column: number;
   preview: string;
   commit?: string;
+  remediation: ExposureRemediation;
 }
 
 export interface ExposureScanResult {
+  schema: "open-secrets.exposure-scan.v1";
   version: 1;
   source: ExposureScanKind;
   root: string;
@@ -246,9 +265,9 @@ export function scanHistoryExposures(options: HistoryExposureScanOptions = {}): 
   const maxCommits = normalizePositiveInteger(options.maxCommits, DEFAULT_MAX_COMMITS, MAX_COMMITS);
   const timeoutMs = normalizePositiveInteger(options.timeoutMs, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS);
   const deadline = Date.now() + timeoutMs;
-  const gitRoot = resolveGitRoot(requestedRoot);
   const result = createResult("history", requestedRoot, limit, { maxCommits, timeoutMs });
   result.stats.commitsScanned = 0;
+  const gitRoot = resolveGitRoot(requestedRoot, Math.max(1, deadline - Date.now()));
 
   if (!gitRoot) {
     result.stats.errors.push(`Not a git workspace: ${requestedRoot}`);
@@ -263,7 +282,12 @@ export function scanHistoryExposures(options: HistoryExposureScanOptions = {}): 
     `--max-count=${maxCommits}`,
     "--",
     pathspec,
-  ]);
+  ], { timeoutMs: Math.max(1, deadline - Date.now()) });
+  if (commits.error?.code === "ETIMEDOUT") {
+    markTruncated(result, "timeout");
+    pushError(result, "Timed out while listing git commits.");
+    return finalizeResult(result);
+  }
   if (commits.status !== 0) {
     result.stats.errors.push(trimError(commits.stderr) || "Unable to list git commits.");
     return finalizeResult(result);
@@ -315,6 +339,10 @@ export function scanHistoryExposures(options: HistoryExposureScanOptions = {}): 
 
     for (const line of grep.stdout.split("\n")) {
       if (!line || result.truncated) continue;
+      if (Date.now() > deadline) {
+        markTruncated(result, "timeout");
+        break;
+      }
       const parsed = parseGitGrepLine(line);
       if (!parsed) continue;
       if (isExcludedPath(parsed.path)) continue;
@@ -338,6 +366,7 @@ function createResult(
   bounds: { maxFileBytes?: number; maxFiles?: number; maxBytesScanned?: number; maxCommits?: number; timeoutMs?: number },
 ): ExposureScanResult {
   return {
+    schema: "open-secrets.exposure-scan.v1",
     version: 1,
     source,
     root,
@@ -380,6 +409,10 @@ function walkWorkspace(
 
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (result.truncated) return;
+    if (Date.now() > bounds.deadline) {
+      markTruncated(result, "timeout");
+      return;
+    }
     const fullPath = resolve(dir, entry.name);
     const relPath = relativePath(root, fullPath);
 
@@ -430,14 +463,18 @@ function walkWorkspace(
 
     result.stats.filesScanned++;
     result.stats.bytesScanned += buffer.length;
-    scanText(buffer.toString("utf8"), { source: "workspace", path: relPath }, result);
+    scanText(buffer.toString("utf8"), { source: "workspace", path: relPath }, result, bounds.deadline);
   }
 }
 
-function scanText(text: string, context: ScanTextContext, result: ExposureScanResult): void {
+function scanText(text: string, context: ScanTextContext, result: ExposureScanResult, deadline: number): void {
   const lines = text.split(/\r?\n/);
   for (let index = 0; index < lines.length; index++) {
     if (result.truncated) return;
+    if (Date.now() > deadline) {
+      markTruncated(result, "timeout");
+      return;
+    }
     scanTextLine(lines[index], index + 1, context, result);
   }
 }
@@ -452,17 +489,46 @@ function scanTextLine(line: string, lineNumber: number, context: ScanTextContext
       markTruncated(result, "findings");
       return;
     }
+    const column = span.start + 1;
     result.findings.push({
+      id: exposureFindingId(context, span.detector.id, lineNumber, column),
       source: context.source,
       detector: span.detector.id,
       severity: span.detector.severity,
       path: context.path,
       line: lineNumber,
-      column: span.start + 1,
+      column,
       preview,
       ...(context.commit ? { commit: context.commit } : {}),
+      remediation: exposureRemediation(context.source, span.detector.severity),
     });
   }
+}
+
+function exposureFindingId(
+  context: ScanTextContext,
+  detector: string,
+  line: number,
+  column: number,
+): string {
+  const locator = [context.source, context.path, line, column, detector, context.commit ?? ""].join("\0");
+  return `secret-exposure:${createHash("sha256").update(locator).digest("hex").slice(0, 24)}`;
+}
+
+function exposureRemediation(source: ExposureScanKind, severity: ExposureSeverity): ExposureRemediation {
+  return {
+    kind: "credential_exposure",
+    priority: severity === "high" ? "critical" : "high",
+    steps: [
+      "verify_finding",
+      "revoke_credential",
+      "rotate_credential",
+      "remove_from_source",
+      ...(source === "history" ? ["purge_git_history" as const] : []),
+      "update_dependents",
+      "rescan",
+    ],
+  };
 }
 
 function collectMatchSpans(line: string): MatchSpan[] {
@@ -523,8 +589,8 @@ function parseGitGrepLine(line: string): { path: string; line: number; content: 
   return { path, line: lineNumber, content: line.slice(thirdColon + 1) };
 }
 
-function resolveGitRoot(root: string): string | undefined {
-  const result = runGit(root, ["rev-parse", "--show-toplevel"]);
+function resolveGitRoot(root: string, timeoutMs: number): string | undefined {
+  const result = runGit(root, ["rev-parse", "--show-toplevel"], { timeoutMs });
   if (result.status !== 0) return undefined;
   return result.stdout.trim() || undefined;
 }
