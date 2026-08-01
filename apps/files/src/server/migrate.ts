@@ -13,8 +13,22 @@ import { createCloudPoolFromEnv } from "../generated/storage-kit/index.js";
 import { MigrationLedger } from "../generated/storage-kit/migrations.js";
 import { CLOUD_MIGRATIONS } from "../db/cloud-migrations.js";
 
-async function main(): Promise<void> {
-  const dryRun = process.argv.includes("--check") || process.argv.includes("--dry-run");
+export function filesMigrateHelpText(): string {
+  return `Usage: files-migrate [options]
+
+Apply the cloud PostgreSQL schema migrations for open-files.
+
+Options:
+  --check, --dry-run  Report pending migrations without applying them; exits 1 when pending
+  -h, --help          Show this help text`;
+}
+
+async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
+  if (argv.includes("-h") || argv.includes("--help")) {
+    console.log(filesMigrateHelpText());
+    return;
+  }
+  const dryRun = argv.includes("--check") || argv.includes("--dry-run");
   const { client, connectionSource } = createCloudPoolFromEnv("files", { applicationName: "files-migrate", max: 2 });
   console.log(`files-migrate: connected (source=${connectionSource}) — ${CLOUD_MIGRATIONS.length} migrations`);
   const ledger = new MigrationLedger(client, CLOUD_MIGRATIONS);
@@ -29,4 +43,6 @@ async function main(): Promise<void> {
   console.log(`files-migrate: done — ${result.applied.length} migrations recorded in ledger`);
 }
 
-main().catch((e) => { console.error(`files-migrate: FAILED — ${(e as Error).message}`); process.exit(1); });
+if (import.meta.main) {
+  main().catch((e) => { console.error(`files-migrate: FAILED — ${(e as Error).message}`); process.exit(1); });
+}

@@ -6,6 +6,7 @@ import {
   type McpHttpServerHandle,
 } from "@hasna/mcp-harness";
 import { startMcpHttpServer as harnessStartMcpHttpServer } from "@hasna/mcp-harness/node";
+import { DEFAULT_MCP_HTTP_PORT } from "./options.js";
 
 /**
  * open-files MCP transport/port boilerplate — now a thin shim over
@@ -16,7 +17,7 @@ import { startMcpHttpServer as harnessStartMcpHttpServer } from "@hasna/mcp-harn
  */
 
 export const MCP_HTTP_SERVICE_NAME = "files";
-export const DEFAULT_MCP_HTTP_PORT = 8863;
+export { DEFAULT_MCP_HTTP_PORT } from "./options.js";
 
 export { isHttpMode, isStdioMode };
 export type { McpHttpServerHandle };

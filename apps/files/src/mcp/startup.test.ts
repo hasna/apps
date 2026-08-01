@@ -37,6 +37,7 @@ test("MCP help exits without creating or opening the files database", async () =
 
   expect(exitCode).toBe(0);
   expect(stdout).toContain("Usage: files-mcp");
+  expect(stdout).toContain("HTTP port (default: 8863, env: MCP_HTTP_PORT)");
   expect(stderr).toBe("");
   await expect(Bun.file(join(dataDir, "files.db")).exists()).resolves.toBe(false);
 });

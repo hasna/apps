@@ -35,7 +35,12 @@ Files enter the bucket under `quarantine/` and move to the final key only after 
 
 ## Local Mode
 
-Local filesystem storage is allowed for development, tests, offline, and self-hosted deployments. Hosted apps should use their configured bucket through this package.
+Local filesystem storage is allowed for development, tests, and offline
+deployments. The default evidence provider is S3; select local storage with
+`--storage local`, an SDK override, or `HASNA_FILES_EVIDENCE_STORAGE=local`.
+The default local root is `<files-data-dir>/evidence` and can be overridden with
+`HASNA_FILES_EVIDENCE_LOCAL_ROOT`. Each asset persists its resolved local root
+so later complete, verify, and download operations resolve the same bytes.
 
 ## Environment
 
@@ -55,27 +60,28 @@ already use evidence-specific configuration.
 
 ## Cloud Runtime Boundary
 
-Storage status and metadata sync are intentionally separate from object-byte
-mutation:
+Evidence operations use the active files store:
 
-- SQLite is the local metadata index under the Hasna files data directory.
-- PostgreSQL is the remote metadata store and is touched only by explicit
-  storage migration or push/pull/sync commands.
-- S3-compatible storage owns durable bytes for evidence assets, imported Drive
-  objects, and S3 sources. Bytes move only through object APIs such as evidence
-  upload completion, Drive import, S3 upload/download, copy, delete, and signed
-  URL helpers.
-- `files storage status` is diagnostic. It reports no-secret credential source
-  diagnostics such as `aws_profile` or `default_provider_chain`, and it does not
-  call S3 listing APIs, upload objects, apply migrations, or replace the local
-  SQLite index. Credential readiness is reported as `not_checked` unless a
-  separate mocked, dry-run, or approved live operation verifies it.
+- In local mode, evidence metadata is in SQLite. Per-call CLI/MCP/SDK storage
+  overrides are honored and bytes may use local storage or S3.
+- In API mode, evidence metadata is in the service's PostgreSQL database and
+  the service owns storage configuration. Client bucket, profile, endpoint,
+  prefix, and local-root overrides are ignored by the API store so a thin
+  client cannot redirect the vault.
+- There is no local/remote metadata synchronization command. PostgreSQL schema
+  changes are applied by the service-only `files-migrate` executable.
+- Bytes move only through evidence, S3, Google Drive import, upload, download,
+  copy, delete, and signed-URL operations; metadata transport selection does
+  not migrate object bytes.
 
 For hosted deployments, configure AWS credentials by named profile, environment
 provider chain, or platform secret injection. Do not write raw access keys into
 task comments, docs, logs, PRs, or public config. S3-compatible endpoints may
 set `HASNA_FILES_S3_ENDPOINT` and `HASNA_FILES_S3_FORCE_PATH_STYLE`.
 `files sources` does not persist static S3 access keys or session tokens.
+
+Use `files evidence configure-prod` to print the effective no-secret local
+evidence configuration. It does not probe credentials or contact S3.
 
 ## 2026-06-09 Checksum Note
 

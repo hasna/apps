@@ -11,11 +11,34 @@ Agent-first file management — index local folders and S3 buckets, sync Google 
 bun install -g @hasna/files
 ```
 
+The published executables use Bun. A local index is created on first use; no
+PostgreSQL or S3 configuration is required for local folders.
+
+```bash
+files sources add ~/Documents --name documents
+files index
+files search "quarterly plan"
+```
+
+## Documentation
+
+- [CLI reference](docs/cli-reference.md)
+- [MCP server and tool catalog](docs/mcp.md)
+- [HTTP service, client modes, migrations, and SDK](docs/service-and-sdk.md)
+- [Evidence storage contract](docs/evidence-storage.md)
+- [Knowledge source contract](docs/knowledge-source-contract.md)
+
 ## CLI Usage
 
 ```bash
 files --help
+files sources --help
+files knowledge manifest --help
 ```
+
+The CLI supports local SQLite mode and an HTTP API client mode. Commands that
+need on-box bytes or ingestion state fail explicitly in API mode; the complete
+command and availability matrix is in the [CLI reference](docs/cli-reference.md).
 
 Build bounded agent context packs with citations instead of dumping full files:
 
@@ -54,9 +77,9 @@ files sources sync-google-drive
 ```
 
 `bootstrap-prod-files` (aliased `bootstrap-prod-emails`) creates or updates a
-single canonical S3 source at `s3://<bucket>/imports/google-drive/live/<profile>/...`
-and sets it as the default Google Drive destination; new imports land under
-`imports/google-drive/live/`. The `--aws-profile` flag defaults to the
+single canonical S3 source rooted at `s3://<bucket>/imports/google-drive/live`
+and sets it as the default Google Drive destination; new imports land below
+that root under `<profile>/...`. The `--aws-profile` flag defaults to the
 standard AWS SDK `default` profile (or `HASNA_FILES_AWS_PROFILE` if set) —
 never a hardcoded profile name. Operator-specific bucket names, legacy bucket
 aliases, and migration runbooks are internal evidence and are not shipped in
@@ -76,8 +99,10 @@ files sources add ~/Files/google-drive-imports --name drive-local
 files sources add-google-drive --profile personal --all --destination-source <local-source-id>
 ```
 
-Synced files are indexed under the actual S3 or local destination source, so
-`files download`, `files where`, and MCP file tools operate on the stored copy.
+Google Drive rows retain their Drive source identity while the resolver follows
+the configured S3 or local destination for bytes. Use `files resolve` or
+`files download` for those stored copies. `files where` is limited to files
+whose source itself is local.
 
 To organize the migrated Google Drive corpus into the unified open-files
 taxonomy, run the policy command as a dry-run first:
@@ -99,8 +124,9 @@ files-mcp
 ```
 
 Includes file, source, Google Drive, project, collection, agent activity, and
-evidence-vault tools. Agent-facing mutation, destructive, import, signed URL,
-download, and indexing tools fail closed unless explicitly enabled:
+evidence-vault tools. Tools in the MCP capability map fail closed unless their
+required mutation, destructive, import, signed URL, download, or indexing
+capabilities are explicitly enabled:
 
 ```bash
 OPEN_FILES_MCP_ALLOW_MUTATIONS=1 files-mcp
@@ -114,22 +140,29 @@ OPEN_FILES_MCP_ALLOW_DESTRUCTIVE=1 files-mcp
 `OPEN_FILES_ALLOW_<CAPABILITY>=1` or `OPEN_FILES_MCP_ALLOW_ALL=1` may be used
 for controlled local operator sessions.
 
+The current default server is not strictly read-only: agent registration and
+focus, feedback, and organization bootstrap/review updates are not in the
+capability map. See [docs/mcp.md](docs/mcp.md) for the exact behavior.
+
 The MCP server also exposes read-only `build_context_pack` and
 `search_context_pack` tools for bounded excerpts, citations, attachment refs,
 and omitted counts in agent loops.
+
+See [docs/mcp.md](docs/mcp.md) for the complete tool catalog, local/API-mode
+availability, and capability mapping.
 
 ## HTTP mode
 
 Run a shared Streamable HTTP MCP server (127.0.0.1 only):
 
 ```bash
-files-mcp --http              # default port 8818
-files-mcp --http --port 8818
+files-mcp --http              # default port 8863
+files-mcp --http --port 8863
 MCP_HTTP=1 files-mcp
 ```
 
-- Health: `GET http://127.0.0.1:8818/health`
-- MCP: `POST http://127.0.0.1:8818/mcp`
+- Health: `GET http://127.0.0.1:8863/health`
+- MCP: `POST http://127.0.0.1:8863/mcp`
 
 Stdio remains the default when no `--http` flag is passed.
 
@@ -178,18 +211,22 @@ const buffer = await store.getObjectBodyBuffer({
 ## REST API
 
 ```bash
-files-serve
+files-serve --port 19432
 ```
 
-REST mutation, destructive, signed URL, download, import, and indexing routes
-are also disabled by default. Use `OPEN_FILES_REST_ALLOW_<CAPABILITY>=1` or
-`OPEN_FILES_ALLOW_<CAPABILITY>=1` for controlled operator sessions.
+`files-serve` exposes unauthenticated health endpoints, a legacy unversioned
+local API, and the authenticated PostgreSQL-backed `/v1` API. Capability flags
+such as `OPEN_FILES_REST_ALLOW_MUTATIONS=1` gate unsafe unversioned routes. The
+`/v1` API instead requires an API key with `files:read` or `files:write` scope.
 
-`files-serve` binds to `127.0.0.1` by default and does not emit wildcard CORS
-headers. Browser requests are accepted only from the same origin or from exact
-origins listed in `OPEN_FILES_REST_ALLOWED_ORIGINS` (comma-separated), for
-example `OPEN_FILES_REST_ALLOWED_ORIGINS=http://localhost:5173`. Set
-`OPEN_FILES_REST_HOST` only for explicit non-loopback operator deployments.
+The server binds to `127.0.0.1` by default and tries the next free port when the
+requested port is occupied. Browser requests are accepted only from the same
+origin or from exact origins in `OPEN_FILES_REST_ALLOWED_ORIGINS`
+(comma-separated). Set `OPEN_FILES_REST_HOST` only for an intentional
+non-loopback deployment.
+
+For cloud service startup, migrations, API-key configuration, endpoint
+boundaries, and SDK usage, see [docs/service-and-sdk.md](docs/service-and-sdk.md).
 
 ## Evidence Vault
 
@@ -228,65 +265,33 @@ boundary and object layout.
 
 ## Storage
 
-Files stores metadata locally in SQLite under the Hasna data directory. Remote
-metadata sync uses this repo's PostgreSQL schema directly, without depending on
-the shared cloud package. The cloud runtime has three separate boundaries:
+There are two client transports and no SQLite/PostgreSQL sync engine:
 
-- local index: SQLite remains the local metadata index and cache;
-- remote metadata: PostgreSQL is updated only by explicit `storage migrate`,
-  `storage push`, `storage pull`, or `storage sync` commands;
-- object bytes: S3-compatible storage is used only by explicit S3, evidence,
-  Google Drive import, upload, download, and signed URL APIs.
+- Local mode is the default. Reads and writes use SQLite at
+  `~/.hasna/files/files.db`.
+- API mode routes supported data-plane reads and writes to `<API_URL>/v1`.
+  It does not read or update the local SQLite index.
 
-`files storage status` is diagnostic only. It does not contact AWS, mutate
-PostgreSQL, migrate object bytes, or replace the local SQLite index.
+API URL and key are sufficient to select API mode. Setting
+`HASNA_FILES_STORAGE_MODE=local` explicitly keeps the client local.
 
 ```bash
-export HASNA_FILES_STORAGE_MODE=hybrid
-export HASNA_FILES_DATABASE_URL="$FILES_DATABASE_URL"
-export HASNA_FILES_S3_BUCKET=<your-bucket>
-export HASNA_FILES_S3_PREFIX=objects
-export HASNA_FILES_AWS_REGION=us-east-1
-export HASNA_FILES_AWS_PROFILE=files-sync
-# Optional for S3-compatible stores such as MinIO/R2-compatible endpoints:
-export HASNA_FILES_S3_ENDPOINT=https://s3-compatible.example.test
-export HASNA_FILES_S3_FORCE_PATH_STYLE=1
-
-files storage status
-files storage push --tables machines,sources,files
-files storage pull
-files storage sync
+export HASNA_FILES_API_URL=https://files.example.test
+export HASNA_FILES_API_KEY=<scoped-api-key>
+files list --json
 ```
 
-`HASNA_FILES_STORAGE_MODE` accepts `local`, `hybrid`, or `remote`. The older
-`HASNA_FILES_EVIDENCE_*` S3 settings are still supported for evidence uploads,
-but `HASNA_FILES_S3_BUCKET`, `HASNA_FILES_S3_PREFIX`, `HASNA_FILES_AWS_REGION`,
-`HASNA_FILES_AWS_PROFILE`, `HASNA_FILES_S3_ENDPOINT`, and
-`HASNA_FILES_S3_FORCE_PATH_STYLE` are the canonical repo-level object storage
-aliases. Status output reports credential source as a no-secret diagnostic
-(`aws_profile` or `default_provider_chain`) and never prints credential values
-or database URLs. It also reports credential checks as `not_checked`; readiness
-requires an explicit mocked, dry-run, or approved live operation outside
-`storage status`.
+The service is different from the client: cloud `files-serve` uses PostgreSQL
+directly and must be configured with `HASNA_FILES_STORAGE_MODE=cloud`,
+`HASNA_FILES_DATABASE_URL`, and `HASNA_FILES_API_SIGNING_KEY`. Run
+`files-migrate --check`, then `files-migrate`, before starting the service.
+`files-migrate` is the only shipped PostgreSQL migration command; there is no
+`files storage` command group.
 
 Do not store static S3 access keys in `files sources`. S3 source config accepts
 named profiles, endpoints, and path-style settings only. Use platform secret
 injection, AWS environment provider chain, or a named AWS profile for
 credentials.
-
-Migration plan for hosted runtime:
-
-1. Run `files storage status --json` with only env-var names/profile names
-   configured and verify `runtime.boundary` stays false for remote mutation and
-   byte migration.
-2. Apply PostgreSQL metadata migrations with `files storage migrate`; this
-   changes schema only, not S3 bytes.
-3. Push/pull metadata tables deliberately with `files storage push`, `pull`, or
-   `sync`.
-4. Move or create object bytes only through the S3/evidence/import APIs with
-   mocked or approved credentials. Live bucket changes, production migrations,
-   secret creation, deploys, or terraform changes require a separate approval
-   task.
 
 ## Knowledge Source Contract
 
@@ -306,7 +311,8 @@ public-safe descriptor.
 
 ## Data Directory
 
-Data is stored in `~/.hasna/files/`.
+Local data is stored in `~/.hasna/files/`. Override the directory with
+`HASNA_FILES_DATA_DIR` or only the SQLite path with `HASNA_FILES_DB_PATH`.
 
 ## License
 

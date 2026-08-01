@@ -69,15 +69,19 @@ Remote flow:
 
 1. `open-files` owns the S3 source or canonical object bucket, for example
    `s3://example-files-prod/objects/sha256/...`.
-2. `open-files` keeps its local SQLite index as the local metadata cache. Remote
-   PostgreSQL metadata is updated only through explicit storage migrate, push,
-   pull, or sync commands.
-3. `open-files` writes manifest and extraction artifacts to a local directory or
-   S3 job prefix through explicit object APIs. Metadata sync does not move S3
-   bytes or rewrite canonical object keys.
+2. The hosted `files-serve` data plane reads and writes PostgreSQL directly.
+   API clients do not keep a synchronized SQLite cache and never receive the
+   database DSN.
+3. PostgreSQL schema changes are applied by `files-migrate`. This changes
+   metadata schema only and does not move S3 bytes or rewrite object keys.
 4. `open-knowledge` can run locally or in a future SaaS worker, fetch only the
    manifest/extracted text it is allowed to read, and store knowledge artifacts
    in a local app data directory or its own configured S3 bucket.
+
+The current CLI and MCP knowledge manifest, resolver, extraction, doctor, and
+outbox tools are on-box workflows over the local files index. They fail in API
+mode rather than reading a stale local database. The current `/v1` service does
+not expose those knowledge-specific workflows.
 
 Example hosted paths:
 
@@ -94,15 +98,11 @@ must not become a second source-file bucket. Raw source bytes, immutable object
 identity, extraction snapshots, S3 version metadata, and access enforcement stay
 in `open-files`.
 
-`files storage status --json` exposes this boundary under `runtime`: SQLite
-local index, PostgreSQL remote metadata, S3/local object bytes, and booleans
-stating that status and metadata sync do not mutate remote bytes or replace the
-local index. The status payload reports credential source as no-secret
-diagnostics only; consumers must not expect raw credentials in manifests or
-resolver contracts. It does not verify S3 credential readiness; that remains
-`not_checked` until a separate mocked, dry-run, or approved live operation
-checks access. S3 source records persist named profiles, endpoints, and
-path-style settings, not static access keys or session tokens.
+Storage transport configuration must not appear in manifests or resolver
+contracts. S3 source records persist named profiles, endpoints, and path-style
+settings, not static access keys or session tokens. Local/API mode selection
+does not move source bytes; there is no `files storage` command group or
+SQLite/PostgreSQL synchronization engine.
 
 For S3-backed bytes, `open-files` also owns `s3_objects`. That table stores the
 canonical object identity and metadata used by future resolvers: bucket, region,
@@ -132,7 +132,7 @@ extracted text snapshots, revision hashes, and outbox events; `open-knowledge`
 stores chunks, embeddings, FTS/vector indexes, reranking metadata, and cited
 wiki artifacts.
 
-Current CLI examples:
+Source setup examples:
 
 ```bash
 files sources add ~/Documents --name local-docs
@@ -140,10 +140,10 @@ files sources add s3://example-files-prod/imports/google-drive --region us-east-
 files sources list --json
 ```
 
-Current CLI examples:
+Knowledge workflow examples:
 
 ```bash
-files knowledge manifest --source <source_id> --jsonl --out manifest.jsonl
+files knowledge manifest --source <source_id> --format jsonl --out manifest.jsonl
 files knowledge doctor open-files://file/f_123 --json
 files knowledge resolve open-files://file/f_123 --purpose knowledge_index --json
 files extract-text f_123 --json
@@ -152,11 +152,13 @@ files knowledge outbox poll --consumer open-knowledge --json
 files knowledge outbox ack open-knowledge <cursor> --json
 ```
 
-Current MCP tools expose the same read-only surface:
+Current MCP tools expose the corresponding on-box surface:
 `export_knowledge_manifest`, `doctor_knowledge_sources`,
 `resolve_knowledge_source`, `resolve_extracted_text`, `poll_knowledge_outbox`, and
-`ack_knowledge_outbox`. This lets `knowledge <prompt>` ask for read-only source
-manifests and content resolution without receiving write access to source files.
+`ack_knowledge_outbox`. Manifest, doctor, resolve, extraction, and polling are
+read-only. Acknowledging the outbox updates a consumer checkpoint and therefore
+requires the MCP `mutations` capability. None of these tools grants write access
+to source-file bytes.
 
 The doctor is a read-only readiness diagnostic for agents before sync. It checks
 refs through the same resolver contract used by manifests and returns stable

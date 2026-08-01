@@ -25,6 +25,7 @@ import { homedir } from "os";
 import { createRequire } from "module";
 import { buildOpenFilesFileRef } from "../lib/source-ref.js";
 import type { FilesContextPack, GoogleDriveConfig, KnowledgeSourceManifestFormat, KnowledgeSourceResolveMode, S3Config } from "../types/index.js";
+import { DEFAULT_MCP_HTTP_PORT } from "./options.js";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../../package.json") as { version: string };
@@ -1733,7 +1734,7 @@ Runs the open-files MCP server (stdio by default).
 
 Options:
   --http            Serve MCP over Streamable HTTP (127.0.0.1)
-  --port <number>   HTTP port (default: 8818, env: MCP_HTTP_PORT)
+  --port <number>   HTTP port (default: ${DEFAULT_MCP_HTTP_PORT}, env: MCP_HTTP_PORT)
   -h, --help        Show this help text`);
 }
 

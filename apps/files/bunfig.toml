@@ -5,3 +5,6 @@ minimumReleaseAgeExcludes = [
   "@hasna/contracts",
   "@hasna/events",
 ]
+
+[test]
+preload = ["./src/test/setup-env.ts"]

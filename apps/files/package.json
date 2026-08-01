@@ -32,8 +32,7 @@
   "files": [
     "dist",
     "dashboard/dist",
-    "docs/evidence-storage.md",
-    "docs/knowledge-source-contract.md",
+    "docs",
     "LICENSE",
     "README.md"
   ],
