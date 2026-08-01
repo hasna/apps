@@ -497,7 +497,7 @@ function inspectSourceTodosTask(todosProjectPath: string, taskId: string): Sourc
   return {
     checked: true,
     resolved: true,
-    taskId,
+    taskId: inspectedId,
     todosProjectPath,
     status: stringField(task.status)?.trim().toLowerCase(),
     title: stringField(task.title),
@@ -510,11 +510,12 @@ function resolveSourceTodosTask(
   metadata: Record<string, unknown>,
   opts: TodosTaskRouteOptions,
 ): SourceTaskResolution | undefined {
-  if (opts.sourceTaskResolved) {
+  const sourceTaskResolvedId = opts.sourceTaskResolvedId?.trim();
+  if (sourceTaskResolvedId) {
     return {
       checked: false,
       resolved: true,
-      taskId,
+      taskId: sourceTaskResolvedId,
       todosProjectPath: opts.sourceTodosProjectPath?.trim() || opts.todosProject?.trim(),
     };
   }
@@ -921,14 +922,14 @@ function routeEvent(plan: RouteEventPlan): TodosTaskRoutePrint {
 export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions): TodosTaskRoutePrint {
   const data = eventData(event);
   const metadata = eventMetadata(event);
-  const taskId = taskEventField(data, ["id", "task_id", "taskId"]);
-  if (!taskId) throw new ValidationError("todos task event is missing task id in data.id, data.task_id, data.task.id, or data.payload.id");
+  const eventTaskId = taskEventField(data, ["id", "task_id", "taskId"]);
+  if (!eventTaskId) throw new ValidationError("todos task event is missing task id in data.id, data.task_id, data.task.id, or data.payload.id");
   const eligibility = taskRouteEligibility(data, metadata);
   if (!eligibility.eligible) {
     return {
       kind: "skipped",
-      value: { skipped: true, reason: eligibility.reason, event, taskId, eligibility },
-      human: `skipped task ${taskId}: ${eligibility.reason}`,
+      value: { skipped: true, reason: eligibility.reason, event, taskId: eventTaskId, eligibility },
+      human: `skipped task ${eventTaskId}: ${eligibility.reason}`,
     };
   }
   const taskTitle = taskEventField(data, ["title", "task_title", "taskTitle"]);
@@ -964,6 +965,37 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
   const sourceProjectIdempotencyPrefix = sourceTodosProjectPath
     ? normalizeRoutePath(sourceTodosProjectPath) ?? resolve(sourceTodosProjectPath)
     : undefined;
+  // Dry-run avoids shelling out to the source, but a drain already performed
+  // the authoritative queue read and can safely supply that canonical id.
+  const sourceTaskResolution = opts.dryRun && !opts.sourceTaskResolvedId?.trim()
+    ? undefined
+    : resolveSourceTodosTask(eventTaskId, data, metadata, opts);
+  if (sourceTaskResolution && !sourceTaskResolution.resolved) {
+    const reason = sourceTaskResolution.sourceUnavailable
+      ? `could not ask the active todos source whether task ${eventTaskId} exists: ${sourceTaskResolution.error ?? "todos inspect produced no exit status"}`
+      : `source todos task is not resolvable in active todos source: ${sourceTaskResolution.error ?? "todos inspect failed"}`;
+    return {
+      kind: "skipped",
+      value: {
+        skipped: true,
+        blocked: true,
+        reason,
+        event,
+        taskId: eventTaskId,
+        routeError: true,
+        // Distinguishes "the source says this task is absent" (a benign skip) from
+        // "the source could not be reached" (a misconfiguration the caller must
+        // surface as a failure so the event is retried rather than silently lost).
+        ...(sourceTaskResolution.sourceUnavailable ? { sourceUnavailable: true } : {}),
+        sourceTaskResolution,
+      },
+      human: `skipped task ${eventTaskId}: ${reason}`,
+    };
+  }
+  // Every durable route identity follows the canonical id returned by the
+  // active source. Keep the raw event id only as a lookup alias for work items
+  // created before canonicalization was introduced (#151).
+  const taskId = sourceTaskResolution?.taskId ?? eventTaskId;
   // PR-subject tasks dedupe by GitHub owner/repo#number so the duplicate tasks
   // the repos registry mints (one per local checkout of the same repo) collapse
   // to a single work item instead of spawning a worker per checkout. Non-PR
@@ -974,35 +1006,20 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
     : sourceProjectIdempotencyPrefix
       ? `todos-task:${sourceProjectIdempotencyPrefix}:${taskId}`
       : `todos-task:${taskId}`;
-  const legacyTaskIdempotencyKey = `todos-task:${taskId}`;
-  const dedupeAliases = legacyTaskIdempotencyKey === idempotencyKey ? [] : [legacyTaskIdempotencyKey];
+  const rawIdempotencyKey = prFingerprint
+    ? idempotencyKey
+    : sourceProjectIdempotencyPrefix
+      ? `todos-task:${sourceProjectIdempotencyPrefix}:${eventTaskId}`
+      : `todos-task:${eventTaskId}`;
+  const dedupeAliases = [...new Set([
+    `todos-task:${taskId}`,
+    rawIdempotencyKey,
+    `todos-task:${eventTaskId}`,
+  ])].filter((key) => key !== idempotencyKey);
   const idempotencySuffix = stableSuffix(idempotencyKey);
   const namePrefix = opts.namePrefix ?? "event:todos-task";
   const workflowName = `${namePrefix}:${taskId.slice(0, 8)}:${idempotencySuffix}:workflow`;
   const loopName = `${namePrefix}:${taskId.slice(0, 8)}:${idempotencySuffix}:run`;
-  const sourceTaskResolution = opts.dryRun ? undefined : resolveSourceTodosTask(taskId, data, metadata, opts);
-  if (sourceTaskResolution && !sourceTaskResolution.resolved) {
-    const reason = sourceTaskResolution.sourceUnavailable
-      ? `could not ask the active todos source whether task ${taskId} exists: ${sourceTaskResolution.error ?? "todos inspect produced no exit status"}`
-      : `source todos task is not resolvable in active todos source: ${sourceTaskResolution.error ?? "todos inspect failed"}`;
-    return {
-      kind: "skipped",
-      value: {
-        skipped: true,
-        blocked: true,
-        reason,
-        event,
-        taskId,
-        routeError: true,
-        // Distinguishes "the source says this task is absent" (a benign skip) from
-        // "the source could not be reached" (a misconfiguration the caller must
-        // surface as a failure so the event is retried rather than silently lost).
-        ...(sourceTaskResolution.sourceUnavailable ? { sourceUnavailable: true } : {}),
-        sourceTaskResolution,
-      },
-      human: `skipped task ${taskId}: ${reason}`,
-    };
-  }
   if (!opts.dryRun) {
     // Dedupe before worktree validation and provider checks so replayed task
     // events never fail on since-broken project paths or provider options.
