@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — direct store and conflict-agent test coverage
+
+- Added focused tests for every runtime export in `src/store.ts`, including
+  legacy-store collision handling, malformed inputs, atomic persistence,
+  lock cleanup/reentrancy, and ID boundaries.
+- Added direct tests for `src/conflict-agent.ts` covering complete and limited
+  evidence, durable fake-run telemetry, missing provider credentials, and an
+  unknown conflict. The source resolver was not duplicated here because its
+  successful resolution, revision/citation evidence, ACL denials, and raw-byte
+  boundary are already exercised directly in the existing database and
+  open-files fixture suites.
+
 ## Unreleased — the backend is chosen explicitly, and test egress is refused
 
 **BREAKING for the fleet flip.** `HASNA_KNOWLEDGE_API_URL` +

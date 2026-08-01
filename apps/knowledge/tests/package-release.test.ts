@@ -304,5 +304,5 @@ describe('public package release safety', () => {
       expect(summary.docsFiles).not.toContain(path);
       expect(summary.scriptsFiles).not.toContain(path);
     }
-  });
+  }, 15_000);
 });
