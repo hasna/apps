@@ -38,7 +38,7 @@ function conformanceFixture(mutatePackage) {
 }
 
 describe("Loops repository contract conformance", () => {
-  test("preserves the official loops-api failure and applies only its documented compatibility waiver", () => {
+  test("passes official bin conformance without a loops-api compatibility waiver", () => {
     const report = runContractConformance();
     const rawBinCheck = report.official.checks.find(
       ({ id }) => id === "bins_match_package",
@@ -54,30 +54,18 @@ describe("Loops repository contract conformance", () => {
       class: "service",
     });
     expect(report.official).toMatchObject({
-      ok: false,
+      ok: true,
       repoRoot,
       name: "loops",
       class: "service",
     });
     expect(rawBinCheck).toEqual({
       id: "bins_match_package",
-      status: "fail",
-      detail: "in package.json but undeclared: loops-api",
-    });
-    expect(adjudicatedBinCheck).toEqual({
-      id: "bins_match_package",
       status: "pass",
-      detail:
-        "waived exact published compatibility bin loops-api -> dist/api/index.js; official result: in package.json but undeclared: loops-api",
+      detail: "declared bins match package.json bin",
     });
-    expect(report.adjudications).toEqual([
-      {
-        checkId: "bins_match_package",
-        bin: "loops-api",
-        packageTarget: "dist/api/index.js",
-        exportPath: "./api",
-      },
-    ]);
+    expect(adjudicatedBinCheck).toEqual(rawBinCheck);
+    expect(report.adjudications).toEqual([]);
     expect(
       report.official.checks.find(({ id }) => id === "health_shape"),
     ).toMatchObject({ status: "pass" });
@@ -98,8 +86,7 @@ describe("Loops repository contract conformance", () => {
       ).toEqual({
         id: "bins_match_package",
         status: "fail",
-        detail:
-          "in package.json but undeclared: loops-api, loops-unwaived",
+        detail: "in package.json but undeclared: loops-unwaived",
       });
       expect(report.adjudications).toEqual([]);
     } finally {
@@ -107,31 +94,10 @@ describe("Loops repository contract conformance", () => {
     }
   });
 
-  test("requires the waived bin target and package export to match exactly", () => {
-    const mutations = [
-      (packageJson) => {
-        packageJson.bin["loops-api"] = "dist/other/index.js";
-      },
-      (packageJson) => {
-        packageJson.exports["./api"].import = "./dist/other/index.js";
-      },
-      (packageJson) => {
-        packageJson.exports["./api"].types = "./dist/other/index.d.ts";
-      },
-    ];
-    for (const mutatePackage of mutations) {
-      const root = conformanceFixture(mutatePackage);
-      try {
-        const report = runContractConformance(root);
-        expect(report.ok).toBe(false);
-        expect(
-          report.checks.find(({ id }) => id === "bins_match_package"),
-        ).toMatchObject({ status: "fail" });
-        expect(report.adjudications).toEqual([]);
-      } finally {
-        rmSync(root, { recursive: true, force: true });
-      }
-    }
+  test("does not retain a loops-api compatibility waiver", () => {
+    const manifest = readJson(join(repoRoot, "hasna.contract.json"));
+
+    expect(manifest.metadata.conformance?.binCompatibilityWaivers).toBeUndefined();
   });
 
   test("declares the exact package, deployment, and split DSN contracts", () => {
@@ -153,7 +119,7 @@ describe("Loops repository contract conformance", () => {
       ),
     ].sort();
 
-    expect(packageJson.bin["loops-api"]).toBe("dist/api/index.js");
+    expect(packageJson.bin["loops-api"]).toBeUndefined();
     expect(packageJson.exports["./api"]).toEqual({
       types: "./dist/api/index.d.ts",
       import: "./dist/api/index.js",

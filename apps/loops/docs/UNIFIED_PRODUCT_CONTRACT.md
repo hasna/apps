@@ -234,7 +234,7 @@ Network server authority is a multi-tenant contract. It requires explicit select
 Compatibility is boundary-only and time-bounded:
 
 - legacy mode values follow the exact mapping/refusal table below and otherwise fail closed;
-- all six binaries follow the exhaustive binary disposition table below; the five non-canonical binaries begin as thin shims;
+- all five published binaries follow the exhaustive binary disposition table below; the four non-canonical binaries begin as thin shims;
 - all 13 package exports follow the exhaustive export disposition table below; none is removed or internalized before its consumer-evidence gate;
 - compatibility shims must not preserve divergent stores, schedulers, transports, or lifecycle semantics.
 
@@ -261,7 +261,9 @@ Canonical outputs never emit `local`, `self_hosted`, or `cloud` as behavioral st
 | SDK constructors/options | Embedded and remote clients can be selected through overlapping constructors/options | Explicit embedded and remote constructors/options feed one role resolver and one public SDK | SDK unit, generated-client, and resolver matrix tests | Ambiguous constructors removed only after typed migration path, verified consumer evidence, and deprecation gate |
 | Documentation and configuration environment inputs | Documents or accepts mode-shaped environment values | Document explicit role, authority, persistence, auth/tenant, and topology inputs; legacy env input follows the exact value table | Documentation examples plus configuration value/refusal matrix tests | Config migration guide shipped; verified consumers migrated; deprecated parser removal gate complete |
 
-The six binary entries and all 13 package export entries are exhaustively dispositioned below; their inventory is not deferred.
+The five published binary entries, the removed `loops-api` compatibility binary,
+and all 13 package export entries are exhaustively dispositioned below; their
+inventory is not deferred.
 
 #### Exhaustive binary disposition
 
@@ -269,7 +271,7 @@ The six binary entries and all 13 package export entries are exhaustively dispos
 | --- | --- | --- | --- |
 | `loops` | Canonical executable and subcommand dispatcher; owns role resolution and adapter wiring | Packed invocation, help/version, role resolution, argument, exit-code, and error-contract tests | Canonical binary is retained; any future replacement requires verified consumer evidence and an explicit superseding contract |
 | `loops-daemon` | Thin forwarder to `loops daemon`; preserves supported arguments, signals, stdout/stderr, and exit status without owning scheduler policy | Packed shim versus `loops daemon` argument/config-error/signal/exit parity | Verified consumer inventory and migration, replacement available, deprecation window and semver gate complete |
-| `loops-api` | Thin forwarder to the `loops api/status` adapter; contains no independent HTTP or status policy | Packed shim versus canonical API/status startup, probe/status response, argument, error, and exit parity | Verified consumer inventory and migration, endpoint/command replacement documented, deprecation window and semver gate complete |
+| `loops-api` | **Removed from the package bin map.** The `./api` export and packed `dist/api/*` runtime/types remain public | Packed package rejects the bin while importing and smoking `@hasna/loops/api`; `loops self-hosted status` covers operator status | Fleet caller survey found no invocation on reachable stations or registered runtime surfaces; removal ships as an explicit breaking PR with rollback to restore the bin and waiver together and revert the packed-boundary rejection |
 | `loops-serve` | Thin forwarder to `loops server/admin`; contains no independent authority, migration, or auth policy | Packed shim versus canonical server/admin argument routing, startup refusal, signal, error, and exit parity | Verified server/admin consumers migrated, operational replacement rehearsed, deprecation window and semver gate complete |
 | `loops-runner` | Thin forwarder to `loops runner`; contains no claim, heartbeat, retry, or finalization policy | Packed shim versus canonical runner identity/config refusal, signal, error, and exit parity | Verified runner consumers migrated, replacement operationally proven, deprecation window and semver gate complete |
 | `loops-mcp` | Thin forwarder to `loops mcp`; preserves MCP transport framing while owning no tool semantics | Packed shim versus canonical MCP handshake, tool schema, framing, semantic error, and exit parity | Verified MCP consumers migrated, replacement compatibility proven, deprecation window and semver gate complete |

@@ -71,20 +71,6 @@
     "sqlitePath": "~/.hasna/loops/loops.db"
   },
   "metadata": {
-    "conformance": {
-      "binCompatibilityWaivers": [
-        {
-          "checkId": "bins_match_package",
-          "failureDetail": "in package.json but undeclared: loops-api",
-          "bin": "loops-api",
-          "packageTarget": "dist/api/index.js",
-          "exportPath": "./api",
-          "exportImport": "./dist/api/index.js",
-          "exportTypes": "./dist/api/index.d.ts",
-          "reason": "Retain the published loops-api compatibility binary and the matching package export while the 0.5.2 checker has no first-class per-repo bin waiver."
-        }
-      ]
-    },
     "service": {
       "port": 8787,
       "healthPath": "/health",

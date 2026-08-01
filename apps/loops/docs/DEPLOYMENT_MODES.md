@@ -63,7 +63,7 @@ loops self-hosted migrate --dry-run
 loops self-hosted push --dry-run
 loops self-hosted pull --dry-run
 loops cloud status
-loops-api status
+loops self-hosted status
 loops-serve version
 HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --dry-run
 loops-serve db-credentials reconcile
@@ -147,10 +147,11 @@ migration `0010_tenant_enforce`, runtime and authenticator logins are kept
 detached from service roles; after `0010`, each is attached only to its exact
 matching NOLOGIN role.
 
-`loops-api` is the embeddable API contract in the same public package. It is not
-a separate service because self-hosted users and the hosted service must share
-the same public contract. `loops-serve` is the only shipped Postgres-backed
-self-hosted host.
+`@hasna/loops/api` is the embeddable API contract in the same public package.
+It is not a separate service because self-hosted users and the hosted service
+must share the same public contract. The former `loops-api` PATH binary is not
+published; use `loops self-hosted status` for operator status and `loops-serve`
+for the Postgres-backed self-hosted host.
 
 `loops-runner` is the process that connects a machine to a non-local control
 plane. The current public package supports a bounded one-shot protocol:

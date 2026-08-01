@@ -50,7 +50,7 @@ loops self-hosted migrate --dry-run
 loops self-hosted push --dry-run
 loops self-hosted pull --dry-run
 loops cloud status
-loops-api status
+loops self-hosted status
 loops-serve version
 HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --dry-run
 HASNA_LOOPS_DATABASE_URL=... HASNA_LOOPS_AUTH_DATABASE_URL=... loops-serve serve
@@ -110,8 +110,9 @@ self-hosted control-plane host.
 ## Install
 
 **Loops requires the [Bun](https://bun.sh) runtime (`bun >= 1.0`).** The
-installed binaries are `loops`, `loops-daemon`, `loops-api`, `loops-serve`,
-`loops-runner`, and `loops-mcp`; each uses a `#!/usr/bin/env bun` shebang.
+installed binaries are `loops`, `loops-daemon`, `loops-serve`, `loops-runner`,
+and `loops-mcp`; each uses a `#!/usr/bin/env bun` shebang. The embeddable API
+remains available as `@hasna/loops/api`.
 
 From npm:
 

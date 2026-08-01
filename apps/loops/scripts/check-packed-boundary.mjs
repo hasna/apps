@@ -56,8 +56,8 @@ try {
   const packageJson = JSON.parse(
     readFileSync(join(packageRoot, "package.json"), "utf8"),
   );
-  if (packageJson.bin?.["loops-api"] !== "dist/api/index.js") {
-    throw new Error("packed package did not preserve loops-api -> dist/api/index.js");
+  if (packageJson.bin?.["loops-api"] !== undefined) {
+    throw new Error("packed package still exposes the removed loops-api binary");
   }
   if (
     packageJson.exports?.["./api"]?.import !== "./dist/api/index.js" ||
@@ -73,16 +73,6 @@ try {
   }
 
   symlinkSync(join(repoRoot, "node_modules"), join(extractRoot, "node_modules"), "dir");
-  const binSmoke = run(
-    "bun",
-    [join(packageRoot, "dist", "api", "index.js"), "--json", "status"],
-    extractRoot,
-  );
-  const binStatus = JSON.parse(binSmoke.stdout);
-  if (binStatus.service !== "loops-api" || binStatus.ok !== true) {
-    throw new Error("packed loops-api binary status smoke returned an invalid envelope");
-  }
-
   const exportSmoke = run(
     "bun",
     [
@@ -106,7 +96,7 @@ try {
     packageRoot,
   ]);
   process.stdout.write(scan.stdout);
-  console.log("Loops packed artifact boundary and loops-api export/bin smokes passed");
+  console.log("Loops packed artifact boundary and loops-api export smoke passed");
 } finally {
   rmSync(tempRoot, { recursive: true, force: true });
 }
