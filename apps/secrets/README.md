@@ -83,7 +83,7 @@ secret key names, raw env values, provider inventory, or private key material.
 ```ts
 import { getSecretReferenceStatus } from "@hasna/secrets/status";
 
-const status = getSecretReferenceStatus();
+const status = await getSecretReferenceStatus();
 console.log(status.counts.byType.api_key);
 ```
 
@@ -341,12 +341,19 @@ Export plaintext only when a local restorable artifact is explicitly needed:
 secrets export --show --pretty > secrets-backup.json
 ```
 
-Scan the current workspace or bounded git history for exposed credentials:
+Scan the current working tree or full git history for exposed credentials. Each
+JSON response is bounded; when `nextCursor` is present, pass it back with
+`--cursor` to continue:
 
 ```bash
 secrets scan workspace --limit 50
 secrets scan history --max-commits 200 --limit 50
+secrets scan history --cursor "$NEXT_CURSOR" --limit 50
 ```
+
+Findings contain deterministic `secret-exposure:` IDs, redacted previews,
+remediation metadata, and `evidencePath` locations suitable for task bodies;
+matched credential values are never returned.
 
 Create secure loop evidence and deduped Todos tasks for unsafe sensitive-file
 permissions:
@@ -562,8 +569,8 @@ audit_log(key?, limit?)
 register_user(id, name, type?)
 list_users(type?)
 send_feedback(message, email?, category?)
-scan_workspace_exposures(root?, limit?, maxFileBytes?, maxFiles?, maxBytesScanned?, timeoutMs?)
-scan_history_exposures(root?, limit?, maxCommits?, timeoutMs?)
+scan_workspace_exposures(root?, cursor?, limit?, maxFileBytes?, maxFiles?, maxBytesScanned?, timeoutMs?)
+scan_history_exposures(root?, cursor?, limit?, maxCommits?, timeoutMs?)
 ```
 
 `list_secrets` and `search_secrets` return metadata only and do not decrypt
@@ -571,11 +578,11 @@ stored values. `get_secret` returns the raw value, so use it only when the agent
 needs to pass the secret into a tool or command.
 
 The scan tools return compact JSON with a stable schema, bounded redacted
-findings, deterministic `secret-exposure:` ids, remediation metadata, and
-path/line/commit references only. They do not return raw matching values. MCP
-scan roots are constrained to the server working directory, and workspace scans
-include hard file, byte, and timeout bounds. The same scheduler-neutral contract
-is available programmatically:
+findings, deterministic `secret-exposure:` ids, remediation metadata,
+path/line/commit references, and opaque chunk cursors. They do not return raw
+matching values. MCP scan roots are constrained to the server working directory,
+and workspace scans include hard file, byte, and timeout bounds. The same
+scheduler-neutral contract is available programmatically:
 
 ```ts
 import { scanWorkspaceExposures } from "@hasna/secrets/scanner";

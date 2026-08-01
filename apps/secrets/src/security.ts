@@ -327,12 +327,12 @@ function permissionTaskSuggestion(finding: SecretPermissionFinding): SecurityTas
 
 function exposureTaskSuggestion(root: string, finding: ExposureScanResult["findings"][number]): SecurityTaskSuggestion {
   return {
-    fingerprint: fingerprint("secret-exposure", `${root}:${finding.path}:${finding.line}:${finding.detector}:${finding.commit ?? ""}`),
+    fingerprint: fingerprint("secret-exposure", `${root}:${finding.id}`),
     title: `Review possible leaked secret in ${finding.path}`,
     body: [
       `Finding: ${finding.id}`,
       `Root: ${root}`,
-      `Path: ${finding.path}:${finding.line}`,
+      `Evidence: ${finding.evidencePath}`,
       `Detector: ${finding.detector}`,
       `Severity: ${finding.severity}`,
       `Preview: ${finding.preview}`,
@@ -342,10 +342,11 @@ function exposureTaskSuggestion(root: string, finding: ExposureScanResult["findi
     tags: ["auto:route", "area:security", "secret-exposure"],
     metadata: {
       root,
+      finding_id: finding.id,
+      evidence_path: finding.evidencePath,
       path: finding.path,
       line: finding.line,
       detector: finding.detector,
-      finding_id: finding.id,
       remediation: finding.remediation,
       source: "open-secrets.exposure-sweep.v1",
     },

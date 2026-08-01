@@ -56,9 +56,11 @@ describe("exposure scanner", () => {
     expect(result.findingCount).toBe(1);
     expect(result.truncated).toBe(true);
     expect(result.truncatedReason).toBe("findings");
+    expect(result.nextCursor).toBeString();
     expect(result.findings[0].path).toBe("app.env");
     expect(result.findings[0].id).toMatch(/^secret-exposure:[0-9a-f]{24}$/);
     expect(result.findings[0].id).toBe(repeated.findings[0].id);
+    expect(result.findings[0].evidencePath).toBe(`app.env:1:${result.findings[0].column}`);
     expect(result.findings[0].preview).toContain("***REDACTED***");
     expect(result.findings[0].remediation).toEqual({
       kind: "credential_exposure",
@@ -75,6 +77,65 @@ describe("exposure scanner", () => {
     expect(result).not.toHaveProperty("generated_at");
     expect(serialized).not.toContain(first);
     expect(serialized).not.toContain(second);
+  });
+
+  it("continues workspace findings with a redacted chunk cursor and stable ids", () => {
+    const value = fakeOpenAiToken();
+    for (const name of ["a.env", "b.env", "c.env"]) {
+      writeFileSync(join(testDir, name), `OPENAI_API_KEY=${value}\n`);
+    }
+
+    const first = scanWorkspaceExposures({ root: testDir, limit: 1 });
+    const second = scanWorkspaceExposures({ root: testDir, limit: 1, cursor: first.nextCursor });
+    const third = scanWorkspaceExposures({ root: testDir, limit: 1, cursor: second.nextCursor });
+    const repeated = scanWorkspaceExposures({ root: testDir, limit: 1 });
+    const findings = [...first.findings, ...second.findings, ...third.findings];
+
+    expect(findings.map((finding) => finding.path)).toEqual(["a.env", "b.env", "c.env"]);
+    expect(new Set(findings.map((finding) => finding.id)).size).toBe(3);
+    for (const finding of findings) {
+      expect(finding.id).toMatch(/^secret-exposure:[0-9a-f]{24}$/);
+      expect(finding.remediation.kind).toBe("credential_exposure");
+    }
+    expect(repeated.findings[0].id).toBe(first.findings[0].id);
+    expect(third.nextCursor).toBeUndefined();
+    expect(JSON.stringify([first, second, third])).not.toContain(value);
+  });
+
+  it("resumes a workspace timeout without skipping unscanned content in the current file", () => {
+    const value = fakeOpenAiToken();
+    writeFileSync(
+      join(testDir, "app.env"),
+      ["metadata only", "still metadata", `OPENAI_API_KEY=${value}`].join("\n"),
+    );
+
+    const originalNow = Date.now;
+    let calls = 0;
+    Date.now = (() => {
+      calls += 1;
+      return calls < 6 ? 1_000 : 1_010;
+    }) as typeof Date.now;
+
+    let first: ReturnType<typeof scanWorkspaceExposures>;
+    try {
+      first = scanWorkspaceExposures({ root: testDir, limit: 10, timeoutMs: 1 });
+    } finally {
+      Date.now = originalNow;
+    }
+    const second = scanWorkspaceExposures({ root: testDir, limit: 10, cursor: first.nextCursor });
+
+    expect(first.truncated).toBe(true);
+    expect(first.truncatedReason).toBe("timeout");
+    expect(first.findingCount).toBe(0);
+    expect(first.nextCursor).toBeString();
+    expect(second.truncated).toBe(false);
+    expect(second.findingCount).toBe(1);
+    expect(second.findings[0]).toMatchObject({
+      path: "app.env",
+      line: 3,
+      detector: "openai_api_key",
+    });
+    expect(JSON.stringify([first, second])).not.toContain(value);
   });
 
   it("returns redacted git history findings with commit references", () => {
@@ -95,9 +156,51 @@ describe("exposure scanner", () => {
     expect(result.findingCount).toBeGreaterThan(0);
     expect(result.findings[0].path).toBe("config.env");
     expect(result.findings[0].commit).toMatch(/^[0-9a-f]{40}$/);
+    expect(result.findings[0].evidencePath).toStartWith(`${result.findings[0].commit}:config.env:1:`);
     expect(result.findings[0].preview).toContain("***REDACTED***");
     expect(result.findings[0].remediation.steps).toContain("purge_git_history");
     expect(serialized).not.toContain(value);
+  });
+
+  it("continues through full history by commit chunk", () => {
+    if (!gitAvailable()) return;
+
+    git(["init"]);
+    git(["config", "user.name", "Open Secrets Test"]);
+    git(["config", "user.email", "open-secrets-test@example.invalid"]);
+    writeFileSync(join(testDir, "config.env"), `OPENAI_API_KEY=${fakeOpenAiToken()}\n`);
+    git(["add", "config.env"]);
+    git(["commit", "-m", "first config"]);
+    writeFileSync(join(testDir, "config.env"), `PACKAGE_TOKEN=${fakePackageRegistryToken()}\n`);
+    git(["commit", "-am", "second config"]);
+
+    const first = scanHistoryExposures({ root: testDir, limit: 10, maxCommits: 1 });
+    const second = scanHistoryExposures({
+      root: testDir,
+      limit: 10,
+      maxCommits: 1,
+      cursor: first.nextCursor,
+    });
+
+    expect(first.truncatedReason).toBe("max_commits");
+    expect(first.nextCursor).toBeString();
+    expect(second.nextCursor).toBeUndefined();
+    expect([...first.findings, ...second.findings]).toHaveLength(2);
+    expect(new Set([...first.findings, ...second.findings].map((finding) => finding.id)).size).toBe(2);
+  });
+
+  it("rejects cursors for a different root without scanning", () => {
+    writeFileSync(
+      join(testDir, "app.env"),
+      `OPENAI_API_KEY=${fakeOpenAiToken()}\nPACKAGE_TOKEN=${fakePackageRegistryToken()}\n`,
+    );
+    const first = scanWorkspaceExposures({ root: testDir, limit: 1 });
+    const otherDir = join(testDir, "other");
+    mkdirSync(otherDir);
+
+    const result = scanWorkspaceExposures({ root: otherDir, cursor: first.nextCursor });
+    expect(result.findingCount).toBe(0);
+    expect(result.stats.errors[0]).toContain("does not match");
   });
 
   it("keeps history scans bounded to the requested root", () => {

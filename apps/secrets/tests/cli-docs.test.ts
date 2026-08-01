@@ -32,4 +32,23 @@ describe("CLI docs", () => {
     expect(stdout).toContain("secrets export");
     expect(stdout).toContain("secrets scan workspace --limit 50");
   });
+
+  it("prints help for status without executing the status command", async () => {
+    const proc = Bun.spawn({
+      cmd: ["bun", "src/index.ts", "status", "--help"],
+      env: { ...process.env },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+
+    expect(exitCode).toBe(0);
+    expect(stderr).toBe("");
+    expect(stdout).toContain("secrets — local secrets vault");
+    expect(stdout).not.toContain("values: not included");
+  });
 });

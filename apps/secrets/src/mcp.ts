@@ -226,13 +226,14 @@ export function buildServer(): McpServer {
     "Scan a workspace for likely exposed credentials. Returns bounded redacted metadata only.",
     {
       root: z.string().optional().describe("Workspace root. Defaults to the MCP process working directory."),
+      cursor: z.string().optional().describe("Opaque nextCursor from the preceding chunk."),
       limit: z.number().int().positive().optional().describe("Maximum findings to return. Capped by the server."),
       maxFileBytes: z.number().int().positive().optional().describe("Maximum bytes per file to inspect."),
       maxFiles: z.number().int().positive().optional().describe("Maximum files to scan. Capped by the server."),
       maxBytesScanned: z.number().int().positive().optional().describe("Maximum total bytes to scan. Capped by the server."),
       timeoutMs: z.number().int().positive().optional().describe("Maximum scan runtime in milliseconds. Capped by the server."),
     },
-    async ({ root, limit, maxFileBytes, maxFiles, maxBytesScanned, timeoutMs }) => {
+    async ({ root, cursor, limit, maxFileBytes, maxFiles, maxBytesScanned, timeoutMs }) => {
       const resolved = resolveMcpRoot(root);
       if (!resolved.ok) return mcpScanRootError("workspace", resolved.root, resolved.error);
       return {
@@ -240,6 +241,7 @@ export function buildServer(): McpServer {
           type: "text",
           text: JSON.stringify(scanWorkspaceExposures({
             root: resolved.root,
+            cursor,
             limit,
             maxFileBytes,
             maxFiles,
@@ -253,20 +255,21 @@ export function buildServer(): McpServer {
 
   server.tool(
     "scan_history_exposures",
-    "Scan bounded git history for likely exposed credentials. Returns bounded redacted metadata only.",
+    "Scan full git history in bounded chunks for likely exposed credentials. Returns bounded redacted metadata only.",
     {
       root: z.string().optional().describe("Git workspace root. Defaults to the MCP process working directory."),
+      cursor: z.string().optional().describe("Opaque nextCursor from the preceding chunk."),
       limit: z.number().int().positive().optional().describe("Maximum findings to return. Capped by the server."),
       maxCommits: z.number().int().positive().optional().describe("Maximum commits to inspect. Capped by the server."),
       timeoutMs: z.number().int().positive().optional().describe("Maximum scan runtime in milliseconds. Capped by the server."),
     },
-    async ({ root, limit, maxCommits, timeoutMs }) => {
+    async ({ root, cursor, limit, maxCommits, timeoutMs }) => {
       const resolved = resolveMcpRoot(root);
       if (!resolved.ok) return mcpScanRootError("history", resolved.root, resolved.error);
       return {
         content: [{
           type: "text",
-          text: JSON.stringify(scanHistoryExposures({ root: resolved.root, limit, maxCommits, timeoutMs })),
+          text: JSON.stringify(scanHistoryExposures({ root: resolved.root, cursor, limit, maxCommits, timeoutMs })),
         }],
       };
     }

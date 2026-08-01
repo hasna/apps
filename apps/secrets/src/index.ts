@@ -37,8 +37,8 @@ Commands:
   list [namespace] [--json]
   search <query> [--json]
   export [--show|--plaintext] [--pretty]  export redacted compact JSON by default
-  scan workspace [path] [--limit <n>] [--max-bytes <n>] [--max-files <n>] [--max-scan-bytes <n>] [--timeout-ms <n>] [--pretty]
-  scan history [path] [--limit <n>] [--max-commits <n>] [--timeout-ms <n>] [--pretty]
+  scan workspace [path] [--limit <n>] [--cursor <cursor>] [--max-bytes <n>] [--max-files <n>] [--max-scan-bytes <n>] [--timeout-ms <n>] [--pretty]
+  scan history [path] [--limit <n>] [--cursor <cursor>] [--max-commits <n>] [--timeout-ms <n>] [--pretty]
   security permissions [--roots <paths>] [--fix-permissions] [--report-dir <dir>] [--upsert-tasks] [--todos-project <path>] [--task-list <slug>] [--max-task-actions <n>] [--json|--pretty]
   security exposure [--mode workspace|history] [--roots <paths>] [--limit <n>] [--json|--pretty]
   security supply-chain [--roots <paths>] [--max-files <n>] [--max-findings <n>] [--json|--pretty]
@@ -206,8 +206,8 @@ MCP usage
     register_user(id, name, type?)
     list_users(type?)
     send_feedback(message, email?, category?)
-    scan_workspace_exposures(root?, limit?, maxFileBytes?, maxFiles?, maxBytesScanned?, timeoutMs?)
-    scan_history_exposures(root?, limit?, maxCommits?, timeoutMs?)
+    scan_workspace_exposures(root?, cursor?, limit?, maxFileBytes?, maxFiles?, maxBytesScanned?, timeoutMs?)
+    scan_history_exposures(root?, cursor?, limit?, maxCommits?, timeoutMs?)
 
 Self-hosted (api mode)
   Route all reads/writes to the cloud API instead of the local vault:
@@ -652,6 +652,7 @@ switch (command) {
     const { scanWorkspaceExposures, scanHistoryExposures } = await import("./scanner.js");
     const common = {
       root,
+      cursor: flags.cursor,
       limit: positiveIntegerFlag(flags, "limit"),
     };
     switch (target) {
@@ -676,7 +677,7 @@ switch (command) {
         break;
       }
       default:
-        console.error("Usage: secrets scan workspace|history [path] [--limit <n>] [--max-bytes <n>] [--max-files <n>] [--max-scan-bytes <n>] [--max-commits <n>] [--timeout-ms <n>] [--pretty]");
+        console.error("Usage: secrets scan workspace|history [path] [--limit <n>] [--cursor <cursor>] [--max-bytes <n>] [--max-files <n>] [--max-scan-bytes <n>] [--max-commits <n>] [--timeout-ms <n>] [--pretty]");
         process.exit(1);
     }
     break;
