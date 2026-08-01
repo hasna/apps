@@ -1390,6 +1390,98 @@ describe("storage adapter contracts", () => {
     await expect(Promise.resolve(adapter.verifications!.add({ task_id: "nope", command: "x" }))).rejects.toThrow(/not found/);
   });
 
+  test("v1 start treats an empty assignee like null without rewriting task identity or dependencies", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client: postgres.client, sourceMachineId: "spark01" });
+    const project = await adapter.projects.create({ name: "Start normalization", path: "/tmp/start-normalization" });
+    const prerequisite = await adapter.tasks.create({ title: "Completed prerequisite", project_id: project.id });
+    await adapter.tasks.complete(prerequisite.id, "finisher");
+
+    const emptyAssignee = await adapter.tasks.create({
+      title: "Legacy empty assignee",
+      project_id: project.id,
+      priority: "high",
+      assigned_to: "",
+      assigned_by: "dispatcher",
+      agent_id: "origin-agent",
+      tags: ["start-normalization"],
+      metadata: { sentinel: "preserve-me" },
+    });
+    const nullAssignee = await adapter.tasks.create({
+      title: "Canonical null assignee",
+      project_id: project.id,
+      assigned_to: null,
+      agent_id: "origin-agent",
+    });
+    await adapter.dependencies!.add(emptyAssignee.id, prerequisite.id);
+
+    const verifier: ApiKeyVerifier = {
+      app: "todos",
+      authenticate: async () => ({
+        ok: true as const,
+        status: 200 as const,
+        principal: {
+          kid: "test-key-id",
+          app: "todos",
+          scopes: ["todos:*"],
+          agent: "claimer",
+          claims: { v: 1, kid: "test-key-id", app: "todos", scopes: ["todos:*"], iat: 0, exp: null },
+        },
+      }),
+    };
+    const request = async (method: string, path: string, body?: Record<string, unknown>) => {
+      const url = new URL(`https://todos.test${path}`);
+      const response = await handleV1Request(
+        new Request(url, {
+          method,
+          headers: { "content-type": "application/json", authorization: "Bearer [REDACTED_SECRET]" },
+          body: body ? JSON.stringify(body) : undefined,
+        }),
+        url,
+        {
+          getVerifier: () => verifier,
+          ensureSchema: async () => {},
+          getStorageAdapter: () => adapter,
+        },
+      );
+      if (!response) throw new Error(`Expected ${path} to be handled by v1`);
+      return response;
+    };
+
+    for (const task of [emptyAssignee, nullAssignee]) {
+      const started = await request("POST", `/v1/tasks/${task.id}/start`, { agent_id: "claimer" });
+      expect(started.status).toBe(200);
+    }
+
+    const nullRead = await request("GET", `/v1/tasks/${nullAssignee.id}`);
+    expect((await nullRead.json() as { task: typeof nullAssignee }).task).toMatchObject({
+      assigned_to: "claimer",
+      agent_id: "origin-agent",
+      locked_by: "claimer",
+      status: "in_progress",
+    });
+
+    expect(await adapter.dependencies!.list(emptyAssignee.id)).toMatchObject({
+      dependencies: [{ task_id: emptyAssignee.id, depends_on: prerequisite.id }],
+    });
+
+    const emptyRead = await request("GET", `/v1/tasks/${emptyAssignee.id}`);
+    const emptyTask = (await emptyRead.json() as { task: typeof emptyAssignee }).task;
+    expect(emptyTask).toMatchObject({
+      assigned_to: "claimer",
+      assigned_by: "dispatcher",
+      agent_id: "origin-agent",
+      locked_by: "claimer",
+      status: "in_progress",
+      project_id: project.id,
+      priority: "high",
+      tags: ["start-normalization"],
+      metadata: { sentinel: "preserve-me" },
+    });
+    expect(emptyTask.locked_at).toBeTruthy();
+    expect(emptyTask.started_at).toBeTruthy();
+  });
+
   test("v1 comments persist through a reopened Postgres adapter and redact new and historical content", async () => {
     const { client, calls } = createMemoryPostgresClient();
     const adapter = createPostgresTodosStorageAdapter({ client, service: "todos" });

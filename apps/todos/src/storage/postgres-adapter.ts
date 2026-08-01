@@ -1204,7 +1204,10 @@ async function startTask(id: string, agentId: string, store: PostgresJsonRecordS
   }
   const started = await patchTask(task, {
     status: "in_progress",
-    assigned_to: task.assigned_to ?? agentId,
+    // Legacy remote rows may encode "unassigned" as an empty string. Nullish
+    // coalescing preserves that sentinel, so start would take the lock without
+    // assigning the caller.
+    assigned_to: task.assigned_to || agentId,
     agent_id: task.agent_id ?? agentId,
     locked_by: agentId,
     locked_at: new Date().toISOString(),
