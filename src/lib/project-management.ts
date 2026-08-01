@@ -12,14 +12,14 @@ export const PROJECT_START_AGENTS = ["codewith", "claude", "opencode", "cursor",
 export type ProjectStartAgent = (typeof PROJECT_START_AGENTS)[number];
 export const PROJECT_START_SESSION_POLICIES = ["reuse", "new", "error-if-running"] as const;
 export type ProjectStartSessionPolicy = (typeof PROJECT_START_SESSION_POLICIES)[number];
-export type ProjectIntegrationUnlinkGroup = "github" | "todos" | "brief" | "mementos" | "conversations" | "files";
+export type ProjectIntegrationUnlinkGroup = "github" | "todos" | "brief" | "canvases" | "mementos" | "conversations" | "files";
 
 export const PROJECT_MANAGEMENT_TAXONOMY = {
   stages: PROJECT_STAGES,
   priorities: PROJECT_PRIORITIES,
   start_agents: PROJECT_START_AGENTS,
   start_session_policies: PROJECT_START_SESSION_POLICIES,
-  integration_keys: ["todos_project_id", "todos_task_list_id", "brief_id", "brief_path"] as const,
+  integration_keys: ["todos_project_id", "todos_task_list_id", "brief_id", "brief_path", "canvases_project_id", "canvases_default_canvas_id"] as const,
 } as const;
 
 export interface ProjectManagementMetadataInput {
@@ -38,6 +38,8 @@ export interface ProjectIntegrationInput {
   todos_task_list_id?: string | null;
   brief_id?: string | null;
   brief_path?: string | null;
+  canvases_project_id?: string | null;
+  canvases_default_canvas_id?: string | null;
 }
 
 export interface ProjectManagementSummary {
@@ -53,6 +55,8 @@ export interface ProjectManagementSummary {
   todos_task_list_id: string | null;
   brief_id: string | null;
   brief_path: string | null;
+  canvases_project_id: string | null;
+  canvases_default_canvas_id: string | null;
 }
 
 export interface ProjectExternalLinksSummary {
@@ -68,6 +72,12 @@ export interface ProjectExternalLinksSummary {
     id: string | null;
     path: string | null;
     path_exists: boolean | null;
+  };
+  canvases: {
+    linked: boolean;
+    status: "linked" | "unlinked";
+    project_id: string | null;
+    default_canvas_id: string | null;
   };
 }
 
@@ -124,6 +134,16 @@ export function expandProjectIntegrationUnlinkKey(key: string): string[] {
     case "brief_path":
     case "spec_path":
       return ["brief_path"];
+    case "canvases":
+    case "canvas":
+      return ["canvases_project_id", "canvases_default_canvas_id"];
+    case "canvases_project":
+    case "canvases_project_id":
+      return ["canvases_project_id"];
+    case "canvases_default_canvas":
+    case "canvases_default_canvas_id":
+    case "canvas_id":
+      return ["canvases_default_canvas_id"];
     case "mementos":
     case "memento":
     case "mementos_project":
@@ -343,6 +363,8 @@ export function projectManagementSummary(project: Workspace): ProjectManagementS
     todos_task_list_id: project.integrations.todos_task_list_id ?? null,
     brief_id: project.integrations.brief_id ?? null,
     brief_path: project.integrations.brief_path ?? null,
+    canvases_project_id: project.integrations.canvases_project_id ?? null,
+    canvases_default_canvas_id: project.integrations.canvases_default_canvas_id ?? null,
   };
 }
 
@@ -352,6 +374,8 @@ export function projectExternalLinksSummary(project: Workspace): ProjectExternal
   const briefId = project.integrations.brief_id ?? null;
   const briefPath = project.integrations.brief_path ?? null;
   const briefLinked = Boolean(briefId || briefPath);
+  const canvasesProjectId = project.integrations.canvases_project_id ?? null;
+  const canvasesDefaultCanvasId = project.integrations.canvases_default_canvas_id ?? null;
 
   return {
     todos: {
@@ -366,6 +390,12 @@ export function projectExternalLinksSummary(project: Workspace): ProjectExternal
       id: briefId,
       path: briefPath,
       path_exists: briefPath ? existsSync(briefPath) : null,
+    },
+    canvases: {
+      linked: Boolean(canvasesProjectId || canvasesDefaultCanvasId),
+      status: canvasesProjectId || canvasesDefaultCanvasId ? "linked" : "unlinked",
+      project_id: canvasesProjectId,
+      default_canvas_id: canvasesDefaultCanvasId,
     },
   };
 }

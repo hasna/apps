@@ -4,18 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   PROJECTS_HOME_ENV,
-  createProjectCanvas,
   createProjectDataModel,
   createProjectDataRecord,
-  ensureDefaultProjectCanvas,
   ensureProjectStore,
   getProjectStorePaths,
   inspectProjectStoreWithLoops,
   linkProjectLoop,
-  listProjectCanvases,
   listProjectDataRecords,
   listProjectLoopSummaries,
-  upsertProjectCanvas,
   type LoopsClientLike,
   type ProjectStoreProject,
 } from "./project-store.js";
@@ -42,36 +38,6 @@ describe("project store", () => {
       const paths = getProjectStorePaths(project);
       expect(summary.paths.db_path).toBe(join(root, "data", project.id, "project.db"));
       expect(existsSync(paths.db_path)).toBe(true);
-
-      const dashboard = ensureDefaultProjectCanvas(project);
-      expect(dashboard.slug).toBe("dashboard");
-      expect(dashboard.layout_engine).toBe("react-flow");
-      expect(dashboard.data.ui).toMatchObject({ canvas: "react-flow", infinite_canvas: true });
-
-      const custom = createProjectCanvas(project, {
-        name: "Research Board",
-        nodes: [{ id: "note", type: "note", position: { x: 1, y: 2 }, data: { title: "Note" } }],
-      });
-      expect(custom.slug).toBe("research-board");
-      expect(listProjectCanvases(project).map((canvas) => canvas.slug)).toEqual(["research-board", "dashboard"]);
-
-      const first = upsertProjectCanvas(project, {
-        slug: "agent-directory",
-        name: "Agent Directory",
-        nodes: [{ id: "summary", type: "projectPanel", position: { x: 0, y: 0 }, data: { title: "Summary" } }],
-        edges: [],
-        metadata: { source: "blocks" },
-      });
-      const second = upsertProjectCanvas(project, {
-        slug: "agent-directory",
-        name: "Agent Directory Updated",
-        edges: [{ id: "summary-note", source: "summary", target: "note" }],
-      });
-      expect(second.id).toBe(first.id);
-      expect(second.name).toBe("Agent Directory Updated");
-      expect(second.nodes).toEqual(first.nodes);
-      expect(second.edges).toHaveLength(1);
-      expect(second.metadata).toEqual(first.metadata);
 
       const model = createProjectDataModel(project, {
         name: "Dataset",

@@ -17,6 +17,7 @@ describe("projects MCP HTTP transport", () => {
   let previousDbPath: string | undefined;
   let previousApiEnv: Partial<Record<(typeof API_MODE_ENV_KEYS)[number], string | undefined>>;
 
+
   beforeAll(() => {
     root = mkdtempSync(join(tmpdir(), "projects-mcp-http-"));
     previousDbPath = process.env.HASNA_PROJECTS_DB_PATH;
@@ -28,6 +29,7 @@ describe("projects MCP HTTP transport", () => {
     process.env.HASNA_PROJECTS_DB_PATH = join(root, "projects.db");
     __resetProjectStore();
     closeDatabase();
+
     httpServer = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -59,6 +61,7 @@ describe("projects MCP HTTP transport", () => {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
+
     __resetProjectStore();
     rmSync(root, { recursive: true, force: true });
   });
@@ -91,14 +94,14 @@ describe("projects MCP HTTP transport", () => {
     });
     expect(created.isError).not.toBe(true);
 
-    const result = await client.callTool({ name: "projects_list", arguments: { limit: 1 } });
+    const result = await client.callTool({ name: "projects_list", arguments: { query: "http-compact-project", limit: 1 } });
     expect(result.isError).not.toBe(true);
     const content = result.content as Array<{ type: string; text?: string }> | undefined;
     expect(content?.[0]?.type).toBe("text");
     const payload = JSON.parse(content?.[0]?.text ?? "[]") as Array<{ slug: string; metadata?: { notes?: string } }>;
     expect(payload.find((item) => item.slug === "http-compact-project")?.metadata?.notes).toHaveLength(500);
 
-    const compact = await client.callTool({ name: "projects_list", arguments: { compact: true, limit: 1 } });
+    const compact = await client.callTool({ name: "projects_list", arguments: { query: "http-compact-project", compact: true, limit: 1 } });
     expect(compact.isError).not.toBe(true);
     const compactContent = compact.content as Array<{ type: string; text?: string }> | undefined;
     const compactPayload = JSON.parse(compactContent?.[0]?.text ?? "{}") as {

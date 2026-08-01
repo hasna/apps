@@ -11,22 +11,22 @@ import {
 import type { JsonObject, Workspace } from "../types/workspace.js";
 
 export { PROJECTS_HOME_ENV } from "../lib/project-store-paths.js";
-export const PROJECT_STORE_SCHEMA_VERSION = 1 as const;
+export const PROJECT_STORE_SCHEMA_VERSION = 2 as const;
+export const LEGACY_PROJECT_CANVAS_EXPORT_SCHEMA = "hasna.projects_legacy_canvas_export.v1" as const;
 export const PROJECT_STORE_TABLES = [
   "project_meta",
   "project_store_migrations",
-  "project_canvases",
   "project_data_models",
   "project_data_records",
   "project_loop_links",
 ] as const;
+const LEGACY_PROJECT_CANVAS_TABLE = "project_canvases" as const;
 const LOOPS_SDK_SPECIFIER: string = "@hasna/loops/sdk";
 
 const nanoid = customAlphabet(`0123456789${"abcdefghijklmnopqrstuvwxyz"}`, 12);
 
 export type ProjectStoreTable = (typeof PROJECT_STORE_TABLES)[number];
 export type ProjectStoreProject = Pick<Workspace, "id" | "name" | "slug" | "status" | "kind" | "primary_path">;
-export type ProjectCanvasStatus = "active" | "archived";
 
 export interface ProjectStorePaths extends JsonObject {
   project_id: string;
@@ -34,10 +34,9 @@ export interface ProjectStorePaths extends JsonObject {
   project_dir: string;
   db_path: string;
   assets_dir: string;
-  canvases_dir: string;
 }
 
-export interface ProjectCanvasNode extends JsonObject {
+export interface LegacyProjectCanvasNode extends JsonObject {
   id: string;
   type?: string;
   position: { x: number; y: number };
@@ -46,7 +45,7 @@ export interface ProjectCanvasNode extends JsonObject {
   height?: number;
 }
 
-export interface ProjectCanvasEdge extends JsonObject {
+export interface LegacyProjectCanvasEdge extends JsonObject {
   id: string;
   source: string;
   target: string;
@@ -57,52 +56,41 @@ export interface ProjectCanvasEdge extends JsonObject {
   data?: JsonObject;
 }
 
-export interface ProjectCanvas extends JsonObject {
+export interface LegacyProjectCanvasMigrationRecord extends JsonObject {
   id: string;
+  source_ref: string;
   slug: string;
   name: string;
   description: string | null;
-  status: ProjectCanvasStatus;
+  status: string;
   layout_engine: string;
   viewport: JsonObject;
-  nodes: ProjectCanvasNode[];
-  edges: ProjectCanvasEdge[];
+  nodes: LegacyProjectCanvasNode[];
+  edges: LegacyProjectCanvasEdge[];
   data: JsonObject;
   metadata: JsonObject;
   created_at: string;
   updated_at: string;
 }
 
-export interface CreateProjectCanvasInput {
-  name: string;
-  slug?: string;
-  description?: string;
-  status?: ProjectCanvasStatus;
-  layout_engine?: string;
-  viewport?: JsonObject;
-  nodes?: ProjectCanvasNode[];
-  edges?: ProjectCanvasEdge[];
-  data?: JsonObject;
-  metadata?: JsonObject;
+export interface LegacyProjectCanvasStorage extends JsonObject {
+  state: "absent" | "present";
+  read_only: true;
+  table: typeof LEGACY_PROJECT_CANVAS_TABLE;
+  table_exists: boolean;
+  record_count: number;
+  db_path: string;
+  files_path: string;
+  files_path_exists: boolean;
+  export_schema: typeof LEGACY_PROJECT_CANVAS_EXPORT_SCHEMA;
 }
 
-export interface UpsertProjectCanvasInput {
-  slug: string;
-  name?: string;
-  description?: string | null;
-  status?: ProjectCanvasStatus;
-  layout_engine?: string;
-  viewport?: JsonObject;
-  nodes?: ProjectCanvasNode[];
-  edges?: ProjectCanvasEdge[];
-  data?: JsonObject;
-  metadata?: JsonObject;
-}
-
-export interface UpdateProjectCanvasLayoutInput {
-  nodes?: ProjectCanvasNode[];
-  viewport?: JsonObject;
-  data?: JsonObject;
+export interface LegacyProjectCanvasMigrationSource extends JsonObject {
+  schema: typeof LEGACY_PROJECT_CANVAS_EXPORT_SCHEMA;
+  project_id: string;
+  read_only: true;
+  source: LegacyProjectCanvasStorage;
+  canvases: LegacyProjectCanvasMigrationRecord[];
 }
 
 export interface ProjectDataModel extends JsonObject {
@@ -192,11 +180,11 @@ export interface ProjectStoreSummary extends JsonObject {
   exists: boolean;
   schema_version: number | null;
   counts: {
-    canvases: number;
     data_models: number;
     data_records: number;
     loop_links: number;
   };
+  legacy_canvas_storage: LegacyProjectCanvasStorage;
   loops?: ProjectLoopSummary[];
 }
 
@@ -206,7 +194,7 @@ export interface LoopsClientLike {
   close?(): void;
 }
 
-interface ProjectCanvasRow {
+interface LegacyProjectCanvasRow {
   id: string;
   slug: string;
   name: string;
@@ -290,7 +278,7 @@ function json(value: unknown): string {
   return JSON.stringify(value ?? null);
 }
 
-function uniqueSlug(table: "project_canvases" | "project_data_models", base: string, db: Database): string {
+function uniqueSlug(table: "project_data_models", base: string, db: Database): string {
   let candidate = slugify(base);
   let suffix = 1;
   while (true) {
@@ -301,25 +289,18 @@ function uniqueSlug(table: "project_canvases" | "project_data_models", base: str
   }
 }
 
-function titleFromSlug(value: string): string {
-  return value
-    .split("-")
-    .filter(Boolean)
-    .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
-    .join(" ") || "Canvas";
-}
-
-function rowToCanvas(row: ProjectCanvasRow): ProjectCanvas {
+function rowToLegacyCanvas(projectId: string, row: LegacyProjectCanvasRow): LegacyProjectCanvasMigrationRecord {
   return {
     id: row.id,
+    source_ref: `projects-legacy-canvas://${encodeURIComponent(projectId)}/${encodeURIComponent(row.id)}`,
     slug: row.slug,
     name: row.name,
     description: row.description,
-    status: row.status as ProjectCanvasStatus,
+    status: row.status,
     layout_engine: row.layout_engine,
     viewport: parseJson<JsonObject>(row.viewport_json, {}),
-    nodes: parseJson<ProjectCanvasNode[]>(row.nodes_json, []),
-    edges: parseJson<ProjectCanvasEdge[]>(row.edges_json, []),
+    nodes: parseJson<LegacyProjectCanvasNode[]>(row.nodes_json, []),
+    edges: parseJson<LegacyProjectCanvasEdge[]>(row.edges_json, []),
     data: parseJson<JsonObject>(row.data_json, {}),
     metadata: parseJson<JsonObject>(row.metadata_json, {}),
     created_at: row.created_at,
@@ -391,7 +372,6 @@ export function getProjectStorePaths(project: string | Pick<Workspace, "id">): P
     project_dir: projectDir,
     db_path: join(projectDir, "project.db"),
     assets_dir: join(projectDir, "assets"),
-    canvases_dir: join(projectDir, "canvases"),
   };
 }
 
@@ -399,7 +379,6 @@ export function ensureProjectStoreDirs(project: string | Pick<Workspace, "id">):
   const paths = getProjectStorePaths(project);
   mkdirSync(paths.project_dir, { recursive: true, mode: 0o700 });
   mkdirSync(paths.assets_dir, { recursive: true, mode: 0o700 });
-  mkdirSync(paths.canvases_dir, { recursive: true, mode: 0o700 });
   return paths;
 }
 
@@ -413,7 +392,7 @@ export function runProjectStoreMigrations(db: Database): void {
     );
   `);
 
-  const migrated = db.query("SELECT id FROM project_store_migrations WHERE id = 1").get();
+  const migrated = db.query("SELECT id FROM project_store_migrations WHERE id = 2").get();
   if (migrated) return;
 
   db.exec(`
@@ -422,23 +401,6 @@ export function runProjectStoreMigrations(db: Database): void {
       value_json TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
-
-    CREATE TABLE IF NOT EXISTS project_canvases (
-      id TEXT PRIMARY KEY,
-      slug TEXT UNIQUE NOT NULL,
-      name TEXT NOT NULL,
-      description TEXT,
-      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'archived')),
-      layout_engine TEXT NOT NULL DEFAULT 'react-flow',
-      viewport_json TEXT NOT NULL DEFAULT '{}',
-      nodes_json TEXT NOT NULL DEFAULT '[]',
-      edges_json TEXT NOT NULL DEFAULT '[]',
-      data_json TEXT NOT NULL DEFAULT '{}',
-      metadata_json TEXT NOT NULL DEFAULT '{}',
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_project_canvases_status ON project_canvases(status);
 
     CREATE TABLE IF NOT EXISTS project_data_models (
       id TEXT PRIMARY KEY,
@@ -479,8 +441,8 @@ export function runProjectStoreMigrations(db: Database): void {
     CREATE INDEX IF NOT EXISTS idx_project_loop_links_role ON project_loop_links(role);
 
     INSERT OR REPLACE INTO project_meta (key, value_json, updated_at)
-      VALUES ('schema_version', '1', datetime('now'));
-    INSERT OR IGNORE INTO project_store_migrations (id) VALUES (1);
+      VALUES ('schema_version', '2', datetime('now'));
+    INSERT OR IGNORE INTO project_store_migrations (id) VALUES (2);
   `);
 }
 
@@ -501,220 +463,6 @@ export function ensureProjectStore(project: string | Pick<Workspace, "id">): Pro
   } finally {
     db.close();
   }
-}
-
-export function createProjectCanvas(project: string | Pick<Workspace, "id">, input: CreateProjectCanvasInput, db?: Database): ProjectCanvas {
-  const opened = openDbForProject(project, db);
-  try {
-    const id = `pcv_${nanoid()}`;
-    const ts = now();
-    const slug = uniqueSlug("project_canvases", input.slug ?? input.name, opened.db);
-    opened.db.run(
-      `INSERT INTO project_canvases (
-        id, slug, name, description, status, layout_engine, viewport_json,
-        nodes_json, edges_json, data_json, metadata_json, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        id,
-        slug,
-        input.name,
-        input.description ?? null,
-        input.status ?? "active",
-        input.layout_engine ?? "react-flow",
-        json(input.viewport ?? {}),
-        json(input.nodes ?? []),
-        json(input.edges ?? []),
-        json(input.data ?? {}),
-        json(input.metadata ?? {}),
-        ts,
-        ts,
-      ],
-    );
-    return getProjectCanvas(project, id, opened.db)!;
-  } finally {
-    closeIfOwned(opened.db, opened.owned);
-  }
-}
-
-export function listProjectCanvases(project: string | Pick<Workspace, "id">, db?: Database): ProjectCanvas[] {
-  const opened = openDbForProject(project, db);
-  try {
-    const rows = opened.db
-      .query<ProjectCanvasRow, []>("SELECT * FROM project_canvases ORDER BY status ASC, updated_at DESC")
-      .all();
-    return rows.map(rowToCanvas);
-  } finally {
-    closeIfOwned(opened.db, opened.owned);
-  }
-}
-
-export function listExistingProjectCanvases(project: string | Pick<Workspace, "id">): ProjectCanvas[] {
-  const paths = getProjectStorePaths(project);
-  if (!existsSync(paths.db_path)) return [];
-  const db = new Database(paths.db_path, { readonly: true });
-  try {
-    const rows = db
-      .query<ProjectCanvasRow, []>("SELECT * FROM project_canvases ORDER BY status ASC, updated_at DESC")
-      .all();
-    return rows.map(rowToCanvas);
-  } catch (err) {
-    if (err instanceof Error && err.message.includes("no such table: project_canvases")) return [];
-    throw err;
-  } finally {
-    db.close();
-  }
-}
-
-export function getProjectCanvas(project: string | Pick<Workspace, "id">, idOrSlug: string, db?: Database): ProjectCanvas | null {
-  const opened = openDbForProject(project, db);
-  try {
-    const row = opened.db
-      .query<ProjectCanvasRow, [string, string]>("SELECT * FROM project_canvases WHERE id = ? OR slug = ? LIMIT 1")
-      .get(idOrSlug, idOrSlug);
-    return row ? rowToCanvas(row) : null;
-  } finally {
-    closeIfOwned(opened.db, opened.owned);
-  }
-}
-
-export function upsertProjectCanvas(project: string | Pick<Workspace, "id">, input: UpsertProjectCanvasInput, db?: Database): ProjectCanvas {
-  const opened = openDbForProject(project, db);
-  try {
-    const slug = slugify(input.slug);
-    const existing = getProjectCanvas(project, slug, opened.db);
-    if (!existing) {
-      return createProjectCanvas(project, {
-        name: input.name ?? titleFromSlug(slug),
-        slug,
-        description: input.description ?? undefined,
-        status: input.status,
-        layout_engine: input.layout_engine,
-        viewport: input.viewport,
-        nodes: input.nodes,
-        edges: input.edges,
-        data: input.data,
-        metadata: input.metadata,
-      }, opened.db);
-    }
-
-    const ts = now();
-    opened.db.run(
-      `UPDATE project_canvases
-       SET name = ?, description = ?, status = ?, layout_engine = ?,
-           viewport_json = ?, nodes_json = ?, edges_json = ?, data_json = ?,
-           metadata_json = ?, updated_at = ?
-       WHERE id = ?`,
-      [
-        input.name ?? existing.name,
-        input.description === undefined ? existing.description : input.description,
-        input.status ?? existing.status,
-        input.layout_engine ?? existing.layout_engine,
-        json(input.viewport ?? existing.viewport),
-        json(input.nodes ?? existing.nodes),
-        json(input.edges ?? existing.edges),
-        json(input.data ?? existing.data),
-        json(input.metadata ?? existing.metadata),
-        ts,
-        existing.id,
-      ],
-    );
-    return getProjectCanvas(project, existing.id, opened.db)!;
-  } finally {
-    closeIfOwned(opened.db, opened.owned);
-  }
-}
-
-export function updateProjectCanvasLayout(project: string | Pick<Workspace, "id">, idOrSlug: string, input: UpdateProjectCanvasLayoutInput, db?: Database): ProjectCanvas {
-  const opened = openDbForProject(project, db);
-  try {
-    const existing = getProjectCanvas(project, idOrSlug, opened.db);
-    if (!existing) throw new Error(`Project canvas not found: ${idOrSlug}`);
-    const nodes = input.nodes ?? existing.nodes;
-    const viewport = input.viewport ?? existing.viewport;
-    const data = input.data ?? existing.data;
-    const ts = now();
-    opened.db.run(
-      `UPDATE project_canvases
-       SET nodes_json = ?, viewport_json = ?, data_json = ?, updated_at = ?
-       WHERE id = ?`,
-      [json(nodes), json(viewport), json(data), ts, existing.id],
-    );
-    return getProjectCanvas(project, existing.id, opened.db)!;
-  } finally {
-    closeIfOwned(opened.db, opened.owned);
-  }
-}
-
-export function ensureDefaultProjectCanvas(project: ProjectStoreProject, db?: Database): ProjectCanvas {
-  const opened = openDbForProject(project, db);
-  try {
-    const existing = getProjectCanvas(project, "dashboard", opened.db);
-    if (existing) return existing;
-    return createProjectCanvas(project, defaultProjectCanvasInput(project), opened.db);
-  } finally {
-    closeIfOwned(opened.db, opened.owned);
-  }
-}
-
-export function defaultProjectCanvasInput(project: ProjectStoreProject): CreateProjectCanvasInput {
-  return {
-    name: "Dashboard",
-    slug: "dashboard",
-    description: "Default project dashboard canvas for React Flow rendering.",
-    layout_engine: "react-flow",
-    viewport: { x: 0, y: 0, zoom: 1 },
-    nodes: [
-      {
-        id: "project-summary",
-        type: "project.summary",
-        position: { x: 0, y: 0 },
-        data: {
-          title: project.name,
-          project_id: project.id,
-          slug: project.slug,
-          kind: project.kind,
-          status: project.status,
-          primary_path: project.primary_path,
-        },
-      },
-      {
-        id: "custom-data",
-        type: "project.data_models",
-        position: { x: 420, y: 0 },
-        data: {
-          title: "Custom Data",
-          description: "Project-specific data models and records live in this project's project.db.",
-        },
-      },
-      {
-        id: "open-loops",
-        type: "project.open_loops",
-        position: { x: 420, y: 260 },
-        data: {
-          title: "OpenLoops",
-          description: "Linked recurring loops and workflow schedules from @hasna/loops.",
-        },
-      },
-    ],
-    edges: [
-      { id: "project-to-data", source: "project-summary", target: "custom-data", type: "smoothstep" },
-      { id: "project-to-loops", source: "project-summary", target: "open-loops", type: "smoothstep" },
-    ],
-    data: {
-      surface: "project-dashboard",
-      ui: {
-        framework: "react",
-        styling: "tailwind",
-        components: "shadcn",
-        canvas: "react-flow",
-        infinite_canvas: true,
-      },
-    },
-    metadata: {
-      generated_by: "@hasna/projects",
-      schema_version: PROJECT_STORE_SCHEMA_VERSION,
-    },
-  };
 }
 
 export function createProjectDataModel(project: string | Pick<Workspace, "id">, input: CreateProjectDataModelInput, db?: Database): ProjectDataModel {
@@ -1004,7 +752,6 @@ export function inspectProjectStore(
       .query<{ value_json: string }, []>("SELECT value_json FROM project_meta WHERE key = 'schema_version'")
       .get();
     const counts = {
-      canvases: tableCount(opened.db, "project_canvases"),
       data_models: tableCount(opened.db, "project_data_models"),
       data_records: tableCount(opened.db, "project_data_records"),
       loop_links: tableCount(opened.db, "project_loop_links"),
@@ -1015,9 +762,79 @@ export function inspectProjectStore(
       exists,
       schema_version: schemaVersion ? Number.parseInt(schemaVersion.value_json, 10) : null,
       counts,
+      legacy_canvas_storage: inspectLegacyProjectCanvasStorage(project, opened.db),
     };
   } finally {
     closeIfOwned(opened.db, opened.owned);
+  }
+}
+
+/**
+ * Inventory the retired Projects-owned canvas store without creating, updating,
+ * or deleting it. Existing rows and files remain in place until a separately
+ * approved Canvases migration consumes the read-only source.
+ */
+export function inspectLegacyProjectCanvasStorage(
+  project: string | Pick<Workspace, "id">,
+  db?: Database,
+): LegacyProjectCanvasStorage {
+  const paths = getProjectStorePaths(project);
+  const filesPath = join(paths.project_dir, "canvases");
+  const tableExists = db ? hasTable(db, LEGACY_PROJECT_CANVAS_TABLE) : legacyCanvasTableExists(paths.db_path);
+  const recordCount = tableExists
+    ? db
+      ? tableCount(db, LEGACY_PROJECT_CANVAS_TABLE)
+      : legacyCanvasRecordCount(paths.db_path)
+    : 0;
+  const filesPathExists = existsSync(filesPath);
+  return {
+    state: tableExists || filesPathExists ? "present" : "absent",
+    read_only: true,
+    table: LEGACY_PROJECT_CANVAS_TABLE,
+    table_exists: tableExists,
+    record_count: recordCount,
+    db_path: paths.db_path,
+    files_path: filesPath,
+    files_path_exists: filesPathExists,
+    export_schema: LEGACY_PROJECT_CANVAS_EXPORT_SCHEMA,
+  };
+}
+
+/**
+ * Read the complete legacy canvas payload for a future migration adapter.
+ * This compatibility seam is deliberately read-only and performs no schema
+ * migration, writes, remote calls, or Canvases product behavior.
+ */
+export function readLegacyProjectCanvasMigrationSource(
+  project: string | Pick<Workspace, "id">,
+): LegacyProjectCanvasMigrationSource {
+  const projectId = projectIdOf(project);
+  const source = inspectLegacyProjectCanvasStorage(project);
+  if (!source.table_exists) {
+    return {
+      schema: LEGACY_PROJECT_CANVAS_EXPORT_SCHEMA,
+      project_id: projectId,
+      read_only: true,
+      source,
+      canvases: [],
+    };
+  }
+  const db = new Database(source.db_path, { readonly: true });
+  try {
+    const rows = db
+      .query<LegacyProjectCanvasRow, []>(
+        "SELECT * FROM project_canvases ORDER BY created_at ASC, id ASC",
+      )
+      .all();
+    return {
+      schema: LEGACY_PROJECT_CANVAS_EXPORT_SCHEMA,
+      project_id: projectId,
+      read_only: true,
+      source,
+      canvases: rows.map((row) => rowToLegacyCanvas(projectId, row)),
+    };
+  } finally {
+    db.close();
   }
 }
 
@@ -1039,4 +856,29 @@ export async function inspectProjectStoreWithLoops(
 function tableCount(db: Database, table: string): number {
   const row = db.query(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number } | null;
   return row?.count ?? 0;
+}
+
+function hasTable(db: Database, table: string): boolean {
+  return Boolean(
+    db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1").get(table),
+  );
+}
+
+function legacyCanvasTableExists(dbPath: string): boolean {
+  if (!existsSync(dbPath)) return false;
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    return hasTable(db, LEGACY_PROJECT_CANVAS_TABLE);
+  } finally {
+    db.close();
+  }
+}
+
+function legacyCanvasRecordCount(dbPath: string): number {
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    return tableCount(db, LEGACY_PROJECT_CANVAS_TABLE);
+  } finally {
+    db.close();
+  }
 }
