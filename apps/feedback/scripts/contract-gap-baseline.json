@@ -2,13 +2,31 @@
   "note": "Measured failing checks from `contracts repo-conformance`. This file is a ratchet, not an excuse: `bun run contract-gap` fails when the real failure set differs from this one in EITHER direction, so a new violation is caught and a fixed violation forces the baseline down. Regenerate with `bun run contract-gap --update` and land the change with the fix that earned it.",
   "contractsVersion": "0.8.5",
   "reported": [
-    "manifest_valid"
+    {
+      "id": "manifest_valid",
+      "detail": "Service contract manifest failed validation: storage cli-with-store repos must declare storage"
+    }
   ],
   "behindManifestGate": [
-    "self_host_artifact",
-    "service_api_topology",
-    "storage_capabilities",
-    "surface_bindings",
-    "surface_matrix"
+    {
+      "id": "self_host_artifact",
+      "detail": "service-class repos require one self-host deployment artifact: docker-compose.yml, docker-compose.yaml, compose.yml, compose.yaml, Dockerfile"
+    },
+    {
+      "id": "service_api_topology",
+      "detail": "a supported API surface is required"
+    },
+    {
+      "id": "storage_capabilities",
+      "detail": "missing storage engines: sqlite, postgres; storage.envPrefix is required for the PostgreSQL DATABASE_URL contract; storage.pgTestGate is required to prove live PostgreSQL support"
+    },
+    {
+      "id": "surface_bindings",
+      "detail": "serviceSurfaces[2].generatedFrom is required for a supported service SDK"
+    },
+    {
+      "id": "surface_matrix",
+      "detail": "missing supported surface declarations or eligible waivers: api"
+    }
   ]
 }
