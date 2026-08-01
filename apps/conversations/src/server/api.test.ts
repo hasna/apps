@@ -9,6 +9,7 @@ function makeFakeClient() {
   const channels: Record<string, any> = {};
   const channelMembers = new Set<string>();
   const messages: any[] = [];
+  const messageMentions: any[] = [];
   const projects: Record<string, any> = {
     "proj-valid": { id: "proj-valid", name: "Chief of Harness" },
   };
@@ -33,17 +34,44 @@ function makeFakeClient() {
         const numRows = (sql.match(/COALESCE\(/g) || []).length || 1;
         const perRow = p.length / numRows;
         let inserted = 0;
+        const rows: any[] = [];
         for (let i = 0; i < numRows; i++) {
-          const uuid = (p as any[])[i * perRow]; // uuid is the first column
-          const to_agent = (p as any[])[i * perRow + 3];
-          const channel = (p as any[])[i * perRow + 4];
-          const content = (p as any[])[i * perRow + 6];
+          const values = (p as any[]).slice(i * perRow, (i + 1) * perRow);
+          const [
+            uuid, session_id, from_agent, to_agent, channel, project_id,
+            content, priority, working_dir, repository, branch, metadata,
+            edited_at, pinned_at, blocking, attachments, reply_to,
+            created_at, read_at,
+          ] = values;
           if (!messages.find((m) => m.uuid === uuid)) {
-            messages.push({ id: nextId++, uuid, to_agent, channel, content });
+            const row = {
+              id: nextId++, uuid, session_id, from_agent, to_agent, channel,
+              project_id, content, priority, working_dir, repository, branch,
+              metadata, edited_at, pinned_at, blocking, attachments, reply_to,
+              created_at: created_at ?? new Date().toISOString(), read_at,
+            };
+            messages.push(row);
+            rows.push(row);
             inserted++;
           }
         }
-        return { rows: [], rowCount: inserted };
+        return { rows, rowCount: inserted };
+      }
+      if (/INSERT INTO message_mentions/i.test(sql)) {
+        const [message_id, mentioned_agent, from_agent, channel] = p as any[];
+        const row = { id: messageMentions.length + 1, message_id, mentioned_agent, from_agent, channel };
+        messageMentions.push(row);
+        return { rows: [row], rowCount: 1 };
+      }
+      if (/INSERT INTO messages/i.test(sql) && /priority, metadata/i.test(sql)) {
+        const [uuid, session_id, from_agent, to_agent, content, metadata] = p as any[];
+        const row = {
+          id: nextId++, uuid, session_id, from_agent, to_agent, channel: null,
+          project_id: null, content, priority: "normal", metadata,
+          created_at: new Date().toISOString(),
+        };
+        messages.push(row);
+        return { rows: [row], rowCount: 1 };
       }
       if (/INSERT INTO channel_members/i.test(sql)) {
         const [channel, agent] = p as any[];
@@ -120,6 +148,7 @@ function makeFakeClient() {
         channelMembers.add(`${channel}:${agent}`);
       }
     },
+    __debug: { messages, messageMentions },
   };
   return client;
 }
@@ -385,6 +414,206 @@ describe("conversations-serve", () => {
     expect(b2.inserted).toBe(0);
     expect(b2.skipped).toBe(2);
     expect(b2.total).toBe(b1.total); // count unchanged on re-run
+  });
+
+  test("bulk ingest blocks sensitive content generically without echo or insertion", async () => {
+    const blocked = syntheticDatabaseUrl();
+    const before = activeFakeClient!.__debug.messages.length;
+    const r = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ messages: [{ uuid: "bulk-sensitive-content", from: "a", to: "b", content: `blocked ${blocked}` }] }),
+    });
+    const text = await r.text();
+
+    expect({
+      status: r.status,
+      generic: text.includes("sensitive content detected"),
+      echoed: text.includes(blocked),
+      inserted: activeFakeClient!.__debug.messages.length - before,
+    }).toEqual({ status: 400, generic: true, echoed: false, inserted: 0 });
+  });
+
+  test("bulk ingest validates the same persisted string fields before writing", async () => {
+    const blocked = syntheticDatabaseUrl();
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ["content", { content: `blocked ${blocked}` }],
+      ["from", { from: blocked }],
+      ["to", { to: blocked }],
+      ["channel", { channel: blocked }],
+      ["project", { project_id: blocked }],
+      ["explicit-session", { session_id: blocked }],
+    ];
+    const outcomes: Array<Record<string, unknown>> = [];
+
+    for (const [label, override] of cases) {
+      const before = activeFakeClient!.__debug.messages.length;
+      const r = await fetch(`${base}/v1/messages/bulk`, {
+        method: "POST",
+        headers: { "x-api-key": rwKey, "content-type": "application/json" },
+        body: JSON.stringify({
+          messages: [{ uuid: `bulk-sensitive-${label}`, from: "source", to: "target", content: "safe", ...override }],
+        }),
+      });
+      const text = await r.text();
+      outcomes.push({
+        label,
+        status: r.status,
+        generic: text.includes("sensitive content detected"),
+        echoed: text.includes(blocked),
+        inserted: activeFakeClient!.__debug.messages.length - before,
+      });
+    }
+
+    const derived = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ messages: [{ uuid: "bulk-derived-session-safe", from: "source", to: "target", content: "safe" }] }),
+    });
+    expect(derived.status).toBe(200);
+    expect(activeFakeClient!.__debug.messages.find((m) => m.uuid === "bulk-derived-session-safe")?.session_id).toBe("api:source");
+    expect(outcomes).toEqual(cases.map(([label]) => ({
+      label, status: 400, generic: true, echoed: false, inserted: 0,
+    })));
+  });
+
+  test("bulk ingest rejects a mixed safe and sensitive batch atomically", async () => {
+    const blocked = syntheticDatabaseUrl();
+    const before = activeFakeClient!.__debug.messages.length;
+    const r = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ messages: [
+        { uuid: "bulk-atomic-safe", from: "a", to: "b", content: "safe" },
+        { uuid: "bulk-atomic-sensitive", from: "a", to: "b", content: `blocked ${blocked}` },
+      ] }),
+    });
+    const text = await r.text();
+
+    expect({
+      status: r.status,
+      generic: text.includes("sensitive content detected"),
+      echoed: text.includes(blocked),
+      inserted: activeFakeClient!.__debug.messages.length - before,
+    }).toEqual({ status: 400, generic: true, echoed: false, inserted: 0 });
+  });
+
+  test("bulk channel inserts create case-insensitive deduped mentions and notification DMs", async () => {
+    const r = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ messages: [{
+        uuid: "bulk-mentions-new",
+        from: "Sender",
+        to: "alerts",
+        channel: "alerts",
+        content: "Hello @Alpha, @alpha, @BETA, and @Sender",
+      }] }),
+    });
+    const body = await r.json();
+    const source = activeFakeClient!.__debug.messages.find((m) => m.uuid === "bulk-mentions-new");
+    const mentions = activeFakeClient!.__debug.messageMentions
+      .filter((m) => m.message_id === source?.id)
+      .map((m) => m.mentioned_agent)
+      .sort();
+    const notificationRecipients = activeFakeClient!.__debug.messages
+      .filter((m) => {
+        try { return JSON.parse(m.metadata ?? "null")?.source_message_id === source?.id; } catch { return false; }
+      })
+      .map((m) => m.to_agent)
+      .sort();
+
+    expect(body.inserted).toBe(1);
+    expect(mentions).toEqual(["alpha", "beta", "sender"]);
+    expect(notificationRecipients).toEqual(["alpha", "beta"]);
+  });
+
+  test("bulk mention fanout processes only newly returned rows across idempotent reruns", async () => {
+    const first = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ messages: [{
+        uuid: "bulk-mentions-idempotent",
+        from: "sender",
+        to: "alerts",
+        channel: "alerts",
+        content: "Hello @First",
+      }] }),
+    });
+    const firstBody = await first.json();
+    const source = activeFakeClient!.__debug.messages.find((m) => m.uuid === "bulk-mentions-idempotent");
+    const afterFirst = activeFakeClient!.__debug.messages.length;
+
+    const rerun = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ messages: [
+        {
+          uuid: "bulk-mentions-idempotent",
+          from: "sender",
+          to: "alerts",
+          channel: "alerts",
+          content: "Changed duplicate payload @Second",
+        },
+        {
+          uuid: "bulk-mentions-new-on-rerun",
+          from: "sender",
+          to: "alerts",
+          channel: "alerts",
+          content: "Actually new @Third",
+        },
+      ] }),
+    });
+    const rerunBody = await rerun.json();
+    const mentionAgents = activeFakeClient!.__debug.messageMentions.map((m) => m.mentioned_agent);
+    const sourceMentions = activeFakeClient!.__debug.messageMentions.filter((m) => m.message_id === source?.id);
+    const notifications = activeFakeClient!.__debug.messages.filter((m) => {
+      try { return JSON.parse(m.metadata ?? "null")?.type === "mention_notification"; } catch { return false; }
+    });
+
+    expect(firstBody.inserted).toBe(1);
+    expect(rerunBody).toMatchObject({ requested: 2, inserted: 1, skipped: 1 });
+    expect(rerunBody.total - firstBody.total).toBe(2); // one source row + its one notification DM
+    expect(activeFakeClient!.__debug.messages.length - afterFirst).toBe(2);
+    expect(sourceMentions.map((m) => m.mentioned_agent)).toEqual(["first"]);
+    expect(mentionAgents).toContain("third");
+    expect(mentionAgents).not.toContain("second");
+    expect(notifications.filter((m) => m.to_agent === "first")).toHaveLength(1);
+    expect(notifications.filter((m) => m.to_agent === "third")).toHaveLength(1);
+    expect(notifications.filter((m) => m.to_agent === "second")).toHaveLength(0);
+  });
+
+  test("bulk ingest preserves empty and maximum batch boundaries and counts", async () => {
+    const before = activeFakeClient!.__debug.messages.length;
+    const empty = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ messages: [] }),
+    });
+    expect(await empty.json()).toEqual({ requested: 0, inserted: 0, skipped: 0, total: before });
+
+    const maxBatch = Array.from({ length: 2000 }, (_, i) => ({
+      uuid: `bulk-max-${i}`,
+      from: "a",
+      to: "b",
+      content: `safe ${i}`,
+    }));
+    const max = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ messages: maxBatch }),
+    });
+    const maxBody = await max.json();
+    expect(max.status).toBe(200);
+    expect(maxBody).toEqual({ requested: 2000, inserted: 2000, skipped: 0, total: before + 2000 });
+
+    const over = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ messages: [...maxBatch, { uuid: "bulk-over", from: "a", to: "b", content: "safe" }] }),
+    });
+    expect(over.status).toBe(400);
+    expect(activeFakeClient!.__debug.messages.length).toBe(before + 2000);
   });
 
   test("bulk ingest requires the write scope (read-only key -> 403)", async () => {
