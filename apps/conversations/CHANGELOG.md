@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.5.19 - 2026-08-01
+
+### Fixed
+- **Cloud `conversations watch` now advances its read-notification cursor.** The HTTP store now forwards `mark_read` when it reads channel notifications and acknowledges the returned notification IDs through the hosted read endpoint. Previously `ApiStore.readChannelNotifications` discarded that option, so an unchanged notification could be emitted again on every poll even though the watcher requested it be marked read (#62).
+
 ## 0.5.18 - 2026-07-31
 
 > **Addendum, written after this version was published.** The entry below was authored against the release commit and documents two commits; the tarball actually on npm carries **three**. `#60` merged four seconds after the release commit, and 0.5.18 was published from the resulting `main` tip rather than from the release commit itself — deliberately, so that a freshly-merged fix would not be stranded unpublished, which was the condition this release existed to clear. Recording the delta rather than leaving the changelog quietly one commit short. The extra commit is listed under "Also in this release" below.
