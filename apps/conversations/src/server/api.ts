@@ -26,6 +26,7 @@ import { openapiSpec } from "./openapi.js";
 import { normalizeChannelName } from "../lib/channel-names.js";
 import { extractTopics } from "../lib/topic-extract.js";
 import { assertNoSensitiveContent, redactSensitiveValue } from "../lib/content-safety.js";
+import { resolveSelfSenderId } from "../lib/sender-identity.js";
 
 export const APP = "conversations";
 const SCOPE_READ = `${APP}:read`;
@@ -1601,8 +1602,13 @@ async function handleChannelNotifications(
   if (sub === "channel-notifications/inbox" && method === "GET") {
     const who = str(url.searchParams.get("agent"));
     if (!who) return json({ error: "agent is required" }, 400);
-    const clauses = ["s.agent = $1", "m.channel IS NOT NULL", "m.from_agent <> $1", "m.id > s.since_message_id"];
-    const params: unknown[] = [who];
+    const presence = await client.get<{ id: string }>(
+      `SELECT id FROM agent_presence WHERE LOWER(agent) = LOWER($1) ORDER BY last_seen_at DESC LIMIT 1`,
+      [who],
+    );
+    const selfSenderId = resolveSelfSenderId(who, presence);
+    const clauses = ["s.agent = $1", "m.channel IS NOT NULL", "m.from_agent <> $2", "m.id > s.since_message_id"];
+    const params: unknown[] = [who, selfSenderId];
     const channel = str(url.searchParams.get("channel"));
     if (channel) { params.push(normalizeChannelName(channel)); clauses.push(`m.channel = $${params.length}`); }
     const since = str(url.searchParams.get("since"));
@@ -1653,7 +1659,12 @@ async function handleChannelNotifications(
     const body = await readJson(req);
     const who = str(body.agent) ?? agent ?? undefined;
     if (!who) return json({ error: "agent is required" }, 400);
-    const params: unknown[] = [who];
+    const presence = await client.get<{ id: string }>(
+      `SELECT id FROM agent_presence WHERE LOWER(agent) = LOWER($1) ORDER BY last_seen_at DESC LIMIT 1`,
+      [who],
+    );
+    const selfSenderId = resolveSelfSenderId(who, presence);
+    const params: unknown[] = [who, selfSenderId];
     let channelClause = "";
     const channel = str(body.channel);
     if (channel) { params.push(normalizeChannelName(channel)); channelClause = `AND m.channel = $${params.length}`; }
@@ -1662,7 +1673,7 @@ async function handleChannelNotifications(
        SELECT $1, m.id FROM messages m
        INNER JOIN channel_subscriptions s ON s.channel = m.channel AND s.agent = $1
        LEFT JOIN channel_notification_reads snr ON snr.message_id = m.id AND snr.agent = $1
-       WHERE m.channel IS NOT NULL AND m.from_agent <> $1 AND m.id > s.since_message_id AND snr.message_id IS NULL ${channelClause}
+       WHERE m.channel IS NOT NULL AND m.from_agent <> $2 AND m.id > s.since_message_id AND snr.message_id IS NULL ${channelClause}
        ON CONFLICT DO NOTHING`,
       params,
     );

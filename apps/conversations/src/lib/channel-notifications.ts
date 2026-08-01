@@ -3,6 +3,8 @@ import type { ChannelNotification, ChannelNotificationSubscription } from "../ty
 import { normalizeChannelName } from "./channel-names.js";
 import { redactSensitiveText } from "./content-safety.js";
 import { CHANNEL_SUBSCRIPTION_AGENT_ORDER, CHANNEL_SUBSCRIPTION_ALL_ORDER, simpleOrderByClause } from "./list-order.js";
+import { getPresence } from "./presence.js";
+import { resolveSelfSenderId } from "./sender-identity.js";
 
 const DEFAULT_PREVIEW_CHARS = 140;
 
@@ -82,13 +84,14 @@ export interface ReadChannelNotificationsOptions {
 
 export function readChannelNotifications(opts: ReadChannelNotificationsOptions): ChannelNotification[] {
   const db = getDb();
+  const selfSenderId = resolveSelfSenderId(opts.agent, getPresence(opts.agent));
   const conditions: string[] = [
     "s.agent = ?",
     "m.channel IS NOT NULL",
     "m.from_agent != ?",
     "m.id > s.since_message_id",
   ];
-  const params: (string | number)[] = [opts.agent, opts.agent];
+  const params: (string | number)[] = [opts.agent, selfSenderId];
 
   if (opts.channel) {
     conditions.push("m.channel = ?");
