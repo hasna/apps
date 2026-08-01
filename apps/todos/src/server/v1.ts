@@ -663,7 +663,9 @@ export async function handleV1Request(
           if (body.agent_id && principal.agent && body.agent_id !== principal.agent && !principal.scopes.includes("todos:*")) {
             return error(403, "unlock agent_id must match the authenticated agent");
           }
-          const agentId = principal.agent || body.agent_id;
+          // A broad station principal may act for a named holder without using
+          // force; non-broad principals are constrained by the guard above.
+          const agentId = body.agent_id || principal.agent;
           if (!agentId) return error(403, "unlock requires an agent-bound key or force=true");
           const released = await store.tasks.unlock(id, agentId);
           return json({ success: released });

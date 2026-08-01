@@ -573,6 +573,17 @@ describe("/v1 task hierarchy and lock authorization", () => {
     expect((await store.tasks.get(task.id))?.locked_by).toBeNull();
   });
 
+  test("broad shared principals can release the caller-named holder without force", async () => {
+    const task = await store.tasks.create({ title: "named holder" });
+    await store.tasks.start(task.id, "nerva");
+
+    principal = { agent: "fleet", scopes: ["todos:*"] };
+    const response = await request(`/v1/tasks/${task.id}/unlock`, "POST", { agent_id: "nerva" });
+    expect(response?.status).toBe(200);
+    expect(await response!.json()).toEqual({ success: true });
+    expect((await store.tasks.get(task.id))?.locked_by).toBeNull();
+  });
+
   test("non-owner unlock is a 409 conflict and an unbound write key is denied", async () => {
     const task = await store.tasks.create({ title: "locked" });
     await store.tasks.start(task.id, "parent-agent");
