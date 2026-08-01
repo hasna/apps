@@ -35,7 +35,11 @@ export async function resolveValidatedAssignee(value: string, allowSeat: boolean
   if (!verdict.ok) {
     handleError(new Error(`Cannot assign to '${value}'. ${verdict.message}`));
   }
-  if (verdict.warning) {
+  // When the roster could not be fetched the agent list is empty, so EVERY
+  // name looks unregistered. Emitting "no agent named X is registered" then
+  // would be a confident false statement about a name that may be perfectly
+  // valid. The seat refusal still applies — it reads a local file.
+  if (verdict.warning && !ctx.degraded) {
     console.error(chalk.yellow(`Warning: ${verdict.warning}`));
   }
   return verdict.assignee;

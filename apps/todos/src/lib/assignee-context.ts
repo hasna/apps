@@ -28,6 +28,8 @@ interface CachedRoster {
   at: number;
   agents: KnownAgent[];
   seats: Set<string>;
+  /** True when the agent list could not be fetched and is therefore empty. */
+  degraded: boolean;
 }
 
 let cache: CachedRoster | undefined;
@@ -48,14 +50,38 @@ export async function loadAssigneeContext(
   listAgentsFn: () => Promise<Array<{ id: string; name: string }>> | Array<{ id: string; name: string }>,
   allowSeat: boolean,
   nowMs: number = Date.now(),
-): Promise<AssigneeContext> {
+): Promise<AssigneeContext & { degraded: boolean }> {
   if (!cache || nowMs - cache.at >= ROSTER_TTL_MS) {
-    const agents = await listAgentsFn();
+    let agents: Array<{ id: string; name: string }>;
+    let degraded = false;
+    try {
+      agents = await listAgentsFn();
+    } catch {
+      // VALIDATION MUST NEVER TURN A WORKING ASSIGNMENT INTO A FAILURE.
+      //
+      // This guard is advisory. Fetching the roster added a NEW dependency to
+      // the cloud assign path (`GET /v1/agents`), and on the first version of
+      // this change a 404 there made `todos assign` exit 1 — caught by CI on
+      // hasna/todos#146, where a synthetic /v1 fixture did not serve that
+      // route. A server that lacks the endpoint, or a transient failure, is a
+      // capability gap; it is not a reason to refuse to assign work.
+      //
+      // Degrading is SILENT on purpose, and the reasoning is narrow: if the
+      // API is genuinely down, the assign's own calls (GET the task, PATCH it)
+      // fail immediately afterwards and report it. So a warning here would
+      // either duplicate that, or fire on every assign against a server whose
+      // only fault is not exposing one optional read. The seat rule is
+      // unaffected — it reads a local file — and the seat rule is the one
+      // backed by an owner directive.
+      agents = [];
+      degraded = true;
+    }
     cache = {
       at: nowMs,
       agents: agents.map((a) => ({ id: a.id, name: a.name })),
       seats: loadSeatSlugs(),
+      degraded,
     };
   }
-  return { agents: cache.agents, seats: cache.seats, allowSeat };
+  return { agents: cache.agents, seats: cache.seats, allowSeat, degraded: cache.degraded };
 }
