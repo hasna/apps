@@ -44,4 +44,4 @@ export function isApiMode(env: NodeJS.ProcessEnv = process.env): boolean {
 
 export type { Store } from "./types.js";
 export { LocalStore } from "./local.js";
-export { ApiStore } from "./api.js";
+export { ApiStore, SecretDecryptionError } from "./api.js";

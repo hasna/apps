@@ -6,7 +6,7 @@
 // subpath now exposes the single Store abstraction so embedders route through
 // the same LocalStore/ApiStore the CLI and MCP use.
 
-export { getStore, isApiMode, LocalStore, ApiStore } from "./store/index.js";
+export { getStore, isApiMode, LocalStore, ApiStore, SecretDecryptionError } from "./store/index.js";
 export type { Store } from "./store/types.js";
 export type {
   StoreCounts,

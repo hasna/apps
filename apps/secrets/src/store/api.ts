@@ -54,6 +54,36 @@ function errorMessage(error: unknown): string {
   return String(error);
 }
 
+interface VaultDecryptionErrorBody {
+  error: string;
+  code: "VAULT_DECRYPTION_FAILED";
+  recovery: string;
+}
+
+function vaultDecryptionErrorBody(error: unknown): VaultDecryptionErrorBody | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const body = (error as { body?: unknown }).body;
+  if (typeof body !== "object" || body === null) return undefined;
+  const candidate = body as Partial<VaultDecryptionErrorBody>;
+  if (
+    candidate.code !== "VAULT_DECRYPTION_FAILED" ||
+    typeof candidate.error !== "string" ||
+    typeof candidate.recovery !== "string"
+  ) return undefined;
+  return candidate as VaultDecryptionErrorBody;
+}
+
+/** Actionable client-side form of the server's typed 422 decryption response. */
+export class SecretDecryptionError extends Error {
+  readonly code = "VAULT_DECRYPTION_FAILED" as const;
+  readonly status = 422;
+
+  constructor(message: string, readonly recovery: string) {
+    super(`${message} Recovery: ${recovery}`);
+    this.name = "SecretDecryptionError";
+  }
+}
+
 export class ApiStore implements Store {
   readonly mode = "api" as const;
   private readonly client: HasnaStorageClient;
@@ -82,6 +112,8 @@ export class ApiStore implements Store {
       return await this.transport.get<SecretEntry>("/secrets/get", { query: { key } });
     } catch (error) {
       if (isNotFound(error)) return undefined;
+      const body = vaultDecryptionErrorBody(error);
+      if (body) throw new SecretDecryptionError(body.error, body.recovery);
       throw error;
     }
   }
