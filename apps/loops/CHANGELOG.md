@@ -5,7 +5,17 @@ documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
 unless noted.
 
-## 0.4.36 (2026-08-02)
+## 0.4.37 (2026-08-01)
+
+### Fixed
+
+- **Todos-owned route project defaults:** `todos-task` routes now use an
+  explicit `--todos-project` or `LOOPS_TASK_PROJECT` only. When neither is
+  configured, drains, source-task gates, and task mutations invoke `todos`
+  without `--project` instead of passing the unrelated `LOOPS_DATA_DIR`.
+  Scheduled drains preserve the same distinction.
+
+## 0.4.36 (2026-08-01)
 
 ### Fixed
 
@@ -15,7 +25,7 @@ unless noted.
   trigger retries, and retry logs describe exec contention instead of the
   removed start lifecycle.
 
-## 0.4.35 (2026-08-02)
+## 0.4.35 (2026-08-01)
 
 ### Fixed
 

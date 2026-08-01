@@ -60,7 +60,7 @@ import {
   type RouteThrottleLimits,
 } from "./throttle.js";
 import type { TodosTaskRouteOptions, TodosTaskRoutePrint } from "./types.js";
-import { runLocalCommand } from "./todos-cli.js";
+import { runLocalCommand, todosCliArgs } from "./todos-cli.js";
 
 /** Shared event-to-workflow route engine behind `routes create/preview` and the deprecated `events handle` aliases. */
 
@@ -390,8 +390,8 @@ function todosIdentifiesRequestedTask(inspectedId: string, requestedId: string):
   return inspected === requested || inspected.startsWith(requested);
 }
 
-function inspectSourceTodosTask(todosProjectPath: string, taskId: string): SourceTaskResolution {
-  const result = runLocalCommand("todos", ["--project", todosProjectPath, "--json", "inspect", taskId], {
+function inspectSourceTodosTask(todosProjectPath: string | undefined, taskId: string): SourceTaskResolution {
+  const result = runLocalCommand("todos", todosCliArgs(todosProjectPath, ["--json", "inspect", taskId]), {
     timeoutMs: 30_000,
     maxBuffer: 16 * 1024 * 1024,
   });
@@ -524,7 +524,6 @@ function resolveSourceTodosTask(
     taskEventField(data, ["source_todos_project_path", "sourceTodosProjectPath", "todos_project_path", "todosProjectPath", "todos_project", "todosProject"]) ||
     taskEventField(metadata, ["source_todos_project_path", "sourceTodosProjectPath", "todos_project_path", "todosProjectPath", "todos_project", "todosProject"]) ||
     opts.todosProject?.trim();
-  if (!sourceTodosProjectPath) return undefined;
   return inspectSourceTodosTask(sourceTodosProjectPath, taskId);
 }
 
@@ -970,6 +969,10 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
   const sourceTaskResolution = opts.dryRun && !opts.sourceTaskResolvedId?.trim()
     ? undefined
     : resolveSourceTodosTask(eventTaskId, data, metadata, opts);
+  const resolvedTodosProjectPath =
+    sourceTaskResolution?.todosProjectPath ??
+    sourceTodosProjectPath ??
+    opts.todosProject?.trim();
   if (sourceTaskResolution && !sourceTaskResolution.resolved) {
     const reason = sourceTaskResolution.sourceUnavailable
       ? `could not ask the active todos source whether task ${eventTaskId} exists: ${sourceTaskResolution.error ?? "todos inspect produced no exit status"}`
@@ -1117,7 +1120,7 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
     prReviewRouting: prReviewRouting.required ? prReviewRouting : undefined,
     eventId: event.id,
     eventType: event.type,
-    todosProjectPath: sourceTodosProjectPath || opts.todosProject,
+    todosProjectPath: resolvedTodosProjectPath,
   };
   const workflowContext = {
     name: workflowName,
@@ -1153,6 +1156,7 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
     intent: "route" as const,
     scope: {
       projectPath: routeProjectPath,
+      todosProjectPath: resolvedTodosProjectPath,
       projectGroup,
       worktreePolicy: (opts.worktreeMode ?? "auto") as AgentWorktreeMode,
       permissions: permissionMode,

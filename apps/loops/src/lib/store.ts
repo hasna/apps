@@ -69,7 +69,7 @@ import { normalizeRunReceipt } from "./run-receipts.js";
 import { normalizeLoopLabels } from "./labels.js";
 import { assertLoopStatus } from "./loop-status.js";
 import { normalizeRunCompletion } from "./run-completion.js";
-import { runLocalCommand, todosMutationSummary } from "./route/todos-cli.js";
+import { runLocalCommand, todosCliArgs, todosMutationSummary } from "./route/todos-cli.js";
 
 interface DaemonLeaseFence {
   daemonLeaseId?: string;
@@ -2667,7 +2667,7 @@ export class Store {
   }
 
   private taskLifecycleTodosPointerContext(workflowRunId: string): {
-    projectPath: string;
+    todosProjectPath?: string;
     taskId: string;
     invocationId: string;
     workflowRunId: string;
@@ -2679,11 +2679,11 @@ export class Store {
     if (!workItem || workItem.routeKey !== "todos-task") return undefined;
     const invocation = this.getWorkflowInvocation(run.invocationId);
     if (!invocation || invocation.templateId !== TASK_LIFECYCLE_TEMPLATE_ID) return undefined;
-    const projectPath = workItem.projectKey ?? invocation.scope?.projectPath;
+    const todosProjectPath = invocation.scope?.todosProjectPath;
     const taskId = invocation.subjectRef.id ?? workItem.subjectRef;
-    if (!projectPath || !taskId) return undefined;
+    if (!taskId) return undefined;
     return {
-      projectPath,
+      todosProjectPath,
       taskId,
       invocationId: invocation.id,
       workflowRunId: run.id,
@@ -2694,9 +2694,7 @@ export class Store {
   private syncSuccessfulTaskLifecycleTodosPointers(workflowRunId: string): void {
     const context = this.taskLifecycleTodosPointerContext(workflowRunId);
     if (!context) return;
-    const result = runLocalCommand("todos", [
-      "--project",
-      context.projectPath,
+    const result = runLocalCommand("todos", todosCliArgs(context.todosProjectPath, [
       "task",
       "workflow-pointers",
       context.taskId,
@@ -2711,9 +2709,9 @@ export class Store {
       "succeeded",
       "--actor",
       "openloops:task-lifecycle",
-    ]);
+    ]));
     this.appendWorkflowEvent(workflowRunId, result.ok ? "todos_workflow_pointers_synced" : "todos_workflow_pointers_sync_failed", undefined, {
-      projectPath: context.projectPath,
+      todosProjectPath: context.todosProjectPath,
       taskId: context.taskId,
       invocationId: context.invocationId,
       workflowRunId: context.workflowRunId,

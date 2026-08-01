@@ -386,20 +386,30 @@ export function verifierRuntimeGuidance(input: { verifierIdleTimeoutMs?: number 
   ].join("\n");
 }
 
-export function todosInspectLine(todosProjectPath: string, taskId: string): string {
-  return `- Inspect first: todos --project ${todosProjectPath} inspect ${taskId}`;
+function todosPromptCommand(todosProjectPath: string | undefined): string {
+  const project = todosProjectPath?.trim();
+  return project ? `todos --project ${project}` : "todos";
 }
 
-export function todosStartLine(todosProjectPath: string, taskId: string): string {
-  return `- Claim/start if appropriate: todos --project ${todosProjectPath} start ${taskId}`;
+function todosShellCommand(todosProjectPath: string | undefined): string {
+  const project = todosProjectPath?.trim();
+  return project ? `todos --project ${shellQuote(project)}` : "todos";
 }
 
-export function todosEvidenceLine(todosProjectPath: string, taskId: string, placeholder: string): string {
-  return `- Record evidence: todos --project ${todosProjectPath} comment ${taskId} "<${placeholder}>"`;
+export function todosInspectLine(todosProjectPath: string | undefined, taskId: string): string {
+  return `- Inspect first: ${todosPromptCommand(todosProjectPath)} inspect ${taskId}`;
 }
 
-export function todosVerificationLine(todosProjectPath: string, taskId: string): string {
-  return `- Record verification: todos --project ${todosProjectPath} comment ${taskId} "<verification evidence or blocker>"`;
+export function todosStartLine(todosProjectPath: string | undefined, taskId: string): string {
+  return `- Claim/start if appropriate: ${todosPromptCommand(todosProjectPath)} start ${taskId}`;
+}
+
+export function todosEvidenceLine(todosProjectPath: string | undefined, taskId: string, placeholder: string): string {
+  return `- Record evidence: ${todosPromptCommand(todosProjectPath)} comment ${taskId} "<${placeholder}>"`;
+}
+
+export function todosVerificationLine(todosProjectPath: string | undefined, taskId: string): string {
+  return `- Record verification: ${todosPromptCommand(todosProjectPath)} comment ${taskId} "<verification evidence or blocker>"`;
 }
 
 export type TaskEvidenceRole = "worker" | "verifier";
@@ -409,24 +419,27 @@ export function taskEvidenceMarker(role: TaskEvidenceRole, taskId: string, event
 }
 
 export function todosTaskEvidenceLine(
-  todosProjectPath: string,
+  todosProjectPath: string | undefined,
   taskId: string,
   role: TaskEvidenceRole,
   marker: string,
   placeholder: string,
 ): string {
-  return `- Record ${role} evidence: todos --project ${todosProjectPath} comment ${taskId} "${marker}\n<${placeholder}>"`;
+  return `- Record ${role} evidence: ${todosPromptCommand(todosProjectPath)} comment ${taskId} "${marker}\n<${placeholder}>"`;
 }
 
-export function todosDoneLine(todosProjectPath: string, taskId: string): string {
-  return `- If valid and complete: todos --project ${todosProjectPath} done ${taskId}`;
+export function todosDoneLine(todosProjectPath: string | undefined, taskId: string): string {
+  return `- If valid and complete: ${todosPromptCommand(todosProjectPath)} done ${taskId}`;
 }
 
-/** Exact-todos-commands stanza: project pin, cwd-inference warning, inspect, then role-specific command lines. */
-export function todosExactCommandsFragment(todosProjectPath: string, taskId: string, commandLines: string[]): string[] {
+/** Exact-todos-commands stanza: optional project pin, inspect, then role-specific command lines. */
+export function todosExactCommandsFragment(todosProjectPath: string | undefined, taskId: string, commandLines: string[]): string[] {
+  const project = todosProjectPath?.trim();
   return [
-    `Todos project path: ${todosProjectPath}`,
-    "Use these exact todos commands so worktree cwd inference cannot attach to the wrong project:",
+    project ? `Todos project path: ${project}` : "Todos project path: not specified; use the CLI default without --project.",
+    project
+      ? "Use these exact todos commands so worktree cwd inference cannot attach to the wrong project:"
+      : "Use these exact todos commands and do not invent a --project value:",
     todosInspectLine(todosProjectPath, taskId),
     ...commandLines,
   ];
@@ -672,11 +685,12 @@ export function routingRemediationPreflightCommand(opts: RoutingRemediationPrefl
   ].join("\n");
 }
 
-export function sourceTaskGateCommand(todosProjectPath: string, taskId: string): string {
+export function sourceTaskGateCommand(todosProjectPath: string | undefined, taskId: string): string {
+  const projectLabel = todosProjectPath?.trim() || "default todos resolution";
   return [
     "set -euo pipefail",
-    `todos --project ${shellQuote(todosProjectPath)} --json inspect ${shellQuote(taskId)} >/dev/null`,
-    `printf "source task %s resolved in todos project %s\\n" ${shellQuote(taskId)} ${shellQuote(todosProjectPath)}`,
+    `${todosShellCommand(todosProjectPath)} --json inspect ${shellQuote(taskId)} >/dev/null`,
+    `printf "source task %s resolved via %s\\n" ${shellQuote(taskId)} ${shellQuote(projectLabel)}`,
   ].join("\n");
 }
 
@@ -739,7 +753,7 @@ const LIFECYCLE_GATE_SCRIPT_TAIL = [
 ].join("\n");
 
 export function lifecycleGateCommand(
-  todosProjectPath: string,
+  todosProjectPath: string | undefined,
   taskId: string,
   stage: LifecycleGateStage,
   goMarker: string,
@@ -747,7 +761,7 @@ export function lifecycleGateCommand(
 ): string {
   return [
     "set -euo pipefail",
-    `task_json="$(todos --project ${shellQuote(todosProjectPath)} --json inspect ${shellQuote(taskId)})"`,
+    `task_json="$(${todosShellCommand(todosProjectPath)} --json inspect ${shellQuote(taskId)})"`,
     `TASK_JSON="$task_json" STAGE=${shellQuote(stage)} bun - <<'BUN'`,
     LIFECYCLE_GATE_SCRIPT_HEAD,
     `const goMarker = ${JSON.stringify(goMarker)};`,
@@ -817,14 +831,14 @@ const TASK_EVIDENCE_GATE_SCRIPT = [
 ].join("\n");
 
 export function taskEvidenceGateCommand(
-  todosProjectPath: string,
+  todosProjectPath: string | undefined,
   taskId: string,
   workerMarker: string,
   verifierMarker: string,
 ): string {
   return [
     "set -euo pipefail",
-    `task_json="$(todos --project ${shellQuote(todosProjectPath)} --json inspect ${shellQuote(taskId)})"`,
+    `task_json="$(${todosShellCommand(todosProjectPath)} --json inspect ${shellQuote(taskId)})"`,
     `TASK_JSON="$task_json" TASK_ID=${shellQuote(taskId)} WORKER_MARKER=${shellQuote(workerMarker)} VERIFIER_MARKER=${shellQuote(verifierMarker)} bun - <<'BUN'`,
     TASK_EVIDENCE_GATE_SCRIPT,
     "BUN",
@@ -1081,7 +1095,7 @@ const PR_HANDOFF_NO_ARTIFACT_SCRIPT = [
 export interface PrHandoffCommandOptions {
   artifactPath: string;
   taskId: string;
-  todosProjectPath: string;
+  todosProjectPath?: string;
   worktreeCwd: string;
   worktreeRoot: string;
   expectedBranch: string;
@@ -1092,7 +1106,7 @@ export function prHandoffCommand(opts: PrHandoffCommandOptions): string {
     "set -euo pipefail",
     `export OPENLOOPS_PR_HANDOFF_ARTIFACT=${shellQuote(opts.artifactPath)}`,
     `export OPENLOOPS_PR_HANDOFF_TASK_ID=${shellQuote(opts.taskId)}`,
-    `export OPENLOOPS_PR_HANDOFF_TODOS_PROJECT=${shellQuote(opts.todosProjectPath)}`,
+    `export OPENLOOPS_PR_HANDOFF_TODOS_PROJECT=${shellQuote(opts.todosProjectPath?.trim() || "")}`,
     `export OPENLOOPS_PR_HANDOFF_WORKTREE=${shellQuote(opts.worktreeCwd)}`,
     `export OPENLOOPS_PR_HANDOFF_WORKTREE_ROOT=${shellQuote(opts.worktreeRoot)}`,
     `export OPENLOOPS_PR_HANDOFF_EXPECTED_BRANCH=${shellQuote(opts.expectedBranch)}`,

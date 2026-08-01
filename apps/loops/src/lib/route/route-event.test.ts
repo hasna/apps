@@ -22,15 +22,38 @@ interface RouteEnv {
 function withRouteEnv(): RouteEnv {
   const oldDataDir = process.env.LOOPS_DATA_DIR;
   const oldMachineId = process.env.LOOPS_MACHINE_ID;
+  const oldPath = process.env.PATH;
   const dataDir = mkdtempSync(join(tmpdir(), "loops-route-dedupe-"));
+  const binDir = join(dataDir, "default-bin");
+  mkdirSync(binDir, { recursive: true });
+  const todosBin = join(binDir, "todos");
+  writeFileSync(
+    todosBin,
+    [
+      "#!/usr/bin/env bash",
+      "for arg in \"$@\"; do",
+      "  if [[ \"$arg\" == \"inspect\" ]]; then",
+      "    task_id=\"${@: -1}\"",
+      "    printf '{\"id\":\"%s\",\"status\":\"pending\",\"tags\":[\"auto:route\"]}' \"$task_id\"",
+      "    exit 0",
+      "  fi",
+      "done",
+      "printf 'unexpected todos command: %s\\n' \"$*\" >&2",
+      "exit 2",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(todosBin, 0o755);
   process.env.LOOPS_DATA_DIR = dataDir;
   process.env.LOOPS_MACHINE_ID = "route-event-test-machine";
+  process.env.PATH = `${binDir}:${oldPath ?? ""}`;
   return {
     dataDir,
     restore: () => {
       if (oldDataDir === undefined) delete process.env.LOOPS_DATA_DIR;
       else process.env.LOOPS_DATA_DIR = oldDataDir;
       restoreEnv("LOOPS_MACHINE_ID", oldMachineId);
+      restoreEnv("PATH", oldPath);
       rmSync(dataDir, { recursive: true, force: true });
     },
   };
@@ -208,6 +231,23 @@ describe("routeTodosTaskEvent dedupe re-admission", () => {
     expect(result.kind).toBe("created");
     expect(result.value.deduped).toBeFalsy();
     expect(workItemRow()).toEqual({ status: "admitted", attempts: 1 });
+  });
+
+  test("inspects the source task without --project when no todos project is configured", () => {
+    const fakeTodos = withFakeTodosInspect(env.dataDir, { id: TASK_ID, status: "pending", title: "default source" });
+    try {
+      const result = routeTodosTaskEvent(pendingTaskEvent(), ROUTE_OPTS);
+      expect(result.kind).toBe("created");
+      expect(result.value.sourceTaskResolution).toMatchObject({
+        checked: true,
+        resolved: true,
+        taskId: TASK_ID,
+      });
+      expect((result.value.sourceTaskResolution as { todosProjectPath?: string }).todosProjectPath).toBeUndefined();
+      expect(readFileSync(fakeTodos.calls, "utf8").trim()).toBe(`--json inspect ${TASK_ID}`);
+    } finally {
+      fakeTodos.restore();
+    }
   });
 
   test("skips a task-created event when the source todos task is missing", () => {

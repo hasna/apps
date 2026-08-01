@@ -5327,6 +5327,63 @@ describe("loops CLI", () => {
     expect(loop.target.args).toEqual(expect.arrayContaining(["routes", "drain", "todos-task", "--task-list", "oss", "--max-dispatch", "2", "--timeout", "10m"]));
   });
 
+  test("routes create persists the resolved Todos project separately from the routed repository", () => {
+    const dataDir = freshDataDir("loops-cli-routes-todos-project-scope-");
+    const repo = createGitRepo("loops-cli-routes-todos-project-scope-repo-");
+    const event = (id: string) => ({
+      id: `evt-${id}`,
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id,
+        title: "Persist Todos project scope",
+        working_dir: repo,
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    });
+
+    const inherited = runCli(
+      dataDir,
+      ["--json", "routes", "create", "todos-task", "--event-json", JSON.stringify(event("task-env-scope")), "--worktree-mode", "off"],
+      undefined,
+      { LOOPS_TASK_PROJECT: "/tmp/todos-env-default" },
+    );
+    expect(inherited.status).toBe(0);
+    const inheritedValue = JSON.parse(inherited.stdout);
+    expect(inheritedValue.invocation.scope.projectPath).toBe(testPath(repo));
+    expect(inheritedValue.invocation.scope.todosProjectPath).toBe("/tmp/todos-env-default");
+
+    const explicit = runCli(
+      dataDir,
+      [
+        "--json",
+        "routes",
+        "create",
+        "todos-task",
+        "--event-json",
+        JSON.stringify(event("task-explicit-scope")),
+        "--todos-project",
+        "/tmp/todos-explicit",
+        "--worktree-mode",
+        "off",
+      ],
+      undefined,
+      { LOOPS_TASK_PROJECT: "/tmp/todos-env-default" },
+    );
+    expect(explicit.status).toBe(0);
+    expect(JSON.parse(explicit.stdout).invocation.scope.todosProjectPath).toBe("/tmp/todos-explicit");
+
+    const omitted = runCli(
+      dataDir,
+      ["--json", "routes", "create", "todos-task", "--event-json", JSON.stringify(event("task-omitted-scope")), "--worktree-mode", "off"],
+      undefined,
+      { LOOPS_TASK_PROJECT: "" },
+    );
+    expect(omitted.status).toBe(0);
+    expect(JSON.parse(omitted.stdout).invocation.scope.todosProjectPath).toBeUndefined();
+  });
+
   test("todos task routes can select the full task-lifecycle template", () => {
     const dataDir = freshDataDir("loops-cli-routes-task-lifecycle-");
     const event = {
@@ -5685,7 +5742,9 @@ describe("loops CLI", () => {
     const callLog = readFileSync(calls, "utf8");
     expect(callLog).toContain("git -C");
     expect(callLog).toContain("push origin 0123456789abcdef0123456789abcdef01234567:refs/heads/openloops/pr-handoff-test");
-    expect(callLog).toContain("todos --project");
+    expect(callLog).toContain("todos task upsert");
+    expect(callLog).toContain("todos comment task-routes-pr-handoff-0001");
+    expect(callLog).not.toContain("todos --project");
     expect(callLog).toContain("task upsert --fingerprint openloops:pr-handoff:task-routes-pr-handoff-0001:openloops/pr-handoff-test:0123456789abcdef0123456789abcdef01234567");
     expect(callLog).toContain("auto:route,pr-handoff,github,network,repo:open-loops");
     expect(callLog).toContain("comment task-routes-pr-handoff-0001 openloops:pr-handoff=pending");
@@ -5935,6 +5994,52 @@ describe("loops CLI", () => {
     expect(loop.target.args).toEqual(expect.arrayContaining(["--max-dispatch", "3"]));
   });
 
+  test("routes schedule serializes only Todos-owned or explicit project defaults", () => {
+    const dataDir = freshDataDir("loops-cli-routes-template-schedule-todos-project-");
+
+    const omitted = runCli(
+      dataDir,
+      ["--json", "routes", "schedule", "todos-task", "route-drain-no-todos-project", "--every", "5m"],
+      undefined,
+      { LOOPS_TASK_PROJECT: "" },
+    );
+    expect(omitted.status).toBe(0);
+    const omittedLoop = JSON.parse(omitted.stdout);
+    expect(omittedLoop.target.args).not.toContain("--todos-project");
+    expect(omittedLoop.target.args).not.toContain(dataDir);
+
+    const inherited = runCli(
+      dataDir,
+      ["--json", "routes", "schedule", "todos-task", "route-drain-env-todos-project", "--every", "5m"],
+      undefined,
+      { LOOPS_TASK_PROJECT: "/tmp/todos-owned-default" },
+    );
+    expect(inherited.status).toBe(0);
+    const inheritedLoop = JSON.parse(inherited.stdout);
+    expect(inheritedLoop.target.args).toEqual(expect.arrayContaining(["--todos-project", "/tmp/todos-owned-default"]));
+
+    const explicit = runCli(
+      dataDir,
+      [
+        "--json",
+        "routes",
+        "schedule",
+        "todos-task",
+        "route-drain-explicit-todos-project",
+        "--every",
+        "5m",
+        "--todos-project",
+        "/tmp/todos-explicit",
+      ],
+      undefined,
+      { LOOPS_TASK_PROJECT: "/tmp/todos-owned-default" },
+    );
+    expect(explicit.status).toBe(0);
+    const explicitLoop = JSON.parse(explicit.stdout);
+    expect(explicitLoop.target.args).toEqual(expect.arrayContaining(["--todos-project", "/tmp/todos-explicit"]));
+    expect(explicitLoop.target.args).not.toContain("/tmp/todos-owned-default");
+  });
+
   test("routes schedule preserves launch gate blocker options", () => {
     const dataDir = freshDataDir("loops-cli-routes-template-schedule-launch-gate-");
 
@@ -6020,6 +6125,8 @@ describe("loops CLI", () => {
     expect(loop.maxAttempts).toBe(2);
     expect(loop.leaseMs).toBe(20 * 60_000);
     expect(loop.target.args).not.toContain("--policy");
+    expect(loop.target.args).not.toContain("--todos-project");
+    expect(loop.target.args).not.toContain(dataDir);
     expect(loop.target.args).toEqual(expect.arrayContaining([
       "--route-policy-evidence",
       "oss",
@@ -6773,6 +6880,96 @@ describe("loops CLI", () => {
     expect(loops).toHaveLength(1);
     const worker = value.results[0].workflow.steps.find((step: { id: string }) => step.id === "worker");
     expect(worker.target.addDirs).toEqual([join(dataDir, "todos-store")]);
+  });
+
+  test("todos task drain omits --project when no todos project is configured", () => {
+    const dataDir = freshDataDir("loops-cli-event-drain-no-todos-project-");
+    const binDir = join(dataDir, "bin");
+    const callsFile = join(dataDir, "todos-calls.txt");
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "printf '%s\n' \"$*\" >> \"$CALLS_FILE\"",
+        "for arg in \"$@\"; do",
+        "  if [[ \"$arg\" == \"ready\" ]]; then printf '[]\n'; exit 0; fi",
+        "done",
+        "printf 'unexpected todos command: %s\n' \"$*\" >&2",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todosBin, 0o755);
+
+    const result = runCli(
+      dataDir,
+      ["--json", "routes", "drain", "todos-task", "--dry-run"],
+      undefined,
+      {
+        PATH: `${binDir}:/usr/bin:/bin`,
+        CALLS_FILE: callsFile,
+        LOOPS_TASK_PROJECT: "",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.todosProject).toBeUndefined();
+    expect(readFileSync(callsFile, "utf8").trim()).toBe("--json ready --limit 50");
+  });
+
+  test("todos task drain uses LOOPS_TASK_PROJECT and lets an explicit flag override it", () => {
+    const dataDir = freshDataDir("loops-cli-event-drain-todos-project-precedence-");
+    const binDir = join(dataDir, "bin");
+    const callsFile = join(dataDir, "todos-calls.txt");
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "printf '%s\n' \"$*\" >> \"$CALLS_FILE\"",
+        "for arg in \"$@\"; do",
+        "  if [[ \"$arg\" == \"ready\" ]]; then printf '[]\n'; exit 0; fi",
+        "done",
+        "printf 'unexpected todos command: %s\n' \"$*\" >&2",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todosBin, 0o755);
+
+    const inherited = runCli(
+      dataDir,
+      ["--json", "routes", "drain", "todos-task", "--dry-run"],
+      undefined,
+      {
+        PATH: `${binDir}:/usr/bin:/bin`,
+        CALLS_FILE: callsFile,
+        LOOPS_TASK_PROJECT: "/tmp/todos-owned-default",
+      },
+    );
+    expect(inherited.status).toBe(0);
+    expect(JSON.parse(inherited.stdout).todosProject).toBe("/tmp/todos-owned-default");
+
+    const explicit = runCli(
+      dataDir,
+      ["--json", "routes", "drain", "todos-task", "--todos-project", "/tmp/todos-explicit", "--dry-run"],
+      undefined,
+      {
+        PATH: `${binDir}:/usr/bin:/bin`,
+        CALLS_FILE: callsFile,
+        LOOPS_TASK_PROJECT: "/tmp/todos-owned-default",
+      },
+    );
+    expect(explicit.status).toBe(0);
+    expect(JSON.parse(explicit.stdout).todosProject).toBe("/tmp/todos-explicit");
+    expect(readFileSync(callsFile, "utf8").trim().split("\n")).toEqual([
+      "--project /tmp/todos-owned-default --json ready --limit 50",
+      "--project /tmp/todos-explicit --json ready --limit 50",
+    ]);
   });
 
   test("todos task drain single-project keeps old idempotency and single ready scan", () => {

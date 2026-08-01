@@ -655,7 +655,11 @@ exit 0
         sourceRef: { kind: "event", id: "evt-task-1", dedupeKey: "todos-task:task-1:task.created" },
         subjectRef: { kind: "task", id: "task-1", path: "/tmp/open-loops" },
         intent: "route",
-        scope: { projectPath: "/tmp/open-loops", worktreePolicy: "required" },
+        scope: {
+          projectPath: "/tmp/open-loops",
+          todosProjectPath: "/tmp/todos-source",
+          worktreePolicy: "required",
+        },
       });
       const workItem = store.upsertWorkflowWorkItem({
         routeKey: "todos-task",
@@ -710,7 +714,8 @@ exit 0
       store.finalizeWorkflowRun(successRun.id, "succeeded");
 
       const args = readFileSync(todosLog, "utf8").trim();
-      expect(args).toContain("--project /tmp/open-loops task workflow-pointers task-1 --clear");
+      expect(args).toContain("--project /tmp/todos-source task workflow-pointers task-1 --clear");
+      expect(args).not.toContain("--project /tmp/open-loops");
       expect(args).toContain(`--invocation ${invocation.id}`);
       expect(args).toContain(`--run ${successRun.id}`);
       expect(args).toContain(`--manifest ${successRun.manifestPath}`);
@@ -718,6 +723,76 @@ exit 0
       expect(args).toContain("--actor openloops:task-lifecycle");
       expect(args).not.toContain(cancelledRun.id);
       expect(store.listWorkflowEvents(successRun.id).map((event) => event.eventType)).toContain("todos_workflow_pointers_synced");
+
+      for (const scenario of [
+        {
+          taskId: "task-env-default",
+          todosProjectPath: "/tmp/todos-env-default",
+          expectedPrefix: "--project /tmp/todos-env-default task workflow-pointers task-env-default --clear",
+        },
+        {
+          taskId: "task-unscoped",
+          todosProjectPath: undefined,
+          expectedPrefix: "task workflow-pointers task-unscoped --clear",
+        },
+      ]) {
+        writeFileSync(todosLog, "");
+        const scenarioInvocation = store.createWorkflowInvocation({
+          templateId: "task-lifecycle",
+          sourceRef: {
+            kind: "event",
+            id: `evt-${scenario.taskId}`,
+            dedupeKey: `todos-task:${scenario.taskId}:task.created`,
+          },
+          subjectRef: { kind: "task", id: scenario.taskId, path: "/tmp/open-loops" },
+          intent: "route",
+          scope: {
+            projectPath: "/tmp/open-loops",
+            todosProjectPath: scenario.todosProjectPath,
+            worktreePolicy: "required",
+          },
+        });
+        const scenarioItem = store.upsertWorkflowWorkItem({
+          routeKey: "todos-task",
+          idempotencyKey: `todos-task:${scenario.taskId}:task.created`,
+          invocationId: scenarioInvocation.id,
+          sourceType: "task.created",
+          sourceRef: `evt-${scenario.taskId}`,
+          subjectRef: scenario.taskId,
+          projectKey: "/tmp/open-loops",
+        });
+        const scenarioWorkflow = store.createWorkflow({
+          name: `route-${scenario.taskId}`,
+          steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+        });
+        const scenarioLoop = store.createLoop({
+          name: `route-${scenario.taskId}-run`,
+          schedule: { type: "once", at: "2026-01-01T00:02:00Z" },
+          target: {
+            type: "workflow",
+            workflowId: scenarioWorkflow.id,
+            input: {
+              workflowInvocationId: scenarioInvocation.id,
+              workflowWorkItemId: scenarioItem.id,
+            },
+          },
+        });
+        store.admitWorkflowWorkItem(scenarioItem.id, {
+          workflowId: scenarioWorkflow.id,
+          loopId: scenarioLoop.id,
+        });
+        const scenarioRun = store.createWorkflowRun({
+          workflow: scenarioWorkflow,
+          loop: scenarioLoop,
+          scheduledFor: "2026-01-01T00:02:00.000Z",
+        });
+        store.finalizeWorkflowRun(scenarioRun.id, "succeeded");
+
+        const scenarioArgs = readFileSync(todosLog, "utf8").trim();
+        expect(scenarioArgs).toContain(scenario.expectedPrefix);
+        expect(scenarioArgs).not.toContain("--project /tmp/open-loops");
+        if (!scenario.todosProjectPath) expect(scenarioArgs).not.toContain("--project");
+      }
     } finally {
       store.close();
       if (previousPath === undefined) delete process.env.PATH;

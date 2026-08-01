@@ -566,8 +566,8 @@ interface CommandStepOptions {
 }
 
 /**
- * Deterministic helper steps run in the original checkout: their commands pin
- * the todos project and repo paths explicitly, and the executor prepares the
+ * Deterministic helper steps run in the original checkout. Their commands pin
+ * a Todos project only when one is configured, and the executor prepares the
  * agent worktree lazily so the worktree cwd may not exist yet.
  */
 function commandStep(opts: CommandStepOptions): GateWorkflowStep {
@@ -589,7 +589,7 @@ function commandStep(opts: CommandStepOptions): GateWorkflowStep {
   };
 }
 
-function sourceTaskGateStep(todosProjectPath: string, taskId: string, plan: WorktreePlan, description: string): GateWorkflowStep {
+function sourceTaskGateStep(todosProjectPath: string | undefined, taskId: string, plan: WorktreePlan, description: string): GateWorkflowStep {
   return commandStep({
     id: "source-task-gate",
     name: "Source Task Gate",
@@ -605,7 +605,7 @@ interface LifecycleGateStepOptions {
   stage: LifecycleGateStage;
   description: string;
   dependsOn: string[];
-  todosProjectPath: string;
+  todosProjectPath?: string;
   taskId: string;
   goMarker: string;
   blockedMarker: string;
@@ -626,7 +626,7 @@ function lifecycleGateStep(opts: LifecycleGateStepOptions): GateWorkflowStep {
 }
 
 function taskEvidenceCheckStep(
-  todosProjectPath: string,
+  todosProjectPath: string | undefined,
   taskId: string,
   plan: WorktreePlan,
   workerMarker: string,
@@ -648,7 +648,7 @@ function prHandoffArtifactPath(plan: WorktreePlan, taskId: string): string {
   return join(plan.cwd, ".openloops", "pr-handoff", `${slugSegment(taskId, "task")}.json`);
 }
 
-function prHandoffStep(input: TodosTaskWorkflowTemplateInput, plan: WorktreePlan, todosProjectPath: string): WorkflowStep {
+function prHandoffStep(input: TodosTaskWorkflowTemplateInput, plan: WorktreePlan, todosProjectPath: string | undefined): WorkflowStep {
   return commandStep({
     id: "pr-handoff",
     name: "PR Handoff",
@@ -768,7 +768,7 @@ export function getLoopTemplate(id: string, opts: ListLoopTemplatesOptions = {})
 export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTemplateInput): CreateWorkflowInput {
   if (!input.taskId?.trim()) throw new Error("taskId is required");
   if (!input.projectPath?.trim()) throw new Error("projectPath is required");
-  const todosProjectPath = input.todosProjectPath ?? input.routeProjectPath ?? input.projectPath;
+  const todosProjectPath = input.todosProjectPath?.trim() || undefined;
   const plan = worktreePlan(input, input.taskId);
   const workerMarker = taskEvidenceMarker("worker", input.taskId, input.eventId);
   const verifierMarker = taskEvidenceMarker("verifier", input.taskId, input.eventId);
@@ -843,7 +843,7 @@ export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTe
 export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInput): CreateWorkflowInput {
   if (!input.taskId?.trim()) throw new Error("taskId is required");
   if (!input.projectPath?.trim()) throw new Error("projectPath is required");
-  const todosProjectPath = input.todosProjectPath ?? input.routeProjectPath ?? input.projectPath;
+  const todosProjectPath = input.todosProjectPath?.trim() || undefined;
   const plan = worktreePlan(input, input.taskId);
   const workerMarker = taskEvidenceMarker("worker", input.taskId, input.eventId);
   const verifierMarker = taskEvidenceMarker("verifier", input.taskId, input.eventId);
@@ -883,9 +883,10 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
   ].join("\n");
   const gateMarker = (stage: LifecycleGateStage, state: "go" | "blocked"): string =>
     `openloops:${stage}=${state} task=${input.taskId}${input.eventId ? ` event=${input.eventId}` : ""}`;
-  const blockTaskCommand = `todos --project ${todosProjectPath} update ${input.taskId} --status blocked`;
+  const todosCommand = todosProjectPath ? `todos --project ${todosProjectPath}` : "todos";
+  const blockTaskCommand = `${todosCommand} update ${input.taskId} --status blocked`;
   const markerCommentCommand = (stage: LifecycleGateStage, state: "go" | "blocked", evidencePlaceholder: string): string =>
-    `todos --project ${todosProjectPath} comment ${input.taskId} "${gateMarker(stage, state)}\n<${evidencePlaceholder}>"`;
+    `${todosCommand} comment ${input.taskId} "${gateMarker(stage, state)}\n<${evidencePlaceholder}>"`;
   const gateStopFragment = (stage: LifecycleGateStage, stops: string): string =>
     `The deterministic ${stage} gate will stop ${stops} unless the latest ${stage} marker is the exact go marker and the task has no blocked/completed/done/cancelled/failed/archived/no-auto/manual/approval-required state.`;
   const triagePrompt = [

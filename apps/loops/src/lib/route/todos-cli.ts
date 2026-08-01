@@ -10,6 +10,15 @@ export function defaultLoopsProject(): string {
   return process.env.LOOPS_TASK_PROJECT || process.env.LOOPS_DATA_DIR || `${process.env.HOME || homedir()}/.hasna/loops`;
 }
 
+export function defaultTodosProject(): string | undefined {
+  return process.env.LOOPS_TASK_PROJECT?.trim() || undefined;
+}
+
+export function todosCliArgs(project: string | undefined, args: string[]): string[] {
+  const value = project?.trim();
+  return value ? ["--project", value, ...args] : args;
+}
+
 export interface LocalCommandResult {
   ok: boolean;
   /**

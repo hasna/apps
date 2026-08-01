@@ -266,6 +266,7 @@ export interface WorkflowInvocationRef {
 
 export interface WorkflowInvocationScope {
   projectPath?: string;
+  todosProjectPath?: string;
   projectGroup?: string;
   worktreePolicy?: AgentWorktreeMode;
   permissions?: string;

@@ -133,6 +133,28 @@ describe("prompt fragment composition", () => {
     expect(verifierPrompt).toContain("Act as an adversarial reviewer focused on correctness, regressions, missing tests, security, and incomplete requirements.");
   });
 
+  test("omitted todos project uses unscoped commands instead of the routed repository", () => {
+    const unscoped = renderTodosTaskWorkerVerifierWorkflow({
+      taskId: "task-unscoped",
+      projectPath: repoPath,
+      routeProjectPath: repoPath,
+      worktreeMode: "off",
+    });
+    const worker = agentTargetOf(stepById(unscoped, "worker")).prompt;
+    const verifier = agentTargetOf(stepById(unscoped, "verifier")).prompt;
+    const sourceGate = commandOf(stepById(unscoped, "source-task-gate"));
+    const evidenceGate = commandOf(stepById(unscoped, "task-evidence-check"));
+
+    expect(worker).toContain("Todos project path: not specified; use the CLI default without --project.");
+    expect(worker).toContain("- Inspect first: todos inspect task-unscoped");
+    expect(worker).toContain("- Claim/start if appropriate: todos start task-unscoped");
+    expect(verifier).toContain("- If valid and complete: todos done task-unscoped");
+    for (const value of [worker, verifier, sourceGate, evidenceGate]) {
+      expect(value).not.toContain("todos --project");
+      expect(value).not.toContain(`--project ${repoPath}`);
+    }
+  });
+
   test("disabled worktree policy prose explains the mode instead of listing worktree paths", () => {
     expect(workerPrompt).toContain("Loops worktree policy:");
     expect(workerPrompt).toContain("- Worktree mode off did not select an isolated worktree: worktree mode disabled.");

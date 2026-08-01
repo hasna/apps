@@ -540,7 +540,7 @@ loops templates render todos-task-worker-verifier \
   --var provider=codewith \
   --var authProfilePool=account001,account002,account003 \
   --var sandbox=workspace-write \
-  --var todosProjectPath=$HOME/.hasna/loops \
+  --var todosProjectPath=/path/to/todos-project \
   --var addDirs=$HOME/.hasna/todos,$HOME/.hasna/loops
 loops workflows create --template todos-task-worker-verifier \
   --var taskId=<task-id> \
@@ -691,7 +691,7 @@ cat task-created-event.json | loops routes create todos-task \
   --auth-profile-pool account001,account002,account003 \
   --permission-mode bypass \
   --sandbox workspace-write \
-  --todos-project "$HOME/.hasna/loops" \
+  --todos-project /path/to/todos-project \
   --add-dir "$HOME/.hasna/todos,$HOME/.hasna/loops" \
   --worktree-mode required
 ```
@@ -751,10 +751,12 @@ compatibility. Use `--template task-lifecycle` to run the full triage ->
 planner -> worker -> verifier lifecycle. The route rejects unrelated templates
 such as `pr-review` so a todos task cannot accidentally use the wrong contract.
 The default worker/verifier template starts with a deterministic
-`source-task-gate` command that runs `todos --project <source-store> --json
-inspect <task-id>` before the worker. If the routed source task cannot be
-resolved in the intended Todos store, the workflow fails before repo-mutating
-agent work starts.
+`source-task-gate` command that runs `todos --json inspect <task-id>` before the
+worker, adding `--project <source-store>` only when `--todos-project` or
+`LOOPS_TASK_PROJECT` supplied a Todos-owned project. `LOOPS_DATA_DIR` remains a
+Loops-only setting and is never reused as a Todos project. If the routed source
+task cannot be resolved, the workflow fails before repo-mutating agent work
+starts.
 The lifecycle template adds deterministic gates after triage and planning. If
 either step marks the task blocked, omits its contextual
 `openloops:triage=go task=<id> event=<event-id>` /
@@ -801,12 +803,12 @@ access is an explicit manual emergency path, not a default automation mode.
 
 When a sandboxed Codewith/Codex worker must update app stores outside the repo
 worktree, pass those stores explicitly with `--add-dir` or template `addDirs`.
-For task-created routes, pass `--todos-project` so worker/verifier prompts use
-the actual todos storage project while repo routing and worktree isolation still
-use the repository path. This avoids `danger-full-access` for normal todos
-comments, completion state, and loop evidence writes. `addDirs` is intentionally
-accepted only for Codewith/Codex until other providers expose equivalent
-directory-scoped write controls.
+For task-created routes, pass `--todos-project` or set `LOOPS_TASK_PROJECT` when
+worker/verifier commands must pin a specific Todos project. If neither is set,
+Loops omits `--project` instead of inventing one from the routed repository or
+`LOOPS_DATA_DIR`. Repo routing and worktree isolation still use the repository
+path. `addDirs` is intentionally accepted only for Codewith/Codex until other
+providers expose equivalent directory-scoped write controls.
 
 Inspect route state with:
 
@@ -847,7 +849,7 @@ dispatch:
 ```bash
 loops routes schedule todos-task oss-task-route-drain \
   --every 5m \
-  --todos-project "$HOME/.hasna/loops" \
+  --todos-project /path/to/todos-project \
   --template task-lifecycle \
   --project-path-prefix "$HOME/workspace/example/opensource" \
   --tags auto:route \

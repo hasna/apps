@@ -3,7 +3,7 @@ import { ValidationError } from "../errors.js";
 import { TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID } from "../templates.js";
 import { collectValues, listFromRepeatedOpts } from "./parse.js";
 import { providerActiveCapFromOpts } from "./provider-admission.js";
-import { defaultLoopsProject } from "./todos-cli.js";
+import { defaultTodosProject } from "./todos-cli.js";
 import type { TodosDrainOptions } from "./types.js";
 
 /**
@@ -23,7 +23,7 @@ interface RouteOptionSpec {
   /** Camel-case commander opts key. */
   key: string;
   kind: RouteOptionKind;
-  defaultValue?: string | (() => string);
+  defaultValue?: string | (() => string | undefined);
   /** Only meaningful for todos-task routes (template, role accounts, PR gating). */
   todosTaskOnly?: boolean;
   /** Skip when rebuilding argv (e.g. aliases another flag). */
@@ -90,7 +90,7 @@ const AGENT_ROUTING_OPTION_SPECS: RouteOptionSpec[] = [
     key: "todosProject",
     kind: "value",
     description: "todos storage project path for generated task commands",
-    defaultValue: () => defaultLoopsProject(),
+    defaultValue: () => defaultTodosProject(),
     todosTaskOnly: true,
   },
   {

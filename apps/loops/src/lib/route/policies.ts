@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID } from "../templates.js";
 import { ValidationError } from "../errors.js";
 import { routeDrainArgs } from "./options.js";
-import { defaultLoopsProject } from "./todos-cli.js";
+import { defaultLoopsProject, defaultTodosProject } from "./todos-cli.js";
 import type { TodosDrainOptions } from "./types.js";
 
 /** Named route-drain policies keep recurring task routes auditable and replayable. */
@@ -84,6 +84,7 @@ function commonCodewithDrain(): Pick<TodosDrainOptions, "provider" | "addDir" | 
 
 function policyDefinitions(): RoutePolicyDefinition[] {
   const loopsProject = defaultLoopsProject();
+  const todosProject = defaultTodosProject();
   const worktreeRoot = homePath(".hasna", "loops", "worktrees");
   return [
     {
@@ -96,7 +97,7 @@ function policyDefinitions(): RoutePolicyDefinition[] {
       aliases: ["repoops"],
       drain: {
         routePolicyEvidence: "repoops-pr-queue",
-        todosProject: loopsProject,
+        ...(todosProject ? { todosProject } : {}),
         taskList: "repo-pr-merge-queue",
         tags: "auto:route",
         limit: "50",
@@ -138,7 +139,7 @@ function policyDefinitions(): RoutePolicyDefinition[] {
       source: "spark01 live loop machine-oss-task-lifecycle-router inspected 2026-07-06",
       drain: {
         routePolicyEvidence: "oss",
-        todosProject: loopsProject,
+        ...(todosProject ? { todosProject } : {}),
         projectPathPrefix: homePath("workspace", "hasna", "opensource"),
         tags: "auto:route",
         limit: "50",
@@ -182,7 +183,7 @@ function policyDefinitions(): RoutePolicyDefinition[] {
       requiresExplicitOptions: ["manualBreakGlass", "safetyReason"],
       drain: {
         routePolicyEvidence: "pilot",
-        todosProject: loopsProject,
+        ...(todosProject ? { todosProject } : {}),
         taskList: "event-trigger-production-pilot",
         tags: "auto:route",
         scanLimit: "500",
@@ -226,7 +227,7 @@ function policyDefinitions(): RoutePolicyDefinition[] {
       source: "spark01 live loop machine-default-sync-task-router inspected 2026-07-06",
       drain: {
         routePolicyEvidence: "machine-sync",
-        todosProject: loopsProject,
+        ...(todosProject ? { todosProject } : {}),
         taskList: "machine-default-sync",
         tags: "auto:route",
         limit: "50",
@@ -298,7 +299,7 @@ function valuesEqual(a: unknown, b: unknown): boolean {
 }
 
 const DRAIN_DEFAULTS: Partial<Record<keyof TodosDrainOptions, unknown>> = {
-  todosProject: defaultLoopsProject(),
+  todosProject: defaultTodosProject(),
   template: TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID,
   limit: "50",
   maxDispatch: "1",

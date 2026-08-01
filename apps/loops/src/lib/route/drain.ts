@@ -9,7 +9,7 @@ import { providerActiveCapFromOpts } from "./provider-admission.js";
 import { routeTodosTaskEvent, todosTaskRouteTemplateId } from "./route-event.js";
 import { routePolicyEvidenceFromOptions } from "./policies.js";
 import { isExistingGitProjectPath, normalizeRoutePath } from "./throttle.js";
-import { defaultLoopsProject, runLocalCommand, runLocalCommandWithStdoutFile, todosMutationSummary } from "./todos-cli.js";
+import { defaultTodosProject, runLocalCommand, runLocalCommandWithStdoutFile, todosCliArgs, todosMutationSummary } from "./todos-cli.js";
 import { writeRouteEvidence } from "./cursors.js";
 import type { TodosDrainOptions, TodosReadyTask, TodosTaskRoutePrint } from "./types.js";
 
@@ -393,8 +393,8 @@ function loadTodoProjectPathsFromRegistry(opts: TodosDrainOptions): string[] {
   return [...new Set(paths)];
 }
 
-function loadReadyTodosTasksForProject(projectPath: string, scanLimit: number): TodosReadyTask[] {
-  const args = ["--project", projectPath, "--json", "ready", "--limit", String(scanLimit)];
+function loadReadyTodosTasksForProject(projectPath: string | undefined, scanLimit: number): TodosReadyTask[] {
+  const args = todosCliArgs(projectPath, ["--json", "ready", "--limit", String(scanLimit)]);
   const result = runLocalCommandWithStdoutFile("todos", args, { timeoutMs: 60_000, maxBuffer: 64 * 1024 * 1024 });
   if (!result.ok) throw new Error(result.stderr || result.error || "todos ready failed");
   const parsed = parseTodosReadyJson(result.stdout);
@@ -404,7 +404,7 @@ function loadReadyTodosTasksForProject(projectPath: string, scanLimit: number): 
 
 function loadReadyTodosTasks(opts: TodosDrainOptions, scanLimit: number): TodosReadyTask[] {
   if (!opts.todosProjectsFromRegistry) {
-    const todosProject = opts.todosProject ?? defaultLoopsProject();
+    const todosProject = opts.todosProject?.trim() || defaultTodosProject();
     return loadReadyTodosTasksForProject(todosProject, scanLimit);
   }
   const projectPaths = loadTodoProjectPathsFromRegistry(opts);
@@ -421,10 +421,10 @@ function loadReadyTodosTasks(opts: TodosDrainOptions, scanLimit: number): TodosR
   return ready;
 }
 
-function resolveTaskListFilter(todosProject: string, filter: string | undefined): string | undefined {
+function resolveTaskListFilter(todosProject: string | undefined, filter: string | undefined): string | undefined {
   const wanted = filter?.trim();
   if (!wanted) return undefined;
-  const result = runLocalCommand("todos", ["--project", todosProject, "--json", "task-lists"], { timeoutMs: 30_000 });
+  const result = runLocalCommand("todos", todosCliArgs(todosProject, ["--json", "task-lists"]), { timeoutMs: 30_000 });
   if (!result.ok) throw new Error(result.stderr || result.error || "failed to list todos task lists");
   const values = JSON.parse(result.stdout || "[]") as Array<{ id?: string; slug?: string; name?: string }>;
   const match = values.find((entry) => entry.id === wanted || entry.slug === wanted || entry.name === wanted);
@@ -489,13 +489,13 @@ function isSkippableDrainRouteError(message: string): boolean {
   return message.startsWith("worktreeMode=required but projectPath is not an existing git repository:");
 }
 
-function markInvalidDrainTaskNonRouteable(sourceTodosProject: string, task: TodosReadyTask, reason: string): Record<string, unknown> {
+function markInvalidDrainTaskNonRouteable(sourceTodosProject: string | undefined, task: TodosReadyTask, reason: string): Record<string, unknown> {
   const taskId = taskField(task, ["id", "task_id", "taskId"]);
   if (!taskId) return { attempted: false, reason: "task id missing" };
   const comment = `Loops route blocked for task ${taskId}: ${reason}. Added no-auto and removed auto:route so route drains do not repeatedly route this task until its project path is fixed.`;
-  const commentResult = runLocalCommand("todos", ["--project", sourceTodosProject, "comment", taskId, comment], { timeoutMs: 30_000 });
-  const tagResult = runLocalCommand("todos", ["--project", sourceTodosProject, "tag", taskId, "no-auto"], { timeoutMs: 30_000 });
-  const untagResult = runLocalCommand("todos", ["--project", sourceTodosProject, "untag", taskId, "auto:route"], { timeoutMs: 30_000 });
+  const commentResult = runLocalCommand("todos", todosCliArgs(sourceTodosProject, ["comment", taskId, comment]), { timeoutMs: 30_000 });
+  const tagResult = runLocalCommand("todos", todosCliArgs(sourceTodosProject, ["tag", taskId, "no-auto"]), { timeoutMs: 30_000 });
+  const untagResult = runLocalCommand("todos", todosCliArgs(sourceTodosProject, ["untag", taskId, "auto:route"]), { timeoutMs: 30_000 });
   const ok = commentResult.ok && tagResult.ok && untagResult.ok;
   return {
     ok,
@@ -523,20 +523,20 @@ function isFreshnessSkip(result: TodosTaskRoutePrint): boolean {
  * routable queue even if a todos build does not honor `done`. Best-effort: each
  * mutation result is recorded for the drain evidence report.
  */
-function closeFreshnessSkippedTask(sourceTodosProject: string, task: TodosReadyTask, reason: string): Record<string, unknown> {
+function closeFreshnessSkippedTask(sourceTodosProject: string | undefined, task: TodosReadyTask, reason: string): Record<string, unknown> {
   const taskId = taskField(task, ["id", "task_id", "taskId"]);
   if (!taskId) return { attempted: false, reason: "task id missing" };
   const comment =
     `Loops freshness gate closed this task: ${reason}. The referenced PR is already merged/closed, so the ` +
     `merge/review route will not dispatch a worker. Marked done and removed auto:route/route:enabled so drains stop re-skipping it.`;
-  const commentResult = runLocalCommand("todos", ["--project", sourceTodosProject, "comment", taskId, comment], { timeoutMs: 30_000 });
+  const commentResult = runLocalCommand("todos", todosCliArgs(sourceTodosProject, ["comment", taskId, comment]), { timeoutMs: 30_000 });
   const doneResult = runLocalCommand(
     "todos",
-    ["--project", sourceTodosProject, "done", taskId, "--notes", "PR already merged/closed; closed by Loops freshness gate"],
+    todosCliArgs(sourceTodosProject, ["done", taskId, "--notes", "PR already merged/closed; closed by Loops freshness gate"]),
     { timeoutMs: 30_000 },
   );
-  const untagAutoRoute = runLocalCommand("todos", ["--project", sourceTodosProject, "untag", taskId, "auto:route"], { timeoutMs: 30_000 });
-  const untagRouteEnabled = runLocalCommand("todos", ["--project", sourceTodosProject, "untag", taskId, "route:enabled"], { timeoutMs: 30_000 });
+  const untagAutoRoute = runLocalCommand("todos", todosCliArgs(sourceTodosProject, ["untag", taskId, "auto:route"]), { timeoutMs: 30_000 });
+  const untagRouteEnabled = runLocalCommand("todos", todosCliArgs(sourceTodosProject, ["untag", taskId, "route:enabled"]), { timeoutMs: 30_000 });
   const leftQueue = doneResult.ok || untagAutoRoute.ok || untagRouteEnabled.ok;
   return {
     ok: leftQueue,
@@ -559,7 +559,7 @@ export interface DrainResult {
 export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
   providerActiveCapFromOpts(opts);
   const maxDispatch = positiveInteger(opts.maxDispatch ?? "1", "--max-dispatch") ?? 1;
-  const todosProject = opts.todosProject ?? defaultLoopsProject();
+  const todosProject = opts.todosProject?.trim() || defaultTodosProject();
   const requiredTags = splitList(opts.tags ?? opts.tag) ?? [];
   const candidateLimit = positiveInteger(opts.limit ?? "50", "--limit") ?? 50;
   const hasPostFilters = Boolean(opts.todosProjectId || opts.taskList || opts.projectPathPrefix || requiredTags.length);

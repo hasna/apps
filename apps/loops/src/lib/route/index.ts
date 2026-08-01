@@ -78,7 +78,7 @@ export {
   type RouteTaskSpec,
   type UpsertRouteTasksOptions,
 } from "./route-tasks.js";
-export { defaultLoopsProject, ensureTodosTaskList, runLocalCommand, runLocalCommandWithStdoutFile } from "./todos-cli.js";
+export { defaultLoopsProject, defaultTodosProject, ensureTodosTaskList, runLocalCommand, runLocalCommandWithStdoutFile, todosCliArgs } from "./todos-cli.js";
 export { addAgentRoutingOptions, addRouteEventOptions, addTodosDrainOptions, routeDrainArgs, type AgentRoutingOptionConfig } from "./options.js";
 export {
   applyRoutePolicyToDrainOptions,
