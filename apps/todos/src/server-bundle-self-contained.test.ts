@@ -129,6 +129,10 @@ function unresolvableSpecifiers(app: string, cache: string, home: string): strin
     const specs = new Set();
     for (const m of src.matchAll(/^import\\s+(?:[^;\\n]*?\\s+from\\s+)?"([^"]+)";?$/gm)) specs.add(m[1]);
     for (const m of src.matchAll(/(?<![.\\w])import\\(\\s*"([^"]+)"\\s*\\)/g)) specs.add(m[1]);
+    // require() too. Omitting it is not a small gap: ajv emits require() calls
+    // inside generated validator code, so a probe that scans only import forms
+    // returns a CLEAN [] over a bundle with five unresolvable specifiers in it.
+    for (const m of src.matchAll(/(?<![.\\w])require\\(\\s*"([^"]+)"\\s*\\)/g)) specs.add(m[1]);
     const from = process.env.APP_DIR + "/dist/server/";
     const bad = [];
     for (const spec of specs) {
@@ -174,13 +178,45 @@ function bootStderr(
   return booted.stderr.toString() + booted.stdout.toString();
 }
 
+/**
+ * Specifiers that are bare in the bundle, unresolvable in the runner, and known.
+ *
+ * ajv's code generator emits `require()` calls into the validator source it
+ * builds, and the bundler cannot follow them, so they survive bundling. They
+ * predate the self-contained work — an externalized build carries the identical
+ * five — and they are NOT reached by ordinary traffic: measured in a
+ * `--network none` container, POST /api/tasks returns 201 and GET /api/tasks
+ * returns 200 with no module error in the log.
+ *
+ * They are pinned here rather than globbed as `ajv/*` so that a NEW unresolvable
+ * specifier — including a new ajv subpath nobody has looked at — fails this test
+ * instead of being absorbed by a pattern.
+ *
+ * This matters more now than it did before `bunfig.toml` disabled auto-install.
+ * Previously an unresolvable specifier was silently fetched from npm; now it is
+ * a hard startup failure. That is the right trade, and it means the set below is
+ * the exact list of ways this bundle could still fail to boot if a code path
+ * ever reaches one of them.
+ */
+const KNOWN_UNRESOLVED_IN_RUNNER = [
+  "ajv-formats/dist/formats (unresolvable)",
+  "ajv/dist/runtime/equal (unresolvable)",
+  "ajv/dist/runtime/ucs2length (unresolvable)",
+  "ajv/dist/runtime/uri (unresolvable)",
+  "ajv/dist/runtime/validation_error (unresolvable)",
+];
+
 describe("server bundle is self-contained in the runner image", () => {
   test("no bare specifier survives that the image cannot resolve on its own", () => {
     const outDir = mkdtempSync(join(tmpdir(), "todos-bundle-"));
     build(outDir);
     const { app, cache, home } = runnerRoot(join(outDir, "index.js"));
 
-    expect(unresolvableSpecifiers(app, cache, home)).toEqual([]);
+    const unresolved = unresolvableSpecifiers(app, cache, home);
+    // Nothing from @hasna may survive — that is the class this file exists for,
+    // and it is asserted exactly rather than folded into the allowlist.
+    expect(unresolved.filter((s) => s.startsWith("@hasna/"))).toEqual([]);
+    expect([...unresolved].sort()).toEqual(KNOWN_UNRESOLVED_IN_RUNNER);
   });
 
   test("POSITIVE CONTROL: the same harness rejects an externalized bundle", () => {
