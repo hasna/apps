@@ -9,6 +9,8 @@ const scriptPath = fileURLToPath(import.meta.url);
 const root = resolve(dirname(scriptPath), "..");
 const expectedRepository = "hasna/uptime";
 const expectedRepositoryUrl = "git+https://github.com/hasna/uptime.git";
+const expectedHomepage = "https://github.com/hasna/uptime#readme";
+const expectedBugsUrl = "https://github.com/hasna/uptime/issues";
 const requiredLegalFiles = ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"];
 const releaseWorkflowPath = ".github/workflows/release.yml";
 
@@ -55,6 +57,20 @@ function command(commandName, args, cwd = root) {
 
 function check(condition, message, errors) {
   if (!condition) errors.push(message);
+}
+
+export function auditPackageLinks(pkg, githubVisibility) {
+  const errors = [];
+  if (githubVisibility === "PUBLIC") {
+    check(pkg.repository?.url === expectedRepositoryUrl, "package repository URL is not the expected GitHub repository", errors);
+    check(pkg.homepage === expectedHomepage, "package homepage is not the expected GitHub README", errors);
+    check(pkg.bugs?.url === expectedBugsUrl, "package bugs URL is not the expected GitHub issue tracker", errors);
+  } else {
+    check(pkg.repository === undefined, "package repository must be omitted while the GitHub repository is not public", errors);
+    check(pkg.homepage === undefined, "package homepage must be omitted while the GitHub repository is not public", errors);
+    check(pkg.bugs === undefined, "package bugs URL must be omitted while the GitHub repository is not public", errors);
+  }
+  return errors;
 }
 
 function parseBunLock(repositoryRoot = root) {
@@ -141,9 +157,7 @@ export function auditStaticRepository(repositoryRoot = root) {
 
   check(pkg.name === "@hasna/uptime", "package name must be @hasna/uptime", errors);
   check(pkg.license === "Apache-2.0", "package license must be Apache-2.0", errors);
-  check(pkg.repository?.url === expectedRepositoryUrl, "package repository URL is not the expected GitHub repository", errors);
-  check(pkg.homepage === "https://github.com/hasna/uptime#readme", "package homepage is not the expected GitHub README", errors);
-  check(pkg.bugs?.url === "https://github.com/hasna/uptime/issues", "package bugs URL is not the expected GitHub issue tracker", errors);
+  errors.push(...auditPackageLinks(pkg, decision.observed?.githubVisibility));
   check(pkg.publishConfig?.access === "public", "publishConfig.access must explicitly be public", errors);
   check(pkg.publishConfig?.provenance === undefined, "publishConfig.provenance must not be set, because npm refuses to publish outside a supported CI provider when it is", errors);
   check(pkg.scripts?.prepublishOnly?.startsWith("node scripts/oss-release-gate.mjs &&"), "prepublishOnly must run the OSS release gate first", errors);

@@ -7,14 +7,6 @@
     "bun": ">=1.0.0"
   },
   "type": "module",
-  "homepage": "https://github.com/hasna/uptime#readme",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/hasna/uptime.git"
-  },
-  "bugs": {
-    "url": "https://github.com/hasna/uptime/issues"
-  },
   "publishConfig": {
     "access": "public"
   },

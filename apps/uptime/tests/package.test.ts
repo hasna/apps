@@ -10,7 +10,9 @@ const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
   exports: Record<string, { import: string }>;
   license: string;
   publishConfig: { access: string; provenance?: boolean };
-  repository: { type: string; url: string };
+  repository?: { type: string; url: string };
+  homepage?: string;
+  bugs?: { url: string };
   scripts: Record<string, string>;
 };
 
@@ -517,7 +519,9 @@ test("public OSS release decision stays fail-closed while visibility and provena
 
   expect(audit.errors).toEqual([]);
   expect(pkg.license).toBe("Apache-2.0");
-  expect(pkg.repository.url).toBe("git+https://github.com/hasna/uptime.git");
+  expect(pkg.repository).toBeUndefined();
+  expect(pkg.homepage).toBeUndefined();
+  expect(pkg.bugs).toBeUndefined();
   expect(decision).toMatchObject({
     decision: "HOLD",
     explicitPublicApproval: false,
@@ -531,6 +535,28 @@ test("public OSS release decision stays fail-closed while visibility and provena
   expect(result.blockers).toContain("GitHub repository is not public, so public package metadata is unresolved");
   expect(result.blockers).toContain("release candidate commit is not recorded");
   expect(result.blockers).toContain("npm provenance or approved alternate source evidence is not verified");
+});
+
+test("package links follow the recorded repository visibility", async () => {
+  const gate = await import(join(root, "scripts/oss-release-gate.mjs")) as Record<string, any>;
+  const links = {
+    repository: { type: "git", url: "git+https://github.com/hasna/uptime.git" },
+    homepage: "https://github.com/hasna/uptime#readme",
+    bugs: { url: "https://github.com/hasna/uptime/issues" },
+  };
+
+  expect(gate.auditPackageLinks({}, "PRIVATE")).toEqual([]);
+  expect(gate.auditPackageLinks(links, "PUBLIC")).toEqual([]);
+  expect(gate.auditPackageLinks(links, "PRIVATE")).toEqual([
+    "package repository must be omitted while the GitHub repository is not public",
+    "package homepage must be omitted while the GitHub repository is not public",
+    "package bugs URL must be omitted while the GitHub repository is not public",
+  ]);
+  expect(gate.auditPackageLinks({}, "PUBLIC")).toEqual([
+    "package repository URL is not the expected GitHub repository",
+    "package homepage is not the expected GitHub README",
+    "package bugs URL is not the expected GitHub issue tracker",
+  ]);
 });
 
 test("every release blocker clears for an approved candidate whose version is already on the registry", async () => {
