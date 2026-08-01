@@ -12,6 +12,39 @@ afterEach(() => {
 });
 
 describe("evidence CLI", () => {
+  test("requires an explicit mode to emit a low-level upload URL", () => {
+    testDir = mkdtempSync(join(tmpdir(), "files-evidence-intent-"));
+    const evidenceRoot = join(testDir, "evidence");
+    const env = {
+      ...process.env,
+      HASNA_FILES_DATA_DIR: testDir,
+      HASNA_FILES_DB_PATH: join(testDir, "files.db"),
+      HASNA_FILES_EVIDENCE_STORAGE: "local",
+      HASNA_FILES_EVIDENCE_LOCAL_ROOT: evidenceRoot,
+    };
+    const args = [
+      "bun", "run", cliPath, "evidence", "create-upload",
+      "--org", "org_hasna", "--app", "iapp-accounting", "--kind", "receipt",
+      "--name", "receipt.txt", "--size", "13", "--checksum", "a".repeat(64),
+      "--storage", "local", "--local-root", evidenceRoot, "--json",
+    ];
+
+    const redacted = Bun.spawnSync({ cmd: args, env, stdout: "pipe", stderr: "pipe" });
+    expect(redacted.exitCode).toBe(0);
+    const redactedOutput = new TextDecoder().decode(redacted.stdout);
+    expect(redactedOutput).not.toContain("upload_url");
+
+    const explicit = Bun.spawnSync({
+      cmd: [...args, "--include-upload-url"],
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(explicit.exitCode).toBe(0);
+    const explicitOutput = JSON.parse(new TextDecoder().decode(explicit.stdout)) as { intent: { upload_url?: string } };
+    expect(explicitOutput.intent.upload_url).toStartWith("file:");
+  });
+
   test("uploads a local file through the registered evidence command", () => {
     testDir = mkdtempSync(join(tmpdir(), "files-evidence-cli-"));
     const dataDir = testDir;
@@ -55,6 +88,7 @@ describe("evidence CLI", () => {
     expect(upload.exitCode).toBe(0);
     const output = JSON.parse(new TextDecoder().decode(upload.stdout)) as {
       asset: { app: string; kind: string; status: string; scan_status: string; storage_provider: string };
+      intent: { upload_url?: string };
     };
     expect(output.asset).toMatchObject({
       app: "iapp-accounting",
@@ -63,6 +97,8 @@ describe("evidence CLI", () => {
       scan_status: "skipped",
       storage_provider: "local",
     });
+    expect(output.intent.upload_url).toBeUndefined();
+    expect(new TextDecoder().decode(upload.stdout)).not.toContain("upload_url");
   });
 
   test("verify locates bytes via the persisted root when --local-root is not re-passed", () => {

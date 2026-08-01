@@ -16,6 +16,7 @@ import {
   listFileAccessEvents,
   listFileAssets,
   listFileLinks,
+  redactEvidenceUploadCredentials,
   signEvidenceDownload,
   verifyEvidenceAsset,
   type EvidenceStorageOptions,
@@ -488,7 +489,7 @@ async function routeRestRequest(req: Request): Promise<Response> {
             metadata: optionalRecord(body.metadata),
             expires_in_seconds: optionalNumber(body.expires_in_seconds),
           }, evidenceStorageFromBody(body));
-          return json(result, 201);
+          return json(body.include_upload_url === true ? result : redactEvidenceUploadCredentials(result), 201);
         }
 
         const completeMatch = path.match(/^\/evidence\/upload-intents\/([^/]+)\/complete$/);

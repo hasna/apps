@@ -85,6 +85,8 @@ describe("evidence vault", () => {
     expect(result.asset.storage_class).toBe("STANDARD_IA");
     expect(result.asset.legal_hold).toBe(true);
     expect(result.asset.immutable).toBe(true);
+    expect(result.intent.upload_url).toBeUndefined();
+    expect(JSON.stringify(result)).not.toContain("upload_url");
     expect(existsSync(join(evidenceRoot(), result.asset.object_key))).toBe(true);
     expect(existsSync(join(evidenceRoot(), result.asset.quarantine_key!))).toBe(false);
 

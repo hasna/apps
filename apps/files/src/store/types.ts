@@ -44,6 +44,7 @@ import type {
 } from "../types/index.js";
 import type {
   CreateEvidenceUploadInput,
+  EvidenceCredentialOutputOptions,
   EvidenceDownloadGrant,
   EvidenceStorageOptions,
   EvidenceUploadResult,
@@ -247,7 +248,7 @@ export interface FilesStore {
    * shared bucket via a server-signed URL). The `storage` overrides are honored
    * only by the LocalStore; the ApiStore ignores them (server-owned storage).
    */
-  createEvidenceUploadIntent(input: CreateEvidenceUploadInput, storage?: EvidenceStorageOptions): Promise<EvidenceUploadResult>;
+  createEvidenceUploadIntent(input: CreateEvidenceUploadInput, storage?: EvidenceStorageOptions, output?: EvidenceCredentialOutputOptions): Promise<EvidenceUploadResult>;
   uploadEvidenceFile(input: UploadEvidenceFileInput, storage?: EvidenceStorageOptions): Promise<EvidenceUploadResult>;
   completeEvidenceUpload(intentId: string, storage?: EvidenceStorageOptions): Promise<FileAsset>;
   linkEvidenceAsset(input: CreateFileLinkInput): Promise<FileLink>;

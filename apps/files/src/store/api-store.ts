@@ -33,14 +33,16 @@ import type {
   Source,
   Tag,
 } from "../types/index.js";
-import type {
-  CreateEvidenceUploadInput,
-  EvidenceDownloadGrant,
-  EvidenceStorageOptions,
-  EvidenceUploadResult,
-  EvidenceVerifyResult,
-  SignEvidenceDownloadInput,
-  UploadEvidenceFileInput,
+import {
+  redactEvidenceUploadCredentials,
+  type CreateEvidenceUploadInput,
+  type EvidenceCredentialOutputOptions,
+  type EvidenceDownloadGrant,
+  type EvidenceStorageOptions,
+  type EvidenceUploadResult,
+  type EvidenceVerifyResult,
+  type SignEvidenceDownloadInput,
+  type UploadEvidenceFileInput,
 } from "../lib/evidence.js";
 import type { ListFileAssetsOptions } from "../db/evidence.js";
 import type {
@@ -325,8 +327,11 @@ export class ApiStore implements FilesStore {
   // Storage (S3 bucket/creds) is owned by the self-hosted service; the `storage`
   // overrides are intentionally NOT forwarded — a thin api client can never
   // redirect the shared vault. Bytes go to the server-signed URL directly.
-  async createEvidenceUploadIntent(input: CreateEvidenceUploadInput, _storage?: EvidenceStorageOptions): Promise<EvidenceUploadResult> {
-    return this.http.post<EvidenceUploadResult>("/evidence/upload-intents", input);
+  async createEvidenceUploadIntent(input: CreateEvidenceUploadInput, _storage?: EvidenceStorageOptions, output?: EvidenceCredentialOutputOptions): Promise<EvidenceUploadResult> {
+    return this.http.post<EvidenceUploadResult>("/evidence/upload-intents", {
+      ...input,
+      ...(output?.includeUploadUrl ? { include_upload_url: true } : {}),
+    });
   }
   async uploadEvidenceFile(input: UploadEvidenceFileInput, _storage?: EvidenceStorageOptions): Promise<EvidenceUploadResult> {
     if (!existsSync(input.path)) throw new Error(`File not found: ${input.path}`);
@@ -339,16 +344,17 @@ export class ApiStore implements FilesStore {
       size: stat.size,
       checksum: sha256File(input.path),
       checksum_algorithm: "sha256",
-    });
+    }, undefined, { includeUploadUrl: true });
     if (!intent.upload_url) throw new Error("Server did not return an evidence upload URL");
-    const res = await fetch(intent.upload_url, {
+    const uploadUrl = intent.upload_url;
+    const res = await fetch(uploadUrl, {
       method: intent.method,
       headers: intent.required_headers,
       body: readFileSync(input.path),
     });
     if (!res.ok) throw new Error(`Evidence byte upload failed: ${res.status} ${res.statusText}`);
     const asset = await this.completeEvidenceUpload(intent.id);
-    return { asset, intent };
+    return redactEvidenceUploadCredentials({ asset, intent });
   }
   async completeEvidenceUpload(intentId: string, _storage?: EvidenceStorageOptions): Promise<FileAsset> {
     return this.http.post<FileAsset>(`/evidence/upload-intents/${seg(intentId)}/complete`);

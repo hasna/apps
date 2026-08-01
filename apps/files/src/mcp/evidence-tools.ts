@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { store } from "../store/index.js";
-import type { EvidenceStorageOptions } from "../lib/evidence.js";
+import { redactEvidenceUploadCredentials, type EvidenceStorageOptions } from "../lib/evidence.js";
 import type { FileAssetStatus, FileStorageProvider } from "../types/index.js";
 
 type ToolHandler = (params: any) => unknown | Promise<unknown>;
@@ -40,6 +40,7 @@ export function registerEvidenceTools(registerTool: RegisterTool): void {
     immutable: z.boolean().optional(),
     metadata: z.record(z.unknown()).optional(),
     expires_in_seconds: z.number().int().positive().optional(),
+    include_upload_url: z.boolean().optional().describe("Explicitly include the credential-bearing upload URL in the response"),
     ...storageSchema,
   }, async (params) => {
     const result = await store().createEvidenceUploadIntent({
@@ -59,8 +60,8 @@ export function registerEvidenceTools(registerTool: RegisterTool): void {
       immutable: params.immutable,
       metadata: params.metadata,
       expires_in_seconds: params.expires_in_seconds,
-    }, storageOptions(params));
-    return jsonResult(result);
+    }, storageOptions(params), { includeUploadUrl: params.include_upload_url });
+    return jsonResult(params.include_upload_url ? result : redactEvidenceUploadCredentials(result));
   });
 
   registerTool("upload_evidence_file", "Upload a local file into the shared evidence vault and complete verification", {
@@ -94,7 +95,7 @@ export function registerEvidenceTools(registerTool: RegisterTool): void {
       immutable: params.immutable,
       metadata: params.metadata,
     }, storageOptions(params));
-    return jsonResult(result);
+    return jsonResult(redactEvidenceUploadCredentials(result));
   });
 
   registerTool("complete_evidence_upload", "Complete an evidence upload intent after bytes are uploaded", {

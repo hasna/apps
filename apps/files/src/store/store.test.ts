@@ -4,6 +4,9 @@
  * we assert the exact method + path + body it emits without a live server.
  */
 import { describe, expect, it } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import { createHasnaStorageClient } from "@hasna/contracts/client/storage";
 import { HasnaHttpError } from "@hasna/contracts/client";
 import type { HasnaHttpTransport } from "@hasna/contracts/client/transport";
@@ -165,6 +168,7 @@ describe("ApiStore route mapping", () => {
     const find = (method: string, path: string) => calls.find((c) => c.method === method && c.path === path);
 
     expect(find("POST", "/evidence/upload-intents")?.body).toMatchObject({ org_id: "org_1", app: "iapp-accounting", kind: "receipt" });
+    expect((find("POST", "/evidence/upload-intents")?.body as Record<string, unknown>).include_upload_url).toBeUndefined();
     expect(find("POST", "/evidence/upload-intents/upl_1/complete")).toBeDefined();
     // asset_id travels in the path, not the body.
     expect(find("POST", "/evidence/assets/asset_1/links")?.body).toMatchObject({ source_type: "invoice", source_id: "inv_1" });
@@ -175,5 +179,73 @@ describe("ApiStore route mapping", () => {
     expect(find("GET", "/evidence/assets/asset_1")).toBeDefined();
     expect(find("GET", "/evidence/assets/asset_1/links")).toBeDefined();
     expect(find("GET", "/evidence/assets/asset_1/access-events")).toBeDefined();
+  });
+
+  it("does not return the presigned URL after a high-level API upload", async () => {
+    const fixtureRoot = mkdtempSync(join(tmpdir(), "files-api-evidence-"));
+    const fixture = join(fixtureRoot, "receipt.txt");
+    writeFileSync(fixture, "receipt bytes");
+
+    const uploadUrl = "https://upload.example.invalid/object?synthetic-signature=temporary";
+    const intent = {
+      id: "upl_1",
+      asset_id: "asset_1",
+      method: "PUT",
+      upload_url: uploadUrl,
+      expires_at: "2099-01-01T00:00:00.000Z",
+      status: "pending",
+      expected_checksum: "a".repeat(64),
+      expected_checksum_algorithm: "sha256",
+      expected_size: 13,
+      required_headers: { "content-type": "text/plain" },
+      metadata: {},
+      created_at: "2026-01-01T00:00:00.000Z",
+    };
+    const asset = {
+      id: "asset_1",
+      status: "verified",
+      scan_status: "skipped",
+    };
+    let createBody: unknown;
+    const transport = {
+      baseUrl: "https://files.example.invalid/v1",
+      get: async () => ({}),
+      post: async (path: string, body?: unknown) => {
+        if (path === "/evidence/upload-intents") {
+          createBody = body;
+          return { asset, intent };
+        }
+        if (path === "/evidence/upload-intents/upl_1/complete") return asset;
+        throw new Error(`Unexpected POST ${path}`);
+      },
+      put: async () => ({}),
+      patch: async () => ({}),
+      del: async () => ({}),
+    } as unknown as HasnaHttpTransport;
+    const store = new ApiStore(createHasnaStorageClient("files", transport));
+    const originalFetch = globalThis.fetch;
+    let uploadedTo: string | undefined;
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      uploadedTo = String(input);
+      return new Response(null, { status: 200 });
+    }) as typeof fetch;
+
+    try {
+      const result = await store.uploadEvidenceFile({
+        path: fixture,
+        org_id: "org_1",
+        app: "iapp-accounting",
+        kind: "receipt",
+      });
+
+      expect(uploadedTo).toBe(uploadUrl);
+      expect(createBody).toMatchObject({ include_upload_url: true });
+      expect(result.intent.upload_url).toBeUndefined();
+      expect(JSON.stringify(result)).not.toContain("upload_url");
+      expect(JSON.stringify(result)).not.toContain("synthetic-signature");
+    } finally {
+      globalThis.fetch = originalFetch;
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
   });
 });

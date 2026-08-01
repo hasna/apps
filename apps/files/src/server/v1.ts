@@ -14,6 +14,7 @@ import {
   completeEvidenceUpload,
   createEvidenceUploadIntent,
   linkEvidenceAsset,
+  redactEvidenceUploadCredentials,
   signEvidenceDownload,
   verifyEvidenceAsset,
 } from "../lib/evidence.js";
@@ -432,7 +433,7 @@ export function createV1Handler(): V1Handler {
               metadata: b.metadata as Record<string, unknown> | undefined,
               expires_in_seconds: b.expires_in_seconds as number | undefined,
             }, serverStorage, evDb);
-            return json(result, 201);
+            return json(b.include_upload_url === true ? result : redactEvidenceUploadCredentials(result), 201);
           }
           if (seg[1] === "upload-intents" && seg.length === 4 && seg[3] === "complete" && method === "POST") {
             return json(await completeEvidenceUpload(seg[2]!, serverStorage, evDb));

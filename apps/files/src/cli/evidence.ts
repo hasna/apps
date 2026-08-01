@@ -4,6 +4,7 @@ import { store } from "../store/index.js";
 import {
   getEvidenceStorageOptions,
   DEFAULT_EVIDENCE_S3_BUCKET,
+  redactEvidenceUploadCredentials,
   type EvidenceStorageOptions,
 } from "../lib/evidence.js";
 import type { FileAssetStatus } from "../types/index.js";
@@ -51,6 +52,7 @@ export function registerEvidenceCommands(program: Command): void {
     .option("--prefix <prefix>", "Object key prefix")
     .option("--local-root <path>", "Local evidence root for local mode")
     .option("--expires <seconds>", "Upload URL expiry seconds", "600")
+    .option("--include-upload-url", "Include the credential-bearing upload URL in JSON output")
     .option("--json", "Output as JSON")
     .action(async (opts: EvidenceCreateUploadOptions) => {
       await runCli(async () => {
@@ -66,8 +68,12 @@ export function registerEvidenceCommands(program: Command): void {
           classification: opts.classification,
           storage_class: opts.storageClass,
           expires_in_seconds: parseInteger(opts.expires, "expires"),
-        }, storageOptions(opts));
-        printResult(result, opts.json, `Created upload intent ${result.intent.id} for ${result.asset.id}`);
+        }, storageOptions(opts), { includeUploadUrl: opts.includeUploadUrl });
+        printResult(
+          opts.includeUploadUrl ? result : redactEvidenceUploadCredentials(result),
+          opts.json,
+          `Created upload intent ${result.intent.id} for ${result.asset.id}`,
+        );
       });
     });
 
@@ -112,7 +118,8 @@ export function registerEvidenceCommands(program: Command): void {
               kind: opts.linkKind ?? opts.kind,
             })
           : undefined;
-        printResult({ ...result, link }, opts.json, `Uploaded and verified ${result.asset.id}`);
+        const receipt = redactEvidenceUploadCredentials(result);
+        printResult({ ...receipt, link }, opts.json, `Uploaded and verified ${result.asset.id}`);
       });
     });
 
@@ -276,6 +283,7 @@ interface EvidenceCreateUploadOptions extends EvidenceStorageCliOptions {
   classification?: string;
   storageClass?: string;
   expires: string;
+  includeUploadUrl?: boolean;
 }
 
 interface EvidenceUploadOptions extends EvidenceStorageCliOptions {

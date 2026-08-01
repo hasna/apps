@@ -122,6 +122,22 @@ export interface EvidenceUploadResult {
   intent: FileUploadIntent;
 }
 
+export interface EvidenceCredentialOutputOptions {
+  includeUploadUrl?: boolean;
+}
+
+/**
+ * Remove the credential-bearing destination from an upload result before it
+ * crosses a completed/high-level command boundary. The low-level intent
+ * creator still needs the URL long enough for a client to upload the bytes,
+ * but callers must opt in before that URL is emitted to logs or JSON output.
+ */
+export function redactEvidenceUploadCredentials(result: EvidenceUploadResult): EvidenceUploadResult {
+  const intent = { ...result.intent };
+  delete intent.upload_url;
+  return { asset: result.asset, intent };
+}
+
 export interface EvidenceDownloadGrant {
   asset: FileAsset;
   url: string;
@@ -283,7 +299,10 @@ export async function uploadEvidenceFile(
   }
 
   const completed = await completeEvidenceUpload(result.intent.id, storageOverrides, db);
-  return { asset: completed, intent: (await db.getFileUploadIntent(result.intent.id))! };
+  return redactEvidenceUploadCredentials({
+    asset: completed,
+    intent: (await db.getFileUploadIntent(result.intent.id))!,
+  });
 }
 
 export async function completeEvidenceUpload(

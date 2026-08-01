@@ -63,10 +63,12 @@ import {
   completeEvidenceUpload,
   createEvidenceUploadIntent,
   linkEvidenceAsset,
+  redactEvidenceUploadCredentials,
   signEvidenceDownload,
   uploadEvidenceFile,
   verifyEvidenceAsset,
   type CreateEvidenceUploadInput,
+  type EvidenceCredentialOutputOptions,
   type EvidenceDownloadGrant,
   type EvidenceStorageOptions,
   type EvidenceUploadResult,
@@ -294,8 +296,9 @@ export class LocalStore implements FilesStore {
 
   // ── evidence ───────────────────────────────────────────────────────────────
   // Uses the default (sqlite) evidence DB seam; bytes on local disk / S3.
-  async createEvidenceUploadIntent(input: CreateEvidenceUploadInput, storage?: EvidenceStorageOptions): Promise<EvidenceUploadResult> {
-    return createEvidenceUploadIntent(input, storage);
+  async createEvidenceUploadIntent(input: CreateEvidenceUploadInput, storage?: EvidenceStorageOptions, output?: EvidenceCredentialOutputOptions): Promise<EvidenceUploadResult> {
+    const result = await createEvidenceUploadIntent(input, storage);
+    return output?.includeUploadUrl ? result : redactEvidenceUploadCredentials(result);
   }
   async uploadEvidenceFile(input: UploadEvidenceFileInput, storage?: EvidenceStorageOptions): Promise<EvidenceUploadResult> {
     return uploadEvidenceFile(input, storage);
