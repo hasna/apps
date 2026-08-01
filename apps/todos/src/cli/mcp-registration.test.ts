@@ -73,6 +73,9 @@ describe("Cursor MCP registration", () => {
     const configPath = join(fixtureRoot.workspace, ".cursor", "mcp.json");
     mkdirSync(join(fixtureRoot.workspace, ".cursor"), { recursive: true });
     writeFileSync(configPath, JSON.stringify({
+      // A sibling top-level key: registration must rewrite mcpServers without
+      // discarding unrelated Cursor project configuration around it.
+      projectSetting: true,
       mcpServers: {
         "plugin-telegram-telegram": { command: "telegram-mcp" },
       },
@@ -84,6 +87,7 @@ describe("Cursor MCP registration", () => {
     expect(registered.stderr).toBe("");
     expect(registered.stdout).toContain("Cursor (project): registered");
     expect(readJson(configPath)).toEqual({
+      projectSetting: true,
       mcpServers: {
         "plugin-telegram-telegram": { command: "telegram-mcp" },
         todos: { command: fixtureRoot.mcpBinary, args: ["--stdio"] },
@@ -94,6 +98,7 @@ describe("Cursor MCP registration", () => {
 
     expect(unregistered.exitCode).toBe(0);
     expect(readJson(configPath)).toEqual({
+      projectSetting: true,
       mcpServers: {
         "plugin-telegram-telegram": { command: "telegram-mcp" },
       },

@@ -138,7 +138,7 @@ export const CLI_COMMAND_GROUPS: CliCommandGroup[] = [
     commands: [
       { name: "completion", summary: "Shell completions", usage: "todos completion <bash|zsh|fish>", example: "todos completion bash >> ~/.bashrc" },
       { name: "docs", summary: "CLI reference and adapter docs", example: "todos docs cli" },
-      { name: "mcp", summary: "Register MCP server", flags: ["--claude", "--codex"] },
+      { name: "mcp", summary: "Register MCP server", flags: ["--register <agent>", "--unregister <agent>", "--global"] },
     ],
   },
 ];
