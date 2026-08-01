@@ -660,10 +660,19 @@ export async function handleV1Request(
             const released = await store.tasks.unlock(id);
             return json({ success: released });
           }
-          if (body.agent_id && principal.agent && body.agent_id !== principal.agent && !principal.scopes.includes("todos:*")) {
+          // Authorize with the PRINCIPAL, but compare the holder against the agent the
+          // caller NAMED — the same precedence the lock branch above uses. Resolving
+          // `principal.agent || body.agent_id` here threw the named value away, and since
+          // every station key binds to one shared principal agent ("fleet") the holder was
+          // never the value compared: a named agent could take a lock and never release it.
+          // The gate below is the entitlement check and it fires whenever a caller names an
+          // agent that is not its own principal; todos:* is the delegation scope, and it
+          // already authorizes the strictly stronger force branch above, which releases any
+          // holder's lock without naming one at all.
+          if (body.agent_id && body.agent_id !== principal.agent && !principal.scopes.includes("todos:*")) {
             return error(403, "unlock agent_id must match the authenticated agent");
           }
-          const agentId = principal.agent || body.agent_id;
+          const agentId = body.agent_id || principal.agent;
           if (!agentId) return error(403, "unlock requires an agent-bound key or force=true");
           const released = await store.tasks.unlock(id, agentId);
           return json({ success: released });

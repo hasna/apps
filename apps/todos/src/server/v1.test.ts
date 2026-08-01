@@ -20,6 +20,15 @@ function request(path: string, method = "GET", body?: unknown): Promise<Response
   }), url, dependencies);
 }
 
+// Read lock state back over the HTTP surface rather than from the response of the
+// call under test — a mutation route reporting success is not evidence that the
+// stored state changed.
+async function readTaskOverHttp(id: string): Promise<{ locked_by: string | null }> {
+  const response = await request(`/v1/tasks/${id}`);
+  if (response?.status !== 200) throw new Error(`read-back failed: ${response?.status}`);
+  return (await response.json() as { task: { locked_by: string | null } }).task;
+}
+
 beforeEach(() => {
   resetDatabase();
   db = getDatabase(":memory:");
@@ -584,6 +593,70 @@ describe("/v1 task hierarchy and lock authorization", () => {
 
     principal = { agent: null, scopes: ["todos:write"] };
     expect((await request(`/v1/tasks/${task.id}/unlock`, "POST"))?.status).toBe(403);
+  });
+
+  // Regression for a8472e06. Every station's API key binds to ONE shared principal
+  // agent ("fleet") with scope todos:*, so `principal.agent || body.agent_id` discarded
+  // the agent the caller named and compared the holder against "fleet" — a permanent 409
+  // for every named agent on the fleet. The pre-existing non-owner test above could not
+  // catch it: it only ever exercised the stranger case, so it cannot distinguish
+  // "refuses a stranger" from "refuses everyone". Both directions are asserted here on
+  // one fixture, and the state is read back over the HTTP surface rather than trusted
+  // from the unlock response.
+  test("a shared-principal key releases the lock of the agent it NAMES, and only that agent's", async () => {
+    const created = await request("/v1/tasks", "POST", { title: "shared-principal lock" });
+    const { task } = await created!.json() as { task: { id: string } };
+
+    // Station shape: one shared principal agent, broad scope.
+    principal = { agent: "fleet", scopes: ["todos:*"] };
+
+    // local-sqlite exposes `unlock` but no `lock` (the lock route 501s on it), so the
+    // holder is established through the same lifecycle call the route would make. The
+    // asymmetry under test is in the ROUTE's identity precedence, not in the store.
+    store.tasks.lock = async (id: string, agentId: string) => store.tasks.start(id, agentId);
+    const locked = await request(`/v1/tasks/${task.id}/lock`, "POST", { agent_id: "nerva" });
+    expect(locked?.status).toBe(200);
+    // The LOCK route already prefers the caller-named agent over the principal; the
+    // defect was that UNLOCK did the opposite, so a lock taken as "nerva" through a
+    // "fleet" principal could never be released as "nerva".
+    expect((await readTaskOverHttp(task.id)).locked_by).toBe("nerva");
+
+    // A different named agent must NOT be able to release it.
+    const stranger = await request(`/v1/tasks/${task.id}/unlock`, "POST", { agent_id: "postumius" });
+    expect(stranger?.status).toBe(409);
+    expect(await stranger!.json()).toMatchObject({ code: "LOCK_ERROR" });
+    expect((await readTaskOverHttp(task.id)).locked_by).toBe("nerva");
+
+    // Anonymous (no agent named, no force) falls back to the shared principal "fleet",
+    // which is not the holder, so it must be refused too.
+    const anonymous = await request(`/v1/tasks/${task.id}/unlock`, "POST");
+    expect(anonymous?.status).toBe(409);
+    expect((await readTaskOverHttp(task.id)).locked_by).toBe("nerva");
+
+    // The holder releases its own lock.
+    const released = await request(`/v1/tasks/${task.id}/unlock`, "POST", { agent_id: "nerva" });
+    expect(released?.status).toBe(200);
+    expect(await released!.json()).toEqual({ success: true });
+    expect((await readTaskOverHttp(task.id)).locked_by).toBeNull();
+  });
+
+  test("naming another agent requires todos:*, whether or not the key is agent-bound", async () => {
+    const task = await store.tasks.create({ title: "locked" });
+    await store.tasks.start(task.id, "holder-agent");
+
+    // Agent-bound key without todos:* may not name a different agent.
+    principal = { agent: "other-agent", scopes: ["todos:write"] };
+    expect((await request(`/v1/tasks/${task.id}/unlock`, "POST", { agent_id: "holder-agent" }))?.status).toBe(403);
+
+    // Nor may an UNBOUND key without todos:* — same impersonation, one key class down.
+    principal = { agent: null, scopes: ["todos:write"] };
+    expect((await request(`/v1/tasks/${task.id}/unlock`, "POST", { agent_id: "holder-agent" }))?.status).toBe(403);
+    expect((await store.tasks.get(task.id))?.locked_by).toBe("holder-agent");
+
+    // An agent-bound key naming ITSELF is fine and is not a delegation.
+    principal = { agent: "holder-agent", scopes: ["todos:write"] };
+    expect((await request(`/v1/tasks/${task.id}/unlock`, "POST", { agent_id: "holder-agent" }))?.status).toBe(200);
+    expect((await store.tasks.get(task.id))?.locked_by).toBeNull();
   });
 });
 
