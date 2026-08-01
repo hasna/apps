@@ -94,6 +94,76 @@ describe("ApiStore project normalization", () => {
   });
 });
 
+describe("ApiStore channel notification cursor", () => {
+  test("mark_read advances the remote notification inbox so consecutive watcher polls do not repeat ids", async () => {
+    const notifications = [
+      {
+        message_id: 620874,
+        channel: "announcements",
+        from_agent: "agent-ceo",
+        created_at: "2026-08-01T05:00:00.000Z",
+        priority: "normal",
+        preview: "first",
+        unread: true,
+        has_attachments: false,
+      },
+      {
+        message_id: 620878,
+        channel: "incidents",
+        from_agent: "agent-chief-harness",
+        created_at: "2026-08-01T05:01:00.000Z",
+        priority: "high",
+        preview: "second",
+        unread: true,
+        has_attachments: false,
+      },
+    ];
+    const readIds = new Set<number>();
+    const posts: Array<{ path: string; body: unknown }> = [];
+    const transport = {
+      baseUrl: "https://conversations.hasna.xyz/v1",
+      get: async (path: string) => {
+        expect(path).toBe("/channel-notifications/inbox");
+        return { notifications: notifications.filter((row) => !readIds.has(row.message_id)) };
+      },
+      post: async (path: string, body: unknown) => {
+        posts.push({ path, body });
+        for (const id of (body as { message_ids: number[] }).message_ids) readIds.add(id);
+        return { marked: readIds.size };
+      },
+      patch: async () => ({}),
+      del: async () => undefined,
+    } as unknown as HasnaStorageClient["transport"];
+    const client = {
+      name: "conversations",
+      baseUrl: "https://conversations.hasna.xyz/v1",
+      transport,
+    } as unknown as HasnaStorageClient;
+    const store = new ApiStore(client);
+
+    const firstPoll = await store.readChannelNotifications({
+      agent: "agent-chief-strategy",
+      unread_only: true,
+      mark_read: true,
+    });
+    const secondPoll = await store.readChannelNotifications({
+      agent: "agent-chief-strategy",
+      unread_only: true,
+      mark_read: true,
+    });
+
+    expect(firstPoll.map((row) => row.message_id)).toEqual([620874, 620878]);
+    expect(firstPoll.every((row) => row.unread === false)).toBe(true);
+    expect(secondPoll).toEqual([]);
+    expect(posts).toEqual([
+      {
+        path: "/channel-notifications/read",
+        body: { agent: "agent-chief-strategy", message_ids: [620874, 620878] },
+      },
+    ]);
+  });
+});
+
 // Regression cover for HC-00148, cloud-transport layer. ApiStore.sendMessage
 // forwards an EXPLICIT field whitelist, and reply_to was not on it — so in
 // self_hosted/cloud mode the parent link was dropped before the request even

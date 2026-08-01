@@ -207,7 +207,12 @@ export class ApiStore implements ConversationsStore {
       limit: opts.limit,
       since: normalizeSince(opts.since),
     });
-    return (body.notifications ?? []) as never;
+    const notifications = (body.notifications ?? []) as Awaited<ReturnType<ConversationsStore["readChannelNotifications"]>>;
+    if (opts.mark_read && notifications.length > 0) {
+      await this.markChannelNotificationsRead(opts.agent, notifications.map((row) => row.message_id));
+      for (const row of notifications) row.unread = false;
+    }
+    return notifications as never;
   };
   markChannelNotificationsRead: ConversationsStore["markChannelNotificationsRead"] = async (agent, messageIds) => {
     const body = await this.post<{ marked?: number }>("/channel-notifications/read", { agent, message_ids: messageIds });
