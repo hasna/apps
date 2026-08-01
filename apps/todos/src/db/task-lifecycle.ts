@@ -6,6 +6,7 @@ import type {
 } from "../types/index.js";
 import {
   LockError,
+  TaskNotStartableError,
   TaskNotFoundError,
   VersionConflictError,
 } from "../types/index.js";
@@ -65,7 +66,7 @@ function lockExpiresAt(lockedAt: string | null): string | null {
 function assertStartable(task: Task, agentId: string): void {
   if (task.status === "pending") return;
   if (task.status === "in_progress") return;
-  throw new Error(`Task is ${task.status} and cannot be started by ${agentId}`);
+  throw new TaskNotStartableError(task.id, task.status, agentId);
 }
 
 export function getBlockingDeps(id: string, db?: Database): Task[] {

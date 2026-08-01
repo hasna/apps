@@ -23,7 +23,7 @@ import {
   claimNextTask,
 } from "../db/tasks.js";
 import { getDatabase } from "../db/database.js";
-import { VersionConflictError, CompletionGuardError, LockError, TaskNotFoundError } from "../types/index.js";
+import { VersionConflictError, CompletionGuardError, LockError, TaskNotFoundError, TaskNotStartableError } from "../types/index.js";
 import { listProjects, createProject, deleteProject } from "../db/projects.js";
 import { listAgents, registerAgent, isAgentConflict, getOrgChart, getDirectReports, updateAgent, deleteAgent, InvalidAgentNameError } from "../db/agents.js";
 import { createPlan, getPlan, listPlans, updatePlan, deletePlan } from "../db/plans.js";
@@ -73,10 +73,13 @@ function mapTaskError(e: unknown, json: (data: unknown, status?: number) => Resp
       retry_after: e.retryAfterSeconds ?? null,
     }, 409);
   }
+  if (e instanceof TaskNotStartableError) {
+    return json({ error: e.message, code: TaskNotStartableError.code }, 409);
+  }
   // The lifecycle layer throws a plain Error (no typed class yet) for blocked
-  // dependencies and non-startable transitions. Match the known phrases so these
-  // real precondition failures surface as 409 instead of a generic 500.
-  if (e instanceof Error && (/ is blocked by /.test(e.message) || /cannot be started/.test(e.message))) {
+  // dependencies. Match the known phrase so this real precondition failure
+  // surfaces as 409 instead of a generic 500.
+  if (e instanceof Error && / is blocked by /.test(e.message)) {
     return json({ error: e.message, code: "TASK_NOT_STARTABLE" }, 409);
   }
   return null;

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { LockError, ProjectNotFoundError, ResourceConflictError, TaskReferenceAmbiguousError } from "../types/index.js";
+import { LockError, ProjectNotFoundError, ResourceConflictError, TaskNotStartableError, TaskReferenceAmbiguousError } from "../types/index.js";
 import type {
   Agent,
   CreateCommentInput,
@@ -1209,7 +1209,7 @@ async function startTask(id: string, agentId: string, store: PostgresJsonRecordS
   const task = await requireRecord<Task>("tasks", id, store);
   // M8: reject starting a task that is not pending/in_progress (mirror sqlite).
   if (task.status !== "pending" && task.status !== "in_progress") {
-    throw new Error(`Task is ${task.status} and cannot be started by ${agentId}`);
+    throw new TaskNotStartableError(task.id, task.status, agentId);
   }
   const started = await patchTask(task, {
     status: "in_progress",

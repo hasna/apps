@@ -519,6 +519,20 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     expect(calls[0]!.url).toBe("https://todos.example.com/v1/tasks/t4/start");
   });
 
+  test("failed-task start preserves the remote transition error instead of reporting authority failure", async () => {
+    installFetch(() => ({
+      status: 409,
+      body: {
+        error: "Task is failed and cannot be started; reset status to pending before starting again",
+        code: "TASK_NOT_STARTABLE",
+      },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudTaskAction(client, "failed-task", "start", { agent_id: "silvanus" }))
+      .rejects.toThrow("TASK_NOT_STARTABLE: Task is failed and cannot be started; reset status to pending before starting again");
+  });
+
   test("comments -> validates the envelope, count, method, auth, and encoded task path", async () => {
     const comment = {
       id: "c1",

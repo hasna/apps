@@ -1153,6 +1153,23 @@ export class TaskNotFoundError extends Error {
   }
 }
 
+export class TaskNotStartableError extends Error {
+  static readonly code = "TASK_NOT_STARTABLE";
+  static readonly suggestion = "Reset the task status to pending before starting it again.";
+
+  constructor(
+    public taskId: string,
+    public status: TaskStatus,
+    public agentId: string,
+  ) {
+    super(
+      `Task ${taskId} is ${status} and cannot be started by ${agentId}; ` +
+      "reset the task status to pending before starting it again",
+    );
+    this.name = "TaskNotStartableError";
+  }
+}
+
 export interface TaskReferenceCandidate {
   task_id: string;
   project_id: string | null;

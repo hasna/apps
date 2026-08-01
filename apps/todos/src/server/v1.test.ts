@@ -470,6 +470,27 @@ describe("/v1 project mutation", () => {
 });
 
 describe("/v1 task hierarchy and lock authorization", () => {
+  test("starting a failed task returns a pending-reset transition error while pending still starts", async () => {
+    const failed = await store.tasks.create({ title: "failed start", status: "failed" });
+    const rejected = await request(`/v1/tasks/${failed.id}/start`, "POST", { agent_id: "silvanus" });
+
+    expect(rejected?.status).toBe(409);
+    expect(await rejected!.json()).toMatchObject({
+      code: "TASK_NOT_STARTABLE",
+      error: expect.stringContaining("pending"),
+    });
+    expect(await store.tasks.get(failed.id)).toMatchObject({ status: "failed", locked_by: null });
+
+    const pending = await store.tasks.create({ title: "pending start" });
+    const started = await request(`/v1/tasks/${pending.id}/start`, "POST", { agent_id: "silvanus" });
+
+    expect(started?.status).toBe(200);
+    expect(await started!.json()).toMatchObject({
+      task: { id: pending.id, status: "in_progress", locked_by: "silvanus" },
+    });
+    expect(await store.tasks.get(pending.id)).toMatchObject({ status: "in_progress", locked_by: "silvanus" });
+  });
+
   test("complete persists the full operational evidence body and confidence", async () => {
     const task = await store.tasks.create({ title: "evidence" });
     const response = await request(`/v1/tasks/${task.id}/complete`, "POST", {

@@ -368,6 +368,16 @@ function classifyRemoteRequestError(baseUrl: string, route: string, error: unkno
       { cause: error },
     );
   }
+  if (status === 409) {
+    const body = error && typeof error === "object" ? (error as { body?: unknown }).body : undefined;
+    if (body && typeof body === "object" && !Array.isArray(body)) {
+      const remoteError = body as { error?: unknown; code?: unknown };
+      if (remoteError.code === "TASK_NOT_STARTABLE" && typeof remoteError.error === "string" && remoteError.error.length > 0) {
+        throw new Error(`${remoteError.code}: ${remoteError.error}`, { cause: error });
+      }
+    }
+    throw error;
+  }
   if (typeof status === "number" && status >= 300 && status < 400) {
     throw new Error(
       `REMOTE_API_REDIRECT_REJECTED: configured Todos authority ${baseUrl} redirected ${route}; ` +

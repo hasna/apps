@@ -431,7 +431,7 @@ describe("startTask", () => {
 
   it("should reject restarting completed tasks", () => {
     const task = createTask({ title: "Already done", status: "completed" }, db);
-    expect(() => startTask(task.id, "claude", db)).toThrow("Task is completed");
+    expect(() => startTask(task.id, "claude", db)).toThrow(`Task ${task.id} is completed`);
   });
 });
 

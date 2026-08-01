@@ -7,7 +7,7 @@
  * require `todos:write` (a `todos:*` key satisfies both). This is a real wrapper
  * over the core storage lib — there are NO stubs; unimplemented routes 404.
  */
-import { LockError, ProjectNotFoundError, ResourceConflictError, TaskReferenceAmbiguousError } from "../types/index.js";
+import { LockError, ProjectNotFoundError, ResourceConflictError, TaskNotStartableError, TaskReferenceAmbiguousError } from "../types/index.js";
 import type { CreatePlanInput, CreateProjectInput, CreateTaskInput, CreateTaskListInput, CreateTemplateInput, RenameProjectInput, TaskComment, TemplateTaskInput, UpdateTaskInput, UpdateTaskListInput } from "../types/index.js";
 import type { TodosStorageContext, TodosStorageSnapshot, TodosTaskCompletionOptions, UpdateTemplateInput } from "../storage/interfaces.js";
 import { getCloudPrGroupLedger, getCloudStorageAdapter, getCloudVerifier, ensureCloudSchema } from "./cloud.js";
@@ -1279,6 +1279,9 @@ export async function handleV1Request(
       });
     }
     if (e instanceof LockError) return error(409, e.message, { code: LockError.code });
+    if (e instanceof TaskNotStartableError) {
+      return error(409, e.message, { code: TaskNotStartableError.code });
+    }
     if (e instanceof ResourceConflictError) return error(409, e.message, { code: e.code, conflict: true });
     if (e instanceof ProjectNotFoundError) return error(404, e.message, { code: ProjectNotFoundError.code });
     return error(500, (e as Error).message || "internal error");

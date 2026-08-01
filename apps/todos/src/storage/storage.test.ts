@@ -53,7 +53,7 @@ import {
 import { s3CredentialsFromEnv } from "../cli/commands/storage-commands.js";
 import { handleV1Request, type V1RequestDependencies } from "../server/v1.js";
 import type { ApiKeyVerifier } from "@hasna/contracts/auth";
-import { LockError, type Task, type TaskComment } from "../types/index.js";
+import { LockError, TaskNotStartableError, type Task, type TaskComment } from "../types/index.js";
 
 let db: Database;
 
@@ -918,6 +918,22 @@ describe("storage adapter contracts", () => {
     );
     expect(postgres.calls.some((call) => call.sql.includes("ON CONFLICT (service, object_type, object_id)"))).toBe(true);
     expect(postgres.calls.some((call) => call.values?.includes("apple06"))).toBe(true);
+  });
+
+  test("Postgres start rejects failed tasks with the typed pending-reset transition and still starts pending tasks", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client: postgres.client });
+    const failed = await adapter.tasks.create({ title: "failed remote start", status: "failed" });
+
+    await expect(Promise.resolve(adapter.tasks.start(failed.id, "silvanus"))).rejects.toBeInstanceOf(TaskNotStartableError);
+    await expect(Promise.resolve(adapter.tasks.start(failed.id, "silvanus"))).rejects.toThrow("reset the task status to pending");
+    expect(await adapter.tasks.get(failed.id)).toMatchObject({ status: "failed", locked_by: null });
+
+    const pending = await adapter.tasks.create({ title: "pending remote start" });
+    await expect(Promise.resolve(adapter.tasks.start(pending.id, "silvanus"))).resolves.toMatchObject({
+      status: "in_progress",
+      locked_by: "silvanus",
+    });
   });
 
   test("Postgres completion atomically merges evidence and completion metadata without dropping omitted keys", async () => {

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.10] - 2026-08-02
+
+### Fixed
+
+- Starting a failed task through the versioned remote API now returns a deterministic
+  `409 TASK_NOT_STARTABLE` response that explains the required reset to `pending`, and
+  the CLI preserves that domain error instead of reporting the Todos authority as
+  unavailable. Pending tasks continue to start normally on both SQLite and PostgreSQL.
+
 ## [0.13.3] - 2026-07-30
 
 ### Added
