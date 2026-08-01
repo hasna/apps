@@ -39,6 +39,7 @@ import {
 import type { CloudTaskRelations } from "../cloud-router.js";
 import type { TaskPriority, TaskStatus } from "../../types/index.js";
 import { canonicalAgentRef, resolveCreatorIdentity, resolveWritableIdentity } from "../../lib/creator-identity.js";
+import { formatExpiredLock, lockDisplayState } from "../../lib/lock-display.js";
 import { resolveClaimIdentity } from "../claim-guard.js";
 import { resolveValidatedAssignee } from "../assignee-guard.js";
 import {
@@ -984,7 +985,9 @@ export function registerTaskCommands(program: Command) {
       if (task.assigned_to) console.log(`  ${chalk.dim("Assigned:")} ${task.assigned_to}`);
       if (task.agent_id) console.log(`  ${chalk.dim("Agent:")}    ${task.agent_id}`);
       if (task.session_id) console.log(`  ${chalk.dim("Session:")}  ${task.session_id}`);
-      if (task.locked_by) console.log(`  ${chalk.dim("Locked:")}   ${task.locked_by} (at ${task.locked_at})`);
+      const showLock = lockDisplayState(task.locked_by, task.locked_at);
+      if (showLock.held) console.log(`  ${chalk.dim("Locked:")}   ${showLock.holder} (at ${showLock.lockedAt})`);
+      else if (showLock.expired) console.log(`  ${chalk.dim("Lock:")}     ${chalk.dim(formatExpiredLock(showLock))}`);
       if (task.requires_approval) {
         const approvalStatus = task.approved_by ? chalk.green(`approved by ${task.approved_by}`) : chalk.yellow("pending approval");
         console.log(`  ${chalk.dim("Approval:")} ${approvalStatus}`);
@@ -1119,7 +1122,9 @@ export function registerTaskCommands(program: Command) {
       }
 
       if (task.assigned_to) console.log(`  ${chalk.dim("Assigned:")}  ${task.assigned_to}`);
-      if (task.locked_by) console.log(`  ${chalk.dim("Locked by:")} ${task.locked_by}`);
+      const inspectLock = lockDisplayState(task.locked_by, task.locked_at);
+      if (inspectLock.held) console.log(`  ${chalk.dim("Locked by:")} ${inspectLock.holder}`);
+      else if (inspectLock.expired) console.log(`  ${chalk.dim("Lock:")}      ${chalk.dim(formatExpiredLock(inspectLock))}`);
       if (task.project_id) console.log(`  ${chalk.dim("Project:")}   ${task.project_id}`);
       if (task.plan_id) console.log(`  ${chalk.dim("Plan:")}      ${task.plan_id}`);
       if (task.started_at) console.log(`  ${chalk.dim("Started:")}   ${task.started_at}`);

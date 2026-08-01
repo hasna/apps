@@ -1,4 +1,5 @@
 import { Box, Text } from "ink";
+import { formatExpiredLock, lockDisplayState } from "../../lib/lock-display.js";
 import type { TaskWithRelations } from "../../types/index.js";
 
 interface TaskDetailProps {
@@ -75,10 +76,16 @@ export function TaskDetail({ task }: TaskDetailProps) {
             <Text>{task.working_dir}</Text>
           </Box>
         )}
-        {task.locked_by && (
+        {lockDisplayState(task.locked_by, task.locked_at).held && (
           <Box>
             <Text dimColor>{"Locked:   "}</Text>
             <Text color="magenta">{task.locked_by} (at {task.locked_at})</Text>
+          </Box>
+        )}
+        {lockDisplayState(task.locked_by, task.locked_at).expired && (
+          <Box>
+            <Text dimColor>{"Lock:     "}</Text>
+            <Text dimColor>{formatExpiredLock(lockDisplayState(task.locked_by, task.locked_at))}</Text>
           </Box>
         )}
         {task.tags.length > 0 && (

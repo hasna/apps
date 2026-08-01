@@ -7,6 +7,7 @@ import { cloudResolveTaskRef, getTodosCloudClient, isCloudRouting } from "./clou
 import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
 import { getDatabase, resolvePartialId } from "../db/database.js";
 import { ensureProject, getProject, getProjectByPath, slugify } from "../db/projects.js";
+import { lockDisplayState } from "../lib/lock-display.js";
 import { getPackageVersion } from "../lib/package-version.js";
 import type { Project, Task } from "../types/index.js";
 
@@ -376,7 +377,8 @@ export const priorityColors: Record<string, (s: string) => string> = {
 export function formatTaskLine(t: Task): string {
   const statusFn = statusColors[t.status] || chalk.white;
   const priorityFn = priorityColors[t.priority] || chalk.white;
-  const lock = t.locked_by ? chalk.magenta(` [locked:${t.locked_by}]`) : "";
+  const lockState = lockDisplayState(t.locked_by, t.locked_at);
+  const lock = lockState.held ? chalk.magenta(` [locked:${lockState.holder}]`) : "";
   const assigned = t.assigned_to ? chalk.cyan(` -> ${t.assigned_to}`) : "";
   const tags = t.tags.length > 0 ? chalk.dim(` [${t.tags.join(",")}]`) : "";
   const plan = t.plan_id ? chalk.magenta(` [plan:${t.plan_id.slice(0, 8)}]`) : "";
