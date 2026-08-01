@@ -102,11 +102,66 @@ function packageNameFromPath(path: string): string | null {
   return null;
 }
 
+function normalizeJsonLikeLockfile(content: string): string {
+  let result = "";
+  let quote: string | null = null;
+  let escaped = false;
+
+  for (let index = 0; index < content.length; index++) {
+    const char = content[index];
+    const next = content[index + 1];
+
+    if (quote) {
+      result += char;
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+
+    if (char === "\"" || char === "'") {
+      quote = char;
+      result += char;
+      continue;
+    }
+
+    if (char === "/" && next === "/") {
+      while (index < content.length && content[index] !== "\n" && content[index] !== "\r") {
+        index++;
+      }
+      index--;
+      continue;
+    }
+
+    if (char === "/" && next === "*") {
+      index += 2;
+      while (index < content.length && !(content[index] === "*" && content[index + 1] === "/")) {
+        index++;
+      }
+      index++;
+      continue;
+    }
+
+    if (char === ",") {
+      let cursor = index + 1;
+      while (/\s/.test(content[cursor] ?? "")) {
+        cursor++;
+      }
+      if (content[cursor] === "}" || content[cursor] === "]") continue;
+    }
+
+    result += char;
+  }
+
+  return result;
+}
+
 function parseJsonLockfile(content: string): Array<{ name: string; version: string }> {
-  const normalized = content
-    .replace(/\/\/.*$/gm, "")
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/,(\s*[}\]])/g, "$1");
+  const normalized = normalizeJsonLikeLockfile(content);
   const parsed = JSON.parse(normalized) as {
     packages?: Record<string, { name?: string; version?: string } | unknown[]>;
     dependencies?: Record<string, { version?: string }>;
