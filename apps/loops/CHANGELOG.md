@@ -5,6 +5,16 @@ documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
 unless noted.
 
+## 0.4.34 (2026-08-01)
+
+### Fixed
+
+- **Hosted lease recovery:** authenticated runner polls now perform a bounded
+  tenant recovery pass, abandon expired PostgreSQL run leases that no eligible
+  runner reclaimed, and advance their loop cursors. A run owned by a missing
+  runner can no longer remain `running` indefinitely and hold a fixed-rate
+  cadence overdue until an operator calls the maintenance endpoint.
+
 ## 0.4.29 (2026-07-21)
 
 This source release gives the post-`npm/loops/v0.4.28` code line a new,

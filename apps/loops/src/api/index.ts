@@ -1241,6 +1241,8 @@ async function handleRunnerRequest(ctx: V1RequestContext, segments: string[]): P
     const claims = await claimRuns(storage, runner, {
       now: ctx.now(),
       maxClaims: optionalPositiveInteger(body.maxClaims, 1, 100) ?? 1,
+      random: ctx.random,
+      circuitBreakerThreshold: ctx.circuitBreakerThreshold,
     });
     return ok({ runner, claims });
   }
@@ -1284,7 +1286,12 @@ function runnerRecord(body: Record<string, unknown>): RunnerRecord {
 async function claimRuns(
   storage: LoopStorageContract,
   runner: RunnerRecord,
-  opts: { now: Date; maxClaims: number },
+  opts: {
+    now: Date;
+    maxClaims: number;
+    random: () => number;
+    circuitBreakerThreshold?: CircuitBreakerThreshold;
+  },
 ): Promise<Array<Record<string, unknown>>> {
   const claims: Array<Record<string, unknown>> = [];
   for (const loop of await storage.dueLoops(opts.now)) {
@@ -1314,6 +1321,26 @@ async function claimRuns(
       if (loop.overlap === "skip") break;
     }
   }
+
+  // Runner polling is the hosted scheduler tick. After this runner has had a
+  // chance to take over an eligible expired slot through claimRun, reap every
+  // other expired lease in the tenant. Running the sweep after claim selection
+  // preserves same-slot takeover while ensuring a run owned by a missing or
+  // ineligible machine cannot remain `running` forever. Keep this pass bounded
+  // to the storage recovery batch and advance only rows recovered by this poll
+  // (the operator maintenance route owns historical replay).
+  const recovered = await storage.recoverExpiredRunLeasesDetailed(opts.now);
+  const advancementDeferred = await advanceRecoveredRuns(storage, recovered.abandoned, {
+    random: opts.random,
+    circuitBreakerThreshold: opts.circuitBreakerThreshold,
+  });
+  if (advancementDeferred.length > 0) {
+    await advanceRecoveredRuns(storage, advancementDeferred, {
+      random: opts.random,
+      circuitBreakerThreshold: opts.circuitBreakerThreshold,
+    });
+  }
+
   return claims;
 }
 
