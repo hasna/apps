@@ -86,7 +86,6 @@ test("MCP dispatch fleet smoke is read-only and redacted", async () => {
   // where this test failed with version_ok:false while CI (no dispatch
   // installed) passed. Point HOME at the sandbox so the product's own PATH
   // prefix resolves inside it and the stub is the only dispatch reachable.
-  const previousHome = process.env.HOME;
   const syntheticSecret = `${"secret"}-token:abcdef`;
   process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
   process.env["HASNA_MACHINES_DB_PATH"] = join(dir, "machines.db");
@@ -113,7 +112,6 @@ exit 2
     chmodSync(dispatch, 0o755);
     process.env.HOME = dir;
     process.env.PATH = `${binDir}:${previousPath ?? ""}`;
-    process.env.HOME = dir;
 
     const server = createMcpServer("0.0.1");
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -148,7 +146,6 @@ exit 2
       await server.close();
     }
   } finally {
-    process.env.HOME = previousHome;
     process.env.PATH = previousPath;
     if (previousHome === undefined) {
       delete process.env.HOME;
