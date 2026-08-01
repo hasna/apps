@@ -2170,7 +2170,7 @@ describe("getOverdueTasks", () => {
     const task = createTask({ title: "Done overdue", due_at: yesterday.toISOString() }, db);
     const agent = registerAgent({ name: "testoverdueagent" }, db) as any;
     startTask(task.id, agent.id, db);
-    completeTask(task.id, undefined, db);
+    completeTask(task.id, agent.id, db);
 
     const overdue = getOverdueTasks(undefined, db);
     expect(overdue.length).toBe(0);

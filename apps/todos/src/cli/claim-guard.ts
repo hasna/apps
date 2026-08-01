@@ -1,6 +1,6 @@
 /**
  * The identity a lock-sensitive verb may use, shared by `start`, `lock`,
- * `bulk start`, and `unlock`.
+ * `bulk start`, `done`, and `unlock`.
  *
  * These verbs are different in kind from `add`. `add` may legitimately produce an
  * ownerless row — an unrouted task is a visible, recoverable state, and #142 chose
@@ -40,10 +40,10 @@
  * into an unreleasable-lock bug, and it still writes a meaningless name into the
  * queue column that `assigned_to` is.
  *
- * `unlock` needs the same boundary for the inverse reason: omitting identity used
- * to reach `unlockTask`'s internal force-release sentinel and clear another
- * agent's live lock. Force release remains available to explicitly authorized
- * server and stale-recovery paths; omission at the CLI is not force authorization.
+ * `done` and `unlock` need the same boundary for the inverse reason: omitting
+ * identity used to clear another agent's live lock. Force release remains
+ * available to explicitly authorized server and stale-recovery paths; omission
+ * at the CLI is not force authorization.
  *
  * So: refuse. The cost is real and is stated rather than glossed — a script or CI
  * job that ran one of these verbs with no identity now exits non-zero where it

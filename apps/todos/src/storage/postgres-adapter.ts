@@ -27,6 +27,7 @@ import type {
   UpdateTaskListInput,
 } from "../types/index.js";
 import { normalizeAgentNameInput } from "../lib/agent-name-normalize.js";
+import { canonicalAgentRef } from "../lib/creator-identity.js";
 import type {
   ActiveWorkItem,
   TodosActiveWorkFilter,
@@ -770,10 +771,16 @@ class PostgresJsonRecordStore {
     } : {};
     const hasEvidence = Object.keys(evidence).length > 0;
     const hasConfidence = options?.confidence !== undefined;
+    const lockExpiryCutoff = new Date(
+      new Date(operationTimestamp).getTime() - CLOUD_LOCK_EXPIRY_MINUTES * 60 * 1000,
+    ).toISOString();
     const result = await this.options.client.query<{ payload: unknown }>(
-      `/* todos:complete-task-atomic */ UPDATE ${this.tableName}
+      `/* todos:complete-task-atomic todos:complete-task-lock-guard todos:complete-task-clears-lock */
+       UPDATE ${this.tableName}
        SET payload = payload || jsonb_build_object(
          'status', 'completed',
+         'locked_by', 'null'::jsonb,
+         'locked_at', 'null'::jsonb,
          'assigned_to', CASE
            WHEN jsonb_typeof(payload->'assigned_to') = 'string' THEN payload->'assigned_to'
            ELSE COALESCE(to_jsonb($3::text), 'null'::jsonb)
@@ -801,6 +808,16 @@ class PostgresJsonRecordStore {
        updated_at = $9::timestamptz,
        version = COALESCE(version, 0) + 1
        WHERE service = $1 AND object_type = 'tasks' AND object_id = $2 AND deleted_at IS NULL
+         AND (
+           payload->>'locked_by' IS NULL
+           OR BTRIM(payload->>'locked_by') = ''
+           OR payload->>'locked_at' IS NULL
+           OR payload->>'locked_at' < $10::text
+           OR (
+             $3::text IS NOT NULL
+             AND LOWER(BTRIM(payload->>'locked_by')) = LOWER(BTRIM($3::text))
+           )
+         )
        RETURNING payload`,
       [
         this.service,
@@ -812,6 +829,7 @@ class PostgresJsonRecordStore {
         hasConfidence,
         options?.confidence ?? null,
         operationTimestamp,
+        lockExpiryCutoff,
       ],
     );
     return result.rows[0] ? payloadRecord<Task>(result.rows[0].payload) : null;
@@ -1203,7 +1221,17 @@ async function completeTask(
   store: PostgresJsonRecordStore,
 ): Promise<Task> {
   const task = await store.completeTask(id, agentId, options);
-  if (!task) throw new Error(`tasks record not found: ${id}`);
+  if (!task) {
+    const current = await store.get<Task>("tasks", id);
+    if (
+      current?.locked_by &&
+      !cloudLockExpired(current.locked_at) &&
+      !sameCloudLockHolder(current.locked_by, agentId)
+    ) {
+      throw new LockError(id, current.locked_by);
+    }
+    throw new Error(`tasks record not found: ${id}`);
+  }
   return task;
 }
 
@@ -1254,6 +1282,11 @@ async function patchTask(task: Task, patch: Partial<Task>, store: PostgresJsonRe
 
 // Lock lease TTL — keep in lockstep with the local sqlite path (LOCK_EXPIRY_MINUTES).
 const CLOUD_LOCK_EXPIRY_MINUTES = 30;
+
+function sameCloudLockHolder(stored: string | null | undefined, incoming: string | null | undefined): boolean {
+  if (!stored || !incoming) return false;
+  return canonicalAgentRef(stored) === canonicalAgentRef(incoming);
+}
 
 function cloudLockExpired(lockedAt: string | null | undefined): boolean {
   if (!lockedAt) return true;

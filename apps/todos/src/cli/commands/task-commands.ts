@@ -1494,10 +1494,12 @@ export function registerTaskCommands(program: Command) {
       };
       const cloud = getTodosCloudClient();
       if (cloud) {
+        const resolvedId = await resolveTaskIdForCommand(id, cloud);
+        const agentId = resolveClaimIdentity("complete", globalOpts.agent);
         let task;
         try {
-          task = await cloudCompleteTask(cloud, await resolveTaskIdForCommand(id, cloud), {
-            ...(globalOpts.agent ? { agent_id: globalOpts.agent } : {}),
+          task = await cloudCompleteTask(cloud, resolvedId, {
+            agent_id: agentId,
             ...completionOptions,
           });
         } catch (e) {
@@ -1512,9 +1514,10 @@ export function registerTaskCommands(program: Command) {
         return;
       }
       const resolvedId = resolveTaskId(id);
+      const agentId = resolveClaimIdentity("complete", globalOpts.agent);
       let task;
       try {
-        task = completeTask(resolvedId, globalOpts.agent, undefined, completionOptions);
+        task = completeTask(resolvedId, agentId, undefined, completionOptions);
       } catch (e) {
         handleError(e);
       }

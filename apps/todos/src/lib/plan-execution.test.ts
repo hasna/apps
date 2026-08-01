@@ -79,7 +79,7 @@ describe("plan execution", () => {
       project_id: project.id,
     });
     const claimed = claimPlanStep(manifest.plan_id, "agent-a")!;
-    completeTask(claimed.id);
+    completeTask(claimed.id, "agent-a");
 
     const state = getPlanExecutionState(manifest.plan_id)!;
     expect(state.completed).toBe(1);

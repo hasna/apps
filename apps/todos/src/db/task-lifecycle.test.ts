@@ -7,6 +7,7 @@ import {
   listTasks,
   countTasks,
   updateTask,
+  deleteTask,
   startTask,
   completeTask,
   failTask,
@@ -15,7 +16,7 @@ import {
   upsertTaskByFingerprint,
   getTaskByFingerprint,
 } from "./tasks.js";
-import { VersionConflictError } from "../types/index.js";
+import { LockError, VersionConflictError } from "../types/index.js";
 
 let db: Database;
 
@@ -78,6 +79,32 @@ describe("completeTask — idempotency (H3)", () => {
     const t = createTask({ title: "c" }, db);
     setTaskStatus(t.id, "cancelled", undefined, db);
     expect(() => completeTask(t.id, "agent", db)).toThrow(/cancelled/);
+  });
+});
+
+describe("completeTask — live lock identity", () => {
+  it("refuses an unidentified local completion and preserves the live lock", () => {
+    const task = createTask({ title: "local anonymous completion" }, db);
+    startTask(task.id, "holder-a", db);
+    expect(getTask(task.id, db)).toMatchObject({ status: "in_progress", locked_by: "holder-a" });
+
+    expect(() => completeTask(task.id, undefined, db)).toThrow(LockError);
+    expect(getTask(task.id, db)).toMatchObject({ status: "in_progress", locked_by: "holder-a" });
+
+    expect(deleteTask(task.id, db)).toBe(true);
+    expect(getTask(task.id, db)).toBeNull();
+  });
+
+  it("lets the legitimate local holder complete and releases the live lock", () => {
+    const task = createTask({ title: "local holder completion" }, db);
+    startTask(task.id, "holder-a", db);
+    expect(getTask(task.id, db)).toMatchObject({ status: "in_progress", locked_by: "holder-a" });
+
+    expect(completeTask(task.id, "holder-a", db)).toMatchObject({ status: "completed" });
+    expect(getTask(task.id, db)).toMatchObject({ status: "completed", locked_by: null, locked_at: null });
+
+    expect(deleteTask(task.id, db)).toBe(true);
+    expect(getTask(task.id, db)).toBeNull();
   });
 });
 

@@ -187,7 +187,7 @@ describe("dependency orientation regression (CLI, local store)", () => {
     expect(dependentEdges.blocks).toEqual([]);
 
     // Completing the blocker unblocks the dependent; the edge itself remains.
-    await runLocal(["done", blocker.id], root);
+    await runLocal(["--agent", "dependency-finisher", "done", blocker.id], root);
     const after = JSON.parse((await runLocal(["deps", dependent.id, "--json"], root)).stdout);
     expect(after.dependencies).toHaveLength(1);
     expect(after.dependencies[0]).toMatchObject({ id: blocker.id, status: "completed" });

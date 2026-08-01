@@ -80,7 +80,7 @@ describe("CLI QoL commands", () => {
     // identity policy, so it simply supplies one.
     run(`--agent qol-bulk --json bulk start ${t1.id} ${t2.id}`);
 
-    const out = run(`--json bulk done ${t1.id} ${t2.id}`);
+    const out = run(`--agent qol-bulk --json bulk done ${t1.id} ${t2.id}`);
     const result = JSON.parse(out);
 
     expect(result.succeeded).toBe(2);

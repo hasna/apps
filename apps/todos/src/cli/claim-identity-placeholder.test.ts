@@ -233,6 +233,33 @@ describe("todos start — a claim must carry a real, process-bound identity", ()
 });
 
 describe("todos start/done — the same --agent value must claim and release", () => {
+  it("refuses done without a process-bound identity and preserves the named live lock", async () => {
+    const task = await addTask("named lock must survive unidentified done");
+    expect((await runCli(["--agent", "session-a", "start", task.id])).exitCode).toBe(0);
+    expect((await showTask(task.id)).locked_by).toBe("session-a");
+
+    const done = await runCli(["done", task.id]);
+    expect(done.exitCode).not.toBe(0);
+    expect(done.stderr).toContain("TODOS_AGENT_ID");
+    expect(await showTask(task.id)).toMatchObject({ status: "in_progress", locked_by: "session-a" });
+
+    expect((await runCli(["delete", task.id])).exitCode).toBe(0);
+    expect((await runCli(["--json", "show", task.id])).exitCode).not.toBe(0);
+  });
+
+  it("uses TODOS_AGENT_ID for done and releases the legitimate holder's live lock", async () => {
+    const task = await addTask("environment holder completes");
+    expect((await runCli(["--agent", "session-a", "start", task.id])).exitCode).toBe(0);
+    expect((await showTask(task.id)).locked_by).toBe("session-a");
+
+    const done = await runCli(["done", task.id], { TODOS_AGENT_ID: "session-a" });
+    expect(done.exitCode).toBe(0);
+    expect(await showTask(task.id)).toMatchObject({ status: "completed", locked_by: null });
+
+    expect((await runCli(["delete", task.id])).exitCode).toBe(0);
+    expect((await runCli(["--json", "show", task.id])).exitCode).not.toBe(0);
+  });
+
   it("releases a lock taken with a capitalised --agent, using that same value", async () => {
     // Found by adversarial review (hortensia) and it is a defect this fix
     // CREATED rather than inherited. `resolveClaimIdentity` folds case, as

@@ -158,9 +158,9 @@ export function completeTask(
     throw new Error(`Task ${id} is cancelled and cannot be completed`);
   }
 
-  // Check lock ownership if agent specified
+  // A live lock may be completed only by its holder. Missing identity is not
+  // authority to clear somebody else's lock.
   if (
-    agentId &&
     task.locked_by &&
     !sameHolder(task.locked_by, agentId) &&
     !isLockExpired(task.locked_at)

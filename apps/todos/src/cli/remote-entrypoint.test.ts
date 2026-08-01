@@ -847,7 +847,7 @@ describe("remote CLI entrypoint authority boundary", () => {
     const before = recursiveInventory(cwd);
     try {
       const unsupported = await runCli(executable, [
-        "--json", "done", TASK_ID, "--notes", "must not be dropped",
+        "--agent", "fixture-agent", "--json", "done", TASK_ID, "--notes", "must not be dropped",
       ], env, cwd);
       expect(unsupported.exitCode).toBe(1);
       expect(unsupported.stderr).toContain("REMOTE_COMPLETION_EVIDENCE_UNSUPPORTED");
@@ -882,12 +882,12 @@ describe("remote CLI entrypoint authority boundary", () => {
           confidence: 0.85,
         },
       });
-      const complete = await runCli(executable, ["--json", "complete", TASK_ID], env, cwd);
+      const complete = await runCli(executable, ["--agent", "fixture-agent", "--json", "complete", TASK_ID], env, cwd);
       expect({ exitCode: complete.exitCode, stderr: complete.stderr }).toEqual({ exitCode: 0, stderr: "" });
       expect(requests[2]).toEqual({
         method: "POST",
         path: `/v1/tasks/${TASK_ID}/complete`,
-        body: {},
+        body: { agent_id: "fixture-agent" },
       });
       const invalid = await runCli(executable, ["--json", "done", TASK_ID, "--confidence", "1.5"], env, cwd);
       expect(invalid.exitCode).toBe(1);
@@ -1177,11 +1177,10 @@ describe("remote CLI entrypoint authority boundary", () => {
         // fall back to the literal "cli", which every unidentified session on a
         // station shared as a lock holder. This case asserts that the BUILT CLI
         // keeps the whole lifecycle on HTTP, not anything about identity, so it
-        // simply supplies one. `done` deliberately keeps no --agent: completion
-        // does not claim, and an absent agent still skips the lock-ownership
-        // check, so this also exercises the release path against a named lock.
+        // simply supplies one. `done` also releases the named live lock, so it
+        // must carry the same process-bound holder identity.
         ["--agent", "fixture-agent", "--json", "start", "REMOTE-1"],
-        ["--json", "done", "REMOTE-1"],
+        ["--agent", "fixture-agent", "--json", "done", "REMOTE-1"],
         ["--project", PROJECT_ID, "--json", "next"],
         ["--json", "claim", "fixture-worker"],
       ];

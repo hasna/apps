@@ -53,7 +53,7 @@ import {
 import { s3CredentialsFromEnv } from "../cli/commands/storage-commands.js";
 import { handleV1Request, type V1RequestDependencies } from "../server/v1.js";
 import type { ApiKeyVerifier } from "@hasna/contracts/auth";
-import type { TaskComment } from "../types/index.js";
+import { LockError, type TaskComment } from "../types/index.js";
 
 let db: Database;
 
@@ -962,6 +962,36 @@ describe("storage adapter contracts", () => {
     const defaultTimestampCompletion = await adapter.tasks.complete(defaultTimestampTask.id, "finisher");
     expect(defaultTimestampCompletion.completed_at).toBe(defaultTimestampCompletion.updated_at);
     expect(postgres.calls).toHaveLength(1);
+  });
+
+  test("Postgres completion refuses no identity and preserves the live lock", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client: postgres.client });
+
+    const task = await adapter.tasks.create({ title: "cloud anonymous completion" });
+    await adapter.tasks.lock!(task.id, "holder-a");
+    expect(await adapter.tasks.get(task.id)).toMatchObject({ status: "pending", locked_by: "holder-a" });
+
+    await expect(Promise.resolve(adapter.tasks.complete(task.id))).rejects.toBeInstanceOf(LockError);
+    expect(await adapter.tasks.get(task.id)).toMatchObject({ status: "pending", locked_by: "holder-a" });
+
+    expect(await adapter.tasks.delete(task.id)).toBe(true);
+    expect(await adapter.tasks.get(task.id)).toBeNull();
+  });
+
+  test("Postgres completion by the legitimate holder releases the live lock", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client: postgres.client });
+
+    const task = await adapter.tasks.create({ title: "cloud holder completion" });
+    await adapter.tasks.lock!(task.id, "holder-a");
+    expect(await adapter.tasks.get(task.id)).toMatchObject({ status: "pending", locked_by: "holder-a" });
+
+    expect(await adapter.tasks.complete(task.id, "holder-a")).toMatchObject({ status: "completed" });
+    expect(await adapter.tasks.get(task.id)).toMatchObject({ status: "completed", locked_by: null, locked_at: null });
+
+    expect(await adapter.tasks.delete(task.id)).toBe(true);
+    expect(await adapter.tasks.get(task.id)).toBeNull();
   });
 
   test("exposes the direct pure remote Postgres adapter factory", async () => {
@@ -2395,10 +2425,23 @@ function createMemoryPostgresClient(): {
       calls.push({ sql, values });
 
       if (sql.includes("todos:complete-task-atomic")) {
-        const [service, taskId, agentId, completedAt, hasEvidence, rawEvidence, hasConfidence, confidence, operationTimestamp] = values;
+        const [service, taskId, agentId, completedAt, hasEvidence, rawEvidence, hasConfidence, confidence, operationTimestamp, lockExpiryCutoff] = values;
         const row = rows.get(recordKey(service, "tasks", taskId));
         if (!row || row.deletedAt) return { rows: [] as T[] };
         const payload = structuredClone(row.payload) as Record<string, unknown>;
+        if (sql.includes("todos:complete-task-lock-guard")) {
+          const lockedBy = typeof payload["locked_by"] === "string" ? payload["locked_by"] as string : null;
+          const lockedAt = typeof payload["locked_at"] === "string" ? payload["locked_at"] as string : null;
+          const live = Boolean(
+            lockedBy && lockedAt && typeof lockExpiryCutoff === "string" &&
+            Date.parse(lockedAt) >= Date.parse(lockExpiryCutoff),
+          );
+          const sameHolder = Boolean(
+            lockedBy && typeof agentId === "string" &&
+            lockedBy.trim().toLowerCase() === agentId.trim().toLowerCase(),
+          );
+          if (live && !sameHolder) return { rows: [] as T[] };
+        }
         const metadata = payload["metadata"] && typeof payload["metadata"] === "object" && !Array.isArray(payload["metadata"])
           ? payload["metadata"] as Record<string, unknown>
           : {};
@@ -2419,6 +2462,10 @@ function createMemoryPostgresClient(): {
         payload["updated_at"] = operationTimestamp;
         payload["version"] = Number(payload["version"] ?? 0) + 1;
         payload["metadata"] = nextMetadata;
+        if (sql.includes("todos:complete-task-clears-lock")) {
+          payload["locked_by"] = null;
+          payload["locked_at"] = null;
+        }
         if (hasConfidence) payload["confidence"] = confidence;
         row.payload = payload;
         row.updatedAt = String(operationTimestamp);
