@@ -1,9 +1,8 @@
 # Open Uptime
 
-Local-first uptime and downtime monitoring for internal systems. It is closer to
-Pingdom than Sentry: define HTTP or TCP monitors, run checks, track incidents,
-summarize uptime, and expose the same data through a CLI, SDK, MCP server, and
-local dashboard.
+`@hasna/uptime` checks HTTP and TCP services, records outages as incidents, and
+summarizes uptime for developers and operations teams running their own
+monitoring. Install it globally with Bun or npm; the CLI runs on Bun.
 
 ## Install
 
