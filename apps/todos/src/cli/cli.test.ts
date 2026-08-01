@@ -605,25 +605,24 @@ describe("CLI integration", () => {
     const dbPath = join(testRoot, "doctor-routing-apply.db");
     const projectDir = join(testRoot, "doctor-apply-project");
     mkdirSync(projectDir, { recursive: true });
-    const previousDbPath = process.env["TODOS_DB_PATH"];
-    closeDatabase();
-    process.env["TODOS_DB_PATH"] = dbPath;
-    resetDatabase();
-    const db = getDatabase();
-    const project = createProject({ name: "DoctorApply", path: projectDir }, db);
-    const list = createTaskList({ name: "DoctorApply list", slug: project.task_list_id!, project_id: project.id }, db);
-    const drifted = createTask({
-      title: "drifted apply task",
-      project_id: project.id,
-      task_list_id: list.id,
-      working_dir: "/somewhere/wrong",
-      status: "pending",
-      tags: ["auto:route"],
-    }, db);
-    closeDatabase();
-    if (previousDbPath === undefined) delete process.env["TODOS_DB_PATH"];
-    else process.env["TODOS_DB_PATH"] = previousDbPath;
-    resetDatabase();
+    const drifted = (() => {
+      const seedDb = new Database(dbPath);
+      runMigrations(seedDb);
+      try {
+        const project = createProject({ name: "DoctorApply", path: projectDir }, seedDb);
+        const list = createTaskList({ name: "DoctorApply list", slug: project.task_list_id!, project_id: project.id }, seedDb);
+        return createTask({
+          title: "drifted apply task",
+          project_id: project.id,
+          task_list_id: list.id,
+          working_dir: "/somewhere/wrong",
+          status: "pending",
+          tags: ["auto:route"],
+        }, seedDb);
+      } finally {
+        seedDb.close();
+      }
+    })();
 
     const undoPath = join(testRoot, "doctor-routing-apply-undo.json");
     const run = await runCli(["doctor", "routing", "--apply", "--undo-record", undoPath, "--json"], dbPath);
