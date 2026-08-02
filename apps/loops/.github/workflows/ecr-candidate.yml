@@ -80,13 +80,49 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify exact commit is on main
+      - name: Verify commit derives from reviewed main history
         shell: bash
         run: |
           set -Eeuo pipefail
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           test "$(git rev-parse HEAD)" = "${SOURCE_SHA}"
-          git merge-base --is-ancestor "${SOURCE_SHA}^{commit}" refs/remotes/origin/main
+
+          # The property this gate protects is that EVERYTHING WE BUILD DERIVES
+          # FROM REVIEWED MAIN HISTORY. Two shapes satisfy it.
+          #
+          # 1. The commit is itself on main. Unchanged, and the normal case.
+          if git merge-base --is-ancestor "${SOURCE_SHA}^{commit}" refs/remotes/origin/main; then
+            echo "source is on main"
+            exit 0
+          fi
+
+          # 2. A SINGLE-COMMIT HOTFIX on top of a main-ancestor base. Needed
+          #    because a fix can be unavailable on main: for the agent-prompt
+          #    redaction (task c64e66bd) every main commit carrying the fix also
+          #    carries the 0008/0009/0010 tenancy migrations, since those landed
+          #    in 93f6adb which PREDATES the fix commit 2e5e492. Deploying from
+          #    main would therefore force a 1,140-line schema change into a
+          #    hotfix. This admits the fix with no schema delta.
+          #
+          #    MERGE COMMITS ARE REJECTED, and that is the load-bearing clause.
+          #    `<sha>^` resolves to the FIRST parent, so a merge whose first
+          #    parent is on main and whose second parent is arbitrary unreviewed
+          #    code would pass a bare parent-ancestry check while its TREE
+          #    carries the unreviewed code. Requiring exactly one parent closes
+          #    that hole. Do not relax this to `^1` without re-deriving why.
+          parent_count="$(git rev-list --parents -n 1 "${SOURCE_SHA}" | wc -w)"
+          parent_count=$(( parent_count - 1 ))
+          if [[ "${parent_count}" -ne 1 ]]; then
+            echo "source is not on main and is not a single-parent commit (parents=${parent_count}); refusing" >&2
+            exit 1
+          fi
+
+          parent_sha="$(git rev-parse "${SOURCE_SHA}^")"
+          if ! git merge-base --is-ancestor "${parent_sha}^{commit}" refs/remotes/origin/main; then
+            echo "source is not on main and its parent ${parent_sha} is not on main either; refusing" >&2
+            exit 1
+          fi
+          echo "single-commit hotfix on main-ancestor parent ${parent_sha}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
