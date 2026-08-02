@@ -2432,6 +2432,27 @@ describe("MCP tool wrappers", () => {
     expect(doctor.content[0]!.text).toContain("migration_level");
   });
 
+  it("rebalance_workload leaves ambiguous case-variant assignments untouched", async () => {
+    const now = new Date().toISOString();
+    db.run(
+      "INSERT INTO agents (id, name, created_at, last_seen_at) VALUES (?, ?, ?, ?), (?, ?, ?, ?), (?, ?, ?, ?)",
+      [
+        "01d4cc12", "fabricius", now, now,
+        "4d77b218", "Fabricius", now, now,
+        "c1ce0001", "cicero", now, now,
+      ],
+    );
+    const lowerCaseTask = createTask({ title: "Lower-case owner", assigned_to: "fabricius" }, db);
+    const upperCaseTask = createTask({ title: "Upper-case owner", assigned_to: "Fabricius" }, db);
+    const tools = captureTools(registerTaskAutoTools);
+
+    const result = await callCapturedTool(tools, "rebalance_workload", { max_per_agent: 1 });
+
+    expect(result.content[0]!.text).toBe("Rebalanced: moved 0 task(s), 0 skipped.");
+    expect(getTask(lowerCaseTask.id, db)!.assigned_to).toBe("fabricius");
+    expect(getTask(upperCaseTask.id, db)!.assigned_to).toBe("Fabricius");
+  });
+
   it("machine tools expose heartbeat and topology diagnostics", async () => {
     const tools = captureTools(registerMachineTools);
     await callCapturedTool(tools, "machines_register", {
@@ -2542,6 +2563,47 @@ describe("MCP tool wrappers", () => {
 
     const released = await callCapturedTool(tools, "release_agent", { agent_id: "mcpagent" });
     expect(released.content[0]!.text).toContain("Agent released");
+  });
+
+  it("rename_agent does not rewrite tasks owned by a case-variant legacy agent", async () => {
+    const now = new Date().toISOString();
+    db.run(
+      "INSERT INTO agents (id, name, created_at, last_seen_at) VALUES (?, ?, ?, ?), (?, ?, ?, ?)",
+      [
+        "01d4cc12", "fabricius", now, now,
+        "4d77b218", "Fabricius", now, now,
+      ],
+    );
+    const renamedAgentTask = createTask({ title: "Rename exact owner", assigned_to: "fabricius" }, db);
+    const caseVariantTask = createTask({ title: "Keep distinct owner", assigned_to: "Fabricius" }, db);
+    const tools = captureTools(registerAgentTools);
+
+    const result = await callCapturedTool(tools, "rename_agent", {
+      id: "01d4cc12",
+      new_name: "cicero",
+    });
+
+    expect(result.content[0]!.text).toContain("Updated assigned_to on 1 task(s).");
+    expect(getTask(renamedAgentTask.id, db)!.assigned_to).toBe("cicero");
+    expect(getTask(caseVariantTask.id, db)!.assigned_to).toBe("Fabricius");
+  });
+
+  it("rename_agent rewrites a differently cased task alias when the agent name is unique", async () => {
+    const now = new Date().toISOString();
+    db.run(
+      "INSERT INTO agents (id, name, created_at, last_seen_at) VALUES (?, ?, ?, ?)",
+      ["01d4cc12", "fabricius", now, now],
+    );
+    const task = createTask({ title: "Unique case variant", assigned_to: "FABRICIUS" }, db);
+    const tools = captureTools(registerAgentTools);
+
+    const result = await callCapturedTool(tools, "rename_agent", {
+      id: "01d4cc12",
+      new_name: "cicero",
+    });
+
+    expect(result.content[0]!.text).toContain("Updated assigned_to on 1 task(s).");
+    expect(getTask(task.id, db)!.assigned_to).toBe("cicero");
   });
 
   it("agent tools reject generated generic names", async () => {
