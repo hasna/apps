@@ -1,7 +1,9 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { scanDeploymentIdentifiers, scanPaths } from "./check-package-secrets.ts";
 
@@ -34,6 +36,35 @@ function makeTree(files: Record<string, string>): { dir: string; paths: string[]
 afterAll(() => {
   for (const dir of roots) rmSync(dir, { recursive: true, force: true });
 });
+
+const GUARD_SCRIPT = fileURLToPath(new URL("./check-package-secrets.ts", import.meta.url));
+
+// A minimal git-tracked npm package, so the guard's real entrypoint can run
+// end to end: it unions `git ls-files` with `npm pack --dry-run`, so a fixture
+// needs both a git index and a package.json to exercise the path a publish takes.
+function makeGitPackage(files: Record<string, string>): string {
+  const dir = mkdtempSync(join(tmpdir(), "guard-fixture-"));
+  roots.push(dir);
+  writeFileSync(
+    join(dir, "package.json"),
+    `${JSON.stringify({ name: "guard-fixture", version: "0.0.0", files: ["**/*"] }, null, 2)}\n`,
+  );
+  for (const [name, body] of Object.entries(files)) {
+    const full = join(dir, name);
+    mkdirSync(join(full, ".."), { recursive: true });
+    writeFileSync(full, body);
+  }
+  execFileSync("git", ["init", "-q", "."], { cwd: dir, stdio: "ignore" });
+  execFileSync("git", ["add", "-A"], { cwd: dir, stdio: "ignore" });
+  return dir;
+}
+
+function runGuardIn(dir: string): { code: number | null; stdout: string; stderr: string } {
+  const run = spawnSync("bun", [GUARD_SCRIPT], { cwd: dir, encoding: "utf-8" });
+  return { code: run.status, stdout: run.stdout ?? "", stderr: run.stderr ?? "" };
+}
+
+const CENSUS = /(\d+) tracked \+ packed file\(s\) scanned/;
 
 describe("deployment-identifier rules — the guard must be able to FIRE", () => {
   test("flags a convention-built resource name presented as infrastructure", () => {
@@ -185,6 +216,49 @@ describe("the guard never emits what it found", () => {
     for (const value of [SENTINEL_NAME, SENTINEL_ARN, SENTINEL_RDS_HOST]) {
       expect(serialised).not.toContain(value);
     }
+  });
+});
+
+// These assert the guard's EMITTED TEXT, by running the real entrypoint and
+// reading what it printed — not scanPaths()'s return value.
+//
+// That distinction is the whole point and I got it wrong once already. The
+// earlier revision asserted `expect(scanned).toBe(2)` and believed the census
+// was covered; deleting `(${census})` from the fail-path console.error left the
+// suite fully green at 19 pass / 0 fail, because a returned number and a printed
+// line are different things and only one of them is the deliverable.
+//
+// It matters beyond tidiness: the CI step name is identical before and after the
+// scan was widened, so the file count is the ONLY observable that distinguishes
+// the widened guard from the narrow one, and a release gate outside this
+// repository keys on `scanned > 20000` in this output. If the number silently
+// stops being printed on the fail path, that external gate reads the absence as
+// a pass. So the number needs a test that fails when it goes missing.
+describe("the emitted report carries the file census on BOTH paths", () => {
+  test("FAIL path prints the scanned count alongside the findings", () => {
+    const dir = makeGitPackage({ "README.md": `# S3 Bucket: ${SENTINEL_SINGLE_COMPONENT}` });
+
+    const { code, stderr } = runGuardIn(dir);
+
+    expect(code).toBe(1);
+    expect(stderr).toContain("finding(s) detected");
+    // The assertion that actually binds the fix: the census is in the OUTPUT.
+    expect(stderr).toMatch(CENSUS);
+    // And it is the real count, not a literal someone could hardcode: the
+    // fixture ships exactly README.md and package.json.
+    expect(Number(stderr.match(CENSUS)![1])).toBe(2);
+    // The report still never echoes what it matched.
+    expect(stderr).not.toContain(SENTINEL_SINGLE_COMPONENT);
+  });
+
+  test("PASS path prints the scanned count too", () => {
+    const dir = makeGitPackage({ "README.md": "# nothing to see\n" });
+
+    const { code, stdout } = runGuardIn(dir);
+
+    expect(code).toBe(0);
+    expect(stdout).toMatch(CENSUS);
+    expect(Number(stdout.match(CENSUS)![1])).toBe(2);
   });
 });
 
