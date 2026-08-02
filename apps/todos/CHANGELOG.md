@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.12] - 2026-08-02
+
+### Fixed
+
+- Alias-resolve `assigned_to` on every remaining sibling exact-match call site
+  (~20 sites behind one shared resolver), including a rebalance-load path where
+  an overloaded agent's queue was silently undercounted. `assigned_to` has held
+  an agent ID from one write path and a resolved name from another, plus case
+  variants, so exact-match reads returned a silent subset. `#160` fixed the
+  list filter; this closes the remaining call sites.
+- **This is a local `bun:sqlite` fix.** Agents on the hosted API (`/v1`) are
+  unaffected: the hosted service lacks Postgres equivalents for most of these
+  code paths and runs an older client version regardless. This release changes
+  nothing for hosted-mode agents.
+
 ## [0.13.11] - 2026-08-02
 
 ### Fixed
