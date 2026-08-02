@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.13] - 2026-08-02
+
+### Changed
+
+- **BREAKING (CLI): an out-of-vocabulary enum flag value is now rejected instead of
+  returning an empty result at exit code 0.** Passing an unsupported value — the
+  common case is a `--status` word that is not one of `pending`, `in_progress`,
+  `completed`, `failed`, `cancelled` — previously produced a clean empty list that
+  was indistinguishable from "no tasks matched", so a typo read as a true negative.
+  It now exits non-zero and names the accepted vocabulary. Any script that depended
+  on the silent-empty behaviour will start failing loudly; that is the intent.
+
+### Fixed
+
+- **Reaching any terminal status through the generic update path now releases the
+  task lock.** Only `completed` did before, so `--status failed` and
+  `--status cancelled` left `locked_by` and `locked_at` set permanently — a terminal
+  task cannot be started again, so nothing could ever re-acquire the lock and clear
+  it, and lazy repair-on-reacquisition could never reach the row. Both storage
+  adapters are corrected; on the hosted adapter the hole was wider than first
+  reported, having never released a lock for any terminal status including
+  `completed`.
+- The CLI now surfaces the server's own reason on a remote 400/4xx failure instead
+  of swallowing it, so a rejected request explains itself rather than presenting as
+  a generic failure.
+- Registering an agent through the hosted path no longer mints a case variant of an
+  existing name. This closes the remaining write path that could recreate the
+  split-identity condition 0.13.12 fixed on the read side.
+- Multi-value task filters are now modelled correctly in the generated API schema,
+  so generated clients emit the repeated query parameters the server accepts.
+
+### Note
+
+- **This release does not retro-clear task locks that already leaked.** That sweep is
+  deliberately excluded rather than overlooked: clearing a lock bumps the row version
+  and rewrites `updated_at`, and the change feeds page on `updated_at`, so sweeping
+  the existing terminal rows would push every one of them through those feeds to
+  repair something the reporting layer already handles. This release stops new leaks;
+  the accumulated rows remain a separate, explicit decision.
+
 ## [0.13.12] - 2026-08-02
 
 ### Fixed
