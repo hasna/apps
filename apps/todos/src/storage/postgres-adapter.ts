@@ -345,6 +345,53 @@ class PostgresJsonRecordStore {
   }
 
   /**
+   * Resolve a `--assigned`/`assigned_to` filter value to every stored form it
+   * could legitimately appear under, so a query by an agent's id also finds
+   * rows written under that agent's registered name and vice versa.
+   *
+   * ROOT CAUSE this closes (todos task 8f07bc15): `add --agent <id>` and
+   * `update --assign <name>` both write whatever string the caller passed,
+   * unresolved, into the same `assigned_to` field — so one agent's tasks end
+   * up split across its id form and its name form with no overlap. Matching
+   * is additionally done via `LOWER()` on both sides, because a row can also
+   * hold the registered name in the wrong case (`Silvanus` vs the canonical
+   * lower-cased `silvanus` — see `normalizeAgentNameInput`), independent of
+   * which alias was used.
+   *
+   * Resolution is against exactly ONE agents-table row: `resolveAgentForAssignedFilter`
+   * finds it by exact id, then by case-insensitive name, and the alias set
+   * returned is that row's `{id, name}` plus the literal input. A ref matching
+   * NO registered agent returns just the literal input unchanged, so an
+   * unknown/free-text `assigned_to` value keeps its current exact-match
+   * behaviour — this only widens a query that already resolves to a real,
+   * single agent.
+   *
+   * Deliberately NOT covered: two independently registered agent rows for
+   * what a human considers one seat (e.g. a personal name and a seat slug
+   * registered as separate rows with no linking field — confirmed live,
+   * `todos agents` shows no shared `identity_id`/`reports_to`). Bridging that
+   * needs an identity-model decision, not a widened query filter; filed
+   * separately (todos task a37a7137).
+   *
+   * A ref that resolves by name to 2+ registered agents (e.g. `fabricius` +
+   * `Fabricius`, task 0bf5d979) is this same "not bridged" case, so it is
+   * resolved to `null` — literal-only fallback, same as no match — rather
+   * than crashing (as the SQLite path did pre-fix, `IdentityAliasAmbiguousError`)
+   * or silently picking one of the ambiguous rows via the freshest-wins
+   * tie-break `matchAgentByName` uses for other callers. See
+   * `resolveAgentForAssignedFilter` below.
+   */
+  private async resolveAssignedToAliases(ref: string): Promise<string[]> {
+    const agent = await resolveAgentForAssignedFilter(ref, this);
+    const aliases = new Set<string>([ref]);
+    if (agent) {
+      aliases.add(agent.id);
+      aliases.add(agent.name);
+    }
+    return [...aliases];
+  }
+
+  /**
    * SQL-side task filtering, sorting, pagination and counting over the jsonb
    * payload. Historically the adapter materialized the ENTIRE tasks table into JS
    * on every list/count/stats call and filtered in memory — with ~38k tasks that
@@ -356,7 +403,7 @@ class PostgresJsonRecordStore {
    * (createMemoryPostgresClient): the condition emission order below is decoded
    * positionally there.
    */
-  private buildTaskFilterSql(filter: TaskFilter): { where: string; params: unknown[]; queryRef?: string } {
+  private async buildTaskFilterSql(filter: TaskFilter): Promise<{ where: string; params: unknown[]; queryRef?: string }> {
     const params: unknown[] = [this.service, "tasks"];
     const conds: string[] = ["service = $1", "object_type = $2", "deleted_at IS NULL"];
     const p = (value: unknown): string => {
@@ -378,7 +425,11 @@ class PostgresJsonRecordStore {
     if (filter.task_list_id !== undefined) conds.push(`payload->>'task_list_id' = ${p(filter.task_list_id)}`);
     if (filter.status !== undefined) conds.push(inClause("payload->>'status'", toFilterArray(filter.status)));
     if (filter.priority !== undefined) conds.push(inClause("payload->>'priority'", toFilterArray(filter.priority)));
-    if (filter.assigned_to !== undefined) conds.push(`payload->>'assigned_to' = ${p(filter.assigned_to)}`);
+    if (filter.assigned_to !== undefined) {
+      // Case-insensitive alias-set match — see resolveAssignedToAliases above.
+      const aliases = [...new Set((await this.resolveAssignedToAliases(filter.assigned_to)).map((a) => a.toLowerCase()))];
+      conds.push(inClause("LOWER(payload->>'assigned_to')", aliases));
+    }
     if (filter.agent_id !== undefined) conds.push(`payload->>'agent_id' = ${p(filter.agent_id)}`);
     // Case-insensitive for the same reason as the SQLite path: write-time
     // canonicalisation does not reach rows written before it, nor a hand-typed filter.
@@ -431,7 +482,7 @@ class PostgresJsonRecordStore {
 
   async listTasks(filter: TaskFilter): Promise<Task[]> {
     await this.ensureSchema();
-    const { where, params, queryRef } = this.buildTaskFilterSql(filter);
+    const { where, params, queryRef } = await this.buildTaskFilterSql(filter);
     // With a search query, rank by full-text relevance first (parity with the
     // SQLite bm25() ordering), then fall back to the standard priority/recency
     // tiebreak. Trigram-only fuzzy hits rank 0 and sort after exact matches.
@@ -543,7 +594,7 @@ class PostgresJsonRecordStore {
 
   async countTasks(filter: TaskFilter): Promise<number> {
     await this.ensureSchema();
-    const { where, params } = this.buildTaskFilterSql(filter);
+    const { where, params } = await this.buildTaskFilterSql(filter);
     const sql = `/* todos:count-tasks */ SELECT COUNT(*)::int AS count FROM ${this.tableName} WHERE ${where}`;
     const result = await this.options.client.query<{ count: number | string }>(sql, params);
     return Number(result.rows[0]?.count ?? 0);
@@ -1745,6 +1796,36 @@ async function resolveAgent(idOrName: string, store: PostgresJsonRecordStore): P
   const byId = await store.get<Agent>("agents", idOrName);
   if (byId) return byId;
   return matchAgentByName(await store.list<Agent>("agents"), idOrName);
+}
+
+/**
+ * Resolve `idOrName` to an agent for `--assigned` filter aliasing specifically
+ * — refusing to silently narrow to one row when the name is genuinely
+ * ambiguous (2+ independently-registered agents share it case-insensitively,
+ * e.g. `fabricius` + `Fabricius`, task 0bf5d979).
+ *
+ * This deliberately does NOT reuse `resolveAgent`/`matchAgentByName`'s
+ * freshest-wins tie-break. That tie-break is correct for its own callers
+ * (heartbeat, registration) where the caller wants exactly one live agent and
+ * the stale twin is noise. For a task-ownership FILTER it is the wrong
+ * default: picking one ambiguous row and searching only its alias set
+ * silently excludes the other row's own tasks, which is a different
+ * instance of the exact silent-subset bug this resolver exists to fix
+ * (task 8f07bc15). Bridging the two rows is a deliberate non-goal (task
+ * a37a7137), so ambiguous input here returns `null` and the caller falls
+ * back to literal-only matching — never a crash, and never a silent pick.
+ * Must stay behaviourally identical to the SQLite-side `IdentityAliasAmbiguousError`
+ * catch in task-crud.ts's `resolveAssignedToAliases`.
+ */
+async function resolveAgentForAssignedFilter(idOrName: string, store: PostgresJsonRecordStore): Promise<Agent | null> {
+  const byId = await store.get<Agent>("agents", idOrName);
+  if (byId) return byId;
+  const target = normalizeAgentNameInput(idOrName);
+  if (!target) return null;
+  const matches = (await store.list<Agent>("agents")).filter(
+    (agent) => normalizeAgentNameInput(agent.name) === target,
+  );
+  return matches.length === 1 ? matches[0]! : null;
 }
 
 /** Refresh an agent's last_seen_at in the shared cloud roster (heartbeat). */
