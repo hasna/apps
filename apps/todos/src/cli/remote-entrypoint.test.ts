@@ -752,7 +752,7 @@ describe("remote CLI entrypoint authority boundary", () => {
     const before = recursiveInventory(cwd);
     try {
       for (const args of [
-        ["--json", "init", "fixture-agent"],
+        ["--json", "init", "  fixture-agent  "],
         ["--json", "agents"],
         ["--json", "heartbeat", "fixture-agent"],
         ["--json", "release", "fixture-agent"],
@@ -767,7 +767,11 @@ describe("remote CLI entrypoint authority boundary", () => {
         expect(recursiveInventory(cwd)).toEqual(before);
         expectNoLocalDatabase(home, localDbPath);
       }
+      expect(requests.find((request) => request.method === "POST" && request.path === "/v1/agents")?.body).toEqual({
+        name: "fixture-agent",
+      });
       expect(requests.map((request) => `${request.method} ${request.path}`)).toEqual([
+        "GET /v1/agents",
         "POST /v1/agents",
         "GET /v1/agents",
         "POST /v1/agents/fixture-agent/heartbeat",

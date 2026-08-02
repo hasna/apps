@@ -50,6 +50,52 @@ function resolveCloudAgentByNameOrId<T extends { id: string; name: string; last_
 }
 
 
+/**
+ * Rows that are the SAME identity as `requested` under the canonical
+ * case-insensitive rule, but are spelled differently — i.e. the rows that
+ * registering `requested` would turn into a case-variant clash.
+ *
+ * WHY THIS GUARD IS ON THE CLOUD BRANCH AND NOT SHARED (todos task 1170f87b).
+ * `init` has two branches. The LOCAL one goes through `db/agents.ts`, whose
+ * `validateAgentName` RETURNS the lower-cased name, so a case variant cannot
+ * be created there. The CLOUD one posts the raw argument straight to
+ * `/v1/agents`. Every station on this fleet is cloud-routed, so 100% of
+ * registrations took the unnormalised branch and the shared normaliser —
+ * documented in `lib/agent-name-normalize.ts` as "the single source of truth"
+ * for `fabricius`, `Fabricius` and `FABRICIUS` being ONE agent — was never
+ * consulted. Measured on the live roster 2026-08-02: 1291 rows, 75 names held
+ * in two or more capitalisations, 7 of those clashes minted since 07-29.
+ *
+ * WHY IT REFUSES RATHER THAN SILENTLY LOWER-CASING. Normalising here would
+ * redirect a session that registers as `Silvanus` onto the existing
+ * `silvanus` row — merging two mailboxes with nothing on screen to say so.
+ * The live consequence of these split identities is that
+ * `todos list --assigned Silvanus` and `--assigned silvanus` return disjoint
+ * sets (28 and 29 rows, intersection 0), so silently moving an agent between
+ * them would change which queue a running watcher reads. A refusal is
+ * visible; a silent redirect is another instance of the defect being fixed.
+ *
+ * WHY IT DOES NOT CALL `validateAgentName` FOR SYMMETRY WITH THE LOCAL PATH.
+ * That validator enforces `/^[a-z]+$/` — letters only. 283 of the 1291 live
+ * names (21.9%) fail it, including every seat (`agent-ceo`,
+ * `agent-chief-staff`, ...). Applying it here would make registration fail for
+ * a fifth of the fleet. Only the trim-and-lower-case normaliser is safe.
+ *
+ * An EXACT-spelling row is deliberately NOT a conflict: re-registering an
+ * identity that already exists is the ordinary restart path, and refusing it
+ * would break every agent on the fleet rather than only the typos.
+ */
+export function findCaseVariantRows<T extends { id: string; name: string }>(
+  agents: readonly T[],
+  requested: string,
+): T[] {
+  const raw = requested.trim();
+  const target = normalizeAgentNameInput(raw);
+  if (!target) return [];
+  if (agents.some((agent) => agent.name === raw)) return [];
+  return agents.filter((agent) => normalizeAgentNameInput(agent.name) === target);
+}
+
 /** Drop the persisted identity only when the agent being released IS the persisted one —
  *  releasing some other agent must not silently un-identify this session. */
 function clearIdentityIfMine(agentId: string, agentName?: string): void {
@@ -77,9 +123,39 @@ export function registerAgentCommands(program: Command) {
         // This is the agent-identity misroute fix — a flipped machine's `init`
         // used to write the agent locally only, invisible to the cloud fleet.
         const cloud = getTodosCloudClient();
+        // The guard compares the trimmed spelling, so registration must send
+        // that same spelling. Sending the original value would let an exact
+        // restart such as `  zoilus  ` pass the guard and mint a whitespace
+        // variant on an older exact-match cloud authority.
+        const registrationName = name.trim();
+        if (cloud) {
+          // Degrade OPEN on a roster read failure, with the cost stated on
+          // stderr. Same precedent as `loadSeatSlugs` in assignee-validation:
+          // a guard that refuses every registration when it cannot reach its
+          // own reference data is a worse defect than the one it prevents.
+          let roster: Awaited<ReturnType<typeof cloudListAgents>> | null = null;
+          try {
+            roster = await cloudListAgents(cloud);
+          } catch {
+            console.error(chalk.yellow(
+              "Warning: could not read the shared roster, so the case-variant check was skipped for this registration.",
+            ));
+          }
+          const variants = roster ? findCaseVariantRows(roster, registrationName) : [];
+          if (variants.length > 0) {
+            const listed = variants.map((a) => `${a.name} (${a.id})`).join(", ");
+            console.error(chalk.red(
+              `'${name}' is a case variant of an agent that already exists: ${listed}. ` +
+              `Agent names are ONE case-insensitive identity, so registering this spelling would create a second row ` +
+              `and split the identity in two — tasks assigned to one spelling are invisible to the other. ` +
+              `Register with the existing spelling instead.`,
+            ));
+            process.exit(1);
+          }
+        }
         const result = cloud
-          ? await cloudRegisterAgent(cloud, { name, description: opts.description })
-          : (await import("../../db/agents.js")).registerAgent({ name, description: opts.description });
+          ? await cloudRegisterAgent(cloud, { name: registrationName, description: opts.description })
+          : (await import("../../db/agents.js")).registerAgent({ name: registrationName, description: opts.description });
         const { isAgentConflict } = await import("../../db/agents.js");
         if (isAgentConflict(result)) {
           console.error(chalk.red("CONFLICT:"), result.message);
