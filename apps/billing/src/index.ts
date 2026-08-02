@@ -11,8 +11,8 @@ export {
   resetDatabase,
   now,
   uuid,
-  buildCloudPoolConfig,
-  probeCloudReachable,
+  buildPostgresqlPoolConfig,
+  probePostgresqlReachable,
   appliedMigrationCount,
 } from "./db/database.js";
 export { appendAudit, verifyAuditChain, listAudit } from "./db/audit.js";

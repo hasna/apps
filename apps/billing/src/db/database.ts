@@ -1,13 +1,13 @@
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { assertModeConsistency, resolveDbPath, type StorageMode } from "../config.js";
+import { resolveDbPath, resolveStorageBackend, type StorageBackend } from "../config.js";
 import { ensureBillingAppHome } from "../core/app-home.js";
 import { backupDatabaseBeforeMigration, shouldBackupBeforeMigration } from "./backup.js";
 import { migrationsApplied, runMigrations } from "./schema.js";
 
 export { migrationsApplied } from "./schema.js";
-export { buildCloudPoolConfig, probeCloudReachable } from "./cloud.js";
+export { buildPostgresqlPoolConfig, probePostgresqlReachable } from "./postgresql.js";
 
 let _db: Database | null = null;
 
@@ -19,24 +19,19 @@ function ensureDir(filePath: string): void {
 /**
  * Open the billing store.
  *
- * - local: bun:sqlite is authoritative; migrations applied idempotently.
+ * - sqlite: bun:sqlite is authoritative; migrations applied idempotently.
  *   Pass ":memory:" for tests.
- * - cloud: PURE REMOTE. This synchronous SQLite entry point is NOT used for
- *   cloud; cloud reads/writes go directly to Postgres via the vendored kit
- *   (src/db/cloud.ts). To avoid EVER silently writing money/audit data to an
- *   ephemeral SQLite, cloud mode FAILS CLOSED here with a clear throw
- *   (BUILD-SPEC §2.2 failure class 2) unless an explicit local path is given
- *   (tests). The mode-consistency guard (§2.3) runs first.
+ * - postgresql: this synchronous SQLite entry point is not used. To avoid
+ *   silently writing money/audit data to SQLite, it always fails closed,
+ *   including when callers pass an explicit path.
  */
 export function openDatabase(path?: string): Database {
-  const mode: StorageMode = assertModeConsistency();
+  const backend: StorageBackend = resolveStorageBackend();
 
-  if (mode === "cloud" && path === undefined) {
+  if (backend === "postgresql") {
     throw new Error(
-      "billing is in cloud (PURE REMOTE) mode: reads/writes go directly to cloud Postgres via the " +
-        "vendored storage-kit, not this local SQLite path. This build fails closed rather than silently " +
-        "writing money/audit data to ephemeral storage. Run in local mode (unset HASNA_BILLING_STORAGE_MODE) " +
-        "or deploy the serve/mcp tier against the cloud pool (docker-compose.yml).",
+      "billing selected the postgresql backend: this SQLite entry point cannot serve PostgreSQL reads or writes. " +
+        "This build fails closed rather than silently writing money/audit data to ephemeral storage.",
     );
   }
 
@@ -55,7 +50,7 @@ export function openDatabase(path?: string): Database {
   return db;
 }
 
-/** Process-wide singleton for the CLI/serve/mcp long-lived handle (local). */
+/** Process-wide singleton for the CLI/serve/mcp long-lived SQLite handle. */
 export function getDatabase(dbPath?: string): Database {
   if (_db) return _db;
   _db = openDatabase(dbPath);

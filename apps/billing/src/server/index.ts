@@ -1,18 +1,18 @@
 #!/usr/bin/env bun
 import { assertServeSafeToStart, buildApp, getBindHost, getPort } from "./app.js";
 import { isApiAuthConfigured } from "./auth.js";
-import { resolveStorageMode, scrubDatabaseUrl } from "../config.js";
+import { resolveStorageBackend } from "../config.js";
 import { getDatabase } from "../db/database.js";
 
 /** Boot the Hono serve tier (BUILD-SPEC §6.1). */
 export function startServer(): { port: number; hostname: string } {
-  // Fail-closed if bound wide/cloud without credentials (§6.3).
+  // Fail closed if bound wide or using PostgreSQL without credentials.
   assertServeSafeToStart();
 
-  // Warm the store so /ready reflects a real connection; scrub the DSN after
-  // connect so it is not readable via /proc or child processes (§2.4).
-  if (resolveStorageMode() === "local") getDatabase();
-  scrubDatabaseUrl();
+  // Warm SQLite so /ready reflects a real connection. PostgreSQL remains
+  // selected by DATABASE_URL for the process lifetime and fails closed in
+  // domain handlers until their PostgreSQL query path is implemented.
+  if (resolveStorageBackend() === "sqlite") getDatabase();
 
   const app = buildApp();
   const port = getPort();
@@ -23,6 +23,6 @@ export function startServer(): { port: number; hostname: string } {
 
 if (import.meta.main) {
   const { port, hostname } = startServer();
-  console.log(`billing serve on http://${hostname}:${port} (mode=${resolveStorageMode()})`);
-  console.log(`API auth ${isApiAuthConfigured() ? "enabled" : "disabled (local loopback dev only)"}`);
+  console.log(`billing serve on http://${hostname}:${port} (backend=${resolveStorageBackend()})`);
+  console.log(`API auth ${isApiAuthConfigured() ? "enabled" : "disabled (SQLite loopback dev only)"}`);
 }

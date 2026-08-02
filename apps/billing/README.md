@@ -31,12 +31,12 @@ All three surfaces call the **same** `src/services/*` layer through one `runOp` 
 
 ## Storage
 
-- **local** (default): `bun:sqlite` at `~/.hasna/billing/billing.db` is authoritative.
-- **cloud** (`HASNA_BILLING_STORAGE_MODE=cloud`): PURE REMOTE Postgres via the vendored storage-kit (`sslmode=verify-full`). This build fails **closed** rather than silently writing money/audit data to ephemeral storage.
+- **SQLite** (default): `bun:sqlite` at `~/.hasna/billing/billing.db` is authoritative.
+- **PostgreSQL** (`HASNA_BILLING_DATABASE_URL` or `HASNA_BILLING_DATABASE_URL_FILE`): selected by the server through the vendored storage kit, with `sslmode=verify-full`. This build fails **closed** rather than silently writing money/audit data to ephemeral storage.
 
 The append-only, hash-chained `audit_log` (SQLite triggers forbid UPDATE/DELETE) records money/lifecycle events and is excluded from `storage_push/pull/sync`.
 
-> **v0 cloud-serve limitation (operators read this):** although `cloud` is the stated production default, this v0 integrator wires only the cloud **pool config + TLS + reachability probe** — there is no Postgres-backed domain query path yet. In `cloud` mode every `/v1` route and MCP domain tool fails closed and `/ready` returns `503` (the spec-sanctioned failure-class-2 branch, never a silent in-memory fallback). A functional cloud serve tier lands only when the domain query layer is wired to the vendored kit (the v1 `HASNA_BILLING_LIVE_UPSTREAM` phase). For a working service today, run **local** mode, or the `docker-compose` self-host artifact once the query layer exists. Do not expect `cloud` to serve domain traffic in v0.
+> **Current PostgreSQL limitation (operators read this):** this integrator wires the PostgreSQL **pool config + TLS + reachability probe**, but not a PostgreSQL-backed domain query path. When a database URL selects PostgreSQL, every `/v1` route and MCP domain tool fails closed and `/ready` returns `503`; it never falls back to an in-memory or SQLite store. Use the default SQLite backend for a working service until the domain query layer is wired. `docker-compose.yml` is the user-hosted service artifact and demonstrates the intended PostgreSQL configuration without changing this fail-closed boundary.
 
 ## Develop
 

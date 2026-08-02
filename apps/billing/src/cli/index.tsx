@@ -8,7 +8,7 @@ import { cliNamespaces } from "./namespaces.js";
 import { buildRunContext } from "./context.js";
 import { cliInvoke, parseInputJson } from "./dispatch.js";
 import { openApiJson } from "../api/index.js";
-import { resolveStorageMode } from "../config.js";
+import { resolveStorageBackend } from "../config.js";
 
 function toActionName(op: string): string {
   return op.replace(/_/g, "-");
@@ -23,7 +23,7 @@ function Dashboard(): React.ReactElement {
   const namespaces = cliNamespaces();
   return (
     <Box flexDirection="column">
-      <Text bold>@hasna/billing v{APP_VERSION} (mode={resolveStorageMode()})</Text>
+      <Text bold>@hasna/billing v{APP_VERSION} (backend={resolveStorageBackend()})</Text>
       <Text>Thin billing/dunning orchestration over Stripe Billing.</Text>
       {namespaces.map((ns) => (
         <Text key={ns.resource}>

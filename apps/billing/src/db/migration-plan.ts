@@ -1,13 +1,13 @@
 import { defineMigration, type Migration } from "../generated/storage-kit/migrations.js";
 
 /**
- * Ordered, forward-only cloud (Postgres) migration plan (BUILD-SPEC §4.3).
- * Applied via the vendored storage-kit MigrationLedger in cloud mode. The local
+ * Ordered, forward-only PostgreSQL migration plan (BUILD-SPEC §4.3).
+ * Applied via the vendored storage-kit MigrationLedger. The
  * SQLite schema (db/schema.ts) is the logical equivalent; these are the
  * Postgres-dialect statements. Never rewrite an applied migration — add a new
  * one with the next id.
  */
-export const CLOUD_MIGRATIONS: readonly Migration[] = [
+export const POSTGRESQL_MIGRATIONS: readonly Migration[] = [
   defineMigration(
     "0001-core",
     `
@@ -131,5 +131,5 @@ export const CLOUD_MIGRATIONS: readonly Migration[] = [
 ];
 
 export function migrationIds(): string[] {
-  return CLOUD_MIGRATIONS.map((m) => m.id);
+  return POSTGRESQL_MIGRATIONS.map((m) => m.id);
 }

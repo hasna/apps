@@ -20,7 +20,7 @@ export function registerStorageTools(server: McpServer, principal: ApiPrincipal 
 
   server.tool(
     "billing_storage_status",
-    "Redacted storage status: mode, whether a DSN is present, sqlite path, migrations applied, remote reachability. Never returns secret values.",
+    "Redacted storage status: backend, whether a DSN is present, SQLite path, migrations applied, and PostgreSQL reachability. Never returns secret values.",
     {},
     async () => {
       try {
@@ -35,7 +35,7 @@ export function registerStorageTools(server: McpServer, principal: ApiPrincipal 
 
   server.tool(
     "billing_storage_push",
-    "Push local rows to cloud Postgres (elevated storage:admin scope; audited; append-only audit tables excluded).",
+    "Push SQLite rows to PostgreSQL (elevated storage:admin scope; audited; append-only audit tables excluded).",
     tablesArg,
     async ({ tables }) => {
       try {
@@ -48,7 +48,7 @@ export function registerStorageTools(server: McpServer, principal: ApiPrincipal 
 
   server.tool(
     "billing_storage_pull",
-    "Pull cloud rows into local SQLite (elevated storage:admin scope; audited; append-only audit tables excluded).",
+    "Pull PostgreSQL rows into SQLite (elevated storage:admin scope; audited; append-only audit tables excluded).",
     tablesArg,
     async ({ tables }) => {
       try {

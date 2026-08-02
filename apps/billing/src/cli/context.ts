@@ -5,7 +5,7 @@ import { SYSTEM_AUTHORIZATION_CONTEXT, type AuthorizationContext } from "../serv
 
 /**
  * Build the CLI run context. The CLI is a local operator tool running as the
- * machine user; in local mode it uses the SYSTEM (bypass) context. A caller may
+ * machine user; on its SQLite path it uses the SYSTEM (bypass) context. A caller may
  * override the principal (used by the interface-parity harness to drive the CLI
  * surface with scoped credentials).
  */

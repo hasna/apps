@@ -22,8 +22,8 @@ export function freshDb(): Database {
   resetDatabase();
   const dir = mkdtempSync(join(tmpdir(), "billing-test-"));
   process.env["HASNA_BILLING_DB_PATH"] = join(dir, "billing.db");
-  delete process.env["HASNA_BILLING_STORAGE_MODE"];
   delete process.env["HASNA_BILLING_DATABASE_URL"];
+  delete process.env["HASNA_BILLING_DATABASE_URL_FILE"];
   return getDatabase();
 }
 

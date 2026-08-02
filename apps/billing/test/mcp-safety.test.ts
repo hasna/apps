@@ -88,7 +88,7 @@ describe("no secret leakage (§4.6)", () => {
     expect(serialized).not.toContain("SUP3RSECRET_pw");
     expect(serialized).not.toContain(secret);
     expect(status.dsn_present).toBe(true);
-    expect(status.remote_reachable).toBe(false);
+    expect(status.postgresql_reachable).toBe(false);
   });
 
   it("the billing_storage_status MCP tool output contains no DSN substring", async () => {

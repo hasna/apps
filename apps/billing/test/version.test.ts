@@ -8,14 +8,14 @@ describe("version + health", () => {
     expect(APP_VERSION).toBe(packageJson.version);
   });
 
-  it("health returns the { status, version, mode } contract shape", () => {
-    const prev = process.env["HASNA_BILLING_STORAGE_MODE"];
-    delete process.env["HASNA_BILLING_STORAGE_MODE"];
+  it("health returns the { status, version, backend } contract shape", () => {
+    const prev = process.env["HASNA_BILLING_DATABASE_URL"];
+    delete process.env["HASNA_BILLING_DATABASE_URL"];
     try {
       const h = health();
-      expect(h).toEqual({ status: "ok", version: APP_VERSION, mode: "local" });
+      expect(h).toEqual({ status: "ok", version: APP_VERSION, backend: "sqlite" });
     } finally {
-      if (prev !== undefined) process.env["HASNA_BILLING_STORAGE_MODE"] = prev;
+      if (prev !== undefined) process.env["HASNA_BILLING_DATABASE_URL"] = prev;
     }
   });
 });

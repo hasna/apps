@@ -1,6 +1,6 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { resolveStorageMode } from "../config.js";
+import { resolveStorageBackend } from "../config.js";
 import { authenticateToken, bearerFromHeader, isApiAuthConfigured, type ApiPrincipal } from "../server/auth.js";
 import { buildServer } from "./index.js";
 
@@ -56,11 +56,11 @@ function isLoopbackHost(host: string): boolean {
 
 /**
  * Fail-closed MCP auth (§5.1a): a bearer token is required on every /mcp
- * request unless HASNA_BILLING_MCP_AUTH=off AND bound to loopback in local mode.
+ * request unless HASNA_BILLING_MCP_AUTH=off, bound to loopback, with SQLite.
  */
 export function mcpAuthRequired(host: string): boolean {
   const off = (process.env["HASNA_BILLING_MCP_AUTH"] || process.env["BILLING_MCP_AUTH"]) === "off";
-  if (off && isLoopbackHost(host) && resolveStorageMode() === "local") return false;
+  if (off && isLoopbackHost(host) && resolveStorageBackend() === "sqlite") return false;
   return true;
 }
 
@@ -95,19 +95,19 @@ export function resetMcpRateLimit(): void {
 
 /**
  * Fail-closed startup assertion for the MCP HTTP transport, mirroring the serve
- * tier's assertServeSafety (BUILD-SPEC §5.1a). A non-loopback bind OR cloud mode
+ * tier's assertServeSafety (BUILD-SPEC §5.1a). A non-loopback bind or PostgreSQL
  * with no API credentials configured is almost certainly a misconfigured /
  * open-intent deploy. Refuse to start and surface the misconfig instead of
  * silently coming up "successfully" and 401'ing every caller at request time.
  */
 export function assertMcpServeSafety(hostname: string): void {
   const loopback = hostname === "127.0.0.1" || hostname === "localhost";
-  const cloud = resolveStorageMode() === "cloud";
-  if ((!loopback || cloud) && !isApiAuthConfigured()) {
+  const postgresql = resolveStorageBackend() === "postgresql";
+  if ((!loopback || postgresql) && !isApiAuthConfigured()) {
     throw new Error(
-      `Refusing to start billing-mcp: bind=${hostname} mode=${cloud ? "cloud" : "local"} requires API credentials. ` +
+      `Refusing to start billing-mcp: bind=${hostname} backend=${postgresql ? "postgresql" : "sqlite"} requires API credentials. ` +
         `Set HASNA_BILLING_API_CREDENTIALS (or HASNA_BILLING_API_KEY). ` +
-        `Unauthenticated MCP is only allowed on 127.0.0.1 in local mode.`,
+        `Unauthenticated MCP is only allowed on 127.0.0.1 with SQLite.`,
     );
   }
 }

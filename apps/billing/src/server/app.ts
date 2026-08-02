@@ -1,8 +1,9 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { getDatabase } from "../db/database.js";
-import { resolveStorageMode } from "../config.js";
+import { resolveStorageBackend } from "../config.js";
 import { APP_VERSION } from "../version.js";
+import { openApiDocument } from "../api/index.js";
 import { ERROR_STATUS, errorEnvelope } from "../types/index.js";
 import { ALL_OPS } from "../services/registry.js";
 import { makeContext, runOp } from "../services/context.js";
@@ -37,19 +38,18 @@ function rateLimitMax(): number {
 }
 
 /**
- * Auth is DECOUPLED from storage mode (BUILD-SPEC §6.3). Require auth whenever
- * the server binds a non-loopback interface OR runs cloud mode OR credentials
- * are configured. Unauthenticated /v1 is permitted ONLY on a strict 127.0.0.1
- * bind in local mode with no creds. Startup fails closed otherwise.
+ * Auth is decoupled from the data backend. Require auth whenever the server
+ * binds a non-loopback interface, uses PostgreSQL, or has credentials
+ * configured. Unauthenticated /v1 is permitted only on loopback with SQLite.
  */
 export function authRequired(): boolean {
-  return !isLoopbackBind() || resolveStorageMode() === "cloud" || isApiAuthConfigured();
+  return !isLoopbackBind() || resolveStorageBackend() === "postgresql" || isApiAuthConfigured();
 }
 
 export function assertServeSafeToStart(): void {
-  if ((!isLoopbackBind() || resolveStorageMode() === "cloud") && !isApiAuthConfigured()) {
+  if ((!isLoopbackBind() || resolveStorageBackend() === "postgresql") && !isApiAuthConfigured()) {
     throw new Error(
-      "Refusing to start: billing-serve is bound to a non-loopback interface or cloud mode without any API " +
+      "Refusing to start: billing-serve is bound to a non-loopback interface or uses PostgreSQL without any API " +
         "credentials configured. Set HASNA_BILLING_API_CREDENTIALS (a JSON array of distinct scoped " +
         "credentials) — /v1 must not serve open on a shared interface (BUILD-SPEC §6.3, fail-closed).",
     );
@@ -154,8 +154,9 @@ export function buildApp(): Hono {
   });
 
   // System endpoints (BUILD-SPEC §6.2).
-  app.get("/health", (c) => c.json({ status: "ok", version: APP_VERSION, mode: resolveStorageMode() }));
-  app.get("/version", (c) => c.json({ status: "ok", version: APP_VERSION, mode: resolveStorageMode() }));
+  app.get("/health", (c) => c.json({ status: "ok", version: APP_VERSION, backend: resolveStorageBackend() }));
+  app.get("/version", (c) => c.json({ status: "ok", version: APP_VERSION, backend: resolveStorageBackend() }));
+  app.get("/openapi.json", (c) => c.json(openApiDocument()));
   app.get("/ready", (c) => {
     try {
       getDatabase();

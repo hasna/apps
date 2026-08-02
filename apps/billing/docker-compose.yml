@@ -17,7 +17,6 @@ services:
     # billing-serve` would run the CLI and treat "billing-serve" as an arg).
     command: ["bunx", "--package", "@hasna/billing", "billing-serve"]
     environment:
-      HASNA_BILLING_STORAGE_MODE: cloud
       HASNA_BILLING_DATABASE_URL_FILE: /run/secrets/database_url
       HASNA_BILLING_PORT: "3487"
       HASNA_BILLING_BIND_HOST: "0.0.0.0"
@@ -32,7 +31,6 @@ services:
     # run the CLI and treat "billing-mcp" as a bogus argument. (BUILD-SPEC §6.4)
     command: ["bunx", "--package", "@hasna/billing", "billing-mcp", "--http", "--port", "8891"]
     environment:
-      HASNA_BILLING_STORAGE_MODE: cloud
       HASNA_BILLING_DATABASE_URL_FILE: /run/secrets/database_url
       MCP_HTTP: "1"
       MCP_HTTP_PORT: "8891"

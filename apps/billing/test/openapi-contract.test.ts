@@ -30,4 +30,15 @@ describe("openapi contract", () => {
     expect((doc.components as { securitySchemes?: Record<string, unknown> }).securitySchemes).toHaveProperty("bearerAuth");
     for (const p of ["/health", "/ready", "/version"]) expect(doc.paths[p]).toBeDefined();
   });
+
+  it("documents the current backend payload without the removed mode contract", () => {
+    const doc = openApiDocument();
+    const systemEndpoints = JSON.stringify({
+      health: doc.paths["/health"],
+      ready: doc.paths["/ready"],
+      version: doc.paths["/version"],
+    });
+    expect(systemEndpoints).toContain("backend");
+    expect(systemEndpoints).not.toMatch(/\bmode\b/i);
+  });
 });

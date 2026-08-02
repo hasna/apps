@@ -77,16 +77,16 @@ export function openApiDocument(): OpenApiDocument {
   paths["/health"] = {
     get: {
       operationId: "health",
-      summary: "Liveness + version + mode.",
+      summary: "Liveness + version + data backend.",
       tags: ["system"],
-      responses: { "200": { description: "Health payload { status, version, mode }" } },
+      responses: { "200": { description: "Health payload { status, version, backend }" } },
     },
   };
   paths["/ready"] = {
     get: { operationId: "ready", summary: "Readiness (DB + migrations).", tags: ["system"], responses: { "200": { description: "Ready" }, "503": { description: "Not ready" } } },
   };
   paths["/version"] = {
-    get: { operationId: "version", summary: "Version + mode.", tags: ["system"], responses: { "200": { description: "Version payload" } } },
+    get: { operationId: "version", summary: "Version + data backend.", tags: ["system"], responses: { "200": { description: "Version payload" } } },
   };
 
   for (const op of ALL_OPS) {

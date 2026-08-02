@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { appendAudit } from "../db/audit.js";
-import { appliedMigrationCount, probeCloudReachable } from "../db/database.js";
-import { databaseUrlPresent, resolveDbPath, resolveStorageMode } from "../config.js";
+import { appliedMigrationCount, probePostgresqlReachable } from "../db/database.js";
+import { databaseUrlPresent, resolveDbPath, resolveStorageBackend } from "../config.js";
 import { type AuthorizationContext } from "./authorization.js";
 import { requireScopes } from "./scopes.js";
 
@@ -17,22 +17,22 @@ export const SYNCABLE_TABLES = ["customers", "subscriptions", "invoices", "dunni
 export const EXCLUDED_TABLES = ["audit_log", "schema_migrations"] as const;
 
 export interface StorageStatus {
-  mode: "local" | "cloud";
+  backend: "sqlite" | "postgresql";
   dsn_present: boolean;
   sqlite_path: string;
   migrations_applied: number;
-  remote_reachable: boolean;
+  postgresql_reachable: boolean;
 }
 
-/** Redacted status. remote_reachable is PROBED, never hardcoded (§4.6/failure class 2). */
+/** Redacted status. PostgreSQL reachability is probed, never hardcoded. */
 export async function storageStatus(db: Database): Promise<StorageStatus> {
-  const mode = resolveStorageMode();
+  const backend = resolveStorageBackend();
   return {
-    mode,
+    backend,
     dsn_present: databaseUrlPresent(),
-    sqlite_path: mode === "local" ? resolveDbPath() : "(cloud: PURE REMOTE Postgres)",
+    sqlite_path: backend === "sqlite" ? resolveDbPath() : "(not active)",
     migrations_applied: appliedMigrationCount(db),
-    remote_reachable: await probeCloudReachable(),
+    postgresql_reachable: await probePostgresqlReachable(),
   };
 }
 
@@ -62,11 +62,11 @@ async function move(
   requireScopes(principal, ["storage:admin"]);
   const { tables, excluded } = resolveTables(requested);
 
-  const reachable = await probeCloudReachable();
+  const reachable = await probePostgresqlReachable();
   const moved = false;
   const detail = reachable
-    ? `cloud reachable; ${direction} of ${tables.length} table(s) would proceed`
-    : `cloud target not reachable — ${direction} fails closed (no ephemeral/partial write)`;
+    ? `PostgreSQL reachable; ${direction} of ${tables.length} table(s) would proceed`
+    : `PostgreSQL target not reachable — ${direction} fails closed (no ephemeral/partial write)`;
 
   appendAudit(db, {
     entity_id: null,
@@ -79,7 +79,7 @@ async function move(
 
   if (!reachable) {
     throw new Error(
-      `storage_${direction} requires a reachable cloud Postgres target (PURE REMOTE). ` +
+      `storage_${direction} requires a reachable PostgreSQL target. ` +
         `It fails closed rather than silently writing money/audit data to ephemeral storage. ` +
         `Configure HASNA_BILLING_DATABASE_URL (sslmode=verify-full) and retry.`,
     );
