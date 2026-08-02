@@ -690,7 +690,18 @@ export function registerQueryCommands(program: Command) {
       // Validated on the same terms as `add`/`update --assign`. This is the
       // most literally-named assignment surface, so leaving it unguarded would
       // make the whole rule bypassable. See `lib/assignee-validation.ts`.
-      const agent = await resolveValidatedAssignee(agentInput, Boolean(opts.assignSeat));
+      //
+      // UNLIKE add/update/upsert, this verb takes the agent POSITIONALLY —
+      // there is no `--assign` flag here at all. Recommending `--assign <v>
+      // --assign-seat` on this verb gives "unknown option '--assign'" (todos
+      // 75296282, PR #162 review): the working form keeps the agent
+      // positional and only ADDS --assign-seat, so the hint must say exactly
+      // that and nothing else.
+      const agent = await resolveValidatedAssignee(
+        agentInput,
+        Boolean(opts.assignSeat),
+        (v) => `${id} ${v} --assign-seat`,
+      );
       // Remote authority routing: PATCH via /v1, mirroring `update --assign`.
       const cloud = getTodosCloudClient();
       if (cloud) {

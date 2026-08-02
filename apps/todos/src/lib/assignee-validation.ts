@@ -54,6 +54,28 @@ export interface AssigneeContext {
   seats: Set<string>;
   /** Caller passed `--assign-seat`: filing at a seat is deliberate. */
   allowSeat?: boolean;
+  /**
+   * Builds the exact runnable suffix that pairs `--assign-seat` with the
+   * refused value, FOR THE VERB THE CALLER IS ACTUALLY ON.
+   *
+   * This function is shared by four call sites — `add`, `update`,
+   * `task upsert`, and the standalone `assign <id> <agent>` — and three of
+   * them take the assignee via a `--assign <agent>` FLAG while the fourth
+   * takes it POSITIONALLY with no `--assign` flag at all. A single hardcoded
+   * `--assign <value> --assign-seat` snippet is therefore correct for three
+   * verbs and `error: unknown option '--assign'` on the fourth (todos
+   * 75296282, PR hasna/todos#162 review by pr162-reviewer, cycle 1): the
+   * seat-refusal message recommended an invocation the verb it was printed
+   * from does not accept — the exact class of defect the message exists to
+   * remove, relocated rather than fixed.
+   *
+   * Each call site supplies its own builder naming its own real shape, so the
+   * message can never again claim a flag a given verb does not have.
+   * Undefined falls back to naming `--assign-seat` in prose with no runnable
+   * snippet, which is always safe because it recommends no invocation shape
+   * at all.
+   */
+  seatHint?: (value: string) => string;
 }
 
 /**
@@ -157,12 +179,14 @@ export function validateAssignee(input: string, ctx: AssigneeContext): AssigneeV
     if (ctx.allowSeat) {
       return { ok: true, assignee: byId ? byId.name : raw, agentId: byId?.id, isSeat: true };
     }
+    const hint = ctx.seatHint?.(raw);
     return {
       ok: false,
       reason: "seat",
       message:
         `'${raw}' is a durable SEAT, and a task assigned to a seat is assigned to nobody — no session is watching that queue. ` +
-        `Assign a specific agent, use --unassigned to file it with no owner on purpose, or pass --assign-seat if filing at the seat is what you mean.`,
+        `Assign a specific agent, use --unassigned to file it with no owner on purpose, or repeat the command with --assign-seat added to confirm the seat is deliberate` +
+        (hint ? `: ${hint}` : " (see --help for this command's exact form)."),
     };
   }
 

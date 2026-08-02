@@ -27,11 +27,22 @@ import { handleError } from "./helpers.js";
  *
  * Refusal exits the process via `handleError` (typed `never`), so a caller
  * cannot accidentally fall through to a silent self-assign.
+ *
+ * `buildSeatHint` is REQUIRED, not optional, and deliberately has no default:
+ * every call site takes the assignee on a different real shape (a
+ * `--assign <agent>` flag on three verbs, a bare positional on the fourth),
+ * so there is no invocation-shaped default that is correct everywhere. See
+ * {@link AssigneeContext.seatHint} for why a shared default was exactly the
+ * bug (todos 75296282).
  */
-export async function resolveValidatedAssignee(value: string, allowSeat: boolean): Promise<string> {
+export async function resolveValidatedAssignee(
+  value: string,
+  allowSeat: boolean,
+  buildSeatHint: (value: string) => string,
+): Promise<string> {
   const cloud = getTodosCloudClient();
   const ctx = await loadAssigneeContext(() => (cloud ? cloudListAgents(cloud) : listAgents()), allowSeat);
-  const verdict = validateAssignee(value, ctx);
+  const verdict = validateAssignee(value, { ...ctx, seatHint: buildSeatHint });
   if (!verdict.ok) {
     handleError(new Error(`Cannot assign to '${value}'. ${verdict.message}`));
   }
