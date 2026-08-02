@@ -924,13 +924,14 @@ export function registerMessagingCommands(program: Command): void {
         }
         dmRecent.sort((left, right) => left.created_at.localeCompare(right.created_at) || left.id - right.id);
 
-        const pendingNotifications = await readChannelNotificationsUnion(store, {
+        const pendingBatch = await readChannelNotificationsUnion(store, {
           agents: identities,
           unread_only: true,
           limit: 20,
           mark_read: true,
           include_content: wantFullContent,
         });
+        const pendingNotifications = pendingBatch.notifications;
 
         if (dmRecent.length > 0) {
           printLine(chalk.dim(`  ── Recent DMs (${dmRecent.length}) ──\n`));
@@ -939,6 +940,7 @@ export function registerMessagingCommands(program: Command): void {
         if (pendingNotifications.length > 0) {
           printLine(chalk.dim(`  ── Pending channel notifications (${pendingNotifications.length}) ──\n`));
           for (const notification of pendingNotifications) { renderNotification(notification); }
+          await pendingBatch.markRead();
         }
         if (dmRecent.length > 0 || pendingNotifications.length > 0) {
           printLine(chalk.dim(`  ── Live ──\n`));

@@ -21,8 +21,11 @@ const notification = (id: number): ChannelNotification => ({
   created_at: new Date(id * 1000).toISOString(),
 } as ChannelNotification);
 
+const markNothing = async (): Promise<number> => 0;
+
 const failingStore = (error: Error): NotificationPollStore => ({
   readChannelNotifications: async () => { throw error; },
+  markChannelNotificationsRead: markNothing,
 });
 
 const settle = (ms = 220) => new Promise((r) => setTimeout(r, ms));
@@ -48,7 +51,10 @@ describe("startNotificationPolling — store failure visibility (regression d3c6
     const lines: string[] = [];
     let calls = 0;
     const { stop } = startNotificationPolling({
-      store: { readChannelNotifications: async () => { calls++; throw new Error("DOWN"); } },
+      store: {
+        readChannelNotifications: async () => { calls++; throw new Error("DOWN"); },
+        markChannelNotificationsRead: markNothing,
+      },
       agent: "watcher",
       interval_ms: 20,
       on_notifications: () => {},
@@ -93,6 +99,7 @@ describe("startNotificationPolling — store failure visibility (regression d3c6
           if (call <= 3) throw new Error("DOWN");
           return [notification(call)];
         },
+        markChannelNotificationsRead: markNothing,
       },
       agent: "watcher",
       interval_ms: 20,
@@ -125,19 +132,20 @@ describe("readChannelNotificationsUnion", () => {
         if (args.agent === "agent-chief-staff") return [notification(2)];
         return [];
       },
+      markChannelNotificationsRead: markNothing,
     };
   };
 
   test("a single identity behaves exactly as the single-agent read", async () => {
     const store = perIdentityStore();
-    const rows = await readChannelNotificationsUnion(store, { agents: ["fabricius"] });
+    const { notifications: rows } = await readChannelNotificationsUnion(store, { agents: ["fabricius"] });
     expect(rows.map((r) => r.message_id)).toEqual([1]);
     expect(store.seen).toEqual(["fabricius"]);
   });
 
   test("reads BOTH queues and returns the union", async () => {
     const store = perIdentityStore();
-    const rows = await readChannelNotificationsUnion(store, {
+    const { notifications: rows } = await readChannelNotificationsUnion(store, {
       agents: ["fabricius", "agent-chief-staff"],
     });
     expect(store.seen).toEqual(["fabricius", "agent-chief-staff"]);
@@ -148,15 +156,16 @@ describe("readChannelNotificationsUnion", () => {
     // Without this, "the union returned 2 rows" could not distinguish a real
     // union from a store that ignores `agent` and returns everything anyway.
     const store = perIdentityStore();
-    const onlyFirst = await readChannelNotificationsUnion(store, { agents: ["fabricius"] });
+    const { notifications: onlyFirst } = await readChannelNotificationsUnion(store, { agents: ["fabricius"] });
     expect(onlyFirst.map((r) => r.message_id)).not.toContain(2);
   });
 
   test("de-duplicates a message both identities are subscribed to", async () => {
     const shared: NotificationPollStore = {
       readChannelNotifications: async () => [notification(7)],
+      markChannelNotificationsRead: markNothing,
     };
-    const rows = await readChannelNotificationsUnion(shared, {
+    const { notifications: rows } = await readChannelNotificationsUnion(shared, {
       agents: ["fabricius", "agent-chief-staff"],
     });
     expect(rows.map((r) => r.message_id)).toEqual([7]);
@@ -166,8 +175,9 @@ describe("readChannelNotificationsUnion", () => {
     const store: NotificationPollStore = {
       readChannelNotifications: async (args) =>
         args.agent === "second-listed" ? [notification(1)] : [notification(5)],
+      markChannelNotificationsRead: markNothing,
     };
-    const rows = await readChannelNotificationsUnion(store, {
+    const { notifications: rows } = await readChannelNotificationsUnion(store, {
       agents: ["first-listed", "second-listed"],
     });
     expect(rows.map((r) => r.message_id)).toEqual([1, 5]);
@@ -182,10 +192,61 @@ describe("readChannelNotificationsUnion", () => {
         if (args.agent === "broken") throw new Error("QUEUE_DOWN");
         return [notification(3)];
       },
+      markChannelNotificationsRead: markNothing,
     };
     await expect(
       readChannelNotificationsUnion(store, { agents: ["broken", "healthy"] }),
     ).rejects.toThrow("QUEUE_DOWN");
+  });
+
+  test("a later identity failure cannot acknowledge an earlier identity before delivery", async () => {
+    const acknowledged: string[] = [];
+    const store: NotificationPollStore = {
+      readChannelNotifications: async (args) => {
+        if (args.agent === "broken") throw new Error("QUEUE_DOWN");
+        return [notification(3)];
+      },
+      markChannelNotificationsRead: async (agent) => {
+        acknowledged.push(agent);
+        return 1;
+      },
+    };
+
+    await expect(
+      readChannelNotificationsUnion(store, {
+        agents: ["healthy", "broken"],
+        mark_read: true,
+      }),
+    ).rejects.toThrow("QUEUE_DOWN");
+
+    // The union was never delivered, so no queue may be acknowledged. On the
+    // old path `healthy` was already marked read here and vanished on retry.
+    expect(acknowledged).toEqual([]);
+  });
+
+  test("acknowledges each identity only after the caller delivers the complete union", async () => {
+    const store = perIdentityStore();
+    const acknowledged: Array<{ agent: string; ids: number[] }> = [];
+    store.markChannelNotificationsRead = async (agent, ids) => {
+      acknowledged.push({ agent, ids });
+      return ids.length;
+    };
+
+    const batch = await readChannelNotificationsUnion(store, {
+      agents: ["fabricius", "agent-chief-staff"],
+      mark_read: true,
+    });
+
+    expect(batch.notifications.map((row) => row.message_id)).toEqual([1, 2]);
+    expect(acknowledged).toEqual([]);
+
+    // This call represents successful rendering/delivery by the watcher.
+    await batch.markRead();
+    expect(acknowledged).toEqual([
+      { agent: "fabricius", ids: [1] },
+      { agent: "agent-chief-staff", ids: [2] },
+    ]);
+    expect(batch.notifications.every((row) => row.unread === false)).toBe(true);
   });
 });
 
@@ -195,6 +256,7 @@ describe("startNotificationPolling — multiple identities", () => {
     const { stop } = startNotificationPolling({
       store: {
         readChannelNotifications: async (args) => { seen.push(args.agent); return []; },
+        markChannelNotificationsRead: markNothing,
       },
       agent: "fabricius",
       agents: ["fabricius", "agent-chief-staff"],
@@ -214,6 +276,7 @@ describe("startNotificationPolling — multiple identities", () => {
     const { stop } = startNotificationPolling({
       store: {
         readChannelNotifications: async (args) => { seen.push(args.agent); return []; },
+        markChannelNotificationsRead: markNothing,
       },
       agent: "fabricius",
       interval_ms: 20,

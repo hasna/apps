@@ -17,6 +17,7 @@ export interface NotificationPollStore {
     mark_read?: boolean;
     include_content?: boolean;
   }): Promise<ChannelNotification[]>;
+  markChannelNotificationsRead(agent: string, messageIds: number[]): Promise<number>;
 }
 
 export interface NotificationPollOptions {
@@ -50,6 +51,18 @@ export interface UnionReadOptions {
   include_content?: boolean;
 }
 
+export interface UnionNotificationBatch {
+  notifications: ChannelNotification[];
+  /**
+   * Acknowledge exactly the ids returned for each identity.
+   *
+   * Call this only after `notifications` have been delivered. Keeping the
+   * mutation outside the read phase means a later identity failure cannot
+   * consume an earlier identity's rows before the union reaches its caller.
+   */
+  markRead: () => Promise<void>;
+}
+
 /**
  * Read channel notifications for several identities and return their union.
  *
@@ -73,26 +86,39 @@ export interface UnionReadOptions {
 export async function readChannelNotificationsUnion(
   store: NotificationPollStore,
   opts: UnionReadOptions,
-): Promise<ChannelNotification[]> {
+): Promise<UnionNotificationBatch> {
   const byId = new Map<number, ChannelNotification>();
+  const idsByAgent: Array<{ agent: string; messageIds: number[] }> = [];
 
   for (const agent of opts.agents) {
     const rows = await store.readChannelNotifications({
       agent,
       unread_only: opts.unread_only,
       limit: opts.limit,
-      mark_read: opts.mark_read,
       include_content: opts.include_content,
     });
+    idsByAgent.push({ agent, messageIds: rows.map((row) => row.message_id) });
     for (const row of rows) {
       if (!byId.has(row.message_id)) byId.set(row.message_id, row);
     }
   }
 
-  return [...byId.values()].sort(
+  const notifications = [...byId.values()].sort(
     (left, right) =>
       left.created_at.localeCompare(right.created_at) || left.message_id - right.message_id,
   );
+
+  return {
+    notifications,
+    markRead: async () => {
+      if (!opts.mark_read) return;
+      for (const { agent, messageIds } of idsByAgent) {
+        if (messageIds.length === 0) continue;
+        await store.markChannelNotificationsRead(agent, messageIds);
+      }
+      for (const notification of notifications) notification.unread = false;
+    },
+  };
 }
 
 /**
@@ -115,7 +141,7 @@ export function startNotificationPolling(opts: NotificationPollOptions): { stop:
     inFlight = true;
 
     try {
-      const notifications = await readChannelNotificationsUnion(opts.store, {
+      const batch = await readChannelNotificationsUnion(opts.store, {
         agents: opts.agents?.length ? opts.agents : [opts.agent],
         unread_only: true,
         limit: opts.limit ?? DEFAULT_LIMIT,
@@ -123,17 +149,22 @@ export function startNotificationPolling(opts: NotificationPollOptions): { stop:
         include_content: opts.include_content,
       });
 
-      health.recordSuccess();
+      const { notifications } = batch;
 
       if (notifications.length > 0) {
+        let delivered = false;
         try {
           opts.on_notifications(notifications);
+          delivered = true;
         } catch (error) {
           // Matches the message loop: a rendering fault is the caller's, and
           // must not be mistaken for the store being unreachable.
           console.error("Notification callback error:", error);
         }
+        if (delivered) await batch.markRead();
       }
+
+      health.recordSuccess();
     } catch (error) {
       health.recordFailure(error);
     } finally {
