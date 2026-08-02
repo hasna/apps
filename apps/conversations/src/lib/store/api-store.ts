@@ -206,6 +206,7 @@ export class ApiStore implements ConversationsStore {
       unread_only: opts.unread_only ? true : undefined,
       limit: opts.limit,
       since: normalizeSince(opts.since),
+      include_content: opts.include_content ? true : undefined,
     });
     const notifications = (body.notifications ?? []) as Awaited<ReturnType<ConversationsStore["readChannelNotifications"]>>;
     if (opts.mark_read && notifications.length > 0) {

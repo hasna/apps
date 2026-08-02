@@ -6,7 +6,17 @@ import { CHANNEL_SUBSCRIPTION_AGENT_ORDER, CHANNEL_SUBSCRIPTION_ALL_ORDER, simpl
 import { getPresence } from "./presence.js";
 import { resolveSelfSenderId } from "./sender-identity.js";
 
-const DEFAULT_PREVIEW_CHARS = 140;
+/**
+ * How much of a channel message a notification `preview` carries.
+ *
+ * Exported because it is load-bearing for callers deciding whether they need
+ * `include_content`: together with the character-class strip in
+ * {@link buildMessagePreview} it is why a preview cannot be parsed for
+ * identifiers. Note this is NOT the DM preview length — that is
+ * `DEFAULT_PREVIEW_CHARS` in ./compact-output.ts, which is 160 and strips
+ * nothing.
+ */
+export const DEFAULT_PREVIEW_CHARS = 140;
 
 export function buildMessagePreview(content: string, maxChars = DEFAULT_PREVIEW_CHARS): string {
   const normalized = redactSensitiveText(content)
@@ -80,6 +90,14 @@ export interface ReadChannelNotificationsOptions {
   limit?: number;
   since?: string;
   mark_read?: boolean;
+  /**
+   * Also return the full, un-stripped message body as `content`.
+   *
+   * Opt-in, because `preview` is a display string that several callers already
+   * render as-is and adding a second field to every one of them would be a cost
+   * they did not ask for. `preview` is unaffected either way.
+   */
+  include_content?: boolean;
 }
 
 export function readChannelNotifications(opts: ReadChannelNotificationsOptions): ChannelNotification[] {
@@ -149,6 +167,11 @@ export function readChannelNotifications(opts: ReadChannelNotificationsOptions):
     preview: buildMessagePreview(row.content, row.preview_chars),
     unread: row.read_message_id == null,
     has_attachments: !!row.attachments && row.attachments !== "[]",
+    // Redacted on exactly the same terms as the preview. Widening what a
+    // notification carries must not widen what a credential can ride out on:
+    // the preview's redaction is the reason a legacy DSN in the store does not
+    // reach a watcher's terminal, and full content has to clear the same bar.
+    ...(opts.include_content ? { content: redactSensitiveText(row.content) } : {}),
   })) satisfies ChannelNotification[];
 
   if (opts.mark_read && notifications.length > 0) {

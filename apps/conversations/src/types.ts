@@ -93,6 +93,16 @@ export interface ChannelNotification {
   preview: string;
   unread: boolean;
   has_attachments: boolean;
+  /**
+   * The full message body, redacted on the same terms as `preview`, and present
+   * ONLY when the caller passed `include_content`.
+   *
+   * `preview` strips `[*#`~_>-]` and caps the result, which destroys every
+   * identifier a monitor acts on — agent names, `repo#pr` references and branch
+   * names all lose their separators. This field is the opt-in escape hatch;
+   * `preview` is unchanged for every existing consumer.
+   */
+  content?: string;
 }
 
 export interface ChannelInfo extends Channel {
