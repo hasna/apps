@@ -7,7 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.13.13] - 2026-08-02
+## [0.14.0] - 2026-08-02
+
+This release was prepared as `0.13.13` and renumbered before publishing. It carries a
+breaking CLI change, and under 0.x semver the minor is the field that signals one — a
+patch number would have let a `^0.13` range pick it up silently. No `0.13.13` was ever
+published to npm; `0.13.12` is the version this supersedes.
 
 ### Changed
 

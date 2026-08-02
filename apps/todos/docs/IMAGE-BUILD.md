@@ -134,7 +134,7 @@ reverse-engineering and rewriting the step bodies:
   environment variable name, because it cannot tell a region name from a
   credential name. Spelling either of these out literally here makes
   @hasna/todos unpublishable at `prepublishOnly` — that is not hypothetical, it
-  blocked the 0.13.13 release and seven merged fixes behind it (todos b84f7f4c).
+  blocked the 0.14.0 release and seven merged fixes behind it (todos b84f7f4c).
   The guard is deliberately not narrowed to admit these two; the doc yields
   instead.
 -->
