@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { LockError, ProjectNotFoundError, ResourceConflictError, TaskNotStartableError, TaskReferenceAmbiguousError } from "../types/index.js";
+import { LockError, ProjectNotFoundError, ResourceConflictError, TaskNotStartableError, TaskReferenceAmbiguousError, isTerminalStatus } from "../types/index.js";
 import type {
   Agent,
   CreateCommentInput,
@@ -1229,9 +1229,18 @@ async function updateTask(id: string, input: UpdateTaskInput, store: PostgresJso
     && input.status !== undefined
     && input.status !== "completed"
     && input.completed_at === undefined;
+  // Mirror SQLite (`db/task-crud.updateTask`): reaching a TERMINAL state releases
+  // the lock. `definedPatch` never touches locked_by/locked_at, so without this
+  // the cloud route left a holder on every task completed, failed or cancelled
+  // through the generic PATCH — and a terminal row is not startable, so nothing
+  // could ever re-acquire or expire that lock. Measured 2026-08-02: 2,205 of the
+  // fleet's 2,597 locked rows were terminal, and 100% of the completed ones were
+  // completed after the lock was taken.
+  const terminalNow = input.status !== undefined && isTerminalStatus(input.status);
   const task: Task = {
     ...existing,
     ...definedPatch(input),
+    ...(terminalNow ? { locked_by: null, locked_at: null } : {}),
     version: existing.version + 1,
     updated_at: new Date().toISOString(),
     tags: input.tags ?? existing.tags,

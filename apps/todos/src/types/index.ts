@@ -537,6 +537,20 @@ export function isBlockingDependencyStatus(status: string): boolean {
   return status !== "completed" && status !== "cancelled";
 }
 
+/**
+ * Whether a task in this status has finished for good. Terminal rows are not
+ * startable — `startTask` rejects anything that is not pending/in_progress — so
+ * a lock left on one can never be re-acquired and never expires into anyone
+ * else's hands. Single source of truth for both backends: SQLite
+ * (`db/task-crud.updateTask`) and Postgres (`storage/postgres-adapter.updateTask`)
+ * released the lock on different subsets of these before, which leaked a
+ * permanent holder on every `update --status failed|cancelled` (and, on the
+ * cloud route, on `completed` too).
+ */
+export function isTerminalStatus(status: string): boolean {
+  return status === "completed" || status === "failed" || status === "cancelled";
+}
+
 // Task with relations loaded
 export interface TaskWithRelations extends Task {
   subtasks: Task[];

@@ -13,6 +13,7 @@ import {
   TaskNotFoundError,
   VersionConflictError,
   isBlockingDependencyStatus,
+  isTerminalStatus,
 } from "../types/index.js";
 import { getDatabase, lowerInClause, now, resolveAssignedToAliases, uuid } from "./database.js";
 export { resolveAssignedToAliases, assignedToAliasSet, lowerInClause } from "./database.js";
@@ -657,13 +658,21 @@ export function updateTask(
     }
     sets.push("status = ?");
     params.push(input.status);
+    if (isTerminalStatus(input.status)) {
+      // M1: mirror completeTask/failTask — reaching a TERMINAL state releases the
+      // lock so a recurring/handoff chain isn't left holding a stale one.
+      //
+      // This used to fire for "completed" only, so `update --status failed` and
+      // `--status cancelled` leaked a permanent lock: `startTask` refuses a row
+      // that is not pending/in_progress, so nothing can ever re-acquire it and
+      // repair-on-reacquisition can never reach it. The dedicated completeTask
+      // and failTask paths always cleared it; only this generic patch path did not.
+      sets.push("locked_by = NULL");
+      sets.push("locked_at = NULL");
+    }
     if (input.status === "completed") {
       sets.push("completed_at = ?");
       params.push(completionTimestamp);
-      // M1: mirror completeTask — completing a task releases its lock so a
-      // recurring/handoff chain isn't left holding a stale lock.
-      sets.push("locked_by = NULL");
-      sets.push("locked_at = NULL");
     } else if (task.status === "completed" && input.completed_at === undefined) {
       // M3: reopening a completed task clears the stale completed_at.
       sets.push("completed_at = NULL");
@@ -815,6 +824,10 @@ export function updateTask(
   // Determine the post-write completion timestamp / lock state to mirror the SQL above.
   const reopened = input.status !== undefined && input.status !== "completed" && task.status === "completed" && input.completed_at === undefined;
   const completedNow = input.status === "completed";
+  // Mirrors the `isTerminalStatus` branch in the SQL above. These two must agree:
+  // when they did not, the row was written correctly and the object returned to
+  // the caller still reported the released lock as held.
+  const terminalNow = input.status !== undefined && isTerminalStatus(input.status);
   const updatedTask: Task = {
     ...task,
     ...Object.fromEntries(Object.entries(input).filter(([, v]) => v !== undefined)),
@@ -822,8 +835,8 @@ export function updateTask(
     metadata: input.metadata ?? task.metadata,
     version: task.version + 1,
     updated_at: timestamp,
-    locked_by: completedNow ? null : task.locked_by,
-    locked_at: completedNow ? null : task.locked_at,
+    locked_by: terminalNow ? null : task.locked_by,
+    locked_at: terminalNow ? null : task.locked_at,
     completed_at: completedNow ? completionTimestamp : reopened ? null : input.completed_at !== undefined ? input.completed_at : task.completed_at,
     sla_minutes: input.sla_minutes !== undefined ? input.sla_minutes : task.sla_minutes,
     actual_minutes: input.actual_minutes ?? task.actual_minutes,
