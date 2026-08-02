@@ -1054,6 +1054,65 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
       .rejects.toThrow('Project reference is ambiguous: "aaaaaaaa"');
   });
 
+  // Regression for 7a50aa8c: a project registered elsewhere (e.g. the Hasna
+  // Projects CLI, whose "wks_..." workspace id and canonical slug are never
+  // auto-linked into a todos project) resolved by its todos NAME but not by
+  // that other system's slug — and both misses threw the byte-identical
+  // "Project not found" message, so a caller could not tell "this project has
+  // never been created" from "todos's own registry has no record under this
+  // exact string". A name/path/slug miss must now say so explicitly; a
+  // UUID-shaped id miss (a real id-lookup, not a slug guess) stays terse.
+  test("project resolution distinguishes a registry-scoped slug/name miss from a genuine UUID miss", async () => {
+    installFetch(() => ({
+      body: {
+        projects: [
+          {
+            id: "3a4b956d-3880-4b35-8c78-1c951237350f",
+            name: "wks_bdn79k6023gj",
+            path: "/home/hasna/.hasna/projects/workspaces/wks_bdn79k6023gj",
+            task_list_id: "todos-wks-bdn79k6023gj",
+          },
+        ],
+      },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    // The project's own todos name/id/slug still resolve normally.
+    await expect(cloudResolveProjectRef(client, "wks_bdn79k6023gj"))
+      .resolves.toBe("3a4b956d-3880-4b35-8c78-1c951237350f");
+
+    // A slug that is real in a DIFFERENT system but was never registered here
+    // still fails — the negative-control prefix is unchanged so existing
+    // callers that only check for "Project not found" keep working — but the
+    // message now says the search was scoped to todos's own registry, rather
+    // than reading as proof the project has never existed anywhere.
+    const otherSystemSlug = "iproj-gtm-strategy";
+    await expect(cloudResolveProjectRef(client, otherSystemSlug))
+      .rejects.toThrow(`Project not found: "${otherSystemSlug}"`);
+    await expect(cloudResolveProjectRef(client, otherSystemSlug)).rejects.toThrow(
+      /todos's own project registry|does not know about projects registered elsewhere/i,
+    );
+
+    // A genuinely-absent reference of the SAME shape (a slug, not a UUID) still
+    // fails outright — the fix does not weaken the negative case.
+    await expect(cloudResolveProjectRef(client, "definitely-not-a-project-xyz"))
+      .rejects.toThrow('Project not found: "definitely-not-a-project-xyz"');
+
+    // A UUID-shaped id that simply doesn't exist is an id-lookup miss, not a
+    // slug guess — it must NOT gain the registry-scope hint, so the two
+    // failure shapes stay distinguishable from each other.
+    const missingUuid = "00000000-0000-4000-8000-000000000000";
+    await expect(cloudResolveProjectRef(client, missingUuid))
+      .rejects.toThrow(`Project not found: "${missingUuid}"`);
+    let uuidMissMessage = "";
+    try {
+      await cloudResolveProjectRef(client, missingUuid);
+    } catch (error) {
+      uuidMissMessage = error instanceof Error ? error.message : String(error);
+    }
+    expect(uuidMissMessage).toBe(`Project not found: "${missingUuid}"`);
+  });
+
   test("list forwards task-list, parent, and multi-status filters", async () => {
     const calls = installFetch(() => ({ body: { tasks: [] } }));
     const client = getTodosCloudClient(CLOUD_ENV)!;

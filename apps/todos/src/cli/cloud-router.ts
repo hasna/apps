@@ -1038,7 +1038,15 @@ function uniqueProjectMatches(projects: Project[], predicate: (project: Project)
   return [...new Map(projects.filter(predicate).map((project) => [project.id, project])).values()];
 }
 
-/** Resolve a cloud project UUID, unique UUID prefix, exact name/path, or canonical slug. */
+/**
+ * Resolve a cloud project UUID, unique UUID prefix, exact name/path, or canonical slug.
+ *
+ * A miss throws one of two DISTINGUISHABLE errors (see 7a50aa8c): a UUID-shaped
+ * reference that matches nothing is a genuine id-lookup miss and stays terse; a
+ * name/path/slug reference that matches nothing only proves it is absent from
+ * todos's own registry, and the error says so rather than reading as proof the
+ * project was never created anywhere.
+ */
 function resolveCloudProjectRef(projects: Project[], ref: string): string {
   const input = ref.trim();
   const normalizedRef = input.toLowerCase();
@@ -1067,7 +1075,28 @@ function resolveCloudProjectRef(projects: Project[], ref: string): string {
     if (matches.length > 1) throw new Error(`Project reference is ambiguous: "${input}"`);
   }
 
-  throw new Error(`Project not found: "${input}"`);
+  // A UUID (or a hex-only id prefix, the shape the last match group above
+  // resolves) is unambiguously an ID LOOKUP: it never matched a name, path, or
+  // slug, and it never will. "Project not found" is the whole truth there.
+  //
+  // Anything else fell through every name/path/slug match group above without
+  // matching, i.e. it went through THE SLUG PATH. That failure is NOT the same
+  // fact: this only proves the reference is absent from todos's OWN project
+  // registry. A slug or id that is real in a different system — for example a
+  // Hasna Projects CLI workspace, whose canonical "wks_..." id and slug are
+  // never auto-linked into a todos project — produced the byte-identical
+  // message here, which reads as "this has never been created" and invites a
+  // caller to create a duplicate project. Say what was actually checked.
+  if (UUID_RE.test(input) || /^[0-9a-f]{4,}$/i.test(input)) {
+    throw new Error(`Project not found: "${input}"`);
+  }
+  throw new Error(
+    `Project not found: "${input}" — no project in todos's own project registry matches this ` +
+      `name, path, or slug. This does not know about projects registered elsewhere (for example ` +
+      `a Hasna Projects CLI workspace) — resolve it there first (e.g. "projects show ${input} ` +
+      `--json") and pass the resulting id or task-list slug, or run "todos projects create" to ` +
+      `register it here. Do not assume "${input}" has never been created.`,
+  );
 }
 
 export async function cloudResolveProjectRef(client: HasnaStorageClient, ref: string): Promise<string> {
