@@ -22,12 +22,23 @@ import { attachSendRedaction } from "../content-safety.js";
 import {
   parseMessage,
   compactMessage,
+  DEFAULT_SEARCH_LIMIT,
   resolveDigestMaxBytes,
   resolveDigestLimit,
   resolveDigestCursor,
   assembleDigest,
   type DigestNorm,
 } from "../messages.js";
+
+/**
+ * The row ceiling the hosted `/messages` route clamps every read to.
+ *
+ * Mirrors `clampLimit(..., max = 500)` in `src/server/api.ts`. It lives here as
+ * a named constant because the client must recognise the clamp to report it:
+ * the server answers a `limit=3000` request with 500 rows and, on a server
+ * older than the additive `has_more` field, says nothing about having done so.
+ */
+export const SERVER_SEARCH_MAX_ROWS = 500;
 
 type Q = Record<string, string | number | boolean | undefined | null>;
 
@@ -594,14 +605,70 @@ export class ApiStore implements ConversationsStore {
     return messages as never;
   };
   searchMessages: ConversationsStore["searchMessages"] = async (opts) => {
+    const page = await this.searchMessagesPage(opts);
+    return page.items as never;
+  };
+  searchMessagesPage: ConversationsStore["searchMessagesPage"] = async (opts) => {
     const since = normalizeSince(opts.since);
-    const res = await this.get<{ messages?: Record<string, unknown>[] }>("/messages", {
+    const requested = Number.isFinite(opts.limit) && (opts.limit as number) > 0
+      ? Math.floor(opts.limit as number)
+      : DEFAULT_SEARCH_LIMIT;
+    const offset = Number.isFinite(opts.offset) && (opts.offset as number) > 0
+      ? Math.floor(opts.offset as number)
+      : 0;
+    // Over-fetch one row so an exhausted page is distinguishable from a full
+    // one. The server may clamp this back down; that case is handled below.
+    const res = await this.get<{ messages?: Record<string, unknown>[]; has_more?: boolean; next_offset?: number | null }>("/messages", {
       q: opts.query,
-      limit: Number.isFinite(opts.limit) && (opts.limit as number) > 0 ? Math.floor(opts.limit as number) : 20,
-      offset: Number.isFinite(opts.offset) && (opts.offset as number) > 0 ? Math.floor(opts.offset as number) : undefined,
+      limit: requested + 1,
+      offset: offset > 0 ? offset : undefined,
       order: "desc", channel: opts.channel ? normalizeChannelName(opts.channel) : undefined, from: opts.from, to: opts.to, since,
     });
-    return (res?.messages ?? []).map((row) => ({ ...parseMessage(row), snippet: null, relevance_score: 0 })) as never;
+    const rows = (res?.messages ?? []).map((row) => ({ ...parseMessage(row), snippet: null, relevance_score: 0 }));
+
+    // A server new enough to report truncation is authoritative — it can see
+    // the population beyond its WIRE page, and the heuristic below cannot.
+    // The client still owns the smaller caller page: it deliberately asked for
+    // one probe row beyond `requested`. If that row came back, it proves there
+    // is another caller page even when the server truthfully says its larger
+    // wire page exhausted the population. Likewise, the server's next_offset
+    // advances past every wire row, so use the number actually handed to the
+    // caller or the trimmed probe row would be skipped forever.
+    if (typeof res?.has_more === "boolean") {
+      const clientHasProbeRow = rows.length > requested;
+      const items = clientHasProbeRow ? rows.slice(0, requested) : rows;
+      const hasMore = clientHasProbeRow || res.has_more;
+      return {
+        items,
+        has_more: hasMore,
+        next_cursor: hasMore ? offset + items.length : null,
+        effective_limit: Math.min(requested, SERVER_SEARCH_MAX_ROWS),
+      } as never;
+    }
+
+    // Older server: infer. Two distinct shapes mean "there is more".
+    if (rows.length > requested) {
+      const items = rows.slice(0, requested);
+      return { items, has_more: true, next_cursor: offset + items.length, effective_limit: requested } as never;
+    }
+    // The clamp. Asking for more than the server's ceiling returns exactly the
+    // ceiling — FEWER rows than requested, which is the shape that normally
+    // means "exhausted". This is the reported defect (todos 83852845), and it
+    // is the one case where trusting the row count produces a false absence.
+    //
+    // Deliberately fails toward warning: a population of exactly the ceiling
+    // is reported as truncated when it is not. Over-warning costs one wasted
+    // page; under-warning publishes a wrong audit. A server that reports
+    // has_more removes the ambiguity above.
+    if (rows.length >= SERVER_SEARCH_MAX_ROWS && requested + 1 > SERVER_SEARCH_MAX_ROWS) {
+      return {
+        items: rows,
+        has_more: true,
+        next_cursor: offset + rows.length,
+        effective_limit: SERVER_SEARCH_MAX_ROWS,
+      } as never;
+    }
+    return { items: rows, has_more: false, next_cursor: null, effective_limit: requested } as never;
   };
   readDigest: ConversationsStore["readDigest"] = async (opts) => {
     const o = opts ?? {};

@@ -183,6 +183,27 @@ export interface SearchResult extends Message {
   relevance_score: number;
 }
 
+/**
+ * One page of search results, carrying whether the backend held anything back.
+ *
+ * `searchMessages` returns a bare array, so a caller cannot tell a page that
+ * exhausted the population from one a backend cap cut short — and for `search`
+ * those two look IDENTICAL, because a clamping server answers with fewer rows
+ * than were requested, which every ordinary pagination rule reads as
+ * "exhausted". Callers making an absence claim ("no instances found") must use
+ * this shape instead; the array-returning form is kept for callers that only
+ * want rows.
+ */
+export interface SearchMessagesPage {
+  items: SearchResult[];
+  /** True when rows exist beyond this page, INCLUDING when a backend cap applied. */
+  has_more: boolean;
+  /** Offset to pass as `--cursor`/`offset` for the next page, or null when exhausted. */
+  next_cursor: number | null;
+  /** The row count the backend actually applied — below the request when a cap clamped it. */
+  effective_limit: number;
+}
+
 export interface AgentPresence {
   id: string;
   agent: string;

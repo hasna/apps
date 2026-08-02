@@ -631,18 +631,36 @@ async function handleV1(
     const replyCountSelect = includeReplyCounts
       ? `, (SELECT count(*) FROM messages r WHERE r.reply_to = messages.id)::int AS reply_count`
       : "";
-    params.push(limit);
+    // Search reads over-fetch one row so the response can say whether the
+    // population outruns the page. `clampLimit` silently caps every read at 500,
+    // and a clamped answer returns FEWER rows than were asked for — the shape
+    // that normally means "exhausted" — so a caller auditing a sender read a
+    // truncated page as a complete one and published false absences
+    // (todos 83852845). Plain (non-`q`) reads keep their exact previous
+    // behaviour and cost: no extra row, no extra work.
+    const probeForMore = !!q;
+    params.push(probeForMore ? limit + 1 : limit);
     const limitIdx = params.length;
     params.push(offset);
     const offsetIdx = params.length;
-    const rows = await client.many(
+    const fetched = await client.many(
       `SELECT id, uuid, session_id, from_agent, to_agent, channel, project_id, content, priority,
               blocking, reply_to, working_dir, repository, branch, metadata, edited_at, pinned_at,
               attachments, created_at, read_at${replyCountSelect}
        FROM messages ${where} ORDER BY created_at ${order}, id ${order} LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
       params,
     );
-    return json({ messages: redactResponse(rows) });
+    if (!probeForMore) return json({ messages: redactResponse(fetched) });
+    const hasMore = fetched.length > limit;
+    const rows = hasMore ? fetched.slice(0, limit) : fetched;
+    // Additive fields only — `messages` keeps its exact shape and position, so
+    // a client that has never heard of `has_more` is unaffected.
+    return json({
+      messages: redactResponse(rows),
+      has_more: hasMore,
+      next_offset: hasMore ? offset + rows.length : null,
+      limit,
+    });
   }
 
   // ---- mark messages read (per-agent receipts + global read_at) ----

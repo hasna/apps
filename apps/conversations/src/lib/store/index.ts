@@ -473,6 +473,11 @@ export interface ConversationsStore {
   readMessages: Async<typeof messagesLib.readMessages>;
   countMessages: Async<typeof messagesLib.countMessages>;
   searchMessages: Async<typeof messagesLib.searchMessages>;
+  /**
+   * `searchMessages` plus a truthful truncation signal. Use this — not the
+   * array form — whenever the result feeds an absence claim.
+   */
+  searchMessagesPage: Async<typeof messagesLib.searchMessagesPage>;
   readDigest: Async<typeof messagesLib.readDigest>;
   exportMessages: Async<typeof messagesLib.exportMessages>;
   getThreadReplies: Async<typeof messagesLib.getThreadReplies>;
@@ -633,6 +638,7 @@ export class LocalStore implements ConversationsStore {
   readMessages: ConversationsStore["readMessages"] = async (...a) => messagesLib.readMessages(...a);
   countMessages: ConversationsStore["countMessages"] = async (...a) => messagesLib.countMessages(...a);
   searchMessages: ConversationsStore["searchMessages"] = async (...a) => messagesLib.searchMessages(...a);
+  searchMessagesPage: ConversationsStore["searchMessagesPage"] = async (...a) => messagesLib.searchMessagesPage(...a);
   readDigest: ConversationsStore["readDigest"] = async (...a) => messagesLib.readDigest(...a);
   exportMessages: ConversationsStore["exportMessages"] = async (...a) => messagesLib.exportMessages(...a);
   getThreadReplies: ConversationsStore["getThreadReplies"] = async (...a) => messagesLib.getThreadReplies(...a);

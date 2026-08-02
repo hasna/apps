@@ -1,5 +1,5 @@
 import { getDb, getDataDir } from "./db.js";
-import type { Message, Attachment, SendMessageOptions, ReadMessagesOptions, SearchMessagesOptions, SearchResult } from "../types.js";
+import type { Message, Attachment, SendMessageOptions, ReadMessagesOptions, SearchMessagesOptions, SearchResult, SearchMessagesPage } from "../types.js";
 import { createHash, randomUUID } from "crypto";
 import { mkdirSync, copyFileSync, closeSync, openSync, readSync, statSync, existsSync, realpathSync } from "fs";
 import { join, basename, resolve } from "path";
@@ -1234,6 +1234,34 @@ export function searchMessages(opts: SearchMessagesOptions): SearchResult[] {
     const msg = parseMessage(row);
     return { ...msg, snippet: buildSearchSnippet(msg), relevance_score: 0 };
   });
+}
+
+/** The limit `searchMessages` applies when a caller passes none. */
+export const DEFAULT_SEARCH_LIMIT = 20;
+
+/**
+ * `searchMessages`, plus a truthful answer to "is there more?".
+ *
+ * Over-fetches one row beyond the requested limit and reports the extra rather
+ * than returning it — the same shape `pageFromQuery` already uses for every
+ * other listing verb, so a reader who knows one knows this one.
+ */
+export function searchMessagesPage(opts: SearchMessagesOptions): SearchMessagesPage {
+  const limit = Number.isFinite(opts.limit) && (opts.limit as number) > 0
+    ? Math.floor(opts.limit as number)
+    : DEFAULT_SEARCH_LIMIT;
+  const offset = Number.isFinite(opts.offset) && (opts.offset as number) > 0
+    ? Math.floor(opts.offset as number)
+    : 0;
+  const rows = searchMessages({ ...opts, limit: limit + 1, offset });
+  const has_more = rows.length > limit;
+  const items = has_more ? rows.slice(0, limit) : rows;
+  return {
+    items,
+    has_more,
+    next_cursor: has_more ? offset + items.length : null,
+    effective_limit: limit,
+  };
 }
 
 export interface UnreadCount {

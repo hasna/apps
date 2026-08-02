@@ -10,7 +10,7 @@ import { buildMessagePreview } from "../../lib/channel-notifications.js";
 import { readChannelNotificationsUnion } from "../../lib/poll-notifications.js";
 import { resolveSelfSenderId } from "../../lib/sender-identity.js";
 import { previewText } from "../../lib/compact-output.js";
-import { getCliWindow, pageFromQuery, printCompactFooter, queryLimitFor, warnIfPageFull, SINCE_JSON_LIMIT } from "../compact.js";
+import { getCliWindow, pageFromQuery, printCompactFooter, printJsonDisclosure, queryLimitFor, warnIfPageFull, SINCE_JSON_LIMIT } from "../compact.js";
 import { BLOCKERS_LIST_ORDER, PINNED_LIST_ORDER } from "../../lib/list-order.js";
 import { printMessageEntry } from "../message-output.js";
 import { resolveReadWindow } from "../../lib/message-window.js";
@@ -290,10 +290,38 @@ export function registerMessagingCommands(program: Command): void {
     .option("--channel <name>", "Filter by channel")
     .option("--from <agent>", "Filter by sender")
     .option("--to <agent>", "Filter by recipient")
-    .option("--limit <n>", "Max results to return", parseInt)
+    .option("--limit <n>", "Max results to return (the server caps a single page at 500)", parseInt)
     .option("--cursor <n>", "Skip first N results for pagination", parseInt)
     .option("--verbose", "Show full message bodies")
     .option("-j, --json", "Output as JSON")
+    .addHelpText("after", `
+Two limits bound what this verb can tell you. Both are silent by default, and
+both bite hardest on the thing search is most used for — auditing a sender or a
+channel, which is an ABSENCE claim.
+
+  1. PAGE SIZE. A single page is capped at 500 rows server-side; --limit above
+     that is clamped, not honoured. The cap is now always disclosed: text output
+     prints "More available: rerun with --cursor N", and --json prints the same
+     line to stderr while stdout stays a bare array. Page with --cursor until
+     the notice stops. Never read a 500-row result as a population.
+
+  2. THE QUERY IS A CONTENT FILTER, NOT A SENDER LISTING. search returns
+     messages MATCHING THE QUERY, filtered by --from — not "this sender's
+     messages". Any message that does not contain the query term is invisible,
+     and the misses are not scattered: they cluster BY TEMPLATE. A term that
+     correlates with how a message is written will silently exclude that whole
+     class of message.
+
+     Measured by agent-chief-marketing (#incidents 648598) against 19 message
+     ids they held independently: a signature-term search found 17 of 19, and
+     both misses were [REPORT] posts, whose template carries no signature. The
+     500-row cap was tested and ruled out as the cause — both missing ids fell
+     inside the returned id range. A caller sampling those results sees nothing
+     wrong, because the absent rows are systematically alike and absent
+     together.
+
+     To enumerate a sender exhaustively, page a listing verb; do not infer a
+     population from a content search.`)
     .action(async (query, opts) => {
       const q = typeof query === "string" ? query.trim() : "";
       if (!q) {
@@ -301,32 +329,38 @@ export function registerMessagingCommands(program: Command): void {
       }
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
 
-      const messages = await await getStore().searchMessages({
+      // The store pages this verb now. `--json` used to pass the raw limit and
+      // then hardcode `hasMore: false`, so a result cut short by the backend's
+      // 500-row cap was published as a complete set (todos 83852845).
+      const result = await getStore().searchMessagesPage({
         query: q,
         channel: opts.channel,
         from: opts.from,
         to: opts.to,
-        limit: opts.json ? opts.limit : queryLimitFor(window),
+        limit: opts.json ? opts.limit : window.limit,
         offset: opts.json ? opts.cursor : window.offset,
       });
-      const page = opts.json
-        ? { items: messages, count: messages.length, total: messages.length, hasMore: false, nextCursor: null }
-        : pageFromQuery(messages, window);
+      const disclosure = {
+        shown: result.items.length,
+        hasMore: result.has_more,
+        nextCursor: result.next_cursor,
+        sort: getStore().describeListOrder("search"),
+      };
 
       if (opts.json) {
-        printJson(messages);
+        printJson(result.items);
+        // stdout stays a bare array — every monitor on this fleet parses it as
+        // one — so the truncation notice goes to stderr alongside it.
+        printJsonDisclosure(disclosure);
       } else {
-        if (messages.length === 0) {
+        if (result.items.length === 0) {
           printLine(chalk.dim("No messages found."));
         } else {
           printLine(chalk.dim(`Search results for "${q}":\n`));
-          for (const msg of page.items) printMessageEntry(msg, { verbose: opts.verbose });
+          for (const msg of result.items) printMessageEntry(msg, { verbose: opts.verbose });
           printCompactFooter({
-            shown: page.count,
-            hasMore: page.hasMore,
-            nextCursor: page.nextCursor,
+            ...disclosure,
             limitCapped: window.limitCapped,
-            sort: getStore().describeListOrder("search"),
             detailHint: opts.verbose ? "Use conversations show <id> for one message." : "Use --verbose for full bodies or conversations show <id> for one message.",
           });
         }
