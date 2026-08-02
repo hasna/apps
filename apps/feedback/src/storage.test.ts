@@ -78,17 +78,32 @@ describe("LocalFeedbackStore", () => {
 });
 
 describe("feedback storage runtime", () => {
-  test("uses local JSONL storage by default", async () => {
+  test("uses local SQLite storage by default", async () => {
     const dataDir = await mkdtemp(join(tmpdir(), "open-feedback-runtime-"));
     const diagnostics = describeFeedbackStoreRuntime({ env: { FEEDBACK_DATA_DIR: dataDir } });
     expect(diagnostics).toMatchObject({
       mode: "local",
+      engine: "sqlite",
+      activeStore: "local-sqlite",
+      ok: true,
+      blockers: [],
+    });
+    expect(diagnostics.local?.dataFile).toBe(join(dataDir, "feedback.db"));
+    expect(diagnostics.local?.jsonlPath).toBe(join(dataDir, "feedback.jsonl"));
+  });
+
+  test("still uses the JSONL store when it is explicitly selected", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "open-feedback-runtime-"));
+    const env = { FEEDBACK_DATA_DIR: dataDir, FEEDBACK_STORE: "jsonl" };
+    expect(describeFeedbackStoreRuntime({ env })).toMatchObject({
+      mode: "local",
+      engine: "jsonl",
       activeStore: "local-jsonl",
       ok: true,
       blockers: [],
     });
-    expect(diagnostics.local?.dataFile).toBe(join(dataDir, "feedback.jsonl"));
-    expect(createFeedbackStore({ env: { FEEDBACK_DATA_DIR: dataDir } })).toBeInstanceOf(LocalFeedbackStore);
+    expect(describeFeedbackStoreRuntime({ env }).local?.dataFile).toBe(join(dataDir, "feedback.jsonl"));
+    expect(createFeedbackStore({ env })).toBeInstanceOf(LocalFeedbackStore);
   });
 
   test("fails closed for cloud mode until a host adapter is injected", async () => {

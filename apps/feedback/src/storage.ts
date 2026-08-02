@@ -1,39 +1,44 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { appendFile, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import type {
-  FeedbackCreateOptions,
-  FeedbackInput,
-  FeedbackItem,
-  FeedbackListFilter,
-  FeedbackStats,
-  FeedbackStatus,
-  FeedbackStore,
-  FeedbackSyncTasksResult,
-} from "./types.js";
+import { dirname } from "node:path";
+import type { FeedbackItem, FeedbackStore } from "./types.js";
 import { createTaskSink } from "./tasks.js";
 import type { FeedbackTaskSink } from "./tasks.js";
-import {
-  feedbackKinds,
-  feedbackStatuses,
-  isFeedbackLinkageDelta,
-  parseFeedbackInput,
-  parseFeedbackLinkageDelta,
-  parseStoredFeedbackItem,
-  truncateTaskError,
-} from "./validation.js";
 import type { FeedbackLinkageDelta } from "./validation.js";
-import {
-  buildFeedbackCreatedEvent,
-  buildFeedbackTriagedEvent,
-  createDefaultFeedbackEventSink,
-  emitFeedbackEvent,
-} from "./events.js";
+import { createDefaultFeedbackEventSink } from "./events.js";
 import type { FeedbackEventSink } from "./events.js";
+import {
+  FeedbackStoreBase,
+  FeedbackStoreBusyError,
+  foldFeedbackRecords,
+  serialiseFeedbackJsonl,
+} from "./storage.base.js";
+import {
+  DEFAULT_DATA_DIR,
+  DEFAULT_FEEDBACK_FILE,
+  ENV_PREFIX,
+  readStorageEnv,
+  resolveFeedbackDataDir,
+  resolveFeedbackFilePath,
+} from "./storage.paths.js";
+import { SqliteFeedbackStore, resolveFeedbackSqlitePath } from "./storage.sqlite.js";
 
-export const DEFAULT_DATA_DIR = join(homedir(), ".hasna", "feedback");
-export const DEFAULT_FEEDBACK_FILE = "feedback.jsonl";
+export { DEFAULT_DATA_DIR, DEFAULT_FEEDBACK_FILE, ENV_PREFIX, resolveFeedbackDataDir, resolveFeedbackFilePath };
+export {
+  DEFAULT_SQLITE_FILE,
+  SqliteFeedbackStore,
+  migrateJsonlIntoSqlite,
+  resolveFeedbackSqlitePath,
+} from "./storage.sqlite.js";
+export type { FeedbackMigrationResult, SqliteFeedbackStoreOptions } from "./storage.sqlite.js";
+export {
+  FeedbackStoreBase,
+  FeedbackStoreBusyError,
+  applyFeedbackFilter,
+  buildFeedbackSearchHaystack,
+  computeFeedbackStats,
+  serialiseFeedbackJsonl,
+} from "./storage.base.js";
 
 export interface LocalFeedbackStoreOptions {
   dataDir?: string;
@@ -52,12 +57,23 @@ export interface LocalFeedbackStoreOptions {
   taskSink?: FeedbackTaskSink | null;
 }
 
+/**
+ * Where the store lives. `local` is on this machine; `cloud` is a
+ * host-injected adapter.
+ */
 export type FeedbackStoreRuntimeMode = "local" | "cloud";
 export type FeedbackStoreRuntimeDiagnosticMode = FeedbackStoreRuntimeMode | "invalid";
 
+/**
+ * Which backend holds the data. This is the axis the service contract names as
+ * `storage.mode`, and it is separate from where the store lives: `sqlite` and
+ * `jsonl` are both local.
+ */
+export type FeedbackStorageEngine = "sqlite" | "jsonl" | "postgres";
+
 export interface FeedbackStoreRuntimeOptions {
   env?: Record<string, string | undefined>;
-  local?: LocalFeedbackStoreOptions;
+  local?: LocalFeedbackStoreOptions & { sqlitePath?: string };
   cloudStore?: FeedbackStore;
 }
 
@@ -75,27 +91,37 @@ export interface FeedbackCloudRuntimeDiagnostics {
 export interface FeedbackStoreRuntimeDiagnostics {
   mode: FeedbackStoreRuntimeDiagnosticMode;
   requestedMode: FeedbackStoreRuntimeDiagnosticMode;
-  activeStore: "local-jsonl" | "cloud-adapter" | "unavailable";
+  /** Absent when the requested configuration is unsupported. */
+  engine?: FeedbackStorageEngine;
+  activeStore: "local-sqlite" | "local-jsonl" | "cloud-adapter" | "unavailable";
   ok: boolean;
   local?: {
+    /** The file the active engine reads and writes. */
     dataFile: string;
+    engine: "sqlite" | "jsonl";
+    /** The legacy JSONL log, whether or not it is the active store. */
+    jsonlPath: string;
   };
   cloud?: FeedbackCloudRuntimeDiagnostics;
   blockers: string[];
 }
 
-export function resolveFeedbackDataDir(dataDir = process.env["FEEDBACK_DATA_DIR"]): string {
-  return dataDir && dataDir.trim() ? dataDir : DEFAULT_DATA_DIR;
-}
-
-export function resolveFeedbackFilePath(options: LocalFeedbackStoreOptions = {}): string {
-  return options.filePath ?? join(resolveFeedbackDataDir(options.dataDir), DEFAULT_FEEDBACK_FILE);
-}
-
-function runtimeModeFromEnv(env: Record<string, string | undefined>): FeedbackStoreRuntimeDiagnostics["mode"] {
-  const rawMode = (env["FEEDBACK_STORE"] ?? env["FEEDBACK_STORAGE_BACKEND"] ?? "local").trim().toLowerCase();
-  if (!rawMode || rawMode === "local" || rawMode === "jsonl" || rawMode === "file") return "local";
-  if (rawMode === "cloud" || rawMode === "rds" || rawMode === "postgres" || rawMode === "postgresql") return "cloud";
+/**
+ * Resolve the configured storage engine.
+ *
+ * SQLite is the default when nothing is set — that is the storage migration
+ * this repo's contract-conformance doc calls item 1. An EXPLICIT setting is
+ * never reinterpreted: `local`, `file` and `jsonl` all keep meaning the
+ * append-only JSONL log, so a user who pinned the old behaviour still gets it.
+ * Only the unset default moved.
+ */
+function engineFromEnv(env: Record<string, string | undefined>): FeedbackStorageEngine | "invalid" {
+  const raw = (readStorageEnv(env, "STORE", ["FEEDBACK_STORAGE_BACKEND", `${ENV_PREFIX}STORAGE_BACKEND`]) ?? "")
+    .trim()
+    .toLowerCase();
+  if (!raw || raw === "sqlite" || raw === "db") return "sqlite";
+  if (raw === "jsonl" || raw === "file" || raw === "local") return "jsonl";
+  if (raw === "cloud" || raw === "rds" || raw === "postgres" || raw === "postgresql") return "postgres";
   return "invalid";
 }
 
@@ -125,31 +151,39 @@ function cloudDiagnostics(options: FeedbackStoreRuntimeOptions): FeedbackCloudRu
   };
 }
 
-export function describeFeedbackStoreRuntime(options: FeedbackStoreRuntimeOptions = {}): FeedbackStoreRuntimeDiagnostics {
+export function describeFeedbackStoreRuntime(
+  options: FeedbackStoreRuntimeOptions = {},
+): FeedbackStoreRuntimeDiagnostics {
   const env = options.env ?? process.env;
-  const mode = runtimeModeFromEnv(env);
-  const requestedMode = mode;
+  const engine = engineFromEnv(env);
 
-  if (mode === "local") {
-    const dataFile = resolveFeedbackFilePath({
-      dataDir: options.local?.dataDir ?? env["FEEDBACK_DATA_DIR"],
-      filePath: options.local?.filePath,
-    });
+  if (engine === "sqlite" || engine === "jsonl") {
+    const dataDir = options.local?.dataDir ?? readStorageEnv(env, "DATA_DIR");
+    const jsonlPath = resolveFeedbackFilePath({ dataDir, filePath: options.local?.filePath });
+    const dataFile =
+      engine === "sqlite"
+        ? resolveFeedbackSqlitePath({
+            dataDir,
+            sqlitePath: options.local?.sqlitePath ?? readStorageEnv(env, "SQLITE_PATH"),
+          })
+        : jsonlPath;
     return {
-      mode,
-      requestedMode,
-      activeStore: "local-jsonl",
+      mode: "local",
+      requestedMode: "local",
+      engine,
+      activeStore: engine === "sqlite" ? "local-sqlite" : "local-jsonl",
       ok: true,
-      local: { dataFile },
+      local: { dataFile, engine, jsonlPath },
       blockers: [],
     };
   }
 
-  if (mode === "cloud") {
+  if (engine === "postgres") {
     const cloud = cloudDiagnostics(options);
     return {
-      mode,
-      requestedMode,
+      mode: "cloud",
+      requestedMode: "cloud",
+      engine: "postgres",
       activeStore: cloud.adapterProvided ? "cloud-adapter" : "unavailable",
       ok: cloud.ready,
       cloud,
@@ -158,22 +192,34 @@ export function describeFeedbackStoreRuntime(options: FeedbackStoreRuntimeOption
   }
 
   return {
-    mode,
-    requestedMode,
+    mode: "invalid",
+    requestedMode: "invalid",
     activeStore: "unavailable",
     ok: false,
     blockers: [
-      "Unsupported FEEDBACK_STORE/FEEDBACK_STORAGE_BACKEND value. Use \"local\" or \"cloud\".",
+      "Unsupported FEEDBACK_STORE/FEEDBACK_STORAGE_BACKEND value. Use \"sqlite\", \"jsonl\", or \"postgres\".",
     ],
   };
 }
 
 export function createFeedbackStore(options: FeedbackStoreRuntimeOptions = {}): FeedbackStore {
+  const env = options.env ?? process.env;
   const runtime = describeFeedbackStoreRuntime(options);
-  if (runtime.mode === "local") {
+
+  if (runtime.engine === "sqlite") {
+    return new SqliteFeedbackStore({
+      dataDir: options.local?.dataDir ?? readStorageEnv(env, "DATA_DIR"),
+      sqlitePath: options.local?.sqlitePath ?? readStorageEnv(env, "SQLITE_PATH"),
+      eventSink: options.local?.eventSink,
+      taskSink: options.local?.taskSink,
+    });
+  }
+  if (runtime.engine === "jsonl") {
     return new LocalFeedbackStore({
-      dataDir: options.local?.dataDir ?? options.env?.["FEEDBACK_DATA_DIR"],
+      dataDir: options.local?.dataDir ?? readStorageEnv(env, "DATA_DIR"),
       filePath: options.local?.filePath,
+      eventSink: options.local?.eventSink,
+      taskSink: options.local?.taskSink,
     });
   }
   if (runtime.mode === "cloud" && options.cloudStore) {
@@ -182,127 +228,8 @@ export function createFeedbackStore(options: FeedbackStoreRuntimeOptions = {}): 
   throw new Error(runtime.blockers.join(" "));
 }
 
-/** Merge a field-level linkage patch onto an item. `null` clears a field. */
-function applyLinkageDelta(item: FeedbackItem, delta: FeedbackLinkageDelta): FeedbackItem {
-  const next: FeedbackItem = { ...item };
-  if (delta.taskRef !== undefined) {
-    if (delta.taskRef === null) delete next.taskRef;
-    else next.taskRef = delta.taskRef;
-  }
-  if (delta.taskError !== undefined) {
-    if (delta.taskError === null) delete next.taskError;
-    else next.taskError = delta.taskError;
-  }
-  if (delta.taskAttempt !== undefined) {
-    if (delta.taskAttempt === null) delete next.taskAttempt;
-    else next.taskAttempt = delta.taskAttempt;
-  }
-  return next;
-}
-
 function ensureParentDir(filePath: string): void {
   mkdirSync(dirname(filePath), { recursive: true });
-}
-
-function emptyStats(): FeedbackStats {
-  return {
-    total: 0,
-    byApp: {},
-    byKind: Object.fromEntries(feedbackKinds.map((kind) => [kind, 0])) as FeedbackStats["byKind"],
-    byStatus: Object.fromEntries(feedbackStatuses.map((status) => [status, 0])) as FeedbackStats["byStatus"],
-    bySeverity: {},
-  };
-}
-
-/**
- * Aggregate a set of items into the SDK's canonical {@link FeedbackStats} shape.
- *
- * Every kind and status is zero-filled rather than omitted, so a caller can index
- * the result without guarding for undefined. Exported alongside
- * {@link applyFeedbackFilter} so a custom store reports stats identically to the
- * bundled ones.
- */
-export function computeFeedbackStats(items: readonly FeedbackItem[]): FeedbackStats {
-  const stats = emptyStats();
-  for (const item of items) {
-    stats.total += 1;
-    stats.byApp[item.appId] = (stats.byApp[item.appId] ?? 0) + 1;
-    stats.byKind[item.kind] += 1;
-    stats.byStatus[item.status] += 1;
-    if (item.severity) stats.bySeverity[item.severity] = (stats.bySeverity[item.severity] ?? 0) + 1;
-  }
-  return stats;
-}
-
-function parseDateFilter(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
-}
-
-/**
- * Fold every searchable field of an item into one lowercased string.
- *
- * Exported because a store backed by something other than the bundled JSONL
- * file has to reproduce this to keep `search` filtering consistent, and two
- * shipped consumers were hand-copying it for exactly that reason.
- */
-export function buildFeedbackSearchHaystack(item: FeedbackItem): string {
-  return [
-    item.appId,
-    item.message,
-    item.kind,
-    item.severity,
-    item.status,
-    item.userId,
-    item.email,
-    item.url,
-    item.tags.join(" "),
-    item.context ? JSON.stringify(item.context) : "",
-    item.metadata ? JSON.stringify(item.metadata) : "",
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-}
-
-/**
- * Apply the SDK's canonical list semantics — field filters, date range, free-text
- * search, newest-first ordering, and the 1..500 limit clamp — to an already-loaded
- * set of items.
- *
- * Exported so that a custom {@link FeedbackStore} can guarantee parity with the
- * bundled stores instead of reimplementing the rules. Backends that can push these
- * predicates down into a query should still route their final result through this
- * function, or use it as the reference the query is tested against.
- */
-export function applyFeedbackFilter(items: FeedbackItem[], filter: FeedbackListFilter = {}): FeedbackItem[] {
-  const limit = Math.max(1, Math.min(filter.limit ?? 50, 500));
-  const since = parseDateFilter(filter.since);
-  const until = parseDateFilter(filter.until);
-  const search = filter.search?.trim().toLowerCase();
-  return items
-    .filter((item) => !filter.appId || item.appId === filter.appId)
-    .filter((item) => !filter.status || item.status === filter.status)
-    .filter((item) => !filter.tag || item.tags.includes(filter.tag.toLowerCase()))
-    .filter((item) => !since || item.createdAt >= since)
-    .filter((item) => !until || item.createdAt <= until)
-    .filter((item) => !search || buildFeedbackSearchHaystack(item).includes(search))
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-    .slice(0, limit);
-}
-
-/**
- * Raised when the data lock could not be acquired. Typed so callers can tell
- * "server is busy, retry" from "your request was bad" — an HTTP 400 tells a
- * client not to retry, which is exactly wrong for contention.
- */
-export class FeedbackStoreBusyError extends Error {
-  readonly code = "FEEDBACK_STORE_BUSY";
-  constructor(message: string) {
-    super(message);
-    this.name = "FeedbackStoreBusyError";
-  }
 }
 
 function delay(ms: number): Promise<void> {
@@ -335,43 +262,21 @@ async function withFileLock<T>(filePath: string, run: () => Promise<T>): Promise
   }
 }
 
-export class LocalFeedbackStore implements FeedbackStore {
+/**
+ * The append-only JSONL store. No longer the default — see
+ * {@link SqliteFeedbackStore} — but still fully supported, and selected with
+ * `HASNA_FEEDBACK_STORE=jsonl`.
+ */
+export class LocalFeedbackStore extends FeedbackStoreBase {
   readonly filePath: string;
-  private readonly eventSink: FeedbackEventSink | null;
-  private readonly taskSink: FeedbackTaskSink | null;
 
   constructor(options: LocalFeedbackStoreOptions = {}) {
+    super(
+      options.eventSink === null ? null : options.eventSink ?? createDefaultFeedbackEventSink(),
+      options.taskSink === null ? null : options.taskSink ?? createTaskSink(),
+    );
     this.filePath = resolveFeedbackFilePath(options);
     ensureParentDir(this.filePath);
-    this.eventSink = options.eventSink === null ? null : options.eventSink ?? createDefaultFeedbackEventSink();
-    this.taskSink = options.taskSink === null ? null : options.taskSink ?? createTaskSink();
-  }
-
-  async createFeedback(input: FeedbackInput, options: FeedbackCreateOptions = {}): Promise<FeedbackItem> {
-    const now = (options.now ?? new Date()).toISOString();
-    const parsed = parseFeedbackInput(input);
-    const item: FeedbackItem = {
-      ...parsed,
-      id: crypto.randomUUID(),
-      createdAt: now,
-      updatedAt: now,
-      status: "new",
-      source: options.source ?? "server",
-      kind: parsed.kind ?? "other",
-      tags: parsed.tags ?? [],
-    };
-    // Durability first: the report is on disk before anything downstream runs,
-    // so a failing task sink can never cost us the feedback itself.
-    //
-    // The attempt marker goes in this SAME first write. Without it, a crash
-    // between "task created" and "link recorded" is indistinguishable from
-    // "never attempted", and the repair path files a duplicate task.
-    const stored: FeedbackItem = this.taskSink
-      ? { ...item, taskAttempt: { startedAt: now, attempts: 1 } }
-      : item;
-    await this.appendItem(stored);
-    if (this.eventSink) await emitFeedbackEvent(buildFeedbackCreatedEvent(item), this.eventSink);
-    return this.attachTask(stored);
   }
 
   /**
@@ -379,7 +284,7 @@ export class LocalFeedbackStore implements FeedbackStore {
    * whole file under the lock is O(n) and, under concurrency, blew the lock
    * deadline and dropped reports outright.
    */
-  private async appendItem(item: FeedbackItem): Promise<void> {
+  protected async appendNew(item: FeedbackItem): Promise<void> {
     await this.appendRecord(item);
   }
 
@@ -388,7 +293,7 @@ export class LocalFeedbackStore implements FeedbackStore {
    * snapshot for this: the snapshot predates task creation, and folding it as
    * a full record would revert any status change that landed meanwhile.
    */
-  private async appendDelta(delta: FeedbackLinkageDelta): Promise<void> {
+  protected async patchItem(delta: FeedbackLinkageDelta): Promise<void> {
     await this.appendRecord(delta);
   }
 
@@ -398,202 +303,32 @@ export class LocalFeedbackStore implements FeedbackStore {
     });
   }
 
-  /**
-   * Create the task for a feedback item and record the outcome by appending an
-   * updated record. Runs outside the file lock because task creation spawns a
-   * process.
-   *
-   * This never rejects once the report is stored. Rejecting here would drop
-   * the caller's only copy of the feedback id while the report sat on disk.
-   */
-  private async attachTask(item: FeedbackItem): Promise<FeedbackItem> {
-    if (!this.taskSink) return item;
-    let taskRef: FeedbackItem["taskRef"];
-    let taskError: string | undefined;
-    try {
-      taskRef = await this.taskSink.createTask(item);
-    } catch (error) {
-      taskError = truncateTaskError(error instanceof Error ? error.message : String(error));
-    }
-
-    const delta: FeedbackLinkageDelta = taskRef
-      ? { patch: "task", id: item.id, taskRef, taskError: null }
-      : { patch: "task", id: item.id, taskError: taskError! };
-
-    try {
-      await this.appendDelta(delta);
-    } catch (error) {
-      // The linkage record could not be written. Report what is actually on
-      // disk — claiming a taskRef we failed to persist would assert a
-      // durability we do not have. `sync-tasks` sees the attempt marker and
-      // reports it as uncertain rather than duplicating the task.
-      const detail = taskRef
-        ? `task ${taskRef.taskId} was created but its link could not be stored`
-        : "task creation failed and the failure could not be stored";
-      const message = error instanceof Error ? error.message : String(error);
-      return { ...item, taskRef: undefined, taskError: truncateTaskError(`${detail}: ${message}`) };
-    }
-
-    return taskRef ? { ...item, taskRef, taskError: undefined } : { ...item, taskError };
-  }
-
-  /**
-   * Retry task creation for feedback that has no task yet. This is the repair
-   * path for feedback captured while the task sink was down or unconfigured —
-   * without it, an outage would silently leave the loop open.
-   *
-   * Items whose previous attempt recorded no outcome are reported as
-   * `uncertain` and skipped: a task may already exist for them, and filing a
-   * second one is worse than leaving a human to check.
-   */
-  async syncTasks(options: { limit?: number; retryUncertain?: boolean } = {}): Promise<FeedbackSyncTasksResult> {
-    const result: FeedbackSyncTasksResult = {
-      sinkConfigured: Boolean(this.taskSink),
-      created: 0,
-      failed: 0,
-      skipped: 0,
-      uncertain: 0,
-      remaining: 0,
-      errors: [],
-    };
-    if (!this.taskSink) return result;
-
+  /** Rewrite the log with this item folded in, compacting it to one record per item. */
+  protected async putItem(item: FeedbackItem): Promise<void> {
     const items = await this.readAll();
-    const unlinked = items.filter((item) => !item.taskRef);
-    result.skipped = items.length - unlinked.length;
-
-    // A recorded taskError means we KNOW the attempt failed, so retrying is
-    // safe. An attempt marker with no recorded outcome means we do not know.
-    const uncertain = unlinked.filter((item) => item.taskAttempt && !item.taskError);
-    const safe = unlinked.filter((item) => !(item.taskAttempt && !item.taskError));
-    const queue = options.retryUncertain ? [...safe, ...uncertain] : safe;
-    if (!options.retryUncertain) result.uncertain = uncertain.length;
-
-    const batch = queue.slice(0, options.limit ?? queue.length);
-    result.remaining = queue.length - batch.length;
-
-    for (const item of batch) {
-      const attempts = (item.taskAttempt?.attempts ?? 0) + 1;
-      const attempt = { startedAt: new Date().toISOString(), attempts };
-      try {
-        await this.appendDelta({ patch: "task", id: item.id, taskAttempt: attempt });
-      } catch {
-        // Best effort: a missing marker only costs us duplicate-detection.
-      }
-      try {
-        const taskRef = await this.taskSink.createTask(item);
-        await this.appendDelta({ patch: "task", id: item.id, taskRef, taskError: null });
-        result.created += 1;
-      } catch (error) {
-        const message = truncateTaskError(error instanceof Error ? error.message : String(error));
-        await this.appendDelta({ patch: "task", id: item.id, taskError: message }).catch(() => {});
-        result.failed += 1;
-        result.errors.push(`${item.id}: ${message}`);
-      }
-    }
-    return result;
-  }
-
-  async listFeedback(filter: FeedbackListFilter = {}): Promise<FeedbackItem[]> {
-    return applyFeedbackFilter(await this.readAll(), filter);
-  }
-
-  async getFeedback(id: string): Promise<FeedbackItem | null> {
-    return (await this.readAll()).find((item) => item.id === id) ?? null;
-  }
-
-  async updateFeedbackStatus(id: string, status: FeedbackStatus): Promise<FeedbackItem | null> {
-    const updated = await withFileLock(this.filePath, async () => {
-      const items = await this.readAll();
-      const index = items.findIndex((item) => item.id === id);
-      if (index === -1) return null;
-      const current = items[index]!;
-      const next: FeedbackItem = {
-        ...current,
-        status,
-        updatedAt: new Date().toISOString(),
-      };
-      items[index] = next;
-      await this.writeAll(items);
-      return next;
-    });
-    if (updated && status !== "new" && this.eventSink) {
-      await emitFeedbackEvent(buildFeedbackTriagedEvent(updated, status), this.eventSink);
-    }
-    return updated;
+    const index = items.findIndex((existing) => existing.id === item.id);
+    if (index === -1) items.push(item);
+    else items[index] = item;
+    await this.writeAll(items);
   }
 
   /**
-   * Changelog-entry linkage: mark feedback as shipped, record the changelog
-   * ref + shippedAt, and emit the `feedback.triaged` notification event with
-   * disposition "shipped".
+   * In-process ordering first, then the cross-process lock file. The lock file
+   * alone cannot serialise two concurrent awaits from this same process.
    */
-  async markFeedbackShipped(id: string, changelogRef: string): Promise<FeedbackItem | null> {
-    const ref = changelogRef?.trim();
-    if (!ref) throw new Error("changelogRef is required to mark feedback shipped");
-    const updated = await withFileLock(this.filePath, async () => {
-      const items = await this.readAll();
-      const index = items.findIndex((item) => item.id === id);
-      if (index === -1) return null;
-      const current = items[index]!;
-      const now = new Date().toISOString();
-      const next: FeedbackItem = {
-        ...current,
-        status: "shipped",
-        changelogRef: ref,
-        shippedAt: now,
-        updatedAt: now,
-      };
-      items[index] = next;
-      await this.writeAll(items);
-      return next;
-    });
-    if (updated && this.eventSink) {
-      await emitFeedbackEvent(buildFeedbackTriagedEvent(updated, "shipped"), this.eventSink);
-    }
-    return updated;
+  protected async mutate<T>(run: () => Promise<T>): Promise<T> {
+    return this.serialise(() => withFileLock(this.filePath, run));
   }
 
-  async stats(): Promise<FeedbackStats> {
-    return computeFeedbackStats(await this.readAll());
-  }
-
-  async exportJsonl(filter: FeedbackListFilter = {}): Promise<string> {
-    const items = await this.listFeedback({ ...filter, limit: filter.limit ?? 500 });
-    return items.map((item) => JSON.stringify(item)).join("\n") + (items.length ? "\n" : "");
-  }
-
-  /**
-   * The file is an append-only log: a feedback item may appear more than once,
-   * with later records superseding earlier ones (that is how task linkage is
-   * recorded without rewriting the file). Fold by id, last record wins.
-   * `writeAll` compacts the log back to one record per item.
-   */
   async readAll(): Promise<FeedbackItem[]> {
     if (!existsSync(this.filePath)) return [];
-    const raw = await readFile(this.filePath, "utf8");
-    const byId = new Map<string, FeedbackItem>();
-    for (const line of raw.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      const record: unknown = JSON.parse(trimmed);
-      if (isFeedbackLinkageDelta(record)) {
-        const delta = parseFeedbackLinkageDelta(record);
-        const existing = byId.get(delta.id);
-        // A patch for an item we have not seen has nothing to merge onto.
-        if (existing) byId.set(delta.id, applyLinkageDelta(existing, delta));
-        continue;
-      }
-      const item = parseStoredFeedbackItem(record);
-      byId.set(item.id, item);
-    }
-    return [...byId.values()];
+    return foldFeedbackRecords(await readFile(this.filePath, "utf8"));
   }
 
   private async writeAll(items: FeedbackItem[]): Promise<void> {
     ensureParentDir(this.filePath);
     const tmpPath = `${this.filePath}.${process.pid}.${Date.now()}.tmp`;
-    await writeFile(tmpPath, items.map((item) => JSON.stringify(item)).join("\n") + (items.length ? "\n" : ""), "utf8");
+    await writeFile(tmpPath, serialiseFeedbackJsonl(items), "utf8");
     await rename(tmpPath, this.filePath);
   }
 }

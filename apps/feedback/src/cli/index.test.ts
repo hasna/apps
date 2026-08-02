@@ -16,13 +16,26 @@ describe("feedback CLI diagnostics", () => {
       ok: true,
       runtime: {
         mode: "local",
-        activeStore: "local-jsonl",
+        engine: "sqlite",
+        activeStore: "local-sqlite",
         ok: true,
       },
       dataDirWritable: true,
       dataFileReadable: true,
       apiTokenConfigured: false,
     });
+    expect(report.dataFile).toBe(join(dataDir, "feedback.db"));
+  });
+
+  test("reports the JSONL data file when the legacy engine is selected", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "open-feedback-cli-"));
+    const report = await buildDoctorReport({
+      FEEDBACK_DATA_DIR: dataDir,
+      FEEDBACK_STORE: "jsonl",
+      PATH: "",
+    });
+
+    expect(report).toMatchObject({ ok: true, runtime: { engine: "jsonl", activeStore: "local-jsonl" } });
     expect(report.dataFile).toBe(join(dataDir, "feedback.jsonl"));
   });
 

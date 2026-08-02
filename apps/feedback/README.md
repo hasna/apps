@@ -2,7 +2,7 @@
 
 Reusable feedback collection for Hasna-coded apps.
 
-Open Feedback provides a small HTTP API, TypeScript SDK, CLI, MCP server, and local JSONL storage so apps can collect product feedback without standing up a database first. Production deployments can inject a cloud-backed `FeedbackStore` adapter while keeping local operation unchanged. The local project slug is `open-feedback`; the GitHub repository is `hasna/feedback`.
+Open Feedback provides a small HTTP API, TypeScript SDK, CLI, MCP server, and local SQLite storage so apps can collect product feedback without standing up a database server first. Production deployments can inject a cloud-backed `FeedbackStore` adapter while keeping local operation unchanged. The local project slug is `open-feedback`; the GitHub repository is `hasna/feedback`.
 
 ## Install
 
@@ -182,7 +182,15 @@ feedback sync-tasks   # -> {"sinkConfigured":true,"created":2,"failed":0,"skippe
 
 ### Storage shape
 
-The JSONL file is an **append-only log** with two kinds of record:
+The **SQLite** store keeps one row per feedback item, holding the full item as
+JSON alongside projected `id`, `created_at`, `app_id`, `status`, `kind` and
+`severity` columns. The JSON is the source of truth, which is what keeps
+`exportJsonl` byte-identical to the JSONL store's output and lets the item
+shape grow a field without a schema migration. Updates replace a row in a
+transaction, so there is no compaction step and reads scale with items rather
+than records.
+
+The **JSONL** file is an **append-only log** with two kinds of record:
 
 - a **full item** — the whole feedback object, written once when it is submitted (and again when the log is compacted);
 - a **linkage patch** — `{"patch":"task","id":…,"taskRef":…}`, carrying only the task fields, where `null` clears a field.
@@ -235,15 +243,43 @@ Feedback submitted through the MCP server goes through the same store, so it cre
 
 ## Storage
 
-By default, Open Feedback runs in local JSONL mode and writes to:
+By default, Open Feedback stores feedback in a local **SQLite** database:
 
 ```text
-~/.hasna/feedback/feedback.jsonl
+~/.hasna/feedback/feedback.db
 ```
 
-Override the directory with `FEEDBACK_DATA_DIR`.
+Override the directory with `HASNA_FEEDBACK_DATA_DIR`, or name the database
+file outright with `HASNA_FEEDBACK_SQLITE_PATH`. Configuration is read from
+`HASNA_FEEDBACK_*` first and falls back to the historical unprefixed
+`FEEDBACK_*` names, so existing setups keep working.
 
-Set `FEEDBACK_STORE=cloud` only in a host runtime that injects a cloud-backed `FeedbackStore` adapter:
+Select the engine with `HASNA_FEEDBACK_STORE`:
+
+| value | backend |
+| --- | --- |
+| unset, `sqlite`, `db` | SQLite at `~/.hasna/feedback/feedback.db` (default) |
+| `jsonl`, `file`, `local` | the append-only JSONL log at `~/.hasna/feedback/feedback.jsonl` |
+| `postgres`, `postgresql`, `cloud`, `rds` | a host-injected `FeedbackStore` adapter |
+
+### Migrating from `feedback.jsonl`
+
+**This happens automatically and needs no action.** The first time a SQLite
+store opens, it imports any `feedback.jsonl` sitting in the same directory and
+records that it has done so, so the import runs once and cannot duplicate rows.
+
+The import is **non-destructive**: `feedback.jsonl` is never written, renamed
+or deleted. To roll back, set `HASNA_FEEDBACK_STORE=jsonl` — the original log
+is still there, unchanged, and still authoritative for that engine. Note that
+feedback captured under SQLite after the switch does **not** flow back into the
+JSONL log, so a rollback leaves behind anything recorded in between.
+
+JSONL remains a first-class **export** format regardless of engine — `feedback
+export --format jsonl` and `GET /v1/export.jsonl` produce byte-identical output
+on either backend.
+
+Set `HASNA_FEEDBACK_STORE=postgres` only in a host runtime that injects a
+`FeedbackStore` adapter:
 
 ```ts
 import { createFeedbackHandler, type FeedbackStore } from "@hasna/feedback";
