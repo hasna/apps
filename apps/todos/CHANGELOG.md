@@ -16,13 +16,17 @@ published to npm; `0.13.12` is the version this supersedes.
 
 ### Changed
 
-- **BREAKING (CLI): an out-of-vocabulary enum flag value is now rejected instead of
-  returning an empty result at exit code 0.** Passing an unsupported value — the
-  common case is a `--status` word that is not one of `pending`, `in_progress`,
-  `completed`, `failed`, `cancelled` — previously produced a clean empty list that
-  was indistinguishable from "no tasks matched", so a typo read as a true negative.
-  It now exits non-zero and names the accepted vocabulary. Any script that depended
-  on the silent-empty behaviour will start failing loudly; that is the intent.
+- **BREAKING (CLI and HTTP API): an out-of-vocabulary enum value is now rejected
+  instead of returning an empty result.** Passing an unsupported value — the common
+  case is a `--status` word that is not one of `pending`, `in_progress`, `completed`,
+  `failed`, `cancelled` — previously produced a clean empty list that was
+  indistinguishable from "no tasks matched", so a typo read as a true negative. The
+  CLI now exits non-zero and names the accepted vocabulary, and three HTTP endpoints
+  now answer **400** where they previously answered 200 with an empty list:
+  `GET /v1/tasks` validates `status` and `priority`, and `GET /api/tasks` and
+  `GET /api/tasks/export` validate `status`. `?status=open` is the canonical
+  example. Any script or API client that depended on the silent-empty behaviour
+  will start failing loudly; that is the intent.
 
 ### Fixed
 
@@ -40,8 +44,32 @@ published to npm; `0.13.12` is the version this supersedes.
 - Registering an agent through the hosted path no longer mints a case variant of an
   existing name. This closes the remaining write path that could recreate the
   split-identity condition 0.13.12 fixed on the read side.
-- Multi-value task filters are now modelled correctly in the generated API schema,
-  so generated clients emit the repeated query parameters the server accepts.
+- **The MCP `rename_agent` and `rebalance_workload` tools now leave an ambiguous
+  case-variant assignee alone instead of resolving it arbitrarily.** Where a database
+  holds two distinct agents whose names differ only by case — the same split-identity
+  condition the entry above closes at its source — `rename_agent` matched `assigned_to`
+  case-insensitively and therefore moved *both* agents' tasks onto the renamed one, and
+  `rebalance_workload` indexed both roster rows under one lower-cased key, attributing
+  those tasks to whichever row happened to be indexed last. `rename_agent` now widens to
+  a case-insensitive match only when the old name uniquely identifies the agent being
+  renamed, and uses an exact match when it does not; `rebalance_workload` marks a
+  colliding alias ambiguous and skips those assignments rather than guessing. The
+  observable difference on a database carrying such a collision is that `rename_agent`
+  reports fewer updated tasks and `rebalance_workload` reports fewer moves — that is the
+  wrong work no longer being done. This is not marked breaking because what it replaces
+  was not a contract: in the colliding case the outcome was arbitrary — whichever roster
+  row was indexed last — and no caller can have depended on it. It does carry one
+  regression, named here rather than left to be found: `rename_agent`'s uniqueness guard
+  resolves the old name through `resolvePartialId`, which treats any string of 36
+  characters or more as a full UUID and looks it up on the `id` column, so it reports
+  "not unique" for every agent name that long even when no collision exists. Such an
+  agent's differently-cased task rows are now left on the stale name after a rename.
+  Tracked as a follow-up.
+- Multi-value task filters are now modelled correctly in the generated API schema
+  (`style: form`, `explode: false`), so generated clients emit the **comma-separated
+  single parameter** the server actually reads — `?status=pending,in_progress`. The
+  server reads each filter with `searchParams.get()` and splits on `,`; it never calls
+  `getAll`, so a client emitting a repeated parameter has only its first value honoured.
 
 ### Note
 
