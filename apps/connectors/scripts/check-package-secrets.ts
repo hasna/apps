@@ -378,14 +378,28 @@ const { findings, scanned, symlinks, absent } = scanPaths(filesToScan());
 const symlinkNote = symlinks > 0 ? `, ${symlinks} symlink(s) skipped` : "";
 const absentNote = absent > 0 ? `, ${absent} listed-but-absent path(s) skipped` : "";
 
+// The file census is emitted on BOTH the pass and the fail path, and that is
+// deliberate rather than tidiness.
+//
+// This script's CI step is named "Package-manager secret guard", and that name
+// read identically before and after the scan was widened from a basename
+// allow-list to the whole text tree. So a green step on a tree that still
+// carries an exposure is indistinguishable from a green step on a clean one —
+// the step name is not evidence about which guard ran. The only observable that
+// changed is how many files were opened: roughly 1,220 under the old
+// basename gate against roughly 22,745 now. That number is therefore the sole
+// discriminator available to anyone verifying that the widened guard actually
+// ran, and it is relied on outside this repository as a release-gate
+// corroborator. A discriminator that disappears exactly when the guard fails is
+// no use to an operator reading a red log, so it is printed either way.
+const census = `${scanned} tracked + packed file(s) scanned${symlinkNote}${absentNote}`;
+
 if (findings.length === 0) {
-  console.log(
-    `Package-manager and deployment-identifier guard clean (${scanned} tracked + packed file(s) scanned${symlinkNote}${absentNote}).`,
-  );
+  console.log(`Package-manager and deployment-identifier guard clean (${census}).`);
   process.exit(0);
 }
 
-console.error(`${findings.length} package-manager / deployment-identifier finding(s) detected.`);
+console.error(`${findings.length} package-manager / deployment-identifier finding(s) detected (${census}).`);
 for (const finding of findings.slice(0, 50)) {
   console.error(`${finding.path}:${finding.line} ${finding.rule} - ${finding.detail}`);
 }

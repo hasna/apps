@@ -42,7 +42,7 @@
     "dev": "bun run ./src/cli/index.tsx",
     "check:package-secrets": "bun run scripts/check-package-secrets.ts",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.social.json --noEmit",
-    "test": "bun test",
+    "test": "bun run build && bun test",
     "secrets:scan:npmrc": "bun run scripts/scan-npmrc-auth.mjs",
     "sdk:build": "cd sdk && bun run build",
     "prepublishOnly": "bun run secrets:scan:npmrc && bun run check:package-secrets && bun run build && bun test"

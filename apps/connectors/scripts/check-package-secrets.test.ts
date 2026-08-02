@@ -50,6 +50,51 @@ describe("deployment-identifier rules — the guard must be able to FIRE", () =>
     expect(findings.map((f) => f.rule)).toEqual(["deployment-resource-name"]);
   });
 
+  // BOTH ARITIES, each against a negative control that differs ONLY in the
+  // resource-kind word.
+  //
+  // The house standard writes the pattern as `<workload>-<env>-<component>[-<role>]`
+  // — the role segment is bracketed, so ONE component is the documented default
+  // and two is the variant. An earlier revision of this rule required two or
+  // more, which exempted the default; measured against the standard's own worked
+  // examples, 9 of its 18 distinct convention-shaped names were single-component
+  // and none of them matched.
+  //
+  // The paired negative controls are the load-bearing half. Fixing the arity gap
+  // meant loosening the name shape, and the obvious way to get that wrong is to
+  // let the rule decay into "any hyphenated name containing an environment-looking
+  // segment" — measured at 67 matches across 30 files, overwhelmingly false, and
+  // unusable. Asserting the positive alone cannot catch that decay, because a
+  // rule with no second signal still passes every positive. Each control below is
+  // the same line with only the resource-kind word swapped out, so the pair fails
+  // if either the arity fix or the two-signal design regresses.
+  test("fires on BOTH arities, and stays silent when only the kind word is removed", () => {
+    const row = (kind: string, name: string) => `| ${kind} | \`${name}\` |`;
+
+    for (const name of [SENTINEL_SINGLE_COMPONENT, SENTINEL_NAME]) {
+      expect(scanDeploymentIdentifiers("x.md", [row("S3 Bucket", name)]).map((f) => f.rule)).toEqual([
+        "deployment-resource-name",
+      ]);
+      expect(scanDeploymentIdentifiers("x.md", [row("Label", name)])).toEqual([]);
+    }
+  });
+
+  test("flags the single-component form end to end, through file selection", () => {
+    // Through scanPaths rather than the matcher alone, so the regression covers
+    // the whole path a real publish would take — selection, read, then rule —
+    // rather than only the last step of it. The bypass this closes was reachable
+    // precisely because all three had to line up.
+    const { paths } = makeTree({
+      "README.md": `| EC2 Instance | \`${SENTINEL_SINGLE_COMPONENT}\` |`,
+      "Makefile": `EC2_HOST ?= ${SENTINEL_SINGLE_COMPONENT}`,
+    });
+
+    const { findings, scanned } = scanPaths(paths);
+
+    expect(scanned).toBe(2);
+    expect(findings.map((f) => f.rule)).toEqual(["deployment-resource-name", "deployment-resource-name"]);
+  });
+
   test("flags the naming TEMPLATE, not only concrete names", () => {
     // Publishing the pattern makes every sibling resource's name derivable, so
     // scrubbing concrete names alone would leave the disclosure intact.
