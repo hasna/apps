@@ -1,6 +1,5 @@
 import type { Database, SQLQueryBindings } from "bun:sqlite";
-import { getDatabase } from "../db/database.js";
-import { isLockExpired } from "../db/database.js";
+import { assignedToAliasSet, getDatabase, isLockExpired, lowerInClause, resolveAssignedToAliases } from "../db/database.js";
 import { listPlans } from "../db/plans.js";
 import { getBlockingDeps, listTasks } from "../db/tasks.js";
 import type { Task } from "../types/index.js";
@@ -213,9 +212,15 @@ function isTerminal(task: Task): boolean {
   return task.status === "completed" || task.status === "failed" || task.status === "cancelled";
 }
 
-function sameAgent(task: Task, agentId?: string): boolean {
+// Alias-resolved (task 84c77210): `assigned_to` holds an agent id from one
+// write path and a resolved name from another — see database.ts for the
+// root cause. `agentId` is compared to `task.agent_id` unchanged (a
+// different, less aliasable write path); `aliasSet`, from
+// `assignedToAliasSet`, covers every stored form of `assigned_to`.
+function sameAgent(task: Task, agentId?: string, aliasSet?: Set<string>): boolean {
   if (!agentId) return true;
-  return task.assigned_to === agentId || task.agent_id === agentId;
+  if (task.agent_id === agentId) return true;
+  return aliasSet ? aliasSet.has((task.assigned_to ?? "").toLowerCase()) : task.assigned_to === agentId;
 }
 
 function withinTaskWindow(task: Task, options: LocalReportOptions): boolean {
@@ -227,11 +232,12 @@ function withinTaskWindow(task: Task, options: LocalReportOptions): boolean {
 }
 
 function scopedTasks(options: LocalReportOptions, db: Database): Task[] {
+  const aliasSet = options.agent_id ? assignedToAliasSet(db, options.agent_id) : undefined;
   return listTasks({
     project_id: options.project_id,
     plan_id: options.plan_id,
     include_archived: false,
-  }, db).filter((task) => sameAgent(task, options.agent_id) && withinTaskWindow(task, options));
+  }, db).filter((task) => sameAgent(task, options.agent_id, aliasSet) && withinTaskWindow(task, options));
 }
 
 function summarizeTask(task: Task): LocalReportTaskSummary {
@@ -298,7 +304,10 @@ function initialAgentSummary(agentId: string): LocalReportAgentSummary {
   };
 }
 
-function addScopeClauses(where: string[], params: SQLQueryBindings[], options: LocalReportOptions, timeColumn: string): void {
+// Alias-resolves the `t.assigned_to` leg (task 84c77210) — see database.ts
+// for the root cause. `r.agent_id`/`t.agent_id` are left as exact matches;
+// they are populated from a different, less aliasable write path.
+function addScopeClauses(where: string[], params: SQLQueryBindings[], options: LocalReportOptions, timeColumn: string, db: Database): void {
   if (options.project_id) {
     where.push("t.project_id = ?");
     params.push(options.project_id);
@@ -308,8 +317,9 @@ function addScopeClauses(where: string[], params: SQLQueryBindings[], options: L
     params.push(options.plan_id);
   }
   if (options.agent_id) {
-    where.push("(r.agent_id = ? OR t.agent_id = ? OR t.assigned_to = ?)");
-    params.push(options.agent_id, options.agent_id, options.agent_id);
+    params.push(options.agent_id, options.agent_id);
+    const assignedInClause = lowerInClause("t.assigned_to", resolveAssignedToAliases(db, options.agent_id), params);
+    where.push(`(r.agent_id = ? OR t.agent_id = ? OR ${assignedInClause})`);
   }
   if (options.since) {
     where.push(`${timeColumn} >= ?`);
@@ -324,7 +334,7 @@ function addScopeClauses(where: string[], params: SQLQueryBindings[], options: L
 function loadRuns(options: LocalReportOptions, db: Database): RunRow[] {
   const where = ["t.archived_at IS NULL"];
   const params: SQLQueryBindings[] = [];
-  addScopeClauses(where, params, options, "r.started_at");
+  addScopeClauses(where, params, options, "r.started_at", db);
   return db.query(`
     SELECT
       r.id,
@@ -365,8 +375,11 @@ function loadVerifications(options: LocalReportOptions, db: Database): Verificat
     params.push(options.plan_id);
   }
   if (options.agent_id) {
-    where.push("(v.agent_id = ? OR t.agent_id = ? OR t.assigned_to = ?)");
-    params.push(options.agent_id, options.agent_id, options.agent_id);
+    // Alias-resolved (task 84c77210) for the `t.assigned_to` leg — see
+    // database.ts for the root cause.
+    params.push(options.agent_id, options.agent_id);
+    const assignedInClause = lowerInClause("t.assigned_to", resolveAssignedToAliases(db, options.agent_id), params);
+    where.push(`(v.agent_id = ? OR t.agent_id = ? OR ${assignedInClause})`);
   }
   if (options.since) {
     where.push("v.run_at >= ?");

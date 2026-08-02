@@ -8,7 +8,7 @@ import {
   TaskNotFoundError,
   VersionConflictError,
 } from "../types/index.js";
-import { getDatabase, now } from "./database.js";
+import { getDatabase, lowerInClause, now, resolveAssignedToAliases } from "./database.js";
 import { countTasks, createTask, getTask, listTasks, updateTask } from "./task-crud.js";
 import { addDependency } from "./task-graph.js";
 import {
@@ -233,7 +233,11 @@ export function getTaskStats(
 
   if (filters?.project_id) { conditions.push("project_id = ?"); params.push(filters.project_id); }
   if (filters?.task_list_id) { conditions.push("task_list_id = ?"); params.push(filters.task_list_id); }
-  if (filters?.agent_id) { conditions.push("(agent_id = ? OR assigned_to = ?)"); params.push(filters.agent_id, filters.agent_id); }
+  if (filters?.agent_id) {
+    // Alias-resolved (task 84c77210) — see database.ts for the root cause.
+    params.push(filters.agent_id);
+    conditions.push(`(agent_id = ? OR ${lowerInClause("assigned_to", resolveAssignedToAliases(d, filters.agent_id), params)})`);
+  }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 

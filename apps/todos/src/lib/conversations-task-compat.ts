@@ -430,6 +430,13 @@ function prepareTask(
     metadata,
     due_at: nonEmptyString(normalized.record.due_at) ?? undefined,
   };
+  // Examined for task 84c77210 (assigned_to alias-resolution sweep) and
+  // judged correct as an exact match: this is an idempotency/no-op check
+  // comparing an existing task's `assigned_to` to the SAME literal input
+  // that would be written for this update — never a "find this agent's
+  // tasks" lookup — so there is no alias form to resolve. `input.assigned_to`
+  // was itself just derived on the lines above from the incoming record; the
+  // fields being compared always share one representation.
   const unchanged = existing
     && existing.title === input.title
     && (existing.description ?? undefined) === input.description

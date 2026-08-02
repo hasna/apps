@@ -134,6 +134,29 @@ describe("Agent Metrics", () => {
       expect(metrics).not.toBeNull();
       expect(metrics!.tasks_completed).toBe(1);
     });
+
+    it("counts completions recorded under EITHER assigned_to form, not just the id form (task 84c77210, sibling to 8f07bc15)", () => {
+      // Reproduces the split this task exists to fix: one task's
+      // `assigned_to` is written as the agent's id (the `agent_id` create
+      // path), another as the agent's registered name (the `assigned_to`
+      // create path) — the two write paths named in 84c77210's root cause.
+      const byId = createTask({ title: "via id", assigned_to: agent.id }, db);
+      startTask(byId.id, agent.id, db);
+      completeTask(byId.id, agent.id, db, { confidence: 0.9 });
+
+      const byName = createTask({ title: "via name", assigned_to: agent.name }, db);
+      startTask(byName.id, agent.name, db);
+      completeTask(byName.id, agent.name, db, { confidence: 0.7 });
+
+      const metrics = getAgentMetrics(agent.id, {}, db);
+      expect(metrics).not.toBeNull();
+      // Before the fix this returned 1 (only the id-form row) — a plausible,
+      // silently-wrong completion count and completion_rate, exactly the
+      // "a rate nobody questions because it carries no obvious scale" shape
+      // 84c77210 named for this function.
+      expect(metrics!.tasks_completed).toBe(2);
+      expect(metrics!.avg_confidence).toBeCloseTo(0.8, 5);
+    });
   });
 
   describe("scoreTask", () => {

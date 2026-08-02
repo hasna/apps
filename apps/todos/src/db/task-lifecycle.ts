@@ -10,7 +10,7 @@ import {
   TaskNotFoundError,
   VersionConflictError,
 } from "../types/index.js";
-import { LOCK_EXPIRY_MINUTES, clearExpiredLocks, getDatabase, isLockExpired, lockExpiryCutoff, now } from "./database.js";
+import { LOCK_EXPIRY_MINUTES, clearExpiredLocks, getDatabase, isLockExpired, lockExpiryCutoff, lowerInClause, now, resolveAssignedToAliases } from "./database.js";
 import { canonicalAgentRef } from "../lib/creator-identity.js";
 
 import { checkCompletionGuard } from "../lib/completion-guard.js";
@@ -487,19 +487,25 @@ export function getNextTask(
 
   const where = conditions.join(" AND ");
 
-  // Agent affinity: boost tasks in projects where agent recently completed work
+  // Agent affinity: boost tasks in projects where agent recently completed
+  // work. Alias-resolved (task 84c77210) — see database.ts for the root
+  // cause. This is an ORDERING heuristic, not a correctness gate: getting it
+  // wrong degrades the boost rather than losing or leaking a task, but it is
+  // fixed for consistency with every other exact-match `assigned_to` site.
   let recentProjectIds: string[] = [];
+  const assignedAliasParams: SQLQueryBindings[] = [];
+  const assignedInClause = agentId ? lowerInClause("assigned_to", resolveAssignedToAliases(d, agentId), assignedAliasParams) : "";
   if (agentId) {
     const recentRows = d.query(
-      `SELECT DISTINCT project_id FROM tasks WHERE assigned_to = ? AND status = 'completed' AND project_id IS NOT NULL ORDER BY completed_at DESC LIMIT 3`
-    ).all(agentId) as { project_id: string }[];
+      `SELECT DISTINCT project_id FROM tasks WHERE ${assignedInClause} AND status = 'completed' AND project_id IS NOT NULL ORDER BY completed_at DESC LIMIT 3`
+    ).all(...assignedAliasParams) as { project_id: string }[];
     recentProjectIds = recentRows.map(r => r.project_id);
   }
 
   let sql = `SELECT * FROM tasks WHERE ${where} ORDER BY `;
   if (agentId) {
-    sql += `CASE WHEN assigned_to = ? THEN 0 WHEN assigned_to IS NULL THEN 1 ELSE 2 END, `;
-    params.push(agentId);
+    sql += `CASE WHEN ${assignedInClause} THEN 0 WHEN assigned_to IS NULL THEN 1 ELSE 2 END, `;
+    params.push(...assignedAliasParams);
   }
   if (recentProjectIds.length > 0) {
     const placeholders = recentProjectIds.map(() => "?").join(",");

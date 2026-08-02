@@ -1886,9 +1886,16 @@ export async function cloudEscalatedTasks(
   const nowMs = at.getTime();
   const filter: TaskFilter = {};
   if (opts.project_id) (filter as TaskFilter).project_id = opts.project_id;
+  // Alias-resolved (task 84c77210) — pushed into the server-side `filter`
+  // rather than compared client-side against the raw `assigned_to` value.
+  // The server (Postgres adapter, fixed in PR #160) already resolves
+  // `assigned_to` to every alias form; a client-side `t.assigned_to ===
+  // opts.agent_id` here would silently re-narrow to one form after the
+  // server had already done the alias-widening.
+  if (opts.agent_id) (filter as TaskFilter).assigned_to = opts.agent_id;
   const active = await cloudActiveTasks(client, filter);
   return active
-    .filter((t) => !t.archived_at && (opts.agent_id ? t.assigned_to === opts.agent_id : true))
+    .filter((t) => !t.archived_at)
     .map((task) => {
       const reasons: CloudEscalatedTask["reasons"] = [];
       const breachedTimes: number[] = [];
@@ -2207,7 +2214,16 @@ export async function cloudRecap(client: HasnaStorageClient, hours: number, proj
   const sinceMs = new Date(since).getTime();
   const agentSummaries = agents
     .map((agent) => {
-      const owned = all.filter((t) => t.assigned_to === agent.id || t.agent_id === agent.id);
+      // Alias-resolved (task 84c77210): `assigned_to` holds an agent id from
+      // one write path and a resolved name from another — see database.ts
+      // for the root cause. No server round-trip is needed here: `agent`
+      // already carries both `id` and `name` from the same `agents` fetch,
+      // so match `t.assigned_to` against either, case-insensitively.
+      const assignedName = agent.name?.toLowerCase();
+      const owned = all.filter((t) => {
+        const assignedTo = t.assigned_to?.toLowerCase();
+        return assignedTo === agent.id.toLowerCase() || (assignedName && assignedTo === assignedName) || t.agent_id === agent.id;
+      });
       return {
         name: agent.name,
         completed_count: owned.filter((t) => t.status === "completed" && t.completed_at != null && t.completed_at > since).length,

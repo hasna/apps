@@ -303,3 +303,71 @@ export function resolvePartialId(db: Database, table: string, partialId: string)
 
   return null;
 }
+
+/**
+ * Resolve an `--assigned`/`assigned_to` filter/comparison value to every
+ * stored form it could legitimately appear under: its registered agent's id,
+ * its registered name, and the literal input.
+ *
+ * ROOT CAUSE this closes (todos task 8f07bc15, sibling sites tracked in
+ * 84c77210): `add --agent <id>` and `update --assign <name>` both write
+ * whatever string the caller passed, unresolved, into the same `assigned_to`
+ * field — so one agent's tasks end up split across its id form and its name
+ * form with no overlap. Every exact-match read/comparison against that field
+ * therefore returns a silent subset unless it goes through this resolver (or
+ * the equivalent Postgres-side `resolveAgentForAssignedFilter` in
+ * storage/postgres-adapter.ts, for the hosted/cloud path).
+ *
+ * Canonical home: originally introduced as a private helper in
+ * db/task-crud.ts for PR #160 (`listTasks`/`countTasks`); moved here so every
+ * other exact-match `assigned_to` call site in this package can reuse the
+ * SAME resolution logic instead of re-deriving it. `task-crud.ts` re-exports
+ * it for backward compatibility with existing imports.
+ *
+ * An ambiguous name (2+ independently-registered agent rows share it
+ * case-insensitively, e.g. `fabricius` + `Fabricius`, task 0bf5d979) degrades
+ * to literal-only matching — same as no match — rather than crashing or
+ * silently picking one of the ambiguous rows. This must stay behaviourally
+ * identical to the Postgres adapter's `resolveAgentForAssignedFilter`, which
+ * resolves the same ambiguity to `null` for the same reason.
+ *
+ * Deliberately NOT covered: two independently registered agent rows for what
+ * a human considers one seat (e.g. a personal name and a seat slug registered
+ * as separate rows with no linking field). Bridging that needs an
+ * identity-model decision, not a widened query filter (todos task a37a7137).
+ */
+export function resolveAssignedToAliases(db: Database, ref: string): string[] {
+  const aliases = new Set<string>([ref]);
+  let agentId: string | null;
+  try {
+    agentId = resolvePartialId(db, "agents", ref);
+  } catch (err) {
+    if (!(err instanceof IdentityAliasAmbiguousError)) throw err;
+    agentId = null;
+  }
+  if (agentId) {
+    aliases.add(agentId);
+    const row = db.query("SELECT name FROM agents WHERE id = ?").get(agentId) as { name: string } | null;
+    if (row?.name) aliases.add(row.name);
+  }
+  return [...aliases];
+}
+
+/**
+ * `resolveAssignedToAliases`, as a lowercased Set for in-memory (JS-level)
+ * comparisons against an already-fetched `Task.assigned_to` value, e.g.
+ * `aliasSet.has((task.assigned_to ?? "").toLowerCase())`. Use this instead of
+ * a bare `task.assigned_to === ref` wherever the comparison is against a
+ * value that might be an agent id in one row and a resolved name in another —
+ * exactly the case a raw `IN (...)` SQL clause covers for query-time filters.
+ */
+export function assignedToAliasSet(db: Database, ref: string): Set<string> {
+  return new Set(resolveAssignedToAliases(db, ref).map((a) => a.toLowerCase()));
+}
+
+/** Build a case-insensitive `column IN (...)` clause matching any of `values`. */
+export function lowerInClause(column: string, values: readonly string[], params: unknown[]): string {
+  if (values.length === 0) return "1=0";
+  params.push(...values.map((v) => v.toLowerCase()));
+  return `LOWER(${column}) IN (${values.map(() => "?").join(",")})`;
+}

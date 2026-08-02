@@ -1,5 +1,5 @@
 import type { Database, SQLQueryBindings } from "bun:sqlite";
-import { getDatabase, now, resolvePartialId } from "./database.js";
+import { getDatabase, now, resolvePartialId, resolveAssignedToAliases } from "./database.js";
 import { redactEvidenceText } from "../lib/redaction.js";
 
 export interface AgentMetrics {
@@ -104,8 +104,16 @@ export function getAgentMetrics(agentId: string, opts?: { project_id?: string },
   const agent = d.query("SELECT id, name FROM agents WHERE id = ? OR LOWER(name) = LOWER(?)").get(agentId, agentId) as { id: string; name: string } | null;
   if (!agent) return null;
 
+  // Alias-resolved (task 84c77210): `assigned_to` holds an agent id from one
+  // write path and a resolved name from another, so comparing it to only
+  // `agent.id` (as this function did before) silently missed every task
+  // recorded under the agent's name form. `agent_id` is left as a plain
+  // exact match to `agent.id` — it is populated from a different, less
+  // aliasable write path and is out of this fix's scope.
+  const assignedAliases = resolveAssignedToAliases(d, agent.id).map((a) => a.toLowerCase());
+  const assignedInClause = `LOWER(assigned_to) IN (${assignedAliases.map(() => "?").join(",")})`;
   let projectFilter = "";
-  const params: string[] = [agent.id, agent.id];
+  const params: string[] = [agent.id, ...assignedAliases];
   if (opts?.project_id) {
     projectFilter = " AND project_id = ?";
     params.push(opts.project_id);
@@ -113,15 +121,15 @@ export function getAgentMetrics(agentId: string, opts?: { project_id?: string },
 
   // Task counts
   const completed = (d.query(
-    `SELECT COUNT(*) as count FROM tasks WHERE (agent_id = ? OR assigned_to = ?) AND status = 'completed'${projectFilter}`,
+    `SELECT COUNT(*) as count FROM tasks WHERE (agent_id = ? OR ${assignedInClause}) AND status = 'completed'${projectFilter}`,
   ).get(...params) as { count: number }).count;
 
   const failed = (d.query(
-    `SELECT COUNT(*) as count FROM tasks WHERE (agent_id = ? OR assigned_to = ?) AND status = 'failed'${projectFilter}`,
+    `SELECT COUNT(*) as count FROM tasks WHERE (agent_id = ? OR ${assignedInClause}) AND status = 'failed'${projectFilter}`,
   ).get(...params) as { count: number }).count;
 
   const inProgress = (d.query(
-    `SELECT COUNT(*) as count FROM tasks WHERE (agent_id = ? OR assigned_to = ?) AND status = 'in_progress'${projectFilter}`,
+    `SELECT COUNT(*) as count FROM tasks WHERE (agent_id = ? OR ${assignedInClause}) AND status = 'in_progress'${projectFilter}`,
   ).get(...params) as { count: number }).count;
 
   const total = completed + failed;
@@ -133,20 +141,20 @@ export function getAgentMetrics(agentId: string, opts?: { project_id?: string },
        (julianday(completed_at) - julianday(created_at)) * 24 * 60
      ) as avg_minutes
      FROM tasks
-     WHERE (agent_id = ? OR assigned_to = ?) AND status = 'completed' AND completed_at IS NOT NULL${projectFilter}`,
+     WHERE (agent_id = ? OR ${assignedInClause}) AND status = 'completed' AND completed_at IS NOT NULL${projectFilter}`,
   ).get(...params) as { avg_minutes: number | null };
 
   // Average confidence
   const avgConf = d.query(
     `SELECT AVG(confidence) as avg_confidence
      FROM tasks
-     WHERE (agent_id = ? OR assigned_to = ?) AND status = 'completed' AND confidence IS NOT NULL${projectFilter}`,
+     WHERE (agent_id = ? OR ${assignedInClause}) AND status = 'completed' AND confidence IS NOT NULL${projectFilter}`,
   ).get(...params) as { avg_confidence: number | null };
 
   // Review score average (from metadata._review_score)
   const reviewTasks = d.query(
     `SELECT metadata FROM tasks
-     WHERE (agent_id = ? OR assigned_to = ?) AND status = 'completed'${projectFilter}
+     WHERE (agent_id = ? OR ${assignedInClause}) AND status = 'completed'${projectFilter}
        AND metadata LIKE '%_review_score%'`,
   ).all(...params) as { metadata: string }[];
 
@@ -272,6 +280,13 @@ function resolveAgent(agentId: string, db: Database): { id: string; name: string
   return db.query("SELECT id, name FROM agents WHERE id = ? OR LOWER(name) = LOWER(?)").get(agentId, agentId) as { id: string; name: string } | null;
 }
 
+// Examined for task 84c77210 (assigned_to alias-resolution sweep) and judged
+// already correct: both helpers below already match `t.assigned_to` against
+// BOTH the agent's id (exact) and its name (case-insensitive), because
+// `agent` here is already a resolved {id, name} pair from `resolveAgent`.
+// This predates the shared `resolveAssignedToAliases` helper but covers the
+// same two forms — left as-is rather than churned onto the shared resolver
+// for a diff with no behavioural change.
 function agentTaskWhere(agent: { id: string; name: string }, options: AgentReliabilityScorecardOptions, db: Database): {
   where: string;
   params: SQLQueryBindings[];

@@ -8,6 +8,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Task } from "../../types/index.js";
 import { getTodosCloudClient, cloudGetStats, cloudCountTasks, cloudListProjects, cloudListAgents } from "../../cli/cloud-router.js";
+import { assignedToAliasSet, getDatabase } from "../../db/database.js";
 
 interface TaskAutoContext {
   shouldRegisterTool: (name: string) => boolean;
@@ -126,7 +127,11 @@ export function registerTaskAutoTools(server: McpServer, ctx: TaskAutoContext) {
           const assigned = listTasks({ assigned_to: effectiveAgentId, limit: 500 }, undefined) as Task[];
           const now = Date.now();
           const dueSoonCutoff = now + 24 * 60 * 60 * 1000;
-          const blocked = getBlockedTasks().filter((t: Task) => t.assigned_to === effectiveAgentId);
+          // Alias-resolved (task 84c77210): `getBlockedTasks` takes no agent
+          // filter of its own, unlike `listTasks` above (fixed in #160) — see
+          // database.ts for the root cause.
+          const blockedAliases = assignedToAliasSet(getDatabase(), effectiveAgentId);
+          const blocked = getBlockedTasks().filter((t: Task) => blockedAliases.has((t.assigned_to ?? "").toLowerCase()));
           const workload = {
             in_progress: assigned.filter(t => t.status === "in_progress").length,
             pending: assigned.filter(t => t.status === "pending").length,
@@ -167,20 +172,39 @@ export function registerTaskAutoTools(server: McpServer, ctx: TaskAutoContext) {
           const agents = listAgents().filter((agent: any) => agent.status === "active");
           if (agents.length === 0) return { content: [{ type: "text" as const, text: "No active agents available for rebalancing." }] };
           const activeTasks = listTasks({ project_id: resolvedProjectId, status: ["pending", "in_progress"], limit: 1000 }, undefined) as Task[];
-          const load = new Map(agents.map((agent: any) => [agent.id, activeTasks.filter(t => t.assigned_to === agent.id).length]));
+          // Alias-resolved (task 84c77210): `t.assigned_to` holds an agent id
+          // from one write path and a resolved name from another — see
+          // database.ts for the root cause. Keying `load` by whatever raw
+          // string `t.assigned_to` holds (as this did before) silently
+          // undercounted an overloaded agent's queue whenever some of its
+          // tasks were recorded under the other form, so the rebalance loop
+          // below never reassigned them: a load map that misses half an
+          // agent's tasks does not fail loudly, it just never fires.
+          // Built once from the already-fetched roster (roster has both id
+          // and name), so this needs no per-task DB lookup.
+          const agentKeyByAlias = new Map<string, string>();
+          for (const agent of agents) {
+            agentKeyByAlias.set(String(agent.id).toLowerCase(), agent.id);
+            if (agent.name) agentKeyByAlias.set(String(agent.name).toLowerCase(), agent.id);
+          }
+          const canonicalAgentKey = (assignedTo: string | null | undefined): string | undefined =>
+            assignedTo ? agentKeyByAlias.get(assignedTo.toLowerCase()) : undefined;
+
+          const load = new Map(agents.map((agent: any) => [agent.id, activeTasks.filter(t => canonicalAgentKey(t.assigned_to) === agent.id).length]));
           let moved = 0;
           let skipped = 0;
 
-          for (const task of activeTasks.filter(t => t.status === "pending" && t.assigned_to && (load.get(t.assigned_to) ?? 0) > limit)) {
+          for (const task of activeTasks.filter(t => t.status === "pending" && canonicalAgentKey(t.assigned_to) && (load.get(canonicalAgentKey(t.assigned_to)!) ?? 0) > limit)) {
+            const currentAgentKey = canonicalAgentKey(task.assigned_to)!;
             const target = agents
-              .filter((agent: any) => agent.id !== task.assigned_to)
+              .filter((agent: any) => agent.id !== currentAgentKey)
               .sort((a: any, b: any) => (load.get(a.id) ?? 0) - (load.get(b.id) ?? 0))[0];
             if (!target || (load.get(target.id) ?? 0) >= limit) {
               skipped++;
               continue;
             }
             updateTask(task.id, { assigned_to: target.id, version: task.version });
-            load.set(task.assigned_to!, (load.get(task.assigned_to!) ?? 1) - 1);
+            load.set(currentAgentKey, (load.get(currentAgentKey) ?? 1) - 1);
             load.set(target.id, (load.get(target.id) ?? 0) + 1);
             moved++;
           }

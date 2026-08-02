@@ -100,9 +100,14 @@ export function getRecap(hours = 8, projectId?: string, db?: Database): RecapSum
     : d.query(`SELECT id, short_id, title, assigned_to, updated_at FROM tasks WHERE status = 'in_progress' AND updated_at < ? ORDER BY updated_at ASC`).all(staleWindow)
   ) as any[];
 
+  // Alias-resolved (task 84c77210): compares `t.assigned_to` against BOTH
+  // the agent row's id (exact) and its name (case-insensitive) — see
+  // database.ts for the root cause. No separate resolver call is needed
+  // here: `a.id` and `a.name` are already in scope from the same correlated
+  // `agents` row, unlike the other sibling sites which only had a bare ref.
   const agents = (projectId
-    ? d.query(`SELECT a.name, a.last_seen_at, (SELECT COUNT(*) FROM tasks t WHERE (t.assigned_to = a.id OR t.agent_id = a.id) AND t.status = 'completed' AND t.completed_at > ?${tpf}) as completed_count, (SELECT COUNT(*) FROM tasks t WHERE (t.assigned_to = a.id OR t.agent_id = a.id) AND t.status = 'in_progress'${tpf}) as in_progress_count FROM agents a WHERE a.status = 'active' AND a.last_seen_at > ? ORDER BY completed_count DESC`).all(since, projectId, projectId, since)
-    : d.query(`SELECT a.name, a.last_seen_at, (SELECT COUNT(*) FROM tasks t WHERE (t.assigned_to = a.id OR t.agent_id = a.id) AND t.status = 'completed' AND t.completed_at > ?) as completed_count, (SELECT COUNT(*) FROM tasks t WHERE (t.assigned_to = a.id OR t.agent_id = a.id) AND t.status = 'in_progress') as in_progress_count FROM agents a WHERE a.status = 'active' AND a.last_seen_at > ? ORDER BY completed_count DESC`).all(since, since)
+    ? d.query(`SELECT a.name, a.last_seen_at, (SELECT COUNT(*) FROM tasks t WHERE (t.assigned_to = a.id OR LOWER(t.assigned_to) = LOWER(a.name) OR t.agent_id = a.id) AND t.status = 'completed' AND t.completed_at > ?${tpf}) as completed_count, (SELECT COUNT(*) FROM tasks t WHERE (t.assigned_to = a.id OR LOWER(t.assigned_to) = LOWER(a.name) OR t.agent_id = a.id) AND t.status = 'in_progress'${tpf}) as in_progress_count FROM agents a WHERE a.status = 'active' AND a.last_seen_at > ? ORDER BY completed_count DESC`).all(since, projectId, projectId, since)
+    : d.query(`SELECT a.name, a.last_seen_at, (SELECT COUNT(*) FROM tasks t WHERE (t.assigned_to = a.id OR LOWER(t.assigned_to) = LOWER(a.name) OR t.agent_id = a.id) AND t.status = 'completed' AND t.completed_at > ?) as completed_count, (SELECT COUNT(*) FROM tasks t WHERE (t.assigned_to = a.id OR LOWER(t.assigned_to) = LOWER(a.name) OR t.agent_id = a.id) AND t.status = 'in_progress') as in_progress_count FROM agents a WHERE a.status = 'active' AND a.last_seen_at > ? ORDER BY completed_count DESC`).all(since, since)
   ) as any[];
 
   return {
