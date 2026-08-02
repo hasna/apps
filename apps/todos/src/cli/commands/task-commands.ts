@@ -362,7 +362,12 @@ export function registerTaskCommands(program: Command) {
       // no agent owns, and a name several agents share. See
       // `lib/assignee-validation.ts`.
       const requestedAssign = opts.assign
-        ? await resolveValidatedAssignee(opts.assign, Boolean(opts.assignSeat))
+        ? await resolveValidatedAssignee(
+            opts.assign,
+            Boolean(opts.assignSeat),
+            // `add` takes the assignee via the `--assign <agent>` FLAG.
+            (v) => `--assign ${v} --assign-seat`,
+          )
         : undefined;
       const assignee: string | undefined = requestedAssign || (opts.unassigned ? undefined : router.agent_id || undefined);
       if (!assignee && !opts.unassigned) {
@@ -518,7 +523,12 @@ export function registerTaskCommands(program: Command) {
       // and a loop-driven one, so an unvalidated assignee here mints the same
       // bad rows on every run rather than once.
       if (opts.assign) {
-        opts.assign = await resolveValidatedAssignee(opts.assign, Boolean(opts.assignSeat));
+        opts.assign = await resolveValidatedAssignee(
+          opts.assign,
+          Boolean(opts.assignSeat),
+          // `task upsert` also takes the assignee via the `--assign <agent>` FLAG.
+          (v) => `--assign ${v} --assign-seat`,
+        );
       }
       const explicitProject = opts.project || globalOpts.project;
       // http authority routing: dedupe-and-upsert on the SHARED dataset. The
@@ -1303,7 +1313,12 @@ export function registerTaskCommands(program: Command) {
       // this is the path that quietly moved a task onto another session's live
       // agent at rc=0. See `lib/assignee-validation.ts`.
       if (opts.assign) {
-        opts.assign = await resolveValidatedAssignee(opts.assign, Boolean(opts.assignSeat));
+        opts.assign = await resolveValidatedAssignee(
+          opts.assign,
+          Boolean(opts.assignSeat),
+          // `update <id>` also takes the assignee via the `--assign <agent>` FLAG.
+          (v) => `--assign ${v} --assign-seat`,
+        );
       }
 
       // http authority routing: PATCH straight against <app-host>/v1.

@@ -142,3 +142,107 @@ describe("todos add --assign <seat> — refused end to end, with the roster actu
     expect((JSON.parse(r.stdout) as { assigned_to: string | null }).assigned_to).toBe("agent-ceo");
   }, SPAWN_BUDGET_MS);
 });
+
+/**
+ * PR hasna/todos#162, remediation cycle 1 (pr162-reviewer, NO_GO).
+ *
+ * The seat-refusal message recommends a runnable invocation so the reader
+ * never has to guess its shape — that is the entire point of the original
+ * fix. But the message is shared by FOUR verbs, and one of them (the
+ * standalone `assign <id> <agent>`) has no `--assign` flag at all, while the
+ * other three (`add`, `update`, `task upsert`) do. A hardcoded snippet is
+ * therefore right for three call sites and produces "unknown option
+ * '--assign'" on the fourth — reproduced live by the reviewer.
+ *
+ * This suite does not trust the fix by reading the string. For each of the
+ * four verbs it: triggers the real refusal against an isolated store,
+ * EXTRACTS the exact invocation the message recommends, and RUNS that
+ * invocation against the same verb — the reviewer's own method ("ideally by
+ * running it"). A wrong hint on any one of the four fails here with the
+ * verb's own error, not with a string assertion that could itself be wrong.
+ */
+describe("seat-refusal hint — verified by RUNNING it, per verb, not by reading it", () => {
+  /** Pull the runnable suffix out of the refusal, whatever verb produced it. */
+  function extractHint(stderr: string): string[] {
+    const m = stderr.match(/to confirm the seat is deliberate: (.+?)\s*$/m);
+    if (!m || !m[1]) {
+      throw new Error(`No runnable hint found in refusal:\n${stderr}`);
+    }
+    return m[1].trim().split(/\s+/);
+  }
+
+  it("add: the hint recommends --assign <agent> --assign-seat, and running it succeeds", async () => {
+    const refused = await runCli(["add", "--assign", "agent-ceo", "add hint check"], {
+      TODOS_SEAT_ROSTER_PATH: rosterPath,
+    });
+    expect(refused.exitCode).toBe(1);
+    const hint = extractHint(refused.stderr);
+    expect(hint).toEqual(["--assign", "agent-ceo", "--assign-seat"]);
+
+    const allowed = await runCli(["--json", "add", ...hint, "add hint check"], {
+      TODOS_SEAT_ROSTER_PATH: rosterPath,
+    });
+    expect(allowed.exitCode).toBe(0);
+    expect((JSON.parse(allowed.stdout) as { assigned_to: string | null }).assigned_to).toBe("agent-ceo");
+  }, SPAWN_BUDGET_MS);
+
+  it("update: the hint recommends --assign <agent> --assign-seat, and running it succeeds", async () => {
+    const created = await runCli(["--json", "add", "--unassigned", "update hint check"], {
+      TODOS_SEAT_ROSTER_PATH: rosterPath,
+    });
+    expect(created.exitCode).toBe(0);
+    const id = (JSON.parse(created.stdout) as { id: string }).id;
+
+    const refused = await runCli(["update", id, "--assign", "agent-chief-staff"], {
+      TODOS_SEAT_ROSTER_PATH: rosterPath,
+    });
+    expect(refused.exitCode).toBe(1);
+    const hint = extractHint(refused.stderr);
+    expect(hint).toEqual(["--assign", "agent-chief-staff", "--assign-seat"]);
+
+    const allowed = await runCli(["--json", "update", id, ...hint], { TODOS_SEAT_ROSTER_PATH: rosterPath });
+    expect(allowed.exitCode).toBe(0);
+    expect((JSON.parse(allowed.stdout) as { assigned_to: string | null }).assigned_to).toBe("agent-chief-staff");
+  }, SPAWN_BUDGET_MS);
+
+  it("task upsert: the hint recommends --assign <agent> --assign-seat, and running it succeeds", async () => {
+    const refused = await runCli(
+      ["task", "upsert", "--fingerprint", "upsert-hint-check", "--title", "upsert hint check", "--assign", "agent-ceo"],
+      { TODOS_SEAT_ROSTER_PATH: rosterPath },
+    );
+    expect(refused.exitCode).toBe(1);
+    const hint = extractHint(refused.stderr);
+    expect(hint).toEqual(["--assign", "agent-ceo", "--assign-seat"]);
+
+    const allowed = await runCli(
+      ["--json", "task", "upsert", "--fingerprint", "upsert-hint-check", "--title", "upsert hint check", ...hint],
+      { TODOS_SEAT_ROSTER_PATH: rosterPath },
+    );
+    expect(allowed.exitCode).toBe(0);
+    // `task upsert --json` nests the row under `task`, unlike `add`/`update`,
+    // which return it at the top level.
+    expect((JSON.parse(allowed.stdout) as { task: { assigned_to: string | null } }).task.assigned_to).toBe(
+      "agent-ceo",
+    );
+  }, SPAWN_BUDGET_MS);
+
+  it("assign: the hint has NO --assign flag — it is <id> <agent> --assign-seat — and running it succeeds", async () => {
+    const created = await runCli(["--json", "add", "--unassigned", "assign hint check"], {
+      TODOS_SEAT_ROSTER_PATH: rosterPath,
+    });
+    expect(created.exitCode).toBe(0);
+    const id = (JSON.parse(created.stdout) as { id: string }).id;
+
+    const refused = await runCli(["assign", id, "agent-ceo"], { TODOS_SEAT_ROSTER_PATH: rosterPath });
+    expect(refused.exitCode).toBe(1);
+    const hint = extractHint(refused.stderr);
+    // The defect this cycle fixes, made concrete: this hint must NEVER start
+    // with "--assign" — that is the flag this verb does not have, and it is
+    // exactly what the pre-fix shared message recommended here.
+    expect(hint[0]).not.toBe("--assign");
+    expect(hint).toEqual([id, "agent-ceo", "--assign-seat"]);
+
+    const allowed = await runCli(["assign", ...hint], { TODOS_SEAT_ROSTER_PATH: rosterPath });
+    expect(allowed.exitCode).toBe(0);
+  }, SPAWN_BUDGET_MS);
+});

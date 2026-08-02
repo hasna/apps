@@ -78,22 +78,21 @@ describe("validateAssignee — a seat is nobody", () => {
     expect(v.message).toContain("--assign-seat");
   });
 
-  it("names the RUNNABLE flag combination, not just the flag — regression for todos 75296282", () => {
-    // --assign-seat is a boolean MODIFIER of --assign, not a replacement for
-    // it: `--assign-seat agent-ceo` on its own errors with "too many
-    // arguments". A message that only mentions the flag's name (as the
-    // previous version of this string did) reads as "use --assign-seat
-    // instead of --assign", which is the wrong shape and cost a real caller
-    // their task claim (todos 75296282). The fix is a message containing the
-    // exact runnable pairing, which cannot be misread into a different shape.
+  it("with NO seatHint supplied, recommends no invocation shape at all — regression for todos 75296282, cycle 0", () => {
+    // The original message hardcoded "--assign <value> --assign-seat" into
+    // the SHARED validator, which is correct for `add`/`update`/`task
+    // upsert` (they take `--assign` as a flag) and WRONG for the standalone
+    // `assign <id> <agent>` command, which has no `--assign` flag at all —
+    // running the recommended form there gives "unknown option '--assign'".
+    // Fixed by moving the invocation shape out of the shared validator and
+    // into a per-call-site `seatHint` builder (see the describe block below).
+    // With no hint supplied, the message must fall back to naming no
+    // invocation shape, so it can never again be verb-wrong by default.
     const v = validateAssignee("agent-chief-staff", ctx);
     expect(v.ok).toBe(false);
     if (v.ok) throw new Error("unreachable");
-    // The full working invocation shape must appear verbatim: the flag being
-    // refused, paired with --assign-seat, in that order and on one line.
-    expect(v.message).toContain("--assign agent-chief-staff --assign-seat");
-    // And it must not read as a bare replacement suggestion.
-    expect(v.message).not.toMatch(/pass --assign-seat if filing/);
+    expect(v.message).toContain("--assign-seat");
+    expect(v.message).not.toContain("--assign ");
   });
 
   it("refuses a seat that has no agent row at all — the roster is the authority, not the store", () => {
@@ -123,6 +122,63 @@ describe("validateAssignee — a seat is nobody", () => {
     if (!v.ok) throw new Error("unreachable");
     expect(v.isSeat).toBe(false);
     expect(v.warning).toBeDefined();
+  });
+});
+
+/**
+ * PR hasna/todos#162, remediation cycle 1 (pr162-reviewer, NO_GO): the
+ * shared seat-refusal message hardcoded `--assign <value> --assign-seat`,
+ * which is the working form on `add`/`update`/`task upsert` (they take the
+ * assignee via that FLAG) and `error: unknown option '--assign'` on the
+ * standalone `assign <id> <agent>` command, which takes it POSITIONALLY and
+ * has no `--assign` flag at all. Reproduced live by the reviewer against an
+ * isolated store; confirmed here at the unit level for all three shapes, and
+ * end-to-end for all four call sites in `src/cli/assign-seat-guard.test.ts`.
+ *
+ * Each call site now supplies its own `seatHint` builder naming its own real
+ * invocation shape (`src/cli/commands/task-commands.ts` for add/update/
+ * upsert, `src/cli/commands/query-commands.ts` for the standalone `assign`).
+ * These tests pin the two shapes directly against the pure validator, since
+ * `seatHint` is exactly the seam that makes that possible without spawning a
+ * subprocess for every case.
+ */
+describe("validateAssignee — seatHint names an invocation the CALLING VERB actually accepts", () => {
+  it("flag-shaped verbs (add / update / task upsert): --assign <value> --assign-seat", () => {
+    const flagHint = (v: string) => `--assign ${v} --assign-seat`;
+    const v = validateAssignee("agent-chief-staff", { ...ctx, seatHint: flagHint });
+    expect(v.ok).toBe(false);
+    if (v.ok) throw new Error("unreachable");
+    expect(v.message).toContain("--assign agent-chief-staff --assign-seat");
+  });
+
+  it("the positional `assign <id> <agent>` verb: NO --assign flag, just the two positionals plus --assign-seat", () => {
+    // This is the exact shape query-commands.ts's `assign` action supplies.
+    // It must never contain the string "--assign " (the flag token with its
+    // trailing space) — only the bare "--assign-seat" boolean.
+    const positionalHint = (v: string) => `9c2f1a3e ${v} --assign-seat`;
+    const v = validateAssignee("agent-chief-staff", { ...ctx, seatHint: positionalHint });
+    expect(v.ok).toBe(false);
+    if (v.ok) throw new Error("unreachable");
+    expect(v.message).toContain("9c2f1a3e agent-chief-staff --assign-seat");
+    expect(v.message).not.toContain("--assign ");
+  });
+
+  it("a hint that gets the flag wrong is exactly the regression this guards against", () => {
+    // Pinning the FAILURE mode, not only the fix: if a future call site wired
+    // the flag-shaped hint into the positional verb by mistake, this is what
+    // it would produce, and it is precisely the invocation the reviewer
+    // proved `assign` rejects with "unknown option '--assign'". This test
+    // exists so that mistake is visible in a diff, not only in a live probe.
+    const wrongHintForPositionalVerb = (v: string) => `--assign ${v} --assign-seat`;
+    const v = validateAssignee("agent-chief-staff", { ...ctx, seatHint: wrongHintForPositionalVerb });
+    expect(v.ok).toBe(false);
+    if (v.ok) throw new Error("unreachable");
+    // The validator itself is verb-agnostic — it renders whatever hint it is
+    // given. Confirming the FLAG-shaped hint is never wired to `assign` is an
+    // end-to-end concern, covered by assign-seat-guard.test.ts's "argv sanity"
+    // test below, which extracts the message's own hint and spawns the real
+    // `assign` verb with it.
+    expect(v.message).toContain("--assign agent-chief-staff --assign-seat");
   });
 });
 
