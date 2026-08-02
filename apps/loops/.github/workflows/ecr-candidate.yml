@@ -19,6 +19,7 @@ concurrency:
 permissions:
   contents: read
   id-token: write
+  checks: read
 
 env:
   AWS_REGION: ${{ vars.AWS_REGION }}
@@ -104,12 +105,23 @@ jobs:
           #    main would therefore force a 1,140-line schema change into a
           #    hotfix. This admits the fix with no schema delta.
           #
-          #    MERGE COMMITS ARE REJECTED, and that is the load-bearing clause.
-          #    `<sha>^` resolves to the FIRST parent, so a merge whose first
-          #    parent is on main and whose second parent is arbitrary unreviewed
-          #    code would pass a bare parent-ancestry check while its TREE
-          #    carries the unreviewed code. Requiring exactly one parent closes
-          #    that hole. Do not relax this to `^1` without re-deriving why.
+          #    ANCESTRY CONSTRAINS SHAPE, NEVER CONTENT. Read that before adding
+          #    any security claim here. A single-parent commit on a main-ancestor
+          #    base may carry an ARBITRARY TREE, and `git merge --squash` turns
+          #    any unreviewed branch into exactly that shape. An earlier version
+          #    of this comment claimed the single-parent rule "closes the hole"
+          #    of unreviewed content reaching the image; that was FALSE and was
+          #    falsified by fixtures with byte-identical trees differing only in
+          #    shape. Do not reintroduce that claim.
+          #
+          #    Rejecting merges is kept for a smaller, honest reason: `<sha>^`
+          #    silently selects the FIRST parent, so a merge makes "the parent"
+          #    ambiguous and the rule non-deterministic to reason about. It is a
+          #    legibility constraint, NOT a content control.
+          #
+          #    What actually constrains CONTENT on this path is the required
+          #    status checks asserted in the next step. Ancestry decides where a
+          #    commit may sit; CI decides whether it is fit to build.
           parent_count="$(git rev-list --parents -n 1 "${SOURCE_SHA}" | wc -w)"
           parent_count=$(( parent_count - 1 ))
           if [[ "${parent_count}" -ne 1 ]]; then
@@ -123,6 +135,67 @@ jobs:
             exit 1
           fi
           echo "single-commit hotfix on main-ancestor parent ${parent_sha}"
+          printf 'REQUIRE_STATUS_CHECKS=1\n' >> "${GITHUB_ENV}"
+
+      # A commit ON main has already satisfied main's required status checks.
+      # A hotfix commit has NOT: ci.yml triggers only on `push` to main and on
+      # `pull_request`, so a commit on a branch with no open PR runs ZERO checks
+      # and would otherwise be buildable untested. This restores the property
+      # that everything built has passed the same gate main enforces.
+      - name: Require main's status checks on a hotfix commit
+        if: ${{ env.REQUIRE_STATUS_CHECKS == '1' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          # Source of truth for WHICH checks are required is main's ruleset, not
+          # a list copied into this file that would rot the moment it changes.
+          contexts_file="${RUNNER_TEMP}/required-contexts.txt"
+          if ! gh api "repos/${GITHUB_REPOSITORY}/rulesets" > "${RUNNER_TEMP}/rulesets.json" 2>"${RUNNER_TEMP}/rulesets.err"; then
+            echo "cannot read repository rulesets; failing closed" >&2
+            cat "${RUNNER_TEMP}/rulesets.err" >&2
+            exit 1
+          fi
+          ruleset_id="$(jq -r '[.[] | select(.target=="branch" and .enforcement=="active")][0].id // empty' "${RUNNER_TEMP}/rulesets.json")"
+          if [[ -z "${ruleset_id}" ]]; then
+            echo "no active branch ruleset found; failing closed" >&2
+            exit 1
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/rulesets/${ruleset_id}" > "${RUNNER_TEMP}/ruleset.json"
+          jq -r '[.rules[] | select(.type=="required_status_checks")][0].parameters.required_status_checks[]?.context // empty' \
+            "${RUNNER_TEMP}/ruleset.json" > "${contexts_file}"
+
+          required_count="$(wc -l < "${contexts_file}")"
+          if (( required_count == 0 )); then
+            # A vacuous pass here would admit an untested commit while reporting
+            # success, so an empty required set is treated as a fault.
+            echo "ruleset declares no required status checks; failing closed rather than passing vacuously" >&2
+            exit 1
+          fi
+
+          gh api "repos/${GITHUB_REPOSITORY}/commits/${SOURCE_SHA}/check-runs" --paginate \
+            > "${RUNNER_TEMP}/check-runs.json"
+
+          failed=0
+          while IFS= read -r context; do
+            [[ -n "${context}" ]] || continue
+            conclusion="$(jq -r --arg n "${context}" \
+              '[.check_runs[]? | select(.name==$n)] | sort_by(.completed_at) | last | .conclusion // "MISSING"' \
+              "${RUNNER_TEMP}/check-runs.json")"
+            printf 'required check %-28s -> %s\n' "${context}" "${conclusion}"
+            if [[ "${conclusion}" != "success" ]]; then
+              failed=1
+            fi
+          done < "${contexts_file}"
+
+          if (( failed != 0 )); then
+            echo "hotfix commit ${SOURCE_SHA} has not passed main's required status checks; refusing" >&2
+            echo "open a pull request for the hotfix branch so ci.yml runs against this commit" >&2
+            exit 1
+          fi
+          echo "all ${required_count} required status checks passed on ${SOURCE_SHA}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
