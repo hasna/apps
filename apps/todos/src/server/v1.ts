@@ -7,7 +7,8 @@
  * require `todos:write` (a `todos:*` key satisfies both). This is a real wrapper
  * over the core storage lib — there are NO stubs; unimplemented routes 404.
  */
-import { LockError, ProjectNotFoundError, ResourceConflictError, TaskNotStartableError, TaskReferenceAmbiguousError } from "../types/index.js";
+import { LockError, ProjectNotFoundError, ResourceConflictError, TaskNotStartableError, TaskReferenceAmbiguousError, TASK_PRIORITIES, TASK_STATUSES } from "../types/index.js";
+import { collapseEnumValues, resolveEnumVocabulary } from "../lib/enum-vocabulary.js";
 import type { CreatePlanInput, CreateProjectInput, CreateTaskInput, CreateTaskListInput, CreateTemplateInput, RenameProjectInput, TaskComment, TemplateTaskInput, UpdateTaskInput, UpdateTaskListInput } from "../types/index.js";
 import type { TodosStorageContext, TodosStorageSnapshot, TodosTaskCompletionOptions, UpdateTemplateInput } from "../storage/interfaces.js";
 import { getCloudPrGroupLedger, getCloudStorageAdapter, getCloudVerifier, ensureCloudSchema } from "./cloud.js";
@@ -33,6 +34,32 @@ function json(body: unknown, status = 200): Response {
 
 function error(status: number, message: string, extra?: Record<string, unknown>): Response {
   return json({ error: message, ...(extra ?? {}) }, status);
+}
+
+/**
+ * Validate a closed-vocabulary query param, or 400.
+ *
+ * `status` and `priority` used to be cast `as never` and handed to the store
+ * unchecked, so `GET /v1/tasks?status=open` returned `{"tasks":[],"count":0}` with
+ * HTTP 200 — an authoritative-looking "there is nothing" for a value the API does
+ * not have. Comma-separated multi-values are supported, and EVERY element is
+ * validated: one bad element fails the request rather than being dropped from the
+ * `IN (...)` set, which would answer a different question than the one asked.
+ *
+ * Unlike the CLI this applies no aliasing and no case folding: the vocabulary in
+ * the OpenAPI enum is the contract, and clients that want ergonomics (the `todos`
+ * CLI included) canonicalize before they call. `undefined` means "param absent".
+ */
+function enumQueryParam<T extends string>(
+  url: URL,
+  name: string,
+  vocabulary: readonly T[],
+): { ok: true; value: T | T[] | undefined } | { ok: false; response: Response } {
+  const raw = url.searchParams.get(name);
+  if (raw === null || raw === "") return { ok: true, value: undefined };
+  const result = resolveEnumVocabulary(raw, { name, vocabulary });
+  if (!result.ok) return { ok: false, response: error(400, result.message) };
+  return { ok: true, value: collapseEnumValues(result.values) };
 }
 
 function validateTaskCompletion(value: unknown):
@@ -488,18 +515,17 @@ export async function handleV1Request(
             return error(400, "include_subtasks must be true or false");
           }
           const hasParentFilter = url.searchParams.has("parent_id");
+          // Reject an out-of-vocabulary status/priority here rather than casting it
+          // `as never` into the store, where it matched nothing and the endpoint
+          // answered 200 with an empty task list.
+          const statusParam = enumQueryParam(url, "status", TASK_STATUSES);
+          if (!statusParam.ok) return statusParam.response;
+          const priorityParam = enumQueryParam(url, "priority", TASK_PRIORITIES);
+          if (!priorityParam.ok) return priorityParam.response;
           const filter = {
             ...(url.searchParams.get("q") ? { query: url.searchParams.get("q")! } : {}),
-            ...(url.searchParams.get("status") ? {
-              status: (url.searchParams.get("status")!.includes(",")
-                ? url.searchParams.get("status")!.split(",")
-                : url.searchParams.get("status")) as never,
-            } : {}),
-            ...(url.searchParams.get("priority") ? {
-              priority: (url.searchParams.get("priority")!.includes(",")
-                ? url.searchParams.get("priority")!.split(",")
-                : url.searchParams.get("priority")) as never,
-            } : {}),
+            ...(statusParam.value !== undefined ? { status: statusParam.value } : {}),
+            ...(priorityParam.value !== undefined ? { priority: priorityParam.value } : {}),
             ...(url.searchParams.get("project_id") ? { project_id: url.searchParams.get("project_id")! } : {}),
             ...(hasParentFilter
               ? { parent_id: url.searchParams.get("parent_id") || null, include_subtasks: true }

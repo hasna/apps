@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
 import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
+import { TASK_PRIORITIES, TASK_STATUSES } from "../types/index.js";
 
 const CWD = join(import.meta.dir, "../..");
 const T = 30000; // generous per-test timeout: each case shells out to the CLI
@@ -120,7 +121,11 @@ describe("M5/L1: input validation instead of raw SQLite / NaN", () => {
   it("`add --status bogus` fails cleanly (no raw CHECK constraint error)", () => {
     const { code, output } = runExpectFail("add 'M5 bad status' --status bogus");
     expect(code).not.toBe(0);
-    expect(output).toContain("--status must be one of");
+    // Substance, not prose: the flag, the offending value, and the whole
+    // vocabulary from TASK_STATUSES, with no raw SQLite CHECK failure leaking.
+    expect(output).toContain("--status");
+    expect(output).toContain("bogus");
+    for (const status of TASK_STATUSES) expect(output).toContain(status);
     expect(output).not.toContain("CHECK constraint");
   }, T);
 
@@ -128,7 +133,9 @@ describe("M5/L1: input validation instead of raw SQLite / NaN", () => {
     const t = JSON.parse(run("add 'M5 update prio' --json"));
     const { code, output } = runExpectFail(`update ${t.id} -p bogus`);
     expect(code).not.toBe(0);
-    expect(output).toContain("--priority must be one of");
+    expect(output).toContain("--priority");
+    expect(output).toContain("bogus");
+    for (const priority of TASK_PRIORITIES) expect(output).toContain(priority);
   }, T);
 
   it("`done --confidence banana` is rejected (NaN not stored)", () => {

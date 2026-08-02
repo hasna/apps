@@ -9,6 +9,7 @@ import { createTaskList } from "../db/task-lists.js";
 import { createProject } from "../db/projects.js";
 import { runMigrations } from "../db/schema.js";
 import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
+import { TASK_PRIORITIES } from "../types/index.js";
 
 // Every test here shells out to the real CLI (a cold `bun run` per call, ~0.5s
 // each), and the heavier flows issue 6-10 subprocesses. The 5s bun-test default
@@ -397,7 +398,13 @@ describe("CLI integration", () => {
     const result = await runCli(["add", "Invalid priority task", "--priority", "urgent"], ":memory:");
 
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("--priority must be one of: low, medium, high, critical");
+    // Asserted on substance rather than exact prose: the rejection must name the
+    // offending value and every allowed one (sourced from TASK_PRIORITIES), and
+    // must not leak the raw SQLite CHECK failure. Naming the bad value is the part
+    // the old "--priority must be one of: ..." wording lacked.
+    expect(result.stderr).toContain("--priority");
+    expect(result.stderr).toContain("urgent");
+    for (const priority of TASK_PRIORITIES) expect(result.stderr).toContain(priority);
     expect(result.stderr).not.toContain("CHECK constraint failed");
   });
 

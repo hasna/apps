@@ -6,7 +6,7 @@ import { releaseAgent, listAgents, normalizeGeneratedAgentNames, suggestAgentNam
 import { normalizeAgentNameInput } from "../../lib/agent-name-normalize.js";
 import { createTaskList, getTaskList, listTaskLists, updateTaskList, deleteTaskList } from "../../db/task-lists.js";
 import { listTasks } from "../../db/tasks.js";
-import { getPackageVersion, handleError, autoProject, output } from "../helpers.js";
+import { getPackageVersion, handleError, autoProject, output, outputRecord } from "../helpers.js";
 import { clearPersistedIdentity, detectIdentityCollision, persistIdentity, readPersistedIdentity } from "../../lib/creator-identity.js";
 import {
   getTodosCloudClient,
@@ -479,7 +479,9 @@ export function registerAgentCommands(program: Command) {
           if (opts.show) {
             const list = cloud ? await cloudGetTaskList(cloud, resolved) : getTaskList(resolved);
             if (!list) throw new Error(`Task list not found: ${ref}`);
-            output(list, Boolean(globalOpts.json));
+            // outputRecord, not output: `output` prints only under --json, so this
+            // exited 0 with completely empty stdout in human mode.
+            outputRecord(list, Boolean(globalOpts.json), "Task list:");
             return;
           }
           const patch = {
@@ -491,7 +493,8 @@ export function registerAgentCommands(program: Command) {
           const list = cloud
             ? await cloudUpdateTaskList(cloud, resolved, patch)
             : updateTaskList(resolved, patch);
-          output(list, Boolean(globalOpts.json));
+          // A successful mutation must say so; this printed nothing in human mode.
+          outputRecord(list, Boolean(globalOpts.json), "Task list updated:");
           return;
         }
 

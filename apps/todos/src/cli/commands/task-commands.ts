@@ -46,15 +46,17 @@ import {
   formatTaskLine,
   resolveTaskId,
   resolveTaskIdForCommand,
-  normalizeStatus,
   autoProject,
   handleError,
   output,
+  parseEnumFlag,
+  parseEnumFlagList,
   statusColors,
   priorityColors,
+  TASK_PRIORITY_FLAG,
+  TASK_STATUS_FLAG,
 } from "../helpers.js";
 import { redactBroadTasks } from "../output-redaction.js";
-import { TASK_PRIORITIES, TASK_STATUSES } from "../../types/index.js";
 
 /** Render untrusted text without allowing terminal control sequences to execute. */
 export function escapeTerminalControls(value: string): string {
@@ -137,14 +139,15 @@ function resolveProjectIdOrSlug(input: string): string {
   handleError(new Error(`Project not found: ${input}`));
 }
 
-/** Validate and normalize a status value, rejecting unknowns before the DB does. */
+/**
+ * Validate and normalize a status value, rejecting unknowns before the DB does.
+ *
+ * Write flags take exactly one status, so a comma list is rejected rather than
+ * silently reduced to its first element.
+ */
 function parseStatus(value: string | undefined): TaskStatus | undefined {
   if (!value) return undefined;
-  const normalized = normalizeStatus(value);
-  if (!(TASK_STATUSES as readonly string[]).includes(normalized)) {
-    handleError(new Error(`--status must be one of: ${TASK_STATUSES.join(", ")}`));
-  }
-  return normalized as TaskStatus;
+  return parseEnumFlagList(value, { ...TASK_STATUS_FLAG, allowList: false })?.[0];
 }
 
 /** Parse an integer option, rejecting non-numeric input instead of storing NaN. */
@@ -170,12 +173,14 @@ function resolvePlanId(input: string): string {
   return id;
 }
 
+/**
+ * Validate a priority value. The allowed list comes from `TASK_PRIORITIES`; it used
+ * to be re-typed into the error string, so the message could drift from the real
+ * vocabulary.
+ */
 function parsePriority(value: string | undefined): TaskPriority | undefined {
   if (!value) return undefined;
-  if (!(TASK_PRIORITIES as readonly string[]).includes(value)) {
-    handleError(new Error("--priority must be one of: low, medium, high, critical"));
-  }
-  return value as TaskPriority;
+  return parseEnumFlagList(value, { ...TASK_PRIORITY_FLAG, allowList: false })?.[0];
 }
 
 function parseJsonObject(value: string | undefined, flag: string): Record<string, unknown> | undefined {
@@ -757,14 +762,20 @@ export function registerTaskCommands(program: Command) {
         }
         filter["task_list_id"] = listId;
       }
+      // A status/priority outside the vocabulary is rejected here, BEFORE it can
+      // reach the store. Unvalidated it matched nothing and the command printed
+      // "No tasks found." with exit 0, which reads as "there is no work" — the
+      // defect that made `--status open` hide 27 real tasks. Same mechanism and
+      // message shape as the `--sort`/`--format` checks above.
       if (opts.status) {
-        filter["status"] = opts.status.includes(",")
-          ? opts.status.split(",").map((s: string) => normalizeStatus(s.trim()))
-          : normalizeStatus(opts.status);
+        filter["status"] = parseEnumFlag(opts.status, TASK_STATUS_FLAG);
       } else if (!opts.all) {
         filter["status"] = ["pending", "in_progress"];
       }
-      if (opts.priority) filter["priority"] = opts.priority;
+      // `--priority` accepts a comma list too: `TaskFilter.priority` is
+      // `TaskPriority | TaskPriority[]`, but the raw string used to be forwarded
+      // whole, so `--priority high,critical` matched a literal "high,critical".
+      if (opts.priority) filter["priority"] = parseEnumFlag(opts.priority, TASK_PRIORITY_FLAG);
       if (opts.assigned) filter["assigned_to"] = opts.assigned;
       // A hand-typed `--created-by Cassius` never goes through the identity resolver,
       // so canonicalise it here too. Both backends also compare case-insensitively —

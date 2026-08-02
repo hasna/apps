@@ -8,8 +8,14 @@ import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
 import { getDatabase, resolvePartialId } from "../db/database.js";
 import { ensureProject, getProject, getProjectByPath, slugify } from "../db/projects.js";
 import { lockDisplayState } from "../lib/lock-display.js";
+import {
+  collapseEnumValues,
+  resolveEnumVocabulary,
+  type EnumVocabularySpec,
+} from "../lib/enum-vocabulary.js";
 import { getPackageVersion } from "../lib/package-version.js";
-import type { Project, Task } from "../types/index.js";
+import { TASK_PRIORITIES, TASK_STATUSES } from "../types/index.js";
+import type { Project, Task, TaskPriority, TaskStatus } from "../types/index.js";
 
 export { getPackageVersion };
 
@@ -344,23 +350,104 @@ export function autoProject(opts: { project?: string }): string | undefined {
   return autoDetectProject(opts)?.id;
 }
 
-/** Normalize user-friendly status aliases to canonical TaskStatus values */
+/**
+ * Normalize user-friendly status aliases to canonical TaskStatus values.
+ *
+ * Case and surrounding whitespace are folded away for EVERY input, not just the
+ * aliases below. Previously the alias switch lower-cased its subject but the
+ * default branch returned the caller's string verbatim, so `--status Pending`
+ * survived as `Pending`, missed the vocabulary, matched no rows, and printed
+ * "No tasks found." with exit 0. Every canonical status in `TASK_STATUSES` is
+ * lower-case, so folding is lossless: it cannot collide two distinct members.
+ */
 export function normalizeStatus(s: string): string {
-  switch (s.toLowerCase().trim()) {
+  const folded = s.toLowerCase().trim();
+  switch (folded) {
     case "done":      return "completed";
     case "complete":  return "completed";
     case "active":    return "in_progress";
     case "wip":       return "in_progress";
     case "cancelled": return "cancelled";
     case "canceled":  return "cancelled";
-    default:          return s;
+    default:          return folded;
   }
+}
+
+/**
+ * Fold case/whitespace on a priority value. `TASK_PRIORITIES` is all lower-case
+ * and carries no aliases, so folding is the whole canonicalization.
+ */
+export function normalizePriority(p: string): string {
+  return p.toLowerCase().trim();
 }
 
 export function normalizeStatusList(statuses: string | string[]): string | string[] {
   if (Array.isArray(statuses)) return statuses.map(normalizeStatus);
   return normalizeStatus(statuses);
 }
+
+/**
+ * Remediation hints for status inputs operators plausibly type that are NOT
+ * statuses. These are never accepted as values — `resolveEnumVocabulary` still
+ * rejects them non-zero — they only make the rejection actionable.
+ *
+ * `all` earns a hint because it is the most dangerous near-miss in the set: it
+ * reads as "everything" and used to return the empty set with exit 0. The flag
+ * that actually widens the status filter is `-a`/`--all`.
+ */
+export const TASK_STATUS_FLAG_HINTS: Readonly<Record<string, string>> = {
+  all: "To include every status, use -a/--all instead of a --status value.",
+  any: "To include every status, use -a/--all instead of a --status value.",
+  open: "Unstarted and running work is pending and in_progress (the default when no --status is given).",
+};
+
+/**
+ * Validate a closed-vocabulary flag value and exit non-zero when it is not in the
+ * vocabulary, instead of letting it reach storage and return an empty result set.
+ *
+ * Uses `handleError`, so the failure shape matches what `todos list` already does
+ * for `--sort`, `--format` and `--project-name`: red message on stderr, exit 1,
+ * plus the `{"error":...}` stdout envelope under `--json`.
+ *
+ * Returns a bare string for a single value and an array for a comma-separated
+ * list, matching the `TaskFilter` field types and keeping the generated query
+ * identical to the pre-validation behaviour for single-value callers.
+ */
+export function parseEnumFlag<T extends string>(
+  raw: string | undefined,
+  spec: EnumVocabularySpec<T>,
+): T | T[] | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const result = resolveEnumVocabulary(String(raw), spec);
+  if (!result.ok) handleError(new Error(result.message));
+  return collapseEnumValues(result.values);
+}
+
+/** Same as `parseEnumFlag` but always an array, for callers whose filter field is a list. */
+export function parseEnumFlagList<T extends string>(
+  raw: string | undefined,
+  spec: EnumVocabularySpec<T>,
+): T[] | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const result = resolveEnumVocabulary(String(raw), spec);
+  if (!result.ok) handleError(new Error(result.message));
+  return result.values;
+}
+
+/** Vocabulary spec for any `--status` flag over the canonical task statuses. */
+export const TASK_STATUS_FLAG: EnumVocabularySpec<TaskStatus> = {
+  name: "--status",
+  vocabulary: TASK_STATUSES,
+  normalize: normalizeStatus,
+  hints: TASK_STATUS_FLAG_HINTS,
+};
+
+/** Vocabulary spec for any `--priority` flag over the canonical task priorities. */
+export const TASK_PRIORITY_FLAG: EnumVocabularySpec<TaskPriority> = {
+  name: "--priority",
+  vocabulary: TASK_PRIORITIES,
+  normalize: normalizePriority,
+};
 
 function writeStdoutSync(text: string): void {
   const buffer = Buffer.from(text);
@@ -394,6 +481,60 @@ export function output(data: unknown, jsonMode: boolean): void {
   if (jsonMode) {
     printJson(data);
   }
+}
+
+/**
+ * Render one entity for a human: `key: value` lines, nested values as JSON.
+ *
+ * Field order follows the object's own key order so it tracks the row shape
+ * instead of a hand-maintained list of column names.
+ */
+function formatRecordLines(data: unknown): string[] {
+  if (data === null || data === undefined) return [];
+  if (typeof data !== "object") return [String(data)];
+  if (Array.isArray(data)) {
+    return data.flatMap((entry, index) => [
+      chalk.dim(`[${index}]`),
+      ...formatRecordLines(entry).map((line) => `  ${line}`),
+    ]);
+  }
+  const lines: string[] = [];
+  for (const [key, value] of Object.entries(data as Record<string, unknown>)) {
+    if (value === undefined) continue;
+    const rendered = value === null
+      ? chalk.dim("—")
+      : typeof value === "object"
+        ? JSON.stringify(value)
+        : String(value);
+    lines.push(`  ${chalk.dim(`${key}:`)} ${rendered}`);
+  }
+  return lines;
+}
+
+/**
+ * Emit one entity on stdout in BOTH modes.
+ *
+ * `output()` prints only under `--json`, so call sites that used it as their only
+ * emitter exited 0 with completely empty stdout in human mode — including two
+ * mutations (`projects --update`, `lists --update`) that gave no sign the write
+ * had landed. Those call sites use this instead. JSON mode is unchanged: it goes
+ * through the same `printJson`, byte for byte.
+ *
+ * Call sites that already print their own human rendering after `output()` must
+ * keep using `output()`, otherwise they would print twice.
+ */
+export function outputRecord(data: unknown, jsonMode: boolean, heading?: string): void {
+  if (jsonMode) {
+    printJson(data);
+    return;
+  }
+  if (heading) console.log(chalk.bold(heading));
+  const lines = formatRecordLines(data);
+  if (lines.length === 0) {
+    console.log(chalk.dim("(empty)"));
+    return;
+  }
+  for (const line of lines) console.log(line);
 }
 
 export const statusColors: Record<string, (s: string) => string> = {

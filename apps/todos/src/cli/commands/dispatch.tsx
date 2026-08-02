@@ -8,6 +8,8 @@ import { executeDispatch, runDueDispatches, dispatchToMultiple } from "../../lib
 import { formatDispatchMessage } from "../../lib/dispatch-formatter.js";
 import { calculateDelay } from "../../lib/tmux.js";
 import type { Task } from "../../types/index.js";
+import { DISPATCH_STATUSES } from "../../types/index.js";
+import { parseEnumFlagList } from "../helpers.js";
 
 export function registerDispatchCommands(program: Command): void {
   // ── dispatch subcommand ──────────────────────────────────────────────────────
@@ -158,8 +160,15 @@ export function registerDispatchCommands(program: Command): void {
         }
       }
 
-      const statuses = opts.status ? opts.status.split(",").map((s: string) => s.trim()) : undefined;
-      const dispatches = listDispatches({ status: statuses as any, limit: opts.limit ?? 20 });
+      // Validated against DISPATCH_STATUSES: an unknown value was cast `as any`
+      // into the filter, matched nothing, and printed "No dispatches found." at
+      // exit 0 — the same silent empty result `list --status` produced.
+      const statuses = parseEnumFlagList(opts.status, {
+        name: "--status",
+        vocabulary: DISPATCH_STATUSES,
+        normalize: (value: string) => value.toLowerCase().trim(),
+      });
+      const dispatches = listDispatches({ status: statuses, limit: opts.limit ?? 20 });
 
       if (useJson) {
         console.log(JSON.stringify(dispatches, null, 2));

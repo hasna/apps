@@ -4,6 +4,7 @@
  * and is served live at `GET /openapi.json` and `GET /v1/openapi.json`.
  */
 import { getPackageVersion } from "../lib/package-version.js";
+import { TASK_PRIORITIES, TASK_STATUSES } from "../types/index.js";
 
 const taskSchema = {
   type: "object",
@@ -875,8 +876,21 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           operationId: "listTasks",
           summary: "List tasks",
           parameters: [
-            { name: "status", in: "query", schema: { type: "string" } },
-            { name: "priority", in: "query", schema: { type: "string" } },
+            // Enumerated so the contract is machine-visible: an out-of-vocabulary
+            // value is a 400, not a 200 with an empty task list. Comma-separated
+            // multi-values are accepted and every element must be a member.
+            {
+              name: "status",
+              in: "query",
+              description: `Task status, or a comma-separated list of statuses. Allowed values: ${TASK_STATUSES.join(", ")}.`,
+              schema: { type: "string", enum: [...TASK_STATUSES] },
+            },
+            {
+              name: "priority",
+              in: "query",
+              description: `Task priority, or a comma-separated list of priorities. Allowed values: ${TASK_PRIORITIES.join(", ")}.`,
+              schema: { type: "string", enum: [...TASK_PRIORITIES] },
+            },
             { name: "project_id", in: "query", schema: { type: "string" } },
             { name: "parent_id", in: "query", schema: { type: "string", nullable: true } },
             { name: "include_subtasks", in: "query", schema: { type: "boolean" } },

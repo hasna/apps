@@ -23,6 +23,8 @@ import {
   claimNextTask,
 } from "../db/tasks.js";
 import { assignedToAliasSet, getDatabase } from "../db/database.js";
+import { collapseEnumValues, resolveEnumVocabulary } from "../lib/enum-vocabulary.js";
+import { TASK_STATUSES } from "../types/index.js";
 import { VersionConflictError, CompletionGuardError, LockError, TaskNotFoundError, TaskNotStartableError } from "../types/index.js";
 import { listProjects, createProject, deleteProject } from "../db/projects.js";
 import { listAgents, registerAgent, isAgentConflict, getOrgChart, getDirectReports, updateAgent, deleteAgent, InvalidAgentNameError } from "../db/agents.js";
@@ -234,8 +236,27 @@ export function handleStats(_ctx: RouteContext, json: (data: unknown, status?: n
   });
 }
 
+/**
+ * Validate the `status` query param of the dashboard API against `TASK_STATUSES`.
+ *
+ * Unvalidated it was cast straight into the `listTasks` filter, so
+ * `?status=open` answered HTTP 200 with `[]` — the same silent empty result the
+ * CLI produced, one layer down. Returns the validated filter value, or an error
+ * message for the caller to turn into a 400.
+ */
+function taskStatusQueryParam(url: URL):
+  | { ok: true; value: string | string[] | undefined }
+  | { ok: false; message: string } {
+  const raw = url.searchParams.get("status");
+  if (!raw) return { ok: true, value: undefined };
+  const result = resolveEnumVocabulary(raw, { name: "status", vocabulary: TASK_STATUSES });
+  if (!result.ok) return { ok: false, message: result.message };
+  return { ok: true, value: collapseEnumValues(result.values) };
+}
+
 export async function handleListTasks(_req: Request, url: URL, _ctx: RouteContext, json: (data: unknown, status?: number) => Response, taskToSummary: (task: Task, fields?: string[]) => unknown): Promise<Response> {
-  const status = url.searchParams.get("status") || undefined;
+  const statusParam = taskStatusQueryParam(url);
+  if (!statusParam.ok) return json({ error: statusParam.message }, 400);
   const projectId = url.searchParams.get("project_id") || undefined;
   const sessionId = url.searchParams.get("session_id") || undefined;
   const agentId = url.searchParams.get("agent_id") || undefined;
@@ -243,7 +264,7 @@ export async function handleListTasks(_req: Request, url: URL, _ctx: RouteContex
   const offsetParam = url.searchParams.get("offset");
   const fields = parseFieldsParam(url);
   const tasks = listTasks({
-    status: status as Task["status"] | undefined,
+    status: statusParam.value as Task["status"] | Task["status"][] | undefined,
     project_id: projectId,
     session_id: sessionId,
     agent_id: agentId,
@@ -318,9 +339,19 @@ export async function handleUpsertTask(req: Request, ctx: RouteContext, json: (d
 
 export function handleTasksExport(_req: Request, url: URL, _ctx: RouteContext, _json: (data: unknown, status?: number) => Response, taskToSummary: (task: Task, fields?: string[]) => unknown): Response {
   const format = url.searchParams.get("format") || "json";
-  const status = url.searchParams.get("status") || undefined;
+  const statusParam = taskStatusQueryParam(url);
+  if (!statusParam.ok) {
+    return new Response(JSON.stringify({ error: statusParam.message }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
   const projectId = url.searchParams.get("project_id") || undefined;
-  const tasks = listTasks({ status: status as any, project_id: projectId, limit: 10000 });
+  const tasks = listTasks({
+    status: statusParam.value as Task["status"] | Task["status"][] | undefined,
+    project_id: projectId,
+    limit: 10000,
+  });
   const summaries = tasks.map(t => taskToSummary(t));
 
   if (format === "csv") {

@@ -5,7 +5,12 @@ import type { TaskRun } from "../db/task-runs.js";
 import { queryTasksByLocalFields, type LocalTaskFieldQuery } from "./local-fields.js";
 import { searchTasks, type SearchOptions } from "./search.js";
 
-export type SavedSearchScope = "all" | "tasks" | "projects" | "plans" | "runs" | "comments";
+/**
+ * The single source of truth for search scopes. Both the type and `normalizeScope`
+ * derive from it, so `--scope` validation cannot drift from what the union allows.
+ */
+export const SAVED_SEARCH_SCOPES = ["all", "tasks", "projects", "plans", "runs", "comments"] as const;
+export type SavedSearchScope = (typeof SAVED_SEARCH_SCOPES)[number];
 
 export interface SavedSearchFilters {
   query?: string;
@@ -85,11 +90,17 @@ function rowToSavedSearchView(row: SavedSearchViewRow): SavedSearchView {
   };
 }
 
+/**
+ * Coerce a stored/incoming scope to a member of `SAVED_SEARCH_SCOPES`, defaulting
+ * to "tasks". The default keeps persisted views readable if a scope is ever
+ * retired; it is NOT a substitute for validating user input, which the CLI does
+ * up front so a mistyped `--scope` fails loudly instead of silently searching tasks.
+ */
 export function normalizeScope(scope: string | undefined | null): SavedSearchScope {
-  if (scope === "all" || scope === "tasks" || scope === "projects" || scope === "plans" || scope === "runs" || scope === "comments") {
-    return scope;
-  }
-  return "tasks";
+  const candidate = (scope ?? "").trim().toLowerCase();
+  return (SAVED_SEARCH_SCOPES as readonly string[]).includes(candidate)
+    ? candidate as SavedSearchScope
+    : "tasks";
 }
 
 function normalizeName(name: string): string {
