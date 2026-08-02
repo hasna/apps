@@ -1950,6 +1950,104 @@ describe("storage adapter contracts", () => {
       .toEqual([stray.id]);
   });
 
+  test("--assigned resolves the SAME way on sqlite and postgres when the name is genuinely ambiguous (task 8f07bc15 remediation, PR #160 finding 1)", async () => {
+    // Reproduces the live fleet state cited by 0bf5d979/8f07bc15: two agent
+    // rows answering to the same name in different case, registered
+    // independently. `adapter.agents.register` now dedupes case-variants
+    // (see "resolves agent names case-insensitively on BOTH storage
+    // engines" above), so it cannot reproduce the historical split — seed
+    // the raw rows directly, exactly as the real duplicate rows exist today
+    // (no shared identity_id/reports_to; see resolveAssignedToAliases' doc
+    // comment).
+    async function seedAgentRow(
+      client: TodosPostgresQueryClient,
+      agent: { id: string; name: string; lastSeenAt: string },
+    ): Promise<void> {
+      await client.query(
+        `INSERT INTO todos_sync_records (
+          service, object_type, object_id, payload, updated_at,
+          deleted_at, source_machine_id, version
+        ) VALUES ($1, $2, $3, $4::jsonb, $5::timestamptz, NULL, $6, $7)
+        ON CONFLICT (service, object_type, object_id) DO UPDATE SET
+          payload = EXCLUDED.payload,
+          updated_at = EXCLUDED.updated_at,
+          deleted_at = NULL,
+          source_machine_id = EXCLUDED.source_machine_id,
+          version = EXCLUDED.version
+        WHERE todos_sync_records.updated_at IS NULL
+           OR todos_sync_records.updated_at < EXCLUDED.updated_at
+           OR (todos_sync_records.updated_at = EXCLUDED.updated_at
+               AND COALESCE(todos_sync_records.version, 0) <= COALESCE(EXCLUDED.version, 0))
+        RETURNING object_id`,
+        [
+          "todos",
+          "agents",
+          agent.id,
+          {
+            id: agent.id,
+            name: agent.name,
+            status: "active",
+            permissions: [],
+            capabilities: [],
+            metadata: {},
+            created_at: agent.lastSeenAt,
+            last_seen_at: agent.lastSeenAt,
+          },
+          agent.lastSeenAt,
+          "spark01",
+          1,
+        ],
+      );
+    }
+
+    const sqliteTimestamp = new Date().toISOString();
+    db.run(
+      "INSERT INTO agents (id, name, created_at, last_seen_at) VALUES (?, ?, ?, ?), (?, ?, ?, ?)",
+      ["01d4cc12", "fabricius", sqliteTimestamp, sqliteTimestamp, "4d77b218", "Fabricius", sqliteTimestamp, sqliteTimestamp],
+    );
+    const sqlite = createLocalSqliteTodosStorageAdapter({ db });
+    const sqliteProject = await sqlite.projects.create({ name: "Alias ambiguity sqlite", path: "/tmp/alias-ambiguity-sqlite" });
+
+    const postgres = createMemoryPostgresClient();
+    const pg = createPostgresTodosStorageAdapter({ client: postgres.client, sourceMachineId: "spark01" });
+    const pgProject = await pg.projects.create({ name: "Alias ambiguity postgres", path: "/tmp/alias-ambiguity-postgres" });
+    await seedAgentRow(postgres.client, { id: "01d4cc12", name: "fabricius", lastSeenAt: sqliteTimestamp });
+    await seedAgentRow(postgres.client, { id: "4d77b218", name: "Fabricius", lastSeenAt: sqliteTimestamp });
+
+    for (const [engine, adapter, project] of [
+      ["sqlite", sqlite, sqliteProject],
+      ["postgres", pg, pgProject],
+    ] as const) {
+      const byLiveId = await adapter.tasks.create({ title: "id-stored, live duplicate", project_id: project.id, assigned_to: "01d4cc12" });
+      const byStaleId = await adapter.tasks.create({ title: "id-stored, stale duplicate", project_id: project.id, assigned_to: "4d77b218" });
+      const byLiteralName = await adapter.tasks.create({ title: "name-stored, ambiguous literal", project_id: project.id, assigned_to: "fabricius" });
+
+      // Must not throw (pre-remediation: sqlite crashed with
+      // IdentityAliasAmbiguousError; postgres silently narrowed to the
+      // freshest of the two rows instead — neither engine may do that here).
+      // If either call below rejects, the test fails right there with the
+      // thrown error rather than at a later assertion.
+
+      // Same observable outcome on both engines: an ambiguous name falls
+      // back to literal-only matching (identical to a ref matching zero
+      // agents), so it finds only the row stored under that literal string
+      // — never the id-stored rows of either candidate, and never just one
+      // of them via a freshest/first tie-break.
+      const foundByAmbiguousName = await adapter.tasks.list({ project_id: project.id, assigned_to: "fabricius" });
+      expect(foundByAmbiguousName.map((t) => t.id), `${engine}: ambiguous-name query`).toEqual([byLiteralName.id]);
+      expect(await adapter.tasks.count({ project_id: project.id, assigned_to: "fabricius" }), `${engine}: ambiguous-name count`).toBe(1);
+
+      // Querying by either agent's OWN id is unambiguous (id lookup, not the
+      // name lookup that collides) and is unaffected: it resolves to exactly
+      // that one row and widens to its registered name alias, so it also
+      // picks up the literal-"fabricius" task the SAME way on both engines.
+      const foundByLiveId = await adapter.tasks.list({ project_id: project.id, assigned_to: "01d4cc12" });
+      expect(foundByLiveId.map((t) => t.id).sort(), `${engine}: live-id query`).toEqual([byLiveId.id, byLiteralName.id].sort());
+      const foundByStaleId = await adapter.tasks.list({ project_id: project.id, assigned_to: "4d77b218" });
+      expect(foundByStaleId.map((t) => t.id).sort(), `${engine}: stale-id query`).toEqual([byStaleId.id, byLiteralName.id].sort());
+    }
+  });
+
   test("filters by id set including subtasks (POST /v1/tasks/exists parity check)", async () => {
     const postgres = createMemoryPostgresClient();
     const adapter = createPostgresTodosStorageAdapter({

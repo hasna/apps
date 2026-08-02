@@ -358,13 +358,13 @@ class PostgresJsonRecordStore {
    * lower-cased `silvanus` — see `normalizeAgentNameInput`), independent of
    * which alias was used.
    *
-   * Resolution is against exactly ONE agents-table row: `resolveAgent` finds
-   * it by exact id, then by case-insensitive name (`matchAgentByName`), and
-   * the alias set returned is that row's `{id, name}` plus the literal input.
-   * A ref matching NO registered agent returns just the literal input
-   * unchanged, so an unknown/free-text `assigned_to` value keeps its current
-   * exact-match behaviour — this only widens a query that already resolves to
-   * a real, single agent.
+   * Resolution is against exactly ONE agents-table row: `resolveAgentForAssignedFilter`
+   * finds it by exact id, then by case-insensitive name, and the alias set
+   * returned is that row's `{id, name}` plus the literal input. A ref matching
+   * NO registered agent returns just the literal input unchanged, so an
+   * unknown/free-text `assigned_to` value keeps its current exact-match
+   * behaviour — this only widens a query that already resolves to a real,
+   * single agent.
    *
    * Deliberately NOT covered: two independently registered agent rows for
    * what a human considers one seat (e.g. a personal name and a seat slug
@@ -372,9 +372,17 @@ class PostgresJsonRecordStore {
    * `todos agents` shows no shared `identity_id`/`reports_to`). Bridging that
    * needs an identity-model decision, not a widened query filter; filed
    * separately (todos task a37a7137).
+   *
+   * A ref that resolves by name to 2+ registered agents (e.g. `fabricius` +
+   * `Fabricius`, task 0bf5d979) is this same "not bridged" case, so it is
+   * resolved to `null` — literal-only fallback, same as no match — rather
+   * than crashing (as the SQLite path did pre-fix, `IdentityAliasAmbiguousError`)
+   * or silently picking one of the ambiguous rows via the freshest-wins
+   * tie-break `matchAgentByName` uses for other callers. See
+   * `resolveAgentForAssignedFilter` below.
    */
   private async resolveAssignedToAliases(ref: string): Promise<string[]> {
-    const agent = await resolveAgent(ref, this);
+    const agent = await resolveAgentForAssignedFilter(ref, this);
     const aliases = new Set<string>([ref]);
     if (agent) {
       aliases.add(agent.id);
@@ -1788,6 +1796,36 @@ async function resolveAgent(idOrName: string, store: PostgresJsonRecordStore): P
   const byId = await store.get<Agent>("agents", idOrName);
   if (byId) return byId;
   return matchAgentByName(await store.list<Agent>("agents"), idOrName);
+}
+
+/**
+ * Resolve `idOrName` to an agent for `--assigned` filter aliasing specifically
+ * — refusing to silently narrow to one row when the name is genuinely
+ * ambiguous (2+ independently-registered agents share it case-insensitively,
+ * e.g. `fabricius` + `Fabricius`, task 0bf5d979).
+ *
+ * This deliberately does NOT reuse `resolveAgent`/`matchAgentByName`'s
+ * freshest-wins tie-break. That tie-break is correct for its own callers
+ * (heartbeat, registration) where the caller wants exactly one live agent and
+ * the stale twin is noise. For a task-ownership FILTER it is the wrong
+ * default: picking one ambiguous row and searching only its alias set
+ * silently excludes the other row's own tasks, which is a different
+ * instance of the exact silent-subset bug this resolver exists to fix
+ * (task 8f07bc15). Bridging the two rows is a deliberate non-goal (task
+ * a37a7137), so ambiguous input here returns `null` and the caller falls
+ * back to literal-only matching — never a crash, and never a silent pick.
+ * Must stay behaviourally identical to the SQLite-side `IdentityAliasAmbiguousError`
+ * catch in task-crud.ts's `resolveAssignedToAliases`.
+ */
+async function resolveAgentForAssignedFilter(idOrName: string, store: PostgresJsonRecordStore): Promise<Agent | null> {
+  const byId = await store.get<Agent>("agents", idOrName);
+  if (byId) return byId;
+  const target = normalizeAgentNameInput(idOrName);
+  if (!target) return null;
+  const matches = (await store.list<Agent>("agents")).filter(
+    (agent) => normalizeAgentNameInput(agent.name) === target,
+  );
+  return matches.length === 1 ? matches[0]! : null;
 }
 
 /** Refresh an agent's last_seen_at in the shared cloud roster (heartbeat). */

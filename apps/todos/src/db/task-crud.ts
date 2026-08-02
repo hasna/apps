@@ -10,6 +10,7 @@ import type {
   UpsertTaskByFingerprintResult,
 } from "../types/index.js";
 import {
+  IdentityAliasAmbiguousError,
   TaskNotFoundError,
   VersionConflictError,
   isBlockingDependencyStatus,
@@ -265,7 +266,23 @@ export function getTaskWithRelations(
  */
 function resolveAssignedToAliases(db: Database, ref: string): string[] {
   const aliases = new Set<string>([ref]);
-  const agentId = resolvePartialId(db, "agents", ref);
+  let agentId: string | null;
+  try {
+    agentId = resolvePartialId(db, "agents", ref);
+  } catch (err) {
+    if (!(err instanceof IdentityAliasAmbiguousError)) throw err;
+    // Ambiguous name match: 2+ independently-registered agent rows share this
+    // name case-insensitively (e.g. `fabricius` + `Fabricius`, task 0bf5d979).
+    // Bridging across separately-registered rows is a deliberate non-goal of
+    // this resolver (task a37a7137) — so treat this exactly like "no single
+    // agent resolved" and fall back to literal-only matching, rather than
+    // crashing the query or silently picking one of the ambiguous rows. This
+    // must behave identically to the "ref matches no registered agent" path
+    // immediately below (both leave `aliases` as just the literal `ref`), and
+    // it must match the Postgres adapter's `resolveAgentForAssignedFilter`,
+    // which resolves the same ambiguity to `null` for the same reason.
+    agentId = null;
+  }
   if (agentId) {
     aliases.add(agentId);
     const row = db.query("SELECT name FROM agents WHERE id = ?").get(agentId) as { name: string } | null;

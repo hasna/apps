@@ -215,6 +215,46 @@ describe("listTasks", () => {
     expect(listTasks({ assigned_to: "not-a-registered-agent" }, db).map((t) => t.id)).toEqual([stray.id]);
   });
 
+  it("does not crash when --assigned resolves by name to 2+ registered agents (task 8f07bc15 remediation, PR #160 finding 1)", () => {
+    // Reproduces the live fleet state cited by 0bf5d979/8f07bc15: two agent
+    // rows answering to the same name in different case, created
+    // independently (registerAgent's own validateAgentName normalizes and
+    // would refuse this pair, so seed the rows directly, as the real
+    // duplicate rows were).
+    const timestamp = new Date().toISOString();
+    db.run(
+      "INSERT INTO agents (id, name, created_at, last_seen_at) VALUES (?, ?, ?, ?), (?, ?, ?, ?)",
+      ["01d4cc12", "fabricius", timestamp, timestamp, "4d77b218", "Fabricius", timestamp, timestamp],
+    );
+    const byLiveId = createTask({ title: "assigned to the live duplicate's id", assigned_to: "01d4cc12" }, db);
+    const byStaleId = createTask({ title: "assigned to the stale duplicate's id", assigned_to: "4d77b218" }, db);
+    const byLiteralName = createTask({ title: "assigned via the ambiguous literal name", assigned_to: "fabricius" }, db);
+
+    // Must not throw IdentityAliasAmbiguousError (pre-remediation: rc=1,
+    // "Identity alias or source is ambiguous: fabricius").
+    expect(() => listTasks({ assigned_to: "fabricius" }, db)).not.toThrow();
+    expect(() => countTasks({ assigned_to: "fabricius" }, db)).not.toThrow();
+
+    // An ambiguous name falls back to literal-only matching (same as a ref
+    // matching zero agents) rather than crashing or silently picking one of
+    // the two rows — so it finds exactly the rows stored under that literal
+    // string, not the id-stored rows of either candidate agent.
+    expect(listTasks({ assigned_to: "fabricius" }, db).map((t) => t.id).sort())
+      .toEqual([byLiteralName.id].sort());
+    expect(countTasks({ assigned_to: "fabricius" }, db)).toBe(1);
+
+    // Querying by either agent's id is unaffected by the name being
+    // ambiguous: an exact id match resolves to exactly that one row (id
+    // lookup, not the name lookup that throws), so it is not ambiguous at
+    // all — it widens normally to that row's own registered name, per the
+    // pre-existing id/name alias behaviour, and therefore also picks up the
+    // literal-"fabricius" task each of these two agents' names collides with.
+    expect(listTasks({ assigned_to: "01d4cc12" }, db).map((t) => t.id).sort())
+      .toEqual([byLiveId.id, byLiteralName.id].sort());
+    expect(listTasks({ assigned_to: "4d77b218" }, db).map((t) => t.id).sort())
+      .toEqual([byStaleId.id, byLiteralName.id].sort());
+  });
+
   it("should filter by tags", () => {
     createTask({ title: "Tagged", tags: ["bug", "urgent"] }, db);
     createTask({ title: "Untagged" }, db);
