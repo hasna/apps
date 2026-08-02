@@ -378,11 +378,36 @@ function toStuckRunEntry(run: LoopRun, reclaimed: boolean, deferredReason?: "liv
  *
  * The discriminator is evidence, not age: `Store#previewExpiredRunLeases` (and,
  * on apply, `Store#recoverExpiredRunLeasesDetailed`) only ever classifies a run
- * as reclaimable when BOTH its lease has expired AND its recorded process is
+ * as reclaimable when its lease has expired AND EITHER its recorded process is
  * not alive (bounded, additionally, by the daemon's own pid-recycling and
- * workflow-step-liveness checks). A run whose process is still alive is
- * reported as `liveDeferred` and is never touched, regardless of how long it
- * has been running — a long but genuinely alive run is not this defect.
+ * workflow-step-liveness checks) OR it looks alive but has already exceeded
+ * the daemon's own bounded grace ceiling (`MAX_LIVE_EXPIRED_RUN_DEFERRALS`
+ * deferrals — a live-looking process that keeps failing to renew its lease is
+ * a wedged runner or a recycled pid, not a run this tool should defer
+ * forever). A run whose process looks alive AND is still under that ceiling is
+ * reported as `liveDeferred` and is not abandoned — but `apply` still touches
+ * it: each such call advances its `defer_count` exactly as a live daemon tick
+ * would, which is what lets it ever reach the ceiling in the first place. A
+ * genuinely, persistently alive run never crosses the ceiling because its
+ * lease keeps renewing before ever going stale enough to be selected at all.
+ *
+ * SUPERSEDES PART OF #182, DOES NOT REVERT IT (P1 fixed in this cycle, found
+ * by pr182-reviewer, reproduced and confirmed independently before this PR):
+ * #182 called `recoverExpiredRunLeasesDetailed(now, { preserveLiveProcesses:
+ * true })` here, unconditionally. That flag makes `store.ts` `continue` on
+ * every "looks alive" row regardless of `defer_count`, so the ceiling-abandon
+ * branch a few lines below it is provably unreachable through this command —
+ * a live-looking wedged run could never be reclaimed by `--apply`, no matter
+ * how long it sat or how many times the command ran, which under `overlap:
+ * "skip"` is exactly the "blocks every run queued behind it" failure this
+ * whole command exists to fix. That call is changed here to omit
+ * `preserveLiveProcesses`, restoring the ceiling-based reclaim. The
+ * `preserveLiveProcesses` option itself is left in place on
+ * `recoverExpiredRunLeasesDetailed` — #182's safety intent (never touch a
+ * process that looks alive) is a legitimate primitive for some other caller
+ * to opt into; the defect was applying it here, unconditionally, to the one
+ * command whose whole job is to eventually reclaim a run that only *looks*
+ * alive.
  *
  * On this fleet a loop's `leaseMs` is conventionally set wider than its
  * target's `timeoutMs` (e.g. 9m lease over an 8m execution timeout), so lease
@@ -401,16 +426,30 @@ function toStuckRunEntry(run: LoopRun, reclaimed: boolean, deferredReason?: "liv
  * loop's `nextRunAt` moves in the same command invocation rather than waiting
  * on a daemon that may not come back.
  */
-export function buildStuckRunReport(store: Store, opts: { apply?: boolean; limit?: number } = {}): StuckRunReport {
-  const now = new Date();
+export function buildStuckRunReport(store: Store, opts: { apply?: boolean; limit?: number; now?: Date } = {}): StuckRunReport {
+  const now = opts.now ?? new Date();
   const preview = store.previewExpiredRunLeases(now, { limit: opts.limit });
   const advancedLoopIds: string[] = [];
   let entries: StuckRunEntry[];
-  if (opts.apply && preview.reclaimable.length > 0) {
-    const result = store.recoverExpiredRunLeasesDetailed(now, {
-      limit: opts.limit,
-      preserveLiveProcesses: true,
-    });
+  let stuckCount = preview.reclaimable.length;
+  let liveDeferredCount = preview.liveDeferred.length;
+  // CORRECTED (P1, PR #182 review): this used to gate the mutating call on
+  // `preview.reclaimable.length > 0`. That is wrong even once the ceiling
+  // check above is fixed, because a live-looking run under the grace ceiling
+  // is reported by preview as `liveDeferred`, never `reclaimable` — so that
+  // gate would skip calling `recoverExpiredRunLeasesDetailed` for exactly the
+  // runs whose `defer_count` needs to advance toward the ceiling. Left gated,
+  // such a run's `defer_count` stays at 0 forever and it can never be
+  // reclaimed even after real, prior invocations. The daemon's own tick calls
+  // this unconditionally every time it finds an expired-lease row at all
+  // (never conditioned on "would anything be abandoned"); `apply` must match
+  // that, not re-derive a narrower trigger.
+  if (opts.apply && (preview.reclaimable.length > 0 || preview.liveDeferred.length > 0)) {
+    // NOTE: deliberately NOT passing `preserveLiveProcesses` — see the
+    // "SUPERSEDES PART OF #182" note above the doc comment for why passing
+    // `true` here made this command permanently unable to reclaim a
+    // live-looking wedged run.
+    const result = store.recoverExpiredRunLeasesDetailed(now, { limit: opts.limit });
     for (const run of result.abandoned) {
       const loop = store.getLoop(run.loopId);
       if (!loop) continue;
@@ -431,6 +470,13 @@ export function buildStuckRunReport(store: Store, opts: { apply?: boolean; limit
       }
       if (store.getLoop(loop.id)?.nextRunAt !== before) advancedLoopIds.push(loop.id);
     }
+    // Report what THIS invocation actually did (abandoned vs re-deferred),
+    // not the pre-mutation preview counts — the two can legitimately differ
+    // now: a run at the ceiling shows as `reclaimable` in preview but was
+    // just abandoned by this call, and a run below the ceiling shows as
+    // `liveDeferred` in both, but its `defer_count` has now moved.
+    stuckCount = result.abandoned.length;
+    liveDeferredCount = result.deferred.length;
     entries = [
       ...result.abandoned.map((run) => toStuckRunEntry(run, true)),
       ...result.deferred.map((run) => toStuckRunEntry(run, false, "live_process")),
@@ -442,12 +488,12 @@ export function buildStuckRunReport(store: Store, opts: { apply?: boolean; limit
     ];
   }
   return {
-    ok: preview.reclaimable.length === 0,
+    ok: stuckCount === 0,
     generatedAt: now.toISOString(),
     applied: Boolean(opts.apply),
-    checked: preview.reclaimable.length + preview.liveDeferred.length,
-    stuck: preview.reclaimable.length,
-    liveDeferred: preview.liveDeferred.length,
+    checked: stuckCount + liveDeferredCount,
+    stuck: stuckCount,
+    liveDeferred: liveDeferredCount,
     entries,
     advancedLoopIds,
   };
