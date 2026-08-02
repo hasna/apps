@@ -175,27 +175,58 @@ jobs:
             exit 1
           fi
 
+          # A hotfix sits on an OLDER main commit whose ci.yml may define fewer
+          # jobs than main does today. Measured for task c64e66bd: ci.yml at
+          # b6486cef defines only the `test` job, while main's ruleset requires
+          # four contexts - `postgres storage` and `runner image security` were
+          # added to ci.yml AFTER 0.4.28. Demanding all four would make every
+          # hotfix on an older base permanently unbuildable.
+          #
+          # Relaxing to "whatever happened to run" is NOT acceptable on its own:
+          # a hotfix could then delete jobs from its own ci.yml and satisfy an
+          # empty set. So pin the CI definition to the parent first. The parent
+          # is on main and therefore reviewed, so the hotfix inherits exactly the
+          # bar its base enforced and cannot lower it.
+          parent_sha="$(git rev-parse "${SOURCE_SHA}^")"
+          if ! git diff --quiet "${parent_sha}" "${SOURCE_SHA}" -- .github/workflows/; then
+            echo "hotfix modifies .github/workflows/; refusing - a hotfix may not alter its own CI" >&2
+            git diff --name-only "${parent_sha}" "${SOURCE_SHA}" -- .github/workflows/ >&2
+            exit 1
+          fi
+
           gh api "repos/${GITHUB_REPOSITORY}/commits/${SOURCE_SHA}/check-runs" --paginate \
             > "${RUNNER_TEMP}/check-runs.json"
 
           failed=0
+          ran=0
           while IFS= read -r context; do
             [[ -n "${context}" ]] || continue
             conclusion="$(jq -r --arg n "${context}" \
               '[.check_runs[]? | select(.name==$n)] | sort_by(.completed_at) | last | .conclusion // "MISSING"' \
               "${RUNNER_TEMP}/check-runs.json")"
             printf 'required check %-28s -> %s\n' "${context}" "${conclusion}"
-            if [[ "${conclusion}" != "success" ]]; then
-              failed=1
-            fi
+            case "${conclusion}" in
+              success) ran=$(( ran + 1 )) ;;
+              MISSING)
+                # Not producible by this base's reviewed ci.yml. Tolerated only
+                # because workflows are pinned to the parent immediately above.
+                ;;
+              *) failed=1 ;;
+            esac
           done < "${contexts_file}"
 
           if (( failed != 0 )); then
-            echo "hotfix commit ${SOURCE_SHA} has not passed main's required status checks; refusing" >&2
+            echo "hotfix commit ${SOURCE_SHA} has a required check that did not succeed; refusing" >&2
+            exit 1
+          fi
+          if (( ran == 0 )); then
+            # Every required context MISSING means CI never ran on this commit -
+            # exactly the untested-commit bypass this step exists to close.
+            echo "no required status check ran on ${SOURCE_SHA}; refusing rather than passing vacuously" >&2
             echo "open a pull request for the hotfix branch so ci.yml runs against this commit" >&2
             exit 1
           fi
-          echo "all ${required_count} required status checks passed on ${SOURCE_SHA}"
+          echo "${ran} of ${required_count} required checks ran and passed on ${SOURCE_SHA}; workflows identical to reviewed parent ${parent_sha}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
