@@ -184,6 +184,37 @@ describe("listTasks", () => {
     expect(tasks[0]!.title).toBe("Assigned");
   });
 
+  it("should resolve assigned_to across an agent's id/name aliases (task 8f07bc15)", () => {
+    const agent = registerAgent({ name: "fabricius" }, db);
+    if ("conflict" in agent) throw new Error(`agent registration conflict: ${agent.existing_name}`);
+
+    // Reproduces the real split: one caller wrote the id, another the name,
+    // into the same field.
+    const byId = createTask({ title: "stored under id", assigned_to: agent.id }, db);
+    const byName = createTask({ title: "stored under name", assigned_to: agent.name }, db);
+
+    // Direction 1: querying by id finds the row stored under the name too.
+    expect(listTasks({ assigned_to: agent.id }, db).map((t) => t.id).sort())
+      .toEqual([byId.id, byName.id].sort());
+
+    // Direction 2: querying by name finds the row stored under the id too.
+    expect(listTasks({ assigned_to: agent.name }, db).map((t) => t.id).sort())
+      .toEqual([byId.id, byName.id].sort());
+
+    // Direction 3: case-insensitive, both on the query and on a row whose
+    // assigned_to was itself written in the wrong case.
+    const byUpperName = createTask({ title: "stored uppercase", assigned_to: "FABRICIUS" }, db);
+    expect(listTasks({ assigned_to: "Fabricius" }, db).map((t) => t.id).sort())
+      .toEqual([byId.id, byName.id, byUpperName.id].sort());
+
+    // Direction 4: a genuinely unknown agent still returns zero, and an
+    // unrelated free-text assignee (never registered) keeps its existing
+    // exact-match-only behaviour rather than being swept in.
+    const stray = createTask({ title: "unrelated literal assignee", assigned_to: "not-a-registered-agent" }, db);
+    expect(listTasks({ assigned_to: "zzz-no-such-agent" }, db)).toEqual([]);
+    expect(listTasks({ assigned_to: "not-a-registered-agent" }, db).map((t) => t.id)).toEqual([stray.id]);
+  });
+
   it("should filter by tags", () => {
     createTask({ title: "Tagged", tags: ["bug", "urgent"] }, db);
     createTask({ title: "Untagged" }, db);

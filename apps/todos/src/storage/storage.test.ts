@@ -1911,6 +1911,45 @@ describe("storage adapter contracts", () => {
     expect(postgres.calls.some((c) => c.sql.includes("todos:list-tasks") && /OFFSET \$\d+/.test(c.sql))).toBe(true);
   });
 
+  test("--assigned resolves an agent's id/name aliases so a filter by either finds rows stored under the other (task 8f07bc15)", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client: postgres.client, sourceMachineId: "spark01" });
+    const project = await adapter.projects.create({ name: "Alias filter", path: "/tmp/alias-filter" });
+    const agent = await adapter.agents.register({ name: "fabricius", project_id: project.id });
+    if ("conflict" in agent) throw new Error(agent.message);
+
+    // Reproduces the real split: `add --agent <id>` writes the id, `update
+    // --assign <name>` writes the resolved name, into the SAME field.
+    const byId = await adapter.tasks.create({ title: "stored under id", project_id: project.id, assigned_to: agent.id });
+    const byName = await adapter.tasks.create({ title: "stored under name", project_id: project.id, assigned_to: agent.name });
+
+    // Direction 1: querying by the id finds the row stored under the NAME.
+    const foundById = await adapter.tasks.list({ project_id: project.id, assigned_to: agent.id });
+    expect(foundById.map((t) => t.id).sort()).toEqual([byId.id, byName.id].sort());
+
+    // Direction 2: querying by the name finds the row stored under the ID.
+    const foundByName = await adapter.tasks.list({ project_id: project.id, assigned_to: agent.name });
+    expect(foundByName.map((t) => t.id).sort()).toEqual([byId.id, byName.id].sort());
+
+    // count() must agree with list() on both directions (same resolver).
+    expect(await adapter.tasks.count({ project_id: project.id, assigned_to: agent.id })).toBe(2);
+    expect(await adapter.tasks.count({ project_id: project.id, assigned_to: agent.name })).toBe(2);
+
+    // Direction 3: case-insensitive — a differently-cased query string, and a
+    // row whose assigned_to was itself written in the wrong case, both match.
+    const byUpperName = await adapter.tasks.create({ title: "stored uppercase", project_id: project.id, assigned_to: "FABRICIUS" });
+    const foundByMixedCaseQuery = await adapter.tasks.list({ project_id: project.id, assigned_to: "Fabricius" });
+    expect(foundByMixedCaseQuery.map((t) => t.id).sort()).toEqual([byId.id, byName.id, byUpperName.id].sort());
+
+    // Direction 4: a genuinely unknown agent still returns zero, and does not
+    // widen to match every row that merely resolved no agent (i.e. the
+    // literal-fallback path stays an exact, single-value match).
+    const stray = await adapter.tasks.create({ title: "unrelated literal assignee", project_id: project.id, assigned_to: "not-a-registered-agent" });
+    expect(await adapter.tasks.list({ project_id: project.id, assigned_to: "zzz-no-such-agent" })).toEqual([]);
+    expect((await adapter.tasks.list({ project_id: project.id, assigned_to: "not-a-registered-agent" })).map((t) => t.id))
+      .toEqual([stray.id]);
+  });
+
   test("filters by id set including subtasks (POST /v1/tasks/exists parity check)", async () => {
     const postgres = createMemoryPostgresClient();
     const adapter = createPostgresTodosStorageAdapter({
@@ -2713,9 +2752,12 @@ function createMemoryPostgresClient(): {
           const arr = grabIn("payload->>'priority' IN (")!;
           preds.push((t) => arr.includes(t["priority"]));
         }
-        if (sql.includes("payload->>'assigned_to' = $")) {
-          const v = grabScalar("payload->>'assigned_to' = ");
-          preds.push((t) => (t["assigned_to"] ?? null) === v);
+        // assigned_to is matched as a case-insensitive alias SET, not a scalar
+        // equality — see buildTaskFilterSql/resolveAssignedToAliases (task
+        // 8f07bc15). The IN list is already lower-cased by the real code.
+        if (sql.includes("LOWER(payload->>'assigned_to') IN (")) {
+          const lowered = grabIn("LOWER(payload->>'assigned_to') IN (")!;
+          preds.push((t) => lowered.includes(String(t["assigned_to"] ?? "").toLowerCase()));
         }
         if (sql.includes("payload->>'agent_id' = $")) {
           const v = grabScalar("payload->>'agent_id' = ");

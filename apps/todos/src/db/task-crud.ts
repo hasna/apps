@@ -14,7 +14,7 @@ import {
   VersionConflictError,
   isBlockingDependencyStatus,
 } from "../types/index.js";
-import { getDatabase, now, uuid } from "./database.js";
+import { getDatabase, now, resolvePartialId, uuid } from "./database.js";
 import { checkCompletionGuard } from "../lib/completion-guard.js";
 import { databasePathFromDatabase } from "../lib/event-emission-safety.js";
 import { emitLocalEventHooksQuiet } from "../lib/event-hooks.js";
@@ -250,6 +250,37 @@ export function getTaskWithRelations(
   };
 }
 
+/**
+ * Resolve an `--assigned`/`assigned_to` filter value to every stored form it
+ * could legitimately appear under: its registered agent's id, its registered
+ * name, and the literal input. Local-sqlite counterpart to the alias-set
+ * resolver in storage/postgres-adapter.ts — see the comment there for the
+ * root cause (task 8f07bc15) and the deliberate scope limit (one agents-table
+ * row only; two separately-registered rows for one human, e.g. a seat slug
+ * and a personal name, are not bridged here).
+ *
+ * `resolvePartialId(db, "agents", ref)` already does the id/prefix + exact
+ * case-insensitive name lookup this needs (src/db/database.ts); reused as-is
+ * rather than duplicated.
+ */
+function resolveAssignedToAliases(db: Database, ref: string): string[] {
+  const aliases = new Set<string>([ref]);
+  const agentId = resolvePartialId(db, "agents", ref);
+  if (agentId) {
+    aliases.add(agentId);
+    const row = db.query("SELECT name FROM agents WHERE id = ?").get(agentId) as { name: string } | null;
+    if (row?.name) aliases.add(row.name);
+  }
+  return [...aliases];
+}
+
+/** Build a case-insensitive `column IN (...)` clause matching any of `values`. */
+function lowerInClause(column: string, values: readonly string[], params: SQLQueryBindings[]): string {
+  if (values.length === 0) return "1=0";
+  params.push(...values.map((v) => v.toLowerCase()));
+  return `LOWER(${column}) IN (${values.map(() => "?").join(",")})`;
+}
+
 export function listTasks(filter: TaskFilter = {}, db?: Database): Task[] {
   const d = db || getDatabase();
   const { clearExpiredLocks } = require("./database.js");
@@ -299,8 +330,7 @@ export function listTasks(filter: TaskFilter = {}, db?: Database): Task[] {
   }
 
   if (filter.assigned_to) {
-    conditions.push("assigned_to = ?");
-    params.push(filter.assigned_to);
+    conditions.push(lowerInClause("assigned_to", resolveAssignedToAliases(d, filter.assigned_to), params));
   }
 
   if (filter.agent_id) {
@@ -532,8 +562,7 @@ export function countTasks(filter: Omit<TaskFilter, 'limit' | 'offset'> = {}, db
   }
 
   if (filter.assigned_to) {
-    conditions.push("assigned_to = ?");
-    params.push(filter.assigned_to);
+    conditions.push(lowerInClause("assigned_to", resolveAssignedToAliases(d, filter.assigned_to), params));
   }
 
   if (filter.agent_id) {
