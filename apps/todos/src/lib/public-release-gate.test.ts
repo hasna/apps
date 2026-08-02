@@ -178,6 +178,66 @@ describe("public release gate", () => {
     expect(otherFile.map((failure) => failure.check)).toContain("public-text-boundary");
   });
 
+  test("the bundled server module may carry contracts' forbidden-runtime NAMES as inert schema data", () => {
+    // @hasna/contracts ships FORBIDDEN_SHARED_CLOUD_RUNTIMES = ["@hasna/cloud", "open-cloud"] —
+    // a validator constant that NAMES the runtimes a manifest must not depend on. It is data,
+    // not a dependency edge. `bun build src/server/index.ts` does not externalize
+    // @hasna/contracts (unlike the CLI/MCP/SDK targets), so since #153/#154 made the server
+    // bundle self-contained, that literal array is inlined into dist/server/index.js and a
+    // text scanner cannot tell "names a forbidden runtime" from "depends on one". Without this
+    // exemption every publish dies here — verified by removing it and observing this same test
+    // fail with `public-text-boundary` on package/dist/server/index.js.
+    const boundaryFailures = (files: { path: string; text: string }[]) =>
+      validatePublicTextSurfaces(files).filter((failure) => failure.check === "public-text-boundary");
+
+    const contractsConstant = 'var FORBIDDEN_SHARED_CLOUD_RUNTIMES = ["@hasna/cloud", "open-cloud"];';
+    for (const path of ["package/dist/server/index.js", "dist/server/index.js"]) {
+      expect(boundaryFailures([{ path, text: contractsConstant }])).toEqual([]);
+    }
+
+    // The exemption is by exact file AND exact pattern. It must not turn dist/server/index.js
+    // into a hole for everything else the boundary forbids...
+    const otherViolation = validatePublicTextSurfaces([
+      { path: "package/dist/server/index.js", text: `const region = "AWS_REGION";` },
+    ]);
+    expect(otherViolation.map((failure) => failure.check)).toContain("public-text-boundary");
+
+    // ...nor may any OTHER shipped file (including a sibling under dist/server/) name a
+    // forbidden runtime — a genuine dependency on @hasna/cloud or open-cloud must still fail.
+    for (const path of ["package/dist/index.js", "package/dist/server/helpers.js"]) {
+      const otherFile = validatePublicTextSurfaces([{ path, text: 'const runtime = "@hasna/cloud";' }]);
+      expect(otherFile.map((failure) => failure.check)).toContain("public-text-boundary");
+    }
+
+    // THE CASE THE FIRST VERSION OF THIS EXEMPTION MISSED (PR #161 review, NO_GO,
+    // comment 5155307992): the exemption was keyed on (module, pattern), which exempts the
+    // PATTERN IN THAT FILE — not just the one known-inert literal. A real dependency on
+    // @hasna/cloud planted in the SAME file as the contracts literal produced zero
+    // public-text-boundary failures, because the whole file was blind to the pattern once
+    // exempted. dist/server/index.js is exactly the wrong file for that hole: it has no
+    // --external flags at all, so it inlines everything the server imports, including any
+    // future @hasna/contracts release that ships real (non-schema) code touching either
+    // runtime. The fix strips only the known-safe array-literal substring before re-testing
+    // the pattern, so a real reference alongside it still surfaces.
+    const literalPlusRealDependency = [
+      'var FORBIDDEN_SHARED_CLOUD_RUNTIMES = ["@hasna/cloud", "open-cloud"];',
+      'const cloudClient = require("@hasna/cloud");',
+      "cloudClient.connect();",
+    ].join("\n");
+    expect(
+      boundaryFailures([{ path: "package/dist/server/index.js", text: literalPlusRealDependency }])
+        .map((failure) => failure.message),
+    ).toEqual(
+      expect.arrayContaining([expect.stringContaining("package/dist/server/index.js matches forbidden pattern")]),
+    );
+
+    // And a genuine open-cloud reference ALONE, with no contracts literal anywhere in the
+    // file, must still fail — the exemption never applies when the safe occurrence is absent.
+    expect(
+      boundaryFailures([{ path: "package/dist/server/index.js", text: 'import x from "open-cloud";\nx();' }]),
+    ).not.toEqual([]);
+  });
+
   test("checks generated npm package contents", () => {
     expect(
       validatePackedPackageFiles([
