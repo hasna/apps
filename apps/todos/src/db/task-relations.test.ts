@@ -2,12 +2,14 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
 import { getDatabase, closeDatabase, resetDatabase } from "./database.js";
 import { createTask } from "./tasks.js";
+import { registerAgent } from "./agents.js";
 import {
   bulkCreateTasks,
   bulkUpdateTasks,
   archiveTasks,
   unarchiveTask,
   getOverdueTasks,
+  getEscalatedTasks,
   logTime,
   getTimeLogs,
   getTimeReport,
@@ -382,6 +384,43 @@ describe("getTimeReport", () => {
     const oldCutoff = new Date(Date.now() - 86400000).toISOString();
     const report = getTimeReport({ since: oldCutoff }, db);
     expect(report.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("finds a registered agent's completed tasks recorded under EITHER assigned_to form (task 84c77210, sibling to 8f07bc15)", () => {
+    const result = registerAgent({ name: "quintus" }, db);
+    if ("conflict" in result) throw new Error("agent registration conflict");
+    const agent = result;
+    const byId = createTask({ title: "via id", status: "completed", assigned_to: agent.id }, db);
+    logTime({ task_id: byId.id, minutes: 5 }, db);
+    const byName = createTask({ title: "via name", status: "completed", assigned_to: agent.name }, db);
+    logTime({ task_id: byName.id, minutes: 7 }, db);
+
+    // Before the fix, querying by the agent's id found only the id-form row.
+    const byIdReport = getTimeReport({ agent_id: agent.id }, db);
+    expect(byIdReport.map((r) => r.task_id).sort()).toEqual([byId.id, byName.id].sort());
+
+    // And querying by the agent's name finds the id-form row too.
+    const byNameReport = getTimeReport({ agent_id: agent.name }, db);
+    expect(byNameReport.map((r) => r.task_id).sort()).toEqual([byId.id, byName.id].sort());
+  });
+});
+
+describe("getEscalatedTasks", () => {
+  it("finds a registered agent's overdue tasks recorded under EITHER assigned_to form (task 84c77210, sibling to 8f07bc15)", () => {
+    const result = registerAgent({ name: "decimus" }, db);
+    if ("conflict" in result) throw new Error("agent registration conflict");
+    const agent = result;
+    const overdueAt = new Date(Date.now() - 3600_000).toISOString();
+
+    const byId = createTask({ title: "overdue via id", status: "pending", assigned_to: agent.id, due_at: overdueAt }, db);
+    const byName = createTask({ title: "overdue via name", status: "pending", assigned_to: agent.name, due_at: overdueAt }, db);
+
+    // Before the fix, filtering by the agent's id found only the id-form row
+    // — an escalation that silently never fires for the name-form task is
+    // the exact "misses half the corpus without failing loudly" shape
+    // 84c77210 named for this class of site.
+    const escalated = getEscalatedTasks({ agent_id: agent.id }, db);
+    expect(escalated.map((e) => e.task.id).sort()).toEqual([byId.id, byName.id].sort());
   });
 });
 

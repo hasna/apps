@@ -9,6 +9,7 @@ import { z } from "zod";
 import type { Task } from "../../types/index.js";
 import { compactJson, compactStatus, compactTask, truncateText } from "../token-utils.js";
 import { getTodosCloudClient, cloudGetStats, cloudGetTask, cloudCountTasks, cloudAddComment } from "../../cli/cloud-router.js";
+import { assignedToAliasSet, getDatabase } from "../../db/database.js";
 
 interface TaskAdvContext {
   shouldRegisterTool: (name: string) => boolean;
@@ -365,9 +366,13 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
           }, undefined) as Task[];
           const completedYesterday = completed.filter(t => t.completed_at && t.completed_at.startsWith(yesterdayStr));
 
+          // Alias-resolved (task 84c77210): `getBlockedTasks` takes no agent
+          // filter of its own, so this in-memory filter is the only place
+          // doing the agent match here — see database.ts for the root cause.
           const { getBlockedTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const blockedAliases = effectiveAgentId ? assignedToAliasSet(getDatabase(), effectiveAgentId) : null;
           const blocked = getBlockedTasks(effectiveProjectId ? resolveId(effectiveProjectId, "projects") : undefined)
-            .filter((t: any) => t.assigned_to === effectiveAgentId);
+            .filter((t: any) => blockedAliases ? blockedAliases.has((t.assigned_to ?? "").toLowerCase()) : false);
 
           const lines = [
             `Standup for ${effectiveAgentId} (${effectiveProjectId ? `project: ${effectiveProjectId.slice(0,8)}` : "all projects"})`,

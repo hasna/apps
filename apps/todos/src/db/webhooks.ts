@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import type { Webhook, CreateWebhookInput } from "../types/index.js";
-import { getDatabase, now, uuid } from "./database.js";
+import { assignedToAliasSet, getDatabase, now, uuid } from "./database.js";
 
 const MAX_RETRY_ATTEMPTS = 3;
 const RETRY_BASE_DELAY_MS = 1000; // 1s, 2s, 4s exponential backoff
@@ -189,10 +189,20 @@ function logDelivery(
  * If a webhook has no scope filters (all null), it matches everything.
  * If it has filters, each non-null filter must match the corresponding payload field.
  */
-function matchesScope(wh: Webhook, payload: Record<string, unknown>): boolean {
+function matchesScope(wh: Webhook, payload: Record<string, unknown>, db: Database): boolean {
   if (wh.project_id && payload.project_id !== wh.project_id) return false;
   if (wh.task_list_id && payload.task_list_id !== wh.task_list_id) return false;
-  if (wh.agent_id && payload.agent_id !== wh.agent_id && payload.assigned_to !== wh.agent_id) return false;
+  if (wh.agent_id && payload.agent_id !== wh.agent_id) {
+    // Alias-resolved (task 84c77210): `assigned_to` holds an agent id from
+    // one write path and a resolved name from another — see database.ts for
+    // the root cause. A webhook scoped to an agent that never matches
+    // `payload.assigned_to`'s stored form is a webhook that never fires,
+    // which is indistinguishable from having nothing to deliver — the exact
+    // silent-failure shape 84c77210 named for notification-reminders.
+    const aliasSet = assignedToAliasSet(db, wh.agent_id);
+    const assignedTo = typeof payload.assigned_to === "string" ? payload.assigned_to.toLowerCase() : "";
+    if (!aliasSet.has(assignedTo)) return false;
+  }
   if (wh.task_id && payload.id !== wh.task_id) return false;
   return true;
 }
@@ -274,7 +284,7 @@ export async function dispatchWebhook(event: string, payload: unknown, db?: Data
 
   for (const wh of webhooks) {
     // Check scope filters
-    if (!matchesScope(wh, payloadObj)) continue;
+    if (!matchesScope(wh, payloadObj, d)) continue;
 
     const body = JSON.stringify({ event, payload, timestamp: now() });
     deliverWebhook(wh, event, body, 1, d).catch((err) => {

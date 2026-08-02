@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { assignedToAliasSet, getDatabase } from "../db/database.js";
 import { listTasks } from "../db/tasks.js";
 import { getTimeReport } from "../db/task-relations.js";
 import type { Task } from "../types/index.js";
@@ -134,9 +135,14 @@ function matchesProfile(profile: LocalCapacityProfileConfig, query: CapacityProf
   return true;
 }
 
-function taskMatchesAgent(task: Task, agentId?: string): boolean {
+// Alias-resolved (task 84c77210): `assigned_to` holds an agent id from one
+// write path and a resolved name from another — see database.ts for the
+// root cause. `agentId` is still compared to `task.agent_id` unchanged (a
+// different, less aliasable write path); `aliasSet` covers `assigned_to`.
+function taskMatchesAgent(task: Task, agentId?: string, aliasSet?: Set<string>): boolean {
   if (!agentId) return true;
-  return task.assigned_to === agentId || task.agent_id === agentId;
+  if (task.agent_id === agentId) return true;
+  return aliasSet ? aliasSet.has((task.assigned_to ?? "").toLowerCase()) : task.assigned_to === agentId;
 }
 
 function estimateRemaining(task: Task): number {
@@ -210,8 +216,9 @@ export function removeCapacityProfile(idOrAgent: string, projectId?: string | nu
 
 export function getPlanningForecast(input: PlanningForecastInput = {}, db?: Database): PlanningForecast {
   const startDate = input.start_date ? dateOnly(input.start_date) : todayIso();
+  const aliasSet = input.agent_id ? assignedToAliasSet(db || getDatabase(), input.agent_id) : undefined;
   const tasks = listTasks({ project_id: input.project_id, plan_id: input.plan_id, limit: 10000 }, db)
-    .filter((task) => taskMatchesAgent(task, input.agent_id));
+    .filter((task) => taskMatchesAgent(task, input.agent_id, aliasSet));
   const reportByTask = new Map(getTimeReport({ project_id: input.project_id, plan_id: input.plan_id, agent_id: input.agent_id, include_open: true }, db).map((entry) => [entry.task_id, entry]));
   const profiles = listCapacityProfiles({ agent_id: input.agent_id, project_id: input.project_id });
   const globalProfiles = input.project_id ? listCapacityProfiles({ agent_id: input.agent_id }).filter((profile) => profile.project_id === null) : [];

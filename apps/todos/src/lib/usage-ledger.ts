@@ -1,5 +1,5 @@
 import type { Database, SQLQueryBindings } from "bun:sqlite";
-import { getDatabase } from "../db/database.js";
+import { getDatabase, lowerInClause, resolveAssignedToAliases } from "../db/database.js";
 
 export const LOCAL_USAGE_LEDGER_SCHEMA_VERSION = 1;
 
@@ -174,14 +174,19 @@ function millisBetween(start: string | null, end: string | null): number {
   return endMs - startMs;
 }
 
-function addTaskScope(where: string[], params: SQLQueryBindings[], options: UsageLedgerOptions, alias = "t"): void {
+// All three scope helpers below alias-resolve their `*.assigned_to` leg
+// (task 84c77210 — see database.ts for the root cause); the `agent_id`
+// columns are left as exact matches, populated from a different, less
+// aliasable write path.
+function addTaskScope(where: string[], params: SQLQueryBindings[], options: UsageLedgerOptions, db: Database, alias = "t"): void {
   if (options.project_id) {
     where.push(`${alias}.project_id = ?`);
     params.push(options.project_id);
   }
   if (options.agent_id) {
-    where.push(`(${alias}.agent_id = ? OR ${alias}.assigned_to = ?)`);
-    params.push(options.agent_id, options.agent_id);
+    params.push(options.agent_id);
+    const assignedInClause = lowerInClause(`${alias}.assigned_to`, resolveAssignedToAliases(db, options.agent_id), params);
+    where.push(`(${alias}.agent_id = ? OR ${assignedInClause})`);
   }
   if (options.since) {
     where.push(`${alias}.created_at >= ?`);
@@ -193,14 +198,15 @@ function addTaskScope(where: string[], params: SQLQueryBindings[], options: Usag
   }
 }
 
-function addRunScope(where: string[], params: SQLQueryBindings[], options: UsageLedgerOptions, runAlias = "r", taskAlias = "t"): void {
+function addRunScope(where: string[], params: SQLQueryBindings[], options: UsageLedgerOptions, db: Database, runAlias = "r", taskAlias = "t"): void {
   if (options.project_id) {
     where.push(`${taskAlias}.project_id = ?`);
     params.push(options.project_id);
   }
   if (options.agent_id) {
-    where.push(`(${runAlias}.agent_id = ? OR ${taskAlias}.agent_id = ? OR ${taskAlias}.assigned_to = ?)`);
-    params.push(options.agent_id, options.agent_id, options.agent_id);
+    params.push(options.agent_id, options.agent_id);
+    const assignedInClause = lowerInClause(`${taskAlias}.assigned_to`, resolveAssignedToAliases(db, options.agent_id), params);
+    where.push(`(${runAlias}.agent_id = ? OR ${taskAlias}.agent_id = ? OR ${assignedInClause})`);
   }
   if (options.since) {
     where.push(`${runAlias}.started_at >= ?`);
@@ -212,14 +218,15 @@ function addRunScope(where: string[], params: SQLQueryBindings[], options: Usage
   }
 }
 
-function addTraceScope(where: string[], params: SQLQueryBindings[], options: UsageLedgerOptions, traceAlias = "tr", taskAlias = "t"): void {
+function addTraceScope(where: string[], params: SQLQueryBindings[], options: UsageLedgerOptions, db: Database, traceAlias = "tr", taskAlias = "t"): void {
   if (options.project_id) {
     where.push(`${taskAlias}.project_id = ?`);
     params.push(options.project_id);
   }
   if (options.agent_id) {
-    where.push(`(${traceAlias}.agent_id = ? OR ${taskAlias}.agent_id = ? OR ${taskAlias}.assigned_to = ?)`);
-    params.push(options.agent_id, options.agent_id, options.agent_id);
+    params.push(options.agent_id, options.agent_id);
+    const assignedInClause = lowerInClause(`${taskAlias}.assigned_to`, resolveAssignedToAliases(db, options.agent_id), params);
+    where.push(`(${traceAlias}.agent_id = ? OR ${taskAlias}.agent_id = ? OR ${assignedInClause})`);
   }
   if (options.since) {
     where.push(`${traceAlias}.created_at >= ?`);
@@ -288,7 +295,7 @@ export function createLocalUsageLedger(options: UsageLedgerOptions = {}, db?: Da
 
   const taskWhere: string[] = [];
   const taskParams: SQLQueryBindings[] = [];
-  addTaskScope(taskWhere, taskParams, options);
+  addTaskScope(taskWhere, taskParams, options, d);
   const taskClause = taskWhere.length ? `WHERE ${taskWhere.join(" AND ")}` : "";
 
   const taskTotals = queryOne<{ tasks: number; task_tokens: number | null; task_cost_usd: number | null }>(
@@ -303,7 +310,7 @@ export function createLocalUsageLedger(options: UsageLedgerOptions = {}, db?: Da
   } else if (options.agent_id) {
     const projectWhere: string[] = ["t.project_id IS NOT NULL"];
     const projectParams: SQLQueryBindings[] = [];
-    addTaskScope(projectWhere, projectParams, options);
+    addTaskScope(projectWhere, projectParams, options, d);
     projectCount = queryOne<{ count: number }>(
       d,
       `SELECT COUNT(DISTINCT t.project_id) as count FROM tasks t WHERE ${projectWhere.join(" AND ")}`,
@@ -315,7 +322,7 @@ export function createLocalUsageLedger(options: UsageLedgerOptions = {}, db?: Da
 
   const runWhere: string[] = [];
   const runParams: SQLQueryBindings[] = [];
-  addRunScope(runWhere, runParams, options);
+  addRunScope(runWhere, runParams, options, d);
   const runClause = runWhere.length ? `WHERE ${runWhere.join(" AND ")}` : "";
   const runs = queryAll<{ id: string; started_at: string; completed_at: string | null; metadata: string | null }>(
     d,
@@ -347,7 +354,7 @@ export function createLocalUsageLedger(options: UsageLedgerOptions = {}, db?: Da
 
   const traceWhere: string[] = [];
   const traceParams: SQLQueryBindings[] = [];
-  addTraceScope(traceWhere, traceParams, options);
+  addTraceScope(traceWhere, traceParams, options, d);
   const traceClause = traceWhere.length ? `WHERE ${traceWhere.join(" AND ")}` : "";
   const traceTotals = queryOne<{ traces: number; tokens: number | null; cost_usd: number | null; duration_ms: number | null }>(
     d,

@@ -288,10 +288,16 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
           const oldName = agent.name;
           const updated = updateAgent(agent.id, { name: new_name });
 
-          // Update assigned_to on tasks that reference the old name
+          // Update assigned_to on tasks that reference the old name.
+          // Case-insensitive (task 84c77210): a row can hold the agent's name
+          // in a different case than the registered form (see
+          // normalizeAgentNameInput / the case-variant note in
+          // database.ts's resolveAssignedToAliases) — an exact `=` here
+          // would silently leave those rows on the stale name. The agent's
+          // id form is untouched by a rename and is not part of this UPDATE.
           const db = getDatabase();
           const tasksResult = db.run(
-            "UPDATE tasks SET assigned_to = ? WHERE assigned_to = ?",
+            "UPDATE tasks SET assigned_to = ? WHERE LOWER(assigned_to) = LOWER(?)",
             [new_name, oldName],
           );
 

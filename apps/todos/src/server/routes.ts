@@ -22,7 +22,7 @@ import {
   failTask,
   claimNextTask,
 } from "../db/tasks.js";
-import { getDatabase } from "../db/database.js";
+import { assignedToAliasSet, getDatabase } from "../db/database.js";
 import { VersionConflictError, CompletionGuardError, LockError, TaskNotFoundError, TaskNotStartableError } from "../types/index.js";
 import { listProjects, createProject, deleteProject } from "../db/projects.js";
 import { listAgents, registerAgent, isAgentConflict, getOrgChart, getDirectReports, updateAgent, deleteAgent, InvalidAgentNameError } from "../db/agents.js";
@@ -638,9 +638,14 @@ export async function handleAgentMe(_req: Request, url: URL, _ctx: RouteContext,
 }
 
 export function handleAgentQueue(agentId: string, _ctx: RouteContext, json: (data: unknown, status?: number) => Response, taskToSummary: (task: Task, fields?: string[]) => unknown): Response {
+  // Alias-resolved (task 84c77210): `assigned_to` holds an agent id from one
+  // write path and a resolved name from another — see database.ts for the
+  // root cause. `listTasks` here has no `assigned_to` filter applied, so
+  // this in-memory filter is the only agent match for the queue.
+  const aliasSet = assignedToAliasSet(getDatabase(), agentId);
   const pending = listTasks({ status: "pending" as any });
   const queue = pending.filter(t =>
-    t.assigned_to === agentId || t.agent_id === agentId || (!t.assigned_to && !t.locked_by)
+    aliasSet.has((t.assigned_to ?? "").toLowerCase()) || t.agent_id === agentId || (!t.assigned_to && !t.locked_by)
   );
   const order: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
   queue.sort((a, b) => (order[a.priority] ?? 4) - (order[b.priority] ?? 4) || new Date(a.created_at).getTime() - new Date(b.created_at).getTime());

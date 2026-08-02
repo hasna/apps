@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
 import { getDatabase, closeDatabase, resetDatabase } from "../db/database.js";
 import { createTask, startTask, completeTask, updateTask, getTask } from "../db/tasks.js";
+import { registerAgent } from "../db/agents.js";
 import { createProject } from "../db/projects.js";
 import { CompletionGuardError } from "../types/index.js";
 import { checkCompletionGuard } from "./completion-guard.js";
@@ -195,6 +196,35 @@ describe("completion guard - rate limit", () => {
 
     const nextTask = createTask({ title: "Task 2", status: "in_progress", assigned_to: agentId }, db);
     expect(() => checkCompletionGuard(nextTask, agentId, db, config)).not.toThrow();
+  });
+
+  it("counts a registered agent's completions recorded under EITHER assigned_to form (task 84c77210, sibling to 8f07bc15)", () => {
+    // The other rate-limit tests in this file use free-text agent refs that
+    // never resolve to a registered agent, so they exercise the
+    // literal-only fallback and are unaffected by this fix. This test
+    // exercises the actual bug: a REGISTERED agent whose completions are
+    // split across the id form and the name form of `assigned_to`.
+    const result = registerAgent({ name: "lucretius" }, db);
+    if ("conflict" in result) throw new Error("agent registration conflict");
+    const agent = result;
+    const config = guardConfig({ min_work_seconds: 0, cooldown_seconds: 0, max_completions_per_window: 2, window_minutes: 10 });
+
+    const byId = createTask({ title: "via id", status: "in_progress", assigned_to: agent.id }, db);
+    completeTaskAt(byId.id, 0);
+    const byName = createTask({ title: "via name", status: "in_progress", assigned_to: agent.name }, db);
+    completeTaskAt(byName.id, 0);
+
+    // Before the fix, checking with the AGENT ID only counted the id-form
+    // completion (1 of 2 real ones) and silently permitted a third
+    // completion past the configured max_completions_per_window of 2 — the
+    // "misses half the corpus without failing loudly" shape 84c77210 named
+    // for this guard.
+    const nextTask = createTask({ title: "Task 3", status: "in_progress", assigned_to: agent.id }, db);
+    expect(() => checkCompletionGuard(nextTask, agent.id, db, config)).toThrow(/Rate limit/);
+
+    // And the same guard, invoked via the agent's NAME, sees the same total.
+    const nextTaskByName = createTask({ title: "Task 4", status: "in_progress", assigned_to: agent.name }, db);
+    expect(() => checkCompletionGuard(nextTaskByName, agent.name, db, config)).toThrow(/Rate limit/);
   });
 
   it("should not count completions from other agents", () => {

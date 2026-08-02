@@ -1,6 +1,6 @@
 import type { Database, SQLQueryBindings } from "bun:sqlite";
 import type { Task, TaskRow } from "../types/index.js";
-import { clearExpiredLocks, getDatabase } from "../db/database.js";
+import { clearExpiredLocks, getDatabase, lowerInClause, resolveAssignedToAliases } from "../db/database.js";
 
 function rowToTask(row: TaskRow): Task {
   return {
@@ -182,8 +182,10 @@ export function searchTasks(
   }
 
   if (opts.assigned_to) {
-    sql += " AND t.assigned_to = ?";
-    params.push(opts.assigned_to);
+    // Alias-resolved (task 84c77210): `assigned_to` holds an agent id from
+    // one write path and a resolved name from another, so an exact `=` here
+    // silently returned only whichever form the caller happened to pass.
+    sql += ` AND ${lowerInClause("t.assigned_to", resolveAssignedToAliases(d, opts.assigned_to), params)}`;
   }
 
   if (opts.agent_id) {
