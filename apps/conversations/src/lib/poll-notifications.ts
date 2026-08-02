@@ -15,14 +15,24 @@ export interface NotificationPollStore {
     unread_only?: boolean;
     limit?: number;
     mark_read?: boolean;
+    include_content?: boolean;
   }): Promise<ChannelNotification[]>;
 }
 
 export interface NotificationPollOptions {
   store: NotificationPollStore;
+  /** The primary identity. Anything this loop writes goes under this name. */
   agent: string;
+  /**
+   * Every identity to READ for, primary first. Defaults to `[agent]`, so a
+   * caller that does not know about multi-identity keeps its existing
+   * single-queue behaviour exactly.
+   */
+  agents?: string[];
   interval_ms?: number;
   limit?: number;
+  /** Ask the store for full message bodies alongside the stripped preview. */
+  include_content?: boolean;
   on_notifications: (notifications: ChannelNotification[]) => void;
   /** Where poll failures are reported. Defaults to stderr. */
   on_poll_error?: PollHealthReporter;
@@ -30,6 +40,60 @@ export interface NotificationPollOptions {
 
 const DEFAULT_INTERVAL_MS = 200;
 const DEFAULT_LIMIT = 200;
+
+export interface UnionReadOptions {
+  /** Identities to read for, primary first. */
+  agents: string[];
+  unread_only?: boolean;
+  limit?: number;
+  mark_read?: boolean;
+  include_content?: boolean;
+}
+
+/**
+ * Read channel notifications for several identities and return their union.
+ *
+ * A seat that answers to both an agent name and a seat slug has two disjoint
+ * subscription sets; reading one of them and reporting the result as "the
+ * inbox" is a confident wrong answer, not a partial one.
+ *
+ * Semantics that callers depend on:
+ *
+ * - **Union, de-duplicated by `message_id`.** Both identities may subscribe to
+ *   the same channel, and the same message must not be rendered twice.
+ * - **Chronological order**, so the output does not depend on the order the
+ *   identities happened to be listed in.
+ * - **`mark_read` stays per-identity.** Each queue marks only what it actually
+ *   returned, which is that identity's own read state — not a write under
+ *   somebody else's name.
+ * - **A failing identity rejects the whole read.** Returning the identities
+ *   that happened to answer would reintroduce the silently-short read this
+ *   exists to remove; the caller's health reporter is the right place for it.
+ */
+export async function readChannelNotificationsUnion(
+  store: NotificationPollStore,
+  opts: UnionReadOptions,
+): Promise<ChannelNotification[]> {
+  const byId = new Map<number, ChannelNotification>();
+
+  for (const agent of opts.agents) {
+    const rows = await store.readChannelNotifications({
+      agent,
+      unread_only: opts.unread_only,
+      limit: opts.limit,
+      mark_read: opts.mark_read,
+      include_content: opts.include_content,
+    });
+    for (const row of rows) {
+      if (!byId.has(row.message_id)) byId.set(row.message_id, row);
+    }
+  }
+
+  return [...byId.values()].sort(
+    (left, right) =>
+      left.created_at.localeCompare(right.created_at) || left.message_id - right.message_id,
+  );
+}
 
 /**
  * Poll unread channel notifications for `agent`. Returns a stop function.
@@ -51,15 +115,13 @@ export function startNotificationPolling(opts: NotificationPollOptions): { stop:
     inFlight = true;
 
     try {
-      const notifications = (await opts.store.readChannelNotifications({
-        agent: opts.agent,
+      const notifications = await readChannelNotificationsUnion(opts.store, {
+        agents: opts.agents?.length ? opts.agents : [opts.agent],
         unread_only: true,
         limit: opts.limit ?? DEFAULT_LIMIT,
         mark_read: true,
-      })).sort(
-        (left, right) =>
-          left.created_at.localeCompare(right.created_at) || left.message_id - right.message_id,
-      );
+        include_content: opts.include_content,
+      });
 
       health.recordSuccess();
 

@@ -4,9 +4,10 @@ import chalk from "chalk";
 import { normalizeSince } from "../../lib/since.js";
 // Reads/writes route through getStore(): ApiStore (self_hosted/cloud) or LocalStore.
 import { closeDb } from "../../lib/db.js";
-import { resolveIdentity } from "../../lib/identity.js";
+import { resolveIdentities, resolveIdentity } from "../../lib/identity.js";
 import { renderContent } from "../../lib/terminal-markdown.js";
 import { buildMessagePreview } from "../../lib/channel-notifications.js";
+import { readChannelNotificationsUnion } from "../../lib/poll-notifications.js";
 import { resolveSelfSenderId } from "../../lib/sender-identity.js";
 import { previewText } from "../../lib/compact-output.js";
 import { getCliWindow, pageFromQuery, printCompactFooter, queryLimitFor, warnIfPageFull, SINCE_JSON_LIMIT } from "../compact.js";
@@ -779,32 +780,56 @@ export function registerMessagingCommands(program: Command): void {
   program
     .command("watch")
     .description("Watch for new messages with desktop notifications")
-    .option("--from <agent>", "Your agent identity")
+    .option("--from <agent>", "Your agent identity; comma-separated for several (reads union, first is primary for writes)")
     .option("--channel <name>", "Watch a specific channel")
     .option("--all", "Watch DMs and all subscribed channels")
     .option("--interval <ms>", "Poll interval in milliseconds", parseInt)
     .option("--verbose", "Show full message bodies")
+    .option("--full-content", "Render full channel message bodies instead of the stripped preview")
     .action(async (opts) => {
-      const agent = resolveIdentity(opts.from);
+      // A seat answers to more than one name and the queues are disjoint. Reads
+      // union across every identity; identities[0] is primary and is the ONLY
+      // one this command writes under (heartbeat, and the read-marking that
+      // each queue does for itself).
+      const identities = resolveIdentities(opts.from);
+      const agent = identities[0];
       const store = getStore();
       await store.heartbeat(agent);
-      const selfSenderId = resolveSelfSenderId(agent, await store.getPresence(agent));
+      const selfSenderIds = new Set<string>();
+      for (const identity of identities) {
+        selfSenderIds.add(identity);
+        selfSenderIds.add(resolveSelfSenderId(identity, await store.getPresence(identity)));
+      }
+      const isSelf = (from: string) => selfSenderIds.has(from);
 
       const interval = Number.isFinite(opts.interval) && opts.interval > 0 ? opts.interval : 1000;
       const cols = Math.min(process.stdout.columns || 80, 100);
+      // `--verbose` is documented as "show full message bodies" and has only
+      // ever applied to DMs; honouring it for channels too is that promise
+      // being kept, not a new default. Absent both flags, nothing changes.
+      const wantFullContent = !!(opts.fullContent || opts.verbose);
 
-      // Resolve the agent's subscribed channels when --all is used
+      // Resolve subscribed channels across every identity when --all is used
       let agentChannels: string[] = [];
       if (opts.all) {
-        agentChannels = (await store.listChannelNotificationSubscriptions(agent)).map((row) => row.channel);
+        const channels = new Set<string>();
+        for (const identity of identities) {
+          for (const row of await store.listChannelNotificationSubscriptions(identity)) {
+            channels.add(row.channel);
+          }
+        }
+        agentChannels = [...channels];
       }
 
       const modeLabel = opts.all
         ? `DMs + ${agentChannels.length} channel(s)`
         : opts.channel ? `Channel: #${opts.channel}` : "All DMs";
+      const identityLabel = identities.length > 1
+        ? `${chalk.cyan(agent)}${chalk.dim(` (+${identities.length - 1}: ${identities.slice(1).join(", ")})`)}`
+        : chalk.cyan(agent);
 
       printLine("");
-      printLine(chalk.bold(`  Conversations`) + chalk.dim(` — watching as ${chalk.cyan(agent)}`));
+      printLine(chalk.bold(`  Conversations`) + chalk.dim(` — watching as ${identityLabel}`));
       printLine(chalk.dim(`  ${modeLabel} · Poll: ${interval}ms · Ctrl+C to stop`));
       printLine(chalk.dim("  " + "─".repeat(cols - 4)));
       printLine("");
@@ -855,7 +880,13 @@ export function registerMessagingCommands(program: Command): void {
         printLine("");
       };
 
+      /** Message ids already rendered, so two identities cannot double-print. */
+      const renderedNotifications = new Set<number>();
+
       const renderNotification = (notification: import("../../types.js").ChannelNotification) => {
+        if (renderedNotifications.has(notification.message_id)) return;
+        renderedNotifications.add(notification.message_id);
+
         const time = chalk.dim(notification.created_at.slice(11, 19));
         const priority = notification.priority !== "normal"
           ? (notification.priority === "urgent" ? chalk.red.bold(` [${notification.priority}]`) :
@@ -865,22 +896,41 @@ export function registerMessagingCommands(program: Command): void {
         const sender = chalk.cyan.bold(notification.from_agent);
 
         printLine(`  ${sender}  ${chalk.magenta(`#${notification.channel}`)}  ${time}${priority} ${chalk.dim(`[#${notification.message_id}]`)}`);
-        printLine(`    ${notification.preview}`);
-        printLine(chalk.dim(`    Preview only. Inspect with: conversations show ${notification.message_id}`));
+
+        // The preview strips `[*#`~_>-]`, so agent names, `repo#pr` refs and
+        // branch names all arrive with their separators replaced by spaces.
+        // With full content requested we print the body as stored.
+        if (notification.content !== undefined) {
+          const rendered = renderContentLocal(notification.content) as string;
+          printLine(rendered.split("\n").map((l: string) => "    " + l).join("\n"));
+        } else {
+          printLine(`    ${notification.preview}`);
+          printLine(chalk.dim(`    Preview only. Inspect with: conversations show ${notification.message_id}`));
+        }
         printLine(chalk.dim("    " + "·".repeat(Math.min(cols - 8, 60))));
         printLine("");
       };
 
       // Show recent messages first
       if (opts.all) {
-        const dmRecent = (await store.readMessages({ to: agent, limit: 20, order: "asc" }))
-          .filter((msg) => msg.from_agent !== selfSenderId);
-        const pendingNotifications = (await store.readChannelNotifications({
-          agent,
+        const dmSeen = new Set<number>();
+        const dmRecent: import("../../types.js").Message[] = [];
+        for (const identity of identities) {
+          for (const msg of await store.readMessages({ to: identity, limit: 20, order: "asc" })) {
+            if (isSelf(msg.from_agent) || dmSeen.has(msg.id)) continue;
+            dmSeen.add(msg.id);
+            dmRecent.push(msg);
+          }
+        }
+        dmRecent.sort((left, right) => left.created_at.localeCompare(right.created_at) || left.id - right.id);
+
+        const pendingNotifications = await readChannelNotificationsUnion(store, {
+          agents: identities,
           unread_only: true,
           limit: 20,
           mark_read: true,
-        })).sort((left, right) => left.created_at.localeCompare(right.created_at) || left.message_id - right.message_id);
+          include_content: wantFullContent,
+        });
 
         if (dmRecent.length > 0) {
           printLine(chalk.dim(`  ── Recent DMs (${dmRecent.length}) ──\n`));
@@ -894,12 +944,23 @@ export function registerMessagingCommands(program: Command): void {
           printLine(chalk.dim(`  ── Live ──\n`));
         }
       } else {
-        const recent = (await store.readMessages({
-          to: opts.channel ? undefined : agent,
-          channel: opts.channel,
-          limit: 20,
-          order: "asc",
-        })).filter((msg) => msg.from_agent !== selfSenderId);
+        const recentSeen = new Set<number>();
+        const recent: import("../../types.js").Message[] = [];
+        // A channel watch is one stream; only the DM watch is per-identity.
+        const readTargets = opts.channel ? [undefined] : identities;
+        for (const identity of readTargets) {
+          for (const msg of await store.readMessages({
+            to: identity,
+            channel: opts.channel,
+            limit: 20,
+            order: "asc",
+          })) {
+            if (isSelf(msg.from_agent) || recentSeen.has(msg.id)) continue;
+            recentSeen.add(msg.id);
+            recent.push(msg);
+          }
+        }
+        recent.sort((left, right) => left.created_at.localeCompare(right.created_at) || left.id - right.id);
         if (recent.length > 0) {
           printLine(chalk.dim(`  ── Recent messages (${recent.length}) ──\n`));
           for (const msg of recent) { renderMessage(msg); }
@@ -907,9 +968,14 @@ export function registerMessagingCommands(program: Command): void {
         }
       }
 
+      /** Ids already rendered live, so overlapping identity polls print once. */
+      const renderedMessages = new Set<number>();
+
       const onNewMessages = (messages: import("../../types.js").Message[]) => {
         for (const msg of messages) {
-          if (msg.from_agent === selfSenderId) continue;
+          if (isSelf(msg.from_agent)) continue;
+          if (renderedMessages.has(msg.id)) continue;
+          renderedMessages.add(msg.id);
           renderMessage(msg);
 
           // Desktop notification (short preview)
@@ -921,29 +987,45 @@ export function registerMessagingCommands(program: Command): void {
 
       const onNewNotifications = (notifications: import("../../types.js").ChannelNotification[]) => {
         for (const notification of notifications) {
+          const fresh = !renderedNotifications.has(notification.message_id);
           renderNotification(notification);
-          desktopNotify(`${notification.from_agent} (#${notification.channel})`, notification.preview);
+          if (fresh) {
+            desktopNotify(`${notification.from_agent} (#${notification.channel})`, notification.preview);
+          }
         }
       };
 
       const stops: Array<{ stop: () => void }> = [];
 
       if (opts.all) {
-        stops.push(startPolling({ to_agent: agent, interval_ms: interval, on_messages: onNewMessages }));
+        // One DM loop per identity: `to_agent` is a single-value filter, and a
+        // seat's two queues are disjoint.
+        for (const identity of identities) {
+          stops.push(startPolling({ to_agent: identity, interval_ms: interval, on_messages: onNewMessages }));
+        }
 
         stops.push(startNotificationPolling({
           store,
           agent,
+          agents: identities,
           interval_ms: interval,
+          include_content: wantFullContent,
           on_notifications: onNewNotifications,
         }));
-      } else {
+      } else if (opts.channel) {
         stops.push(startPolling({
-          to_agent: opts.channel ? undefined : agent,
           channel: opts.channel,
           interval_ms: interval,
           on_messages: onNewMessages,
         }));
+      } else {
+        for (const identity of identities) {
+          stops.push(startPolling({
+            to_agent: identity,
+            interval_ms: interval,
+            on_messages: onNewMessages,
+          }));
+        }
       }
 
       process.on("SIGINT", () => {

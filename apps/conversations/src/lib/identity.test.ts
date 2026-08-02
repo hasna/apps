@@ -1,6 +1,8 @@
 import { describe, test, expect, afterEach, beforeEach } from "bun:test";
 import {
   resolveIdentity,
+  resolveIdentities,
+  parseIdentityList,
   requireIdentity,
   getAutoName,
   isSelfRename,
@@ -91,6 +93,74 @@ describe("resolveIdentity", () => {
     _resetAutoName();
     expect(resolveIdentity()).toBe("persisted-seat");
     expect(resolveIdentity()).toBe("persisted-seat");
+  });
+});
+
+/**
+ * A seat routinely answers to two names — an agent name and a seat slug — and
+ * the queues behind them are genuinely disjoint. A watcher armed on one name
+ * sees none of the other's traffic and exits 0, which is indistinguishable from
+ * a quiet inbox. Reads union across the list; the FIRST entry is primary and is
+ * the only one anything writes under.
+ */
+describe("parseIdentityList", () => {
+  test("returns an empty list when nothing was given", () => {
+    expect(parseIdentityList(undefined)).toEqual([]);
+    expect(parseIdentityList("")).toEqual([]);
+    expect(parseIdentityList("   ")).toEqual([]);
+    expect(parseIdentityList(" , , ")).toEqual([]);
+  });
+
+  test("splits a comma-separated list and preserves order", () => {
+    expect(parseIdentityList("fabricius,agent-chief-staff")).toEqual(["fabricius", "agent-chief-staff"]);
+  });
+
+  test("trims whitespace around each entry", () => {
+    expect(parseIdentityList(" fabricius , agent-chief-staff ")).toEqual(["fabricius", "agent-chief-staff"]);
+  });
+
+  test("drops empty entries rather than yielding a blank identity", () => {
+    expect(parseIdentityList("fabricius,,agent-chief-staff,")).toEqual(["fabricius", "agent-chief-staff"]);
+  });
+
+  test("de-duplicates case-insensitively, keeping the first spelling", () => {
+    expect(parseIdentityList("Fabricius,fabricius,FABRICIUS")).toEqual(["Fabricius"]);
+  });
+
+  test("a single name is a one-element list", () => {
+    expect(parseIdentityList("alice")).toEqual(["alice"]);
+  });
+});
+
+describe("resolveIdentities", () => {
+  test("resolves a comma-separated flag into every identity", () => {
+    expect(resolveIdentities("fabricius,agent-chief-staff")).toEqual(["fabricius", "agent-chief-staff"]);
+  });
+
+  test("the first entry is primary", () => {
+    expect(resolveIdentities("fabricius,agent-chief-staff")[0]).toBe("fabricius");
+    expect(resolveIdentities("agent-chief-staff,fabricius")[0]).toBe("agent-chief-staff");
+  });
+
+  test("a single explicit name behaves exactly as resolveIdentity", () => {
+    expect(resolveIdentities("alice")).toEqual([resolveIdentity("alice")]);
+  });
+
+  test("falls back to the env identity when no flag was given", () => {
+    process.env.CONVERSATIONS_AGENT_ID = "env-agent";
+    expect(resolveIdentities()).toEqual(["env-agent"]);
+  });
+
+  test("honours a comma-separated env identity", () => {
+    process.env.CONVERSATIONS_AGENT_ID = "env-agent,env-seat";
+    expect(resolveIdentities()).toEqual(["env-agent", "env-seat"]);
+  });
+
+  test("throws rather than guessing when nothing declared an identity", () => {
+    delete process.env.CONVERSATIONS_AGENT_ID;
+    try { unlinkSync(agentIdFile()); } catch {}
+    _resetAutoName();
+    expect(() => resolveIdentities()).toThrow(/no agent identity/i);
   });
 });
 

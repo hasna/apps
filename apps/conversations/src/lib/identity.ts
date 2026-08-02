@@ -146,6 +146,62 @@ export function resolveIdentity(explicit?: string): string {
 }
 
 /**
+ * Split a comma-separated identity list into its entries.
+ *
+ * Returns `[]` when nothing usable was given, so callers can distinguish "no
+ * list supplied" from "a list that resolved to one name" and fall through to
+ * the normal single-identity resolution.
+ *
+ * Entries are trimmed, blanks dropped, and duplicates removed
+ * case-insensitively while keeping the FIRST spelling — a list that names the
+ * same seat twice must not double every row of a union read.
+ */
+export function parseIdentityList(value?: string): string[] {
+  if (!value) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of value.split(",")) {
+    const name = raw.trim();
+    if (!name) continue;
+    const key = normalizeAgentName(name);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(name);
+  }
+  return out;
+}
+
+/**
+ * Resolve one or more agent identities, in declared order.
+ *
+ * A seat routinely answers to two names — an agent name and a seat slug — and
+ * the queues behind them are genuinely disjoint (measured 2026-08-02: 46 tasks
+ * on one, 71 on the other, intersection 0). A reader armed on one name reports
+ * an empty inbox for the other's traffic, at exit 0, which is indistinguishable
+ * from a quiet channel.
+ *
+ * The contract callers depend on: **reads union across the whole list; the
+ * FIRST entry is primary and is the only identity anything writes under.** A
+ * monitor that posts, heartbeats or registers under an arbitrary entry of a
+ * list is worse than one that simply cannot read the second queue, because the
+ * damage it does is attributed to a seat that did not do it.
+ *
+ * Falls back to {@link resolveIdentity} — including its refusal to invent a
+ * name — when no list was supplied.
+ *
+ * @throws {IdentityError} when nothing declared an identity for this session.
+ */
+export function resolveIdentities(explicit?: string): string[] {
+  const explicitList = parseIdentityList(explicit);
+  if (explicitList.length > 0) return explicitList;
+
+  const envList = parseIdentityList(process.env.CONVERSATIONS_AGENT_ID);
+  if (envList.length > 0) return envList;
+
+  return [getAutoName()];
+}
+
+/**
  * Describe, in operator-facing words, where the resolved identity came from.
  *
  * `whoami` used to build this string itself and always reported

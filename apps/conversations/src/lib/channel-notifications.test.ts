@@ -189,3 +189,84 @@ describe("buildMessagePreview", () => {
     expect(buildMessagePreview("abcdef ghijkl mnop", 8)).toBe("abcdef g…");
   });
 });
+
+/**
+ * A channel notification carries a `preview` built by stripping `[*#`~_>-]` and
+ * capping at DEFAULT_PREVIEW_CHARS. That is fine for a glance and useless for a
+ * monitor: every identifier an operator would act on is made of exactly those
+ * characters. `agent-chief-staff` arrives as `agent chief staff`, a PR
+ * reference loses its `#`, and a branch name loses both its hyphens and its
+ * underscores — so the only tokens that survive intact are bare hex ids.
+ *
+ * These assert the OPT-IN full-content path, and equally that the preview is
+ * unchanged for every existing consumer of it.
+ */
+describe("readChannelNotifications include_content", () => {
+  const IDENTIFIERS = "agent-chief-staff hasnaxyz/iapp-infra#92 fix/88605573-identities-oidc-trust test_with_underscores";
+
+  test("preview still mangles identifiers — the existing default is untouched", () => {
+    createChannel("ops", "creator");
+    subscribeToChannelNotifications("ops", "agent-a");
+    sendMessage({ from: "alice", to: "ops", channel: "ops", session_id: "channel:ops", content: IDENTIFIERS });
+
+    const [notification] = readChannelNotifications({ agent: "agent-a" });
+    expect(notification.preview).toContain("agent chief staff");
+    expect(notification.preview).not.toContain("agent-chief-staff");
+    expect(notification.preview).not.toContain("#92");
+    expect(notification.preview).not.toContain("test_with_underscores");
+  });
+
+  test("omits content entirely unless the caller opts in", () => {
+    createChannel("ops", "creator");
+    subscribeToChannelNotifications("ops", "agent-a");
+    sendMessage({ from: "alice", to: "ops", channel: "ops", session_id: "channel:ops", content: IDENTIFIERS });
+
+    const [notification] = readChannelNotifications({ agent: "agent-a" });
+    expect(notification.content).toBeUndefined();
+  });
+
+  test("include_content returns every identifier intact", () => {
+    createChannel("ops", "creator");
+    subscribeToChannelNotifications("ops", "agent-a");
+    sendMessage({ from: "alice", to: "ops", channel: "ops", session_id: "channel:ops", content: IDENTIFIERS });
+
+    const [notification] = readChannelNotifications({ agent: "agent-a", include_content: true });
+    expect(notification.content).toBe(IDENTIFIERS);
+    expect(notification.content).toContain("agent-chief-staff");
+    expect(notification.content).toContain("hasnaxyz/iapp-infra#92");
+    expect(notification.content).toContain("fix/88605573-identities-oidc-trust");
+    expect(notification.content).toContain("test_with_underscores");
+    // The preview is additive, not replaced: other consumers still get theirs.
+    expect(notification.preview).toContain("agent chief staff");
+  });
+
+  test("content is not subject to the preview character cap", () => {
+    createChannel("ops", "creator");
+    // The stored cap that truncates the preview; content must ignore it.
+    subscribeToChannelNotifications("ops", "agent-a", { preview_chars: 20 });
+    const long = `start-of-body ${"x".repeat(300)} end-of-body`;
+    sendMessage({ from: "alice", to: "ops", channel: "ops", session_id: "channel:ops", content: long });
+
+    const [notification] = readChannelNotifications({ agent: "agent-a", include_content: true });
+    expect(notification.content).toBe(long);
+    expect(notification.content!.length).toBeGreaterThan(300);
+    expect(notification.preview).toContain("…");
+    expect(notification.preview.length).toBeLessThan(40);
+  });
+
+  test("content is redacted on the same terms as the preview", () => {
+    const blocked = syntheticDatabaseUrl();
+    createChannel("ops", "creator");
+    subscribeToChannelNotifications("ops", "agent-a");
+
+    insertLegacyChannelMessage("ops", `legacy DSN ${blocked}`);
+    const [notification] = readChannelNotifications({ agent: "agent-a", include_content: true });
+
+    // The marker keeps its underscore here and loses it in the preview
+    // (`[REDACTED:DATABASE URL]`), which is the strip this option exists to
+    // avoid, demonstrated on the redactor's own output.
+    expect(notification.content).toContain("[REDACTED:DATABASE_URL]");
+    expect(notification.content).not.toContain(blocked);
+    expect(notification.preview).toContain("[REDACTED:DATABASE URL]");
+  });
+});

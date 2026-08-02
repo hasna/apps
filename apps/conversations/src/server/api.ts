@@ -25,7 +25,7 @@ import { version as pkgVersion } from "../../package.json";
 import { openapiSpec } from "./openapi.js";
 import { normalizeChannelName } from "../lib/channel-names.js";
 import { extractTopics } from "../lib/topic-extract.js";
-import { assertNoSensitiveContent, redactSensitiveValue } from "../lib/content-safety.js";
+import { assertNoSensitiveContent, redactSensitiveText, redactSensitiveValue } from "../lib/content-safety.js";
 import { resolveSelfSenderId } from "../lib/sender-identity.js";
 
 export const APP = "conversations";
@@ -1644,6 +1644,10 @@ async function handleChannelNotifications(
        ORDER BY m.created_at DESC, m.id DESC LIMIT ${limit}`,
       params,
     );
+    // Opt-in full body. `preview` strips `[*#`~_>-]`, which destroys every
+    // identifier a monitor acts on, so a reader that needs `agent-chief-staff`
+    // or `repo#92` intact asks for this instead of parsing the preview.
+    const includeContent = url.searchParams.get("include_content") === "true";
     const notifications = rows.map((r) => ({
       message_id: Number(r.message_id),
       channel: r.channel,
@@ -1653,6 +1657,7 @@ async function handleChannelNotifications(
       preview: buildMessagePreview(r.content, Number(r.preview_chars ?? 140)),
       unread: r.read_message_id == null,
       has_attachments: !!r.attachments && r.attachments !== "[]",
+      ...(includeContent ? { content: redactSensitiveText(r.content) } : {}),
     }));
     return json({ notifications });
   }
