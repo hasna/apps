@@ -34,6 +34,36 @@ export function jsonModeRequested(argv: readonly string[] = process.argv): boole
 }
 
 /**
+ * Extract the server-provided reason from a `HasnaHttpError`-shaped error, if
+ * one is present, so it can be appended to the generic transport message.
+ *
+ * `@hasna/contracts`'s `HasnaHttpError` carries the parsed response body on
+ * `.body` (typed `unknown` — it is whatever JSON the authority returned). The
+ * `/v1` server's own error contract is `{"error": "<reason>"}` on 4xx
+ * responses, e.g. `validateTemplateCreate()` replying
+ * `{"error": "tasks must be valid template task objects"}` for a malformed
+ * template-import payload. Before this, `handleError` printed only
+ * `e.message` — for a `HasnaHttpError` that is the generic
+ * "Hasna cloud request failed: POST /templates -> 400", which discards the
+ * one piece of information that explains WHY the request was rejected and
+ * makes a legitimate validation error indistinguishable from an outage.
+ *
+ * Deliberately duck-typed rather than `instanceof HasnaHttpError`: this file
+ * does not import `@hasna/contracts/client/transport` for the class itself
+ * (only its type), and errors that cross a network/worker boundary can lose
+ * their prototype chain. Checking the shape is also safe on any OTHER object
+ * that happens to carry a string `.body.error` — the worst case is printing
+ * one extra correct detail line, never a wrong one.
+ */
+function remoteErrorDetail(e: unknown): string | null {
+  if (!e || typeof e !== "object") return null;
+  const body = (e as { body?: unknown }).body;
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+  const detail = (body as { error?: unknown }).error;
+  return typeof detail === "string" && detail.trim() ? detail.trim() : null;
+}
+
+/**
  * Terminate the CLI with a failure, exit code 1.
  *
  * The human-readable, red message is always written to stderr (the human/log
@@ -45,9 +75,16 @@ export function jsonModeRequested(argv: readonly string[] = process.argv): boole
  * Keeping stderr populated in JSON mode preserves the CLI's long-standing
  * human-facing diagnostics (and every test that asserts them) while adding the
  * stdout envelope machine callers rely on.
+ *
+ * When the error is a remote HTTP failure whose body carries the authority's
+ * own `{"error": "<reason>"}`, that reason is appended to the message (both on
+ * stderr and in the --json envelope) rather than silently dropped — see
+ * `remoteErrorDetail` above.
  */
 export function handleError(e: unknown): never {
-  const message = e instanceof Error ? e.message : String(e);
+  const baseMessage = e instanceof Error ? e.message : String(e);
+  const detail = remoteErrorDetail(e);
+  const message = detail && !baseMessage.includes(detail) ? `${baseMessage}: ${detail}` : baseMessage;
   console.error(chalk.red(message));
   if (jsonModeRequested()) {
     console.log(JSON.stringify({ error: message }));
