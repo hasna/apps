@@ -78,6 +78,24 @@ describe("validateAssignee — a seat is nobody", () => {
     expect(v.message).toContain("--assign-seat");
   });
 
+  it("names the RUNNABLE flag combination, not just the flag — regression for todos 75296282", () => {
+    // --assign-seat is a boolean MODIFIER of --assign, not a replacement for
+    // it: `--assign-seat agent-ceo` on its own errors with "too many
+    // arguments". A message that only mentions the flag's name (as the
+    // previous version of this string did) reads as "use --assign-seat
+    // instead of --assign", which is the wrong shape and cost a real caller
+    // their task claim (todos 75296282). The fix is a message containing the
+    // exact runnable pairing, which cannot be misread into a different shape.
+    const v = validateAssignee("agent-chief-staff", ctx);
+    expect(v.ok).toBe(false);
+    if (v.ok) throw new Error("unreachable");
+    // The full working invocation shape must appear verbatim: the flag being
+    // refused, paired with --assign-seat, in that order and on one line.
+    expect(v.message).toContain("--assign agent-chief-staff --assign-seat");
+    // And it must not read as a bare replacement suggestion.
+    expect(v.message).not.toMatch(/pass --assign-seat if filing/);
+  });
+
   it("refuses a seat that has no agent row at all — the roster is the authority, not the store", () => {
     // `agent-chief-engineering` is a live seat with NO row in the agents
     // table. A store-only check would call it "unknown"; a prefix check over

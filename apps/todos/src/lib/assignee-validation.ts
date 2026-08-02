@@ -162,7 +162,8 @@ export function validateAssignee(input: string, ctx: AssigneeContext): AssigneeV
       reason: "seat",
       message:
         `'${raw}' is a durable SEAT, and a task assigned to a seat is assigned to nobody — no session is watching that queue. ` +
-        `Assign a specific agent, use --unassigned to file it with no owner on purpose, or pass --assign-seat if filing at the seat is what you mean.`,
+        `Assign a specific agent, use --unassigned to file it with no owner on purpose, or add --assign-seat ALONGSIDE --assign to confirm the seat is deliberate ` +
+        `(--assign-seat on its own is not a valid invocation — it must be paired with --assign): --assign ${raw} --assign-seat`,
     };
   }
 
