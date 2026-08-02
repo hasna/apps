@@ -5007,18 +5007,47 @@ export class Store {
       scanLimit?: number;
       runId?: string;
       excludeClaimedBy?: string;
+      /**
+       * Leave one runner's runs untouched, but only within an explicit set of
+       * loops. Unlike `excludeClaimedBy`, which protects everything a runner
+       * owns unconditionally, this protects only the loops the caller has
+       * established are still recoverable by other means (for Loops: loops a
+       * poll never examined, whose runs that runner is about to take over on
+       * its next poll). A runner's own run on a loop that WAS examined is not
+       * recoverable by takeover, so blanket-excluding it strands it in
+       * `running` with a dead lease indefinitely.
+       *
+       * Expressed as a loop-id set rather than a run-id set on purpose: a
+       * run-id set has to be enumerated by the caller, which both caps
+       * silently at one page and costs a query per loop. It is applied inside
+       * the scan query, BEFORE `LIMIT`, so protected rows never consume the
+       * scan window and starve an unrelated reapable run.
+       */
+      protectClaimedByInLoops?: { claimedBy: string; loopIds: readonly string[] };
       /** Leave every currently live process untouched, even after the daemon recovery grace ceiling. */
       preserveLiveProcesses?: boolean;
     } = {},
   ): RecoverExpiredRunLeasesResult {
     const limit = Math.max(1, Math.min(1_000, Math.floor(opts.limit ?? DEFAULT_RECOVERY_BATCH_LIMIT)));
     const scanLimit = Math.max(limit, Math.min(5_000, Math.floor(opts.scanLimit ?? limit * DEFAULT_RECOVERY_SCAN_MULTIPLIER)));
+    // Capacity protection is part of the QUERY, not a post-scan filter: rows
+    // discarded after `LIMIT` have already consumed the scan window, so a large
+    // protected set would crowd out an unrelated expired run and — because the
+    // caller rebuilds the same protected set on every poll — starve it
+    // permanently rather than transiently.
+    const protect = opts.protectClaimedByInLoops;
+    const protectLoopIds = protect ? [...new Set(protect.loopIds)] : [];
+    // `claimed_by IS NULL` first: an unclaimed row must stay reapable, and a
+    // bare `claimed_by <> ?` is NULL (not true) for those rows.
+    const protectClause = protectLoopIds.length > 0
+      ? ` AND (claimed_by IS NULL OR claimed_by <> ? OR loop_id NOT IN (${protectLoopIds.map(() => "?").join(",")}))`
+      : "";
     const rows = this.db
-      .query<RunRow, [string, string | null, string | null, string | null, string | null, number]>(
+      .query<RunRow, Array<string | number | null>>(
         `SELECT * FROM loop_runs
          WHERE status = 'running' AND lease_expires_at <= ?
            AND (? IS NULL OR id = ?)
-           AND (? IS NULL OR claimed_by IS NULL OR claimed_by <> ?)
+           AND (? IS NULL OR claimed_by IS NULL OR claimed_by <> ?)${protectClause}
          ORDER BY lease_expires_at ASC
          LIMIT ?`,
       )
@@ -5028,6 +5057,7 @@ export class Store {
         opts.runId ?? null,
         opts.excludeClaimedBy ?? null,
         opts.excludeClaimedBy ?? null,
+        ...(protectLoopIds.length > 0 ? [protect!.claimedBy, ...protectLoopIds] : []),
         scanLimit,
       );
     const recovered: LoopRun[] = [];

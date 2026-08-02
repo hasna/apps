@@ -1294,15 +1294,30 @@ async function claimRuns(
   },
 ): Promise<Array<Record<string, unknown>>> {
   const claims: Array<Record<string, unknown>> = [];
-  for (const loop of await storage.dueLoops(opts.now)) {
-    if (claims.length >= opts.maxClaims) break;
+  const dueLoopsForPoll = await storage.dueLoops(opts.now);
+  // Loops this poll never got to look at because claim capacity ran out first.
+  // Their runs are the ones the sweep must not touch — see
+  // `protectClaimedByInLoops` below.
+  let unexaminedLoops: typeof dueLoopsForPoll = [];
+  pollDueLoops:
+  for (const [loopIndex, loop] of dueLoopsForPoll.entries()) {
+    if (claims.length >= opts.maxClaims) {
+      unexaminedLoops = dueLoopsForPoll.slice(loopIndex);
+      break;
+    }
     if (!runnerMatchesLoop(loop.machine, runner)) continue;
     const workflow = loop.target.type === "workflow"
       ? await storage.getWorkflow(loop.target.workflowId)
       : undefined;
     if (loop.target.type === "workflow" && !workflow) continue;
     for (const slot of dueSlots(loop, opts.now).slots) {
-      if (claims.length >= opts.maxClaims) break;
+      if (claims.length >= opts.maxClaims) {
+        // Capacity can be consumed inside one catch-up plan. In that case this
+        // loop still has unexamined slots, so protect it along with every later
+        // loop rather than letting the recovery sweep abandon those slots.
+        unexaminedLoops = dueLoopsForPoll.slice(loopIndex);
+        break pollDueLoops;
+      }
       const claim = await storage.claimRun(loop, slot, runner.id, opts.now);
       if (!claim) continue;
       const run = await storage.heartbeatRunLease(
@@ -1323,14 +1338,48 @@ async function claimRuns(
   }
 
   // Runner polling is the hosted scheduler tick. After this runner has had a
-  // chance to take over an eligible expired slot through claimRun, reap every
-  // other expired lease in the tenant. Running the sweep after claim selection
-  // preserves same-slot takeover while ensuring a run owned by a missing or
-  // ineligible machine cannot remain `running` forever. Keep this pass bounded
-  // to the storage recovery batch and advance only rows recovered by this poll
-  // (the operator maintenance route owns historical replay).
+  // chance to take over an eligible expired slot through claimRun, reap the
+  // remaining expired leases in the tenant. Running the sweep after claim
+  // selection preserves same-slot takeover while ensuring a run owned by a
+  // missing or ineligible machine cannot remain `running` forever. Keep this
+  // pass bounded to the storage recovery batch and advance only rows recovered
+  // by this poll (the operator maintenance route owns historical replay).
+  //
+  // Protect exactly what the old `excludeClaimedBy: runner.id` was FOR: a run of
+  // this runner's own that belongs to a loop this poll never examined because
+  // claim capacity ran out first. Reaping one of those would pull a slot out from
+  // under a runner that is about to take it over on its next poll.
+  //
+  // What that blanket exclusion also did, and must not, is protect a run
+  // belonging to a loop this poll DID examine and could not claim. Under
+  // `catchUp: "latest"` the due list holds only the newest slot, so once wall
+  // time moves past a run's own slot the same-slot takeover it was being held
+  // for can never happen again — and the sweep skipped it precisely because
+  // this runner owned it. The one runner able to finalize the run was the one
+  // runner forbidden from reaping it, so it stayed `running` with a long-dead
+  // lease indefinitely and the loop's cursor advanced only if some later run
+  // happened to finalize, never through recovery.
+  //
+  // Be precise about what that state does and does not do, because the
+  // imprecise version sends the next reader to the wrong place: an expired
+  // lease does NOT block `overlap: "skip"`. That gate refuses a new slot only
+  // while a run holds a LIVE lease or a live process (sqlite
+  // `hasBlockingRunningRunForOtherSlot`; the Postgres predicate is strictly
+  // more permissive still). So what this fixes is an unreapable orphan row and
+  // a recovery path that could not advance the loop — not a wedged scheduler.
+  //
+  // Same-slot takeover (the legitimate reason to hold a run) is unaffected: it
+  // happens in the claim pass above and re-leases the run, so the sweep stops
+  // selecting it at all.
+  //
+  // Passed as a loop-id set, never an enumerated run-id list: enumerating runs
+  // costs one query per unexamined loop on the scheduler's hottest path and
+  // silently truncates at one `listRuns` page.
   const recovered = await storage.recoverExpiredRunLeasesDetailed(opts.now, {
-    excludeClaimedBy: runner.id,
+    protectClaimedByInLoops: {
+      claimedBy: runner.id,
+      loopIds: unexaminedLoops.map((loop) => loop.id),
+    },
   });
   const advancementDeferred = await advanceRecoveredRuns(storage, recovered.abandoned, {
     random: opts.random,

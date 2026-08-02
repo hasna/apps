@@ -1592,13 +1592,20 @@ export class PostgresLoopStorage implements LoopStorageContract {
       Math.min(5_000, Math.floor(opts.scanLimit ?? limit * DEFAULT_RECOVERY_SCAN_MULTIPLIER)),
     );
     const finished = now.toISOString();
+    // Applied inside the query, before LIMIT — see the sqlite implementation
+    // and the `protectClaimedByInLoops` contract note for why a post-scan
+    // filter starves unrelated reapable runs.
+    const protect = opts.protectClaimedByInLoops;
+    const protectLoopIds = protect ? [...new Set(protect.loopIds)] : [];
+    const protectClaimedBy = protectLoopIds.length > 0 ? protect!.claimedBy : null;
     const rows = await this.client.many<RunRow>(
       `SELECT * FROM loop_runs
        WHERE tenant_id = open_loops_current_tenant_id() AND status='running' AND lease_expires_at <= $1
          AND ($2::text IS NULL OR id = $2)
          AND ($3::text IS NULL OR claimed_by IS DISTINCT FROM $3)
-       ORDER BY lease_expires_at ASC LIMIT $4`,
-      [finished, opts.runId ?? null, opts.excludeClaimedBy ?? null, scanLimit],
+         AND ($4::text IS NULL OR claimed_by IS NULL OR claimed_by <> $4 OR NOT (loop_id = ANY($5::text[])))
+       ORDER BY lease_expires_at ASC LIMIT $6`,
+      [finished, opts.runId ?? null, opts.excludeClaimedBy ?? null, protectClaimedBy, protectLoopIds, scanLimit],
     );
     const recovered: LoopRun[] = [];
     for (const row of rows) {

@@ -3007,6 +3007,403 @@ describe("loops-api foundation", () => {
     }
   });
 
+  test("runner claim capacity protects later unexamined slots in the partially examined loop", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    let now = new Date("2026-01-01T00:00:00.000Z");
+    const server = createTestServer(
+      mod,
+      { host: "127.0.0.1", port: 0, storage, now: () => now, random: () => 0.5 },
+      runnerPrincipal("runner-a"),
+    );
+
+    try {
+      const loop = await storage.createLoop(
+        {
+          name: "api-partially-examined-capacity",
+          schedule: { type: "interval", everyMs: 1_000 },
+          target: { type: "command", command: "true" },
+          catchUp: "all",
+          catchUpLimit: 10,
+          overlap: "allow",
+          maxAttempts: 1,
+          leaseMs: 1_000,
+        },
+        now,
+      );
+      const firstSlot = loop.nextRunAt!;
+      const secondSlot = new Date(new Date(firstSlot).getTime() + 1_000).toISOString();
+      const first = await storage.claimRun(loop, firstSlot, "runner-a", new Date(firstSlot));
+      const second = await storage.claimRun(loop, secondSlot, "runner-a", new Date(firstSlot));
+      expect(first).toBeTruthy();
+      expect(second).toBeTruthy();
+
+      now = new Date("2026-01-01T00:00:10.000Z");
+      const poll = await fetch(apiUrl(server, "/v1/runners/claim"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ runnerId: "runner-a", maxClaims: 1 }),
+      });
+      expect(poll.status).toBe(200);
+      const body = (await poll.json()) as { claims: Array<{ run: { id: string } }> };
+      expect(body.claims.map((claim) => claim.run.id)).toEqual([first!.run.id]);
+
+      expect(await storage.getRun(second!.run.id)).toMatchObject({
+        status: "running",
+        claimedBy: "runner-a",
+        attempt: 1,
+      });
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("runner claim reaps its own expired lease once the due slot has moved past it", async () => {
+    // Regression for the wedged-run defect: a `catchUp: "latest"` + `overlap: "skip"`
+    // loop (the shape every agent-*-coordination-10m seat loop uses: 10m interval,
+    // 9m lease) whose run outlives its lease is never recovered by the runner that
+    // owns it.
+    //
+    // `claimRuns` passes `excludeClaimedBy: runner.id` to the sweep so that a runner
+    // which merely ran out of claim capacity can still take its own slot over on a
+    // later poll — that intent is correct and is covered by the "claim capacity"
+    // test above. But `dueSlots` under `catchUp: "latest"` returns ONLY the latest
+    // slot, so once wall time has moved past the wedged run's own slot the same-slot
+    // takeover it is being preserved for can never happen again: `overlap: "skip"`
+    // refuses the new slot because a `running` run exists, and the sweep skips that
+    // run because this runner owns it. Neither path can fire, so the loop is blocked
+    // for as long as the process lives.
+    //
+    // The existing "reclaims an expired overlap-skip lease" test does not reach this
+    // because it uses `catchUp: "all"`, which keeps the original slot in the due list
+    // and so always permits the same-slot takeover.
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    let now = new Date("2026-01-01T00:00:00.000Z");
+    const server = createTestServer(
+      mod,
+      { host: "127.0.0.1", port: 0, storage, now: () => now, random: () => 0.5 },
+      runnerPrincipal("runner-a"),
+    );
+
+    try {
+      const loop = await storage.createLoop(
+        {
+          name: "api-own-expired-stale-slot",
+          schedule: { type: "interval", everyMs: 600_000 },
+          target: { type: "command", command: "true" },
+          catchUp: "latest",
+          overlap: "skip",
+          leaseMs: 540_000,
+        },
+        now,
+      );
+      const originalNextRunAt = loop.nextRunAt;
+
+      // createLoop schedules the first slot one interval out, so move to it before
+      // the loop is due at all.
+      now = new Date("2026-01-01T00:10:00.000Z");
+
+      const first = await fetch(apiUrl(server, "/v1/runners/claim"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ runnerId: "runner-a", maxClaims: 5 }),
+      });
+      expect(first.status).toBe(200);
+      const firstBody = (await first.json()) as {
+        claims: Array<{ run: { id: string; status: string } }>;
+      };
+      expect(firstBody.claims).toHaveLength(1);
+      const wedgedRunId = firstBody.claims[0]!.run.id;
+
+      // The runner dies here: it never heartbeats, never completes. Wall time moves
+      // two hours on, far past both the 9m lease and this run's own 10m slot.
+      now = new Date("2026-01-01T02:00:00.000Z");
+
+      // Poll repeatedly with ample capacity — this is emphatically not the
+      // capacity-exhaustion case. A healthy scheduler recovers on the first of these.
+      for (let i = 0; i < 3; i += 1) {
+        const poll = await fetch(apiUrl(server, "/v1/runners/claim"), {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify({ runnerId: "runner-a", maxClaims: 5 }),
+        });
+        expect(poll.status).toBe(200);
+      }
+
+      // No phantom may survive: the run is either abandoned, or genuinely taken over
+      // with a lease in the future. What must not persist is `running` with a lease
+      // that expired in the past — that is the state which blocks `overlap: "skip"`.
+      const wedged = await storage.getRun(wedgedRunId);
+      expect(wedged).toBeTruthy();
+      const leaseStillExpired = wedged!.status === "running"
+        && (!wedged!.leaseExpiresAt || new Date(wedged!.leaseExpiresAt).getTime() <= now.getTime());
+      expect(leaseStillExpired).toBe(false);
+
+      // And the loop must have made progress rather than sitting on a permanently
+      // past nextRunAt.
+      const after = await storage.getLoop(loop.id);
+      expect(new Date(after!.nextRunAt!).getTime()).toBeGreaterThan(new Date(originalNextRunAt!).getTime());
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("runner claim protects EVERY own run in a capacity-unexamined loop, not just the first page", async () => {
+    // The capacity protection must not be built by enumerating runs: `listRuns`
+    // defaults to 100 rows on both backends, so a loop holding more than one
+    // page of running runs would have the remainder silently unprotected and
+    // reaped out from under the runner that is about to take it over.
+    //
+    // `overlap: "allow"` with `catchUp: "all"` is a supported configuration and
+    // `catchUpLimit`/`maxClaims` both permit far more than 100 concurrent runs
+    // on one loop, so this is reachable rather than theoretical.
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    let now = new Date("2026-01-01T00:00:00.000Z");
+    const server = createTestServer(
+      mod,
+      { host: "127.0.0.1", port: 0, storage, now: () => now, random: () => 0.5 },
+      runnerPrincipal("runner-a"),
+    );
+
+    try {
+      // Earliest nextRunAt, so `dueLoops` returns it first: it consumes the one
+      // claim this poll is allowed, which is what leaves the second loop
+      // unexamined.
+      await storage.createLoop(
+        {
+          name: "api-capacity-consumer",
+          schedule: { type: "interval", everyMs: 1_000 },
+          target: { type: "command", command: "true" },
+          machine: { id: "runner-a" },
+        },
+        new Date("2025-12-31T23:59:00.000Z"),
+      );
+
+      const unexamined = await storage.createLoop(
+        {
+          name: "api-unexamined-many-own-runs",
+          schedule: { type: "interval", everyMs: 1_000 },
+          target: { type: "command", command: "true" },
+          machine: { id: "runner-a" },
+          overlap: "allow",
+          leaseMs: 1_000,
+        },
+        new Date("2025-12-31T23:59:30.000Z"),
+      );
+
+      // One `listRuns` page is 100 rows. Cross it.
+      const OWNED = 101;
+      const ownedRunIds: string[] = [];
+      for (let i = 0; i < OWNED; i += 1) {
+        const slot = new Date(Date.parse("2026-01-01T00:00:00.000Z") + i * 1_000).toISOString();
+        const claim = await storage.claimRun(unexamined, slot, "runner-a", now);
+        expect(claim).toBeTruthy();
+        ownedRunIds.push(claim!.run.id);
+      }
+
+      // Every one of those leases is now long expired.
+      now = new Date("2026-01-01T01:00:00.000Z");
+
+      const poll = await fetch(apiUrl(server, "/v1/runners/claim"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ runnerId: "runner-a", maxClaims: 1 }),
+      });
+      expect(poll.status).toBe(200);
+
+      const statuses = await Promise.all(
+        ownedRunIds.map(async (id) => (await storage.getRun(id))!.status),
+      );
+      expect(statuses.filter((status) => status === "running").length).toBe(OWNED);
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("runner claim protection does not consume the recovery scan window", async () => {
+    // Protection must be expressed in the recovery QUERY, before its LIMIT.
+    // Filtering protected rows out in application code after the scan has
+    // already been truncated means a large protected set can crowd the window
+    // and starve an unrelated, genuinely reapable run — and because the same
+    // protected set is rebuilt on every poll, that starvation is stable rather
+    // than transient. That is the same "can never be reaped" class this PR
+    // exists to remove, reintroduced through the fix.
+    //
+    // The default recovery scan window is 100 * 5 = 500 rows, so the protected
+    // set here is deliberately larger, and the reapable run's lease expires
+    // LATER so it sorts behind them under `ORDER BY lease_expires_at ASC`.
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    let now = new Date("2026-01-01T00:00:00.000Z");
+    const server = createTestServer(
+      mod,
+      { host: "127.0.0.1", port: 0, storage, now: () => now, random: () => 0.5 },
+      runnerPrincipal("runner-a"),
+    );
+
+    try {
+      await storage.createLoop(
+        {
+          name: "api-scanwindow-capacity-consumer",
+          schedule: { type: "interval", everyMs: 1_000 },
+          target: { type: "command", command: "true" },
+          machine: { id: "runner-a" },
+        },
+        new Date("2025-12-31T23:59:00.000Z"),
+      );
+
+      const unexamined = await storage.createLoop(
+        {
+          name: "api-scanwindow-protected",
+          schedule: { type: "interval", everyMs: 1_000 },
+          target: { type: "command", command: "true" },
+          machine: { id: "runner-a" },
+          overlap: "allow",
+          leaseMs: 1_000,
+        },
+        new Date("2025-12-31T23:59:30.000Z"),
+      );
+
+      const PROTECTED = 520;
+      const protectedRunIds: string[] = [];
+      for (let i = 0; i < PROTECTED; i += 1) {
+        const slot = new Date(Date.parse("2026-01-01T00:00:00.000Z") + i * 1_000).toISOString();
+        const claim = await storage.claimRun(unexamined, slot, "runner-a", now);
+        expect(claim).toBeTruthy();
+        protectedRunIds.push(claim!.run.id);
+      }
+
+      // A run this runner does NOT own, on another loop, whose lease expires
+      // after every protected row above. Nothing protects it, so the sweep must
+      // reach and reap it.
+      const ghostLoop = await storage.createLoop(
+        {
+          name: "api-scanwindow-reapable",
+          schedule: { type: "interval", everyMs: 1_000 },
+          target: { type: "command", command: "true" },
+          machine: { id: "runner-ghost" },
+          overlap: "skip",
+          leaseMs: 1_000,
+        },
+        new Date("2025-12-31T23:59:45.000Z"),
+      );
+      const ghostClaim = await storage.claimRun(
+        ghostLoop,
+        "2026-01-01T00:30:00.000Z",
+        "runner-ghost",
+        new Date("2026-01-01T00:30:00.000Z"),
+      );
+      expect(ghostClaim).toBeTruthy();
+
+      now = new Date("2026-01-01T01:00:00.000Z");
+
+      const poll = await fetch(apiUrl(server, "/v1/runners/claim"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ runnerId: "runner-a", maxClaims: 1 }),
+      });
+      expect(poll.status).toBe(200);
+
+      // Two-sided: the reapable run is reaped AND the protected set is intact.
+      // Asserting only the first would pass on an implementation that protects
+      // nothing at all.
+      expect((await storage.getRun(ghostClaim!.run.id))!.status).toBe("abandoned");
+      const protectedStatuses = await Promise.all(
+        protectedRunIds.map(async (id) => (await storage.getRun(id))!.status),
+      );
+      expect(protectedStatuses.filter((status) => status === "running").length).toBe(PROTECTED);
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("runner claim protection costs a bounded number of storage reads, not one per unexamined loop", async () => {
+    // The claim endpoint is the hosted scheduler's tick and its hottest path.
+    // Building the protection set with one `listRuns` per unexamined loop is an
+    // unbatched N+1: the shipped runner polls with `maxClaims: 1`, so a single
+    // claim makes EVERY remaining due loop unexamined, and `dueLoops` returns up
+    // to 500 of them.
+    //
+    // The invariant under test is that the cost does not scale with the number
+    // of unexamined loops — not any particular call count, so that adding a
+    // legitimate constant read later does not fail this test spuriously.
+    const mod = await import("./index.js");
+
+    const measure = async (unexaminedLoopCount: number): Promise<number> => {
+      const inner = createSqliteLoopStorage(":memory:");
+      const counts: Record<string, number> = {};
+      const storage = new Proxy(inner, {
+        get(target, prop, receiver) {
+          const value = Reflect.get(target, prop, receiver) as unknown;
+          if (typeof value !== "function") return value;
+          return (...args: unknown[]) => {
+            counts[String(prop)] = (counts[String(prop)] ?? 0) + 1;
+            return (value as (...a: unknown[]) => unknown).apply(target, args);
+          };
+        },
+      }) as unknown as LoopStorageContract;
+
+      let now = new Date("2026-01-01T00:00:00.000Z");
+      const server = createTestServer(
+        mod,
+        { host: "127.0.0.1", port: 0, storage, now: () => now, random: () => 0.5 },
+        runnerPrincipal("runner-a"),
+      );
+      try {
+        await inner.createLoop(
+          {
+            name: "api-nplusone-capacity-consumer",
+            schedule: { type: "interval", everyMs: 1_000 },
+            target: { type: "command", command: "true" },
+            machine: { id: "runner-a" },
+          },
+          new Date("2025-12-31T23:59:00.000Z"),
+        );
+
+        for (let i = 0; i < unexaminedLoopCount; i += 1) {
+          const loop = await inner.createLoop(
+            {
+              name: `api-nplusone-unexamined-${i}`,
+              schedule: { type: "interval", everyMs: 1_000 },
+              target: { type: "command", command: "true" },
+              machine: { id: "runner-a" },
+              overlap: "allow",
+              leaseMs: 1_000,
+            },
+            new Date(Date.parse("2025-12-31T23:59:30.000Z") + i),
+          );
+          const claim = await inner.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner-a", now);
+          expect(claim).toBeTruthy();
+        }
+
+        now = new Date("2026-01-01T01:00:00.000Z");
+        // Counting starts here so loop/run construction above is excluded.
+        for (const key of Object.keys(counts)) delete counts[key];
+
+        const poll = await fetch(apiUrl(server, "/v1/runners/claim"), {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify({ runnerId: "runner-a", maxClaims: 1 }),
+        });
+        expect(poll.status).toBe(200);
+        return counts.listRuns ?? 0;
+      } finally {
+        server.stop(true);
+        await inner.close();
+      }
+    };
+
+    const few = await measure(3);
+    const many = await measure(30);
+    expect(many).toBe(few);
+  });
+
   test("runner claim reaps an expired lease owned by an ineligible runner", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");

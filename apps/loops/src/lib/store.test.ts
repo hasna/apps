@@ -2701,6 +2701,113 @@ exit 0
     }
   });
 
+  test("lease recovery honours protectClaimedByInLoops and scopes it to the claiming runner", () => {
+    const store = new Store(":memory:");
+    try {
+      const protectedLoop = store.createLoop(
+        {
+          name: "protect-kept",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+          overlap: "allow",
+          leaseMs: 10,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      const otherLoop = store.createLoop(
+        {
+          name: "protect-reaped",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+          leaseMs: 10,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      const at = new Date("2026-01-01T00:00:00Z");
+      const kept = store.claimRun(protectedLoop, "2026-01-01T00:00:00.000Z", "runner-x", at);
+      // Same protected loop, different runner: the protection is per-runner, so
+      // this one must still be reaped.
+      const otherRunnerSameLoop = store.claimRun(protectedLoop, "2026-01-01T00:01:00.000Z", "runner-y", at);
+      const reaped = store.claimRun(otherLoop, "2026-01-01T00:00:00.000Z", "runner-x", at);
+      expect(kept).toBeTruthy();
+      expect(otherRunnerSameLoop).toBeTruthy();
+      expect(reaped).toBeTruthy();
+
+      const result = store.recoverExpiredRunLeasesDetailed(new Date("2026-01-01T00:02:00Z"), {
+        protectClaimedByInLoops: { claimedBy: "runner-x", loopIds: [protectedLoop.id] },
+      });
+
+      expect(result.abandoned.map((run) => run.id).sort()).toEqual(
+        [otherRunnerSameLoop!.run.id, reaped!.run.id].sort(),
+      );
+      expect(store.getRun(kept!.run.id)?.status).toBe("running");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("protected runs do not consume the lease-recovery scan window", () => {
+    // Regression for select-then-filter ordering: protected rows discarded in
+    // application code after the scan `LIMIT` crowd the window and starve an
+    // unrelated reapable run. The caller rebuilds the same protected set every
+    // poll, so the starvation is permanent rather than transient. `scanLimit`
+    // is pinned small so three rows cross the window instead of five hundred.
+    const store = new Store(":memory:");
+    try {
+      const protectedLoop = store.createLoop(
+        {
+          name: "scanwindow-protected",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+          overlap: "allow",
+          leaseMs: 10,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      const reapableLoop = store.createLoop(
+        {
+          name: "scanwindow-reapable",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+          leaseMs: 10,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+
+      const protectedIds: string[] = [];
+      for (let i = 0; i < 3; i += 1) {
+        const claim = store.claimRun(
+          protectedLoop,
+          `2026-01-01T00:0${i}:00.000Z`,
+          "runner-x",
+          new Date("2026-01-01T00:00:00Z"),
+        );
+        expect(claim).toBeTruthy();
+        protectedIds.push(claim!.run.id);
+      }
+      // Claimed later, so its lease expires last and it sorts behind every
+      // protected row under `ORDER BY lease_expires_at ASC`.
+      const reapable = store.claimRun(
+        reapableLoop,
+        "2026-01-01T00:10:00.000Z",
+        "runner-y",
+        new Date("2026-01-01T00:10:00Z"),
+      );
+      expect(reapable).toBeTruthy();
+
+      const result = store.recoverExpiredRunLeasesDetailed(new Date("2026-01-01T01:00:00Z"), {
+        limit: 1,
+        scanLimit: 3,
+        protectClaimedByInLoops: { claimedBy: "runner-x", loopIds: [protectedLoop.id] },
+      });
+
+      expect(result.abandoned.map((run) => run.id)).toEqual([reapable!.run.id]);
+      for (const id of protectedIds) expect(store.getRun(id)?.status).toBe("running");
+    } finally {
+      store.close();
+    }
+  });
+
   test("lease recovery abandons runs whose live pid fails the start-time fingerprint", () => {
     const store = new Store(":memory:");
     try {

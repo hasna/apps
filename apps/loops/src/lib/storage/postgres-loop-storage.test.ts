@@ -1368,6 +1368,90 @@ suite("PostgresLoopStorage (live)", () => {
     expect(result.deferred.length).toBe(0);
   });
 
+  test("recoverExpiredRunLeasesDetailed honours protectClaimedByInLoops", async () => {
+    // The hosted control plane is the production path for this sweep, so the
+    // option the API relies on to avoid reaping a slot a runner is about to take
+    // over must be verified here and not only against sqlite. Both states are
+    // exercised deliberately: protected leaves the run alone, unprotected reaps
+    // it — a one-sided assertion here could pass on a backend that ignored the
+    // option entirely.
+    const protectedLoop = await storage.createLoop(loopInput("protect-kept", { leaseMs: 1 }));
+    const reapedLoop = await storage.createLoop(loopInput("protect-reaped", { leaseMs: 1 }));
+    const slot = "2026-07-06T12:00:00.000Z";
+    const past = new Date(Date.now() - 60_000);
+    const keptClaim = await storage.claimRun(protectedLoop, slot, "runner-x", past);
+    const reapedClaim = await storage.claimRun(reapedLoop, slot, "runner-x", past);
+    expect(keptClaim).toBeTruthy();
+    expect(reapedClaim).toBeTruthy();
+
+    const result = await storage.recoverExpiredRunLeasesDetailed(new Date(), {
+      protectClaimedByInLoops: { claimedBy: "runner-x", loopIds: [protectedLoop.id] },
+    });
+
+    expect(result.abandoned.map((run) => run.id)).toEqual([reapedClaim!.run.id]);
+    expect((await storage.getRun(keptClaim!.run.id))!.status).toBe("running");
+    expect((await storage.getRun(reapedClaim!.run.id))!.status).toBe("abandoned");
+  });
+
+  test("protectClaimedByInLoops protects one runner's runs, not the whole loop", async () => {
+    // Scoped to the claiming runner: another runner's orphan on a protected
+    // loop must still be reaped, otherwise naming a loop would shelter every
+    // runner's dead leases on it.
+    const loop = await storage.createLoop(loopInput("protect-scoped-to-runner", { leaseMs: 1 }));
+    const past = new Date(Date.now() - 60_000);
+    const otherClaim = await storage.claimRun(loop, "2026-07-06T13:00:00.000Z", "runner-other", past);
+    expect(otherClaim).toBeTruthy();
+
+    const result = await storage.recoverExpiredRunLeasesDetailed(new Date(), {
+      protectClaimedByInLoops: { claimedBy: "runner-x", loopIds: [loop.id] },
+    });
+
+    expect(result.abandoned.map((run) => run.id)).toEqual([otherClaim!.run.id]);
+  });
+
+  test("protected runs do not consume the recovery scan window", async () => {
+    // Regression for the select-then-filter ordering: discarding protected rows
+    // in application code AFTER the scan `LIMIT` lets a large protected set
+    // crowd the window and starve an unrelated, genuinely reapable run. Because
+    // the caller rebuilds the same protected set on every poll, that starvation
+    // is stable rather than transient — the same "can never be reaped" class the
+    // protection itself exists to remove.
+    //
+    // `scanLimit` is pinned small so the window is crossed with three rows
+    // rather than the five hundred the default would need.
+    const protectedLoop = await storage.createLoop(
+      loopInput("scanwindow-protected", { leaseMs: 1, overlap: "allow" }),
+    );
+    const reapableLoop = await storage.createLoop(
+      loopInput("scanwindow-reapable", { leaseMs: 1, overlap: "allow" }),
+    );
+    const early = new Date(Date.now() - 600_000);
+    const late = new Date(Date.now() - 60_000);
+
+    const protectedIds: string[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      const claim = await storage.claimRun(protectedLoop, `2026-07-06T14:0${i}:00.000Z`, "runner-x", early);
+      expect(claim).toBeTruthy();
+      protectedIds.push(claim!.run.id);
+    }
+    // Expires later, so it sorts behind every protected row under
+    // `ORDER BY lease_expires_at ASC` and is only reached if they never
+    // occupied the window.
+    const reapable = await storage.claimRun(reapableLoop, "2026-07-06T15:00:00.000Z", "runner-y", late);
+    expect(reapable).toBeTruthy();
+
+    const result = await storage.recoverExpiredRunLeasesDetailed(new Date(), {
+      limit: 1,
+      scanLimit: 3,
+      protectClaimedByInLoops: { claimedBy: "runner-x", loopIds: [protectedLoop.id] },
+    });
+
+    expect(result.abandoned.map((run) => run.id)).toEqual([reapable!.run.id]);
+    for (const id of protectedIds) {
+      expect((await storage.getRun(id))!.status).toBe("running");
+    }
+  });
+
   test("paginates an immutable tenant-scoped recovered-row snapshot", async () => {
     for (const id of ["a", "z"]) {
       const loop = await storage.createLoop(loopInput(`recovered-keyset-pages-${id}`));
