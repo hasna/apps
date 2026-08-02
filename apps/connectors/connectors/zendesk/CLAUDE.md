@@ -40,9 +40,7 @@ connect-zendesk/
 ## Infrastructure
 
 - **CLI Name**: `connect-zendesk`
-- **EC2 Instance**: `hasna-prod-connect-zendesk`
-- **RDS Database**: `hasna-prod-connect-zendesk`
-- **S3 Bucket**: `hasna-prod-connect-zendesk`
+- **Compute, database, object storage**: deployment-specific; not published with this package
 - **Remote API**: deployment-specific; set `ZENDESK_REMOTE_API_URL` (no shipped default)
 
 ## Key Patterns
