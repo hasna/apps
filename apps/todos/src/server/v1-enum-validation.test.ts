@@ -15,6 +15,7 @@ import { handleV1Request, type V1RequestDependencies } from "./v1.js";
 import { createLocalPrGroupLedger } from "../pr-groups/index.js";
 import { buildV1OpenApiDocument } from "./openapi.js";
 import { TASK_PRIORITIES, TASK_STATUSES } from "../types/index.js";
+import { generateSdkFromOpenApi } from "@hasna/contracts/sdk";
 
 let db: Database;
 let store: TodosStorageAdapter;
@@ -125,14 +126,36 @@ describe("GET /v1/tasks rejects an out-of-vocabulary priority", () => {
 });
 
 describe("the OpenAPI document publishes the filter vocabularies", () => {
-  test("declares status and priority enums on GET /v1/tasks, sourced from the constants", () => {
+  test("declares scalar-or-array status and priority enums on GET /v1/tasks", () => {
     const document = buildV1OpenApiDocument("0.0.0-test") as unknown as {
-      paths: Record<string, { get: { parameters: Array<{ name: string; schema: { enum?: string[] } }> } }>;
+      paths: Record<string, { get: { parameters: Array<{
+        name: string;
+        style?: string;
+        explode?: boolean;
+        schema: { oneOf?: Array<{ enum?: string[]; items?: { enum?: string[] } }> };
+      }> } }>;
     };
     const parameters = document.paths["/v1/tasks"]!.get.parameters;
     const status = parameters.find((parameter) => parameter.name === "status");
     const priority = parameters.find((parameter) => parameter.name === "priority");
-    expect(status?.schema.enum).toEqual([...TASK_STATUSES]);
-    expect(priority?.schema.enum).toEqual([...TASK_PRIORITIES]);
+    expect(status).toMatchObject({ style: "form", explode: false });
+    expect(priority).toMatchObject({ style: "form", explode: false });
+    expect(status?.schema.oneOf?.[0]?.enum).toEqual([...TASK_STATUSES]);
+    expect(status?.schema.oneOf?.[1]?.items?.enum).toEqual([...TASK_STATUSES]);
+    expect(priority?.schema.oneOf?.[0]?.enum).toEqual([...TASK_PRIORITIES]);
+    expect(priority?.schema.oneOf?.[1]?.items?.enum).toEqual([...TASK_PRIORITIES]);
+  });
+
+  test("generated SDK accepts both scalar and comma-serialized array filters", () => {
+    const { code, warnings } = generateSdkFromOpenApi(
+      buildV1OpenApiDocument("0.0.0-test") as never,
+      { className: "TodosV1Client", apiKeyHeader: "x-api-key" },
+    );
+    const listSignature = code.split("\n").find((line) => line.includes("async listTasks"));
+    expect(warnings).toEqual([]);
+    expect(listSignature).toContain('"status"?: "pending"');
+    expect(listSignature).toContain('Array<"pending"');
+    expect(listSignature).toContain('"priority"?: "low"');
+    expect(listSignature).toContain('Array<"low"');
   });
 });

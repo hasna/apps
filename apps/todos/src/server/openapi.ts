@@ -883,13 +883,33 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
               name: "status",
               in: "query",
               description: `Task status, or a comma-separated list of statuses. Allowed values: ${TASK_STATUSES.join(", ")}.`,
-              schema: { type: "string", enum: [...TASK_STATUSES] },
+              style: "form",
+              explode: false,
+              schema: {
+                oneOf: [
+                  { type: "string", enum: [...TASK_STATUSES] },
+                  {
+                    type: "array",
+                    items: { type: "string", enum: [...TASK_STATUSES] },
+                  },
+                ],
+              },
             },
             {
               name: "priority",
               in: "query",
               description: `Task priority, or a comma-separated list of priorities. Allowed values: ${TASK_PRIORITIES.join(", ")}.`,
-              schema: { type: "string", enum: [...TASK_PRIORITIES] },
+              style: "form",
+              explode: false,
+              schema: {
+                oneOf: [
+                  { type: "string", enum: [...TASK_PRIORITIES] },
+                  {
+                    type: "array",
+                    items: { type: "string", enum: [...TASK_PRIORITIES] },
+                  },
+                ],
+              },
             },
             { name: "project_id", in: "query", schema: { type: "string" } },
             { name: "parent_id", in: "query", schema: { type: "string", nullable: true } },
