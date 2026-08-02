@@ -179,6 +179,8 @@ export interface ActiveFileInfo {
   agent_name: string | null;
 }
 
+// Alias-resolved (task 84c77210): the LEFT JOIN below also matches the
+// agent's name, not only its id.
 export function listActiveFiles(db?: Database): ActiveFileInfo[] {
   const d = db || getDatabase();
   return d.query(`
@@ -198,7 +200,6 @@ export function listActiveFiles(db?: Database): ActiveFileInfo[] {
       a.name AS agent_name
     FROM task_files tf
     JOIN tasks t ON tf.task_id = t.id
-    // Alias-resolved (task 84c77210): also match the agent's name, not only its id.
     LEFT JOIN agents a ON (tf.agent_id = a.id OR (tf.agent_id IS NULL AND (t.assigned_to = a.id OR LOWER(t.assigned_to) = LOWER(a.name))))
     WHERE t.status = 'in_progress'
       AND tf.status != 'removed'
