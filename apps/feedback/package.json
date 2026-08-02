@@ -1,6 +1,6 @@
 {
   "name": "@hasna/feedback",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Reusable feedback collection API, SDK, CLI, and MCP server for Hasna-coded apps",
   "type": "module",
   "main": "dist/index.js",
