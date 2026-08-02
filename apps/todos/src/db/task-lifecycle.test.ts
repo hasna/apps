@@ -266,3 +266,50 @@ describe("listTasks pagination is stable (L1)", () => {
     expect(again).toEqual(all);
   });
 });
+
+describe("updateTask releases the lock on EVERY terminal status, not only completed", () => {
+  // A task that reaches a terminal state is finished, so nothing can ever
+  // re-acquire its lock — `todos start` refuses a non-pending/in_progress row.
+  // A lock retained here is therefore PERMANENT, and lazy repair-on-reacquisition
+  // can never reach it. Measured on the fleet 2026-08-02: 2,205 of 2,597 locked
+  // rows sat on terminal tasks, 100% of the completed ones locked before they
+  // completed. `completed` was already covered (M1); `failed` and `cancelled`
+  // fell through the same branch and leaked.
+  for (const status of ["completed", "failed", "cancelled"] as const) {
+    it(`clears locked_by/locked_at when status becomes ${status}`, () => {
+      const t = createTask({ title: `terminal-${status}` }, db);
+      startTask(t.id, "holder-a", db);
+      expect(getTask(t.id, db)).toMatchObject({ locked_by: "holder-a" });
+
+      const fresh = getTask(t.id, db)!;
+      const out = updateTask(fresh.id, { version: fresh.version, status }, db);
+
+      expect(out.status).toBe(status);
+      expect(out.locked_by).toBeNull();
+      expect(out.locked_at).toBeNull();
+      // Read back from the row, not just the returned object.
+      expect(getTask(t.id, db)).toMatchObject({ status, locked_by: null, locked_at: null });
+    });
+  }
+
+  it("leaves the lock alone on a NON-terminal status change (negative control)", () => {
+    // The fix must not become "any update drops the lock" — an in-flight holder
+    // editing priority or re-opening a row keeps its claim.
+    const t = createTask({ title: "still-working" }, db);
+    startTask(t.id, "holder-a", db);
+    const fresh = getTask(t.id, db)!;
+    const out = updateTask(fresh.id, { version: fresh.version, status: "pending" }, db);
+    expect(out.status).toBe("pending");
+    expect(out.locked_by).toBe("holder-a");
+    expect(out.locked_at).not.toBeNull();
+  });
+
+  it("leaves the lock alone when the patch carries no status at all (negative control)", () => {
+    const t = createTask({ title: "retitle-only" }, db);
+    startTask(t.id, "holder-a", db);
+    const fresh = getTask(t.id, db)!;
+    const out = updateTask(fresh.id, { version: fresh.version, title: "renamed" }, db);
+    expect(out.title).toBe("renamed");
+    expect(out.locked_by).toBe("holder-a");
+  });
+});
