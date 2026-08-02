@@ -43,6 +43,40 @@ describe("resolveEconomyCloudStorage", () => {
     ).toThrow();
   });
 
+  // Regression: todos 4704ab9f. The guard above only ever fired when the mode was
+  // set EXPLICITLY. With the mode INFERRED (the shape the fleet env-flip actually
+  // writes: API_URL + API_KEY and no STORAGE_MODE), a half-applied flip left
+  // API_URL set and API_KEY absent -- and that resolved to `local` with
+  // misconfigured=false and no warning, indistinguishable from an unconfigured
+  // machine. The CLI then served the local SQLite store while the operator had
+  // pointed it at the cloud API: a different dataset, no error, plausible numbers.
+  it("throws when API_URL is set without API_KEY and no explicit mode (partial flip)", () => {
+    expect(() =>
+      resolveEconomyCloudStorage({
+        HASNA_ECONOMY_API_URL: "https://economy.hasna.xyz",
+      }),
+    ).toThrow(/API key/i);
+  });
+
+  // Guard against over-firing: an unconfigured machine is a legitimate local
+  // client and must stay silent. This is the negative control for the test above
+  // -- if the partial-flip fix ever starts throwing here, it has become a
+  // fleet-wide outage rather than a safety check.
+  it("stays silently local when neither API_URL nor API_KEY is set", () => {
+    expect(() => resolveEconomyCloudStorage({})).not.toThrow();
+    expect(resolveEconomyCloudStorage({}).active).toBe(false);
+  });
+
+  // An explicit local mode is an operator decision and outranks a stray API_URL
+  // left in the environment.
+  it("stays local when mode=local even with API_URL set and no key", () => {
+    const r = resolveEconomyCloudStorage({
+      HASNA_ECONOMY_STORAGE_MODE: "local",
+      HASNA_ECONOMY_API_URL: "https://economy.hasna.xyz",
+    });
+    expect(r.active).toBe(false);
+  });
+
   it("is active and targets <origin>/v1 when mode=self_hosted + API_URL + API_KEY", () => {
     const r = resolveEconomyCloudStorage({
       HASNA_ECONOMY_STORAGE_MODE: "self_hosted",

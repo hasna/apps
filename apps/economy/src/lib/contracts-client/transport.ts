@@ -150,6 +150,37 @@ export function resolveClientTransport(name: string, env: Env = process.env): Cl
     // this, a flipped client with only url+key silently kept reading its local store.
     mode = "cloud";
     modeSource = `${urlHit.key}+${keyHit.key}`;
+  } else if (urlHit) {
+    // HALF-APPLIED FLIP (todos 4704ab9f). The flip writes URL and KEY together, so
+    // an API URL on its own is cloud intent with a missing credential -- not a
+    // local machine. The branch below would otherwise return `local` with
+    // misconfigured=false and no warning, which is byte-identical to an
+    // unconfigured host: the CLI silently serves the local SQLite store while the
+    // operator has pointed it at the cloud API. For a spend-reporting tool that is
+    // a different dataset rendered as plausible numbers, with no error anywhere.
+    // Flag it so createClientTransport() hard-fails on the existing
+    // `misconfigured` path rather than drifting.
+    //
+    // An EXPLICIT mode wins over this inference and is handled above:
+    // `STORAGE_MODE=local` with a stray API_URL stays local and silent.
+    warnings.push(
+      `${urlHit.key} is set but no API key is present (${keys.apiKeyKeys[0]}). ` +
+        `Refusing to fall back to the local store, which would silently serve a different dataset. ` +
+        `Set ${keys.apiKeyKeys[0]} to enable the cloud client, or set ${keys.modeKeys[0]}=local ` +
+        `to use the local store deliberately.`,
+    );
+    return {
+      transport: "local",
+      mode: "local",
+      deprecatedAlias,
+      modeSource: urlHit.key,
+      baseUrl: null,
+      apiUrlSource: null,
+      apiKeyPresent: false,
+      apiKeySource: null,
+      misconfigured: true,
+      warning: warnings.join(" "),
+    };
   }
 
   // Local mode: never route to the network, regardless of URL/key presence.
