@@ -248,6 +248,134 @@ describe("readChannelNotificationsUnion", () => {
     ]);
     expect(batch.notifications.every((row) => row.unread === false)).toBe(true);
   });
+
+  /**
+   * The two above assert the acknowledgement CONTRACT against a store double
+   * that records calls. This asserts the OUTCOME an operator cares about,
+   * against a store that models the semantics the defect actually lived in:
+   * `unread_only` hides anything already marked, so a stranded row is gone from
+   * every later poll. Written independently while the fix above was being
+   * authored, and kept because a contract test and an outcome test fail for
+   * different reasons.
+   */
+  const unreadStore = (rowsByAgent: Record<string, number[]>) => {
+    const read = new Set<number>();
+    let failing: string | null = null;
+    return {
+      read,
+      failIdentity(agent: string | null) { failing = agent; },
+      readChannelNotifications: async (args: { agent: string; mark_read?: boolean }) => {
+        if (args.agent === failing) throw new Error("STORE_503");
+        const out = (rowsByAgent[args.agent] ?? [])
+          .filter((id) => !read.has(id))
+          .map(notification);
+        // Honours mark_read the way the real store does, so a fix that simply
+        // went on passing mark_read through would still be caught here.
+        if (args.mark_read) for (const row of out) read.add(row.message_id);
+        return out;
+      },
+      markChannelNotificationsRead: async (_agent: string, ids: number[]) => {
+        for (const id of ids) read.add(id);
+        return ids.length;
+      },
+    };
+  };
+
+  test("a transient failure on the second identity does not consume the first identity's inbox", async () => {
+    const store = unreadStore({ first: [101, 102], second: [201] });
+    store.failIdentity("second");
+
+    await expect(
+      readChannelNotificationsUnion(store, { agents: ["first", "second"], mark_read: true }),
+    ).rejects.toThrow("STORE_503");
+    expect([...store.read]).toEqual([]);
+
+    // The store recovers. Every id must still be reachable — this is the line
+    // that failed on the pass-through path, where 101 and 102 were gone.
+    store.failIdentity(null);
+    const recovered = await readChannelNotificationsUnion(store, {
+      agents: ["first", "second"],
+      mark_read: true,
+    });
+    expect(recovered.notifications.map((r) => r.message_id).sort((a, b) => a - b))
+      .toEqual([101, 102, 201]);
+
+    // And once delivered, they are consumed exactly once.
+    await recovered.markRead();
+    const afterDelivery = await readChannelNotificationsUnion(store, {
+      agents: ["first", "second"],
+      mark_read: true,
+    });
+    expect(afterDelivery.notifications).toEqual([]);
+  });
+
+  test("acknowledges nothing when mark_read was not requested", async () => {
+    const store = unreadStore({ first: [101], second: [201] });
+    const batch = await readChannelNotificationsUnion(store, { agents: ["first", "second"] });
+    await batch.markRead();
+    expect([...store.read]).toEqual([]);
+  });
+});
+
+describe("startNotificationPolling — acknowledgement follows delivery", () => {
+  /**
+   * The loop only calls markRead() when the render callback returned normally.
+   * Without a test, deleting that guard leaves the suite green while restoring
+   * the loss: a renderer that throws would consume the rows it never printed.
+   */
+  test("a rendering failure leaves the notifications unacknowledged", async () => {
+    const acknowledged: number[] = [];
+    let served = false;
+    const { stop } = startNotificationPolling({
+      store: {
+        readChannelNotifications: async () => {
+          if (served) return [];
+          served = true;
+          return [notification(11)];
+        },
+        markChannelNotificationsRead: async (_agent, ids) => {
+          acknowledged.push(...ids);
+          return ids.length;
+        },
+      },
+      agent: "watcher",
+      interval_ms: 20,
+      on_notifications: () => { throw new Error("RENDER_BOOM"); },
+      on_poll_error: () => {},
+    });
+    await settle();
+    stop();
+
+    expect(acknowledged).toEqual([]);
+  });
+
+  test("positive control: a rendering success DOES acknowledge", async () => {
+    // Without this the test above would pass just as well against a loop that
+    // never acknowledges anything at all.
+    const acknowledged: number[] = [];
+    let served = false;
+    const { stop } = startNotificationPolling({
+      store: {
+        readChannelNotifications: async () => {
+          if (served) return [];
+          served = true;
+          return [notification(12)];
+        },
+        markChannelNotificationsRead: async (_agent, ids) => {
+          acknowledged.push(...ids);
+          return ids.length;
+        },
+      },
+      agent: "watcher",
+      interval_ms: 20,
+      on_notifications: () => {},
+      on_poll_error: () => {},
+    });
+    await settle();
+    stop();
+
+    expect(acknowledged).toEqual([12]);
+  });
 });
 
 describe("startNotificationPolling — multiple identities", () => {
