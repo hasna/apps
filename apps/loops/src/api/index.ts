@@ -728,7 +728,7 @@ async function claimRuns(
         { claimToken: claim.claimToken },
       ) ?? claim.run;
       claims.push({
-        loop: publicLoop(claim.loop),
+        loop: claim.loop,
         run: publicRun(run, false, { redactError: true }),
         claimToken: claim.claimToken,
       });

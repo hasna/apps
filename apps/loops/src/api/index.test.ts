@@ -1014,4 +1014,63 @@ describe("loops-api foundation", () => {
       await storage.close();
     }
   });
+  // Regression: incident 607176 / task c64e66bd. `claimRuns` pushed
+  // `publicLoop(claim.loop)`, which rewrites target.prompt to
+  // "[redacted N chars]" for agent targets. The runner executes the loop it is
+  // handed by the claim response, so every agent-type loop ran with a
+  // placeholder as its entire instruction and exited 0 having done nothing.
+  // Redaction belongs on operator-facing reads (GET /v1/loops), never on the
+  // runner's execution payload. This test FAILS against the unfixed base.
+  test("runner claim delivers the agent prompt unredacted while operator reads stay redacted", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const now = new Date("2026-01-01T00:00:00Z");
+    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage, now: () => now });
+    const prompt = "Using the Write tool, create /tmp/loop-probe.txt containing exactly SENTINEL-OK and nothing else.";
+
+    try {
+      const loop = await storage.createLoop(
+        {
+          name: "api-runner-agent-prompt",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "agent", provider: "claude", prompt },
+          leaseMs: 60_000,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+
+      const register = await fetch(apiUrl(server, "/v1/runners/register"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ runnerId: "runner-prompt", machineId: "machine-prompt" }),
+      });
+      expect(register.status).toBe(200);
+
+      const claimResponse = await fetch(apiUrl(server, "/v1/runners/claim"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ runnerId: "runner-prompt", maxClaims: 1 }),
+      });
+      expect(claimResponse.status).toBe(200);
+      const claimed = (await claimResponse.json()) as {
+        claims: Array<{ loop: { id: string; target: { prompt?: string } } }>;
+      };
+
+      // The runner must receive the REAL prompt.
+      expect(claimed.claims).toHaveLength(1);
+      expect(claimed.claims[0]!.loop.id).toBe(loop.id);
+      expect(claimed.claims[0]!.loop.target.prompt).toBe(prompt);
+      expect(claimed.claims[0]!.loop.target.prompt).not.toMatch(/^\[redacted/);
+
+      // ...while the operator-facing read stays redacted. Without this arm the
+      // fix could be "corrected" into a credential-leaking regression.
+      const read = await fetch(apiUrl(server, `/v1/loops/${loop.id}`));
+      expect(read.status).toBe(200);
+      const body = (await read.json()) as { loop: { target: { prompt?: string } } };
+      expect(body.loop.target.prompt).toBe(`[redacted ${prompt.length} chars]`);
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
 });
