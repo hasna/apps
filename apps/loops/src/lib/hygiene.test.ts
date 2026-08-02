@@ -316,6 +316,65 @@ describe("hygiene", () => {
       }
     });
 
+    // Regression for the PR #182 review P1: buildStuckRunReport's --apply path
+    // used to call the real mutating store method (recoverExpiredRunLeasesDetailed
+    // — the ONLY place a run's defer_count is ever incremented) only when
+    // `preview.reclaimable.length > 0`. A live-looking run under the grace
+    // ceiling is always classified as liveDeferred, never reclaimable, by
+    // construction — so that gate stayed closed forever for exactly this run,
+    // its defer_count never moved off 0, and --apply could be invoked any
+    // number of times without ever crossing the ceiling. Reproduced exactly as
+    // the reviewer did: repeated --apply calls, defer_count observably stuck.
+    // Timestamps mirror the existing store-level ceiling test
+    // ("lease recovery abandons a still-live run once the deferral ceiling is
+    // exhausted", src/lib/store.test.ts) so the arithmetic is proven correct
+    // independently of this test.
+    test("--apply reclaims a live-looking run once it exceeds the grace ceiling, never before (both directions)", () => {
+      const store = new Store(":memory:");
+      try {
+        const loop = store.createLoop(
+          { name: "ceiling-wedged", schedule: { type: "interval", everyMs: 60_000 }, target: { type: "command", command: "true" }, overlap: "skip", leaseMs: 10 },
+          new Date("2025-12-31T00:00:00Z"),
+        );
+        const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "daemon:1234", new Date("2026-01-01T00:00:00Z"));
+        // Genuinely alive fingerprint (this test process). The ONLY thing that
+        // ever ends this run is the grace ceiling — never plain lease expiry.
+        store.recordRunProcess(claim!.run.id, { pid: process.pid, pgid: process.pid }, { claimToken: claim!.claimToken });
+
+        // ARM 1 — the direction that must NOT regress: a genuinely live run
+        // stays refused across repeated --apply calls, well under the ceiling.
+        // Before the fix this direction already "passed" (nothing was ever
+        // reclaimed) — for the wrong reason: --apply never even ran the real
+        // recovery pass, so this arm alone cannot tell the fixed code from the
+        // broken one. ARM 2 is the discriminating one.
+        for (let attempt = 1; attempt <= 10; attempt += 1) {
+          const at = new Date(Date.parse("2026-01-01T00:02:00Z") + attempt * 60_000);
+          const report = buildStuckRunReport(store, { apply: true, now: at });
+          expect(report.stuck).toBe(0);
+          expect(report.liveDeferred).toBe(1);
+          expect(report.entries.every((entry) => !entry.reclaimed)).toBe(true);
+          expect(store.getRun(claim!.run.id)?.status).toBe("running");
+        }
+
+        // ARM 2 (discriminating) — the 11th pass is past the ceiling: --apply
+        // must now reclaim it despite it still looking alive. On the pre-fix
+        // code this never happens no matter how many times --apply is called,
+        // because defer_count was frozen at 0 by ARM 1's gate never opening.
+        const past = buildStuckRunReport(store, { apply: true, now: new Date("2026-01-01T00:14:00Z") });
+        expect(past.stuck).toBe(1);
+        expect(past.liveDeferred).toBe(0);
+        expect(past.entries[0]?.reclaimed).toBe(true);
+        expect(past.advancedLoopIds).toEqual([loop.id]);
+        const abandoned = store.getRun(claim!.run.id);
+        expect(abandoned?.status).toBe("abandoned");
+        // Distinguishes an exhausted grace ceiling from a plainly dead run.
+        expect(abandoned?.error).toContain("deferral ceiling");
+        expect(store.hasRunningRun(loop.id)).toBe(false);
+      } finally {
+        store.close();
+      }
+    });
+
     test("dead recorded pid with a mismatched start-time fingerprint (recycled pid) is still reclaimed", () => {
       const store = new Store(":memory:");
       try {

@@ -4939,15 +4939,25 @@ export class Store {
 
   /**
    * Read-only counterpart to {@link recoverExpiredRunLeasesDetailed}: runs the
-   * identical SELECT and the identical liveness classification
-   * (`isRecordedProcessAlive` / `hasLiveWorkflowStepProcesses`) but issues no
-   * UPDATE. `reclaimable` is exactly the set that a same-parameters call to
-   * `recoverExpiredRunLeasesDetailed` would mark abandoned; `liveDeferred` is
-   * exactly the set it would instead defer, because it still has a live
-   * process. Sharing the SELECT and the classifier (rather than
-   * reimplementing them) is deliberate: a preview built from separate logic
-   * could drift from what apply actually does, which is exactly the
-   * check-that-cannot-fail shape this command exists to avoid.
+   * identical SELECT and the identical two-part classification — liveness
+   * (`isRecordedProcessAlive` / `hasLiveWorkflowStepProcesses`) AND the
+   * `defer_count` grace ceiling (`MAX_LIVE_EXPIRED_RUN_DEFERRALS`) — but issues
+   * no UPDATE. `reclaimable` is exactly the set a same-parameters call to
+   * `recoverExpiredRunLeasesDetailed` would mark abandoned: dead now, OR alive
+   * but already past the grace ceiling. `liveDeferred` is exactly the set it
+   * would instead defer: alive AND still under the ceiling.
+   *
+   * CORRECTED (P1, PR #182 review): this previously classified any row that
+   * "looks alive" as `liveDeferred` unconditionally, ignoring `defer_count`
+   * entirely. Because callers gate the real mutating call on
+   * `reclaimable.length > 0`, that made a live-looking run's grace-ceiling
+   * escalation permanently unreachable — `recoverExpiredRunLeasesDetailed`,
+   * the only place `defer_count` is ever incremented, was never invoked for
+   * such a run, so it sat at `defer_count=0` forever rather than ever
+   * accumulating toward the ceiling and being abandoned. Reusing the exact
+   * `looksAlive && deferralsSoFar < MAX_LIVE_EXPIRED_RUN_DEFERRALS` predicate
+   * (not a re-derived one) is what keeps this method from drifting from
+   * `recoverExpiredRunLeasesDetailed` again.
    */
   previewExpiredRunLeases(
     now: Date = new Date(),
@@ -4970,7 +4980,9 @@ export class Store {
       if (reclaimable.length >= limit) break;
       const run = this.getRun(row.id);
       if (!run) continue;
-      if (isRecordedProcessAlive(row.pid, row.process_started_at) || this.hasLiveWorkflowStepProcesses(row.id)) {
+      const looksAlive = isRecordedProcessAlive(row.pid, row.process_started_at) || this.hasLiveWorkflowStepProcesses(row.id);
+      const deferralsSoFar = row.defer_count ?? 0;
+      if (looksAlive && deferralsSoFar < MAX_LIVE_EXPIRED_RUN_DEFERRALS) {
         liveDeferred.push(run);
         continue;
       }

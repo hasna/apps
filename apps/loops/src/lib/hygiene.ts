@@ -401,12 +401,25 @@ function toStuckRunEntry(run: LoopRun, reclaimed: boolean, deferredReason?: "liv
  * loop's `nextRunAt` moves in the same command invocation rather than waiting
  * on a daemon that may not come back.
  */
-export function buildStuckRunReport(store: Store, opts: { apply?: boolean; limit?: number } = {}): StuckRunReport {
-  const now = new Date();
+export function buildStuckRunReport(store: Store, opts: { apply?: boolean; limit?: number; now?: Date } = {}): StuckRunReport {
+  const now = opts.now ?? new Date();
   const preview = store.previewExpiredRunLeases(now, { limit: opts.limit });
   const advancedLoopIds: string[] = [];
   let entries: StuckRunEntry[];
-  if (opts.apply && preview.reclaimable.length > 0) {
+  let stuckCount = preview.reclaimable.length;
+  let liveDeferredCount = preview.liveDeferred.length;
+  // CORRECTED (P1, PR #182 review): this used to gate the mutating call on
+  // `preview.reclaimable.length > 0`. That is wrong even once the ceiling
+  // check above is fixed, because a live-looking run under the grace ceiling
+  // is reported by preview as `liveDeferred`, never `reclaimable` — so that
+  // gate would skip calling `recoverExpiredRunLeasesDetailed` for exactly the
+  // runs whose `defer_count` needs to advance toward the ceiling. Left gated,
+  // such a run's `defer_count` stays at 0 forever and it can never be
+  // reclaimed even after real, prior invocations. The daemon's own tick calls
+  // this unconditionally every time it finds an expired-lease row at all
+  // (never conditioned on "would anything be abandoned"); `apply` must match
+  // that, not re-derive a narrower trigger.
+  if (opts.apply && (preview.reclaimable.length > 0 || preview.liveDeferred.length > 0)) {
     const result = store.recoverExpiredRunLeasesDetailed(now, { limit: opts.limit });
     for (const run of result.abandoned) {
       const loop = store.getLoop(run.loopId);
@@ -428,6 +441,13 @@ export function buildStuckRunReport(store: Store, opts: { apply?: boolean; limit
       }
       if (store.getLoop(loop.id)?.nextRunAt !== before) advancedLoopIds.push(loop.id);
     }
+    // Report what THIS invocation actually did (abandoned vs re-deferred),
+    // not the pre-mutation preview counts — the two can legitimately differ
+    // now: a run at the ceiling shows as `reclaimable` in preview but was
+    // just abandoned by this call, and a run below the ceiling shows as
+    // `liveDeferred` in both, but its `defer_count` has now moved.
+    stuckCount = result.abandoned.length;
+    liveDeferredCount = result.deferred.length;
     entries = [
       ...result.abandoned.map((run) => toStuckRunEntry(run, true)),
       ...result.deferred.map((run) => toStuckRunEntry(run, false, "live_process")),
@@ -439,12 +459,12 @@ export function buildStuckRunReport(store: Store, opts: { apply?: boolean; limit
     ];
   }
   return {
-    ok: preview.reclaimable.length === 0,
+    ok: stuckCount === 0,
     generatedAt: now.toISOString(),
     applied: Boolean(opts.apply),
-    checked: preview.reclaimable.length + preview.liveDeferred.length,
-    stuck: preview.reclaimable.length,
-    liveDeferred: preview.liveDeferred.length,
+    checked: stuckCount + liveDeferredCount,
+    stuck: stuckCount,
+    liveDeferred: liveDeferredCount,
     entries,
     advancedLoopIds,
   };
