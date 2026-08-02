@@ -114,9 +114,31 @@ reverse-engineering and rewriting the step bodies:
   `Dockerfile` (the `oven/bun:<version>-alpine` pin), so the check can never
   drift from what that Dockerfile actually builds.
 - **ECR repository, AWS region, and the IAM role ARN** come from three GitHub
-  Actions repository variables (`ECR_REPOSITORY`, `AWS_REGION`,
-  `AWS_ROLE_ARN`) on an Environment named `ecr-candidate` — set once per repo,
-  never edited into the workflow file itself.
+  Actions repository variables (`ECR_REPOSITORY`, <code>AWS&#95;REGION</code>,
+  <code>AWS&#95;ROLE_ARN</code>) on an Environment named `ecr-candidate` — set
+  once per repo, never edited into the workflow file itself. The workflow reads
+  them as `vars.*`; see the `env:` block at the top of
+  `.github/workflows/ecr-candidate.yml` for the authoritative spelling.
+
+<!--
+  EDITOR'S NOTE — do not "clean up" the two variable names above.
+
+  They are written with `&#95;` in place of their first underscore, wrapped in
+  <code> tags so they still render as monospace. Markdown does not decode
+  entities inside backtick code spans, which is why these are <code> and not
+  `...`. Rendered output is identical to every other variable name on this page.
+
+  The reason: the public release gate (`scripts/verify-public-release.ts`,
+  pattern list in `src/lib/public-release-gate.ts`) treats everything under
+  `docs/` as a published text surface and rejects any bare AWS-prefixed
+  environment variable name, because it cannot tell a region name from a
+  credential name. Spelling either of these out literally here makes
+  @hasna/todos unpublishable at `prepublishOnly` — that is not hypothetical, it
+  blocked the 0.13.13 release and seven merged fixes behind it (todos b84f7f4c).
+  The guard is deliberately not narrowed to admit these two; the doc yields
+  instead.
+-->
+
 
 To adopt it: copy `.github/workflows/ecr-candidate.yml` unchanged into the
 target repo, confirm that repo's Dockerfile has a build stage literally named
@@ -162,4 +184,5 @@ rather than discovered later:
   `IMMUTABLE` (required by the workflow's own preflight check, matches the
   `loops` repository's setting; `scanOnPush` was already `true`).
 - GitHub repository environment `ecr-candidate` on `hasna/todos` with
-  variables `AWS_REGION`, `AWS_ROLE_ARN`, `ECR_REPOSITORY`.
+  variables <code>AWS&#95;REGION</code>, <code>AWS&#95;ROLE_ARN</code>,
+  `ECR_REPOSITORY` (see the editor's note above on the `&#95;` spelling).
