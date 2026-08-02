@@ -1,7 +1,8 @@
 import { basename } from "node:path";
 import { homedir } from "node:os";
-import type { Loop, ScheduleSpec } from "../types.js";
+import type { Loop, LoopRun, ScheduleSpec } from "../types.js";
 import type { Store } from "./store.js";
+import { advanceLoop } from "./scheduler.js";
 
 export interface NameHygieneChange {
   id: string;
@@ -322,5 +323,129 @@ export function buildScriptInventoryReport(
     checked: loops.length,
     scriptBacked: scriptBacked.length,
     loops: scriptBacked,
+  };
+}
+
+export interface StuckRunEntry {
+  runId: string;
+  loopId: string;
+  loopName: string;
+  scheduledFor: string;
+  startedAt?: string;
+  leaseExpiresAt?: string;
+  pid?: number;
+  /** Why this run was left alone instead of reclaimed. Present only for entries that were not reclaimed. */
+  deferredReason?: "live_process";
+  /** True once this run has actually been marked `abandoned` by an --apply run. */
+  reclaimed: boolean;
+}
+
+export interface StuckRunReport {
+  ok: boolean;
+  generatedAt: string;
+  applied: boolean;
+  /** Total running runs found with an expired lease, reclaimable or not. */
+  checked: number;
+  /** Runs with an expired lease AND no live process — the reclaimable set. */
+  stuck: number;
+  /** Runs with an expired lease but a still-live process — never reclaimed. */
+  liveDeferred: number;
+  entries: StuckRunEntry[];
+  /** Loop ids whose nextRunAt was advanced immediately after reclaiming a run, unblocking their cadence without waiting for a daemon tick. */
+  advancedLoopIds: string[];
+}
+
+function toStuckRunEntry(run: LoopRun, reclaimed: boolean, deferredReason?: "live_process"): StuckRunEntry {
+  return {
+    runId: run.id,
+    loopId: run.loopId,
+    loopName: run.loopName,
+    scheduledFor: run.scheduledFor,
+    startedAt: run.startedAt,
+    leaseExpiresAt: run.leaseExpiresAt,
+    pid: run.pid,
+    deferredReason,
+    reclaimed,
+  };
+}
+
+/**
+ * Detect (and, with `apply`, reclaim) loop runs stuck in `status: "running"`
+ * with an expired lease and no live backing process — the `7cf8d8c1` defect
+ * class: a run that outlives both its lease and its execution timeout with no
+ * process behind it, which under `overlap: "skip"` blocks every later slot
+ * forever because nothing ever moves the run out of `running`.
+ *
+ * The discriminator is evidence, not age: `Store#previewExpiredRunLeases` (and,
+ * on apply, `Store#recoverExpiredRunLeasesDetailed`) only ever classifies a run
+ * as reclaimable when BOTH its lease has expired AND its recorded process is
+ * not alive (bounded, additionally, by the daemon's own pid-recycling and
+ * workflow-step-liveness checks). A run whose process is still alive is
+ * reported as `liveDeferred` and is never touched, regardless of how long it
+ * has been running — a long but genuinely alive run is not this defect.
+ *
+ * On this fleet a loop's `leaseMs` is conventionally set wider than its
+ * target's `timeoutMs` (e.g. 9m lease over an 8m execution timeout), so lease
+ * expiry is already evidence that the execution timeout has also elapsed; this
+ * command does not additionally re-check `timeoutMs` because doing so could
+ * only ever narrow, never widen, what the lease+liveness check already
+ * requires.
+ *
+ * Reclaiming a run is not enough on its own to unblock its loop: `overlap:
+ * "skip"` only re-admits new claims once no `running` run remains for the
+ * loop, and `nextRunAt` is only recomputed by the scheduler's own advancement
+ * logic. Waiting for that to happen relies on a live daemon ticking against
+ * this exact store, which is precisely the condition already absent for a run
+ * that got this stuck. So on `apply`, this command calls the scheduler's own
+ * `advanceLoop` directly against each reclaimed run, synchronously, so the
+ * loop's `nextRunAt` moves in the same command invocation rather than waiting
+ * on a daemon that may not come back.
+ */
+export function buildStuckRunReport(store: Store, opts: { apply?: boolean; limit?: number } = {}): StuckRunReport {
+  const now = new Date();
+  const preview = store.previewExpiredRunLeases(now, { limit: opts.limit });
+  const advancedLoopIds: string[] = [];
+  let entries: StuckRunEntry[];
+  if (opts.apply && preview.reclaimable.length > 0) {
+    const result = store.recoverExpiredRunLeasesDetailed(now, { limit: opts.limit });
+    for (const run of result.abandoned) {
+      const loop = store.getLoop(run.loopId);
+      if (!loop) continue;
+      // advanceLoop is a documented no-op for a non-active loop (planLoopAdvancement
+      // reason: "inactive") — a paused or stopped loop's nextRunAt must stay exactly
+      // where an operator left it, never get silently nudged forward by a reclaim.
+      // advanceLoop itself never reports whether it actually changed anything, so
+      // compare before/after to report advancement truthfully rather than reporting
+      // "advanced" for every non-throwing call, most of which are no-ops.
+      const before = loop.nextRunAt;
+      try {
+        advanceLoop(store, loop, run, now, false);
+      } catch {
+        // Best-effort: a lost race or a since-archived loop leaves nextRunAt
+        // for the daemon's own tick to repair (see repairWedgedTerminalSlot).
+        // The run is already reclaimed either way — that half never rolls back.
+        continue;
+      }
+      if (store.getLoop(loop.id)?.nextRunAt !== before) advancedLoopIds.push(loop.id);
+    }
+    entries = [
+      ...result.abandoned.map((run) => toStuckRunEntry(run, true)),
+      ...result.deferred.map((run) => toStuckRunEntry(run, false, "live_process")),
+    ];
+  } else {
+    entries = [
+      ...preview.reclaimable.map((run) => toStuckRunEntry(run, false)),
+      ...preview.liveDeferred.map((run) => toStuckRunEntry(run, false, "live_process")),
+    ];
+  }
+  return {
+    ok: preview.reclaimable.length === 0,
+    generatedAt: now.toISOString(),
+    applied: Boolean(opts.apply),
+    checked: preview.reclaimable.length + preview.liveDeferred.length,
+    stuck: preview.reclaimable.length,
+    liveDeferred: preview.liveDeferred.length,
+    entries,
+    advancedLoopIds,
   };
 }

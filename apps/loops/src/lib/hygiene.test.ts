@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { Store } from "./store.js";
-import { buildDuplicateOverlapReport, buildNameHygieneReport, buildScriptInventoryReport } from "./hygiene.js";
+import { claimDueRuns } from "./scheduler.js";
+import { buildDuplicateOverlapReport, buildNameHygieneReport, buildScriptInventoryReport, buildStuckRunReport } from "./hygiene.js";
 
 describe("hygiene", () => {
   test("name hygiene canonicalizes provider-prefixed machine loop names", () => {
@@ -195,5 +196,231 @@ describe("hygiene", () => {
     } finally {
       store.close();
     }
+  });
+
+  describe("stuck run hygiene (7cf8d8c1)", () => {
+    // Real wall-clock past, safely older than any lease used below, so a run
+    // claimed "at" this time is already expired by the time buildStuckRunReport
+    // reads the real Date.now() inside it.
+    const wellInThePast = new Date(Date.now() - 60 * 60_000);
+
+    test("dry run detects a lease-expired, process-dead run without mutating it", () => {
+      const store = new Store(":memory:");
+      try {
+        const loop = store.createLoop(
+          { name: "zombie", schedule: { type: "interval", everyMs: 600_000 }, target: { type: "command", command: "true" }, overlap: "skip", leaseMs: 10 },
+          wellInThePast,
+        );
+        const claim = store.claimRun(loop, loop.nextRunAt!, "daemon:1234", wellInThePast);
+        expect(claim).toBeDefined();
+        // No recordRunProcess call: pid stays NULL, which is never "alive".
+
+        const report = buildStuckRunReport(store, { apply: false });
+
+        expect(report.applied).toBe(false);
+        expect(report.ok).toBe(false);
+        expect(report.stuck).toBe(1);
+        expect(report.liveDeferred).toBe(0);
+        expect(report.entries).toHaveLength(1);
+        expect(report.entries[0]?.runId).toBe(claim!.run.id);
+        expect(report.entries[0]?.reclaimed).toBe(false);
+        expect(report.advancedLoopIds).toEqual([]);
+
+        // Dry run must not touch the run or the loop.
+        expect(store.getRun(claim!.run.id)?.status).toBe("running");
+        expect(store.hasRunningRun(loop.id)).toBe(true);
+      } finally {
+        store.close();
+      }
+    });
+
+    test("--apply reclaims the run, advances nextRunAt immediately, and the cadence claims again", () => {
+      const store = new Store(":memory:");
+      try {
+        const loop = store.createLoop(
+          { name: "zombie-apply", schedule: { type: "interval", everyMs: 600_000 }, target: { type: "command", command: "true" }, overlap: "skip", leaseMs: 10 },
+          wellInThePast,
+        );
+        const originalNextRunAt = loop.nextRunAt!;
+        const claim = store.claimRun(loop, originalNextRunAt, "daemon:1234", wellInThePast);
+        expect(claim).toBeDefined();
+
+        const report = buildStuckRunReport(store, { apply: true });
+
+        expect(report.applied).toBe(true);
+        expect(report.stuck).toBe(1);
+        expect(report.entries).toHaveLength(1);
+        expect(report.entries[0]?.runId).toBe(claim!.run.id);
+        expect(report.entries[0]?.reclaimed).toBe(true);
+        expect(report.advancedLoopIds).toEqual([loop.id]);
+
+        // The row actually changed state...
+        expect(store.getRun(claim!.run.id)?.status).toBe("abandoned");
+        // ...which is what unblocks overlap:skip for this loop.
+        expect(store.hasRunningRun(loop.id)).toBe(false);
+        // ...and nextRunAt moved off the wedged slot in the SAME call, not on
+        // some later daemon tick that may never come.
+        const advancedLoop = store.getLoop(loop.id)!;
+        expect(advancedLoop.nextRunAt).toBeDefined();
+        expect(advancedLoop.nextRunAt).not.toBe(originalNextRunAt);
+
+        // Prove the cadence actually resumes: a scheduler tick once the newly
+        // advanced slot is due claims a fresh run for the loop, rather than
+        // being refused forever by a phantom "running" row. (The advanced
+        // nextRunAt is normally still minutes away on a 10-minute cadence —
+        // ticking at its own due time, not at real "now", is what isolates
+        // "did unblocking work" from "has 10 minutes of wall-clock passed".)
+        const dueAt = new Date(new Date(advancedLoop.nextRunAt!).getTime() + 1);
+        const tickResult = claimDueRuns({ store, runnerId: "daemon:5678", now: () => dueAt });
+        expect(tickResult.claims.some((c) => c.loop.id === loop.id)).toBe(true);
+        const newRun = tickResult.claims.find((c) => c.loop.id === loop.id)!.run;
+        expect(newRun.id).not.toBe(claim!.run.id);
+        expect(store.getRun(newRun.id)?.status).toBe("running");
+      } finally {
+        store.close();
+      }
+    });
+
+    test("never reclaims a run whose recorded process is still alive, even long after its lease expired", () => {
+      const store = new Store(":memory:");
+      try {
+        const loop = store.createLoop(
+          { name: "healthy-long-runner", schedule: { type: "interval", everyMs: 600_000 }, target: { type: "command", command: "true" }, overlap: "skip", leaseMs: 10 },
+          wellInThePast,
+        );
+        const claim = store.claimRun(loop, loop.nextRunAt!, "daemon:1234", wellInThePast);
+        expect(claim).toBeDefined();
+        // Record THIS test process as the run's owner: genuinely alive, and its
+        // lease (10ms, claimed an hour ago) is expired many times over — the
+        // long-running-but-healthy case the reclaim command must refuse.
+        store.recordRunProcess(claim!.run.id, { pid: process.pid, pgid: process.pid }, { claimToken: claim!.claimToken });
+
+        const dryRun = buildStuckRunReport(store, { apply: false });
+        expect(dryRun.stuck).toBe(0);
+        expect(dryRun.liveDeferred).toBe(1);
+        expect(dryRun.entries[0]?.deferredReason).toBe("live_process");
+        expect(dryRun.entries[0]?.reclaimed).toBe(false);
+
+        const applied = buildStuckRunReport(store, { apply: true });
+        expect(applied.stuck).toBe(0);
+        expect(applied.liveDeferred).toBe(1);
+        expect(applied.entries.every((entry) => !entry.reclaimed)).toBe(true);
+        expect(applied.advancedLoopIds).toEqual([]);
+
+        // The run is untouched and still blocks new claims for this loop —
+        // exactly the property that distinguishes "stuck" from "alive".
+        expect(store.getRun(claim!.run.id)?.status).toBe("running");
+        expect(store.hasRunningRun(loop.id)).toBe(true);
+      } finally {
+        store.close();
+      }
+    });
+
+    test("dead recorded pid with a mismatched start-time fingerprint (recycled pid) is still reclaimed", () => {
+      const store = new Store(":memory:");
+      try {
+        const loop = store.createLoop(
+          { name: "recycled-pid-loop", schedule: { type: "interval", everyMs: 600_000 }, target: { type: "command", command: "true" }, overlap: "skip", leaseMs: 10 },
+          wellInThePast,
+        );
+        const claim = store.claimRun(loop, loop.nextRunAt!, "daemon:1234", wellInThePast);
+        // A live pid (this test process) but a start-time fingerprint from a
+        // day before it actually started: a recycled pid impersonating a live
+        // owner. isRecordedProcessAlive treats this as dead, and so must this
+        // command's reclaim.
+        store.recordRunProcess(
+          claim!.run.id,
+          { pid: process.pid, pgid: process.pid, processStartedAt: new Date(Date.now() - 24 * 60 * 60_000).toISOString() },
+          { claimToken: claim!.claimToken },
+        );
+
+        const report = buildStuckRunReport(store, { apply: true });
+        expect(report.stuck).toBe(1);
+        expect(report.entries[0]?.reclaimed).toBe(true);
+        expect(store.getRun(claim!.run.id)?.status).toBe("abandoned");
+      } finally {
+        store.close();
+      }
+    });
+
+    test("reclaims a stuck run under a PAUSED loop without resuming it or moving its frozen nextRunAt", () => {
+      // Relayed finding (loop-zombie-sweeper, incident #incidents 639449): a
+      // confirmed fleet zombie is a PAUSED loop with nextRunAt frozen months
+      // ago under overlap:skip. Reclaiming the run must not silently resume
+      // the loop — planLoopAdvancement is a no-op for a non-active loop
+      // (reason: "inactive"), so nextRunAt must stay exactly where an
+      // operator left it and status must stay "paused". The run itself still
+      // gets abandoned: that half is unconditional and independent of loop
+      // status, because a run row lying about being "running" is wrong
+      // regardless of whether its loop is paused.
+      const store = new Store(":memory:");
+      try {
+        const loop = store.createLoop(
+          { name: "paused-zombie", schedule: { type: "interval", everyMs: 600_000 }, target: { type: "command", command: "true" }, overlap: "skip", leaseMs: 10 },
+          wellInThePast,
+        );
+        const claim = store.claimRun(loop, loop.nextRunAt!, "daemon:1234", wellInThePast);
+        store.updateLoop(loop.id, { status: "paused" });
+        const frozenNextRunAt = store.getLoop(loop.id)!.nextRunAt;
+
+        const report = buildStuckRunReport(store, { apply: true });
+
+        expect(report.entries[0]?.reclaimed).toBe(true);
+        expect(store.getRun(claim!.run.id)?.status).toBe("abandoned");
+        // Not resumed, and no nextRunAt movement was even attempted for it.
+        expect(report.advancedLoopIds).not.toContain(loop.id);
+        const afterLoop = store.getLoop(loop.id)!;
+        expect(afterLoop.status).toBe("paused");
+        expect(afterLoop.nextRunAt).toBe(frozenNextRunAt);
+      } finally {
+        store.close();
+      }
+    });
+
+    test("a running run with NO recorded pid at all is reclaimable, not silently skipped", () => {
+      // Relayed finding (loop-zombie-sweeper): running runs may carry no pid
+      // (e.g. the daemon died between claiming the run and ever spawning a
+      // process, so onSpawn/onSpawnProcess never fired). isRecordedProcessAlive
+      // treats a null/falsy pid as "not alive" — the safe default for this
+      // check, not a blind spot: a run this command needs to judge is never
+      // skipped for lack of a pid to look up.
+      const store = new Store(":memory:");
+      try {
+        const loop = store.createLoop(
+          { name: "never-spawned", schedule: { type: "interval", everyMs: 600_000 }, target: { type: "command", command: "true" }, overlap: "skip", leaseMs: 10 },
+          wellInThePast,
+        );
+        const claim = store.claimRun(loop, loop.nextRunAt!, "daemon:1234", wellInThePast);
+        expect(claim!.run.pid).toBeUndefined();
+        expect(store.getRun(claim!.run.id)?.pid).toBeUndefined();
+
+        const report = buildStuckRunReport(store, { apply: true });
+        expect(report.stuck).toBe(1);
+        expect(report.liveDeferred).toBe(0);
+        expect(report.entries[0]?.reclaimed).toBe(true);
+        expect(store.getRun(claim!.run.id)?.status).toBe("abandoned");
+      } finally {
+        store.close();
+      }
+    });
+
+    test("reports ok with nothing to reclaim when no run's lease has expired", () => {
+      const store = new Store(":memory:");
+      try {
+        store.createLoop({
+          name: "fresh",
+          schedule: { type: "interval", everyMs: 600_000 },
+          target: { type: "command", command: "true" },
+          leaseMs: 30 * 60_000,
+        });
+        const report = buildStuckRunReport(store);
+        expect(report.ok).toBe(true);
+        expect(report.stuck).toBe(0);
+        expect(report.liveDeferred).toBe(0);
+        expect(report.entries).toEqual([]);
+      } finally {
+        store.close();
+      }
+    });
   });
 });

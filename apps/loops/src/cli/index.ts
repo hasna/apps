@@ -65,6 +65,7 @@ import {
   buildDuplicateOverlapReport,
   buildNameHygieneReport,
   buildScriptInventoryReport,
+  buildStuckRunReport,
 } from "../lib/hygiene.js";
 import { listOpenMachines, resolveLoopMachine } from "../lib/machines.js";
 import { packageVersion } from "../lib/version.js";
@@ -2559,6 +2560,40 @@ hygiene
         for (const action of actions) console.log(`${action.action} ${action.fingerprint}`);
       }
       if (!result.ok) process.exitCode = 1;
+    } finally {
+      store.close();
+    }
+  }));
+
+hygiene
+  .command("stuck")
+  .description(
+    "check or reclaim loop runs stuck 'running' with an expired lease and no live process (7cf8d8c1: overlap:skip then blocks the loop forever)",
+  )
+  .option("--apply", "abandon reclaimable runs and immediately advance their loop's nextRunAt")
+  .option("--limit <n>", "maximum runs to reclaim in one pass", "100")
+  .action(runAction((opts) => {
+    assertLocalOnlyCommand("hygiene stuck");
+    const store = new Store();
+    try {
+      const limit = positiveInteger(opts.limit, "--limit") ?? 100;
+      const preview = buildStuckRunReport(store, { apply: false, limit });
+      const backupPath = opts.apply && preview.stuck > 0 ? backupLoopsDatabase("stuck-run-hygiene") : undefined;
+      const report = opts.apply ? buildStuckRunReport(store, { apply: true, limit }) : preview;
+      const output = backupPath ? { ...report, backupPath } : report;
+      if (isJson()) console.log(JSON.stringify(output, null, 2));
+      else {
+        console.log(
+          `hygiene_stuck checked=${report.checked} stuck=${report.stuck} live_deferred=${report.liveDeferred} applied=${report.applied}`,
+        );
+        if (backupPath) console.log(`backup=${backupPath}`);
+        for (const entry of report.entries) {
+          const verb = entry.reclaimed ? "reclaimed" : entry.deferredReason === "live_process" ? "live-deferred" : "would-reclaim";
+          console.log(`${verb} run=${entry.runId} loop=${entry.loopId} (${entry.loopName}) lease_expired=${entry.leaseExpiresAt ?? ""} pid=${entry.pid ?? ""}`);
+        }
+        for (const loopId of report.advancedLoopIds) console.log(`advanced loop=${loopId}`);
+      }
+      if (!report.ok && !report.applied) process.exitCode = 1;
     } finally {
       store.close();
     }

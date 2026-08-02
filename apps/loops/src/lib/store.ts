@@ -4938,6 +4938,48 @@ export class Store {
   }
 
   /**
+   * Read-only counterpart to {@link recoverExpiredRunLeasesDetailed}: runs the
+   * identical SELECT and the identical liveness classification
+   * (`isRecordedProcessAlive` / `hasLiveWorkflowStepProcesses`) but issues no
+   * UPDATE. `reclaimable` is exactly the set that a same-parameters call to
+   * `recoverExpiredRunLeasesDetailed` would mark abandoned; `liveDeferred` is
+   * exactly the set it would instead defer, because it still has a live
+   * process. Sharing the SELECT and the classifier (rather than
+   * reimplementing them) is deliberate: a preview built from separate logic
+   * could drift from what apply actually does, which is exactly the
+   * check-that-cannot-fail shape this command exists to avoid.
+   */
+  previewExpiredRunLeases(
+    now: Date = new Date(),
+    opts: { limit?: number; scanLimit?: number; runId?: string } = {},
+  ): { reclaimable: LoopRun[]; liveDeferred: LoopRun[] } {
+    const limit = Math.max(1, Math.min(1_000, Math.floor(opts.limit ?? DEFAULT_RECOVERY_BATCH_LIMIT)));
+    const scanLimit = Math.max(limit, Math.min(5_000, Math.floor(opts.scanLimit ?? limit * DEFAULT_RECOVERY_SCAN_MULTIPLIER)));
+    const rows = this.db
+      .query<RunRow, [string, string | null, string | null, number]>(
+        `SELECT * FROM loop_runs
+         WHERE status = 'running' AND lease_expires_at <= ?
+           AND (? IS NULL OR id = ?)
+         ORDER BY lease_expires_at ASC
+         LIMIT ?`,
+      )
+      .all(now.toISOString(), opts.runId ?? null, opts.runId ?? null, scanLimit);
+    const reclaimable: LoopRun[] = [];
+    const liveDeferred: LoopRun[] = [];
+    for (const row of rows) {
+      if (reclaimable.length >= limit) break;
+      const run = this.getRun(row.id);
+      if (!run) continue;
+      if (isRecordedProcessAlive(row.pid, row.process_started_at) || this.hasLiveWorkflowStepProcesses(row.id)) {
+        liveDeferred.push(run);
+        continue;
+      }
+      reclaimable.push(run);
+    }
+    return { reclaimable, liveDeferred };
+  }
+
+  /**
    * Recover expired run leases and report both outcomes: runs abandoned (no
    * live process) and runs deferred because their process (group) is still
    * alive. Entries carry pid/pgid/processStartedAt so the daemon can signal
