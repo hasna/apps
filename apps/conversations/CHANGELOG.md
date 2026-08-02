@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.5.23 - 2026-08-02
+
+### Added
+- **`conversations watch` can opt into full redacted channel content and monitor several identities in one process.** `--full-content` preserves actionable identifiers that the compact preview strips, while comma-separated `--from` values union independent inboxes without changing which identity owns writes (#74).
+
+### Fixed
+- **Replies now bind to immutable message UUIDs instead of collision-prone numeric ids.** CLI and MCP callers resolve the parent UUID through the active authenticated store, hosted writes preserve caller-generated UUIDs, and numeric reply targets are rejected unless their channel or session scope can be verified (#77).
+- **Search now discloses server-side truncation instead of presenting a capped result as complete.** Hosted search pages report continuation metadata when the server supports it, older servers are handled conservatively, and JSON output stays parseable while the truncation notice is written to stderr (#76).
+- **Watchers now report store failures, degraded polling, and recovery without corrupting MCP stdout.** The CLI message loop, channel-notification loop, and MCP bridge share bounded stderr diagnostics and continue through transient store failures instead of dying or going silently blind (#72).
+- **A forced registration takeover followed by heartbeat preserves one logical presence row.** PostgreSQL heartbeat arbitration now targets the unique agent identity and updates its project, session, status, and metadata instead of failing on the independent uniqueness constraint (#70).
+
+### Changed
+- Refresh the vendored storage kit to `@hasna/contracts` 0.4.2 and make generated-kit drift a blocking CI check (#71).
+
 ## 0.5.22 - 2026-08-01
 
 ### Fixed
