@@ -11,21 +11,50 @@ bun run contract-check    # contracts repo-conformance .
 **It exits 1 today, and that is the accurate result.** This page records what is
 genuinely missing, so the failure is legible instead of mysterious.
 
-## Why the manifest declares no `storage` block
+## Why the manifest still declares no `storage` block
 
-`storage.mode` admits `sqlite` and `postgres` and nothing else. The only
-implemented backend in this package is an append-only JSONL file at
-`~/.hasna/feedback/feedback.jsonl` (`LocalFeedbackStore` in `src/storage.ts`).
-There is no SQLite database and no PostgreSQL driver here; the `cloud` runtime
-mode is a seam that requires the host to inject its own `FeedbackStore` adapter,
-and `createFeedbackStore` throws without one.
+**SQLite now exists** — `SqliteFeedbackStore` in `src/storage.sqlite.ts` is the
+local default, at `~/.hasna/feedback/feedback.db`, with an automatic
+non-destructive import of any existing `feedback.jsonl`. That is item 1 below,
+and it is done. JSONL is now an export format and an opt-in legacy engine
+(`HASNA_FEEDBACK_STORE=jsonl`) rather than the storage format.
 
-The schema will not let the real store be described even approximately —
-`storage.sqlitePath` must match `\.db$`, so it cannot point at `feedback.jsonl`.
-So there is no `storage` block that is both schema-valid and true, and the
-manifest omits it rather than assert a backend that does not exist. A
-`cli-with-store` manifest is required to declare `storage`, which is why
-`manifest_valid` is the first reported failure.
+There is still no PostgreSQL driver here; the `postgres` runtime engine is a
+seam that requires the host to inject its own `FeedbackStore` adapter, and
+`createFeedbackStore` throws without one.
+
+**The manifest is deliberately unchanged by that work, and the block is still
+absent.** A `cli-with-store` manifest must declare `storage`, and the block this
+repo would have to write is not yet truthful in either available shape:
+
+- `engines: ["sqlite", "postgres"]` asserts a PostgreSQL backend that does not
+  exist (item 2).
+- `engines: ["sqlite"]` plus a PostgreSQL waiver is **refused outright** while
+  `feedback-serve` ships. Measured at `37718cb0`, one variable apart: with the
+  bin present the waiver yields `declared waiver ignored: storage waivers are
+  not permitted for a service-capable cli-with-store repo shipping
+  feedback-serve`; with the bin removed the same manifest is fully conformant.
+  Removing the bin is gated — see the `0.4.0` gate below and todos `87db44e3`.
+
+So `manifest_valid` remains the first reported failure, and correctly so. The
+storage block lands with whichever of those two unblocks first, not with this
+change. Writing it now would assert a backend that is not there, which is the
+one thing this file has consistently refused to do.
+
+Two kit-shape facts for whoever writes that block, measured against
+`@hasna/contracts` 0.8.5 rather than read from docs:
+
+- `storage.envPrefix` must be exactly `HASNA_FEEDBACK_`. The code now reads
+  `HASNA_FEEDBACK_*` first (falling back to the legacy unprefixed names), so
+  this part is already true.
+- `cli-with-store` storage also requires `storage.sqlitePath`, conventionally
+  `~/.hasna/<name>/<name>.db`; omitting it fails validation. Elements of
+  `metadata.conformance.waivedStorageEngines` are **objects**, not strings —
+  `{ engine, reason, reviewedBy?, expiresAt? }`.
+
+Note also that the kit does **not** verify a declared backend actually exists: a
+probe declaring `storage.mode=sqlite` passed conformance with no implementation
+behind it. Conformance passing is therefore not evidence that this work is done.
 
 Two escape hatches exist and both are closed to this repo, by the kit's own
 rules rather than by choice:
@@ -40,9 +69,15 @@ rules rather than by choice:
 
 Each item is real implementation work, not a manifest edit.
 
-1. **Move the store onto a contract storage engine.** SQLite as the local
+1. ~~**Move the store onto a contract storage engine.** SQLite as the local
    default, with a migration for existing `feedback.jsonl` data, and
-   `exportJsonl` preserved as an export format rather than the storage format.
+   `exportJsonl` preserved as an export format rather than the storage
+   format.~~ **DONE** — `SqliteFeedbackStore` (`src/storage.sqlite.ts`) is the
+   default engine; `migrateJsonlIntoSqlite` imports an existing log
+   automatically, once, without modifying it; `exportJsonl` is byte-identical
+   across both engines and is covered by a parity test. This did **not** change
+   the reported gap set, because the manifest block it unblocks is still
+   waiting on item 2 or on the `feedback-serve` removal.
 2. **Implement PostgreSQL as a second engine**, plus a `storage.pgTestGate`
    naming an env-gated live-PostgreSQL test. This is not optional while
    `feedback-serve` ships: the waiver that would excuse it is unavailable to a

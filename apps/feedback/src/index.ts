@@ -7,22 +7,33 @@ export type { BrowserFeedbackContextOptions } from "./browser.js";
 export {
   DEFAULT_DATA_DIR,
   DEFAULT_FEEDBACK_FILE,
+  DEFAULT_SQLITE_FILE,
+  ENV_PREFIX,
+  FeedbackStoreBase,
+  FeedbackStoreBusyError,
   LocalFeedbackStore,
+  SqliteFeedbackStore,
   applyFeedbackFilter,
   buildFeedbackSearchHaystack,
   computeFeedbackStats,
   createFeedbackStore,
   describeFeedbackStoreRuntime,
+  migrateJsonlIntoSqlite,
   resolveFeedbackDataDir,
   resolveFeedbackFilePath,
+  resolveFeedbackSqlitePath,
+  serialiseFeedbackJsonl,
 } from "./storage.js";
 export type {
   FeedbackCloudRuntimeDiagnostics,
+  FeedbackMigrationResult,
+  FeedbackStorageEngine,
   FeedbackStoreRuntimeDiagnosticMode,
   FeedbackStoreRuntimeDiagnostics,
   FeedbackStoreRuntimeMode,
   FeedbackStoreRuntimeOptions,
   LocalFeedbackStoreOptions,
+  SqliteFeedbackStoreOptions,
 } from "./storage.js";
 export {
   FEEDBACK_EVENT_CONTRACT_SCHEMA,

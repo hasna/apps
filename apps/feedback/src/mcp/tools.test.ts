@@ -22,7 +22,8 @@ describe("feedback MCP tools", () => {
     expect(diagnostics).toBeDefined();
     expect(JSON.parse(textFromResult(await diagnostics!.run({})))).toMatchObject({
       mode: "local",
-      activeStore: "local-jsonl",
+      engine: "sqlite",
+      activeStore: "local-sqlite",
       ok: true,
     });
 

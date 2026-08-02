@@ -200,9 +200,13 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .command("init")
     .description("Create the local Open Feedback data directory")
     .action(() => {
-      const filePath = resolveFeedbackFilePath();
+      // Report the file the ACTIVE engine uses, not the JSONL log — with
+      // SQLite as the default, printing feedback.jsonl here would send an
+      // operator to inspect a file the store no longer reads.
+      const runtime = describeFeedbackStoreRuntime();
+      const filePath = runtime.local?.dataFile ?? resolveFeedbackFilePath();
       mkdirSync(dirname(filePath), { recursive: true });
-      printJson({ dataFile: filePath });
+      printJson({ dataFile: filePath, engine: runtime.engine ?? null });
     });
 
   program
