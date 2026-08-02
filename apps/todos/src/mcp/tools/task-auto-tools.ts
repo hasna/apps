@@ -183,10 +183,25 @@ export function registerTaskAutoTools(server: McpServer, ctx: TaskAutoContext) {
           // Built once from the already-fetched roster (roster has both id
           // and name), so this needs no per-task DB lookup.
           const agentKeyByAlias = new Map<string, string>();
+          const ambiguousAgentAliases = new Set<string>();
+          const indexAgentAlias = (alias: string, agentId: string): void => {
+            const normalizedAlias = alias.toLowerCase();
+            if (ambiguousAgentAliases.has(normalizedAlias)) return;
+            const existingAgentId = agentKeyByAlias.get(normalizedAlias);
+            if (existingAgentId !== undefined && existingAgentId !== agentId) {
+              agentKeyByAlias.delete(normalizedAlias);
+              ambiguousAgentAliases.add(normalizedAlias);
+              return;
+            }
+            agentKeyByAlias.set(normalizedAlias, agentId);
+          };
           for (const agent of agents) {
-            agentKeyByAlias.set(String(agent.id).toLowerCase(), agent.id);
-            if (agent.name) agentKeyByAlias.set(String(agent.name).toLowerCase(), agent.id);
+            indexAgentAlias(String(agent.id), agent.id);
+            if (agent.name) indexAgentAlias(String(agent.name), agent.id);
           }
+          // Case-insensitive legacy name collisions are not safe to resolve to
+          // either agent. Leave those assignments untouched instead of choosing
+          // whichever roster row happened to be indexed last.
           const canonicalAgentKey = (assignedTo: string | null | undefined): string | undefined =>
             assignedTo ? agentKeyByAlias.get(assignedTo.toLowerCase()) : undefined;
 

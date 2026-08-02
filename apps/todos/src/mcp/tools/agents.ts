@@ -2,7 +2,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { registerAgent, isAgentConflict, releaseAgent, getAgent, getAgentByName, listAgents, updateAgent, updateAgentActivity, archiveAgent, unarchiveAgent, getAvailableNamesFromPool } from "../../db/agents.js";
 import { getAgentPoolForProject } from "../../lib/config.js";
-import { getDatabase } from "../../db/database.js";
+import { getDatabase, resolvePartialId } from "../../db/database.js";
+import { IdentityAliasAmbiguousError } from "../../types/index.js";
 import { getTodosCloudClient, cloudListAgents, cloudRegisterAgent, cloudHeartbeatAgent, cloudReleaseAgent } from "../../cli/cloud-router.js";
 
 interface AgentFocus {
@@ -286,18 +287,25 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
             return { content: [{ type: "text" as const, text: `Agent not found: ${id || name}` }], isError: true };
           }
           const oldName = agent.name;
+          const db = getDatabase();
+          let oldNameUniquelyIdentifiesAgent = false;
+          try {
+            oldNameUniquelyIdentifiesAgent = resolvePartialId(db, "agents", oldName) === agent.id;
+          } catch (error) {
+            if (!(error instanceof IdentityAliasAmbiguousError)) throw error;
+          }
           const updated = updateAgent(agent.id, { name: new_name });
 
-          // Update assigned_to on tasks that reference the old name.
-          // Case-insensitive (task 84c77210): a row can hold the agent's name
-          // in a different case than the registered form (see
-          // normalizeAgentNameInput / the case-variant note in
-          // database.ts's resolveAssignedToAliases) — an exact `=` here
-          // would silently leave those rows on the stale name. The agent's
-          // id form is untouched by a rename and is not part of this UPDATE.
-          const db = getDatabase();
+          // Update differently cased task aliases only when the old name
+          // uniquely identified this agent before the rename.
+          // Legacy databases can contain two distinct agents whose names differ
+          // only by case. A case-insensitive UPDATE would transfer both agents'
+          // tasks to the renamed agent. The agent's id form is unaffected by a
+          // rename and is intentionally not part of this UPDATE.
           const tasksResult = db.run(
-            "UPDATE tasks SET assigned_to = ? WHERE LOWER(assigned_to) = LOWER(?)",
+            oldNameUniquelyIdentifiesAgent
+              ? "UPDATE tasks SET assigned_to = ? WHERE LOWER(assigned_to) = LOWER(?)"
+              : "UPDATE tasks SET assigned_to = ? WHERE assigned_to = ?",
             [new_name, oldName],
           );
 
