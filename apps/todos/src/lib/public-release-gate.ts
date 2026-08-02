@@ -146,6 +146,24 @@ const TEXT_BOUNDARY_EXEMPTIONS: { module: string; pattern: RegExp; reason: strin
       "src/server/cloud.ts and the SDK client all still read the unprefixed forms. This module " +
       "exists to keep consumer tests OFF a hosted store, never to reach one.",
   },
+  {
+    module: "dist/server/index",
+    pattern: new RegExp(escapeRegExp(LEGACY_CLOUD_PACKAGE), "i"),
+    reason:
+      "@hasna/contracts@0.5.2 ships FORBIDDEN_SHARED_CLOUD_RUNTIMES = [\"@hasna/cloud\", \"open-cloud\"] " +
+      "as validator schema data — it NAMES the runtimes a manifest must not depend on, it does not " +
+      "depend on them. Only the server build target skips `--external '@hasna/contracts'`, so that " +
+      "literal array is inlined here and only here. A text scanner cannot tell a name from a " +
+      "dependency edge; this exemption is scoped to the one pattern and one module where that " +
+      "ambiguity is known and inert.",
+  },
+  {
+    module: "dist/server/index",
+    pattern: wordPattern(LEGACY_OPEN_CLOUD),
+    reason:
+      "the other half of the same FORBIDDEN_SHARED_CLOUD_RUNTIMES literal — see the @hasna/cloud " +
+      "exemption immediately above for the full explanation.",
+  },
 ];
 
 function isExemptTextMatch(path: string, pattern: RegExp): boolean {
