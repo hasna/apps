@@ -16,6 +16,7 @@ import { identityFor } from "../identity.js";
 import { compactQueriedMessages, compactQueriedSearchMessages, compactWindowedSessions, jsonText, resolveMcpWindow } from "../compact.js";
 import { resolveReadWindow, takeWindow } from "../../lib/message-window.js";
 import { PINNED_LIST_ORDER, describeReadMessagesOrder } from "../../lib/list-order.js";
+import { normalizeChannelName } from "../../lib/channel-names.js";
 
 function toolError(error: unknown, fallback: string) {
   return {
@@ -166,15 +167,24 @@ export function registerMessagingTools(
   });
 
   registerMcpTool(server, "get_message", {
-    description: "Get the full content of a message by numeric ID. Use this to inspect a full channel message after receiving a preview-only notification blurb.",
+    description: "Get the full content of a message by immutable UUID or numeric ID.",
     inputSchema: {
-      id: z.coerce.number().describe("Numeric message ID to fetch"),
+      id: z.coerce.number().optional().describe("Numeric message ID to fetch"),
+      uuid: z.string().optional().describe("Immutable message UUID to fetch"),
     },
   }, async (args: Record<string, any>) => {
-    const message = await await getStore().getMessageById(args.id);
+    if (!args.uuid && !args.id) {
+      return {
+        content: [{ type: "text", text: "Provide uuid or id." }],
+        isError: true,
+      };
+    }
+    const message = args.uuid
+      ? await getStore().getMessageByUuid(args.uuid)
+      : await getStore().getMessageById(args.id);
     if (!message) {
       return {
-        content: [{ type: "text", text: `Message #${args.id} not found` }],
+        content: [{ type: "text", text: `Message ${args.uuid ?? `#${args.id}`} not found` }],
         isError: true,
       };
     }
@@ -202,20 +212,55 @@ export function registerMessagingTools(
   });
 
   registerMcpTool(server, "reply", {
-    description: "Reply to a specific message by its numeric ID, creating a thread. Use read_messages first to find the message ID.",
+    description: "Reply by immutable message UUID, or by numeric ID with an independently supplied channel/session scope.",
     inputSchema: {
-      message_id: z.coerce.number().describe("Numeric message ID (integer) to reply to. Use read_messages to find IDs."),
+      message_id: z.coerce.number().optional().describe("Numeric message ID; requires channel or session_id"),
+      message_uuid: z.string().optional().describe("Immutable parent message UUID (preferred)"),
       content: z.string(),
       from: z.string().optional(),
       reply_to: z.coerce.number().optional().describe("Alias for message_id"),
+      channel: z.string().optional().describe("Expected parent channel for numeric IDs"),
+      session_id: z.string().optional().describe("Expected parent session for numeric IDs"),
     },
   }, async (args: Record<string, any>) => {
-    const { from: fromParam, message_id: mid, reply_to, content } = args;
-    const message_id = mid || reply_to;
-    const original = await await getStore().getMessageById(message_id);
+    const {
+      from: fromParam,
+      message_id: mid,
+      message_uuid,
+      reply_to,
+      content,
+      channel: expectedChannel,
+      session_id: expectedSession,
+    } = args;
+    const messageId = mid ?? reply_to;
+    if (!message_uuid && !messageId) {
+      return {
+        content: [{ type: "text", text: "Provide message_uuid or message_id." }],
+        isError: true,
+      };
+    }
+    if (!message_uuid && !expectedChannel && !expectedSession) {
+      return {
+        content: [{
+          type: "text",
+          text: "Numeric message IDs require channel or session_id scope; use message_uuid when available.",
+        }],
+        isError: true,
+      };
+    }
+
+    const original = message_uuid
+      ? await getStore().getMessageByUuid(message_uuid)
+      : await getStore().getMessageById(messageId);
     if (!original) {
       return {
-        content: [{ type: "text", text: `Message #${message_id} not found` }],
+        content: [{ type: "text", text: `Message ${message_uuid ?? `#${messageId}`} not found` }],
+        isError: true,
+      };
+    }
+    if (messageId && Number(messageId) !== original.id) {
+      return {
+        content: [{ type: "text", text: "message_id and message_uuid resolve to different messages" }],
         isError: true,
       };
     }
@@ -224,6 +269,24 @@ export function registerMessagingTools(
     const channel =
       original.channel ||
       (original.session_id?.startsWith("channel:") ? original.session_id.slice(6) : undefined);
+    const normalizedExpectedChannel = expectedChannel
+      ? normalizeChannelName(expectedChannel)
+      : undefined;
+    if (normalizedExpectedChannel && normalizedExpectedChannel !== channel) {
+      return {
+        content: [{
+          type: "text",
+          text: `Expected channel ${normalizedExpectedChannel} does not match ${channel ?? "(direct message)"}`,
+        }],
+        isError: true,
+      };
+    }
+    if (expectedSession && expectedSession !== original.session_id) {
+      return {
+        content: [{ type: "text", text: `Expected session ${expectedSession} does not match ${original.session_id}` }],
+        isError: true,
+      };
+    }
     let msg;
     try {
       msg = await getStore().sendMessage({
@@ -232,7 +295,8 @@ export function registerMessagingTools(
         content,
         session_id: original.session_id,
         channel,
-        reply_to: message_id,  // thread linkage
+        reply_to: original.id,
+        reply_to_uuid: original.uuid,
       });
     } catch (error) {
       return toolError(error, "Failed to send reply.");

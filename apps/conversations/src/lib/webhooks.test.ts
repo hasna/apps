@@ -13,6 +13,7 @@ const ORIGINAL_WARN = console.warn;
 function makeMessage(overrides: Partial<Message> = {}): Message {
   return {
     id: 1,
+    uuid: "22222222222222222222222222222222",
     session_id: "test-session",
     from_agent: "alice",
     to_agent: "bob",

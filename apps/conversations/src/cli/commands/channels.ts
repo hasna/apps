@@ -364,7 +364,7 @@ export function registerChannelCommands(program: Command): void {
       if (opts.json) {
         printJson({ ...msg, redaction });
       } else {
-        printLine(chalk.green(`Message sent to #${channelArg}`) + chalk.dim(` (id: ${msg.id})`));
+        printLine(chalk.green(`Message sent to #${channelArg}`) + chalk.dim(` (uuid: ${msg.uuid}, id: ${msg.id})`));
       }
       closeDb();
     });

@@ -189,12 +189,21 @@ describe("ApiStore.sendMessage wire body", () => {
   test("forwards reply_to to the API so the reply is threaded server-side", async () => {
     const { client, sent } = capturingClient();
     const store = new ApiStore(client);
+    const parentUuid = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 
-    await store.sendMessage({ from: "bob", to: "incidents", content: "on it", channel: "incidents", reply_to: 602449 });
+    await store.sendMessage({
+      from: "bob",
+      to: "incidents",
+      content: "on it",
+      channel: "incidents",
+      reply_to: 602449,
+      reply_to_uuid: parentUuid,
+    });
 
     expect(sent).toHaveLength(1);
     // The exact assertion the defect failed: reply_to never reached the body.
     expect(sent[0]).toHaveProperty("reply_to", 602449);
+    expect(sent[0]).toHaveProperty("reply_to_uuid", parentUuid);
   });
 
   test("omits reply_to for a non-reply send (must not thread everything)", async () => {
@@ -213,8 +222,74 @@ describe("ApiStore.sendMessage wire body", () => {
     const { client } = capturingClient();
     const store = new ApiStore(client);
 
-    const msg = await store.sendMessage({ from: "bob", to: "incidents", content: "on it", channel: "incidents", reply_to: 42 });
+    const msg = await store.sendMessage({
+      from: "bob",
+      to: "incidents",
+      content: "on it",
+      channel: "incidents",
+      reply_to: 42,
+      reply_to_uuid: "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff",
+    });
     expect(msg.reply_to).toBe(42);
+  });
+
+  test("refuses numeric-only reply identity before any request is sent", async () => {
+    const { client, sent } = capturingClient();
+    const store = new ApiStore(client);
+
+    await expect(store.sendMessage({
+      from: "bob",
+      to: "incidents",
+      content: "unsafe numeric only",
+      channel: "incidents",
+      reply_to: 42,
+    })).rejects.toThrow("reply_to requires reply_to_uuid");
+    expect(sent).toHaveLength(0);
+  });
+
+  test("reads back by caller-bound UUID when the create response names a different row", async () => {
+    const exactUuid = "cccccccc-dddd-4eee-8fff-000000000000";
+    const client = {
+      name: "conversations",
+      baseUrl: "https://conversations.hasna.xyz/v1",
+      transport: {
+        get: async (path: string) => path === `/messages/by-uuid/${exactUuid}`
+          ? {
+              message: {
+                id: 649560,
+                uuid: exactUuid,
+                session_id: "channel:git-publishing",
+                from_agent: "agent-chief-finance",
+                to_agent: "git-publishing",
+                channel: "git-publishing",
+                content: "exact row",
+              },
+            }
+          : null,
+      } as unknown as HasnaStorageClient["transport"],
+      create: async () => ({
+        message: {
+          id: 649564,
+          uuid: "dddddddd-eeee-4fff-8000-111111111111",
+          session_id: "wrong-session",
+          from_agent: "other",
+          to_agent: "other",
+          channel: null,
+          content: "wrong row",
+        },
+      }),
+    } as unknown as HasnaStorageClient;
+    const store = new ApiStore(client);
+
+    const message = await store.sendMessage({
+      uuid: exactUuid,
+      from: "agent-chief-finance",
+      to: "git-publishing",
+      channel: "git-publishing",
+      content: "exact row",
+    });
+
+    expect(message).toMatchObject({ id: 649560, uuid: exactUuid, channel: "git-publishing" });
   });
 
   // `messages.id`/`messages.reply_to` are Postgres BIGINT, and node-postgres
@@ -256,7 +331,12 @@ describe("ApiStore.sendMessage wire body", () => {
 
     const store = new ApiStore(client);
     const msg = await store.sendMessage({
-      from: "bob", to: "incidents", content: "on it", channel: "incidents", reply_to: 602449,
+      from: "bob",
+      to: "incidents",
+      content: "on it",
+      channel: "incidents",
+      reply_to: 602449,
+      reply_to_uuid: "eeeeeeee-ffff-4000-8111-222222222222",
     });
 
     // Strictly a number, so the CLI's `!==` parent-link check passes.

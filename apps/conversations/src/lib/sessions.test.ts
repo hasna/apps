@@ -98,9 +98,16 @@ describe("getSessionActivity", () => {
   });
 
   test("returns activity metrics for a session", () => {
-    sendMessage({ from: "alice", to: "bob", content: "hello", session_id: "act1" });
+    const parent = sendMessage({ from: "alice", to: "bob", content: "hello", session_id: "act1" });
     sendMessage({ from: "bob", to: "alice", content: "hi back", session_id: "act1" });
-    sendMessage({ from: "alice", to: "bob", content: "reply", session_id: "act1", reply_to: 1 });
+    sendMessage({
+      from: "alice",
+      to: "bob",
+      content: "reply",
+      session_id: "act1",
+      reply_to: parent.id,
+      reply_to_uuid: parent.uuid,
+    });
 
     const activity = getSessionActivity("act1");
     expect(activity).not.toBeNull();

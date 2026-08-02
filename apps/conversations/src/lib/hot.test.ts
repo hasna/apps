@@ -79,8 +79,8 @@ describe("computeHotness", () => {
 
   test("includes reply count in metrics", () => {
     const parent = sendMessage({ from: "a", to: "b", content: "parent", session_id: "thread-sess" });
-    sendMessage({ from: "b", to: "a", content: "reply 1", session_id: "thread-sess", reply_to: parent.id });
-    sendMessage({ from: "a", to: "b", content: "reply 2", session_id: "thread-sess", reply_to: parent.id });
+    sendMessage({ from: "b", to: "a", content: "reply 1", session_id: "thread-sess", reply_to: parent.id, reply_to_uuid: parent.uuid });
+    sendMessage({ from: "a", to: "b", content: "reply 2", session_id: "thread-sess", reply_to: parent.id, reply_to_uuid: parent.uuid });
     const hot = computeHotness("thread-sess");
     expect(hot!.metrics.reply_count).toBe(2);
   });

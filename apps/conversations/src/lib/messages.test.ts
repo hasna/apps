@@ -940,8 +940,33 @@ describe("blocking messages", () => {
 describe("threaded replies", () => {
   test("sendMessage with reply_to stores the reference", () => {
     const parent = sendMessage({ from: "alice", to: "bob", content: "original" });
-    const reply = sendMessage({ from: "bob", to: "alice", content: "reply", reply_to: parent.id });
+    const reply = sendMessage({
+      from: "bob",
+      to: "alice",
+      content: "reply",
+      reply_to: parent.id,
+      reply_to_uuid: parent.uuid,
+    });
     expect(reply.reply_to).toBe(parent.id);
+  });
+
+  test("sendMessage rejects numeric-only and mismatched reply identities before writing", () => {
+    const parent = sendMessage({ from: "alice", to: "bob", content: "strict parent" });
+    expect(() => sendMessage({
+      from: "bob",
+      to: "alice",
+      content: "numeric only",
+      reply_to: parent.id,
+    })).toThrow("reply_to requires reply_to_uuid");
+
+    const other = sendMessage({ from: "alice", to: "bob", content: "other parent" });
+    expect(() => sendMessage({
+      from: "bob",
+      to: "alice",
+      content: "mismatch",
+      reply_to: other.id,
+      reply_to_uuid: parent.uuid,
+    })).toThrow("identity mismatch");
   });
 
   test("sendMessage without reply_to defaults to null", () => {
@@ -951,8 +976,8 @@ describe("threaded replies", () => {
 
   test("getThreadReplies returns replies to a message", () => {
     const parent = sendMessage({ from: "alice", to: "bob", content: "parent" });
-    sendMessage({ from: "bob", to: "alice", content: "reply 1", reply_to: parent.id });
-    sendMessage({ from: "charlie", to: "alice", content: "reply 2", reply_to: parent.id });
+    sendMessage({ from: "bob", to: "alice", content: "reply 1", reply_to: parent.id, reply_to_uuid: parent.uuid });
+    sendMessage({ from: "charlie", to: "alice", content: "reply 2", reply_to: parent.id, reply_to_uuid: parent.uuid });
     sendMessage({ from: "alice", to: "bob", content: "unrelated" });
 
     const replies = getThreadReplies(parent.id);

@@ -90,7 +90,14 @@ describe("getConversationSummary", () => {
 
   test("tracks reply count in activity", () => {
     const parent = sendMessage({ from: "a", to: "b", content: "question?", session_id: "reply-test" });
-    sendMessage({ from: "b", to: "a", content: "answer!", session_id: "reply-test", reply_to: parent.id });
+    sendMessage({
+      from: "b",
+      to: "a",
+      content: "answer!",
+      session_id: "reply-test",
+      reply_to: parent.id,
+      reply_to_uuid: parent.uuid,
+    });
 
     const summary = getConversationSummary("reply-test");
     expect(summary!.activity.reply_count).toBe(1);

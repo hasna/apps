@@ -139,10 +139,12 @@ export const openapiSpec = {
             type: "object",
             required: ["to", "content"],
             properties: {
+              uuid: { type: "string" },
               from: { type: "string" }, to: { type: "string" }, content: { type: "string" },
               channel: { type: "string" }, project_id: { type: "string" },
               session_id: { type: "string" }, priority: { type: "string" }, blocking: { type: "boolean" },
               reply_to: { type: "integer" },
+              reply_to_uuid: { type: "string" },
             },
           } } },
         },
@@ -212,6 +214,13 @@ export const openapiSpec = {
           { name: "from", in: "query", schema: { type: "string" } },
         ],
         responses: { "200": { description: "deleted", content: { "application/json": { schema: okObject } } } },
+      },
+    },
+    "/v1/messages/by-uuid/{uuid}": {
+      get: {
+        operationId: "getMessageByUuid",
+        parameters: [{ name: "uuid", in: "path", required: true, schema: { type: "string" } }],
+        responses: { "200": { description: "message", content: { "application/json": { schema: okObject } } } },
       },
     },
     "/v1/channels": {

@@ -11,6 +11,7 @@
 // returned, or embedded in any value produced here.
 
 import type { HasnaStorageClient } from "../contracts-client/storage.js";
+import { randomUUID } from "crypto";
 import type { ConversationsStore } from "./index.js";
 import { normalizeChannelName } from "../channel-names.js";
 import { loggableUrl } from "../loggable-url.js";
@@ -19,6 +20,7 @@ import { normalizeSince } from "../since.js";
 import { resolveReadLimit, resolveReadWindow } from "../message-window.js";
 import { parseProject } from "../projects.js";
 import { attachSendRedaction } from "../content-safety.js";
+import { normalizeMessageUuid } from "../message-reference.js";
 import {
   parseMessage,
   compactMessage,
@@ -541,7 +543,23 @@ export class ApiStore implements ConversationsStore {
 
   // ── messages ────────────────────────────────────────────────────────────────
   sendMessage: ConversationsStore["sendMessage"] = async (opts) => {
+    const replyUuid = opts.reply_to_uuid === undefined
+      ? null
+      : normalizeMessageUuid(opts.reply_to_uuid);
+    if (opts.reply_to !== undefined && !replyUuid) {
+      throw new Error("reply_to requires reply_to_uuid so the parent identity is immutable.");
+    }
+    if (opts.reply_to_uuid !== undefined && !replyUuid) {
+      throw new Error("reply_to_uuid must be a valid message UUID.");
+    }
+    const messageUuid = opts.uuid === undefined
+      ? randomUUID()
+      : normalizeMessageUuid(opts.uuid);
+    if (!messageUuid) {
+      throw new Error("Message uuid must be a valid UUID.");
+    }
     const body = await this.client.create<{ message: Record<string, unknown> }>("messages", {
+      uuid: messageUuid,
       from: opts.from, to: opts.to, content: opts.content, channel: opts.channel,
       project_id: opts.project_id, session_id: opts.session_id, priority: opts.priority,
       blocking: opts.blocking === true,
@@ -550,12 +568,41 @@ export class ApiStore implements ConversationsStore {
       // unthreaded every reply sent in self_hosted/cloud mode while the local
       // SQLite path (and its tests) stayed correct.
       reply_to: opts.reply_to ?? undefined,
+      reply_to_uuid: replyUuid ?? undefined,
     });
-    return attachSendRedaction(opts.content, parseMessage(body.message)) as never;
+    const returned = parseMessage(body.message);
+    if (returned.uuid === messageUuid) {
+      return attachSendRedaction(opts.content, returned) as never;
+    }
+
+    // A send can fan out mention notification DMs before the response is
+    // observed. Never trust a later mutable numeric id as the identity of the
+    // row we wrote: read back by the caller-bound immutable UUID instead.
+    const exact = await this.getMessageByUuid(messageUuid);
+    if (!exact) {
+      throw new Error(
+        `Message write returned UUID ${returned.uuid || "(missing)"} instead of ${messageUuid}, ` +
+          `and the exact row could not be read back. Refusing to report a numeric message id.`
+      );
+    }
+    return attachSendRedaction(opts.content, exact) as never;
   };
   getMessageById: ConversationsStore["getMessageById"] = async (id) => {
     const body = await this.client.get<{ message: Record<string, unknown> }>("messages", String(id));
     return (body ? parseMessage(body.message) : null) as never;
+  };
+  getMessageByUuid: ConversationsStore["getMessageByUuid"] = async (uuid) => {
+    const normalized = normalizeMessageUuid(uuid);
+    if (!normalized) return null as never;
+    try {
+      const body = await this.get<{ message: Record<string, unknown> }>(
+        `/messages/by-uuid/${encodeURIComponent(normalized)}`
+      );
+      return (body ? parseMessage(body.message) : null) as never;
+    } catch (e) {
+      if (isHttpStatus(e, 404)) return null as never;
+      throw e;
+    }
   };
   deleteMessage: ConversationsStore["deleteMessage"] = async (id, agent) => {
     try {

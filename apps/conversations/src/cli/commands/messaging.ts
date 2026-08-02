@@ -19,6 +19,8 @@ import { emitCliError } from "../cli-error.js";
 import { warnIfRedacted } from "../redaction-notice.js";
 import type { DigestResult } from "../../lib/messages.js";
 import { printErrorLine, printJson, printJsonLine, printLine } from "../../lib/stdout.js";
+import { normalizeChannelName } from "../../lib/channel-names.js";
+import { parseMessageReference } from "../../lib/message-reference.js";
 
 function quoteDigestCommandArg(value: string): string {
   return /^[A-Za-z0-9._:/@=-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
@@ -112,9 +114,9 @@ export function registerMessagingCommands(program: Command): void {
       if (opts.json) {
         printJson({ ...msg, redaction });
       } else if (channel) {
-        printLine(chalk.green(`Message sent to #${channel}`) + chalk.dim(` (id: ${msg.id})`));
+        printLine(chalk.green(`Message sent to #${channel}`) + chalk.dim(` (uuid: ${msg.uuid}, id: ${msg.id})`));
       } else {
-        printLine(chalk.green(`Message sent`) + chalk.dim(` (id: ${msg.id}, session: ${msg.session_id})`));
+        printLine(chalk.green(`Message sent`) + chalk.dim(` (uuid: ${msg.uuid}, id: ${msg.id}, session: ${msg.session_id})`));
       }
       closeDb();
     });
@@ -182,18 +184,20 @@ export function registerMessagingCommands(program: Command): void {
   // ---- show ----
   program
     .command("show")
-    .description("Show a full message by ID")
-    .argument("<id>", "Numeric message ID")
+    .description("Show a full message by numeric ID or immutable UUID")
+    .argument("<reference>", "Numeric message ID or UUID")
     .option("-j, --json", "Output as JSON")
     .action(async (idArg, opts) => {
-      const id = Number.parseInt(String(idArg), 10);
-      if (!Number.isFinite(id) || id <= 0) {
-        emitCliError("Message ID must be a positive integer.", opts);
+      const ref = parseMessageReference(idArg);
+      if (!ref) {
+        emitCliError("Message reference must be a positive numeric ID or UUID.", opts);
       }
 
-      const msg = await await getStore().getMessageById(id);
+      const msg = ref.kind === "id"
+        ? await getStore().getMessageById(ref.id)
+        : await getStore().getMessageByUuid(ref.uuid);
       if (!msg) {
-        emitCliError(`Message #${id} not found.`, opts);
+        emitCliError(`Message ${String(idArg)} not found.`, opts);
       }
 
       if (opts.json) {
@@ -430,22 +434,35 @@ channel, which is an ABSENCE claim.
   // ---- reply ----
   program
     .command("reply")
-    .description("Reply to a message (uses same session)")
+    .description("Reply to a message by immutable UUID, or by numeric ID with independent scope")
     .argument("<message>", "Reply content")
-    .requiredOption("--to <message-id>", "Message ID to reply to", parseInt)
+    .requiredOption("--to <message-reference>", "Parent UUID, or numeric ID with --channel/--session")
+    .option("--channel <name>", "Expected parent channel (required for a numeric channel-message ID)")
+    .option("--session <id>", "Expected parent session (required for a numeric DM/session ID)")
     .option("--from <agent>", "Sender agent ID")
     .option("--priority <level>", "Priority: low, normal, high, urgent", "normal")
     .option("-j, --json", "Output as JSON")
     .action(async (message, opts) => {
-      // `parseInt` yields NaN for `--to not-a-number`; catch it here so the
-      // failure names the bad input instead of surfacing as "not found".
-      const parentId = opts.to;
-      if (!Number.isInteger(parentId) || parentId <= 0) {
-        emitCliError(`--to must be a positive message id (got: ${String(opts.to)}).`, opts);
+      const ref = parseMessageReference(opts.to);
+      if (!ref) {
+        emitCliError(`--to must be a positive message id or UUID (got: ${String(opts.to)}).`, opts);
       }
-      const original = await await getStore().getMessageById(parentId);
+      if (ref.kind === "id" && !opts.channel && !opts.session) {
+        emitCliError(
+          "Numeric message IDs require independent scope before a reply can be written. " +
+            "Pass --channel <name> or --session <id>, or use the parent UUID from send/show output.",
+          opts,
+        );
+      }
+
+      const original = ref.kind === "id"
+        ? await getStore().getMessageById(ref.id)
+        : await getStore().getMessageByUuid(ref.uuid);
       if (!original) {
-        emitCliError(`Message #${parentId} not found.`, opts);
+        emitCliError(`Message ${String(opts.to)} not found.`, opts);
+      }
+      if (!original.uuid) {
+        emitCliError("Parent message has no immutable UUID; refusing to write a numeric-only reply.", opts);
       }
 
       const from = resolveIdentity(opts.from).trim();
@@ -459,6 +476,19 @@ channel, which is an ABSENCE claim.
       const channel =
         original.channel ||
         (original.session_id?.startsWith("channel:") ? original.session_id.slice(6) : undefined);
+      const expectedChannel = opts.channel ? normalizeChannelName(opts.channel) : undefined;
+      if (expectedChannel && expectedChannel !== channel) {
+        emitCliError(
+          `Expected parent channel ${expectedChannel} does not match resolved channel ${channel ?? "(direct message)"}.`,
+          opts,
+        );
+      }
+      if (opts.session && opts.session !== original.session_id) {
+        emitCliError(
+          `Expected parent session ${opts.session} does not match resolved session ${original.session_id}.`,
+          opts,
+        );
+      }
       const to = channel
         ? channel
         : (original.from_agent === from ? original.to_agent : original.from_agent);
@@ -473,7 +503,8 @@ channel, which is an ABSENCE claim.
           // The whole point of `reply`: persist the parent link. Omitting this
           // stored every reply with reply_to NULL while still printing "Reply
           // sent", so threads could not be reconstructed from the data at all.
-          reply_to: parentId,
+          reply_to: original.id,
+          reply_to_uuid: original.uuid,
           channel,
         });
       } catch (error) {
@@ -485,13 +516,13 @@ channel, which is an ABSENCE claim.
       // carries the parent before claiming the reply was sent. This also
       // catches a server image too old to persist reply_to, which would
       // otherwise silently degrade the reply to a top-level post.
-      if (msg.reply_to !== parentId) {
+      if (msg.reply_to !== original.id) {
         emitCliError(
           `Reply was stored as message #${msg.id} but its parent link did not persist ` +
-            `(expected reply_to=${parentId}, stored ${JSON.stringify(msg.reply_to)}). ` +
+            `(expected reply_to=${original.id}, stored ${JSON.stringify(msg.reply_to)}). ` +
             `The message is NOT threaded — check that the conversations server supports reply_to.`,
           opts,
-          { id: msg.id, expected_reply_to: parentId, stored_reply_to: msg.reply_to ?? null },
+          { id: msg.id, expected_reply_to: original.id, stored_reply_to: msg.reply_to ?? null },
         );
       }
 
@@ -500,7 +531,7 @@ channel, which is an ABSENCE claim.
       if (opts.json) {
         printJson({ ...msg, redaction });
       } else {
-        printLine(chalk.green(`Reply sent`) + chalk.dim(` (id: ${msg.id}, session: ${msg.session_id})`));
+        printLine(chalk.green(`Reply sent`) + chalk.dim(` (uuid: ${msg.uuid}, id: ${msg.id}, session: ${msg.session_id})`));
       }
       closeDb();
     });

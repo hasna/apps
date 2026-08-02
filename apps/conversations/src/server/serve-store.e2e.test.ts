@@ -105,14 +105,19 @@ beforeAll(async () => {
   cloud = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
-    fetch(request) {
+    async fetch(request) {
       const url = new URL(request.url);
       const p = url.pathname.replace(/^\/v1/, "");
 
       // Writes. Each one echoes a row tagged `cloud-written-*`, so a mutation that
       // silently landed in the local SQLite store cannot produce this response.
       if (request.method === "POST") {
-        if (p === "/messages") return Response.json({ message: { id: 901, content: "cloud-written-message" } });
+        if (p === "/messages") {
+          const body = await request.json() as { uuid?: string };
+          return Response.json({
+            message: { id: 901, uuid: body.uuid, content: "cloud-written-message" },
+          });
+        }
         if (p === "/channels") return Response.json({ channel: { id: 902, name: "cloud-written-channel" } });
         if (p === "/projects") return Response.json({ project: { id: 903, name: "cloud-written-project" } });
         if (/^\/channels\/[^/]+\/(un)?archive$/.test(p)) {

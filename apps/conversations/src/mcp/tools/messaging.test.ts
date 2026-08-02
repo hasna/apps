@@ -151,6 +151,15 @@ describe("messaging MCP tools", () => {
       });
       expect((result as any).isError).toBe(true);
     });
+
+    test("fetches a message by immutable UUID", async () => {
+      const message = sendMessage({ from: "alice", to: "bob", content: "uuid lookup" });
+      const result = parseResult(await client.callTool({
+        name: "get_message",
+        arguments: { uuid: message.uuid },
+      }) as any) as any;
+      expect(result).toMatchObject({ id: message.id, uuid: message.uuid, content: "uuid lookup" });
+    });
   });
 
   describe("list_sessions", () => {
@@ -168,9 +177,43 @@ describe("messaging MCP tools", () => {
     test("returns error for nonexistent parent", async () => {
       const result = await client.callTool({
         name: "reply",
-        arguments: { message_id: 99999, content: "reply" },
+        arguments: { message_id: 99999, channel: "missing-channel", content: "reply" },
       });
       expect((result as any).isError).toBe(true);
+    });
+
+    test("replies by immutable UUID and persists the numeric parent id", async () => {
+      createChannel("mcp-reply-uuid", "messaging-test-agent");
+      const parent = sendMessage({
+        from: "alice",
+        to: "mcp-reply-uuid",
+        channel: "mcp-reply-uuid",
+        content: "uuid parent",
+      });
+      const result = parseResult(await client.callTool({
+        name: "reply",
+        arguments: { message_uuid: parent.uuid, content: "uuid reply", from: "bob" },
+      }) as any) as any;
+
+      expect(result.reply_to).toBe(parent.id);
+      expect(result.channel).toBe("mcp-reply-uuid");
+    });
+
+    test("rejects bare numeric reply target before writing", async () => {
+      createChannel("mcp-reply-numeric", "messaging-test-agent");
+      const parent = sendMessage({
+        from: "alice",
+        to: "mcp-reply-numeric",
+        channel: "mcp-reply-numeric",
+        content: "numeric parent",
+      });
+      const result = await client.callTool({
+        name: "reply",
+        arguments: { message_id: parent.id, content: "unsafe numeric reply", from: "bob" },
+      });
+
+      expect((result as any).isError).toBe(true);
+      expect(String(parseResult(result as any))).toContain("require channel or session_id");
     });
   });
 

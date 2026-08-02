@@ -8,6 +8,7 @@ import { normalizeChannelName } from "./channel-names.js";
 import { markChannelNotificationsRead } from "./channel-notifications.js";
 import { assertNoSensitiveContent, assertNoSensitiveValue, redactSensitiveText, redactSensitiveValue } from "./content-safety.js";
 import { resolveReadLimit, resolveReadWindow } from "./message-window.js";
+import { normalizeMessageUuid } from "./message-reference.js";
 import {
   BLOCKERS_LIST_ORDER,
   PINNED_LIST_ORDER,
@@ -52,12 +53,15 @@ export function parseMessage(row: Record<string, unknown>): Message {
   // cloud API serializes Postgres bigint as a string ("23"), which would break
   // numeric id comparisons/paging downstream. Number() is a no-op for numbers.
   const id = row.id === undefined || row.id === null ? row.id : Number(row.id);
+  const rawUuid = typeof row.uuid === "string" ? row.uuid.trim() : "";
+  const uuid = normalizeMessageUuid(rawUuid) ?? rawUuid;
   const replyToRaw = row.reply_to === undefined || row.reply_to === null ? null : Number(row.reply_to);
   const replyCount = row.reply_count === undefined || row.reply_count === null ? undefined : Number(row.reply_count);
 
   return redactMessage({
     ...row,
     id,
+    uuid,
     metadata,
     attachments,
     blocking: !!row.blocking,
@@ -209,11 +213,51 @@ export function sendMessage(opts: SendMessageOptions): Message {
     : [];
 
   const db = getDb();
-  const channelName = opts.channel ? normalizeChannelName(opts.channel) : null;
-  const explicitSession = opts.session_id && opts.session_id.trim().length > 0 ? opts.session_id : undefined;
-  const sessionId = channelName
-    ? `channel:${channelName}`
-    : explicitSession ?? `${[opts.from, opts.to].sort().join("-")}-${randomUUID().slice(0, 8)}`;
+  const requestedChannel = opts.channel ? normalizeChannelName(opts.channel) : null;
+  const explicitSession = opts.session_id && opts.session_id.trim().length > 0 ? opts.session_id.trim() : undefined;
+  const requestedReplyId = opts.reply_to ?? null;
+  const requestedReplyUuid = normalizeMessageUuid(opts.reply_to_uuid);
+  if (requestedReplyId !== null && !requestedReplyUuid) {
+    throw new Error("reply_to requires reply_to_uuid so the parent identity is immutable.");
+  }
+  if (opts.reply_to_uuid && !requestedReplyUuid) {
+    throw new Error("reply_to_uuid must be a valid message UUID.");
+  }
+
+  let replyTo: number | null = null;
+  let channelName = requestedChannel;
+  let sessionId: string;
+  if (requestedReplyUuid) {
+    const parent = db.prepare(
+      "SELECT id, uuid, session_id, channel FROM messages WHERE uuid = ?"
+    ).get(requestedReplyUuid) as { id: number; uuid: string; session_id: string; channel: string | null } | null;
+    if (!parent) {
+      throw new Error(`reply_to_uuid message ${requestedReplyUuid} not found.`);
+    }
+    if (requestedReplyId !== null && requestedReplyId !== parent.id) {
+      throw new Error(
+        `reply_to identity mismatch: id ${requestedReplyId} belongs to a different message than UUID ${requestedReplyUuid}.`
+      );
+    }
+    const parentChannel = parent.channel ? normalizeChannelName(parent.channel) : null;
+    if (requestedChannel !== null && requestedChannel !== parentChannel) {
+      throw new Error(
+        `reply channel ${requestedChannel} does not match parent channel ${parentChannel ?? "(direct message)"}.`
+      );
+    }
+    if (explicitSession && explicitSession !== parent.session_id) {
+      throw new Error(
+        `reply session ${explicitSession} does not match parent session ${parent.session_id}.`
+      );
+    }
+    replyTo = parent.id;
+    channelName = parentChannel;
+    sessionId = parent.session_id;
+  } else {
+    sessionId = channelName
+      ? `channel:${channelName}`
+      : explicitSession ?? `${[opts.from, opts.to].sort().join("-")}-${randomUUID().slice(0, 8)}`;
+  }
   const toAgent = channelName ?? opts.to;
   const normalizedPriority = (opts.priority === "low" || opts.priority === "normal" || opts.priority === "high" || opts.priority === "urgent")
     ? opts.priority
@@ -221,9 +265,12 @@ export function sendMessage(opts: SendMessageOptions): Message {
 
   const blocking = opts.blocking ? 1 : 0;
 
-  const replyTo = opts.reply_to || null;
-
-  const msgUuid = randomUUID().replace(/-/g, "");
+  const msgUuid = opts.uuid === undefined
+    ? randomUUID().replace(/-/g, "")
+    : normalizeMessageUuid(opts.uuid);
+  if (!msgUuid) {
+    throw new Error("Message uuid must be a valid UUID.");
+  }
 
   const stmt = db.prepare(`
     INSERT INTO messages (uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, working_dir, repository, branch, metadata, blocking, reply_to)
@@ -473,6 +520,14 @@ export function markChannelRead(channelName: string, reader: string): number {
 export function getMessageById(id: number): Message | null {
   const db = getDb();
   const row = db.prepare("SELECT * FROM messages WHERE id = ?").get(id) as Record<string, unknown> | null;
+  return row ? parseMessage(row) : null;
+}
+
+export function getMessageByUuid(uuid: string): Message | null {
+  const normalized = normalizeMessageUuid(uuid);
+  if (!normalized) return null;
+  const db = getDb();
+  const row = db.prepare("SELECT * FROM messages WHERE uuid = ?").get(normalized) as Record<string, unknown> | null;
   return row ? parseMessage(row) : null;
 }
 

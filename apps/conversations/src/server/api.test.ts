@@ -177,6 +177,15 @@ function makeFakeClient() {
       if (/SELECT \* FROM messages WHERE id/i.test(sql)) {
         return messages.find((row) => row.id === (p as any[])[0]) ?? null;
       }
+      if (/SELECT \* FROM messages WHERE uuid/i.test(sql)) {
+        return messages.find((row) => row.uuid === (p as any[])[0]) ?? null;
+      }
+      if (/SELECT id, uuid, session_id, channel FROM messages WHERE uuid/i.test(sql)) {
+        const found = messages.find((row) => row.uuid === (p as any[])[0]);
+        return found
+          ? { id: found.id, uuid: found.uuid, session_id: found.session_id, channel: found.channel }
+          : null;
+      }
       // Parent-existence probe for reply_to validation on POST /messages.
       if (/SELECT id FROM messages WHERE id/i.test(sql)) {
         const found = messages.find((row) => row.id === (p as any[])[0]);
@@ -196,8 +205,8 @@ function makeFakeClient() {
         // Destructured positionally, so this must track the column list in the
         // INSERT. reply_to is last; a column missing from the statement is
         // exactly how thread linkage got dropped on the cloud path.
-        const [session_id, from_agent, to_agent, channel, project_id, content, priority, blocking, reply_to] = p as any[];
-        const row = { id: nextId++, uuid: `u${nextId}`, session_id, from_agent, to_agent, channel, project_id, content, priority, blocking, reply_to: reply_to ?? null, created_at: new Date().toISOString() };
+        const [uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, blocking, reply_to] = p as any[];
+        const row = { id: nextId++, uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, blocking, reply_to: reply_to ?? null, created_at: new Date().toISOString() };
         messages.push(row);
         return row;
       }
@@ -391,7 +400,14 @@ describe("conversations-serve", () => {
     const reply = await fetch(`${base}/v1/messages`, {
       method: "POST",
       headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
-      body: JSON.stringify({ from: "b", to: "a", content: "threaded answer", channel: "threads", reply_to: rootId }),
+      body: JSON.stringify({
+        from: "b",
+        to: "a",
+        content: "threaded answer",
+        channel: "threads",
+        reply_to: rootId,
+        reply_to_uuid: rootBody.message.uuid,
+      }),
     });
     expect(reply.status).toBe(201);
     const replyId = (await reply.json()).message.id as number;
@@ -404,13 +420,123 @@ describe("conversations-serve", () => {
     expect(stored.reply_to).toBe(rootId);
   });
 
+  test("POST /v1/messages preserves a caller-bound UUID across mention fanout", async () => {
+    const uuid = "11111111-2222-4333-8444-555555555555";
+    const sent = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        uuid,
+        from: "alice",
+        to: "threads",
+        channel: "threads",
+        content: "immutable identity @bob",
+      }),
+    });
+    expect(sent.status).toBe(201);
+    const body = await sent.json();
+
+    expect(body.message).toMatchObject({
+      uuid,
+      channel: "threads",
+      content: "immutable identity @bob",
+    });
+    const readback = await fetch(`${base}/v1/messages/by-uuid/${uuid}`, {
+      headers: { "x-api-key": rwKey },
+    });
+    expect(readback.status).toBe(200);
+    expect((await readback.json()).message).toMatchObject({ id: body.message.id, uuid });
+    const stored = activeFakeClient!.__debug.messages.find((message) => message.uuid === uuid);
+    expect(stored?.channel).toBe("threads");
+  });
+
+  test("POST /v1/messages resolves reply_to_uuid and persists the exact numeric parent id", async () => {
+    const root = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        uuid: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+        from: "alice",
+        to: "threads",
+        channel: "threads",
+        content: "uuid parent",
+      }),
+    });
+    const rootMessage = (await root.json()).message;
+
+    const reply = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        uuid: "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff",
+        from: "bob",
+        to: "threads",
+        channel: "threads",
+        content: "uuid child",
+        reply_to_uuid: rootMessage.uuid,
+      }),
+    });
+    expect(reply.status).toBe(201);
+    expect((await reply.json()).message.reply_to).toBe(rootMessage.id);
+  });
+
+  test("POST /v1/messages rejects numeric-only and mismatched reply identities before writing", async () => {
+    const root = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        uuid: "cccccccc-dddd-4eee-8fff-000000000000",
+        from: "alice",
+        to: "threads",
+        channel: "threads",
+        content: "strict parent",
+      }),
+    });
+    const rootMessage = (await root.json()).message;
+    const before = activeFakeClient!.__debug.messages.length;
+
+    const numericOnly = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        from: "bob",
+        to: "threads",
+        channel: "threads",
+        content: "numeric only",
+        reply_to: rootMessage.id,
+      }),
+    });
+    expect(numericOnly.status).toBe(400);
+
+    const mismatched = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        from: "bob",
+        to: "threads",
+        channel: "threads",
+        content: "mismatched pair",
+        reply_to: rootMessage.id + 1,
+        reply_to_uuid: rootMessage.uuid,
+      }),
+    });
+    expect(mismatched.status).toBe(409);
+    expect(activeFakeClient!.__debug.messages).toHaveLength(before);
+  });
+
   test("POST /v1/messages rejects a reply_to that names no existing message", async () => {
     // reply_to has no FK, so an unvalidated bogus parent would insert a dangling
     // pointer and read back as unthreaded — a success that lost the linkage.
     const r = await fetch(`${base}/v1/messages`, {
       method: "POST",
       headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
-      body: JSON.stringify({ from: "a", to: "b", content: "orphan", channel: "threads", reply_to: 987654 }),
+      body: JSON.stringify({
+        from: "a",
+        to: "b",
+        content: "orphan",
+        channel: "threads",
+        reply_to_uuid: "dddddddd-eeee-4fff-8000-111111111111",
+      }),
     });
     expect(r.status).toBe(400);
     expect((await r.json()).error).toContain("not found");
@@ -420,7 +546,14 @@ describe("conversations-serve", () => {
     const r = await fetch(`${base}/v1/messages`, {
       method: "POST",
       headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
-      body: JSON.stringify({ from: "a", to: "b", content: "bad target", channel: "threads", reply_to: "not-a-number" }),
+      body: JSON.stringify({
+        from: "a",
+        to: "b",
+        content: "bad target",
+        channel: "threads",
+        reply_to: "not-a-number",
+        reply_to_uuid: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      }),
     });
     expect(r.status).toBe(400);
     expect((await r.json()).error).toContain("positive integer");
@@ -826,7 +959,10 @@ describe("conversations-serve", () => {
     // their types, and the linkage is lost before the request is made.
     const sendProperties = b.paths["/v1/messages"].post.requestBody
       .content["application/json"].schema.properties;
+    expect(sendProperties.uuid).toEqual({ type: "string" });
     expect(sendProperties.reply_to).toEqual({ type: "integer" });
+    expect(sendProperties.reply_to_uuid).toEqual({ type: "string" });
+    expect(b.paths["/v1/messages/by-uuid/{uuid}"].get.operationId).toBe("getMessageByUuid");
     expect(b.components.schemas.Message.properties.reply_to).toEqual({
       type: "integer",
       nullable: true,

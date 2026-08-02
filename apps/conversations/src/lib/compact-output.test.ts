@@ -53,6 +53,7 @@ describe("compact output helpers", () => {
   test("summarizeMessage omits full content and exposes a preview", () => {
     const msg: Message = {
       id: 42,
+      uuid: "11111111111111111111111111111111",
       session_id: "session-1",
       from_agent: "alice",
       to_agent: "bob",

@@ -2,6 +2,7 @@ export type Priority = "low" | "normal" | "high" | "urgent";
 
 export interface Message {
   id: number;
+  uuid: string;
   session_id: string;
   from_agent: string;
   to_agent: string;
@@ -129,6 +130,7 @@ export interface ProjectInfo extends Project {
 }
 
 export interface SendMessageOptions {
+  uuid?: string;
   from: string;
   to: string;
   content: string;
@@ -143,6 +145,7 @@ export interface SendMessageOptions {
   blocking?: boolean;
   attachments?: { name: string; source_path: string }[];
   reply_to?: number;
+  reply_to_uuid?: string;
 }
 
 export interface ReadMessagesOptions {

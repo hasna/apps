@@ -144,7 +144,7 @@ describe("reply from parameter", () => {
     const sent = sendMessage({ from: "alice", to: "bob", content: "original" });
     const result = await client.callTool({
       name: "reply",
-      arguments: { from: "bob", message_id: sent.id, content: "reply from bob" },
+      arguments: { from: "bob", message_uuid: sent.uuid, content: "reply from bob" },
     });
     const msg = parseResult(result as any) as any;
     expect(msg.from_agent).toBe("bob");
@@ -166,7 +166,7 @@ describe("reply from parameter", () => {
     const sent = sendMessage({ from: "alice", to: "bob", content: "hey auto" });
     const result = await client.callTool({
       name: "reply",
-      arguments: { message_id: sent.id, content: "reply without from" },
+      arguments: { message_uuid: sent.uuid, content: "reply without from" },
     });
     expect((result as any).isError).toBe(true);
     expect(JSON.stringify(result)).toMatch(/no agent identity/i);

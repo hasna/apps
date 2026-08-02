@@ -468,6 +468,7 @@ export interface ConversationsStore {
   // messages
   sendMessage: Async<typeof messagesLib.sendMessage>;
   getMessageById: Async<typeof messagesLib.getMessageById>;
+  getMessageByUuid: Async<typeof messagesLib.getMessageByUuid>;
   deleteMessage: Async<typeof messagesLib.deleteMessage>;
   editMessage: Async<typeof messagesLib.editMessage>;
   readMessages: Async<typeof messagesLib.readMessages>;
@@ -630,6 +631,7 @@ export class LocalStore implements ConversationsStore {
   // messages
   sendMessage: ConversationsStore["sendMessage"] = async (...a) => attachSendRedaction(a[0]?.content ?? "", messagesLib.sendMessage(...a));
   getMessageById: ConversationsStore["getMessageById"] = async (...a) => messagesLib.getMessageById(...a);
+  getMessageByUuid: ConversationsStore["getMessageByUuid"] = async (...a) => messagesLib.getMessageByUuid(...a);
   deleteMessage: ConversationsStore["deleteMessage"] = async (...a) => messagesLib.deleteMessage(...a);
   editMessage: ConversationsStore["editMessage"] = async (...a) => {
     const edited = messagesLib.editMessage(...a);

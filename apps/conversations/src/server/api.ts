@@ -27,6 +27,7 @@ import { normalizeChannelName } from "../lib/channel-names.js";
 import { extractTopics } from "../lib/topic-extract.js";
 import { assertNoSensitiveContent, redactSensitiveText, redactSensitiveValue } from "../lib/content-safety.js";
 import { resolveSelfSenderId } from "../lib/sender-identity.js";
+import { normalizeMessageUuid, parseMessageReference } from "../lib/message-reference.js";
 
 export const APP = "conversations";
 const SCOPE_READ = `${APP}:read`;
@@ -887,7 +888,65 @@ async function handleV1(
     const body = await readJson(req);
     const from = str(body.from) ?? agent ?? undefined;
     const content = str(body.content);
-    const channelName = body.channel ? normalizeChannelName(String(body.channel)) : null;
+    const requestedChannel = body.channel ? normalizeChannelName(String(body.channel)) : null;
+    const requestedSession = str(body.session_id);
+    const messageUuid = body.uuid === undefined ? randomUUID() : normalizeMessageUuid(body.uuid);
+    if (!messageUuid) return json({ error: "uuid must be a valid message UUID" }, 400);
+
+    const replyIdPresent = body.reply_to !== undefined && body.reply_to !== null;
+    const replyUuidPresent = body.reply_to_uuid !== undefined && body.reply_to_uuid !== null;
+    if (replyIdPresent && !replyUuidPresent) {
+      return json({ error: "reply_to requires reply_to_uuid so the parent identity is immutable" }, 400);
+    }
+
+    const replyUuid = replyUuidPresent ? normalizeMessageUuid(body.reply_to_uuid) : null;
+    if (replyUuidPresent && !replyUuid) {
+      return json({ error: "reply_to_uuid must be a valid message UUID" }, 400);
+    }
+
+    let replyParent: {
+      id: number;
+      uuid: string;
+      session_id: string;
+      channel: string | null;
+    } | null = null;
+    if (replyUuid) {
+      replyParent = await client.get(
+        "SELECT id, uuid, session_id, channel FROM messages WHERE uuid = $1",
+        [replyUuid],
+      );
+      if (!replyParent) return json({ error: `reply_to_uuid message ${replyUuid} not found` }, 400);
+
+      if (replyIdPresent) {
+        const replyId = Number(body.reply_to);
+        if (!Number.isInteger(replyId) || replyId <= 0) {
+          return json({ error: "reply_to must be a positive integer message id" }, 400);
+        }
+        if (replyId !== Number(replyParent.id)) {
+          return json({
+            error: "reply_to identity mismatch",
+            reply_to: replyId,
+            reply_to_uuid: replyUuid,
+          }, 409);
+        }
+      }
+
+      const parentChannel = replyParent.channel ? normalizeChannelName(replyParent.channel) : null;
+      if (requestedChannel !== null && requestedChannel !== parentChannel) {
+        return json({
+          error: `reply channel ${requestedChannel} does not match parent channel ${parentChannel ?? "(direct message)"}`,
+        }, 409);
+      }
+      if (requestedSession && requestedSession !== replyParent.session_id) {
+        return json({
+          error: `reply session ${requestedSession} does not match parent session ${replyParent.session_id}`,
+        }, 409);
+      }
+    }
+
+    const channelName = replyParent?.channel
+      ? normalizeChannelName(replyParent.channel)
+      : requestedChannel;
     // A channel message addresses the channel itself; a DM needs an explicit `to`.
     const toAgent = channelName ?? str(body.to);
     if (!from || !toAgent || !content) return json({ error: "from, to (or channel), and content are required" }, 400);
@@ -895,9 +954,11 @@ async function handleV1(
     const projectId = str(body.project_id);
     // Mirror the local sendMessage session derivation so channel history and
     // notifications group identically on the cloud.
-    const sessionId = channelName
-      ? `channel:${channelName}`
-      : str(body.session_id) ?? `${[from, toAgent].sort().join("-")}-${randomUUID().slice(0, 8)}`;
+    const sessionId = replyParent?.session_id ?? (
+      channelName
+        ? `channel:${channelName}`
+        : requestedSession ?? `${[from, toAgent].sort().join("-")}-${randomUUID().slice(0, 8)}`
+    );
     let priority = str(body.priority)?.toLowerCase() ?? "normal";
     if (!VALID_PRIORITIES.includes(priority)) return json({ error: "Invalid priority" }, 400);
     assertNoSensitiveContent(from, "Message sender");
@@ -906,33 +967,26 @@ async function handleV1(
     assertNoSensitiveOptionalText(projectId, "Message project");
     assertNoSensitiveContent(sessionId, "Message session");
     const blocking = body.blocking === true;
-    // Thread linkage. `messages.reply_to` is a bare BIGINT with no FK
-    // (pg-migrations.ts:84), so a bogus parent would insert a dangling pointer
-    // and read back as an unthreaded post. Validate it here instead: a reply
-    // aimed at a message that does not exist is an error, not a silent
-    // top-level post.
-    let replyTo: number | null = null;
-    if (body.reply_to !== undefined && body.reply_to !== null) {
-      const n = Number(body.reply_to);
-      if (!Number.isInteger(n) || n <= 0) {
-        return json({ error: "reply_to must be a positive integer message id" }, 400);
-      }
-      const parent = await client.get<{ id: number }>("SELECT id FROM messages WHERE id = $1", [n]);
-      if (!parent) return json({ error: `reply_to message #${n} not found` }, 400);
-      replyTo = n;
-    }
+    // Persist the local numeric FK only after an immutable UUID lookup resolved
+    // it in this authenticated tenant/store. Numeric-only reply identities are
+    // refused above because a wrong id can name a different reachable message.
+    const replyTo = replyParent ? Number(replyParent.id) : null;
     const row = await client.get<{ id: number }>(
-      `INSERT INTO messages (session_id, from_agent, to_agent, channel, project_id, content, priority, blocking, reply_to)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      `INSERT INTO messages (uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, blocking, reply_to)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
        RETURNING id, uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, blocking, reply_to, created_at`,
-      [sessionId, from, toAgent, channelName ?? null, projectId ?? null, content, priority, blocking, replyTo],
+      [messageUuid, sessionId, from, toAgent, channelName ?? null, projectId ?? null, content, priority, blocking, replyTo],
     );
+    if (!row) return json({ error: "Message insert returned no row" }, 500);
+    // Clone before mention fanout: supported query adapters may reuse row
+    // objects internally, while fanout performs additional INSERTs.
+    const insertedMessage = { ...row };
     // @mentions in channel messages create mention rows + notification DMs, so
     // mentions_only reads and mention counts work through the server API too.
-    if (channelName && row?.id != null) {
-      try { await processMentions(client, Number(row.id), from, channelName, content); } catch { /* best-effort */ }
+    if (channelName && insertedMessage.id != null) {
+      try { await processMentions(client, Number(insertedMessage.id), from, channelName, content); } catch { /* best-effort */ }
     }
-    return json({ message: redactResponse(row) }, 201);
+    return json({ message: redactResponse(insertedMessage) }, 201);
   }
 
   // ---- bulk message ingest (backfill local -> cloud to parity) ----
@@ -1129,6 +1183,15 @@ async function handleV1(
     return json({ receipts, unread_by });
   }
 
+  const msgUuidMatch = sub.match(/^messages\/by-uuid\/([^/]+)$/);
+  if (msgUuidMatch && method === "GET") {
+    const uuid = normalizeMessageUuid(decodeURIComponent(msgUuidMatch[1]));
+    if (!uuid) return json({ error: "Message UUID is invalid" }, 400);
+    const row = await client.get(`SELECT * FROM messages WHERE uuid = $1`, [uuid]);
+    if (!row) return json({ error: "Message not found" }, 404);
+    return json({ message: redactResponse(row) });
+  }
+
   // ---- pin / unpin one message ----
   const pinMatch = sub.match(/^messages\/(\d+)\/(pin|unpin)$/);
   if (pinMatch && method === "POST") {
@@ -1142,14 +1205,21 @@ async function handleV1(
     return json({ message: row });
   }
 
-  const msgIdMatch = sub.match(/^messages\/(\d+)$/);
-  if (msgIdMatch) {
-    const id = Number(msgIdMatch[1]);
+  const msgRefMatch = sub.match(/^messages\/([^/]+)$/);
+  if (msgRefMatch) {
+    const ref = parseMessageReference(decodeURIComponent(msgRefMatch[1]));
+    if (!ref) return json({ error: "Message reference must be a positive numeric id or UUID" }, 400);
     if (method === "GET") {
-      const row = await client.get(`SELECT * FROM messages WHERE id = $1`, [id]);
+      const row = ref.kind === "id"
+        ? await client.get(`SELECT * FROM messages WHERE id = $1`, [ref.id])
+        : await client.get(`SELECT * FROM messages WHERE uuid = $1`, [ref.uuid]);
       if (!row) return json({ error: "Message not found" }, 404);
       return json({ message: redactResponse(row) });
     }
+    if (ref.kind !== "id") {
+      return json({ error: "Editing and deleting messages still require a numeric id" }, 400);
+    }
+    const id = ref.id;
     if (method === "PATCH") {
       // Edit content — only the original sender may edit; stamps edited_at.
       const body = await readJson(req);
