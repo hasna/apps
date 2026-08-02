@@ -214,13 +214,40 @@ function emptyStats(): FeedbackStats {
   };
 }
 
+/**
+ * Aggregate a set of items into the SDK's canonical {@link FeedbackStats} shape.
+ *
+ * Every kind and status is zero-filled rather than omitted, so a caller can index
+ * the result without guarding for undefined. Exported alongside
+ * {@link applyFeedbackFilter} so a custom store reports stats identically to the
+ * bundled ones.
+ */
+export function computeFeedbackStats(items: readonly FeedbackItem[]): FeedbackStats {
+  const stats = emptyStats();
+  for (const item of items) {
+    stats.total += 1;
+    stats.byApp[item.appId] = (stats.byApp[item.appId] ?? 0) + 1;
+    stats.byKind[item.kind] += 1;
+    stats.byStatus[item.status] += 1;
+    if (item.severity) stats.bySeverity[item.severity] = (stats.bySeverity[item.severity] ?? 0) + 1;
+  }
+  return stats;
+}
+
 function parseDateFilter(value: string | undefined): string | undefined {
   if (!value) return undefined;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 
-function searchHaystack(item: FeedbackItem): string {
+/**
+ * Fold every searchable field of an item into one lowercased string.
+ *
+ * Exported because a store backed by something other than the bundled JSONL
+ * file has to reproduce this to keep `search` filtering consistent, and two
+ * shipped consumers were hand-copying it for exactly that reason.
+ */
+export function buildFeedbackSearchHaystack(item: FeedbackItem): string {
   return [
     item.appId,
     item.message,
@@ -239,7 +266,17 @@ function searchHaystack(item: FeedbackItem): string {
     .toLowerCase();
 }
 
-function applyFilter(items: FeedbackItem[], filter: FeedbackListFilter = {}): FeedbackItem[] {
+/**
+ * Apply the SDK's canonical list semantics — field filters, date range, free-text
+ * search, newest-first ordering, and the 1..500 limit clamp — to an already-loaded
+ * set of items.
+ *
+ * Exported so that a custom {@link FeedbackStore} can guarantee parity with the
+ * bundled stores instead of reimplementing the rules. Backends that can push these
+ * predicates down into a query should still route their final result through this
+ * function, or use it as the reference the query is tested against.
+ */
+export function applyFeedbackFilter(items: FeedbackItem[], filter: FeedbackListFilter = {}): FeedbackItem[] {
   const limit = Math.max(1, Math.min(filter.limit ?? 50, 500));
   const since = parseDateFilter(filter.since);
   const until = parseDateFilter(filter.until);
@@ -250,7 +287,7 @@ function applyFilter(items: FeedbackItem[], filter: FeedbackListFilter = {}): Fe
     .filter((item) => !filter.tag || item.tags.includes(filter.tag.toLowerCase()))
     .filter((item) => !since || item.createdAt >= since)
     .filter((item) => !until || item.createdAt <= until)
-    .filter((item) => !search || searchHaystack(item).includes(search))
+    .filter((item) => !search || buildFeedbackSearchHaystack(item).includes(search))
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .slice(0, limit);
 }
@@ -458,7 +495,7 @@ export class LocalFeedbackStore implements FeedbackStore {
   }
 
   async listFeedback(filter: FeedbackListFilter = {}): Promise<FeedbackItem[]> {
-    return applyFilter(await this.readAll(), filter);
+    return applyFeedbackFilter(await this.readAll(), filter);
   }
 
   async getFeedback(id: string): Promise<FeedbackItem | null> {
@@ -518,15 +555,7 @@ export class LocalFeedbackStore implements FeedbackStore {
   }
 
   async stats(): Promise<FeedbackStats> {
-    const stats = emptyStats();
-    for (const item of await this.readAll()) {
-      stats.total += 1;
-      stats.byApp[item.appId] = (stats.byApp[item.appId] ?? 0) + 1;
-      stats.byKind[item.kind] += 1;
-      stats.byStatus[item.status] += 1;
-      if (item.severity) stats.bySeverity[item.severity] = (stats.bySeverity[item.severity] ?? 0) + 1;
-    }
-    return stats;
+    return computeFeedbackStats(await this.readAll());
   }
 
   async exportJsonl(filter: FeedbackListFilter = {}): Promise<string> {
