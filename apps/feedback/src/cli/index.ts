@@ -5,6 +5,7 @@ import { access, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { FeedbackClient } from "../client.js";
 import { startFeedbackServer } from "../server/index.js";
+import { SERVE_DESCRIPTION } from "../server/deprecation.js";
 import { createFeedbackStore, describeFeedbackStoreRuntime, resolveFeedbackFilePath } from "../storage.js";
 import { describeTaskSinkRuntime, findBinaryOnPath } from "../tasks.js";
 import type {
@@ -216,7 +217,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
 
   program
     .command("serve")
-    .description("Start the Open Feedback HTTP API")
+    .description(SERVE_DESCRIPTION)
     .option("--host <host>", "Host to bind", "127.0.0.1")
     .option("--port <port>", "Port to bind", "8787")
     .action((options: { host: string; port: string }) => {

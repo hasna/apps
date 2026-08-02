@@ -107,3 +107,47 @@ violation appears **and** when an existing one is fixed without the baseline
 being lowered, so neither drift nor silent progress goes unrecorded. It probes
 behind the early return deliberately: a ratchet reading only the reported output
 would baseline one failure and pass forever while the other five sat unseen.
+
+## Decision (2026-08-02): the `feedback-serve` bin is being withdrawn
+
+Recorded from a two-sided debate on todos task `9b740e99`. Verdict: **drop the
+bin, with an alignment condition.** The reasoning, because the conclusion is
+worth less than the argument:
+
+**The bin cannot do what its name declares.** `src/server/cli.ts` builds the
+server with only `{ host, port }`; `startFeedbackServer` then falls back to
+`createFeedbackStore()` with no options; and `createFeedbackStore` throws in
+cloud mode without a host-injected adapter (`src/storage.ts`). So
+`FEEDBACK_STORE=postgres feedback-serve` cannot start, ever. A `<name>-serve` bin
+is the conventional declaration of a run-me-as-a-service story. Withdrawing it
+retracts a false advertisement rather than removing a capability — the identical
+server remains as `feedback serve`, as the exported `startFeedbackServer()`, and
+as `createFeedbackHandler()`.
+
+**Why the subcommand was demoted in the same change.** The opposing side's
+strongest point, conceded by both: `feedback serve` runs the identical code path,
+so removing only the bin would make the conformance report go clean while the
+same one-command HTTP server still shipped. The kit's condition is
+`bins.includes("feedback-serve")` — a *string proxy* for service capability, and
+a proxy a subcommand walks straight past. Dropping the bin while leaving the
+subcommand advertising an unqualified "HTTP API" would have moved the report
+without changing the truth. Its description now states what it actually is: a
+local-development server over the JSONL store, with no PostgreSQL support.
+
+**What is deliberately NOT done here.** The bin is deprecated, not removed —
+`0.3.0` ships a stub that still works and prints a migration notice to stderr,
+and `0.4.0` removes it. Nothing is urgent: CI runs the `contract-gap` ratchet
+rather than `contract-check`, so no build, publish or consumer is gated on this.
+The gap set above is therefore unchanged by this commit, and correctly so.
+
+**Removal checklist for `0.4.0`**, since the manifest also has to move:
+delete `src/server/cli.ts`; drop `feedback-serve` from `bin` in `package.json`
+and from the `build` script; drop it from `bins` in `hasna.contract.json`; drop
+the `bin` field from the `feedback-http-api` surface there; drop the
+`feedback-serve` probe from `feedback doctor` (`src/cli/index.ts`); and lower the
+`contract-gap` baseline in the same commit, which the ratchet will force.
+
+**Filed upstream regardless of any of the above:** the kit's ineligibility test
+keys on a bin *name*, so any `cli-with-store` repo can hide its server behind a
+subcommand and take the PostgreSQL waiver. That defect outlives this repo's
+decision and is the finding with the longest reach.

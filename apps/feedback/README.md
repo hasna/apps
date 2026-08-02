@@ -15,12 +15,23 @@ For local CLI usage:
 ```bash
 bunx @hasna/feedback init
 feedback serve --port 8787
-feedback-serve --port 8787
 ```
+
+> **Deprecated:** the separate `feedback-serve` bin is deprecated as of 0.3.0 and
+> will be removed in 0.4.0. Use `feedback serve` — it is the same server with the
+> same `--host`/`--port` options. The bin still works and now prints a migration
+> notice to stderr.
 
 ## HTTP API
 
-Start the API:
+The HTTP API is a **local development server**. It serves the append-only JSONL
+store at `~/.hasna/feedback/feedback.jsonl` and has no PostgreSQL support:
+`createFeedbackStore()` throws in cloud mode unless the host injects a
+`FeedbackStore` adapter. To run feedback as a real service, mount
+`createFeedbackHandler()` from `@hasna/feedback/api` inside your own app and pass
+it a store you control — which is what the Hasna platform apps do.
+
+Start the local API:
 
 ```bash
 feedback serve --host 127.0.0.1 --port 8787

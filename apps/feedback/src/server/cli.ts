@@ -2,6 +2,7 @@
 import { parseArgs } from "node:util";
 import { startFeedbackServer } from "./index.js";
 import { VERSION } from "../version.js";
+import { emitDeprecationNotice } from "./deprecation.js";
 
 function printHelp(): void {
   console.log(`Usage: feedback-serve [options]
@@ -14,6 +15,11 @@ Options:
 }
 
 export async function main(args: string[] = process.argv.slice(2)): Promise<void> {
+  // Emitted on every path, including --help and --version, so that any caller
+  // touching this bin learns it is going away. stderr only — stdout stays
+  // byte-for-byte what it was, so scripted callers are unaffected.
+  emitDeprecationNotice();
+
   if (args.includes("--help") || args.includes("-h")) {
     printHelp();
     return;
@@ -38,7 +44,17 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
   console.log(`Open Feedback API listening on http://${server.hostname}:${server.port}`);
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error);
-  process.exit(1);
-});
+// Only run when invoked as the bin. Without this guard, importing this module —
+// which the deprecation tests must do — starts a real server on a real port.
+// Mirrors the same guard in src/cli/index.ts.
+const isDirectRun =
+  import.meta.url === `file://${process.argv[1]}` ||
+  process.argv[1]?.endsWith("/server/cli.ts") ||
+  process.argv[1]?.endsWith("/server/cli.js");
+
+if (isDirectRun) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exit(1);
+  });
+}
