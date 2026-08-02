@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { mintApiKey, verifyApiKey } from "@hasna/contracts/auth";
 import { describe, expect, test } from "bun:test";
 import { createSqliteLoopStorage } from "../lib/storage/sqlite.js";
 import type { Loop, WorkflowSpec } from "../types.js";
@@ -1068,6 +1069,70 @@ describe("loops-api foundation", () => {
       expect(read.status).toBe(200);
       const body = (await read.json()) as { loop: { target: { prompt?: string } } };
       expect(body.loop.target.prompt).toBe(`[redacted ${prompt.length} chars]`);
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("runner claim requires execution scope before returning the raw loop payload", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const now = new Date("2026-01-01T00:00:00Z");
+    const signingSecret = "runner-scope-test-signing-secret";
+    const authenticator = verifyApiKey({
+      app: "loops",
+      signingSecret,
+      nowMs: () => now.getTime(),
+      isRevoked: async () => false,
+    });
+    const readKey = mintApiKey({
+      app: "loops",
+      scopes: ["loops:read"],
+      signingSecret,
+      nowMs: now.getTime(),
+      ttlSeconds: 60,
+    });
+    const runnerKey = mintApiKey({
+      app: "loops",
+      scopes: ["loops:execute"],
+      signingSecret,
+      nowMs: now.getTime(),
+      ttlSeconds: 60,
+    });
+    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage, now: () => now, authenticator });
+    const prompt = "NONSECRET_RUNNER_SCOPE_MARKER";
+
+    try {
+      await storage.createLoop(
+        {
+          name: "api-runner-scope",
+          schedule: { type: "once", at: now.toISOString() },
+          target: { type: "agent", provider: "claude", prompt },
+          leaseMs: 60_000,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+
+      const readClaim = await fetch(apiUrl(server, "/v1/runners/claim"), {
+        method: "POST",
+        headers: { ...jsonHeaders, "x-api-key": readKey.token },
+        body: JSON.stringify({ runnerId: "unregistered-reader", maxClaims: 1 }),
+      });
+      expect(readClaim.status).toBe(403);
+      expect(await storage.listRuns({ status: "running" })).toHaveLength(0);
+
+      const runnerClaim = await fetch(apiUrl(server, "/v1/runners/claim"), {
+        method: "POST",
+        headers: { ...jsonHeaders, "x-api-key": runnerKey.token },
+        body: JSON.stringify({ runnerId: "scoped-runner", maxClaims: 1 }),
+      });
+      expect(runnerClaim.status).toBe(200);
+      const claimed = (await runnerClaim.json()) as {
+        claims: Array<{ loop: { target: { prompt?: string } } }>;
+      };
+      expect(claimed.claims).toHaveLength(1);
+      expect(claimed.claims[0]!.loop.target.prompt).toBe(prompt);
     } finally {
       server.stop(true);
       await storage.close();

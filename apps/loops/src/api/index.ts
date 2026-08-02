@@ -50,6 +50,7 @@ const DEFAULT_EVIDENCE_LIMIT_BYTES = 256 * 1024;
 // The client batches by byte budget well under this ceiling.
 const DEFAULT_IMPORT_LIMIT_BYTES = 32 * 1024 * 1024;
 const MIN_RUNNER_LEASE_MS = 1_000;
+const RUNNER_EXECUTION_SCOPES = ["loops:execute"] as const;
 
 program
   .name("loops-api")
@@ -90,6 +91,17 @@ function authorizeRequest(request: Request, host: string): Response | undefined 
   return bearerTokenMatches(authorization, token)
     ? undefined
     : Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+}
+
+function requiredScopesForRequest(method: string, pathname: string): readonly string[] | undefined {
+  if (method !== "POST") return undefined;
+  if (/^\/v1\/runners\/(?:[^/]+\/)?(?:register|heartbeat|poll|claim)$/.test(pathname)) {
+    return RUNNER_EXECUTION_SCOPES;
+  }
+  if (/^\/v1\/runs\/[^/]+\/(?:heartbeat|finalize|evidence)$/.test(pathname)) {
+    return RUNNER_EXECUTION_SCOPES;
+  }
+  return undefined;
 }
 
 function ok(payload: Record<string, unknown> = {}, init?: ResponseInit): Response {
@@ -197,9 +209,11 @@ export function createLoopsApiServer(opts: LoopsApiServerOptions = {}) {
       }
       // ── Authenticated control plane (/status included) ───────────────────
       if (opts.authenticator) {
+        const requiredScopes = requiredScopesForRequest(request.method, url.pathname);
         const decision = await opts.authenticator.authenticate(request.headers, {
           method: request.method,
           path: url.pathname,
+          requiredScopes,
         });
         if (!decision.ok) {
           return Response.json(
