@@ -119,9 +119,15 @@ jobs:
           #    ambiguous and the rule non-deterministic to reason about. It is a
           #    legibility constraint, NOT a content control.
           #
-          #    What actually constrains CONTENT on this path is the required
-          #    status checks asserted in the next step. Ancestry decides where a
-          #    commit may sit; CI decides whether it is fit to build.
+          #    NOTHING HERE CONSTRAINS CONTENT, and no mechanical rule in this
+          #    file can. CI cannot: the required jobs execute package.json
+          #    scripts and test files that live in the tree, so a commit can
+          #    rewrite what its own CI does (measured - a fixture with
+          #    `"test": "true"` and a planted src/BACKDOOR.ts produced a genuine
+          #    green check run). Pinning paths cannot either: the list is
+          #    unbounded. The CONTENT control on this path is the required
+          #    APPROVING REVIEW asserted in the next step. Ancestry decides where
+          #    a commit may sit; a human decides whether its content may ship.
           parent_count="$(git rev-list --parents -n 1 "${SOURCE_SHA}" | wc -w)"
           parent_count=$(( parent_count - 1 ))
           if [[ "${parent_count}" -ne 1 ]]; then
@@ -135,98 +141,132 @@ jobs:
             exit 1
           fi
           echo "single-commit hotfix on main-ancestor parent ${parent_sha}"
-          printf 'REQUIRE_STATUS_CHECKS=1\n' >> "${GITHUB_ENV}"
+          printf 'HOTFIX_LANE=1\n' >> "${GITHUB_ENV}"
 
-      # A commit ON main has already satisfied main's required status checks.
-      # A hotfix commit has NOT: ci.yml triggers only on `push` to main and on
-      # `pull_request`, so a commit on a branch with no open PR runs ZERO checks
-      # and would otherwise be buildable untested. This restores the property
-      # that everything built has passed the same gate main enforces.
-      - name: Require main's status checks on a hotfix commit
-        if: ${{ env.REQUIRE_STATUS_CHECKS == '1' }}
+      # A commit on main reached main through a pull request. A hotfix commit
+      # did NOT, so nothing has reviewed its content. That is the gap this step
+      # closes, and it is closed by REVIEW rather than by CI.
+      #
+      # Why not CI: the required jobs run package.json scripts and test files
+      # that live in the tree, so a hotfix can neuter its own suite and still
+      # produce a genuine green check. Measured on fixture 6f738f0e with
+      # `"test": "true"` and a planted src/BACKDOOR.ts. Pinning the files CI
+      # reads does not fix it either - package.json, bunfig.toml, tsconfig*,
+      # every test path and every vendored dep would have to be pinned, which is
+      # an unbounded list that fails silently when something new is added.
+      #
+      # Note this is STRICTER than main, deliberately: main's ruleset carries
+      # required_approving_review_count 0, so main is PR-gated and status-checked
+      # rather than human-reviewed. A path that bypasses main should not inherit
+      # a weaker bar than the one it bypasses.
+      # PATH ALLOWLIST - fails closed on paths nobody thought of, which is the
+      # class that produced the package.json finding. A denylist would have to
+      # enumerate package.json, bunfig.toml, tsconfig*, every test path and every
+      # vendored dep, and would silently admit whatever is added next.
+      #
+      # What this buys, precisely: it restores the MEANING of a green check. CI
+      # is only evidence about the code if the commit cannot rewrite what CI
+      # executes; confining a hotfix to src/ means package.json scripts, bunfig,
+      # tsconfig, the Dockerfile and .github/ are all untouchable, so the suite
+      # that ran is the suite the reviewed parent defined.
+      #
+      # What it does NOT buy: it cannot stop hostile content inside src/ - the
+      # backdoor fixture planted src/BACKDOOR.ts, and this hotfix legitimately
+      # edits src/api/index.ts. CONTENT is covered by the approving review in the
+      # next step, never by this list. Do not let this comment grow a claim that
+      # the allowlist makes content safe.
+      #
+      # It also enforces path (b)'s defining property mechanically: migrations/
+      # is not admissible, so a hotfix CANNOT carry a schema change.
+      - name: Restrict hotfix diff to the allowlist
+        if: ${{ env.HOTFIX_LANE == '1' }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          parent_sha="$(git rev-parse "${SOURCE_SHA}^")"
+
+          git diff --name-only "${parent_sha}" "${SOURCE_SHA}" > "${RUNNER_TEMP}/changed.txt"
+          if [[ ! -s "${RUNNER_TEMP}/changed.txt" ]]; then
+            echo "hotfix changes no files; refusing" >&2
+            exit 1
+          fi
+
+          violations=0
+          while IFS= read -r f; do
+            [[ -n "${f}" ]] || continue
+            case "${f}" in
+              src/*) printf '  allowed  %s\n' "${f}" ;;
+              *)     printf '  REFUSED  %s\n' "${f}" >&2; violations=$(( violations + 1 )) ;;
+            esac
+          done < "${RUNNER_TEMP}/changed.txt"
+
+          if (( violations > 0 )); then
+            echo "hotfix touches ${violations} path(s) outside the allowlist (src/); refusing" >&2
+            echo "a hotfix may not alter build config, CI, the Dockerfile, or migrations" >&2
+            exit 1
+          fi
+          echo "all $(wc -l < "${RUNNER_TEMP}/changed.txt") changed path(s) within allowlist"
+
+      - name: Require an approving review on the hotfix commit
+        if: ${{ env.HOTFIX_LANE == '1' }}
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -Eeuo pipefail
 
-          # Source of truth for WHICH checks are required is main's ruleset, not
-          # a list copied into this file that would rot the moment it changes.
-          contexts_file="${RUNNER_TEMP}/required-contexts.txt"
-          if ! gh api "repos/${GITHUB_REPOSITORY}/rulesets" > "${RUNNER_TEMP}/rulesets.json" 2>"${RUNNER_TEMP}/rulesets.err"; then
-            echo "cannot read repository rulesets; failing closed" >&2
-            cat "${RUNNER_TEMP}/rulesets.err" >&2
-            exit 1
-          fi
-          ruleset_id="$(jq -r '[.[] | select(.target=="branch" and .enforcement=="active")][0].id // empty' "${RUNNER_TEMP}/rulesets.json")"
-          if [[ -z "${ruleset_id}" ]]; then
-            echo "no active branch ruleset found; failing closed" >&2
-            exit 1
-          fi
-          gh api "repos/${GITHUB_REPOSITORY}/rulesets/${ruleset_id}" > "${RUNNER_TEMP}/ruleset.json"
-          jq -r '[.rules[] | select(.type=="required_status_checks")][0].parameters.required_status_checks[]?.context // empty' \
-            "${RUNNER_TEMP}/ruleset.json" > "${contexts_file}"
+          # Approvals are matched to THIS EXACT SHA. A review approving an
+          # earlier push must not authorise different content.
+          gh api "repos/${GITHUB_REPOSITORY}/commits/${SOURCE_SHA}/pulls" --paginate \
+            | jq -s 'add // []' > "${RUNNER_TEMP}/pulls.json"
 
-          required_count="$(wc -l < "${contexts_file}")"
-          if (( required_count == 0 )); then
-            # A vacuous pass here would admit an untested commit while reporting
-            # success, so an empty required set is treated as a fault.
-            echo "ruleset declares no required status checks; failing closed rather than passing vacuously" >&2
+          approved=0
+          while IFS= read -r pr; do
+            [[ -n "${pr}" ]] || continue
+            gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr}/reviews" --paginate \
+              | jq -s 'add // []' > "${RUNNER_TEMP}/reviews-${pr}.json"
+            n="$(jq --arg sha "${SOURCE_SHA}" \
+              '[.[] | select(.state=="APPROVED" and .commit_id==$sha)] | length' \
+              "${RUNNER_TEMP}/reviews-${pr}.json")"
+            printf 'PR #%s approvals on %s: %s\n' "${pr}" "${SOURCE_SHA:0:12}" "${n}"
+            approved=$(( approved + n ))
+          done < <(jq -r '.[].number' "${RUNNER_TEMP}/pulls.json")
+
+          if (( approved < 1 )); then
+            echo "no APPROVED review on ${SOURCE_SHA}; refusing" >&2
+            echo "open a pull request for the hotfix branch and have it reviewed" >&2
             exit 1
           fi
+          echo "${approved} approving review(s) on ${SOURCE_SHA}"
 
-          # A hotfix sits on an OLDER main commit whose ci.yml may define fewer
-          # jobs than main does today. Measured for task c64e66bd: ci.yml at
-          # b6486cef defines only the `test` job, while main's ruleset requires
-          # four contexts - `postgres storage` and `runner image security` were
-          # added to ci.yml AFTER 0.4.28. Demanding all four would make every
-          # hotfix on an older base permanently unbuildable.
-          #
-          # Relaxing to "whatever happened to run" is NOT acceptable on its own:
-          # a hotfix could then delete jobs from its own ci.yml and satisfy an
-          # empty set. So pin the CI definition to the parent first. The parent
-          # is on main and therefore reviewed, so the hotfix inherits exactly the
-          # bar its base enforced and cannot lower it.
-          parent_sha="$(git rev-parse "${SOURCE_SHA}^")"
-          if ! git diff --quiet "${parent_sha}" "${SOURCE_SHA}" -- .github/workflows/; then
-            echo "hotfix modifies .github/workflows/; refusing - a hotfix may not alter its own CI" >&2
-            git diff --name-only "${parent_sha}" "${SOURCE_SHA}" -- .github/workflows/ >&2
-            exit 1
-          fi
-
+          # Secondary QUALITY signal, not a content control. Anything that ran
+          # and did not succeed refuses; anything still running refuses rather
+          # than being read as absent (a re-run in progress must not inherit an
+          # earlier green).
           gh api "repos/${GITHUB_REPOSITORY}/commits/${SOURCE_SHA}/check-runs" --paginate \
-            > "${RUNNER_TEMP}/check-runs.json"
+            | jq -s '[.[].check_runs[]?]' > "${RUNNER_TEMP}/check-runs.json"
 
-          failed=0
-          ran=0
-          while IFS= read -r context; do
-            [[ -n "${context}" ]] || continue
-            conclusion="$(jq -r --arg n "${context}" \
-              '[.check_runs[]? | select(.name==$n)] | sort_by(.completed_at) | last | .conclusion // "MISSING"' \
-              "${RUNNER_TEMP}/check-runs.json")"
-            printf 'required check %-28s -> %s\n' "${context}" "${conclusion}"
-            case "${conclusion}" in
-              success) ran=$(( ran + 1 )) ;;
-              MISSING)
-                # Not producible by this base's reviewed ci.yml. Tolerated only
-                # because workflows are pinned to the parent immediately above.
-                ;;
-              *) failed=1 ;;
-            esac
-          done < "${contexts_file}"
-
-          if (( failed != 0 )); then
-            echo "hotfix commit ${SOURCE_SHA} has a required check that did not succeed; refusing" >&2
+          incomplete="$(jq '[.[] | select(.status != "completed")] | length' "${RUNNER_TEMP}/check-runs.json")"
+          if (( incomplete > 0 )); then
+            jq -r '.[] | select(.status != "completed") | "  still running: \(.name) [\(.status)]"' \
+              "${RUNNER_TEMP}/check-runs.json" >&2
+            echo "${incomplete} check run(s) not completed on ${SOURCE_SHA}; refusing" >&2
             exit 1
           fi
-          if (( ran == 0 )); then
-            # Every required context MISSING means CI never ran on this commit -
-            # exactly the untested-commit bypass this step exists to close.
-            echo "no required status check ran on ${SOURCE_SHA}; refusing rather than passing vacuously" >&2
-            echo "open a pull request for the hotfix branch so ci.yml runs against this commit" >&2
+
+          total="$(jq 'length' "${RUNNER_TEMP}/check-runs.json")"
+          bad="$(jq '[.[] | select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral")] | length' \
+            "${RUNNER_TEMP}/check-runs.json")"
+          jq -r '.[] | "  check \(.name) -> \(.conclusion)"' "${RUNNER_TEMP}/check-runs.json"
+          if (( total == 0 )); then
+            echo "no check runs at all on ${SOURCE_SHA}; refusing rather than passing vacuously" >&2
             exit 1
           fi
-          echo "${ran} of ${required_count} required checks ran and passed on ${SOURCE_SHA}; workflows identical to reviewed parent ${parent_sha}"
+          if (( bad > 0 )); then
+            echo "${bad} check run(s) did not succeed on ${SOURCE_SHA}; refusing" >&2
+            exit 1
+          fi
+          echo "${total} completed check run(s), none failing"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
