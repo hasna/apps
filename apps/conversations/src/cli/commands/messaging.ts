@@ -810,6 +810,7 @@ export function registerMessagingCommands(program: Command): void {
       printLine("");
 
       const { startPolling } = require("../../lib/poll.js");
+      const { startNotificationPolling } = require("../../lib/poll-notifications.js");
       const { renderContent: renderContentLocal } = require("../../lib/terminal-markdown.js");
 
       const desktopNotify = (title: string, body: string) => {
@@ -930,26 +931,12 @@ export function registerMessagingCommands(program: Command): void {
       if (opts.all) {
         stops.push(startPolling({ to_agent: agent, interval_ms: interval, on_messages: onNewMessages }));
 
-        let inFlightNotifications = false;
-        const timer = setInterval(async () => {
-          if (inFlightNotifications) return;
-          inFlightNotifications = true;
-          try {
-            const notifications = (await store.readChannelNotifications({
-              agent,
-              unread_only: true,
-              limit: 200,
-              mark_read: true,
-            })).sort((left, right) => left.created_at.localeCompare(right.created_at) || left.message_id - right.message_id);
-
-            if (notifications.length > 0) {
-              onNewNotifications(notifications);
-            }
-          } finally {
-            inFlightNotifications = false;
-          }
-        }, interval);
-        stops.push({ stop: () => clearInterval(timer) });
+        stops.push(startNotificationPolling({
+          store,
+          agent,
+          interval_ms: interval,
+          on_notifications: onNewNotifications,
+        }));
       } else {
         stops.push(startPolling({
           to_agent: opts.channel ? undefined : agent,

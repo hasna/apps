@@ -6,6 +6,7 @@
 // split-brain bug this eliminates.
 
 import { getStore } from "./store/index.js";
+import { createPollHealth, type PollHealthReporter } from "./poll-health.js";
 import type { Message } from "../types.js";
 
 export interface PollOptions {
@@ -14,6 +15,8 @@ export interface PollOptions {
   channel?: string;
   interval_ms?: number;
   on_messages: (messages: Message[]) => void;
+  /** Where poll failures are reported. Defaults to stderr. */
+  on_poll_error?: PollHealthReporter;
 }
 
 /**
@@ -33,6 +36,8 @@ export function startPolling(opts: PollOptions): { stop: () => void } {
   // transport resolves inline; the cloud transport on the next tick) and every
   // poll awaits it before querying, keeping the "only NEW messages" contract in
   // both modes.
+  const health = createPollHealth({ label: "watch", report: opts.on_poll_error });
+
   const seeded = store
     .readMessages({
       session_id: opts.session_id,
@@ -44,8 +49,13 @@ export function startPolling(opts: PollOptions): { stop: () => void } {
     .then((latest) => {
       if (latest.length > 0 && latest[0].id > lastSeenId) lastSeenId = latest[0].id;
     })
-    .catch(() => {
-      // A failed seed just means the first poll starts from id 0; never fatal.
+    .catch((error: unknown) => {
+      // Still not fatal — the first poll simply starts from id 0 — but it is
+      // reported rather than swallowed. A failed seed means the store was
+      // already unreachable at startup, and starting from 0 will replay
+      // history once it returns; an operator seeing a flood needs this line to
+      // explain it.
+      health.recordFailure(error);
     });
 
   const poll = async () => {
@@ -64,6 +74,8 @@ export function startPolling(opts: PollOptions): { stop: () => void } {
         order: "asc",
       });
 
+      health.recordSuccess();
+
       if (messages.length > 0) {
         lastSeenId = messages[messages.length - 1].id;
         try {
@@ -72,6 +84,14 @@ export function startPolling(opts: PollOptions): { stop: () => void } {
           console.error("Polling callback error:", error);
         }
       }
+    } catch (error) {
+      // A store failure must not end the loop and must not be silent. Without
+      // this, the rejection escapes through the `void poll()` below: under the
+      // CLI's process-level unhandledRejection handler that prints and calls
+      // process.exit(1), so the watcher dies on the first blip; with no such
+      // handler it is swallowed and the watcher goes blind. Both look, to the
+      // operator, exactly like an inbox with nothing in it.
+      health.recordFailure(error);
     } finally {
       inFlight = false;
     }

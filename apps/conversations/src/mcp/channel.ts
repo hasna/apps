@@ -16,6 +16,7 @@
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { createPollHealth, type PollHealthReporter } from "../lib/poll-health.js";
 import { getStore } from "../lib/store/index.js";
 // Routed reads/writes: every read/write goes through the Store (local or cloud API).
 
@@ -101,7 +102,12 @@ export function getClaudeSessionId(server: McpServer): string | null {
 
 export function registerChannelBridge(
   server: McpServer,
-  opts?: { pollIntervalMs?: number; startDelayMs?: number },
+  opts?: {
+    pollIntervalMs?: number;
+    startDelayMs?: number;
+    /** Where poll failures are reported. Defaults to stderr — NEVER stdout. */
+    onPollError?: PollHealthReporter;
+  },
 ): () => void {
   server.server.registerCapabilities({
     experimental: { 'claude/channel': {} },
@@ -109,6 +115,10 @@ export function registerChannelBridge(
 
   const pollIntervalMs = opts?.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const startDelayMs = opts?.startDelayMs ?? DEFAULT_START_DELAY_MS;
+  const health = createPollHealth({
+    label: "mcp-channel-bridge",
+    report: opts?.onPollError,
+  });
   let lastAgentMsgId = 0;
   let lastSessionMsgId = 0;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -212,6 +222,10 @@ export function registerChannelBridge(
           if (!delivered) break;
         }
       }
+
+      // Reached only when every read above completed; announces RECOVERED if
+      // the bridge had been reported degraded.
+      health.recordSuccess();
     } finally {
       polling = false;
     }
@@ -220,11 +234,16 @@ export function registerChannelBridge(
   function startPolling(): void {
     if (pollTimer) return;
 
+    // Continue on failure, but never SILENTLY: this bridge is the only thing
+    // delivering messages to an MCP client, so a swallowed store error left the
+    // session unable to tell a broken bridge from a quiet inbox. Reporting goes
+    // to stderr via createPollHealth — stdout is the JSON-RPC channel and a
+    // stray line there would corrupt the protocol stream.
     pollTimer = setInterval(() => {
-      void pollOnce().catch(() => { /* silently continue */ });
+      void pollOnce().catch((error: unknown) => health.recordFailure(error));
     }, pollIntervalMs);
 
-    void pollOnce().catch(() => { /* silently continue */ });
+    void pollOnce().catch((error: unknown) => health.recordFailure(error));
   }
 
   // Start polling after connection established

@@ -9,6 +9,7 @@ import { createChannel } from "../lib/channels.js";
 import { readChannelNotifications, subscribeToChannelNotifications } from "../lib/channel-notifications.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerChannelBridge, setSessionAgent, setClaudeSessionId, getSessionAgent, getClaudeSessionId } from "./channel.js";
+import { ENV_KEYS, DB_PATH_KEYS } from "../lib/store/index.js";
 
 function createTestDbPath(): string {
   return join(tmpdir(), `conversations-channel-${Date.now()}-${Math.random().toString(16).slice(2)}.db`);
@@ -274,4 +275,61 @@ describe("session agent tracking", () => {
     expect(typeof cleanup).toBe("function");
     cleanup();
   });
+});
+
+/**
+ * Regression for the MCP channel bridge's swallowed poll failure
+ * (todos d3c6b65e), site C.
+ *
+ * On base both call sites read `void pollOnce().catch(() => { });` — an
+ * explicitly empty handler. Unlike the CLI loops there is no process-level
+ * unhandledRejection handler in an MCP server, so a store outage produced
+ * NOTHING: the bridge kept ticking and the session could not distinguish a
+ * broken bridge from a quiet inbox. This is the site with live processes
+ * behind it.
+ *
+ * The failure is a real ApiStore aimed at a closed port, so the rejection
+ * comes from the transport the fleet actually runs.
+ */
+describe("channel bridge — store failure visibility (regression d3c6b65e)", () => {
+  test("reports a store failure instead of swallowing it", async () => {
+    const saved: Record<string, string | undefined> = {};
+    const remember = (key: string) => { saved[key] = process.env[key]; };
+    for (const key of DB_PATH_KEYS) { remember(key); delete process.env[key]; }
+    const urlKey = ENV_KEYS.apiUrlKeys[0];
+    const keyKey = ENV_KEYS.apiKeyKeys[0];
+    remember(urlKey); remember(keyKey);
+    process.env[urlKey] = "http://127.0.0.1:9/v1";
+    process.env[keyKey] = "placeholder-not-a-credential";
+    closeDb();
+
+    const lines: string[] = [];
+    const bridgeServer = {
+      server: {
+        registerCapabilities() {},
+        async notification() {},
+      },
+    } as any;
+    setSessionAgent(bridgeServer, "watcher", "claude-session-store-failure");
+
+    const stop = registerChannelBridge(bridgeServer, {
+      pollIntervalMs: 50,
+      startDelayMs: 0,
+      onPollError: (line: string) => { lines.push(line); },
+    });
+
+    try {
+      // A failed ApiStore read takes ~760ms (the storage client retries), so
+      // this waits well past one attempt rather than one poll interval.
+      await waitFor(() => lines.length > 0, 8000);
+      expect(lines.length).toBeGreaterThan(0);
+      expect(lines.join("\n")).toMatch(/unable to connect|refused|failed|ConnectionRefused/i);
+    } finally {
+      stop();
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  }, 20000);
 });
