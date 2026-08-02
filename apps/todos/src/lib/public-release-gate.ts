@@ -128,53 +128,104 @@ const FORBIDDEN_TEXT_PATTERNS: RegExp[] = [
 
 /**
  * Narrow, named exemptions from {@link FORBIDDEN_TEXT_PATTERNS}. Each entry names ONE
- * module and ONE pattern and says why the match is the OPPOSITE of what the boundary is
- * looking for. Never widen a pattern to make a file pass; add a line here or fix the file.
+ * module, ONE pattern, and — load-bearing, added after PR #161's own review — ONE
+ * `occurrence` regex naming the EXACT known-safe substring the match is expected to come
+ * from. Never widen a pattern or an occurrence to make a file pass; add a line here (with
+ * a real occurrence) or fix the file.
+ *
+ * WHY `occurrence` EXISTS AND MUST NEVER BE DROPPED (measured, not theoretical — reviewer
+ * `pr161-reviewer`, PR #161 NO_GO comment 5155307992, 2026-08-02): an exemption keyed only
+ * on (module, pattern) exempts the PATTERN IN THAT FILE, full stop — not just the one known
+ * literal. Constructed proof: with only a (module, pattern) key, a real
+ * `require("@hasna/cloud")` planted in the *same* file as the inert contracts literal
+ * produced ZERO `public-text-boundary` failures, and a genuine `open-cloud` import ALONE
+ * (no contracts literal present at all) also passed silently. `dist/server/index.js` is
+ * exactly the wrong file to have that hole in: `bun build src/server/index.ts` carries no
+ * `--external` flags at all, so it inlines the entire `@hasna/contracts` dependency graph —
+ * a future contracts release shipping real code touching either runtime would land right
+ * there and pass unnoticed.
+ *
+ * So `validatePublicTextSurfaces` does not skip a matching pattern outright for an exempt
+ * module. It strips every occurrence of `exemption.occurrence` from the file's text first,
+ * THEN re-tests the pattern against what remains. The known-inert literal disappears and
+ * the file passes; anything else that also matches the forbidden pattern — a real import, a
+ * different reference, the pattern appearing without the safe context — survives the strip
+ * and still fails. An exemption with no real occurrence to strip therefore protects nothing
+ * and must not be added; the occurrence is the safety property, not an implementation detail.
  *
  * This mirrors, for the published artifacts, the exemption `src/no-cloud-boundary.test.ts`
  * already carries for the corresponding source file. The boundary is enforced at two
  * points — that test and this release gate — and an exemption applied to only one of them
  * produces a module that builds, typechecks, tests and merges but can never be published.
  */
-const TEXT_BOUNDARY_EXEMPTIONS: { module: string; pattern: RegExp; reason: string }[] = [
+const FORBIDDEN_SHARED_CLOUD_RUNTIMES_LITERAL =
+  /\[\s*"@hasna\/cloud"\s*,\s*"open-cloud"\s*\]/g;
+
+// Built the same split-string way as LEGACY_CLOUD_PACKAGE etc. above. This file's own
+// legacy-alias regex in FORBIDDEN_TEXT_PATTERNS dodges its sibling source-level scan
+// (src/no-cloud-boundary.test.ts) only because a `\b` escape sequence happens to sit
+// immediately in front of it in that one spelling — an accident of that exact literal, not a
+// rule to depend on again. Any other spelling of the same variable name in this file — quoted,
+// with nothing word-shaped in front of it — is a genuine boundary match and trips that scan.
+// Splitting the string here, the same way the constants above split theirs, avoids relying on
+// the accident twice.
+const LEGACY_TODOS_API_URL = `TODOS${"_API_URL"}`;
+
+const TEXT_BOUNDARY_EXEMPTIONS: { module: string; pattern: RegExp; occurrence: RegExp; reason: string }[] = [
   {
     module: "dist/testing",
     pattern: /\bTODOS_API_URL\b/,
+    occurrence: new RegExp(`"${escapeRegExp(LEGACY_TODOS_API_URL)}"`, "g"),
     reason:
       "the test-store scrub list must NAME the legacy unprefixed hosted-routing aliases in " +
       "order to blank them, and those aliases are live — src/lib/config.ts, src/server/serve.ts, " +
       "src/server/cloud.ts and the SDK client all still read the unprefixed forms. This module " +
-      "exists to keep consumer tests OFF a hosted store, never to reach one.",
+      "exists to keep consumer tests OFF a hosted store, never to reach one. Scoped to the " +
+      "quoted scrub-list entry only: an unquoted, live reference to that same variable name " +
+      "read straight off the environment elsewhere in this file is not this literal and " +
+      "would still fail the boundary.",
   },
   {
     module: "dist/server/index",
     pattern: new RegExp(escapeRegExp(LEGACY_CLOUD_PACKAGE), "i"),
+    occurrence: FORBIDDEN_SHARED_CLOUD_RUNTIMES_LITERAL,
     reason:
       "@hasna/contracts@0.5.2 ships FORBIDDEN_SHARED_CLOUD_RUNTIMES = [\"@hasna/cloud\", \"open-cloud\"] " +
       "as validator schema data — it NAMES the runtimes a manifest must not depend on, it does not " +
       "depend on them. Only the server build target skips `--external '@hasna/contracts'`, so that " +
-      "literal array is inlined here and only here. A text scanner cannot tell a name from a " +
-      "dependency edge; this exemption is scoped to the one pattern and one module where that " +
-      "ambiguity is known and inert.",
+      "literal array is inlined here and only here (measured: exactly this array literal, twice, at " +
+      "dist/server/index.js — once as FORBIDDEN_SHARED_CLOUD_RUNTIMES and once as its bundler-renamed " +
+      "duplicate FORBIDDEN_SHARED_CLOUD_RUNTIMES2). The occurrence regex strips only that exact " +
+      "bracketed pair, so a real `require(\"@hasna/cloud\")` or a bare `open-cloud` reference " +
+      "anywhere in this file — including alongside the literal — still fails.",
   },
   {
     module: "dist/server/index",
     pattern: wordPattern(LEGACY_OPEN_CLOUD),
+    occurrence: FORBIDDEN_SHARED_CLOUD_RUNTIMES_LITERAL,
     reason:
       "the other half of the same FORBIDDEN_SHARED_CLOUD_RUNTIMES literal — see the @hasna/cloud " +
-      "exemption immediately above for the full explanation.",
+      "exemption immediately above for the full explanation and the same occurrence scoping.",
   },
 ];
 
-function isExemptTextMatch(path: string, pattern: RegExp): boolean {
+/**
+ * Returns `file.text` with every exempt, known-safe occurrence for this (path, pattern)
+ * removed. If the pattern still matches what remains, the match is NOT exempt — it came
+ * from somewhere other than the named literal, and `validatePublicTextSurfaces` must
+ * report it. A file with no matching exemption gets its text back unchanged.
+ */
+function stripExemptOccurrences(path: string, pattern: RegExp, text: string): string {
   // Match on the module path so the packed form ("package/dist/testing.js") and the built
   // form ("dist/testing.d.ts") resolve to the same entry, without letting a substring like
   // "dist/testing-helpers.js" inherit the exemption.
-  return TEXT_BOUNDARY_EXEMPTIONS.some(
-    (exemption) =>
-      pattern.source === exemption.pattern.source &&
-      /^(?:package\/)?(.+?)(?:\.d)?\.[cm]?[jt]s$/.exec(path)?.[1] === exemption.module,
-  );
+  const modulePath = /^(?:package\/)?(.+?)(?:\.d)?\.[cm]?[jt]s$/.exec(path)?.[1];
+  let stripped = text;
+  for (const exemption of TEXT_BOUNDARY_EXEMPTIONS) {
+    if (exemption.pattern.source !== pattern.source || exemption.module !== modulePath) continue;
+    stripped = stripped.replace(exemption.occurrence, "");
+  }
+  return stripped;
 }
 
 const SECRET_PATTERNS: RegExp[] = [
@@ -270,8 +321,8 @@ export function validatePublicTextSurfaces(files: TextFile[]): ReleaseGateFailur
   const failures: ReleaseGateFailure[] = [];
   for (const file of files) {
     for (const pattern of FORBIDDEN_TEXT_PATTERNS) {
-      if (isExemptTextMatch(file.path, pattern)) continue;
-      addIf(failures, pattern.test(file.text), "public-text-boundary", `${file.path} matches forbidden pattern ${pattern}`);
+      const textAfterExemptions = stripExemptOccurrences(file.path, pattern, file.text);
+      addIf(failures, pattern.test(textAfterExemptions), "public-text-boundary", `${file.path} matches forbidden pattern ${pattern}`);
     }
     for (const pattern of SECRET_PATTERNS) {
       addIf(failures, pattern.test(file.text), "secret-scan", `${file.path} looks like it contains a secret`);
