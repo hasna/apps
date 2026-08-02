@@ -2578,7 +2578,12 @@ hygiene
     try {
       const limit = positiveInteger(opts.limit, "--limit") ?? 100;
       const preview = buildStuckRunReport(store, { apply: false, limit });
-      const backupPath = opts.apply && preview.stuck > 0 ? backupLoopsDatabase("stuck-run-hygiene") : undefined;
+      // A live-looking-but-deferred run still gets mutated on apply (its
+      // lease_expires_at and defer_count both advance toward the grace
+      // ceiling), so back up whenever apply will touch ANY expired-lease row,
+      // not only when something is immediately reclaimable.
+      const backupPath =
+        opts.apply && preview.stuck + preview.liveDeferred > 0 ? backupLoopsDatabase("stuck-run-hygiene") : undefined;
       const report = opts.apply ? buildStuckRunReport(store, { apply: true, limit }) : preview;
       const output = backupPath ? { ...report, backupPath } : report;
       if (isJson()) console.log(JSON.stringify(output, null, 2));
