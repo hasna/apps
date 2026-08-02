@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.11] - 2026-08-02
+
+### Fixed
+
+- `todos update --assign <seat>` now points callers at a `--assign-seat` invocation
+  that actually runs. The prior refusal message named the flag in a shape the verb
+  rejects, so an agent following it hit a second error and could conclude the CLI
+  was recommending a broken flag. The corrected hint is client-side, so it reaches
+  every installed agent immediately rather than waiting on the hosted service.
+
 ## [0.13.10] - 2026-08-02
 
 ### Fixed
