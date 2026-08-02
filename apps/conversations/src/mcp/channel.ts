@@ -17,6 +17,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createPollHealth, type PollHealthReporter } from "../lib/poll-health.js";
+import type { ConversationsStore } from "../lib/store/index.js";
 import { getStore } from "../lib/store/index.js";
 // Routed reads/writes: every read/write goes through the Store (local or cloud API).
 
@@ -107,12 +108,26 @@ export function registerChannelBridge(
     startDelayMs?: number;
     /** Where poll failures are reported. Defaults to stderr — NEVER stdout. */
     onPollError?: PollHealthReporter;
+    /**
+     * The store to read through. Defaults to the ambient getStore() on every
+     * poll, which is the production behaviour.
+     *
+     * A test needs this to point ONE bridge at an unreachable endpoint without
+     * mutating process.env: getStore(env = process.env) re-reads the
+     * environment per call and does not cache, so flipping those variables
+     * process-wide re-points every other live bridge too — including the ones
+     * buildServer() starts and never disposes (todos 890b269e). That is how a
+     * closed-port fixture in one file produced real HTTP traffic in another
+     * (todos 19c79404).
+     */
+    store?: ConversationsStore;
   },
-): () => void {
+): () => Promise<void> {
   server.server.registerCapabilities({
     experimental: { 'claude/channel': {} },
   });
 
+  const resolveStore = (): ConversationsStore => opts?.store ?? getStore();
   const pollIntervalMs = opts?.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const startDelayMs = opts?.startDelayMs ?? DEFAULT_START_DELAY_MS;
   const health = createPollHealth({
@@ -124,6 +139,8 @@ export function registerChannelBridge(
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let startTimer: ReturnType<typeof setTimeout> | null = null;
   let polling = false;
+  /** The poll currently in flight, so the disposer can wait for it. */
+  let inFlightPoll: Promise<void> | null = null;
 
   function getSessionId(): string | null {
     return getClaudeSessionId(server);
@@ -159,11 +176,11 @@ export function registerChannelBridge(
 
       // Only acknowledge delivery after the channel transport accepts it.
       if (mode === "direct") {
-        try { await await getStore().markReadByIds([msg.id]); } catch { /* ok */ }
+        try { await await resolveStore().markReadByIds([msg.id]); } catch { /* ok */ }
       } else if (mode === "channel_blurb") {
         const agent = getSessionAgent(server);
         if (agent) {
-          try { await getStore().markChannelNotificationsRead(agent, [msg.id]); } catch { /* ok */ }
+          try { await resolveStore().markChannelNotificationsRead(agent, [msg.id]); } catch { /* ok */ }
         }
       }
 
@@ -182,7 +199,7 @@ export function registerChannelBridge(
 
       // Poll DMs to this agent — skip messages FROM self (no echoes)
       if (agent) {
-        const msgs = (await await getStore().readMessages({ to: agent, unread_only: true, order: "asc", limit: 20 }))
+        const msgs = (await await resolveStore().readMessages({ to: agent, unread_only: true, order: "asc", limit: 20 }))
           .filter(m => m.id > lastAgentMsgId && m.from_agent !== agent);
         for (const msg of msgs) {
           const delivered = await pushNotification(msg, "dm");
@@ -193,7 +210,7 @@ export function registerChannelBridge(
 
       // Poll direct session-targeted messages — skip self (no echoes)
       if (sid) {
-        const msgs = (await await getStore().readMessages({ to: `session:${sid}`, unread_only: true, order: "asc", limit: 20 }))
+        const msgs = (await await resolveStore().readMessages({ to: `session:${sid}`, unread_only: true, order: "asc", limit: 20 }))
           .filter(m => m.id > lastSessionMsgId && m.from_agent !== agent);
         for (const msg of msgs) {
           const delivered = await pushNotification(msg, "direct");
@@ -203,7 +220,7 @@ export function registerChannelBridge(
       }
 
       if (agent) {
-        const notifications = (await getStore().readChannelNotifications({
+        const notifications = (await resolveStore().readChannelNotifications({
           agent,
           unread_only: true,
           limit: 20,
@@ -231,6 +248,17 @@ export function registerChannelBridge(
     }
   }
 
+  // Track the poll actually in flight so the disposer can wait for it. A tick
+  // dropped by the `polling` guard must not replace it with a resolved promise
+  // (todos 19c79404).
+  function runPoll(): void {
+    if (polling) return;
+    const running = pollOnce()
+      .catch((error: unknown) => health.recordFailure(error))
+      .finally(() => { if (inFlightPoll === running) inFlightPoll = null; });
+    inFlightPoll = running;
+  }
+
   function startPolling(): void {
     if (pollTimer) return;
 
@@ -239,20 +267,30 @@ export function registerChannelBridge(
     // session unable to tell a broken bridge from a quiet inbox. Reporting goes
     // to stderr via createPollHealth — stdout is the JSON-RPC channel and a
     // stray line there would corrupt the protocol stream.
-    pollTimer = setInterval(() => {
-      void pollOnce().catch((error: unknown) => health.recordFailure(error));
-    }, pollIntervalMs);
+    pollTimer = setInterval(runPoll, pollIntervalMs);
 
-    void pollOnce().catch((error: unknown) => health.recordFailure(error));
+    runPoll();
   }
 
   // Start polling after connection established
   startTimer = setTimeout(() => startPolling(), startDelayMs);
 
-  return () => {
+  /**
+   * Dispose the bridge AND wait until it is quiescent.
+   *
+   * Clearing the timers leaves any read already in flight running, and the HTTP
+   * transport retries idempotent GETs with backoff — so the bridge can keep
+   * calling the global `fetch` for hundreds of milliseconds after the disposer
+   * returns. Under `bun test`, where all files share one process and one
+   * `globalThis`, that straggler lands in a later test's `fetch` stub and fails
+   * an unrelated assertion (todos 19c79404). Callers that do not care may
+   * ignore the promise, exactly as before.
+   */
+  return async () => {
     if (startTimer) clearTimeout(startTimer);
     if (pollTimer) clearInterval(pollTimer);
     startTimer = null;
     pollTimer = null;
+    await Promise.allSettled([inFlightPoll]);
   };
 }

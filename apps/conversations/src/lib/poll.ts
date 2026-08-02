@@ -5,7 +5,7 @@
 // reading the local db while the client was flipped to the cloud was the
 // split-brain bug this eliminates.
 
-import { getStore } from "./store/index.js";
+import { getStore, type ConversationsStore } from "./store/index.js";
 import { createPollHealth, type PollHealthReporter } from "./poll-health.js";
 import type { Message } from "../types.js";
 
@@ -17,6 +17,17 @@ export interface PollOptions {
   on_messages: (messages: Message[]) => void;
   /** Where poll failures are reported. Defaults to stderr. */
   on_poll_error?: PollHealthReporter;
+  /**
+   * The store to read through. Defaults to the ambient {@link getStore}.
+   *
+   * This exists so a test can point ONE loop at an unreachable endpoint
+   * without mutating `process.env`. `getStore(env = process.env)` re-reads the
+   * environment on every call and does not cache, so a test that flips those
+   * variables process-wide silently re-points every other live poll loop in
+   * the process at the same endpoint — which is how a closed-port fixture in
+   * one file produced real HTTP traffic inside another (todos 19c79404).
+   */
+  store?: ConversationsStore;
 }
 
 /**
@@ -24,12 +35,14 @@ export interface PollOptions {
  * the active {@link getStore} transport, so the same loop works in local and
  * cloud modes.
  */
-export function startPolling(opts: PollOptions): { stop: () => void } {
+export function startPolling(opts: PollOptions): { stop: () => Promise<void> } {
   const interval = opts.interval_ms ?? 200;
-  const store = getStore();
+  const store = opts.store ?? getStore();
   let stopped = false;
   let inFlight = false;
   let lastSeenId = 0;
+  /** The read currently in flight, so `stop()` can wait for it to finish. */
+  let current: Promise<void> | null = null;
 
   // Seed lastSeenId at call time so we never replay messages that already
   // existed when watching began. The read is issued synchronously (the local
@@ -59,9 +72,6 @@ export function startPolling(opts: PollOptions): { stop: () => void } {
     });
 
   const poll = async () => {
-    if (stopped || inFlight) return;
-    inFlight = true;
-
     try {
       await seeded;
       if (stopped) return;
@@ -86,25 +96,50 @@ export function startPolling(opts: PollOptions): { stop: () => void } {
       }
     } catch (error) {
       // A store failure must not end the loop and must not be silent. Without
-      // this, the rejection escapes through the `void poll()` below: under the
+      // this, the rejection escapes through the `tick()` below: under the
       // CLI's process-level unhandledRejection handler that prints and calls
       // process.exit(1), so the watcher dies on the first blip; with no such
       // handler it is swallowed and the watcher goes blind. Both look, to the
       // operator, exactly like an inbox with nothing in it.
       health.recordFailure(error);
-    } finally {
-      inFlight = false;
     }
   };
 
-  const timer = setInterval(() => {
-    void poll();
-  }, interval);
+  // A tick that is dropped by the in-flight guard MUST NOT overwrite the
+  // tracked promise, or `stop()` would wait on an already-resolved one and the
+  // real read would outlive it — which is the whole defect being fixed.
+  const tick = () => {
+    if (stopped || inFlight) return;
+    inFlight = true;
+    const running = poll().finally(() => {
+      inFlight = false;
+      if (current === running) current = null;
+    });
+    current = running;
+  };
+
+  const timer = setInterval(tick, interval);
 
   return {
-    stop: () => {
+    /**
+     * Stop the loop AND wait until it is quiescent.
+     *
+     * Clearing the interval is not enough. A read already in flight keeps
+     * running — the HTTP transport retries idempotent GETs with backoff, so a
+     * single failing read can keep calling the global `fetch` for hundreds of
+     * milliseconds after `stop()` returns. In a `bun test` run every file
+     * shares one process and one `globalThis`, so that straggler lands in
+     * whichever later test has since swapped in its own `fetch`, and fails an
+     * assertion in a file this loop has nothing to do with (todos 19c79404).
+     *
+     * Awaiting the returned promise is therefore how a caller knows the loop
+     * has stopped touching shared state. Callers that do not care may ignore
+     * it, exactly as before.
+     */
+    stop: async () => {
       stopped = true;
       clearInterval(timer);
+      await Promise.allSettled([seeded, current]);
     },
   };
 }

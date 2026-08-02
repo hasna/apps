@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { startPolling } from "./poll";
 import { sendMessage } from "./messages";
 import { closeDb } from "./db";
-import { ENV_KEYS, DB_PATH_KEYS } from "./store/index";
+import { ENV_KEYS, getStore, type ConversationsStore } from "./store/index";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -129,26 +129,30 @@ describe("startPolling", () => {
  * some `catch` block exists.
  */
 describe("startPolling — store failure visibility (regression d3c6b65e)", () => {
-  const saved: Record<string, string | undefined> = {};
+  let failingStore: ConversationsStore;
   let errorLines: string[] = [];
   let restoreConsole: (() => void) | null = null;
   let absorbRejection: ((reason: unknown) => void) | null = null;
 
   beforeEach(() => {
-    // An explicit local DB path outranks the cloud keys in getStore()'s
-    // precedence table, and the suite-level beforeEach sets one — clear them
-    // or this test quietly measures a healthy LocalStore instead.
-    for (const key of DB_PATH_KEYS) {
-      saved[key] = process.env[key];
-      delete process.env[key];
-    }
-    const urlKey = ENV_KEYS.apiUrlKeys[0];
-    const keyKey = ENV_KEYS.apiKeyKeys[0];
-    saved[urlKey] = process.env[urlKey];
-    saved[keyKey] = process.env[keyKey];
+    // A store built from a PRIVATE env object, never from process.env.
+    //
+    // The earlier version of this fixture deleted the DB-path keys and set the
+    // cloud keys on process.env for the duration of the test. That is a
+    // process-wide flip, and getStore(env = process.env) re-reads the
+    // environment on every call without caching — so every other live poll
+    // loop in the bun test process silently re-pointed at this closed port
+    // too, including the channel bridges buildServer() starts and never
+    // disposes (todos 890b269e). Their retrying reads then outlived this file
+    // and landed in a later file's global fetch stub. Building the store here
+    // and handing it to this ONE loop keeps the fixture's real transport and
+    // real fetch while touching nothing global (todos 19c79404).
+    //
     // Port 9 (discard) is closed here: connect fails immediately.
-    process.env[urlKey] = "http://127.0.0.1:9/v1";
-    process.env[keyKey] = "placeholder-not-a-credential";
+    failingStore = getStore({
+      [ENV_KEYS.apiUrlKeys[0]]: "http://127.0.0.1:9/v1",
+      [ENV_KEYS.apiKeyKeys[0]]: "placeholder-not-a-credential",
+    });
 
     errorLines = [];
     const original = console.error;
@@ -169,10 +173,6 @@ describe("startPolling — store failure visibility (regression d3c6b65e)", () =
   afterEach(() => {
     restoreConsole?.();
     if (absorbRejection) process.off("unhandledRejection", absorbRejection);
-    for (const [key, value] of Object.entries(saved)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
   });
 
   // A failed ApiStore read takes ~760ms here, not the ~13ms a bare fetch to
@@ -185,19 +185,19 @@ describe("startPolling — store failure visibility (regression d3c6b65e)", () =
 
   test("surfaces store failures and keeps polling through them", async () => {
     const { stop } = startPolling({
+      store: failingStore,
       to_agent: "watcher",
       interval_ms: 30,
       on_messages: () => {},
     });
     await new Promise((r) => setTimeout(r, WINDOW_MS));
-    stop();
 
-    // `stop()` prevents future ticks, but it cannot cancel a store read that
-    // was already retrying when the timer was cleared. Keep this test's closed-
-    // port environment and console sink installed until that final read has
-    // drained; otherwise it can reach the global fetch mock installed by the
-    // next test file and manufacture an unrelated webhook call in CI.
-    await new Promise((r) => setTimeout(r, OBSERVED_FAILED_READ_MS * 2));
+    // Awaited, not fired and forgotten. `stop()` resolves only once the read
+    // that was already retrying when the timer was cleared has drained; until
+    // then it can still reach the global fetch stub installed by a later test
+    // file and manufacture an unrelated webhook call (todos 19c79404). This
+    // replaces a fixed sleep, which raced the transport's own retry schedule.
+    await stop();
 
     // 1. A blind watcher and a quiet inbox must not look alike.
     expect(errorLines.length).toBeGreaterThan(0);
@@ -213,4 +213,66 @@ describe("startPolling — store failure visibility (regression d3c6b65e)", () =
     // 4. A sustained outage is labelled, not just logged line by line.
     expect(errorLines.some((line) => line.includes("DEGRADED"))).toBe(true);
   }, WINDOW_MS + 5000);
+
+  /**
+   * The test above is only safe because `stop()` drains. This asserts that
+   * property directly, so it cannot regress silently (todos 19c79404).
+   *
+   * Measured on 0d51745, where `stop()` did not drain: a counting stub
+   * installed AFTER stop() recorded
+   *   `callCount_after_50ms=0 callCount_after_2050ms=1`
+   * — one real fetch arriving late, from a loop the caller believed had
+   * stopped. That is the call that incremented webhooks.test.ts's counter and
+   * turned CI red. This test fails on that revision and passes on this one.
+   */
+  test("stop() drains — a stopped loop never reaches a later fetch stub", async () => {
+    // A DISTINCT loopback address, so this assertion counts THIS loop's traffic
+    // and nothing else. Counting every fetch in the process instead makes the
+    // test a global canary: it then fails on any unrelated leak elsewhere in
+    // the suite, which is a true statement about the suite but not about the
+    // property under test. 127.0.0.9:9 is closed exactly like 127.0.0.1:9.
+    // Its own closed loopback host, and its own private store, so the count
+    // below is THIS loop's traffic and nothing else. Two separate hazards are
+    // being avoided: counting every fetch in the process would make this a
+    // global canary that fails on any unrelated leak, and setting the URL on
+    // process.env would hand this host to every other live loop as well.
+    const PROBE_HOST = "127.0.0.9";
+    const probeStore = getStore({
+      [ENV_KEYS.apiUrlKeys[0]]: `http://${PROBE_HOST}:9/v1`,
+      [ENV_KEYS.apiKeyKeys[0]]: "placeholder-not-a-credential",
+    });
+
+    const { stop } = startPolling({
+      store: probeStore,
+      to_agent: "watcher",
+      interval_ms: 30,
+      on_messages: () => {},
+    });
+    // Long enough that a read is genuinely mid-retry when stop() is called;
+    // stopping before the first read starts would make this vacuous.
+    await new Promise((r) => setTimeout(r, OBSERVED_FAILED_READ_MS));
+    await stop();
+
+    // Take ownership of the global exactly as a later test file would, but
+    // discriminate on the URL and pass everything else through — the pattern
+    // src/server/serve.test.ts already uses.
+    let callCount = 0;
+    const originalFetch = globalThis.fetch;
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      if (String(input).includes(PROBE_HOST)) {
+        callCount++;
+        return new Response("ok");
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+    try {
+      await new Promise((r) => setTimeout(r, OBSERVED_FAILED_READ_MS * 4));
+      expect(callCount).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }, WINDOW_MS + 10000);
 });

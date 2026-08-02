@@ -9,7 +9,7 @@ import { createChannel } from "../lib/channels.js";
 import { readChannelNotifications, subscribeToChannelNotifications } from "../lib/channel-notifications.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerChannelBridge, setSessionAgent, setClaudeSessionId, getSessionAgent, getClaudeSessionId } from "./channel.js";
-import { ENV_KEYS, DB_PATH_KEYS } from "../lib/store/index.js";
+import { ENV_KEYS, getStore } from "../lib/store/index.js";
 
 function createTestDbPath(): string {
   return join(tmpdir(), `conversations-channel-${Date.now()}-${Math.random().toString(16).slice(2)}.db`);
@@ -293,15 +293,19 @@ describe("session agent tracking", () => {
  */
 describe("channel bridge — store failure visibility (regression d3c6b65e)", () => {
   test("reports a store failure instead of swallowing it", async () => {
-    const saved: Record<string, string | undefined> = {};
-    const remember = (key: string) => { saved[key] = process.env[key]; };
-    for (const key of DB_PATH_KEYS) { remember(key); delete process.env[key]; }
-    const urlKey = ENV_KEYS.apiUrlKeys[0];
-    const keyKey = ENV_KEYS.apiKeyKeys[0];
-    remember(urlKey); remember(keyKey);
-    process.env[urlKey] = "http://127.0.0.1:9/v1";
-    process.env[keyKey] = "placeholder-not-a-credential";
-    closeDb();
+    // A store built from a PRIVATE env object, never from process.env. The
+    // earlier version flipped the cloud keys process-wide, and
+    // getStore(env = process.env) re-reads them per call without caching — so
+    // every other live bridge in the run adopted this closed port too,
+    // including the ones buildServer() starts and never disposes
+    // (todos 890b269e), whose retrying reads then landed in a later file's
+    // global fetch stub (todos 19c79404). Handing the store to this ONE bridge
+    // keeps the real transport and the real fetch while touching nothing
+    // global. Port 9 (discard) is closed here: connect fails immediately.
+    const failingStore = getStore({
+      [ENV_KEYS.apiUrlKeys[0]]: "http://127.0.0.1:9/v1",
+      [ENV_KEYS.apiKeyKeys[0]]: "placeholder-not-a-credential",
+    });
 
     const lines: string[] = [];
     const bridgeServer = {
@@ -313,6 +317,7 @@ describe("channel bridge — store failure visibility (regression d3c6b65e)", ()
     setSessionAgent(bridgeServer, "watcher", "claude-session-store-failure");
 
     const stop = registerChannelBridge(bridgeServer, {
+      store: failingStore,
       pollIntervalMs: 50,
       startDelayMs: 0,
       onPollError: (line: string) => { lines.push(line); },
@@ -325,11 +330,36 @@ describe("channel bridge — store failure visibility (regression d3c6b65e)", ()
       expect(lines.length).toBeGreaterThan(0);
       expect(lines.join("\n")).toMatch(/unable to connect|refused|failed|ConnectionRefused/i);
     } finally {
-      stop();
-      for (const [key, value] of Object.entries(saved)) {
-        if (value === undefined) delete process.env[key];
-        else process.env[key] = value;
-      }
+      // Awaited: the disposer resolves only once the poll that was already
+      // retrying has drained. Left un-awaited it kept calling the global fetch
+      // after this test returned, landing in a later file's stub and failing an
+      // assertion there — which is what turned main red (todos 19c79404).
+      await stop();
     }
   }, 20000);
+
+  /**
+   * NO DRAIN TEST HERE, DELIBERATELY — and this note is the reason, so nobody
+   * adds one and watches it flake.
+   *
+   * The bridge's disposer does now drain (src/mcp/channel.ts), and that is what
+   * fixed main. But the property cannot be ASSERTED from this suite yet.
+   * `pollOnce` resolves `getStore()` on every poll, and `getStore(env =
+   * process.env)` re-reads the environment each call and does not cache — so a
+   * probe that points the store at a unique closed host to count only its own
+   * traffic has that host adopted by every other live bridge in the process.
+   *
+   * There are three such bridges: `buildServer()` (src/mcp/index.ts:62) starts
+   * one and returns only the McpServer, so its disposer is unreachable by
+   * construction, and tool-contract.test.ts:171, http.test.ts:224 and
+   * envelope-ordering.test.ts:114 each leak one for the rest of the run.
+   * Measured on the full suite: a drain probe on its own unique host still
+   * counted `Expected: 0 / Received: 8`, with zero foreign URLs logged — all of
+   * it from those bridges wearing this test's store URL.
+   *
+   * Tracked as todos 890b269e. Once buildServer exposes its disposer this test
+   * becomes writable; the equivalent assertion for the `watch` loop lives in
+   * src/lib/poll.test.ts, which CAN isolate because startPolling resolves its
+   * store once at construction.
+   */
 });

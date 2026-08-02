@@ -119,7 +119,10 @@ export function ChatView({ agent, onBack, sessionId: initialSessionId, recipient
       },
     });
 
-    return stop;
+    // `stop()` now resolves once the loop is quiescent, but a React effect
+    // destructor must return void — not a promise — so the wait is discarded
+    // here deliberately. Unmounting does not need to block on a final read.
+    return () => { void stop(); };
   }, [sessionId, channelName]);
 
   // Mark as read
