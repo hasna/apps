@@ -177,6 +177,48 @@ function deriveWorkspacePath(input: CreateWorkspaceInput, root: Root | null, slu
   return isAbsolute(rendered) ? resolve(rendered) : resolve(join(root.base_path, rendered));
 }
 
+/**
+ * Registry-level defaults for a new project: the canonical workspace path and
+ * the slug-derived conversations channel.
+ *
+ * Extracted so local planning and the api/cloud PostgreSQL store compute them
+ * identically. The server calls this only after allocating the exact persisted
+ * slug; clients must not precompute slug-dependent values that the server would
+ * then mistake for explicit operator choices.
+ *
+ * Both derivations are pure with respect to the registry: the path is a
+ * function of the project id under `$HASNA_PROJECTS_HOME` (plus the root's
+ * template when a root is given), and the channel is a function of slug and
+ * kind. Neither needs the local database, which is what lets the api transport
+ * call this too.
+ */
+export function deriveWorkspaceRegistryFields(
+  input: Pick<CreateWorkspaceInput, "name" | "primary_path" | "integrations">,
+  context: { root: Root | null; slug: string; id: string; kind: WorkspaceKind },
+): { primary_path: string | null; integrations: WorkspaceIntegrations } {
+  const primary_path = deriveWorkspacePath(
+    input as CreateWorkspaceInput,
+    context.root,
+    context.slug,
+    context.id,
+    context.kind,
+  );
+  const integrations: WorkspaceIntegrations = { ...(input.integrations ?? {}) };
+  if (!integrations.conversations_channel?.trim()) {
+    try {
+      integrations.conversations_channel = deriveProjectChannel({
+        slug: context.slug,
+        kind: context.kind,
+        integrations,
+      }).channel;
+    } catch {
+      // Slug does not produce a valid channel name; leave the integration unset.
+      delete integrations.conversations_channel;
+    }
+  }
+  return { primary_path, integrations };
+}
+
 function plannedWorkspace(input: WorkspaceCreationPlanInput, db?: Database): {
   workspace: WorkspaceCreationPlan["workspace"];
   workspace_input: CreateWorkspaceInput;
@@ -191,25 +233,17 @@ function plannedWorkspace(input: WorkspaceCreationPlanInput, db?: Database): {
   const id = input.id ? assertProjectWorkspaceId(input.id) : generateWorkspaceId();
   const slug = uniqueWorkspaceSlug(input.slug ?? workspaceSlugify(input.name), db);
   const kind = input.kind ?? recipe?.kind ?? root?.default_kind ?? "generic";
-  const primaryPath = deriveWorkspacePath(input, root, slug, id, kind);
   const tags = normalizeList([
     ...(root?.tags ?? []),
     ...(recipe?.default_tags ?? []),
     ...(input.tags ?? []),
   ]);
-  const integrations: WorkspaceIntegrations = { ...(input.integrations ?? {}) };
-  if (!integrations.conversations_channel?.trim()) {
-    try {
-      integrations.conversations_channel = deriveProjectChannel({
-        slug,
-        kind: kind as WorkspaceKind,
-        integrations,
-      }).channel;
-    } catch {
-      // Slug does not produce a valid channel name; leave the integration unset.
-      delete integrations.conversations_channel;
-    }
-  }
+  const { primary_path: primaryPath, integrations } = deriveWorkspaceRegistryFields(input, {
+    root,
+    slug,
+    id,
+    kind: kind as WorkspaceKind,
+  });
 
   const workspace = {
     id,

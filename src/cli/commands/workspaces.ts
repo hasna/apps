@@ -4,10 +4,12 @@ import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
   ensureCliAgent,
+  generateWorkspaceId,
   getAgent,
   getAgentBySlug,
   getRecipe,
   getRoot,
+  workspaceSlugify,
   listAgents,
   listRecipes,
   listRoots,
@@ -23,6 +25,7 @@ import {
 } from "../../lib/workspace-runtime.js";
 import {
   cleanupWorkspaceCreationTarget,
+  deriveWorkspaceRegistryFields,
   executeWorkspaceCreation,
   type WorkspaceCreationCleanupTarget,
   type WorkspaceCreationPlanAction,
@@ -97,7 +100,7 @@ import {
   removeProjectTags,
   unlinkProjectIntegrationFields,
 } from "../../lib/project-management.js";
-import { PROJECT_AGENT_ROLES, WORKSPACE_KINDS, WORKSPACE_STATUSES, type AgentKind, type JsonObject, type Workspace, type WorkspaceEvent, type WorkspaceIntegrations, type WorkspaceKind, type WorkspaceLock, type WorkspaceStatus } from "../../types/workspace.js";
+import { PROJECT_AGENT_ROLES, WORKSPACE_KINDS, WORKSPACE_STATUSES, type AgentKind, type JsonObject, type Recipe, type Root, type Workspace, type WorkspaceEvent, type WorkspaceIntegrations, type WorkspaceKind, type WorkspaceLock, type WorkspaceStatus } from "../../types/workspace.js";
 
 const DEFAULT_LIST_LIMIT = 25;
 const DEFAULT_EVENT_LIMIT = 20;
@@ -300,18 +303,26 @@ async function withWorkspaceLock<T>(
 // BOTH transports (local sqlite or `/v1/roots` + `/v1/recipes` over HTTP), so
 // slug->id resolution must route through the Store — never straight to local
 // sqlite, which would resolve stale local ids on a flipped machine.
-async function resolveRootId(store: ProjectStore, idOrSlug: string | undefined): Promise<string | undefined> {
-  if (!idOrSlug) return undefined;
+async function resolveRoot(store: ProjectStore, idOrSlug: string): Promise<Root> {
   const root = await store.getRoot(idOrSlug);
   if (!root) throw new Error(`Root not found: ${idOrSlug}`);
-  return root.id;
+  return root;
+}
+
+async function resolveRecipe(store: ProjectStore, idOrSlug: string): Promise<Recipe> {
+  const recipe = await store.getRecipe(idOrSlug);
+  if (!recipe) throw new Error(`Recipe not found: ${idOrSlug}`);
+  return recipe;
+}
+
+async function resolveRootId(store: ProjectStore, idOrSlug: string | undefined): Promise<string | undefined> {
+  if (!idOrSlug) return undefined;
+  return (await resolveRoot(store, idOrSlug)).id;
 }
 
 async function resolveRecipeId(store: ProjectStore, idOrSlug: string | undefined): Promise<string | undefined> {
   if (!idOrSlug) return undefined;
-  const recipe = await store.getRecipe(idOrSlug);
-  if (!recipe) throw new Error(`Recipe not found: ${idOrSlug}`);
-  return recipe.id;
+  return (await resolveRecipe(store, idOrSlug)).id;
 }
 
 function resolveAgentId(idOrSlug: string | undefined): string {
@@ -1506,14 +1517,32 @@ function registerProjectCommands(program: Command): void {
           // shared registry resources: resolve slug->id through the Store so the
           // intent is honored (not silently dropped) in api mode. Agent
           // attribution stays server-side (see mutationAgentId).
-          const project = await store.createProject({
+          const root = opts.root ? await resolveRoot(store, opts.root) : null;
+          const recipe = opts.recipe ? await resolveRecipe(store, opts.recipe) : null;
+          // Generate the id client-side so the canonical no-root path can still
+          // describe this client's project store. Slug-dependent defaults are
+          // server-authoritative: a root template may contain {slug}, and the
+          // server may suffix a duplicate slug. Do not send an implicit rooted
+          // path or derived channel, because the server cannot distinguish
+          // those guesses from explicit operator values. It derives missing
+          // fields after selecting the exact slug it persists.
+          const id = generateWorkspaceId();
+          const slug = opts.slug ?? workspaceSlugify(opts.name);
+          const kind = parseKind(opts.kind) ?? recipe?.kind ?? root?.default_kind ?? "generic";
+          const derived = deriveWorkspaceRegistryFields({
             name: opts.name,
-            slug: opts.slug,
-            description: opts.description,
-            kind: parseKind(opts.kind),
-            root_id: await resolveRootId(store, opts.root),
-            recipe_id: await resolveRecipeId(store, opts.recipe),
             primary_path: opts.path ? resolve(opts.path) : undefined,
+            integrations,
+          }, { root, slug, id, kind });
+          const project = await store.createProject({
+            id,
+            name: opts.name,
+            slug,
+            description: opts.description,
+            kind,
+            root_id: root?.id,
+            recipe_id: recipe?.id,
+            primary_path: opts.path || !root ? derived.primary_path ?? undefined : undefined,
             git_remote: opts.gitRemote,
             tags: splitList(opts.tags),
             metadata: Object.keys(managementMetadata).length ? managementMetadata : undefined,
