@@ -91,6 +91,52 @@ describe("sender notification at the process boundary", () => {
     expect(result.exitCode).toBe(REDACTION_EXIT_CODE);
   });
 
+  test("c400d5f0: a stripped trailing newline does NOT produce rc=2", () => {
+    // The defect at the surface a caller actually scripts against. Measured on
+    // installed 0.5.22: the same body sent with and without the newline the
+    // shell appends returned rc=2 and rc=0 respectively (messages 650921 and
+    // 650922), and BOTH landed intact. rc=2 therefore meant either "your body
+    // was destroyed" or "you had a newline", with nothing to tell them apart.
+    const script = [
+      `import { warnIfRedacted } from "${join(process.cwd(), "src/cli/redaction-notice.ts")}";`,
+      `warnIfRedacted("an ordinary status report\\n", "an ordinary status report");`,
+      `process.exit(process.exitCode ?? 0);`,
+    ].join("\n");
+
+    const result = Bun.spawnSync({
+      cmd: ["bun", "-e", script],
+      cwd: process.cwd(),
+      env: { ...process.env, FORCE_COLOR: "0" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    expect(result.stderr.toString()).not.toContain("WARNING");
+    expect(result.exitCode).toBe(0);
+  });
+
+  test("c400d5f0 guard: rc=2 still fires for a REAL loss that also lost a newline", () => {
+    // The other half, and the one that must not be traded away. If this ever
+    // goes quiet, the false-positive fix has blinded the real detector and a
+    // gutted report will again read as delivered.
+    const script = [
+      `import { warnIfRedacted } from "${join(process.cwd(), "src/cli/redaction-notice.ts")}";`,
+      `warnIfRedacted("ASSIGNED_PENDING=14\\nUNASSIGNED_PENDING=41\\n", "[REDACTED:ENV_DUMP]");`,
+      `process.exit(process.exitCode ?? 0);`,
+    ].join("\n");
+
+    const result = Bun.spawnSync({
+      cmd: ["bun", "-e", script],
+      cwd: process.cwd(),
+      env: { ...process.env, FORCE_COLOR: "0" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    expect(result.stderr.toString()).toContain("WARNING");
+    expect(result.exitCode).toBe(REDACTION_EXIT_CODE);
+  });
+
   test("the notice stays SILENT on clean content, so it is not noise", () => {
     const script = [
       `import { warnIfRedacted } from "${join(process.cwd(), "src/cli/redaction-notice.ts")}";`,
