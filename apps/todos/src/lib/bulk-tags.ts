@@ -24,7 +24,7 @@ export interface BulkTagResolution {
  * Parse a comma-separated `--tag` argument.
  *
  * Splits ONLY on commas: `:` and `/` are legal inside a tag and are load
- * bearing for the namespaced tags this fleet already stores (`repo:open-todos`,
+ * bearing for the namespaced tags this fleet already stores (`repo:secrets`,
  * `gh:hasna/todos`, `directive:k_msd4cz8t_ste6f4`).
  */
 export function parseTagList(raw: string | undefined | null): string[] {

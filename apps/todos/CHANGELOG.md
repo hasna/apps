@@ -25,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     given but name different sets — a silently dropped tag argument would report
     success while applying the wrong tags.
   - Tags split on commas only; `:` and `/` are preserved, which namespaced tags such as
-    `repo:open-todos` and `gh:hasna/todos` depend on.
+    `repo:secrets` and `gh:hasna/todos` depend on.
 
 ## [0.14.0] - 2026-08-02
 
