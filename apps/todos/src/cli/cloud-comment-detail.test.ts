@@ -3,13 +3,15 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-/** `todos add` warns on stderr when a task ends up both unassigned and unattributed —
- *  that warning is the point of the fix, not incidental noise, so it is stripped here
- *  rather than tolerated wholesale. Any OTHER stderr output still fails the assertion. */
+/** `todos add` warns on stderr when a task ends up both unassigned and unattributed,
+ *  and again when it ends up with no project — each warning is the point of the fix
+ *  that added it, not incidental noise, so both are stripped here BY NAME rather than
+ *  tolerated wholesale. Any OTHER stderr output still fails the assertion. */
 function stderrWithoutAttributionWarning(stderr: string): string {
   return stderr
     .split("\n")
     .filter((line) => !line.includes("ownerless and unattributable"))
+    .filter((line) => !line.includes("filed with no project"))
     .join("\n")
     .trim();
 }

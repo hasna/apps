@@ -140,6 +140,56 @@ function resolveProjectIdOrSlug(input: string): string {
 }
 
 /**
+ * Read `--project` as a REFERENCE, tolerating commander's `--no-project` negation.
+ *
+ * Declaring `--no-project` alongside `--project <id>` makes commander store the
+ * boolean `false` under the same `project` key. Every existing reader here does
+ * `opts.project || globalOpts.project`, which coerces that `false` away
+ * correctly — but only by accident. These two helpers make the distinction
+ * explicit so a later edit cannot reintroduce a `false` leaking into a resolver
+ * that expects a string.
+ */
+function projectRefFromOpts(opts: { project?: unknown }, globalOpts: { project?: unknown }): string | undefined {
+  const own = typeof opts.project === "string" ? opts.project : undefined;
+  const global = typeof globalOpts.project === "string" ? globalOpts.project : undefined;
+  return own || global;
+}
+
+/** True only when the caller passed `--no-project`, i.e. the omission is deliberate. */
+function projectOptOut(opts: { project?: unknown }): boolean {
+  return opts.project === false;
+}
+
+/**
+ * Warn when a task is about to be filed with no project.
+ *
+ * MEASURED 2026-08-03 on the hosted store: 578 of 3231 pending rows (17.9%) carry
+ * project_id NULL, and 93 of the 283 created in the previous 24h (32.9%) — the
+ * INFLOW is nearly double the stock. Such a row appears in no per-seat list and
+ * no drain reaches it, including the censuses that measured the problem.
+ *
+ * This WARNS rather than rejects, deliberately. A third of live creations omit the
+ * project, so rejecting would take the CLI every agent files work through offline
+ * for a third of its traffic — worse than the condition it treats. The line names
+ * BOTH remedies because a caller with genuinely no project needs a reachable
+ * action, or it learns to scroll past the warning; `--no-project` mirrors the
+ * `--unassigned` flag this same command already ships for the identical shape of
+ * problem on the assignee field.
+ *
+ * One line, not two, for the reason the ownerless warning inside `add` gives: a
+ * warning people scroll past is a warning that does not work. It goes to stderr,
+ * so `--json` stdout stays machine-parseable — asserted in the regression test,
+ * because every agent on the fleet parses that stdout.
+ */
+function warnMissingProject(resolvedProjectId: string | undefined, optedOut: boolean): void {
+  if (resolvedProjectId || optedOut) return;
+  console.error(chalk.yellow(
+    "Warning: task filed with no project — it will not appear in any project list, per-seat report, or drain. " +
+    "Pass --project <id-or-slug>, or --no-project if filing it globally is deliberate.",
+  ));
+}
+
+/**
  * Validate and normalize a status value, rejecting unknowns before the DB does.
  *
  * Write flags take exactly one status, so a comma list is rejected rather than
@@ -335,6 +385,7 @@ export function registerTaskCommands(program: Command) {
     .option("--due <date>", "Due date (ISO string or YYYY-MM-DD)")
     .option("--reason <text>", "Why this task exists")
     .option("--project <id>", "Assign to project by ID or slug (overrides auto-detect)")
+    .option("--no-project", "Deliberately file this task with no project (silences the orphan warning)")
     .option("--unassigned", "Deliberately file this task with no assignee")
     .option("--assign-seat", "Allow --assign to name a durable seat (a seat queue has no session watching it)")
     .option("--created-by <agent>", "Record a different filer than the resolved agent identity")
@@ -388,10 +439,17 @@ export function registerTaskCommands(program: Command) {
       if (cloud) {
         let task;
         try {
-          const cloudProjectRef = opts.project || globalOpts.project;
+          const cloudProjectRef = projectRefFromOpts(opts, globalOpts);
           const cloudProjectId = cloudProjectRef
             ? await cloudResolveProjectRef(cloud, cloudProjectRef)
             : undefined;
+          // This branch had no fallback at all while the local branch below falls
+          // through to `autoProject`, and the fleet runs THIS one — every station
+          // sets HASNA_TODOS_API_URL/_API_KEY/_STORAGE_MODE. So a create that
+          // omitted --project stored NULL silently, which is the whole orphan
+          // inflow. Deliberately still no git-root inference here: see the
+          // working_dir note below for why that decision is not yet measurable.
+          warnMissingProject(cloudProjectId, projectOptOut(opts));
           const cloudTaskListId = opts.list
             ? await cloudResolveTaskListRef(cloud, opts.list, cloudProjectId)
             : undefined;
@@ -418,6 +476,13 @@ export function registerTaskCommands(program: Command) {
             created_by: creator.agent_id || undefined,
             session_id: globalOpts.session,
             project_id: cloudProjectId,
+            // Parity with the local branch, which has always sent process.cwd().
+            // Omitting it here is why 96.5% of orphans have working_dir NULL — and
+            // why 91.1% of NON-orphans do too, since every cloud row lost it
+            // regardless of project. cwd is the only signal that could justify
+            // inferring a project later, so dropping it made that decision
+            // unmeasurable on real traffic. This is what starts collecting it.
+            working_dir: process.cwd(),
             estimated_minutes: opts.estimated !== undefined ? parseIntOption(opts.estimated, "--estimated") : undefined,
             sla_minutes: opts.slaMinutes !== undefined || opts.sla !== undefined ? parseIntOption(opts.slaMinutes ?? opts.sla, "--sla-minutes") : undefined,
             requires_approval: opts.approval || undefined,
@@ -441,10 +506,14 @@ export function registerTaskCommands(program: Command) {
       // opts depending on its position; commander routes it to globalOpts when a
       // global --project option exists. Honor both (matches the list/audit
       // commands) so `todos add … --project <id>` actually assigns the project.
-      const explicitProject = opts.project || globalOpts.project;
+      const explicitProject = projectRefFromOpts(opts, globalOpts);
       const projectId = explicitProject
         ? resolveProjectIdOrSlug(explicitProject)
-        : autoProject(globalOpts);
+        : (projectOptOut(opts) ? undefined : autoProject(globalOpts));
+      // autoProject can still return undefined — outside a git repo, under /tmp,
+      // or with TODOS_AUTO_PROJECT=false — so the local branch produces orphans
+      // too, just far less often than cloud did. Same warning, same opt-out.
+      warnMissingProject(projectId, projectOptOut(opts));
       opts.tags = opts.tags || opts.tag;
       opts.list = opts.list || opts.taskList;
       const taskListId = opts.list ? (() => {
