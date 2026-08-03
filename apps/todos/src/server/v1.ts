@@ -1225,7 +1225,17 @@ export async function handleV1Request(
     if (resource === "refs" && id) {
       if (method !== "GET") return error(405, `method ${method} not allowed on /v1/refs/:ref`);
       if (!store.gitRefs) return error(501, "git ref links are not supported by this storage backend");
-      const refs = await store.gitRefs.find(id);
+      let decodedRef: string;
+      try {
+        // URL.pathname keeps escaped delimiters escaped. Ref names routinely
+        // contain `/` and `#`, so decode this opaque lookup segment only after
+        // splitting the route; decoding the whole pathname first would turn a
+        // ref's slash into a route separator.
+        decodedRef = decodeURIComponent(id);
+      } catch {
+        return error(400, "ref path segment has invalid percent encoding");
+      }
+      const refs = await store.gitRefs.find(decodedRef);
       return json({ refs, count: refs.length });
     }
 
