@@ -172,6 +172,9 @@ curl -X POST http://localhost:7337/snapshots -H 'content-type: application/json'
 
 ## Release Verification
 
+See the [hardening roadmap ledger guide](docs/hardening-roadmap.md) for the
+17-item coordination, evidence, blocker, and closure requirements.
+
 ```sh
 bun run typecheck
 bun test
