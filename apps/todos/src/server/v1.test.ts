@@ -681,6 +681,49 @@ describe("/v1 task hierarchy and lock authorization", () => {
   });
 });
 
+describe("/v1 git ref path decoding", () => {
+  test("round-trips a slash-and-hash ref through the encoded lookup path", async () => {
+    const created = await request("/v1/tasks", "POST", { title: "encoded ref" });
+    const task = (await created!.json() as { task: { id: string } }).task;
+    const name = "hasna/todos#synthetic";
+    const linkedRef = {
+      id: "synthetic-ref-id",
+      task_id: task.id,
+      ref_type: "pull_request" as const,
+      name,
+      url: "https://example.test/hasna/todos/pull/synthetic",
+      provider: "github",
+      metadata: {},
+      created_at: "2026-08-03T00:00:00.000Z",
+      updated_at: "2026-08-03T00:00:00.000Z",
+    };
+    store = {
+      ...store,
+      gitRefs: {
+        add: (input) => ({ ...linkedRef, ...input }),
+        list: (taskId) => taskId === task.id ? [linkedRef] : [],
+        find: (ref) => ref === name ? [linkedRef] : [],
+      },
+    };
+
+    const linked = await request(`/v1/tasks/${task.id}/refs`, "POST", {
+      ref_type: "pull_request",
+      name,
+      url: linkedRef.url,
+      provider: linkedRef.provider,
+    });
+    expect(linked?.status).toBe(201);
+
+    const found = await request(`/v1/refs/${encodeURIComponent(name)}`);
+    expect(found?.status).toBe(200);
+    expect(await found!.json()).toEqual({ refs: [linkedRef], count: 1 });
+
+    const malformed = await request("/v1/refs/%ZZ");
+    expect(malformed?.status).toBe(400);
+    expect(await malformed!.json()).toEqual({ error: "ref path segment has invalid percent encoding" });
+  });
+});
+
 describe("/v1 short task reference resolution", () => {
   test("GET /v1/tasks/:ref resolves a unique id-prefix and an exact (case-insensitive) short_id", async () => {
     const created = await request("/v1/tasks", "POST", { title: "resolvable" });
