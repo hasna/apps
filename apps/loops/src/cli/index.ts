@@ -2568,7 +2568,7 @@ hygiene
 hygiene
   .command("stuck")
   .description(
-    "check or reclaim loop runs stuck 'running' with an expired lease and no live process (7cf8d8c1: overlap:skip then blocks the loop forever)",
+    "check or reclaim loop runs stuck 'running' with an expired lease and no live process (7cf8d8c1: an unreapable orphan row whose loop cursor never advances through recovery)",
   )
   .option("--apply", "abandon reclaimable runs and immediately advance their loop's nextRunAt")
   .option("--limit <n>", "maximum runs to reclaim in one pass", "100")

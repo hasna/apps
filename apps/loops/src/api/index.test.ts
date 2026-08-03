@@ -3070,10 +3070,18 @@ describe("loops-api foundation", () => {
     // later poll — that intent is correct and is covered by the "claim capacity"
     // test above. But `dueSlots` under `catchUp: "latest"` returns ONLY the latest
     // slot, so once wall time has moved past the wedged run's own slot the same-slot
-    // takeover it is being preserved for can never happen again: `overlap: "skip"`
-    // refuses the new slot because a `running` run exists, and the sweep skips that
-    // run because this runner owns it. Neither path can fire, so the loop is blocked
-    // for as long as the process lives.
+    // takeover it is being preserved for can never happen again, and the sweep skips
+    // that run because this runner owns it. Neither path can fire, so the run stays
+    // `running` behind a long-dead lease as an orphan row nothing can finalize, and
+    // the loop's cursor advances only if some later run happens to finalize — never
+    // through recovery.
+    //
+    // NOT "`overlap: "skip"` then blocks the loop": an EXPIRED lease does not, on its
+    // own, refuse the new slot. That gate turns on a run holding a LIVE lease or a
+    // live process (see the claim-sweep note in `src/api/index.ts`, and the store-level
+    // test "overlap skip does not block a later slot on an expired dead lease"). The
+    // defect under test here is the unreapable row and the recovery path, not a
+    // wedged scheduler.
     //
     // The existing "reclaims an expired overlap-skip lease" test does not reach this
     // because it uses `catchUp: "all"`, which keeps the original slot in the due list
@@ -3134,7 +3142,9 @@ describe("loops-api foundation", () => {
 
       // No phantom may survive: the run is either abandoned, or genuinely taken over
       // with a lease in the future. What must not persist is `running` with a lease
-      // that expired in the past — that is the state which blocks `overlap: "skip"`.
+      // that expired in the past — the unreapable orphan row this defect leaves
+      // behind. (That row does not block `overlap: "skip"`; it is simply a row no
+      // path can finalize, so the loop's cursor never advances through recovery.)
       const wedged = await storage.getRun(wedgedRunId);
       expect(wedged).toBeTruthy();
       const leaseStillExpired = wedged!.status === "running"
