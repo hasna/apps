@@ -69,7 +69,53 @@ export const TODOS_CLI_COMMAND_ALIASES = {
   lists: ["task-lists", "tl"],
 } as const satisfies Record<string, readonly string[]>;
 
-const DIAGNOSTIC_COMMANDS = new Set(["help", "manual", "completions", "completion", "config", "storage"]);
+/**
+ * Verbs that render content BUNDLED INTO THE PACKAGE, mapped to the options on
+ * each that instead reach the local store. An empty list means every form of
+ * the verb is store-free.
+ *
+ * `manual` and `completions` already render bundled static content on the /v1
+ * route; these four did not, and were refused as `local-only` even though the
+ * shipped manual documents `todos workflows` in its own examples (task
+ * 3e5e773f).
+ *
+ * The mapping is per-OPTION rather than per-VERB because two of these are
+ * genuinely mixed, so reclassifying the verb wholesale would admit an
+ * invocation that opens bun:sqlite on a route where the SQLite fallback is
+ * disabled. Measured against an isolated `HASNA_TODOS_DB_PATH`, with `todos
+ * list` as the positive control for "a database appears when one is needed":
+ * `onboarding --import` reaches `importLocalBridgeBundle`, and `sdk-fixtures
+ * --show/--write` reach `ensureFixtureImported`, which runs a NON-dry-run
+ * bridge import — all three land in `getDatabase()`. Every other form of all
+ * four verbs created no database.
+ *
+ * `--write` differs between the two: on `onboarding` it serialises the bundled
+ * fixture to disk (store-free), while on `sdk-fixtures` it writes a pack whose
+ * construction imports the fixture first. Same flag name, different reach,
+ * which is why this is keyed per verb rather than by flag name globally.
+ */
+const BUNDLED_STATIC_COMMANDS = {
+  workflows: [],
+  "template-library": [],
+  onboarding: ["--import"],
+  "sdk-fixtures": ["--show", "--write"],
+} as const satisfies Record<string, readonly string[]>;
+
+/**
+ * The same mapping widened to aliases, derived from the alias table so a new
+ * alias cannot silently acquire a different capability from its canonical verb.
+ */
+const BUNDLED_STATIC_STORE_BACKED_OPTIONS = new Map<string, readonly string[]>();
+for (const [canonical, storeBackedOptions] of Object.entries(BUNDLED_STATIC_COMMANDS)) {
+  BUNDLED_STATIC_STORE_BACKED_OPTIONS.set(canonical, storeBackedOptions);
+  const aliases = (TODOS_CLI_COMMAND_ALIASES as Record<string, readonly string[] | undefined>)[canonical] ?? [];
+  for (const alias of aliases) BUNDLED_STATIC_STORE_BACKED_OPTIONS.set(alias, storeBackedOptions);
+}
+
+const DIAGNOSTIC_COMMANDS = new Set([
+  "help", "manual", "completions", "completion", "config", "storage",
+  ...Object.keys(BUNDLED_STATIC_COMMANDS),
+]);
 const REMOTE_COMMANDS = new Set([
   "active", "add", "agent", "agents", "approve", "assign", "bulk", "claim", "comment", "count", "delete", "deps",
   "doctor", "done", "find-commit", "find-ref", "health", "heartbeat", "history", "init", "inspect", "link-commit",
@@ -212,6 +258,20 @@ function positionalArgs(args: readonly string[]): string[] {
   return args.filter((arg) => !arg.startsWith("-"));
 }
 
+/**
+ * Whether this invocation of a bundled-content verb stays inside the package's
+ * own static assets. Mirrors `isReadOnlyConfigInvocation`: the verb is
+ * diagnostic, and the ARGUMENTS decide whether this particular call is
+ * serviceable without a store.
+ */
+function isBundledStaticInvocation(invocation: ParsedInvocation): boolean {
+  const command = invocation.command;
+  if (!command) return false;
+  const storeBackedOptions = BUNDLED_STATIC_STORE_BACKED_OPTIONS.get(command);
+  if (!storeBackedOptions) return false;
+  return !storeBackedOptions.some((option) => hasOption(invocation.commandArgs, option));
+}
+
 function isReadOnlyConfigInvocation(invocation: ParsedInvocation): boolean {
   if (invocation.command !== "config") return false;
   const args = invocation.commandArgs;
@@ -231,6 +291,10 @@ function isMetadataInvocation(args: string[], invocation: ParsedInvocation): boo
   // succeed offline in remote mode.
   if (invocation.command === "completions" || invocation.command === "completion") return true;
   if (invocation.command === "manual" && invocation.commandArgs.length === 0) return true;
+  // Bundled workflow prompts, template library, onboarding fixtures and SDK
+  // fixture examples are package assets, not stored records, so the store-free
+  // forms must render offline on the /v1 route exactly as `manual` does.
+  if (isBundledStaticInvocation(invocation)) return true;
   if (invocation.command === "help" && invocation.commandArgs.every((arg) => !arg.startsWith("-"))) return true;
   if (invocation.command === "config") {
     return isReadOnlyConfigInvocation(invocation) ||
@@ -268,6 +332,19 @@ const dropIt = (blame: string): Disqualification => ({ blame, remedy: "re-run wi
 function disqualifyingArgument(invocation: ParsedInvocation): Disqualification | null {
   const command = invocation.command!;
   const args = invocation.commandArgs;
+  // A bundled-content verb whose store-free forms DO work here. Blaming the
+  // verb would send the reader to debug `sdk-fixtures`, which is fine on its
+  // own; only the option that triggers a local bridge import is not.
+  const storeBackedOptions = BUNDLED_STATIC_STORE_BACKED_OPTIONS.get(command);
+  if (storeBackedOptions) {
+    const option = storeBackedOptions.find((candidate) => hasOption(args, candidate));
+    return option
+      ? {
+          blame: option,
+          remedy: `it imports bundled fixtures into the local store, which this route disables; re-run \`${command}\` without it to read the bundled content`,
+        }
+      : null;
+  }
   switch (command) {
     case "task":
       return positionalArgs(args)[0] === "upsert"
@@ -425,8 +502,14 @@ function assertRemoteCommandSupported(invocation: ParsedInvocation): void {
 
   if (!command || !commandSupportsRemote(invocation)) {
     const blame = command ? disqualifyingArgument(invocation) : null;
+    // A bundled-content verb is served from the package, NOT by the authority,
+    // so the usual lead clause would point the reader at /v1 for a refusal that
+    // has nothing to do with it.
+    const servedBy = command && BUNDLED_STATIC_STORE_BACKED_OPTIONS.has(command)
+      ? `\`${command}\` renders bundled content on this route`
+      : `\`${command}\` is served by the Todos /v1 authority`;
     const detail = blame
-      ? `\`${command}\` is served by the Todos /v1 authority but ${blame.blame} is not; ${blame.remedy}`
+      ? `${servedBy} but ${blame.blame} is not; ${blame.remedy}`
       : `${invocationLabel(invocation)} is not supported by the Todos /v1 CLI; local SQLite fallback is disabled`;
     throw new Error(`REMOTE_COMMAND_UNSUPPORTED: ${detail}`);
   }
