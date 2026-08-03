@@ -32,7 +32,14 @@ import {
   type KnowledgeItemVersion,
   type KnowledgeItemVersionList,
 } from './store';
-import { resolveKnowledgeCloudStore, fetchAllCloudItems, type KnowledgeCloudStore } from './cloud-store';
+import {
+  KnowledgeVersionConflictError,
+  resolveKnowledgeCloudStore,
+  fetchAllCloudItems,
+  type KnowledgeCloudStore,
+} from './cloud-store';
+
+export { KnowledgeVersionConflictError };
 
 export interface ItemCreateInput {
   /** Optional caller-supplied id (upsert/import). Both transports honor it: the
@@ -59,8 +66,14 @@ export interface ItemPatch {
 export interface ItemUpdateOptions {
   /**
    * Optimistic concurrency guard — the version the caller last read. Honoured
-   * by the api transport; meaningless on the local JSON store, which is
-   * single-machine and has no version line.
+   * by BOTH transports: the api store sends it as `If-Match` and the server
+   * checks it against the row; the local JSON store checks it against the
+   * same lock-protected counter it bumps on every successful write, so the
+   * check and the write happen inside one file-lock acquisition. Omit it to
+   * skip the check entirely (unconditional overwrite — the pre-existing
+   * behaviour, unchanged, on both stores). A mismatch throws
+   * {@link KnowledgeVersionConflictError} naming both the version the caller
+   * expected and the version actually stored; nothing is written.
    */
   expectedVersion?: number;
 }
@@ -174,6 +187,11 @@ class LocalItemStore implements ItemStore {
         archived: false,
         created_at: now,
         updated_at: now,
+        // Optimistic-concurrency counter — see the field's doc in store.ts.
+        // Distinct from version HISTORY (supportsVersions stays false: no
+        // retained prior bodies), this is just a number this same class bumps
+        // on every write, so `--if-version` has something real to check.
+        version: 1,
       };
       db.items.push(item);
       saveStore(this.storePath, db);
@@ -181,12 +199,22 @@ class LocalItemStore implements ItemStore {
     }, { createParent: true });
   }
 
-  async update(idOrShort: string, patch: ItemPatch): Promise<KnowledgeItem | null> {
+  async update(idOrShort: string, patch: ItemPatch, options: ItemUpdateOptions = {}): Promise<KnowledgeItem | null> {
     return withLock(this.storePath, () => {
       const db = loadStore(this.storePath);
       const idx = db.items.findIndex((item) => matchesId(item, idOrShort));
       if (idx === -1) return null;
       const item = db.items[idx];
+      // Pre-existing items written before this counter existed carry no
+      // `version` field at all; read them as version 1 (never edited under
+      // this scheme yet) rather than defaulting the CHECK away. The check and
+      // the write below both happen inside this one file-lock acquisition, so
+      // two local processes racing on the same db.json cannot both "succeed"
+      // against the same expected version.
+      const storedVersion = item.version ?? 1;
+      if (options.expectedVersion !== undefined && options.expectedVersion !== storedVersion) {
+        throw new KnowledgeVersionConflictError(options.expectedVersion, storedVersion);
+      }
       if (patch.title !== undefined) item.title = patch.title;
       if (patch.content !== undefined) item.content = patch.content;
       if (patch.url !== undefined) item.url = patch.url;
@@ -194,6 +222,7 @@ class LocalItemStore implements ItemStore {
       if (patch.metadata !== undefined) item.metadata = patch.metadata;
       if (patch.archived !== undefined) item.archived = patch.archived;
       item.updated_at = new Date().toISOString();
+      item.version = storedVersion + 1;
       db.items[idx] = item;
       saveStore(this.storePath, db);
       return item;
