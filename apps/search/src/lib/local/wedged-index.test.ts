@@ -18,8 +18,9 @@ import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { Database } from "bun:sqlite";
+import { Database } from "bun:sqlite";
 import { getIndexDbForTesting } from "../../db/index-db.js";
+import { runIndexMigrations } from "../../db/index-migrations.js";
 import {
   addRoot,
   getRoot,
@@ -251,6 +252,52 @@ describe("wedged index: health reporting", () => {
 });
 
 describe("wedged index: recovery", () => {
+  test("SIGKILL after the indexing status write cannot commit a permanent wedge", async () => {
+    const workspace = join(root, "workspace");
+    const dbPath = join(root, "index.db");
+    mkdirSync(workspace, { recursive: true });
+    writeFileSync(join(workspace, "a.ts"), "const crashAtomicity = 1;");
+
+    const fileDb = new Database(dbPath);
+    fileDb.exec("PRAGMA journal_mode = WAL");
+    fileDb.exec("PRAGMA foreign_keys = ON");
+    runIndexMigrations(fileDb);
+    const indexed = addRoot(workspace, {}, fileDb);
+    indexRoot(indexed.id, {}, fileDb);
+    expect(getRoot(indexed.id, fileDb)!.status).toBe("ready");
+    fileDb.close();
+
+    const fixture = join(import.meta.dir, "test-fixtures/crash-after-indexing-status.ts");
+    const child = Bun.spawn(["bun", fixture, dbPath, indexed.id], {
+      cwd: import.meta.dir,
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    expect(await child.exited).not.toBe(0);
+
+    const recoveredDb = new Database(dbPath);
+    recoveredDb.exec("PRAGMA journal_mode = WAL");
+    recoveredDb.exec("PRAGMA foreign_keys = ON");
+    try {
+      // The child dies immediately after executing the status update. When
+      // that write shares the completion transaction, SQLite rolls it back.
+      // Before the fix, the independently committed sentinel survives here.
+      expect(getRoot(indexed.id, recoveredDb)!.status).toBe("ready");
+
+      // Legacy rows from older releases still need the second half of the
+      // repair: a stale status with no live lock owner must self-heal.
+      recoveredDb
+        .prepare(
+          "UPDATE index_roots SET status = 'indexing', indexing_started_at = ? WHERE id = ?",
+        )
+        .run(new Date(Date.now() - INDEXING_STALL_MS - 60_000).toISOString(), indexed.id);
+      expect(refreshStaleRoots(5, recoveredDb)).toHaveLength(1);
+      expect(getRoot(indexed.id, recoveredDb)!.status).toBe("ready");
+    } finally {
+      recoveredDb.close();
+    }
+  });
+
   test("refreshStaleRoots recovers a root wedged at 'indexing'", () => {
     write("a.ts", "const alumia = 1;");
     const r = addRoot(root, {}, db);
@@ -264,6 +311,20 @@ describe("wedged index: recovery", () => {
     expect(stats.length).toBe(1);
     expect(getRoot(r.id, db)!.status).toBe("ready");
     expect(hasReadyRoot(db)).toBe(true);
+  });
+
+  test("a killed first index recovers from pending once its owner is stale", () => {
+    write("a.ts", "const firstIndexCrash = 1;");
+    const r = addRoot(root, {}, db);
+    db.prepare("UPDATE index_roots SET indexing_started_at = ? WHERE id = ?").run(
+      new Date(Date.now() - INDEXING_STALL_MS - 60_000).toISOString(),
+      r.id,
+    );
+
+    expect(getRoot(r.id, db)!.status).toBe("pending");
+    expect(rootHealth(getRoot(r.id, db)!)).toBe("wedged");
+    expect(refreshStaleRoots(5, db)).toHaveLength(1);
+    expect(getRoot(r.id, db)!.status).toBe("ready");
   });
 
   test("a wedged root is recovered even when its last index looks fresh", () => {

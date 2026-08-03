@@ -279,9 +279,12 @@ function rowToRoot(row: RootRow): IndexRoot {
  */
 export function rootHealth(root: IndexRoot, staleMinutes?: number): RootHealth {
   if (root.status === "error") return "error";
-  if (root.status === "pending") return "pending";
 
-  if (root.status === "indexing") {
+  // A committed start marker can outlive its process even though the mutable
+  // status now changes only inside the file-update transaction. Inspect the
+  // marker for pending/ready rows too: after a crash, SQLite rolls status back
+  // to its prior value while this marker remains as recovery evidence.
+  if (root.status === "indexing" || root.status === "pending" || root.indexingStartedAt) {
     // Direct evidence about the process outranks every inference drawn from a
     // column, and it is consulted FIRST. Three cases depend on this ordering:
     //
@@ -294,19 +297,18 @@ export function rootHealth(root: IndexRoot, staleMinutes?: number): RootHealth {
     //  - Recovery must not steal a root from a live indexer. Since the removal
     //    of the unconditional `status === 'indexing'` skip in
     //    refreshStaleRoots, this is the only thing preventing that: any pass
-    //    outlasting INDEX_LOCK_STALE_MS has a "stale" lock, because the lock
-    //    mtime is never refreshed during a run, so acquireRootLock would
-    //    happily unlink it and run a second indexer concurrently.
+    //    outlasting INDEX_LOCK_STALE_MS would otherwise have its lock stolen;
+    //    heartbeatRootLock keeps that evidence fresh throughout the pass.
     const lock = probeLockHolder(root.id);
     if (lock === "alive") return "indexing";
     // A dead holder is proof the run ended, so a run killed seconds ago is
     // caught immediately rather than masquerading as live until the threshold.
     if (lock === "dead") return "wedged";
 
-    // No lock to consult. Fall back to the start marker: absent means the row
-    // predates the marker column, i.e. written by a build that could not record
-    // liveness at all.
-    if (!root.indexingStartedAt) return "wedged";
+    // No lock to consult. Fall back to the start marker. A raw `indexing` row
+    // without one predates the marker column and is abandoned; another status
+    // without a marker has no active-run evidence at all.
+    if (!root.indexingStartedAt) return root.status === "indexing" ? "wedged" : root.status;
     const startedAt = Date.parse(root.indexingStartedAt);
     if (!Number.isFinite(startedAt)) return "wedged";
     return Date.now() - startedAt > INDEXING_STALL_MS ? "wedged" : "indexing";
@@ -467,13 +469,14 @@ export function indexRoot(
   const releaseRootLock = db ? () => undefined : acquireRootLock(root.id);
 
   const start = Date.now();
-  // Committed immediately and outside the transaction below, so a concurrent
-  // reader can see that work started. That is also why it must carry a start
-  // marker: if this process is killed, nothing here runs again, and the marker
-  // is the only evidence that lets a later run tell 'running' from 'died'.
-  d.prepare(
-    "UPDATE index_roots SET status = 'indexing', error = NULL, indexing_started_at = ? WHERE id = ?",
-  ).run(new Date(start).toISOString(), root.id);
+  // The marker is deliberately committed before the expensive scan so other
+  // processes can distinguish a live run from an interrupted one. The status
+  // itself is not: it changes inside the file-update transaction below, where
+  // process death rolls it back together with every partial index mutation.
+  d.prepare("UPDATE index_roots SET indexing_started_at = ? WHERE id = ?").run(
+    new Date(start).toISOString(),
+    root.id,
+  );
 
   try {
     const { files: scanned, skippedDirs } = scanRoot(root.path, root.exclude, () =>
@@ -513,7 +516,7 @@ export function indexRoot(
     const seen = new Set<string>();
     const changes: PreparedFileChange[] = [];
     for (const file of scanned) {
-      // Reading and tokenising file bodies is the longest phase of a run.
+      // Keep the process-owned lock fresh while reading and tokenising bodies.
       heartbeatRootLock(root.id);
       seen.add(file.relPath);
       const prev = existing.get(file.relPath);
@@ -542,9 +545,13 @@ export function indexRoot(
       });
     }
 
+    heartbeatRootLock(root.id, true);
     d.exec("BEGIN");
     try {
+      d.prepare("UPDATE index_roots SET status = 'indexing', error = NULL WHERE id = ?").run(root.id);
+
       for (const { file, prev, isBinary, body, grams, contentIndexed } of changes) {
+        heartbeatRootLock(root.id);
         if (prev) {
           if (prev.content_indexed) {
             deleteContent.run(prev.id);
@@ -580,6 +587,7 @@ export function indexRoot(
       }
 
       for (const [relPath, row] of existing) {
+        heartbeatRootLock(root.id);
         if (seen.has(relPath)) continue;
         if (row.content_indexed) {
           deleteContent.run(row.id);
@@ -630,7 +638,6 @@ export function refreshStaleRoots(staleMinutes: number, db?: Database): IndexSta
   const stats: IndexStats[] = [];
 
   for (const root of listRoots(db)) {
-    if (root.status === "pending") continue;
     if (refreshing.has(root.id)) continue;
 
     const health = rootHealth(root);
@@ -640,7 +647,7 @@ export function refreshStaleRoots(staleMinutes: number, db?: Database): IndexSta
     // 48-day outage: the sentinel disabled its own recovery path. Recover it
     // regardless of staleness, because being wedged already makes every query
     // against it fail. The on-disk lock still prevents a real double-index.
-    if (health === "indexing") continue;
+    if (health === "indexing" || health === "pending") continue;
     if (health !== "wedged" && root.lastIndexedAt && Date.parse(root.lastIndexedAt) > cutoff) {
       continue;
     }
