@@ -6,6 +6,7 @@ import { getActiveModel, setActiveModel, clearActiveModel, DEFAULT_MODEL } from 
 const testHomeDir = `/tmp/todos-test-model-config-${Date.now()}`;
 const configDir = join(testHomeDir, ".hasna", "todos");
 const configPath = join(configDir, "config.json");
+const originalHome = process.env["HOME"];
 
 beforeAll(() => {
   mkdirSync(configDir, { recursive: true });
@@ -14,8 +15,12 @@ beforeAll(() => {
 
 afterAll(() => {
   rmSync(testHomeDir, { recursive: true, force: true });
-  // Reset to ensure no cached state
-  delete process.env["HOME"];
+  if (originalHome === undefined) delete process.env["HOME"];
+  else process.env["HOME"] = originalHome;
+});
+
+afterAll(() => {
+  expect(process.env["HOME"]).toBe(originalHome);
 });
 
 describe("DEFAULT_MODEL", () => {

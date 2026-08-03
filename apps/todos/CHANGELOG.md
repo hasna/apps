@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-08-03
+
+### Fixed
+
+- **Cloud `link-ref` / `find-ref` round-trips now support refs containing `/` and
+  `#`.** The v1 server decodes the opaque ref segment after route matching and returns
+  a stable 400 for malformed percent encoding.
+- **The npm release workflow no longer dirties its checkout during the full suite.**
+  The model-config test restores the runner's original `HOME` instead of deleting it,
+  preventing later config writes from creating a literal `~/.hasna/todos/config.json`
+  inside the repository. A pre-publish cleanliness assertion now reports the path and
+  stops before npm lifecycle hooks if this regresses.
+
 ## [0.15.0] - 2026-08-03
 
 Numbered as a minor for the same reason `0.13.13` was renumbered to `0.14.0` the day
