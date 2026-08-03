@@ -149,6 +149,18 @@ jobs:
       - name: Build
         run: bun run build
 
+      - name: Require a clean release input before npm lifecycle hooks
+        run: |
+          set -euo pipefail
+          status_file="${RUNNER_TEMP}/todos-release-status.txt"
+          git status --porcelain=v1 --untracked-files=all > "${status_file}"
+          if [ -s "${status_file}" ]; then
+            echo "::error::release input became dirty before npm publish"
+            sed -n '1,80p' "${status_file}"
+            exit 1
+          fi
+          echo "release input is clean before npm publish"
+
       # No NODE_AUTH_TOKEN, and no token of any kind. npm detects the Actions
       # OIDC environment and exchanges the id-token for a short-lived,
       # publish-scoped credential. --provenance is passed explicitly: npm
