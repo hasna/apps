@@ -620,6 +620,76 @@ describe('knowledge cli', () => {
     ]);
   });
 
+  // Regression guard for the slug-resolution defect in `list --search`.
+  //
+  // `--search` is a case-insensitive literal substring filter, and it matched ONLY
+  // `title` and `content` — never the item's `id`. The dominant instructed use of the
+  // flag across the skill corpus is SLUG RESOLUTION ("resolve knowledge slugs via
+  // `knowledge list --search <slug>`"), and that use failed silently: an existing item
+  // queried by its own id returned `total: 0` at exit 0, with nothing to distinguish it
+  // from a genuinely absent item. Because this is the dedupe path, that false zero reads
+  // as "no existing item, safe to create" and manufactures duplicate knowledge items.
+  //
+  // What made it survive: an item whose CONTENT happens to quote its own slug matched
+  // anyway, so a spot check could pass for the wrong reason. `id-not-in-body` below is
+  // the case that cannot pass by coincidence — its slug appears in neither field — and
+  // `id-quoted-in-body` pins the coincidence so a future reader cannot mistake it for
+  // evidence that ids were being searched all along.
+  test('list --search resolves an item by its id, not only title and content', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-list-search-id-'));
+    const store = join(dir, 'db.json');
+    const decode = (buf: Uint8Array) => new TextDecoder().decode(buf);
+    const total = (args: string[]): number => {
+      const res = runCli(['list', '--store', store, '--json', '-l', '50', ...args]);
+      expect(res.exitCode).toBe(0);
+      return JSON.parse(decode(res.stdout)).total;
+    };
+    const ids = (args: string[]): string[] => {
+      const res = runCli(['list', '--store', store, '--json', '-l', '50', ...args]);
+      expect(res.exitCode).toBe(0);
+      return JSON.parse(decode(res.stdout)).items.map((item: { id: string }) => item.id);
+    };
+
+    // The defect case: the slug is in NEITHER the title nor the content, so nothing but
+    // an id-aware filter can return it.
+    const seeded = runCli([
+      'upsert', 'Loop labelling taxonomy', 'Body about labelling and classification.',
+      '--id', 'id-not-in-body', '--store', store, '--json',
+    ]);
+    expect(seeded.exitCode).toBe(0);
+
+    // The coincidence case, pinned so it is never read as evidence about ids.
+    const quoted = runCli([
+      'upsert', 'Quoted slug', 'This body mentions id-quoted-in-body verbatim.',
+      '--id', 'id-quoted-in-body', '--store', store, '--json',
+    ]);
+    expect(quoted.exitCode).toBe(0);
+
+    // Positive control on the STORE, not just the query: both items really are present,
+    // so a zero below is a statement about the filter and not about an empty fixture.
+    expect(total([])).toBe(2);
+
+    // The regression itself.
+    expect(ids(['--search', 'id-not-in-body'])).toEqual(['id-not-in-body']);
+
+    // Case-insensitive on the id, matching how the flag already treats title and content.
+    expect(ids(['--search', 'ID-NOT-IN-BODY'])).toEqual(['id-not-in-body']);
+
+    // Substring of an id must match, since this is a substring filter and not a token search.
+    expect(ids(['--search', 'not-in-body'])).toEqual(['id-not-in-body']);
+
+    // No regression: title and content matching still work and still return only their match.
+    expect(ids(['--search', 'labelling taxonomy'])).toEqual(['id-not-in-body']);
+    expect(ids(['--search', 'mentions'])).toEqual(['id-quoted-in-body']);
+
+    // NEGATIVE CONTROL — the check must be able to report zero. Without this the
+    // assertions above would also pass against a filter that returned everything.
+    expect(total(['--search', 'no-item-carries-this-string'])).toBe(0);
+    // Ten CLI spawns at roughly half a second each sit right on the 5s default, so the
+    // budget is explicit rather than left to chance. It was measured under a full-suite
+    // run, not in isolation — see the 20000 used by the other multi-spawn tests here.
+  }, 20000);
+
   // Regression guard for the silent multi-tag data-loss defect: `add -t a -t b -t c`
   // exited 0, logged "Item added", and persisted ONLY the last tag; `-t "a,b,c"`
   // stored one literal comma string. Every assertion below reads the PERSISTED item

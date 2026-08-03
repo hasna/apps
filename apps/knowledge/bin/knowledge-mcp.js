@@ -17248,6 +17248,12 @@ import {
 } from "fs";
 import { randomUUID } from "crypto";
 import { basename, dirname as dirname2, join as join3 } from "path";
+function itemMatchesSearch(item, needle) {
+  if (!needle)
+    return true;
+  const q = needle.toLowerCase();
+  return item.id.toLowerCase().includes(q) || item.title.toLowerCase().includes(q) || item.content.toLowerCase().includes(q);
+}
 function defaultStorePath() {
   return workspaceForHome(globalKnowledgeHome()).jsonStorePath;
 }
@@ -32913,7 +32919,7 @@ function buildServer() {
     return jsonText({ ok: true, item, message: `Added ${item.id}` });
   });
   registerTool(server, "ok_list", "List knowledge items", "List compact item summaries with pagination, search, tag filtering, and sorting", {
-    search: exports_external.string().optional().describe("Search text for title/content"),
+    search: exports_external.string().optional().describe("Case-insensitive literal substring filter over id, title and content. Not a semantic search \u2014 use ok_search for that."),
     tag: exports_external.array(exports_external.string()).optional().describe("Filter by tags; item must match all tags"),
     include_archived: exports_external.boolean().optional().describe("Include archived items"),
     include_content: exports_external.boolean().optional().describe("Include full item content in each list row; default false to keep agent output compact"),
@@ -32931,7 +32937,7 @@ function buildServer() {
     const requiredTags = (tag ?? []).map((entry) => entry.toLowerCase());
     let items = activeItems(all, include_archived);
     if (q)
-      items = items.filter((item) => item.title.toLowerCase().includes(q) || item.content.toLowerCase().includes(q));
+      items = items.filter((item) => itemMatchesSearch(item, q));
     if (requiredTags.length > 0) {
       items = items.filter((item) => {
         const itemTags = (item.tags ?? []).map((entry) => entry.toLowerCase());
