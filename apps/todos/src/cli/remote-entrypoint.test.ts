@@ -37,7 +37,7 @@ const REPO_ROOT = join(import.meta.dir, "../..");
  * An exact count fails loudly the moment a command is reclassified in either
  * direction, forcing a deliberate update here instead of silent erosion.
  */
-const EXPECTED_LOCAL_ONLY_COMMANDS = 122;
+const EXPECTED_LOCAL_ONLY_COMMANDS = 116;
 
 /**
  * Budget for the Stage-A sweep, derived from the matrix that drives its workload
