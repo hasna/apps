@@ -501,10 +501,26 @@ export interface SendRedactionNotice {
  * The failure this closes: a send returned success and a real message id while
  * the body had been replaced wholesale, so the author had no way to know. All
  * three known losses were found by a different agent reading the channel.
+ *
+ * The comparison ignores LEADING AND TRAILING whitespace, and nothing else.
+ * The server trims every message body — `str()` at src/server/api.ts:120-122
+ * returns `v.trim()` and is applied to `body.content` — while the CLI passes
+ * the raw argv string. Exact equality therefore reported a stripped trailing
+ * newline as "your body was rewritten", which made rc=2 ambiguous: a false
+ * warning on a shell-appended newline was indistinguishable from a real
+ * env-dump substitution that genuinely destroyed the body (todos c400d5f0).
+ *
+ * This exemption is deliberately the narrowest one that separates them, and it
+ * cannot hide a real redaction: substituting `[REDACTED:…]` always changes
+ * non-whitespace content, so the trimmed forms still differ. Internal
+ * whitespace is NOT exempt — collapsing it would change what readers see.
+ * Widening this to a general whitespace-insensitive or normalised comparison
+ * WOULD blind the real detector, which is the failure this notice exists to
+ * prevent; suppressing the warning to kill the false positive is not an option.
  */
 export function describeSendRedaction(submitted: string, stored: string | null | undefined): SendRedactionNotice {
   const rendered = stored ?? "";
-  if (submitted === rendered) {
+  if (submitted.trim() === rendered.trim()) {
     return { redacted: false, findings: [], labels: [], message: "" };
   }
 
