@@ -87,3 +87,149 @@ export const SUITE_TIMEOUT_MS = 120_000;
  * it without re-registering that file's test cases.
  */
 export const CLI_SPAWN_TIMEOUT_MS = 60_000;
+
+/**
+ * WHY THE WORKFLOW SCAN BELOW PARSES INSTEAD OF GREPPING
+ *
+ * The policy test that guards `.github/workflows` used to read each file as
+ * raw lines and treat any line matching `bun test` as an invocation. A comment
+ * is not an invocation, and that parser was measurably wrong in BOTH
+ * directions in this repository at the same time:
+ *
+ *   - FALSE POSITIVE. release.yml carries the comment "`bun test` does not
+ *     invoke tsc in this repository", which has no `--timeout` because it is
+ *     prose. The scan reported it as a bare invocation and failed CI on both
+ *     runners, while the workflow's real command two lines below was the
+ *     compliant `bun test --timeout 120000`.
+ *   - FALSE NEGATIVE. ci.yml carries the comment "`bun run test`, not bare
+ *     `bun test`". The scan matched it as an invocation, then took the
+ *     `bun run test` early-exit and waved it through — so a comment was
+ *     silently counted as a compliant invocation, and it padded the very
+ *     positive control that is supposed to prove the scan found real commands.
+ *
+ * Both faults are the same root: prose was being read as code. So the scan
+ * parses the workflow and inspects only the executable content of `run:`
+ * steps, and strips shell comments inside those steps as well, because a `#`
+ * line inside a `run: |` block is prose too.
+ *
+ * Comment stripping is quote-aware rather than a cut at the first `#`. That
+ * matters in the under-blocking direction, which is the dangerous one: a naive
+ * cut on `echo "a # b" && bun test` would discard the real bare invocation
+ * along with the quoted `#` and report the workflow clean.
+ */
+
+/** One `bun test` invocation found in a workflow's executable content. */
+export interface WorkflowBunTestInvocation {
+  /** The workflow file it was found in, e.g. `release.yml`. */
+  workflow: string;
+  /** The single command it appeared in, with comments already removed. */
+  command: string;
+  /** The explicit `--timeout` budget in ms, or null when none is present. */
+  timeoutMs: number | null;
+  /**
+   * True only for `bun run test`, which resolves to the `test` script and so
+   * inherits the budget asserted separately against package.json. Set false
+   * whenever a bare `bun test` is also present in the same command, so a
+   * command carrying both is judged on the bare one rather than excused by the
+   * other — that excuse is exactly the false negative described above.
+   */
+  viaTestScript: boolean;
+}
+
+/**
+ * Remove shell comments from a script, honouring single and double quotes so a
+ * `#` inside a string cannot truncate the command that follows it.
+ *
+ * Quote state is tracked across the whole script rather than per line, because
+ * a shell string may legitimately span lines. Newlines are preserved so that
+ * command boundaries survive the strip.
+ */
+export function stripShellComments(script: string): string {
+  let out = "";
+  let inSingle = false;
+  let inDouble = false;
+
+  for (let i = 0; i < script.length; i += 1) {
+    const ch = script[i]!;
+
+    // A backslash escapes the next character everywhere except inside single
+    // quotes, where it is literal.
+    if (ch === "\\" && !inSingle && i + 1 < script.length) {
+      out += ch + script[i + 1];
+      i += 1;
+      continue;
+    }
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle;
+      out += ch;
+      continue;
+    }
+    if (ch === '"' && !inSingle) {
+      inDouble = !inDouble;
+      out += ch;
+      continue;
+    }
+
+    // `#` opens a comment only when it starts a word and is unquoted.
+    if (ch === "#" && !inSingle && !inDouble && /\s/.test(i === 0 ? "\n" : script[i - 1]!)) {
+      while (i < script.length && script[i] !== "\n") i += 1;
+      if (i < script.length) out += "\n";
+      continue;
+    }
+
+    out += ch;
+  }
+
+  return out;
+}
+
+/** Every `run:` script in a parsed workflow, in document order. */
+function runScripts(workflowSource: string): string[] {
+  const scripts: string[] = [];
+
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const entry of node) walk(entry);
+      return;
+    }
+    if (node === null || typeof node !== "object") return;
+    for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+      if (key === "run" && typeof value === "string") scripts.push(value);
+      walk(value);
+    }
+  };
+
+  walk(Bun.YAML.parse(workflowSource));
+  return scripts;
+}
+
+/**
+ * Every `bun test` invocation in a workflow's executable content.
+ *
+ * Commands are separated on `&&`, `||`, `;`, `|` and newlines so that a
+ * `--timeout` belonging to a later command cannot be read as covering an
+ * earlier bare one.
+ */
+export function findBunTestInvocations(
+  workflow: string,
+  workflowSource: string,
+): WorkflowBunTestInvocation[] {
+  const invocations: WorkflowBunTestInvocation[] = [];
+
+  for (const script of runScripts(workflowSource)) {
+    for (const command of stripShellComments(script).split(/&&|\|\||;|\||\n/)) {
+      if (!/\bbun\s+(?:run\s+)?test\b/.test(command)) continue;
+
+      const bare = /\bbun\s+test\b/.test(command);
+      const match = /\bbun\s+test\b.*?--timeout\s+(\d+)/.exec(command);
+      invocations.push({
+        workflow,
+        command: command.trim(),
+        timeoutMs: match ? Number(match[1]) : null,
+        viaTestScript: !bare && /\bbun\s+run\s+test\b/.test(command),
+      });
+    }
+  }
+
+  return invocations;
+}

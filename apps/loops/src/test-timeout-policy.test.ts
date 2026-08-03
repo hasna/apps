@@ -22,6 +22,8 @@ import {
   BUN_DEFAULT_TIMEOUT_MS,
   CLI_SPAWN_TIMEOUT_MS,
   SUITE_TIMEOUT_MS,
+  findBunTestInvocations,
+  stripShellComments,
 } from "./test-timeout-policy.js";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -135,28 +137,164 @@ describe("test timeout policy", () => {
     const files = readdirSync(workflowDir).filter((name) => /\.ya?ml$/.test(name));
     expect(files.length).toBeGreaterThan(0);
 
-    const invocations: string[] = [];
-    for (const name of files) {
-      for (const line of readFileSync(join(workflowDir, name), "utf8").split("\n")) {
-        if (!/\bbun\s+test\b/.test(line)) continue;
-        invocations.push(`${name}: ${line.trim()}`);
+    const invocations = files.flatMap((name) =>
+      findBunTestInvocations(name, readFileSync(join(workflowDir, name), "utf8")),
+    );
 
-        // `bun run test` resolves to the `test` script, which the assertion
-        // above already proves carries the budget.
-        if (/\bbun\s+run\s+test\b/.test(line)) continue;
+    for (const invocation of invocations) {
+      // `bun run test` resolves to the `test` script, which the assertion
+      // above already proves carries the budget.
+      if (invocation.viaTestScript) continue;
 
-        const match = /\bbun\s+test\b[^&|]*?--timeout\s+(\d+)/.exec(line);
-        expect(
-          match,
-          `${name} must use \`bun run test\` or pass --timeout explicitly — got: ${line.trim()}`,
-        ).not.toBeNull();
-        expect(Number(match![1])).toBeGreaterThan(BUN_DEFAULT_TIMEOUT_MS);
-      }
+      expect(
+        invocation.timeoutMs,
+        `${invocation.workflow} must use \`bun run test\` or pass --timeout explicitly — got: ${invocation.command}`,
+      ).not.toBeNull();
+      expect(invocation.timeoutMs!).toBeGreaterThan(BUN_DEFAULT_TIMEOUT_MS);
     }
 
     // Positive control: if this ever reads zero, the scan found nothing and
-    // the assertions above were vacuous.
+    // the assertions above were vacuous. Counted over executable content only,
+    // so a comment mentioning `bun test` can no longer pad it.
     expect(invocations.length).toBeGreaterThan(0);
+  });
+
+  /**
+   * The scan above is only worth anything if it reads code and not prose, and
+   * the parser it replaced failed that in both directions at once — see
+   * test-timeout-policy.ts for the two live instances. Each case below states
+   * the passing state and the failing state, so none of them can quietly
+   * become an assertion that always holds.
+   */
+  describe("the workflow scan reads executable content, not prose", () => {
+    const workflow = (steps: string) =>
+      ["name: probe", "on: push", "jobs:", "  probe:", "    steps:", steps, ""].join("\n");
+
+    // THE control that matters: the scan must still catch the real violation.
+    test("a genuine bare `bun test` in a run step is reported with no budget", () => {
+      const found = findBunTestInvocations(
+        "probe.yml",
+        workflow(["      - name: Test", "        run: bun test"].join("\n")),
+      );
+
+      expect(found).toHaveLength(1);
+      expect(found[0]!.command).toBe("bun test");
+      expect(found[0]!.viaTestScript).toBe(false);
+      expect(found[0]!.timeoutMs).toBeNull();
+    });
+
+    test("a compliant invocation reports its budget", () => {
+      const found = findBunTestInvocations(
+        "probe.yml",
+        workflow(["      - name: Test", "        run: bun test --timeout 120000"].join("\n")),
+      );
+
+      expect(found).toHaveLength(1);
+      expect(found[0]!.timeoutMs).toBe(SUITE_TIMEOUT_MS);
+    });
+
+    // The false positive that failed CI on this PR: prose above a real command.
+    test("a YAML comment naming bare `bun test` is not an invocation", () => {
+      const found = findBunTestInvocations(
+        "probe.yml",
+        workflow(
+          [
+            "      # `bun test` does not invoke tsc in this repository, so typecheck",
+            "      # is its own step rather than something the suite implies.",
+            "      - name: Test",
+            "        run: bun test --timeout 120000",
+          ].join("\n"),
+        ),
+      );
+
+      expect(found).toHaveLength(1);
+      expect(found[0]!.command).toBe("bun test --timeout 120000");
+    });
+
+    // The false negative: prose that named both forms took the `bun run test`
+    // early-exit and was counted as a compliant invocation.
+    test("a comment naming both forms is not counted as a compliant invocation", () => {
+      const found = findBunTestInvocations(
+        "probe.yml",
+        workflow(
+          [
+            "      - name: Test",
+            "        # `bun run test`, not bare `bun test`: the budget lives on the script.",
+            "        run: bun run test",
+          ].join("\n"),
+        ),
+      );
+
+      expect(found).toHaveLength(1);
+      expect(found[0]!.command).toBe("bun run test");
+      expect(found[0]!.viaTestScript).toBe(true);
+    });
+
+    test("a shell comment inside a `run:` block is not an invocation", () => {
+      const found = findBunTestInvocations(
+        "probe.yml",
+        workflow(
+          [
+            "      - name: Test",
+            "        run: |",
+            "          # bun test is deliberately not run here",
+            "          bun run build",
+          ].join("\n"),
+        ),
+      );
+
+      expect(found).toEqual([]);
+    });
+
+    // The under-blocking direction, and the reason comment stripping is
+    // quote-aware: cutting at the first `#` would discard the real invocation
+    // along with the quoted one and report this workflow clean.
+    //
+    // A BLOCK scalar is the shape that can express this, and measuring that
+    // was worth more than assuming it. In a PLAIN scalar YAML itself ends the
+    // value at ` #`, so `run: echo "a # b" && bun test` carries no invocation
+    // for anything to hide — GitHub Actions would run `echo "a` and nothing
+    // else. Inside `run: |` the `#` is literal and shell rules take over,
+    // which is where a naive cut would lose the command that follows.
+    test("a `#` inside a quoted string cannot hide a real invocation", () => {
+      const found = findBunTestInvocations(
+        "probe.yml",
+        workflow(
+          [
+            "      - name: Test",
+            "        run: |",
+            '          echo "a # b" && bun test',
+          ].join("\n"),
+        ),
+      );
+
+      expect(found).toHaveLength(1);
+      expect(found[0]!.timeoutMs).toBeNull();
+      expect(found[0]!.viaTestScript).toBe(false);
+    });
+
+    test("a later command's --timeout does not excuse an earlier bare invocation", () => {
+      const found = findBunTestInvocations(
+        "probe.yml",
+        workflow(
+          [
+            "      - name: Test",
+            "        run: bun test && bun test --timeout 120000",
+          ].join("\n"),
+        ),
+      );
+
+      expect(found).toHaveLength(2);
+      expect(found[0]!.timeoutMs).toBeNull();
+      expect(found[1]!.timeoutMs).toBe(SUITE_TIMEOUT_MS);
+    });
+
+    test("stripShellComments keeps quoted `#` and drops unquoted ones", () => {
+      expect(stripShellComments('echo "a # b" # trailing').trim()).toBe('echo "a # b"');
+      expect(stripShellComments("echo 'a # b'").trim()).toBe("echo 'a # b'");
+      // A `#` that does not start a word is part of the word, not a comment.
+      expect(stripShellComments("echo abc#def").trim()).toBe("echo abc#def");
+    });
   });
 
   /**
