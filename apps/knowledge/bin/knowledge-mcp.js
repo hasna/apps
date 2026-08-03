@@ -17513,7 +17513,11 @@ function breakStaleLock(lockPath2) {
   }
   throw new Error(`Could not acquire stale-lock breaker on ${breakerPath} after ${LOCK_MAX_WAIT_MS}ms`);
 }
-function tryAcquireLock(path, ownerId) {
+var LOCK_CONTENTION_CODES = new Set(["EEXIST", "EPERM", "EBUSY"]);
+function isLockContentionCode(code) {
+  return code !== undefined && LOCK_CONTENTION_CODES.has(code);
+}
+function tryAcquireLock(path, ownerId, onContention) {
   let fd = null;
   let created = false;
   try {
@@ -17537,22 +17541,29 @@ function tryAcquireLock(path, ownerId) {
         unlinkSync(path);
       } catch {}
     }
-    if (errCode(error51) === "EEXIST")
+    const code = errCode(error51);
+    if (isLockContentionCode(code)) {
+      onContention?.(code);
       return false;
+    }
     throw error51;
   }
 }
 function acquireLock(lockPath2, ownerId) {
   const start = Date.now();
+  let lastContention;
+  const note = (code) => {
+    lastContention = code;
+  };
   while (Date.now() - start < LOCK_MAX_WAIT_MS) {
-    if (tryAcquireLock(lockPath2, ownerId))
+    if (tryAcquireLock(lockPath2, ownerId, note))
       return;
     if (lockIsStale(lockPath2, Date.now())) {
       breakStaleLock(lockPath2);
     }
     sleepSync(LOCK_RETRY_MS);
   }
-  throw new Error(`Could not acquire lock on ${lockPath2} after ${LOCK_MAX_WAIT_MS}ms`);
+  throw new Error(`Could not acquire lock on ${lockPath2} after ${LOCK_MAX_WAIT_MS}ms` + (lastContention ? ` (last contention: ${lastContention})` : ""));
 }
 function releaseLock(lockPath2, ownerId) {
   try {

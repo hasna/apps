@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { budget } from './support/budget';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const packageJson = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')) as {
@@ -304,5 +305,5 @@ describe('public package release safety', () => {
       expect(summary.docsFiles).not.toContain(path);
       expect(summary.scriptsFiles).not.toContain(path);
     }
-  }, 15_000);
+  }, budget(15_000));
 });

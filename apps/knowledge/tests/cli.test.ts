@@ -16,6 +16,7 @@ import { parseSourceRef } from '../src/source-ref';
 import { recordStorageObjects } from '../src/storage-contract';
 import { recordKnowledgeSyncConflict } from '../src/sync';
 import { defaultKnowledgeConfig, writeKnowledgeConfig } from '../src/workspace';
+import { budget } from './support/budget';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI = join(__dirname, '..', 'src', 'cli.ts');
@@ -450,7 +451,7 @@ describe('knowledge cli', () => {
     // The `lst` typo should also surface the levenshtein suggestion.
     const typo = runKnowledgeBin(['lst']);
     expect(new TextDecoder().decode(typo.stderr)).toContain("Did you mean 'list'");
-  }, 20000);
+  }, budget(20000));
 
   test('knowledge bin keeps multi-word natural-language ask shorthand', () => {
     // The documented `knowledge <prompt>` shorthand for multi-word prompts must still
@@ -464,7 +465,7 @@ describe('knowledge cli', () => {
     const out = JSON.parse(new TextDecoder().decode(result.stdout));
     expect(out.ok).toBe(true);
     expect(out.prompt).toBe('how do I cite sources');
-  }, 20000);
+  }, budget(20000));
 
   test('knowledge bin keeps quoted single-token natural-language ask shorthand', () => {
     // Regression guard: the canonical documented form passes the whole prompt as one
@@ -478,7 +479,7 @@ describe('knowledge cli', () => {
     const out = JSON.parse(new TextDecoder().decode(result.stdout));
     expect(out.ok).toBe(true);
     expect(out.prompt).toBe('How do we cite handbook policy?');
-  }, 20000);
+  }, budget(20000));
 
   test('usage/validation errors do not leak an internal stack trace', () => {
     // Regression: usage/validation errors previously logged the full Error stack
@@ -688,7 +689,7 @@ describe('knowledge cli', () => {
     // Ten CLI spawns at roughly half a second each sit right on the 5s default, so the
     // budget is explicit rather than left to chance. It was measured under a full-suite
     // run, not in isolation — see the 20000 used by the other multi-spawn tests here.
-  }, 20000);
+  }, budget(20000));
 
   // Regression guard for the silent multi-tag data-loss defect: `add -t a -t b -t c`
   // exited 0, logged "Item added", and persisted ONLY the last tag; `-t "a,b,c"`
@@ -1267,7 +1268,7 @@ describe('knowledge cli', () => {
     expect(add.exitCode).toBe(0);
     expect(existsSync(join(dir, '.hasna', 'knowledge', 'db.json'))).toBe(true);
     expect(existsSync(join(dir, '.open-knowledge', 'db.json'))).toBe(false);
-  }, 20000);
+  }, budget(20000));
 
   test('source and built read-only sync listing commands do not create workspaces', () => {
     const sourceDir = mkdtempSync(join(tmpdir(), 'ok-sync-readonly-source-'));
@@ -1300,7 +1301,7 @@ describe('knowledge cli', () => {
       expect(existsSync(join(builtDir, '.hasna', 'knowledge'))).toBe(false);
       expect(existsSync(join(builtHome, '.hasna', 'knowledge'))).toBe(false);
     }
-  }, 20000);
+  }, budget(20000));
 
   test('project scope ignores legacy app workspace until explicit migration', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-workspace-no-fallback-'));
@@ -2615,7 +2616,7 @@ describe('knowledge cli', () => {
     expect(resolvedOut.conflict.status).toBe('resolved');
     expect(resolvedOut.conflict.approved_by).toBe('cli-reviewer');
     expect(resolvedOut.audit_event_id).toStartWith('audit_');
-  }, 10000);
+  }, budget(10000));
 
   test('sync dry-run and push copy a project catalog into a peer workspace', () => {
     const sourceDir = mkdtempSync(join(tmpdir(), 'ok-sync-cli-source-'));
@@ -2651,7 +2652,7 @@ describe('knowledge cli', () => {
     const peerStatsOut = JSON.parse(new TextDecoder().decode(peerStats.stdout));
     expect(peerStatsOut.sources).toBe(1);
     expect(peerStatsOut.storage_objects).toBe(4);
-  }, 10000);
+  }, budget(10000));
 
   test('sync peer-workspace works without machines adapter calls', () => {
     const sourceDir = mkdtempSync(join(tmpdir(), 'ok-sync-no-machines-source-'));
@@ -2689,7 +2690,7 @@ describe('knowledge cli', () => {
     expect(pushOut.push.artifacts.copied).toBeGreaterThanOrEqual(1);
     expect(pushOut.resolved_workspace.adapter.error).toBe('argument_override');
     expect(existsSync(machinesMarker)).toBe(false);
-  }, 10000);
+  }, budget(10000));
 
   test('sync export and import move a bundle through stdin/stdout', () => {
     const sourceDir = mkdtempSync(join(tmpdir(), 'ok-sync-export-source-'));
@@ -2716,7 +2717,7 @@ describe('knowledge cli', () => {
     expect(importedOut.min_protocol_version).toBe(1);
     expect(importedOut.artifacts.copied).toBe(4);
     expect(existsSync(join(peerDir, '.hasna', 'knowledge', 'artifacts', 'wiki', 'README.md'))).toBe(true);
-  }, 10000);
+  }, budget(10000));
 
   test('ssh sync rejects remote export without protocol handshake', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-sync-ssh-old-export-'));
@@ -3116,7 +3117,7 @@ describe('knowledge cli', () => {
     expect(compactContextOut).toContain('context excerpt(s)');
     expect(compactContextOut).toContain('Citations:');
     expect(compactContextOut).toContain('Hint: use --verbose');
-  }, 15000);
+  }, budget(15000));
 
   test('context pack and proposal context commands return bounded agent JSON', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-context-pack-cli-'));

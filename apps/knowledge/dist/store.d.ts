@@ -126,6 +126,7 @@ export declare function importLegacyGlobalStore(options?: LegacyGlobalStoreImpor
 export declare function loadStoreIfExists(path: string): Store & {
     exists: boolean;
 };
+export declare function isLockContentionCode(code: string | undefined): boolean;
 export declare function loadStore(path: string): Store;
 export declare function saveStore(path: string, store: Store): void;
 export declare function withLock<T>(path: string, fn: () => T, options?: {

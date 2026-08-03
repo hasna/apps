@@ -448,7 +448,39 @@ function breakStaleLock(lockPath: string): void {
   throw new Error(`Could not acquire stale-lock breaker on ${breakerPath} after ${LOCK_MAX_WAIT_MS}ms`);
 }
 
-function tryAcquireLock(path: string, ownerId: string): boolean {
+/**
+ * Errno values that mean "another writer holds this lock, try again" rather than
+ * "this lock can never be taken".
+ *
+ * EEXIST is the POSIX answer. Windows adds two more, and omitting them turned the
+ * most ordinary outcome of contention into a hard failure:
+ *   - EPERM  the holder is unlinking the lock right now. Windows marks a file
+ *            delete-pending and fails EVERY open against it until the last handle
+ *            closes, so the loser of a release race sees EPERM where POSIX sees
+ *            EEXIST (or simply succeeds).
+ *   - EBUSY  transient sharing violation, including an antivirus scanner holding
+ *            the freshly written lock file open.
+ *
+ * Deliberately NARROW. EACCES, EROFS and ENOSPC are genuine environment failures on
+ * every platform and must keep failing fast with their own errno; folding them in
+ * here would turn an unwritable directory into a LOCK_MAX_WAIT_MS spin that ends in
+ * a misleading "could not acquire lock".
+ *
+ * Same predicate as isRetriableFsLock() in workspace-migration.ts, which already
+ * handled this for the legacy-migration rmSync path. Exported so the classification
+ * is directly testable off Windows.
+ */
+const LOCK_CONTENTION_CODES = new Set(['EEXIST', 'EPERM', 'EBUSY']);
+
+export function isLockContentionCode(code: string | undefined): boolean {
+  return code !== undefined && LOCK_CONTENTION_CODES.has(code);
+}
+
+function tryAcquireLock(
+  path: string,
+  ownerId: string,
+  onContention?: (code: string) => void,
+): boolean {
   let fd: number | null = null;
   let created = false;
   try {
@@ -471,21 +503,34 @@ function tryAcquireLock(path: string, ownerId: string): boolean {
         unlinkSync(path);
       } catch {}
     }
-    if (errCode(error) === 'EEXIST') return false;
+    const code = errCode(error);
+    if (isLockContentionCode(code)) {
+      onContention?.(code as string);
+      return false;
+    }
     throw error;
   }
 }
 
 function acquireLock(lockPath: string, ownerId: string): void {
   const start = Date.now();
+  let lastContention: string | undefined;
+  const note = (code: string): void => {
+    lastContention = code;
+  };
   while (Date.now() - start < LOCK_MAX_WAIT_MS) {
-    if (tryAcquireLock(lockPath, ownerId)) return;
+    if (tryAcquireLock(lockPath, ownerId, note)) return;
     if (lockIsStale(lockPath, Date.now())) {
       breakStaleLock(lockPath);
     }
     sleepSync(LOCK_RETRY_MS);
   }
-  throw new Error(`Could not acquire lock on ${lockPath} after ${LOCK_MAX_WAIT_MS}ms`);
+  // Carry the last errno. Without it an EPERM storm and an ordinary busy lock produce
+  // the same message, and the first one is a bug report while the second is not.
+  throw new Error(
+    `Could not acquire lock on ${lockPath} after ${LOCK_MAX_WAIT_MS}ms`
+      + (lastContention ? ` (last contention: ${lastContention})` : ''),
+  );
 }
 
 function releaseLock(lockPath: string, ownerId: string): void {

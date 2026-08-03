@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadStore, saveStore, withLock } from '../src/store';
+import { isLockContentionCode, loadStore, saveStore, withLock } from '../src/store';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI = join(__dirname, '..', 'src', 'cli.ts');
@@ -123,4 +123,67 @@ describe('JSON store lock handling', () => {
     expect(existsSync(lockPath)).toBe(false);
     expect(existsSync(`${lockPath}.breaker`)).toBe(false);
   });
+});
+
+describe('lock contention is classified by errno, not by platform luck', () => {
+  // REGRESSION: hasna/knowledge windows-latest CI, run 30847733877 attempt 2.
+  //   "JSON store lock handling > serializes concurrent CLI writers with no lost items"
+  //   EPERM: operation not permitted, open '...\knowledge-concurrent-lock-qCORDr\db.json.lock'
+  //
+  // tryAcquireLock() classified ONLY EEXIST as "someone else holds the lock, retry" and
+  // rethrew everything else. On Windows a concurrent unlink of the lock file (releaseLock)
+  // puts it in a delete-pending state, and every open against a delete-pending file fails
+  // with EPERM until the last handle closes. So the single most ordinary outcome of lock
+  // contention -- the holder released while we were opening -- was a hard failure for the
+  // loser of the race. That is a defect in shipped code, not a test artifact: any two
+  // concurrent `knowledge` writers on Windows could hit it.
+  //
+  // This is the deterministic half of the guard. It runs identically on every platform.
+  // The end-to-end half is "serializes concurrent CLI writers with no lost items" above,
+  // which can only reproduce the EPERM on Windows.
+  test('EEXIST, EPERM and EBUSY all mean "held, retry"', () => {
+    expect(isLockContentionCode('EEXIST')).toBe(true);
+    // Windows delete-pending. The whole point of the regression.
+    expect(isLockContentionCode('EPERM')).toBe(true);
+    // Windows sharing violation.
+    expect(isLockContentionCode('EBUSY')).toBe(true);
+  });
+
+  // The set must stay narrow, or a genuinely broken environment becomes a 10-second
+  // spin ending in a misleading "could not acquire lock" instead of the real errno.
+  test('permission and disk errors are NOT contention and must still fail fast', () => {
+    expect(isLockContentionCode('EACCES')).toBe(false);
+    expect(isLockContentionCode('ENOSPC')).toBe(false);
+    expect(isLockContentionCode('EROFS')).toBe(false);
+    expect(isLockContentionCode('ENOENT')).toBe(false);
+    expect(isLockContentionCode(undefined)).toBe(false);
+  });
+
+  // Behavioural proof of the clause above: an unwritable parent must surface EACCES
+  // promptly rather than being swallowed into the retry loop. Guards the over-broad fix.
+  test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'an unwritable lock directory fails fast with the real errno',
+    () => {
+      const dir = mkdtempSync(join(tmpdir(), 'knowledge-lock-perm-'));
+      const readOnly = join(dir, 'ro');
+      mkdirSync(readOnly);
+      chmodSync(readOnly, 0o555);
+      try {
+        const started = Date.now();
+        let caught: unknown;
+        try {
+          withLock(join(readOnly, 'db.json'), () => undefined);
+        } catch (error) {
+          caught = error;
+        }
+        const elapsed = Date.now() - started;
+        expect(caught).toBeDefined();
+        expect(String((caught as { code?: unknown })?.code)).toBe('EACCES');
+        // LOCK_MAX_WAIT_MS is 10000; a fast failure is well under it.
+        expect(elapsed).toBeLessThan(5000);
+      } finally {
+        chmodSync(readOnly, 0o755);
+      }
+    },
+  );
 });
