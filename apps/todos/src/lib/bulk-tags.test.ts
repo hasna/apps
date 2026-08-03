@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { parseTagList, resolveBulkTags } from "./bulk-tags.js";
+import { parseTagList, resolveBulkTags, resolveTagArgument } from "./bulk-tags.js";
 
 /**
  * `todos bulk` could reassign a plan across many tasks but could not add a tag
@@ -44,6 +44,52 @@ describe("parseTagList", () => {
   test("an absent or blank argument yields no tags", () => {
     expect(parseTagList(undefined)).toEqual([]);
     expect(parseTagList("   ")).toEqual([]);
+  });
+});
+
+describe("resolveTagArgument", () => {
+  /**
+   * Reviewer finding (P2): the first cut read `opts.tag ?? opts.tags`, which
+   * inverted the precedence used by five other sites in task-commands.ts
+   * (`opts.tags || opts.tag`) AND silently discarded the loser:
+   *
+   *   bulk tag <id> --tag "a" --tags "b"   ->  rc=0, only "a" applied, "b" gone
+   *
+   * A silently dropped tag argument is the wrong failure mode for a tool whose
+   * whole purpose is stamping thousands of rows. Both spellings now have to
+   * agree, or the run is refused before any row is touched.
+   */
+  test("accepts either spelling on its own", () => {
+    expect(resolveTagArgument("a,b", undefined)).toEqual({ ok: true, raw: "a,b" });
+    expect(resolveTagArgument(undefined, "a,b")).toEqual({ ok: true, raw: "a,b" });
+  });
+
+  test("accepts both spellings when they agree", () => {
+    expect(resolveTagArgument("a,b", "a,b")).toEqual({ ok: true, raw: "a,b" });
+  });
+
+  test("REFUSES both spellings when they differ, instead of dropping one", () => {
+    const result = resolveTagArgument("a", "b");
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected a conflict");
+    expect(result.conflict).toEqual({ tag: "a", tags: "b" });
+  });
+
+  test("treats an equivalent set written in a different order as agreement", () => {
+    // `--tag "a,b" --tags "b,a"` names the same set; refusing that would be
+    // pedantry rather than safety.
+    expect(resolveTagArgument("a,b", "b,a")).toEqual({ ok: true, raw: "a,b" });
+  });
+
+  test("neither spelling yields no raw argument", () => {
+    expect(resolveTagArgument(undefined, undefined)).toEqual({ ok: true, raw: undefined });
+  });
+
+  test("an empty --tag does not silently fall through to a populated --tags", () => {
+    // `??` would have let `--tag=` (empty, but PRESENT) pass through to
+    // `--tags`, applying tags the operator did not intend on that flag.
+    const result = resolveTagArgument("", "a");
+    expect(result.ok).toBe(false);
   });
 });
 

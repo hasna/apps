@@ -40,6 +40,35 @@ export function parseTagList(raw: string | undefined | null): string[] {
   return tags;
 }
 
+export type TagArgumentResolution =
+  | { ok: true; raw: string | undefined }
+  | { ok: false; conflict: { tag: string; tags: string } };
+
+/**
+ * Reconcile the `--tag` / `--tags` spellings.
+ *
+ * Both are accepted because the rest of the CLI accepts both, but when they are
+ * both present and name DIFFERENT sets the run is refused rather than picking a
+ * winner. Silently dropping one of two explicitly-passed tag arguments is the
+ * wrong failure mode for a command whose purpose is stamping thousands of rows:
+ * the operator sees rc=0 and a success count while the tags they asked for are
+ * simply absent.
+ */
+export function resolveTagArgument(
+  tag: string | undefined,
+  tags: string | undefined,
+): TagArgumentResolution {
+  if (tag === undefined) return { ok: true, raw: tags };
+  if (tags === undefined) return { ok: true, raw: tag };
+
+  // Both present. Compare as SETS so a different order is not a conflict.
+  const left = parseTagList(tag);
+  const right = parseTagList(tags);
+  const same = left.length === right.length && left.every((entry) => right.includes(entry));
+  if (!same) return { ok: false, conflict: { tag, tags } };
+  return { ok: true, raw: tag };
+}
+
 /**
  * Apply `action` to `current`, returning the tag list to persist.
  *

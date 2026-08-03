@@ -41,7 +41,7 @@ import type { CloudTaskRelations } from "../cloud-router.js";
 import type { TaskPriority, TaskStatus } from "../../types/index.js";
 import { canonicalAgentRef, resolveCreatorIdentity, resolveWritableIdentity } from "../../lib/creator-identity.js";
 import { formatExpiredLock, lockDisplayState } from "../../lib/lock-display.js";
-import { parseTagList, resolveBulkTags } from "../../lib/bulk-tags.js";
+import { parseTagList, resolveBulkTags, resolveTagArgument } from "../../lib/bulk-tags.js";
 import { resolveClaimIdentity } from "../claim-guard.js";
 import { resolveValidatedAssignee } from "../assignee-guard.js";
 import { loadAssigneeContext } from "../../lib/assignee-context.js";
@@ -2061,7 +2061,14 @@ export function registerTaskCommands(program: Command) {
       // Resolved once, before either loop. An empty tag set is refused rather
       // than applied: a bulk run with nothing to apply would report success for
       // every id and read as a completed backfill.
-      const bulkTags = isTagAction ? parseTagList(opts.tag ?? opts.tags) : [];
+      const tagArgument = resolveTagArgument(opts.tag, opts.tags);
+      if (isTagAction && !tagArgument.ok) {
+        handleError(new Error(
+          `--tag and --tags name different tag sets (--tag "${tagArgument.conflict.tag}" vs --tags "${tagArgument.conflict.tags}"). ` +
+          "They are aliases; pass one, or pass the same set to both.",
+        ));
+      }
+      const bulkTags = isTagAction && tagArgument.ok ? parseTagList(tagArgument.raw) : [];
       if (isTagAction && bulkTags.length === 0) {
         handleError(new Error(
           `bulk ${action} needs --tag. Example: todos bulk ${action} <ids...> --tag directive:k_msd4cz8t_ste6f4`,
