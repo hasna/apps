@@ -6,13 +6,18 @@ function printHelp(): void {
   console.log(`Usage: economy-serve [command] [options]
 
 REST API server for ${packageMetadata.name}
-Foundation probes: GET /health, /ready, /version -> { status, version, mode }
-Versioned API: /v1/* (API-key auth via @hasna/contracts in cloud mode)
+Foundation probes: GET /health -> { status, version, backend }
+                   GET /ready  -> { ready, reason? }
+                   GET /version -> { version }
+Versioned API: /v1/* (API-key auth via @hasna/contracts)
+
+The server data backend is sqlite | postgresql, selected by the presence of
+HASNA_ECONOMY_DATABASE_URL (or ECONOMY_DATABASE_URL / DATABASE_URL).
 
 Commands:
   (default)          start the HTTP server
-  migrate            apply the cloud Postgres schema + api_keys, then exit
-  version            print { status, version, mode }
+  migrate            apply the Postgres schema + api_keys, then exit
+  version            print { status, version, backend }
 
 Options:
   -p, --port <port>  Port to bind (default: ECONOMY_PORT or 3456)
@@ -67,8 +72,16 @@ const args = process.argv.slice(2)
 const sub = args[0]
 
 if (sub === 'version') {
-  console.log(JSON.stringify({ status: 'ok', version: packageMetadata.version, mode: process.env['HASNA_ECONOMY_STORAGE_MODE'] === 'cloud' ? 'self_hosted' : 'local' }))
-  process.exit(0)
+  try {
+    const { resolveEconomyServerBackend } = await import('../db/cloud.js')
+    console.log(JSON.stringify({ status: 'ok', version: packageMetadata.version, backend: resolveEconomyServerBackend() }))
+    process.exit(0)
+  } catch (error) {
+    // A retired storage-mode variable fails closed here too. Print the migration
+    // hint rather than a stack trace, which would bury the one actionable line.
+    console.error(error instanceof Error ? error.message : String(error))
+    process.exit(1)
+  }
 }
 
 if (sub === 'migrate') {

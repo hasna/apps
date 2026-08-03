@@ -5,7 +5,7 @@ export const openApiSpec: Record<string, unknown> = {
   "info": {
     "title": "@hasna/economy self-hosted API",
     "version": "0.0.0",
-    "description": "AI coding cost tracker — self-hosted control plane. Cloud mode is PURE REMOTE per Amendment A1: the serve process reads/writes the shared RDS Postgres directly with API-key auth via @hasna/contracts. All /v1 routes require a valid `economy:*` scoped API key (x-api-key or Authorization: Bearer). The foundation probes /health, /ready, /version are open."
+    "description": "AI coding cost tracker — self-hosted control plane. The server data backend is sqlite | postgresql, selected by the presence of a database URL; with postgresql the serve process reads AND writes PostgreSQL directly with API-key auth via @hasna/contracts. All /v1 routes require a valid `economy:*` scoped API key (x-api-key or Authorization: Bearer). The foundation probes /health, /ready, /version are open."
   },
   "servers": [
     {
@@ -51,27 +51,61 @@ export const openApiSpec: Record<string, unknown> = {
           "data"
         ]
       },
-      "Foundation": {
+      "Health": {
         "type": "object",
         "properties": {
           "status": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "ok",
+              "degraded",
+              "unavailable"
+            ]
           },
           "version": {
             "type": "string"
           },
-          "mode": {
-            "type": "string"
-          },
-          "service": {
-            "type": "string"
+          "backend": {
+            "type": "string",
+            "enum": [
+              "sqlite",
+              "postgresql"
+            ]
           }
         },
         "required": [
           "status",
           "version",
-          "mode"
-        ]
+          "backend"
+        ],
+        "additionalProperties": false
+      },
+      "Ready": {
+        "type": "object",
+        "properties": {
+          "ready": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ready"
+        ],
+        "additionalProperties": false
+      },
+      "Version": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "additionalProperties": false
       },
       "Error": {
         "type": "object",
@@ -354,7 +388,7 @@ export const openApiSpec: Record<string, unknown> = {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Foundation"
+                  "$ref": "#/components/schemas/Health"
                 }
               }
             }
@@ -373,7 +407,7 @@ export const openApiSpec: Record<string, unknown> = {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Foundation"
+                  "$ref": "#/components/schemas/Ready"
                 }
               }
             }
@@ -383,7 +417,7 @@ export const openApiSpec: Record<string, unknown> = {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Foundation"
+                  "$ref": "#/components/schemas/Ready"
                 }
               }
             }
@@ -402,7 +436,7 @@ export const openApiSpec: Record<string, unknown> = {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Foundation"
+                  "$ref": "#/components/schemas/Version"
                 }
               }
             }
