@@ -1,0 +1,268 @@
+# =============================================================================
+# hasna self-hosted deploy pipeline  —  .github/workflows/deploy.yml
+#
+# Adapted from the fleet-standard template (hasna/domains), with the three
+# deviations called out below. Everything else stays diffable against siblings.
+#
+# What it does:
+#   1. Assumes the per-repo least-priv OIDC role (no long-lived keys).
+#   2. PROMOTES the already-built, already-scanned ECR candidate for the target
+#      commit — it does NOT build an image. See DEVIATION 3.
+#   3. Runs the one-shot DB migration task and fails hard on non-zero exit.
+#   4. Registers a new web task-def revision and updates the ECS service.
+#   5. Waits for the service to reach steady state and asserts the deployment
+#      circuit breaker reported COMPLETED (rollback => job fails).
+#
+# Prereqs: IAM role `loops-prod-gha-deploy` and the `/hasna/deploy/loops` SSM
+# manifest, both created by the `module "deploy"` block in
+# hasna-xyz-infra `apps/loops/prod/main.tf` (modules/deploy-oidc-role). The
+# role trust is pinned to repo:hasna/loops:environment:production, so this job
+# MUST run in the `production` GitHub Environment (set below).
+#
+# -----------------------------------------------------------------------------
+# DEVIATION 1 — MANUAL DISPATCH ONLY. THIS IS DELIBERATE. DO NOT "RESTORE" IT.
+# -----------------------------------------------------------------------------
+# The fleet template also triggers on `push: branches: [main]` and `tags: v*`.
+# That trigger is intentionally ABSENT here.
+#
+# `migrations/0010_tenant_enforce` is a ROLLBACK BOUNDARY (CHANGELOG 0.4.29):
+# once applied, the previously published image cannot pass readiness because it
+# lacks the 0008-0010 tenant migration lineage. The live `loops-prod` service
+# runs with deploymentCircuitBreaker {enable:true, rollback:true}, whose
+# automatic rollback target is the CURRENT revision. So an auto-triggered deploy
+# that applies migrations and then fails a health check for any reason would be
+# rolled back by ECS onto an image that CANNOT serve the schema just installed,
+# and would flap there with no automatic recovery.
+#
+# An unattended push trigger therefore turns any ordinary merge to main into a
+# potential self-inflicted hard outage of the control plane every loop on the
+# fleet depends on. Adding the push trigger is a separate, deliberate decision
+# that must be taken together with a decision about the circuit breaker; it is
+# not a hygiene cleanup. See knowledge k_ms87ibag_f9gpca and todos 013212b9.
+#
+# -----------------------------------------------------------------------------
+# DEVIATION 2 — the `production` environment additionally requires a reviewer.
+# -----------------------------------------------------------------------------
+# Sibling repos gate `production` on a branch policy alone. This repo's own two
+# existing environments (`ecr-candidate`, `shared-database-transfer`) both carry
+# required_reviewers, and the rollback boundary above makes an unattended
+# production mutation materially riskier here than for a stateless sibling. The
+# environment keeps that repo-local convention.
+#
+# -----------------------------------------------------------------------------
+# DEVIATION 3 — PROMOTE A SCANNED CANDIDATE; DO NOT BUILD HERE.
+# -----------------------------------------------------------------------------
+# The fleet template builds its own image in this workflow and pushes it under
+# the commit SHA. This repo does NOT, because it already owns a stronger path:
+# `.github/workflows/ecr-candidate.yml` builds the same artefact (same
+# `Dockerfile`, same `--target runner`, same `linux/arm64`), gates it on Trivy
+# CRITICAL/HIGH with `ignore-unfixed: false`, and pushes it to the SAME ECR
+# repository this job deploys from, under the immutable tag
+# `candidate-<short12>-<full40sha>`. It also emits a CycloneDX SBOM and an
+# in-toto/SLSA provenance statement for that exact artefact.
+#
+# Building a second, separately-gated image into the same repository would mean
+# the bytes that actually run in production are never themselves gated on a
+# scan — only a rebuild from the same source is (ci.yml `image-security`, which
+# is real but uses the weaker `ignore-unfixed: true`) — and would ship without
+# the SBOM/provenance the candidate already produces. Promotion also removes
+# rebuild nondeterminism entirely: what was scanned is what runs, by digest.
+#
+# KNOWN RESIDUAL, stated so nobody reads this as more than it is:
+# `ecr-candidate.yml` pushes the image BEFORE it waits on ECR's native scan, so
+# the presence of a candidate tag proves the PRE-PUSH local Trivy gate passed —
+# it does not prove ECR's own scan passed. This job cannot close that gap:
+# `modules/deploy-oidc-role` does not grant `ecr:DescribeImageScanFindings`, and
+# `ecr:DescribeImages` (which it does grant) returns no scan fields at all.
+# Closing it needs an IAM change to a module shared by 17 sibling apps, plus
+# reordering ecr-candidate.yml to gate before it pushes. Tracked separately.
+# =============================================================================
+name: deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: >-
+          Full lowercase 40-character commit SHA that already has a scanned ECR
+          candidate. Leave empty to deploy the dispatched ref's HEAD.
+        required: false
+        type: string
+
+# Serialize production deploys; never cancel an in-flight one mid-rollout.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write # required to mint the GitHub OIDC token
+
+env:
+  # >>> THE ONLY LINE EACH REPO CHANGES <<<
+  APP: loops
+  # Locked platform defaults.
+  AWS_REGION: us-east-1
+  AWS_ACCOUNT_ID: "789877399345"
+
+jobs:
+  deploy:
+    name: promote + migrate + deploy
+    runs-on: ubuntu-24.04-arm
+    environment: production # MUST match the OIDC subject repo:hasna/<APP>:environment:production
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0 # ancestry check below needs real history
+          persist-credentials: false
+
+      - name: Resolve and verify the source commit
+        id: src
+        env:
+          REQUESTED_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          SOURCE_SHA="${REQUESTED_SHA:-$GITHUB_SHA}"
+          if [[ ! "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::source_sha must be a full lowercase 40-character commit SHA (got '$SOURCE_SHA')"
+            exit 1
+          fi
+          # The candidate workflow only builds commits reachable from main; hold
+          # the deploy to the same rule so a dispatch can never promote an image
+          # built from a commit that never landed.
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "${SOURCE_SHA}^{commit}" refs/remotes/origin/main; then
+            echo "::error::${SOURCE_SHA} is not an ancestor of origin/main; refusing to deploy it"
+            exit 1
+          fi
+          echo "source_sha=${SOURCE_SHA}" >> "$GITHUB_OUTPUT"
+          echo "candidate_tag=candidate-${SOURCE_SHA:0:12}-${SOURCE_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials (GitHub OIDC)
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/${{ env.APP }}-prod-gha-deploy
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: gha-deploy-${{ env.APP }}-${{ github.run_id }}
+
+      - name: Load deploy manifest
+        id: m
+        run: |
+          set -euo pipefail
+          M="$(aws ssm get-parameter --name "/hasna/deploy/${APP}" --query Parameter.Value --output text)"
+          get() { jq -er ".$1" <<<"$M"; }
+          {
+            echo "cluster=$(get cluster)"
+            echo "service=$(get service)"
+            echo "web_family=$(get web_task_family)"
+            echo "web_container=$(get web_container)"
+            echo "mig_family=$(get migration_task_family)"
+            echo "mig_container=$(get migration_container)"
+            echo "ecr_url=$(get ecr_repository_url)"
+            echo "assign_public_ip=$(get assign_public_ip)"
+            echo "subnets=$(jq -er '.subnets | join(",")' <<<"$M")"
+            echo "sgs=$(jq -er '.security_groups | join(",")' <<<"$M")"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Resolve the scanned candidate digest
+        id: image
+        env:
+          ECR_URL: ${{ steps.m.outputs.ecr_url }}
+          SOURCE_SHA: ${{ steps.src.outputs.source_sha }}
+          CANDIDATE_TAG: ${{ steps.src.outputs.candidate_tag }}
+        run: |
+          set -euo pipefail
+          # The manifest carries the full repository URI; describe-images wants
+          # the bare repository name.
+          REPO_NAME="${ECR_URL##*/}"
+          DIGEST="$(aws ecr describe-images \
+            --repository-name "$REPO_NAME" \
+            --image-ids imageTag="$CANDIDATE_TAG" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text 2>/dev/null || true)"
+          if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::no scanned candidate exists for ${SOURCE_SHA} (expected tag ${CANDIDATE_TAG} in ${REPO_NAME})."
+            echo "::error::Run the 'ECR candidate' workflow for that commit first, then re-run this deploy."
+            exit 1
+          fi
+          # Deploy by digest, not by tag: the task definition then names the
+          # exact bytes that were scanned, independent of any tag.
+          echo "image=${ECR_URL}@${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "Promoting ${CANDIDATE_TAG} -> ${DIGEST}"
+
+      - name: Run one-shot migration task
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+          CLUSTER: ${{ steps.m.outputs.cluster }}
+          MIG_FAMILY: ${{ steps.m.outputs.mig_family }}
+          MIG_CONTAINER: ${{ steps.m.outputs.mig_container }}
+          SUBNETS: ${{ steps.m.outputs.subnets }}
+          SGS: ${{ steps.m.outputs.sgs }}
+          ASSIGN: ${{ steps.m.outputs.assign_public_ip }}
+        run: |
+          set -euo pipefail
+          # Register a migration revision pinned to the promoted image.
+          NEW_TD="$(aws ecs describe-task-definition --task-definition "$MIG_FAMILY" \
+            --query taskDefinition | jq --arg img "$IMAGE" --arg c "$MIG_CONTAINER" '
+              .containerDefinitions |= map(if .name==$c then .image=$img else . end)
+              | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy,.deregisteredAt)')"
+          MIG_ARN="$(aws ecs register-task-definition --cli-input-json "$NEW_TD" \
+            --query taskDefinition.taskDefinitionArn --output text)"
+          echo "Running migration task def: $MIG_ARN"
+          TASK_ARN="$(aws ecs run-task --cluster "$CLUSTER" --task-definition "$MIG_ARN" \
+            --launch-type FARGATE --count 1 \
+            --started-by "gha-migrate-${GITHUB_RUN_ID}" \
+            --network-configuration "awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$SGS],assignPublicIp=$ASSIGN}" \
+            --query 'tasks[0].taskArn' --output text)"
+          if [ -z "$TASK_ARN" ] || [ "$TASK_ARN" = "None" ]; then
+            echo "::error::migration task failed to start"; exit 1
+          fi
+          echo "Waiting for migration task to stop: $TASK_ARN"
+          aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "$TASK_ARN"
+          DESC="$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN")"
+          EXIT="$(jq -r ".tasks[0].containers[] | select(.name==\"$MIG_CONTAINER\") | .exitCode // \"null\"" <<<"$DESC")"
+          REASON="$(jq -r '.tasks[0].stoppedReason // ""' <<<"$DESC")"
+          echo "migration exitCode=$EXIT stoppedReason=$REASON"
+          if [ "$EXIT" != "0" ]; then
+            echo "::error::migration task did not exit 0 (exit=$EXIT, reason=$REASON)"; exit 1
+          fi
+
+      - name: Deploy service (new revision) and wait for stable
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+          CLUSTER: ${{ steps.m.outputs.cluster }}
+          SERVICE: ${{ steps.m.outputs.service }}
+          WEB_FAMILY: ${{ steps.m.outputs.web_family }}
+          WEB_CONTAINER: ${{ steps.m.outputs.web_container }}
+        run: |
+          set -euo pipefail
+          NEW_TD="$(aws ecs describe-task-definition --task-definition "$WEB_FAMILY" \
+            --query taskDefinition | jq --arg img "$IMAGE" --arg c "$WEB_CONTAINER" '
+              .containerDefinitions |= map(if .name==$c then .image=$img else . end)
+              | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy,.deregisteredAt)')"
+          WEB_ARN="$(aws ecs register-task-definition --cli-input-json "$NEW_TD" \
+            --query taskDefinition.taskDefinitionArn --output text)"
+          echo "Updating $SERVICE -> $WEB_ARN"
+          aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" \
+            --task-definition "$WEB_ARN" >/dev/null
+          echo "Waiting for service to reach steady state..."
+          aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE"
+          # Deployment circuit breaker: a rolled-back deploy is a FAILED deploy.
+          # After a rollback the PRIMARY deployment can still report COMPLETED (the
+          # *rollback* completed) while running the OLD task def, so assert BOTH the
+          # rollout state AND that the live PRIMARY task def is the one we deployed.
+          SVC="$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE")"
+          RS="$(jq -r '.services[0].deployments[] | select(.status=="PRIMARY") | .rolloutState' <<<"$SVC")"
+          LIVE_TD="$(jq -r '.services[0].deployments[] | select(.status=="PRIMARY") | .taskDefinition' <<<"$SVC")"
+          echo "primary rolloutState=$RS liveTaskDef=$LIVE_TD deployed=$WEB_ARN"
+          if [ "$RS" != "COMPLETED" ]; then
+            echo "::error::deployment did not complete (rolloutState=$RS) — likely circuit-breaker rollback"; exit 1
+          fi
+          if [ "$LIVE_TD" != "$WEB_ARN" ]; then
+            echo "::error::live task def ($LIVE_TD) != deployed ($WEB_ARN) — deployment was rolled back"; exit 1
+          fi
+          echo "Deploy of ${APP} @ ${{ steps.src.outputs.source_sha }} (${{ steps.image.outputs.digest }}) succeeded."
