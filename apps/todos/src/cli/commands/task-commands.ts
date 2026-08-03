@@ -897,8 +897,31 @@ export function registerTaskCommands(program: Command) {
       // creator filter is client-enforced, the limit is withheld from the request and
       // applied here instead — filter first, then truncate, which is the order the
       // SQL does it in.
+      //
+      // The same reasoning governs every other step that changes WHICH rows or in
+      // WHAT ORDER after the query has run, so the rule is generalised rather than
+      // special-cased per flag:
+      //
+      //   --sort            reorders. Storage orders by `priority_rank, created_at
+      //                     DESC`, never by the requested field, so a limit applied
+      //                     in storage draws the window from the WRONG ordering.
+      //                     `--sort updated --limit 2` returned the 2 highest-
+      //                     priority rows ordered by update time while reading as
+      //                     "the 2 most recently updated" — the row actually
+      //                     updated last was absent, at exit 0, with no indication.
+      //   --due-today       narrow. Applied to a truncated page they shrink it
+      //   --overdue         further, so `--overdue --limit 20` could return 3 while
+      //                     the real overdue set was larger.
+      //
+      // In each case the limit is withheld from the query and applied last, below.
+      // This is not a new cost: every one of these steps ALREADY reads the whole
+      // matching set when no limit is given, so withholding the limit alongside one
+      // of them fetches no more than the same command without `--limit` does.
       const requestedLimit = filter["limit"] as number | undefined;
-      const serverFilter = creatorFilterActive && cloud && requestedLimit !== undefined
+      const reordersAfterQuery = Boolean(opts.sort);
+      const narrowsAfterQuery = Boolean(opts.dueToday) || Boolean(opts.overdue) || (creatorFilterActive && cloud);
+      const withholdLimit = requestedLimit !== undefined && (reordersAfterQuery || narrowsAfterQuery);
+      const serverFilter = withholdLimit
         ? (() => { const { limit: _dropped, ...rest } = filter; return rest; })()
         : filter;
 
@@ -930,7 +953,6 @@ export function registerTaskCommands(program: Command) {
           if (excludeCreatedBy && author !== null && author === canonicalAgentRef(excludeCreatedBy)) return false;
           return true;
         });
-        if (requestedLimit !== undefined) tasks = tasks.slice(0, requestedLimit);
       }
       if (opts.dueToday) {
         const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
@@ -950,6 +972,10 @@ export function registerTaskCommands(program: Command) {
           return 0;
         });
       }
+
+      // The window is taken LAST, once the set and its order are final. When the
+      // limit was left on the query this is a no-op — storage already truncated.
+      if (withholdLimit && requestedLimit !== undefined) tasks = tasks.slice(0, requestedLimit);
 
       const fmt = opts.format || (globalOpts.json ? "json" : "table");
       const outputTasks = redactBroadTasks(tasks);

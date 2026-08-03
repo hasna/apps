@@ -225,6 +225,43 @@ describe("CLI QoL commands", () => {
     expect(idx1).toBeLessThan(idx2);
   });
 
+  // ── list --sort with --limit ───────────────────────────────────
+  //
+  // `--limit` reaches storage, whose ORDER BY is `priority_rank, created_at DESC`
+  // — NOT the requested sort field, which used to be applied in JS only AFTER the
+  // truncated page came back. So `--sort updated --limit 2` returned "the 2
+  // highest-priority rows, ordered by update time" while reading as "the 2 most
+  // recently updated". The row that was actually updated last was absent, at exit
+  // 0, with nothing to indicate the window was the wrong one.
+  //
+  // The fixture makes the two orderings disagree on purpose: the most recently
+  // updated task is the LOWEST priority and the OLDEST created, so storage ranks
+  // it dead last and any limit applied before the sort drops it.
+
+  it("list --sort updated must select the window AFTER sorting, not before", () => {
+    const tag = "sortlimit";
+    // Created first + lowest priority => last in the storage ordering.
+    const low = JSON.parse(run(`add 'SL low priority' --priority low --tags ${tag} --json`));
+    JSON.parse(run(`add 'SL critical one' --priority critical --tags ${tag} --json`));
+    JSON.parse(run(`add 'SL critical two' --priority critical --tags ${tag} --json`));
+    // ...but updated last, so it is unambiguously the most recently updated row.
+    run(`update ${low.id} --description 'touched last'`);
+
+    // Control: with no --limit the fixture must put `low` first. If this fails the
+    // fixture is wrong (not the code), so the assertion below would be meaningless.
+    const unlimited = JSON.parse(run(`--json list --all --tags ${tag} --sort updated`));
+    expect(unlimited[0].id).toBe(low.id);
+
+    const limited = JSON.parse(run(`--json list --all --tags ${tag} --sort updated --limit 2`));
+    expect(limited.length).toBe(2);
+    // The most recently updated task must be in — and at the head of — a window
+    // that claims to be the 2 most recently updated.
+    expect(limited[0].id).toBe(low.id);
+    expect(limited.map((t: any) => t.id)).toContain(low.id);
+    // Six cold `bun run` subprocesses (~0.5s each) overrun the 5s bun-test default
+    // under parallel CI load. Matches the explicit budgets in src/cli/cli.test.ts.
+  }, 30000);
+
   // ── list --project-name ────────────────────────────────────────
 
   it("list --project-name should filter by project name", () => {

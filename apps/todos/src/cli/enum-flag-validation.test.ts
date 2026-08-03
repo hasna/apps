@@ -308,6 +308,71 @@ describe("todos search rejects out-of-vocabulary enum filters", () => {
   });
 });
 
+/**
+ * `watch` was the read verb this suite missed. It takes the same `--status`
+ * vocabulary as `list` and forwarded the raw value into the storage filter, so
+ * `watch --status open` painted an empty live dashboard that never filled — the
+ * incident's failure mode on a surface that invites an operator to sit and watch
+ * it, rather than a one-shot command they might re-run.
+ *
+ * A valid status makes `watch` loop forever by design, so the accept-side control
+ * asserts the process is STILL RUNNING when killed rather than waiting for exit.
+ */
+describe("todos watch rejects out-of-vocabulary --status", () => {
+  /** Spawn, let it settle, then kill. Reports whether it was still running. */
+  async function runWatchBounded(args: string[], root: string, ms: number): Promise<CliResult & { stillRunning: boolean }> {
+    const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
+      cwd: REPO_ROOT,
+      env: localRoutingTestEnv({
+        HOME: join(root, "home"),
+        TMPDIR: root,
+        LANG: "C.UTF-8",
+        TODOS_DB_PATH: join(root, "todos.db"),
+        TODOS_AUTO_PROJECT: "false",
+        HASNA_EVENTS_DIR: join(root, "events"),
+      }),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const exited = proc.exited.then((code) => ({ code, timedOut: false }));
+    const timer = Bun.sleep(ms).then(() => ({ code: -1, timedOut: true }));
+    const outcome = await Promise.race([exited, timer]);
+    if (outcome.timedOut) proc.kill();
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    await proc.exited;
+    return { stdout, stderr, exitCode: outcome.code, stillRunning: outcome.timedOut };
+  }
+
+  test.each([
+    ["open", "the value from the incident"],
+    ["totally_bogus_value", "arbitrary junk"],
+  ])("exits non-zero for --status %s (%s)", async (value) => {
+    const root = tempRoot("todos-enum-watch-");
+    await seedLocal(root);
+    const result = await runWatchBounded(["watch", "--status", value], root, 15_000);
+    expect(result.stillRunning).toBe(false);
+    expect(result.exitCode).not.toBe(0);
+    // The rejection must be the VOCABULARY error. An "Unknown flag"/usage error
+    // also exits non-zero and also contains the flag name, so asserting on the
+    // flag alone would pass against a CLI that never learned the vocabulary.
+    expect(result.stderr).toContain(`Allowed values: ${TASK_STATUSES.join(", ")}.`);
+    expect(result.stderr).not.toContain("Unknown flag");
+  });
+
+  test("still accepts a documented status alias instead of rejecting it", async () => {
+    const root = tempRoot("todos-enum-watch-alias-");
+    await seedLocal(root);
+    // `done` normalizes to `completed`; validation must not cost the aliases the
+    // previous implementation supported via normalizeStatus.
+    const result = await runWatchBounded(["watch", "--status", "done"], root, 6_000);
+    expect(result.stillRunning).toBe(true);
+    expect(result.stderr).not.toContain("Allowed values:");
+  });
+});
+
 describe("write flags reject out-of-vocabulary enums", () => {
   test("todos add --status junk exits non-zero and creates nothing", async () => {
     const root = tempRoot("todos-enum-add-");
