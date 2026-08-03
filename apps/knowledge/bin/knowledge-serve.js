@@ -717,6 +717,7 @@ var LEGACY_HASNA_KNOWLEDGE_APP_PATH = join(".hasna", "apps", "knowledge");
 // src/store.ts
 var SLEEP_BUFFER = new Int32Array(new SharedArrayBuffer(4));
 var heldLockPaths = new Set;
+var LOCK_CONTENTION_CODES = new Set(["EEXIST", "EPERM", "EBUSY"]);
 function makeId() {
   return `k_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }

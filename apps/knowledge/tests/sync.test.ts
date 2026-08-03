@@ -17,6 +17,7 @@ import {
 } from '../src/sync';
 import type { KnowledgeMachineTopology } from '../src/machines';
 import { defaultKnowledgeConfig, writeKnowledgeConfig } from '../src/workspace';
+import { budget } from './support/budget';
 
 class FakeS3ArtifactStore implements ArtifactStore {
   readonly type = 's3' as const;
@@ -366,7 +367,7 @@ describe('knowledge machine sync ledger', () => {
     expect(replay.ok).toBe(true);
     expect(replay.push?.replayed).toBe(true);
     expect(replay.push?.tables.reduce((sum, table) => sum + table.inserted, 0)).toBe(0);
-  }, 10000);
+  }, budget(10000));
 
   test('syncs generated artifact manifests through fake S3 without raw source bytes', async () => {
     const sourceDir = mkdtempSync(join(tmpdir(), 'ok-sync-fake-s3-source-'));
@@ -497,7 +498,7 @@ describe('knowledge machine sync ledger', () => {
         preserves_provenance: true,
       },
     });
-  }, 10000);
+  }, budget(10000));
 
   test('sync export redacts local file and workspace refs from bundles', async () => {
     const sourceDir = mkdtempSync(join(tmpdir(), 'ok-sync-redacted-source-'));
@@ -602,7 +603,7 @@ describe('knowledge machine sync ledger', () => {
     expect(finalPreview.ok).toBe(true);
     expect(finalPreview.pull?.tables.find((table) => table.table === 'wiki_pages')?.conflicts).toBe(0);
     expect(finalPreview.push?.tables.find((table) => table.table === 'wiki_pages')?.conflicts).toBe(0);
-  }, 10000);
+  }, budget(10000));
 
   test('guards duplicate, interrupted, and out-of-order bundle imports with table clocks', async () => {
     const sourceDir = mkdtempSync(join(tmpdir(), 'ok-sync-clock-source-'));
@@ -672,5 +673,5 @@ describe('knowledge machine sync ledger', () => {
     expect(stale.clocks.stale_tables).toBeGreaterThan(0);
     expect(stale.warnings.some((warning) => warning.startsWith('stale_table_skipped:'))).toBe(true);
     expect(peerService.dbStats().sources).toBe(1);
-  }, 10000);
+  }, budget(10000));
 });

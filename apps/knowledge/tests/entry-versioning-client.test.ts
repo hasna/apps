@@ -24,6 +24,7 @@ import { createServeHandler } from '../src/serve';
 import { KnowledgeVersionConflictError } from '../src/cloud-store';
 import { resolveItemStore, VersionHistoryUnsupportedError, type ItemStore } from '../src/item-store';
 import { createMigratedPglite } from './fixtures/pglite-client';
+import { budget } from './support/budget';
 
 const SIGNING = 'test-signing-secret-not-a-real-key';
 
@@ -199,7 +200,7 @@ describe('knowledge versions / diff — CLI against the live server', () => {
     expect((JSON.parse(rev.stdout) as { from: string; to: string }).from).toBe('v1');
     // v2 IS the current version, so the live row is the right right-hand side.
     expect((JSON.parse(rev.stdout) as { to: string }).to).toBe('v2 (current)');
-  }, 60_000);
+  }, budget(60_000));
 
   test('an entry with no edits prints an empty history at exit 0, and diff refuses at exit 1', async () => {
     const created = await cloudStore().create({ title: 'Never edited', content: 'only' });
@@ -214,7 +215,7 @@ describe('knowledge versions / diff — CLI against the live server', () => {
     const diff = await runCli(['diff', '--id', created.id, '--json'], cliEnv);
     expect(diff.exitCode).toBe(1);
     expect(diff.stderr).toContain('no retained prior versions');
-  }, 60_000);
+  }, budget(60_000));
 
   test('versions pages, so history past one page is still reachable', async () => {
     // The server caps a page at 200. Without an offset, an entry with more
@@ -243,13 +244,13 @@ describe('knowledge versions / diff — CLI against the live server', () => {
 
     const third = await runCli(['versions', '--id', created.id, '--limit', '1', '--page', '3', '--json'], cliEnv);
     expect((JSON.parse(third.stdout) as { versions: { version: number }[] }).versions.map((v) => v.version)).toEqual([1]);
-  }, 60_000);
+  }, budget(60_000));
 
   test('versions on an absent id exits 1 rather than printing an empty history', async () => {
     const result = await runCli(['versions', '--id', 'k_absent_entirely', '--json'], cloudEnv as Record<string, string>);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('Item not found');
-  }, 60_000);
+  }, budget(60_000));
 
   test('against the local JSON store the verbs refuse loudly instead of printing an empty history', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-versions-cli-local-'));
@@ -259,7 +260,7 @@ describe('knowledge versions / diff — CLI against the live server', () => {
     const result = await runCli(['versions', '--id', 'k_local', '--store', path, '--json']);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('Version history is not kept by the local JSON knowledge store');
-  }, 60_000);
+  }, budget(60_000));
 });
 
 describe('ItemStore (local transport) — a store with no history says so', () => {
@@ -348,7 +349,7 @@ describe('knowledge update --if-version — caller-supplied concurrency guard', 
     expect(after!.version).toBe(2);
     expect(after!.content).toContain('AAA');
     expect(after!.content).not.toContain('BBB');
-  }, 60_000);
+  }, budget(60_000));
 
   test('a matching --if-version is accepted, so the guard is not simply always-on', async () => {
     // Positive control for the test above: same flag, same path, a current
@@ -366,7 +367,7 @@ describe('knowledge update --if-version — caller-supplied concurrency guard', 
     const after = await store.get(created.id);
     expect(after!.version).toBe(2);
     expect(after!.content).toBe('second');
-  }, 60_000);
+  }, budget(60_000));
 
   test('OMITTING --if-version leaves existing callers working exactly as before', async () => {
     // Back-compat is the reason the flag is opt-in. Many installed callers pass
@@ -381,7 +382,7 @@ describe('knowledge update --if-version — caller-supplied concurrency guard', 
     const after = await store.get(created.id);
     expect(after!.version).toBe(2);
     expect(after!.content).toBe('second');
-  }, 60_000);
+  }, budget(60_000));
 
   test('a non-numeric --if-version is rejected before anything is written', async () => {
     const store = cloudStore();
@@ -403,7 +404,7 @@ describe('knowledge update --if-version — caller-supplied concurrency guard', 
     const after = await store.get(created.id);
     expect(after!.content).toBe('untouched');
     expect(after!.version).toBe(1);
-  }, 60_000);
+  }, budget(60_000));
 
   // REWRITTEN from the version filed against fix/5d45a037-if-version, whose
   // design refused --if-version outright on the local JSON store ("the local
@@ -451,5 +452,5 @@ describe('knowledge update --if-version — caller-supplied concurrency guard', 
     const stored = JSON.parse(readFileSync(path, 'utf8')).items[0];
     expect(stored.content).toBe('new');
     expect(stored.version).toBe(2);
-  }, 60_000);
+  }, budget(60_000));
 });

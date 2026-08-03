@@ -9,6 +9,7 @@ import { CURRENT_SCHEMA_VERSION } from '../src/knowledge-db';
 import { ingestOpenFilesManifest } from '../src/manifest-ingest';
 import { createKnowledgeService } from '../src/service';
 import { recordKnowledgeSyncConflict } from '../src/sync';
+import { budget } from './support/budget';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MCP = join(__dirname, '..', 'src', 'mcp.js');
@@ -887,7 +888,7 @@ describe('knowledge MCP', () => {
   // matrix job itself runs `bun test --timeout 20000`; keep the test aligned
   // with that required gate instead of letting this file's older 10s override
   // fail a passing end-to-end run on slower Windows hosts.
-  }, 20_000);
+  }, budget(20_000));
 
   // ok_untag had no MCP-side coverage at all, which is how it kept returning `ok: true` on
   // `removed: 0` through two PRs that fixed the same defect on the CLI side. Every assertion
@@ -1030,5 +1031,5 @@ describe('knowledge MCP', () => {
     } finally {
       await client.close();
     }
-  }, 30000);
+  }, budget(30000));
 });

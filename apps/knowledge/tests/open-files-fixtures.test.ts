@@ -9,6 +9,7 @@ import { consumeOpenFilesOutbox } from '../src/outbox-consume';
 import { resolveOpenFilesSource } from '../src/source-resolver';
 import { retrieveKnowledgeContext } from '../src/retrieval';
 import { createKnowledgeService } from '../src/service';
+import { budget } from './support/budget';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const openFilesFixtureModulePath = resolve(__dirname, '../../open-files/src/lib/knowledge-sync-fixtures.ts');
@@ -301,5 +302,5 @@ describe('open-files knowledge sync fixtures', () => {
     expect(peerKnowledgeText).not.toContain(rawSentinelBase64);
     expect(peerKnowledgeText).toContain('safe_open_files_metadata');
     expect(peerKnowledgeText).toContain('safe_nested_metadata');
-  }, 10000);
+  }, budget(10000));
 });
