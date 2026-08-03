@@ -132,6 +132,57 @@ describe("public release gate", () => {
     expect(failures.map((failure) => failure.check)).toContain("readme-install");
   });
 
+  test("reads the root README for the install check whatever order the surfaces arrive in", () => {
+    // Regression for @hasna/todos@0.15.0 publish run 30829940563, which failed
+    // readme-install at a sha whose README.md contained the required line twice.
+    // The selector also matched sdk/README.md, and the source collector feeds it
+    // unsorted readdirSync order, so the file the check read was decided by the
+    // filesystem. Both orders below must reach the same verdict.
+    const rootReadme = { path: "README.md", text: "# todos\n\nbun install -g @hasna/todos\n" };
+    const sdkReadme = { path: "sdk/README.md", text: "# todos-sdk\n\nbun add @hasna/todos-sdk\n" };
+    const readmeInstall = (files: { path: string; text: string }[]) =>
+      validatePublicTextSurfaces(files).filter((failure) => failure.check === "readme-install");
+
+    expect(readmeInstall([rootReadme, sdkReadme])).toEqual([]);
+    expect(readmeInstall([sdkReadme, rootReadme])).toEqual([]);
+
+    // The packed scan prefixes every entry with `package/`; the root README of an
+    // extracted tarball must resolve the same way, and its sdk sibling must not.
+    expect(readmeInstall([
+      { path: "package/sdk/README.md", text: sdkReadme.text },
+      { path: "package/README.md", text: rootReadme.text },
+    ])).toEqual([]);
+  });
+
+  test("a sibling README cannot satisfy the install requirement for a root README that omits it", () => {
+    // The inverse failure the old suffix match allowed: a compliant sdk/README.md
+    // enumerated first would have masked a root README missing the install line.
+    const failures = validatePublicTextSurfaces([
+      { path: "sdk/README.md", text: "bun install -g @hasna/todos\n" },
+      { path: "README.md", text: "# todos\n\nno install instructions here\n" },
+    ]).filter((failure) => failure.check === "readme-install");
+
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.message).toContain("README.md must document bun install -g @hasna/todos");
+  });
+
+  test("distinguishes an uncollected README from one that omits the install command", () => {
+    // `?? ""` used to turn "never collected" into "collected and empty", so a
+    // collection bug was reported as a content bug against a file the gate had
+    // never opened. The two states must not share a message.
+    const absent = validatePublicTextSurfaces([{ path: "docs/roadmaps.md", text: "" }])
+      .filter((failure) => failure.check === "readme-install");
+    expect(absent).toHaveLength(1);
+    expect(absent[0]?.message).toContain("no root README.md was collected");
+    expect(absent[0]?.message).toContain("docs/roadmaps.md");
+
+    const omits = validatePublicTextSurfaces([{ path: "README.md", text: "# todos\n" }])
+      .filter((failure) => failure.check === "readme-install");
+    expect(omits).toHaveLength(1);
+    expect(omits[0]?.message).toContain("README.md must document");
+    expect(omits[0]?.message).not.toContain("no root README.md was collected");
+  });
+
   test("scopes source scanning to public surfaces while packed text stays authoritative", () => {
     expect(isPublicReleaseTextSurface("buildspec.container-candidate.yml")).toBe(false);
     expect(isPublicReleaseTextSurface("scripts/verify-public-release.ts")).toBe(false);

@@ -329,15 +329,48 @@ export function validatePublicTextSurfaces(files: TextFile[]): ReleaseGateFailur
     }
   }
 
-  const readme = files.find((file) => file.path === "README.md" || file.path.endsWith("/README.md"))?.text ?? "";
-  addIf(
-    failures,
-    !readme.includes("bun install -g @hasna/todos"),
-    "readme-install",
-    "README.md must document bun install -g @hasna/todos",
-  );
+  const readme = findRootReadme(files);
+  if (!readme) {
+    failures.push({
+      check: "readme-install",
+      message: `no root README.md was collected, so ${README_INSTALL_COMMAND} could not be checked`
+        + ` (surfaces seen: ${files.length === 0 ? "none" : files.map((file) => file.path).join(", ")})`,
+    });
+  } else {
+    addIf(
+      failures,
+      !readme.text.includes(README_INSTALL_COMMAND),
+      "readme-install",
+      `${readme.path} must document ${README_INSTALL_COMMAND}`,
+    );
+  }
 
   return failures;
+}
+
+const README_INSTALL_COMMAND = "bun install -g @hasna/todos";
+
+/**
+ * Select the ROOT README, and only the root README.
+ *
+ * The previous selector was `path === "README.md" || path.endsWith("/README.md")`,
+ * which also matched `sdk/README.md`. `Array.prototype.find` returns the FIRST
+ * match, and the source-tree collector in scripts/verify-public-release.ts builds
+ * its list from `readdirSync`, whose order is unsorted filesystem order rather
+ * than alphabetical. So which README the install check read depended on the
+ * filesystem: on a checkout that enumerated `README.md` before `sdk/`, the gate
+ * read the right file and passed; on one that enumerated `sdk/` first, it read
+ * `sdk/README.md` — which documents `bun add @hasna/todos-sdk`, exactly as it
+ * should — and failed while naming README.md in the message. That is how
+ * @hasna/todos@0.15.0 failed this gate against a README that contains the
+ * required line twice.
+ *
+ * Matching is anchored instead of suffixed, and tolerates the single `package/`
+ * prefix that scanExtractedPackedFiles puts on entries from an extracted
+ * tarball, so both callers select the same file regardless of enumeration order.
+ */
+function findRootReadme(files: TextFile[]): TextFile | undefined {
+  return files.find((file) => file.path.replaceAll("\\", "/").replace(/^package\//, "") === "README.md");
 }
 
 export function isPublicReleaseTextSurface(path: string): boolean {
