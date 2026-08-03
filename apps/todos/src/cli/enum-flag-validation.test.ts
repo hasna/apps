@@ -311,6 +311,29 @@ describe("todos list rejects out-of-vocabulary --priority (local store)", () => 
   });
 });
 
+/**
+ * Commander 13.1.0 parses the combined `--flag=` form as an explicit empty
+ * string. Keep that real shell spelling covered separately from the existing
+ * empty-argv tests above so a future option-parser change cannot silently turn
+ * it back into "no filter requested".
+ */
+describe("todos list rejects combined empty --status=/--priority= flags", () => {
+  test("rejects --status= (combined flag=value form) instead of falling back to the default filter", async () => {
+    const root = tempRoot("todos-enum-status-empty-eq-");
+    await seedLocal(root);
+    const result = await runLocal(["list", "--status="], root);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout).not.toContain("No tasks found.");
+  });
+
+  test("rejects --priority= (combined flag=value form) instead of silently dropping the filter", async () => {
+    const root = tempRoot("todos-enum-prio-empty-eq-");
+    await seedLocal(root);
+    const result = await runLocal(["list", "--priority="], root);
+    expect(result.exitCode).not.toBe(0);
+  });
+});
+
 describe("todos list rejects out-of-vocabulary enums against a self-hosted authority", () => {
   test("rejects --status open without asking the authority to filter on it", async () => {
     const result = await runRemote(["list", "--status", "open"], [remoteTask()]);
