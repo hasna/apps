@@ -239,6 +239,17 @@ describe('knowledge update --if-version — CLI end to end against a real local 
     const result = await runCli(['update', '--id', id, '--content', 'b', '--if-version', 'nope', '--store', storePath, '--json'], {}, home);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('--if-version');
+    // The assertion above is NOT sufficient by itself: on a build where
+    // --if-version does not exist at all, argument parsing rejects it as an
+    // unrecognized flag, echoes the flag's own name back in the message
+    // ("Unknown flag: --if-version. Run 'knowledge --help' for valid
+    // options."), and ALSO exits 1 — so `toContain('--if-version')` passes
+    // for the wrong reason on that build too. This second assertion is what
+    // actually distinguishes "the flag exists and rejected a bad value" from
+    // "the flag does not exist"; drop it and this test cannot tell the two
+    // apart (measured: it stays green with --if-version support fully
+    // reverted).
+    expect(result.stderr).not.toContain('Unknown flag');
     // Confirms nothing was written under the bad flag.
     const after = await runCli(['get', '--id', id, '--store', storePath, '--json'], {}, home);
     expect((JSON.parse(after.stdout) as { item: { content: string } }).item.content).toBe('a');
