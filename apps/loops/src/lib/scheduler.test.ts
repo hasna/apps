@@ -444,6 +444,48 @@ describe("scheduler", () => {
     }
   });
 
+  test("catch_up all honors a retry budget raised while the first slot is running", async () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "catch-up-live-retry-budget",
+          schedule: { type: "interval", everyMs: 1_000 },
+          target: { type: "command", command: "true" },
+          catchUp: "all",
+          catchUpLimit: 10,
+          maxAttempts: 1,
+          retryDelayMs: 5_000,
+        },
+        new Date("2026-01-01T00:00:00Z"),
+      );
+      const firstSlot = loop.nextRunAt!;
+      let raisedBudget = false;
+
+      const out = await tick({
+        store,
+        runnerId: "test",
+        now: () => new Date("2026-01-01T00:00:05Z"),
+        random: noJitter,
+        beforeFinalize: () => {
+          if (raisedBudget) return;
+          store.updateLoop(loop.id, { maxAttempts: 2 });
+          raisedBudget = true;
+        },
+        execute: async () => result("failed", "2026-01-01T00:00:05.000Z"),
+      });
+
+      expect(out.completed).toHaveLength(1);
+      expect(store.listRuns({ loopId: loop.id })).toHaveLength(1);
+      const updated = store.getLoop(loop.id);
+      expect(updated?.maxAttempts).toBe(2);
+      expect(updated?.retryScheduledFor).toBe(firstSlot);
+      expect(updated?.nextRunAt).toBe("2026-01-01T00:00:10.000Z");
+    } finally {
+      store.close();
+    }
+  });
+
   test("preserves retry intent for recovered abandoned runs before advancing later recovered slots", async () => {
     const store = new Store(":memory:");
     try {

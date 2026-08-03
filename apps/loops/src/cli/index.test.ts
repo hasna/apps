@@ -1140,6 +1140,58 @@ describe("loops CLI", () => {
     expect(oldName.status).not.toBe(0);
   });
 
+  test("set-max-attempts changes only the retry budget and writes a backup", () => {
+    const dataDir = freshDataDir("loops-cli-max-attempts-");
+    const create = runCli(dataDir, ["--json", "create", "command", "retry-budget-loop", "--at", futureAt(), "--cmd", "true"]);
+    expect(create.status).toBe(0);
+    const created = JSON.parse(create.stdout);
+    expect(created.maxAttempts).toBe(1);
+
+    const set = runCli(dataDir, ["--json", "set-max-attempts", created.id, "3"]);
+
+    expect(set.status).toBe(0);
+    const value = JSON.parse(set.stdout);
+    expect(value).toMatchObject({
+      changed: true,
+      id: created.id,
+      previousMaxAttempts: 1,
+      maxAttempts: 3,
+    });
+    expect(value.backupPath).toContain(join(dataDir, "backups"));
+    expect(existsSync(value.backupPath)).toBe(true);
+
+    // Read it back through a separate process: the loop keeps its id, name,
+    // and schedule, which delete-and-recreate would not have.
+    const after = runCli(dataDir, ["--json", "show", created.id]);
+    expect(after.status).toBe(0);
+    const loop = JSON.parse(after.stdout);
+    expect(loop.id).toBe(created.id);
+    expect(loop.name).toBe("retry-budget-loop");
+    expect(loop.maxAttempts).toBe(3);
+    expect(loop.schedule).toEqual(created.schedule);
+  });
+
+  test("set-max-attempts reports a no-op and rejects a budget below 1", () => {
+    const dataDir = freshDataDir("loops-cli-max-attempts-invalid-");
+    const create = runCli(dataDir, ["--json", "create", "command", "budget-guard", "--at", futureAt(), "--cmd", "true", "--attempts", "2"]);
+    expect(create.status).toBe(0);
+    const created = JSON.parse(create.stdout);
+    expect(created.maxAttempts).toBe(2);
+
+    const noop = runCli(dataDir, ["--json", "set-max-attempts", "budget-guard", "2"]);
+    expect(noop.status).toBe(0);
+    const noopValue = JSON.parse(noop.stdout);
+    expect(noopValue.changed).toBe(false);
+    expect(noopValue.backupPath).toBeUndefined();
+
+    for (const bad of ["0", "-1", "1.5", "abc"]) {
+      const rejected = runCli(dataDir, ["--json", "set-max-attempts", "budget-guard", bad]);
+      expect(rejected.status).not.toBe(0);
+      const still = JSON.parse(runCli(dataDir, ["--json", "show", "budget-guard"]).stdout);
+      expect(still.maxAttempts).toBe(2);
+    }
+  });
+
   test("rename reports no-op without writing a backup", () => {
     const dataDir = freshDataDir("loops-cli-rename-noop-");
     const create = runCli(dataDir, ["create", "command", "stable-name", "--at", futureAt(), "--cmd", "true"]);

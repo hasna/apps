@@ -601,7 +601,12 @@ export async function tick(deps: SchedulerDeps): Promise<TickResult> {
         loopSkips += 1;
       } else completed.push(run);
       // tick-only retry gate: see recoverAndExpire() doc comment.
-      if (["failed", "timed_out", "abandoned"].includes(run.status) && run.attempt < loop.maxAttempts) break;
+      // The retry budget can change while a run is executing, so decide from
+      // the persisted loop instead of the pre-run snapshot used by dueSlots().
+      if (["failed", "timed_out", "abandoned"].includes(run.status)) {
+        const current = deps.store.getLoop(loop.id);
+        if (current && run.attempt < current.maxAttempts) break;
+      }
     }
   }
 

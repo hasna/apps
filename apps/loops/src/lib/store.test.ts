@@ -69,6 +69,99 @@ describe("Store", () => {
     }
   });
 
+  test("updateLoop changes maxAttempts in place, keeping the loop's id, schedule and run history", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "retry-budget",
+          schedule: { type: "once", at: "2027-01-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2026-01-01T00:00:00Z"),
+      );
+      // The default is 1: one transient failure retires the loop with no retry.
+      expect(loop.maxAttempts).toBe(1);
+      store.claimRun(loop, "2027-01-01T00:00:00.000Z", "test");
+      const runsBefore = store.listRuns({ loopId: loop.id }).length;
+      expect(runsBefore).toBe(1);
+
+      const updated = store.updateLoop(loop.id, { maxAttempts: 3 });
+
+      expect(updated.maxAttempts).toBe(3);
+      expect(store.getLoop(loop.id)?.maxAttempts).toBe(3);
+      // In place: nothing that a delete-and-recreate would have destroyed moved.
+      expect(updated.id).toBe(loop.id);
+      expect(updated.name).toBe(loop.name);
+      expect(updated.schedule).toEqual(loop.schedule);
+      expect(updated.nextRunAt).toBe(loop.nextRunAt);
+      expect(updated.createdAt).toBe(loop.createdAt);
+      expect(store.listRuns({ loopId: loop.id }).length).toBe(runsBefore);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("updateLoop leaves maxAttempts untouched when the patch omits it", () => {
+    // Regression: updateLoop writes max_attempts unconditionally from the merged
+    // row, so an omitted key must fall through to the current value rather than
+    // resetting the retry budget. This is the same class of bug that once wiped
+    // omitted schedule fields on the /v1 PATCH path.
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "retry-budget-preserved",
+          maxAttempts: 5,
+          schedule: { type: "once", at: "2027-01-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2026-01-01T00:00:00Z"),
+      );
+      expect(loop.maxAttempts).toBe(5);
+
+      store.updateLoop(loop.id, { labels: ["unrelated"] });
+      expect(store.getLoop(loop.id)?.maxAttempts).toBe(5);
+
+      store.updateLoop(loop.id, { status: "paused" });
+      expect(store.getLoop(loop.id)?.maxAttempts).toBe(5);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("updateLoop rejects a maxAttempts that is not an integer >= 1, atomically", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "retry-budget-invalid",
+          maxAttempts: 4,
+          schedule: { type: "once", at: "2027-01-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2026-01-01T00:00:00Z"),
+      );
+      const before = store.getLoop(loop.id);
+      // 0 and negatives would make `attempt < maxAttempts` false forever, so a
+      // run could never be admitted or retried.
+      for (const maxAttempts of [0, -1, 1.5, "2", null, {}, Number.NaN]) {
+        expect(() =>
+          store.updateLoop(loop.id, {
+            maxAttempts,
+            labels: ["mutated"],
+          } as unknown as Parameters<Store["updateLoop"]>[1])
+        ).toThrow(ValidationError);
+        expect(store.getLoop(loop.id)).toEqual(before);
+      }
+
+      expect(store.updateLoop(loop.id, { maxAttempts: 1 }).maxAttempts).toBe(1);
+      expect(store.updateLoop(loop.id, { maxAttempts: 10 }).maxAttempts).toBe(10);
+    } finally {
+      store.close();
+    }
+  });
+
   test("updateLoop rejects erased invalid statuses atomically and accepts every canonical status", () => {
     const store = new Store(":memory:");
     try {

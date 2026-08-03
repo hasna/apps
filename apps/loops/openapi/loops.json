@@ -3801,6 +3801,11 @@
             "type": "string",
             "nullable": true
           },
+          "maxAttempts": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Retry budget for this loop: the scheduler admits a retry while attempt < maxAttempts, so 1 means a single transient failure retires the loop with no retry. Omit to leave the current budget unchanged."
+          },
           "labels": {
             "type": "array",
             "items": {

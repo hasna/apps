@@ -67,7 +67,7 @@ import {
 } from "./run-artifacts.js";
 import { normalizeRunReceipt } from "./run-receipts.js";
 import { normalizeLoopLabels } from "./labels.js";
-import { assertLoopStatus } from "./loop-status.js";
+import { assertLoopStatus, assertMaxAttempts } from "./loop-status.js";
 import { normalizeRunCompletion } from "./run-completion.js";
 import { runLocalCommand, todosCliArgs, todosMutationSummary } from "./route/todos-cli.js";
 
@@ -1838,11 +1838,12 @@ export class Store {
 
   updateLoop(
     id: string,
-    patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt" | "labels">>,
+    patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt" | "labels" | "maxAttempts">>,
     opts: DaemonLeaseFence = {},
   ): Loop {
     const updated = (opts.now ?? new Date()).toISOString();
     if ("status" in patch && patch.status !== undefined) assertLoopStatus(patch.status);
+    if ("maxAttempts" in patch && patch.maxAttempts !== undefined) assertMaxAttempts(patch.maxAttempts);
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const current = this.getLoop(id);
@@ -1859,7 +1860,7 @@ export class Store {
       const res = this.db
         .query(
           `UPDATE loops SET status=$status, labels_json=$labels, next_run_at=$nextRun, retry_scheduled_for=$retrySlot,
-           expires_at=$expiresAt, updated_at=$updated
+           expires_at=$expiresAt, max_attempts=$maxAttempts, updated_at=$updated
            WHERE id=$id
              AND ($daemonLeaseId IS NULL OR EXISTS (
                SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
@@ -1872,6 +1873,7 @@ export class Store {
           $nextRun: merged.nextRunAt ?? null,
           $retrySlot: merged.retryScheduledFor ?? null,
           $expiresAt: merged.expiresAt ?? null,
+          $maxAttempts: merged.maxAttempts,
           $updated: merged.updatedAt,
           $daemonLeaseId: opts.daemonLeaseId ?? null,
           $now: updated,

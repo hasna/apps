@@ -1579,6 +1579,56 @@ describe("loops-api foundation", () => {
     }
   });
 
+  test("PATCH updates maxAttempts in place and rejects a non-integer budget with a stable 422", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+
+    try {
+      const loop = await storage.createLoop({
+        name: "api-retry-budget",
+        schedule: { type: "once", at: "2027-01-01T00:00:00Z" },
+        target: { type: "command", command: "true" },
+      }, new Date("2026-01-01T00:00:00Z"));
+      expect(loop.maxAttempts).toBe(1);
+
+      const ok = await fetch(apiUrl(server, `/v1/loops/${loop.id}`), {
+        method: "PATCH",
+        headers: jsonHeaders,
+        body: JSON.stringify({ maxAttempts: 3 }),
+      });
+      expect(ok.status).toBe(200);
+      expect((await ok.json()).loop.maxAttempts).toBe(3);
+      expect((await storage.getLoop(loop.id))?.maxAttempts).toBe(3);
+      // The schedule must survive a retry-budget-only PATCH.
+      expect((await storage.getLoop(loop.id))?.nextRunAt).toBe(loop.nextRunAt);
+
+      const before = await storage.getLoop(loop.id);
+      for (const maxAttempts of [0, -1, 1.5, "2", null, {}]) {
+        const response = await fetch(apiUrl(server, `/v1/loops/${loop.id}`), {
+          method: "PATCH",
+          headers: jsonHeaders,
+          body: JSON.stringify({ maxAttempts, labels: ["mutated"] }),
+        });
+        expect(response.status).toBe(422);
+        expect(await response.json()).toEqual({ ok: false, error: "invalid_max_attempts" });
+        expect(await storage.getLoop(loop.id)).toEqual(before);
+      }
+
+      // A PATCH that omits maxAttempts must not reset the budget.
+      const other = await fetch(apiUrl(server, `/v1/loops/${loop.id}`), {
+        method: "PATCH",
+        headers: jsonHeaders,
+        body: JSON.stringify({ status: "paused" }),
+      });
+      expect(other.status).toBe(200);
+      expect((await storage.getLoop(loop.id))?.maxAttempts).toBe(3);
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
   test("PATCH rejects every invalid loop status atomically with a stable 422", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");

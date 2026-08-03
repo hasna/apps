@@ -95,7 +95,7 @@ export interface LoopStore {
     name?: string;
   }): Promise<Loop[]>;
   countLoops(status?: LoopStatus, opts?: { archived?: boolean; includeArchived?: boolean }): Promise<number>;
-  updateLoop(id: string, patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt" | "labels">>): Promise<Loop>;
+  updateLoop(id: string, patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt" | "labels" | "maxAttempts">>): Promise<Loop>;
   renameLoop(id: string, name: string): Promise<Loop>;
   archiveLoop(idOrName: string): Promise<Loop>;
   unarchiveLoop(idOrName: string): Promise<Loop>;
@@ -205,7 +205,7 @@ export class LocalStore implements LoopStore {
   }
   async updateLoop(
     id: string,
-    patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt" | "labels">>,
+    patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt" | "labels" | "maxAttempts">>,
   ): Promise<Loop> {
     return this.store.updateLoop(id, patch);
   }
@@ -426,7 +426,7 @@ export class ApiStore implements LoopStore {
   }
   async updateLoop(
     id: string,
-    patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt" | "labels">>,
+    patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt" | "labels" | "maxAttempts">>,
   ): Promise<Loop> {
     // The `/v1` PATCH contract distinguishes a present-null nullable field (an
     // explicit clear) from an absent one (leave unchanged). Callers signal a

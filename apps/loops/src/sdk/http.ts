@@ -27,7 +27,7 @@ export interface Loop { "id": string; "name": string; "description"?: string | n
 
 export interface CreateLoopInput { "name": string; "description"?: string; "labels"?: Array<string>; "schedule": Record<string, unknown>; "target": Record<string, unknown> }
 
-export interface UpdateLoopInput { "status"?: "active" | "paused" | "stopped" | "expired"; "nextRunAt"?: string | null; "retryScheduledFor"?: string | null; "expiresAt"?: string | null; "labels"?: Array<string> }
+export interface UpdateLoopInput { "status"?: "active" | "paused" | "stopped" | "expired"; "nextRunAt"?: string | null; "retryScheduledFor"?: string | null; "expiresAt"?: string | null; "maxAttempts"?: number; "labels"?: Array<string> }
 
 export interface Run { "id": string; "loopId": string; "status": string; "attempt"?: number; "scheduledFor"?: string; "startedAt"?: string | null; "finishedAt"?: string | null }
 

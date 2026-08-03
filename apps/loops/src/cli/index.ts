@@ -2653,6 +2653,42 @@ program
     );
   })));
 
+program
+  .command("set-max-attempts <idOrName> <attempts>")
+  .description("change a loop's retry budget in place, without losing its id, schedule, runs, or history")
+  .action(runAction((idOrName, attempts) => withStore(async (store) => {
+    // requireUniqueLoop so an ambiguous name errors instead of mutating the
+    // newest same-named loop -- the same guard rename and pause/resume use.
+    const loop = await store.requireUniqueLoop(idOrName);
+    const previous = loop.maxAttempts;
+    const next = positiveInteger(String(attempts), "<attempts>");
+    if (next === undefined) throw new ValidationError("attempts must be an integer >= 1");
+
+    if (next === previous) {
+      print(
+        { changed: false, id: loop.id, maxAttempts: previous, loop: publicLoop(loop) },
+        `${loop.id} unchanged (maxAttempts=${previous})`,
+      );
+      return;
+    }
+
+    // Backups protect the on-box sqlite file; there is nothing local to snapshot
+    // when the update is routed to the hosted API.
+    const backupPath = store.transport === "local" ? backupLoopsDatabase("set-max-attempts") : undefined;
+    const updated = await store.updateLoop(loop.id, { maxAttempts: next });
+    print(
+      {
+        changed: true,
+        id: updated.id,
+        previousMaxAttempts: previous,
+        maxAttempts: updated.maxAttempts,
+        backupPath,
+        loop: publicLoop(updated),
+      },
+      `${updated.id} maxAttempts ${previous} -> ${updated.maxAttempts}\nbackup=${backupPath ?? "skipped (recent backup exists)"}`,
+    );
+  })));
+
 function updateStatus(idOrName: string, status: "paused" | "active" | "stopped"): Promise<void> {
   return withStore(async (store) => {
     // requireUniqueLoop so an ambiguous name errors instead of mutating the

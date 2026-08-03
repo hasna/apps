@@ -108,7 +108,7 @@ import type {
 } from "../../types.js";
 import { normalizeRunReceipt } from "../run-receipts.js";
 import { normalizeLoopLabels } from "../labels.js";
-import { assertLoopStatus } from "../loop-status.js";
+import { assertLoopStatus, assertMaxAttempts } from "../loop-status.js";
 import { normalizeRunCompletion } from "../run-completion.js";
 import type { PoolQueryClient, TypedQueryClient } from "../../generated/storage-kit/query.js";
 import type { LoopStorageContract, LoopStorageMethodName } from "./contract.js";
@@ -618,6 +618,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
   async updateLoop(...args: M<"updateLoop">["args"]): Promise<M<"updateLoop">["result"]> {
     const [id, patch, opts = {}] = args;
     if ("status" in patch && patch.status !== undefined) assertLoopStatus(patch.status);
+    if ("maxAttempts" in patch && patch.maxAttempts !== undefined) assertMaxAttempts(patch.maxAttempts);
     const updated = (opts.now ?? new Date()).toISOString();
     return this.client.transaction(async (c) => {
       const current = await this.loadLoop(c, id);
@@ -630,15 +631,16 @@ export class PostgresLoopStorage implements LoopStorageContract {
         updatedAt: updated,
       };
       const res = await c.query(
-        `UPDATE loops SET status=$1, labels_json=$2::jsonb, next_run_at=$3, retry_scheduled_for=$4, expires_at=$5, updated_at=$6
-         WHERE tenant_id = open_loops_current_tenant_id() AND id=$7
-           AND ($8::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$8 AND expires_at > $9))`,
+        `UPDATE loops SET status=$1, labels_json=$2::jsonb, next_run_at=$3, retry_scheduled_for=$4, expires_at=$5, max_attempts=$6, updated_at=$7
+         WHERE tenant_id = open_loops_current_tenant_id() AND id=$8
+           AND ($9::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$9 AND expires_at > $10))`,
         [
           merged.status,
           JSON.stringify(merged.labels),
           merged.nextRunAt ?? null,
           merged.retryScheduledFor ?? null,
           merged.expiresAt ?? null,
+          merged.maxAttempts,
           merged.updatedAt,
           id,
           opts.daemonLeaseId ?? null,

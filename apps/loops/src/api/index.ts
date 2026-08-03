@@ -63,7 +63,7 @@ import {
   type CircuitBreakerThreshold,
 } from "../lib/advancement.js";
 import { normalizeLoopLabels } from "../lib/labels.js";
-import { isLoopStatus, LOOP_STATUSES } from "../lib/loop-status.js";
+import { isLoopStatus, isMaxAttempts, LOOP_STATUSES } from "../lib/loop-status.js";
 import { normalizeRunCompletion } from "../lib/run-completion.js";
 import { scrubSecretsDeep } from "../lib/redact.js";
 import type { LoopStorageContract } from "../lib/storage/contract.js";
@@ -486,16 +486,21 @@ async function handleLoopsRequest(ctx: V1RequestContext, segments: string[]): Pr
       nextRunAt: string | null;
       retryScheduledFor: string | null;
       expiresAt: string | null;
+      maxAttempts: unknown;
     }>;
     // Only forward keys the caller actually sent. Store.updateLoop merges
     // {...current, ...patch}, so a present-but-undefined key overrides the
     // current value: emitting all four keys unconditionally wiped omitted
     // schedule fields (and set status=NULL -> NOT NULL 500). A key set to
     // JSON null is an explicit clear (mapped to undefined -> merged to null).
-    const patch: Partial<{ status: LoopStatus; labels: string[]; nextRunAt: string; retryScheduledFor: string; expiresAt: string }> = {};
+    const patch: Partial<{ status: LoopStatus; labels: string[]; nextRunAt: string; retryScheduledFor: string; expiresAt: string; maxAttempts: number }> = {};
     if ("status" in body) {
       if (!isLoopStatus(body.status)) throw apiError("invalid_loop_status", 422);
       patch.status = body.status;
+    }
+    if ("maxAttempts" in body) {
+      if (!isMaxAttempts(body.maxAttempts)) throw apiError("invalid_max_attempts", 422);
+      patch.maxAttempts = body.maxAttempts;
     }
     if ("labels" in body) patch.labels = normalizedLabels(body.labels);
     if ("nextRunAt" in body) patch.nextRunAt = body.nextRunAt === null ? undefined : body.nextRunAt;
