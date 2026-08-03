@@ -4,7 +4,7 @@ import chalk from "chalk";
 import { normalizeSince } from "../../lib/since.js";
 // Reads/writes route through getStore(): ApiStore (self_hosted/cloud) or LocalStore.
 import { closeDb } from "../../lib/db.js";
-import { resolveIdentities, resolveIdentity } from "../../lib/identity.js";
+import { getDeclaredSessionId, resolveIdentities, resolveIdentity } from "../../lib/identity.js";
 import { renderContent } from "../../lib/terminal-markdown.js";
 import { buildMessagePreview } from "../../lib/channel-notifications.js";
 import { readChannelNotificationsUnion } from "../../lib/poll-notifications.js";
@@ -803,7 +803,7 @@ channel, which is an ABSENCE claim.
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
       const agent = resolveIdentity(opts.from);
-      await getStore().heartbeat(agent);
+      await getStore().heartbeat(agent, undefined, undefined, getDeclaredSessionId() ?? undefined);
 
       if (opts.clear) {
         const cleared = await getStore().markAllChannelNotificationsRead(agent, opts.channel);
@@ -859,7 +859,7 @@ channel, which is an ABSENCE claim.
       const identities = resolveIdentities(opts.from);
       const agent = identities[0];
       const store = getStore();
-      await store.heartbeat(agent);
+      await store.heartbeat(agent, undefined, undefined, getDeclaredSessionId() ?? undefined);
       const selfSenderIds = new Set<string>();
       for (const identity of identities) {
         selfSenderIds.add(identity);

@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import { getStore } from "../../lib/store/index.js";
 import chalk from "chalk";
 import { getDbPath, closeDb } from "../../lib/db.js";
-import { resolveIdentity } from "../../lib/identity.js";
+import { getDeclaredSessionId, resolveIdentity } from "../../lib/identity.js";
 import { windowItems } from "../../lib/compact-output.js";
 import { storeStatusLocation, type StoreStatusLocation } from "../../lib/store/status-location.js";
 import { checkForUpdate } from "../../lib/version-check.js";
@@ -201,7 +201,7 @@ export function registerAnalyticsCommands(program: Command): void {
     .action(async (opts) => {
       const agent = resolveIdentity();
       const store = getStore();
-      await store.heartbeat(agent);
+      await store.heartbeat(agent, undefined, undefined, getDeclaredSessionId() ?? undefined);
       const window = getCliWindow({ limit: opts.limit });
 
       // Online agents
