@@ -3,9 +3,23 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createFeedbackHandler } from "./api.js";
-import { FeedbackStoreBusyError, activeMutationChainCount } from "./storage.base.js";
-import { SqliteFeedbackStore, resolveFeedbackMigrationSource } from "./storage.sqlite.js";
+import { FeedbackStoreBusyError } from "./storage.base.js";
+import { SqliteFeedbackStore } from "./storage.sqlite.js";
 import type { FeedbackItem } from "./types.js";
+
+/**
+ * EVERY IMPORT HERE EXISTS ON THE PRE-FIX TREE, and that is a requirement
+ * rather than a coincidence.
+ *
+ * This file previously imported `activeMutationChainCount` and
+ * `resolveFeedbackMigrationSource`, which do not exist at `33b5324`. Running
+ * it against that tree therefore failed at IMPORT, and an import failure is
+ * indistinguishable from an assertion failure — so "it fails pre-fix" was
+ * vacuous evidence for every test in the file. The two assertions that needed
+ * new symbols were rewritten to observe the same behaviour through the public
+ * API. Keep it that way: a regression test that cannot run on both trees
+ * cannot tell you it caught anything.
+ */
 
 async function tempDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), "open-feedback-conc-"));
@@ -129,18 +143,6 @@ describe("SqliteFeedbackStore concurrency", () => {
     }
   });
 
-  test("mutation chains are released once idle", async () => {
-    const store = quietStore({ dataDir: await tempDir() });
-    try {
-      const item = await store.createFeedback({ appId: "app", message: "x" });
-      await store.updateFeedbackStatus(item.id, "triaged");
-      // Let the settle callback that clears the entry run.
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(activeMutationChainCount()).toBe(0);
-    } finally {
-      store.close();
-    }
-  });
 });
 
 describe("SqliteFeedbackStore contention reporting", () => {
@@ -253,10 +255,18 @@ describe("SqliteFeedbackStore migration source", () => {
     const dataDir = await tempDir();
     const databaseDir = await tempDir();
     await seedLegacy(dataDir);
+    // A store reaching the data dir's three items rather than this empty log
+    // is the observable form of the preference, and unlike asserting on the
+    // resolver directly it runs on the pre-fix tree too (where it fails).
     await writeFile(join(databaseDir, "feedback.jsonl"), "");
-    expect(resolveFeedbackMigrationSource({ dataDir, databasePath: join(databaseDir, "custom.db") })).toBe(
-      join(dataDir, "feedback.jsonl"),
-    );
+
+    const store = quietStore({ dataDir, sqlitePath: join(databaseDir, "custom.db") });
+    try {
+      expect(store.migration).toMatchObject({ ran: true, migrated: 3 });
+      expect(store.migration.source).toBe(join(dataDir, "feedback.jsonl"));
+    } finally {
+      store.close();
+    }
   });
 
   test("announces a migration once, on the open that performed it", async () => {

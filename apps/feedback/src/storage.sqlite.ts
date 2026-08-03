@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join, resolve as resolvePath } from "node:path";
+import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import type { FeedbackItem } from "./types.js";
 import type { FeedbackLinkageDelta } from "./validation.js";
 import { parseStoredFeedbackItem } from "./validation.js";
@@ -77,9 +77,50 @@ function isSqliteBusy(error: unknown): boolean {
   return /database (?:table )?is locked|database is busy/i.test(message);
 }
 
+/**
+ * The identity of the FILE a path points at, for keying the mutation chain.
+ *
+ * `path.resolve` is NOT sufficient and reads as though it were: it normalises
+ * `..`, relative segments and trailing slashes, so the obvious counter-examples
+ * pass, and it silently does neither of the two things that matter here. It
+ * does not follow symlinks — macOS `/tmp` is a symlink to `/private/tmp` — and
+ * it does not case-fold, while APFS is case-insensitive by default. Either one
+ * yields two keys for one database, two independent mutation chains, and the
+ * cross-instance deadlock back at full strength with the suite still green.
+ *
+ * `realpathSync` closes both in one call, because it asks the filesystem what
+ * the file IS rather than tidying up how it was spelled.
+ */
+function canonicalDatabaseIdentity(databasePath: string): string {
+  try {
+    return realpathSync(databasePath);
+  } catch {
+    // The file does not exist yet. Callers resolve this once at construction,
+    // AFTER the driver has created the database, so this is close to
+    // unreachable — but `realpathSync` throws rather than returning a
+    // best-effort answer, and a throw here would take out the constructor.
+    //
+    // The parent directory is the useful fallback: the constructor has just
+    // `mkdirSync`-ed it, so it exists and resolves, which recovers the symlink
+    // half. It cannot case-fold the basename, so it is strictly weaker than the
+    // primary path and is a fallback rather than the implementation.
+    try {
+      return join(realpathSync(dirname(databasePath)), basename(databasePath));
+    } catch {
+      return resolvePath(databasePath);
+    }
+  }
+}
+
 export interface SqliteFeedbackStoreOptions {
   dataDir?: string;
-  /** Explicit database path. Overrides `dataDir`. */
+  /**
+   * Explicit database path. Overrides where the DATABASE is written; it does
+   * NOT override `dataDir`, which still determines where the automatic
+   * `feedback.jsonl` import looks. Relocating the database alone therefore
+   * still migrates the existing log — see
+   * {@link resolveFeedbackMigrationSource}.
+   */
   sqlitePath?: string;
   eventSink?: FeedbackEventSink | null;
   taskSink?: FeedbackTaskSink | null;
@@ -200,6 +241,15 @@ export class SqliteFeedbackStore extends FeedbackStoreBase {
   readonly migration: FeedbackMigrationResult;
   private readonly db: SqliteDatabase;
   private closed = false;
+  /**
+   * Resolved ONCE, immediately after the driver creates the database, rather
+   * than per call. Two reasons, and the first is the load-bearing one: at that
+   * moment the file is guaranteed to exist, so the canonical form is the strong
+   * one and never the degraded fallback. The second is that a per-call
+   * `realpathSync` would put a syscall on every mutation to answer a question
+   * whose answer cannot change for the lifetime of an open handle.
+   */
+  private readonly databaseIdentity: string;
 
   constructor(options: SqliteFeedbackStoreOptions = {}) {
     super(
@@ -210,6 +260,9 @@ export class SqliteFeedbackStore extends FeedbackStoreBase {
     mkdirSync(dirname(this.databasePath), { recursive: true });
     const Database = loadDatabaseConstructor();
     this.db = new Database(this.databasePath, { create: true });
+    // Ordering matters: the database file now exists, so this resolves to the
+    // real path rather than the parent-directory fallback.
+    this.databaseIdentity = canonicalDatabaseIdentity(this.databasePath);
     // WAL keeps a reader from blocking the writer, which matters because the
     // CLI, the MCP server and the HTTP server all open the same file.
     this.db.run("PRAGMA journal_mode = WAL");
@@ -253,9 +306,15 @@ export class SqliteFeedbackStore extends FeedbackStoreBase {
    * before, `fulfilled=2 rejected=2 elapsed=10051ms`; after, 4/0 in tens of ms.
    * It is reachable by default because `createFeedbackHandler()` and
    * `buildFeedbackMcpTools()` each call `createFeedbackStore()`.
+   *
+   * The key is the FILE's identity, not the path string it was reached by —
+   * see {@link canonicalDatabaseIdentity}. A first attempt used
+   * `path.resolve`, which normalises spelling but follows no symlink and does
+   * no case-folding, so a symlinked pair reproduced the deadlock at full
+   * magnitude (`rejected=2 elapsed=10059ms`) with the whole suite green.
    */
   protected override serialisationKey(): string {
-    return `sqlite:${resolvePath(this.databasePath)}`;
+    return `sqlite:${this.databaseIdentity}`;
   }
 
   /** Run driver work, translating contention into the typed, retryable error. */
