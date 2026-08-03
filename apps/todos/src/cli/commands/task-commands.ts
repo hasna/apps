@@ -203,6 +203,34 @@ function parseStatus(value: string | undefined): TaskStatus | undefined {
   return parseEnumFlagList(value, { ...TASK_STATUS_FLAG, allowList: false })?.[0];
 }
 
+/**
+ * Ceiling on rows a single `todos list` will pull from a REMOTE authority.
+ *
+ * `GET /v1/tasks` applies no default limit (`src/server/routes.ts` passes
+ * `limit: limitParam ? parseInt(limitParam, 10) : undefined`) and exposes no `sort`
+ * parameter, so ordering cannot be delegated to the authority. A correct `--sort`
+ * therefore needs the whole matching set — which is precisely the O(all-tasks)
+ * download this repository has already paid for once, on a fleet with thousands of
+ * open tasks.
+ *
+ * A ceiling resolves the two requirements that were treated as exclusive: the client
+ * asks for a bounded page, and when that page comes back full it SAYS the result may
+ * be drawn from a truncated scan rather than returning a plausible window in silence.
+ *
+ * 10,000 matches the bounded scan `handleExportTasks` already uses in
+ * `src/server/routes.ts`, so this is the repository's existing convention rather than
+ * a new number. `TODOS_LIST_SCAN_LIMIT` overrides it for a genuinely larger store.
+ */
+const DEFAULT_LIST_SCAN_LIMIT = 10_000;
+
+/** Resolved scan ceiling; a malformed override falls back rather than sending NaN. */
+function listScanLimit(): number {
+  const raw = process.env["TODOS_LIST_SCAN_LIMIT"];
+  if (raw === undefined || raw.trim() === "") return DEFAULT_LIST_SCAN_LIMIT;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_LIST_SCAN_LIMIT;
+}
+
 /** Parse an integer option, rejecting non-numeric input instead of storing NaN. */
 function parseIntOption(value: string | undefined, flag: string): number | undefined {
   if (value === undefined) return undefined;
@@ -839,7 +867,15 @@ export function registerTaskCommands(program: Command) {
       // "No tasks found." with exit 0, which reads as "there is no work" — the
       // defect that made `--status open` hide 27 real tasks. Same mechanism and
       // message shape as the `--sort`/`--format` checks above.
-      if (opts.status) {
+      //
+      // The guard tests PRESENCE, not truthiness. `if (opts.status)` let an empty
+      // string past the validator, and the two flags then failed differently and
+      // silently: `--status ""` fell through to the default branch below and applied
+      // `pending,in_progress` (measured: 2 rows on a 3-row fixture, byte-identical to
+      // passing no flag, while `-a` returned 3), and `--priority ""` set no key at
+      // all so that dimension went unfiltered. Both exit 0 with a plausible count.
+      // `--status "$STATUS"` with the variable unset is how it arrives in practice.
+      if (opts.status !== undefined) {
         filter["status"] = parseEnumFlag(opts.status, TASK_STATUS_FLAG);
       } else if (!opts.all) {
         filter["status"] = ["pending", "in_progress"];
@@ -847,7 +883,7 @@ export function registerTaskCommands(program: Command) {
       // `--priority` accepts a comma list too: `TaskFilter.priority` is
       // `TaskPriority | TaskPriority[]`, but the raw string used to be forwarded
       // whole, so `--priority high,critical` matched a literal "high,critical".
-      if (opts.priority) filter["priority"] = parseEnumFlag(opts.priority, TASK_PRIORITY_FLAG);
+      if (opts.priority !== undefined) filter["priority"] = parseEnumFlag(opts.priority, TASK_PRIORITY_FLAG);
       if (opts.assigned) filter["assigned_to"] = opts.assigned;
       // A hand-typed `--created-by Cassius` never goes through the identity resolver,
       // so canonicalise it here too. Both backends also compare case-insensitively —
@@ -924,11 +960,57 @@ export function registerTaskCommands(program: Command) {
       const reordersAfterQuery = Boolean(opts.sort);
       const narrowsAfterQuery = Boolean(opts.dueToday) || Boolean(opts.overdue) || (creatorFilterActive && cloud);
       const withholdLimit = requestedLimit !== undefined && (reordersAfterQuery || narrowsAfterQuery);
-      const serverFilter = withholdLimit
-        ? (() => { const { limit: _dropped, ...rest } = filter; return rest; })()
-        : filter;
+
+      // Withholding the caller's limit fixed the ordering defect and removed the only
+      // BOUND on the request with it: `/v1/tasks` has no default limit, so `--sort
+      // updated --limit 2` asked the authority for every matching row and materialised
+      // it client-side. Measured against a recording stub: the outgoing query was
+      // `status=pending,in_progress` with no limit, where the same command without
+      // `--sort` sent `...&limit=2`. Silently discarding a caller's resource bound is
+      // the same silent-success class this command exists to remove.
+      //
+      // So the limit is REPLACED rather than dropped. A scan ceiling is used instead of
+      // the caller's own limit because a correct global sort genuinely needs more rows
+      // than the caller asked to see, and the authority cannot sort — there is no
+      // `sort` query param to delegate to. The ceiling is raised to the caller's limit
+      // when that is larger, so `--limit 50000` is never answered with fewer rows than
+      // it asked for.
+      //
+      // This also bounds the case that carried no limit at all (`todos list --sort
+      // updated`), which was unbounded before this change and is the same download.
+      // That is a deliberate widening of the fix: leaving it unbounded would have
+      // repaired the symptom the review named while the mechanism stayed live.
+      //
+      // LOCAL is deliberately left unbounded. The cost being controlled here is a
+      // network fetch of an entire shared task set; a local SQLite read of the same
+      // rows is already what `--sort` does on any store, and capping it would trade
+      // correctness for no meaningful saving.
+      const scanCeiling = cloud && (withholdLimit || requestedLimit === undefined)
+        ? Math.max(requestedLimit ?? 0, listScanLimit())
+        : undefined;
+
+      const serverFilter = (() => {
+        const base = withholdLimit
+          ? (() => { const { limit: _dropped, ...rest } = filter; return rest; })()
+          : filter;
+        return scanCeiling === undefined ? base : { ...base, limit: scanCeiling };
+      })();
 
       let tasks = cloud ? await cloudListTasks(cloud, serverFilter as any) : listTasks(serverFilter as any);
+
+      // A full page cannot be distinguished from a set that happens to end exactly at
+      // the ceiling, so the ambiguous case warns too — the alternative is staying quiet
+      // in precisely the case where the answer may be wrong. Sorting and narrowing
+      // below then run over a set that is NOT the whole matching set, which is exactly
+      // the "window drawn from the wrong rows" failure the ordering fix removed, so it
+      // is reported rather than absorbed.
+      if (scanCeiling !== undefined && tasks.length >= scanCeiling) {
+        console.error(chalk.yellow(
+          `Warning: this query reached its ${scanCeiling}-row scan limit, so the rows below were\n` +
+          `         selected from a truncated set and may not be the true result.\n` +
+          `         Narrow it (--project, --status, --assigned) or raise TODOS_LIST_SCAN_LIMIT.`,
+        ));
+      }
       if (cloud && creatorFilterActive) {
         // Enforcing the filter is not the same as the filter being USEFUL. A server
         // that predates created_by omits the key entirely, so every row reads as
@@ -1004,7 +1086,13 @@ export function registerTaskCommands(program: Command) {
       // degrades silently when the roster cannot be fetched, in which case EVERY
       // name reads as unregistered and the warning is suppressed rather than
       // asserting something false about a name that may be perfectly valid.
-      const assignedFilter: string | undefined = opts.assigned ?? opts.agentName;
+      // Must name the reference the QUERY actually used, not the first one the caller
+      // typed. `--agent-name` overwrites `filter.assigned_to` above, so with both flags
+      // present `opts.assigned ?? opts.agentName` validated the value that was
+      // discarded — reporting a name the empty result had nothing to do with, and
+      // staying silent about a mistyped `--agent-name`. Precedence here mirrors the
+      // assignment order above.
+      const assignedFilter: string | undefined = opts.agentName ?? opts.assigned;
       if (assignedFilter && tasks.length === 0) {
         try {
           const roster = await loadAssigneeContext(

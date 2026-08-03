@@ -72,6 +72,44 @@ describe("resolveEnumVocabulary", () => {
     expect(result.message).toContain("pending");
   });
 
+  /**
+   * A blank element used to be dropped by the `length > 0` filter, so `pending,`
+   * and `high,,critical` were accepted as if the operator had typed a clean list.
+   * That is the same silent-acceptance this module exists to remove — the doctrine
+   * above is that ONE bad element fails the whole value rather than being dropped,
+   * and an empty element is a bad element. A shell that expands `--status
+   * "$STATUS,$EXTRA"` with `$EXTRA` unset produces exactly this shape.
+   */
+  it("rejects a trailing comma instead of silently dropping the blank element", () => {
+    const result = resolveEnumVocabulary("pending,", statusSpec);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected rejection");
+    expect(result.message).toContain("pending");
+  });
+
+  it("rejects a doubled comma instead of silently dropping the blank element", () => {
+    const result = resolveEnumVocabulary("pending,,in_progress", statusSpec);
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects a leading comma", () => {
+    expect(resolveEnumVocabulary(",pending", statusSpec).ok).toBe(false);
+  });
+
+  it("rejects a whitespace-only element between commas", () => {
+    expect(resolveEnumVocabulary("pending,   ,completed", statusSpec).ok).toBe(false);
+  });
+
+  /**
+   * The discriminating control. Tightening blank handling must not cost the
+   * surrounding-whitespace tolerance the accept-side test above relies on, or the
+   * fix would break `--status "pending, in_progress"` — a shape operators type.
+   */
+  it("still accepts a list whose elements merely carry surrounding whitespace", () => {
+    expect(resolveEnumVocabulary(" pending , in_progress ", statusSpec))
+      .toEqual({ ok: true, values: ["pending", "in_progress"] });
+  });
+
   it("validates priorities from TASK_PRIORITIES with the same helper", () => {
     const prioritySpec = {
       name: "--priority",

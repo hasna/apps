@@ -197,6 +197,84 @@ describe("todos list rejects out-of-vocabulary --status (local store)", () => {
   });
 });
 
+/**
+ * An EMPTY value bypassed the guard entirely, because the guard tested truthiness
+ * (`if (opts.status)`) rather than presence. The two flags then failed DIFFERENTLY,
+ * and neither failure is the one a reader expects:
+ *
+ *   --status ""    fell through to the `else if (!opts.all)` branch and applied the
+ *                  DEFAULT filter (pending,in_progress). Measured on a 3-row fixture:
+ *                  `--status ""` returned 2 rows, byte-identical to passing no flag,
+ *                  while `-a` returned 3. So it is NOT "the unfiltered queue" — it is
+ *                  the default working set wearing the caller's filter.
+ *   --priority ""  set no priority key at all, so that dimension was genuinely
+ *                  unfiltered: `--priority ""` returned 2 rows where
+ *                  `--priority critical` returned 1.
+ *
+ * Either way the operator asked to filter, was not filtered as asked, and got a
+ * plausible row count with exit 0 and no signal — the exact silent-empty class this
+ * suite exists to close, arriving through the one input nobody validated. A shell
+ * expanding `--status "$STATUS"` with `$STATUS` unset produces it by accident.
+ */
+describe("todos list rejects an EMPTY value for a closed-vocabulary flag", () => {
+  test("exits non-zero for --status '' instead of silently applying the default filter", async () => {
+    const root = tempRoot("todos-enum-empty-status-");
+    await seedLocal(root);
+    const result = await runLocal(["list", "--status", ""], root);
+    expect(result.exitCode).not.toBe(0);
+    // Assert on the VOCABULARY message, not the flag name: an "Unknown flag" usage
+    // error also exits non-zero and also contains "--status", so matching the flag
+    // alone would pass against a CLI that never validated anything.
+    expect(result.stderr).toContain(`Allowed values: ${TASK_STATUSES.join(", ")}.`);
+    expect(result.stderr).not.toContain("Unknown flag");
+    expect(result.stdout).not.toContain("No tasks found.");
+  });
+
+  test("exits non-zero for --priority '' instead of dropping the filter", async () => {
+    const root = tempRoot("todos-enum-empty-prio-");
+    await seedLocal(root);
+    const result = await runLocal(["list", "--priority", ""], root);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain(`Allowed values: ${TASK_PRIORITIES.join(", ")}.`);
+    expect(result.stderr).not.toContain("Unknown flag");
+  });
+
+  test("exits non-zero for a --status trailing comma", async () => {
+    const root = tempRoot("todos-enum-trailing-");
+    await seedLocal(root);
+    const result = await runLocal(["list", "--status", "pending,"], root);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).not.toContain("Unknown flag");
+  });
+
+  test("exits non-zero for a --priority doubled comma", async () => {
+    const root = tempRoot("todos-enum-doubled-");
+    await seedLocal(root);
+    const result = await runLocal(["list", "--priority", "high,,critical"], root);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).not.toContain("Unknown flag");
+  });
+
+  /**
+   * The discriminating control: rejecting empties must not cost the DEFAULT filter
+   * for callers who pass no flag at all. Without this, "reject empty" could be
+   * implemented as "always require --status", which breaks the common case.
+   */
+  test("still applies the default filter when --status is absent entirely", async () => {
+    const root = tempRoot("todos-enum-empty-control-");
+    await seedLocal(root);
+    const result = await runLocal(["list", "--json"], root);
+    expect(result.exitCode).toBe(0);
+    expect((JSON.parse(result.stdout) as unknown[]).length).toBe(2);
+  });
+
+  test("rejects an empty --status against a self-hosted authority without querying it", async () => {
+    const result = await runRemote(["list", "--status", ""], [remoteTask()]);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.requests.filter((request) => request.path === "/v1/tasks")).toEqual([]);
+  });
+});
+
 describe("todos list rejects out-of-vocabulary --priority (local store)", () => {
   test("exits non-zero and names every allowed priority", async () => {
     const root = tempRoot("todos-enum-prio-");
@@ -417,6 +495,25 @@ describe("todos list warns when --assigned names no known agent", () => {
     // The discriminating case. Warning here would fire on every idle queue and
     // make the real signal worthless.
     expect(result.stderr).not.toContain("is registered");
+  });
+
+  /**
+   * `--agent-name` overwrites `filter.assigned_to` after `--assigned` has set it, so
+   * the warning must validate the name the QUERY used. Validating `--assigned` first
+   * named a value the empty result had nothing to do with, and said nothing about the
+   * mistyped flag that actually produced it. Both flags are passed here because one
+   * flag alone cannot tell the two orderings apart.
+   */
+  test("names the assignee the query actually used when both flags are given", async () => {
+    const root = tempRoot("todos-assigned-precedence-");
+    await seedAgents(root);
+    const result = await runLocal(
+      ["list", "--assigned", "caesar", "--agent-name", "totallybogusxyz"],
+      root,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("no agent named 'totallybogusxyz' is registered");
+    expect(result.stderr).not.toContain("'caesar'");
   });
 
   test("stays silent and returns rows for an assignee that has work", async () => {
