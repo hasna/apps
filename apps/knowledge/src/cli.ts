@@ -83,6 +83,21 @@ interface Flags {
   to?: string;
   /** Entry version for `diff`. Named --rev because -v/--version is taken. */
   rev?: number;
+  /**
+   * Optimistic concurrency guard for `update`: the version the CALLER read.
+   *
+   * Distinct from the version `update` reads for itself immediately before
+   * writing. That internal read only ever covers the microseconds inside one
+   * invocation, so it cannot see the race that actually loses edits — an agent
+   * reads an entry, composes a new body over the following minutes, and by the
+   * time it types `update` the CLI's own re-read has already absorbed whatever
+   * landed in between and the guard passes. Only the caller knows the version
+   * its content was written against, so only the caller can supply it.
+   *
+   * Held as the raw argv string so a malformed value can be refused by name
+   * rather than becoming NaN.
+   */
+  ifVersionRaw?: string;
   since?: string;
   topic?: string;
   dedupe?: boolean;
@@ -240,6 +255,11 @@ function parseArgs(argv: string[]): ParseResult {
       // --version (print the package version), and re-pointing it at an entry
       // version would silently break every existing `knowledge -v` invocation.
       case '--rev': flags.rev = Number(argv[i + 1]); i += 1; break;
+      // Parsed as a raw string and validated at use, not with `Number()` here.
+      // `Number('abc')` is NaN, and NaN silently serialises to `null` in the
+      // If-Match header — the guard would then be dropped and the write would
+      // land at exit 0, which is worse than having no flag at all.
+      case '--if-version': flags.ifVersionRaw = argv[i + 1]; i += 1; break;
       case '--since': flags.since = argv[i + 1]; i += 1; break;
       case '--topic': flags.topic = argv[i + 1]; i += 1; break;
       case '--dedupe': flags.dedupe = true; break;
@@ -457,6 +477,10 @@ Update Options:
   --content <content>         New content
   --url <url>                 New source URL
   -t, --tag <tag>             Add a tag
+  --if-version <n>            Refuse (non-zero) if the entry moved past version n.
+                              Pass the version you read BEFORE composing the edit;
+                              without it the guard is this command's own re-read,
+                              which cannot see a change that landed while you wrote.
 
 Delete Options:
   --id <id>                   Item id
@@ -474,7 +498,7 @@ function printCommandHelp(command: string): void {
   if (command === 'add') { console.log('Usage: knowledge add <title> <content> [--url <url>] [-t <tag>]... [--json]\n  -t/--tag is repeatable and accepts comma-separated values: -t a -t b  ==  -t "a,b"'); return; }
   if (command === 'list' || command === 'ls') { console.log('Usage: knowledge list|ls [--format table|json] [-p <page>] [-l <limit>] [-s <search>] [-t <tag>]... [--sort created|title] [--desc] [--archived] [--include-archived] [--verbose] [--json]\n  -s/--search is a CASE-INSENSITIVE LITERAL SUBSTRING filter over id, title and content — not a\n  tokenised or semantic search, so a word order that never appears verbatim matches nothing. It\n  resolves an item by its slug because the id is included. For meaning-based lookup use `knowledge\n  search <query>`, which is a different index and will find items this filter cannot.\n  -t/--tag is repeatable and accepts comma-separated values; repeated -t narrows (an item must carry every tag).\n  Each value matches an item carrying the whole value OR all of its comma-split names — a union, so\n  `-t "a,b,c"` finds items carrying a legacy literal "a,b,c" tag as well as items carrying the three\n  names separately. (`untag` differs on purpose: it stops at the whole-value match.)\n  Use --json to tell those two shapes apart; the table renders them near-identically.\n  Archived items are excluded by default; add --include-archived to sweep both.\n  If both --archived and --include-archived are passed, --archived wins (archived items only).'); return; }
   if (command === 'get') { console.log('Usage: knowledge get --id <id> [--json]'); return; }
-  if (command === 'update' || command === 'edit') { console.log('Usage: knowledge update|edit --id <id> [--title <title>] [--content <content>] [--url <url>] [-t <tag>]... [--json]\n  -t/--tag is repeatable and accepts comma-separated values; tags are added, never replaced.\n  With -t the output reports how many tags were actually added, so 0 added is not read as 3.'); return; }
+  if (command === 'update' || command === 'edit') { console.log('Usage: knowledge update|edit --id <id> [--title <title>] [--content <content>] [--url <url>] [-t <tag>]... [--if-version <n>] [--json]\n  -t/--tag is repeatable and accepts comma-separated values; tags are added, never replaced.\n  With -t the output reports how many tags were actually added, so 0 added is not read as 3.\n  --if-version <n> refuses the write, non-zero, if the entry has moved past version n.\n    Pass the version you read BEFORE composing this edit (knowledge get --id <id> --json).\n    Without it the guard is the version this command re-reads for itself, which cannot\n    see an edit that landed while you were composing, so a stale write still wins.\n    On conflict, re-read the entry, reconcile against what changed, and re-run — there is\n    deliberately no automatic retry.'); return; }
   if (command === 'archive') { console.log('Usage: knowledge archive --id <id> [--json]'); return; }
   if (command === 'restore' || command === 'unarchive') { console.log('Usage: knowledge restore|unarchive --id <id> [--json]'); return; }
   if (command === 'upsert') { console.log('Usage: knowledge upsert [title] [content] [--id <id>] [--title <title>] [--content <content>] [--url <url>] [-t <tag>]... [--json]\n  -t/--tag is repeatable and accepts comma-separated values; tags are added, never replaced.\n  With -t the output reports how many tags were actually added, on both the create and update paths.'); return; }
@@ -832,6 +856,45 @@ function machineIsLocal(machine: string | undefined): boolean {
 
 function requireId(flags: Flags): asserts flags is Flags & { id: string } {
   if (!flags.id) throw new Error('Missing required --id. Example: knowledge get --id <id>');
+}
+
+/**
+ * Validate `--if-version` and confirm the resolved store can actually enforce
+ * it. Returns undefined when the flag was not passed, which leaves the existing
+ * read-then-write default in place for every installed caller.
+ *
+ * Both refusals below exist because the alternative is a guard that cannot
+ * fail. `Number('abc')` is NaN and would serialise into the If-Match header as
+ * `null`, so the server would see no guard and accept the write at exit 0 — the
+ * caller asked for protection and silently received none. The local JSON store
+ * is the same failure with a different cause: its `update` takes no options at
+ * all, so `expectedVersion` is dropped on the floor and every `--if-version`
+ * against it would report success while enforcing nothing.
+ */
+function parseIfVersion(flags: Flags, store: ItemStore): number | undefined {
+  const raw = flags.ifVersionRaw;
+  if (raw === undefined) return undefined;
+
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(
+      `Invalid --if-version value ${JSON.stringify(raw)}. It must be a positive whole number — `
+        + 'the version you read before composing this edit, as reported by '
+        + '`knowledge get --id <id> --json` or `knowledge versions --id <id> --json`.',
+    );
+  }
+
+  if (!store.supportsVersions) {
+    throw new Error(
+      '--if-version cannot be honoured by the local JSON knowledge store. It keeps no version '
+        + 'line, so the guard would be accepted and enforced nowhere — reporting success while '
+        + 'another writer is overwritten is worse than refusing. Optimistic concurrency lives in '
+        + 'the Postgres-backed store: point this CLI at it (HASNA_KNOWLEDGE_STORAGE_MODE=postgres '
+        + 'plus the API url/key) and re-run.',
+    );
+  }
+
+  return parsed;
 }
 
 function sortItems(items: KnowledgeItem[], flags: Flags): { sorted: KnowledgeItem[]; sort: string; direction: string } {
@@ -2116,7 +2179,18 @@ async function run(argv: string[]): Promise<void> {
     // versions; there is deliberately NO automatic retry, because re-applying
     // without comparing the fields that moved is how you overwrite a colleague
     // while believing you handled the conflict.
-    const item = await itemStore.update(current.id, patch, { expectedVersion: current.version });
+    //
+    // That default is necessary and NOT sufficient, which is why --if-version
+    // exists. `current.version` is read microseconds before the write, so it
+    // only ever closes the gap inside this one invocation. The race that loses
+    // real edits is wider than one invocation: an agent reads an entry, spends
+    // minutes composing a body against what it read, and by the time it runs
+    // `update` this re-read has already absorbed the other writer's change. The
+    // guard then matches, the write is accepted, and the earlier edit is gone at
+    // exit 0. A guard derived from the write cannot detect staleness in the
+    // read that produced the content — only the caller's own version can.
+    const expectedVersion = parseIfVersion(flags, itemStore);
+    const item = await itemStore.update(current.id, patch, { expectedVersion: expectedVersion ?? current.version });
     // When -t was asked for, report how many tags were actually added. Without this,
     // "added 3" and "added none, they were all already there" both print `Updated <id>`
     // at exit 0 and carry the count nowhere — not in `message`, not in JSON — the same

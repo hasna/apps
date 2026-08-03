@@ -15,7 +15,7 @@
  * bodies.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ApiKeyStore, mintApiKey, verifyApiKey } from '@hasna/contracts/auth';
@@ -294,4 +294,140 @@ describe('ItemStore (local transport) — a store with no history says so', () =
     expect(message).toContain('db.json');
     expect(message).toContain('HASNA_KNOWLEDGE_STORAGE_MODE=postgres');
   });
+});
+
+// ---------------------------------------------------------------------------
+// `update --if-version` — the guard the CLI's own re-read cannot provide.
+//
+// The update command already passes `expectedVersion: current.version`, but that
+// number comes from a read the CLI performs microseconds before its own write.
+// It therefore guards only the gap inside one invocation. The race that actually
+// loses fleet edits is wider: an agent reads an entry, spends minutes composing a
+// new body, and then types `knowledge update --content <composed>`. The CLI
+// re-reads, sees whatever landed in the meantime, passes THAT as the guard, and
+// the write is accepted — so a second writer holding a stale read still clobbers
+// the first at exit 0. The version the agent actually read is never expressed,
+// and a guard derived from the write itself cannot express it.
+//
+// `--if-version <N>` is how the caller supplies the version IT read. Omitted,
+// behaviour is unchanged, because many installed callers pass nothing.
+// ---------------------------------------------------------------------------
+
+describe('knowledge update --if-version — caller-supplied concurrency guard', () => {
+  test('a writer holding a stale read is REFUSED instead of silently clobbering', async () => {
+    const store = cloudStore();
+    const created = await store.create({ title: 'Contended entry', content: 'BASE-LINE-ZERO' });
+    const cliEnv = cloudEnv as Record<string, string>;
+
+    // Both agents read the same version — the read an agent really performs,
+    // well before it composes an edit.
+    const readA = await store.get(created.id);
+    const readB = await store.get(created.id);
+    expect(readA!.version).toBe(1);
+    expect(readB!.version).toBe(1);
+
+    const a = await runCli(
+      ['update', '--id', created.id, '--content', 'BASE-LINE-ZERO\nAAA', '--if-version', String(readA!.version), '--json'],
+      cliEnv,
+    );
+    expect(a.exitCode).toBe(0);
+
+    // B still holds version 1 while the stored entry is at 2.
+    const b = await runCli(
+      ['update', '--id', created.id, '--content', 'BASE-LINE-ZERO\nBBB', '--if-version', String(readB!.version), '--json'],
+      cliEnv,
+    );
+    expect(b.exitCode).not.toBe(0);
+    expect(b.stderr).toContain('version_conflict');
+    // Both numbers must be named, or the operator cannot tell what to re-read.
+    expect(b.stderr).toContain('version 1');
+    expect(b.stderr).toContain('version 2');
+
+    // The decisive assertion: A's edit survived and B's never landed.
+    const after = await store.get(created.id);
+    expect(after!.version).toBe(2);
+    expect(after!.content).toContain('AAA');
+    expect(after!.content).not.toContain('BBB');
+  }, 60_000);
+
+  test('a matching --if-version is accepted, so the guard is not simply always-on', async () => {
+    // Positive control for the test above: same flag, same path, a current
+    // version instead of a stale one, and the write must land.
+    const store = cloudStore();
+    const created = await store.create({ title: 'Uncontended entry', content: 'first' });
+    const cliEnv = cloudEnv as Record<string, string>;
+
+    const result = await runCli(
+      ['update', '--id', created.id, '--content', 'second', '--if-version', String(created.version), '--json'],
+      cliEnv,
+    );
+    expect(result.exitCode).toBe(0);
+
+    const after = await store.get(created.id);
+    expect(after!.version).toBe(2);
+    expect(after!.content).toBe('second');
+  }, 60_000);
+
+  test('OMITTING --if-version leaves existing callers working exactly as before', async () => {
+    // Back-compat is the reason the flag is opt-in. Many installed callers pass
+    // nothing, and this asserts they are not broken by the addition.
+    const store = cloudStore();
+    const created = await store.create({ title: 'Unguarded entry', content: 'first' });
+    const cliEnv = cloudEnv as Record<string, string>;
+
+    const result = await runCli(['update', '--id', created.id, '--content', 'second', '--json'], cliEnv);
+    expect(result.exitCode).toBe(0);
+
+    const after = await store.get(created.id);
+    expect(after!.version).toBe(2);
+    expect(after!.content).toBe('second');
+  }, 60_000);
+
+  test('a non-numeric --if-version is rejected before anything is written', async () => {
+    const store = cloudStore();
+    const created = await store.create({ title: 'Bad guard', content: 'untouched' });
+    const cliEnv = cloudEnv as Record<string, string>;
+
+    const result = await runCli(
+      ['update', '--id', created.id, '--content', 'clobbered', '--if-version', 'abc', '--json'],
+      cliEnv,
+    );
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain('--if-version');
+    // Without this the test passes while the flag does not exist at all, because
+    // `Unknown flag: --if-version` also contains the string above. It would then
+    // be a check that cannot fail.
+    expect(result.stderr).not.toContain('Unknown flag');
+
+    // A guard that parsed to NaN and then wrote anyway would be worse than none.
+    const after = await store.get(created.id);
+    expect(after!.content).toBe('untouched');
+    expect(after!.version).toBe(1);
+  }, 60_000);
+
+  test('--if-version against the local JSON store REFUSES rather than passing vacuously', async () => {
+    // The local store drops expectedVersion on the floor. Accepting the flag
+    // there would return exit 0 while enforcing nothing — a guard that cannot
+    // fail, which is the failure mode this whole file exists to prevent.
+    const dir = mkdtempSync(join(tmpdir(), 'ok-ifversion-local-'));
+    const path = join(dir, 'db.json');
+    writeFileSync(
+      path,
+      JSON.stringify({
+        items: [{ id: 'k_local', short_id: 'local', title: 'T', content: 'c', url: null, tags: [], created_at: 'x', updated_at: 'x' }],
+      }),
+    );
+
+    const result = await runCli(['update', '--id', 'k_local', '--content', 'new', '--if-version', '1', '--store', path, '--json']);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('--if-version');
+    // Same discriminator as above: an unparsed flag would satisfy the assertion
+    // above without the store ever refusing anything.
+    expect(result.stderr).not.toContain('Unknown flag');
+    // Name the way out, exactly as VersionHistoryUnsupportedError does.
+    expect(result.stderr).toContain('HASNA_KNOWLEDGE_STORAGE_MODE=postgres');
+
+    // And the write must not have happened behind the refusal.
+    expect(JSON.parse(readFileSync(path, 'utf8')).items[0].content).toBe('c');
+  }, 60_000);
 });
