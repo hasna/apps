@@ -279,6 +279,7 @@ export function buildServer() {
     formatTask,
     formatTaskDetail,
     getAgentFocus,
+    applyFocus,
   };
 
   registerTaskCrudTools(server, toolContext);

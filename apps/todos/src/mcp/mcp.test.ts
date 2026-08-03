@@ -72,6 +72,7 @@ function captureTools(register: (server: any, ctx: any) => void): Map<string, Ca
     formatTask: (task: Task) => `${task.id.slice(0, 8)} ${task.status} ${task.priority} ${task.title}`,
     formatTaskDetail: (task: Task) => `${task.id} ${task.title}`,
     getAgentFocus: () => undefined,
+    applyFocus: () => {},
     agentFocusMap: new Map(),
   };
   register(server, ctx);
