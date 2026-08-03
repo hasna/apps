@@ -28,6 +28,7 @@ export {
   DEFAULT_SQLITE_FILE,
   SqliteFeedbackStore,
   migrateJsonlIntoSqlite,
+  resolveFeedbackMigrationSource,
   resolveFeedbackSqlitePath,
 } from "./storage.sqlite.js";
 export type { FeedbackMigrationResult, SqliteFeedbackStoreOptions } from "./storage.sqlite.js";

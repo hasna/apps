@@ -186,6 +186,28 @@ export interface FeedbackStoreBaseOptions {
 }
 
 /**
+ * Mutation chains, keyed by whatever a backend considers "the same underlying
+ * data". Module-level rather than per-instance because two stores in one
+ * process can point at one file, and a per-instance chain does not know that.
+ *
+ * Entries are dropped once nothing is waiting, so a long-lived process that
+ * opens many short-lived stores does not accumulate keys.
+ */
+const mutationChains = new Map<string, { tail: Promise<unknown>; waiters: number }>();
+
+/** Test seam: how many chains are currently live. Should return to 0 when idle. */
+export function activeMutationChainCount(): number {
+  return mutationChains.size;
+}
+
+let instanceCounter = 0;
+/** A key no other instance can collide with, for backends with no shared resource. */
+export function nextInstanceSerialisationKey(prefix: string): string {
+  instanceCounter += 1;
+  return `${prefix}#${instanceCounter}`;
+}
+
+/**
  * The behaviour every bundled backend shares: the create → event → task
  * sequence, the task repair path, and the read-side semantics.
  *
@@ -201,7 +223,6 @@ export interface FeedbackStoreBaseOptions {
 export abstract class FeedbackStoreBase implements FeedbackStore {
   protected readonly eventSink: FeedbackEventSink | null;
   protected readonly taskSink: FeedbackTaskSink | null;
-  private mutationTail: Promise<unknown> = Promise.resolve();
 
   protected constructor(eventSink: FeedbackEventSink | null, taskSink: FeedbackTaskSink | null) {
     this.eventSink = eventSink;
@@ -209,22 +230,55 @@ export abstract class FeedbackStoreBase implements FeedbackStore {
   }
 
   /**
-   * Run `run` after every previously-queued mutation on this instance has
-   * settled.
+   * The resource this store's mutations contend for. Two instances that return
+   * the same key share one mutation chain.
+   *
+   * The default is per-instance, which is correct for a backend whose writes
+   * cannot collide with another instance's. A backend holding an exclusive
+   * handle on a shared file MUST override this with that file's identity —
+   * see {@link SqliteFeedbackStore}, where two instances on one database
+   * deadlocked the event loop until this was keyed on the path.
+   */
+  protected serialisationKey(): string {
+    this.instanceKey ??= nextInstanceSerialisationKey(this.constructor.name);
+    return this.instanceKey;
+  }
+  private instanceKey?: string;
+
+  /**
+   * Run `run` after every previously-queued mutation against the SAME
+   * {@link serialisationKey} has settled.
    *
    * A cross-process lock (a lock file, `BEGIN IMMEDIATE`) does not serialise
-   * two `await`s issued from the SAME process against the same handle, and a
+   * two `await`s issued from the SAME process against the same resource, and a
    * read-modify-write that interleaves loses an update. A depth counter is NOT
    * a substitute: a second concurrent caller observes the first caller's depth
    * and concludes it is already inside the critical section, which is exactly
    * how a lost-update regression got written here once.
+   *
+   * Nor is a PER-INSTANCE chain a substitute, which is the subtler version of
+   * the same error: it reads as "serialised" and is only "serialised per
+   * instance", so the moment a second store opens the same database the
+   * guarantee is gone with nothing in the code to show for it.
    */
   protected serialise<T>(run: () => Promise<T>): Promise<T> {
-    const next = this.mutationTail.then(run, run);
-    this.mutationTail = next.then(
+    const key = this.serialisationKey();
+    const entry = mutationChains.get(key) ?? { tail: Promise.resolve(), waiters: 0 };
+    entry.waiters += 1;
+    mutationChains.set(key, entry);
+
+    const next = entry.tail.then(run, run);
+    entry.tail = next.then(
       () => undefined,
       () => undefined,
     );
+    void entry.tail.then(() => {
+      entry.waiters -= 1;
+      // Only the last waiter clears the chain, and only if nobody re-queued
+      // onto it meanwhile — otherwise a fresh caller would start a second,
+      // unordered chain against the same resource.
+      if (entry.waiters === 0 && mutationChains.get(key) === entry) mutationChains.delete(key);
+    });
     return next;
   }
 

@@ -265,14 +265,24 @@ Select the engine with `HASNA_FEEDBACK_STORE`:
 ### Migrating from `feedback.jsonl`
 
 **This happens automatically and needs no action.** The first time a SQLite
-store opens, it imports any `feedback.jsonl` sitting in the same directory and
-records that it has done so, so the import runs once and cannot duplicate rows.
+store opens, it imports any `feedback.jsonl` from the **data directory**
+(`HASNA_FEEDBACK_DATA_DIR`, default `~/.hasna/feedback`) and records that it has
+done so, so the import runs once and cannot duplicate rows. Relocating only the
+database with `HASNA_FEEDBACK_SQLITE_PATH` still imports that log; a log sitting
+beside the database is picked up too, if the data directory has none.
+
+The open that performs the import prints a one-line notice to **stderr** naming
+the source, the destination and the row count. Rolling back is safe but not
+lossless, and the moment that becomes true is the moment worth saying so —
+rather than only in this paragraph, which nobody is reading at the time.
 
 The import is **non-destructive**: `feedback.jsonl` is never written, renamed
 or deleted. To roll back, set `HASNA_FEEDBACK_STORE=jsonl` — the original log
 is still there, unchanged, and still authoritative for that engine. Note that
 feedback captured under SQLite after the switch does **not** flow back into the
-JSONL log, so a rollback leaves behind anything recorded in between.
+JSONL log, so a rollback leaves behind anything recorded in between. There is
+deliberately no two-way sync: writing to both engines would restore the
+dual-write hazard this migration exists to end.
 
 JSONL remains a first-class **export** format regardless of engine — `feedback
 export --format jsonl` and `GET /v1/export.jsonl` produce byte-identical output

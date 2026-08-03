@@ -21,6 +21,7 @@ export {
   migrateJsonlIntoSqlite,
   resolveFeedbackDataDir,
   resolveFeedbackFilePath,
+  resolveFeedbackMigrationSource,
   resolveFeedbackSqlitePath,
   serialiseFeedbackJsonl,
 } from "./storage.js";

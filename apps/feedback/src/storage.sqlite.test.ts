@@ -240,7 +240,13 @@ describe("storage runtime selection", () => {
     const dataDir = await tempDir();
     const custom = join(dataDir, "nested", "custom.db");
     expect(resolveFeedbackSqlitePath({ sqlitePath: custom })).toBe(custom);
-    const store = new SqliteFeedbackStore({ sqlitePath: custom });
+    // `dataDir` is pinned to this test's temp directory, not left to default.
+    // The automatic import reads the DATA DIR's `feedback.jsonl`, so a store
+    // built with only `sqlitePath` inherits the real `~/.hasna/feedback` log —
+    // which is correct behaviour (someone relocating just the database still
+    // wants their existing feedback) and makes this assertion depend on the
+    // machine it runs on.
+    const store = new SqliteFeedbackStore({ dataDir, sqlitePath: custom });
     await store.createFeedback({ appId: "app-a", message: "custom path" });
     expect(existsSync(custom)).toBe(true);
     expect(await store.listFeedback({})).toHaveLength(1);
