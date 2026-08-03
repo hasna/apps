@@ -151,6 +151,44 @@ describe("the guard is narrow — these must keep working", () => {
     expect(msg.channel).toBe("general");
   });
 
+  test("a reply into a PRE-EXISTING orphan channel is still allowed", () => {
+    // Found by adversarial review (Aulus, NO-GO on PR #80). The guard's own
+    // comment promises that only an EXPLICITLY REQUESTED channel is checked, so
+    // that replies to messages already sitting in orphan channels — legacy data
+    // the author did not write — are not punished. On the SQLite path that
+    // carve-out never fired: `conversations reply` derives the parent's channel
+    // and passes it EXPLICITLY (src/cli/commands/messaging.ts:509), so
+    // requestedChannel is non-null for every channel reply.
+    //
+    // The server path already had this right (`requestedChannel && !replyParent`
+    // at src/server/api.ts), so the two backends disagreed while carrying the
+    // identical comment — the exact divergence unknownChannelMessage was put in
+    // channel-names.ts to prevent.
+    const db = getDb();
+    // Seed a legacy orphan directly: a message row whose channel has no row in
+    // `channels`, which is precisely what the pre-guard code produced.
+    db.prepare(
+      `INSERT INTO messages (uuid, session_id, from_agent, to_agent, channel, content)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run("aaaaaaaabbbbccccddddeeeeeeeeeeee", "channel:legacy-orphan", "alice", "legacy-orphan", "legacy-orphan", "the original report");
+    // Assert the orphan really is one, rather than assuming it.
+    expect(getChannel("legacy-orphan")).toBeNull();
+
+    const parent = db.prepare(`SELECT id, uuid FROM messages WHERE channel = ?`).get("legacy-orphan") as { id: number; uuid: string };
+
+    const reply = sendMessage({
+      from: "bob",
+      to: "",
+      channel: "legacy-orphan",
+      content: "a correction to the original report",
+      reply_to: parent.id,
+      reply_to_uuid: parent.uuid,
+    });
+
+    expect(reply.id).toBeGreaterThan(0);
+    expect(reply.reply_to).toBe(parent.id);
+  });
+
   test("an archived channel still accepts sends, so this changes only existence", () => {
     // Archival policy is a separate question with its own verbs. Conflating it
     // here would smuggle in a second behaviour change under one fix.

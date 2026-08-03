@@ -227,17 +227,17 @@ export function sendMessage(opts: SendMessageOptions): Message {
   // belongs nowhere cannot be found, subscribed to, or cleaned up (todos
   // 4cc80a4d).
   //
-  // Only an EXPLICITLY REQUESTED channel is checked. A reply inherits its
-  // parent's channel below, and re-validating that would refuse replies to
-  // messages already sitting in orphan channels created before this guard —
-  // punishing authors for legacy data they did not write.
+  // Only a NON-REPLY send is checked. Replies to messages already sitting in
+  // orphan channels — legacy data the author did not write — must still go
+  // through, and `conversations reply` derives the parent's channel and passes
+  // it EXPLICITLY (src/cli/commands/messaging.ts:509), so testing
+  // `requestedChannel` alone would refuse every one of them. The reply branch
+  // below already rejects a channel that disagrees with the parent, so nothing
+  // is weakened by skipping the existence check here.
   //
   // Existence only: an archived channel still accepts sends, exactly as before.
   // Archival is a separate policy with its own verbs, and folding it in here
   // would smuggle a second behaviour change under one fix.
-  if (requestedChannel) {
-    assertChannelExists(db, requestedChannel);
-  }
   const explicitSession = opts.session_id && opts.session_id.trim().length > 0 ? opts.session_id.trim() : undefined;
   const requestedReplyId = opts.reply_to ?? null;
   const requestedReplyUuid = normalizeMessageUuid(opts.reply_to_uuid);
@@ -246,6 +246,9 @@ export function sendMessage(opts: SendMessageOptions): Message {
   }
   if (opts.reply_to_uuid && !requestedReplyUuid) {
     throw new Error("reply_to_uuid must be a valid message UUID.");
+  }
+  if (requestedChannel && !requestedReplyUuid) {
+    assertChannelExists(db, requestedChannel);
   }
 
   let replyTo: number | null = null;

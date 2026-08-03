@@ -953,9 +953,12 @@ async function handleV1(
     // `messages.channel` is free text with no foreign key to `channels`, so a
     // typo'd name wrote an ORPHAN: readable by digest, invisible to
     // `GET /channels` (which selects FROM channels), and unarchivable (todos
-    // 4cc80a4d). Only an EXPLICITLY REQUESTED channel is checked — a reply
-    // inherits its parent's channel, and re-validating that would refuse
-    // replies to messages already sitting in pre-existing orphan channels.
+    // 4cc80a4d). Only a NON-REPLY send is checked — replies to messages already
+    // sitting in pre-existing orphan channels are legacy data the author did
+    // not write, and must still go through. `!replyParent` is the same
+    // predicate the SQLite path expresses as `!requestedReplyUuid`; they must
+    // stay in step, because a guard present on only one backend is absent
+    // exactly where it matters.
     // Existence only: archived channels still accept sends, as before.
     if (requestedChannel && !replyParent) {
       const channelRow = await client.get(`SELECT name FROM channels WHERE name = $1`, [requestedChannel]);
