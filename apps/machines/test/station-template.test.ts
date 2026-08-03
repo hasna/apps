@@ -8,7 +8,9 @@ import {
   BASHRC_BLOCK_END,
   buildBashrcSpliceCommand,
   buildStationTemplateSteps,
+  checkExitCode,
   checkStationTemplate,
+  compareVersions,
   defaultTemplatesDir,
   loadStationTemplate,
   parseTemplateSpec,
@@ -21,6 +23,7 @@ import { sortSystemdDropinNames } from "../src/station-template/check.js";
 const SHIPPED = defaultTemplatesDir();
 const repoRoot = resolve(import.meta.dir, "..");
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
+const packageVersion = (JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as { version: string }).version;
 
 function runCli(args: string[], env: NodeJS.ProcessEnv) {
   return spawnSync(process.execPath, [cliPath, ...args], { cwd: repoRoot, env, encoding: "utf8" });
@@ -50,13 +53,50 @@ function buildCleanFixture(overlays: string[] = ["ec2"]) {
     mkdirSync(join(target, ".."), { recursive: true });
     writeFileSync(target, `${runtime.value}\n`);
   }
+  // Installed EXACTLY AT the declared floor, not comfortably above it. The
+  // conforming case is the boundary: a fixture at 9.9.9 would pass a `>` check
+  // as happily as a `>=` one and prove nothing about which was written.
   for (const pkg of effective.packages.bun) {
-    const dir = join(home, ".bun/install/global/node_modules", pkg);
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: pkg, version: "9.9.9" }));
+    writeBunGlobal(home, pkg.name, pkg.minVersion ?? "9.9.9");
   }
   writeSwap(root, effective.swap.sizeGb);
   return { root, home, effective };
+}
+
+function writeBunGlobal(home: string, name: string, version: string | null) {
+  const dir = join(home, ".bun/install/global/node_modules", name);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "package.json"), JSON.stringify(version === null ? { name } : { name, version }));
+}
+
+/**
+ * A probe answering as a CONFORMING ec2 station: services up, aws on PATH, and
+ * — the part that matters since the 2026-07-30 ruling — no tailscale binary and
+ * no tailscaled unit. A catch-all `sh -> /usr/local/bin/aws` would claim every
+ * binary on earth resolves, tailscale included, so absence probes must be
+ * answered explicitly rather than by falling through.
+ */
+function conformingEc2Probe(overrides: Record<string, { ok: boolean; stdout: string }> = {}): CommandProbe {
+  return (command, args) => {
+    const joined = args.join(" ");
+    for (const [needle, response] of Object.entries(overrides)) {
+      if (`${command} ${joined}`.includes(needle)) return response;
+    }
+    if (command === "sh") {
+      if (joined.includes("tailscale")) return { ok: false, stdout: "" };
+      return { ok: true, stdout: "/usr/local/bin/aws\n" };
+    }
+    if (command === "systemctl" && joined.includes("LoadState")) {
+      return { ok: true, stdout: "not-found\n" };
+    }
+    if (command === "systemctl") {
+      return { ok: true, stdout: args.includes("is-active") ? "active\n" : "enabled\n" };
+    }
+    if (command === "df") {
+      return { ok: true, stdout: "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/root 66060288 4000000 62060288 6% /\n" };
+    }
+    return { ok: true, stdout: "install ok installed" };
+  };
 }
 
 /** /proc/swaps as the kernel formats it: header line, then Size in KB. */
@@ -271,12 +311,94 @@ describe("drift check", () => {
     expect(item?.detail).toContain("not installed globally");
   });
 
-  test("bun globals are reported with the version actually on disk", () => {
+  // INVERTED 2026-07-31. The previous version of this test read:
+  //
+  //   test("bun globals are reported with the version actually on disk", ...)
+  //     -> fixture planted at 9.9.9, expect(item.status).toBe("ok")
+  //
+  // and it was not a stale assertion — it was the version-blind contract,
+  // written down and pinned. `package:bun:*` reported ok when the package was
+  // present at ANY version, across 12 of the 42 items, so a station carrying a
+  // CLI from before a fix was indistinguishable from one updated an hour ago.
+  // The version is still REPORTED; it is now also JUDGED, against the floor
+  // the template declares.
+  test("POSITIVE CONTROL: a bun global BELOW the declared floor is drift, not ok-at-any-version", () => {
     const { root, home, effective } = buildCleanFixture();
+    const floor = effective.packages.bun.find((pkg) => pkg.name === "@hasna/todos")!.minVersion!;
+    writeBunGlobal(home, "@hasna/todos", "0.0.1");
     const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: null });
     const item = result.items.find((candidate) => candidate.id === "package:bun:@hasna/todos");
-    expect(item?.status).toBe("ok");
-    expect(item?.detail).toContain("@9.9.9");
+    expect(item?.status).toBe("drift");
+    expect(item?.detail).toContain("BELOW the declared floor");
+    expect(item?.detail).toContain(floor);
+    expect(result.verdict).toBe("drift");
+  });
+
+  test("a bun global at or above the declared floor is ok, and the version is still named", () => {
+    const { root, home, effective } = buildCleanFixture();
+    const floor = effective.packages.bun.find((pkg) => pkg.name === "@hasna/todos")!.minVersion!;
+    // The clean fixture plants every package exactly AT its floor: >= not >.
+    const atFloor = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: null });
+    const atFloorItem = atFloor.items.find((candidate) => candidate.id === "package:bun:@hasna/todos");
+    expect(atFloorItem?.status).toBe("ok");
+    expect(atFloorItem?.detail).toContain(`@hasna/todos@${floor}`);
+
+    writeBunGlobal(home, "@hasna/todos", "99.0.0");
+    const above = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: null });
+    const aboveItem = above.items.find((candidate) => candidate.id === "package:bun:@hasna/todos");
+    expect(aboveItem?.status).toBe("ok");
+    expect(aboveItem?.detail).toContain("@99.0.0");
+  });
+
+  test("POSITIVE CONTROL: an installed package whose version cannot be read is drift, never ok", () => {
+    const { root, home, effective } = buildCleanFixture();
+    writeBunGlobal(home, "@hasna/todos", null);
+    const missing = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: null });
+    expect(missing.items.find((candidate) => candidate.id === "package:bun:@hasna/todos")?.detail).toContain(
+      "no readable version"
+    );
+
+    // A dist-tag-shaped version is not semver and must not be waved through.
+    writeBunGlobal(home, "@hasna/todos", "latest");
+    const unparseable = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: null });
+    const item = unparseable.items.find((candidate) => candidate.id === "package:bun:@hasna/todos");
+    expect(item?.status).toBe("drift");
+    expect(item?.detail).toContain("not readable as semver");
+  });
+
+  // THE REGRESSION GUARD. If someone reverts a bun entry to the bare-string
+  // form, the check goes back to presence-only for it and every assertion above
+  // still passes — they only exercise @hasna/todos. This one fails.
+  test("every bun global in the shipped template declares a minVersion floor", () => {
+    for (const overlays of [[], ["ec2"], ["dgx-spark"]]) {
+      for (const pkg of effectiveFor(overlays).packages.bun) {
+        expect({ layers: overlays, pkg: pkg.name, minVersion: pkg.minVersion }).toEqual({
+          layers: overlays,
+          pkg: pkg.name,
+          minVersion: expect.stringMatching(/^\d+\.\d+\.\d+$/),
+        });
+      }
+    }
+  });
+
+  test("the shipped machines floor tracks this package version", () => {
+    for (const overlays of [[], ["ec2"], ["dgx-spark"]]) {
+      const pkg = effectiveFor(overlays).packages.bun.find((candidate) => candidate.name === "@hasna/machines");
+      expect({ layers: overlays, pkg: pkg?.name, minVersion: pkg?.minVersion, packageVersion }).toEqual({
+        layers: overlays,
+        pkg: "@hasna/machines",
+        minVersion: packageVersion,
+        packageVersion,
+      });
+    }
+  });
+
+  test("prerelease sorts below the release it precedes, and build metadata is ignored", () => {
+    expect(compareVersions("1.2.3", "1.2.3")).toBe(0);
+    expect(compareVersions("1.2.3-rc.1", "1.2.3")!).toBeLessThan(0);
+    expect(compareVersions("1.2.3+build.7", "1.2.3")).toBe(0);
+    expect(compareVersions("1.10.0", "1.9.0")!).toBeGreaterThan(0);
+    expect(compareVersions("nightly", "1.0.0")).toBeNull();
   });
 
   test("POSITIVE CONTROL: swap smaller than the overlay asks for is detected", () => {
@@ -362,7 +484,7 @@ describe("drift check", () => {
       // Every bun package must be drift: the fixture has none, and the ambient
       // BUN_INSTALL must not be allowed to answer for it.
       for (const pkg of effective.packages.bun) {
-        expect(result.items.find((candidate) => candidate.id === `package:bun:${pkg}`)?.status).toBe("drift");
+        expect(result.items.find((candidate) => candidate.id === `package:bun:${pkg.name}`)?.status).toBe("drift");
       }
     } finally {
       if (previous === undefined) delete process.env["BUN_INSTALL"];
@@ -721,6 +843,9 @@ describe("boot criticality (owner ruling 2026-07-29: tailscale must never be boo
     cpSync(join(SHIPPED, "station"), join(planted, "station"), { recursive: true });
     const templatePath = join(planted, "station", "template.json");
     const template = JSON.parse(readFileSync(templatePath, "utf8"));
+    // Opting this overlay into tailscale retracts its declared absence — a
+    // template that both forbids and requires it is refused at load.
+    delete template.overlays.ec2.absences;
     template.overlays.ec2.tailscale = {
       join: true,
       authKeySecretName: "stations/prod/tailscale/authkey",
@@ -809,24 +934,126 @@ describe("boot criticality (owner ruling 2026-07-29: tailscale must never be boo
     expect(result.verdict).toBe("drift");
   });
 
-  test("ec2 end-state: floor healthy, and NO tailscale item exists to be un-joined (2026-07-30 ruling)", () => {
+  // REWRITTEN 2026-07-31. The previous version of this test asserted the ec2
+  // report carried NO tailscale item in any status, and called that the end
+  // state of the 2026-07-30 ruling — with a probe that answered "yes, it
+  // resolves" to every `sh -c command -v` and "active/enabled" to every
+  // systemctl. That combination is a box with a live tailscale, and the test
+  // asserted verdict clean. It was not wrong about `tailscale:join` being
+  // noise; it was wrong that removing the check discharged the ruling. Measured
+  // consequence, 2026-07-30 22:02Z: `tailscale_items=[]` on an ec2 render, and
+  // station18 with BackendState=Running reading clean 42/42.
+  test("ec2 end-state: floor healthy, NO tailscale:join item, and tailscale's ABSENCE asserted", () => {
     const { root, home, effective } = buildCleanFixture();
+    const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: conformingEc2Probe() });
+    expect(result.items.find((candidate) => candidate.id === "access-floor:snap.amazon-ssm-agent.amazon-ssm-agent")?.status).toBe("ok");
+    // Still no tailnet-health item: asking whether the tailnet is healthy on a
+    // box that must not have one is noise, and noise is how real drift gets
+    // ignored.
+    expect(result.items.filter((candidate) => candidate.kind === "tailscale")).toEqual([]);
+    // But the absence is now a claim the report actually makes.
+    const absence = result.items.find((candidate) => candidate.id === "absence:tailscale");
+    expect(absence?.status).toBe("ok");
+    expect(absence?.detail).toContain("absent as declared");
+    expect(result.verdict).toBe("clean");
+  });
+
+  test("POSITIVE CONTROL: a LIVE tailscale on an ec2 station is caught — the station18 case that read clean 42/42", () => {
+    const { root, home, effective } = buildCleanFixture();
+    // Exactly station18 on 2026-07-30: daemon loaded and running, binary on
+    // PATH, backend Running. Under the old check this produced no item at all.
+    const probe = conformingEc2Probe({
+      "sh -c command -v -- tailscale": { ok: true, stdout: "/usr/bin/tailscale\n" },
+      "systemctl show -p LoadState --value tailscaled": { ok: true, stdout: "loaded\n" },
+    });
+    const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: probe });
+    const absence = result.items.find((candidate) => candidate.id === "absence:tailscale");
+    expect(absence?.status).toBe("violation");
+    expect(absence?.detail).toContain("/usr/bin/tailscale");
+    expect(absence?.detail).toContain("LoadState=loaded");
+    expect(result.verdict).toBe("drift");
+    expect(checkExitCode(result)).toBe(1);
+  });
+
+  test("POSITIVE CONTROL: leftover tailscale STATE on disk is caught with no probe at all", () => {
+    const { root, home, effective } = buildCleanFixture();
+    // An uninstalled-but-not-purged tailscale leaves /var/lib/tailscale with
+    // the node key in it. The daemon is gone; the box is still enrolled.
+    mkdirSync(join(root, "var/lib/tailscale"), { recursive: true });
+    const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: conformingEc2Probe() });
+    const absence = result.items.find((candidate) => candidate.id === "absence:tailscale");
+    expect(absence?.status).toBe("violation");
+    expect(absence?.detail).toContain("/var/lib/tailscale exists");
+    expect(result.verdict).toBe("drift");
+  });
+
+  test("an absence whose command/service could not be probed is skipped, NEVER ok", () => {
+    // The vacuous shape this item exists to end: with no probe we checked the
+    // paths and nothing else, so we have not earned "absent".
+    const { root, home, effective } = buildCleanFixture();
+    const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: null });
+    const absence = result.items.find((candidate) => candidate.id === "absence:tailscale");
+    expect(absence?.status).toBe("skipped");
+    expect(absence?.detail).toContain("could not be probed");
+    // Not a finding — but not a pass either: the check did not complete.
+    expect(result.verdict).toBe("clean");
+    expect(checkExitCode(result)).toBe(2);
+  });
+
+  // Review finding P2 on the closed #58: a probe that RAN and answered
+  // `not-found` is evidence of absence; a probe that could not answer is not,
+  // and the two were indistinguishable because both left `found` empty. On a
+  // service-only absence that difference is the whole verdict.
+  test("systemd that could not be QUERIED is skipped, not absent — an empty LoadState is not evidence", () => {
+    const { root, home, effective } = buildCleanFixture();
+    for (const broken of [
+      { ok: false, stdout: "" }, // systemctl exited non-zero (no systemd / container)
+      { ok: true, stdout: "\n" }, // ran, answered nothing
+    ]) {
+      const probe = conformingEc2Probe({ "systemctl show -p LoadState --value tailscaled": broken });
+      const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: probe });
+      const absence = result.items.find((candidate) => candidate.id === "absence:tailscale");
+      expect(absence?.status).toBe("skipped");
+      expect(absence?.detail).toContain("systemctl gave no LoadState");
+      expect(checkExitCode(result)).toBe(2);
+    }
+  });
+
+  // The other direction, so the clause above cannot pass by making everything
+  // skipped: systemd answering `not-found` is a real negative and stays `ok`.
+  test("systemd answering not-found IS evidence of absence and still reports ok", () => {
+    const { root, home, effective } = buildCleanFixture();
+    const probe = conformingEc2Probe({
+      "systemctl show -p LoadState --value tailscaled": { ok: true, stdout: "not-found\n" },
+    });
+    const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: probe });
+    const absence = result.items.find((candidate) => candidate.id === "absence:tailscale");
+    expect(absence?.status).toBe("ok");
+    expect(checkExitCode(result)).toBe(0);
+  });
+
+  test("physical stations that legitimately run tailscale are untouched by the ec2 absence", () => {
+    const { root, home, effective } = buildCleanFixture(["dgx-spark"]);
     const probe: CommandProbe = (command, args) => {
-      if (command === "systemctl") {
-        return { ok: true, stdout: args.includes("is-active") ? "active\n" : "enabled\n" };
+      if (command === "tailscale") {
+        return { ok: true, stdout: JSON.stringify({ BackendState: "Running", Self: { HostName: "station01" } }) };
       }
+      if (command === "systemctl") return { ok: true, stdout: args.includes("is-active") ? "active\n" : "enabled\n" };
       if (command === "sh") return { ok: true, stdout: "/usr/local/bin/aws\n" };
-      if (command === "df") {
-        return { ok: true, stdout: "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/root 66060288 4000000 62060288 6% /\n" };
-      }
       return { ok: true, stdout: "install ok installed" };
     };
     const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: probe });
-    expect(result.items.find((candidate) => candidate.id === "access-floor:snap.amazon-ssm-agent.amazon-ssm-agent")?.status).toBe("ok");
-    // A check for a thing we deliberately do not run is noise — an EC2 report
-    // must carry no tailscale item in ANY status.
-    expect(result.items.filter((candidate) => candidate.kind === "tailscale")).toEqual([]);
+    // A running tailscale is CORRECT here: no absence item, and join is ok.
+    expect(result.items.filter((candidate) => candidate.kind === "absence")).toEqual([]);
+    expect(result.items.find((candidate) => candidate.id === "tailscale:join")?.status).toBe("ok");
     expect(result.verdict).toBe("clean");
+  });
+
+  test("a layer set that both requires and forbids tailscale fails to load, rather than reporting both", () => {
+    // Reachable today: `--template station,dgx-spark,ec2`. The ruling's future
+    // exception — one AWS box granted tailscale — has to be argued for in its
+    // own overlay, and this is what makes "argued for" mean something.
+    expect(() => effectiveFor(["dgx-spark", "ec2"])).toThrow(/absence "tailscale" while also requiring it/);
   });
 
   test("setup-steps render: ec2 floor step is first and carries NO tailscale steps; dgx-spark is the inverse", () => {
@@ -963,13 +1190,20 @@ describe("no tailscale on AWS stations (owner ruling 2026-07-30 — supersedes t
     expect(userData).not.toContain("secretsmanager");
   });
 
-  test("ABSENCE: the station,ec2 setup-steps render and drift report carry no tailscale in any status", () => {
+  // REWRITTEN 2026-07-31. This test used to assert that an ec2 drift report
+  // contained NO item mentioning tailscale in any status, and that was the
+  // whole implementation of ruling item 3. It made the absence unfalsifiable:
+  // measured 2026-07-30 22:02Z, an ec2 render emitted `tailscale_items=[]`, and
+  // station18 — running a live tailscale, BackendState=Running — read clean
+  // 42/42 while this test was green. No tailnet-HEALTH item is still correct;
+  // no item AT ALL is what left the ruling unchecked.
+  test("ABSENCE: the station,ec2 render carries no tailscale, and the report ASSERTS its absence", () => {
     const steps = buildStationTemplateSteps(effectiveFor(["ec2"]), { station: "station17" });
     expect(steps.map((step) => `${step.id} ${step.command}`).join("\n")).not.toMatch(TAILSCALE_PATTERN);
     const { root, home, effective } = buildCleanFixture();
-    // Both probe modes — no-probe (skipped items are still noise) AND a live
-    // probe (an ok/drift item would be worse). Reviewer finding P3-1: an
-    // earlier version iterated [null, undefined] and tested null twice.
+    // A probe that claims every binary resolves and every unit is up: i.e. a
+    // box that HAS tailscale. Reviewer finding P3-1: an earlier version
+    // iterated [null, undefined] and tested null twice.
     const liveProbe: CommandProbe = (command, args) => {
       if (command === "systemctl") return { ok: true, stdout: args.includes("is-active") ? "active\n" : "enabled\n" };
       if (command === "sh") return { ok: true, stdout: "/usr/local/bin/aws\n" };
@@ -980,8 +1214,14 @@ describe("no tailscale on AWS stations (owner ruling 2026-07-30 — supersedes t
     };
     for (const probe of [null, liveProbe]) {
       const result = checkStationTemplate(effective, { rootDir: root, homeDir: home, commandProbe: probe });
+      // No tailnet-health item: that question is noise on this station class.
       expect(result.items.filter((item) => item.kind === "tailscale")).toEqual([]);
-      expect(result.items.filter((item) => item.id.includes("tailscale") || item.id.includes("tailscaled"))).toEqual([]);
+      // But exactly one item speaks to tailscale, and it is the absence.
+      const mentions = result.items.filter((item) => item.id.includes("tailscale"));
+      expect(mentions.map((item) => item.id)).toEqual(["absence:tailscale"]);
+      // Under the live probe the box HAS tailscale and the report says so;
+      // with no probe it cannot tell, and refuses to say ok either way.
+      expect(mentions[0]!.status).toBe(probe === null ? "skipped" : "violation");
     }
   });
 
@@ -1011,10 +1251,16 @@ describe("no tailscale on AWS stations (owner ruling 2026-07-30 — supersedes t
     // refused by the schema (previous test), so plant into the ec2 OVERLAY —
     // the deliberate-opt-in path that remains schema-legal — and prove the
     // same pattern and the same item filters the ABSENCE tests use detect it.
+    //
+    // Opting in means RETRACTING the declared absence, which is the point of
+    // declaring it: the ruling's one-box exception now has to be written down
+    // in the overlay rather than arrived at by deleting a check. A template
+    // that both forbids and requires tailscale does not load at all.
     const planted = mkdtempSync(join(tmpdir(), "station-template-planted-"));
     cpSync(join(SHIPPED, "station"), join(planted, "station"), { recursive: true });
     const templatePath = join(planted, "station", "template.json");
     const template = JSON.parse(readFileSync(templatePath, "utf8"));
+    delete template.overlays.ec2.absences;
     template.overlays.ec2.tailscale = {
       join: true,
       authKeySecretName: "stations/prod/tailscale/authkey",
@@ -1113,12 +1359,122 @@ describe("setup --check targeting", () => {
     expect(result.stdout).not.toContain("\"verdict\"");
   }, 60_000);
 
-  test("--check stamps the machine it actually inspected into the JSON", () => {
+  // WAS `expect(result.status).toBe(0)`. That assertion held for the same
+  // reason defect 2bfe61b0 held: `--check` exited 0 no matter what it found, so
+  // a test could assert 0 while running on a box that is not a station at all.
+  // The exit code is now the verdict, so the test asserts the CONTRACT rather
+  // than a constant.
+  test("--check stamps the machine it actually inspected into the JSON, and its rc matches the report", () => {
     const result = runCli(["setup", "--machine", "local", "--template", "station", "--check"], checkEnv());
-    expect(result.status).toBe(0);
     const report = JSON.parse(result.stdout);
     expect(report.machineId).toBe("control");
     expect(report.schemaId).toBe("hasna.station_template.v1");
+    const findings = report.items.filter((item: { status: string }) => item.status === "drift" || item.status === "violation");
+    const skipped = report.items.filter((item: { status: string }) => item.status === "skipped");
+    expect(result.status).toBe(findings.length > 0 ? 1 : skipped.length > 0 ? 2 : 0);
+  }, 60_000);
+});
+
+/**
+ * The exit-code contract, end to end through the real CLI process.
+ *
+ * Driven by a purpose-built template rather than the shipped one so all three
+ * codes are reachable deterministically: run against `station` on whatever box
+ * CI happens to be, the answer depends on that box.
+ */
+describe("setup --check exit codes (0 clean / 1 findings / 2 incomplete)", () => {
+  function exitCodeFixture(template: Record<string, unknown>) {
+    const dir = mkdtempSync(join(tmpdir(), "station-template-rc-"));
+    mkdirSync(join(dir, "templates", "station"), { recursive: true });
+    writeFileSync(
+      join(dir, "templates", "station", "template.json"),
+      JSON.stringify({
+        $schema: "hasna.station_template.v1",
+        name: "station",
+        version: "1.0.0",
+        description: "exit-code contract fixture",
+        ...template,
+      })
+    );
+    const home = join(dir, "home");
+    mkdirSync(home, { recursive: true });
+    return {
+      home,
+      env: {
+        ...process.env,
+        HOME: home,
+        BUN_INSTALL: join(home, ".bun"),
+        HASNA_MACHINES_TEMPLATES_DIR: join(dir, "templates"),
+        HASNA_MACHINES_MANIFEST_PATH: join(dir, "machines.json"),
+        HASNA_MACHINES_DB_PATH: join(dir, "machines.db"),
+        HASNA_MACHINES_MACHINE_ID: "control",
+      } as NodeJS.ProcessEnv,
+    };
+  }
+
+  const ONE_PACKAGE = { base: { packages: { apt: [], bun: [{ name: "rc-fixture-pkg", minVersion: "2.0.0" }] } } };
+
+  test("conforming box exits 0", () => {
+    const { home, env } = exitCodeFixture(ONE_PACKAGE);
+    writeBunGlobal(home, "rc-fixture-pkg", "2.0.0");
+    const result = runCli(["setup", "--template", "station", "--check"], env);
+    expect(JSON.parse(result.stdout).verdict).toBe("clean");
+    expect(result.status).toBe(0);
+  }, 60_000);
+
+  test("POSITIVE CONTROL: deviant box exits 1 — the gate that could not fail (defect 2bfe61b0)", () => {
+    const { home, env } = exitCodeFixture(ONE_PACKAGE);
+    writeBunGlobal(home, "rc-fixture-pkg", "1.0.0");
+    const result = runCli(["setup", "--template", "station", "--check"], env);
+    expect(JSON.parse(result.stdout).verdict).toBe("drift");
+    expect(result.status).toBe(1);
+  }, 60_000);
+
+  test("a check that could not complete exits 2, not 0 — 'could not look' is not 'clean'", () => {
+    const { home, env } = exitCodeFixture({
+      base: {
+        packages: ONE_PACKAGE.base.packages,
+        // No such knob on any kernel: the item can only be `skipped`.
+        sysctls: { "vm.hasna_rc_fixture_no_such_knob": "1" },
+      },
+    });
+    writeBunGlobal(home, "rc-fixture-pkg", "2.0.0");
+    const result = runCli(["setup", "--template", "station", "--check"], env);
+    const report = JSON.parse(result.stdout);
+    expect(report.verdict).toBe("clean");
+    expect(report.items.some((item: { status: string }) => item.status === "skipped")).toBe(true);
+    expect(result.status).toBe(2);
+  }, 60_000);
+
+  test("findings outrank incompleteness: a drifted AND incomplete check exits 1", () => {
+    const { home, env } = exitCodeFixture({
+      base: {
+        packages: ONE_PACKAGE.base.packages,
+        sysctls: { "vm.hasna_rc_fixture_no_such_knob": "1" },
+      },
+    });
+    writeBunGlobal(home, "rc-fixture-pkg", "1.0.0");
+    const result = runCli(["setup", "--template", "station", "--check"], env);
+    expect(result.status).toBe(1);
+  }, 60_000);
+
+  test("--no-fail-on-findings restores the pre-1.8.0 always-0 behaviour for callers not ready to move", () => {
+    const { home, env } = exitCodeFixture(ONE_PACKAGE);
+    writeBunGlobal(home, "rc-fixture-pkg", "1.0.0");
+    const result = runCli(["setup", "--template", "station", "--check", "--no-fail-on-findings"], env);
+    // The report still says drift — the opt-out silences the rc, not the truth.
+    expect(JSON.parse(result.stdout).verdict).toBe("drift");
+    expect(result.status).toBe(0);
+  }, 60_000);
+
+  test("the report is still emitted in full when the rc is non-zero", () => {
+    const { home, env } = exitCodeFixture(ONE_PACKAGE);
+    writeBunGlobal(home, "rc-fixture-pkg", "1.0.0");
+    const result = runCli(["setup", "--template", "station", "--check"], env);
+    // process.exitCode, not process.exit(): a gate that fails without saying
+    // what it found is only marginally better than one that cannot fail.
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout).items[0].detail).toContain("BELOW the declared floor");
   }, 60_000);
 });
 

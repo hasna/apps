@@ -9,6 +9,8 @@ export {
   type TemplateLayer,
   type TemplateCommand,
   type AccessFloor,
+  type TemplateAbsence,
+  type BunPackage,
   type TemplateDisk,
   type LoadedTemplateFile,
   type EffectiveTemplate,
@@ -33,6 +35,8 @@ export {
 export { renderCloudInit, type CloudInitOptions } from "./render-cloud-init.js";
 export {
   checkStationTemplate,
+  checkExitCode,
+  compareVersions,
   type TemplateCheckResult,
   type TemplateCheckItem,
   type CheckOptions,
