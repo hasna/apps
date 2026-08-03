@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { startPolling } from "./poll";
 import { sendMessage } from "./messages";
+import { createChannel } from "./channels";
 import { closeDb } from "./db";
 import { ENV_KEYS, getStore, type ConversationsStore } from "./store/index";
 import { unlinkSync } from "fs";
@@ -72,6 +73,9 @@ describe("startPolling", () => {
 
   test("filters by channel", async () => {
     const received: Message[] = [];
+    // sendMessage refuses a channel with no row rather than writing an orphan
+    // that `channel list` cannot see (todos 4cc80a4d).
+    createChannel("general", "fixture");
 
     const { stop } = startPolling({
       channel: "general",

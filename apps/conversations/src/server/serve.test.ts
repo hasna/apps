@@ -214,6 +214,10 @@ describe("API /api/messages/search", () => {
   });
 
   test("filters by channel param", async () => {
+    // sendMessage refuses a channel with no row rather than writing an orphan
+    // that `channel list` cannot see and `channel archive` cannot remove
+    // (todos 4cc80a4d).
+    createChannel("search-sp", "fixture");
     sendMessage({ from: "a", to: "search-sp", content: "searchchannel-test", channel: "search-sp" });
     sendMessage({ from: "a", to: "b", content: "searchchannel-test" });
     const res = await fetch(`${base()}/api/messages/search?q=searchchannel-test&channel=search-sp`);

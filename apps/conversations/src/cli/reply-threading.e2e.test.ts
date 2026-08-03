@@ -77,6 +77,13 @@ describe("reply threading persistence (e2e)", () => {
   });
 
   test("plain `send --channel` output exposes the immutable UUID, not only the numeric id", () => {
+    // `send` refuses a channel with no row rather than writing an orphan that
+    // `channel list` cannot see and `channel archive` cannot remove (todos
+    // 4cc80a4d). The sibling tests get this via seedRootMessage; this one sends
+    // directly, so it creates the channel itself.
+    const created = runCli(["channel", "create", "send-output-uuid", "--from", "alice"], "alice");
+    expect(created.exitCode, created.stderr).toBe(0);
+
     const sent = runCli([
       "send", "plain output reference", "--channel", "send-output-uuid", "--from", "alice",
     ], "alice");

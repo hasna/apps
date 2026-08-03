@@ -8,6 +8,24 @@ export function normalizeChannelName(input: string): string {
   return cleaned || "channel";
 }
 
+/**
+ * The message a caller gets when they send to a channel that does not exist.
+ *
+ * It lives in this module — which holds no storage dependency — so the SQLite
+ * path (src/lib/messages.ts) and the Postgres server path (src/server/api.ts)
+ * can share one wording without the server importing the local database layer.
+ * The two backends have diverged before, and a guard present on only one is
+ * absent exactly where it matters.
+ *
+ * The remedy is named in the text: a refusal an agent cannot act on gets
+ * retried unchanged.
+ */
+export function unknownChannelMessage(channel: string): string {
+  return `Channel "${channel}" does not exist, so this message was not sent. `
+    + `Check the name with 'conversations channel list', or create it with `
+    + `'conversations channel create ${channel}' if it is genuinely new.`;
+}
+
 export function buildLegacyChannelNameMap(legacyNames: Iterable<string>): Map<string, string> {
   const names = [...new Set([...legacyNames].map((name) => name.trim()).filter(Boolean))]
     .sort((left, right) => left.localeCompare(right));

@@ -23,7 +23,7 @@ import { verifyApiKey, ApiKeyStore } from "@hasna/contracts/auth";
 import type { ApiKeyVerifier } from "@hasna/contracts/auth";
 import { version as pkgVersion } from "../../package.json";
 import { openapiSpec } from "./openapi.js";
-import { normalizeChannelName } from "../lib/channel-names.js";
+import { normalizeChannelName, unknownChannelMessage } from "../lib/channel-names.js";
 import { extractTopics } from "../lib/topic-extract.js";
 import { assertNoSensitiveContent, redactSensitiveText, redactSensitiveValue } from "../lib/content-safety.js";
 import { resolveSelfSenderId } from "../lib/sender-identity.js";
@@ -950,6 +950,20 @@ async function handleV1(
     // A channel message addresses the channel itself; a DM needs an explicit `to`.
     const toAgent = channelName ?? str(body.to);
     if (!from || !toAgent || !content) return json({ error: "from, to (or channel), and content are required" }, 400);
+    // `messages.channel` is free text with no foreign key to `channels`, so a
+    // typo'd name wrote an ORPHAN: readable by digest, invisible to
+    // `GET /channels` (which selects FROM channels), and unarchivable (todos
+    // 4cc80a4d). Only a NON-REPLY send is checked — replies to messages already
+    // sitting in pre-existing orphan channels are legacy data the author did
+    // not write, and must still go through. `!replyParent` is the same
+    // predicate the SQLite path expresses as `!requestedReplyUuid`; they must
+    // stay in step, because a guard present on only one backend is absent
+    // exactly where it matters.
+    // Existence only: archived channels still accept sends, as before.
+    if (requestedChannel && !replyParent) {
+      const channelRow = await client.get(`SELECT name FROM channels WHERE name = $1`, [requestedChannel]);
+      if (!channelRow) return json({ error: unknownChannelMessage(requestedChannel) }, 404);
+    }
     assertNoSensitiveContent(content, "Message content");
     const projectId = str(body.project_id);
     // Mirror the local sendMessage session derivation so channel history and
