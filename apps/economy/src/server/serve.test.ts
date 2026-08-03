@@ -111,22 +111,26 @@ describe('REST API server', () => {
     }
   })
 
-  it('GET /health returns the foundation envelope', async () => {
+  // The `mode` assertion these cases used to make PASSED, and was deleted rather
+  // than repaired: @hasna/contracts 0.9.0 retired the deployment-mode axis, so a
+  // test demanding a `mode` key now pins the defect instead of the contract.
+  // Shape conformance is asserted against the contract's own schemas in
+  // src/server/foundation-probe.contract.test.ts; these keep the local smoke.
+  it('GET /health returns { status, version, backend }', async () => {
     const { status, data } = await req(handler, '/health')
     expect(status).toBe(200)
-    // Foundation probe contract: { status, version, mode } at the top level.
     expect(data as Record<string, unknown>).toMatchObject({ status: 'ok' })
     expect((data as Record<string, unknown>)['version']).toBeDefined()
-    expect((data as Record<string, unknown>)['mode']).toBeDefined()
+    expect((data as Record<string, unknown>)['backend']).toBeDefined()
   })
 
-  it('GET /version and /ready return the foundation envelope', async () => {
+  it('GET /version returns { version } and /ready returns { ready }', async () => {
     const version = await req(handler, '/version')
     expect(version.status).toBe(200)
-    expect(version.data as Record<string, unknown>).toMatchObject({ status: 'ok' })
+    expect((version.data as Record<string, unknown>)['version']).toBeDefined()
     const ready = await req(handler, '/ready')
     expect([200, 503]).toContain(ready.status)
-    expect((ready.data as Record<string, unknown>)['status']).toBeDefined()
+    expect((ready.data as Record<string, unknown>)['ready']).toBe(true)
   })
 
   it('GET /api/summary returns cost summary', async () => {

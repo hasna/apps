@@ -62,7 +62,7 @@ The server serves `dashboard/dist` and falls back to its `index.html` for non-AP
 
 ## Self-hosted server
 
-The server switches to direct Postgres mode when `HASNA_ECONOMY_STORAGE_MODE=cloud` or when a DSN is present:
+The server backend follows the database URL alone — `postgresql` when one of these is set, `sqlite` when none is:
 
 ```text
 HASNA_ECONOMY_DATABASE_URL
@@ -70,7 +70,9 @@ ECONOMY_DATABASE_URL
 DATABASE_URL
 ```
 
-Apply migrations with `economy-serve migrate`. `ECONOMY_PG_POOL_MAX` defaults to 5. A non-loopback cloud server also requires one of `HASNA_ECONOMY_API_SIGNING_KEY`, `HASNA_API_SIGNING_KEY`, or `API_KEY_SIGNING_SECRET`; API keys are then verified by `@hasna/contracts`. The signing secret belongs only on the server.
+`HASNA_ECONOMY_STORAGE_MODE` (and `HASNA_ECONOMY_MODE`, `ECONOMY_STORAGE_MODE`, `ECONOMY_MODE`) no longer selects a backend: the server refuses to start and prints a migration hint. Delete it and set a DSN instead. This is server-only — the CLI/MCP client still reads the mode variable described above.
+
+Apply migrations with `economy-serve migrate`. `ECONOMY_PG_POOL_MAX` defaults to 5. A non-loopback server also requires one of `HASNA_ECONOMY_API_SIGNING_KEY`, `HASNA_API_SIGNING_KEY`, or `API_KEY_SIGNING_SECRET`; API keys are then verified by `@hasna/contracts`. The signing secret belongs only on the server.
 
 See [REST API authentication](rest-api.md#authentication) for request headers and open probes.
 

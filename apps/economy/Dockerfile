@@ -29,8 +29,10 @@ WORKDIR /app
 # Amazon RDS global CA bundle so verify-full-capable TLS to the shared RDS
 # succeeds (pg-connection-string escalates sslmode=require to verify-full).
 COPY docker/rds-global-bundle.pem /etc/ssl/certs/rds-global-bundle.pem
+# No storage-mode variable: the server data backend is selected by the presence
+# of HASNA_ECONOMY_DATABASE_URL, injected at run time. Baking a retired
+# HASNA_ECONOMY_STORAGE_MODE into the image now fails closed at startup.
 ENV NODE_ENV=production \
-    HASNA_ECONOMY_STORAGE_MODE=cloud \
     NODE_EXTRA_CA_CERTS=/etc/ssl/certs/rds-global-bundle.pem \
     PGSSLROOTCERT=/etc/ssl/certs/rds-global-bundle.pem \
     ECONOMY_HOST=0.0.0.0 \

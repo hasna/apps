@@ -38,7 +38,7 @@ import { existsSync } from 'fs'
 import { resolve, sep } from 'path'
 import { getServeBindHost } from '../lib/serve-auth.js'
 import { packageMetadata } from '../lib/package-metadata.js'
-import { isCloudMode, openCloudDatabase, resolveSigningSecret, createCloudPool, authClientFromPool } from '../db/cloud.js'
+import { isPostgresBackend, resolveEconomyServerBackend, openCloudDatabase, resolveSigningSecret, createCloudPool, authClientFromPool } from '../db/cloud.js'
 import { verifyApiKey, ApiKeyStore } from '@hasna/contracts/auth'
 import { openApiSpec } from '../openapi.js'
 import type { CostCenterKind, Period } from '../types/index.js'
@@ -62,14 +62,14 @@ export interface ApiAuthenticator {
   ): Promise<{ ok: boolean; status: number; reason?: string; message?: string }>
 }
 
-/** Deployment mode reported by the foundation probes. */
-function serveMode(): string {
-  return isCloudMode() ? 'self_hosted' : 'local'
-}
-
-/** Shared { status, version, mode } envelope for /health, /ready, /version. */
-function foundationEnvelope(status: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
-  return { status, version: packageMetadata.version, mode: serveMode(), service: 'economy', ...extra }
+/**
+ * `GET /health` — `{ status, version, backend }`, validated by the contract's
+ * `HealthResponseSchema`. That schema is STRICT, so this object must carry those
+ * three keys and nothing else: the `mode` and `service` keys this envelope used
+ * to add are what made the payload fail the `health_shape` conformance gate.
+ */
+function healthEnvelope(status: 'ok' | 'degraded' | 'unavailable'): Record<string, unknown> {
+  return { status, version: packageMetadata.version, backend: resolveEconomyServerBackend() }
 }
 
 const CORS = {
@@ -218,17 +218,22 @@ export function createHandler(db: Database, options: HandlerOptions = {}) {
 
     if (method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS })
 
-    // ── Open foundation probes ({ status, version, mode }) ──────────────────
+    // ── Open foundation probes (CONTRACT.md section 4) ──────────────────────
+    // Each probe has its OWN strict shape; they deliberately no longer share one
+    // envelope, because the shared envelope is what leaked `mode` into all three.
+    //   /health  -> { status, version, backend }   HealthResponseSchema
+    //   /version -> { version }                    VersionResponseSchema
+    //   /ready   -> { ready, reason? }             ReadyResponseSchema
     if (method === 'GET' && (rawPath === '/health' || rawPath === '/healthz')) {
-      return json(foundationEnvelope('ok'))
+      return json(healthEnvelope('ok'))
     }
     if (method === 'GET' && (rawPath === '/version' || rawPath === '/v1/version')) {
-      return json(foundationEnvelope('ok'))
+      return json({ version: packageMetadata.version })
     }
     if (method === 'GET' && (rawPath === '/ready' || rawPath === '/readyz')) {
       const result = options.readyCheck ? await options.readyCheck() : { ready: true }
       return json(
-        foundationEnvelope(result.ready ? 'ready' : 'not_ready', result.detail ? { detail: result.detail } : {}),
+        result.detail ? { ready: result.ready, reason: result.detail } : { ready: result.ready },
         result.ready ? 200 : 503,
       )
     }
@@ -710,7 +715,7 @@ function isLocalHost(host: string): boolean {
 }
 
 export function startServer(port = 3456, options: StartServerOptions = {}): ReturnType<typeof Bun.serve> {
-  const cloud = options.db ? false : isCloudMode()
+  const cloud = options.db ? false : isPostgresBackend()
   const hostname = options.hostname ?? (cloud ? (process.env['ECONOMY_HOST'] ?? '0.0.0.0') : getServeBindHost())
   const log = options.log ?? console.log
 

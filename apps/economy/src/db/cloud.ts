@@ -8,28 +8,51 @@
 // SQLite-flavored SQL to Postgres and executes it synchronously against a pooled
 // connection.
 import type { AuthQueryClient } from '@hasna/contracts/auth'
+import { assertNoLegacyStorageMode } from '@hasna/contracts/server-backend'
+import type { ServerDataBackend } from '@hasna/contracts/schemas'
 import pg from 'pg'
 import type { DbAdapter, SqliteAdapter as Database } from './sqlite-adapter.js'
 import { SyncPgAdapter } from './sync-pg.js'
 import { resolvePgSsl } from './pg-migrate.js'
 import { PG_MIGRATIONS } from './pg-migrations.js'
 
-/** Resolve the cloud Postgres DSN from the standard env aliases. */
-export function getCloudDatabaseUrl(): string | undefined {
+/** The environment shape the backend resolver reads. */
+type Env = Record<string, string | undefined>
+
+/** Resolve the Postgres DSN from the standard env aliases. */
+export function getCloudDatabaseUrl(env: Env = process.env): string | undefined {
   return (
-    process.env['HASNA_ECONOMY_DATABASE_URL']?.trim() ||
-    process.env['ECONOMY_DATABASE_URL']?.trim() ||
-    process.env['DATABASE_URL']?.trim() ||
+    env['HASNA_ECONOMY_DATABASE_URL']?.trim() ||
+    env['ECONOMY_DATABASE_URL']?.trim() ||
+    env['DATABASE_URL']?.trim() ||
     undefined
   )
 }
 
-/** True when the serve should run in cloud (RDS-direct) mode. */
-export function isCloudMode(): boolean {
-  const mode = process.env['HASNA_ECONOMY_STORAGE_MODE']?.trim().toLowerCase()
-  if (mode === 'cloud') return true
-  if (mode === 'local') return false
-  return Boolean(getCloudDatabaseUrl())
+/**
+ * Resolve the server data backend from database configuration ALONE.
+ *
+ * `@hasna/contracts` 0.9.0 removed the deployment-mode axis: the only switch is
+ * the server's data backend, `sqlite | postgresql`, and a present database URL
+ * is what selects `postgresql`. Retired `STORAGE_MODE` / `MODE` variables are
+ * rejected with a migration hint rather than normalized or silently mapped
+ * (CONTRACT.md section 2), so a half-migrated deployment fails loudly at startup
+ * instead of quietly serving the wrong store.
+ *
+ * The rejection is delegated to the contract package so the migration hint stays
+ * identical to the one the `server_backend_configuration` conformance gate emits.
+ * DSN resolution stays local because economy also honours the bare `DATABASE_URL`
+ * alias, which the contract's own resolver does not read — deferring to it
+ * wholesale would silently downgrade such a deployment to sqlite.
+ */
+export function resolveEconomyServerBackend(env: Env = process.env): ServerDataBackend {
+  assertNoLegacyStorageMode('economy', env)
+  return getCloudDatabaseUrl(env) ? 'postgresql' : 'sqlite'
+}
+
+/** True when the serve reads and writes PostgreSQL directly. */
+export function isPostgresBackend(env: Env = process.env): boolean {
+  return resolveEconomyServerBackend(env) === 'postgresql'
 }
 
 /** HMAC signing secret for API-key verification (server-held, never in a token). */
