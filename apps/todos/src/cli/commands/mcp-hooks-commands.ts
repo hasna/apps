@@ -6,8 +6,9 @@ import { dirname, join } from "node:path";
 import { createTask } from "../../db/tasks.js";
 import { autoProject, output, resolveTaskId, resolveTaskIdForCommand, handleError } from "../helpers.js";
 import { getTodosCloudClient, cloudRecordVerification, cloudLinkCommit, cloudFindCommit, cloudLinkRef, cloudFindRefs } from "../cloud-router.js";
+import { getHomeDir } from "../../lib/sync-utils.js";
 
-const HOME = process.env["HOME"] || process.env["USERPROFILE"] || "~";
+const HOME = getHomeDir();
 
 // --- MCP Registration Helpers ---
 

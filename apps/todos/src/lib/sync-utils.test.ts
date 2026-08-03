@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import {
   ensureDir,
+  getHomeDir,
+  getTodosGlobalDir,
   listJsonFiles,
   readJsonFile,
   writeJsonFile,
@@ -11,6 +14,40 @@ import {
   parseTimestamp,
   appendSyncConflict,
 } from "./sync-utils.js";
+
+describe("getHomeDir", () => {
+  const originalHome = process.env["HOME"];
+  const originalUserProfile = process.env["USERPROFILE"];
+
+  afterEach(() => {
+    if (originalHome === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = originalHome;
+    if (originalUserProfile === undefined) delete process.env["USERPROFILE"];
+    else process.env["USERPROFILE"] = originalUserProfile;
+  });
+
+  it("honours HOME when it is set", () => {
+    process.env["HOME"] = "/tmp/todos-home-probe";
+    expect(getHomeDir()).toBe("/tmp/todos-home-probe");
+    expect(getTodosGlobalDir()).toBe("/tmp/todos-home-probe/.hasna/todos");
+  });
+
+  // The regression: with HOME unset the fallback used to be the literal string
+  // "~", so every global path became RELATIVE and the store was written into
+  // the process cwd — which during the suite is this repository. The stray
+  // `~/.hasna/todos/config.json` that produced failed the 0.15.0 publish.
+  // Asserting absoluteness is what makes this fail on the old code: join("~",
+  // ...) is relative, and no shell is involved to expand it.
+  it("resolves an ABSOLUTE home even when HOME and USERPROFILE are unset", () => {
+    delete process.env["HOME"];
+    delete process.env["USERPROFILE"];
+    const home = getHomeDir();
+    expect(home).not.toBe("~");
+    expect(home.startsWith("~")).toBe(false);
+    expect(isAbsolute(home)).toBe(true);
+    expect(isAbsolute(getTodosGlobalDir())).toBe(true);
+  });
+});
 
 describe("ensureDir", () => {
   it("should create a new directory", () => {

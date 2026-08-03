@@ -1,15 +1,29 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import type { SyncConflict } from "./sync-types.js";
 
 export const TODO_SYNC_FINGERPRINT_KEY = "todos_sync_fingerprint";
 
-export const HOME = process.env["HOME"] || process.env["USERPROFILE"] || "~";
-
+// A literal "~" is NOT a home directory. Nothing in Node expands it — only a
+// shell does, and only unquoted at the start of a word — so `join("~", ...)`
+// yields a RELATIVE path and every write lands under whatever the process cwd
+// happens to be. With HOME unset that silently scattered the global store into
+// the working directory: the suite left a literal `~/.hasna/todos/` folder
+// inside this repository, and the stray `~/.hasna/todos/config.json` it
+// produced is what failed the 0.15.0 publish (run 30822824396, "1 change
+// found"). Worse than the failed release, a user or daemon running with no
+// HOME (cron, systemd, a container) got a DIFFERENT task database per cwd
+// instead of one global store.
+//
+// `homedir()` consults HOME first and otherwise resolves the passwd entry, so
+// it returns a real absolute path in exactly the case the old fallback broke.
 export function getHomeDir(): string {
-  return process.env["HOME"] || process.env["USERPROFILE"] || "~";
+  return process.env["HOME"] || process.env["USERPROFILE"] || homedir();
 }
+
+export const HOME = getHomeDir();
 
 export function getTodosGlobalDir(): string {
   return join(getHomeDir(), ".hasna", "todos");

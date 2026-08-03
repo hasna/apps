@@ -499,12 +499,25 @@ export function validateReleaseProvenanceMetadata(
   return failures;
 }
 
+// A dirty release tree is only actionable if the gate says WHICH path is dirty.
+// Reporting the count alone forced a reader to reproduce the whole CI run just
+// to learn the filename: run 30822824396 failed with "(1 change found)" and the
+// offending path appeared nowhere in its 625KB log. The porcelain text is
+// already in hand here, so naming the entries costs nothing and turns the next
+// occurrence from a guess into a read. Entries are capped so a pathological
+// tree cannot bury the rest of the failure list.
+const MAX_REPORTED_WORKTREE_ENTRIES = 20;
+
 export function validateReleaseRepositoryState(porcelainStatus: string): ReleaseGateFailure[] {
   if (!porcelainStatus.trim()) return [];
-  const entries = porcelainStatus.split(/\r?\n/).filter(Boolean).length;
+  const lines = porcelainStatus.split(/\r?\n/).filter(Boolean);
+  const entries = lines.length;
+  const shown = lines.slice(0, MAX_REPORTED_WORKTREE_ENTRIES).map((line) => line.trimEnd());
+  const omitted = entries - shown.length;
+  const detail = omitted > 0 ? `${shown.join("; ")}; and ${omitted} more` : shown.join("; ");
   return [{
     check: "release-worktree-dirty",
-    message: `release input must be a clean tracked tree with no untracked files (${entries} change${entries === 1 ? "" : "s"} found)`,
+    message: `release input must be a clean tracked tree with no untracked files (${entries} change${entries === 1 ? "" : "s"} found): ${detail}`,
   }];
 }
 

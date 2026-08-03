@@ -361,6 +361,28 @@ describe("public release gate", () => {
     ]);
   });
 
+  test("names the dirty paths so a failed release does not have to be reproduced to find them", () => {
+    const single = validateReleaseRepositoryState("?? src/generated-fixture.json\n")[0]!.message;
+    expect(single).toContain("1 change found");
+    expect(single).toContain("?? src/generated-fixture.json");
+
+    const pair = validateReleaseRepositoryState(" M package.json\n?? untracked.txt\n")[0]!.message;
+    expect(pair).toContain("2 changes found");
+    expect(pair).toContain(" M package.json");
+    expect(pair).toContain("?? untracked.txt");
+
+    // The cap keeps a pathological tree from burying every other failure, and
+    // still reports the true total rather than the truncated one.
+    const many = validateReleaseRepositoryState(
+      Array.from({ length: 25 }, (_, index) => `?? file-${index}.txt`).join("\n"),
+    )[0]!.message;
+    expect(many).toContain("25 changes found");
+    expect(many).toContain("?? file-0.txt");
+    expect(many).toContain("?? file-19.txt");
+    expect(many).not.toContain("?? file-20.txt");
+    expect(many).toContain("and 5 more");
+  });
+
   test("does not allow release verification to reuse stale build output", () => {
     expect(validateReleaseGateArguments([]).map((failure) => failure.check)).toContain("release-mode");
     expect(validateReleaseGateArguments(["--mode=review", "--skip-build"]).map((failure) => failure.check)).toEqual([
