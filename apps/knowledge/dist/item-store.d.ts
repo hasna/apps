@@ -1,4 +1,6 @@
 import { type KnowledgeItem, type KnowledgeItemVersion, type KnowledgeItemVersionList } from './store';
+import { KnowledgeVersionConflictError } from './cloud-store';
+export { KnowledgeVersionConflictError };
 export interface ItemCreateInput {
     /** Optional caller-supplied id (upsert/import). Both transports honor it: the
      * local store persists it; the API transport forwards it and the server upserts
@@ -22,8 +24,14 @@ export interface ItemPatch {
 export interface ItemUpdateOptions {
     /**
      * Optimistic concurrency guard — the version the caller last read. Honoured
-     * by the api transport; meaningless on the local JSON store, which is
-     * single-machine and has no version line.
+     * by BOTH transports: the api store sends it as `If-Match` and the server
+     * checks it against the row; the local JSON store checks it against the
+     * same lock-protected counter it bumps on every successful write, so the
+     * check and the write happen inside one file-lock acquisition. Omit it to
+     * skip the check entirely (unconditional overwrite — the pre-existing
+     * behaviour, unchanged, on both stores). A mismatch throws
+     * {@link KnowledgeVersionConflictError} naming both the version the caller
+     * expected and the version actually stored; nothing is written.
      */
     expectedVersion?: number;
 }
