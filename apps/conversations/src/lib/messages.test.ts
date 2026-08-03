@@ -65,9 +65,23 @@ function insertLegacyMessage(content: string, metadata?: Record<string, unknown>
   `).run("legacy-session", "legacy-from", "legacy-to", content, metadata ? JSON.stringify(metadata) : null);
 }
 
+/**
+ * Channels these tests send to.
+ *
+ * `sendMessage` now refuses a channel with no row rather than writing an orphan
+ * message that `channel list` cannot see and `channel archive` cannot remove
+ * (todos 4cc80a4d). The tests in this file exercise message behaviour —
+ * filtering, digests, receipts, search — and not the channel-existence
+ * contract, which has its own file at src/lib/channel-orphan-messages.test.ts.
+ * Creating their fixture channels here keeps those assertions about the thing
+ * they are actually testing.
+ */
+const FIXTURE_CHANNELS = ["general", "mychannel", "watch", "tiny", "skip-mark", "lossless", "imported"];
+
 beforeEach(() => {
   process.env.CONVERSATIONS_DB_PATH = TEST_DB;
   closeDb();
+  for (const name of FIXTURE_CHANNELS) createChannel(name, "fixture");
 });
 
 afterEach(() => {
@@ -1331,7 +1345,8 @@ describe("listUnreadCounts", () => {
   });
 
   test("returns all channels when no agent specified", () => {
-    createChannel("general", "admin");
+    // "general" comes from FIXTURE_CHANNELS in beforeEach; creating it again
+    // here would hit UNIQUE constraint failed: channels.name.
     sendMessage({ from: "a", to: "general", channel: "general", content: "hi there" });
     const counts = listUnreadCounts();
     expect(counts.length).toBeGreaterThanOrEqual(1);

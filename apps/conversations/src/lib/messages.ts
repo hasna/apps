@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "crypto";
 import { mkdirSync, copyFileSync, closeSync, openSync, readSync, statSync, existsSync, realpathSync } from "fs";
 import { join, basename, resolve } from "path";
 import { fireWebhooks } from "./webhooks.js";
-import { normalizeChannelName } from "./channel-names.js";
+import { normalizeChannelName, unknownChannelMessage } from "./channel-names.js";
 import { markChannelNotificationsRead } from "./channel-notifications.js";
 import { assertNoSensitiveContent, assertNoSensitiveValue, redactSensitiveText, redactSensitiveValue } from "./content-safety.js";
 import { resolveReadLimit, resolveReadWindow } from "./message-window.js";
@@ -201,6 +201,12 @@ function assertNoSensitiveSendFields(opts: SendMessageOptions, serializedMetadat
   }
 }
 
+/** Refuse a send to a channel with no row, rather than writing an orphan. */
+function assertChannelExists(db: ReturnType<typeof getDb>, channel: string): void {
+  const row = db.prepare(`SELECT name FROM channels WHERE name = ?`).get(channel);
+  if (!row) throw new Error(unknownChannelMessage(channel));
+}
+
 export function sendMessage(opts: SendMessageOptions): Message {
   assertMessageSize(opts.content);
   const metadata = opts.metadata ? JSON.stringify(opts.metadata) ?? null : null;
@@ -214,6 +220,24 @@ export function sendMessage(opts: SendMessageOptions): Message {
 
   const db = getDb();
   const requestedChannel = opts.channel ? normalizeChannelName(opts.channel) : null;
+  // `messages.channel` is free text with no foreign key to `channels`, so before
+  // this check a typo'd name wrote an ORPHAN: readable by `digest`, invisible to
+  // `channel list` (which selects FROM channels), and unarchivable — the archive
+  // verb 404s because there is no row to archive. A message that exists and
+  // belongs nowhere cannot be found, subscribed to, or cleaned up (todos
+  // 4cc80a4d).
+  //
+  // Only an EXPLICITLY REQUESTED channel is checked. A reply inherits its
+  // parent's channel below, and re-validating that would refuse replies to
+  // messages already sitting in orphan channels created before this guard —
+  // punishing authors for legacy data they did not write.
+  //
+  // Existence only: an archived channel still accepts sends, exactly as before.
+  // Archival is a separate policy with its own verbs, and folding it in here
+  // would smuggle a second behaviour change under one fix.
+  if (requestedChannel) {
+    assertChannelExists(db, requestedChannel);
+  }
   const explicitSession = opts.session_id && opts.session_id.trim().length > 0 ? opts.session_id.trim() : undefined;
   const requestedReplyId = opts.reply_to ?? null;
   const requestedReplyUuid = normalizeMessageUuid(opts.reply_to_uuid);
