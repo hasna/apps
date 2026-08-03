@@ -113,14 +113,34 @@ export function resolveEnumVocabulary<T extends string>(
   spec: EnumVocabularySpec<T>,
 ): EnumVocabularyResult<T> {
   const allowList = spec.allowList !== false;
-  const rawElements = (allowList ? raw.split(",") : [raw])
-    .map((element) => element.trim())
-    .filter((element) => element.length > 0);
+  const rawElements = (allowList ? raw.split(",") : [raw]).map((element) => element.trim());
 
-  if (rawElements.length === 0) {
+  // Nothing but separators and whitespace: the caller supplied no value at all.
+  if (rawElements.every((element) => element.length === 0)) {
     return {
       ok: false,
       message: `${spec.name} requires a value. Allowed values: ${spec.vocabulary.join(", ")}.`,
+      invalid: [],
+    };
+  }
+
+  // A BLANK element used to be dropped here, so `pending,` and `high,,critical`
+  // were accepted as though the operator had typed a clean list. That is the
+  // silent acceptance this module exists to remove, and it contradicted the rule
+  // stated above — one bad element fails the whole value rather than being
+  // dropped. An empty element IS a bad element: it is almost always a stray comma
+  // or a shell expanding `--status "$A,$B"` with one variable unset, and in both
+  // cases the operator asked for something the filter did not deliver.
+  //
+  // Surrounding whitespace on a NON-empty element stays tolerated (` pending , x`),
+  // because that is a shape operators legitimately type and trimming already
+  // handled it.
+  if (rawElements.some((element) => element.length === 0)) {
+    return {
+      ok: false,
+      message:
+        `${spec.name} has an empty value in "${raw}" — remove the stray comma. ` +
+        `Allowed values: ${spec.vocabulary.join(", ")}.`,
       invalid: [],
     };
   }

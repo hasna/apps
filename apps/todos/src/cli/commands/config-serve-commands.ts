@@ -7,7 +7,7 @@ import { getDatabase } from "../../db/database.js";
 import { listTasks } from "../../db/tasks.js";
 import { loadConfig } from "../../lib/config.js";
 import { getTodosGlobalDir } from "../../lib/sync-utils.js";
-import { autoProject, handleError, output, formatTaskLine, normalizeStatus, resolveTaskId } from "../helpers.js";
+import { autoProject, handleError, output, formatTaskLine, parseEnumFlagList, resolveTaskId, TASK_STATUS_FLAG } from "../helpers.js";
 
 export function registerConfigServeCommands(program: Command) {
   // config
@@ -1214,7 +1214,15 @@ export function registerConfigServeCommands(program: Command) {
       const globalOpts = program.opts();
       const projectId = autoProject(globalOpts);
       const interval = parseInt(opts.interval, 10) * 1000;
-      const statusFilter = opts.status ? opts.status.split(",").map((s: string) => normalizeStatus(s.trim())) : ["pending", "in_progress"];
+      // `watch` is a read verb with the same closed vocabulary as `list`, and it
+      // failed the same way: an out-of-vocabulary status matched no rows, so
+      // `watch --status open` painted a permanently empty dashboard that an
+      // operator reads as "there is no work". Worse than the `list` case, because
+      // a live view invites you to sit and watch it. `parseEnumFlagList` keeps the
+      // documented aliases (`done` -> `completed`) via the spec's `normalize` and
+      // splits the list itself, so this is the same behaviour for every valid
+      // input and non-zero for the invalid ones.
+      const statusFilter = parseEnumFlagList(opts.status, TASK_STATUS_FLAG) ?? ["pending", "in_progress"];
 
       function render() {
         const tasks = listTasks({ project_id: projectId, status: statusFilter as any });

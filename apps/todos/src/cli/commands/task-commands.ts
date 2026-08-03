@@ -35,6 +35,7 @@ import {
   cloudResolveProjectRef,
   cloudResolveTaskListRef,
   cloudResolvePlan,
+  cloudListAgents,
 } from "../cloud-router.js";
 import type { CloudTaskRelations } from "../cloud-router.js";
 import type { TaskPriority, TaskStatus } from "../../types/index.js";
@@ -42,6 +43,8 @@ import { canonicalAgentRef, resolveCreatorIdentity, resolveWritableIdentity } fr
 import { formatExpiredLock, lockDisplayState } from "../../lib/lock-display.js";
 import { resolveClaimIdentity } from "../claim-guard.js";
 import { resolveValidatedAssignee } from "../assignee-guard.js";
+import { loadAssigneeContext } from "../../lib/assignee-context.js";
+import { listAgents } from "../../db/agents.js";
 import {
   formatTaskLine,
   resolveTaskId,
@@ -198,6 +201,34 @@ function warnMissingProject(resolvedProjectId: string | undefined, optedOut: boo
 function parseStatus(value: string | undefined): TaskStatus | undefined {
   if (!value) return undefined;
   return parseEnumFlagList(value, { ...TASK_STATUS_FLAG, allowList: false })?.[0];
+}
+
+/**
+ * Ceiling on rows a single `todos list` will pull from a REMOTE authority.
+ *
+ * `GET /v1/tasks` applies no default limit (`src/server/routes.ts` passes
+ * `limit: limitParam ? parseInt(limitParam, 10) : undefined`) and exposes no `sort`
+ * parameter, so ordering cannot be delegated to the authority. A correct `--sort`
+ * therefore needs the whole matching set — which is precisely the O(all-tasks)
+ * download this repository has already paid for once, on a fleet with thousands of
+ * open tasks.
+ *
+ * A ceiling resolves the two requirements that were treated as exclusive: the client
+ * asks for a bounded page, and when that page comes back full it SAYS the result may
+ * be drawn from a truncated scan rather than returning a plausible window in silence.
+ *
+ * 10,000 matches the bounded scan `handleExportTasks` already uses in
+ * `src/server/routes.ts`, so this is the repository's existing convention rather than
+ * a new number. `TODOS_LIST_SCAN_LIMIT` overrides it for a genuinely larger store.
+ */
+const DEFAULT_LIST_SCAN_LIMIT = 10_000;
+
+/** Resolved scan ceiling; a malformed override falls back rather than sending NaN. */
+function listScanLimit(): number {
+  const raw = process.env["TODOS_LIST_SCAN_LIMIT"];
+  if (raw === undefined || raw.trim() === "") return DEFAULT_LIST_SCAN_LIMIT;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_LIST_SCAN_LIMIT;
 }
 
 /** Parse an integer option, rejecting non-numeric input instead of storing NaN. */
@@ -806,6 +837,10 @@ export function registerTaskCommands(program: Command) {
           : autoProject(globalOpts);
       // --inbox is an assigned filter too. Omitting it here would auto-scope the
       // inbox to the cwd's project and silently hide work assigned to me elsewhere.
+      // This answers "did the caller ask to scope by assignee at all", which is needed
+      // before `--inbox` can resolve an identity below, so it necessarily reads `opts`
+      // rather than the resolved `assignedFilter`. It uses the same truthiness rule as
+      // the resolution, so the two agree on every combination, empty strings included.
       const hasAssignedFilter = Boolean(opts.assigned || opts.agentName || opts.inbox);
       const hasExplicitProjectFilter = Boolean(globalOpts.project || opts.projectName);
       const allowedSortFields = new Set(["updated", "created", "priority", "status"]);
@@ -836,7 +871,15 @@ export function registerTaskCommands(program: Command) {
       // "No tasks found." with exit 0, which reads as "there is no work" — the
       // defect that made `--status open` hide 27 real tasks. Same mechanism and
       // message shape as the `--sort`/`--format` checks above.
-      if (opts.status) {
+      //
+      // The guard tests PRESENCE, not truthiness. `if (opts.status)` let an empty
+      // string past the validator, and the two flags then failed differently and
+      // silently: `--status ""` fell through to the default branch below and applied
+      // `pending,in_progress` (measured: 2 rows on a 3-row fixture, byte-identical to
+      // passing no flag, while `-a` returned 3), and `--priority ""` set no key at
+      // all so that dimension went unfiltered. Both exit 0 with a plausible count.
+      // `--status "$STATUS"` with the variable unset is how it arrives in practice.
+      if (opts.status !== undefined) {
         filter["status"] = parseEnumFlag(opts.status, TASK_STATUS_FLAG);
       } else if (!opts.all) {
         filter["status"] = ["pending", "in_progress"];
@@ -844,8 +887,25 @@ export function registerTaskCommands(program: Command) {
       // `--priority` accepts a comma list too: `TaskFilter.priority` is
       // `TaskPriority | TaskPriority[]`, but the raw string used to be forwarded
       // whole, so `--priority high,critical` matched a literal "high,critical".
-      if (opts.priority) filter["priority"] = parseEnumFlag(opts.priority, TASK_PRIORITY_FLAG);
-      if (opts.assigned) filter["assigned_to"] = opts.assigned;
+      if (opts.priority !== undefined) filter["priority"] = parseEnumFlag(opts.priority, TASK_PRIORITY_FLAG);
+      // THREE flags write `assigned_to`, in sequence: `--assigned`, then `--inbox`,
+      // then `--agent-name`. They are resolved ONCE, here, into a single value that
+      // the query and the warning at the foot of this action both read. Deriving the
+      // warning's own answer from `opts` a second time is what let the two disagree
+      // about what had been asked, and when they disagreed the warning won the
+      // operator's attention while the query won the result.
+      //
+      // `assignedWasTyped` records whether the surviving reference is one the OPERATOR
+      // typed. `--inbox` substitutes an identity from the resolver, which cannot be
+      // mistyped and which the caller never spelled, so the "did you mean another
+      // name" warning has nothing to say about it. Both variables are written at the
+      // same site as the value, so neither can drift from it.
+      let assignedFilter: string | undefined;
+      let assignedWasTyped = false;
+      if (opts.assigned) {
+        assignedFilter = opts.assigned;
+        assignedWasTyped = true;
+      }
       // A hand-typed `--created-by Cassius` never goes through the identity resolver,
       // so canonicalise it here too. Both backends also compare case-insensitively —
       // this is the cheap half, that is the one that reaches rows written before the
@@ -860,7 +920,8 @@ export function registerTaskCommands(program: Command) {
           console.error(chalk.red("--inbox needs an agent identity. Run `todos init <name>` or pass --agent <id>."));
           process.exit(1);
         }
-        filter["assigned_to"] = me.agent_id;
+        assignedFilter = me.agent_id;
+        assignedWasTyped = false;
         filter["not_created_by"] = me.agent_id;
       }
       if (opts.tags) filter["tags"] = opts.tags.split(",").map((t: string) => t.trim());
@@ -875,8 +936,14 @@ export function registerTaskCommands(program: Command) {
         }
       }
       if (opts.agentName) {
-        filter["assigned_to"] = opts.agentName;
+        assignedFilter = opts.agentName;
+        assignedWasTyped = true;
       }
+      // The only write of this key. `--assigned ""` and `--agent-name ""` are falsy
+      // above and so leave the dimension unfiltered — the warning below reads the same
+      // variable and therefore reports on exactly that, rather than on a value the
+      // query dropped.
+      if (assignedFilter !== undefined) filter["assigned_to"] = assignedFilter;
       if (opts.recurring) filter["has_recurrence"] = true;
       if (opts.limit !== undefined) {
         const parsedLimit = Number.parseInt(String(opts.limit), 10);
@@ -897,12 +964,81 @@ export function registerTaskCommands(program: Command) {
       // creator filter is client-enforced, the limit is withheld from the request and
       // applied here instead — filter first, then truncate, which is the order the
       // SQL does it in.
+      //
+      // The same reasoning governs every other step that changes WHICH rows or in
+      // WHAT ORDER after the query has run, so the rule is generalised rather than
+      // special-cased per flag:
+      //
+      //   --sort            reorders. Storage orders by `priority_rank, created_at
+      //                     DESC`, never by the requested field, so a limit applied
+      //                     in storage draws the window from the WRONG ordering.
+      //                     `--sort updated --limit 2` returned the 2 highest-
+      //                     priority rows ordered by update time while reading as
+      //                     "the 2 most recently updated" — the row actually
+      //                     updated last was absent, at exit 0, with no indication.
+      //   --due-today       narrow. Applied to a truncated page they shrink it
+      //   --overdue         further, so `--overdue --limit 20` could return 3 while
+      //                     the real overdue set was larger.
+      //
+      // In each case the limit is withheld from the query and applied last, below.
+      // This is not a new cost: every one of these steps ALREADY reads the whole
+      // matching set when no limit is given, so withholding the limit alongside one
+      // of them fetches no more than the same command without `--limit` does.
       const requestedLimit = filter["limit"] as number | undefined;
-      const serverFilter = creatorFilterActive && cloud && requestedLimit !== undefined
-        ? (() => { const { limit: _dropped, ...rest } = filter; return rest; })()
-        : filter;
+      const reordersAfterQuery = Boolean(opts.sort);
+      const narrowsAfterQuery = Boolean(opts.dueToday) || Boolean(opts.overdue) || (creatorFilterActive && cloud);
+      const withholdLimit = requestedLimit !== undefined && (reordersAfterQuery || narrowsAfterQuery);
+
+      // Withholding the caller's limit fixed the ordering defect and removed the only
+      // BOUND on the request with it: `/v1/tasks` has no default limit, so `--sort
+      // updated --limit 2` asked the authority for every matching row and materialised
+      // it client-side. Measured against a recording stub: the outgoing query was
+      // `status=pending,in_progress` with no limit, where the same command without
+      // `--sort` sent `...&limit=2`. Silently discarding a caller's resource bound is
+      // the same silent-success class this command exists to remove.
+      //
+      // So the limit is REPLACED rather than dropped. A scan ceiling is used instead of
+      // the caller's own limit because a correct global sort genuinely needs more rows
+      // than the caller asked to see, and the authority cannot sort — there is no
+      // `sort` query param to delegate to. The ceiling is raised to the caller's limit
+      // when that is larger, so `--limit 50000` is never answered with fewer rows than
+      // it asked for.
+      //
+      // This also bounds the case that carried no limit at all (`todos list --sort
+      // updated`), which was unbounded before this change and is the same download.
+      // That is a deliberate widening of the fix: leaving it unbounded would have
+      // repaired the symptom the review named while the mechanism stayed live.
+      //
+      // LOCAL is deliberately left unbounded. The cost being controlled here is a
+      // network fetch of an entire shared task set; a local SQLite read of the same
+      // rows is already what `--sort` does on any store, and capping it would trade
+      // correctness for no meaningful saving.
+      const scanCeiling = cloud && (withholdLimit || requestedLimit === undefined)
+        ? Math.max(requestedLimit ?? 0, listScanLimit())
+        : undefined;
+
+      const serverFilter = (() => {
+        const base = withholdLimit
+          ? (() => { const { limit: _dropped, ...rest } = filter; return rest; })()
+          : filter;
+        return scanCeiling === undefined ? base : { ...base, limit: scanCeiling };
+      })();
 
       let tasks = cloud ? await cloudListTasks(cloud, serverFilter as any) : listTasks(serverFilter as any);
+
+      // A full page cannot be distinguished from a set that happens to end exactly at
+      // the ceiling, so the ambiguous case warns too — the alternative is staying quiet
+      // in precisely the case where the answer may be wrong. Sorting and narrowing
+      // below then run over a set that is NOT the whole matching set, which is exactly
+      // the "window drawn from the wrong rows" failure the ordering fix removed, so it
+      // is reported rather than absorbed.
+      if (scanCeiling !== undefined && tasks.length >= scanCeiling) {
+        console.error(chalk.yellow(
+          `Warning: this query reached its ${scanCeiling}-row scan limit, so the rows below were\n` +
+          `         selected from a truncated set and may not be the true result.\n` +
+          `         Narrow it (--project, --status, --assigned) or raise TODOS_LIST_SCAN_LIMIT.`,
+        ));
+      }
       if (cloud && creatorFilterActive) {
         // Enforcing the filter is not the same as the filter being USEFUL. A server
         // that predates created_by omits the key entirely, so every row reads as
@@ -930,7 +1066,6 @@ export function registerTaskCommands(program: Command) {
           if (excludeCreatedBy && author !== null && author === canonicalAgentRef(excludeCreatedBy)) return false;
           return true;
         });
-        if (requestedLimit !== undefined) tasks = tasks.slice(0, requestedLimit);
       }
       if (opts.dueToday) {
         const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
@@ -949,6 +1084,76 @@ export function registerTaskCommands(program: Command) {
           if (opts.sort === "status") return a.status.localeCompare(b.status);
           return 0;
         });
+      }
+
+      // The window is taken LAST, once the set and its order are final. When the
+      // limit was left on the query this is a no-op — storage already truncated.
+      if (withholdLimit && requestedLimit !== undefined) tasks = tasks.slice(0, requestedLimit);
+
+      // `--assigned` fails open the same way an out-of-vocabulary status did, but
+      // it is a REFERENCE rather than a closed vocabulary, so the remedy differs.
+      //
+      // An unresolvable assignee returns an empty set at exit 0, and "this agent
+      // has no work" is then indistinguishable from "no agent by that name" — the
+      // shape that has a coordinator stand down while holding real work. A typo is
+      // likelier here than in a status, because agent names on this fleet are not
+      // stable: the same seat has answered to different names, and duplicates exist
+      // at different casings.
+      //
+      // This WARNS and never refuses, matching `lib/assignee-validation.ts`, which
+      // deliberately admits an unregistered assignee on the write path because
+      // routing work to an agent that registers later is legitimate. On the read
+      // path the case for admitting it is stronger still: operating rule 21 has
+      // agents release their identity at session end, so querying a past agent's
+      // queue is ordinary and must keep working. Refusing would break more than it
+      // fixes, and would be a worse regression than the defect.
+      //
+      // The roster is consulted ONLY when the result is empty — the sole case where
+      // the answer is ambiguous — so a query that returns rows pays nothing, and no
+      // request is added to the hot path. `loadAssigneeContext` is TTL-cached and
+      // degrades silently when the roster cannot be fetched, in which case EVERY
+      // name reads as unregistered and the warning is suppressed rather than
+      // asserting something false about a name that may be perfectly valid.
+      // This names `assignedFilter` — the SAME variable the query filtered on, resolved
+      // once where the flags are read. It is deliberately not re-derived from `opts`
+      // here: a second derivation is free to disagree with the first, and did.
+      // `opts.agentName ?? opts.assigned` got both directions wrong at once, because
+      // `??` and the truthiness guards above answer differently on an empty string and
+      // neither of them accounts for `--inbox` at all:
+      //
+      //   --assigned bogus --inbox     query: my identity   warned about: 'bogus'
+      //   --agent-name "" --assigned x query: 'x'           warned about: nothing ("" is
+      //                                                     not nullish, so it resolved
+      //                                                     to "" and fell out of the
+      //                                                     guard below)
+      //
+      // `assignedWasTyped` is the other half. An unregistered reference is worth
+      // reporting because the operator may have mistyped it; the identity `--inbox`
+      // resolves was never typed, so the same message would be false about how it got
+      // there. Suppressing it there can only ever remove a warning, never add one, so
+      // it cannot regress the registered-but-idle silence this warning depends on.
+      if (assignedWasTyped && assignedFilter && tasks.length === 0) {
+        try {
+          const roster = await loadAssigneeContext(
+            () => (cloud ? cloudListAgents(cloud) : listAgents()),
+            true,
+          );
+          if (!roster.degraded) {
+            const target = canonicalAgentRef(assignedFilter);
+            const known = roster.agents.some(
+              (a) => canonicalAgentRef(a.name) === target || canonicalAgentRef(a.id) === target,
+            );
+            if (!known) {
+              console.error(chalk.yellow(
+                `Warning: no agent named '${assignedFilter}' is registered, so this empty result may be a\n` +
+                `         mistyped name rather than an empty queue. Check with 'todos agents'.`,
+              ));
+            }
+          }
+        } catch {
+          // Advisory only. A roster lookup must never turn a working list into a
+          // failure, and the empty result below is still reported either way.
+        }
       }
 
       const fmt = opts.format || (globalOpts.json ? "json" : "table");

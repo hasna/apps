@@ -24,13 +24,34 @@ const LIST_ID = "12345678-1111-4111-8111-111111111111";
 const TASK_ID = "22222222-2222-4222-8222-222222222222";
 const tempRoots: string[] = [];
 
+/**
+ * Scan ceiling pinned for this file's cloud requests.
+ *
+ * `todos list` bounds a REMOTE read with a scan ceiling (`task-commands.ts`,
+ * `scanCeiling`, gated on `cloud &&`), so every `/v1/tasks` request below carries a
+ * `limit`. That is the deliberate behaviour, not a stray parameter: the unbounded
+ * remote read it replaced was a blocking review finding on this PR.
+ *
+ * It is pinned to a number this file OWNS rather than left to the CLI's built-in
+ * default, for two reasons. The assertions then name a value instead of duplicating a
+ * constant that lives in the product, so changing that default does not break these
+ * task-list-resolution tests, which are not about limits. And because the value is
+ * arbitrary rather than round, asserting it proves the env override actually reaches
+ * the request — a test expecting the default would pass even if the override were
+ * ignored entirely.
+ *
+ * It only has to exceed the row counts these stubs return (0 or 1); well below it, the
+ * truncation warning stays silent, which is what keeps `stderr: ""` a real assertion.
+ */
+const SCAN_LIMIT = "4242";
+
 afterEach(() => {
   for (const root of tempRoots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-async function runCli(args: string[], root: string, baseUrl: string) {
+async function runCli(args: string[], root: string, baseUrl: string, env: Record<string, string> = {}) {
   const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
     cwd: REPO_ROOT,
     env: {
@@ -43,6 +64,8 @@ async function runCli(args: string[], root: string, baseUrl: string) {
       HASNA_TODOS_STORAGE_MODE: "self_hosted",
       HASNA_TODOS_API_URL: baseUrl,
       HASNA_TODOS_API_KEY: TEST_API_KEY,
+      TODOS_LIST_SCAN_LIMIT: SCAN_LIMIT,
+      ...env,
     },
     stdout: "pipe",
     stderr: "pipe",
@@ -356,7 +379,7 @@ describe("cloud CLI task-list filtering", () => {
       expect(requests).toEqual([
         "/v1/projects?",
         `/v1/task-lists?project_id=${PROJECT_ID}`,
-        `/v1/tasks?status=pending%2Cin_progress&project_id=${PROJECT_ID}&task_list_id=${LIST_ID}`,
+        `/v1/tasks?status=pending%2Cin_progress&project_id=${PROJECT_ID}&task_list_id=${LIST_ID}&limit=${SCAN_LIMIT}`,
       ]);
     } finally {
       server.stop(true);
@@ -396,7 +419,7 @@ describe("cloud CLI task-list filtering", () => {
       ]);
       expect(requests).toEqual([
         "/v1/projects?",
-        `/v1/tasks?project_id=${PROJECT_ID}`,
+        `/v1/tasks?project_id=${PROJECT_ID}&limit=${SCAN_LIMIT}`,
       ]);
     } finally {
       server.stop(true);
@@ -431,7 +454,7 @@ describe("cloud CLI task-list filtering", () => {
       expect(requests).toEqual([
         "/v1/projects?",
         `/v1/task-lists?project_id=${PROJECT_ID}`,
-        `/v1/tasks?project_id=${PROJECT_ID}&task_list_id=${LIST_ID}`,
+        `/v1/tasks?project_id=${PROJECT_ID}&task_list_id=${LIST_ID}&limit=${SCAN_LIMIT}`,
       ]);
     } finally {
       server.stop(true);

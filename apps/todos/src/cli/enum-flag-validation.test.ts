@@ -197,6 +197,84 @@ describe("todos list rejects out-of-vocabulary --status (local store)", () => {
   });
 });
 
+/**
+ * An EMPTY value bypassed the guard entirely, because the guard tested truthiness
+ * (`if (opts.status)`) rather than presence. The two flags then failed DIFFERENTLY,
+ * and neither failure is the one a reader expects:
+ *
+ *   --status ""    fell through to the `else if (!opts.all)` branch and applied the
+ *                  DEFAULT filter (pending,in_progress). Measured on a 3-row fixture:
+ *                  `--status ""` returned 2 rows, byte-identical to passing no flag,
+ *                  while `-a` returned 3. So it is NOT "the unfiltered queue" — it is
+ *                  the default working set wearing the caller's filter.
+ *   --priority ""  set no priority key at all, so that dimension was genuinely
+ *                  unfiltered: `--priority ""` returned 2 rows where
+ *                  `--priority critical` returned 1.
+ *
+ * Either way the operator asked to filter, was not filtered as asked, and got a
+ * plausible row count with exit 0 and no signal — the exact silent-empty class this
+ * suite exists to close, arriving through the one input nobody validated. A shell
+ * expanding `--status "$STATUS"` with `$STATUS` unset produces it by accident.
+ */
+describe("todos list rejects an EMPTY value for a closed-vocabulary flag", () => {
+  test("exits non-zero for --status '' instead of silently applying the default filter", async () => {
+    const root = tempRoot("todos-enum-empty-status-");
+    await seedLocal(root);
+    const result = await runLocal(["list", "--status", ""], root);
+    expect(result.exitCode).not.toBe(0);
+    // Assert on the VOCABULARY message, not the flag name: an "Unknown flag" usage
+    // error also exits non-zero and also contains "--status", so matching the flag
+    // alone would pass against a CLI that never validated anything.
+    expect(result.stderr).toContain(`Allowed values: ${TASK_STATUSES.join(", ")}.`);
+    expect(result.stderr).not.toContain("Unknown flag");
+    expect(result.stdout).not.toContain("No tasks found.");
+  });
+
+  test("exits non-zero for --priority '' instead of dropping the filter", async () => {
+    const root = tempRoot("todos-enum-empty-prio-");
+    await seedLocal(root);
+    const result = await runLocal(["list", "--priority", ""], root);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain(`Allowed values: ${TASK_PRIORITIES.join(", ")}.`);
+    expect(result.stderr).not.toContain("Unknown flag");
+  });
+
+  test("exits non-zero for a --status trailing comma", async () => {
+    const root = tempRoot("todos-enum-trailing-");
+    await seedLocal(root);
+    const result = await runLocal(["list", "--status", "pending,"], root);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).not.toContain("Unknown flag");
+  });
+
+  test("exits non-zero for a --priority doubled comma", async () => {
+    const root = tempRoot("todos-enum-doubled-");
+    await seedLocal(root);
+    const result = await runLocal(["list", "--priority", "high,,critical"], root);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).not.toContain("Unknown flag");
+  });
+
+  /**
+   * The discriminating control: rejecting empties must not cost the DEFAULT filter
+   * for callers who pass no flag at all. Without this, "reject empty" could be
+   * implemented as "always require --status", which breaks the common case.
+   */
+  test("still applies the default filter when --status is absent entirely", async () => {
+    const root = tempRoot("todos-enum-empty-control-");
+    await seedLocal(root);
+    const result = await runLocal(["list", "--json"], root);
+    expect(result.exitCode).toBe(0);
+    expect((JSON.parse(result.stdout) as unknown[]).length).toBe(2);
+  });
+
+  test("rejects an empty --status against a self-hosted authority without querying it", async () => {
+    const result = await runRemote(["list", "--status", ""], [remoteTask()]);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.requests.filter((request) => request.path === "/v1/tasks")).toEqual([]);
+  });
+});
+
 describe("todos list rejects out-of-vocabulary --priority (local store)", () => {
   test("exits non-zero and names every allowed priority", async () => {
     const root = tempRoot("todos-enum-prio-");
@@ -305,6 +383,202 @@ describe("todos search rejects out-of-vocabulary enum filters", () => {
     await seedLocal(root);
     const result = await runLocal(["search", "fixture", "--scope", "totally_bogus_value"], root);
     expect(result.exitCode).not.toBe(0);
+  });
+});
+
+/**
+ * `watch` was the read verb this suite missed. It takes the same `--status`
+ * vocabulary as `list` and forwarded the raw value into the storage filter, so
+ * `watch --status open` painted an empty live dashboard that never filled — the
+ * incident's failure mode on a surface that invites an operator to sit and watch
+ * it, rather than a one-shot command they might re-run.
+ *
+ * A valid status makes `watch` loop forever by design, so the accept-side control
+ * asserts the process is STILL RUNNING when killed rather than waiting for exit.
+ */
+describe("todos watch rejects out-of-vocabulary --status", () => {
+  /** Spawn, let it settle, then kill. Reports whether it was still running. */
+  async function runWatchBounded(args: string[], root: string, ms: number): Promise<CliResult & { stillRunning: boolean }> {
+    const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
+      cwd: REPO_ROOT,
+      env: localRoutingTestEnv({
+        HOME: join(root, "home"),
+        TMPDIR: root,
+        LANG: "C.UTF-8",
+        TODOS_DB_PATH: join(root, "todos.db"),
+        TODOS_AUTO_PROJECT: "false",
+        HASNA_EVENTS_DIR: join(root, "events"),
+      }),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const exited = proc.exited.then((code) => ({ code, timedOut: false }));
+    const timer = Bun.sleep(ms).then(() => ({ code: -1, timedOut: true }));
+    const outcome = await Promise.race([exited, timer]);
+    if (outcome.timedOut) proc.kill();
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    await proc.exited;
+    return { stdout, stderr, exitCode: outcome.code, stillRunning: outcome.timedOut };
+  }
+
+  test.each([
+    ["open", "the value from the incident"],
+    ["totally_bogus_value", "arbitrary junk"],
+  ])("exits non-zero for --status %s (%s)", async (value) => {
+    const root = tempRoot("todos-enum-watch-");
+    await seedLocal(root);
+    const result = await runWatchBounded(["watch", "--status", value], root, 15_000);
+    expect(result.stillRunning).toBe(false);
+    expect(result.exitCode).not.toBe(0);
+    // The rejection must be the VOCABULARY error. An "Unknown flag"/usage error
+    // also exits non-zero and also contains the flag name, so asserting on the
+    // flag alone would pass against a CLI that never learned the vocabulary.
+    expect(result.stderr).toContain(`Allowed values: ${TASK_STATUSES.join(", ")}.`);
+    expect(result.stderr).not.toContain("Unknown flag");
+  });
+
+  test("still accepts a documented status alias instead of rejecting it", async () => {
+    const root = tempRoot("todos-enum-watch-alias-");
+    await seedLocal(root);
+    // `done` normalizes to `completed`; validation must not cost the aliases the
+    // previous implementation supported via normalizeStatus.
+    const result = await runWatchBounded(["watch", "--status", "done"], root, 6_000);
+    expect(result.stillRunning).toBe(true);
+    expect(result.stderr).not.toContain("Allowed values:");
+  });
+});
+
+/**
+ * `--assigned` is the same silent-empty failure with a DIFFERENT shape, so it gets
+ * a different remedy and is called out rather than folded into the cases above.
+ *
+ * It is a REFERENCE, not a closed vocabulary: there is no fixed legal set to check
+ * against, only "does this agent resolve". An unresolvable assignee returns empty
+ * at exit 0, so "this agent has no work" is indistinguishable from "no agent by
+ * that name" — the shape that has a coordinator stand down holding real work, and
+ * likelier than a bad status because agent names on this fleet are unstable.
+ *
+ * It WARNS and never refuses. `lib/assignee-validation.ts` deliberately admits an
+ * unregistered assignee on the write path, and the read path has the stronger case:
+ * agents release their identity at session end, so querying a past agent's queue is
+ * ordinary and must keep working. The registered-but-idle case below is the one
+ * that matters — it is what separates a useful warning from noise on every empty
+ * queue, and a regression there would train operators to ignore the warning.
+ */
+describe("todos list warns when --assigned names no known agent", () => {
+  async function seedAgents(root: string): Promise<void> {
+    // One-word, letters-only names: the CLI rejects anything else.
+    await runLocal(["init", "caesar"], root);
+    await runLocal(["init", "brutus"], root);
+    await runLocal(["add", "Assigned fixture", "--assign", "caesar"], root);
+  }
+
+  test("warns on an unknown assignee instead of an unqualified empty result", async () => {
+    const root = tempRoot("todos-assigned-unknown-");
+    await seedAgents(root);
+    const result = await runLocal(["list", "--assigned", "totallybogusxyz"], root);
+    expect(result.stderr).toContain("no agent named 'totallybogusxyz' is registered");
+    // Advisory only: an unknown assignee is not an error, and a past agent's queue
+    // must stay queryable after that agent released its identity.
+    expect(result.exitCode).toBe(0);
+  });
+
+  test("stays SILENT for a registered agent whose queue is genuinely empty", async () => {
+    const root = tempRoot("todos-assigned-idle-");
+    await seedAgents(root);
+    const result = await runLocal(["list", "--assigned", "brutus"], root);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("No tasks found.");
+    // The discriminating case. Warning here would fire on every idle queue and
+    // make the real signal worthless.
+    expect(result.stderr).not.toContain("is registered");
+  });
+
+  /**
+   * `--agent-name` overwrites `filter.assigned_to` after `--assigned` has set it, so
+   * the warning must validate the name the QUERY used. Validating `--assigned` first
+   * named a value the empty result had nothing to do with, and said nothing about the
+   * mistyped flag that actually produced it. Both flags are passed here because one
+   * flag alone cannot tell the two orderings apart.
+   */
+  test("names the assignee the query actually used when both flags are given", async () => {
+    const root = tempRoot("todos-assigned-precedence-");
+    await seedAgents(root);
+    const result = await runLocal(
+      ["list", "--assigned", "caesar", "--agent-name", "totallybogusxyz"],
+      root,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("no agent named 'totallybogusxyz' is registered");
+    expect(result.stderr).not.toContain("'caesar'");
+  });
+
+  test("stays silent and returns rows for an assignee that has work", async () => {
+    const root = tempRoot("todos-assigned-hit-");
+    await seedAgents(root);
+    const result = await runLocal(["list", "--assigned", "caesar", "--format", "compact"], root);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Assigned fixture");
+    expect(result.stderr).not.toContain("is registered");
+  });
+
+  /**
+   * THREE flags write `filter.assigned_to`, in this order: `--assigned`, then
+   * `--inbox`, then `--agent-name`. The warning derived its own answer from `opts`
+   * with a DIFFERENT rule than the query used, so the two could disagree about what
+   * had been asked — and when they disagreed, the warning won the operator's
+   * attention while the query won the result.
+   *
+   * A flag that is entirely overridden must not change any output. Asserting the two
+   * runs byte-for-byte is what makes this non-vacuous: an assertion that the warning
+   * merely omits one word would also pass if the warning vanished for some unrelated
+   * reason, whereas equality pins the overridden run to the behaviour of the query
+   * that actually ran.
+   */
+  test("does not warn about an --assigned value that --inbox discarded", async () => {
+    const root = tempRoot("todos-assigned-inbox-override-");
+    await seedAgents(root);
+    const overridden = await runLocal(
+      ["list", "--assigned", "totallybogusxyz", "--inbox"],
+      root,
+    );
+    // The list must have RUN. A usage error also exits with no warning and also
+    // mentions the flag, so silence alone would pass against a CLI that rejected
+    // the command outright.
+    expect(overridden.exitCode).toBe(0);
+    expect(overridden.stdout).toContain("No tasks found.");
+    expect(overridden.stderr).not.toContain("Unknown flag");
+    // `--inbox` rewrote assigned_to to the caller's identity, so the query never
+    // saw this value and the empty result says nothing about it.
+    expect(overridden.stderr).not.toContain("totallybogusxyz");
+
+    const inboxOnly = await runLocal(["list", "--inbox"], root);
+    expect(inboxOnly.exitCode).toBe(0);
+    expect(inboxOnly.stdout).toBe(overridden.stdout);
+    expect(inboxOnly.stderr).toBe(overridden.stderr);
+  });
+
+  /**
+   * `--agent-name ""` is falsy, so the query keeps the `--assigned` value. The
+   * warning resolved `opts.agentName ?? opts.assigned`, and "" is not nullish, so it
+   * resolved to "" and then fell out of its own truthiness guard — validating
+   * NOTHING about the reference the query was actually filtering on. An unset shell
+   * variable (`--agent-name "$AGENT"`) is how this arrives in practice, which is the
+   * same way the empty-status case arrived.
+   */
+  test("still validates --assigned when --agent-name is an empty string", async () => {
+    const root = tempRoot("todos-assigned-empty-agentname-");
+    await seedAgents(root);
+    const result = await runLocal(
+      ["list", "--agent-name", "", "--assigned", "totallybogusxyz"],
+      root,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).not.toContain("Unknown flag");
+    expect(result.stderr).toContain("no agent named 'totallybogusxyz' is registered");
   });
 });
 
