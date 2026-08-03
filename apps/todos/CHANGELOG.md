@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.2] - 2026-08-03
+
+### Fixed
+
+- **Public-release validation now checks the package-root README deterministically.**
+  The gate no longer treats the first nested `*/README.md` as the package README, so
+  filesystem traversal order cannot make `sdk/README.md` produce a false missing-install
+  failure after the package has already passed its build and install smoke tests.
+
 ## [0.15.1] - 2026-08-03
 
 ### Fixed
