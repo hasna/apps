@@ -1,6 +1,6 @@
 {
   "name": "@hasna/security",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "description": "Legacy command aliases for @hasna/shield",
   "type": "module",
   "bin": {
