@@ -252,6 +252,13 @@ describe("remote CLI entrypoint authority boundary", () => {
       ["status", "--agent", "fixture-agent"],
       ["bulk", "unknown", TASK_FIXTURE_ID],
       ["bulk", "done", TASK_FIXTURE_ID, "--plan", "fixture-plan"],
+      // `bulk tag|untag` needs something to apply. Failing closed here is what
+      // stops a no-op backfill from reporting success over thousands of rows.
+      ["bulk", "tag", TASK_FIXTURE_ID],
+      ["bulk", "untag", TASK_FIXTURE_ID],
+      // The tag actions carry no plan semantics, so the plan flags stay
+      // rejected rather than being silently ignored.
+      ["bulk", "tag", TASK_FIXTURE_ID, "--tag", "directive:k_abc", "--plan", "fixture-plan"],
       ["projects", "--path-prefix", "/tmp"],
       ["plans", "--write-artifacts"],
     ]) {
@@ -287,6 +294,13 @@ describe("remote CLI entrypoint authority boundary", () => {
       ["bulk", "plan", TASK_FIXTURE_ID, "--plan", "fixture-plan"],
       ["bulk", "move-plan", TASK_FIXTURE_ID, "--plan", "fixture-plan"],
       ["bulk", "plan", TASK_FIXTURE_ID, "--clear-plan"],
+      // Bulk tagging is serviced remotely (read the row, merge, PATCH
+      // /v1/tasks/<id>). Provenance backfill is the reason it exists: stamping
+      // `directive:<knowledge-id>` onto existing work must not require one
+      // process per task, and must not fail closed under remote authority.
+      ["bulk", "tag", TASK_FIXTURE_ID, "--tag", "directive:k_msd4cz8t_ste6f4"],
+      ["bulk", "untag", TASK_FIXTURE_ID, "--tag", "directive:k_msd4cz8t_ste6f4"],
+      ["bulk", "tag", TASK_FIXTURE_ID, "--tag", "directive:k_abc,governance"],
       ["deps", TASK_FIXTURE_ID, "--needs", OTHER_TASK_FIXTURE_ID],
       // `deps <id>` works remotely, so its presentation-only flags must stay
       // supported too: `--graph`/`--direction` degrade to the same flat edges

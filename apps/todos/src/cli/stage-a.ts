@@ -376,14 +376,30 @@ function disqualifyingArgument(invocation: ParsedInvocation): Disqualification |
       // serviced remotely. The other actions carry no plan semantics, so the
       // plan flags stay rejected there rather than being silently ignored.
       if (action === "plan" || action === "move-plan") return null;
+      // `bulk tag|untag` reads each row, merges tags, and PATCHes /v1/tasks/<id>,
+      // so it is serviced remotely. It exists so provenance backfill —
+      // stamping `directive:<knowledge-id>` onto work created before the
+      // convention — does not cost one process per task.
+      if (action === "tag" || action === "untag") {
+        // Fail closed on an empty request: a bulk run with nothing to apply
+        // would report success across every id and look like a completed
+        // backfill.
+        if (!hasOption(args, "--tag") && !hasOption(args, "--tags")) {
+          return {
+            blame: `\`bulk ${action}\` without --tag`,
+            remedy: `pass --tag <comma-separated>, e.g. bulk ${action} <ids...> --tag directive:k_msd4cz8t_ste6f4`,
+          };
+        }
+        return firstPresentOption(args, ["--plan", "--clear-plan"]);
+      }
       if (!action) {
         // "re-run without it" does not parse when nothing was given.
-        return { blame: "a missing action", remedy: "pass one of done, complete, start, delete, plan, move-plan" };
+        return { blame: "a missing action", remedy: "pass one of done, complete, start, delete, plan, move-plan, tag, untag" };
       }
       if (!["done", "complete", "start", "delete"].includes(action)) {
         return {
           blame: `the \`${action}\` action`,
-          remedy: "use one of done, complete, start, delete, plan, move-plan",
+          remedy: "use one of done, complete, start, delete, plan, move-plan, tag, untag",
         };
       }
       return firstPresentOption(args, ["--plan", "--clear-plan"]);

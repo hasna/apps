@@ -741,6 +741,8 @@ todos update <task-id> --plan <plan-id>       # move one task to another plan
 todos update <task-id> --clear-plan           # detach from its plan
 todos bulk plan --plan <plan-id> <id> <id>    # move many tasks at once
 todos bulk move-plan --clear-plan <id> <id>   # detach many tasks at once
+todos bulk tag <id> <id> --tag a,b            # add tags to many tasks (merges; never replaces)
+todos bulk untag <id> <id> --tag a            # remove tags from many tasks
 todos plans --show <plan-id>                  # verify the plan's task set
 ```
 

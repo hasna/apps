@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`todos bulk tag|untag <ids...> --tag <comma-separated>`.** Adds or removes tags
+  across many tasks in one invocation, on both the `/v1` and local SQLite paths.
+  Previously `bulk` could reassign a plan across many tasks but could not tag them,
+  and `todos tag` / `todos untag` take one id and one tag — so stamping a tag across a
+  backlog cost one process per task.
+
+  Semantics chosen so a large backfill is safe to run and safe to re-run:
+
+  - **Merges, never replaces.** `todos update --tags` replaces the tag list; reusing
+    that here would strip every unrelated tag from every row the run touched.
+  - **Idempotent.** A row that already satisfies the request is skipped with no write,
+    so a re-run after a partial failure does not bump row versions or emit audit noise.
+  - **Fails closed** when `--tag` is absent, and when `--tag` and `--tags` are both
+    given but name different sets — a silently dropped tag argument would report
+    success while applying the wrong tags.
+  - Tags split on commas only; `:` and `/` are preserved, which namespaced tags such as
+    `repo:secrets` and `gh:hasna/todos` depend on.
+
 ## [0.14.0] - 2026-08-02
 
 This release was prepared as `0.13.13` and renumbered before publishing. It carries a
