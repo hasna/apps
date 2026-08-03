@@ -409,6 +409,32 @@ describe('knowledge MCP', () => {
       }));
       expect(expandedList.items[0].content).toBe('Stored through MCP');
 
+      // ok_list's `search` must resolve an item by its id, not only by title and content.
+      // The generated `k_…` id appears in NEITHER field of this fixture, so this cannot
+      // pass by the coincidence that hid the same defect on the CLI side — where an item
+      // whose body quoted its own slug matched anyway. Before the fix this returned zero
+      // items with ok=true, which on the dedupe path reads as "safe to create".
+      const searchById = parseToolJson(await client.callTool({
+        name: 'ok_list',
+        arguments: { store_path: store, search: add.item.id },
+      }));
+      expect(searchById.items.map((item: { id: string }) => item.id)).toEqual([add.item.id]);
+
+      // Still matches title and content, and still on a case-insensitive substring.
+      const searchByTitle = parseToolJson(await client.callTool({
+        name: 'ok_list',
+        arguments: { store_path: store, search: 'mcp ITEM' },
+      }));
+      expect(searchByTitle.items.map((item: { id: string }) => item.id)).toEqual([add.item.id]);
+
+      // NEGATIVE CONTROL — the filter must still be able to return nothing, or the
+      // assertions above would pass against a search that ignored its argument.
+      const searchMiss = parseToolJson(await client.callTool({
+        name: 'ok_list',
+        arguments: { store_path: store, search: 'no-item-carries-this-string' },
+      }));
+      expect(searchMiss.items).toEqual([]);
+
       const stableGetItem = parseToolJson(await client.callTool({
         name: 'knowledge_get',
         arguments: { kind: 'item', id: add.item.short_id, store_path: store },

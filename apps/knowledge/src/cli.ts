@@ -4,7 +4,7 @@
  * Copyright 2026 Hasna Inc.
  * Licensed under the Apache License, Version 2.0
  */
-import { defaultStorePath, ensureStore, importLegacyGlobalStore, type KnowledgeItem } from './store';
+import { defaultStorePath, ensureStore, importLegacyGlobalStore, itemMatchesSearch, type KnowledgeItem } from './store';
 import { resolveItemStore, type ItemStore } from './item-store';
 import { isKnowledgeApiMode } from './cloud-store';
 import { diffEntries, formatEntryDiff, type EntrySnapshot } from './entry-diff';
@@ -441,7 +441,7 @@ List Options:
   --format table|json         Output format (default: table if TTY, json otherwise)
   -p, --page <n>              Page number (default: 1)
   -l, --limit <n>             Items per page (default: 20)
-  -s, --search <text>         Filter by title/content
+  -s, --search <text>         Filter by id/title/content (case-insensitive substring; use 'knowledge search' for semantic)
   -t, --tag <tag>             Filter by tag; repeatable/comma-separated, item must match ALL
   --sort <created|title>       Sort field (default: created)
   --desc                       Sort descending
@@ -472,7 +472,7 @@ Prune Options:
 
 function printCommandHelp(command: string): void {
   if (command === 'add') { console.log('Usage: knowledge add <title> <content> [--url <url>] [-t <tag>]... [--json]\n  -t/--tag is repeatable and accepts comma-separated values: -t a -t b  ==  -t "a,b"'); return; }
-  if (command === 'list' || command === 'ls') { console.log('Usage: knowledge list|ls [--format table|json] [-p <page>] [-l <limit>] [-s <search>] [-t <tag>]... [--sort created|title] [--desc] [--archived] [--include-archived] [--verbose] [--json]\n  -t/--tag is repeatable and accepts comma-separated values; repeated -t narrows (an item must carry every tag).\n  Each value matches an item carrying the whole value OR all of its comma-split names — a union, so\n  `-t "a,b,c"` finds items carrying a legacy literal "a,b,c" tag as well as items carrying the three\n  names separately. (`untag` differs on purpose: it stops at the whole-value match.)\n  Use --json to tell those two shapes apart; the table renders them near-identically.\n  Archived items are excluded by default; add --include-archived to sweep both.\n  If both --archived and --include-archived are passed, --archived wins (archived items only).'); return; }
+  if (command === 'list' || command === 'ls') { console.log('Usage: knowledge list|ls [--format table|json] [-p <page>] [-l <limit>] [-s <search>] [-t <tag>]... [--sort created|title] [--desc] [--archived] [--include-archived] [--verbose] [--json]\n  -s/--search is a CASE-INSENSITIVE LITERAL SUBSTRING filter over id, title and content — not a\n  tokenised or semantic search, so a word order that never appears verbatim matches nothing. It\n  resolves an item by its slug because the id is included. For meaning-based lookup use `knowledge\n  search <query>`, which is a different index and will find items this filter cannot.\n  -t/--tag is repeatable and accepts comma-separated values; repeated -t narrows (an item must carry every tag).\n  Each value matches an item carrying the whole value OR all of its comma-split names — a union, so\n  `-t "a,b,c"` finds items carrying a legacy literal "a,b,c" tag as well as items carrying the three\n  names separately. (`untag` differs on purpose: it stops at the whole-value match.)\n  Use --json to tell those two shapes apart; the table renders them near-identically.\n  Archived items are excluded by default; add --include-archived to sweep both.\n  If both --archived and --include-archived are passed, --archived wins (archived items only).'); return; }
   if (command === 'get') { console.log('Usage: knowledge get --id <id> [--json]'); return; }
   if (command === 'update' || command === 'edit') { console.log('Usage: knowledge update|edit --id <id> [--title <title>] [--content <content>] [--url <url>] [-t <tag>]... [--json]\n  -t/--tag is repeatable and accepts comma-separated values; tags are added, never replaced.\n  With -t the output reports how many tags were actually added, so 0 added is not read as 3.'); return; }
   if (command === 'archive') { console.log('Usage: knowledge archive --id <id> [--json]'); return; }
@@ -1925,7 +1925,11 @@ async function run(argv: string[]): Promise<void> {
     // win, so this is documented rather than changed — flipping it would alter behaviour.
     if (flags.archived) filtered = filtered.filter((x) => x.archived === true);
     else if (!flags.includeArchived) filtered = filtered.filter((x) => !x.archived);
-    if (search) filtered = filtered.filter((x) => x.title.toLowerCase().includes(search) || x.content.toLowerCase().includes(search));
+    // Matches id, title and content — see itemMatchesSearch in store.ts for why the id is
+    // in there. Keep this delegating rather than inlining the predicate again: the id was
+    // missing here and in the two mcp.js copies simultaneously, which is what a duplicated
+    // one-liner buys you.
+    if (search) filtered = filtered.filter((x) => itemMatchesSearch(x, search));
     if (tagFilters.length > 0) filtered = filtered.filter((x) => {
       const itemTags = new Set((x.tags ?? []).map((t) => t.toLowerCase()));
       return tagFilters.every(({ whole, parts }) => (whole.length > 0 && itemTags.has(whole)) || parts.every((wanted) => itemTags.has(wanted)));

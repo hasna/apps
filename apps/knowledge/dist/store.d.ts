@@ -19,6 +19,33 @@ export interface KnowledgeItem {
     version?: number;
 }
 /**
+ * The one predicate behind every `--search` / `search:` free-text filter over stored
+ * items — `knowledge list --search` and the `ok_list` MCP tool.
+ *
+ * It is a CASE-INSENSITIVE LITERAL SUBSTRING test, not a tokenised or semantic search.
+ * `knowledge search` is the semantic verb and is a different code path entirely; this
+ * one deliberately stays a cheap filter, because it has to compose with tag filtering,
+ * sorting and pagination over a fully materialised list.
+ *
+ * IT MATCHES `id` AS WELL AS `title` AND `content`, and the id is the reason this
+ * function exists. The filter used to read title and content only, so resolving an item
+ * by its own slug — the dominant instructed use of the flag across the skill corpus, and
+ * the DEDUPE path that decides whether an artefact already exists — returned `total: 0`
+ * at exit 0 for an item that was demonstrably present. A false zero there reads as "no
+ * existing item, safe to create", so the omission manufactured duplicate knowledge items.
+ *
+ * What hid it: an item whose CONTENT happens to quote its own slug matched anyway, so a
+ * spot check could pass for entirely the wrong reason. Measured on the fleet store before
+ * the fix — `hasna-loop-naming-convention` and `hasna-knowledge-taxonomy` both existed and
+ * were both unfindable by their own ids, while `hasna-agent-identity-convention` was found
+ * only because its body cites its own slug.
+ *
+ * `short_id` is deliberately NOT matched. It is an opaque short handle rather than the
+ * slug agents are instructed to resolve, and widening identity matching further is a
+ * separate decision from repairing the one that was broken.
+ */
+export declare function itemMatchesSearch(item: Pick<KnowledgeItem, 'id' | 'title' | 'content'>, needle: string): boolean;
+/**
  * An immutable snapshot of an entry as it stood BEFORE the edit that produced
  * the next version. Written only by the database trigger (see
  * db/pg-migrations.ts) — never by application code, on any surface.

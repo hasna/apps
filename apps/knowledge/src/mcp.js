@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import pkg from '../package.json' with { type: 'json' };
 import { migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db.ts';
-import { defaultStorePath } from './store.ts';
+import { defaultStorePath, itemMatchesSearch } from './store.ts';
 import { resolveItemStore } from './item-store.ts';
 import { isKnowledgeApiMode } from './cloud-store.ts';
 import { assertKnowledgeModeSelected } from './knowledge-mode.ts';
@@ -1537,7 +1537,7 @@ export function buildServer() {
   });
 
   registerTool(server, 'ok_list', 'List knowledge items', 'List compact item summaries with pagination, search, tag filtering, and sorting', {
-    search: z.string().optional().describe('Search text for title/content'),
+    search: z.string().optional().describe('Case-insensitive literal substring filter over id, title and content. Not a semantic search — use ok_search for that.'),
     tag: z.array(z.string()).optional().describe('Filter by tags; item must match all tags'),
     include_archived: z.boolean().optional().describe('Include archived items'),
     include_content: z.boolean().optional().describe('Include full item content in each list row; default false to keep agent output compact'),
@@ -1554,7 +1554,7 @@ export function buildServer() {
     const q = search ? search.toLowerCase() : '';
     const requiredTags = (tag ?? []).map((entry) => entry.toLowerCase());
     let items = activeItems(all, include_archived);
-    if (q) items = items.filter((item) => item.title.toLowerCase().includes(q) || item.content.toLowerCase().includes(q));
+    if (q) items = items.filter((item) => itemMatchesSearch(item, q));
     if (requiredTags.length > 0) {
       items = items.filter((item) => {
         const itemTags = (item.tags ?? []).map((entry) => entry.toLowerCase());
@@ -1762,6 +1762,17 @@ export function buildServer() {
     const q = search ? search.toLowerCase() : '';
     const tags = (tag ?? []).map((entry) => entry.toLowerCase());
     const deleteIds = all.filter((item) => {
+      // DELIBERATELY NARROWER THAN ok_list / `knowledge list --search`, which also match the
+      // item's `id`. This is the destructive verb, so it is not widened along with them: an
+      // agent that passes a slug-shaped query here would otherwise start deleting items it
+      // had never previewed, and "the read filter was repaired" is not a reason to enlarge
+      // what a delete removes.
+      //
+      // The divergence is safe in one direction only, which is why it is acceptable at all:
+      // this predicate matches a SUBSET of what ok_list shows for the same query, so a
+      // preview can over-report what a delete will remove but can never under-report it.
+      // Do not "align" these by widening this one — align them by narrowing, or not at all.
+      // Deleting by id is what ok_delete is for.
       const matchesSearch = q ? item.title.toLowerCase().includes(q) || item.content.toLowerCase().includes(q) : false;
       const itemTags = (item.tags ?? []).map((entry) => entry.toLowerCase());
       const matchesTag = tags.length > 0 ? tags.some((entry) => itemTags.includes(entry)) : false;
