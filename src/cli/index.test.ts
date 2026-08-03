@@ -2004,4 +2004,148 @@ describe("project-first CLI surface", () => {
     }
   }, 30000);
 
+  test("create in cloud mode derives the same primary_path and channel the dry-run plan promises", async () => {
+    // Regression: `projects create --dry-run` reported a canonical
+    // `primary_path` and a derived `integrations.conversations_channel`, and the
+    // identical real create in api/cloud mode produced `primary_path: null` and
+    // `integrations: {}` — so the plan promised a project the create did not
+    // build, and `projects store inspect` then read primary_is_canonical=false /
+    // exists.workspace=false. Five projects were created that way.
+    //
+    // Both derivations live in the local planner (`plannedWorkspace`), which the
+    // api branch of `create` skipped entirely. The server derives nothing —
+    // `pg-store.ts` stores `input.primary_path ?? null` and `input.integrations
+    // ?? {}` verbatim — so the client is the only place this can be computed,
+    // and it honours a client-supplied `id` (`input.id ?? generateWorkspaceId()`).
+    //
+    // The property under test is TRANSPORT PARITY: the same flags must produce
+    // the same registry row whether the store is local or api. The existing
+    // cloud-create test above always passes `--path`, so it could never observe
+    // this — the divergence only appears on the defaulting path.
+    const root = mkdtempSync(join(tmpdir(), "projects-cloud-derive-"));
+    const home = join(root, "home");
+    const port = reserveFreePort();
+    const requests: Array<{ method: string; path: string; body: Record<string, unknown> | null }> = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port,
+      async fetch(req) {
+        const url = new URL(req.url);
+        let body: Record<string, unknown> | null = null;
+        try { body = (await req.json()) as Record<string, unknown>; } catch { body = null; }
+        requests.push({ method: req.method, path: url.pathname, body });
+        if (req.method === "POST" && url.pathname === "/v1/projects") {
+          // Mirror the real server: it echoes the client's id and stores
+          // primary_path/integrations verbatim, deriving nothing of its own.
+          return Response.json({
+            id: (body?.id as string | undefined) ?? "wks_serverassigned0001",
+            slug: (body?.slug as string | undefined) ?? "cloud-derive-probe",
+            name: "Cloud Derive Probe",
+            kind: "generic",
+            status: "active",
+            primary_path: (body?.primary_path as string | undefined) ?? null,
+            integrations: (body?.integrations as Record<string, unknown> | undefined) ?? {},
+          });
+        }
+        if (url.pathname === "/v1/projects") return Response.json({ workspaces: [] });
+        return Response.json({});
+      },
+    });
+    const env = {
+      HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
+      HASNA_PROJECTS_HOME: home,
+      HASNA_PROJECTS_API_URL: `http://127.0.0.1:${port}`,
+      HASNA_PROJECTS_API_KEY: "test-key",
+    };
+    const runCreate = async (args: string[]) => {
+      const proc = Bun.spawn({
+        cmd: ["bun", "run", CLI_PATH, "create", ...args],
+        stdout: "pipe",
+        stderr: "pipe",
+        env: testSpawnEnv(env),
+      });
+      const stdout = await new Response(proc.stdout).text();
+      const stderr = await new Response(proc.stderr).text();
+      await proc.exited;
+      return { exitCode: proc.exitCode, stdout, stderr };
+    };
+    const postBodies = () => requests
+      .filter((r) => r.method === "POST" && r.path === "/v1/projects")
+      .map((r) => r.body as {
+        id?: string;
+        slug?: string;
+        primary_path?: string | null;
+        integrations?: Record<string, unknown>;
+      });
+
+    try {
+      // The plan the operator is shown before committing.
+      const planned = await runCreate([
+        "--name", "Cloud Derive Probe",
+        "--slug", "cloud-derive-probe",
+        "--dry-run",
+        "--json",
+      ]);
+      expect(planned.exitCode).toBe(0);
+      // Negative control on the dry run itself: previewing must not create.
+      expect(postBodies()).toHaveLength(0);
+      const plan = JSON.parse(planned.stdout) as {
+        plan: { project: { primary_path: string | null; integrations: Record<string, unknown> } };
+      };
+      const plannedPath = plan.plan.project.primary_path;
+      const plannedChannel = plan.plan.project.integrations?.["conversations_channel"];
+      // The plan is only a meaningful oracle if it actually promises something.
+      expect(plannedPath).toBe(join(home, "workspaces", plannedPath!.split("/").pop()!));
+      expect(plannedChannel).toBe("cloud-derive-probe");
+
+      // The real create, same flags, no --path.
+      const created = await runCreate([
+        "--name", "Cloud Derive Probe",
+        "--slug", "cloud-derive-probe",
+        "--json",
+      ]);
+      expect(created.exitCode).toBe(0);
+      const bodies = postBodies();
+      expect(bodies).toHaveLength(1);
+      const body = bodies[0]!;
+
+      // The create must honour what the plan promised.
+      expect(body.integrations?.["conversations_channel"]).toBe(plannedChannel);
+      expect(body.primary_path).not.toBeNull();
+      expect(body.primary_path).toBeDefined();
+      // Tie the path to the id actually sent, so a path for some *other*
+      // project's id cannot pass: the canonical location is derived from the id.
+      expect(body.id).toMatch(/^wks_[A-Za-z0-9_-]+$/);
+      expect(body.primary_path).toBe(join(home, "workspaces", body.id!));
+
+      // Negative control 1: an explicit --path must still win, so the fix is
+      // "derive a default", not "overwrite whatever the operator asked for".
+      const explicitPath = join(root, "explicit-elsewhere");
+      const explicit = await runCreate([
+        "--name", "Cloud Derive Explicit",
+        "--slug", "cloud-derive-explicit",
+        "--path", explicitPath,
+        "--json",
+      ]);
+      expect(explicit.exitCode).toBe(0);
+      const explicitBody = postBodies()[1]!;
+      expect(explicitBody.primary_path).toBe(explicitPath);
+
+      // Negative control 2: an explicitly linked channel must still win over the
+      // slug-derived default.
+      const pinned = await runCreate([
+        "--name", "Cloud Derive Pinned",
+        "--slug", "cloud-derive-pinned",
+        "--integrations-json", JSON.stringify({ conversations_channel: "pinned-elsewhere" }),
+        "--json",
+      ]);
+      expect(pinned.exitCode).toBe(0);
+      const pinnedBody = postBodies()[2]!;
+      expect(pinnedBody.integrations?.["conversations_channel"]).toBe("pinned-elsewhere");
+    } finally {
+      server.stop(true);
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30000);
+
 });

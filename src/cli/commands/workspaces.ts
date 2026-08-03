@@ -4,10 +4,12 @@ import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
   ensureCliAgent,
+  generateWorkspaceId,
   getAgent,
   getAgentBySlug,
   getRecipe,
   getRoot,
+  workspaceSlugify,
   listAgents,
   listRecipes,
   listRoots,
@@ -23,6 +25,7 @@ import {
 } from "../../lib/workspace-runtime.js";
 import {
   cleanupWorkspaceCreationTarget,
+  deriveWorkspaceRegistryFields,
   executeWorkspaceCreation,
   type WorkspaceCreationCleanupTarget,
   type WorkspaceCreationPlanAction,
@@ -97,7 +100,7 @@ import {
   removeProjectTags,
   unlinkProjectIntegrationFields,
 } from "../../lib/project-management.js";
-import { PROJECT_AGENT_ROLES, WORKSPACE_KINDS, WORKSPACE_STATUSES, type AgentKind, type JsonObject, type Workspace, type WorkspaceEvent, type WorkspaceIntegrations, type WorkspaceKind, type WorkspaceLock, type WorkspaceStatus } from "../../types/workspace.js";
+import { PROJECT_AGENT_ROLES, WORKSPACE_KINDS, WORKSPACE_STATUSES, type AgentKind, type JsonObject, type Recipe, type Root, type Workspace, type WorkspaceEvent, type WorkspaceIntegrations, type WorkspaceKind, type WorkspaceLock, type WorkspaceStatus } from "../../types/workspace.js";
 
 const DEFAULT_LIST_LIMIT = 25;
 const DEFAULT_EVENT_LIMIT = 20;
@@ -300,18 +303,26 @@ async function withWorkspaceLock<T>(
 // BOTH transports (local sqlite or `/v1/roots` + `/v1/recipes` over HTTP), so
 // slug->id resolution must route through the Store — never straight to local
 // sqlite, which would resolve stale local ids on a flipped machine.
-async function resolveRootId(store: ProjectStore, idOrSlug: string | undefined): Promise<string | undefined> {
-  if (!idOrSlug) return undefined;
+async function resolveRoot(store: ProjectStore, idOrSlug: string): Promise<Root> {
   const root = await store.getRoot(idOrSlug);
   if (!root) throw new Error(`Root not found: ${idOrSlug}`);
-  return root.id;
+  return root;
+}
+
+async function resolveRecipe(store: ProjectStore, idOrSlug: string): Promise<Recipe> {
+  const recipe = await store.getRecipe(idOrSlug);
+  if (!recipe) throw new Error(`Recipe not found: ${idOrSlug}`);
+  return recipe;
+}
+
+async function resolveRootId(store: ProjectStore, idOrSlug: string | undefined): Promise<string | undefined> {
+  if (!idOrSlug) return undefined;
+  return (await resolveRoot(store, idOrSlug)).id;
 }
 
 async function resolveRecipeId(store: ProjectStore, idOrSlug: string | undefined): Promise<string | undefined> {
   if (!idOrSlug) return undefined;
-  const recipe = await store.getRecipe(idOrSlug);
-  if (!recipe) throw new Error(`Recipe not found: ${idOrSlug}`);
-  return recipe.id;
+  return (await resolveRecipe(store, idOrSlug)).id;
 }
 
 function resolveAgentId(idOrSlug: string | undefined): string {
@@ -1506,18 +1517,38 @@ function registerProjectCommands(program: Command): void {
           // shared registry resources: resolve slug->id through the Store so the
           // intent is honored (not silently dropped) in api mode. Agent
           // attribution stays server-side (see mutationAgentId).
-          const project = await store.createProject({
+          const root = opts.root ? await resolveRoot(store, opts.root) : null;
+          const recipe = opts.recipe ? await resolveRecipe(store, opts.recipe) : null;
+          // The canonical workspace path and the derived conversations channel
+          // are computed CLIENT-SIDE in every transport: the server stores
+          // `primary_path`/`integrations` verbatim and derives neither. Skipping
+          // this here is what produced rows with `primary_path: null` while
+          // `--dry-run` — which routes through the local planner below — showed a
+          // canonical path, so the plan promised a project the create never
+          // built. Derive from a client-generated id, which the server honours
+          // (`input.id ?? generateWorkspaceId()`), so the row and the directory
+          // agree on one id.
+          const id = generateWorkspaceId();
+          const slug = opts.slug ?? workspaceSlugify(opts.name);
+          const kind = parseKind(opts.kind) ?? recipe?.kind ?? root?.default_kind ?? "generic";
+          const derived = deriveWorkspaceRegistryFields({
             name: opts.name,
-            slug: opts.slug,
-            description: opts.description,
-            kind: parseKind(opts.kind),
-            root_id: await resolveRootId(store, opts.root),
-            recipe_id: await resolveRecipeId(store, opts.recipe),
             primary_path: opts.path ? resolve(opts.path) : undefined,
+            integrations,
+          }, { root, slug, id, kind });
+          const project = await store.createProject({
+            id,
+            name: opts.name,
+            slug,
+            description: opts.description,
+            kind,
+            root_id: root?.id,
+            recipe_id: recipe?.id,
+            primary_path: derived.primary_path ?? undefined,
             git_remote: opts.gitRemote,
             tags: splitList(opts.tags),
             metadata: Object.keys(managementMetadata).length ? managementMetadata : undefined,
-            integrations: Object.keys(integrations).length ? integrations : undefined,
+            integrations: Object.keys(derived.integrations).length ? derived.integrations : undefined,
           });
           if (wantsJson(opts)) { printObject({ project }, opts); return; }
           console.log(chalk.green(`✓ Project created (cloud): ${project.slug}`));
