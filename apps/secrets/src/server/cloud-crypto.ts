@@ -35,7 +35,38 @@ export class VaultDecryptionError extends Error {
   }
 }
 
-let _cached: Buffer | null = null;
+let _cached: Buffer[] | null = null;
+
+function deriveKey(raw: string): Buffer {
+  const b64 = tryDecode(raw, "base64");
+  const hex = tryDecode(raw, "hex");
+  if (b64 && b64.length === 32) return b64;
+  if (hex && hex.length === 32) return hex;
+  return createHash("sha256").update(raw, "utf8").digest();
+}
+
+function getCloudMasterKeys(env: NodeJS.ProcessEnv = process.env): Buffer[] {
+  if (_cached) return _cached;
+  const rawKeys = MASTER_KEY_ENV
+    .map((name) => env[name]?.trim())
+    .filter((value): value is string => Boolean(value));
+  if (rawKeys.length === 0) {
+    throw new Error(
+      `secrets-serve requires a master key. Set ${MASTER_KEY_ENV[0]} (base64/hex 32 bytes) — the vault refuses to store plaintext.`,
+    );
+  }
+
+  const seen = new Set<string>();
+  _cached = rawKeys
+    .map(deriveKey)
+    .filter((key) => {
+      const fingerprint = key.toString("hex");
+      if (seen.has(fingerprint)) return false;
+      seen.add(fingerprint);
+      return true;
+    });
+  return _cached;
+}
 
 /**
  * Resolve the 32-byte master key from the environment. Accepts a base64 or hex
@@ -43,30 +74,7 @@ let _cached: Buffer | null = null;
  * operator-supplied passphrase also works. Throws when unset (fail-closed).
  */
 export function getCloudMasterKey(env: NodeJS.ProcessEnv = process.env): Buffer {
-  if (_cached) return _cached;
-  let raw: string | undefined;
-  for (const key of MASTER_KEY_ENV) {
-    const v = env[key]?.trim();
-    if (v) {
-      raw = v;
-      break;
-    }
-  }
-  if (!raw) {
-    throw new Error(
-      `secrets-serve requires a master key. Set ${MASTER_KEY_ENV[0]} (base64/hex 32 bytes) — the vault refuses to store plaintext.`,
-    );
-  }
-
-  let key: Buffer;
-  const b64 = tryDecode(raw, "base64");
-  const hex = tryDecode(raw, "hex");
-  if (b64 && b64.length === 32) key = b64;
-  else if (hex && hex.length === 32) key = hex;
-  else key = createHash("sha256").update(raw, "utf8").digest();
-
-  _cached = key;
-  return key;
+  return getCloudMasterKeys(env)[0]!;
 }
 
 function tryDecode(value: string, encoding: "base64" | "hex"): Buffer | null {
@@ -108,7 +116,7 @@ export function decryptValue(stored: string, env: NodeJS.ProcessEnv = process.en
   // wording: a message-only fix regresses the moment either string is edited.
   // Regression cover: tests/cloud-crypto.test.ts, "a missing master key is NOT
   // reported as a decryption failure".
-  const key = getCloudMasterKey(env);
+  const keys = getCloudMasterKeys(env);
 
   try {
     const rest = stored.slice(PREFIX.length);
@@ -118,9 +126,17 @@ export function decryptValue(stored: string, env: NodeJS.ProcessEnv = process.en
     const payload = Buffer.from(rest.slice(sep + 1), "hex");
     const tag = payload.subarray(payload.length - 16);
     const ciphertext = payload.subarray(0, payload.length - 16);
-    const decipher = createDecipheriv(ALGO, key, iv);
-    decipher.setAuthTag(tag);
-    return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
+    for (const key of keys) {
+      try {
+        const decipher = createDecipheriv(ALGO, key, iv);
+        decipher.setAuthTag(tag);
+        return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
+      } catch {
+        // A configured legacy alias may own this row; try it without exposing
+        // the AES-GCM authentication error or any key/value material.
+      }
+    }
+    throw new VaultDecryptionError();
   } catch {
     // Do not expose OpenSSL's low-level authentication message. Callers can use
     // the stable code and recovery guidance without receiving key/value material.

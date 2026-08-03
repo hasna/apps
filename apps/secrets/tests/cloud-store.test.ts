@@ -182,6 +182,62 @@ describe("cloud Postgres store", () => {
     expect(await store.deleteSecret("demo/key", "agent-1")).toBe(true);
   });
 
+  it("reads an x_-prefixed legacy-key row beside an active-key sibling", async () => {
+    const activeKey = Buffer.alloc(32, 9).toString("base64");
+    const legacyKey = Buffer.alloc(32, 10).toString("base64");
+
+    _resetCloudMasterKey();
+    const bareStored = encryptValue("synthetic-bare-value", {
+      HASNA_SECRETS_MASTER_KEY: activeKey,
+    });
+    _resetCloudMasterKey();
+    const prefixedStored = encryptValue("synthetic-prefixed-value", {
+      SECRETS_MASTER_KEY: legacyKey,
+    });
+
+    process.env.HASNA_SECRETS_MASTER_KEY = activeKey;
+    process.env.SECRETS_MASTER_KEY = legacyKey;
+    _resetCloudMasterKey();
+
+    const db = new FakeDb();
+    db.getResults.push(
+      {
+        key: "synthetic/x/live/bare_name",
+        value: bareStored,
+        type: "other",
+        label: null,
+        expires_at: null,
+        created_at: now,
+        updated_at: now,
+      },
+      {
+        key: "synthetic/x/live/x_prefixed_name",
+        value: prefixedStored,
+        type: "other",
+        label: null,
+        expires_at: null,
+        created_at: now,
+        updated_at: now,
+      },
+    );
+    const store = new CloudSecretsStore(db as any);
+
+    expect(await store.getSecret("synthetic/x/live/bare_name", "synthetic-agent"))
+      .toMatchObject({ key: "synthetic/x/live/bare_name", value: "synthetic-bare-value" });
+    expect(await store.getSecret("synthetic/x/live/x_prefixed_name", "synthetic-agent"))
+      .toMatchObject({ key: "synthetic/x/live/x_prefixed_name", value: "synthetic-prefixed-value" });
+    expect(db.getCalls.map((call) => call.params)).toEqual([
+      ["synthetic/x/live/bare_name"],
+      ["synthetic/x/live/x_prefixed_name"],
+    ]);
+
+    _resetCloudMasterKey();
+    const newlyStored = encryptValue("synthetic-new-value", process.env);
+    _resetCloudMasterKey();
+    expect(decryptValue(newlyStored, { HASNA_SECRETS_MASTER_KEY: activeKey }))
+      .toBe("synthetic-new-value");
+  });
+
   it("validates, normalizes, stores, reads, lists, searches, and deletes vault items", async () => {
     const db = new FakeDb();
     const store = new CloudSecretsStore(db as any);
