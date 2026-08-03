@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-08-03
+
+Numbered as a minor for the same reason `0.13.13` was renumbered to `0.14.0` the day
+before: this release rejects CLI input that `0.14.0` accepted, and under 0.x semver the
+minor is the field that signals that. A patch would have let a `^0.14` range absorb it
+silently, which is the outcome the previous renumber existed to prevent.
+
+The scope is narrower than `0.14.0`'s. That release rejected out-of-vocabulary enums on
+`todos list` and on three HTTP endpoints, and it named those surfaces explicitly. It did
+not cover `todos watch`, and it did not treat an empty or blank enum element as invalid.
+Both gaps are closed here, so input that survived `0.14.0` can now fail.
+
 ### Added
 
 - **`todos bulk tag|untag <ids...> --tag <comma-separated>`.** Adds or removes tags
@@ -26,6 +38,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     success while applying the wrong tags.
   - Tags split on commas only; `:` and `/` are preserved, which namespaced tags such as
     `repo:secrets` and `gh:hasna/todos` depend on.
+
+### Changed
+
+- **BREAKING (CLI): `todos watch --status` now validates its value against the status
+  vocabulary.** `watch` shared `list`'s closed vocabulary and failed the way `list` used
+  to: an out-of-vocabulary status matched no rows, so `todos watch --status open` painted
+  a permanently empty dashboard that reads as "there is no work". This is worse than the
+  `list` case it mirrors, because a live view invites an operator to sit and watch it.
+  `watch` now exits non-zero and names the accepted vocabulary. Documented aliases
+  (`done` -> `completed`) still resolve, so every previously *valid* input behaves
+  identically; only previously *invalid* input changes, from a silent empty view at exit
+  0 to a named rejection.
+- **BREAKING (CLI): an empty or blank enum element is now rejected instead of being
+  dropped.** `--status=` was parsed by Commander as an explicit empty string and fell
+  back to the default filter at exit 0, and a blank list member meant `--status pending,`
+  and `--priority high,,critical` were accepted as though a clean list had been typed.
+  Both are almost always a stray comma or a shell expanding `--status "$A,$B"` with one
+  variable unset, and in both cases the filter did not deliver what was asked for.
+  Surrounding whitespace on a non-empty element (` pending , high`) stays tolerated,
+  because that is a shape operators legitimately type.
+
+### Fixed
+
+- **`todos list` now applies its window after sorting rather than before**, so a bounded
+  list returns the first N of the sorted result instead of an arbitrary N that was then
+  sorted among itself. The remote scan is bounded by an explicit ceiling sent to the
+  cloud API; the ceiling applies to the remote path by construction and never to local
+  SQLite.
+- **`todos list` no longer warns about an assignee it never queried.** The empty-result
+  warning resolved the assignee separately from the query, so `--assigned <bogus>
+  --inbox` warned about a value that was never used as a filter, while
+  `--agent-name "" --assigned <bogus>` stayed silent about the value that actually was.
+  The effective assignee is now resolved once and read for both the filter and the
+  warning.
+- **`todos add` warns instead of silently filing a task with no project.** The local
+  branch fell back to project auto-detection when `--project` was absent; the cloud
+  branch did not, and the fleet runs cloud, so every fleet create stored a NULL project
+  silently. Such a row appears in no per-seat list and no drain reaches it. Measured
+  against the hosted store on 2026-08-03: 578 of 3231 pending rows (17.9%) carried a NULL
+  project, and 93 of the 283 rows created in the preceding 24 hours (32.9%) did. It warns
+  rather than rejects, deliberately — a third of live creations omit the project, so
+  rejecting would take the CLI offline for that traffic. `--no-project` silences the
+  warning, mirroring the `--unassigned` flag this command already ships for the same
+  shape of problem on the assignee field. The cloud create also sends `working_dir`
+  again, which the local branch had always sent.
+- **`todos workflows`, `template-library`, `onboarding` and `sdk-fixtures` now serve
+  their bundled static content on the `/v1` route** instead of exiting 1 with
+  `REMOTE_COMMAND_UNSUPPORTED`, which is what `manual` — also bundled static — already
+  did. The shipped manual documents `todos workflows` in its own examples. The four are
+  admitted per invocation rather than wholesale: `onboarding --import` and
+  `sdk-fixtures --show/--write` reach a store-backed import path, so those invocations
+  are still refused rather than opening a route to SQLite where the local fallback is
+  deliberately disabled.
 
 ## [0.14.0] - 2026-08-02
 
