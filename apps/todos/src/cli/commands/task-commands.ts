@@ -837,6 +837,10 @@ export function registerTaskCommands(program: Command) {
           : autoProject(globalOpts);
       // --inbox is an assigned filter too. Omitting it here would auto-scope the
       // inbox to the cwd's project and silently hide work assigned to me elsewhere.
+      // This answers "did the caller ask to scope by assignee at all", which is needed
+      // before `--inbox` can resolve an identity below, so it necessarily reads `opts`
+      // rather than the resolved `assignedFilter`. It uses the same truthiness rule as
+      // the resolution, so the two agree on every combination, empty strings included.
       const hasAssignedFilter = Boolean(opts.assigned || opts.agentName || opts.inbox);
       const hasExplicitProjectFilter = Boolean(globalOpts.project || opts.projectName);
       const allowedSortFields = new Set(["updated", "created", "priority", "status"]);
@@ -884,7 +888,24 @@ export function registerTaskCommands(program: Command) {
       // `TaskPriority | TaskPriority[]`, but the raw string used to be forwarded
       // whole, so `--priority high,critical` matched a literal "high,critical".
       if (opts.priority !== undefined) filter["priority"] = parseEnumFlag(opts.priority, TASK_PRIORITY_FLAG);
-      if (opts.assigned) filter["assigned_to"] = opts.assigned;
+      // THREE flags write `assigned_to`, in sequence: `--assigned`, then `--inbox`,
+      // then `--agent-name`. They are resolved ONCE, here, into a single value that
+      // the query and the warning at the foot of this action both read. Deriving the
+      // warning's own answer from `opts` a second time is what let the two disagree
+      // about what had been asked, and when they disagreed the warning won the
+      // operator's attention while the query won the result.
+      //
+      // `assignedWasTyped` records whether the surviving reference is one the OPERATOR
+      // typed. `--inbox` substitutes an identity from the resolver, which cannot be
+      // mistyped and which the caller never spelled, so the "did you mean another
+      // name" warning has nothing to say about it. Both variables are written at the
+      // same site as the value, so neither can drift from it.
+      let assignedFilter: string | undefined;
+      let assignedWasTyped = false;
+      if (opts.assigned) {
+        assignedFilter = opts.assigned;
+        assignedWasTyped = true;
+      }
       // A hand-typed `--created-by Cassius` never goes through the identity resolver,
       // so canonicalise it here too. Both backends also compare case-insensitively —
       // this is the cheap half, that is the one that reaches rows written before the
@@ -899,7 +920,8 @@ export function registerTaskCommands(program: Command) {
           console.error(chalk.red("--inbox needs an agent identity. Run `todos init <name>` or pass --agent <id>."));
           process.exit(1);
         }
-        filter["assigned_to"] = me.agent_id;
+        assignedFilter = me.agent_id;
+        assignedWasTyped = false;
         filter["not_created_by"] = me.agent_id;
       }
       if (opts.tags) filter["tags"] = opts.tags.split(",").map((t: string) => t.trim());
@@ -914,8 +936,14 @@ export function registerTaskCommands(program: Command) {
         }
       }
       if (opts.agentName) {
-        filter["assigned_to"] = opts.agentName;
+        assignedFilter = opts.agentName;
+        assignedWasTyped = true;
       }
+      // The only write of this key. `--assigned ""` and `--agent-name ""` are falsy
+      // above and so leave the dimension unfiltered — the warning below reads the same
+      // variable and therefore reports on exactly that, rather than on a value the
+      // query dropped.
+      if (assignedFilter !== undefined) filter["assigned_to"] = assignedFilter;
       if (opts.recurring) filter["has_recurrence"] = true;
       if (opts.limit !== undefined) {
         const parsedLimit = Number.parseInt(String(opts.limit), 10);
@@ -1086,14 +1114,25 @@ export function registerTaskCommands(program: Command) {
       // degrades silently when the roster cannot be fetched, in which case EVERY
       // name reads as unregistered and the warning is suppressed rather than
       // asserting something false about a name that may be perfectly valid.
-      // Must name the reference the QUERY actually used, not the first one the caller
-      // typed. `--agent-name` overwrites `filter.assigned_to` above, so with both flags
-      // present `opts.assigned ?? opts.agentName` validated the value that was
-      // discarded — reporting a name the empty result had nothing to do with, and
-      // staying silent about a mistyped `--agent-name`. Precedence here mirrors the
-      // assignment order above.
-      const assignedFilter: string | undefined = opts.agentName ?? opts.assigned;
-      if (assignedFilter && tasks.length === 0) {
+      // This names `assignedFilter` — the SAME variable the query filtered on, resolved
+      // once where the flags are read. It is deliberately not re-derived from `opts`
+      // here: a second derivation is free to disagree with the first, and did.
+      // `opts.agentName ?? opts.assigned` got both directions wrong at once, because
+      // `??` and the truthiness guards above answer differently on an empty string and
+      // neither of them accounts for `--inbox` at all:
+      //
+      //   --assigned bogus --inbox     query: my identity   warned about: 'bogus'
+      //   --agent-name "" --assigned x query: 'x'           warned about: nothing ("" is
+      //                                                     not nullish, so it resolved
+      //                                                     to "" and fell out of the
+      //                                                     guard below)
+      //
+      // `assignedWasTyped` is the other half. An unregistered reference is worth
+      // reporting because the operator may have mistyped it; the identity `--inbox`
+      // resolves was never typed, so the same message would be false about how it got
+      // there. Suppressing it there can only ever remove a warning, never add one, so
+      // it cannot regress the registered-but-idle silence this warning depends on.
+      if (assignedWasTyped && assignedFilter && tasks.length === 0) {
         try {
           const roster = await loadAssigneeContext(
             () => (cloud ? cloudListAgents(cloud) : listAgents()),

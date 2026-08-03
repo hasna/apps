@@ -524,6 +524,62 @@ describe("todos list warns when --assigned names no known agent", () => {
     expect(result.stdout).toContain("Assigned fixture");
     expect(result.stderr).not.toContain("is registered");
   });
+
+  /**
+   * THREE flags write `filter.assigned_to`, in this order: `--assigned`, then
+   * `--inbox`, then `--agent-name`. The warning derived its own answer from `opts`
+   * with a DIFFERENT rule than the query used, so the two could disagree about what
+   * had been asked — and when they disagreed, the warning won the operator's
+   * attention while the query won the result.
+   *
+   * A flag that is entirely overridden must not change any output. Asserting the two
+   * runs byte-for-byte is what makes this non-vacuous: an assertion that the warning
+   * merely omits one word would also pass if the warning vanished for some unrelated
+   * reason, whereas equality pins the overridden run to the behaviour of the query
+   * that actually ran.
+   */
+  test("does not warn about an --assigned value that --inbox discarded", async () => {
+    const root = tempRoot("todos-assigned-inbox-override-");
+    await seedAgents(root);
+    const overridden = await runLocal(
+      ["list", "--assigned", "totallybogusxyz", "--inbox"],
+      root,
+    );
+    // The list must have RUN. A usage error also exits with no warning and also
+    // mentions the flag, so silence alone would pass against a CLI that rejected
+    // the command outright.
+    expect(overridden.exitCode).toBe(0);
+    expect(overridden.stdout).toContain("No tasks found.");
+    expect(overridden.stderr).not.toContain("Unknown flag");
+    // `--inbox` rewrote assigned_to to the caller's identity, so the query never
+    // saw this value and the empty result says nothing about it.
+    expect(overridden.stderr).not.toContain("totallybogusxyz");
+
+    const inboxOnly = await runLocal(["list", "--inbox"], root);
+    expect(inboxOnly.exitCode).toBe(0);
+    expect(inboxOnly.stdout).toBe(overridden.stdout);
+    expect(inboxOnly.stderr).toBe(overridden.stderr);
+  });
+
+  /**
+   * `--agent-name ""` is falsy, so the query keeps the `--assigned` value. The
+   * warning resolved `opts.agentName ?? opts.assigned`, and "" is not nullish, so it
+   * resolved to "" and then fell out of its own truthiness guard — validating
+   * NOTHING about the reference the query was actually filtering on. An unset shell
+   * variable (`--agent-name "$AGENT"`) is how this arrives in practice, which is the
+   * same way the empty-status case arrived.
+   */
+  test("still validates --assigned when --agent-name is an empty string", async () => {
+    const root = tempRoot("todos-assigned-empty-agentname-");
+    await seedAgents(root);
+    const result = await runLocal(
+      ["list", "--agent-name", "", "--assigned", "totallybogusxyz"],
+      root,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).not.toContain("Unknown flag");
+    expect(result.stderr).toContain("no agent named 'totallybogusxyz' is registered");
+  });
 });
 
 describe("write flags reject out-of-vocabulary enums", () => {
