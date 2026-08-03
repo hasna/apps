@@ -3,11 +3,50 @@
   "name": "economy",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.4.2",
+  "kitVersion": "0.9.0",
   "description": "AI coding cost tracker — CLI + MCP + HTTP API (economy-serve) + generated SDK. Cloud mode (HASNA_ECONOMY_STORAGE_MODE=cloud) is PURE REMOTE per Amendment A1: the serve process reads/writes the shared cloud Postgres directly with API-key auth via @hasna/contracts.",
   "bins": ["economy", "economy-mcp", "economy-serve", "economy-otel"],
+  "hosting": ["user-hosted"],
+  "serviceSurfaces": [
+    {
+      "name": "economy-api",
+      "kind": "api",
+      "status": "supported",
+      "bin": "economy-serve",
+      "authMode": "api-key",
+      "apiBasePath": "/v1",
+      "openApiPath": "/openapi.json",
+      "health": { "method": "GET", "path": "/health", "public": true },
+      "readiness": { "method": "GET", "path": "/ready", "public": true },
+      "version": { "method": "GET", "path": "/version", "public": true }
+    },
+    {
+      "name": "economy-mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "economy-mcp",
+      "authMode": "local-only"
+    },
+    {
+      "name": "economy-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "economy",
+      "authMode": "local-only"
+    },
+    {
+      "name": "economy-sdk",
+      "kind": "sdk",
+      "status": "deferred",
+      "authMode": "api-key",
+      "generatedFrom": "/openapi.json",
+      "clientClassName": "EconomyClient",
+      "deferReason": "The generated SDK ships as the sibling package @hasna/economy-sdk, not as an export subpath of @hasna/economy. The v1 contract models SDK surfaces only as exportSubpath of the same package, so this surface cannot yet be declared supported without a false exportSubpath."
+    }
+  ],
   "storage": {
-    "mode": "local",
+    "backend": "sqlite",
+    "engines": ["sqlite", "postgresql"],
     "envPrefix": "HASNA_ECONOMY_",
     "aliasEnvPrefix": "ECONOMY_",
     "databaseUrlSecretRef": "hasna/oss/economy/database-url",
