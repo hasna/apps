@@ -373,8 +373,19 @@ function toStuckRunEntry(run: LoopRun, reclaimed: boolean, deferredReason?: "liv
  * Detect (and, with `apply`, reclaim) loop runs stuck in `status: "running"`
  * with an expired lease and no live backing process — the `7cf8d8c1` defect
  * class: a run that outlives both its lease and its execution timeout with no
- * process behind it, which under `overlap: "skip"` blocks every later slot
- * forever because nothing ever moves the run out of `running`.
+ * process behind it, leaving an unreapable orphan row whose loop's cursor
+ * never advances through recovery because nothing ever moves the run out of
+ * `running`.
+ *
+ * Be precise about what that state does NOT do, because the imprecise version
+ * ("`overlap: "skip"` then blocks the loop forever") sends the next reader to
+ * the scheduler instead of to recovery: an EXPIRED lease does not, on its own,
+ * refuse a later slot. That gate turns on a run holding a LIVE lease or a live
+ * process (`Store#hasBlockingRunningRunForOtherSlot`), which the store's own
+ * test "overlap skip does not block a later slot on an expired dead lease"
+ * (`src/lib/store.test.ts`) pins in exactly this shape. What this command
+ * repairs is the orphan row and the loop cursor behind it, not a wedged
+ * scheduler.
  *
  * The discriminator is evidence, not age: `Store#previewExpiredRunLeases` (and,
  * on apply, `Store#recoverExpiredRunLeasesDetailed`) only ever classifies a run
