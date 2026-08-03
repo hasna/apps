@@ -5,10 +5,13 @@ import { closeDb } from "../../lib/db.js";
 import {
   resolveIdentity,
   readPersistedIdentity,
+  readSessionIdentity,
   updateCachedAutoName,
   isSelfRename,
   describeIdentitySource,
   IdentityError,
+  bindSessionIdentity,
+  getDeclaredSessionId,
 } from "../../lib/identity.js";
 import { emitCliError } from "../cli-error.js";
 import { isAgentConflict, normalizeAgentName } from "../../lib/presence.js";
@@ -176,16 +179,24 @@ export function registerAgentCommands(program: Command): void {
           process.exit(1);
         }
 
-        // Presence lives in the store, but this installation's identity lives in
-        // the local agent-id file. Without this the rename succeeds remotely and
-        // the very next process resolves the OLD name again — the identity looks
-        // like it "reverts". Only follow the rename when we renamed OURSELVES,
-        // and decide that from the file on disk, never from the in-process cache
-        // (in a long-lived daemon that cache can be days stale).
+        // Presence lives in the store, while durable identity can live in either
+        // the session record or the installation-wide agent-id file. Migrate each
+        // record only when it names the agent that was actually renamed. Without
+        // this, the next process resolves the OLD name and heartbeat recreates
+        // presence for an agent the rename just removed.
+        const normalizedRenamed = normalizeAgentName(renamed);
         const persistedIdentity = readPersistedIdentity();
-        const isSelf = isSelfRename(old, persistedIdentity);
-        const identityAdopted = isSelf ? updateCachedAutoName(normalizeAgentName(renamed)) : false;
-        const identityWriteFailed = isSelf && !identityAdopted;
+        const machineIsSelf = isSelfRename(old, persistedIdentity);
+        const identityAdopted = machineIsSelf ? updateCachedAutoName(normalizedRenamed) : false;
+        const identityWriteFailed = machineIsSelf && !identityAdopted;
+
+        const declaredSessionId = getDeclaredSessionId();
+        const persistedSessionIdentity = readSessionIdentity(declaredSessionId);
+        const sessionIsSelf = isSelfRename(old, persistedSessionIdentity);
+        const sessionIdentityAdopted = sessionIsSelf && declaredSessionId
+          ? bindSessionIdentity(normalizedRenamed, declaredSessionId)
+          : false;
+        const sessionIdentityWriteFailed = sessionIsSelf && !sessionIdentityAdopted;
 
         if (opts.json) {
           printJsonLine({
@@ -194,15 +205,22 @@ export function registerAgentCommands(program: Command): void {
             renamed: true,
             identity_adopted: identityAdopted,
             identity_write_failed: identityWriteFailed,
+            session_identity_adopted: sessionIdentityAdopted,
+            session_identity_write_failed: sessionIdentityWriteFailed,
           });
         } else {
           printLine(chalk.green(`Agent "${old}" renamed to "${renamed}".`));
           if (identityAdopted) {
-            printLine(chalk.dim(`This installation's identity is now "${normalizeAgentName(renamed)}".`));
+            printLine(chalk.dim(`This installation's identity is now "${normalizedRenamed}".`));
           } else if (identityWriteFailed) {
             // Report the file, not resolveIdentity(): the file is what survives
             // this process, and it still names the agent we just renamed away.
             printErrorLine(chalk.red(`Renamed in presence, but could not update the local agent-id file (pinned read-only?). This installation still resolves as "${persistedIdentity}" — which no longer exists in presence.`));
+          }
+          if (sessionIdentityAdopted) {
+            printLine(chalk.dim(`This session's identity is now "${normalizedRenamed}".`));
+          } else if (sessionIdentityWriteFailed) {
+            printErrorLine(chalk.red(`Renamed in presence, but could not update this session's identity binding. CONVERSATIONS_SESSION_ID still resolves as "${persistedSessionIdentity}" — which no longer exists in presence.`));
           }
         }
       } catch (e: any) {
@@ -229,7 +247,9 @@ export function registerAgentCommands(program: Command): void {
         process.exit(1);
       }
 
-      const sessionId = opts.session || crypto.randomUUID();
+      const explicitSessionId = typeof opts.session === "string" ? opts.session.trim() : "";
+      const environmentSessionId = getDeclaredSessionId();
+      const sessionId = explicitSessionId || environmentSessionId || crypto.randomUUID();
       const result = await getStore().registerAgent(agentName, sessionId, opts.role, opts.project, opts.force);
 
       if (isAgentConflict(result)) {
@@ -243,6 +263,19 @@ export function registerAgentCommands(program: Command): void {
       }
 
       const registeredName = result.agent.agent;
+
+      // Presence registration and identity resolution are separate surfaces.
+      // Persist the successful registration under this session id so the next
+      // CLI process carrying the same CONVERSATIONS_SESSION_ID resolves to the
+      // same agent. Each session gets its own hashed file; registering session B
+      // cannot rewrite session A or the installation-wide fallback.
+      const sessionIdentityBound = bindSessionIdentity(registeredName, sessionId);
+      const sessionIdentityWriteFailed = !sessionIdentityBound;
+      const sessionIdentitySource = explicitSessionId
+        ? "explicit (--session)"
+        : environmentSessionId
+          ? "env var (CONVERSATIONS_SESSION_ID)"
+          : "generated by agents register";
 
       // Adopting is OPT-IN. The agent-id file is machine-wide: every session on
       // this host that passes neither --from nor CONVERSATIONS_AGENT_ID resolves
@@ -266,15 +299,25 @@ export function registerAgentCommands(program: Command): void {
           identity_adopted: identityAdopted,
           identity_write_failed: identityWriteFailed,
           identity_env_override: envOverride,
+          session_identity_bound: sessionIdentityBound,
+          session_identity_write_failed: sessionIdentityWriteFailed,
+          session_identity_source: sessionIdentitySource,
         });
       } else {
         const action = result.took_over ? chalk.yellow("took over") : result.created ? chalk.green("registered") : chalk.cyan("updated");
         printLine(`  ${action}  ${chalk.bold(registeredName)}  session: ${chalk.dim(sessionId)}`);
+        if (sessionIdentityBound) {
+          printLine(chalk.dim(`  identity   session identity bound via ${sessionIdentitySource}`));
+          if (!environmentSessionId) {
+            printLine(chalk.dim(`  reuse      set CONVERSATIONS_SESSION_ID=${sessionId} for later CLI invocations in this session`));
+          } else if (explicitSessionId && explicitSessionId !== environmentSessionId) {
+            printLine(chalk.yellow(`  warning    --session bound "${explicitSessionId}", but this environment resolves CONVERSATIONS_SESSION_ID="${environmentSessionId}"`));
+          }
+        } else {
+          printErrorLine(chalk.red("  identity   session binding was NOT persisted; later CLI invocations cannot inherit this registration"));
+        }
         if (identityAdopted) {
           printLine(chalk.dim(`  identity   installation identity set to "${registeredName}"`));
-          if (envOverride && normalizeAgentName(envOverride) !== normalizeAgentName(registeredName)) {
-            printLine(chalk.yellow(`  warning    CONVERSATIONS_AGENT_ID="${envOverride}" overrides the file; this environment still resolves as "${envOverride}"`));
-          }
         } else if (identityWriteFailed) {
           // Read the file rather than resolveIdentity(): nothing was adopted, so
           // the truth is whatever the unwritable file already says.
@@ -283,6 +326,9 @@ export function registerAgentCommands(program: Command): void {
             ? `This installation still resolves as "${persistedIdentity}".`
             : "This installation still has no machine identity.";
           printErrorLine(chalk.red(`  identity   NOT changed — could not write ${chalk.bold("agent-id")} (pinned read-only?). ${stillResolves}`));
+        }
+        if (envOverride && normalizeAgentName(envOverride) !== normalizeAgentName(registeredName)) {
+          printLine(chalk.yellow(`  warning    CONVERSATIONS_AGENT_ID="${envOverride}" has higher precedence; this environment still resolves as "${envOverride}"`));
         }
       }
       closeDb();

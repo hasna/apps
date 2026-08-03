@@ -1,4 +1,5 @@
-import { readFileSync, writeFileSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync, renameSync, rmSync } from "fs";
+import { createHash, randomUUID } from "crypto";
 import { join, dirname } from "path";
 import { getDataDir } from "./db.js";
 import { normalizeAgentName } from "./presence.js";
@@ -13,6 +14,81 @@ import { normalizeAgentName } from "./presence.js";
  */
 function agentIdFile(): string {
   return join(getDataDir(), "agent-id");
+}
+
+/** Return the stable session id declared by the caller, if it has one. */
+export function getDeclaredSessionId(): string | null {
+  const sessionId = process.env.CONVERSATIONS_SESSION_ID?.trim();
+  return sessionId || null;
+}
+
+/**
+ * Path for one session's identity binding.
+ *
+ * The session id is hashed rather than interpolated into the path. Besides
+ * avoiding path traversal, this lets callers use opaque runtime session ids
+ * without leaking them into directory listings.
+ */
+function sessionIdentityFile(sessionId: string): string {
+  const key = createHash("sha256").update(sessionId).digest("hex");
+  return join(getDataDir(), "session-identities", `${key}.json`);
+}
+
+type SessionIdentityRecord = {
+  version: 1;
+  session_id: string;
+  agent: string;
+};
+
+/** Read one session's persisted identity, verifying the unhashed key too. */
+export function readSessionIdentity(
+  sessionId: string | null = getDeclaredSessionId(),
+): string | null {
+  const declared = sessionId?.trim();
+  if (!declared) return null;
+
+  try {
+    const record = JSON.parse(
+      readFileSync(sessionIdentityFile(declared), "utf-8"),
+    ) as Partial<SessionIdentityRecord>;
+    if (record.version !== 1 || record.session_id !== declared) return null;
+    const agent = typeof record.agent === "string" ? record.agent.trim() : "";
+    return agent || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Bind one stable session id to an agent without touching another session or
+ * the installation-wide fallback. The rename makes the record replacement
+ * atomic for readers in other CLI processes.
+ */
+export function bindSessionIdentity(name: string, sessionId: string): boolean {
+  const declared = sessionId.trim();
+  const agent = name.trim();
+  if (!declared || !agent) return false;
+
+  const target = sessionIdentityFile(declared);
+  const temp = `${target}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    mkdirSync(dirname(target), { recursive: true });
+    const record: SessionIdentityRecord = {
+      version: 1,
+      session_id: declared,
+      agent,
+    };
+    writeFileSync(temp, JSON.stringify(record) + "\n", {
+      encoding: "utf-8",
+      mode: 0o600,
+    });
+    renameSync(temp, target);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    try { rmSync(temp, { force: true }); } catch {}
+  }
 }
 
 let cachedAutoName: string | null = null;
@@ -79,6 +155,7 @@ function identityNotSet(persisted: string | null): IdentityError {
       `Declare one of:\n` +
       `  - CONVERSATIONS_AGENT_ID=<name>   per session (what a durable seat should set)\n` +
       `  - --from <name>                   per invocation\n` +
+      `  - CONVERSATIONS_SESSION_ID=<id>   then run conversations agents register <name>\n` +
       `  - CONVERSATIONS_USE_MACHINE_IDENTITY=1   only where this process owns the whole machine's identity`,
   );
 }
@@ -129,11 +206,11 @@ export function getAutoName(): string {
 /**
  * Resolve agent identity.
  *
- * Priority: explicit flag → CONVERSATIONS_AGENT_ID env → opted-in machine
- * identity file. There is deliberately no fourth rung: a session that declared
- * nothing gets an error, not a guess. Silent inheritance and silent invention
- * were the same bug, and both were invisible precisely because resolution
- * always succeeded.
+ * Priority: explicit flag → CONVERSATIONS_AGENT_ID env → identity bound to the
+ * declared CONVERSATIONS_SESSION_ID → opted-in machine identity file. There is
+ * deliberately no fifth rung: a session that declared nothing gets an error,
+ * not a guess. Silent inheritance and silent invention were the same bug, and
+ * both were invisible precisely because resolution always succeeded.
  *
  * @throws {IdentityError} when nothing declared an identity for this session.
  */
@@ -142,6 +219,8 @@ export function resolveIdentity(explicit?: string): string {
   if (explicitValue) return explicitValue;
   const envValue = process.env.CONVERSATIONS_AGENT_ID?.trim();
   if (envValue) return envValue;
+  const sessionValue = readSessionIdentity();
+  if (sessionValue) return sessionValue;
   return getAutoName();
 }
 
@@ -198,6 +277,9 @@ export function resolveIdentities(explicit?: string): string[] {
   const envList = parseIdentityList(process.env.CONVERSATIONS_AGENT_ID);
   if (envList.length > 0) return envList;
 
+  const sessionIdentity = readSessionIdentity();
+  if (sessionIdentity) return [sessionIdentity];
+
   return [getAutoName()];
 }
 
@@ -214,20 +296,25 @@ export function resolveIdentities(explicit?: string): string[] {
 export function describeIdentitySource(explicit?: string): string {
   if (explicit?.trim()) return "explicit (--from flag)";
   if (process.env.CONVERSATIONS_AGENT_ID?.trim()) return "env var (CONVERSATIONS_AGENT_ID)";
+  if (readSessionIdentity()) {
+    return "session identity file keyed by CONVERSATIONS_SESSION_ID";
+  }
   return `machine identity file, opted in via CONVERSATIONS_USE_MACHINE_IDENTITY (${agentIdFile()})`;
 }
 
 /**
- * Require an explicit identity (for headless/MCP use).
- * Throws if no identity is set via flag or env.
+ * Require a caller-scoped identity (for headless/MCP use).
+ * Throws if no identity is set via flag, agent env, or session binding.
  */
 export function requireIdentity(explicit?: string): string {
   const explicitValue = explicit?.trim();
   if (explicitValue) return explicitValue;
   const envValue = process.env.CONVERSATIONS_AGENT_ID?.trim();
   if (envValue) return envValue;
+  const sessionValue = readSessionIdentity();
+  if (sessionValue) return sessionValue;
   throw new Error(
-    "Agent identity required. Set CONVERSATIONS_AGENT_ID env var or pass --from flag."
+    "Agent identity required. Set CONVERSATIONS_AGENT_ID, bind CONVERSATIONS_SESSION_ID with agents register, or pass --from."
   );
 }
 

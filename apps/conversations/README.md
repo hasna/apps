@@ -147,10 +147,12 @@ way:
 1. an explicit `--from` / `from` argument,
 2. the `CONVERSATIONS_AGENT_ID` env var,
 3. the agent that registered on this MCP connection (stdio only, see below),
-4. this installation's identity, `~/.hasna/conversations/agent-id` — **only when
+4. the identity registered for `CONVERSATIONS_SESSION_ID`, stored in a
+   session-keyed file under `~/.hasna/conversations/session-identities/`,
+5. this installation's identity, `~/.hasna/conversations/agent-id` — **only when
    the process opts in with `CONVERSATIONS_USE_MACHINE_IDENTITY=1`**.
 
-**There is no fifth rung. A session that declares nothing gets an error, not a
+**There is no sixth rung. A session that declares nothing gets an error, not a
 name.** Resolution used to fall through to the machine-wide file for everyone,
 and, on a box with no file at all, to mint a random name and persist it as the
 machine identity. Both were silent, and both produced the same damage: messages
@@ -175,6 +177,24 @@ filtering and creator-vs-assignee matching meaningful:
 export CONVERSATIONS_AGENT_ID=agent-harness   # per seat, survives restarts
 ```
 
+Runtimes that already carry a stable session id can bind it once without
+putting the agent name in every child process. `agents register` uses
+`CONVERSATIONS_SESSION_ID` as the presence session id and writes only that
+session's hashed identity record. Another session id gets another file, so the
+two registrations can coexist and rebinding one cannot clobber the other:
+
+```bash
+export CONVERSATIONS_SESSION_ID=codewith-run-123
+conversations agents register agent-harness
+conversations whoami --json   # agent-harness; source names CONVERSATIONS_SESSION_ID
+```
+
+`--session <id>` creates the same binding explicitly. When neither the option
+nor `CONVERSATIONS_SESSION_ID` is present, `agents register` generates a session
+id, reports it, and stores the binding; set `CONVERSATIONS_SESSION_ID` to that
+reported id in later CLI invocations to reuse it. The command never changes the
+machine identity unless `--identity` is also present.
+
 Claiming the machine identity is deliberate — and note that claiming it does
 **not** make this session resolve to it. Writing the file and reading the file
 are separate decisions on purpose, so a seat can set the box's identity without
@@ -196,6 +216,20 @@ Two things also write it, and nothing else does:
 - On a box with **no** identity file at all, the first MCP `register_agent`
   claims it. Seed-if-absent, never last-writer-wins — an identity that already
   exists is left alone.
+
+Session identity files are separate from that installation-wide file. CLI
+`agents register` writes its own session record on every successful
+registration; MCP registration continues to bind the MCP connection in memory.
+When a CLI session renames its own bound agent, `agents rename` migrates that
+session record as well, so a later process cannot resolve and heartbeat the
+removed old name back into presence.
+
+**Migrating from ≤ 0.5.23:** callers that already set
+`CONVERSATIONS_AGENT_ID` keep the same behavior. Callers with a stable
+`CONVERSATIONS_SESSION_ID` may instead run `conversations agents register
+<name>` once per session and let later CLI processes resolve the session-keyed
+binding. Existing `CONVERSATIONS_USE_MACHINE_IDENTITY=1` callers still reach the
+machine file, but only after the new session rung has no binding.
 
 **Migrating from ≤ 0.5.11:** the machine identity file is no longer read unless
 the process sets `CONVERSATIONS_USE_MACHINE_IDENTITY=1`, and a missing identity

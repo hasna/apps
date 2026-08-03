@@ -21,14 +21,19 @@ const TEST_DB = join(tmpdir(), `conversations-identity-${Date.now()}.db`);
 const CLI = ["bun", "run", "./src/cli/index.tsx"];
 const AGENT_ID_FILE = join(HOME_DIR, ".hasna", "conversations", "agent-id");
 
-function runCli(args: string[]) {
+function cliEnv(overrides: Record<string, string> = {}): Record<string, string> {
   const env: Record<string, string> = { ...process.env, ...{} } as Record<string, string>;
 
   // Never inherit the developer's identity or transport: CONVERSATIONS_AGENT_ID
-  // short-circuits the file we are testing, and the HASNA_CONVERSATIONS_* keys
-  // would point the test at the real cloud deployment.
+  // and CONVERSATIONS_SESSION_ID short-circuit the sources we are testing, and
+  // the HASNA_CONVERSATIONS_* keys would point the test at the real cloud
+  // deployment.
   for (const key of Object.keys(env)) {
-    if (key === "CONVERSATIONS_AGENT_ID" || key.startsWith("HASNA_CONVERSATIONS_")) {
+    if (
+      key === "CONVERSATIONS_AGENT_ID"
+      || key === "CONVERSATIONS_SESSION_ID"
+      || key.startsWith("HASNA_CONVERSATIONS_")
+    ) {
       delete env[key];
     }
   }
@@ -42,6 +47,12 @@ function runCli(args: string[]) {
   // The file is no longer read without this opt-in, so the suite must declare
   // it — the same one-line migration a cron job or loop makes.
   env.CONVERSATIONS_USE_MACHINE_IDENTITY = "1";
+
+  return { ...env, ...overrides };
+}
+
+function runCli(args: string[], overrides: Record<string, string> = {}) {
+  const env = cliEnv(overrides);
 
   const result = Bun.spawnSync({
     cmd: [...CLI, ...args],
@@ -100,6 +111,108 @@ describe("CLI identity persistence (e2e)", () => {
 
     expect(storedIdentity()).toBe(autoName);
     expect(JSON.parse(runCli(["whoami", "--json"]).stdout).agent).toBe(autoName);
+  });
+
+  test("two concurrent sessions retain different registered identities without clobbering", () => {
+    const sessionA = "session-alpha";
+    const sessionB = "session-beta";
+
+    // Both presence records remain live while the identities are resolved. The
+    // registrations themselves are serialized so this test covers session
+    // isolation, not SQLite's separate multi-writer transaction behavior.
+    const registerA = runCli(
+      ["agents", "register", "session-agent-alpha", "--json"],
+      { CONVERSATIONS_SESSION_ID: sessionA },
+    );
+    const registerB = runCli(
+      ["agents", "register", "session-agent-beta", "--json"],
+      { CONVERSATIONS_SESSION_ID: sessionB },
+    );
+
+    expect(registerA.exitCode).toBe(0);
+    expect(registerB.exitCode).toBe(0);
+    expect(JSON.parse(registerA.stdout)).toMatchObject({
+      session_identity_bound: true,
+      session_identity_write_failed: false,
+      session_identity_source: "env var (CONVERSATIONS_SESSION_ID)",
+    });
+    expect(JSON.parse(registerB.stdout)).toMatchObject({
+      session_identity_bound: true,
+      session_identity_write_failed: false,
+      session_identity_source: "env var (CONVERSATIONS_SESSION_ID)",
+    });
+
+    const whoamiA = runCli(["whoami", "--json"], {
+      CONVERSATIONS_SESSION_ID: sessionA,
+    });
+    const whoamiB = runCli(["whoami", "--json"], {
+      CONVERSATIONS_SESSION_ID: sessionB,
+    });
+
+    expect(whoamiA.exitCode).toBe(0);
+    expect(whoamiB.exitCode).toBe(0);
+    expect(JSON.parse(whoamiA.stdout)).toMatchObject({
+      agent: "session-agent-alpha",
+      source: expect.stringContaining("CONVERSATIONS_SESSION_ID"),
+    });
+    expect(JSON.parse(whoamiB.stdout)).toMatchObject({
+      agent: "session-agent-beta",
+      source: expect.stringContaining("CONVERSATIONS_SESSION_ID"),
+    });
+
+    // Rebinding one live session must affect only that session. The other
+    // session and the installation-wide compatibility fallback stay intact.
+    const rebindA = runCli(
+      ["agents", "register", "session-agent-alpha-next", "--json"],
+      { CONVERSATIONS_SESSION_ID: sessionA },
+    );
+    expect(rebindA.exitCode).toBe(0);
+    expect(JSON.parse(runCli(["whoami", "--json"], {
+      CONVERSATIONS_SESSION_ID: sessionA,
+    }).stdout).agent).toBe("session-agent-alpha-next");
+    expect(JSON.parse(runCli(["whoami", "--json"], {
+      CONVERSATIONS_SESSION_ID: sessionB,
+    }).stdout).agent).toBe("session-agent-beta");
+    expect(storedIdentity()).toBe("seed-agent");
+  });
+
+  test("renaming a session-bound agent migrates the binding for later processes", () => {
+    const sessionId = "session-rename";
+    const oldName = "session-agent-before-rename";
+    const newName = "session-agent-after-rename";
+
+    const register = runCli(
+      ["agents", "register", oldName, "--json"],
+      { CONVERSATIONS_SESSION_ID: sessionId },
+    );
+    expect(register.exitCode).toBe(0);
+    expect(JSON.parse(register.stdout).session_identity_bound).toBe(true);
+
+    const rename = runCli(
+      ["agents", "rename", oldName, newName, "--json"],
+      { CONVERSATIONS_SESSION_ID: sessionId },
+    );
+    expect(rename.exitCode).toBe(0);
+    expect(JSON.parse(rename.stdout)).toMatchObject({
+      renamed: true,
+      session_identity_adopted: true,
+      session_identity_write_failed: false,
+    });
+
+    // Both commands run in new processes. A stale binding would resolve the
+    // removed old name here, and heartbeat would recreate its presence row.
+    expect(JSON.parse(runCli(["whoami", "--json"], {
+      CONVERSATIONS_SESSION_ID: sessionId,
+    }).stdout).agent).toBe(newName);
+
+    const heartbeat = runCli(["agents", "heartbeat", "--json"], {
+      CONVERSATIONS_SESSION_ID: sessionId,
+    });
+    expect(heartbeat.exitCode).toBe(0);
+    expect(JSON.parse(heartbeat.stdout)).toMatchObject({
+      agent: newName,
+      heartbeat: true,
+    });
   });
 
   test("register --identity deliberately claims the machine identity, and it survives a new process", () => {

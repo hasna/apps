@@ -10,6 +10,8 @@ import {
   updateCachedAutoName,
   _resetAutoName,
   describeIdentitySource,
+  bindSessionIdentity,
+  readSessionIdentity,
 } from "./identity";
 import { AGENT_NAMES } from "./names";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, unlinkSync, readFileSync, writeFileSync } from "fs";
@@ -25,6 +27,7 @@ import { getDataDir } from "./db";
  * fixed for, so the suite now runs against a throwaway HOME.
  */
 const savedEnv = process.env.CONVERSATIONS_AGENT_ID;
+const savedSessionEnv = process.env.CONVERSATIONS_SESSION_ID;
 let savedHome: string | undefined;
 let savedUserProfile: string | undefined;
 let tempHome: string;
@@ -39,6 +42,10 @@ beforeEach(() => {
   tempHome = mkdtempSync(join(tmpdir(), "conversations-identity-test-"));
   process.env.HOME = tempHome;
   process.env.USERPROFILE = tempHome;
+  // No test may inherit the operator's live identity. Individual cases set the
+  // exact env rung they intend to exercise, and afterEach restores the caller.
+  delete process.env.CONVERSATIONS_AGENT_ID;
+  delete process.env.CONVERSATIONS_SESSION_ID;
   // These suites exercise the machine-identity FILE path, which is now opt-in.
   // The suites below that assert the refusal delete this in their own
   // beforeEach (inner hooks run after outer ones).
@@ -52,6 +59,12 @@ afterEach(() => {
     process.env.CONVERSATIONS_AGENT_ID = savedEnv;
   } else {
     delete process.env.CONVERSATIONS_AGENT_ID;
+  }
+
+  if (savedSessionEnv !== undefined) {
+    process.env.CONVERSATIONS_SESSION_ID = savedSessionEnv;
+  } else {
+    delete process.env.CONVERSATIONS_SESSION_ID;
   }
 
   delete process.env.CONVERSATIONS_USE_MACHINE_IDENTITY;
@@ -93,6 +106,51 @@ describe("resolveIdentity", () => {
     _resetAutoName();
     expect(resolveIdentity()).toBe("persisted-seat");
     expect(resolveIdentity()).toBe("persisted-seat");
+  });
+});
+
+describe("session identity bindings", () => {
+  beforeEach(() => {
+    delete process.env.CONVERSATIONS_AGENT_ID;
+    delete process.env.CONVERSATIONS_SESSION_ID;
+  });
+
+  test("keeps two session ids isolated in the same data directory", () => {
+    expect(bindSessionIdentity("session-agent-a", "session-a")).toBe(true);
+    expect(bindSessionIdentity("session-agent-b", "session-b")).toBe(true);
+
+    process.env.CONVERSATIONS_SESSION_ID = "session-a";
+    expect(readSessionIdentity()).toBe("session-agent-a");
+    expect(resolveIdentity()).toBe("session-agent-a");
+
+    process.env.CONVERSATIONS_SESSION_ID = "session-b";
+    expect(readSessionIdentity()).toBe("session-agent-b");
+    expect(resolveIdentity()).toBe("session-agent-b");
+  });
+
+  test("rebinding one session leaves the other session alone", () => {
+    expect(bindSessionIdentity("session-agent-a", "session-a")).toBe(true);
+    expect(bindSessionIdentity("session-agent-b", "session-b")).toBe(true);
+    expect(bindSessionIdentity("session-agent-a-next", "session-a")).toBe(true);
+
+    expect(readSessionIdentity("session-a")).toBe("session-agent-a-next");
+    expect(readSessionIdentity("session-b")).toBe("session-agent-b");
+  });
+
+  test("explicit and agent env identities still outrank a session binding", () => {
+    expect(bindSessionIdentity("session-agent", "session-a")).toBe(true);
+    process.env.CONVERSATIONS_SESSION_ID = "session-a";
+    process.env.CONVERSATIONS_AGENT_ID = "env-agent";
+
+    expect(resolveIdentity()).toBe("env-agent");
+    expect(resolveIdentity("explicit-agent")).toBe("explicit-agent");
+  });
+
+  test("whoami source names the session mechanism that answered", () => {
+    expect(bindSessionIdentity("session-agent", "session-a")).toBe(true);
+    process.env.CONVERSATIONS_SESSION_ID = "session-a";
+
+    expect(describeIdentitySource()).toContain("CONVERSATIONS_SESSION_ID");
   });
 });
 
@@ -154,6 +212,13 @@ describe("resolveIdentities", () => {
   test("honours a comma-separated env identity", () => {
     process.env.CONVERSATIONS_AGENT_ID = "env-agent,env-seat";
     expect(resolveIdentities()).toEqual(["env-agent", "env-seat"]);
+  });
+
+  test("falls back to the bound session identity when no agent env was given", () => {
+    delete process.env.CONVERSATIONS_AGENT_ID;
+    process.env.CONVERSATIONS_SESSION_ID = "session-read";
+    expect(bindSessionIdentity("session-agent", "session-read")).toBe(true);
+    expect(resolveIdentities()).toEqual(["session-agent"]);
   });
 
   test("throws rather than guessing when nothing declared an identity", () => {
@@ -284,6 +349,13 @@ describe("requireIdentity", () => {
   test("returns env var when no explicit value", () => {
     process.env.CONVERSATIONS_AGENT_ID = "env-agent";
     expect(requireIdentity()).toBe("env-agent");
+  });
+
+  test("returns a bound session identity when flag and agent env are absent", () => {
+    delete process.env.CONVERSATIONS_AGENT_ID;
+    process.env.CONVERSATIONS_SESSION_ID = "session-required";
+    expect(bindSessionIdentity("session-agent", "session-required")).toBe(true);
+    expect(requireIdentity()).toBe("session-agent");
   });
 
   test("throws when no identity available", () => {
