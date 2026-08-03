@@ -50,6 +50,31 @@ describe("CLI scan source and error boundaries", () => {
     expect(`${optedIn.stdout}${optedIn.stderr}`).not.toContain(syntheticSecret);
   });
 
+  test("completed JSON scan metadata matches the persisted findings", () => {
+    const scheme = "postgres" + "://";
+    const credentials = "user" + ":" + "pass";
+    writeFileSync(
+      join(repoDir, "database.ts"),
+      `const databaseUrl = "${scheme}${credentials}@localhost:5432/example";\n`,
+    );
+
+    const result = spawnSync(
+      "bun",
+      ["run", "src/cli/index.tsx", "scan", repoDir, "--scanner", "secrets", "--format", "json"],
+      { cwd: process.cwd(), env, encoding: "utf-8" },
+    );
+
+    expect(result.status).toBe(1);
+    const report = JSON.parse(result.stdout);
+    expect(report.scan.status).toBe("completed");
+    expect(report.findings).toHaveLength(1);
+    expect(report.summary.total_findings).toBe(1);
+    expect(report.scan.findings_count).toBe(report.findings.length);
+    expect(report.scan.completed_at).toBeString();
+    expect(report.scan.duration_ms).toBeNumber();
+    expect(report.scan.duration_ms).toBeGreaterThanOrEqual(0);
+  });
+
   test("files-only command scans regular files and withholds failing paths", () => {
     const syntheticSecret = "ghp_" + "SYNTHETICONLYABCDEFGHIJKLMNOPQRSTUVWXYZ12";
     const file = join(tempDir, "synthetic.env");

@@ -4,7 +4,7 @@ import { existsSync } from "fs";
 import chalk from "chalk";
 import { ScanStatus, Severity, ReportFormat, type Finding } from "../../types/index.js";
 import {
-  getDb, createScan, completeScan, updateScanStatus, createFinding,
+  getDb, createScan, getScan, completeScan, updateScanStatus, createFinding,
 } from "../../db/index.js";
 import { runScanner, getScanner } from "../../scanners/index.js";
 import { isLLMAvailable, analyzeFinding as llmAnalyzeFinding } from "../../llm/index.js";
@@ -125,7 +125,9 @@ export function registerScanCommand(program: Command): void {
 
         const filtered = filterBySeverity(storedFindings, severityThreshold);
         const reporter = getReporter(format);
-        const output = reporter.report(filtered, { ...scan, status: ScanStatus.Completed });
+        const completedScan = getScan(scan.id);
+        if (!completedScan) throw new Error("Completed scan could not be reloaded");
+        const output = reporter.report(filtered, completedScan);
         if (typeof output === "string") console.log(output);
 
         if (filtered.some((f) => f.severity === Severity.Critical || f.severity === Severity.High)) {
