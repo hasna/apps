@@ -74,7 +74,6 @@ import { collectPages } from "./paginate.js";
 import {
   createProjectDataModel as dbCreateProjectDataModel,
   createProjectDataRecord as dbCreateProjectDataRecord,
-  getProjectStorePaths,
   inspectProjectStore as dbInspectProjectStore,
   inspectProjectStoreWithLoops as dbInspectProjectStoreWithLoops,
   linkProjectLoop as dbLinkProjectLoop,
@@ -82,7 +81,6 @@ import {
   listProjectDataRecords as dbListProjectDataRecords,
   listProjectLoopLinks as dbListProjectLoopLinks,
   listProjectLoopSummaries as dbListProjectLoopSummaries,
-  PROJECT_STORE_SCHEMA_VERSION,
   type CreateProjectDataModelInput,
   type CreateProjectDataRecordInput,
   type LinkProjectLoopInput,
@@ -394,6 +392,50 @@ function withLock<T>(workspaceId: string, ctx: MutationContext | undefined, reas
  * invariant holds (no command touches sqlite directly) without pretending
  * profiles live in the cloud.
  */
+/**
+ * The per-project app store is a machine-local sqlite FILE at
+ * $HASNA_PROJECTS_HOME/data/<project_id>/project.db. It is keyed by the SAME
+ * project id in both transports, and the projects API server models none of it
+ * — there is no /v1 loop, data-model or app-store route to call.
+ *
+ * So both transports resolve it against local sqlite, exactly as tmux profiles
+ * do above. The api transport previously answered these reads from a hardcoded
+ * empty summary on the premise that the file "does not hold the cloud project's
+ * data"; that premise was wrong (same id, same file), and it made every read
+ * vacuous — `loops list` returned `loops: []` and `store inspect` reported
+ * `exists: false` / `loop_links: 0` against stores holding real rows, at rc=0,
+ * with no input that could ever produce a non-empty answer. See todos 4c17afb1.
+ */
+const machineLocalAppStore = {
+  listDataModels: async (project: Workspace): Promise<ProjectDataModel[]> => dbListProjectDataModels(project),
+  createDataModel: async (
+    project: Workspace,
+    input: CreateProjectDataModelInput,
+    ctx?: MutationContext,
+  ): Promise<ProjectDataModel> =>
+    withLock(project.id, ctx, "project data model create", () => dbCreateProjectDataModel(project, input)),
+  listDataRecords: async (project: Workspace, modelId: string): Promise<ProjectDataRecord[]> =>
+    dbListProjectDataRecords(project, modelId),
+  createDataRecord: async (
+    project: Workspace,
+    input: CreateProjectDataRecordInput,
+    ctx?: MutationContext,
+  ): Promise<ProjectDataRecord> =>
+    withLock(project.id, ctx, "project data record create", () => dbCreateProjectDataRecord(project, input)),
+  listLoopLinks: async (project: Workspace): Promise<ProjectLoopLink[]> => dbListProjectLoopLinks(project),
+  linkLoop: async (project: Workspace, input: LinkProjectLoopInput, ctx?: MutationContext): Promise<ProjectLoopLink> =>
+    withLock(project.id, ctx, "project OpenLoops link", () => dbLinkProjectLoop(project, input)),
+  listLoopSummaries: async (
+    project: Workspace,
+    options?: { includeRuns?: boolean; runLimit?: number },
+  ): Promise<ProjectLoopSummary[]> => dbListProjectLoopSummaries(project, options),
+  inspectAppStore: async (project: Workspace): Promise<ProjectStoreSummary> => dbInspectProjectStore(project),
+  inspectAppStoreWithLoops: async (
+    project: Workspace,
+    options?: { includeRuns?: boolean },
+  ): Promise<ProjectStoreSummary> => dbInspectProjectStoreWithLoops(project, options),
+} as const;
+
 const machineLocalTmuxProfiles = {
   listTmuxProfiles: async (): Promise<TmuxProfile[]> => dbListTmuxProfiles(),
   getTmuxProfile: async (idOrSlug: string): Promise<TmuxProfile | null> => dbResolveTmuxProfile(idOrSlug),
@@ -603,43 +645,19 @@ class LocalProjectStore implements ProjectStore {
     return dbListAgentRuns(filter ?? {});
   }
 
-  // ---- Data models & records ----
-  async listDataModels(project: Workspace): Promise<ProjectDataModel[]> {
-    return dbListProjectDataModels(project);
-  }
-
-  async createDataModel(project: Workspace, input: CreateProjectDataModelInput, ctx?: MutationContext): Promise<ProjectDataModel> {
-    return withLock(project.id, ctx, "project data model create", () => dbCreateProjectDataModel(project, input));
-  }
-
-  async listDataRecords(project: Workspace, modelId: string): Promise<ProjectDataRecord[]> {
-    return dbListProjectDataRecords(project, modelId);
-  }
-
-  async createDataRecord(project: Workspace, input: CreateProjectDataRecordInput, ctx?: MutationContext): Promise<ProjectDataRecord> {
-    return withLock(project.id, ctx, "project data record create", () => dbCreateProjectDataRecord(project, input));
-  }
-
-  // ---- Loop links ----
-  async listLoopLinks(project: Workspace): Promise<ProjectLoopLink[]> {
-    return dbListProjectLoopLinks(project);
-  }
-
-  async linkLoop(project: Workspace, input: LinkProjectLoopInput, ctx?: MutationContext): Promise<ProjectLoopLink> {
-    return withLock(project.id, ctx, "project OpenLoops link", () => dbLinkProjectLoop(project, input));
-  }
-
-  async listLoopSummaries(project: Workspace, options?: { includeRuns?: boolean; runLimit?: number }): Promise<ProjectLoopSummary[]> {
-    return dbListProjectLoopSummaries(project, options);
-  }
-
-  async inspectAppStore(project: Workspace): Promise<ProjectStoreSummary> {
-    return dbInspectProjectStore(project);
-  }
-
-  async inspectAppStoreWithLoops(project: Workspace, options?: { includeRuns?: boolean }): Promise<ProjectStoreSummary> {
-    return dbInspectProjectStoreWithLoops(project, options);
-  }
+  // ---- App store: data models/records + loop links ----
+  // Shared with the api transport: the app store is one machine-local sqlite
+  // file in both modes, so both classes delegate to the same implementation
+  // rather than keeping two copies that can drift.
+  listDataModels = machineLocalAppStore.listDataModels;
+  createDataModel = machineLocalAppStore.createDataModel;
+  listDataRecords = machineLocalAppStore.listDataRecords;
+  createDataRecord = machineLocalAppStore.createDataRecord;
+  listLoopLinks = machineLocalAppStore.listLoopLinks;
+  linkLoop = machineLocalAppStore.linkLoop;
+  listLoopSummaries = machineLocalAppStore.listLoopSummaries;
+  inspectAppStore = machineLocalAppStore.inspectAppStore;
+  inspectAppStoreWithLoops = machineLocalAppStore.inspectAppStoreWithLoops;
 
   // ---- Budgets & spend ----
   async createBudget(input: CreateProjectBudgetInput): Promise<ProjectBudget> {
@@ -1006,46 +1024,18 @@ class ApiProjectStore implements ProjectStore {
     return [];
   }
 
-  // Custom data models/records, OpenLoops links and budgets/spend are on-box
-  // sub-resources under
-  // $HASNA_PROJECTS_HOME/data/<id>; the projects API server does not model
-  // them. Reads return empty and writes throw rather than silently reading or
-  // writing a local sqlite file that does not hold the cloud project's data.
-  async listDataModels(): Promise<ProjectDataModel[]> {
-    return [];
-  }
-
-  async createDataModel(): Promise<ProjectDataModel> {
-    throw new LocalOnlyOperationError("create project data model");
-  }
-
-  async listDataRecords(): Promise<ProjectDataRecord[]> {
-    return [];
-  }
-
-  async createDataRecord(): Promise<ProjectDataRecord> {
-    throw new LocalOnlyOperationError("create project data record");
-  }
-
-  async listLoopLinks(): Promise<ProjectLoopLink[]> {
-    return [];
-  }
-
-  async linkLoop(): Promise<ProjectLoopLink> {
-    throw new LocalOnlyOperationError("link project OpenLoops loop");
-  }
-
-  async listLoopSummaries(): Promise<ProjectLoopSummary[]> {
-    return [];
-  }
-
-  async inspectAppStore(project: Workspace): Promise<ProjectStoreSummary> {
-    return emptyAppStoreSummary(project);
-  }
-
-  async inspectAppStoreWithLoops(project: Workspace): Promise<ProjectStoreSummary> {
-    return { ...emptyAppStoreSummary(project), loops: [] };
-  }
+  // ---- App store (machine-local sqlite in BOTH transports; see shared impl) ----
+  // Budgets/spend below stay api-routed: they live in the project REGISTRY,
+  // which the server does model, so they are not part of this machine-local set.
+  listDataModels = machineLocalAppStore.listDataModels;
+  createDataModel = machineLocalAppStore.createDataModel;
+  listDataRecords = machineLocalAppStore.listDataRecords;
+  createDataRecord = machineLocalAppStore.createDataRecord;
+  listLoopLinks = machineLocalAppStore.listLoopLinks;
+  linkLoop = machineLocalAppStore.linkLoop;
+  listLoopSummaries = machineLocalAppStore.listLoopSummaries;
+  inspectAppStore = machineLocalAppStore.inspectAppStore;
+  inspectAppStoreWithLoops = machineLocalAppStore.inspectAppStoreWithLoops;
 
   async createBudget(): Promise<ProjectBudget> {
     throw new LocalOnlyOperationError("create project budget");
@@ -1082,29 +1072,6 @@ class ApiProjectStore implements ProjectStore {
   async ensureChannel(project: Workspace, options?: StoreEnsureChannelOptions): Promise<ProjectChannelEnsureResult> {
     return ensureProjectChannelViaStore(this, project, options);
   }
-}
-
-/** Empty on-box store summary reported by the api transport (nothing local). */
-function emptyAppStoreSummary(project: Workspace): ProjectStoreSummary {
-  const paths = getProjectStorePaths(project);
-  return {
-    project_id: paths.project_id,
-    paths,
-    exists: false,
-    schema_version: PROJECT_STORE_SCHEMA_VERSION,
-    counts: { data_models: 0, data_records: 0, loop_links: 0 },
-    legacy_canvas_storage: {
-      state: "absent",
-      read_only: true,
-      table: "project_canvases",
-      table_exists: false,
-      record_count: 0,
-      db_path: paths.db_path,
-      files_path: `${paths.project_dir}/canvases`,
-      files_path_exists: false,
-      export_schema: "hasna.projects_legacy_canvas_export.v1",
-    },
-  };
 }
 
 // --------------------------------------------------------------------------
