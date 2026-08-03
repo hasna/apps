@@ -132,6 +132,15 @@ describe("public release gate", () => {
     expect(failures.map((failure) => failure.check)).toContain("readme-install");
   });
 
+  test("checks the package-root README when the SDK README is listed first", () => {
+    const failures = validatePublicTextSurfaces([
+      { path: "sdk/README.md", text: "SDK documentation" },
+      { path: "README.md", text: "bun install -g @hasna/todos" },
+    ]);
+
+    expect(failures.map((failure) => failure.check)).not.toContain("readme-install");
+  });
+
   test("scopes source scanning to public surfaces while packed text stays authoritative", () => {
     expect(isPublicReleaseTextSurface("buildspec.container-candidate.yml")).toBe(false);
     expect(isPublicReleaseTextSurface("scripts/verify-public-release.ts")).toBe(false);

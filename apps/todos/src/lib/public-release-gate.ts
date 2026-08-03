@@ -329,7 +329,10 @@ export function validatePublicTextSurfaces(files: TextFile[]): ReleaseGateFailur
     }
   }
 
-  const readme = files.find((file) => file.path === "README.md" || file.path.endsWith("/README.md"))?.text ?? "";
+  const readme = files.find((file) => {
+    const normalized = file.path.replaceAll("\\", "/");
+    return normalized === "README.md" || normalized === "package/README.md";
+  })?.text ?? "";
   addIf(
     failures,
     !readme.includes("bun install -g @hasna/todos"),
