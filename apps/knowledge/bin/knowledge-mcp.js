@@ -17657,20 +17657,25 @@ class LocalItemStore {
         metadata: input.metadata ?? {},
         archived: false,
         created_at: now,
-        updated_at: now
+        updated_at: now,
+        version: 1
       };
       db.items.push(item);
       saveStore(this.storePath, db);
       return item;
     }, { createParent: true });
   }
-  async update(idOrShort, patch) {
+  async update(idOrShort, patch, options = {}) {
     return withLock(this.storePath, () => {
       const db = loadStore(this.storePath);
       const idx = db.items.findIndex((item2) => matchesId(item2, idOrShort));
       if (idx === -1)
         return null;
       const item = db.items[idx];
+      const storedVersion = item.version ?? 1;
+      if (options.expectedVersion !== undefined && options.expectedVersion !== storedVersion) {
+        throw new KnowledgeVersionConflictError(options.expectedVersion, storedVersion);
+      }
       if (patch.title !== undefined)
         item.title = patch.title;
       if (patch.content !== undefined)
@@ -17684,6 +17689,7 @@ class LocalItemStore {
       if (patch.archived !== undefined)
         item.archived = patch.archived;
       item.updated_at = new Date().toISOString();
+      item.version = storedVersion + 1;
       db.items[idx] = item;
       saveStore(this.storePath, db);
       return item;

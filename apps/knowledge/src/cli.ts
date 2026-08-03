@@ -6,7 +6,7 @@
  */
 import { defaultStorePath, ensureStore, importLegacyGlobalStore, itemMatchesSearch, type KnowledgeItem } from './store';
 import { resolveItemStore, type ItemStore } from './item-store';
-import { isKnowledgeApiMode } from './cloud-store';
+import { isKnowledgeApiMode, KnowledgeVersionConflictError } from './cloud-store';
 import { diffEntries, formatEntryDiff, type EntrySnapshot } from './entry-diff';
 import {
   KNOWLEDGE_API_KEY_ENV_KEYS,
@@ -83,6 +83,17 @@ interface Flags {
   to?: string;
   /** Entry version for `diff`. Named --rev because -v/--version is taken. */
   rev?: number;
+  /**
+   * Optimistic-concurrency guard for `update`: reject the write (exit 2,
+   * nothing written) unless the stored item is still at exactly this
+   * version. Pass the version a caller read via a PRIOR, separate `get` —
+   * never re-derive it from a fresh read taken at write time, which is
+   * exactly the gap this flag closes: `update` already re-reads the item for
+   * its own internal patch, and using THAT freshly-read version as the guard
+   * only protects the instant inside one command invocation, not a decision
+   * an agent made from an earlier read.
+   */
+  ifVersion?: number;
   since?: string;
   topic?: string;
   dedupe?: boolean;
@@ -240,6 +251,7 @@ function parseArgs(argv: string[]): ParseResult {
       // --version (print the package version), and re-pointing it at an entry
       // version would silently break every existing `knowledge -v` invocation.
       case '--rev': flags.rev = Number(argv[i + 1]); i += 1; break;
+      case '--if-version': flags.ifVersion = Number(argv[i + 1]); i += 1; break;
       case '--since': flags.since = argv[i + 1]; i += 1; break;
       case '--topic': flags.topic = argv[i + 1]; i += 1; break;
       case '--dedupe': flags.dedupe = true; break;
@@ -457,6 +469,7 @@ Update Options:
   --content <content>         New content
   --url <url>                 New source URL
   -t, --tag <tag>             Add a tag
+  --if-version <n>             Reject the write (exit 2) unless the stored item is still at version <n>
 
 Delete Options:
   --id <id>                   Item id
@@ -474,7 +487,7 @@ function printCommandHelp(command: string): void {
   if (command === 'add') { console.log('Usage: knowledge add <title> <content> [--url <url>] [-t <tag>]... [--json]\n  -t/--tag is repeatable and accepts comma-separated values: -t a -t b  ==  -t "a,b"'); return; }
   if (command === 'list' || command === 'ls') { console.log('Usage: knowledge list|ls [--format table|json] [-p <page>] [-l <limit>] [-s <search>] [-t <tag>]... [--sort created|title] [--desc] [--archived] [--include-archived] [--verbose] [--json]\n  -s/--search is a CASE-INSENSITIVE LITERAL SUBSTRING filter over id, title and content — not a\n  tokenised or semantic search, so a word order that never appears verbatim matches nothing. It\n  resolves an item by its slug because the id is included. For meaning-based lookup use `knowledge\n  search <query>`, which is a different index and will find items this filter cannot.\n  -t/--tag is repeatable and accepts comma-separated values; repeated -t narrows (an item must carry every tag).\n  Each value matches an item carrying the whole value OR all of its comma-split names — a union, so\n  `-t "a,b,c"` finds items carrying a legacy literal "a,b,c" tag as well as items carrying the three\n  names separately. (`untag` differs on purpose: it stops at the whole-value match.)\n  Use --json to tell those two shapes apart; the table renders them near-identically.\n  Archived items are excluded by default; add --include-archived to sweep both.\n  If both --archived and --include-archived are passed, --archived wins (archived items only).'); return; }
   if (command === 'get') { console.log('Usage: knowledge get --id <id> [--json]'); return; }
-  if (command === 'update' || command === 'edit') { console.log('Usage: knowledge update|edit --id <id> [--title <title>] [--content <content>] [--url <url>] [-t <tag>]... [--json]\n  -t/--tag is repeatable and accepts comma-separated values; tags are added, never replaced.\n  With -t the output reports how many tags were actually added, so 0 added is not read as 3.'); return; }
+  if (command === 'update' || command === 'edit') { console.log('Usage: knowledge update|edit --id <id> [--title <title>] [--content <content>] [--url <url>] [-t <tag>]... [--if-version <n>] [--json]\n  -t/--tag is repeatable and accepts comma-separated values; tags are added, never replaced.\n  With -t the output reports how many tags were actually added, so 0 added is not read as 3.\n  --if-version <n> is an explicit optimistic-concurrency guard: pass the "version" a prior\n  `knowledge get` returned, and the write is REJECTED (exit 2, nothing written) if the stored\n  item has moved to a different version since. Without it, the version used is whatever THIS\n  command itself just re-read, which only guards the instant inside one invocation — it cannot\n  catch a decision made from an earlier, separate `get`. On conflict, stderr and --json both\n  name the expected and the actual (current) version; there is no automatic retry.'); return; }
   if (command === 'archive') { console.log('Usage: knowledge archive --id <id> [--json]'); return; }
   if (command === 'restore' || command === 'unarchive') { console.log('Usage: knowledge restore|unarchive --id <id> [--json]'); return; }
   if (command === 'upsert') { console.log('Usage: knowledge upsert [title] [content] [--id <id>] [--title <title>] [--content <content>] [--url <url>] [-t <tag>]... [--json]\n  -t/--tag is repeatable and accepts comma-separated values; tags are added, never replaced.\n  With -t the output reports how many tags were actually added, on both the create and update paths.'); return; }
@@ -2099,6 +2112,14 @@ async function run(argv: string[]): Promise<void> {
     requireId(flags);
     const current = await itemStore.get(flags.id!);
     if (!current) throw new Error(`Item not found: ${flags.id}`);
+    // `--if-version` must be a real positive integer, checked before it ever
+    // reaches the store — a NaN/zero/negative guard value can never equal a
+    // stored version, so a mistyped flag would otherwise ALWAYS read as a
+    // conflict, and someone would eventually "fix" that by removing the
+    // flag instead of their typo.
+    if (flags.ifVersion !== undefined && (!Number.isInteger(flags.ifVersion) || flags.ifVersion < 1)) {
+      throw new Error(`Invalid --if-version ${JSON.stringify(String(flags.ifVersion))}: must be a positive integer version number, e.g. the "version" field from a prior 'knowledge get'.`);
+    }
     const patch: Record<string, unknown> = {};
     if (flags.title !== undefined) patch.title = flags.title;
     if (flags.content !== undefined) patch.content = flags.content;
@@ -2108,15 +2129,22 @@ async function run(argv: string[]): Promise<void> {
       added = tagsToAppend(current.tags, flags.tag);
       if (added.length > 0) patch.tags = [...(current.tags ?? []), ...added];
     }
-    // This command is already read-then-write, so it can send the version it
-    // just read as the concurrency guard for free — the agent never types a
-    // version number. Without this the server's check exists but nothing on the
-    // fleet ever exercises it, and two agents editing one entry still lose an
-    // edit silently. A conflict surfaces as a non-zero exit naming both
-    // versions; there is deliberately NO automatic retry, because re-applying
-    // without comparing the fields that moved is how you overwrite a colleague
-    // while believing you handled the conflict.
-    const item = await itemStore.update(current.id, patch, { expectedVersion: current.version });
+    // This command is already read-then-write, so ABSENT an explicit
+    // --if-version it sends the version it just read as the concurrency
+    // guard for free — the agent never types a version number. That only
+    // guards the instant inside THIS invocation, though: it re-reads `current`
+    // above and hands back exactly that version, so it can never catch a
+    // decision an agent made from an EARLIER separate `get` — by the time this
+    // command re-reads the item, any intervening write is already reflected in
+    // `current.version`, and the guard trivially "passes" against itself.
+    // `--if-version <n>` is the fix: it lets the caller assert the version IT
+    // actually saw, rather than the version this command happens to see right
+    // now. A conflict surfaces as a non-zero exit naming both versions; there
+    // is deliberately NO automatic retry, because re-applying without
+    // comparing the fields that moved is how you overwrite a colleague while
+    // believing you handled the conflict.
+    const expectedVersion = flags.ifVersion !== undefined ? flags.ifVersion : current.version;
+    const item = await itemStore.update(current.id, patch, { expectedVersion });
     // When -t was asked for, report how many tags were actually added. Without this,
     // "added 3" and "added none, they were all already there" both print `Updated <id>`
     // at exit 0 and carry the count nowhere — not in `message`, not in JSON — the same
@@ -2343,6 +2371,14 @@ async function run(argv: string[]): Promise<void> {
  * object is additionally emitted on stdout (mirroring the `{ ok: true, ... }`
  * success contract) so that consumers parsing `<cmd> --json` can detect and
  * read the failure on stdout instead of getting nothing.
+ *
+ * A version-conflict rejection (from `--if-version`, or from the automatic
+ * guard every read-then-write item command sends) is a DISTINCT non-zero exit
+ * (2) rather than the generic catch-all (1) every other CLI error uses, and
+ * carries the two version numbers structurally in `--json` (`code`,
+ * `expected`, `current`) as well as in the message — so a caller can tell
+ * "the concurrency guard fired" apart from "something else went wrong"
+ * without parsing prose.
  */
 function emitCliError(error: unknown, argv: string[]): void {
   const message = error instanceof Error ? error.message : String(error);
@@ -2352,10 +2388,16 @@ function emitCliError(error: unknown, argv: string[]): void {
   // to surface the full diagnostic for troubleshooting.
   log('debug', 'CLI error', { message, stack: error instanceof Error ? error.stack : undefined });
   console.error(`Error: ${message}`);
+  const conflict = error instanceof KnowledgeVersionConflictError ? error : null;
   if (argv.includes('--json')) {
-    output({ ok: false, error: message, message }, true);
+    output({
+      ok: false,
+      error: message,
+      message,
+      ...(conflict ? { code: 'version_conflict', expected: conflict.expected, current: conflict.current } : {}),
+    }, true);
   }
-  process.exitCode = 1;
+  process.exitCode = conflict ? 2 : 1;
 }
 
 if (import.meta.main) {

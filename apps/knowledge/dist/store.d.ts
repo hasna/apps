@@ -10,11 +10,17 @@ export interface KnowledgeItem {
     created_at: string;
     updated_at: string;
     /**
-     * Entry version, owned by the database (see db/pg-migrations.ts). Present on
-     * items read from the Postgres-backed store; absent on the local JSON store,
-     * which has no version line at all — and that absence is deliberately visible
-     * rather than defaulted to 1, so a caller cannot mistake "this store does not
-     * version" for "this entry has never been edited".
+     * Entry version — a monotonic counter bumped on every successful update,
+     * used as the optimistic-concurrency guard (`--if-version` /
+     * `expectedVersion`). On the Postgres-backed store it is owned by the
+     * database (see db/pg-migrations.ts). The local JSON store tracks the same
+     * counter itself (see `LocalItemStore` in item-store.ts), lock-protected
+     * alongside the row, even though it retains no version HISTORY — that is a
+     * separate capability (`supportsVersions`; see
+     * {@link VersionHistoryUnsupportedError} in item-store.ts) covering
+     * retained prior bodies, which the local store still does not keep. An item
+     * written before the local counter existed simply has no field yet and is
+     * read as version 1 the first time it is touched under this scheme.
      */
     version?: number;
 }
