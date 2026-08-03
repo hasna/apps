@@ -41,6 +41,7 @@ import type { CloudTaskRelations } from "../cloud-router.js";
 import type { TaskPriority, TaskStatus } from "../../types/index.js";
 import { canonicalAgentRef, resolveCreatorIdentity, resolveWritableIdentity } from "../../lib/creator-identity.js";
 import { formatExpiredLock, lockDisplayState } from "../../lib/lock-display.js";
+import { parseTagList, resolveBulkTags } from "../../lib/bulk-tags.js";
 import { resolveClaimIdentity } from "../claim-guard.js";
 import { resolveValidatedAssignee } from "../assignee-guard.js";
 import { loadAssigneeContext } from "../../lib/assignee-context.js";
@@ -2039,20 +2040,32 @@ export function registerTaskCommands(program: Command) {
   // bulk
   program
     .command("bulk <action> <ids...>")
-    .description("Bulk operation on multiple tasks (done, start, delete, plan/move-plan)")
+    .description("Bulk operation on multiple tasks (done, start, delete, plan/move-plan, tag, untag)")
     .option("--plan <id>", "Plan ID for the plan/move-plan action")
     .option("--clear-plan", "Remove plan assignment for the plan/move-plan action")
-    .action(async (action: string, ids: string[], opts: { plan?: string; clearPlan?: boolean }) => {
+    .option("--tag <tags>", "Comma-separated tags for the tag/untag action")
+    .option("--tags <tags>", "Comma-separated tags for the tag/untag action (alias for --tag)")
+    .action(async (action: string, ids: string[], opts: { plan?: string; clearPlan?: boolean; tag?: string; tags?: string }) => {
       const globalOpts = program.opts();
       const results: { id: string; success: boolean; error?: string }[] = [];
       const cloud = getTodosCloudClient();
       const isPlanAction = action === "plan" || action === "move-plan";
+      const isTagAction = action === "tag" || action === "untag";
       if (isPlanAction && Boolean(opts.plan) === Boolean(opts.clearPlan)) {
         handleError(new Error("Use exactly one of --plan or --clear-plan with bulk plan."));
       }
-      const knownActions = new Set(["done", "complete", "start", "delete", "plan", "move-plan"]);
+      const knownActions = new Set(["done", "complete", "start", "delete", "plan", "move-plan", "tag", "untag"]);
       if (!knownActions.has(action)) {
-        handleError(new Error(`Unknown action: ${action}. Use: done, start, delete, plan (alias: move-plan)`));
+        handleError(new Error(`Unknown action: ${action}. Use: done, start, delete, plan (alias: move-plan), tag, untag`));
+      }
+      // Resolved once, before either loop. An empty tag set is refused rather
+      // than applied: a bulk run with nothing to apply would report success for
+      // every id and read as a completed backfill.
+      const bulkTags = isTagAction ? parseTagList(opts.tag ?? opts.tags) : [];
+      if (isTagAction && bulkTags.length === 0) {
+        handleError(new Error(
+          `bulk ${action} needs --tag. Example: todos bulk ${action} <ids...> --tag directive:k_msd4cz8t_ste6f4`,
+        ));
       }
       // Resolved ONCE, before either loop: `bulk start` is still a claim, and a
       // missing identity is a property of the session rather than of any one row.
@@ -2100,6 +2113,16 @@ export function registerTaskCommands(program: Command) {
               await cloudTaskAction(cloud, resolvedId, "start", { agent_id: bulkClaimAgentId! });
             } else if (action === "delete") {
               await cloudDeleteTask(cloud, resolvedId);
+            } else if (isTagAction) {
+              const current = await cloudGetTask(cloud, resolvedId);
+              if (!current) throw new Error(`Task not found: ${rawId}`);
+              const resolution = resolveBulkTags(current.tags, action, bulkTags);
+              // Skip the PATCH when the row already satisfies the request, so a
+              // re-run after a partial failure does not bump row versions or
+              // write audit noise for rows that were already correct.
+              if (resolution.changed) {
+                await cloudUpdateTask(cloud, resolvedId, { version: current.version, tags: resolution.tags });
+              }
             } else {
               const current = await cloudGetTask(cloud, resolvedId);
               if (!current) throw new Error(`Task not found: ${rawId}`);
@@ -2139,6 +2162,16 @@ export function registerTaskCommands(program: Command) {
           } else if (action === "delete") {
             deleteTask(resolvedId);
             results.push({ id: resolvedId, success: true });
+          } else if (isTagAction) {
+            const current = getTask(resolvedId);
+            if (!current) {
+              throw new Error(`Task not found: ${rawId}`);
+            }
+            const resolution = resolveBulkTags(current.tags, action, bulkTags);
+            if (resolution.changed) {
+              updateTask(resolvedId, { version: current.version, tags: resolution.tags });
+            }
+            results.push({ id: resolvedId, success: true });
           } else if (isPlanAction) {
             const current = getTask(resolvedId);
             if (!current) {
@@ -2147,7 +2180,7 @@ export function registerTaskCommands(program: Command) {
             updateTask(resolvedId, { version: current.version, plan_id: planId });
             results.push({ id: resolvedId, success: true });
           } else {
-            handleError(new Error(`Unknown action: ${action}. Use: done, start, delete, plan (alias: move-plan)`));
+            handleError(new Error(`Unknown action: ${action}. Use: done, start, delete, plan (alias: move-plan), tag, untag`));
           }
         } catch (e) {
           results.push({ id: rawId, success: false, error: e instanceof Error ? e.message : String(e) });
