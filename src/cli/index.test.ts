@@ -8,9 +8,11 @@ import { join } from "node:path";
 import { acquireWorkspaceLock, completeAgentRun, createRoot, createWorkspace, startAgentRun } from "../db/workspaces.js";
 import { runMigrations } from "../db/schema.js";
 import { closeDatabase } from "../db/database.js";
+import { deriveWorkspaceRegistryFields } from "../lib/workspace-plan.js";
 import { registerWorkspaceCommands } from "./commands/workspaces.js";
 import { API_MODE_ENV_KEYS, testSpawnEnv } from "../testing/spawn-env.js";
 import { __resetProjectStore } from "../store/project-store.js";
+import type { Root, WorkspaceKind } from "../types/workspace.js";
 
 const CLI_PATH = join(process.cwd(), "src/cli/index.ts");
 
@@ -2012,11 +2014,9 @@ describe("project-first CLI surface", () => {
     // build, and `projects store inspect` then read primary_is_canonical=false /
     // exists.workspace=false. Five projects were created that way.
     //
-    // Both derivations live in the local planner (`plannedWorkspace`), which the
-    // api branch of `create` skipped entirely. The server derives nothing —
-    // `pg-store.ts` stores `input.primary_path ?? null` and `input.integrations
-    // ?? {}` verbatim — so the client is the only place this can be computed,
-    // and it honours a client-supplied `id` (`input.id ?? generateWorkspaceId()`).
+    // Both derivations live in the shared registry helper. The client supplies
+    // an id-derived no-root path, while the server derives slug-dependent
+    // fields only after allocating the exact persisted slug.
     //
     // The property under test is TRANSPORT PARITY: the same flags must produce
     // the same registry row whether the store is local or api. The existing
@@ -2024,8 +2024,29 @@ describe("project-first CLI surface", () => {
     // this — the divergence only appears on the defaulting path.
     const root = mkdtempSync(join(tmpdir(), "projects-cloud-derive-"));
     const home = join(root, "home");
+    const rootedBase = join(root, "rooted");
     const port = reserveFreePort();
     const requests: Array<{ method: string; path: string; body: Record<string, unknown> | null }> = [];
+    const persistedSlugs = new Set<string>();
+    const rooted: Root = {
+      id: "root_cloud_derive",
+      slug: "cloud-derive-root",
+      name: "Cloud Derive Root",
+      base_path: rootedBase,
+      tags: [],
+      default_kind: "project",
+      default_recipe_id: null,
+      default_tmux_profile_id: null,
+      github_org: null,
+      repo_visibility: null,
+      path_template: "{slug}",
+      name_template: null,
+      allowed_recipes: [],
+      allowed_agents: [],
+      metadata: {},
+      created_at: "2026-08-03 00:00:00",
+      updated_at: "2026-08-03 00:00:00",
+    };
     const server = Bun.serve({
       hostname: "127.0.0.1",
       port,
@@ -2034,17 +2055,35 @@ describe("project-first CLI surface", () => {
         let body: Record<string, unknown> | null = null;
         try { body = (await req.json()) as Record<string, unknown>; } catch { body = null; }
         requests.push({ method: req.method, path: url.pathname, body });
+        if (req.method === "GET" && url.pathname === `/v1/roots/${rooted.slug}`) {
+          return Response.json(rooted);
+        }
         if (req.method === "POST" && url.pathname === "/v1/projects") {
-          // Mirror the real server: it echoes the client's id and stores
-          // primary_path/integrations verbatim, deriving nothing of its own.
+          const id = (body?.id as string | undefined) ?? "wks_serverassigned0001";
+          const baseSlug = (body?.slug as string | undefined) ?? "cloud-derive-probe";
+          let slug = baseSlug;
+          let suffix = 1;
+          while (persistedSlugs.has(slug)) {
+            suffix++;
+            slug = `${baseSlug}-${suffix}`;
+          }
+          persistedSlugs.add(slug);
+          const projectRoot = body?.root_id === rooted.id ? rooted : null;
+          const kind = ((body?.kind as WorkspaceKind | undefined) ?? projectRoot?.default_kind ?? "generic") as WorkspaceKind;
+          const derived = deriveWorkspaceRegistryFields({
+            name: (body?.name as string | undefined) ?? "Cloud Derive Probe",
+            primary_path: body?.primary_path as string | undefined,
+            integrations: body?.integrations as Record<string, string> | undefined,
+          }, { root: projectRoot, slug, id, kind });
           return Response.json({
-            id: (body?.id as string | undefined) ?? "wks_serverassigned0001",
-            slug: (body?.slug as string | undefined) ?? "cloud-derive-probe",
-            name: "Cloud Derive Probe",
-            kind: "generic",
+            id,
+            slug,
+            name: (body?.name as string | undefined) ?? "Cloud Derive Probe",
+            kind,
             status: "active",
-            primary_path: (body?.primary_path as string | undefined) ?? null,
-            integrations: (body?.integrations as Record<string, unknown> | undefined) ?? {},
+            root_id: projectRoot?.id ?? null,
+            primary_path: derived.primary_path,
+            integrations: derived.integrations,
           });
         }
         if (url.pathname === "/v1/projects") return Response.json({ workspaces: [] });
@@ -2110,13 +2149,21 @@ describe("project-first CLI surface", () => {
       const body = bodies[0]!;
 
       // The create must honour what the plan promised.
-      expect(body.integrations?.["conversations_channel"]).toBe(plannedChannel);
       expect(body.primary_path).not.toBeNull();
       expect(body.primary_path).toBeDefined();
       // Tie the path to the id actually sent, so a path for some *other*
       // project's id cannot pass: the canonical location is derived from the id.
       expect(body.id).toMatch(/^wks_[A-Za-z0-9_-]+$/);
       expect(body.primary_path).toBe(join(home, "workspaces", body.id!));
+      // The channel is deliberately absent from the request. The server must
+      // derive it after slug allocation instead of mistaking a client guess for
+      // an explicit integration link.
+      expect(body.integrations?.["conversations_channel"]).toBeUndefined();
+      const createdProject = (JSON.parse(created.stdout) as {
+        project: { primary_path: string; integrations: Record<string, unknown> };
+      }).project;
+      expect(createdProject.primary_path).toBe(body.primary_path!);
+      expect(createdProject.integrations["conversations_channel"]).toBe(plannedChannel);
 
       // Negative control 1: an explicit --path must still win, so the fix is
       // "derive a default", not "overwrite whatever the operator asked for".
@@ -2142,6 +2189,30 @@ describe("project-first CLI surface", () => {
       expect(pinned.exitCode).toBe(0);
       const pinnedBody = postBodies()[2]!;
       expect(pinnedBody.integrations?.["conversations_channel"]).toBe("pinned-elsewhere");
+
+      // Real duplicate-slug API path: the client cannot know the suffix before
+      // the server checks the registry. A rooted {slug} path and the derived
+      // channel must therefore follow the exact returned/persisted slug.
+      const duplicateArgs = [
+        "--name", "Rooted Duplicate",
+        "--slug", "rooted-duplicate",
+        "--root", rooted.slug,
+        "--json",
+      ];
+      const firstDuplicate = await runCreate(duplicateArgs);
+      const secondDuplicate = await runCreate(duplicateArgs);
+      expect(firstDuplicate.exitCode).toBe(0);
+      expect(secondDuplicate.exitCode).toBe(0);
+      const secondProject = (JSON.parse(secondDuplicate.stdout) as {
+        project: { slug: string; primary_path: string; integrations: Record<string, unknown> };
+      }).project;
+      expect(secondProject.slug).toBe("rooted-duplicate-2");
+      expect(secondProject.primary_path).toBe(join(rootedBase, secondProject.slug));
+      expect(secondProject.integrations["conversations_channel"]).toBe(secondProject.slug);
+
+      const secondDuplicateBody = postBodies()[4]!;
+      expect(secondDuplicateBody.primary_path).toBeUndefined();
+      expect(secondDuplicateBody.integrations?.["conversations_channel"]).toBeUndefined();
     } finally {
       server.stop(true);
       rmSync(root, { recursive: true, force: true });

@@ -178,15 +178,13 @@ function deriveWorkspacePath(input: CreateWorkspaceInput, root: Root | null, slu
 }
 
 /**
- * The registry-level fields a client derives for a new project: the canonical
- * workspace path, and the slug-derived conversations channel.
+ * Registry-level defaults for a new project: the canonical workspace path and
+ * the slug-derived conversations channel.
  *
- * Extracted so that every transport computes them identically. The api/cloud
- * server derives NEITHER — `src/serve/pg-store.ts` stores `input.primary_path ??
- * null` and `input.integrations ?? {}` verbatim — so the client is the only
- * place these can be computed, and a client path that skips this step writes a
- * registry row with no workspace behind it (`primary_is_canonical: false`,
- * `exists.workspace: false`).
+ * Extracted so local planning and the api/cloud PostgreSQL store compute them
+ * identically. The server calls this only after allocating the exact persisted
+ * slug; clients must not precompute slug-dependent values that the server would
+ * then mistake for explicit operator choices.
  *
  * Both derivations are pure with respect to the registry: the path is a
  * function of the project id under `$HASNA_PROJECTS_HOME` (plus the root's

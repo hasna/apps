@@ -9,6 +9,7 @@
 
 import { nanoid } from "nanoid";
 import type { TypedQueryClient } from "../generated/storage-kit/query.js";
+import { deriveWorkspaceRegistryFields } from "../lib/workspace-plan.js";
 import type {
   Agent,
   AgentRow,
@@ -465,7 +466,11 @@ export class ProjectsPgStore {
 
     const kind = input.kind ?? recipe?.kind ?? root?.default_kind ?? "generic";
     const tags = normalizeList([...(root?.tags ?? []), ...(recipe?.default_tags ?? []), ...(input.tags ?? [])]);
-    const primaryPath = input.primary_path ?? null;
+    // Slug allocation is server-authoritative. Derive slug-dependent defaults
+    // only after ensureUniqueSlug has selected the value this row will persist;
+    // otherwise a duplicate request can point at the first project's path and
+    // conversations channel. Explicit client values still win in the helper.
+    const derived = deriveWorkspaceRegistryFields(input, { root, slug, id, kind });
 
     try {
       await this.db.execute(
@@ -481,12 +486,12 @@ export class ProjectsPgStore {
           kind,
           root?.id ?? null,
           recipe?.id ?? null,
-          primaryPath,
+          derived.primary_path,
           input.git_remote ?? null,
           input.s3_bucket ?? null,
           input.s3_prefix ?? null,
           json(tags),
-          json(input.integrations ?? {}),
+          json(derived.integrations),
           json(input.metadata ?? {}),
           ts,
           ts,

@@ -1519,15 +1519,13 @@ function registerProjectCommands(program: Command): void {
           // attribution stays server-side (see mutationAgentId).
           const root = opts.root ? await resolveRoot(store, opts.root) : null;
           const recipe = opts.recipe ? await resolveRecipe(store, opts.recipe) : null;
-          // The canonical workspace path and the derived conversations channel
-          // are computed CLIENT-SIDE in every transport: the server stores
-          // `primary_path`/`integrations` verbatim and derives neither. Skipping
-          // this here is what produced rows with `primary_path: null` while
-          // `--dry-run` — which routes through the local planner below — showed a
-          // canonical path, so the plan promised a project the create never
-          // built. Derive from a client-generated id, which the server honours
-          // (`input.id ?? generateWorkspaceId()`), so the row and the directory
-          // agree on one id.
+          // Generate the id client-side so the canonical no-root path can still
+          // describe this client's project store. Slug-dependent defaults are
+          // server-authoritative: a root template may contain {slug}, and the
+          // server may suffix a duplicate slug. Do not send an implicit rooted
+          // path or derived channel, because the server cannot distinguish
+          // those guesses from explicit operator values. It derives missing
+          // fields after selecting the exact slug it persists.
           const id = generateWorkspaceId();
           const slug = opts.slug ?? workspaceSlugify(opts.name);
           const kind = parseKind(opts.kind) ?? recipe?.kind ?? root?.default_kind ?? "generic";
@@ -1544,11 +1542,11 @@ function registerProjectCommands(program: Command): void {
             kind,
             root_id: root?.id,
             recipe_id: recipe?.id,
-            primary_path: derived.primary_path ?? undefined,
+            primary_path: opts.path || !root ? derived.primary_path ?? undefined : undefined,
             git_remote: opts.gitRemote,
             tags: splitList(opts.tags),
             metadata: Object.keys(managementMetadata).length ? managementMetadata : undefined,
-            integrations: Object.keys(derived.integrations).length ? derived.integrations : undefined,
+            integrations: Object.keys(integrations).length ? integrations : undefined,
           });
           if (wantsJson(opts)) { printObject({ project }, opts); return; }
           console.log(chalk.green(`✓ Project created (cloud): ${project.slug}`));
