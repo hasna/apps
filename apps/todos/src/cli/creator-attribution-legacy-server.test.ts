@@ -164,13 +164,28 @@ describe("--inbox against a server that ignores the creator filter", () => {
         ["--json", "list", "--inbox", "--limit", "5"],
         root,
         `http://127.0.0.1:${server.port}`,
-        { TODOS_AGENT_ID: "cassius" },
+        // Pinned rather than left to the built-in ceiling, so the assertion below
+        // names a number this test owns instead of duplicating a constant that
+        // lives in the CLI. It only has to be larger than the 15 fixture rows.
+        { TODOS_AGENT_ID: "cassius", TODOS_LIST_SCAN_LIMIT: "1000" },
       );
       expect(result.exitCode).toBe(0);
       const titles = (JSON.parse(result.stdout) as Array<{ title: string }>).map((t) => t.title);
       expect(titles).toEqual(["theirs 11", "theirs 12", "theirs 13", "theirs 14", "theirs 15"]);
-      // And the limit was withheld from the request, which is what made it possible.
-      expect(seen.some((q) => q.includes("limit="))).toBe(false);
+      // The CALLER's limit must not reach the authority: this server honours `limit`,
+      // so `limit=5` would return the caller's own ten filings truncated to five and
+      // the creator filter would then yield nothing.
+      //
+      // It is asserted as a VALUE, not as an absence. Absence was the contract until
+      // the scan was bounded; withholding the limit outright left the request with no
+      // bound at all, so the limit is now REPLACED by the scan ceiling rather than
+      // dropped. The old assertion — no `limit=` anywhere — therefore fails against
+      // the current, deliberate behaviour while the property it was protecting still
+      // holds, which is what the passing `titles` assertion above shows.
+      const limitsSent = seen
+        .map((search) => new URLSearchParams(search).get("limit"))
+        .filter((value): value is string => value !== null);
+      expect(limitsSent).toEqual(["1000"]);
     } finally {
       server.stop(true);
     }
