@@ -373,6 +373,62 @@ describe("todos watch rejects out-of-vocabulary --status", () => {
   });
 });
 
+/**
+ * `--assigned` is the same silent-empty failure with a DIFFERENT shape, so it gets
+ * a different remedy and is called out rather than folded into the cases above.
+ *
+ * It is a REFERENCE, not a closed vocabulary: there is no fixed legal set to check
+ * against, only "does this agent resolve". An unresolvable assignee returns empty
+ * at exit 0, so "this agent has no work" is indistinguishable from "no agent by
+ * that name" — the shape that has a coordinator stand down holding real work, and
+ * likelier than a bad status because agent names on this fleet are unstable.
+ *
+ * It WARNS and never refuses. `lib/assignee-validation.ts` deliberately admits an
+ * unregistered assignee on the write path, and the read path has the stronger case:
+ * agents release their identity at session end, so querying a past agent's queue is
+ * ordinary and must keep working. The registered-but-idle case below is the one
+ * that matters — it is what separates a useful warning from noise on every empty
+ * queue, and a regression there would train operators to ignore the warning.
+ */
+describe("todos list warns when --assigned names no known agent", () => {
+  async function seedAgents(root: string): Promise<void> {
+    // One-word, letters-only names: the CLI rejects anything else.
+    await runLocal(["init", "caesar"], root);
+    await runLocal(["init", "brutus"], root);
+    await runLocal(["add", "Assigned fixture", "--assign", "caesar"], root);
+  }
+
+  test("warns on an unknown assignee instead of an unqualified empty result", async () => {
+    const root = tempRoot("todos-assigned-unknown-");
+    await seedAgents(root);
+    const result = await runLocal(["list", "--assigned", "totallybogusxyz"], root);
+    expect(result.stderr).toContain("no agent named 'totallybogusxyz' is registered");
+    // Advisory only: an unknown assignee is not an error, and a past agent's queue
+    // must stay queryable after that agent released its identity.
+    expect(result.exitCode).toBe(0);
+  });
+
+  test("stays SILENT for a registered agent whose queue is genuinely empty", async () => {
+    const root = tempRoot("todos-assigned-idle-");
+    await seedAgents(root);
+    const result = await runLocal(["list", "--assigned", "brutus"], root);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("No tasks found.");
+    // The discriminating case. Warning here would fire on every idle queue and
+    // make the real signal worthless.
+    expect(result.stderr).not.toContain("is registered");
+  });
+
+  test("stays silent and returns rows for an assignee that has work", async () => {
+    const root = tempRoot("todos-assigned-hit-");
+    await seedAgents(root);
+    const result = await runLocal(["list", "--assigned", "caesar", "--format", "compact"], root);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Assigned fixture");
+    expect(result.stderr).not.toContain("is registered");
+  });
+});
+
 describe("write flags reject out-of-vocabulary enums", () => {
   test("todos add --status junk exits non-zero and creates nothing", async () => {
     const root = tempRoot("todos-enum-add-");

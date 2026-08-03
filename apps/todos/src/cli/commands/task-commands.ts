@@ -35,6 +35,7 @@ import {
   cloudResolveProjectRef,
   cloudResolveTaskListRef,
   cloudResolvePlan,
+  cloudListAgents,
 } from "../cloud-router.js";
 import type { CloudTaskRelations } from "../cloud-router.js";
 import type { TaskPriority, TaskStatus } from "../../types/index.js";
@@ -42,6 +43,8 @@ import { canonicalAgentRef, resolveCreatorIdentity, resolveWritableIdentity } fr
 import { formatExpiredLock, lockDisplayState } from "../../lib/lock-display.js";
 import { resolveClaimIdentity } from "../claim-guard.js";
 import { resolveValidatedAssignee } from "../assignee-guard.js";
+import { loadAssigneeContext } from "../../lib/assignee-context.js";
+import { listAgents } from "../../db/agents.js";
 import {
   formatTaskLine,
   resolveTaskId,
@@ -976,6 +979,55 @@ export function registerTaskCommands(program: Command) {
       // The window is taken LAST, once the set and its order are final. When the
       // limit was left on the query this is a no-op — storage already truncated.
       if (withholdLimit && requestedLimit !== undefined) tasks = tasks.slice(0, requestedLimit);
+
+      // `--assigned` fails open the same way an out-of-vocabulary status did, but
+      // it is a REFERENCE rather than a closed vocabulary, so the remedy differs.
+      //
+      // An unresolvable assignee returns an empty set at exit 0, and "this agent
+      // has no work" is then indistinguishable from "no agent by that name" — the
+      // shape that has a coordinator stand down while holding real work. A typo is
+      // likelier here than in a status, because agent names on this fleet are not
+      // stable: the same seat has answered to different names, and duplicates exist
+      // at different casings.
+      //
+      // This WARNS and never refuses, matching `lib/assignee-validation.ts`, which
+      // deliberately admits an unregistered assignee on the write path because
+      // routing work to an agent that registers later is legitimate. On the read
+      // path the case for admitting it is stronger still: operating rule 21 has
+      // agents release their identity at session end, so querying a past agent's
+      // queue is ordinary and must keep working. Refusing would break more than it
+      // fixes, and would be a worse regression than the defect.
+      //
+      // The roster is consulted ONLY when the result is empty — the sole case where
+      // the answer is ambiguous — so a query that returns rows pays nothing, and no
+      // request is added to the hot path. `loadAssigneeContext` is TTL-cached and
+      // degrades silently when the roster cannot be fetched, in which case EVERY
+      // name reads as unregistered and the warning is suppressed rather than
+      // asserting something false about a name that may be perfectly valid.
+      const assignedFilter: string | undefined = opts.assigned ?? opts.agentName;
+      if (assignedFilter && tasks.length === 0) {
+        try {
+          const roster = await loadAssigneeContext(
+            () => (cloud ? cloudListAgents(cloud) : listAgents()),
+            true,
+          );
+          if (!roster.degraded) {
+            const target = canonicalAgentRef(assignedFilter);
+            const known = roster.agents.some(
+              (a) => canonicalAgentRef(a.name) === target || canonicalAgentRef(a.id) === target,
+            );
+            if (!known) {
+              console.error(chalk.yellow(
+                `Warning: no agent named '${assignedFilter}' is registered, so this empty result may be a\n` +
+                `         mistyped name rather than an empty queue. Check with 'todos agents'.`,
+              ));
+            }
+          }
+        } catch {
+          // Advisory only. A roster lookup must never turn a working list into a
+          // failure, and the empty result below is still reported either way.
+        }
+      }
 
       const fmt = opts.format || (globalOpts.json ? "json" : "table");
       const outputTasks = redactBroadTasks(tasks);
