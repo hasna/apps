@@ -108,10 +108,50 @@ describe("todos add — an unassigned task must be deliberate", () => {
     expect(task.created_by).toBeNull();
   });
 
-  it("does not warn when the task is explicitly assigned", async () => {
+  // AMENDED (todos task a3f4bb1a, F1). This test previously asserted the OPPOSITE —
+  // that no warning fires here. That was correct before #192 and became wrong the
+  // moment #192 landed: --assign gives the row an owner, but #192 routes created_by
+  // through the WRITABLE identity only (explicit --agent or TODOS_AGENT_ID), which an
+  // anonymous filer with --assign still lacks. The row is not ownerless — it has an
+  // assignee — but it IS unattributable, and the old gate (keyed on `assignee` alone)
+  // went silent on exactly this branch. Measured live: created_by stayed null while
+  // stderr carried no attribution warning at all.
+  it("warns about unattributable created_by even when the task is explicitly assigned", async () => {
     const result = await runCli(["--json", "add", "--assign", "brutus", "routed by an anonymous filer"]);
     expect(result.exitCode).toBe(0);
-    expect(result.stderr).not.toContain("ownerless and unattributable");
+    expect(result.stderr).toContain("unattributable");
+    // It has an owner (brutus), so the ownerless half must stay silent — printing
+    // "ownerless" here would be a false claim about a row that is not ownerless.
+    expect(result.stderr).not.toContain("ownerless");
+    const task = JSON.parse(result.stdout) as { created_by: string | null; assigned_to: string | null };
+    expect(task.created_by).toBeNull();
+    expect(task.assigned_to).toBe("brutus");
+  });
+
+  it("stays silent when a per-process identity is set, even with --assign to someone else", async () => {
+    const result = await runCli(
+      ["--json", "add", "--assign", "brutus", "filed by cassius for brutus"],
+      { TODOS_AGENT_ID: "cassius" },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).not.toContain("unattributable");
+    expect(result.stderr).not.toContain("ownerless");
+    const task = JSON.parse(result.stdout) as { created_by: string | null; assigned_to: string | null };
+    expect(task.created_by).toBe("cassius");
+    expect(task.assigned_to).toBe("brutus");
+  });
+
+  it("warns about unattributable created_by on a deliberately unassigned row with no identity at all", async () => {
+    // --unassigned suppresses the OWNERLESS half on purpose (see the test above),
+    // but it says nothing about attribution. A row with no identity anywhere is
+    // still unattributable and the attribution half must fire independent of
+    // --unassigned, exactly as it must independent of --assign above.
+    const result = await runCli(["--json", "add", "--unassigned", "ownerless on purpose, still unidentified"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("unattributable");
+    const task = JSON.parse(result.stdout) as { created_by: string | null; assigned_to: string | null };
+    expect(task.created_by).toBeNull();
+    expect(task.assigned_to).toBeNull();
   });
 });
 
@@ -122,6 +162,19 @@ describe("todos init — persisted identity is diagnostic, never writable task a
 
     const task = await addJson(["inherits the registered identity"]);
     expect(task.created_by).toBeNull();
+  });
+
+  // ADDED (todos task a3f4bb1a, F2). `init`'s own success line claimed "later
+  // commands attribute to this agent automatically" — false on every column since
+  // #192, as the test directly above this one proves in the same breath. The
+  // collision path (exit 2) already prints the correct escape hatch
+  // (`export TODOS_AGENT_ID=<name>`); the success path — the one every fresh
+  // session hits — must say the same thing instead of the opposite.
+  it("tells the truth about attribution on the success path, instead of promising automatic credit", async () => {
+    const init = await runCli(["init", "Brutus"]);
+    expect(init.exitCode).toBe(0);
+    expect(init.stdout).not.toContain("automatically");
+    expect(init.stdout).toContain("export TODOS_AGENT_ID=brutus");
   });
 
   // AMENDED 2026-07-31 (todos task 64131fb1). This case previously also asserted
