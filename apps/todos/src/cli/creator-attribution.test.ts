@@ -60,6 +60,12 @@ async function addJson(args: string[], extraEnv: Record<string, string> = {}) {
   };
 }
 
+async function commentJson(taskId: string, text: string, extraEnv: Record<string, string> = {}) {
+  const result = await runCli(["--json", "comment", taskId, text], extraEnv);
+  expect(result.exitCode).toBe(0);
+  return JSON.parse(result.stdout) as { id: string; task_id: string; agent_id: string | null; content: string };
+}
+
 describe("todos add — records who FILED the task", () => {
   it("attributes to the ambient identity from the environment", async () => {
     const task = await addJson(["env-identified task"], { TODOS_AGENT_ID: "cassius" });
@@ -75,6 +81,62 @@ describe("todos add — records who FILED the task", () => {
     const task = await addJson(["--assign", "brutus", "routed work"], { TODOS_AGENT_ID: "cassius" });
     expect(task.created_by).toBe("cassius");
     expect(task.assigned_to).toBe("brutus");
+  });
+});
+
+// ADDED (todos task 39b4255b). `todos comment` never called resolveWritableIdentity
+// at all — `agent_id: globalOpts.agent` was a bare read of the flag, so the
+// documented per-session escape hatch (TODOS_AGENT_ID) was silently invisible to
+// this one command while working for `add`, `start`, `done`, and the rest. rc=0,
+// "Comment added.", no warning: the comment landed and read back fine, so nothing
+// signalled that provenance had been dropped.
+describe("todos comment — records who wrote it", () => {
+  it("attributes to the ambient identity from the environment, matching `add`", async () => {
+    const task = await addJson(["a task to comment on"]);
+    const comment = await commentJson(task.id, "progress note from the environment", { TODOS_AGENT_ID: "cassius" });
+    expect(comment.agent_id).toBe("cassius");
+  });
+
+  it("still attributes to --agent when given — the path that already worked", async () => {
+    const task = await addJson(["a task to comment on"]);
+    const result = await runCli(["--agent", "brutus", "--json", "comment", task.id, "flag-identified comment"]);
+    expect(result.exitCode).toBe(0);
+    const comment = JSON.parse(result.stdout) as { agent_id: string | null };
+    expect(comment.agent_id).toBe("brutus");
+  });
+
+  it("--agent wins over TODOS_AGENT_ID when both are present, exactly as it does for `add`", async () => {
+    const task = await addJson(["a task to comment on"]);
+    const result = await runCli(
+      ["--agent", "brutus", "--json", "comment", task.id, "flag beats env"],
+      { TODOS_AGENT_ID: "cassius" },
+    );
+    expect(result.exitCode).toBe(0);
+    const comment = JSON.parse(result.stdout) as { agent_id: string | null };
+    expect(comment.agent_id).toBe("brutus");
+  });
+
+  it("is unattributable — null, not a plausible guess — with no flag and no environment", async () => {
+    const task = await addJson(["a task to comment on"], { TODOS_AGENT_ID: "cassius" });
+    // The comment call under test must not inherit the runner's own ambient
+    // TODOS_AGENT_ID/HASNA_TODOS_AGENT_ID (runCli's env starts from process.env via
+    // localRoutingTestEnv, and neither var is in SHARED_TODOS_STORE_ENV_KEYS) — blank
+    // both explicitly so "no environment" is actually no environment.
+    const comment = await commentJson(task.id, "anonymous progress note", {
+      TODOS_AGENT_ID: "",
+      HASNA_TODOS_AGENT_ID: "",
+    });
+    expect(comment.agent_id).toBeNull();
+  });
+
+  it("does not attribute from the station-shared identity file, matching `add`", async () => {
+    expect((await runCli(["init", "Cassius"])).exitCode).toBe(0);
+    const task = await addJson(["a task to comment on"]);
+    const comment = await commentJson(task.id, "should stay unattributed", {
+      TODOS_AGENT_ID: "",
+      HASNA_TODOS_AGENT_ID: "",
+    });
+    expect(comment.agent_id).toBeNull();
   });
 });
 

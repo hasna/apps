@@ -12,6 +12,7 @@ import {
 } from "../../db/projects.js";
 import { addComment } from "../../db/comments.js";
 import { getTodosCloudClient, cloudAddComment, cloudCreateProject, cloudDeleteProject, cloudListProjects, cloudListTasks, cloudResolveProject, cloudResolveProjectRef, cloudUpdateProject, cloudAddDependency, cloudRemoveDependency, cloudGetDependencies, cloudGetTaskRelations, cloudRenameProject } from "../cloud-router.js";
+import { resolveWritableIdentity } from "../../lib/creator-identity.js";
 import {
   buildProjectDependencyGraph,
   buildTaskDependencyEdges,
@@ -330,18 +331,27 @@ export function registerProjectCommands(program: Command) {
         content = `[progress ${pct}%] ${text}`;
         progressPct = pct;
       }
+      // Bare `globalOpts.agent` used to be the only source checked here, so
+      // TODOS_AGENT_ID / HASNA_TODOS_AGENT_ID — the documented per-session escape
+      // hatch that `add`, `start`, and `done` all honour via resolveWritableIdentity
+      // — was silently invisible to this one command (todos task 39b4255b). This
+      // mirrors task-commands.ts's `add`: an explicit --agent keeps its original
+      // casing, and falls back to the resolver's canonicalised value (env only —
+      // never the station-shared identity.json file, which is not process-bound).
+      const router = resolveWritableIdentity(globalOpts.agent);
+      const agentId = globalOpts.agent || router.agent_id || undefined;
       try {
         const comment = cloud
           ? await cloudAddComment(cloud, resolvedId, {
               content,
-              agent_id: globalOpts.agent,
+              agent_id: agentId,
               session_id: globalOpts.session,
               ...(progressPct !== undefined ? { type: "progress", progress_pct: progressPct } : {}),
             })
           : addComment({
               task_id: resolvedId,
               content,
-              agent_id: globalOpts.agent,
+              agent_id: agentId,
               session_id: globalOpts.session,
             });
 
