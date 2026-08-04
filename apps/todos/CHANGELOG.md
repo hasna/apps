@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.4] - 2026-08-04
+
+### Fixed
+
+- **`todos comment` ignored the per-session identity environment variable, so every
+  unflagged comment was silently unattributable.** `todos comment <id> <text>` (alias
+  `log-progress`) read `agent_id: globalOpts.agent` directly at both the cloud and the
+  local `addComment` call site — a bare read of the `--agent` flag that never called
+  `resolveWritableIdentity`. `add`, `start`, and `done` all already resolved through that
+  helper, which checks the explicit flag first and then the two supported per-session
+  variables `TODOS_AGENT_ID` and `HASNA_TODOS_AGENT_ID` (never the station-shared
+  `identity.json`, which is not process-bound). Because `comment` never called it, that
+  documented escape hatch was invisible on this one command: a comment written with the
+  variable exported and no flag landed with `agent_id` null on the local store and
+  attributed to the shared `fleet` principal on the cloud path — rc=0, printing
+  `Comment added.`, with no warning that the attribution had been dropped. Both call
+  sites now resolve through `resolveWritableIdentity(globalOpts.agent)`, matching the
+  pattern `add` already uses: an explicit `--agent` still wins and keeps its original
+  casing, and the resolver's canonicalised value is used only when no flag was passed.
+  Regression coverage in `creator-attribution.test.ts` mirrors the existing `add` cases —
+  attributes from the environment variable (this case fails without the fix), `--agent`
+  still wins over the variable, stays null with neither, and never attributes from the
+  persisted identity file (todos task `39b4255b`, PR #196).
+
 ## [0.15.3] - 2026-08-04
 
 ### Fixed
