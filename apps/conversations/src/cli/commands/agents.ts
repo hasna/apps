@@ -89,7 +89,7 @@ export function registerAgentCommands(program: Command): void {
       } catch (err) {
         if (!(err instanceof IdentityError)) throw err;
       }
-      if (agent) await getStore().heartbeat(agent, undefined, undefined, getDeclaredSessionId() ?? undefined);
+      if (agent) await getStore().heartbeat(agent);
 
       const agentsList = await getStore().listAgents({ online_only: opts.online });
       const sort = getStore().describeListOrder("agents");
@@ -343,12 +343,7 @@ export function registerAgentCommands(program: Command): void {
     .action(async (opts) => {
       const agent = resolveIdentity(opts.from);
       const status = opts.status || "online";
-      // Attribute the refresh to the session that actually made it. Without the
-      // session id the store takes its COALESCE branch and keeps whichever
-      // session registered the agent, so last_seen_at advances while session_id
-      // still names a session that has not written since — a row that asserts
-      // the wrong author rather than merely omitting one.
-      await getStore().heartbeat(agent, status, undefined, getDeclaredSessionId() ?? undefined);
+      await getStore().heartbeat(agent, status);
 
       if (opts.json) {
         printJsonLine({ agent, status, heartbeat: true });
