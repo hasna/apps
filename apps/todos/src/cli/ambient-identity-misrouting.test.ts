@@ -24,10 +24,21 @@ import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
  * step involved.
  *
  * The invariant these pin: an identity that a DIFFERENT session persisted may
- * never become this session's assignee or agent_id. A wrong routing target is
- * worse than a missing one, because a null is visibly absent while a name is
- * simply believed — and in this case believed by a live agent that never asked
- * for the work.
+ * never become this session's assignee, agent_id, OR created_by. A wrong
+ * attribution is worse than a missing one, because a null is visibly absent
+ * while a name is simply believed — and in this case believed by a live agent
+ * that never asked for the work.
+ *
+ * created_by was originally left out of this fix (see git history on this
+ * describe block) on the premise that it was "bounded and currently inert on
+ * the hosted path... because the deployed server drops the column outright."
+ * That premise is now FALSE: the hosted server persists and serves created_by,
+ * and the residual materialised exactly as this file always said it could —
+ * measured 2026-08-03/04 on the live station01 hosted store: `todos list
+ * --created-by <a real but wrong agent name> --json` returned 489 rows
+ * (todos task 9090972e), including rows independently confirmed by their true
+ * filer to have been misattributed. created_by is now covered by the same
+ * guard as assigned_to and agent_id.
  */
 
 setDefaultTimeout(30_000);
@@ -145,22 +156,27 @@ describe("todos add — a foreign session's persisted identity must not route wo
     expect(task.agent_id).not.toBe(FOREIGN);
   });
 
-  it("still records the ambient identity as created_by — the RESIDUAL, pinned deliberately", async () => {
-    // Scope boundary, stated rather than glossed. The fix narrows the two ROUTING
-    // columns (assigned_to, agent_id) and leaves provenance alone, because
-    // created_by is documented write-once and #138's contract depends on the
-    // identity file populating it. So a station-shared identity CAN still land a
-    // foreign name in created_by locally.
+  it("no longer records the ambient identity as created_by — the RESIDUAL is CLOSED (todos task 9090972e)", async () => {
+    // This test used to pin the opposite behaviour, deliberately, on the premise
+    // that the hosted server dropped created_by entirely (0 of 50000 rows on
+    // 2026-07-31) so a station-shared name landing in created_by LOCALLY was
+    // "bounded and currently inert." That premise is falsified: the hosted
+    // server now persists and serves created_by, and measured live on
+    // station01 2026-08-03/04, `todos list --created-by <name> --json` returned
+    // 489 real rows carrying a station-shared identity that never filed them —
+    // including rows whose true filer confirmed the misattribution directly.
     //
-    // That residual is bounded and currently inert on the hosted path: created_by
-    // came back non-null on 0 of 50000 rows read from todos.hasna.xyz on
-    // 2026-07-31, because the deployed server drops the column outright. It is
-    // pinned here so that a later reader cannot mistake this fix for full
-    // coverage — overstating a guard's reach is how the next one gets trusted
-    // past it.
+    // created_by gets the exact same treatment as assigned_to and agent_id now:
+    // an identity read back from ~/.hasna/todos/identity.json is DISPLAYABLE
+    // (see resolveCreatorIdentity, still used for --inbox diagnostics) but must
+    // never be WRITTEN into a task, because it identifies the STATION, not the
+    // caller. `resolveWritableIdentity` already enforces exactly this for the
+    // routing columns; created_by now goes through the same guard instead of
+    // the wider resolver.
     persistForeignIdentity();
     const task = await addJson(["unregistered session files a task"]);
-    expect(task.created_by).toBe(FOREIGN);
+    expect(task.created_by).not.toBe(FOREIGN);
+    expect(task.created_by).toBeNull();
     expect(task.assigned_to).not.toBe(FOREIGN);
     expect(task.agent_id).not.toBe(FOREIGN);
   });

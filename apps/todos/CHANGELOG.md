@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`created_by` no longer inherits the station-shared identity `todos init` persists.**
+  `todos add` and the MCP `create_task` tool resolved `created_by` through
+  `resolveCreatorIdentity`, which falls back to `~/.hasna/todos/identity.json` — a file
+  keyed on `$HOME` and shared by every agent session on a station, so it names the box
+  rather than the caller. `agent_id`/`assigned_to` were already narrowed to the guarded
+  `resolveWritableIdentity` in `0.14.x` (#142); `created_by` was deliberately left on the
+  wider resolver on the premise that the change was inert on the hosted path because the
+  deployed server dropped the column outright. That premise no longer holds — the server
+  now persists and serves `created_by` — and the residual produced 489 real rows on one
+  station misattributed to whichever agent last ran `todos init` there (todos task
+  `9090972e`). `created_by` now resolves the same way as `agent_id`: unattributable
+  (`null`) unless a process-bound identity (`--agent`, `--created-by`, `TODOS_AGENT_ID`,
+  or `HASNA_TODOS_AGENT_ID`) is given.
+
 ## [0.15.1] - 2026-08-03
 
 ### Fixed

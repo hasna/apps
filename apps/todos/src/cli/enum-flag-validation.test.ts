@@ -572,10 +572,13 @@ describe("todos list warns when --assigned names no known agent", () => {
     // mentions the flag, so silence alone would pass against a CLI that rejected
     // the command outright.
     expect(overridden.exitCode).toBe(0);
-    expect(overridden.stdout).toContain("No tasks found.");
+    // The seeded task is assigned to the persisted identity but is now correctly
+    // unattributed, so --inbox keeps it. Seeing that row proves --inbox replaced
+    // the bogus --assigned filter and the list really ran.
+    expect(overridden.stdout).toContain("Assigned fixture");
     expect(overridden.stderr).not.toContain("Unknown flag");
     // `--inbox` rewrote assigned_to to the caller's identity, so the query never
-    // saw this value and the empty result says nothing about it.
+    // saw this value and the returned row says nothing about it.
     expect(overridden.stderr).not.toContain("totallybogusxyz");
 
     const inboxOnly = await runLocal(["list", "--inbox"], root);

@@ -115,13 +115,13 @@ describe("todos add — an unassigned task must be deliberate", () => {
   });
 });
 
-describe("todos init — persists the identity so later commands inherit it", () => {
-  it("makes a subsequent bare `add` attributable with no flags and no env", async () => {
+describe("todos init — persisted identity is diagnostic, never writable task attribution", () => {
+  it("does not make a subsequent bare `add` attributable with no flags and no env", async () => {
     const init = await runCli(["init", "Cassius"]);
     expect(init.exitCode).toBe(0);
 
     const task = await addJson(["inherits the registered identity"]);
-    expect(task.created_by).not.toBeNull();
+    expect(task.created_by).toBeNull();
   });
 
   // AMENDED 2026-07-31 (todos task 64131fb1). This case previously also asserted
@@ -134,15 +134,15 @@ describe("todos init — persists the identity so later commands inherit it", ()
   // `titus-skill-corpus` registered at 17:31:04Z and every unregistered session on
   // the box filed against it from 17:37:36Z, still producing at 19:37:00Z.
   //
-  // Attribution (`created_by`) still inherits the file, which is what this
-  // describe-block is about and is unchanged above. ROUTING does not.
-  it("does not auto-assign from the station-shared identity file", async () => {
+  // Attribution (`created_by`) no longer inherits the file either: a plausible
+  // wrong author is the same integrity defect as a plausible wrong assignee.
+  it("does not attribute or auto-assign from the station-shared identity file", async () => {
     expect((await runCli(["init", "Cassius"])).exitCode).toBe(0);
 
-    const result = await runCli(["--json", "add", "attributable but not routed"]);
+    const result = await runCli(["--json", "add", "unattributable and not routed"]);
     expect(result.exitCode).toBe(0);
     const task = JSON.parse(result.stdout) as { created_by: string | null; assigned_to: string | null };
-    expect(task.created_by).toBe("cassius");
+    expect(task.created_by).toBeNull();
     expect(task.assigned_to).toBeNull();
     // and the omission is not silent
     expect(result.stderr).toContain("ownerless");
@@ -188,12 +188,10 @@ describe("todos list --inbox — work others routed to me", () => {
   });
 });
 
-// `registerAgent` canonicalises the name to lower case (src/db/agents.ts), so the
-// persisted identity — and therefore created_by — is the lower-cased form. That is
-// deliberate: a single canonical spelling is what makes authorship comparable
-// between agents. Note the asymmetry it leaves: `--assign Cassius` stores the raw
-// string, so a mixed-case assignment will not match a lower-cased identity. That
-// is pre-existing behaviour of `--assigned` and is not widened here.
+// `registerAgent` canonicalises the persisted name to lower case
+// (src/db/agents.ts). The file remains useful for collision detection and display,
+// but it is deliberately not writable task attribution because it is shared by
+// every session under the station's HOME.
 describe("todos init — a second session must not silently take over the identity", () => {
   it("refuses to overwrite a different agent's persisted identity, and names the escape hatch", async () => {
     expect((await runCli(["init", "Brutus"])).exitCode).toBe(0);
@@ -203,18 +201,20 @@ describe("todos init — a second session must not silently take over the identi
     expect(second.stderr).toContain("already has a persisted todos identity");
     expect(second.stderr).toContain("TODOS_AGENT_ID");
 
-    // And the first session's identity is intact — a refused takeover must not
-    // half-apply, or both sessions end up misattributed instead of one.
+    // And the first session's identity is intact — re-registering Brutus would
+    // collide if the refused Cassius takeover had half-applied.
+    expect((await runCli(["init", "Brutus"])).exitCode).toBe(0);
     const task = await addJson(["still brutus"]);
-    expect(task.created_by).toBe("brutus");
+    expect(task.created_by).toBeNull();
   });
 
   it("--force takes it over deliberately", async () => {
     await runCli(["init", "Brutus"]);
     const forced = await runCli(["init", "Cassius", "--force"]);
     expect(forced.exitCode).toBe(0);
+    expect((await runCli(["init", "Cassius"])).exitCode).toBe(0);
     const task = await addJson(["now cassius"]);
-    expect(task.created_by).toBe("cassius");
+    expect(task.created_by).toBeNull();
   });
 
   it("re-registering the same name is not a collision", async () => {
@@ -229,9 +229,11 @@ describe("todos init — a second session must not silently take over the identi
     // author string, and not_created_by can actually exclude the agent's own filings.
     const task = await addJson(["filed by the other session"], { TODOS_AGENT_ID: "Cassius" });
     expect(task.created_by).toBe("cassius");
-    // The file still belongs to Brutus, canonicalised by registration.
+    // The file still belongs to Brutus, but a bare add may not write that
+    // station-shared identity into created_by.
+    expect((await runCli(["init", "Brutus"])).exitCode).toBe(0);
     const brutusTask = await addJson(["filed by the file owner"]);
-    expect(brutusTask.created_by).toBe("brutus");
+    expect(brutusTask.created_by).toBeNull();
   });
 });
 

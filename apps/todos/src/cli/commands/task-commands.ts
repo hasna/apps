@@ -429,18 +429,29 @@ export function registerTaskCommands(program: Command) {
       // Who is FILING this task. `todos init` now persists the identity, so a
       // registered session no longer has to re-supply --agent on every command —
       // that omission is why creator attribution was empty on 92% of rows.
-      // `creator` may come from the identity file, which is keyed on $HOME and is
-      // therefore shared by every agent session on the station — it names the box,
-      // not the caller. It still supplies `created_by`, which is provenance and is
-      // documented write-once.
       //
-      // `router` is the narrower one, and the two ROUTING columns take it instead:
-      // only `--agent` and TODOS_AGENT_ID, which travel with the process and cannot
-      // be handed to two concurrent sessions by accident. Stamping the shared file
+      // `router` is the ONLY identity this command writes anywhere, into BOTH
+      // created_by and the two ROUTING columns (assigned_to, agent_id): only
+      // `--agent`/`--created-by` and TODOS_AGENT_ID, which travel with the
+      // process and cannot be handed to two concurrent sessions by accident.
+      //
+      // created_by used to take the wider `resolveCreatorIdentity` instead —
+      // the identity file, which is keyed on $HOME and shared by every agent
+      // session on the station, so it names the box, not the caller — on the
+      // theory that provenance is lower-stakes than routing and a station-wide
+      // guess was better than none. That theory is falsified: measured live on
+      // station01 2026-08-03/04, `todos list --created-by <name> --json`
+      // returned 489 rows a different agent had actually filed (todos task
+      // 9090972e). A wrong created_by is exactly the "believed name" #142
+      // already refused for assigned_to/agent_id — stamping the shared file
       // into `assigned_to` and `agent_id` is what queued one agent's work onto
-      // another — 43+ rows on station01 on 2026-07-31, one of them this fix's own
-      // tracking task.
-      const creator = resolveCreatorIdentity(opts.createdBy || globalOpts.agent);
+      // another, 43+ rows on station01 on 2026-07-31. created_by now gets the
+      // same treatment: unattributable (null) rather than a plausible guess.
+      //
+      // `resolveCreatorIdentity` stays available for DISPLAY (the --inbox
+      // filter below reads it to show what is on disk) — it must just never be
+      // WRITTEN into a task, which is the whole point of `isProcessBoundSource`
+      // in lib/creator-identity.ts.
       const router = resolveWritableIdentity(opts.createdBy || globalOpts.agent);
       // Part 2: an unassigned task must be DELIBERATE. Left alone, `todos add`
       // produced an ownerless row silently, so the filer read "filed and
@@ -505,7 +516,7 @@ export function registerTaskCommands(program: Command) {
             status: parseStatus(opts.status),
             task_list_id: cloudTaskListId,
             agent_id: globalOpts.agent || router.agent_id || undefined,
-            created_by: creator.agent_id || undefined,
+            created_by: router.agent_id || undefined,
             session_id: globalOpts.session,
             project_id: cloudProjectId,
             // Parity with the local branch, which has always sent process.cwd().
@@ -569,7 +580,7 @@ export function registerTaskCommands(program: Command) {
           status: parseStatus(opts.status),
           task_list_id: taskListId,
           agent_id: globalOpts.agent || router.agent_id || undefined,
-          created_by: creator.agent_id || undefined,
+          created_by: router.agent_id || undefined,
           session_id: globalOpts.session,
           project_id: projectId,
           working_dir: process.cwd(),

@@ -131,24 +131,32 @@ describe("MCP create_task records the filer", () => {
     expect(onlyTask("mcp env identity").created_by).toBe("cassius");
   });
 
-  it("attributes to the identity `todos init` persisted", async () => {
+  it("does NOT attribute to the identity `todos init` persisted — it names the station, not the caller (todos task 9090972e)", async () => {
+    // This used to assert the opposite. `~/.hasna/todos/identity.json` is
+    // keyed on $HOME and shared by every agent session on the station, so
+    // "attributing" to it is exactly the misrouting #142 already refused for
+    // assigned_to/agent_id. Measured live 2026-08-03/04 on station01's hosted
+    // store: 489 real rows carrying a station-shared name as created_by that
+    // never filed them. created_by must be unattributable (null) here, same
+    // as assigned_to/agent_id, unless a PROCESS-BOUND identity (--agent /
+    // TODOS_AGENT_ID / an explicit created_by param) is given.
     persistIdentity({ agent_id: "uuid", agent_name: "cassius" });
     await createTool().handler({ title: "mcp persisted identity" });
-    expect(onlyTask("mcp persisted identity").created_by).toBe("cassius");
+    expect(onlyTask("mcp persisted identity").created_by).toBeNull();
   });
 
-  // Regression: MCP was the SECOND DOOR onto the same defect (todos task 64131fb1).
-  // The CLI add path was narrowed so the station-shared identity file can supply
-  // provenance but never routing; MCP was left on the wide resolver, so any MCP
-  // caller on a station holding another session's ~/.hasna/todos/identity.json
-  // still created tasks assigned to and stamped with that foreign identity.
-  // Caught by adversarial review of PR #142, which is exactly where a
-  // "the CLI is fixed, therefore the bug is fixed" claim should fall over.
-  it("does not ROUTE to the persisted identity, only attribute to it", async () => {
+  // Regression: MCP was the SECOND DOOR onto the same defect (todos task 64131fb1),
+  // and created_by was a THIRD DOOR left open on both CLI and MCP after #142
+  // closed the first two (assigned_to, agent_id) — see
+  // src/cli/ambient-identity-misrouting.test.ts (todos task 9090972e) for the
+  // measured evidence that falsified the "inert on the hosted path" premise
+  // #142 shipped it under.
+  it("does not ROUTE to the persisted identity, and no longer attributes to it either", async () => {
     persistIdentity({ agent_id: "uuid", agent_name: "cassius" });
     await createTool().handler({ title: "mcp persisted must not route" });
     const task = onlyTask("mcp persisted must not route");
-    expect(task.created_by).toBe("cassius");
+    expect(task.created_by).not.toBe("cassius");
+    expect(task.created_by).toBeNull();
     expect(task.assigned_to).not.toBe("cassius");
     expect(task.agent_id).not.toBe("cassius");
   });
