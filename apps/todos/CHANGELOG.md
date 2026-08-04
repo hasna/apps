@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.2] - 2026-08-04
+
 ### Fixed
 
 - **`created_by` no longer inherits the station-shared identity `todos init` persists.**
