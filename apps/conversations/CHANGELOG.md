@@ -4,7 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
-## 0.5.23 - 2026-08-02
+## 0.5.24 - 2026-08-05
+
+### Added
+- **`--sender` is the unambiguous spelling of the sender filter on `read`, `search`, and `export`.** `--from` keeps working and keeps its exact meaning on those verbs, so no existing caller's result set changes; the two disagreeing is a hard error rather than a silent precedence rule.
+
+### Fixed
+- **A sender filter on `read`, `search`, or `export` can no longer produce a silent false absence.** `--from` names the CALLER on 26 subcommands and filters on `from_agent` on those three, so the canonical liveness probe `search <token> --channel <c> --from <me>` appended `AND from_agent = <me>` and became unsatisfiable by construction — a dispatched sub-agent is a different sender, so the one message being looked for is the one the filter removed. It answered `No messages found.` at rc=0 with an empty stderr. `--from` now always announces on stderr that it was applied as a sender filter, and an empty result from any of the three names the filters that produced it, so a zero caused by the caller's own query is distinguishable from a genuinely empty store (#807d355d, #e60b8820).
+- **A blank `--sender` / `--from` is refused instead of silently dropping the filter.** `--sender "$WHO"` with `WHO` unset would otherwise return every sender's messages at exit code 0 and read as one sender's — the wrong-full direction, which is acted on rather than noticed.
+
+### Known gaps
+- The disclosure covers the sender/recipient/channel/session/since dimensions. `--limit`, `--cursor`, and `--unread` are **not** yet named in it, so `read --cursor 999` against a populated channel is still a bare zero, and `read --channel X --cursor 999` prints an applied-filter line that omits the cursor. Tracked separately.
+- The MCP surface (`src/mcp/tools/messaging.ts`) is unchanged and still carries the original ambiguity, including `read_messages` using `from` as caller identity and sender filter in the same call. Tracked separately.
 
 ### Added
 - **`conversations watch` can opt into full redacted channel content and monitor several identities in one process.** `--full-content` preserves actionable identifiers that the compact preview strips, while comma-separated `--from` values union independent inboxes without changing which identity owns writes (#74).

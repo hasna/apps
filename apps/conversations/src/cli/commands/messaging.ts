@@ -21,6 +21,13 @@ import type { DigestResult } from "../../lib/messages.js";
 import { printErrorLine, printJson, printJsonLine, printLine } from "../../lib/stdout.js";
 import { normalizeChannelName } from "../../lib/channel-names.js";
 import { parseMessageReference } from "../../lib/message-reference.js";
+import {
+  discloseEmptyResult,
+  FROM_ALIAS_HELP,
+  noteSenderFilterAlias,
+  resolveSenderFilter,
+  SENDER_HELP,
+} from "../sender-filter.js";
 
 function quoteDigestCommandArg(value: string): string {
   return /^[A-Za-z0-9._:/@=-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
@@ -126,7 +133,8 @@ export function registerMessagingCommands(program: Command): void {
     .command("read")
     .description("Read messages")
     .option("--session <id>", "Filter by session ID")
-    .option("--from <agent>", "Filter by sender")
+    .option("--sender <agent>", SENDER_HELP)
+    .option("--from <agent>", FROM_ALIAS_HELP)
     .option("--to <agent>", "Filter by recipient")
     .option("--channel <name>", "Filter by channel")
     .option("--since <timestamp>", "Messages after this ISO timestamp")
@@ -138,10 +146,12 @@ export function registerMessagingCommands(program: Command): void {
     .option("--verbose", "Show full message bodies")
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
+      const senderFilter = resolveSenderFilter(opts);
+      if (senderFilter.viaFromAlias) noteSenderFilterAlias(senderFilter.sender as string);
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
       const query = {
         session_id: opts.session,
-        from: opts.from,
+        from: senderFilter.sender,
         to: opts.to,
         channel: opts.channel,
         since: opts.since,
@@ -158,6 +168,16 @@ export function registerMessagingCommands(program: Command): void {
         const reader = resolveIdentity(opts.to);
         const ids = page.items.filter((m) => !m.read_at).map((m) => m.id);
         if (ids.length > 0) await await getStore().markReadByIds(ids, reader);
+      }
+
+      if (messages.length === 0) {
+        discloseEmptyResult({
+          channel: opts.channel,
+          sender: senderFilter.sender,
+          to: opts.to,
+          session: opts.session,
+          since: opts.since,
+        }, { senderFlag: senderFilter.flag });
       }
 
       if (opts.json) {
@@ -292,7 +312,8 @@ export function registerMessagingCommands(program: Command): void {
     .description("Search messages by content")
     .argument("<query>", "Search query string")
     .option("--channel <name>", "Filter by channel")
-    .option("--from <agent>", "Filter by sender")
+    .option("--sender <agent>", SENDER_HELP)
+    .option("--from <agent>", FROM_ALIAS_HELP)
     .option("--to <agent>", "Filter by recipient")
     .option("--limit <n>", "Max results to return (the server caps a single page at 500)", parseInt)
     .option("--cursor <n>", "Skip first N results for pagination", parseInt)
@@ -325,12 +346,26 @@ channel, which is an ABSENCE claim.
      together.
 
      To enumerate a sender exhaustively, page a listing verb; do not infer a
-     population from a content search.`)
+     population from a content search.
+
+  3. --from IS A SENDER FILTER HERE, NOT YOUR IDENTITY. On nearly every other
+     subcommand --from names the caller; on search, read and export it appends
+     "AND from_agent = <value>" to your query. So the liveness probe
+
+         conversations search <token> --channel <c> --from <me>
+
+     is unsatisfiable by construction — a dispatched sub-agent is a DIFFERENT
+     sender, so the one message you are looking for is the one the filter
+     removes. It answered "No messages found." at rc=0 with an empty stderr
+     (todos 807d355d). --from still filters, and now always says so; --sender is
+     the unambiguous spelling. For identity, set CONVERSATIONS_AGENT_ID.`)
     .action(async (query, opts) => {
       const q = typeof query === "string" ? query.trim() : "";
       if (!q) {
         emitCliError("Search query cannot be empty.", opts);
       }
+      const senderFilter = resolveSenderFilter(opts);
+      if (senderFilter.viaFromAlias) noteSenderFilterAlias(senderFilter.sender as string);
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
 
       // The store pages this verb now. `--json` used to pass the raw limit and
@@ -339,11 +374,19 @@ channel, which is an ABSENCE claim.
       const result = await getStore().searchMessagesPage({
         query: q,
         channel: opts.channel,
-        from: opts.from,
+        from: senderFilter.sender,
         to: opts.to,
         limit: opts.json ? opts.limit : window.limit,
         offset: opts.json ? opts.cursor : window.offset,
       });
+      if (result.items.length === 0) {
+        discloseEmptyResult({
+          query: q,
+          channel: opts.channel,
+          sender: senderFilter.sender,
+          to: opts.to,
+        }, { senderFlag: senderFilter.flag });
+      }
       const disclosure = {
         shown: result.items.length,
         hasMore: result.has_more,
@@ -576,20 +619,43 @@ channel, which is an ABSENCE claim.
     .description("Export messages as JSON or CSV")
     .option("--channel <name>", "Filter by channel")
     .option("--session <id>", "Filter by session ID")
-    .option("--from <agent>", "Filter by sender")
+    .option("--sender <agent>", SENDER_HELP)
+    .option("--from <agent>", FROM_ALIAS_HELP)
     .option("--since <date>", "Messages after this ISO date")
     .option("--until <date>", "Messages before this ISO date")
     .option("--format <format>", "Output format: json or csv", "json")
     .action(async (opts) => {
+      const senderFilter = resolveSenderFilter(opts);
+      if (senderFilter.viaFromAlias) noteSenderFilterAlias(senderFilter.sender as string);
       const format = opts.format === "csv" ? "csv" : "json";
       const result = await getStore().exportMessages({
         channel: opts.channel,
         session_id: opts.session,
-        from: opts.from,
+        from: senderFilter.sender,
         since: normalizeSince(opts.since),
         until: opts.until,
         format,
       });
+
+      // An export emptied by the caller's own filter is the same silent false
+      // absence this change exists to remove, and it reached review as a live
+      // defect: `export --sender <nobody>` printed "[]" with 0 bytes on stderr
+      // at rc=0, which made --sender on this verb strictly MORE silent than the
+      // --from it is offered as an improvement on. Emptiness is read off the
+      // rendered payload rather than re-querying: "[]" for json, headers with no
+      // data row for csv.
+      const exportedNothing = format === "csv"
+        ? !result.includes("\n")
+        : result.trim() === "[]";
+      if (exportedNothing) {
+        discloseEmptyResult({
+          channel: opts.channel,
+          sender: senderFilter.sender,
+          session: opts.session,
+          since: opts.since,
+        }, { senderFlag: senderFilter.flag });
+      }
+
       printLine(result);
       closeDb();
     });
