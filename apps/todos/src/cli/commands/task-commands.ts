@@ -469,11 +469,31 @@ export function registerTaskCommands(program: Command) {
           )
         : undefined;
       const assignee: string | undefined = requestedAssign || (opts.unassigned ? undefined : router.agent_id || undefined);
-      if (!assignee && !opts.unassigned) {
+      // Two independent arms, because #192 made them independent: `assignee` and
+      // `router.agent_id` (the WRITABLE identity, written into created_by below)
+      // used to move together, so a single `!assignee` gate covered both. After
+      // #192 an explicit `--assign` can supply an owner while the filer itself
+      // stays unidentified — that row is not ownerless (it has an assignee) but
+      // it IS unattributable, and the old gate went silent on exactly that branch
+      // (todos task a3f4bb1a, F1). `--assign brutus` from an anonymous filer with
+      // no TODOS_AGENT_ID/--agent produced a NULL created_by with no warning at
+      // all.
+      const ownerless = !assignee && !opts.unassigned;
+      if (ownerless) {
         // One line, not two: this fires on every add from an unregistered caller,
         // and a warning people scroll past is a warning that does not work.
+        // Safe to call this row ownerless AND unattributable together: whenever
+        // this arm fires, `assignee` fell back to `router.agent_id` above (no
+        // explicit --assign, not --unassigned), so `router.agent_id` is null too.
         console.error(chalk.yellow(
           "Warning: task is ownerless and unattributable — export TODOS_AGENT_ID=<name> for this session, or pass --agent/--assign <agent> or --unassigned.",
+        ));
+      } else if (!router.agent_id) {
+        // Has an owner (an explicit --assign, or --unassigned was deliberate) but
+        // no writable identity to credit as the filer — independent of whether
+        // --assign or --unassigned was passed.
+        console.error(chalk.yellow(
+          "Warning: task is unattributable — created_by will be recorded as null. Export TODOS_AGENT_ID=<name> for this session, or pass --agent <agent>, to record who filed it.",
         ));
       }
 

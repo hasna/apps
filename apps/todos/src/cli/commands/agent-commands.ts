@@ -187,7 +187,21 @@ export function registerAgentCommands(program: Command) {
           console.log(chalk.green("Agent registered:"));
           console.log(`  ${chalk.dim("ID:")}   ${result.id}`);
           console.log(`  ${chalk.dim("Name:")} ${result.name}`);
-          console.log(`\n${chalk.dim("Identity saved — later commands attribute to this agent automatically.")}`);
+          // #192 made the persisted file read-only for DISPLAY and diagnostics
+          // (`--inbox`, `resolveCreatorIdentity`) — it is never written into a
+          // task's created_by/agent_id/assigned_to (see resolveWritableIdentity
+          // in lib/creator-identity.ts). The line this replaces claimed the
+          // opposite ("later commands attribute to this agent automatically"),
+          // which is false on every column since #192. The collision path
+          // (exit 2, above) already prints the correct escape hatch; the
+          // success path — the one every fresh session hits — must say the
+          // same thing instead of the opposite (todos task a3f4bb1a, F2).
+          console.log(
+            `\n${chalk.dim("Identity saved for diagnostics and --inbox — it is not attribution.")}\n` +
+            `${chalk.dim("For per-session attribution, set a per-process identity — it outranks this file and cannot collide with another session on the same machine:")}\n` +
+            `  ${chalk.dim(`export TODOS_AGENT_ID=${result.name}`)}\n` +
+            `${chalk.dim(`Or pass --agent ${result.name} on each command.`)}`,
+          );
         }
       } catch (e) {
         handleError(e);

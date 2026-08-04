@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`todos add --assign <agent>` silenced the attribution warning while `created_by`
+  went null.** After 0.15.2 routed `created_by` through the guarded
+  `resolveWritableIdentity`, the ownerless-warning gate in `todos add` still keyed
+  only on `assignee` — a check that used to imply attribution but no longer does. An
+  anonymous filer that passed `--assign <agent>` got a real owner and a silently null
+  `created_by`, because giving the row an assignee suppressed the one warning that
+  would have said so. The warning now fires independently on whichever condition is
+  true — no assignee, or no writable identity — so an assigned-but-unattributed row
+  now says so on stderr instead of filing in silence (todos task `a3f4bb1a`).
+- **`todos init`'s success message still promised automatic attribution that 0.15.2
+  removed.** The line printed on every successful `init` — "Identity saved — later
+  commands attribute to this agent automatically" — became false on every column
+  (`created_by`, `agent_id`, `assigned_to`) once the persisted identity file was
+  narrowed to a display-only diagnostic. The collision path already named the correct
+  escape hatch (`export TODOS_AGENT_ID=<name>`); the success path — the one every
+  fresh session hits — now prints the same instruction instead of the opposite one
+  (todos task `a3f4bb1a`).
+
 ## [0.15.2] - 2026-08-04
 
 ### Fixed
