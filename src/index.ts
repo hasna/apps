@@ -229,6 +229,23 @@ export type {
   ProjectStorePaths,
 } from "./lib/project-store.js";
 export {
+  BUILD_OUTPUT_DIRS,
+  DATABASE_EXTENSIONS,
+  DEPENDENCY_TREE_DIRS,
+  DEPENDENCY_TREE_MARKERS,
+  PROVIDER_CACHE_DIRS,
+  TOOL_CACHE_DIRS,
+  classifyDirectory,
+  classifyFile,
+} from "./lib/sync-scope.js";
+export type {
+  ClassifyDirectoryOptions,
+  ClassifyFileOptions,
+  DirectoryProbe,
+  SyncExclusionReason,
+  SyncScopeDecision,
+} from "./lib/sync-scope.js";
+export {
   DEFAULT_OSS_MATRIX_LIMIT,
   MAX_OSS_MATRIX_LIMIT,
   OSS_PROJECT_MATRIX_SCHEMA_VERSION,
