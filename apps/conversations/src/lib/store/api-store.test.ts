@@ -192,6 +192,26 @@ describe("ApiStore message transport", () => {
     });
   });
 
+  test("uses a server-supported cloud search order and preserves the until bound", async () => {
+    const search = capturingClient(previewPage());
+    await new ApiStore(search.client).searchMessagePreviews({
+      query: "deployment",
+      until: "2026-07-19T01:00:00.000Z",
+      limit: 5,
+    });
+
+    expect(search.calls[0].resource).toBe("/messages");
+    expect(search.calls[0].options).toMatchObject({
+      query: {
+        q: "deployment",
+        order: "desc",
+        until: "2026-07-19T01:00:00.000Z",
+        limit: 5,
+      },
+      retry: false,
+    });
+  });
+
   test("posts bounded artifact export options without requesting inline bodies", async () => {
     const artifact = {
       artifact_id: "00000000-0000-4000-8000-000000000001",

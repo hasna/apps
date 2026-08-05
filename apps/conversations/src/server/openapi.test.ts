@@ -33,4 +33,11 @@ describe("incident projection public contract", () => {
     expect(sdk).toContain("reply_to");
     expect(sdk).toContain("metadata");
   });
+
+  test("publishes both message search time bounds", () => {
+    const parameters = (openapiSpec.paths["/v1/messages"].get.parameters as readonly { name: string }[])
+      .map((parameter) => parameter.name);
+    expect(parameters).toContain("since");
+    expect(parameters).toContain("until");
+  });
 });

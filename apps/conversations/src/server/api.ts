@@ -1063,6 +1063,7 @@ async function handleV1(
     }
     const projectId = strictStringParam(url.searchParams.get("project_id"), "project_id");
     const since = strictDateParam(url.searchParams.get("since"), "since");
+    const until = strictDateParam(url.searchParams.get("until"), "until");
     const id = strictIntegerParam(url.searchParams.get("id"), "id");
     const replyTo = strictIntegerParam(url.searchParams.get("reply_to"), "reply_to");
     const sinceId = strictIntegerParam(url.searchParams.get("since_id"), "since_id", true);
@@ -1096,6 +1097,7 @@ async function handleV1(
     if (projectId) { params.push(projectId); clauses.push(`project_id = $${params.length}`); }
     if (uuid) { params.push(uuid); clauses.push(`uuid = $${params.length}`); }
     if (since) { params.push(since); clauses.push(`created_at > $${params.length}`); }
+    if (until) { params.push(until); clauses.push(`created_at <= $${params.length}`); }
     if (sinceId !== undefined) { params.push(sinceId); clauses.push(`id > $${params.length}`); }
     if (q) { params.push(`%${q}%`); clauses.push(`content ILIKE $${params.length}`); }
     if (mentionsOnly) {

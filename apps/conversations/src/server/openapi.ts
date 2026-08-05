@@ -421,6 +421,8 @@ export const openapiSpec = {
           { name: "session", in: "query", schema: { type: "string" } },
           { name: "id", in: "query", schema: { type: "integer", minimum: 1 } },
           { name: "since_id", in: "query", schema: { type: "integer", minimum: 0 } },
+          { name: "since", in: "query", schema: { type: "string", format: "date-time" } },
+          { name: "until", in: "query", schema: { type: "string", format: "date-time" } },
           { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100 } },
           { name: "offset", in: "query", schema: { type: "integer", minimum: 0 } },
           { name: "order", in: "query", schema: { type: "string", enum: ["asc", "desc"] } },

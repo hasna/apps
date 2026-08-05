@@ -466,6 +466,8 @@ describe("conversations-serve", () => {
         "since_id=1.5",
         "since=not-a-date",
         "since=1",
+        "until=not-a-date",
+        "until=1",
         "session=fixture&session_id=",
         "session=one&session_id=two",
         "unread_only=perhaps",
@@ -479,6 +481,29 @@ describe("conversations-serve", () => {
       }
       const validZeroCursor = await fetch(`${isolatedBase}/v1/messages?since_id=0`, { headers: { "x-api-key": rwKey } });
       expect(validZeroCursor.status).toBe(200);
+    } finally {
+      isolated.stop(true);
+    }
+  });
+
+  test("cloud search accepts chronological ordering and enforces the until bound", async () => {
+    const deps = makeDeps();
+    const isolated = startApiServer({ port: 0, host: "127.0.0.1", deps });
+    const isolatedBase = `http://127.0.0.1:${isolated.port}`;
+    const until = "2026-07-19T01:00:00.000Z";
+    try {
+      const response = await fetch(
+        `${isolatedBase}/v1/messages?q=deployment&order=desc&until=${encodeURIComponent(until)}`,
+        { headers: { "x-api-key": rwKey } },
+      );
+      expect(response.status).toBe(200);
+
+      const query = (deps.client as any).queryCalls.find(
+        (call: { sql: string }) => /content ILIKE/.test(call.sql),
+      );
+      expect(query).toBeTruthy();
+      expect(query.sql).toContain("created_at <=");
+      expect(query.params).toContain(until);
     } finally {
       isolated.stop(true);
     }

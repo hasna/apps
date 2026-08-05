@@ -614,7 +614,10 @@ export class ApiStore implements ConversationsStore {
       max_bytes: maxBytes,
       preview_bytes: previewBytes,
       timeout_ms: timeoutMs,
-      order: opts.sort === "recent" ? "desc" : "relevance",
+      // The cloud collection endpoint accepts chronological ordering only.
+      // Local FTS may rank by relevance, but sending that value over HTTP
+      // makes the supported cloud search path fail closed with a 400.
+      order: "desc",
       channel: opts.channel ? normalizeChannelName(opts.channel) : undefined,
       from: opts.from,
       to: opts.to,

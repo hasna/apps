@@ -197,7 +197,7 @@ export class ConversationsClient {
     }
 
     /** List bounded, redacted message previews */
-    async listMessages(query?: { "to"?: string; "from"?: string; "channel"?: string; "session"?: string; "id"?: number; "since_id"?: number; "limit"?: number; "offset"?: number; "order"?: "asc" | "desc"; "q"?: string; "unread_only"?: boolean; "threads_only"?: boolean; "pinned_only"?: boolean; "reply_to"?: number; "detail"?: "preview"; "max_bytes"?: number; "preview_bytes"?: number; "timeout_ms"?: number }, init?: RequestInit): Promise<MessagePreviewPage> {
+    async listMessages(query?: { "to"?: string; "from"?: string; "channel"?: string; "session"?: string; "id"?: number; "since_id"?: number; "since"?: string; "until"?: string; "limit"?: number; "offset"?: number; "order"?: "asc" | "desc"; "q"?: string; "unread_only"?: boolean; "threads_only"?: boolean; "pinned_only"?: boolean; "reply_to"?: number; "detail"?: "preview"; "max_bytes"?: number; "preview_bytes"?: number; "timeout_ms"?: number }, init?: RequestInit): Promise<MessagePreviewPage> {
       return this.request("GET", `/v1/messages`, {
         body: undefined,
         query,
