@@ -50,10 +50,18 @@ function prune(q: Q): Record<string, string | number | boolean> {
   return out;
 }
 
-/** Case-insensitive compare of two optional identity strings. */
+/**
+ * Case-insensitive compare of two identity strings, where BLANK NEVER MATCHES.
+ *
+ * The empty-vs-empty case is the one that matters: a plain `l === r` returns
+ * true for two absent values, so a guard built on it would pass on nothing at
+ * all rather than on a match. Every use below is an accept test, so an
+ * unknown identity must fail it.
+ */
 function sameIdentity(a: unknown, b: unknown): boolean {
   const l = typeof a === "string" ? a.trim().toLowerCase() : "";
   const r = typeof b === "string" ? b.trim().toLowerCase() : "";
+  if (!l || !r) return false;
   return l === r;
 }
 
@@ -668,7 +676,27 @@ export class ApiStore implements ConversationsStore {
     // So ask the one question still answerable: is the row the server DID
     // return the write we just submitted?
     if (echoesSubmittedWrite(opts, returned)) {
-      return attachSendRedaction(opts.content, returned) as never;
+      // DISCLOSE THE DOWNGRADE rather than returning silently. Confirmation
+      // fell from "the server handed back the row under the UUID we bound" to
+      // "the row it handed back is routed the way we asked", which is a weaker
+      // claim, and a caller that cannot tell the two apart cannot know which
+      // guarantee its id carries. This mirrors how the same file already
+      // handles a server-side row cap (`truncated`) instead of presenting a
+      // degraded result as a complete one.
+      //
+      // It is also the only thing that will ever mark this path dead: once the
+      // server serves `/messages/by-uuid`, the flag stops appearing, and its
+      // absence is the signal that this fallback can be removed.
+      return attachSendRedaction(opts.content, {
+        ...returned,
+        write_confirmation: {
+          degraded: true,
+          method: "routing-echo",
+          message:
+            "The server did not preserve the caller-bound message UUID and cannot be queried by UUID, " +
+            "so this id was confirmed from the routing of the row it returned, not by reading the row back.",
+        },
+      }) as never;
     }
 
     throw new Error(

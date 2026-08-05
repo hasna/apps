@@ -479,6 +479,115 @@ describe("ApiStore.sendMessage wire body", () => {
     expect(message).toMatchObject({ id: 668600, to_agent: "manius" });
   });
 
+  // Returning the id silently would leave a caller unable to tell an
+  // authoritative UUID read-back from the weaker routing check, and would leave
+  // nothing to mark this path dead once the server serves /messages/by-uuid.
+  test("discloses that confirmation degraded to the routing echo", async () => {
+    const notFound = Object.assign(new Error("Not Found"), { name: "HasnaHttpError", status: 404 });
+    const client = {
+      name: "conversations",
+      baseUrl: "https://conversations.hasna.xyz/v1",
+      transport: {
+        get: async () => {
+          throw notFound;
+        },
+      } as unknown as HasnaStorageClient["transport"],
+      create: async () => ({
+        message: {
+          id: 668700,
+          uuid: "22222222-3333-4444-8555-666666666666",
+          session_id: "channel:git-publishing",
+          from_agent: "silvanus",
+          to_agent: "git-publishing",
+          channel: "git-publishing",
+          content: "degraded confirmation",
+        },
+      }),
+    } as unknown as HasnaStorageClient;
+    const store = new ApiStore(client);
+
+    const message = (await store.sendMessage({
+      uuid: "33333333-4444-4555-8666-777777777777",
+      from: "silvanus",
+      to: "silvanus",
+      channel: "git-publishing",
+      content: "degraded confirmation",
+    })) as unknown as { id: number; write_confirmation?: { degraded: boolean; method: string } };
+
+    expect(message.id).toBe(668700);
+    expect(message.write_confirmation).toMatchObject({ degraded: true, method: "routing-echo" });
+  });
+
+  // The other side: an AUTHORITATIVE confirmation must carry no degradation
+  // marker, or the flag means nothing and cannot signal the path is dead.
+  test("does NOT mark confirmation degraded when the server honours the caller UUID", async () => {
+    const boundUuid = "44444444-5555-4666-8777-888888888888";
+    const client = {
+      name: "conversations",
+      baseUrl: "https://conversations.hasna.xyz/v1",
+      transport: {} as unknown as HasnaStorageClient["transport"],
+      create: async (_r: string, body: Record<string, unknown>) => ({
+        message: {
+          id: 668701,
+          uuid: body.uuid,
+          session_id: "channel:git-publishing",
+          from_agent: "silvanus",
+          to_agent: "git-publishing",
+          channel: "git-publishing",
+          content: "authoritative",
+        },
+      }),
+    } as unknown as HasnaStorageClient;
+    const store = new ApiStore(client);
+
+    const message = (await store.sendMessage({
+      uuid: boundUuid,
+      from: "silvanus",
+      to: "silvanus",
+      channel: "git-publishing",
+      content: "authoritative",
+    })) as unknown as { id: number; write_confirmation?: unknown };
+
+    expect(message.id).toBe(668701);
+    expect(message.write_confirmation).toBeUndefined();
+  });
+
+  // A blank identity on either side must not satisfy an accept test. Without
+  // the non-empty guard, `"" === ""` passes and the sender check asserts
+  // nothing at all.
+  test("refuses to accept an echo whose sender identity is blank on both sides", async () => {
+    const notFound = Object.assign(new Error("Not Found"), { name: "HasnaHttpError", status: 404 });
+    const client = {
+      name: "conversations",
+      baseUrl: "https://conversations.hasna.xyz/v1",
+      transport: {
+        get: async () => {
+          throw notFound;
+        },
+      } as unknown as HasnaStorageClient["transport"],
+      create: async () => ({
+        message: {
+          id: 668702,
+          uuid: "55555555-6666-4777-8888-999999999999",
+          session_id: "channel:git-publishing",
+          from_agent: "",
+          to_agent: "git-publishing",
+          channel: "git-publishing",
+          content: "blank sender",
+        },
+      }),
+    } as unknown as HasnaStorageClient;
+    const store = new ApiStore(client);
+
+    await expect(store.sendMessage({
+      uuid: "66666666-7777-4888-8999-aaaaaaaaaaaa",
+      from: "",
+      to: "silvanus",
+      channel: "git-publishing",
+      content: "blank sender",
+    })).rejects.toThrow(/could not be read back/);
+  });
+
   // `messages.id`/`messages.reply_to` are Postgres BIGINT, and node-postgres
   // serializes int8 as a STRING. Measured against the live deployed server:
   // GET /v1/messages returns `"id": "603183"` — a string, not a number.
