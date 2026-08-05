@@ -1507,7 +1507,12 @@ Prune Options:
   Do not confuse --description with --desc, which is the sort-descending flag on list.
   --reach ${aN.join("|")} and --consequence ${sN.join("|")} are optional governance
   axes; they default to the QUIET end (${PS}/${zS}) so only a deliberate write escalates.
-  -t/--tag is repeatable and accepts comma-separated values: -t a -t b  ==  -t "a,b"`);return}if(_==="list"||_==="ls"){console.log(`Usage: knowledge list|ls [--format table|json] [-p <page>] [-l <limit>] [-s <search>] [-t <tag>]... [--sort created|title] [--desc] [--archived] [--include-archived] [--verbose] [--json]
+  -t/--tag is repeatable and accepts comma-separated values: -t a -t b  ==  -t "a,b"`);return}if(_==="list"||_==="ls"){console.log(`Usage: knowledge list|ls [--format table|json] [-p <page>] [-l <limit>] [-s <search>] [-t <tag>]... [--sort created|title|updated] [--desc] [--archived] [--include-archived] [--verbose] [--json]
+  --sort updated orders by updated_at, so an item REVISED today surfaces above one merely
+  CREATED today \u2014 this is how a change monitor asks "what moved?", which sorting by created
+  can never answer. Pair it with --desc to lead with the most recently edited item. Note that
+  --desc is the sort DIRECTION and is a different flag from --description on add/update.
+  The description itself is returned by --json but is NOT a column in the table render.
   -s/--search is a CASE-INSENSITIVE LITERAL SUBSTRING filter over id, title and content \u2014 not a
   tokenised or semantic search, so a word order that never appears verbatim matches nothing. It
   resolves an item by its slug because the id is included. For meaning-based lookup use \`knowledge
