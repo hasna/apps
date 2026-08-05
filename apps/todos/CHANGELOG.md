@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.5] - 2026-08-05
+
+### Added
+
+- **`todos delegate` — one atomic verb for handing a task to a worker.** A delegation
+  previously took four to six separate commands (`update --assign`, a comment carrying
+  the brief, an `agents register` for the worker, a channel post), each of which could
+  half-happen. Nothing tied them together, so a row could end up assigned with no brief,
+  briefed with no assignee, or dispatched with no record anyone could grep. `delegate`
+  performs the ordered effects in one call and refuses before the first write when the
+  handover would be incomplete.
+  - **A brief is mandatory and is gated on both sides.** `--brief <path>`,
+    `--brief-text <text>`, or `--brief -` for stdin. A missing, unreadable, zero-byte or
+    whitespace-only brief is refused with the offending path named and the row left
+    byte-identical; the accepted content is stored untrimmed with its sha256, so a brief
+    cannot be silently substituted later.
+  - **Handover lineage is persisted on the row** — `assigned_by`, `delegated_from` and
+    `delegation_depth`, written in a single patch. The write branches test
+    `!== undefined` rather than truthiness, so `delegation_depth: 0` and an explicit
+    `delegated_from: null` are honoured instead of being dropped. Depth increments from
+    the parent row, so a re-delegated task records its chain.
+  - **The row is left claimable.** `started_at` and `locked_by` stay `NULL` and status
+    stays `pending`: delegation assigns and briefs, it does not claim. The worker's own
+    `todos start` is still what takes the lock, which keeps the dispatched-but-unclaimed
+    population countable.
+  - **A greppable `[DISPATCH]` comment** carrying worker, dispatcher, brief source and
+    digest, lineage, and the claim deadline — the marker is the first thing on the first
+    line so counters can anchor on it. The deadline also lands in task metadata as a
+    queryable field, merged read-modify-write so a concurrent writer's keys survive.
+  - **Read-back verification.** After the patch the row is re-read and every field the
+    delegation claims to have written is checked. If the authority accepted the request
+    but did not persist the lineage, the command refuses and names the missing fields
+    *before* the `[DISPATCH]` comment is written, so a partial delegation can never be
+    reported as a complete one. This matters most where `assigned_by` still holds the
+    filer — a plausible value, which is what would otherwise make the no-op invisible.
+  - **Depth threshold and embargo are data, not constants.** The threshold ships unset:
+    the seat-queue count and any recorded override are unconditional, while parking is
+    opt-in via flag, environment or config. The embargo is an owner-editable file that
+    self-disables when absent, and it is enforced against both the worker's name and its
+    agent id, since resolving an id to a name would otherwise bypass a name-only check.
+  - Registered in both the canonical command list and the remote command list.
+    Canonical-only would have left the verb local-only, which the `/v1` route refuses —
+    a state that is invisible from `--help`.
+  - `dispatch` and `dispatches` are unchanged and still registered. No schema change, no
+    migration, and no change to any server route.
+
 ## [0.15.4] - 2026-08-04
 
 ### Fixed
