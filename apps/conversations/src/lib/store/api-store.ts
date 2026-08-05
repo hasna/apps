@@ -50,6 +50,75 @@ function prune(q: Q): Record<string, string | number | boolean> {
   return out;
 }
 
+/** Case-insensitive compare of two optional identity strings. */
+function sameIdentity(a: unknown, b: unknown): boolean {
+  const l = typeof a === "string" ? a.trim().toLowerCase() : "";
+  const r = typeof b === "string" ? b.trim().toLowerCase() : "";
+  return l === r;
+}
+
+/**
+ * Is `returned` the row this very `sendMessage` call submitted?
+ *
+ * Compares the routing identity the CALLER supplied — sender, recipient and
+ * channel — because that is precisely what separates our row from the hazard
+ * the caller-bound UUID exists to catch: a mention-notification DM fanned out
+ * by the same write, which is addressed to a DIFFERENT agent and carries no
+ * channel.
+ *
+ * It deliberately does NOT compare content. The server may legitimately store
+ * a redacted body, and `attachSendRedaction` is the surface that reports that
+ * divergence to the author; re-deriving it here would reject a correct write
+ * for the wrong reason. (`describeSendRedaction` cannot help either — it
+ * reports that two bodies DIFFER, not that the difference is a redaction, so
+ * using it as an accept test would accept any difference at all.)
+ *
+ * STATE THE LIMIT, because this is an accept path: it proves the returned row
+ * is addressed exactly as requested and carries a usable id. It does NOT prove
+ * the row is not some other message with identical routing. That residual is
+ * accepted only where the alternative is failing 100% of successful writes on
+ * a server that cannot be asked — a certain, universal false failure traded
+ * for a narrow ambiguity, and only after the authoritative UUID read-back has
+ * already been tried and found unanswerable.
+ */
+function echoesSubmittedWrite(
+  opts: { from?: string; to?: string; channel?: string | null },
+  returned: { id?: unknown; from_agent?: unknown; to_agent?: unknown; channel?: unknown },
+): boolean {
+  // Without a usable id there is nothing to report, so there is nothing to accept.
+  const id = Number(returned.id);
+  if (!Number.isFinite(id) || id <= 0) return false;
+
+  if (!sameIdentity(returned.from_agent, opts.from)) return false;
+
+  const wantChannel = opts.channel ? normalizeChannelName(opts.channel) : "";
+  const gotChannel = typeof returned.channel === "string" && returned.channel
+    ? normalizeChannelName(returned.channel)
+    : "";
+  if (wantChannel !== gotChannel) return false;
+
+  if (wantChannel) {
+    // CHANNEL POST. The server OWNS the recipient field here and rewrites it to
+    // the channel, whatever the caller passed. Measured on the deployed server:
+    //     sent     to="silvanus" channel="scratch-d8f3f963"
+    //     returned to_agent="scratch-d8f3f963"
+    // and the CLI's own channel path passes `to: to || from`, i.e. the SENDER.
+    // So insisting on `to_agent === opts.to` would reject every correct channel
+    // send — which is exactly what an earlier revision of this function did,
+    // caught only by running the real CLI against the real server rather than
+    // by the unit fixture, which had been written with to == channel and so
+    // could not fail. The channel plus the sender IS the identity here, and the
+    // mention-notification DM this guard exists to reject carries NO channel,
+    // so the channel comparison above already separates it.
+    return sameIdentity(returned.to_agent, gotChannel) || sameIdentity(returned.to_agent, opts.to);
+  }
+
+  // DIRECT MESSAGE. No channel to discriminate on, so the recipient is the
+  // discriminator — and it is precisely what tells our row apart from a
+  // notification DM addressed to a mentioned third party.
+  return sameIdentity(returned.to_agent, opts.to);
+}
+
 /** Duck-typed HasnaHttpError status check (class identity differs across bundles). */
 function isHttpStatus(error: unknown, status: number): boolean {
   return Boolean(
@@ -579,13 +648,33 @@ export class ApiStore implements ConversationsStore {
     // observed. Never trust a later mutable numeric id as the identity of the
     // row we wrote: read back by the caller-bound immutable UUID instead.
     const exact = await this.getMessageByUuid(messageUuid);
-    if (!exact) {
-      throw new Error(
-        `Message write returned UUID ${returned.uuid || "(missing)"} instead of ${messageUuid}, ` +
-          `and the exact row could not be read back. Refusing to report a numeric message id.`
-      );
+    if (exact) return attachSendRedaction(opts.content, exact) as never;
+
+    // Nothing under our UUID — and that has TWO causes this transport cannot
+    // tell apart, because `getMessageByUuid` maps every 404 to null and a
+    // server with no `/messages/by-uuid` route answers with the SAME bare 404
+    // as a genuine row-miss. Measured on the deployed server, 2026-08-05:
+    //   /v1/messages/by-uuid/<uuid>  -> 404 {"error":"Not found"}       (no route)
+    //   /v1/definitely-not-a-route   -> 404 {"error":"Not found"}       (no route)
+    //   /v1/messages/999999999       -> 404 {"error":"Message not found"} (real miss)
+    // That server also drops the caller `uuid` on create — it is absent from
+    // the route's published request schema — mints its own, and returns OUR
+    // row. So the strict check reported EVERY successful send as a failure.
+    //
+    // Treating "could not verify" as "did not write" is the expensive
+    // direction: a caller's natural response is to re-send, on a shared
+    // channel, where the retry reports the same false failure.
+    //
+    // So ask the one question still answerable: is the row the server DID
+    // return the write we just submitted?
+    if (echoesSubmittedWrite(opts, returned)) {
+      return attachSendRedaction(opts.content, returned) as never;
     }
-    return attachSendRedaction(opts.content, exact) as never;
+
+    throw new Error(
+      `Message write returned UUID ${returned.uuid || "(missing)"} instead of ${messageUuid}, ` +
+        `and the exact row could not be read back. Refusing to report a numeric message id.`
+    );
   };
   getMessageById: ConversationsStore["getMessageById"] = async (id) => {
     const body = await this.client.get<{ message: Record<string, unknown> }>("messages", String(id));

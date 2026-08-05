@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.5.25 - 2026-08-05
+
+### Fixed
+- **`send` and `reply` no longer report a fully successful write as a failure.** Against the deployed server every hosted write exited 1 with `Message write returned UUID <a> instead of <b>, and the exact row could not be read back. Refusing to report a numeric message id.` — while the message landed, in the right channel, correctly threaded, with the right content and sender. The exit code was not the harm: the natural response to "your write may not have landed" is to re-send, on a shared channel, where the retry reported the same false failure. It also withheld the message id that the fleet's citation conventions depend on (todos `d8f3f963`).
+
+  Two absent server capabilities were required to reproduce, and the client assumed both. `POST /v1/messages` does not accept a caller `uuid` — it is absent from the route's published request schema — so the server drops it, mints its own, and returns **our row** under a different UUID. `GET /v1/messages/by-uuid/{uuid}` does not exist at all, and falls through to the generic unknown-route handler, whose 404 is **indistinguishable by status** from a real row-miss:
+
+  ```
+  /v1/messages/by-uuid/<valid-uuid>  -> 404 {"error":"Not found"}
+  /v1/definitely-not-a-route         -> 404 {"error":"Not found"}
+  /v1/messages/999999999             -> 404 {"error":"Message not found"}   <- route that DOES exist
+  ```
+
+  `getMessageByUuid` maps any 404 to `null`, so a missing **route** became "the row is not there", and a write that had demonstrably succeeded was reported as a failure. `sendMessage` now falls back — only after the authoritative UUID read-back has been tried and found unanswerable — to checking whether the row the server *did* return is the write just submitted, by the routing identity the caller controls. A response describing some other row (the mention-notification DM the UUID binding exists to catch) is still refused, loudly.
+
+- **The caller-UUID guarantee 0.5.23 announced was never true against the deployed server.** That release's note claims "hosted writes preserve caller-generated UUIDs (#77)". They do not — the server has no `uuid` field on its create route. 0.5.23 went to the `next` dist-tag with no changelog entry and no release tag, so `latest` installs went 0.5.22 → 0.5.24 and #77 first reached the fleet **in 0.5.24**, which is why the onset tracks the 0.5.24 publish while the causing change shipped in 0.5.23.
+
+### Known gaps
+- The underlying conflation is unchanged: `getMessageByUuid` still cannot distinguish a missing route from a missing row, because it has only the HTTP status to go on. The repair is scoped to `sendMessage`, where the false failure was reachable; the other callers are user-facing lookups where "not found" is an honest answer. A discriminated result type would change the `ConversationsStore` interface and every implementation, so it is deliberately not in this patch.
+- The accept path proves the returned row is addressed exactly as requested and carries a usable id. It does **not** prove the row is not some other message with identical routing. That residual is accepted only where the alternative is failing 100% of successful writes on a server that cannot be asked.
+
 ## 0.5.24 - 2026-08-05
 
 ### Added
