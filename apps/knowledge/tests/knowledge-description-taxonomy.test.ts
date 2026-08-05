@@ -177,7 +177,15 @@ describe('legacy rows written before the field existed stay readable', () => {
     const storePath = join(dir, 'db.json');
     // Write a legacy-shaped row directly, bypassing every application path —
     // exactly what the 1361 existing rows look like.
-    Bun.write(
+    //
+    // `Bun.write` returns a Promise and MUST be awaited. Unawaited, the read
+    // below races the write: POSIX runners happened to win that race and the
+    // test passed on every local run, while Windows CI lost it and read an
+    // absent file as an empty store — `toHaveLength(1)` received 0. The
+    // failure therefore looked like "legacy rows are not readable", i.e. a
+    // defect in the feature under test, when it was only the fixture not
+    // having landed yet. Every other Bun.write in tests/ (5 of 5) awaits.
+    await Bun.write(
       storePath,
       JSON.stringify({
         items: [
