@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.5.26 - 2026-08-05
+
+### Fixed
+
+- **The dashboard install at publish time is pinned and quarantined.** `prepublishOnly` ran `cd dashboard && bun install` with no flags, so `npm publish` performed a dependency resolution *after* Typecheck, Test and Build had all passed — the reviewed tree and the published tree were separated by a resolution no gate could observe. `dashboard/` is a second dependency tree with its own lockfile that no CI job installed or built, so its first and only install happened inside the publish itself.
+
+  Two distinct exposures, both measured on bun 1.3.14. **Unpinned:** on a drifted lockfile, plain `bun install` exits 0, silently re-resolves and rewrites `bun.lock` ("Saved lockfile"); with `--frozen-lockfile` the same state exits 1 and leaves the lockfile untouched. **Unquarantined:** the release-age quarantine on a workstation comes entirely from `~/.bunfig.toml`, which does not exist on a GitHub runner — the identical install of a 5-day-old package exits 1 with a real `HOME` and exits 0 with an empty one.
+
+  `build:dashboard` now passes `--frozen-lockfile --minimum-release-age 604800`. The two flags are not interchangeable and this does not pretend they are: `--frozen-lockfile` is load-bearing and removes resolution from the publish boundary entirely, while `--minimum-release-age` is defence in depth enforced at resolution time only — it does **not** re-validate versions already pinned in the lockfile. A lockfile pinning a too-new version is caught by review of the lockfile diff, not by these flags.
+
+  `release.yml` now builds the dashboard inside the gated part of the workflow, before the publish boundary, and fails if `dashboard/dist` is missing: `files` ships `dashboard/dist/`, and npm silently omits a listed path that does not exist rather than failing, so a dashboard that never built would publish as a tarball quietly missing its web UI. `ci.yml` runs the same command so a drifted `dashboard/bun.lock` surfaces as a red check on the pull request that caused it, rather than as a late release failure.
+
 ## 0.5.25 - 2026-08-05
 
 ### Fixed
