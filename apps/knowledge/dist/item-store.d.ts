@@ -8,6 +8,17 @@ export interface ItemCreateInput {
     id?: string;
     title: string;
     content: string;
+    /**
+     * REQUIRED at runtime by both transports — see `assertCreatable` below. It is
+     * typed as required here so the compiler helps callers inside this package,
+     * but the type is NOT the enforcement: this is a plain TypeScript interface,
+     * erased at build time, and the MCP server (`mcp.js`) and any SDK consumer
+     * reach `create` as untyped JavaScript. The runtime check is the floor.
+     */
+    description: string;
+    /** Optional governance axes; validated against a closed vocabulary. */
+    reach?: string | null;
+    consequence?: string | null;
     url?: string | null;
     tags?: string[];
     metadata?: Record<string, unknown>;
@@ -15,6 +26,14 @@ export interface ItemCreateInput {
 export interface ItemPatch {
     title?: string;
     content?: string;
+    /**
+     * When present it must be VALID — a caller may not blank a description back
+     * out once set. When absent the stored value is left untouched, so ordinary
+     * edits (retag, retitle, archive) never have to restate it.
+     */
+    description?: string;
+    reach?: string | null;
+    consequence?: string | null;
     url?: string | null;
     /** Full replacement tag set (callers compute add/remove before patching). */
     tags?: string[];

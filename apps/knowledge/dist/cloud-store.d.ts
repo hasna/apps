@@ -17,6 +17,10 @@ export interface KnowledgeCloudCreateInput {
     id?: string;
     title: string;
     content: string;
+    /** Required by the server and by the CHECK constraint; see knowledge-taxonomy.ts. */
+    description?: string;
+    reach?: string | null;
+    consequence?: string | null;
     url?: string | null;
     tags?: string[];
     metadata?: Record<string, unknown>;
@@ -24,6 +28,9 @@ export interface KnowledgeCloudCreateInput {
 export interface KnowledgeCloudPatch {
     title?: string;
     content?: string;
+    description?: string;
+    reach?: string | null;
+    consequence?: string | null;
     url?: string | null;
     tags?: string[];
     metadata?: Record<string, unknown>;

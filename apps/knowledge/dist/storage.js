@@ -1711,6 +1711,9 @@ function wrap(client) {
         ...input.id ? { id: input.id } : {},
         title: input.title,
         content: input.content,
+        ...input.description !== undefined ? { description: input.description } : {},
+        ...input.reach ? { reach: input.reach } : {},
+        ...input.consequence ? { consequence: input.consequence } : {},
         url: input.url ?? null,
         tags: input.tags ?? [],
         ...input.metadata ? { metadata: input.metadata } : {}
@@ -3018,7 +3021,86 @@ var PG_MIGRATIONS = [
      END IF;
    END
    $knowledge_item_versions_guard$`,
-  `ALTER TABLE knowledge_item_versions ENABLE ALWAYS TRIGGER trg_knowledge_item_versions_append_only`
+  `ALTER TABLE knowledge_item_versions ENABLE ALWAYS TRIGGER trg_knowledge_item_versions_append_only`,
+  `ALTER TABLE knowledge_items ADD COLUMN IF NOT EXISTS description TEXT`,
+  `ALTER TABLE knowledge_items ADD COLUMN IF NOT EXISTS reach TEXT`,
+  `ALTER TABLE knowledge_items ADD COLUMN IF NOT EXISTS consequence TEXT`,
+  `DO $knowledge_items_description_present$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM pg_constraint WHERE conname = 'knowledge_items_description_present'
+     ) THEN
+       ALTER TABLE knowledge_items
+         ADD CONSTRAINT knowledge_items_description_present
+         CHECK (description IS NOT NULL AND char_length(btrim(description)) BETWEEN 24 AND 280)
+         NOT VALID;
+     END IF;
+   END
+   $knowledge_items_description_present$`,
+  `DO $knowledge_items_reach_vocab$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM pg_constraint WHERE conname = 'knowledge_items_reach_vocab'
+     ) THEN
+       ALTER TABLE knowledge_items
+         ADD CONSTRAINT knowledge_items_reach_vocab
+         CHECK (reach IS NULL OR reach IN ('fleet', 'project', 'seat', 'self'));
+     END IF;
+   END
+   $knowledge_items_reach_vocab$`,
+  `DO $knowledge_items_consequence_vocab$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM pg_constraint WHERE conname = 'knowledge_items_consequence_vocab'
+     ) THEN
+       ALTER TABLE knowledge_items
+         ADD CONSTRAINT knowledge_items_consequence_vocab
+         CHECK (consequence IS NULL OR consequence IN ('blocking', 'standing', 'reference'));
+     END IF;
+   END
+   $knowledge_items_consequence_vocab$`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_updated ON knowledge_items(updated_at)`,
+  `CREATE OR REPLACE FUNCTION knowledge_items_version_snapshot()
+   RETURNS TRIGGER AS $knowledge_item_version$
+   BEGIN
+     IF (OLD.title, OLD.content, OLD.url, OLD.tags, OLD.metadata, OLD.archived,
+         OLD.description, OLD.reach, OLD.consequence)
+        IS NOT DISTINCT FROM
+        (NEW.title, NEW.content, NEW.url, NEW.tags, NEW.metadata, NEW.archived,
+         NEW.description, NEW.reach, NEW.consequence) THEN
+       NEW.version := OLD.version;
+       RETURN NEW;
+     END IF;
+
+     INSERT INTO knowledge_item_versions
+       (id, item_id, tenant_id, version, title, content, content_hash, content_bytes,
+        url, tags, metadata, archived, actor, reason, valid_from, valid_to)
+     VALUES
+       (gen_random_uuid()::text,
+        OLD.id,
+        to_jsonb(OLD)->>'tenant_id',
+        OLD.version,
+        OLD.title,
+        OLD.content,
+        encode(sha256(convert_to(coalesce(OLD.content, ''), 'UTF8')), 'hex'),
+        octet_length(coalesce(OLD.content, '')),
+        OLD.url,
+        OLD.tags,
+        OLD.metadata,
+        OLD.archived,
+        NULLIF(current_setting('hasna.actor', true), ''),
+        NULLIF(current_setting('hasna.reason', true), ''),
+        OLD.updated_at,
+        to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'));
+
+     NEW.version := OLD.version + 1;
+
+     IF NEW.updated_at IS NOT DISTINCT FROM OLD.updated_at THEN
+       NEW.updated_at := to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
+     END IF;
+     RETURN NEW;
+   END
+   $knowledge_item_version$ LANGUAGE plpgsql`
 ];
 export {
   wrapExecutor,

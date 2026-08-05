@@ -16581,6 +16581,9 @@ function wrap(client) {
         ...input.id ? { id: input.id } : {},
         title: input.title,
         content: input.content,
+        ...input.description !== undefined ? { description: input.description } : {},
+        ...input.reach ? { reach: input.reach } : {},
+        ...input.consequence ? { consequence: input.consequence } : {},
         url: input.url ?? null,
         tags: input.tags ?? [],
         ...input.metadata ? { metadata: input.metadata } : {}
@@ -17888,7 +17891,86 @@ var PG_MIGRATIONS = [
      END IF;
    END
    $knowledge_item_versions_guard$`,
-  `ALTER TABLE knowledge_item_versions ENABLE ALWAYS TRIGGER trg_knowledge_item_versions_append_only`
+  `ALTER TABLE knowledge_item_versions ENABLE ALWAYS TRIGGER trg_knowledge_item_versions_append_only`,
+  `ALTER TABLE knowledge_items ADD COLUMN IF NOT EXISTS description TEXT`,
+  `ALTER TABLE knowledge_items ADD COLUMN IF NOT EXISTS reach TEXT`,
+  `ALTER TABLE knowledge_items ADD COLUMN IF NOT EXISTS consequence TEXT`,
+  `DO $knowledge_items_description_present$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM pg_constraint WHERE conname = 'knowledge_items_description_present'
+     ) THEN
+       ALTER TABLE knowledge_items
+         ADD CONSTRAINT knowledge_items_description_present
+         CHECK (description IS NOT NULL AND char_length(btrim(description)) BETWEEN 24 AND 280)
+         NOT VALID;
+     END IF;
+   END
+   $knowledge_items_description_present$`,
+  `DO $knowledge_items_reach_vocab$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM pg_constraint WHERE conname = 'knowledge_items_reach_vocab'
+     ) THEN
+       ALTER TABLE knowledge_items
+         ADD CONSTRAINT knowledge_items_reach_vocab
+         CHECK (reach IS NULL OR reach IN ('fleet', 'project', 'seat', 'self'));
+     END IF;
+   END
+   $knowledge_items_reach_vocab$`,
+  `DO $knowledge_items_consequence_vocab$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM pg_constraint WHERE conname = 'knowledge_items_consequence_vocab'
+     ) THEN
+       ALTER TABLE knowledge_items
+         ADD CONSTRAINT knowledge_items_consequence_vocab
+         CHECK (consequence IS NULL OR consequence IN ('blocking', 'standing', 'reference'));
+     END IF;
+   END
+   $knowledge_items_consequence_vocab$`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_updated ON knowledge_items(updated_at)`,
+  `CREATE OR REPLACE FUNCTION knowledge_items_version_snapshot()
+   RETURNS TRIGGER AS $knowledge_item_version$
+   BEGIN
+     IF (OLD.title, OLD.content, OLD.url, OLD.tags, OLD.metadata, OLD.archived,
+         OLD.description, OLD.reach, OLD.consequence)
+        IS NOT DISTINCT FROM
+        (NEW.title, NEW.content, NEW.url, NEW.tags, NEW.metadata, NEW.archived,
+         NEW.description, NEW.reach, NEW.consequence) THEN
+       NEW.version := OLD.version;
+       RETURN NEW;
+     END IF;
+
+     INSERT INTO knowledge_item_versions
+       (id, item_id, tenant_id, version, title, content, content_hash, content_bytes,
+        url, tags, metadata, archived, actor, reason, valid_from, valid_to)
+     VALUES
+       (gen_random_uuid()::text,
+        OLD.id,
+        to_jsonb(OLD)->>'tenant_id',
+        OLD.version,
+        OLD.title,
+        OLD.content,
+        encode(sha256(convert_to(coalesce(OLD.content, ''), 'UTF8')), 'hex'),
+        octet_length(coalesce(OLD.content, '')),
+        OLD.url,
+        OLD.tags,
+        OLD.metadata,
+        OLD.archived,
+        NULLIF(current_setting('hasna.actor', true), ''),
+        NULLIF(current_setting('hasna.reason', true), ''),
+        OLD.updated_at,
+        to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'));
+
+     NEW.version := OLD.version + 1;
+
+     IF NEW.updated_at IS NOT DISTINCT FROM OLD.updated_at THEN
+       NEW.updated_at := to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
+     END IF;
+     RETURN NEW;
+   END
+   $knowledge_item_version$ LANGUAGE plpgsql`
 ];
 // src/serve.ts
 import { readFileSync as readFileSync5 } from "fs";
@@ -18382,6 +18464,72 @@ function knowledgeRegistryContract(input) {
   };
 }
 
+// src/knowledge-taxonomy.ts
+var REACH_VALUES = ["fleet", "project", "seat", "self"];
+var CONSEQUENCE_VALUES = ["blocking", "standing", "reference"];
+var DESCRIPTION_MIN_LENGTH = 24;
+var DESCRIPTION_MAX_LENGTH = 280;
+
+class KnowledgeDescriptionRequiredError extends Error {
+  code = "description_required";
+  constructor(reason) {
+    super(`${reason} Every knowledge item must carry a one-line description: it is what the ` + "fleet-wide change notification shows an agent who has not opened the item, alongside the title. " + `Supply it with --description "<${DESCRIPTION_MIN_LENGTH}-${DESCRIPTION_MAX_LENGTH} chars saying what this is for>". ` + "It is required rather than optional because the equivalent optional field on mementos " + "(when_to_use) is populated on zero rows.");
+    this.name = "KnowledgeDescriptionRequiredError";
+  }
+}
+
+class KnowledgeTaxonomyValueError extends Error {
+  code = "taxonomy_value_invalid";
+  constructor(field, received, allowed) {
+    super(`Invalid --${field} value ${JSON.stringify(received)}. ` + `Use one of: ${allowed.join(", ")}.`);
+    this.name = "KnowledgeTaxonomyValueError";
+  }
+}
+function validateDescription(raw) {
+  if (raw === undefined || raw === null) {
+    throw new KnowledgeDescriptionRequiredError("No description was supplied.");
+  }
+  if (typeof raw !== "string") {
+    throw new KnowledgeDescriptionRequiredError(`The description must be a string, received ${typeof raw}.`);
+  }
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) {
+    throw new KnowledgeDescriptionRequiredError("The description was empty or whitespace only.");
+  }
+  if (trimmed.length < DESCRIPTION_MIN_LENGTH) {
+    throw new KnowledgeDescriptionRequiredError(`The description is ${trimmed.length} characters; the minimum is ${DESCRIPTION_MIN_LENGTH}.`);
+  }
+  if (trimmed.length > DESCRIPTION_MAX_LENGTH) {
+    throw new KnowledgeDescriptionRequiredError(`The description is ${trimmed.length} characters; the maximum is ${DESCRIPTION_MAX_LENGTH}.`);
+  }
+  return trimmed;
+}
+function normalizeAxis(field, raw, allowed) {
+  if (typeof raw !== "string") {
+    throw new KnowledgeTaxonomyValueError(field, raw, allowed);
+  }
+  const value = raw.trim().toLowerCase();
+  if (!allowed.includes(value)) {
+    throw new KnowledgeTaxonomyValueError(field, raw, allowed);
+  }
+  return value;
+}
+function normalizeReach(raw) {
+  return normalizeAxis("reach", raw, REACH_VALUES);
+}
+function normalizeConsequence(raw) {
+  return normalizeAxis("consequence", raw, CONSEQUENCE_VALUES);
+}
+function normalizeTaxonomyInput(input) {
+  const result = {};
+  if (input.reach !== undefined && input.reach !== null)
+    result.reach = normalizeReach(input.reach);
+  if (input.consequence !== undefined && input.consequence !== null) {
+    result.consequence = normalizeConsequence(input.consequence);
+  }
+  return result;
+}
+
 // src/store.ts
 import {
   chmodSync as chmodSync2,
@@ -18799,6 +18947,29 @@ class VersionConflictError extends Error {
     this.name = "VersionConflictError";
   }
 }
+function validateNoteDescription(raw) {
+  try {
+    return validateDescription(raw);
+  } catch (error) {
+    throw new HttpError(400, error instanceof Error ? error.message : "description is required");
+  }
+}
+function normalizeNoteAxis(field, raw) {
+  try {
+    return field === "reach" ? normalizeReach(raw) : normalizeConsequence(raw);
+  } catch (error) {
+    throw new HttpError(400, error instanceof Error ? error.message : `invalid ${field}`);
+  }
+}
+function normalizeNoteTaxonomy(input) {
+  const result = {};
+  if (input.reach !== undefined && input.reach !== null)
+    result.reach = normalizeNoteAxis("reach", input.reach);
+  if (input.consequence !== undefined && input.consequence !== null) {
+    result.consequence = normalizeNoteAxis("consequence", input.consequence);
+  }
+  return result;
+}
 function parseJsonColumn(value, fallback) {
   if (value == null)
     return fallback;
@@ -18850,6 +19021,9 @@ function rowToItem(row) {
     short_id: row.short_id ?? null,
     title: String(row.title ?? ""),
     content: String(row.content ?? ""),
+    description: row.description ?? null,
+    reach: row.reach ?? null,
+    consequence: row.consequence ?? null,
     url: row.url ?? null,
     tags: parseJson(row.tags, []),
     metadata: parseJson(row.metadata, {}),
@@ -18878,14 +19052,19 @@ class NoteRepo {
     if (!input.title || typeof input.title !== "string") {
       throw new HttpError(400, "title is required");
     }
+    const description = validateNoteDescription(input.description);
+    const axes = normalizeNoteTaxonomy(input);
     const now = new Date().toISOString();
     const suppliedId = typeof input.id === "string" ? input.id.trim() : "";
     if (suppliedId) {
-      const row2 = await this.write(options, (tx) => tx.get(`INSERT INTO knowledge_items (id, short_id, title, content, url, tags, metadata, archived, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,FALSE,$8,$8)
+      const row2 = await this.write(options, (tx) => tx.get(`INSERT INTO knowledge_items (id, short_id, title, content, description, reach, consequence, url, tags, metadata, archived, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,FALSE,$11,$11)
          ON CONFLICT (id) DO UPDATE SET
            title = EXCLUDED.title,
            content = EXCLUDED.content,
+           description = EXCLUDED.description,
+           reach = EXCLUDED.reach,
+           consequence = EXCLUDED.consequence,
            url = EXCLUDED.url,
            tags = EXCLUDED.tags,
            metadata = EXCLUDED.metadata,
@@ -18895,6 +19074,9 @@ class NoteRepo {
         makeShortId(suppliedId),
         input.title,
         input.content ?? "",
+        description,
+        axes.reach ?? null,
+        axes.consequence ?? null,
         input.url ?? null,
         JSON.stringify(input.tags ?? []),
         JSON.stringify(input.metadata ?? {}),
@@ -18903,13 +19085,16 @@ class NoteRepo {
       return rowToItem(row2);
     }
     const id = makeId();
-    const row = await this.write(options, (tx) => tx.get(`INSERT INTO knowledge_items (id, short_id, title, content, url, tags, metadata, archived, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,FALSE,$8,$9)
+    const row = await this.write(options, (tx) => tx.get(`INSERT INTO knowledge_items (id, short_id, title, content, description, reach, consequence, url, tags, metadata, archived, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,FALSE,$11,$12)
        RETURNING *`, [
       id,
       makeShortId(id),
       input.title,
       input.content ?? "",
+      description,
+      axes.reach ?? null,
+      axes.consequence ?? null,
       input.url ?? null,
       JSON.stringify(input.tags ?? []),
       JSON.stringify(input.metadata ?? {}),
@@ -18956,6 +19141,13 @@ class NoteRepo {
       push("title", patch.title);
     if (patch.content !== undefined)
       push("content", patch.content);
+    if (patch.description !== undefined)
+      push("description", validateNoteDescription(patch.description));
+    if (patch.reach !== undefined)
+      push("reach", patch.reach === null ? null : normalizeNoteAxis("reach", patch.reach));
+    if (patch.consequence !== undefined) {
+      push("consequence", patch.consequence === null ? null : normalizeNoteAxis("consequence", patch.consequence));
+    }
     if (patch.url !== undefined)
       push("url", patch.url);
     if (patch.tags !== undefined)
@@ -29977,6 +30169,19 @@ function lintWiki(options) {
 
 // src/item-store.ts
 import { existsSync as existsSync12 } from "fs";
+function assertCreatable(input) {
+  const description = validateDescription(input.description);
+  const axes = normalizeTaxonomyInput(input);
+  return { description, ...axes };
+}
+function assertPatchable(patch) {
+  const result = {};
+  if (patch.description !== undefined)
+    result.description = validateDescription(patch.description);
+  Object.assign(result, normalizeTaxonomyInput(patch));
+  return result;
+}
+
 class VersionHistoryUnsupportedError extends Error {
   location;
   code = "version_history_unsupported";
@@ -30018,6 +30223,7 @@ class LocalItemStore {
     return store.items.find((item) => matchesId(item, idOrShort)) ?? null;
   }
   async create(input) {
+    const checked = assertCreatable(input);
     return withLock(this.storePath, () => {
       const db = loadStore(this.storePath);
       const now = new Date().toISOString();
@@ -30027,6 +30233,9 @@ class LocalItemStore {
         short_id: makeShortId(id),
         title: input.title,
         content: input.content,
+        description: checked.description,
+        ...checked.reach ? { reach: checked.reach } : {},
+        ...checked.consequence ? { consequence: checked.consequence } : {},
         url: input.url ?? null,
         tags: input.tags ?? [],
         metadata: input.metadata ?? {},
@@ -30041,6 +30250,7 @@ class LocalItemStore {
     }, { createParent: true });
   }
   async update(idOrShort, patch, options = {}) {
+    const checked = assertPatchable(patch);
     return withLock(this.storePath, () => {
       const db = loadStore(this.storePath);
       const idx = db.items.findIndex((item2) => matchesId(item2, idOrShort));
@@ -30055,6 +30265,12 @@ class LocalItemStore {
         item.title = patch.title;
       if (patch.content !== undefined)
         item.content = patch.content;
+      if (checked.description !== undefined)
+        item.description = checked.description;
+      if (checked.reach !== undefined)
+        item.reach = checked.reach;
+      if (checked.consequence !== undefined)
+        item.consequence = checked.consequence;
       if (patch.url !== undefined)
         item.url = patch.url;
       if (patch.tags !== undefined)
@@ -30121,17 +30337,22 @@ class ApiItemStore {
     return this.cloud.get(idOrShort);
   }
   async create(input) {
+    const checked = assertCreatable(input);
     return this.cloud.create({
       ...input.id ? { id: input.id } : {},
       title: input.title,
       content: input.content,
+      description: checked.description,
+      ...checked.reach ? { reach: checked.reach } : {},
+      ...checked.consequence ? { consequence: checked.consequence } : {},
       url: input.url ?? null,
       tags: input.tags ?? [],
       ...input.metadata ? { metadata: input.metadata } : {}
     });
   }
   async update(idOrShort, patch, options = {}) {
-    return this.cloud.update(idOrShort, patch, { expectedVersion: options.expectedVersion });
+    const checked = assertPatchable(patch);
+    return this.cloud.update(idOrShort, { ...patch, ...checked }, { expectedVersion: options.expectedVersion });
   }
   async delete(idOrShort) {
     return this.cloud.delete(idOrShort);

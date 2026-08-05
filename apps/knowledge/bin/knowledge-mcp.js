@@ -16494,6 +16494,9 @@ function wrap(client) {
         ...input.id ? { id: input.id } : {},
         title: input.title,
         content: input.content,
+        ...input.description !== undefined ? { description: input.description } : {},
+        ...input.reach ? { reach: input.reach } : {},
+        ...input.consequence ? { consequence: input.consequence } : {},
         url: input.url ?? null,
         tags: input.tags ?? [],
         ...input.metadata ? { metadata: input.metadata } : {}
@@ -17613,6 +17616,87 @@ function makeShortId(id) {
 
 // src/item-store.ts
 import { existsSync as existsSync3 } from "fs";
+
+// src/knowledge-taxonomy.ts
+var REACH_VALUES = ["fleet", "project", "seat", "self"];
+var CONSEQUENCE_VALUES = ["blocking", "standing", "reference"];
+var DESCRIPTION_MIN_LENGTH = 24;
+var DESCRIPTION_MAX_LENGTH = 280;
+
+class KnowledgeDescriptionRequiredError extends Error {
+  code = "description_required";
+  constructor(reason) {
+    super(`${reason} Every knowledge item must carry a one-line description: it is what the ` + "fleet-wide change notification shows an agent who has not opened the item, alongside the title. " + `Supply it with --description "<${DESCRIPTION_MIN_LENGTH}-${DESCRIPTION_MAX_LENGTH} chars saying what this is for>". ` + "It is required rather than optional because the equivalent optional field on mementos " + "(when_to_use) is populated on zero rows.");
+    this.name = "KnowledgeDescriptionRequiredError";
+  }
+}
+
+class KnowledgeTaxonomyValueError extends Error {
+  code = "taxonomy_value_invalid";
+  constructor(field, received, allowed) {
+    super(`Invalid --${field} value ${JSON.stringify(received)}. ` + `Use one of: ${allowed.join(", ")}.`);
+    this.name = "KnowledgeTaxonomyValueError";
+  }
+}
+function validateDescription(raw) {
+  if (raw === undefined || raw === null) {
+    throw new KnowledgeDescriptionRequiredError("No description was supplied.");
+  }
+  if (typeof raw !== "string") {
+    throw new KnowledgeDescriptionRequiredError(`The description must be a string, received ${typeof raw}.`);
+  }
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) {
+    throw new KnowledgeDescriptionRequiredError("The description was empty or whitespace only.");
+  }
+  if (trimmed.length < DESCRIPTION_MIN_LENGTH) {
+    throw new KnowledgeDescriptionRequiredError(`The description is ${trimmed.length} characters; the minimum is ${DESCRIPTION_MIN_LENGTH}.`);
+  }
+  if (trimmed.length > DESCRIPTION_MAX_LENGTH) {
+    throw new KnowledgeDescriptionRequiredError(`The description is ${trimmed.length} characters; the maximum is ${DESCRIPTION_MAX_LENGTH}.`);
+  }
+  return trimmed;
+}
+function normalizeAxis(field, raw, allowed) {
+  if (typeof raw !== "string") {
+    throw new KnowledgeTaxonomyValueError(field, raw, allowed);
+  }
+  const value = raw.trim().toLowerCase();
+  if (!allowed.includes(value)) {
+    throw new KnowledgeTaxonomyValueError(field, raw, allowed);
+  }
+  return value;
+}
+function normalizeReach(raw) {
+  return normalizeAxis("reach", raw, REACH_VALUES);
+}
+function normalizeConsequence(raw) {
+  return normalizeAxis("consequence", raw, CONSEQUENCE_VALUES);
+}
+function normalizeTaxonomyInput(input) {
+  const result = {};
+  if (input.reach !== undefined && input.reach !== null)
+    result.reach = normalizeReach(input.reach);
+  if (input.consequence !== undefined && input.consequence !== null) {
+    result.consequence = normalizeConsequence(input.consequence);
+  }
+  return result;
+}
+
+// src/item-store.ts
+function assertCreatable(input) {
+  const description = validateDescription(input.description);
+  const axes = normalizeTaxonomyInput(input);
+  return { description, ...axes };
+}
+function assertPatchable(patch) {
+  const result = {};
+  if (patch.description !== undefined)
+    result.description = validateDescription(patch.description);
+  Object.assign(result, normalizeTaxonomyInput(patch));
+  return result;
+}
+
 class VersionHistoryUnsupportedError extends Error {
   location;
   code = "version_history_unsupported";
@@ -17654,6 +17738,7 @@ class LocalItemStore {
     return store.items.find((item) => matchesId(item, idOrShort)) ?? null;
   }
   async create(input) {
+    const checked = assertCreatable(input);
     return withLock(this.storePath, () => {
       const db = loadStore(this.storePath);
       const now = new Date().toISOString();
@@ -17663,6 +17748,9 @@ class LocalItemStore {
         short_id: makeShortId(id),
         title: input.title,
         content: input.content,
+        description: checked.description,
+        ...checked.reach ? { reach: checked.reach } : {},
+        ...checked.consequence ? { consequence: checked.consequence } : {},
         url: input.url ?? null,
         tags: input.tags ?? [],
         metadata: input.metadata ?? {},
@@ -17677,6 +17765,7 @@ class LocalItemStore {
     }, { createParent: true });
   }
   async update(idOrShort, patch, options = {}) {
+    const checked = assertPatchable(patch);
     return withLock(this.storePath, () => {
       const db = loadStore(this.storePath);
       const idx = db.items.findIndex((item2) => matchesId(item2, idOrShort));
@@ -17691,6 +17780,12 @@ class LocalItemStore {
         item.title = patch.title;
       if (patch.content !== undefined)
         item.content = patch.content;
+      if (checked.description !== undefined)
+        item.description = checked.description;
+      if (checked.reach !== undefined)
+        item.reach = checked.reach;
+      if (checked.consequence !== undefined)
+        item.consequence = checked.consequence;
       if (patch.url !== undefined)
         item.url = patch.url;
       if (patch.tags !== undefined)
@@ -17757,17 +17852,22 @@ class ApiItemStore {
     return this.cloud.get(idOrShort);
   }
   async create(input) {
+    const checked = assertCreatable(input);
     return this.cloud.create({
       ...input.id ? { id: input.id } : {},
       title: input.title,
       content: input.content,
+      description: checked.description,
+      ...checked.reach ? { reach: checked.reach } : {},
+      ...checked.consequence ? { consequence: checked.consequence } : {},
       url: input.url ?? null,
       tags: input.tags ?? [],
       ...input.metadata ? { metadata: input.metadata } : {}
     });
   }
   async update(idOrShort, patch, options = {}) {
-    return this.cloud.update(idOrShort, patch, { expectedVersion: options.expectedVersion });
+    const checked = assertPatchable(patch);
+    return this.cloud.update(idOrShort, { ...patch, ...checked }, { expectedVersion: options.expectedVersion });
   }
   async delete(idOrShort) {
     return this.cloud.delete(idOrShort);
@@ -31646,6 +31746,9 @@ function ensureSyncMetaTable(db) {
 // src/mcp.js
 var storePathField = exports_external.string().optional().describe("Path to the JSON store file");
 var scopeField = exports_external.enum(["local", "global", "project"]).optional().describe("Workspace scope");
+var descriptionField = exports_external.string().min(DESCRIPTION_MIN_LENGTH).max(DESCRIPTION_MAX_LENGTH).describe(`REQUIRED. One line (${DESCRIPTION_MIN_LENGTH}-${DESCRIPTION_MAX_LENGTH} chars) saying what this item is FOR. ` + "It is shown beside the title in the fleet-wide change notification, so another agent can " + "decide whether to open the item without fetching its body.");
+var reachField = exports_external.enum(REACH_VALUES).optional().describe('Who this binds. Optional; unmarked is treated as "self" by readers.');
+var consequenceField = exports_external.enum(CONSEQUENCE_VALUES).optional().describe('What a reader loses by not reading it. Optional; unmarked is treated as "reference".');
 function jsonText(data) {
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 }
@@ -32925,14 +33028,26 @@ function buildServer() {
   registerTool(server, "ok_add", "Add a knowledge item", "Add a new item to the knowledge store", {
     title: exports_external.string().describe("Item title"),
     content: exports_external.string().describe("Item content/body"),
+    description: descriptionField,
+    reach: reachField,
+    consequence: consequenceField,
     tags: exports_external.array(exports_external.string()).optional().describe("Tags to attach"),
     metadata: exports_external.record(exports_external.string(), exports_external.unknown()).optional().describe("Metadata key-value pairs"),
     url: exports_external.string().optional().describe("Source URL or URI"),
     store_path: storePathField,
     scope: scopeField
-  }, async ({ title, content, tags, metadata, url: url2, store_path, scope }) => {
+  }, async ({ title, content, description, reach, consequence, tags, metadata, url: url2, store_path, scope }) => {
     const store = itemStoreFor(store_path, scope);
-    const item = await store.create({ title, content, url: url2 ?? null, tags: tags ?? [], metadata: metadata ?? {} });
+    const item = await store.create({
+      title,
+      content,
+      description,
+      ...reach ? { reach } : {},
+      ...consequence ? { consequence } : {},
+      url: url2 ?? null,
+      tags: tags ?? [],
+      metadata: metadata ?? {}
+    });
     return jsonText({ ok: true, item, message: `Added ${item.id}` });
   });
   registerTool(server, "ok_list", "List knowledge items", "List compact item summaries with pagination, search, tag filtering, and sorting", {
@@ -33057,17 +33172,29 @@ function buildServer() {
     id: exports_external.string(),
     title: exports_external.string().optional(),
     content: exports_external.string().optional(),
+    description: descriptionField.optional(),
+    reach: reachField,
+    consequence: consequenceField,
     tags: exports_external.array(exports_external.string()).optional(),
     metadata: exports_external.record(exports_external.string(), exports_external.unknown()).optional(),
     store_path: storePathField,
     scope: scopeField
-  }, async ({ id, title, content, tags, metadata, store_path, scope }) => {
+  }, async ({ id, title, content, description, reach, consequence, tags, metadata, store_path, scope }) => {
     const store = itemStoreFor(store_path, scope);
     const existing = await store.get(id);
     if (!existing) {
       if (!title || !content)
         return errorText("New item requires both title and content.");
-      const created = await store.create({ id, title, content, tags: tags ?? [], metadata: metadata ?? {} });
+      const created = await store.create({
+        id,
+        title,
+        content,
+        description,
+        ...reach ? { reach } : {},
+        ...consequence ? { consequence } : {},
+        tags: tags ?? [],
+        metadata: metadata ?? {}
+      });
       return jsonText({ ok: true, item: created });
     }
     const patch = {};
@@ -33075,6 +33202,12 @@ function buildServer() {
       patch.title = title;
     if (content !== undefined)
       patch.content = content;
+    if (description !== undefined)
+      patch.description = description;
+    if (reach !== undefined)
+      patch.reach = reach;
+    if (consequence !== undefined)
+      patch.consequence = consequence;
     if (tags)
       patch.tags = [...new Set([...existing.tags ?? [], ...tags])];
     if (metadata)
@@ -33239,14 +33372,22 @@ function buildServer() {
     for (const item of imported.items) {
       if (item.id && existingIds.has(item.id))
         continue;
-      const created = await store.create({
-        id: item.id,
-        title: item.title,
-        content: item.content,
-        url: item.url ?? null,
-        tags: item.tags ?? [],
-        metadata: item.metadata ?? {}
-      });
+      let created;
+      try {
+        created = await store.create({
+          id: item.id,
+          title: item.title,
+          content: item.content,
+          description: item.description,
+          ...item.reach ? { reach: item.reach } : {},
+          ...item.consequence ? { consequence: item.consequence } : {},
+          url: item.url ?? null,
+          tags: item.tags ?? [],
+          metadata: item.metadata ?? {}
+        });
+      } catch (error51) {
+        return errorText(`Import stopped at item ${item.id ?? "(no id)"} (${item.title ?? "untitled"}): ` + `${error51 instanceof Error ? error51.message : String(error51)} ` + `${added} item(s) were imported before this one.`);
+      }
       existingIds.add(created.id);
       added += 1;
     }
@@ -33257,6 +33398,9 @@ function buildServer() {
       id: exports_external.string().optional(),
       title: exports_external.string(),
       content: exports_external.string(),
+      description: descriptionField,
+      reach: reachField,
+      consequence: consequenceField,
       tags: exports_external.array(exports_external.string()).optional(),
       metadata: exports_external.record(exports_external.string(), exports_external.unknown()).optional(),
       created_at: exports_external.string().optional(),
@@ -33279,6 +33423,9 @@ function buildServer() {
         id: entry.id,
         title: entry.title,
         content: entry.content,
+        description: entry.description,
+        ...entry.reach ? { reach: entry.reach } : {},
+        ...entry.consequence ? { consequence: entry.consequence } : {},
         tags: entry.tags ?? [],
         metadata: entry.metadata ?? {}
       });

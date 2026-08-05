@@ -17,6 +17,14 @@ export interface NoteInput {
     id?: string;
     title: string;
     content?: string;
+    /**
+     * REQUIRED on create — validated in `create()` below and, underneath that, by
+     * the `knowledge_items_description_present` CHECK constraint. This interface
+     * is erased at build time and enforces nothing on its own.
+     */
+    description?: string;
+    reach?: string | null;
+    consequence?: string | null;
     url?: string | null;
     tags?: string[];
     metadata?: Record<string, unknown>;

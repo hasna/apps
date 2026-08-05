@@ -709,6 +709,63 @@ function knowledgeRegistryContract(input) {
   };
 }
 
+// src/knowledge-taxonomy.ts
+var REACH_VALUES = ["fleet", "project", "seat", "self"];
+var CONSEQUENCE_VALUES = ["blocking", "standing", "reference"];
+var DESCRIPTION_MIN_LENGTH = 24;
+var DESCRIPTION_MAX_LENGTH = 280;
+
+class KnowledgeDescriptionRequiredError extends Error {
+  code = "description_required";
+  constructor(reason) {
+    super(`${reason} Every knowledge item must carry a one-line description: it is what the ` + "fleet-wide change notification shows an agent who has not opened the item, alongside the title. " + `Supply it with --description "<${DESCRIPTION_MIN_LENGTH}-${DESCRIPTION_MAX_LENGTH} chars saying what this is for>". ` + "It is required rather than optional because the equivalent optional field on mementos " + "(when_to_use) is populated on zero rows.");
+    this.name = "KnowledgeDescriptionRequiredError";
+  }
+}
+
+class KnowledgeTaxonomyValueError extends Error {
+  code = "taxonomy_value_invalid";
+  constructor(field, received, allowed) {
+    super(`Invalid --${field} value ${JSON.stringify(received)}. ` + `Use one of: ${allowed.join(", ")}.`);
+    this.name = "KnowledgeTaxonomyValueError";
+  }
+}
+function validateDescription(raw) {
+  if (raw === undefined || raw === null) {
+    throw new KnowledgeDescriptionRequiredError("No description was supplied.");
+  }
+  if (typeof raw !== "string") {
+    throw new KnowledgeDescriptionRequiredError(`The description must be a string, received ${typeof raw}.`);
+  }
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) {
+    throw new KnowledgeDescriptionRequiredError("The description was empty or whitespace only.");
+  }
+  if (trimmed.length < DESCRIPTION_MIN_LENGTH) {
+    throw new KnowledgeDescriptionRequiredError(`The description is ${trimmed.length} characters; the minimum is ${DESCRIPTION_MIN_LENGTH}.`);
+  }
+  if (trimmed.length > DESCRIPTION_MAX_LENGTH) {
+    throw new KnowledgeDescriptionRequiredError(`The description is ${trimmed.length} characters; the maximum is ${DESCRIPTION_MAX_LENGTH}.`);
+  }
+  return trimmed;
+}
+function normalizeAxis(field, raw, allowed) {
+  if (typeof raw !== "string") {
+    throw new KnowledgeTaxonomyValueError(field, raw, allowed);
+  }
+  const value = raw.trim().toLowerCase();
+  if (!allowed.includes(value)) {
+    throw new KnowledgeTaxonomyValueError(field, raw, allowed);
+  }
+  return value;
+}
+function normalizeReach(raw) {
+  return normalizeAxis("reach", raw, REACH_VALUES);
+}
+function normalizeConsequence(raw) {
+  return normalizeAxis("consequence", raw, CONSEQUENCE_VALUES);
+}
+
 // src/workspace.ts
 import { dirname, join, resolve } from "path";
 var HASNA_KNOWLEDGE_APP_PATH = join(".hasna", "knowledge");
@@ -770,6 +827,29 @@ class VersionConflictError extends Error {
     this.name = "VersionConflictError";
   }
 }
+function validateNoteDescription(raw) {
+  try {
+    return validateDescription(raw);
+  } catch (error) {
+    throw new HttpError(400, error instanceof Error ? error.message : "description is required");
+  }
+}
+function normalizeNoteAxis(field, raw) {
+  try {
+    return field === "reach" ? normalizeReach(raw) : normalizeConsequence(raw);
+  } catch (error) {
+    throw new HttpError(400, error instanceof Error ? error.message : `invalid ${field}`);
+  }
+}
+function normalizeNoteTaxonomy(input) {
+  const result = {};
+  if (input.reach !== undefined && input.reach !== null)
+    result.reach = normalizeNoteAxis("reach", input.reach);
+  if (input.consequence !== undefined && input.consequence !== null) {
+    result.consequence = normalizeNoteAxis("consequence", input.consequence);
+  }
+  return result;
+}
 function parseJsonColumn(value, fallback) {
   if (value == null)
     return fallback;
@@ -821,6 +901,9 @@ function rowToItem(row) {
     short_id: row.short_id ?? null,
     title: String(row.title ?? ""),
     content: String(row.content ?? ""),
+    description: row.description ?? null,
+    reach: row.reach ?? null,
+    consequence: row.consequence ?? null,
     url: row.url ?? null,
     tags: parseJson(row.tags, []),
     metadata: parseJson(row.metadata, {}),
@@ -849,14 +932,19 @@ class NoteRepo {
     if (!input.title || typeof input.title !== "string") {
       throw new HttpError(400, "title is required");
     }
+    const description = validateNoteDescription(input.description);
+    const axes = normalizeNoteTaxonomy(input);
     const now = new Date().toISOString();
     const suppliedId = typeof input.id === "string" ? input.id.trim() : "";
     if (suppliedId) {
-      const row2 = await this.write(options, (tx) => tx.get(`INSERT INTO knowledge_items (id, short_id, title, content, url, tags, metadata, archived, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,FALSE,$8,$8)
+      const row2 = await this.write(options, (tx) => tx.get(`INSERT INTO knowledge_items (id, short_id, title, content, description, reach, consequence, url, tags, metadata, archived, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,FALSE,$11,$11)
          ON CONFLICT (id) DO UPDATE SET
            title = EXCLUDED.title,
            content = EXCLUDED.content,
+           description = EXCLUDED.description,
+           reach = EXCLUDED.reach,
+           consequence = EXCLUDED.consequence,
            url = EXCLUDED.url,
            tags = EXCLUDED.tags,
            metadata = EXCLUDED.metadata,
@@ -866,6 +954,9 @@ class NoteRepo {
         makeShortId(suppliedId),
         input.title,
         input.content ?? "",
+        description,
+        axes.reach ?? null,
+        axes.consequence ?? null,
         input.url ?? null,
         JSON.stringify(input.tags ?? []),
         JSON.stringify(input.metadata ?? {}),
@@ -874,13 +965,16 @@ class NoteRepo {
       return rowToItem(row2);
     }
     const id = makeId();
-    const row = await this.write(options, (tx) => tx.get(`INSERT INTO knowledge_items (id, short_id, title, content, url, tags, metadata, archived, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,FALSE,$8,$9)
+    const row = await this.write(options, (tx) => tx.get(`INSERT INTO knowledge_items (id, short_id, title, content, description, reach, consequence, url, tags, metadata, archived, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,FALSE,$11,$12)
        RETURNING *`, [
       id,
       makeShortId(id),
       input.title,
       input.content ?? "",
+      description,
+      axes.reach ?? null,
+      axes.consequence ?? null,
       input.url ?? null,
       JSON.stringify(input.tags ?? []),
       JSON.stringify(input.metadata ?? {}),
@@ -927,6 +1021,13 @@ class NoteRepo {
       push("title", patch.title);
     if (patch.content !== undefined)
       push("content", patch.content);
+    if (patch.description !== undefined)
+      push("description", validateNoteDescription(patch.description));
+    if (patch.reach !== undefined)
+      push("reach", patch.reach === null ? null : normalizeNoteAxis("reach", patch.reach));
+    if (patch.consequence !== undefined) {
+      push("consequence", patch.consequence === null ? null : normalizeNoteAxis("consequence", patch.consequence));
+    }
     if (patch.url !== undefined)
       push("url", patch.url);
     if (patch.tags !== undefined)
