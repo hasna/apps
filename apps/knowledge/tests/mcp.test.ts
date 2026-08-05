@@ -379,6 +379,7 @@ describe('knowledge MCP', () => {
         arguments: {
           title: 'MCP item',
           content: 'Stored through MCP',
+          description: 'A fixture knowledge item created through the MCP tool surface in tests.',
           tags: ['mcp'],
           store_path: store,
         },
@@ -866,8 +867,8 @@ describe('knowledge MCP', () => {
         arguments: {
           store_path: store,
           items: [
-            { title: 'Duplicate', content: 'Same' },
-            { title: 'Duplicate', content: 'Same' },
+            { title: 'Duplicate', content: 'Same', description: 'A fixture knowledge item created through the MCP tool surface in tests.' },
+            { title: 'Duplicate', content: 'Same', description: 'A fixture knowledge item created through the MCP tool surface in tests.' },
           ],
         },
       }));

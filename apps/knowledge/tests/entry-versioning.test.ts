@@ -37,6 +37,15 @@ import { NoteRepo, VersionConflictError, createServeHandler } from '../src/serve
 import type { PoolQueryClient } from '../src/generated/storage-kit/index.js';
 import { createMigratedPglite } from './fixtures/pglite-client';
 
+/**
+ * Descriptions are REQUIRED on every create from 2026-08-05 (owner directive;
+ * see src/knowledge-taxonomy.ts). These tests are about the versioning trigger
+ * and the egress guard rather than about the description, so they share one
+ * constant — it satisfies the write guard without implying it is under test.
+ */
+const TEST_DESCRIPTION = 'Fixture item used by tests that predate the required description field.';
+
+
 const SIGNING = 'test-signing-secret-not-a-real-key';
 
 // One migrated instance for the file, truncated between tests. Booting a fresh
@@ -100,14 +109,14 @@ function handlerFor(client: PoolQueryClient) {
 describe('entry versioning — schema and trigger', () => {
   test('a new entry starts at version 1 with no history', async () => {
     const { db, repo } = await harness();
-    const item = await repo.create({ title: 'T', content: 'first body' });
+    const item = await repo.create({ description: TEST_DESCRIPTION, title: 'T', content: 'first body' });
     expect(item.version).toBe(1);
     expect(await versionRows(db, item.id)).toHaveLength(0);
   });
 
   test('a raw SQL update — bypassing every application path — still snapshots and bumps', async () => {
     const { db, repo } = await harness();
-    const item = await repo.create({ title: 'T', content: 'first body' });
+    const item = await repo.create({ description: TEST_DESCRIPTION, title: 'T', content: 'first body' });
 
     // No NoteRepo, no handler, no CLI. This is the psql/backfill path.
     await db.query(`UPDATE knowledge_items SET content = $2 WHERE id = $1`, [item.id, 'second body']);
@@ -129,7 +138,7 @@ describe('entry versioning — schema and trigger', () => {
 
   test('the counter cannot be forged: an update that sets version explicitly is overruled', async () => {
     const { db, repo } = await harness();
-    const item = await repo.create({ title: 'T', content: 'a' });
+    const item = await repo.create({ description: TEST_DESCRIPTION, title: 'T', content: 'a' });
     await db.query(`UPDATE knowledge_items SET content = $2, version = 99 WHERE id = $1`, [item.id, 'b']);
     expect((await currentRow(db, item.id)).version).toBe(2);
 
@@ -140,7 +149,7 @@ describe('entry versioning — schema and trigger', () => {
 
   test('each update produces exactly one revision row, and every prior body is retrievable', async () => {
     const { db, repo } = await harness();
-    const item = await repo.create({ title: 'T', content: 'v1 body' });
+    const item = await repo.create({ description: TEST_DESCRIPTION, title: 'T', content: 'v1 body' });
     await repo.update(item.id, { content: 'v2 body' });
     await repo.update(item.id, { content: 'v3 body' });
 
@@ -152,11 +161,11 @@ describe('entry versioning — schema and trigger', () => {
 
   test('a no-op update records nothing — with a positive control on the same row', async () => {
     const { db, repo } = await harness();
-    const item = await repo.create({ title: 'T', content: 'body' });
+    const item = await repo.create({ description: TEST_DESCRIPTION, title: 'T', content: 'body' });
 
     // Idempotent re-upsert: identical field tuple. This is what `ingest rules`
     // and every sync replay do on each run.
-    await repo.create({ id: item.id, title: 'T', content: 'body' });
+    await repo.create({ id: item.id, description: TEST_DESCRIPTION, title: 'T', content: 'body' });
     await repo.update(item.id, { content: 'body' });
     expect(await versionRows(db, item.id)).toHaveLength(0);
     expect((await currentRow(db, item.id)).version).toBe(1);
@@ -170,7 +179,7 @@ describe('entry versioning — schema and trigger', () => {
 
   test('archiving is version-worthy; a bare updated_at touch is not', async () => {
     const { db, repo } = await harness();
-    const item = await repo.create({ title: 'T', content: 'body' });
+    const item = await repo.create({ description: TEST_DESCRIPTION, title: 'T', content: 'body' });
 
     await db.query(`UPDATE knowledge_items SET updated_at = $2 WHERE id = $1`, [item.id, '2030-01-01T00:00:00.000Z']);
     expect(await versionRows(db, item.id)).toHaveLength(0);
@@ -184,7 +193,7 @@ describe('entry versioning — schema and trigger', () => {
 
   test('tags and metadata changes are version-worthy and snapshot faithfully', async () => {
     const { db, repo } = await harness();
-    const item = await repo.create({ title: 'T', content: 'body', tags: ['a'], metadata: { k: 1 } });
+    const item = await repo.create({ description: TEST_DESCRIPTION, title: 'T', content: 'body', tags: ['a'], metadata: { k: 1 } });
     await repo.update(item.id, { tags: ['a', 'b'] });
     await repo.update(item.id, { metadata: { k: 2 } });
 
@@ -210,7 +219,7 @@ describe('entry versioning — schema and trigger', () => {
     expect(enabled.rows[0]?.tgenabled).toBe('A'); // 'A' = ALWAYS, 'O' = origin-only
 
     const { db, repo } = await harness();
-    const item = await repo.create({ title: 'T', content: 'body before replication' });
+    const item = await repo.create({ description: TEST_DESCRIPTION, title: 'T', content: 'body before replication' });
     try {
       await db.query(`SET session_replication_role = replica`);
       await db.query(`UPDATE knowledge_items SET content = $2 WHERE id = $1`, [item.id, 'body written as replica']);
@@ -231,7 +240,7 @@ describe('entry versioning — schema and trigger', () => {
     // timestamp sorts before EVERY application-written one regardless of actual
     // time, and any text comparison of updated_at silently inverts.
     const { db, repo } = await harness();
-    const item = await repo.create({ title: 'T', content: 'a' });
+    const item = await repo.create({ description: TEST_DESCRIPTION, title: 'T', content: 'a' });
     const appWritten = String((await currentRow(db, item.id)).updated_at);
     expect(appWritten).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
 
@@ -253,7 +262,7 @@ describe('entry versioning — schema and trigger', () => {
     // trigger existed those writes kept it; silently replacing it with now()
     // would be a regression this change introduced.
     const { db, repo } = await harness();
-    const item = await repo.create({ title: 'T', content: 'a' });
+    const item = await repo.create({ description: TEST_DESCRIPTION, title: 'T', content: 'a' });
     await db.query(`UPDATE knowledge_items SET content = 'b', updated_at = $2 WHERE id = $1`, [
       item.id,
       '2019-03-04T05:06:07.008Z',
@@ -270,7 +279,7 @@ describe('entry versioning — schema and trigger', () => {
     // package updates this table, so blocking it costs nothing and removes the
     // one way history can be edited in place rather than added to.
     const { db, repo } = await harness();
-    const item = await repo.create({ title: 'T', content: 'original' });
+    const item = await repo.create({ description: TEST_DESCRIPTION, title: 'T', content: 'original' });
     await repo.update(item.id, { content: 'edited' });
     expect(await versionRows(db, item.id)).toHaveLength(1);
 
@@ -289,7 +298,7 @@ describe('entry versioning — schema and trigger', () => {
     const { db, repo } = await harness();
     await db.query(`ALTER TABLE knowledge_items ADD COLUMN tenant_id TEXT`);
     try {
-      const item = await repo.create({ title: 'T', content: 'a' });
+      const item = await repo.create({ description: TEST_DESCRIPTION, title: 'T', content: 'a' });
       await db.query(`UPDATE knowledge_items SET tenant_id = 'tenant-abc' WHERE id = $1`, [item.id]);
       await db.query(`UPDATE knowledge_items SET content = 'b' WHERE id = $1`, [item.id]);
       const rows = await versionRows(db, item.id);
@@ -302,7 +311,7 @@ describe('entry versioning — schema and trigger', () => {
 
   test('a version-worthy change always advances updated_at, even when the caller does not', async () => {
     const { db, repo } = await harness();
-    const item = await repo.create({ title: 'T', content: 'body' });
+    const item = await repo.create({ description: TEST_DESCRIPTION, title: 'T', content: 'body' });
     await db.query(`UPDATE knowledge_items SET updated_at = $2 WHERE id = $1`, [item.id, '2000-01-01T00:00:00.000Z']);
     const stale = String((await currentRow(db, item.id)).updated_at);
     expect(stale).toBe('2000-01-01T00:00:00.000Z');
@@ -324,12 +333,12 @@ describe('entry versioning — schema and trigger', () => {
 describe('entry versioning — the upsert path (the open-mementos failure mode)', () => {
   test('upsert-on-existing-id snapshots too, not just the update path', async () => {
     const { db, repo } = await harness();
-    const created = await repo.create({ id: 'k_stable_upsert', title: 'T', content: 'original' });
+    const created = await repo.create({ id: 'k_stable_upsert', description: TEST_DESCRIPTION, title: 'T', content: 'original' });
     expect(created.version).toBe(1);
 
     // `knowledge upsert --id` / import / ingest all land here. In open-mementos
     // this is the branch that bumped without snapshotting.
-    const merged = await repo.create({ id: 'k_stable_upsert', title: 'T', content: 'replaced' });
+    const merged = await repo.create({ id: 'k_stable_upsert', description: TEST_DESCRIPTION, title: 'T', content: 'replaced' });
     expect(merged.version).toBe(2);
 
     const rows = await versionRows(db, 'k_stable_upsert');
@@ -339,8 +348,8 @@ describe('entry versioning — the upsert path (the open-mementos failure mode)'
 
   test('delete cascades history for the entry but leaves other entries intact', async () => {
     const { db, repo } = await harness();
-    const keep = await repo.create({ title: 'keep', content: 'a' });
-    const drop = await repo.create({ title: 'drop', content: 'a' });
+    const keep = await repo.create({ description: TEST_DESCRIPTION, title: 'keep', content: 'a' });
+    const drop = await repo.create({ description: TEST_DESCRIPTION, title: 'drop', content: 'a' });
     await repo.update(keep.id, { content: 'b' });
     await repo.update(drop.id, { content: 'b' });
 
@@ -357,7 +366,7 @@ describe('entry versioning — the upsert path (the open-mementos failure mode)'
 describe('entry versioning — actor attribution', () => {
   test('actor and reason are recorded when the writer supplies them', async () => {
     const { db, repo } = await harness();
-    const item = await repo.create({ title: 'T', content: 'body' });
+    const item = await repo.create({ description: TEST_DESCRIPTION, title: 'T', content: 'body' });
     await repo.update(item.id, { content: 'edited' }, { actor: 'agent:augustus', reason: 'R4 rollout' });
 
     const rows = await versionRows(db, item.id);
@@ -367,7 +376,7 @@ describe('entry versioning — actor attribution', () => {
 
   test('an unattributed write records NULL, never a leaked previous actor or an empty string', async () => {
     const { db, repo } = await harness();
-    const item = await repo.create({ title: 'T', content: 'body' });
+    const item = await repo.create({ description: TEST_DESCRIPTION, title: 'T', content: 'body' });
     await repo.update(item.id, { content: 'one' }, { actor: 'agent:augustus' });
     // Same connection, next write, no actor: a transaction-local GUC resets to
     // '' rather than unset, so without NULLIF this would read as an attributed
@@ -387,7 +396,7 @@ describe('entry versioning — actor attribution', () => {
 describe('entry versioning — optimistic concurrency', () => {
   test('two agents that both read v1 cannot both succeed', async () => {
     const { db, repo } = await harness();
-    const item = await repo.create({ title: 'T', content: 'shared body' });
+    const item = await repo.create({ description: TEST_DESCRIPTION, title: 'T', content: 'shared body' });
 
     const readA = await repo.get(item.id);
     const readB = await repo.get(item.id);
@@ -414,7 +423,7 @@ describe('entry versioning — optimistic concurrency', () => {
 
   test('a matching expected version is accepted', async () => {
     const { repo } = await harness();
-    const item = await repo.create({ title: 'T', content: 'a' });
+    const item = await repo.create({ description: TEST_DESCRIPTION, title: 'T', content: 'a' });
     const updated = await repo.update(item.id, { content: 'b' }, { expectedVersion: 1 });
     expect(updated!.version).toBe(2);
     const again = await repo.update(item.id, { content: 'c' }, { expectedVersion: 2 });
@@ -423,7 +432,7 @@ describe('entry versioning — optimistic concurrency', () => {
 
   test('an absent expected version still writes (phase 1 back-compat for installed CLIs)', async () => {
     const { repo } = await harness();
-    const item = await repo.create({ title: 'T', content: 'a' });
+    const item = await repo.create({ description: TEST_DESCRIPTION, title: 'T', content: 'a' });
     const updated = await repo.update(item.id, { content: 'b' });
     expect(updated!.version).toBe(2);
   });
@@ -441,7 +450,7 @@ describe('entry versioning — optimistic concurrency', () => {
 describe('entry versioning — read surface', () => {
   test('listVersions returns prior bodies newest-first with the current version stated', async () => {
     const { repo } = await harness();
-    const item = await repo.create({ title: 'T', content: 'v1' });
+    const item = await repo.create({ description: TEST_DESCRIPTION, title: 'T', content: 'v1' });
     await repo.update(item.id, { content: 'v2' });
     await repo.update(item.id, { content: 'v3' });
 
@@ -458,7 +467,7 @@ describe('entry versioning — read surface', () => {
     // versions" was printed for a memory whose history the client simply could
     // not see. Absent must not look like empty.
     const { repo } = await harness();
-    const item = await repo.create({ title: 'T', content: 'v1' });
+    const item = await repo.create({ description: TEST_DESCRIPTION, title: 'T', content: 'v1' });
     const history = await repo.listVersions(item.id);
     expect(history).not.toBeNull();
     expect(history!.items).toEqual([]);
@@ -468,7 +477,7 @@ describe('entry versioning — read surface', () => {
 
   test('getVersion fetches one snapshot by number', async () => {
     const { repo } = await harness();
-    const item = await repo.create({ title: 'T', content: 'v1' });
+    const item = await repo.create({ description: TEST_DESCRIPTION, title: 'T', content: 'v1' });
     await repo.update(item.id, { content: 'v2' });
     const v1 = await repo.getVersion(item.id, 1);
     expect(v1!.content).toBe('v1');
@@ -477,7 +486,7 @@ describe('entry versioning — read surface', () => {
 
   test('history is reachable by short_id, as every other note lookup is', async () => {
     const { repo } = await harness();
-    const item = await repo.create({ title: 'T', content: 'v1' });
+    const item = await repo.create({ description: TEST_DESCRIPTION, title: 'T', content: 'v1' });
     await repo.update(item.id, { content: 'v2' });
     const history = await repo.listVersions(item.short_id!);
     expect(history!.items).toHaveLength(1);
@@ -493,7 +502,7 @@ describe('entry versioning — HTTP surface', () => {
     const { db, client, repo } = await harness();
     const key = keyFor(['knowledge:read', 'knowledge:write']);
     const handler = handlerFor(client);
-    const item = await repo.create({ title: 'T', content: 'v1 body' });
+    const item = await repo.create({ description: TEST_DESCRIPTION, title: 'T', content: 'v1 body' });
     return { db, handler, key, item };
   }
 

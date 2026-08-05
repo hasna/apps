@@ -582,4 +582,146 @@ export const PG_MIGRATIONS: string[] = [
    $knowledge_item_versions_guard$`,
 
   `ALTER TABLE knowledge_item_versions ENABLE ALWAYS TRIGGER trg_knowledge_item_versions_append_only`,
+
+  // --- Description + governance taxonomy (owner directive 2026-08-05) --------
+  // Every agent is to be notified when knowledge is created or updated, with
+  // the TITLE and a BRIEF DESCRIPTION. The store held no description of any
+  // kind — measured on the live row shape, whose keys were exactly: archived,
+  // content, created_at, id, metadata, short_id, tags, tenant_id, title,
+  // updated_at, url, version. So the notification had nothing to carry.
+  //
+  // WHY A CHECK CONSTRAINT AND NOT ONLY APPLICATION CODE — the same argument
+  // this file already makes for the versioning trigger, and it applies with
+  // more force here. `ItemCreateInput` (item-store.ts) and `NoteInput`
+  // (serve.ts) are PLAIN TYPESCRIPT INTERFACES: erased at build time, checking
+  // nothing at runtime. Both stores now run an explicit guard, but the serve
+  // process reaches these rows through more than one path — the upsert branch,
+  // sync/outbox replay, a backfill script, and a human at psql — and next month
+  // there will be another. The constraint is the only layer below all of them.
+  //
+  // NOT VALID IS LOAD-BEARING, NOT A HEDGE. Added plain, this ALTER scans the
+  // existing rows, finds legacy ones with no description, and aborts the
+  // migration — every deployment would fail. NOT VALID enforces on every INSERT
+  // and UPDATE from this moment while never checking what is already stored, so
+  // nothing already written becomes unreadable and no backfill is required.
+  // `description IS NULL` is therefore the mark of a pre-directive row, which
+  // is queryable without a second column or a status enum.
+  //
+  // A CONSEQUENCE WORTH STATING RATHER THAN DISCOVERING: a NOT VALID check
+  // still fires when an EXISTING violating row is UPDATED. Editing a legacy
+  // item therefore forces a description to be supplied at that moment. That is
+  // deliberate — touch it, describe it — and it is why the CLI carries its own
+  // guard with a message naming the flag, so this surfaces as an instruction
+  // rather than as a raw constraint violation.
+  //
+  // Once the null set is small, `ALTER TABLE knowledge_items VALIDATE
+  // CONSTRAINT knowledge_items_description_present` closes it under a SHARE
+  // UPDATE EXCLUSIVE lock (it does not block reads or writes).
+  //
+  // APPEND-ONLY: ids derive from array index, so these stay at the end.
+  `ALTER TABLE knowledge_items ADD COLUMN IF NOT EXISTS description TEXT`,
+  `ALTER TABLE knowledge_items ADD COLUMN IF NOT EXISTS reach TEXT`,
+  `ALTER TABLE knowledge_items ADD COLUMN IF NOT EXISTS consequence TEXT`,
+
+  // Bounds match DESCRIPTION_MIN_LENGTH / DESCRIPTION_MAX_LENGTH in
+  // src/knowledge-taxonomy.ts. A database constraint cannot import TypeScript,
+  // so the two are restated; tests/knowledge-description-taxonomy.test.ts
+  // asserts they stay in step rather than trusting that nobody edits one alone.
+  // btrim so that a description of spaces cannot satisfy the floor.
+  `DO $knowledge_items_description_present$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM pg_constraint WHERE conname = 'knowledge_items_description_present'
+     ) THEN
+       ALTER TABLE knowledge_items
+         ADD CONSTRAINT knowledge_items_description_present
+         CHECK (description IS NOT NULL AND char_length(btrim(description)) BETWEEN 24 AND 280)
+         NOT VALID;
+     END IF;
+   END
+   $knowledge_items_description_present$`,
+
+  // The governance axes are OPTIONAL — `IS NULL OR` is deliberate. Absence
+  // means the author did not choose, which a monitor reads as the quiet default
+  // (self / reference) and an audit can count. Forcing them would drive them to
+  // 100% populated and worthless as a signal, which is exactly what happened to
+  // the sibling package's `importance`/`category`/`scope`: 400 of 400 rows
+  // populated, carrying almost no information, because a default did the work.
+  `DO $knowledge_items_reach_vocab$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM pg_constraint WHERE conname = 'knowledge_items_reach_vocab'
+     ) THEN
+       ALTER TABLE knowledge_items
+         ADD CONSTRAINT knowledge_items_reach_vocab
+         CHECK (reach IS NULL OR reach IN ('fleet', 'project', 'seat', 'self'));
+     END IF;
+   END
+   $knowledge_items_reach_vocab$`,
+
+  `DO $knowledge_items_consequence_vocab$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM pg_constraint WHERE conname = 'knowledge_items_consequence_vocab'
+     ) THEN
+       ALTER TABLE knowledge_items
+         ADD CONSTRAINT knowledge_items_consequence_vocab
+         CHECK (consequence IS NULL OR consequence IN ('blocking', 'standing', 'reference'));
+     END IF;
+   END
+   $knowledge_items_consequence_vocab$`,
+
+  // Sorting by updated_at is how the change monitor detects an EDIT rather than
+  // only a creation, and it is the one query that surface runs.
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_updated ON knowledge_items(updated_at)`,
+
+  // THE NO-OP GUARD MUST LEARN THE NEW COLUMNS, or a description-only edit
+  // takes no version and no counter bump — invisible to the very
+  // update-detection surface this migration exists to enable, and unrecoverable
+  // because no snapshot of the prior description would be retained either.
+  // Redefining the function is idempotent and, being a CREATE OR REPLACE at the
+  // end of the array, does not disturb any earlier migration id. The trigger
+  // itself is unchanged and keeps pointing at this function; everything else in
+  // the body is byte-identical to the definition above.
+  `CREATE OR REPLACE FUNCTION knowledge_items_version_snapshot()
+   RETURNS TRIGGER AS $knowledge_item_version$
+   BEGIN
+     IF (OLD.title, OLD.content, OLD.url, OLD.tags, OLD.metadata, OLD.archived,
+         OLD.description, OLD.reach, OLD.consequence)
+        IS NOT DISTINCT FROM
+        (NEW.title, NEW.content, NEW.url, NEW.tags, NEW.metadata, NEW.archived,
+         NEW.description, NEW.reach, NEW.consequence) THEN
+       NEW.version := OLD.version;
+       RETURN NEW;
+     END IF;
+
+     INSERT INTO knowledge_item_versions
+       (id, item_id, tenant_id, version, title, content, content_hash, content_bytes,
+        url, tags, metadata, archived, actor, reason, valid_from, valid_to)
+     VALUES
+       (gen_random_uuid()::text,
+        OLD.id,
+        to_jsonb(OLD)->>'tenant_id',
+        OLD.version,
+        OLD.title,
+        OLD.content,
+        encode(sha256(convert_to(coalesce(OLD.content, ''), 'UTF8')), 'hex'),
+        octet_length(coalesce(OLD.content, '')),
+        OLD.url,
+        OLD.tags,
+        OLD.metadata,
+        OLD.archived,
+        NULLIF(current_setting('hasna.actor', true), ''),
+        NULLIF(current_setting('hasna.reason', true), ''),
+        OLD.updated_at,
+        to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'));
+
+     NEW.version := OLD.version + 1;
+
+     IF NEW.updated_at IS NOT DISTINCT FROM OLD.updated_at THEN
+       NEW.updated_at := to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
+     END IF;
+     RETURN NEW;
+   END
+   $knowledge_item_version$ LANGUAGE plpgsql`,
 ];

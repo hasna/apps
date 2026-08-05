@@ -38,6 +38,7 @@ import {
   fetchAllCloudItems,
   type KnowledgeCloudStore,
 } from './cloud-store';
+import { validateDescription, normalizeTaxonomyInput } from './knowledge-taxonomy';
 
 export { KnowledgeVersionConflictError };
 
@@ -48,6 +49,17 @@ export interface ItemCreateInput {
   id?: string;
   title: string;
   content: string;
+  /**
+   * REQUIRED at runtime by both transports — see `assertCreatable` below. It is
+   * typed as required here so the compiler helps callers inside this package,
+   * but the type is NOT the enforcement: this is a plain TypeScript interface,
+   * erased at build time, and the MCP server (`mcp.js`) and any SDK consumer
+   * reach `create` as untyped JavaScript. The runtime check is the floor.
+   */
+  description: string;
+  /** Optional governance axes; validated against a closed vocabulary. */
+  reach?: string | null;
+  consequence?: string | null;
   url?: string | null;
   tags?: string[];
   metadata?: Record<string, unknown>;
@@ -56,11 +68,52 @@ export interface ItemCreateInput {
 export interface ItemPatch {
   title?: string;
   content?: string;
+  /**
+   * When present it must be VALID — a caller may not blank a description back
+   * out once set. When absent the stored value is left untouched, so ordinary
+   * edits (retag, retitle, archive) never have to restate it.
+   */
+  description?: string;
+  reach?: string | null;
+  consequence?: string | null;
   url?: string | null;
   /** Full replacement tag set (callers compute add/remove before patching). */
   tags?: string[];
   metadata?: Record<string, unknown>;
   archived?: boolean;
+}
+
+/**
+ * The single runtime gate every create passes through, on BOTH transports.
+ *
+ * Placed here rather than in the CLI because the CLI is one of several callers:
+ * the MCP server, the SDK facade, and `ingest`/import paths all reach the Store
+ * directly. This is the same argument db/pg-migrations.ts makes for putting the
+ * version bump in a trigger — the layer that sits below every writer is the
+ * only one that cannot be bypassed by code nobody has written yet. For the
+ * cloud transport the true floor is one level lower still (a Postgres CHECK),
+ * because the serve process has write paths that never call this function.
+ */
+function assertCreatable(input: ItemCreateInput): {
+  description: string;
+  reach?: string;
+  consequence?: string;
+} {
+  const description = validateDescription((input as { description?: unknown }).description);
+  const axes = normalizeTaxonomyInput(input);
+  return { description, ...axes };
+}
+
+/** The same gate for a patch: validate what is present, ignore what is absent. */
+function assertPatchable(patch: ItemPatch): {
+  description?: string;
+  reach?: string;
+  consequence?: string;
+} {
+  const result: { description?: string; reach?: string; consequence?: string } = {};
+  if (patch.description !== undefined) result.description = validateDescription(patch.description);
+  Object.assign(result, normalizeTaxonomyInput(patch));
+  return result;
 }
 
 export interface ItemUpdateOptions {
@@ -172,6 +225,9 @@ class LocalItemStore implements ItemStore {
   }
 
   async create(input: ItemCreateInput): Promise<KnowledgeItem> {
+    // Validate BEFORE taking the file lock: a refused write should not hold the
+    // lock, and nothing should be written when the input is bad.
+    const checked = assertCreatable(input);
     return withLock(this.storePath, () => {
       const db = loadStore(this.storePath);
       const now = new Date().toISOString();
@@ -181,6 +237,12 @@ class LocalItemStore implements ItemStore {
         short_id: makeShortId(id),
         title: input.title,
         content: input.content,
+        description: checked.description,
+        // Absent stays absent — the defaults are a READ-side notion, so that
+        // "the author chose nothing" remains distinguishable from "the author
+        // chose self/reference". See knowledge-taxonomy.ts.
+        ...(checked.reach ? { reach: checked.reach } : {}),
+        ...(checked.consequence ? { consequence: checked.consequence } : {}),
         url: input.url ?? null,
         tags: input.tags ?? [],
         metadata: input.metadata ?? {},
@@ -200,6 +262,9 @@ class LocalItemStore implements ItemStore {
   }
 
   async update(idOrShort: string, patch: ItemPatch, options: ItemUpdateOptions = {}): Promise<KnowledgeItem | null> {
+    // Validate before the lock, and before any mutation, so a refused patch
+    // leaves the stored row exactly as it was.
+    const checked = assertPatchable(patch);
     return withLock(this.storePath, () => {
       const db = loadStore(this.storePath);
       const idx = db.items.findIndex((item) => matchesId(item, idOrShort));
@@ -217,6 +282,9 @@ class LocalItemStore implements ItemStore {
       }
       if (patch.title !== undefined) item.title = patch.title;
       if (patch.content !== undefined) item.content = patch.content;
+      if (checked.description !== undefined) item.description = checked.description;
+      if (checked.reach !== undefined) item.reach = checked.reach;
+      if (checked.consequence !== undefined) item.consequence = checked.consequence;
       if (patch.url !== undefined) item.url = patch.url;
       if (patch.tags !== undefined) item.tags = patch.tags;
       if (patch.metadata !== undefined) item.metadata = patch.metadata;
@@ -285,10 +353,18 @@ class ApiItemStore implements ItemStore {
     // on it, so `upsert --id <stable>` re-finds and updates the same row instead
     // of creating a duplicate — identical to the local store. When absent, the
     // server assigns the id.
+    // Same gate as the local transport, so the two stores cannot disagree about
+    // what is writable. The server re-checks independently (and Postgres checks
+    // below that) — this one exists so the caller gets a useful message and a
+    // clean refusal without a round trip.
+    const checked = assertCreatable(input);
     return this.cloud.create({
       ...(input.id ? { id: input.id } : {}),
       title: input.title,
       content: input.content,
+      description: checked.description,
+      ...(checked.reach ? { reach: checked.reach } : {}),
+      ...(checked.consequence ? { consequence: checked.consequence } : {}),
       url: input.url ?? null,
       tags: input.tags ?? [],
       ...(input.metadata ? { metadata: input.metadata } : {}),
@@ -296,7 +372,12 @@ class ApiItemStore implements ItemStore {
   }
 
   async update(idOrShort: string, patch: ItemPatch, options: ItemUpdateOptions = {}): Promise<KnowledgeItem | null> {
-    return this.cloud.update(idOrShort, patch, { expectedVersion: options.expectedVersion });
+    const checked = assertPatchable(patch);
+    return this.cloud.update(
+      idOrShort,
+      { ...patch, ...checked },
+      { expectedVersion: options.expectedVersion },
+    );
   }
 
   async delete(idOrShort: string): Promise<boolean> {

@@ -18,6 +18,14 @@ import { recordKnowledgeSyncConflict } from '../src/sync';
 import { defaultKnowledgeConfig, writeKnowledgeConfig } from '../src/workspace';
 import { budget } from './support/budget';
 
+/**
+ * `knowledge add` requires --description from 2026-08-05 (owner directive; see
+ * src/knowledge-taxonomy.ts). These tests exercise other behaviour, so they
+ * pass one shared description rather than asserting anything about it.
+ */
+const CLI_TEST_DESCRIPTION = 'Fixture item created by a CLI test that predates the required description field.';
+
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI = join(__dirname, '..', 'src', 'cli.ts');
 const packageJson = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8')) as {
@@ -376,7 +384,9 @@ describe('knowledge cli', () => {
     const addHelp = runCli(['add', '--help']);
     expect(addHelp.exitCode).toBe(0);
     const addOut = new TextDecoder().decode(addHelp.stdout);
-    expect(addOut).toContain('Usage: knowledge add <title> <content> [--url <url>] [-t <tag>]... [--json]');
+    expect(addOut).toContain('Usage: knowledge add <title> <content> --description <text>');
+    // The required description is documented where the agent will look for it.
+    expect(addOut).toContain('--description is REQUIRED');
     // The repeatable/comma-separated -t contract is documented where agents will see it.
     expect(addOut).toContain('-t/--tag is repeatable and accepts comma-separated values');
     // Must NOT fall through to the root help command tree.
@@ -534,11 +544,11 @@ describe('knowledge cli', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-cli-'));
     const store = join(dir, 'db.json');
 
-    const addA = runCli(['add', 'TitleB', 'BodyA', '--store', store, '--json']);
+    const addA = runCli(['add', '--description', CLI_TEST_DESCRIPTION, 'TitleB', 'BodyA', '--store', store, '--json']);
     expect(addA.exitCode).toBe(0);
     const addAOut = JSON.parse(new TextDecoder().decode(addA.stdout));
 
-    const addB = runCli(['add', 'TitleA', 'BodyB', '--store', store, '--json']);
+    const addB = runCli(['add', '--description', CLI_TEST_DESCRIPTION, 'TitleA', 'BodyB', '--store', store, '--json']);
     expect(addB.exitCode).toBe(0);
     const addBOut = JSON.parse(new TextDecoder().decode(addB.stdout));
 
@@ -603,12 +613,12 @@ describe('knowledge cli', () => {
     const decode = (buf: Uint8Array) => new TextDecoder().decode(buf);
     const frontmatter = '---\ntags:\n  - strategy\n---\nBody';
 
-    const direct = runCli(['add', 'Direct frontmatter', frontmatter, '--store', store, '--json']);
+    const direct = runCli(['add', '--description', CLI_TEST_DESCRIPTION, 'Direct frontmatter', frontmatter, '--store', store, '--json']);
     expect(direct.exitCode).toBe(0);
     const directOut = JSON.parse(decode(direct.stdout));
     expect(directOut.item.content).toBe(frontmatter);
 
-    const terminated = runCli(['add', '--store', store, '--json', '--', 'Terminated frontmatter', frontmatter]);
+    const terminated = runCli(['add', '--description', CLI_TEST_DESCRIPTION, '--store', store, '--json', '--', 'Terminated frontmatter', frontmatter]);
     expect(terminated.exitCode).toBe(0);
     const terminatedOut = JSON.parse(decode(terminated.stdout));
     expect(terminatedOut.item.content).toBe(frontmatter);
@@ -654,14 +664,14 @@ describe('knowledge cli', () => {
     // The defect case: the slug is in NEITHER the title nor the content, so nothing but
     // an id-aware filter can return it.
     const seeded = runCli([
-      'upsert', 'Loop labelling taxonomy', 'Body about labelling and classification.',
+      'upsert', '--description', CLI_TEST_DESCRIPTION, 'Loop labelling taxonomy', 'Body about labelling and classification.',
       '--id', 'id-not-in-body', '--store', store, '--json',
     ]);
     expect(seeded.exitCode).toBe(0);
 
     // The coincidence case, pinned so it is never read as evidence about ids.
     const quoted = runCli([
-      'upsert', 'Quoted slug', 'This body mentions id-quoted-in-body verbatim.',
+      'upsert', '--description', CLI_TEST_DESCRIPTION, 'Quoted slug', 'This body mentions id-quoted-in-body verbatim.',
       '--id', 'id-quoted-in-body', '--store', store, '--json',
     ]);
     expect(quoted.exitCode).toBe(0);
@@ -707,7 +717,7 @@ describe('knowledge cli', () => {
     };
 
     // add: five repeated -t must all persist, in order.
-    const add = runCli(['add', 'Five tags', 'Body', '--store', store, '-t', 'convention', '-t', 'naming', '-t', 'channels', '-t', 'repro', '-t', 'five', '--json']);
+    const add = runCli(['add', '--description', CLI_TEST_DESCRIPTION, 'Five tags', 'Body', '--store', store, '-t', 'convention', '-t', 'naming', '-t', 'channels', '-t', 'repro', '-t', 'five', '--json']);
     expect(add.exitCode).toBe(0);
     const addId = JSON.parse(decode(add.stdout)).item.id;
     expect(storedTags(addId)).toEqual(['convention', 'naming', 'channels', 'repro', 'five']);
@@ -715,19 +725,19 @@ describe('knowledge cli', () => {
     expect(decode(add.stderr)).toContain('"tags":5');
 
     // add: a comma-separated value splits; it must never persist as one literal tag.
-    const comma = runCli(['add', 'Comma tags', 'Body', '--store', store, '-t', 'alpha,beta, gamma', '--json']);
+    const comma = runCli(['add', '--description', CLI_TEST_DESCRIPTION, 'Comma tags', 'Body', '--store', store, '-t', 'alpha,beta, gamma', '--json']);
     expect(comma.exitCode).toBe(0);
     const commaId = JSON.parse(decode(comma.stdout)).item.id;
     expect(storedTags(commaId)).toEqual(['alpha', 'beta', 'gamma']);
     expect(storedTags(commaId)).not.toContain('alpha,beta, gamma');
 
     // add: comma list plus repeats, deduped case-insensitively.
-    const mixed = runCli(['add', 'Mixed tags', 'Body', '--store', store, '-t', 'x, y', '-t', 'z', '-t', 'X', '--json']);
+    const mixed = runCli(['add', '--description', CLI_TEST_DESCRIPTION, 'Mixed tags', 'Body', '--store', store, '-t', 'x, y', '-t', 'z', '-t', 'X', '--json']);
     expect(mixed.exitCode).toBe(0);
     expect(storedTags(JSON.parse(decode(mixed.stdout)).item.id)).toEqual(['x', 'y', 'z']);
 
     // update: repeated -t must append every tag, not just the last one.
-    const seed = runCli(['add', 'Update target', 'Body', '--store', store, '-t', 'one', '--json']);
+    const seed = runCli(['add', '--description', CLI_TEST_DESCRIPTION, 'Update target', 'Body', '--store', store, '-t', 'one', '--json']);
     expect(seed.exitCode).toBe(0);
     const seedId = JSON.parse(decode(seed.stdout)).item.id;
     const update = runCli(['update', '--id', seedId, '--store', store, '-t', 'two', '-t', 'three', '-t', 'four', '--json']);
@@ -741,13 +751,13 @@ describe('knowledge cli', () => {
     expect(storedTags(seedId)).toEqual(['one', 'three']);
 
     // upsert: create path must persist every tag too.
-    const upsert = runCli(['upsert', 'Upsert tags', 'Body', '--id', 'k_tagupsert', '--store', store, '-t', 'p', '-t', 'q', '-t', 'r', '--json']);
+    const upsert = runCli(['upsert', '--description', CLI_TEST_DESCRIPTION, 'Upsert tags', 'Body', '--id', 'k_tagupsert', '--store', store, '-t', 'p', '-t', 'q', '-t', 'r', '--json']);
     expect(upsert.exitCode).toBe(0);
     expect(JSON.parse(decode(upsert.stdout)).created).toBe(true);
     expect(storedTags('k_tagupsert')).toEqual(['p', 'q', 'r']);
 
     // upsert: update path appends all requested tags.
-    const upsertAgain = runCli(['upsert', '--id', 'k_tagupsert', '--content', 'Body 2', '--store', store, '-t', 's', '-t', 't', '--json']);
+    const upsertAgain = runCli(['upsert', '--description', CLI_TEST_DESCRIPTION, '--id', 'k_tagupsert', '--content', 'Body 2', '--store', store, '-t', 's', '-t', 't', '--json']);
     expect(upsertAgain.exitCode).toBe(0);
     expect(storedTags('k_tagupsert')).toEqual(['p', 'q', 'r', 's', 't']);
 
@@ -768,11 +778,11 @@ describe('knowledge cli', () => {
     expect(JSON.parse(decode(all.stdout)).total).toBe(5);
 
     // A -t with no usable value must fail loudly instead of silently dropping the tag.
-    const missing = runCli(['add', 'No tag value', 'Body', '--store', store, '-t']);
+    const missing = runCli(['add', '--description', CLI_TEST_DESCRIPTION, 'No tag value', 'Body', '--store', store, '-t']);
     expect(missing.exitCode).toBe(1);
     expect(decode(missing.stderr)).toContain('Missing value for --tag');
 
-    const blank = runCli(['add', 'Blank tag value', 'Body', '--store', store, '-t', ' , ']);
+    const blank = runCli(['add', '--description', CLI_TEST_DESCRIPTION, 'Blank tag value', 'Body', '--store', store, '-t', ' , ']);
     expect(blank.exitCode).toBe(1);
     expect(decode(blank.stderr)).toContain('no tag name found');
   });
@@ -1000,7 +1010,7 @@ describe('knowledge cli', () => {
     const store = join(dir, 'db.json');
     const decode = (buf: Uint8Array) => new TextDecoder().decode(buf);
 
-    const created = runCli(['add', 'Counted', 'Body', '--store', store, '-t', 'alpha', '--json']);
+    const created = runCli(['add', '--description', CLI_TEST_DESCRIPTION, 'Counted', 'Body', '--store', store, '-t', 'alpha', '--json']);
     expect(created.exitCode).toBe(0);
     const id = JSON.parse(decode(created.stdout)).item.id;
 
@@ -1045,7 +1055,7 @@ describe('knowledge cli', () => {
     expect(upsertExistingOut.message).toContain('(added 1 tag)');
 
     // ...and on the create path, so a caller never branches on `created` to read it.
-    const upsertNew = runCli(['upsert', 'Fresh', 'Body', '--id', 'k_fresh_count', '--store', store, '-t', 'one,two', '--json']);
+    const upsertNew = runCli(['upsert', '--description', CLI_TEST_DESCRIPTION, 'Fresh', 'Body', '--id', 'k_fresh_count', '--store', store, '-t', 'one,two', '--json']);
     expect(upsertNew.exitCode).toBe(0);
     const upsertNewOut = JSON.parse(decode(upsertNew.stdout));
     expect(upsertNewOut.created).toBe(true);
@@ -1057,13 +1067,13 @@ describe('knowledge cli', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-upsert-'));
     const store = join(dir, 'db.json');
 
-    const create = runCli(['upsert', 'Stable ID', 'Initial body', '--id', 'k_custom', '--store', store, '--json']);
+    const create = runCli(['upsert', '--description', CLI_TEST_DESCRIPTION, 'Stable ID', 'Initial body', '--id', 'k_custom', '--store', store, '--json']);
     expect(create.exitCode).toBe(0);
     const createOut = JSON.parse(new TextDecoder().decode(create.stdout));
     expect(createOut.created).toBe(true);
     expect(createOut.item.short_id).toBe('custom');
 
-    const update = runCli(['upsert', '--id', 'k_custom', '--content', 'Updated body', '--store', store, '--json']);
+    const update = runCli(['upsert', '--description', CLI_TEST_DESCRIPTION, '--id', 'k_custom', '--content', 'Updated body', '--store', store, '--json']);
     expect(update.exitCode).toBe(0);
     const updateOut = JSON.parse(new TextDecoder().decode(update.stdout));
     expect(updateOut.created).toBe(false);
@@ -1079,6 +1089,7 @@ describe('knowledge cli', () => {
 
     const add = runCli([
       'add',
+      '--description', CLI_TEST_DESCRIPTION,
       'Hasna OSS boundary',
       'local-first hosted wrapper open actions guardrails open orgs token=sk-testsecretkeyvalue1234567890',
       '--scope',
@@ -1264,7 +1275,7 @@ describe('knowledge cli', () => {
     expect(JSON.parse(new TextDecoder().decode(syncConflicts.stdout)).conflicts).toEqual([]);
     expect(existsSync(join(dir, '.hasna', 'knowledge'))).toBe(false);
 
-    const add = runCli(['add', 'Project scoped', 'Stored in the app workspace', '--scope', 'project', '--json'], dir);
+    const add = runCli(['add', '--description', CLI_TEST_DESCRIPTION, 'Project scoped', 'Stored in the app workspace', '--scope', 'project', '--json'], dir);
     expect(add.exitCode).toBe(0);
     expect(existsSync(join(dir, '.hasna', 'knowledge', 'db.json'))).toBe(true);
     expect(existsSync(join(dir, '.open-knowledge', 'db.json'))).toBe(false);
@@ -1319,7 +1330,7 @@ describe('knowledge cli', () => {
       }],
     }, null, 2));
 
-    const add = runCli(['add', 'Canonical item', 'Stored in canonical workspace', '--scope', 'project', '--json'], dir);
+    const add = runCli(['add', '--description', CLI_TEST_DESCRIPTION, 'Canonical item', 'Stored in canonical workspace', '--scope', 'project', '--json'], dir);
     expect(add.exitCode).toBe(0);
     expect(existsSync(join(dir, '.hasna', 'knowledge', 'db.json'))).toBe(true);
     expect(existsSync(join(legacyHome, 'db.json'))).toBe(true);
@@ -3186,7 +3197,7 @@ describe('knowledge cli', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-export-compact-'));
     const store = join(dir, 'db.json');
 
-    const add = runCli(['add', 'Exported compact item', 'Full export content stays out of default terminal output', '--store', store, '--json']);
+    const add = runCli(['add', '--description', CLI_TEST_DESCRIPTION, 'Exported compact item', 'Full export content stays out of default terminal output', '--store', store, '--json']);
     expect(add.exitCode).toBe(0);
 
     const compact = runCli(['export', '--store', store]);
@@ -3430,7 +3441,7 @@ describe('knowledge cli', () => {
       'The inventory command must retrieve source chunks, wiki pages, artifact rows, and run ledger entries.',
     ].join('\n'));
 
-    const add = runCli(['add', 'Inventory Note', 'Manual note body for inventory checks', '--scope', 'project', '--json'], dir);
+    const add = runCli(['add', '--description', CLI_TEST_DESCRIPTION, 'Inventory Note', 'Manual note body for inventory checks', '--scope', 'project', '--json'], dir);
     expect(add.exitCode).toBe(0);
 
     const ingest = runCli(['ingest', 'source', sourceRef, '--purpose', 'knowledge_index', '--scope', 'project', '--json'], dir);

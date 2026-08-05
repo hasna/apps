@@ -34,6 +34,15 @@ import {
 } from '../src/net-guard';
 import { resolveKnowledgeCloudStore } from '../src/cloud-store';
 
+/**
+ * Descriptions are REQUIRED on every create from 2026-08-05 (owner directive;
+ * see src/knowledge-taxonomy.ts). These tests are about the versioning trigger
+ * and the egress guard rather than about the description, so they share one
+ * constant — it satisfies the write guard without implying it is under test.
+ */
+const TEST_DESCRIPTION = 'Fixture item used by tests that predate the required description field.';
+
+
 const GUARDED = { NODE_ENV: 'test' } as NodeJS.ProcessEnv;
 const UNGUARDED = { NODE_ENV: 'production' } as NodeJS.ProcessEnv;
 const FAKE_KEY = 'k_fake_test_key';
@@ -158,7 +167,7 @@ describe('the guard sits at the cloud transport boundary', () => {
     } as NodeJS.ProcessEnv);
     let caught: unknown = null;
     try {
-      await store!.create({ title: 'guarded', content: 'must never leave the machine' });
+      await store!.create({ description: TEST_DESCRIPTION, title: 'guarded', content: 'must never leave the machine' });
     } catch (error) {
       caught = error;
     }

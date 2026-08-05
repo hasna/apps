@@ -24,6 +24,7 @@ import { readFileSync } from 'node:fs';
 import { verifyApiKey, ApiKeyStore, type ApiKeyVerifier, type ApiKeyPrincipal } from '@hasna/contracts/auth';
 import { createKnowledgeCloudClient } from './db/remote-storage.js';
 import { knowledgeRegistryContract } from './registry-contract.js';
+import { validateDescription, normalizeReach, normalizeConsequence } from './knowledge-taxonomy.js';
 import {
   makeId,
   makeShortId,
@@ -95,6 +96,14 @@ export interface NoteInput {
   id?: string;
   title: string;
   content?: string;
+  /**
+   * REQUIRED on create — validated in `create()` below and, underneath that, by
+   * the `knowledge_items_description_present` CHECK constraint. This interface
+   * is erased at build time and enforces nothing on its own.
+   */
+  description?: string;
+  reach?: string | null;
+  consequence?: string | null;
   url?: string | null;
   tags?: string[];
   metadata?: Record<string, unknown>;
@@ -150,6 +159,38 @@ export class VersionConflictError extends Error {
 export type NoteVersion = KnowledgeItemVersion;
 export type NoteVersionList = KnowledgeItemVersionList;
 
+/**
+ * Server-side description validation. Reuses the shared validator so the rule
+ * cannot drift between the CLI and the API, and converts its error into a 400
+ * — a caller that omits the field has made a bad request, not caused a server
+ * fault, and a raw constraint violation surfacing as a 500 would send them to
+ * debug the database instead of their payload.
+ */
+function validateNoteDescription(raw: unknown): string {
+  try {
+    return validateDescription(raw);
+  } catch (error) {
+    throw new HttpError(400, error instanceof Error ? error.message : 'description is required');
+  }
+}
+
+function normalizeNoteAxis(field: 'reach' | 'consequence', raw: unknown): string {
+  try {
+    return field === 'reach' ? normalizeReach(raw) : normalizeConsequence(raw);
+  } catch (error) {
+    throw new HttpError(400, error instanceof Error ? error.message : `invalid ${field}`);
+  }
+}
+
+function normalizeNoteTaxonomy(input: NoteInput): { reach?: string; consequence?: string } {
+  const result: { reach?: string; consequence?: string } = {};
+  if (input.reach !== undefined && input.reach !== null) result.reach = normalizeNoteAxis('reach', input.reach);
+  if (input.consequence !== undefined && input.consequence !== null) {
+    result.consequence = normalizeNoteAxis('consequence', input.consequence);
+  }
+  return result;
+}
+
 function parseJsonColumn<T>(value: unknown, fallback: T): T {
   if (value == null) return fallback;
   if (typeof value === 'string') {
@@ -201,6 +242,11 @@ function rowToItem(row: Record<string, unknown>): KnowledgeItem {
     short_id: (row.short_id as string | null) ?? null,
     title: String(row.title ?? ''),
     content: String(row.content ?? ''),
+    // Legacy rows carry NULL here and must stay readable — see the NOT VALID
+    // constraint rationale in db/pg-migrations.ts.
+    description: (row.description as string | null) ?? null,
+    reach: (row.reach as string | null) ?? null,
+    consequence: (row.consequence as string | null) ?? null,
     url: (row.url as string | null) ?? null,
     tags: parseJson<string[]>(row.tags, []),
     metadata: parseJson<Record<string, unknown>>(row.metadata, {}),
@@ -243,6 +289,12 @@ export class NoteRepo {
     if (!input.title || typeof input.title !== 'string') {
       throw new HttpError(400, 'title is required');
     }
+    // Validate here so an API caller gets a 400 naming the field, rather than a
+    // 500 carrying a raw Postgres constraint violation. The CHECK constraint
+    // underneath remains the actual floor — it also covers the write paths that
+    // never reach this function (sync/outbox replay, backfill, psql).
+    const description = validateNoteDescription(input.description);
+    const axes = normalizeNoteTaxonomy(input);
     const now = new Date().toISOString();
     const suppliedId = typeof input.id === 'string' ? input.id.trim() : '';
     if (suppliedId) {
@@ -256,11 +308,14 @@ export class NoteRepo {
       // this is the branch `knowledge upsert --id`, import, and `ingest rules`
       // take, and it is the exact branch that lost history in open-mementos.
       const row = await this.write(options, (tx) => tx.get<Record<string, unknown>>(
-        `INSERT INTO knowledge_items (id, short_id, title, content, url, tags, metadata, archived, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,FALSE,$8,$8)
+        `INSERT INTO knowledge_items (id, short_id, title, content, description, reach, consequence, url, tags, metadata, archived, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,FALSE,$11,$11)
          ON CONFLICT (id) DO UPDATE SET
            title = EXCLUDED.title,
            content = EXCLUDED.content,
+           description = EXCLUDED.description,
+           reach = EXCLUDED.reach,
+           consequence = EXCLUDED.consequence,
            url = EXCLUDED.url,
            tags = EXCLUDED.tags,
            metadata = EXCLUDED.metadata,
@@ -271,6 +326,9 @@ export class NoteRepo {
           makeShortId(suppliedId),
           input.title,
           input.content ?? '',
+          description,
+          axes.reach ?? null,
+          axes.consequence ?? null,
           input.url ?? null,
           JSON.stringify(input.tags ?? []),
           JSON.stringify(input.metadata ?? {}),
@@ -281,14 +339,17 @@ export class NoteRepo {
     }
     const id = makeId();
     const row = await this.write(options, (tx) => tx.get<Record<string, unknown>>(
-      `INSERT INTO knowledge_items (id, short_id, title, content, url, tags, metadata, archived, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,FALSE,$8,$9)
+      `INSERT INTO knowledge_items (id, short_id, title, content, description, reach, consequence, url, tags, metadata, archived, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,FALSE,$11,$12)
        RETURNING *`,
       [
         id,
         makeShortId(id),
         input.title,
         input.content ?? '',
+        description,
+        axes.reach ?? null,
+        axes.consequence ?? null,
         input.url ?? null,
         JSON.stringify(input.tags ?? []),
         JSON.stringify(input.metadata ?? {}),
@@ -358,6 +419,13 @@ export class NoteRepo {
     };
     if (patch.title !== undefined) push('title', patch.title);
     if (patch.content !== undefined) push('content', patch.content);
+    // Validated on the way in: a present-but-invalid description is a 400, and
+    // an absent one leaves the stored value untouched.
+    if (patch.description !== undefined) push('description', validateNoteDescription(patch.description));
+    if (patch.reach !== undefined) push('reach', patch.reach === null ? null : normalizeNoteAxis('reach', patch.reach));
+    if (patch.consequence !== undefined) {
+      push('consequence', patch.consequence === null ? null : normalizeNoteAxis('consequence', patch.consequence));
+    }
     if (patch.url !== undefined) push('url', patch.url);
     if (patch.tags !== undefined) push('tags', JSON.stringify(patch.tags), '::jsonb');
     if (patch.metadata !== undefined) push('metadata', JSON.stringify(patch.metadata), '::jsonb');

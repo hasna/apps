@@ -29,6 +29,24 @@ import { join } from 'node:path';
 import { KnowledgeVersionConflictError } from '../src/cloud-store';
 import { resolveItemStore, type ItemStore } from '../src/item-store';
 
+/**
+ * `knowledge add` requires --description from 2026-08-05 (owner directive; see
+ * src/knowledge-taxonomy.ts). These tests exercise other behaviour, so they
+ * pass one shared description rather than asserting anything about it.
+ */
+const CLI_TEST_DESCRIPTION = 'Fixture item created by a CLI test that predates the required description field.';
+
+
+/**
+ * Descriptions are REQUIRED on every create from 2026-08-05 (owner directive;
+ * see src/knowledge-taxonomy.ts). These tests are about versioning and
+ * concurrency rather than about the description, so they use one shared
+ * constant: it satisfies the write guard without implying the value is under
+ * test here.
+ */
+const TEST_DESCRIPTION = 'Fixture item used by the entry-versioning and concurrency tests.';
+
+
 const CLI = join(import.meta.dir, '..', 'src', 'cli.ts');
 
 function freshDir(prefix: string): string {
@@ -81,7 +99,7 @@ describe('ItemStore (local transport) — the lost-update defect and its CAS fix
   test('repro: two stale reads, two honest writes — the SECOND is rejected, not silently accepted', async () => {
     const dir = freshDir('ok-cas-repro-');
     const store = localStore(dir);
-    const created = await store.create({ title: 'Shared entry', content: 'BASE-CONTENT-LINE-ORIGINAL' });
+    const created = await store.create({ description: TEST_DESCRIPTION, title: 'Shared entry', content: 'BASE-CONTENT-LINE-ORIGINAL' });
     expect(created.version).toBe(1);
 
     // Both agents read the SAME version, independently.
@@ -130,7 +148,7 @@ describe('ItemStore (local transport) — the lost-update defect and its CAS fix
   test('a fresh expectedVersion is accepted — positive control, so the guard is not simply always-on', async () => {
     const dir = freshDir('ok-cas-positive-');
     const store = localStore(dir);
-    const created = await store.create({ title: 'Uncontended', content: 'a' });
+    const created = await store.create({ description: TEST_DESCRIPTION, title: 'Uncontended', content: 'a' });
     const updated = await store.update(created.id, { content: 'b' }, { expectedVersion: created.version });
     expect(updated!.version).toBe(2);
     expect(updated!.content).toBe('b');
@@ -139,7 +157,7 @@ describe('ItemStore (local transport) — the lost-update defect and its CAS fix
   test('omitting expectedVersion keeps the pre-existing unconditional-overwrite behaviour (backward compatible)', async () => {
     const dir = freshDir('ok-cas-unconditional-');
     const store = localStore(dir);
-    const created = await store.create({ title: 'No guard', content: 'a' });
+    const created = await store.create({ description: TEST_DESCRIPTION, title: 'No guard', content: 'a' });
     await store.update(created.id, { content: 'b' }); // no expectedVersion at all — must not throw
     const after = await store.update(created.id, { content: 'c' }); // still none
     expect(after!.content).toBe('c');
@@ -176,7 +194,7 @@ describe('knowledge update --if-version — CLI end to end against a real local 
     const home = freshDir('ok-cas-cli-home-');
     const storePath = join(freshDir('ok-cas-cli-store-'), 'db.json');
 
-    const created = await runCli(['add', 'Shared', 'BASE-CONTENT-LINE-ORIGINAL', '--store', storePath, '--json'], {}, home);
+    const created = await runCli(['add', '--description', CLI_TEST_DESCRIPTION, 'Shared', 'BASE-CONTENT-LINE-ORIGINAL', '--store', storePath, '--json'], {}, home);
     expect(created.exitCode).toBe(0);
     const id = (JSON.parse(created.stdout) as { item: { id: string } }).item.id;
 
@@ -222,7 +240,7 @@ describe('knowledge update --if-version — CLI end to end against a real local 
   test('a current --if-version is accepted (positive control over the CLI path)', async () => {
     const home = freshDir('ok-cas-cli-home2-');
     const storePath = join(freshDir('ok-cas-cli-store2-'), 'db.json');
-    const created = await runCli(['add', 'T', 'a', '--store', storePath, '--json'], {}, home);
+    const created = await runCli(['add', '--description', CLI_TEST_DESCRIPTION, 'T', 'a', '--store', storePath, '--json'], {}, home);
     const id = (JSON.parse(created.stdout) as { item: { id: string } }).item.id;
     const result = await runCli(['update', '--id', id, '--content', 'b', '--if-version', '1', '--store', storePath, '--json'], {}, home);
     expect(result.exitCode).toBe(0);
@@ -234,7 +252,7 @@ describe('knowledge update --if-version — CLI end to end against a real local 
   test('--if-version rejects a non-integer value before touching the store (generic exit 1, not the conflict exit 2)', async () => {
     const home = freshDir('ok-cas-cli-home3-');
     const storePath = join(freshDir('ok-cas-cli-store3-'), 'db.json');
-    const created = await runCli(['add', 'T', 'a', '--store', storePath, '--json'], {}, home);
+    const created = await runCli(['add', '--description', CLI_TEST_DESCRIPTION, 'T', 'a', '--store', storePath, '--json'], {}, home);
     const id = (JSON.parse(created.stdout) as { item: { id: string } }).item.id;
     const result = await runCli(['update', '--id', id, '--content', 'b', '--if-version', 'nope', '--store', storePath, '--json'], {}, home);
     expect(result.exitCode).toBe(1);
@@ -258,7 +276,7 @@ describe('knowledge update --if-version — CLI end to end against a real local 
   test('omitting --if-version keeps the CLI working exactly as before (backward compatible)', async () => {
     const home = freshDir('ok-cas-cli-home4-');
     const storePath = join(freshDir('ok-cas-cli-store4-'), 'db.json');
-    const created = await runCli(['add', 'T', 'a', '--store', storePath, '--json'], {}, home);
+    const created = await runCli(['add', '--description', CLI_TEST_DESCRIPTION, 'T', 'a', '--store', storePath, '--json'], {}, home);
     const id = (JSON.parse(created.stdout) as { item: { id: string } }).item.id;
     const result = await runCli(['update', '--id', id, '--content', 'b', '--store', storePath, '--json'], {}, home);
     expect(result.exitCode).toBe(0);
@@ -284,7 +302,7 @@ describe('isolation: --store plus a poisoned cloud environment never reaches the
       HASNA_KNOWLEDGE_API_KEY: 'not-a-real-key',
     };
 
-    const created = await runCli(['add', 'Isolated', 'v1', '--store', storePath, '--json'], poisonedEnv, home);
+    const created = await runCli(['add', '--description', CLI_TEST_DESCRIPTION, 'Isolated', 'v1', '--store', storePath, '--json'], poisonedEnv, home);
     expect(created.exitCode).toBe(0);
     const id = (JSON.parse(created.stdout) as { item: { id: string } }).item.id;
 

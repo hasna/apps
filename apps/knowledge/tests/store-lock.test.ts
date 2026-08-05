@@ -6,6 +6,14 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isLockContentionCode, loadStore, saveStore, withLock } from '../src/store';
 
+/**
+ * `knowledge add` requires --description from 2026-08-05 (owner directive; see
+ * src/knowledge-taxonomy.ts). These tests exercise other behaviour, so they
+ * pass one shared description rather than asserting anything about it.
+ */
+const CLI_TEST_DESCRIPTION = 'Fixture item created by a CLI test that predates the required description field.';
+
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI = join(__dirname, '..', 'src', 'cli.ts');
 
@@ -60,6 +68,7 @@ describe('JSON store lock handling', () => {
     const children = Array.from({ length: writerCount }, (_, index) => spawn('bun', [
       CLI,
       'add',
+      '--description', CLI_TEST_DESCRIPTION,
       `Concurrent ${index}`,
       `Content ${index}`,
       '--store',
@@ -98,6 +107,7 @@ describe('JSON store lock handling', () => {
     const children = Array.from({ length: writerCount }, (_, index) => spawn('bun', [
       CLI,
       'add',
+      '--description', CLI_TEST_DESCRIPTION,
       `Stale concurrent ${index}`,
       `Content ${index}`,
       '--store',

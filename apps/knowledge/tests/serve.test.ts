@@ -176,7 +176,7 @@ describe('knowledge-serve', () => {
       new Request('http://x/v1/notes', {
         method: 'POST',
         headers: { 'x-api-key': key, 'content-type': 'application/json' },
-        body: JSON.stringify({ title: 'hello', content: 'world', tags: ['a'] }),
+        body: JSON.stringify({ title: 'hello', content: 'world', description: 'A fixture note created by the serve HTTP surface tests.', tags: ['a'] }),
       }),
     );
     expect(created.status).toBe(201);
@@ -202,7 +202,7 @@ describe('knowledge-serve', () => {
       );
 
     // First upsert with a stable caller id.
-    const first = await post({ id: 'k_stable', title: 'v1', content: 'first' });
+    const first = await post({ id: 'k_stable', title: 'v1', content: 'first', description: 'A fixture note created by the serve HTTP surface tests.' });
     expect(first.status).toBe(201);
     const created = (await first.json()) as { id: string; title: string };
     expect(created.id).toBe('k_stable'); // server persisted the caller id, not a fresh one
@@ -215,7 +215,7 @@ describe('knowledge-serve', () => {
     expect(((await got.json()) as { title: string }).title).toBe('v1');
 
     // Re-upsert with the same id -> updates the SAME row in place (id unchanged).
-    const second = await post({ id: 'k_stable', title: 'v2', content: 'second' });
+    const second = await post({ id: 'k_stable', title: 'v2', content: 'second', description: 'A fixture note created by the serve HTTP surface tests.' });
     expect(second.status).toBe(201);
     expect(((await second.json()) as { id: string }).id).toBe('k_stable');
 

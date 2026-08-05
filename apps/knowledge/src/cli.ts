@@ -6,6 +6,14 @@
  */
 import { defaultStorePath, ensureStore, importLegacyGlobalStore, itemMatchesSearch, type KnowledgeItem } from './store';
 import { resolveItemStore, type ItemStore } from './item-store';
+import {
+  REACH_VALUES,
+  CONSEQUENCE_VALUES,
+  DEFAULT_REACH,
+  DEFAULT_CONSEQUENCE,
+  DESCRIPTION_MIN_LENGTH,
+  DESCRIPTION_MAX_LENGTH,
+} from './knowledge-taxonomy';
 import { isKnowledgeApiMode, KnowledgeVersionConflictError } from './cloud-store';
 import { diffEntries, formatEntryDiff, type EntrySnapshot } from './entry-diff';
 import {
@@ -59,6 +67,14 @@ interface Flags {
   store?: string;
   title?: string;
   content?: string;
+  /**
+   * The required one-line description (owner directive 2026-08-05). Distinct
+   * from `desc`, which is the sort-descending boolean — see the parser.
+   */
+  description?: string;
+  /** Governance axes; validated against the closed vocabularies. */
+  reach?: string;
+  consequence?: string;
   url?: string;
   tag?: string[];
   /**
@@ -225,6 +241,15 @@ function parseArgs(argv: string[]): ParseResult {
       case '--help': case '-h': flags.help = true; break;
       case '--version': case '-v': flags.version = true; break;
       case '--desc': flags.desc = true; break;
+      // `--description` is a DIFFERENT flag from `--desc`, which is the
+      // sort-descending boolean and predates it. This switch matches tokens
+      // exactly and does no prefix matching, so the two cannot be confused —
+      // asserted in tests/knowledge-description-taxonomy.test.ts rather than
+      // assumed, because a parser that abbreviated would silently turn
+      // `--description "..."` into a reversed sort with a stray positional.
+      case '--description': flags.description = argv[i + 1]; i += 1; break;
+      case '--reach': flags.reach = argv[i + 1]; i += 1; break;
+      case '--consequence': flags.consequence = argv[i + 1]; i += 1; break;
       case '--page': case '-p': flags.page = Number(argv[i + 1]); i += 1; break;
       case '--limit': case '-l': flags.limit = Number(argv[i + 1]); i += 1; break;
       case '--search': case '-s': flags.search = argv[i + 1]; i += 1; break;
@@ -455,12 +480,20 @@ List Options:
   -l, --limit <n>             Items per page (default: 20)
   -s, --search <text>         Filter by id/title/content (case-insensitive substring; use 'knowledge search' for semantic)
   -t, --tag <tag>             Filter by tag; repeatable/comma-separated, item must match ALL
-  --sort <created|title>       Sort field (default: created)
-  --desc                       Sort descending
+  --sort <created|title|updated>  Sort field (default: created). 'updated' surfaces EDITS,
+                              not only new items — what a change monitor needs.
+  --desc                       Sort descending (NOTE: this is the sort direction,
+                              not --description)
   --archived                  Show only archived items
   --include-archived          Include archived items
 
 Add/Update Options:
+  --description <text>        REQUIRED on add. One line (24-280 chars) saying what this
+                              item is FOR. It is what the fleet change notification shows
+                              beside the title, so an agent can decide whether to open it.
+  --reach <fleet|project|seat|self>            Who this binds (optional; default self)
+  --consequence <blocking|standing|reference>  What a reader loses by not reading it
+                              (optional; default reference)
   --url <url>                 Attach source URL
 
 Update Options:
@@ -484,7 +517,7 @@ Prune Options:
 }
 
 function printCommandHelp(command: string): void {
-  if (command === 'add') { console.log('Usage: knowledge add <title> <content> [--url <url>] [-t <tag>]... [--json]\n  -t/--tag is repeatable and accepts comma-separated values: -t a -t b  ==  -t "a,b"'); return; }
+  if (command === 'add') { console.log(`Usage: knowledge add <title> <content> --description <text> [--reach <r>] [--consequence <c>] [--url <url>] [-t <tag>]... [--json]\n  --description is REQUIRED (${DESCRIPTION_MIN_LENGTH}-${DESCRIPTION_MAX_LENGTH} chars). It is the one line the fleet-wide change\n  notification shows an agent beside the title, so they can decide whether to open the item.\n  It is enforced rather than encouraged because the equivalent OPTIONAL field on mementos\n  (when_to_use) is populated on zero rows — an optional guidance field lands at 0%.\n  Do not confuse --description with --desc, which is the sort-descending flag on list.\n  --reach ${REACH_VALUES.join('|')} and --consequence ${CONSEQUENCE_VALUES.join('|')} are optional governance\n  axes; they default to the QUIET end (${DEFAULT_REACH}/${DEFAULT_CONSEQUENCE}) so only a deliberate write escalates.\n  -t/--tag is repeatable and accepts comma-separated values: -t a -t b  ==  -t "a,b"`); return; }
   if (command === 'list' || command === 'ls') { console.log('Usage: knowledge list|ls [--format table|json] [-p <page>] [-l <limit>] [-s <search>] [-t <tag>]... [--sort created|title] [--desc] [--archived] [--include-archived] [--verbose] [--json]\n  -s/--search is a CASE-INSENSITIVE LITERAL SUBSTRING filter over id, title and content — not a\n  tokenised or semantic search, so a word order that never appears verbatim matches nothing. It\n  resolves an item by its slug because the id is included. For meaning-based lookup use `knowledge\n  search <query>`, which is a different index and will find items this filter cannot.\n  -t/--tag is repeatable and accepts comma-separated values; repeated -t narrows (an item must carry every tag).\n  Each value matches an item carrying the whole value OR all of its comma-split names — a union, so\n  `-t "a,b,c"` finds items carrying a legacy literal "a,b,c" tag as well as items carrying the three\n  names separately. (`untag` differs on purpose: it stops at the whole-value match.)\n  Use --json to tell those two shapes apart; the table renders them near-identically.\n  Archived items are excluded by default; add --include-archived to sweep both.\n  If both --archived and --include-archived are passed, --archived wins (archived items only).'); return; }
   if (command === 'get') { console.log('Usage: knowledge get --id <id> [--json]'); return; }
   if (command === 'update' || command === 'edit') { console.log('Usage: knowledge update|edit --id <id> [--title <title>] [--content <content>] [--url <url>] [-t <tag>]... [--if-version <n>] [--json]\n  -t/--tag is repeatable and accepts comma-separated values; tags are added, never replaced.\n  With -t the output reports how many tags were actually added, so 0 added is not read as 3.\n  --if-version <n> is an explicit optimistic-concurrency guard: pass the "version" a prior\n  `knowledge get` returned, and the write is REJECTED (exit 2, nothing written) if the stored\n  item has moved to a different version since. Without it, the version used is whatever THIS\n  command itself just re-read, which only guards the instant inside one invocation — it cannot\n  catch a decision made from an earlier, separate `get`. On conflict, stderr and --json both\n  name the expected and the actual (current) version; there is no automatic retry.'); return; }
@@ -847,13 +880,28 @@ function requireId(flags: Flags): asserts flags is Flags & { id: string } {
   if (!flags.id) throw new Error('Missing required --id. Example: knowledge get --id <id>');
 }
 
+/**
+ * `updated` exists so a caller can detect an EDIT, not only a creation.
+ *
+ * Sorting by `created` can never surface an item that was revised today but
+ * written last month, which made "what changed?" unanswerable from this CLI —
+ * the gap that blocked the fleet-wide change monitor (owner directive
+ * 2026-08-05). `updated_at` was already on every row and every transport; only
+ * the validator refused the key.
+ */
+const SORT_KEYS = ['created', 'title', 'updated'] as const;
+type SortKey = (typeof SORT_KEYS)[number];
+
 function sortItems(items: KnowledgeItem[], flags: Flags): { sorted: KnowledgeItem[]; sort: string; direction: string } {
-  const sort = flags.sort ?? 'created';
-  if (sort !== 'created' && sort !== 'title') {
-    throw new Error("Invalid --sort value. Use 'created' or 'title'.");
+  const sort = (flags.sort ?? 'created') as SortKey;
+  if (!SORT_KEYS.includes(sort)) {
+    throw new Error(`Invalid --sort value. Use ${SORT_KEYS.map((key) => `'${key}'`).join(', ')}.`);
   }
   const sorted = [...items].sort((a, b) => {
     if (sort === 'title') return a.title.localeCompare(b.title);
+    // Fall back to created_at when a row carries no updated_at: legacy rows
+    // exist, and `undefined.localeCompare` would throw rather than sort.
+    if (sort === 'updated') return (a.updated_at ?? a.created_at).localeCompare(b.updated_at ?? b.created_at);
     return a.created_at.localeCompare(b.created_at);
   });
   if (flags.desc) sorted.reverse();
@@ -1882,8 +1930,19 @@ async function run(argv: string[]): Promise<void> {
   if (command === 'add') {
     const title = positional[1];
     const content = positional[2];
-    if (!title || !content) throw new Error('Usage: knowledge add <title> <content>');
-    const item = await itemStore.create({ title, content, url: flags.url ?? null, tags: flags.tag ?? [] });
+    if (!title || !content) throw new Error('Usage: knowledge add <title> <content> --description <text>');
+    // The Store re-validates this (and Postgres re-validates below that); the
+    // call here is not redundant belt-and-braces but the layer that can name
+    // the FLAG, because only the CLI knows the caller typed a command line.
+    const item = await itemStore.create({
+      title,
+      content,
+      description: flags.description as string,
+      ...(flags.reach ? { reach: flags.reach } : {}),
+      ...(flags.consequence ? { consequence: flags.consequence } : {}),
+      url: flags.url ?? null,
+      tags: flags.tag ?? [],
+    });
     log('info', 'Item added', { id: item.id, title: item.title, tags: item.tags?.length ?? 0, transport: itemStore.kind });
     output({ ok: true, item, message: `Added ${item.id}` }, flags.json, flags);
     return;
@@ -2123,6 +2182,9 @@ async function run(argv: string[]): Promise<void> {
     const patch: Record<string, unknown> = {};
     if (flags.title !== undefined) patch.title = flags.title;
     if (flags.content !== undefined) patch.content = flags.content;
+    if (flags.description !== undefined) patch.description = flags.description;
+    if (flags.reach !== undefined) patch.reach = flags.reach;
+    if (flags.consequence !== undefined) patch.consequence = flags.consequence;
     if (flags.url !== undefined) patch.url = flags.url;
     let added: string[] | undefined;
     if (flags.tag !== undefined) {
@@ -2251,6 +2313,9 @@ async function run(argv: string[]): Promise<void> {
         id: flags.id,
         title,
         content,
+        description: flags.description as string,
+        ...(flags.reach ? { reach: flags.reach } : {}),
+        ...(flags.consequence ? { consequence: flags.consequence } : {}),
         url: flags.url ?? null,
         tags: flags.tag ?? [],
       });
@@ -2260,6 +2325,9 @@ async function run(argv: string[]): Promise<void> {
     const patch: Record<string, unknown> = {};
     if (title !== undefined) patch.title = title;
     if (content !== undefined) patch.content = content;
+    if (flags.description !== undefined) patch.description = flags.description;
+    if (flags.reach !== undefined) patch.reach = flags.reach;
+    if (flags.consequence !== undefined) patch.consequence = flags.consequence;
     if (flags.url !== undefined) patch.url = flags.url;
     let added: string[] | undefined;
     if (flags.tag !== undefined) {

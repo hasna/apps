@@ -12,9 +12,41 @@ import { assertKnowledgeModeSelected } from './knowledge-mode.ts';
 import { parseSourceRef } from './source-ref.ts';
 import { createKnowledgeService } from './service.ts';
 import { getStorageStatus as getDatabaseStorageStatus } from './storage.ts';
+import {
+  REACH_VALUES,
+  CONSEQUENCE_VALUES,
+  DESCRIPTION_MIN_LENGTH,
+  DESCRIPTION_MAX_LENGTH,
+} from './knowledge-taxonomy.ts';
 
 const storePathField = z.string().optional().describe('Path to the JSON store file');
 const scopeField = z.enum(['local', 'global', 'project']).optional().describe('Workspace scope');
+
+/**
+ * The required description, and the two optional governance axes.
+ *
+ * Vocabularies and bounds are IMPORTED rather than restated, so the MCP schema
+ * cannot drift from the store's runtime guard or the Postgres constraint. A
+ * second hand-written copy of `['fleet','project','seat','self']` here would be
+ * a third definition of the same list, and the one most likely to rot.
+ */
+const descriptionField = z
+  .string()
+  .min(DESCRIPTION_MIN_LENGTH)
+  .max(DESCRIPTION_MAX_LENGTH)
+  .describe(
+    `REQUIRED. One line (${DESCRIPTION_MIN_LENGTH}-${DESCRIPTION_MAX_LENGTH} chars) saying what this item is FOR. `
+      + 'It is shown beside the title in the fleet-wide change notification, so another agent can '
+      + 'decide whether to open the item without fetching its body.',
+  );
+const reachField = z
+  .enum(REACH_VALUES)
+  .optional()
+  .describe('Who this binds. Optional; unmarked is treated as "self" by readers.');
+const consequenceField = z
+  .enum(CONSEQUENCE_VALUES)
+  .optional()
+  .describe('What a reader loses by not reading it. Optional; unmarked is treated as "reference".');
 
 function jsonText(data) {
   return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
@@ -1525,14 +1557,31 @@ export function buildServer() {
   registerTool(server, 'ok_add', 'Add a knowledge item', 'Add a new item to the knowledge store', {
     title: z.string().describe('Item title'),
     content: z.string().describe('Item content/body'),
+    // REQUIRED, and declared required in the schema so the model is told up
+    // front rather than discovering it through a rejected call. This file is
+    // plain JavaScript, so the TypeScript interface on ItemCreateInput never
+    // constrained it — the store's runtime guard is what actually enforces it,
+    // and this schema is how the requirement becomes visible to a caller.
+    description: descriptionField,
+    reach: reachField,
+    consequence: consequenceField,
     tags: z.array(z.string()).optional().describe('Tags to attach'),
     metadata: z.record(z.string(), z.unknown()).optional().describe('Metadata key-value pairs'),
     url: z.string().optional().describe('Source URL or URI'),
     store_path: storePathField,
     scope: scopeField,
-  }, async ({ title, content, tags, metadata, url, store_path, scope }) => {
+  }, async ({ title, content, description, reach, consequence, tags, metadata, url, store_path, scope }) => {
     const store = itemStoreFor(store_path, scope);
-    const item = await store.create({ title, content, url: url ?? null, tags: tags ?? [], metadata: metadata ?? {} });
+    const item = await store.create({
+      title,
+      content,
+      description,
+      ...(reach ? { reach } : {}),
+      ...(consequence ? { consequence } : {}),
+      url: url ?? null,
+      tags: tags ?? [],
+      metadata: metadata ?? {},
+    });
     return jsonText({ ok: true, item, message: `Added ${item.id}` });
   });
 
@@ -1654,21 +1703,40 @@ export function buildServer() {
     id: z.string(),
     title: z.string().optional(),
     content: z.string().optional(),
+    // Optional on this tool because upsert also UPDATES, where an unchanged
+    // description must not have to be restated. It is required on the CREATE
+    // branch only, which the handler enforces below with a message naming the
+    // field — the same rule, applied where it actually applies.
+    description: descriptionField.optional(),
+    reach: reachField,
+    consequence: consequenceField,
     tags: z.array(z.string()).optional(),
     metadata: z.record(z.string(), z.unknown()).optional(),
     store_path: storePathField,
     scope: scopeField,
-  }, async ({ id, title, content, tags, metadata, store_path, scope }) => {
+  }, async ({ id, title, content, description, reach, consequence, tags, metadata, store_path, scope }) => {
     const store = itemStoreFor(store_path, scope);
     const existing = await store.get(id);
     if (!existing) {
       if (!title || !content) return errorText('New item requires both title and content.');
-      const created = await store.create({ id, title, content, tags: tags ?? [], metadata: metadata ?? {} });
+      const created = await store.create({
+        id,
+        title,
+        content,
+        description,
+        ...(reach ? { reach } : {}),
+        ...(consequence ? { consequence } : {}),
+        tags: tags ?? [],
+        metadata: metadata ?? {},
+      });
       return jsonText({ ok: true, item: created });
     }
     const patch = {};
     if (title !== undefined) patch.title = title;
     if (content !== undefined) patch.content = content;
+    if (description !== undefined) patch.description = description;
+    if (reach !== undefined) patch.reach = reach;
+    if (consequence !== undefined) patch.consequence = consequence;
     if (tags) patch.tags = [...new Set([...(existing.tags ?? []), ...tags])];
     if (metadata) patch.metadata = { ...(existing.metadata ?? {}), ...metadata };
     const item = await store.update(existing.id, patch);
@@ -1871,14 +1939,35 @@ export function buildServer() {
     let added = 0;
     for (const item of imported.items) {
       if (item.id && existingIds.has(item.id)) continue;
-      const created = await store.create({
-        id: item.id,
-        title: item.title,
-        content: item.content,
-        url: item.url ?? null,
-        tags: item.tags ?? [],
-        metadata: item.metadata ?? {},
-      });
+      // The source item's own description is carried through. When the export
+      // predates the field, this create is REFUSED, naming the item — and that
+      // is deliberate rather than an oversight. Import creates NEW rows, and on
+      // the Postgres store the CHECK constraint rejects a null description on
+      // INSERT no matter what this code does, so permitting it here would only
+      // move the failure to a raw constraint violation with no item id in it.
+      // Refusing here keeps the two transports consistent and says which item
+      // needs a description. It does mean a pre-2026-08-05 export cannot be
+      // imported unedited; that is a real cost, recorded rather than hidden.
+      let created;
+      try {
+        created = await store.create({
+          id: item.id,
+          title: item.title,
+          content: item.content,
+          description: item.description,
+          ...(item.reach ? { reach: item.reach } : {}),
+          ...(item.consequence ? { consequence: item.consequence } : {}),
+          url: item.url ?? null,
+          tags: item.tags ?? [],
+          metadata: item.metadata ?? {},
+        });
+      } catch (error) {
+        return errorText(
+          `Import stopped at item ${item.id ?? '(no id)'} (${item.title ?? 'untitled'}): `
+            + `${error instanceof Error ? error.message : String(error)} `
+            + `${added} item(s) were imported before this one.`,
+        );
+      }
       existingIds.add(created.id);
       added += 1;
     }
@@ -1890,6 +1979,9 @@ export function buildServer() {
       id: z.string().optional(),
       title: z.string(),
       content: z.string(),
+      description: descriptionField,
+      reach: reachField,
+      consequence: consequenceField,
       tags: z.array(z.string()).optional(),
       metadata: z.record(z.string(), z.unknown()).optional(),
       created_at: z.string().optional(),
@@ -1914,6 +2006,9 @@ export function buildServer() {
         id: entry.id,
         title: entry.title,
         content: entry.content,
+        description: entry.description,
+        ...(entry.reach ? { reach: entry.reach } : {}),
+        ...(entry.consequence ? { consequence: entry.consequence } : {}),
         tags: entry.tags ?? [],
         metadata: entry.metadata ?? {},
       });

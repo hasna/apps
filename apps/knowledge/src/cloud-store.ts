@@ -69,6 +69,10 @@ export interface KnowledgeCloudCreateInput {
   id?: string;
   title: string;
   content: string;
+  /** Required by the server and by the CHECK constraint; see knowledge-taxonomy.ts. */
+  description?: string;
+  reach?: string | null;
+  consequence?: string | null;
   url?: string | null;
   tags?: string[];
   metadata?: Record<string, unknown>;
@@ -77,6 +81,9 @@ export interface KnowledgeCloudCreateInput {
 export interface KnowledgeCloudPatch {
   title?: string;
   content?: string;
+  description?: string;
+  reach?: string | null;
+  consequence?: string | null;
   url?: string | null;
   tags?: string[];
   metadata?: Record<string, unknown>;
@@ -170,10 +177,16 @@ function wrap(client: HasnaStorageClient): KnowledgeCloudStore {
     },
 
     async create(input: KnowledgeCloudCreateInput) {
+      // This body is an explicit WHITELIST, so a field absent from it is
+      // silently dropped rather than rejected — which is why description/reach/
+      // consequence have to be named here and not merely added to the type.
       return client.create<KnowledgeItem>(KNOWLEDGE_RESOURCE, {
         ...(input.id ? { id: input.id } : {}),
         title: input.title,
         content: input.content,
+        ...(input.description !== undefined ? { description: input.description } : {}),
+        ...(input.reach ? { reach: input.reach } : {}),
+        ...(input.consequence ? { consequence: input.consequence } : {}),
         url: input.url ?? null,
         tags: input.tags ?? [],
         ...(input.metadata ? { metadata: input.metadata } : {}),

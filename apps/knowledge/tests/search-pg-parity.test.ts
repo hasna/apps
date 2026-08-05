@@ -44,9 +44,14 @@ beforeAll(async () => {
     const doc = PARITY_CORPUS[i]!;
     const createdAt = new Date(2026, 0, 1 + i).toISOString();
     await db.query(
-      `INSERT INTO knowledge_items (id, short_id, title, content, tags, metadata, archived, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,'[]'::jsonb,'{}'::jsonb,FALSE,$5,$5)`,
-      [doc.id, doc.id.slice(0, 8), doc.title, doc.text, createdAt],
+      // `description` is carried here because knowledge_items has a NOT VALID
+      // CHECK requiring it on every INSERT (see db/pg-migrations.ts). This is a
+      // raw INSERT that bypasses every application path, so the constraint is
+      // the only thing enforcing it — and it duly rejected this fixture with
+      // SQLSTATE 23514 until the column was supplied.
+      `INSERT INTO knowledge_items (id, short_id, title, content, description, tags, metadata, archived, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,'[]'::jsonb,'{}'::jsonb,FALSE,$6,$6)`,
+      [doc.id, doc.id.slice(0, 8), doc.title, doc.text, `Search parity corpus fixture: ${doc.title}.`, createdAt],
     );
   }
   repo = new NoteRepo(pgliteClient(db));

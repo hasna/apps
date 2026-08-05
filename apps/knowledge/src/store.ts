@@ -24,6 +24,30 @@ export interface KnowledgeItem {
   short_id?: string | null;
   title: string;
   content: string;
+  /**
+   * One-line statement of what this item is FOR, required on every write from
+   * 2026-08-05 (owner directive; see knowledge-taxonomy.ts for why it is forced
+   * rather than encouraged). This is the line the fleet-wide change
+   * notification shows next to the title, so an agent can decide whether to
+   * open the item without fetching its body.
+   *
+   * OPTIONAL IN THE TYPE, REQUIRED AT THE WRITE PATH — and the difference is
+   * not an oversight. Rows written before the field existed carry no
+   * description at all, and `description IS NULL` is precisely the mark of such
+   * a legacy row. Typing it as required here would make every one of those
+   * stored rows fail to type-check on read, which is the opposite of the
+   * intent: they stay readable, and only NEW writes are refused without it.
+   */
+  description?: string | null;
+  /**
+   * Governance axes — who this binds, and what happens to a reader who has not
+   * read it. Closed vocabularies (see REACH_VALUES / CONSEQUENCE_VALUES).
+   * Deliberately optional and deliberately NOT defaulted onto the row: absence
+   * means the author did not choose, which a monitor reads as self/reference
+   * and an audit can count. See knowledge-taxonomy.ts.
+   */
+  reach?: string | null;
+  consequence?: string | null;
   url: string | null;
   tags: string[];
   metadata?: Record<string, unknown>;

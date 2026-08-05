@@ -26,6 +26,16 @@ import { resolveItemStore, VersionHistoryUnsupportedError, type ItemStore } from
 import { createMigratedPglite } from './fixtures/pglite-client';
 import { budget } from './support/budget';
 
+/**
+ * Descriptions are REQUIRED on every create from 2026-08-05 (owner directive;
+ * see src/knowledge-taxonomy.ts). These tests are about versioning and
+ * concurrency rather than about the description, so they use one shared
+ * constant: it satisfies the write guard without implying the value is under
+ * test here.
+ */
+const TEST_DESCRIPTION = 'Fixture item used by the entry-versioning and concurrency tests.';
+
+
 const SIGNING = 'test-signing-secret-not-a-real-key';
 
 let db: PGlite;
@@ -71,7 +81,7 @@ describe('ItemStore (api transport) — versioning over real HTTP', () => {
 
   test('history round-trips: prior bodies come back through the HTTP surface', async () => {
     const store = cloudStore();
-    const created = await store.create({ title: 'Round trip', content: 'body v1' });
+    const created = await store.create({ description: TEST_DESCRIPTION, title: 'Round trip', content: 'body v1' });
     await store.update(created.id, { content: 'body v2' });
     await store.update(created.id, { content: 'body v3' });
 
@@ -90,7 +100,7 @@ describe('ItemStore (api transport) — versioning over real HTTP', () => {
 
   test('an entry that exists but was never edited returns an EMPTY history, not null', async () => {
     const store = cloudStore();
-    const created = await store.create({ title: 'Untouched', content: 'only body' });
+    const created = await store.create({ description: TEST_DESCRIPTION, title: 'Untouched', content: 'only body' });
     const history = await store.listVersions(created.id);
     expect(history).not.toBeNull();
     expect(history!.items).toEqual([]);
@@ -103,7 +113,7 @@ describe('ItemStore (api transport) — versioning over real HTTP', () => {
 
   test('a stale expectedVersion raises a typed conflict carrying both numbers', async () => {
     const store = cloudStore();
-    const created = await store.create({ title: 'Contended', content: 'shared' });
+    const created = await store.create({ description: TEST_DESCRIPTION, title: 'Contended', content: 'shared' });
     await store.update(created.id, { content: 'winner' }, { expectedVersion: created.version });
 
     let caught: unknown = null;
@@ -125,7 +135,7 @@ describe('ItemStore (api transport) — versioning over real HTTP', () => {
     // Positive control for the test above: same code path, same store, a
     // current version instead of a stale one, and the write lands.
     const store = cloudStore();
-    const created = await store.create({ title: 'Uncontended', content: 'a' });
+    const created = await store.create({ description: TEST_DESCRIPTION, title: 'Uncontended', content: 'a' });
     const updated = await store.update(created.id, { content: 'b' }, { expectedVersion: created.version });
     expect(updated!.version).toBe(2);
   });
@@ -165,7 +175,7 @@ async function runCli(args: string[], extraEnv: Record<string, string> = {}) {
 describe('knowledge versions / diff — CLI against the live server', () => {
   test('versions and diff report a real edit end to end', async () => {
     const store = cloudStore();
-    const created = await store.create({ title: 'CLI subject', content: 'line one\nline two', tags: ['x'] });
+    const created = await store.create({ description: TEST_DESCRIPTION, title: 'CLI subject', content: 'line one\nline two', tags: ['x'] });
     await store.update(created.id, { content: 'line one\nline two changed', tags: ['x', 'y'] });
 
     const cliEnv = cloudEnv as Record<string, string>;
@@ -203,7 +213,7 @@ describe('knowledge versions / diff — CLI against the live server', () => {
   }, budget(60_000));
 
   test('an entry with no edits prints an empty history at exit 0, and diff refuses at exit 1', async () => {
-    const created = await cloudStore().create({ title: 'Never edited', content: 'only' });
+    const created = await cloudStore().create({ description: TEST_DESCRIPTION, title: 'Never edited', content: 'only' });
     const cliEnv = cloudEnv as Record<string, string>;
 
     const versions = await runCli(['versions', '--id', created.id, '--json'], cliEnv);
@@ -223,7 +233,7 @@ describe('knowledge versions / diff — CLI against the live server', () => {
     // them — a retrieval hole, not a display one. Proven here at limit 1 so the
     // assertion needs three edits rather than two hundred.
     const store = cloudStore();
-    const created = await store.create({ title: 'Paged', content: 'v1' });
+    const created = await store.create({ description: TEST_DESCRIPTION, title: 'Paged', content: 'v1' });
     await store.update(created.id, { content: 'v2' });
     await store.update(created.id, { content: 'v3' });
     await store.update(created.id, { content: 'v4' });
@@ -317,7 +327,7 @@ describe('ItemStore (local transport) — a store with no history says so', () =
 describe('knowledge update --if-version — caller-supplied concurrency guard', () => {
   test('a writer holding a stale read is REFUSED instead of silently clobbering', async () => {
     const store = cloudStore();
-    const created = await store.create({ title: 'Contended entry', content: 'BASE-LINE-ZERO' });
+    const created = await store.create({ description: TEST_DESCRIPTION, title: 'Contended entry', content: 'BASE-LINE-ZERO' });
     const cliEnv = cloudEnv as Record<string, string>;
 
     // Both agents read the same version — the read an agent really performs,
@@ -355,7 +365,7 @@ describe('knowledge update --if-version — caller-supplied concurrency guard', 
     // Positive control for the test above: same flag, same path, a current
     // version instead of a stale one, and the write must land.
     const store = cloudStore();
-    const created = await store.create({ title: 'Uncontended entry', content: 'first' });
+    const created = await store.create({ description: TEST_DESCRIPTION, title: 'Uncontended entry', content: 'first' });
     const cliEnv = cloudEnv as Record<string, string>;
 
     const result = await runCli(
@@ -373,7 +383,7 @@ describe('knowledge update --if-version — caller-supplied concurrency guard', 
     // Back-compat is the reason the flag is opt-in. Many installed callers pass
     // nothing, and this asserts they are not broken by the addition.
     const store = cloudStore();
-    const created = await store.create({ title: 'Unguarded entry', content: 'first' });
+    const created = await store.create({ description: TEST_DESCRIPTION, title: 'Unguarded entry', content: 'first' });
     const cliEnv = cloudEnv as Record<string, string>;
 
     const result = await runCli(['update', '--id', created.id, '--content', 'second', '--json'], cliEnv);
@@ -386,7 +396,7 @@ describe('knowledge update --if-version — caller-supplied concurrency guard', 
 
   test('a non-numeric --if-version is rejected before anything is written', async () => {
     const store = cloudStore();
-    const created = await store.create({ title: 'Bad guard', content: 'untouched' });
+    const created = await store.create({ description: TEST_DESCRIPTION, title: 'Bad guard', content: 'untouched' });
     const cliEnv = cloudEnv as Record<string, string>;
 
     const result = await runCli(
