@@ -292,6 +292,302 @@ describe("ApiStore.sendMessage wire body", () => {
     expect(message).toMatchObject({ id: 649560, uuid: exactUuid, channel: "git-publishing" });
   });
 
+  // ── regression: rc=1 on a write that fully succeeded (todos d8f3f963) ────────
+  //
+  // MEASURED against the live deployed server, conversations.hasna.xyz, on
+  // 2026-08-05. Both halves of the contract the caller-bound UUID check assumes
+  // are absent there, and BOTH are needed to reproduce:
+  //
+  //   1. `POST /v1/messages` does not accept a caller `uuid`. Its published
+  //      request schema lists exactly from,to,content,channel,project_id,
+  //      session_id,priority,blocking — no uuid. The server drops ours, mints
+  //      its own, stores THE CORRECT ROW, and returns it:
+  //          sent     uuid=0c57bc9f-480f-4e74-b263-49c2e8850a0a
+  //          returned uuid=d9ad71d6-1417-414b-b4d3-bc35b789f5a6   HTTP 201
+  //          returned content/channel/from == exactly what was submitted
+  //   2. `GET /v1/messages/by-uuid/{uuid}` does not exist. It falls through to
+  //      the generic unknown-route handler, which is a 404 INDISTINGUISHABLE BY
+  //      STATUS from a real row-miss:
+  //          /v1/messages/by-uuid/<valid-uuid>  -> 404 {"error":"Not found"}
+  //          /v1/definitely-not-a-route         -> 404 {"error":"Not found"}
+  //          /v1/messages/999999999             -> 404 {"error":"Message not found"}
+  //      (the third is the positive control: a route that DOES exist answers a
+  //      miss with its own body, so the discriminator can fire both ways.)
+  //
+  // `getMessageByUuid` swallows any 404 as `null`, so a missing ROUTE became
+  // "the row is not there", and sendMessage reported a successful write as a
+  // failure. The exit code is not the harm: the caller's natural response to
+  // "your write may not have landed" is to re-send, on a shared channel, where
+  // the retry reports the same false failure.
+  test("reports the row it wrote when the server drops the caller UUID and has no by-uuid route", async () => {
+    const submittedUuid = "aaaaaaaa-1111-4222-8333-444444444444";
+    const notFound = Object.assign(new Error("Not Found"), { name: "HasnaHttpError", status: 404 });
+    const client = {
+      name: "conversations",
+      baseUrl: "https://conversations.hasna.xyz/v1",
+      transport: {
+        // The by-uuid route does not exist on this server: every read 404s.
+        get: async () => {
+          throw notFound;
+        },
+      } as unknown as HasnaStorageClient["transport"],
+      // Server-minted UUID, but unmistakably the row we asked to be written.
+      //
+      // NOTE THE RECIPIENT. On a channel send the server rewrites `to_agent` to
+      // the CHANNEL, discarding whatever the caller passed — measured:
+      //     sent     to="silvanus" channel="scratch-d8f3f963"
+      //     returned to_agent="scratch-d8f3f963"
+      // and `src/cli/commands/messaging.ts` passes `to: to || from`, i.e. the
+      // SENDER. An earlier draft of this fixture used to == channel, which made
+      // it agree with a check that rejected every real channel send; the live
+      // CLI caught it, this fixture did not. It now mirrors the real call.
+      create: async () => ({
+        message: {
+          id: "668569",
+          uuid: "bbbbbbbb-5555-4666-8777-888888888888",
+          session_id: "channel:git-publishing",
+          from_agent: "silvanus",
+          to_agent: "git-publishing",
+          channel: "git-publishing",
+          content: "[PUBLISH INTENT] @hasna/conversations",
+        },
+      }),
+    } as unknown as HasnaStorageClient;
+    const store = new ApiStore(client);
+
+    const message = await store.sendMessage({
+      uuid: submittedUuid,
+      from: "silvanus",
+      to: "silvanus", // what the CLI actually sends for a channel post
+      channel: "git-publishing",
+      content: "[PUBLISH INTENT] @hasna/conversations",
+    });
+
+    // The caller must get a usable numeric id back — withholding it is what
+    // breaks the citation convention that keeps corroboration from collapsing
+    // to a single source.
+    expect(message).toMatchObject({ id: 668569, channel: "git-publishing" });
+  });
+
+  // The other side of the same guarantee. A fix that merely stopped throwing
+  // would pass the test above and destroy the property #77 bought, so this
+  // pins the case that MUST still fail loudly: the response describes some
+  // OTHER row (the mention-notification DM the UUID binding exists to catch),
+  // and our row cannot be read back.
+  test("still refuses when the response names a different row and the write cannot be confirmed", async () => {
+    const submittedUuid = "cccccccc-9999-4aaa-8bbb-cccccccccccc";
+    const notFound = Object.assign(new Error("Not Found"), { name: "HasnaHttpError", status: 404 });
+    const client = {
+      name: "conversations",
+      baseUrl: "https://conversations.hasna.xyz/v1",
+      transport: {
+        get: async () => {
+          throw notFound;
+        },
+      } as unknown as HasnaStorageClient["transport"],
+      create: async () => ({
+        message: {
+          id: 999001,
+          uuid: "dddddddd-eeee-4fff-8000-111111111111",
+          session_id: "dm:someone-else",
+          from_agent: "silvanus",
+          to_agent: "someone-else",
+          channel: null,
+          content: "you were mentioned",
+        },
+      }),
+    } as unknown as HasnaStorageClient;
+    const store = new ApiStore(client);
+
+    await expect(store.sendMessage({
+      uuid: submittedUuid,
+      from: "silvanus",
+      to: "silvanus",
+      channel: "git-publishing",
+      content: "[PUBLISH INTENT] @hasna/conversations",
+    })).rejects.toThrow(/could not be read back/);
+  });
+
+  // The DM half of the same guard. With no channel to compare, the recipient is
+  // the only thing separating our row from a notification DM fanned out to a
+  // mentioned third party, so it must still be enforced there.
+  test("still refuses a DM whose response names a different recipient and cannot be read back", async () => {
+    const notFound = Object.assign(new Error("Not Found"), { name: "HasnaHttpError", status: 404 });
+    const client = {
+      name: "conversations",
+      baseUrl: "https://conversations.hasna.xyz/v1",
+      transport: {
+        get: async () => {
+          throw notFound;
+        },
+      } as unknown as HasnaStorageClient["transport"],
+      create: async () => ({
+        message: {
+          id: 999002,
+          uuid: "eeeeeeee-1111-4222-8333-444444444444",
+          session_id: "dm:someone-else",
+          from_agent: "silvanus",
+          to_agent: "someone-else",
+          channel: null,
+          content: "you were mentioned",
+        },
+      }),
+    } as unknown as HasnaStorageClient;
+    const store = new ApiStore(client);
+
+    await expect(store.sendMessage({
+      uuid: "ffffffff-1111-4222-8333-444444444444",
+      from: "silvanus",
+      to: "manius",
+      content: "a direct message",
+    })).rejects.toThrow(/could not be read back/);
+  });
+
+  // And the DM ACCEPT path, so the DM branch is exercised in both directions
+  // rather than only proved capable of refusing.
+  test("reports a DM the server echoed back under a server-minted UUID", async () => {
+    const notFound = Object.assign(new Error("Not Found"), { name: "HasnaHttpError", status: 404 });
+    const client = {
+      name: "conversations",
+      baseUrl: "https://conversations.hasna.xyz/v1",
+      transport: {
+        get: async () => {
+          throw notFound;
+        },
+      } as unknown as HasnaStorageClient["transport"],
+      create: async () => ({
+        message: {
+          id: 668600,
+          uuid: "11111111-2222-4333-8444-555555555555",
+          session_id: "dm:manius",
+          from_agent: "silvanus",
+          to_agent: "manius",
+          channel: null,
+          content: "a direct message",
+        },
+      }),
+    } as unknown as HasnaStorageClient;
+    const store = new ApiStore(client);
+
+    const message = await store.sendMessage({
+      uuid: "ffffffff-9999-4aaa-8bbb-cccccccccccc",
+      from: "silvanus",
+      to: "manius",
+      content: "a direct message",
+    });
+
+    expect(message).toMatchObject({ id: 668600, to_agent: "manius" });
+  });
+
+  // Returning the id silently would leave a caller unable to tell an
+  // authoritative UUID read-back from the weaker routing check, and would leave
+  // nothing to mark this path dead once the server serves /messages/by-uuid.
+  test("discloses that confirmation degraded to the routing echo", async () => {
+    const notFound = Object.assign(new Error("Not Found"), { name: "HasnaHttpError", status: 404 });
+    const client = {
+      name: "conversations",
+      baseUrl: "https://conversations.hasna.xyz/v1",
+      transport: {
+        get: async () => {
+          throw notFound;
+        },
+      } as unknown as HasnaStorageClient["transport"],
+      create: async () => ({
+        message: {
+          id: 668700,
+          uuid: "22222222-3333-4444-8555-666666666666",
+          session_id: "channel:git-publishing",
+          from_agent: "silvanus",
+          to_agent: "git-publishing",
+          channel: "git-publishing",
+          content: "degraded confirmation",
+        },
+      }),
+    } as unknown as HasnaStorageClient;
+    const store = new ApiStore(client);
+
+    const message = (await store.sendMessage({
+      uuid: "33333333-4444-4555-8666-777777777777",
+      from: "silvanus",
+      to: "silvanus",
+      channel: "git-publishing",
+      content: "degraded confirmation",
+    })) as unknown as { id: number; write_confirmation?: { degraded: boolean; method: string } };
+
+    expect(message.id).toBe(668700);
+    expect(message.write_confirmation).toMatchObject({ degraded: true, method: "routing-echo" });
+  });
+
+  // The other side: an AUTHORITATIVE confirmation must carry no degradation
+  // marker, or the flag means nothing and cannot signal the path is dead.
+  test("does NOT mark confirmation degraded when the server honours the caller UUID", async () => {
+    const boundUuid = "44444444-5555-4666-8777-888888888888";
+    const client = {
+      name: "conversations",
+      baseUrl: "https://conversations.hasna.xyz/v1",
+      transport: {} as unknown as HasnaStorageClient["transport"],
+      create: async (_r: string, body: Record<string, unknown>) => ({
+        message: {
+          id: 668701,
+          uuid: body.uuid,
+          session_id: "channel:git-publishing",
+          from_agent: "silvanus",
+          to_agent: "git-publishing",
+          channel: "git-publishing",
+          content: "authoritative",
+        },
+      }),
+    } as unknown as HasnaStorageClient;
+    const store = new ApiStore(client);
+
+    const message = (await store.sendMessage({
+      uuid: boundUuid,
+      from: "silvanus",
+      to: "silvanus",
+      channel: "git-publishing",
+      content: "authoritative",
+    })) as unknown as { id: number; write_confirmation?: unknown };
+
+    expect(message.id).toBe(668701);
+    expect(message.write_confirmation).toBeUndefined();
+  });
+
+  // A blank identity on either side must not satisfy an accept test. Without
+  // the non-empty guard, `"" === ""` passes and the sender check asserts
+  // nothing at all.
+  test("refuses to accept an echo whose sender identity is blank on both sides", async () => {
+    const notFound = Object.assign(new Error("Not Found"), { name: "HasnaHttpError", status: 404 });
+    const client = {
+      name: "conversations",
+      baseUrl: "https://conversations.hasna.xyz/v1",
+      transport: {
+        get: async () => {
+          throw notFound;
+        },
+      } as unknown as HasnaStorageClient["transport"],
+      create: async () => ({
+        message: {
+          id: 668702,
+          uuid: "55555555-6666-4777-8888-999999999999",
+          session_id: "channel:git-publishing",
+          from_agent: "",
+          to_agent: "git-publishing",
+          channel: "git-publishing",
+          content: "blank sender",
+        },
+      }),
+    } as unknown as HasnaStorageClient;
+    const store = new ApiStore(client);
+
+    await expect(store.sendMessage({
+      uuid: "66666666-7777-4888-8999-aaaaaaaaaaaa",
+      from: "",
+      to: "silvanus",
+      channel: "git-publishing",
+      content: "blank sender",
+    })).rejects.toThrow(/could not be read back/);
+  });
+
   // `messages.id`/`messages.reply_to` are Postgres BIGINT, and node-postgres
   // serializes int8 as a STRING. Measured against the live deployed server:
   // GET /v1/messages returns `"id": "603183"` — a string, not a number.
