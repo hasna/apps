@@ -138,6 +138,7 @@ const [
   { registerQueryCommands },
   { registerMcpHooksCommands },
   { registerDispatchCommands },
+  { registerDelegateCommands },
   { registerMachineCommands },
   { registerApiKeyCommands },
   { registerEnvironmentSnapshotCommands },
@@ -169,6 +170,10 @@ const [
   import("./commands/query-commands.js"),
   import("./commands/mcp-hooks-commands.js"),
   import("./commands/dispatch.js"),
+  // Inserted at the SAME ordinal as `registerDelegateCommands` in the
+  // destructure above. The two arrays are positionally matched, so a
+  // misaligned insert binds the wrong module and still typechecks.
+  import("./commands/delegate.js"),
   import("./commands/machines.js"),
   import("./commands/api-key-commands.js"),
   import("./commands/environment-snapshots.js"),
@@ -200,6 +205,7 @@ registerConfigServeCommands(program);
 registerQueryCommands(program);
 registerMcpHooksCommands(program);
 registerDispatchCommands(program);
+registerDelegateCommands(program);
 registerMachineCommands(program);
 registerApiKeyCommands(program);
 registerEnvironmentSnapshotCommands(program);

@@ -646,6 +646,24 @@ export interface UpdateTaskInput {
   requires_approval?: boolean;
   approved_by?: string;
   recurrence_rule?: string | null;
+  /**
+   * Who handed this row over. Stamped at creation from `agent_id` and, until
+   * `todos delegate`, WRITE-ONCE by omission rather than by design — there was
+   * no update branch, so a task filed by one agent and later dispatched by
+   * another kept naming the filer. Distinct from `agent_id` (who owns the row)
+   * and `created_by` (who filed it, which stays write-once).
+   */
+  assigned_by?: string | null;
+  /**
+   * The parent in the delegation chain. Column present since migration 520 and
+   * hardcoded to `null` at every creation site, so nothing could ever set it.
+   */
+  delegated_from?: string | null;
+  /**
+   * How deep this row sits in the delegation chain. Column present since
+   * migration 521 and hardcoded to `0` at every creation site.
+   */
+  delegation_depth?: number;
   version: number; // required for optimistic locking
   task_type?: string | null;
 }

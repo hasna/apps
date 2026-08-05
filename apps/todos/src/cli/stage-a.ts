@@ -19,7 +19,7 @@ const REGISTERED_CANONICAL_COMMANDS = [
   "approvals", "approve", "assign", "audit-ledger", "backup", "blame", "blocked", "board",
   "branch-plan", "bridge-import", "bulk", "burndown", "calendar", "capacity", "claim", "comment",
   "completions", "config", "context", "context-pack", "contracts", "count", "dashboard", "dedupe",
-  "delete", "deps", "dispatch", "dispatches", "doctor", "done", "encryption", "env-snapshot",
+  "delegate", "delete", "deps", "dispatch", "dispatches", "doctor", "done", "encryption", "env-snapshot",
   "event-hooks", "events", "export", "extensions", "extract", "extract-watch", "fail", "fields",
   "find-commit", "find-ref", "findings", "focus", "handoff", "health", "heartbeat", "history",
   "hook", "hooks", "import", "inbox", "init", "inspect", "interactive", "issues",
@@ -117,7 +117,12 @@ const DIAGNOSTIC_COMMANDS = new Set([
   ...Object.keys(BUNDLED_STATIC_COMMANDS),
 ]);
 const REMOTE_COMMANDS = new Set([
-  "active", "add", "agent", "agents", "approve", "assign", "bulk", "claim", "comment", "count", "delete", "deps",
+  // `delegate` MUST be here as well as in the canonical list above. Membership
+  // of the canonical list alone leaves a verb defaulted to `local-only`, which
+  // on the /v1 route is refused outright — the state `dispatch` is in today.
+  // Shipping the replacement for abandoned dispatch in that state would make it
+  // dead on exactly the fleet it was built for. Covered by delegate-routing.test.ts.
+  "active", "add", "agent", "agents", "approve", "assign", "bulk", "claim", "comment", "count", "delegate", "delete", "deps",
   "doctor", "done", "find-commit", "find-ref", "health", "heartbeat", "history", "init", "inspect", "link-commit",
   "link-ref", "list", "lists", "lock", "log-progress", "move", "next", "plans", "project-rename", "projects", "recap",
   "record-verification", "release", "remove", "show", "standup", "start", "status", "tag", "task", "task-lists",

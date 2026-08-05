@@ -690,6 +690,30 @@ export function updateTask(
     sets.push("assigned_to = ?");
     params.push(input.assigned_to);
   }
+  // ── delegation lineage ────────────────────────────────────────────────────
+  // These three columns existed, were indexed, and had NO write path after
+  // creation. A PATCH carrying them bumped the version and changed nothing, at
+  // rc=0 — so `todos delegate`, whose entire claim over `todos assign` is that
+  // it records the handover, would have reported success while writing none of
+  // it. Each branch tests `!== undefined` rather than truthiness because
+  // `delegation_depth: 0` and `delegated_from: null` are both meaningful: depth
+  // zero is a root dispatch, and an explicit null detaches a mis-stamped chain.
+  //
+  // `created_by` deliberately has no branch here and keeps its write-once
+  // semantics: correcting who DISPATCHED a row must never become a way to
+  // rewrite who FILED it.
+  if (input.assigned_by !== undefined) {
+    sets.push("assigned_by = ?");
+    params.push(input.assigned_by);
+  }
+  if (input.delegated_from !== undefined) {
+    sets.push("delegated_from = ?");
+    params.push(input.delegated_from);
+  }
+  if (input.delegation_depth !== undefined) {
+    sets.push("delegation_depth = ?");
+    params.push(input.delegation_depth);
+  }
   if (input.working_dir !== undefined) {
     sets.push("working_dir = ?");
     params.push(input.working_dir);
