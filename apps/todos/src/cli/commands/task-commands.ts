@@ -17,6 +17,7 @@ import {
   unlockTask,
 } from "../../db/tasks.js";
 import { getTaskList, getTaskListBySlug } from "../../db/task-lists.js";
+import { decodeCommentCursor, pageComments } from "../../lib/comment-cursor.js";
 import {
   getTodosCloudClient,
   cloudListTasks,
@@ -240,6 +241,94 @@ function parseIntOption(value: string | undefined, flag: string): number | undef
     handleError(new Error(`${flag} must be a number`));
   }
   return n;
+}
+
+/**
+ * Comment paging for `show`/`inspect`.
+ *
+ * The detail payload has always carried `comments_page.next_cursor` alongside
+ * `pagination_supported: true`, and nothing could spend that cursor — so every
+ * comment older than the newest page was unreachable from the CLI (measured on
+ * a 125-comment task where 25 comments could not be read by any verb). These
+ * flags are that missing consumer.
+ *
+ * Ordering, measured rather than assumed: a page is the NEWEST `limit` comments
+ * in ASCENDING display order, so the newest comment is the LAST element and is
+ * reachable with no flags at all. `--comments-cursor` walks toward OLDER pages.
+ */
+const DEFAULT_CLI_COMMENT_PAGE = 100;
+const MAX_CLI_COMMENT_PAGE = 500;
+
+interface CommentPageFlags {
+  commentsLimit?: string;
+  commentsCursor?: string;
+}
+
+interface ResolvedCommentPage {
+  /** Passed straight to the cloud reader; empty when no flag was given. */
+  request: { limit?: number; cursor?: string };
+  /** True when the caller asked for a page, so local output gains comments_page. */
+  requested: boolean;
+  limit: number;
+  before?: { created_at: string; id: string };
+}
+
+function commentPageOptions(opts: CommentPageFlags): ResolvedCommentPage {
+  const requested = opts.commentsLimit !== undefined || opts.commentsCursor !== undefined;
+  let limit = DEFAULT_CLI_COMMENT_PAGE;
+  if (opts.commentsLimit !== undefined) {
+    const parsed = Number(opts.commentsLimit);
+    if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > MAX_CLI_COMMENT_PAGE) {
+      handleError(new Error(`--comments-limit must be an integer between 1 and ${MAX_CLI_COMMENT_PAGE}`));
+    }
+    limit = parsed;
+  }
+  let before: { created_at: string; id: string } | undefined;
+  if (opts.commentsCursor !== undefined) {
+    try {
+      before = decodeCommentCursor(opts.commentsCursor);
+    } catch {
+      handleError(new Error(
+        "--comments-cursor is not a valid comment cursor; pass the value from comments_page.next_cursor",
+      ));
+    }
+  }
+  return {
+    request: {
+      ...(opts.commentsLimit !== undefined ? { limit } : {}),
+      ...(opts.commentsCursor !== undefined ? { cursor: opts.commentsCursor } : {}),
+    },
+    requested,
+    limit,
+    ...(before ? { before } : {}),
+  };
+}
+
+/**
+ * Apply the same bounded page to a local (SQLite) task read. Without a flag the
+ * local shape is left exactly as it was — the complete history and no
+ * `comments_page` — so existing local consumers see no change.
+ */
+function applyLocalCommentPage<T extends { comments: Array<{ id: string; created_at: string }> } | null>(
+  task: T,
+  page: ResolvedCommentPage,
+): T {
+  if (!task || !page.requested) return task;
+  const paged = pageComments(task.comments, {
+    limit: page.limit,
+    ...(page.before ? { before: page.before } : {}),
+  });
+  return {
+    ...task,
+    comments: paged.comments,
+    comments_page: {
+      count: paged.count,
+      limit: paged.limit,
+      has_more: paged.has_more,
+      next_cursor: paged.next_cursor,
+      pagination_supported: true,
+    },
+  };
 }
 
 function isPathLike(input: string): boolean {
@@ -1261,13 +1350,16 @@ export function registerTaskCommands(program: Command) {
   program
     .command("show <id>")
     .description("Show full task details")
-    .action(async (id: string) => {
+    .option("--comments-limit <n>", `Comments per page, 1-${MAX_CLI_COMMENT_PAGE} (default ${DEFAULT_CLI_COMMENT_PAGE})`)
+    .option("--comments-cursor <cursor>", "Read the next OLDER page; pass comments_page.next_cursor")
+    .action(async (id: string, opts: CommentPageFlags) => {
       const globalOpts = program.opts();
+      const page = commentPageOptions(opts);
       const cloud = getTodosCloudClient();
       let task: any;
       if (cloud) {
         const remote = await cloudGetTask(cloud, await resolveTaskIdForCommand(id, cloud));
-        const commentPage = remote ? await cloudListComments(cloud, remote.id) : null;
+        const commentPage = remote ? await cloudListComments(cloud, remote.id, page.request) : null;
         // The /v1 API returns the task row without relation graphs, so the
         // dependency edges are read separately and hydrated into task rows —
         // otherwise remote detail views claim a task has no dependencies while
@@ -1291,7 +1383,7 @@ export function registerTaskCommands(program: Command) {
           : null;
       } else {
         const resolvedId = resolveTaskId(id);
-        task = getTaskWithRelations(resolvedId);
+        task = applyLocalCommentPage(getTaskWithRelations(resolvedId), page);
       }
 
       if (!task) {
@@ -1377,8 +1469,11 @@ export function registerTaskCommands(program: Command) {
   program
     .command("inspect [id]")
     .description("Full orientation for a task — details, description, dependencies, blocker, files, commits, comments. If no ID given, shows current in-progress task for --agent.")
-    .action(async (id?: string) => {
+    .option("--comments-limit <n>", `Comments per page, 1-${MAX_CLI_COMMENT_PAGE} (default ${DEFAULT_CLI_COMMENT_PAGE})`)
+    .option("--comments-cursor <cursor>", "Read the next OLDER page; pass comments_page.next_cursor")
+    .action(async (id: string | undefined, opts: CommentPageFlags) => {
       const globalOpts = program.opts();
+      const page = commentPageOptions(opts);
       const cloud = getTodosCloudClient();
       let resolvedId = id ? await resolveTaskIdForCommand(id, cloud) : null;
 
@@ -1398,7 +1493,7 @@ export function registerTaskCommands(program: Command) {
       let task: any;
       if (cloud) {
         const remote = await cloudGetTask(cloud, resolvedId);
-        const commentPage = remote ? await cloudListComments(cloud, remote.id) : null;
+        const commentPage = remote ? await cloudListComments(cloud, remote.id, page.request) : null;
         // The /v1 API returns the task row without relation graphs, so the
         // dependency edges are read separately and hydrated into task rows —
         // otherwise `inspect` never prints the BLOCKED warning for a remote
@@ -1421,7 +1516,7 @@ export function registerTaskCommands(program: Command) {
             }
           : null;
       } else {
-        task = getTaskWithRelations(resolvedId);
+        task = applyLocalCommentPage(getTaskWithRelations(resolvedId), page);
       }
       if (!task) { handleError(new Error(`Task not found: ${id || resolvedId}`)); }
 

@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`show` and `inspect` advertised a comment cursor that no verb could spend, so every
+  comment older than the newest page was unreachable from the CLI.** Both commands emit
+  `comments_page` with `has_more: true`, a `next_cursor`, and `pagination_supported: true`,
+  and both called `cloudListComments(cloud, id)` with no options — while that reader has
+  accepted `{ limit, cursor }` all along and is unit-tested for it. `show --help` listed
+  no options beyond `-h`, `--cursor`/`--comments-cursor` were rejected as unknown, and no
+  `comments` verb exists (`comment` is write-only), so the advertised cursor had no
+  consumer anywhere in the CLI. Measured on a live 125-comment task: the newest 100 were
+  returned and the remaining 25 could not be read by any command. `show` and `inspect` now
+  take `--comments-limit <n>` (1-500) and `--comments-cursor <cursor>`, so the cursor a
+  page hands you is spendable by the command that produced it; walking that live task now
+  yields 100 + 25 = 125 distinct comments with zero overlap and terminates at
+  `has_more: false`. The local (SQLite) read path accepts the same flags with the same
+  semantics through a shared pager; without a flag its output is unchanged — the complete
+  history and no `comments_page` — so existing local consumers are unaffected.
+
+  Note on the ordering, because the reported symptom pointed the other way: a page is the
+  **newest** `limit` comments in **ascending** display order, so the newest comment is the
+  **last** array element and was always reachable. `next_cursor` walks toward **older**
+  history, which is the direction that was blocked. A `--comments-limit 1` read returns the
+  single newest comment, which is the probe that distinguishes the two readings.
+
+- **The comment cursor codec was private to the `/v1` server**, so the CLI could not decode
+  a cursor the server had minted. `encodeCommentCursor`/`decodeCommentCursor` moved to
+  `src/lib/comment-cursor.ts` alongside the pure pager both read paths now share; the
+  server imports them and its behaviour is unchanged. A second copy of keyset logic is how
+  the two ends drift into disagreeing about what a cursor means.
+
 ## [0.15.5] - 2026-08-05
 
 ### Added

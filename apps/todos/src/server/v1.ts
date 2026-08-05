@@ -15,6 +15,7 @@ import { getCloudPrGroupLedger, getCloudStorageAdapter, getCloudVerifier, ensure
 import { handlePrGroupHttpRequest } from "./pr-groups.js";
 import { redactEvidenceText } from "../lib/redaction.js";
 import { isCanonicalSlug, normalizeSlug } from "../lib/slugs.js";
+import { decodeCommentCursor, encodeCommentCursor } from "../lib/comment-cursor.js";
 
 export interface V1RequestDependencies {
   getVerifier?: typeof getCloudVerifier;
@@ -313,27 +314,8 @@ function redactComment(comment: TaskComment): TaskComment {
   return { ...comment, content: redactEvidenceText(comment.content) };
 }
 
-function encodeCommentCursor(comment: Pick<TaskComment, "created_at" | "id">): string {
-  return Buffer.from(JSON.stringify({ created_at: comment.created_at, id: comment.id }), "utf8").toString("base64url");
-}
-
-function decodeCommentCursor(value: string): { created_at: string; id: string } {
-  if (value.length > 1_024) throw new Error("invalid comment cursor");
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
-  } catch {
-    throw new Error("invalid comment cursor");
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("invalid comment cursor");
-  const cursor = parsed as Record<string, unknown>;
-  if (typeof cursor["created_at"] !== "string" || cursor["created_at"].length > 64 ||
-      !Number.isFinite(Date.parse(cursor["created_at"])) ||
-      typeof cursor["id"] !== "string" || !cursor["id"] || cursor["id"].length > 256) {
-    throw new Error("invalid comment cursor");
-  }
-  return { created_at: cursor["created_at"], id: cursor["id"] };
-}
+// The comment cursor codec moved to src/lib/comment-cursor.ts so the CLI can
+// decode the very cursors this endpoint mints. Imported at the top of the file.
 
 /**
  * Coerce an arbitrary request body into a well-formed {@link TodosStorageSnapshot}.
