@@ -290,6 +290,13 @@ describe("ApiStore.sendMessage wire body", () => {
     });
 
     expect(message).toMatchObject({ id: 649560, uuid: exactUuid, channel: "git-publishing" });
+    // The by-uuid read-back is the AUTHORITATIVE path, so it must carry no
+    // degradation marker. `toMatchObject` above is a subset match and would
+    // silently accept a stray one, which would corrupt the exact signal the
+    // field exists to provide — and `sendMessage` has two authoritative returns
+    // (create-echo and this read-back), of which the other one was already
+    // covered and this one was not.
+    expect((message as unknown as { write_confirmation?: unknown }).write_confirmation).toBeUndefined();
   });
 
   // ── regression: rc=1 on a write that fully succeeded (todos d8f3f963) ────────
