@@ -2,6 +2,22 @@
 
 All notable changes to `@hasna/statusline` are documented here.
 
+## 0.0.6 - 2026-08-06
+
+- Ignore a stale in-place switch marker so each pane shows its own identity
+  (bug 2089be70). `sessionAccount()` honored
+  `.accounts-auth/switched-account.json` unconditionally, even after the
+  in-place switch it recorded had been undone; `accounts` does not reliably
+  clear the marker on restore, so a config dir logged back in as its own owner
+  still carried a marker naming a different profile, and every such pane
+  rendered that stale name. Measured on station01: two panes whose
+  `CLAUDE_CONFIG_DIR` pointed at distinct profiles both displayed `account039`.
+  The dir's live `oauthAccount` email is now authoritative — the switch marker
+  is honored only when the dir's live login corroborates it, and a marker the
+  live login contradicts is treated as stale and ignored, falling back to the
+  dir's owner. With no live record to compare against the marker is still
+  trusted, preserving the in-place-switch feature.
+
 ## 0.0.5 - 2026-07-30
 
 - Show the account actually occupying a config dir after an in-place
