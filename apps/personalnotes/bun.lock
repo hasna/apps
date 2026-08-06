@@ -5,7 +5,7 @@
     "": {
       "name": "@hasna/personalnotes",
       "dependencies": {
-        "@hasna/events": "github:hasna/events#70ac34f324f483c38362341ea674c914337418dc",
+        "@hasna/events": "github:hasna/events#92120551c2eb15659a34a8ea4628212af41601c5",
         "hono": "^4.6.0",
       },
       "devDependencies": {
@@ -14,7 +14,7 @@
     },
   },
   "packages": {
-    "@hasna/events": ["@hasna/events@github:hasna/events#70ac34f", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "hasna-events-70ac34f", "sha512-EXCGHtE7eQxn9Y2wlsNX+gGouZQdasiXV3flZA/fo8kDS7ddlLqD6po69i4bekr1eGKLvluy+tj9g8HaiGSlXQ=="],
+    "@hasna/events": ["@hasna/events@github:hasna/events#9212055", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "hasna-events-9212055", "sha512-AJQl2xCj/4LngGH4ztDD28mZvCe4unwhIWiiUMD8K+QQ52LdZyzCWzGGvA+/2/7l13W5iTTxxBEUFd7hqv+LPQ=="],
 
     "@types/bun": ["@types/bun@1.2.4", "", { "dependencies": { "bun-types": "1.2.4" } }, "sha512-QtuV5OMR8/rdKJs213iwXDpfVvnskPXY/S0ZiFbsTjQZycuqPbMW8Gf/XhLfwE5njW8sxI2WjISURXPlHypMFA=="],
 

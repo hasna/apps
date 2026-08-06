@@ -22,7 +22,7 @@ describe('package boundary', () => {
     expect(pkg.bin.personalnotes).toBe('bin/personalnotes.mjs');
     expect(pkg.bin['personalnotes-mcp']).toBe('bin/personalnotes-mcp.mjs');
     expect(pkg.exports['./events']).toBe('./tools/notes-events.mjs');
-    expect(pkg.dependencies['@hasna/events']).toBe('github:hasna/events#70ac34f324f483c38362341ea674c914337418dc');
+    expect(pkg.dependencies['@hasna/events']).toBe('github:hasna/events#92120551c2eb15659a34a8ea4628212af41601c5');
     expect(pkg.exports['./sync']).toBe('./sync/index.mjs');
     // Deprecated shim kept one release for existing importers.
     expect(pkg.exports['./cloud']).toBe('./cloud/index.mjs');
