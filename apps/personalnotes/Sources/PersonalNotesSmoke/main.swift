@@ -550,6 +550,55 @@ do {
         check(parsed?.labels == ["real", "another"], "empty legacy tag element pruned into labels (got: \(parsed?.labels ?? []))")
     }
 
+    print("== durable note.created spool / clean baseline / crash recovery ==")
+    do {
+        let eventsRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("personalnotes-events-smoke-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: eventsRoot) }
+        let eventsStore = MarkdownStore(root: eventsRoot)
+        let publisher = NoteCreatedEventSpool(root: eventsRoot)
+
+        let historical = Note(title: "Historical private title", machine: "history-machine", body: "historical private body")
+        try eventsStore.save(historical)
+        let baseline = try publisher.reconcile(store: eventsStore)
+        check(baseline.establishedBaseline, "first reconciliation establishes a clean baseline")
+        let inbox = eventsRoot.appendingPathComponent("events/spool/inbox")
+        let baselineFiles = (try? FileManager.default.contentsOfDirectory(at: inbox, includingPropertiesForKeys: nil)) ?? []
+        check(baselineFiles.filter { $0.pathExtension == "json" }.isEmpty,
+              "historical notes are not emitted during baseline")
+
+        let created = Note(title: "Private title", machine: "origin-machine", body: "private body")
+        try publisher.beginCreate(created)
+        let intent = eventsRoot.appendingPathComponent(
+            "events/notes-note-created/intents/\(created.id.uuidString.lowercased()).json"
+        )
+        let intentPayload = try String(contentsOf: intent, encoding: .utf8)
+        check(!intentPayload.contains("Private title") && !intentPayload.contains("private body"),
+              "native create intent excludes note title and body")
+        try eventsStore.save(created)
+        check(publisher.commitCreate(created), "native create publishes to the durable spool")
+        let createdFiles = try FileManager.default.contentsOfDirectory(at: inbox, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "json" }
+        check(createdFiles.count == 1, "one create produces one immutable spool record")
+        let payload = try String(contentsOf: createdFiles[0], encoding: .utf8)
+        check(payload.contains(#""source":"notes""#) && payload.contains(#""type":"note.created""#),
+              "spool record uses exact notes/note.created routing")
+        check(payload.contains(#""schemaVersion":"notes.v1""#), "spool record uses notes.v1")
+        check(!payload.contains("Private title") && !payload.contains("private body"),
+              "spool record excludes note title and body")
+
+        let crashRecovered = Note(title: "Crash private title", machine: "recovery-machine", body: "crash private body")
+        try publisher.beginCreate(crashRecovered)
+        try eventsStore.save(crashRecovered)
+        let recovered = try publisher.reconcile(store: eventsStore)
+        check(recovered.enqueued == 1, "startup reconciliation recovers save-before-spool crash")
+        let afterRecovery = try FileManager.default.contentsOfDirectory(at: inbox, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "json" }
+        check(afterRecovery.count == 2, "recovery adds exactly one stable event")
+        let retry = try publisher.reconcile(store: eventsStore)
+        check(retry.enqueued == 0, "reconciliation replay does not duplicate events")
+    }
+
 } catch {
     print("  FAIL: threw error: \(error)")
     counter.failures += 1

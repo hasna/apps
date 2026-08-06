@@ -328,7 +328,7 @@ export async function executeNotesAgentTool(toolName, args = {}, options = {}) {
       createdByName: actorProvenance(options).actorName,
       titleLocked: !!String(args.title || '').trim(),
       titleSource: String(args.title || '').trim() ? 'manual' : 'default',
-    }, root);
+    }, root, { eventContext: { kind: 'created', writer: 'notes-agent' } });
     if (args.labels?.length) await saveLabelList([...(await loadLabelList(root)), ...args.labels], root);
     return { note, sources: [noteReference(note)] };
   }
@@ -529,7 +529,7 @@ export async function executeNotesAgentTool(toolName, args = {}, options = {}) {
         createdByName: actorProvenance(options).actorName,
         titleLocked: true,
         titleSource: 'manual',
-      }, root);
+      }, root, { eventContext: { kind: 'created', writer: 'notes-agent-consolidation' } });
       return { note, sources: notes.map(noteReference) };
     });
   }

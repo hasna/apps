@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { CONTENT_FORMAT_MARKDOWN, dataRoot, deleteNote, loadNotes, revFrom, saveNote } from '../tools/notes-lib.mjs';
+import { reconcileNoteCreatedEvents } from '../tools/notes-events.mjs';
 import { createClient, PersonalNotesApiError } from './client.mjs';
 
 // Real sync engine: maps the canonical local markdown store to /api/v1/sync
@@ -299,7 +300,7 @@ async function applyServerRow(row, ctx) {
     if (action === 'purge-conflict') {
       // Local uncommitted edits survive the remote purge as a conflict copy.
       const copy = conflictCopyOf(localNotes.get(localId), now());
-      const savedCopy = await saveNote(copy, root);
+      const savedCopy = await saveNote(copy, root, { eventContext: { kind: 'created', writer: 'sync-conflict-copy' } });
       localNotes.set(savedCopy.id, savedCopy);
       summary.conflicts.push({ noteId: localId, copyId: savedCopy.id, resolution: 'kept-both' });
     }
@@ -312,7 +313,7 @@ async function applyServerRow(row, ctx) {
   }
   if (action === 'conflict') {
     const copy = conflictCopyOf(localNotes.get(localId), now());
-    const savedCopy = await saveNote(copy, root);
+    const savedCopy = await saveNote(copy, root, { eventContext: { kind: 'created', writer: 'sync-conflict-copy' } });
     localNotes.set(savedCopy.id, savedCopy);
     summary.conflicts.push({ noteId: localId, copyId: savedCopy.id, resolution: 'kept-both' });
   }
@@ -320,7 +321,10 @@ async function applyServerRow(row, ctx) {
   // writes preserve the originating machine's rev (schema-v2 contract in
   // tools/notes-lib.mjs saveNote / MarkdownStore.swift): only genuine local
   // mutations bump rev, so replicas stay rev-identical to the origin.
-  const saved = await saveNote(mapped, root, { preserveRev: true });
+  const saved = await saveNote(mapped, root, {
+    preserveRev: true,
+    ...(action === 'create' ? { eventContext: { kind: 'created', writer: 'sync-import' } } : {}),
+  });
   localNotes.set(localId, saved);
   delete state.tombstones[localId]; // newer non-deleted row = restore
   state.notes[localId] = {
@@ -610,5 +614,8 @@ export async function runSync(options = {}) {
   }
 
   summary.cursor = state.cursor;
+  // Direct sync imports enqueue at their save boundary. Reconciliation is the
+  // crash-recovery net for a note save that committed before its spool publish.
+  await reconcileNoteCreatedEvents([...localNotes.values()], root).catch(() => null);
   return summary;
 }
