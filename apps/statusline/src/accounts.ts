@@ -264,6 +264,30 @@ export function sessionStateFile(env: Env = process.env): string | null {
 }
 
 /**
+ * Email the dir's own state file says this session is logged in as, or null
+ * when the dir carries no record. Authoritative about the live login: it is the
+ * same signal `sessionAccountEmail` trusts ahead of the registry and the marker.
+ */
+function liveAccountEmail(env: Env): string | null {
+  const stateFile = sessionStateFile(env);
+  return stateFile ? str(readJson(stateFile)?.oauthAccount?.emailAddress) : null;
+}
+
+/**
+ * Whether a switch marker still describes the dir's current login. `accounts`
+ * clears the marker when the owner's account is restored *in principle*, but in
+ * practice a stale marker outlives the switch it recorded — so a marker whose
+ * email the dir's LIVE login contradicts is honored only if the two agree.
+ * Without a live record to compare against, the marker is the best signal there
+ * is and is trusted, preserving the in-place-switch feature.
+ */
+function occupantMatchesLiveLogin(occupant: SwitchedOccupant, env: Env): boolean {
+  const live = liveAccountEmail(env);
+  if (!live) return true;
+  return occupant.email != null && occupant.email === live;
+}
+
+/**
  * Resolve the profile owning this session. `tool` is the agent being rendered
  * for, used to disambiguate a config dir claimed by several tools. Never throws.
  */
@@ -277,11 +301,15 @@ export async function sessionAccount(env: Env = process.env, tool?: string): Pro
     const owner: SessionAccount = name
       ? { configDir, profile: name, tool: str(entry?.tool), source: "registry" }
       : (layoutProfile(paths.profiles, configDir, env) ?? unresolved);
-    // An in-place switch overrides the owner. A nameless occupant still
-    // suppresses the owner's name — reporting it would be a stale identity —
-    // and lets callers fall back to `sessionAccountEmail`.
+    // An in-place switch overrides the owner, but only while it is still in
+    // effect. A marker the dir's live login contradicts is stale and must be
+    // ignored — otherwise every pane reports the last-switched profile no
+    // matter who it is actually logged in as (bug 2089be70). A nameless but
+    // still-current occupant suppresses the owner's name — reporting it would
+    // be a stale identity — and lets callers fall back to `sessionAccountEmail`.
     const occupant = switchedOccupant(configDir);
-    if (occupant) return { configDir, profile: occupant.profile, tool: owner.tool, source: "switched" };
+    if (occupant && occupantMatchesLiveLogin(occupant, env))
+      return { configDir, profile: occupant.profile, tool: owner.tool, source: "switched" };
     return owner;
   } catch {
     return unresolved;
@@ -296,8 +324,7 @@ export async function sessionAccount(env: Env = process.env, tool?: string): Pro
  */
 export async function sessionAccountEmail(env: Env = process.env, tool?: string): Promise<string | null> {
   try {
-    const stateFile = sessionStateFile(env);
-    const live = stateFile ? str(readJson(stateFile)?.oauthAccount?.emailAddress) : null;
+    const live = liveAccountEmail(env);
     if (live) return live;
     const configDir = sessionConfigDir(env);
     // After an in-place switch the registry's email describes the dir's
