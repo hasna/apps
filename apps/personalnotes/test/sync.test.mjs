@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -24,6 +24,7 @@ import {
   summaryLine,
   syncStatePath,
 } from '../sync/engine.mjs';
+import { notesEventsDataDir } from '../tools/notes-events.mjs';
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const binPath = join(repoRoot, 'bin', 'personalnotes.mjs');
@@ -177,7 +178,13 @@ async function createMockServer(t, { pageSize = 100, feed = 'hosted' } = {}) {
     batches.set(key, { requestHash, response: JSON.parse(JSON.stringify(response)) });
     if (state.dropNextPushResponse && (body.items || []).length > 0) {
       state.dropNextPushResponse = false;
-      res.socket.destroy();
+      // Return a deliberately truncated successful response after applying and
+      // recording the batch. Recent Bun fetch versions transparently replay a
+      // POST when the socket disappears before any response bytes arrive,
+      // which defeated this crash-resume fixture. A truncated body produces
+      // the same post-commit client failure without a hidden transport retry.
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{"applied":');
       return;
     }
     return json(res, 200, response);
@@ -306,6 +313,18 @@ test('pull: server rows land on disk with machine attribution preserved', async 
   assert.equal(local.machine, 'studio-mac', 'attribution must survive the round trip');
   assert.equal(local.machineFriendlyName, 'Studio Mac');
   assert.deepEqual(local.labels, ['errands']);
+  const inbox = join(notesEventsDataDir(linux), 'spool', 'inbox');
+  const importedEvents = (await readdir(inbox)).filter(name => /^[a-f0-9]{64}\.json$/.test(name));
+  assert.equal(importedEvents.length, 1, 'sync-created local note emits one note.created event');
+  const importedEvent = JSON.parse(await readFile(join(inbox, importedEvents[0]), 'utf8'));
+  assert.equal(importedEvent.id, `notes:note:${note.id}:created`);
+  assert.deepEqual(importedEvent.data, {
+    noteId: note.id,
+    createdAt: note.createdAt,
+    originMachine: 'studio-mac',
+  });
+  assert.equal(JSON.stringify(importedEvent).includes('Recording ideas'), false);
+  assert.equal(JSON.stringify(importedEvent).includes('try the new mic'), false);
 
   // Foreign rows (born on the server, no frontmatterJson) still map sanely.
   mock.notes.set('web-note', {
@@ -394,6 +413,12 @@ test('conflicts: concurrent edits keep both versions on every machine', async (t
   const copy = studioNotes.find(n => n.id !== note.id);
   assert.equal(copy.body, 'studio edit', 'local edit preserved as conflict copy');
   assert.match(copy.title, /\(conflict copy\)$/);
+  const conflictInbox = join(notesEventsDataDir(studio), 'spool', 'inbox');
+  const conflictEvents = await Promise.all((await readdir(conflictInbox))
+    .filter(name => /^[a-f0-9]{64}\.json$/.test(name))
+    .map(async name => JSON.parse(await readFile(join(conflictInbox, name), 'utf8'))));
+  assert.ok(conflictEvents.some(event => event.data.noteId === copy.id), 'sync conflict copy emits note.created');
+  assert.equal(JSON.stringify(conflictEvents).includes('studio edit'), false);
 
   // The copy was pushed in the same run; linux converges on the next sync.
   assert.ok(mock.row(copy.id), 'conflict copy pushed to server');

@@ -5,6 +5,7 @@ import {
   archiveNote,
   assignLabel,
   contentFingerprint,
+  dataRoot,
   deleteLabelEverywhere,
   deleteNote,
   generateTitle,
@@ -34,6 +35,9 @@ import {
   runNotesAgent,
   runNotesGoal,
 } from '../tools/notes-agent.mjs';
+import { reconcileNoteCreatedEvents } from '../tools/notes-events.mjs';
+
+await reconcileNoteCreatedEvents(dataRoot()).catch(() => null);
 
 const tools = [
   {
@@ -467,7 +471,7 @@ async function callTool(name, args) {
       titleSource: title ? 'manual' : 'default',
       createdAt: now,
       updatedAt: now,
-    });
+    }, dataRoot(), { eventContext: { kind: 'created', writer: 'mcp' } });
     if (args.labels?.length) await saveLabelList([...(await loadLabelList()), ...args.labels]);
     return textResult(note);
   }

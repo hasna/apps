@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -47,6 +47,7 @@ import {
   runNotesAgent,
   runNotesGoal,
 } from '../tools/notes-agent.mjs';
+import { notesEventsDataDir } from '../tools/notes-events.mjs';
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const cliPath = join(repoRoot, 'cli', 'personalnotes.mjs');
@@ -60,6 +61,13 @@ async function tempRoot(t) {
   const root = await mkdtemp(join(tmpdir(), 'personalnotes-test-'));
   t.after(async () => { await rm(root, { recursive: true, force: true }); });
   return root;
+}
+
+async function createdEvents(root) {
+  const inbox = join(notesEventsDataDir(root), 'spool', 'inbox');
+  const names = await readdir(inbox).catch((error) => error?.code === 'ENOENT' ? [] : Promise.reject(error));
+  return Promise.all(names.filter((name) => /^[a-f0-9]{64}\.json$/.test(name))
+    .map(async (name) => JSON.parse(await readFile(join(inbox, name), 'utf8'))));
 }
 
 function runNode(script, args, env = {}) {
@@ -758,6 +766,7 @@ test('agent write tools preview unsafe changes and apply confirmed create append
   assert.equal(created.note.createdByActorType, 'agent');
   assert.equal(created.note.createdByName, 'Test Agent');
   assert.deepEqual(created.note.labels, ['agent']);
+  assert.ok((await createdEvents(root)).some((event) => event.data.noteId === created.note.id));
 
   const dryEvents = [];
   const dry = await runNotesAgent('consolidate alpha notes', { root, onEvent: event => dryEvents.push(event) });
@@ -772,6 +781,10 @@ test('agent write tools preview unsafe changes and apply confirmed create append
   assert.ok(consolidated);
   assert.equal(consolidated.createdByName, 'Consolidator');
   assert.match(consolidated.body, /Source One/);
+  const emitted = await createdEvents(root);
+  assert.ok(emitted.some((event) => event.data.noteId === consolidated.id));
+  assert.equal(JSON.stringify(emitted).includes('Created from chat.'), false);
+  assert.equal(JSON.stringify(emitted).includes('Alpha project context.'), false);
 });
 
 test('agent label move and goal flows use shared safe tools', async (t) => {
@@ -2271,6 +2284,11 @@ test('MCP server speaks spec newline-delimited stdio framing (standard clients)'
     arguments: { title: 'NDJSON Note', body: 'ndjson body', targetMachine: 'studio-mac' },
   });
   assert.equal(parseToolText(created).title, 'NDJSON Note');
+  const events = await createdEvents(root);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].data.noteId, parseToolText(created).id);
+  assert.equal(JSON.stringify(events).includes('NDJSON Note'), false);
+  assert.equal(JSON.stringify(events).includes('ndjson body'), false);
 
   const listed = await client.send(4, 'tools/call', { name: 'notes_list', arguments: {} });
   assert.equal(parseToolText(listed).items.length, 1);
@@ -2474,6 +2492,19 @@ test('native destructive bridge actions require confirmed payloads', async () =>
   assert.match(swift, /case "delete":\s+guard allowDestructive\(action\) else \{ return \}/);
 });
 
+test('web duplicate routes through the native create boundary before its follow-up save', async () => {
+  const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
+  const swift = await readFile(join(repoRoot, 'Sources', 'PersonalNotesApp', 'main.swift'), 'utf8');
+  const quickCreate = app.slice(app.indexOf('function quickCreate'), app.indexOf('// Escape a string'));
+  const duplicate = app.slice(app.indexOf('function duplicateNote'), app.indexOf('function copyNoteText'));
+  assert.match(duplicate, /quickCreate\(/);
+  assert.match(quickCreate, /postNative\('create', serializeNote\(note\)\)/);
+  assert.match(duplicate, /postNative\('save', serializeNote\(dup\)\)/);
+  assert.match(swift, /case "create": changed = bridge\.save\(note\.dict, isCreate: true\)/);
+  assert.match(swift, /case "save":\s+changed = bridge\.save\(note\.dict, isCreate: false\)/);
+  assert.match(swift, /let shouldEmitCreate = isCreate && !FileManager\.default\.fileExists/);
+});
+
 test('native window drag strip spans full header band and honors web-reported control rects', async () => {
   const swift = await readFile(join(repoRoot, 'Sources', 'PersonalNotesApp', 'main.swift'), 'utf8');
   const dragClass = swift.match(/final class WindowDragStrip: NSView \{[\s\S]*?\n\}/)?.[0] || '';
@@ -2580,6 +2611,8 @@ test('recording and realtime transcription contracts are exposed to UI/native ho
   const buildScript = await readFile(join(repoRoot, 'scripts', 'build_personalnotes.sh'), 'utf8');
   assert.match(buildScript, /\$RESOURCES\/tools/);
   assert.match(buildScript, /notes-agent\.mjs/);
+  assert.match(buildScript, /notes-events\.mjs/);
+  assert.match(buildScript, /node_modules\/@hasna\/events/);
 });
 
 test('sidecar keeps bounded and realtime transcription models in separate slots', async (t) => {

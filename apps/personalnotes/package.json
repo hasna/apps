@@ -12,6 +12,7 @@
   },
   "exports": {
     ".": "./tools/notes-lib.mjs",
+    "./events": "./tools/notes-events.mjs",
     "./sync": "./sync/index.mjs",
     "./cloud": "./cloud/index.mjs"
   },
@@ -28,6 +29,7 @@
     "server/http.mjs",
     "server/notes.mjs",
     "tools/notes-agent.mjs",
+    "tools/notes-events.mjs",
     "tools/notes-lib.mjs",
     "README.md",
     "LICENSE"
@@ -60,6 +62,7 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@hasna/events": "github:hasna/events#92120551c2eb15659a34a8ea4628212af41601c5",
     "hono": "^4.6.0"
   },
   "devDependencies": {
