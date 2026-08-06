@@ -211,6 +211,53 @@ describe("sessionAccount after an in-place switch-account", () => {
   });
 });
 
+describe("sessionAccount ignores a STALE in-place switch marker (bug 2089be70)", () => {
+  // The marker is left behind by a past in-place switch that has since been
+  // undone: the dir's live login is its own owner again, but accounts did not
+  // clear the marker. The dir's live oauthAccount is authoritative about who is
+  // logged in now, so a marker it contradicts must not mask the real identity.
+  test("a stale marker is ignored when the dir's live login is its own owner", async () => {
+    const { root, entries } = accountsHome([{ name: "account088", tool: "claude", email: "owner@example.com" }]);
+    const dir = entries[0]!.dir;
+    login(dir, "owner@example.com"); // live login == the dir's own owner
+    switchTo(dir, "account039", "jeannie@example.com"); // stale: names a different account
+    const account = await sessionAccount(env(root, dir));
+    expect(account.profile).toBe("account088");
+    expect(account.source).toBe("registry");
+  });
+
+  // The measured incident: two panes, each with a live login as its own owner,
+  // both carrying a stale marker pointing at the same third profile. Each pane
+  // must show its own identity, never the shared stale pointer.
+  test("two dirs with the same stale marker each resolve to their own owner", async () => {
+    const { root, entries } = accountsHome([
+      { name: "account005", tool: "claude", email: "andrei@example.com" },
+      { name: "account038", tool: "claude", email: "matt@example.com" },
+    ]);
+    login(entries[0]!.dir, "andrei@example.com");
+    login(entries[1]!.dir, "matt@example.com");
+    switchTo(entries[0]!.dir, "account039", "jeannie@example.com");
+    switchTo(entries[1]!.dir, "account039", "jeannie@example.com");
+    const first = await sessionAccount(env(root, entries[0]!.dir));
+    const second = await sessionAccount(env(root, entries[1]!.dir));
+    expect(first.profile).toBe("account005");
+    expect(second.profile).toBe("account038");
+  });
+
+  // The guard must still let a genuine, current in-place switch through — the
+  // dir's live login matches the occupant the marker names. Proving the guard
+  // can PASS as well as fail keeps it from being a blanket "ignore all markers".
+  test("a current switch is still honored when the live login matches the marker", async () => {
+    const { root, entries } = accountsHome([{ name: "account088", tool: "claude", email: "owner@example.com" }]);
+    const dir = entries[0]!.dir;
+    login(dir, "occupant@example.com"); // live login == the occupant the marker names
+    switchTo(dir, "account033", "occupant@example.com");
+    const account = await sessionAccount(env(root, dir));
+    expect(account.profile).toBe("account033");
+    expect(account.source).toBe("switched");
+  });
+});
+
 describe("sessionAccountEmail", () => {
   test("prefers the agent's own record over the registry copy", async () => {
     const { root, entries } = accountsHome([{ name: "account006", tool: "claude", email: "stale@example.com" }]);
