@@ -178,7 +178,13 @@ async function createMockServer(t, { pageSize = 100, feed = 'hosted' } = {}) {
     batches.set(key, { requestHash, response: JSON.parse(JSON.stringify(response)) });
     if (state.dropNextPushResponse && (body.items || []).length > 0) {
       state.dropNextPushResponse = false;
-      res.socket.destroy();
+      // Return a deliberately truncated successful response after applying and
+      // recording the batch. Recent Bun fetch versions transparently replay a
+      // POST when the socket disappears before any response bytes arrive,
+      // which defeated this crash-resume fixture. A truncated body produces
+      // the same post-commit client failure without a hidden transport retry.
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{"applied":');
       return;
     }
     return json(res, 200, response);
