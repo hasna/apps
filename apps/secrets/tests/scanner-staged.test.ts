@@ -319,6 +319,80 @@ describe("staged exposure scanner", () => {
     expect(stagedScanExitCode(result)).toBe(1);
   });
 
+  it("scans the WHOLE staged set when invoked from a subdirectory", () => {
+    if (!gitAvailable()) return;
+
+    const value = coveredExtensionToken();
+    initRepo();
+    mkdirSync(join(testDir, "sub"), { recursive: true });
+    writeFileSync(join(testDir, "root-secret.ts"), `const k = "${value}";\n`);
+    writeFileSync(join(testDir, "sub/local.ts"), "export const clean = 1;\n");
+    git(["add", "-A"]);
+
+    // The control being replaced is repo-wide from any cwd: `git diff --cached`
+    // ignores cwd for enumeration. A gate that silently narrows to the caller's
+    // subdirectory is a COVERAGE REGRESSION — `git commit` from that same
+    // subdirectory still commits every staged blob in the repo.
+    const staged = spawnSync("git", ["diff", "--cached", "--name-only"], {
+      cwd: join(testDir, "sub"),
+      encoding: "utf8",
+      env: hermeticGitEnv(),
+    }).stdout.split("\n").filter(Boolean);
+    expect(staged).toHaveLength(2);
+
+    const toplevel = spawnSync("git", ["rev-parse", "--show-toplevel"], {
+      cwd: join(testDir, "sub"),
+      encoding: "utf8",
+      env: hermeticGitEnv(),
+    }).stdout.trim();
+
+    const result = scanStagedExposures({ root: join(testDir, "sub") });
+    expect(result.stats.filesScanned).toBe(2);
+    expect(detectorsFor(result, "root-secret.ts")).toContain("openai_api_key");
+    expect(stagedScanExitCode(result)).toBe(1);
+    // `root` reports what was actually scanned, so the output cannot imply a
+    // narrower reading than the one performed.
+    expect(result.root).toBe(toplevel);
+  });
+
+  it("still scopes to a subtree when --subtree is explicitly opted into", () => {
+    if (!gitAvailable()) return;
+
+    initRepo();
+    mkdirSync(join(testDir, "sub"), { recursive: true });
+    writeFileSync(join(testDir, "root-secret.ts"), `const k = "${coveredExtensionToken()}";\n`);
+    writeFileSync(join(testDir, "sub/local.ts"), "export const clean = 1;\n");
+    git(["add", "-A"]);
+
+    const result = scanStagedExposures({ root: join(testDir, "sub"), subtree: true });
+    expect(result.stats.filesScanned).toBe(1);
+    expect(result.findingCount).toBe(0);
+    expect(result.root).toBe(join(testDir, "sub"));
+  });
+
+  it("does not let a filename matching ^[0-3]: bypass the scan", () => {
+    if (!gitAvailable()) return;
+
+    const value = coveredExtensionToken();
+    initRepo();
+    // `0:foo` is a legal POSIX filename. Queried as `:0:foo`, git parses it as
+    // "stage 0 of foo" — the WRONG object — so the real file's blob is never
+    // read while a clean one is counted twice. An attacker needs only the
+    // filename. The explicit `:0:<path>` form disambiguates it.
+    writeFileSync(join(testDir, "foo"), "clean content here\n");
+    writeFileSync(join(testDir, "0:foo"), `const k = "${value}";\n`);
+    git(["add", "-A"]);
+
+    const result = scanStagedExposures({ root: testDir });
+
+    expect(result.stats.filesScanned).toBe(2);
+    expect(detectorsFor(result, "0:foo")).toContain("openai_api_key");
+    expect(stagedScanExitCode(result)).toBe(1);
+    // The two staged paths must resolve to two DISTINCT blobs; the defect
+    // attributed one blob to both names.
+    expect(new Set(result.findings.map((finding) => finding.path)).size).toBe(1);
+  });
+
   it("exits 2 rather than 0 when the path is not a git workspace", () => {
     const result = scanStagedExposures({ root: testDir });
     expect(result.findingCount).toBe(0);

@@ -326,7 +326,17 @@ export interface HistoryExposureScanOptions {
 }
 
 export interface StagedExposureScanOptions {
+  /** Any path inside the repository. Used to LOCATE the repo, not to narrow it. */
   root?: string;
+  /**
+   * Opt in to scanning only the subtree under `root` instead of the whole
+   * staged set. Off by default, and deliberately so: `git commit` from a
+   * subdirectory still commits every staged blob in the repository, so a gate
+   * that quietly inherited the caller's cwd would pass commits the shell
+   * one-liner it replaces would have caught. Scoping narrower than the commit
+   * has to be asked for.
+   */
+  subtree?: boolean;
   limit?: number;
   maxFileBytes?: number;
   maxFiles?: number;
@@ -579,7 +589,14 @@ export function scanStagedExposures(options: StagedExposureScanOptions = {}): Ex
   );
   const timeoutMs = normalizePositiveInteger(options.timeoutMs, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS);
   const deadline = Date.now() + timeoutMs;
-  const result = createResult("staged", requestedRoot, limit, {
+
+  // The repository root is resolved BEFORE the result is built, because the
+  // default scan root IS the repository root — `root` locates the repo rather
+  // than narrowing it. `result.root` then reports what was actually scanned, so
+  // the output can never imply a narrower reading than the one performed.
+  const gitRoot = resolveGitRoot(requestedRoot, Math.max(1, deadline - Date.now()));
+  const scanRoot = gitRoot && !options.subtree ? gitRoot : requestedRoot;
+  const result = createResult("staged", scanRoot, limit, {
     maxFileBytes,
     maxFiles,
     maxBytesScanned,
@@ -587,7 +604,6 @@ export function scanStagedExposures(options: StagedExposureScanOptions = {}): Ex
   });
   result.stats.skipped = [];
 
-  const gitRoot = resolveGitRoot(requestedRoot, Math.max(1, deadline - Date.now()));
   if (!gitRoot) {
     pushError(result, `Not a git workspace: ${requestedRoot}`);
     return finalizeResult(result);
@@ -607,7 +623,7 @@ export function scanStagedExposures(options: StagedExposureScanOptions = {}): Ex
     "-z",
     "--diff-filter=ACMRT",
     "--",
-    gitPathspecForRoot(gitRoot, requestedRoot),
+    gitPathspecForRoot(gitRoot, scanRoot),
   ], { timeoutMs: Math.max(1, deadline - Date.now()) });
 
   if (names.error?.code === "ETIMEDOUT") {
@@ -634,7 +650,7 @@ export function scanStagedExposures(options: StagedExposureScanOptions = {}): Ex
       break;
     }
 
-    const findingPath = relativePath(requestedRoot, resolve(gitRoot, path));
+    const findingPath = relativePath(scanRoot, resolve(gitRoot, path));
     if (isOutsideRoot(findingPath)) continue;
 
     const entry = meta.get(path);
@@ -788,7 +804,13 @@ function stagedBlobMetadata(
   const result = runGit(gitRoot, ["cat-file", "--batch-check"], {
     timeoutMs,
     maxBuffer: 16 * 1024 * 1024,
-    input: `${batchable.map((path) => `:${path}`).join("\n")}\n`,
+    // `:0:<path>`, never `:<path>`. A file legally named `0:foo` queried as
+    // `:0:foo` is parsed by git as "stage 0 of foo" — a DIFFERENT object — so
+    // the real blob is never read while a clean one is counted twice, at zero
+    // findings and exit 0. Any name matching ^[0-3]: is a silent bypass of the
+    // whole gate, and the filename is the entire attack. The explicit stage
+    // prefix disambiguates it: `:0:0:foo` resolves the file named `0:foo`.
+    input: `${batchable.map((path) => `:0:${path}`).join("\n")}\n`,
   });
   if (result.status !== 0) return meta;
 

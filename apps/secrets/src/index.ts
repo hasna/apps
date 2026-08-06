@@ -680,9 +680,12 @@ switch (command) {
       case "staged": {
         // Commit-gate mode: the exit code is the answer, the JSON is the
         // evidence. No --cursor — a gate returns a verdict on the whole staged
-        // set, and a paginated verdict is not one.
+        // set, and a paginated verdict is not one. [path] LOCATES the repo and
+        // does not narrow it, so running from a subdirectory still covers every
+        // staged blob that `git commit` would write; --subtree opts out.
         const result = scanStagedExposures({
           root,
+          subtree: flags.subtree === "true",
           limit: common.limit,
           maxFileBytes: positiveIntegerFlag(flags, "max-bytes"),
           maxFiles: positiveIntegerFlag(flags, "max-files"),
@@ -694,7 +697,7 @@ switch (command) {
         break;
       }
       default:
-        console.error("Usage: secrets scan workspace|history|staged [path] [--limit <n>] [--cursor <cursor>] [--max-bytes <n>] [--max-files <n>] [--max-scan-bytes <n>] [--max-commits <n>] [--timeout-ms <n>] [--pretty] [--json]");
+        console.error("Usage: secrets scan workspace|history|staged [path] [--limit <n>] [--cursor <cursor>] [--max-bytes <n>] [--max-files <n>] [--max-scan-bytes <n>] [--max-commits <n>] [--timeout-ms <n>] [--subtree] [--pretty] [--json]");
         process.exit(1);
     }
     break;
