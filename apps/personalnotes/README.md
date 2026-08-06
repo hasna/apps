@@ -123,8 +123,13 @@ The stable event identity and dedupe key are both
 `noteId`, `createdAt`, and `originMachine`. Titles, bodies, labels, and webhook
 credentials are never written to intents, event payloads, or status output.
 Existing notes are marked as a clean baseline on first use and are not replayed
-as new. A pre-save intent plus startup and post-sync reconciliation recovers a
-crash between saving the note and enqueuing its event.
+as new. Baseline creation requires a strict, complete read of every note; an
+enumeration, read, or parse failure leaves the baseline absent rather than
+silently accepting a partial store. A metadata-only pre-save intent plus startup
+and post-sync reconciliation recovers a crash between saving the note and
+enqueuing its event. When `<root>/events` is unavailable, the intent is fsynced
+to the owner-only `<root>/notes/.note-created-intents` fallback on the same
+note-store filesystem and migrated after the canonical event state recovers.
 
 The Node paths use the Node-safe `@hasna/events/durable-spool` boundary. A Bun
 delivery worker can import that spool and route it through the durable events
@@ -132,6 +137,11 @@ broker. The webhook channel helper is disabled by default, accepts only an
 `env:NAME` secret reference, rejects URL credentials, and requires HTTPS except
 for loopback test receivers. This package does not configure a destination or
 enable delivery automatically.
+
+Webhook delivery is at least once: a crash, timeout, or expired delivery lease
+can repeat the same stable event identity. A receiver must verify the request,
+durably deduplicate by `dedupeKey` (falling back to `id`), and return HTTP 2xx
+only after that durable enqueue or existing-idempotency record has committed.
 
 Inspect metadata-only health without reading event payloads:
 

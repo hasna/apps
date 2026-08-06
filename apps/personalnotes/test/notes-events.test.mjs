@@ -2,14 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadNotes, saveNote, serializeNote } from '../tools/notes-lib.mjs';
+import { loadNotes, loadNotesStrict, saveNote, serializeNote } from '../tools/notes-lib.mjs';
 import {
   beginNoteCreatedIntent,
   noteCreatedEvent,
+  notesCreatedFallbackIntentsDir,
   notesCreatedStateDir,
   notesCreatedWebhookChannel,
   notesEventsDataDir,
@@ -124,7 +125,7 @@ test('note.created envelope and webhook channel are exact, minimal, and disabled
 test('clean baseline suppresses history; direct public save creates exactly one durable event', async (t) => {
   const root = await tempRoot(t);
   const historical = await writeExternalNote(note(), root);
-  const baseline = await reconcileNoteCreatedEvents(await loadNotes(root), root);
+  const baseline = await reconcileNoteCreatedEvents(root);
   assert.equal(baseline.baseline, true);
   assert.deepEqual(await spoolFiles(root), []);
 
@@ -149,18 +150,18 @@ test('clean baseline suppresses history; direct public save creates exactly one 
 
 test('save-before-spool crash intent and unseen post-baseline file both reconcile once', async (t) => {
   const root = await tempRoot(t);
-  await reconcileNoteCreatedEvents([], root);
+  await reconcileNoteCreatedEvents(root);
 
   const crashed = note();
   await beginNoteCreatedIntent(crashed, root);
   await writeExternalNote(crashed, root);
-  let result = await reconcileNoteCreatedEvents(await loadNotes(root), root);
+  let result = await reconcileNoteCreatedEvents(root);
   assert.equal(result.enqueued, 1);
 
   const unseen = await writeExternalNote(note(), root);
-  result = await reconcileNoteCreatedEvents(await loadNotes(root), root);
+  result = await reconcileNoteCreatedEvents(root);
   assert.equal(result.enqueued, 1);
-  result = await reconcileNoteCreatedEvents(await loadNotes(root), root);
+  result = await reconcileNoteCreatedEvents(root);
   assert.equal(result.enqueued, 0);
 
   const identities = new Set((await spoolEvents(root)).map((event) => event.id));
@@ -172,12 +173,12 @@ test('save-before-spool crash intent and unseen post-baseline file both reconcil
 
 test('concurrent create writers converge to one immutable event identity', async (t) => {
   const root = await tempRoot(t);
-  await reconcileNoteCreatedEvents([], root);
+  await reconcileNoteCreatedEvents(root);
   const fixture = note();
   await Promise.all(Array.from({ length: 12 }, () => saveNote(fixture, root, {
     eventContext: { kind: 'created', writer: 'concurrency-test' },
   })));
-  await reconcileNoteCreatedEvents(await loadNotes(root), root);
+  await reconcileNoteCreatedEvents(root);
   const events = await spoolEvents(root);
   assert.equal(events.length, 1);
   assert.equal(events[0].dedupeKey, `notes:note:${fixture.id}:created`);
@@ -185,7 +186,7 @@ test('concurrent create writers converge to one immutable event identity', async
 
 test('concurrent distinct create writers lose no events', async (t) => {
   const root = await tempRoot(t);
-  await reconcileNoteCreatedEvents([], root);
+  await reconcileNoteCreatedEvents(root);
   const fixtures = Array.from({ length: 24 }, (_, index) => note({
     id: randomUUID(),
     title: `Private concurrent title ${index}`,
@@ -225,7 +226,7 @@ test('intent, status, and spool state never persist note content or credential c
   assert.equal(JSON.stringify(await notesEventsStatus(root)).includes(credentialCanary), false);
 
   await saveNote(fixture, root, { eventContext: { kind: 'created', writer: 'privacy-test' } });
-  await reconcileNoteCreatedEvents(await loadNotes(root), root);
+  await reconcileNoteCreatedEvents(root);
   const serializedEvents = JSON.stringify(await spoolEvents(root));
   const serializedStatus = JSON.stringify(await notesEventsStatus(root));
   for (const serialized of [serializedEvents, serializedStatus]) {
@@ -237,7 +238,7 @@ test('intent, status, and spool state never persist note content or credential c
 
 test('failed note save cancels its intent and unreadable existing targets never emit', async (t) => {
   const root = await tempRoot(t);
-  await reconcileNoteCreatedEvents([], root);
+  await reconcileNoteCreatedEvents(root);
   const notesPath = join(root, 'notes');
   await mkdir(notesPath, { recursive: true });
 
@@ -263,12 +264,89 @@ test('corrupt baseline degrades visibly and never silently re-baselines unseen n
   await mkdir(state, { recursive: true });
   await writeFile(join(state, 'baseline-v1.json'), '{broken\n');
   await writeExternalNote(note(), root);
-  await assert.rejects(reconcileNoteCreatedEvents(await loadNotes(root), root));
+  await assert.rejects(reconcileNoteCreatedEvents(root));
   const status = await notesEventsStatus(root);
   assert.equal(status.status, 'error');
   assert.equal(status.errorCode, 'invalid_note_events_baseline');
   assert.equal(status.baselineState, 'invalid');
   assert.equal(status.seenNotes, 0);
+});
+
+test('strict first-run snapshot never baselines a partial 327-note store', async (t) => {
+  const root = await tempRoot(t);
+  const historical = Array.from({ length: 327 }, (_, index) => note({
+    id: randomUUID(),
+    title: `Historical private title ${index}`,
+    body: `Historical private body ${index}`,
+  }));
+  await Promise.all(historical.map((fixture) => writeExternalNote(fixture, root)));
+
+  const injectedFailure = Object.assign(new Error('injected_note_enumeration_failure'), { code: 'EIO' });
+  await assert.rejects(reconcileNoteCreatedEvents(root, {
+    strictLoadOptions: { readdir: async () => { throw injectedFailure; } },
+  }), /injected_note_enumeration_failure/);
+
+  let reads = 0;
+  await assert.rejects(reconcileNoteCreatedEvents(root, {
+    strictLoadOptions: {
+      readFile: async (...args) => {
+        reads += 1;
+        if (reads === 164) throw injectedFailure;
+        return readFile(...args);
+      },
+    },
+  }), /injected_note_enumeration_failure/);
+  await assert.rejects(reconcileNoteCreatedEvents(root, {
+    strictLoadOptions: { parseNote: async () => null },
+  }), /invalid_note_document/);
+
+  let status = await notesEventsStatus(root);
+  assert.equal(status.baseline, false);
+  assert.equal(status.seenNotes, 0);
+  assert.equal(status.spooledEvents, 0);
+
+  const recovered = await reconcileNoteCreatedEvents(root);
+  assert.equal(recovered.baseline, true);
+  assert.equal(recovered.enqueued, 0);
+  status = await notesEventsStatus(root);
+  assert.equal(status.seenNotes, 327);
+  assert.equal(status.spooledEvents, 0);
+  assert.equal((await loadNotesStrict(root)).length, 327);
+
+  const created = await saveNote(note(), root);
+  const events = await spoolEvents(root);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].data.noteId, created.id);
+});
+
+test('events-as-file obstruction retains a private fallback intent and recovers exactly once', async (t) => {
+  const root = await tempRoot(t);
+  await mkdir(root, { recursive: true });
+  await writeFile(join(root, 'events'), 'obstruction');
+  const fixture = note();
+
+  const created = await saveNote(fixture, root);
+  assert.equal(created.id, fixture.id);
+  const fallbackDir = notesCreatedFallbackIntentsDir(root);
+  const fallbackPath = join(fallbackDir, `${fixture.id}.json`);
+  const fallback = await readFile(fallbackPath, 'utf8');
+  assert.equal(fallback.includes(fixture.title), false);
+  assert.equal(fallback.includes(fixture.body), false);
+  assert.equal((await stat(fallbackDir)).mode & 0o777, 0o700);
+  assert.equal((await stat(fallbackPath)).mode & 0o777, 0o600);
+  let status = await notesEventsStatus(root);
+  assert.equal(status.baseline, false);
+  assert.equal(status.pendingIntents, 1);
+  assert.equal(status.spooledEvents, 0);
+
+  await rm(join(root, 'events'));
+  const recovered = await reconcileNoteCreatedEvents(root);
+  assert.equal(recovered.baseline, true);
+  assert.equal(recovered.enqueued, 1);
+  assert.equal((await spoolFiles(root)).length, 1);
+  status = await notesEventsStatus(root);
+  assert.equal(status.pendingIntents, 0);
+  assert.equal((await reconcileNoteCreatedEvents(root)).enqueued, 0);
 });
 
 test('CLI create covers the public writer and events status is metadata-only', async (t) => {

@@ -550,7 +550,7 @@ async function commandAgent(args, opts) {
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
   const opts = parseArgs(rest);
-  await reconcileNoteCreatedEvents(await loadNotes(), dataRoot()).catch(() => null);
+  await reconcileNoteCreatedEvents(dataRoot()).catch(() => null);
   if (!cmd || cmd === 'help' || opts.help) {
     lineOut(usage());
     return;

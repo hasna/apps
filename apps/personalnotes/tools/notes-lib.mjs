@@ -667,6 +667,41 @@ export async function loadNotes(root = dataRoot()) {
   return notes.sort((a, b) => Date.parse(b.updatedAt || 0) - Date.parse(a.updatedAt || 0));
 }
 
+/**
+ * Strict note-store snapshot for reconciliation and other correctness-critical
+ * callers. Unlike loadNotes(), this never turns an enumeration, read, or parse
+ * failure into a partial list. Normal interactive reads intentionally retain
+ * their historical tolerant behaviour through loadNotes().
+ */
+export async function loadNotesStrict(root = dataRoot(), options = {}) {
+  const dir = notesDir(root);
+  await mkdir(dir, { recursive: true });
+  const readDirectory = options.readdir ?? readdir;
+  const readNote = options.readFile ?? readFile;
+  const parse = options.parseNote ?? parseNote;
+  const files = await readDirectory(dir);
+  const notes = [];
+  for (const file of [...files].sort()) {
+    if (!file.endsWith('.md')) continue;
+    const fallbackID = file.replace(/\.md$/, '');
+    if (!isUUID(fallbackID)) throw new Error('invalid_note_filename');
+    const raw = await readNote(join(dir, file), 'utf8');
+    const normalized = String(raw).replace(/\r\n/g, '\n');
+    if (normalized.startsWith('---\n')) {
+      const lines = normalized.split('\n');
+      if (!lines.some((line, index) => index > 0 && line === '---')) {
+        throw new Error('invalid_note_document');
+      }
+    }
+    const parsed = await parse(raw, fallbackID);
+    if (!parsed || !isUUID(parsed.id) || parsed.id.toLowerCase() !== fallbackID.toLowerCase()) {
+      throw new Error('invalid_note_document');
+    }
+    notes.push(parsed);
+  }
+  return notes.sort((a, b) => Date.parse(b.updatedAt || 0) - Date.parse(a.updatedAt || 0));
+}
+
 export async function saveNote(note, root = dataRoot(), opts = {}) {
   const dir = notesDir(root);
   await mkdir(dir, { recursive: true });
@@ -682,14 +717,11 @@ export async function saveNote(note, root = dataRoot(), opts = {}) {
   const isCreatedEvent = existingRaw == null;
   let hasCreatedIntent = false;
   if (isCreatedEvent) {
-    try {
-      await beginNoteCreatedIntent(n, root);
-      hasCreatedIntent = true;
-    } catch {
-      // The note store remains the source of truth. A failed intent write must
-      // not roll back the note; startup/post-sync reconciliation finds unseen
-      // files and enqueues the same stable event identity later.
-    }
+    // At least one metadata-only intent location must be durable before the
+    // note rename. beginNoteCreatedIntent falls back to a private directory on
+    // the note-store filesystem when <root>/events is unavailable.
+    await beginNoteCreatedIntent(n, root);
+    hasCreatedIntent = true;
   }
   if (!opts.preserveRev) {
     // Every local mutation bumps the per-note monotonic `rev` past whatever is on

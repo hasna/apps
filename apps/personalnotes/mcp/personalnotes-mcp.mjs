@@ -37,7 +37,7 @@ import {
 } from '../tools/notes-agent.mjs';
 import { reconcileNoteCreatedEvents } from '../tools/notes-events.mjs';
 
-await reconcileNoteCreatedEvents(await loadNotes(), dataRoot()).catch(() => null);
+await reconcileNoteCreatedEvents(dataRoot()).catch(() => null);
 
 const tools = [
   {

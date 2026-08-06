@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { open, mkdir, readFile, readdir, rename, rm } from 'node:fs/promises';
+import { chmod, open, mkdir, readFile, readdir, rename, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { DurableEventSpool } from '@hasna/events/durable-spool';
+import { loadNotesStrict } from './notes-lib.mjs';
 
 export const NOTES_EVENT_SOURCE = 'notes';
 export const NOTE_CREATED_EVENT_TYPE = 'note.created';
@@ -11,6 +12,7 @@ const NOTES_EVENTS_STATE_VERSION = 1;
 const EVENTS_DIR = 'events';
 const NOTES_STATE_DIR = 'notes-note-created';
 const INTENTS_DIR = 'intents';
+const FALLBACK_INTENTS_DIR = '.note-created-intents';
 const SEEN_DIR = 'seen';
 const BASELINE_FILE = 'baseline-v1.json';
 const STATUS_FILE = 'status.json';
@@ -58,12 +60,24 @@ function intentDir(root) {
   return join(notesCreatedStateDir(root), INTENTS_DIR);
 }
 
+export function notesCreatedFallbackIntentsDir(root) {
+  return join(root, 'notes', FALLBACK_INTENTS_DIR);
+}
+
 function seenDir(root) {
   return join(notesCreatedStateDir(root), SEEN_DIR);
 }
 
 function intentPath(root, noteId) {
   return join(intentDir(root), `${canonicalNoteId(noteId)}.json`);
+}
+
+function fallbackIntentPath(root, noteId) {
+  return join(notesCreatedFallbackIntentsDir(root), `${canonicalNoteId(noteId)}.json`);
+}
+
+function intentPaths(root, noteId) {
+  return [intentPath(root, noteId), fallbackIntentPath(root, noteId)];
 }
 
 function seenPath(root, noteId) {
@@ -90,6 +104,8 @@ async function fsyncDirectory(path) {
 async function atomicWrite(path, value) {
   const dir = dirname(path);
   await mkdir(dir, { recursive: true, mode: 0o700 });
+  await chmod(dir, 0o700);
+  await fsyncDirectory(dirname(dir));
   const tmp = join(dir, `.tmp-${process.pid}-${randomUUID()}`);
   const handle = await open(tmp, 'wx', 0o600);
   try {
@@ -164,16 +180,30 @@ async function writeBaseline(root) {
 
 export async function beginNoteCreatedIntent(note, root) {
   const event = noteCreatedEvent(note);
-  await atomicWrite(intentPath(root, event.data.noteId), JSON.stringify(event) + '\n');
+  const payload = JSON.stringify(event) + '\n';
+  try {
+    await atomicWrite(intentPath(root, event.data.noteId), payload);
+  } catch (canonicalError) {
+    try {
+      await atomicWrite(fallbackIntentPath(root, event.data.noteId), payload);
+    } catch (fallbackError) {
+      throw new AggregateError([canonicalError, fallbackError], 'note_created_intent_unavailable');
+    }
+  }
   return event;
 }
 
 export async function cancelNoteCreatedIntent(noteId, root) {
-  const path = intentPath(root, noteId);
-  await rm(path, { force: true });
-  await fsyncDirectory(dirname(path)).catch((error) => {
-    if (error?.code !== 'ENOENT') throw error;
-  });
+  const failures = [];
+  for (const path of intentPaths(root, noteId)) {
+    try {
+      await rm(path, { force: true });
+      await fsyncDirectory(dirname(path));
+    } catch (error) {
+      if (!['ENOENT', 'ENOTDIR'].includes(error?.code)) failures.push(error);
+    }
+  }
+  if (failures.length) throw new AggregateError(failures, 'note_created_intent_cancel_failed');
 }
 
 async function publishEvent(event, root, spool = new DurableEventSpool({ dataDir: notesEventsDataDir(root) })) {
@@ -195,24 +225,33 @@ export async function commitNoteCreatedIntent(note, root, options = {}) {
   }
 }
 
+function validateIntent(raw) {
+  let event;
+  try { event = JSON.parse(raw); } catch { throw new Error('invalid_note_created_intent'); }
+  const noteId = canonicalNoteId(event?.data?.noteId);
+  if (event?.source !== NOTES_EVENT_SOURCE
+    || event?.type !== NOTE_CREATED_EVENT_TYPE
+    || event?.id !== noteCreatedEventId(noteId)
+    || event?.dedupeKey !== noteCreatedEventId(noteId)) {
+    throw new Error('invalid_note_created_intent');
+  }
+  return event;
+}
+
 async function loadIntents(root) {
-  const dir = intentDir(root);
-  const names = await readdir(dir).catch((error) => {
-    if (error?.code === 'ENOENT') return [];
-    throw error;
-  });
-  const events = [];
-  for (const name of names.sort()) {
-    if (!name.endsWith('.json')) continue;
-    try {
-      const event = JSON.parse(await readFile(join(dir, name), 'utf8'));
-      if (event?.source === NOTES_EVENT_SOURCE && event?.type === NOTE_CREATED_EVENT_TYPE) events.push(event);
-    } catch {
-      // Leave malformed intent files for explicit operator inspection. They
-      // must never make reconciliation spin or expose their contents in logs.
+  const byNoteId = new Map();
+  for (const dir of [intentDir(root), notesCreatedFallbackIntentsDir(root)]) {
+    const names = await readdir(dir).catch((error) => {
+      if (['ENOENT', 'ENOTDIR'].includes(error?.code)) return [];
+      throw error;
+    });
+    for (const name of names.sort()) {
+      if (!name.endsWith('.json')) continue;
+      const event = validateIntent(await readFile(join(dir, name), 'utf8'));
+      byNoteId.set(event.data.noteId, event);
     }
   }
-  return events;
+  return [...byNoteId.values()];
 }
 
 async function reconcile(notes, root, options = {}) {
@@ -261,8 +300,15 @@ async function writeStatus(root, value) {
   await atomicWrite(statusPath(root), JSON.stringify({ version: 1, ...value }) + '\n');
 }
 
-export async function reconcileNoteCreatedEvents(notes, root, options = {}) {
+export async function reconcileNoteCreatedEvents(rootOrNotes, rootOrOptions = {}, maybeOptions = {}) {
+  // The legacy (notes, root, options) form remains accepted, but its possibly
+  // tolerant/partial array is deliberately ignored. Reconciliation always
+  // obtains its own strict snapshot before it can create baseline state.
+  const legacyCall = Array.isArray(rootOrNotes);
+  const root = legacyCall ? rootOrOptions : rootOrNotes;
+  const options = legacyCall ? maybeOptions : rootOrOptions;
   try {
+    const notes = await loadNotesStrict(root, options.strictLoadOptions);
     const result = await reconcile(notes, root, options);
     await writeStatus(root, {
       status: 'ok',
@@ -285,7 +331,7 @@ export async function reconcileNoteCreatedEvents(notes, root, options = {}) {
 
 async function countFiles(path, accept = () => true) {
   const names = await readdir(path).catch((error) => {
-    if (error?.code === 'ENOENT') return [];
+    if (['ENOENT', 'ENOTDIR'].includes(error?.code)) return [];
     throw error;
   });
   return names.filter(accept).length;
@@ -328,7 +374,10 @@ export async function notesEventsStatus(root) {
     ...status,
     baseline,
     baselineState,
-    pendingIntents: await countFiles(intentDir(root), (name) => name.endsWith('.json')),
+    pendingIntents: (await Promise.all([
+      countFiles(intentDir(root), (name) => name.endsWith('.json')),
+      countFiles(notesCreatedFallbackIntentsDir(root), (name) => name.endsWith('.json')),
+    ])).reduce((total, count) => total + count, 0),
     seenNotes: await countFiles(seenDir(root), (name) => UUID_RE.test(name)),
     spooledEvents: await countFiles(join(notesEventsDataDir(root), 'spool', 'inbox'), (name) => /^[a-f0-9]{64}\.json$/.test(name)),
   };

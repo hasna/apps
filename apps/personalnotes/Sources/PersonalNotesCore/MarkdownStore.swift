@@ -7,6 +7,11 @@ import Foundation
 /// forward-compatible with the `@hasna/personalnotes` catalog/CLI that indexes the
 /// same directory.
 public struct MarkdownStore {
+    public enum StrictLoadError: Error {
+        case invalidNoteFilename(URL)
+        case invalidNoteDocument(URL)
+    }
+
     public let rootURL: URL
     public let notesURL: URL
 
@@ -48,6 +53,62 @@ public struct MarkdownStore {
             }
         }
         // Newest-updated first.
+        notes.sort { $0.updatedAt > $1.updatedAt }
+        return notes
+    }
+
+    /// Correctness-critical snapshot used by event reconciliation. Unlike
+    /// `loadAll()`, this method never skips an entry when directory enumeration,
+    /// file reading, or parsing fails, so first-run baseline state cannot be
+    /// established from a partial view of the note store.
+    public func loadAllStrict(
+        listFiles: ((URL) throws -> [URL])? = nil,
+        readFile: ((URL) throws -> String)? = nil,
+        parseNote: ((String, UUID?) -> Note?)? = nil
+    ) throws -> [Note] {
+        try ensureDirectory()
+        let contents: [URL]
+        if let listFiles {
+            contents = try listFiles(notesURL)
+        } else {
+            contents = try FileManager.default.contentsOfDirectory(
+                at: notesURL,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )
+        }
+
+        var notes: [Note] = []
+        for url in contents
+            .filter({ $0.pathExtension.lowercased() == "md" })
+            .sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+            guard let fallbackID = idFromFilename(url) else {
+                throw StrictLoadError.invalidNoteFilename(url)
+            }
+            let raw: String
+            if let readFile {
+                raw = try readFile(url)
+            } else {
+                raw = try String(contentsOf: url, encoding: .utf8)
+            }
+            let normalized = raw.replacingOccurrences(of: "\r\n", with: "\n")
+            if normalized.hasPrefix("---\n") {
+                let lines = normalized.components(separatedBy: "\n")
+                guard lines.dropFirst().contains("---") else {
+                    throw StrictLoadError.invalidNoteDocument(url)
+                }
+            }
+            let parsed: Note?
+            if let parseNote {
+                parsed = parseNote(raw, fallbackID)
+            } else {
+                parsed = MarkdownStore.parse(raw, fallbackID: fallbackID)
+            }
+            guard let note = parsed, note.id == fallbackID else {
+                throw StrictLoadError.invalidNoteDocument(url)
+            }
+            notes.append(note)
+        }
         notes.sort { $0.updatedAt > $1.updatedAt }
         return notes
     }

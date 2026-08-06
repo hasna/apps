@@ -616,6 +616,6 @@ export async function runSync(options = {}) {
   summary.cursor = state.cursor;
   // Direct sync imports enqueue at their save boundary. Reconciliation is the
   // crash-recovery net for a note save that committed before its spool publish.
-  await reconcileNoteCreatedEvents([...localNotes.values()], root).catch(() => null);
+  await reconcileNoteCreatedEvents(root).catch(() => null);
   return summary;
 }

@@ -62,7 +62,7 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@hasna/events": "github:hasna/events#14939c7df2c4500fad0749ded25e34fa85d20a00",
+    "@hasna/events": "github:hasna/events#70ac34f324f483c38362341ea674c914337418dc",
     "hono": "^4.6.0"
   },
   "devDependencies": {

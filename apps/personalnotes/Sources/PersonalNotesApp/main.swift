@@ -784,8 +784,10 @@ final class NotesBridge: @unchecked Sendable {
                 try noteCreatedEvents.beginCreate(n)
                 hasIntent = true
             } catch {
-                // The startup reconciler tracks unseen note ids. Event state
-                // failure must never turn a successful note save into failure.
+                // A create must not commit without a durable metadata-only
+                // intent in either the canonical or fallback location.
+                NSLog("PersonalNotes: create intent unavailable")
+                return false
             }
         }
         do {
