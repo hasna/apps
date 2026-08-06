@@ -13,12 +13,24 @@ import type {
   Contact,
   CreateCompanyInput,
   CreateContactInput,
+  CreateEmailInput,
+  CreatePhoneInput,
   CreateTagInput,
+  Email,
+  Phone,
   Tag,
   UpdateCompanyInput,
   UpdateContactInput,
   UpdateTagInput,
 } from "../types/index.js";
+
+/**
+ * Contact read responses carry their child collections, matching what the
+ * on-box SQLite store returns from `loadContactDetails`. The ApiStore is typed
+ * against the SQLite return shape, so omitting these here is a silent parity
+ * break rather than a smaller-but-valid response.
+ */
+export type ContactWithMethods = Contact & { tags: Tag[]; emails: Email[]; phones: Phone[] };
 
 function uuid(): string {
   return crypto.randomUUID();
@@ -186,6 +198,31 @@ function mapTag(row: TagRow): Tag {
   };
 }
 
+function mapEmail(row: Record<string, unknown>): Email {
+  return {
+    id: String(row["id"]),
+    contact_id: (row["contact_id"] as string | null) ?? null,
+    company_id: (row["company_id"] as string | null) ?? null,
+    address: String(row["address"]),
+    type: row["type"] as Email["type"],
+    is_primary: Boolean(row["is_primary"]),
+    created_at: iso(row["created_at"]),
+  };
+}
+
+function mapPhone(row: Record<string, unknown>): Phone {
+  return {
+    id: String(row["id"]),
+    contact_id: (row["contact_id"] as string | null) ?? null,
+    company_id: (row["company_id"] as string | null) ?? null,
+    number: String(row["number"]),
+    country_code: (row["country_code"] as string | null) ?? null,
+    type: row["type"] as Phone["type"],
+    is_primary: Boolean(row["is_primary"]),
+    created_at: iso(row["created_at"]),
+  };
+}
+
 export interface ContactListFilter {
   limit?: number;
   offset?: number;
@@ -223,8 +260,79 @@ export class ContactsPgStore {
     return contacts.map((contact) => ({ ...contact, tags: tagsByContactId.get(contact.id) ?? [] }));
   }
 
+  /**
+   * Attach email/phone child rows in TWO batched queries regardless of how many
+   * contacts are passed. `loadDetails` below queries per contact, which is
+   * correct for a single row and an N+1 on a list or an export — this is the
+   * list-safe counterpart, shaped like `attachTags` above.
+   */
+  private async attachContactMethods<T extends Contact>(contacts: T[]): Promise<Array<T & { emails: Email[]; phones: Phone[] }>> {
+    if (contacts.length === 0) return [];
+    const ids = contacts.map((contact) => contact.id);
+    const emailsByContactId = new Map<string, Email[]>(ids.map((id) => [id, []]));
+    const phonesByContactId = new Map<string, Phone[]>(ids.map((id) => [id, []]));
+
+    const [emailRows, phoneRows] = await Promise.all([
+      this.client.many<Record<string, unknown>>(
+        `SELECT * FROM emails WHERE contact_id = ANY($1::text[]) ORDER BY created_at ASC`,
+        [ids],
+      ),
+      this.client.many<Record<string, unknown>>(
+        `SELECT * FROM phones WHERE contact_id = ANY($1::text[]) ORDER BY created_at ASC`,
+        [ids],
+      ),
+    ]);
+
+    for (const row of emailRows) emailsByContactId.get(String(row["contact_id"]))?.push(mapEmail(row));
+    for (const row of phoneRows) phonesByContactId.get(String(row["contact_id"]))?.push(mapPhone(row));
+
+    return contacts.map((contact) => ({
+      ...contact,
+      emails: emailsByContactId.get(contact.id) ?? [],
+      phones: phonesByContactId.get(contact.id) ?? [],
+    }));
+  }
+
+  /** The single readback contract for every contact-returning v1 path. */
+  private async attachContactDetails(contacts: Contact[]): Promise<ContactWithMethods[]> {
+    return this.attachContactMethods(await this.attachTags(contacts));
+  }
+
+  /**
+   * Append emails/phones, skipping duplicates the way the SQLite store does —
+   * case-insensitively on address, exactly on number. `WHERE NOT EXISTS` keeps
+   * the check and the insert in one statement so two concurrent appends of the
+   * same address cannot both pass a separate existence check.
+   */
+  private async insertContactMethods(
+    contactId: string,
+    emails: CreateEmailInput[] | undefined,
+    phones: CreatePhoneInput[] | undefined,
+  ): Promise<void> {
+    for (const email of emails ?? []) {
+      await this.client.query(
+        `INSERT INTO emails (id, contact_id, company_id, address, type, is_primary)
+         SELECT $1, $2, NULL, $3, $4, $5
+         WHERE NOT EXISTS (
+           SELECT 1 FROM emails WHERE contact_id = $2 AND LOWER(address) = LOWER($3)
+         )`,
+        [uuid(), contactId, email.address, email.type ?? "work", email.is_primary ?? false],
+      );
+    }
+    for (const phone of phones ?? []) {
+      await this.client.query(
+        `INSERT INTO phones (id, contact_id, company_id, number, country_code, type, is_primary)
+         SELECT $1, $2, NULL, $3, $4, $5, $6
+         WHERE NOT EXISTS (
+           SELECT 1 FROM phones WHERE contact_id = $2 AND number = $3
+         )`,
+        [uuid(), contactId, phone.number, phone.country_code ?? null, phone.type ?? "mobile", phone.is_primary ?? false],
+      );
+    }
+  }
+
   // ---- contacts ----
-  async listContacts(filter: ContactListFilter = {}): Promise<{ contacts: Array<Contact & { tags: Tag[] }>; count: number }> {
+  async listContacts(filter: ContactListFilter = {}): Promise<{ contacts: ContactWithMethods[]; count: number }> {
     const limit = Math.min(Math.max(filter.limit ?? 50, 1), 500);
     const offset = Math.max(filter.offset ?? 0, 0);
     const where: string[] = [];
@@ -255,16 +363,16 @@ export class ContactsPgStore {
       `SELECT * FROM contacts ${whereSql} ORDER BY display_name ASC LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params,
     );
-    return { contacts: await this.attachTags(rows.map(mapContact)), count: Number(countRow?.count ?? rows.length) };
+    return { contacts: await this.attachContactDetails(rows.map(mapContact)), count: Number(countRow?.count ?? rows.length) };
   }
 
-  async getContact(id: string): Promise<(Contact & { tags: Tag[] }) | null> {
+  async getContact(id: string): Promise<ContactWithMethods | null> {
     const row = await this.client.get<ContactRow>(`SELECT * FROM contacts WHERE id = $1`, [id]);
     if (!row) return null;
-    return (await this.attachTags([mapContact(row)]))[0]!;
+    return (await this.attachContactDetails([mapContact(row)]))[0]!;
   }
 
-  async createContact(input: CreateContactInput): Promise<Contact & { tags: Tag[] }> {
+  async createContact(input: CreateContactInput): Promise<ContactWithMethods> {
     const id = uuid();
     const display =
       input.display_name?.trim() ||
@@ -305,13 +413,16 @@ export class ContactsPgStore {
         input.timezone ?? null,
       ],
     );
+    // Child collections are part of the create input and were previously
+    // dropped: `contacts add --email` stored the contact and lost the address.
+    await this.insertContactMethods(id, input.emails, input.phones);
     // The public v1 Contact schema requires a safe membership readback on every
     // contact response. A newly created contact has no memberships, but still
     // returns the stable `tags: []` shape rather than omitting the field.
-    return (await this.attachTags([mapContact(row as ContactRow)]))[0]!;
+    return (await this.attachContactDetails([mapContact(row as ContactRow)]))[0]!;
   }
 
-  async updateContact(id: string, input: UpdateContactInput): Promise<(Contact & { tags: Tag[] }) | null> {
+  async updateContact(id: string, input: UpdateContactInput): Promise<ContactWithMethods | null> {
     const allowed: Record<string, unknown> = {};
     const columns = [
       "first_name", "last_name", "display_name", "nickname", "avatar_url", "notes", "birthday",
@@ -328,14 +439,25 @@ export class ContactsPgStore {
       allowed.custom_fields = JSON.stringify(input.custom_fields);
     }
     const keys = Object.keys(allowed);
-    if (keys.length === 0) return this.getContact(id);
+    const hasMethodAppends = Boolean(input.emails_add?.length || input.phones_add?.length);
+
+    // Only a PATCH that changes nothing at all is a no-op read. An
+    // emails_add/phones_add-only PATCH has real work to do, and returning here
+    // was the silent failure: zero allowed columns meant the unchanged contact
+    // came back at HTTP 200 with updated_at frozen and the address discarded.
+    if (keys.length === 0 && !hasMethodAppends) return this.getContact(id);
+
     const sets = keys.map((k, i) => `${k} = $${i + 2}`);
     sets.push(`updated_at = NOW()`);
     const row = await this.client.get<ContactRow>(
       `UPDATE contacts SET ${sets.join(", ")} WHERE id = $1 RETURNING *`,
       [id, ...keys.map((k) => allowed[k])],
     );
-    return row ? (await this.attachTags([mapContact(row)]))[0]! : null;
+    // A missing row is a missing contact; do not insert orphaned children.
+    if (!row) return null;
+
+    await this.insertContactMethods(id, input.emails_add, input.phones_add);
+    return (await this.attachContactDetails([mapContact(row)]))[0]!;
   }
 
   async deleteContact(id: string): Promise<boolean> {
