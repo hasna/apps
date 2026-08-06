@@ -649,7 +649,8 @@ switch (command) {
 
   case "scan": {
     const [target = "workspace", root] = positional;
-    const { scanWorkspaceExposures, scanHistoryExposures } = await import("./scanner.js");
+    const { scanWorkspaceExposures, scanHistoryExposures, scanStagedExposures, stagedScanExitCode } =
+      await import("./scanner.js");
     const common = {
       root,
       cursor: flags.cursor,
@@ -676,8 +677,24 @@ switch (command) {
         console.log(formatJson(result, flags.pretty === "true"));
         break;
       }
+      case "staged": {
+        // Commit-gate mode: the exit code is the answer, the JSON is the
+        // evidence. No --cursor — a gate returns a verdict on the whole staged
+        // set, and a paginated verdict is not one.
+        const result = scanStagedExposures({
+          root,
+          limit: common.limit,
+          maxFileBytes: positiveIntegerFlag(flags, "max-bytes"),
+          maxFiles: positiveIntegerFlag(flags, "max-files"),
+          maxBytesScanned: positiveIntegerFlag(flags, "max-scan-bytes"),
+          timeoutMs: positiveIntegerFlag(flags, "timeout-ms"),
+        });
+        console.log(formatJson(result, flags.pretty === "true" || flags.json === "true"));
+        process.exitCode = stagedScanExitCode(result);
+        break;
+      }
       default:
-        console.error("Usage: secrets scan workspace|history [path] [--limit <n>] [--cursor <cursor>] [--max-bytes <n>] [--max-files <n>] [--max-scan-bytes <n>] [--max-commits <n>] [--timeout-ms <n>] [--pretty]");
+        console.error("Usage: secrets scan workspace|history|staged [path] [--limit <n>] [--cursor <cursor>] [--max-bytes <n>] [--max-files <n>] [--max-scan-bytes <n>] [--max-commits <n>] [--timeout-ms <n>] [--pretty] [--json]");
         process.exit(1);
     }
     break;

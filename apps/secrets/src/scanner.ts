@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { relative, resolve, sep } from "node:path";
 
-export type ExposureScanKind = "workspace" | "history";
+export type ExposureScanKind = "workspace" | "history" | "staged";
 export type ExposureSeverity = "high" | "medium";
 export type ExposureRemediationPriority = "critical" | "high";
 export type ExposureRemediationStep =
@@ -34,7 +34,27 @@ export interface ExposureFinding {
   /** Copy/paste-ready location for task bodies and evidence metadata. */
   evidencePath: string;
   commit?: string;
+  /**
+   * Set when the finding came from a blob that is not text. `line` is always 1
+   * and `column` is a 1-based BYTE OFFSET into the blob, because a PNG or a
+   * sqlite file has no lines to count. Stated on the finding so a reader is
+   * never left to guess which of the two coordinate systems they are holding.
+   */
+  binary?: true;
   remediation: ExposureRemediation;
+}
+
+/** Why a staged blob was not scanned. Every skip is reported; none is silent. */
+export type ExposureSkipReason =
+  | "max_file_bytes"
+  | "max_bytes_scanned"
+  | "max_files"
+  | "unreadable";
+
+export interface ExposureSkip {
+  path: string;
+  reason: ExposureSkipReason;
+  bytes?: number;
 }
 
 export interface ExposureScanResult {
@@ -56,6 +76,12 @@ export interface ExposureScanResult {
     filesSkipped: number;
     bytesScanned: number;
     commitsScanned?: number;
+    /**
+     * Named skips, not just a count. A gate that silently declines to read a
+     * staged blob reproduces the defect this scan mode exists to close, so the
+     * path and the reason travel in the result and drive a non-zero exit.
+     */
+    skipped?: ExposureSkip[];
     errors: string[];
   };
   findings: ExposureFinding[];
@@ -73,8 +99,11 @@ interface Detector {
   valueGroup?: number;
   // High-signal detectors whose match is a rigid, vendor-specific structure
   // (fixed prefixes, PEM markers, etc.). For these the lexical placeholder
-  // blocklist ("example", "dummy", ...) must NOT suppress a match — e.g. the
-  // canonical AWS id AKIAIOSFODNN7EXAMPLE is still a real access-key shape.
+  // blocklist ("example", "dummy", ...) must NOT suppress a match — e.g. AWS's
+  // canonical published id (AKIA… …EXAMPLE) is still a real access-key shape.
+  // The id is elided rather than spelled out for the same reason the patterns
+  // below are assembled by token(): a literal credential shape in this file is
+  // a finding in every scan of this repo, including this scanner's own.
   // Only structural placeholder checks (interpolation syntax, too short) apply.
   structuralOnly?: boolean;
 }
@@ -90,6 +119,7 @@ interface ScanTextContext {
   source: ExposureScanKind;
   path: string;
   commit?: string;
+  binary?: boolean;
 }
 
 interface FindingPosition {
@@ -135,6 +165,20 @@ const DEFAULT_MAX_FILES = 5_000;
 const DEFAULT_MAX_BYTES_SCANNED = 25_000_000;
 const DEFAULT_MAX_COMMITS = 200;
 const MAX_COMMITS = 1_000;
+// Staged bounds are deliberately far looser than the workspace walk's. The
+// population is one commit's worth of content rather than a whole tree, and a
+// skip here is not a deferred chunk — it is a blob the gate did not read, which
+// forces a non-zero exit. Bounds tight enough to trip on an ordinary asset
+// commit would turn the gate into noise, and noise is how a gate gets bypassed.
+const DEFAULT_STAGED_MAX_FILE_BYTES = 10_000_000;
+const MAX_STAGED_MAX_FILE_BYTES = 200_000_000;
+const DEFAULT_STAGED_MAX_FILES = 10_000;
+const MAX_STAGED_MAX_FILES = 100_000;
+const DEFAULT_STAGED_MAX_BYTES_SCANNED = 200_000_000;
+// Bytes 0x20..0x7e plus tab. Shortest detector match is 12+ characters, so an
+// 8-byte floor cannot drop a run that could have carried one.
+const MIN_PRINTABLE_RUN = 8;
+const BINARY_DEADLINE_CHECK_STRIDE = 65_536;
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_TIMEOUT_MS = 60_000;
 const GIT_BUFFER_BYTES = 512 * 1024;
@@ -279,6 +323,35 @@ export interface HistoryExposureScanOptions {
   limit?: number;
   maxCommits?: number;
   timeoutMs?: number;
+}
+
+export interface StagedExposureScanOptions {
+  root?: string;
+  limit?: number;
+  maxFileBytes?: number;
+  maxFiles?: number;
+  maxBytesScanned?: number;
+  timeoutMs?: number;
+}
+
+/**
+ * Exit code for a staged scan used as a commit gate.
+ *
+ *   0  scanned every staged blob, found nothing      -> safe to commit
+ *   1  found at least one exposure                   -> block
+ *   2  could not scan everything, found nothing      -> block
+ *
+ * 2 exists because "I looked at everything and it was clean" and "I could not
+ * look" must not share an exit code. A gate that inspects nothing and a gate
+ * that inspects everything and finds nothing are byte-identical from outside
+ * unless the incomplete case is given its own answer.
+ */
+export function stagedScanExitCode(result: ExposureScanResult): 0 | 1 | 2 {
+  if (result.findingCount > 0) return 1;
+  if (result.truncated) return 2;
+  if (result.stats.errors.length > 0) return 2;
+  if ((result.stats.skipped?.length ?? 0) > 0) return 2;
+  return 0;
 }
 
 export function scanWorkspaceExposures(options: WorkspaceExposureScanOptions = {}): ExposureScanResult {
@@ -475,6 +548,288 @@ export function scanHistoryExposures(options: HistoryExposureScanOptions = {}): 
   return finalizeResult(result);
 }
 
+/**
+ * Scan the STAGED INDEX — the exact bytes `git commit` would write.
+ *
+ * Two things separate this from the workspace walk, and both are the point:
+ *
+ * 1. It reads each path's staged BLOB (`git cat-file`), never the working-tree
+ *    file and never a textual diff. Git emits no content whatsoever for a
+ *    binary in a diff, so no diff-based gate can ever see a credential inside a
+ *    PNG tEXt chunk, JPEG EXIF, a PDF, or a sqlite file. Reading the blob is
+ *    the only thing that can, and it covers every file extension for free.
+ * 2. NOTHING staged is excluded by path, directory, or extension. The workspace
+ *    walk skips node_modules/dist/*.png because it is sampling a tree it does
+ *    not intend to commit; everything here is about to become a commit, so an
+ *    exclusion list is just a hole with a rationale attached.
+ */
+export function scanStagedExposures(options: StagedExposureScanOptions = {}): ExposureScanResult {
+  const requestedRoot = resolve(options.root ?? process.cwd());
+  const limit = normalizeLimit(options.limit);
+  const maxFileBytes = normalizePositiveInteger(
+    options.maxFileBytes,
+    DEFAULT_STAGED_MAX_FILE_BYTES,
+    MAX_STAGED_MAX_FILE_BYTES,
+  );
+  const maxFiles = normalizePositiveInteger(options.maxFiles, DEFAULT_STAGED_MAX_FILES, MAX_STAGED_MAX_FILES);
+  const maxBytesScanned = normalizePositiveInteger(
+    options.maxBytesScanned,
+    DEFAULT_STAGED_MAX_BYTES_SCANNED,
+    DEFAULT_STAGED_MAX_BYTES_SCANNED,
+  );
+  const timeoutMs = normalizePositiveInteger(options.timeoutMs, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS);
+  const deadline = Date.now() + timeoutMs;
+  const result = createResult("staged", requestedRoot, limit, {
+    maxFileBytes,
+    maxFiles,
+    maxBytesScanned,
+    timeoutMs,
+  });
+  result.stats.skipped = [];
+
+  const gitRoot = resolveGitRoot(requestedRoot, Math.max(1, deadline - Date.now()));
+  if (!gitRoot) {
+    pushError(result, `Not a git workspace: ${requestedRoot}`);
+    return finalizeResult(result);
+  }
+
+  // ACMRT, not the ACM that the hand-rolled shell gates use. A rename-with-edit
+  // is reported as R and is therefore INVISIBLE to ACM at any extension —
+  // measured on git 2.43.0: an edit that adds a line to a renamed file yields
+  // an empty ACM name list and an empty ACM diff, while the staged blob plainly
+  // carries the new line. T covers a symlink replaced by a regular file. D is
+  // excluded because a deletion has no staged blob to read, and U because git
+  // refuses to commit with unmerged paths at all.
+  const names = runGit(gitRoot, [
+    "diff",
+    "--cached",
+    "--name-only",
+    "-z",
+    "--diff-filter=ACMRT",
+    "--",
+    gitPathspecForRoot(gitRoot, requestedRoot),
+  ], { timeoutMs: Math.max(1, deadline - Date.now()) });
+
+  if (names.error?.code === "ETIMEDOUT") {
+    markTruncated(result, "timeout");
+    pushError(result, "Timed out while listing staged paths.");
+    return finalizeResult(result);
+  }
+  if (names.status !== 0) {
+    pushError(result, trimError(names.stderr) || "Unable to list staged paths.");
+    return finalizeResult(result);
+  }
+
+  // -z keeps paths raw: no core.quotePath mangling, and newlines in a filename
+  // cannot forge an extra entry.
+  const staged = names.stdout.split("\0").filter(Boolean).sort();
+  if (!staged.length) return finalizeResult(result);
+
+  const meta = stagedBlobMetadata(gitRoot, staged, Math.max(1, deadline - Date.now()));
+
+  for (const path of staged) {
+    if (result.truncated) break;
+    if (Date.now() > deadline) {
+      markTruncated(result, "timeout");
+      break;
+    }
+
+    const findingPath = relativePath(requestedRoot, resolve(gitRoot, path));
+    if (isOutsideRoot(findingPath)) continue;
+
+    const entry = meta.get(path);
+    if (!entry) {
+      recordSkip(result, findingPath, "unreadable");
+      pushError(result, `Unable to resolve the staged blob for ${findingPath}.`);
+      continue;
+    }
+    if (entry.size > maxFileBytes) {
+      recordSkip(result, findingPath, "max_file_bytes", entry.size);
+      continue;
+    }
+    if (result.stats.filesScanned >= maxFiles) {
+      markTruncated(result, "max_files");
+      recordSkip(result, findingPath, "max_files", entry.size);
+      break;
+    }
+    if (result.stats.bytesScanned + entry.size > maxBytesScanned) {
+      markTruncated(result, "max_bytes");
+      recordSkip(result, findingPath, "max_bytes_scanned", entry.size);
+      break;
+    }
+
+    const blob = readGitBlob(gitRoot, entry.sha, Math.max(1, deadline - Date.now()));
+    if (!blob) {
+      recordSkip(result, findingPath, "unreadable", entry.size);
+      pushError(result, `Unable to read the staged blob for ${findingPath}.`);
+      continue;
+    }
+
+    result.stats.filesScanned++;
+    result.stats.bytesScanned += blob.length;
+
+    if (!isLikelyBinary(blob)) {
+      scanText(blob.toString("utf8"), { source: "staged", path: findingPath }, result, deadline);
+      continue;
+    }
+
+    // A UTF-16 file is "binary" to git and to the heuristic, but it is text,
+    // and it must be decoded rather than scanned as bytes — see decodeUtf16.
+    const decoded = decodeUtf16(blob);
+    if (decoded !== undefined) {
+      scanText(decoded, { source: "staged", path: findingPath }, result, deadline);
+    } else {
+      scanBinaryBuffer(blob, { source: "staged", path: findingPath, binary: true }, result, deadline);
+    }
+  }
+
+  return finalizeResult(result);
+}
+
+/**
+ * Walk the printable-ASCII runs of a non-text blob.
+ *
+ * A credential is by construction an ASCII run, so extracting runs finds every
+ * shape the detectors know while keeping previews readable and bounded — where
+ * splitting a PNG on newlines would hand the detectors megabyte-long lines of
+ * binary noise. `column` is the run's byte offset, which for a binary is the
+ * only coordinate that means anything.
+ */
+function scanBinaryBuffer(
+  buffer: Buffer,
+  context: ScanTextContext,
+  result: ExposureScanResult,
+  deadline: number,
+): void {
+  let runStart = -1;
+
+  const flush = (end: number): void => {
+    if (runStart < 0) return;
+    if (end - runStart >= MIN_PRINTABLE_RUN) {
+      scanTextLine(buffer.toString("latin1", runStart, end), 1, context, result, undefined, runStart);
+    }
+    runStart = -1;
+  };
+
+  for (let index = 0; index < buffer.length; index++) {
+    if (result.truncated) return;
+    if (index % BINARY_DEADLINE_CHECK_STRIDE === 0 && Date.now() > deadline) {
+      markTruncated(result, "timeout");
+      return;
+    }
+    const byte = buffer[index]!;
+    if (byte === 0x09 || (byte >= 0x20 && byte <= 0x7e)) {
+      if (runStart < 0) runStart = index;
+      continue;
+    }
+    flush(index);
+  }
+  flush(buffer.length);
+}
+
+/**
+ * Decode a UTF-16 blob, or undefined when it is not UTF-16.
+ *
+ * Two separate things make this load-bearing rather than a nicety. Git treats a
+ * UTF-16 file as BINARY, so a UTF-16LE `.json` — a covered extension carrying
+ * ordinary configuration — contributes nothing but "Binary files differ" to
+ * every diff, at any pathspec. And byte-level run extraction cannot rescue it
+ * either: in UTF-16LE an ASCII run is `X\0X\0X\0`, so every printable run is a
+ * single byte and no detector can span one. Decoding first turns the blob back
+ * into the text it always was, with real lines and real column numbers.
+ */
+function decodeUtf16(buffer: Buffer): string | undefined {
+  if (buffer.length < 4 || buffer.length % 2 !== 0) return undefined;
+  if (buffer[0] === 0xff && buffer[1] === 0xfe) return buffer.subarray(2).toString("utf16le");
+  if (buffer[0] === 0xfe && buffer[1] === 0xff) return swapEndian(buffer.subarray(2)).toString("utf16le");
+
+  // No BOM: infer the endianness from where the NUL bytes land. ASCII-dominant
+  // UTF-16LE puts them on odd indices, UTF-16BE on even ones. Requiring the
+  // opposite parity to be entirely NUL-free keeps genuine binaries — a PNG has
+  // NULs on both parities — out of this branch.
+  const sample = buffer.subarray(0, Math.min(buffer.length, 8_192));
+  let evenZero = 0;
+  let oddZero = 0;
+  for (let index = 0; index < sample.length; index++) {
+    if (sample[index] !== 0) continue;
+    if (index % 2 === 0) evenZero++;
+    else oddZero++;
+  }
+  const threshold = (sample.length / 2) * 0.6;
+  if (oddZero > threshold && evenZero === 0) return buffer.toString("utf16le");
+  if (evenZero > threshold && oddZero === 0) return swapEndian(buffer).toString("utf16le");
+  return undefined;
+}
+
+function swapEndian(buffer: Buffer): Buffer {
+  return Buffer.from(buffer).swap16();
+}
+
+/**
+ * One `git cat-file --batch-check` for every staged path: sha, type and size.
+ *
+ * `--batch-check` answers one line per input line, in order, so the mapping
+ * back to a path is POSITIONAL. A path containing a newline would therefore
+ * consume two input lines and silently shift every later answer by one —
+ * attributing one file's blob to a different file's name, in both directions.
+ * Such paths are excluded from the batch instead; they resolve to no metadata,
+ * which the caller turns into a reported skip and a non-zero exit. Failing
+ * loudly on a pathological filename beats mis-attributing a clean blob.
+ */
+function stagedBlobMetadata(
+  gitRoot: string,
+  paths: string[],
+  timeoutMs: number,
+): Map<string, { sha: string; size: number }> {
+  const meta = new Map<string, { sha: string; size: number }>();
+  const batchable = paths.filter((path) => !path.includes("\n") && !path.includes("\r"));
+  if (!batchable.length) return meta;
+
+  const result = runGit(gitRoot, ["cat-file", "--batch-check"], {
+    timeoutMs,
+    maxBuffer: 16 * 1024 * 1024,
+    input: `${batchable.map((path) => `:${path}`).join("\n")}\n`,
+  });
+  if (result.status !== 0) return meta;
+
+  const lines = result.stdout.split("\n");
+  for (let index = 0; index < batchable.length && index < lines.length; index++) {
+    // `<sha> <type> <size>` for a resolvable blob; anything else ("missing",
+    // "ambiguous") stays out of the map and becomes a reported skip. Note the
+    // lines are NOT filtered for emptiness — dropping a blank would reintroduce
+    // exactly the positional shift this function exists to avoid.
+    const parts = lines[index]!.trim().split(/\s+/);
+    if (parts.length !== 3 || parts[1] !== "blob") continue;
+    const size = Number.parseInt(parts[2]!, 10);
+    if (!Number.isFinite(size) || size < 0) continue;
+    meta.set(batchable[index]!, { sha: parts[0]!, size });
+  }
+  return meta;
+}
+
+/** Read a blob as raw bytes. utf8 here would corrupt exactly the binary class. */
+function readGitBlob(gitRoot: string, sha: string, timeoutMs: number): Buffer | undefined {
+  const result = spawnSync("git", ["-C", gitRoot, "cat-file", "blob", sha], {
+    maxBuffer: MAX_STAGED_MAX_FILE_BYTES,
+    timeout: timeoutMs,
+  });
+  if (result.status !== 0 || result.error || !result.stdout) return undefined;
+  return result.stdout as unknown as Buffer;
+}
+
+function recordSkip(
+  result: ExposureScanResult,
+  path: string,
+  reason: ExposureSkipReason,
+  bytes?: number,
+): void {
+  result.stats.filesSkipped++;
+  result.stats.skipped ??= [];
+  if (result.stats.skipped.length < 100) {
+    result.stats.skipped.push({ path, reason, ...(bytes === undefined ? {} : { bytes }) });
+  }
+}
+
 function createResult(
   source: ExposureScanKind,
   root: string,
@@ -636,16 +991,23 @@ function scanTextLine(
   context: ScanTextContext,
   result: ExposureScanResult,
   after?: FindingPosition,
+  /**
+   * Added to every reported column. Zero for real lines; for a printable run
+   * carved out of a binary blob it is the run's byte offset, so the finding
+   * points at the credential's position in the FILE rather than in the run.
+   */
+  columnOffset = 0,
 ): void {
   const spans = collectMatchSpans(line);
   if (!spans.length) return;
 
   const preview = truncatePreview(redactSpans(line, spans));
   for (const span of spans) {
+    const column = span.start + 1 + columnOffset;
     const position: FindingPosition = {
       path: context.path,
       line: lineNumber,
-      column: span.start + 1,
+      column,
       detector: span.detector.id,
     };
     if (after && compareFindingPositions(position, after) <= 0) continue;
@@ -653,7 +1015,6 @@ function scanTextLine(
       markTruncated(result, "findings");
       return;
     }
-    const column = span.start + 1;
     result.findings.push({
       id: exposureFindingId(context, span.detector.id, lineNumber, column),
       source: context.source,
@@ -665,6 +1026,7 @@ function scanTextLine(
       preview,
       evidencePath: evidencePath(position, context.commit),
       ...(context.commit ? { commit: context.commit } : {}),
+      ...(context.binary ? { binary: true as const } : {}),
       remediation: exposureRemediation(context.source, span.detector.severity),
     });
   }
@@ -768,12 +1130,13 @@ function gitPathspecForRoot(gitRoot: string, requestedRoot: string): string {
 function runGit(
   cwd: string,
   args: string[],
-  options: { maxBuffer?: number; timeoutMs?: number } = {},
+  options: { maxBuffer?: number; timeoutMs?: number; input?: string } = {},
 ): { status: number; stdout: string; stderr: string; error?: NodeJS.ErrnoException } {
   const result = spawnSync("git", ["-C", cwd, ...args], {
     encoding: "utf8",
     maxBuffer: options.maxBuffer ?? GIT_BUFFER_BYTES,
     timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    ...(options.input === undefined ? {} : { input: options.input }),
   });
   return {
     status: result.status ?? 1,
@@ -936,7 +1299,7 @@ function isPlaceholder(value: string, options: { lexical?: boolean } = {}): bool
   if (/^[*x_-]+$/i.test(trimmed)) return true;
   // Lexical hints only suppress loosely-structured detectors (assignments,
   // header values). Rigid vendor formats (structuralOnly) skip these so a real
-  // key shape like AKIAIOSFODNN7EXAMPLE is still reported.
+  // key shape like AWS's canonical published id is still reported.
   if (lexical) {
     if (lower.includes("example") || lower.includes("placeholder") || lower.includes("redacted")) return true;
     if (lower.includes("changeme") || lower.includes("dummy")) return true;
