@@ -11,6 +11,7 @@ const rootDir = join(import.meta.dir, "..");
 
 type PackageExport = { types: string; import: string };
 type PackageManifest = {
+  version: string;
   main: string;
   types: string;
   bin: Record<string, string>;
@@ -30,7 +31,32 @@ function runCli(...args: string[]) {
   };
 }
 
+function defaultRuntimeVersion(): string {
+  const env = { ...process.env };
+  delete env.HASNA_SECRETS_VERSION;
+  const result = Bun.spawnSync({
+    cmd: [
+      "bun",
+      "-e",
+      'import { VERSION } from "./src/version.ts"; process.stdout.write(VERSION);',
+    ],
+    cwd: rootDir,
+    env,
+  });
+  expect(result.exitCode).toBe(0);
+  expect(new TextDecoder().decode(result.stderr)).toBe("");
+  return new TextDecoder().decode(result.stdout);
+}
+
 describe("published package surface", () => {
+  it("keeps the default runtime version aligned with the package version", () => {
+    const manifest = JSON.parse(
+      readFileSync(join(rootDir, "package.json"), "utf8"),
+    ) as PackageManifest;
+
+    expect(defaultRuntimeVersion()).toBe(manifest.version);
+  });
+
   it("maps the package root and compatibility subpath to the typed SDK", () => {
     const manifest = JSON.parse(
       readFileSync(join(rootDir, "package.json"), "utf8"),
