@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.9] - 2026-08-07
+
+### Fixed
+
+- **SQLite project registration no longer rolls back unrelated successful task
+  writes.** The 0.15.7 authority path awaited project/list discovery and digest
+  work while a transaction remained open on the shared SQLite connection, so a
+  later authority failure could roll back an ordinary supported task write that
+  had already returned success. Registration now stages all asynchronous work
+  outside the transaction, revalidates the exact read set, and applies the staged
+  mutations atomically under `BEGIN IMMEDIATE`; forward and inverse fault
+  regressions prove unrelated writes survive while concurrent authority calls
+  serialize or retry safely ([#208](https://github.com/hasna/todos/pull/208)).
+- **Ambiguous `todos list --assigned <name>` reads now disclose that the returned
+  queue is partial.** Literal-only fallback remains non-fatal and preserves JSON
+  stdout, but stderr now names the ambiguity instead of making a populated partial
+  result indistinguishable from a complete queue
+  ([#206](https://github.com/hasna/todos/pull/206)).
+
+Containment: `0.15.7` remains deprecated and was removed from `latest`; the
+registry intentionally stays on known-good `0.15.6` until this fix is released.
+Version `0.15.8` was already reserved by a separate release lane and is skipped,
+so `0.15.9` is the first releasable package containing the SQLite repair.
+
 ## [0.15.7] - 2026-08-07
 
 ### Added
