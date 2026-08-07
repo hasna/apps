@@ -198,42 +198,62 @@ function parseChannelTotal(stderr: string): number {
   return total;
 }
 
+async function collectChannelPopulation(
+  runner: ConversationsChannelRunner,
+): Promise<CompleteChannelPopulation> {
+  const channels: ConversationsChannelIdentity[] = [];
+  const seen = new Set<string>();
+  const limit = 1_000;
+  let cursor = 0;
+  let total: number | undefined;
+  let pages = 0;
+
+  while (pages < 1_000) {
+    const result = runner(["channel", "list", "--archived", "--limit", String(limit), "--cursor", String(cursor), "--json"]);
+    if (!result.ok) throw new PrefixMigrationError(`Conversations channel inventory failed: ${result.stderr.trim() || "unknown CLI error"}`);
+    const page = parseChannelList(result.stdout);
+    const pageTotal = parseChannelTotal(result.stderr);
+    if (total === undefined) total = pageTotal;
+    if (pageTotal !== total) throw new PrefixMigrationError("Conversations channel producer total changed during inventory.");
+    if (page.length === 0) {
+      if (total !== channels.length) throw new PrefixMigrationError("Conversations channel inventory returned an empty non-terminal page.");
+      return { channels, total, pages: pages + 1, complete: true };
+    }
+    for (const channel of page) {
+      if (seen.has(channel.name)) throw new PrefixMigrationError(`Conversations channel inventory returned duplicate "${channel.name}".`);
+      seen.add(channel.name);
+      channels.push(channel);
+    }
+    pages++;
+    if (channels.length === total) return { channels, total, pages, complete: true };
+    if (channels.length > total) throw new PrefixMigrationError("Conversations channel inventory exceeded its producer total.");
+    cursor += page.length;
+  }
+  throw new PrefixMigrationError("Conversations channel inventory exceeded its page safety bound.");
+}
+
+function assertStableChannelPopulation(
+  first: CompleteChannelPopulation,
+  second: CompleteChannelPopulation,
+): void {
+  if (
+    first.total !== second.total
+    || first.channels.length !== second.channels.length
+    || first.channels.some((channel, index) => channel.name !== second.channels[index]?.name)
+  ) {
+    throw new PrefixMigrationError("Conversations channel inventory changed between complete traversals.");
+  }
+}
+
 export function createConversationsPrefixPort(
   runner: ConversationsChannelRunner = conversationsCliRunner(),
 ): ConversationsPrefixPort {
   return {
     async listChannels(): Promise<CompleteChannelPopulation> {
-      const channels: ConversationsChannelIdentity[] = [];
-      const seen = new Set<string>();
-      const limit = 1_000;
-      let cursor = 0;
-      let total: number | undefined;
-      let pages = 0;
-
-      while (pages < 1_000) {
-        const result = runner(["channel", "list", "--archived", "--limit", String(limit), "--cursor", String(cursor), "--json"]);
-        if (!result.ok) throw new PrefixMigrationError(`Conversations channel inventory failed: ${result.stderr.trim() || "unknown CLI error"}`);
-        const page = parseChannelList(result.stdout);
-        const pageTotal = parseChannelTotal(result.stderr);
-        if (total === undefined) total = pageTotal;
-        if (pageTotal !== total) throw new PrefixMigrationError("Conversations channel producer total changed during inventory.");
-        if (page.length === 0) {
-          if (total !== channels.length) throw new PrefixMigrationError("Conversations channel inventory returned an empty non-terminal page.");
-          return { channels, total, pages: pages + 1, complete: true };
-        }
-        for (const channel of page) {
-          if (seen.has(channel.name)) throw new PrefixMigrationError(`Conversations channel inventory returned duplicate "${channel.name}".`);
-          const previous = channels[channels.length - 1];
-          if (previous && previous.name > channel.name) throw new PrefixMigrationError("Conversations channel inventory order changed during traversal.");
-          seen.add(channel.name);
-          channels.push(channel);
-        }
-        pages++;
-        if (channels.length === total) return { channels, total, pages, complete: true };
-        if (channels.length > total) throw new PrefixMigrationError("Conversations channel inventory exceeded its producer total.");
-        cursor += page.length;
-      }
-      throw new PrefixMigrationError("Conversations channel inventory exceeded its page safety bound.");
+      const first = await collectChannelPopulation(runner);
+      const second = await collectChannelPopulation(runner);
+      assertStableChannelPopulation(first, second);
+      return second;
     },
 
     async renameChannel(input): Promise<ConversationsChannelIdentity> {
