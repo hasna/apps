@@ -2,6 +2,25 @@
 
 All notable changes to `@hasna/statusline` are documented here.
 
+## 0.0.7 - 2026-08-07
+
+- Add two opt-in usage segments — `usage-session` (session/5-hour) and
+  `usage-weekly` (weekly, the binding limit) — showing the percent **remaining**
+  for the account **this pane is running as**. They read the account uuid the
+  agent recorded for this process's `CLAUDE_CONFIG_DIR`
+  (`oauthAccount.accountUuid`) and the on-disk usage cache the `@hasna/accounts`
+  warmer maintains at `~/.hasna/accounts/cache/usage/<uuid>.json` — a synchronous
+  local read, **never the cloud API**, so they work inside a launched,
+  registry-stripped session and cost nothing per render. Headroom is derived the
+  way accounts derives it: scoped windows are ignored, a window past its reset
+  reads as fully replenished, and an unclassified window can only lower weekly
+  headroom. When the account is unknown or the cache is missing, stale (older
+  than 15 minutes), corrupt, keyed to another account, or an error entry (e.g. a
+  provider `429`), the segments render a neutral marker (`5h —` / `7d —`) rather
+  than a wrong number. `usage-weekly` escalates yellow→red as headroom runs low
+  and shows green while healthy. Both are off by default; enable with
+  `statusline enable usage-session usage-weekly`.
+
 ## 0.0.6 - 2026-08-06
 
 - Ignore a stale in-place switch marker so each pane shows its own identity
