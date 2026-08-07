@@ -1257,21 +1257,24 @@ describe("readDigest", () => {
       content: "second",
     });
 
-    const page1 = readDigest({ channel: "lossless", max_bytes: 630 });
+    // 680 rather than 630: the envelope now carries `cursor_semantics`, which
+    // costs ~31 bytes, so a one-message page no longer fits under 630. The
+    // behaviour under test is unchanged.
+    const page1 = readDigest({ channel: "lossless", max_bytes: 680 });
     expect(page1.message_ids).toEqual([first.id]);
     expect(page1.skipped_count).toBe(0);
     expect(page1.next_cursor).toBe(first.id);
     expect(page1.has_more).toBe(true);
-    expect(page1.byte_length).toBeLessThanOrEqual(630);
+    expect(page1.byte_length).toBeLessThanOrEqual(680);
 
-    const page2 = readDigest({ channel: "lossless", cursor: page1.next_cursor ?? undefined, max_bytes: 630 });
+    const page2 = readDigest({ channel: "lossless", cursor: page1.next_cursor ?? undefined, max_bytes: 680 });
     expect(page2.message_ids).toEqual([]);
     expect(page2.skipped_count).toBe(1);
     expect(page2.next_cursor).toBe(second.id);
-    expect(page2.byte_length).toBeLessThanOrEqual(630);
+    expect(page2.byte_length).toBeLessThanOrEqual(680);
   });
 
-  test("marks included messages read when a later message is skipped for byte budget", () => {
+  test("marks included messages read when a later message does not fit the byte budget", () => {
     const first = sendMessage({ from: "a", to: "skip-mark", channel: "skip-mark", content: "first" });
     const second = sendMessage({
       from: "agent-" + "x".repeat(700),
@@ -1282,8 +1285,14 @@ describe("readDigest", () => {
 
     const result = readDigest({ channel: "skip-mark", max_bytes: 900, mark_read: true, reader: "reader" });
     expect(result.message_ids).toEqual([first.id]);
-    expect(result.skipped_count).toBe(1);
-    expect(result.next_cursor).toBe(second.id);
+    // `second` did not fit ALONGSIDE `first`, so it is deferred to the next page
+    // rather than skipped: next_cursor names the last DELIVERED id and the
+    // caller re-reads `second` at the top of the next page. This test previously
+    // asserted next_cursor === second.id, which encoded the loss it now guards
+    // against — following that cursor stepped past `second` for good.
+    expect(result.skipped_count).toBe(0);
+    expect(result.next_cursor).toBe(first.id);
+    expect(result.has_more).toBe(true);
     expect(result.marked_read).toBe(1);
     expect(getMessageById(first.id)?.read_at).toBeTruthy();
     expect(getMessageById(second.id)?.read_at).toBeNull();
