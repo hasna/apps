@@ -35,7 +35,7 @@ export interface GuardedProjectMutationReceipt { "receipt_id": string; "operatio
 
 export interface GuardedProjectMutationRequest { "operation_id": string; "step_id": string; "direction"?: "forward" | "inverse"; "expected_revision": string; "patch": UpdateWorkspace; "dry_run"?: boolean; "agent_id"?: string; "source"?: string; "command"?: string; "response_byte_limit": number; "time_budget_ms": number }
 
-export interface GuardedProjectMutationResult { "ok": boolean; "dry_run": boolean; "outcome": "accepted" | "duplicate_of_accepted" | "terminal_nonacceptance" | "planned"; "idempotency_key": string; "request_digest": string; "precondition_digest": string; "project_id": string; "expected_revision": string; "current_revision": string; "before": Workspace; "after": Workspace; "receipt": GuardedProjectMutationReceipt; "response_control": GuardedResponseControl }
+export interface GuardedProjectMutationResult { "ok": boolean; "dry_run": boolean; "outcome": "accepted" | "duplicate_of_accepted" | "terminal_nonacceptance" | "planned"; "idempotency_key": string; "request_digest": string; "precondition_digest": string; "project_id": string; "expected_revision": string; "current_revision": string; "before": Workspace; "after": Workspace | null; "receipt": GuardedProjectMutationReceipt | null; "response_control": GuardedResponseControl }
 
 export interface GuardedProjectMutationReceiptLookup { "receipt": GuardedProjectMutationReceipt; "response_control": GuardedResponseControl }
 

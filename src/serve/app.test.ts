@@ -115,6 +115,14 @@ describe("projects-serve probes", () => {
     expect(spec.paths["/v1/projects/{id}/guarded-metadata/receipts"].get.operationId).toBe("lookupGuardedProjectMutationReceipt");
     expect(spec.paths["/v1/projects/{id}/guarded-metadata/rollback"].post.operationId).toBe("rollbackGuardedProjectMutation");
     expect(spec.components.schemas.GuardedProjectRead.required).toContain("project");
+    expect(spec.components.schemas.GuardedProjectMutationResult.properties.after.anyOf).toEqual([
+      { $ref: "#/components/schemas/Workspace" },
+      { type: "null" },
+    ]);
+    expect(spec.components.schemas.GuardedProjectMutationResult.properties.receipt.anyOf).toEqual([
+      { $ref: "#/components/schemas/GuardedProjectMutationReceipt" },
+      { type: "null" },
+    ]);
   });
 });
 

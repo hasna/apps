@@ -325,8 +325,8 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
             expected_revision: { type: "string" },
             current_revision: { type: "string" },
             before: ref("Workspace"),
-            after: { ...ref("Workspace"), nullable: true },
-            receipt: { ...ref("GuardedProjectMutationReceipt"), nullable: true },
+            after: { anyOf: [ref("Workspace"), { type: "null" }] },
+            receipt: { anyOf: [ref("GuardedProjectMutationReceipt"), { type: "null" }] },
             response_control: ref("GuardedResponseControl"),
           },
           required: [
