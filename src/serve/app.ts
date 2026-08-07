@@ -44,6 +44,13 @@ function boundedJsonResponse(body: unknown, bounds: { response_byte_limit: numbe
   return jsonResponse(payload, status);
 }
 
+function guardedJsonResponse(body: unknown, bounds: { response_byte_limit: number; time_budget_ms: number }, startedAtMs: number, status = 200): Response {
+  if (body && typeof body === "object" && !Array.isArray(body) && "response_control" in body) {
+    return jsonResponse(body, status);
+  }
+  return boundedJsonResponse(body, bounds, startedAtMs, status);
+}
+
 function errorResponse(message: string, status: number, reason?: string): Response {
   return jsonResponse(reason ? { error: message, reason } : { error: message }, status);
 }
@@ -205,7 +212,7 @@ async function route(
         time_budget_ms: Number(body.time_budget_ms),
       };
       const result = await store.guardedUpdateWorkspace({ ...body, project_id: id } as never);
-      return boundedJsonResponse(result, bounds, started);
+      return guardedJsonResponse(result, bounds, started);
     }
     if (sub === "guarded-metadata" && extra === "receipts" && method === "GET") {
       const started = Date.now();
@@ -222,7 +229,7 @@ async function route(
         max_items: Number(url.searchParams.get("max_items")) as 1,
         ...bounds,
       });
-      return boundedJsonResponse(result, bounds, started);
+      return guardedJsonResponse(result, bounds, started);
     }
     if (sub === "guarded-metadata" && extra === "rollback" && method === "POST") {
       const started = Date.now();
@@ -232,7 +239,7 @@ async function route(
         time_budget_ms: Number(body.time_budget_ms),
       };
       const result = await store.rollbackGuardedWorkspaceMutation({ ...body, project_id: id } as never);
-      return boundedJsonResponse(result, bounds, started);
+      return guardedJsonResponse(result, bounds, started);
     }
 
     if (sub === "archive" && method === "POST") return jsonResponse(await store.archiveWorkspace(id));

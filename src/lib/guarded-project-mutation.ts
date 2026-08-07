@@ -170,6 +170,27 @@ export function responseControl(
   };
 }
 
+export function withResponseControl<T extends Record<string, unknown>>(
+  payload: T,
+  bounds: GuardedProjectMutationBounds,
+  startedAtMs: number,
+): T & { response_control: GuardedProjectMutationControl } {
+  const envelope = {
+    ...payload,
+    response_control: {
+      response_byte_limit: bounds.response_byte_limit,
+      time_budget_ms: bounds.time_budget_ms,
+      response_bytes: 0,
+      elapsed_ms: 0,
+      complete: true,
+      truncated: false,
+    },
+  };
+  envelope.response_control = responseControl(envelope, bounds, startedAtMs);
+  envelope.response_control = responseControl(envelope, bounds, startedAtMs);
+  return envelope;
+}
+
 export function buildReceiptId(input: {
   operation_id: string;
   step_id: string;

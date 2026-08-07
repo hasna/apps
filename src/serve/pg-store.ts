@@ -15,9 +15,9 @@ import {
   deriveGuardedIdempotencyKey,
   preconditionDigest,
   requestDigest,
-  responseControl,
   rowToGuardedReceipt,
   timedOut,
+  withResponseControl,
   workspaceRevision,
   workspaceSnapshot,
 } from "../lib/guarded-project-mutation.js";
@@ -53,6 +53,10 @@ import type {
   WorkspaceRow,
   WorkspaceStatus,
 } from "../types/workspace.js";
+
+type TransactionCapableClient = TypedQueryClient & {
+  transaction?: <T>(fn: (client: TypedQueryClient) => Promise<T>) => Promise<T>;
+};
 
 // ---------------------------------------------------------------------------
 // Pure helpers (mirrors of the SQLite core, kept dependency-light)
@@ -219,6 +223,14 @@ export interface WorkspaceFilter {
 
 export class ProjectsPgStore {
   constructor(private readonly db: TypedQueryClient) {}
+
+  private async inTransaction<T>(operation: string, fn: (store: ProjectsPgStore) => Promise<T>): Promise<T> {
+    const transaction = (this.db as TransactionCapableClient).transaction;
+    if (typeof transaction !== "function") {
+      throw new ValidationError(`${operation} requires a transaction-capable Postgres client`);
+    }
+    return transaction.call(this.db, async (client) => fn(new ProjectsPgStore(client))) as Promise<T>;
+  }
 
   // --- slug uniqueness --------------------------------------------------
   private async ensureUniqueSlug(table: string, base: string, excludeId?: string): Promise<string> {
@@ -771,6 +783,10 @@ export class ProjectsPgStore {
   }
 
   async guardedUpdateWorkspace(input: GuardedProjectMutationRequest): Promise<GuardedProjectMutationResult> {
+    return this.inTransaction("guarded project metadata mutation", (store) => store.guardedUpdateWorkspaceInCurrentTransaction(input));
+  }
+
+  private async guardedUpdateWorkspaceInCurrentTransaction(input: GuardedProjectMutationRequest): Promise<GuardedProjectMutationResult> {
     const started = Date.now();
     assertCompleteStableProjectId(input.project_id);
     const direction = input.direction ?? "forward";
@@ -803,23 +819,23 @@ export class ProjectsPgStore {
         after: duplicate.after as unknown as Workspace,
         receipt: duplicateReceipt,
       };
-      return { ...result, response_control: responseControl(result, input, started) };
+      return withResponseControl(result, input, started);
     }
     const priorAccepted = await this.guardedAcceptedByStep({ operation_id: input.operation_id, step_id: input.step_id, direction, target_id: input.project_id });
     if (priorAccepted) {
       const receipt = await this.guardedTerminalNonacceptance({ operation_id: input.operation_id, step_id: input.step_id, direction, idempotency_key: idempotencyKey, target_id: input.project_id, request_digest: reqDigest, precondition_digest: preDigest, expected_revision: input.expected_revision, reason: "changed_request_or_precondition_for_step", before });
       const result = { ok: false, dry_run: false, outcome: "terminal_nonacceptance" as const, idempotency_key: idempotencyKey, request_digest: reqDigest, precondition_digest: preDigest, project_id: input.project_id, expected_revision: input.expected_revision, current_revision: currentRevision, before, after: null, receipt };
-      return { ...result, response_control: responseControl(result, input, started) };
+      return withResponseControl(result, input, started);
     }
     if (currentRevision !== input.expected_revision) {
       const receipt = await this.guardedTerminalNonacceptance({ operation_id: input.operation_id, step_id: input.step_id, direction, idempotency_key: idempotencyKey, target_id: input.project_id, request_digest: reqDigest, precondition_digest: preDigest, expected_revision: input.expected_revision, reason: "stale_revision", before });
       const result = { ok: false, dry_run: false, outcome: "terminal_nonacceptance" as const, idempotency_key: idempotencyKey, request_digest: reqDigest, precondition_digest: preDigest, project_id: input.project_id, expected_revision: input.expected_revision, current_revision: currentRevision, before, after: null, receipt };
-      return { ...result, response_control: responseControl(result, input, started) };
+      return withResponseControl(result, input, started);
     }
     if (input.dry_run) {
       const after = { ...before, ...input.patch } as Workspace;
       const result = { ok: true, dry_run: true, outcome: "planned" as const, idempotency_key: idempotencyKey, request_digest: reqDigest, precondition_digest: preDigest, project_id: input.project_id, expected_revision: input.expected_revision, current_revision: currentRevision, before, after, receipt: null };
-      return { ...result, response_control: responseControl(result, input, started) };
+      return withResponseControl(result, input, started);
     }
     if (timedOut(started, input.time_budget_ms)) throw new ValidationError("guarded mutation time budget exceeded before write");
     const after = await this.guardedConditionalUpdate(input.project_id, { ...input.patch, agent_id: input.agent_id ?? input.patch.agent_id, source: input.source ?? input.patch.source ?? "mcp", command: input.command ?? input.patch.command }, input.expected_revision);
@@ -827,7 +843,7 @@ export class ProjectsPgStore {
       const fresh = await this.requireWorkspace(input.project_id);
       const receipt = await this.guardedTerminalNonacceptance({ operation_id: input.operation_id, step_id: input.step_id, direction, idempotency_key: idempotencyKey, target_id: input.project_id, request_digest: reqDigest, precondition_digest: preDigest, expected_revision: input.expected_revision, reason: "stale_revision", before: fresh });
       const result = { ok: false, dry_run: false, outcome: "terminal_nonacceptance" as const, idempotency_key: idempotencyKey, request_digest: reqDigest, precondition_digest: preDigest, project_id: input.project_id, expected_revision: input.expected_revision, current_revision: workspaceRevision(fresh), before: fresh, after: null, receipt };
-      return { ...result, response_control: responseControl(result, input, started) };
+      return withResponseControl(result, input, started);
     }
     const receipt = await this.insertGuardedReceipt({
       receipt_id: buildReceiptId({ operation_id: input.operation_id, step_id: input.step_id, direction, idempotency_key: idempotencyKey, outcome: "accepted", target_id: input.project_id }),
@@ -849,7 +865,7 @@ export class ProjectsPgStore {
     });
     await this.recordEvent({ workspace_id: after.id, agent_id: input.agent_id, event_type: direction === "inverse" ? "guarded_metadata_mutation_rollback" : "guarded_metadata_mutation", source: input.source ?? "mcp", command: input.command, before: before as unknown as JsonObject, after: after as unknown as JsonObject, metadata: { receipt_id: receipt.receipt_id, operation_id: input.operation_id, step_id: input.step_id, idempotency_key: idempotencyKey } });
     const result = { ok: true, dry_run: false, outcome: "accepted" as const, idempotency_key: idempotencyKey, request_digest: reqDigest, precondition_digest: preDigest, project_id: input.project_id, expected_revision: input.expected_revision, current_revision: currentRevision, before, after, receipt };
-    return { ...result, response_control: responseControl(result, input, started) };
+    return withResponseControl(result, input, started);
   }
 
   async lookupGuardedWorkspaceMutationReceipt(input: GuardedProjectMutationReceiptLookupInput): Promise<GuardedProjectMutationReceiptLookupResult> {
@@ -873,11 +889,14 @@ export class ProjectsPgStore {
       }
     }
     const receipt = duplicates.at(-1) ?? accepted ?? receipts[0]!;
-    const result = { receipt, response_control: { complete: true, truncated: false, response_bytes: 0, elapsed_ms: 0, response_byte_limit: input.response_byte_limit, time_budget_ms: input.time_budget_ms } };
-    return { receipt, response_control: responseControl(result, input, started) };
+    return withResponseControl({ receipt }, input, started);
   }
 
   async rollbackGuardedWorkspaceMutation(input: GuardedProjectMutationRollbackRequest): Promise<GuardedProjectMutationResult> {
+    return this.inTransaction("guarded project metadata rollback", (store) => store.rollbackGuardedWorkspaceMutationInCurrentTransaction(input));
+  }
+
+  private async rollbackGuardedWorkspaceMutationInCurrentTransaction(input: GuardedProjectMutationRollbackRequest): Promise<GuardedProjectMutationResult> {
     assertCompleteStableProjectId(input.project_id);
     const row = await this.db.get<GuardedProjectMutationReceiptRow>("SELECT * FROM guarded_project_mutation_receipts WHERE receipt_id = $1", [input.accepted_receipt_id]);
     if (!row) throw new NotFoundError(`accepted receipt not found: ${input.accepted_receipt_id}`);
@@ -890,7 +909,7 @@ export class ProjectsPgStore {
     }
     const before = accepted.before as unknown as Workspace | null;
     if (!before) throw new ValidationError("accepted receipt has no before snapshot");
-    return this.guardedUpdateWorkspace({
+    return this.guardedUpdateWorkspaceInCurrentTransaction({
       project_id: input.project_id,
       operation_id: input.operation_id,
       step_id: input.step_id,

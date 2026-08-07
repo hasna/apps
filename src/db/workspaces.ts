@@ -13,8 +13,8 @@ import {
   preconditionDigest,
   requestDigest,
   rowToGuardedReceipt,
-  responseControl,
   timedOut,
+  withResponseControl,
   workspaceRevision,
   workspaceSnapshot,
 } from "../lib/guarded-project-mutation.js";
@@ -1161,7 +1161,7 @@ export function guardedUpdateWorkspace(input: GuardedProjectMutationRequest, db?
     precondition_digest: preDigest,
   });
 
-  const run = d.transaction(() => {
+  return d.transaction(() => {
     const before = getWorkspace(input.project_id, d);
     if (!before) throw new Error(`Workspace not found: ${input.project_id}`);
     const currentRevision = workspaceRevision(before);
@@ -1188,7 +1188,7 @@ export function guardedUpdateWorkspace(input: GuardedProjectMutationRequest, db?
         after: duplicate.after as unknown as Workspace,
         receipt: duplicateReceipt,
       };
-      return result;
+      return withResponseControl(result, input, started);
     }
     const priorAccepted = findGuardedAcceptedByStep({
       operation_id: input.operation_id,
@@ -1209,7 +1209,7 @@ export function guardedUpdateWorkspace(input: GuardedProjectMutationRequest, db?
         reason: "changed_request_or_precondition_for_step",
         before,
       }, d);
-      return {
+      return withResponseControl({
         ok: false,
         dry_run: false,
         outcome: "terminal_nonacceptance" as const,
@@ -1222,7 +1222,7 @@ export function guardedUpdateWorkspace(input: GuardedProjectMutationRequest, db?
         before,
         after: null,
         receipt,
-      };
+      }, input, started);
     }
     if (currentRevision !== input.expected_revision) {
       const receipt = terminalNonacceptanceReceipt({
@@ -1237,7 +1237,7 @@ export function guardedUpdateWorkspace(input: GuardedProjectMutationRequest, db?
         reason: "stale_revision",
         before,
       }, d);
-      return {
+      return withResponseControl({
         ok: false,
         dry_run: false,
         outcome: "terminal_nonacceptance" as const,
@@ -1250,10 +1250,10 @@ export function guardedUpdateWorkspace(input: GuardedProjectMutationRequest, db?
         before,
         after: null,
         receipt,
-      };
+      }, input, started);
     }
     if (input.dry_run) {
-      return {
+      return withResponseControl({
         ok: true,
         dry_run: true,
         outcome: "planned" as const,
@@ -1266,7 +1266,7 @@ export function guardedUpdateWorkspace(input: GuardedProjectMutationRequest, db?
         before,
         after: previewWorkspacePatch(before, input.patch),
         receipt: null,
-      };
+      }, input, started);
     }
     if (timedOut(started, input.time_budget_ms)) throw new Error("guarded mutation time budget exceeded before write");
     const after = updateWorkspace(input.project_id, {
@@ -1310,7 +1310,7 @@ export function guardedUpdateWorkspace(input: GuardedProjectMutationRequest, db?
       after: after as unknown as JsonObject,
       metadata: { receipt_id: receipt.receipt_id, operation_id: input.operation_id, step_id: input.step_id, idempotency_key: idempotencyKey },
     }, d);
-    return {
+    return withResponseControl({
       ok: true,
       dry_run: false,
       outcome: "accepted" as const,
@@ -1323,9 +1323,8 @@ export function guardedUpdateWorkspace(input: GuardedProjectMutationRequest, db?
       before,
       after,
       receipt,
-    };
+    }, input, started);
   })();
-  return { ...run, response_control: responseControl(run, input, started) };
 }
 
 export function lookupGuardedWorkspaceMutationReceipt(

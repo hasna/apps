@@ -113,7 +113,7 @@ import {
   type ProjectChannelEnsureResult,
   type StoreEnsureChannelOptions,
 } from "../lib/project-channel.js";
-import { responseControl } from "../lib/guarded-project-mutation.js";
+import { withResponseControl } from "../lib/guarded-project-mutation.js";
 import type {
   Agent,
   AgentRun,
@@ -464,8 +464,7 @@ class LocalProjectStore implements ProjectStore {
   async lookupGuardedProjectMutationReceipt(input: GuardedProjectMutationReceiptLookupInput): Promise<GuardedProjectMutationReceiptLookupResult> {
     const started = Date.now();
     const receipt = dbLookupGuardedWorkspaceMutationReceipt(input);
-    const result = { receipt, response_control: { complete: true, truncated: false, response_bytes: 0, elapsed_ms: 0, response_byte_limit: input.response_byte_limit, time_budget_ms: input.time_budget_ms } };
-    return { receipt, response_control: responseControl(result, input, started) };
+    return withResponseControl({ receipt }, input, started);
   }
 
   async rollbackGuardedProjectMutation(input: GuardedProjectMutationRollbackRequest): Promise<GuardedProjectMutationResult> {

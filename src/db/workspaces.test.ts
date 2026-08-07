@@ -283,6 +283,17 @@ describe("workspace domain services", () => {
         dry_run: true,
       }, db)).toThrow(/response byte budget exceeded/);
       expect(getWorkspace(workspace.id, db)?.name).toBe("Tiny Budget");
+
+      expect(() => guardedUpdateWorkspace({
+        project_id: workspace.id,
+        operation_id: "op-budget-write",
+        step_id: "rename",
+        expected_revision: workspace.updated_at,
+        patch: { name: "Must Not Mutate" },
+        response_byte_limit: 10,
+        time_budget_ms: 2_000,
+      }, db)).toThrow(/response byte budget exceeded/);
+      expect(getWorkspace(workspace.id, db)?.name).toBe("Tiny Budget");
     } finally {
       db.close();
     }
