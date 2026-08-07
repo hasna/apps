@@ -207,13 +207,22 @@ describe("hosted hygiene stuck (2582d190)", () => {
     const { server, calls, recoveredCount } = serveHosted([hostedRun(loop)]);
 
     try {
-      const result = await runCli(dataDir, ["--json", "hygiene", "stuck", "--apply"], hostedEnv(server.port));
+      const result = await runCli(dataDir, ["--json", "hygiene", "stuck", "--apply", "--limit", "1"], hostedEnv(server.port));
       expect(result.stderr).not.toContain("not available while flipped");
-      const report = JSON.parse(result.stdout) as { applied?: boolean; stuck?: number };
+      const report = JSON.parse(result.stdout) as {
+        applied?: boolean;
+        stuck?: number;
+        unchecked?: Array<{ id: string; reason: string }>;
+      };
       expect(calls).toContain("POST /v1/leases/recover");
       expect(recoveredCount()).toBe(1);
       expect(report.applied).toBe(true);
       expect(report.stuck).toBe(1);
+      // `--limit` is advertised as "maximum runs to reclaim in one pass" and the
+      // hosted endpoint accepts no bound at all. A flag that appears to work and
+      // silently does nothing is the defect class this command exists to fix, so
+      // the report must say the bound was not enforced rather than drop it.
+      expect((report.unchecked ?? []).map((entry) => entry.id)).toContain("apply-limit-not-enforced");
     } finally {
       server.stop(true);
       rmSync(dataDir, { recursive: true, force: true });

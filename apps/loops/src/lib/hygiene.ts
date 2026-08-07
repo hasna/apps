@@ -354,10 +354,11 @@ export interface StuckRunReport {
   /** Loop ids whose nextRunAt was advanced immediately after reclaiming a run, unblocking their cadence without waiting for a daemon tick. */
   advancedLoopIds: string[];
   /**
-   * Checks this report did NOT perform, each with the reason. Present on the
-   * hosted preview, which cannot observe process liveness from a machine that
-   * did not claim the run; absent on the local path, which does check it. An
-   * all-green or a large count must never read as more certain than it is.
+   * Things a reader must not assume from this report — checks it did not
+   * perform, and bounds it did not enforce — each with the reason. Present on
+   * the hosted paths, absent on the local one, which checks liveness itself and
+   * enforces its own limit. A count must never read as more certain, or more
+   * bounded, than it is.
    */
   unchecked?: Array<{ id: string; reason: string }>;
 }
@@ -610,5 +611,19 @@ export async function buildHostedStuckRunReport(
     // deferred has NOT had its cadence restored and must not be reported as if
     // it had.
     advancedLoopIds: result.abandoned.filter((run) => !advancementDeferredIds.has(run.id)).map((run) => run.loopId),
+    // `--limit` is advertised as "maximum runs to reclaim in one pass" and the
+    // hosted reclaim endpoint does NOT accept one — it calls
+    // recoverExpiredRunLeasesDetailed(now) with no bound and reclaims every
+    // eligible run in a single pass. Saying so is the whole point: a flag that
+    // appears to work and silently does nothing is the same defect class this
+    // command exists to fix, so the bound is reported as not enforced rather
+    // than quietly dropped.
+    unchecked: [
+      {
+        id: "apply-limit-not-enforced",
+        reason:
+          "the hosted reclaim endpoint takes no limit and reclaims every eligible run in one pass; --limit bounds the preview only, so this pass may have reclaimed more runs than requested.",
+      },
+    ],
   };
 }
