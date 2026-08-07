@@ -249,3 +249,62 @@ describe("ApiStore route mapping", () => {
     }
   });
 });
+
+describe("ApiStore search scope — cloud mode must not answer a question it cannot ask", () => {
+  /** A transport whose `/files` list returns one row, so mapping is inspectable. */
+  function transportReturningOneFile(): { transport: HasnaHttpTransport; queries: unknown[] } {
+    const queries: unknown[] = [];
+    const file = {
+      id: "f_1", source_id: "src_1", machine_id: "m_1",
+      path: "/docs/cert.pdf", name: "cert.pdf", ext: ".pdf",
+      size: 1, mime: "application/pdf", status: "active",
+      indexed_at: "2026-01-01T00:00:00.000Z", created_at: "2026-01-01T00:00:00.000Z",
+      tags: [],
+    };
+    const transport = {
+      baseUrl: "https://files.md/v1",
+      get: async (_path: string, opts?: unknown) => { queries.push(opts); return { items: [file] }; },
+      post: async () => ({}),
+      put: async () => ({}),
+      patch: async () => ({}),
+      del: async () => ({}),
+    } as unknown as HasnaHttpTransport;
+    return { transport, queries };
+  }
+
+  // ── must fire ──────────────────────────────────────────────────────────────
+  it("refuses --scope content rather than returning an empty list", async () => {
+    // /v1/files matches name and path only; the extracted-content FTS index is
+    // on-box. Serving this scope over the API answered [] at rc=0 for terms that
+    // appear only inside document bodies — a confident, wrong "not found".
+    const { transport } = transportReturningOneFile();
+    const store = new ApiStore(createHasnaStorageClient("files", transport));
+
+    await expect(store.searchFiles("Buzura", { search_scope: "content" })).rejects.toThrow(/content/i);
+    await expect(store.searchFiles("Buzura", { search_scope: "content" })).rejects.toThrow(/on-box|local/i);
+  });
+
+  it("labels cloud results as metadata matches so --scope all cannot imply content coverage", async () => {
+    const { transport } = transportReturningOneFile();
+    const store = new ApiStore(createHasnaStorageClient("files", transport));
+
+    const results = await store.searchFiles("cert", {});
+    expect(results).toHaveLength(1);
+    expect(results[0]!.search_match_sources).toEqual(["metadata"]);
+    expect(results[0]!.search_match_sources).not.toContain("content");
+  });
+
+  // ── must stay silent ───────────────────────────────────────────────────────
+  it("still serves the scopes the endpoint can actually answer", async () => {
+    const { transport, queries } = transportReturningOneFile();
+    const store = new ApiStore(createHasnaStorageClient("files", transport));
+
+    for (const scope of ["metadata", "all"] as const) {
+      const results = await store.searchFiles("cert", { search_scope: scope, limit: 10 });
+      expect(results).toHaveLength(1);
+      expect(results[0]!.id).toBe("f_1");
+    }
+    // The query term still reaches the endpoint — the guard rejects a scope, not a search.
+    expect(JSON.stringify(queries)).toContain("cert");
+  });
+});

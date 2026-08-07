@@ -489,6 +489,15 @@ export function createV1Handler(): V1Handler {
 
         return err("Not found", 404);
       } catch (e) {
+        // An unservable page is the caller's mistake, not the server's: answer
+        // 400 with the numbers attached so a client can page without scraping
+        // the prose. Anything else is still a 5xx.
+        if (e instanceof store.PageLimitError) {
+          return err(e.message, 400, { max_limit: e.max_limit, requested_limit: e.requested_limit });
+        }
+        if (e instanceof store.PageOffsetError) {
+          return err(e.message, 400, { requested_offset: e.requested_offset });
+        }
         return err((e as Error).message, 500);
       }
     },
