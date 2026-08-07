@@ -1290,9 +1290,11 @@ export function registerTaskCommands(program: Command) {
       // there. Suppressing it there can only ever remove a warning, never add one, so
       // it cannot regress the registered-but-idle silence this warning depends on.
       // The EMPTY case above and the PARTIAL case below are two different false
-      // readings of the same filter, and they are mutually exclusive by
-      // construction — one needs `tasks.length === 0`, the other needs rows — so
-      // they share the one roster fetch started above and can never both fire.
+      // readings of the same filter, and an ambiguous reference can produce EITHER:
+      // literal-only matching may return some name-stored rows, or none when every
+      // matching task was stored under an agent id. Classify ambiguity before
+      // looking at result length so the empty form cannot masquerade as a genuinely
+      // idle registered agent.
       //
       // PARTIAL (todos task 0cbf512c) is the newer of the two and the harder to
       // notice. An ambiguous name — one occupying 2+ agent rows — is resolved to
@@ -1311,7 +1313,10 @@ export function registerTaskCommands(program: Command) {
         try {
           const roster = await rosterPromise;
           if (!roster.degraded) {
-            if (tasks.length === 0) {
+            const notice = describeAssigneeFilter(assignedFilter, { agents: roster.agents });
+            if (notice.kind === "ambiguous") {
+              console.error(chalk.yellow(`Warning: ${notice.message}`));
+            } else if (tasks.length === 0) {
               const target = canonicalAgentRef(assignedFilter);
               const known = roster.agents.some(
                 (a) => canonicalAgentRef(a.name) === target || canonicalAgentRef(a.id) === target,
@@ -1321,11 +1326,6 @@ export function registerTaskCommands(program: Command) {
                   `Warning: no agent named '${assignedFilter}' is registered, so this empty result may be a\n` +
                   `         mistyped name rather than an empty queue. Check with 'todos agents'.`,
                 ));
-              }
-            } else {
-              const notice = describeAssigneeFilter(assignedFilter, { agents: roster.agents });
-              if (notice.kind === "ambiguous") {
-                console.error(chalk.yellow(`Warning: ${notice.message}`));
               }
             }
           }

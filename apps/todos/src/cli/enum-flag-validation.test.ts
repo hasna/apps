@@ -12,9 +12,12 @@
  * happened against the shared self-hosted authority, not local SQLite.
  */
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createTask } from "../db/task-crud.js";
+import { runMigrations } from "../db/schema.js";
 import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
 import { DISPATCH_STATUSES, TASK_PRIORITIES, TASK_STATUSES } from "../types/index.js";
 
@@ -546,6 +549,38 @@ describe("todos list warns when --assigned names no known agent", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("Assigned fixture");
     expect(result.stderr).not.toContain("is registered");
+  });
+
+  test("warns when an ambiguous name returns empty while an id-stored task exists", async () => {
+    const root = tempRoot("todos-assigned-ambiguous-empty-");
+    const db = new Database(join(root, "todos.db"), { create: true });
+    runMigrations(db);
+    db.run(
+      "INSERT INTO agents (id, name, status) VALUES (?, ?, ?)",
+      ["01d4cc12", "fabricius", "active"],
+    );
+    db.run(
+      "INSERT INTO agents (id, name, status) VALUES (?, ?, ?)",
+      ["4d77b218", "Fabricius", "active"],
+    );
+    createTask({ title: "ID-only queue item", assigned_to: "01d4cc12" }, db);
+    db.close();
+
+    const byName = await runLocal(
+      ["list", "--assigned", "fabricius", "--format", "compact"],
+      root,
+    );
+    expect(byName.exitCode).toBe(0);
+    expect(byName.stdout).toBe("");
+    expect(byName.stderr).toContain("result is INCOMPLETE");
+
+    const byId = await runLocal(
+      ["list", "--assigned", "01d4cc12", "--format", "compact"],
+      root,
+    );
+    expect(byId.exitCode).toBe(0);
+    expect(byId.stdout).toContain("ID-only queue item");
+    expect(byId.stderr).not.toContain("INCOMPLETE");
   });
 
   /**
