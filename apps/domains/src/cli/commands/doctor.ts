@@ -37,6 +37,31 @@ export function registerDoctorCommand(program: Command): void {
         failed++;
       }
 
+      // Named FIRST, before anything reads data: the store that gets resolved
+      // decides what every other check below is talking about. Until this
+      // existed, a command could read or write the production portfolio with
+      // no surface anywhere saying so — which is how 230 rows reached it on
+      // 2026-08-07 while the operator believed a local path was in effect.
+      // Reports the transport and the variable NAMES that drove it; never a
+      // credential value, and never a URL.
+      section("Store");
+      try {
+        const { getStore, explicitLocalPathVar } = await import("../../db/store.js");
+        const transport = (getStore() as unknown as { transport: string }).transport;
+        ok(
+          transport === "cloud-http"
+            ? "Resolved store: cloud-http — reads and writes go to the REMOTE portfolio"
+            : "Resolved store: local sqlite",
+        );
+        const pathVar = explicitLocalPathVar(process.env);
+        if (pathVar) ok(`Local path requested by ${pathVar}`);
+      } catch (error) {
+        fail(
+          `Store not resolvable: ${error instanceof Error ? error.message.split(". ")[0] : String(error)}`,
+          "Pick one store: HASNA_DOMAINS_STORAGE_MODE=local, or unset the local path variable",
+        );
+      }
+
       section("Database");
       try {
         const count = await countDomains();

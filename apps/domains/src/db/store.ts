@@ -730,10 +730,60 @@ export function domainsCloudEnv(env: Env = process.env): Env {
 /** Env var that deliberately re-enables the cloud transport inside a test run. */
 export const ALLOW_CLOUD_IN_TESTS = "HASNA_DOMAINS_ALLOW_CLOUD_IN_TESTS";
 
+/** Env var that deliberately resolves a local-path/cloud conflict in favour of cloud. */
+export const ALLOW_CLOUD_WITH_LOCAL_PATH = "HASNA_DOMAINS_ALLOW_CLOUD_WITH_LOCAL_PATH";
+
+/**
+ * Env vars that name a local sqlite file or directory. MUST stay in sync with
+ * `getDbPath()` in `database.ts` — these are exactly the names it reads.
+ * Setting any of them is an explicit request for the LOCAL transport, because
+ * no other transport has a sqlite file to point at.
+ */
+export const LOCAL_PATH_VARS = [
+  "DOMAINS_DB_PATH",
+  "HASNA_DOMAINS_DB_PATH",
+  "DOMAINS_DIR",
+  "HASNA_DOMAINS_DIR",
+] as const;
+
+/**
+ * Opt-in flags are read strictly: `=0`, `=false`, `=no`, `=off` and empty mean
+ * NO. A bare `Boolean(env[k])` treats the string "0" as true, which turns an
+ * operator's explicit refusal into consent — the fail-open shape tracked on
+ * 47115b75 for {@link ALLOW_CLOUD_IN_TESTS}. That flag is left as-is here
+ * because it belongs to that row; new flags do not repeat the defect.
+ */
+function enabled(value: string | undefined): boolean {
+  if (!value) return false;
+  const v = value.trim().toLowerCase();
+  return v !== "0" && v !== "false" && v !== "no" && v !== "off";
+}
+
+/** The first local-path var this env sets, or undefined when none is set. */
+export function explicitLocalPathVar(env: Env): string | undefined {
+  return LOCAL_PATH_VARS.find((key) => Boolean(env[key]));
+}
+
 /**
  * True when this process is a test runner. Measured on bun 1.3.14: `bun test`
  * sets `NODE_ENV=test` and does NOT set `BUN_TEST`, so NODE_ENV is the signal.
  * The jest/vitest worker vars are accepted too for non-bun runners.
+ *
+ * THIS FUNCTION IS NOT, AND CANNOT BE, THE PRODUCTION-WRITE GUARD. It answers
+ * "is a test runner in charge", and the set of runners is open-ended: `bun run`,
+ * a bare `bun script.ts`, `node`, and every CLI invocation set none of these,
+ * and each new runner would need another clause here. Measured on bun 1.3.14,
+ * station01, 2026-08-07:
+ *
+ *   bun test <file>   NODE_ENV="test"   -> underTest TRUE   (protected)
+ *   bun run <script>  NODE_ENV unset    -> underTest FALSE  (NOT protected)
+ *   bun <file>        NODE_ENV unset    -> underTest FALSE  (NOT protected)
+ *
+ * A guard keyed only on this therefore protects the suite and nothing else,
+ * which is precisely why the hazard was invisible: every test that could prove
+ * the guard works runs inside the one context it covers. The conflict check in
+ * {@link assertNoStoreConflict} keys on INTENT instead, and so needs no
+ * per-runner maintenance.
  */
 function underTest(env: Env): boolean {
   return (
@@ -790,20 +840,70 @@ function cloudAllowedHere(env: Env): boolean {
 }
 
 /**
+ * FAIL CLOSED on a contradictory store configuration.
+ *
+ * `DOMAINS_DB_PATH` (and its siblings) name a SQLITE FILE. Only the local
+ * transport has one. So setting such a variable while the cloud transport also
+ * resolves is not a preference to be ranked — it is two mutually exclusive
+ * requests, and nothing in the configuration says which the operator meant.
+ * The rule this repo is held to is explicit that configuring both a DB path and
+ * an API URL is a hard boot error, never a precedence rule.
+ *
+ * WHY THIS AND NOT "JUST HONOUR THE PATH". Silently preferring local would
+ * close the measured hole, and would open the mirror image of it: a caller who
+ * genuinely wants cloud but carries a stale `DOMAINS_DB_PATH` would read and
+ * write an invisible local file while believing it was on the portfolio. That
+ * is the same defect class — a silent store substitution — pointed the other
+ * way, and silent-and-wrong is strictly worse than loud-and-stopped.
+ *
+ * WHY THIS NEEDS NO MAINTENANCE. It keys on the operator's INTENT (a sqlite
+ * path was configured), not on detecting which runner is in charge, so a new
+ * runner cannot open a new hole in it.
+ *
+ * Ordered AFTER {@link cloudAllowedHere} deliberately: inside a test run the
+ * guard has already downgraded to local, which is unambiguously what a suite
+ * meant, so a test that sets both never reaches this error.
+ *
+ * Escape: set `HASNA_DOMAINS_ALLOW_CLOUD_WITH_LOCAL_PATH=1` to keep cloud, or
+ * `HASNA_DOMAINS_STORAGE_MODE=local` to take the path. Both are measured to
+ * work; the second is the one `src/test/setup.ts` already uses.
+ */
+function assertNoStoreConflict(env: Env): void {
+  if (enabled(env[ALLOW_CLOUD_WITH_LOCAL_PATH])) return;
+  const pathVar = explicitLocalPathVar(env);
+  if (!pathVar) return;
+  throw new Error(
+    `Refusing to resolve the cloud domains store while ${pathVar} is set: that variable ` +
+      `names a local sqlite file, so the configuration asks for BOTH stores at once and ` +
+      `nothing here can tell which you meant. Writing to the wrong one is silent — a plain ` +
+      `\`bun run\` script that set ${pathVar} put 230 rows into the production portfolio on ` +
+      `2026-08-07 while reporting success. Pick one: set HASNA_DOMAINS_STORAGE_MODE=local to ` +
+      `use ${pathVar}; unset ${pathVar} to use the cloud store; or set ` +
+      `${ALLOW_CLOUD_WITH_LOCAL_PATH}=1 if you really intend cloud with that variable present.`,
+  );
+}
+
+/**
  * Resolve the active {@link DomainsStore} for the current environment. Returns an
  * {@link ApiStore} when the client-flip contract resolves to cloud-http
  * (self_hosted/cloud), else a {@link LocalStore}. Throws if cloud was requested
  * but is misconfigured (so callers can never silently read the wrong dataset).
  * Inside a test run the cloud transport is refused — see {@link cloudAllowedHere}.
+ * Outside one, a local path set alongside cloud is refused — see
+ * {@link assertNoStoreConflict}.
  */
 export function getStore(env: Env = process.env): DomainsStore {
   const resolved = resolveStorageClient(APP, domainsCloudEnv(env));
   if (resolved.transport !== "cloud-http") return new LocalStore();
-  return cloudAllowedHere(env) ? new ApiStore(resolved.client) : new LocalStore();
+  if (!cloudAllowedHere(env)) return new LocalStore();
+  assertNoStoreConflict(env);
+  return new ApiStore(resolved.client);
 }
 
 /** True when the resolved store is the cloud HTTP transport. */
 export function isCloudStore(env: Env = process.env): boolean {
   if (resolveStorageClient(APP, domainsCloudEnv(env)).transport !== "cloud-http") return false;
-  return cloudAllowedHere(env);
+  if (!cloudAllowedHere(env)) return false;
+  assertNoStoreConflict(env);
+  return true;
 }

@@ -330,6 +330,7 @@ const portfolio = await domains.listDomains({ status: "active" });
 | `HASNA_DOMAINS_STORAGE_MODE`, `DOMAINS_STORAGE_MODE` | Client storage mode: `local` or `cloud` |
 | `HASNA_DOMAINS_API_URL`, `DOMAINS_API_URL` | Cloud HTTP API base URL for the CLI/library store |
 | `HASNA_DOMAINS_API_KEY`, `DOMAINS_API_KEY` | Cloud HTTP API key for the CLI/library store and SDK |
+| `HASNA_DOMAINS_ALLOW_CLOUD_WITH_LOCAL_PATH` | Set to `1` to keep the cloud store even though a local path variable is set. Without it that combination is a hard error — see below |
 | `HASNA_DOMAINS_DATABASE_URL` | Server-side Postgres DSN used by `domains-serve` and DB migrations |
 | `HASNA_DOMAINS_API_SIGNING_KEY` | HMAC signing secret used by `domains-serve` to verify API keys |
 | `AWS_PROFILE` | AWS profile for Route 53 Domains and hosted zones |
@@ -346,6 +347,28 @@ const portfolio = await domains.listDomains({ status: "active" });
 | `BRANDSIGHT_API_KEY`, `BRANDSIGHT_API_SECRET`, `BRANDSIGHT_CUSTOMER_ID` | Brandsight / GoDaddy Corporate Domains credentials |
 | `BRANDSIGHT_DEMO_STUBS`, `BRANDSIGHT_ALLOW_STUBS` | Set either to `1` to allow demo stub responses when the Brandsight API is unreachable |
 | `SEDO_PARTNER_ID`, `SEDO_API_KEY`, `SEDO_USERNAME`, `SEDO_PASSWORD` | Sedo marketplace API credentials |
+
+### Picking a store: a local path and cloud credentials are mutually exclusive
+
+`DOMAINS_DB_PATH`, `HASNA_DOMAINS_DB_PATH`, `DOMAINS_DIR` and `HASNA_DOMAINS_DIR` all name a
+**local sqlite file**. Only the local store has one. So setting any of them while
+`HASNA_DOMAINS_API_URL` + `HASNA_DOMAINS_API_KEY` are also set asks for two different stores at
+once, and `getStore()` **refuses to start** rather than pick one for you.
+
+This is deliberate. Before it, the combination silently resolved to the cloud store: a script
+that set `DOMAINS_DB_PATH` created no sqlite file, wrote to the remote portfolio, and printed
+success. Nothing on any surface said which store it had used.
+
+To resolve it, say which you meant:
+
+```sh
+HASNA_DOMAINS_STORAGE_MODE=local   # use the sqlite file the path variable names
+unset DOMAINS_DB_PATH              # use the cloud store
+HASNA_DOMAINS_ALLOW_CLOUD_WITH_LOCAL_PATH=1   # keep cloud with the variable present
+```
+
+`domains doctor` names the store it resolved, in its `Store` section, before any other check
+runs. Run it whenever you are unsure which dataset a command is about to touch.
 
 ## License
 
