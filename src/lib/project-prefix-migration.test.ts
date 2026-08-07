@@ -47,19 +47,21 @@ function makeHarness(initialProjects: Workspace[], initialChannels: Conversation
   const channels = new Map(initialChannels.map((item) => [item.name, structuredClone(item)]));
   const markers: Workspace[] = [];
   const events: unknown[] = [];
+  let rollbackCalls = 0;
 
   const conversations: ConversationsPrefixPort = {
     async listChannels() {
       const rows = [...channels.values()].sort((a, b) => a.name.localeCompare(b.name));
       return { channels: rows, total: rows.length, pages: 1, complete: true };
     },
-    async renameChannel({ current_name, target_name }) {
+    async renameChannel({ current_name, target_name, on_written }) {
       const before = channels.get(current_name);
       if (!before) throw new Error(`missing channel ${current_name}`);
       if (channels.has(target_name)) throw new Error(`collision ${target_name}`);
       const after = { ...before, name: target_name };
       channels.delete(current_name);
       channels.set(target_name, after);
+      await on_written(after);
       return after;
     },
   };
@@ -135,6 +137,7 @@ function makeHarness(initialProjects: Workspace[], initialChannels: Conversation
       accepted_receipt_id: string;
       expected_current_revision: string;
     }): Promise<GuardedProjectMutationResult> {
+      rollbackCalls++;
       const before = projects.get(input.project_id)!;
       const original = initialProjects.find((item) => item.id === input.project_id)!;
       const after = { ...original, updated_at: `${before.updated_at}-rolled-back` };
@@ -175,6 +178,9 @@ function makeHarness(initialProjects: Workspace[], initialChannels: Conversation
     conversations,
     markers,
     events,
+    get rollbackCalls() {
+      return rollbackCalls;
+    },
     projects,
     channels,
     write_marker: (updated: Workspace) => {
@@ -298,6 +304,68 @@ describe("project prefix migration", () => {
     expect([...harness.channels.keys()]).toEqual(["iproj-failure-lane"]);
   });
 
+  test("rolls back a project write when marker regeneration fails after the write", async () => {
+    const source = project({
+      id: "wks_markerfail0001",
+      name: "iproj-marker-lane",
+      status: "active",
+      integrations: {},
+    });
+    const harness = makeHarness([source], []);
+    let markerCalls = 0;
+    const result = await runProjectPrefixMigration({
+      store: harness.store,
+      conversations: harness.conversations,
+      write_marker: () => {
+        markerCalls++;
+        if (markerCalls === 1) throw new Error("marker write failed");
+        return { type: "workspace_marker", target: "/tmp/restored/.project.json", status: "completed" as const };
+      },
+      dry_run: false,
+      operation_id: "marker-failure-operation",
+    });
+    expect(result.ok).toBe(false);
+    expect(result.rollback.complete).toBe(true);
+    expect(harness.projects.get(source.id)!.name).toBe("iproj-marker-lane");
+    expect(harness.rollbackCalls).toBe(1);
+    expect(result.rollback.receipts).toHaveLength(1);
+    expect(result.rollback.receipts[0]).toMatchObject({ direction: "inverse", outcome: "accepted" });
+    expect(result.steps[0]).toMatchObject({ status: "rolled_back" });
+  });
+
+  test("rolls back a channel rename when post-rename readback fails", async () => {
+    const source = project({
+      id: "wks_channelfail0001",
+      name: "plain-project",
+      status: "active",
+      integrations: {},
+    });
+    const harness = makeHarness([source], [channel("iproj-channel-lane", source.id)]);
+    let renameCalls = 0;
+    const conversations: ConversationsPrefixPort = {
+      listChannels: harness.conversations.listChannels,
+      async renameChannel(input) {
+        const renamed = await harness.conversations.renameChannel(input);
+        renameCalls++;
+        if (renameCalls === 1) throw new Error("channel readback failed");
+        return renamed;
+      },
+    };
+    const result = await runProjectPrefixMigration({
+      store: harness.store,
+      conversations,
+      dry_run: false,
+      operation_id: "channel-failure-operation",
+    });
+    expect(result.ok).toBe(false);
+    expect(result.rollback.complete).toBe(true);
+    expect([...harness.channels.keys()]).toEqual(["iproj-channel-lane"]);
+    expect(renameCalls).toBe(2);
+    expect(result.rollback.receipts).toHaveLength(1);
+    expect(result.rollback.receipts[0]).toMatchObject({ direction: "inverse", outcome: "accepted" });
+    expect(result.steps[0]).toMatchObject({ status: "rolled_back" });
+  });
+
   test("installed Conversations CLI adapter requires complete paged inventory and verifies rename preservation", async () => {
     const rows = new Map([
       ["iproj-cli-lane", channel("iproj-cli-lane", "wks_cli0000001")],
@@ -327,7 +395,11 @@ describe("project prefix migration", () => {
     const inventory = await port.listChannels();
     expect(inventory.complete).toBe(true);
     expect(inventory.total).toBe(2);
-    const renamed = await port.renameChannel({ current_name: "iproj-cli-lane", target_name: "cli-lane" });
+    const renamed = await port.renameChannel({
+      current_name: "iproj-cli-lane",
+      target_name: "cli-lane",
+      on_written: () => undefined,
+    });
     expect(renamed.name).toBe("cli-lane");
     expect(renamed.member_count).toBe(3);
     expect(renamed.message_count).toBe(7);

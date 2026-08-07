@@ -35,6 +35,8 @@ export interface ConversationsPrefixPort {
   renameChannel(input: {
     current_name: string;
     target_name: string;
+    /** Called immediately after the package reports the rename write succeeded, before readback. */
+    on_written: (channel: ConversationsChannelIdentity) => Promise<void> | void;
   }): Promise<ConversationsChannelIdentity>;
 }
 
@@ -240,6 +242,8 @@ export function createConversationsPrefixPort(
       if (!before) throw new PrefixMigrationError(`Conversations channel source "${input.current_name}" is absent from complete pre-rename inventory.`);
       const result = runner(["channel", "rename", input.current_name, input.target_name, "--json"]);
       if (!result.ok) throw new PrefixMigrationError(`Conversations channel rename failed: ${result.stderr.trim() || "unknown CLI error"}`);
+      const written: ConversationsChannelIdentity = { ...before, name: input.target_name };
+      await input.on_written(written);
       const rawReturned = JSON.parse(result.stdout) as unknown;
       if (!rawReturned || typeof rawReturned !== "object" || Array.isArray(rawReturned) || (rawReturned as { name?: unknown }).name !== input.target_name) {
         throw new PrefixMigrationError(`Conversations channel rename did not read back target "${input.target_name}".`);
@@ -422,24 +426,30 @@ export async function runProjectPrefixMigration(options: RunProjectPrefixMigrati
       if (step.target_kind === "channel") {
         const before = channelByName.get(step.current_name);
         if (!before) throw new PrefixMigrationError(`Channel source "${step.current_name}" disappeared after complete inventory.`);
-        const after = await conversations.renameChannel({ current_name: step.current_name, target_name: step.target_name });
-        const receipt = migrationReceipt({
-          operation_id,
-          step_id: step.step_id,
-          direction: "forward",
-          outcome: "accepted",
-          target_kind: "channel",
-          target_id: step.target_id,
-          before: channelSnapshot(before),
-          after: channelSnapshot(after),
-          reason: null,
+        const after = await conversations.renameChannel({
+          current_name: step.current_name,
+          target_name: step.target_name,
+          on_written: async (written) => {
+            const receipt = migrationReceipt({
+              operation_id,
+              step_id: step.step_id,
+              direction: "forward",
+              outcome: "accepted",
+              target_kind: "channel",
+              target_id: step.target_id,
+              before: channelSnapshot(before),
+              after: channelSnapshot(written),
+              reason: null,
+            });
+            step.receipt = receipt;
+            step.status = "accepted";
+            accepted.push(step);
+            channelByName.delete(step.current_name);
+            channelByName.set(step.target_name, written);
+            await recordReceipt(options.store, step.project_id, receipt, options);
+          },
         });
-        step.receipt = receipt;
-        step.status = "accepted";
-        accepted.push(step);
-        channelByName.delete(step.current_name);
         channelByName.set(step.target_name, after);
-        await recordReceipt(options.store, step.project_id, receipt, options);
         continue;
       }
 
@@ -466,9 +476,9 @@ export async function runProjectPrefixMigration(options: RunProjectPrefixMigrati
       }
       step.receipt = guarded.receipt;
       step.status = "accepted";
-      if (guarded.after?.primary_path) step.marker = markerWriter(guarded.after);
       accepted.push(step);
       await recordReceipt(options.store, project.id, guarded.receipt, options);
+      if (guarded.after?.primary_path) step.marker = markerWriter(guarded.after);
     }
     return result;
   } catch (error) {
@@ -497,23 +507,31 @@ export async function runProjectPrefixMigration(options: RunProjectPrefixMigrati
     for (const step of [...accepted].reverse()) {
       try {
         if (step.target_kind === "channel") {
-          const after = await conversations.renameChannel({ current_name: step.target_name, target_name: step.current_name });
-          const receipt = migrationReceipt({
-            operation_id,
-            step_id: `${step.step_id}-rollback`,
-            direction: "inverse",
-            outcome: "accepted",
-            target_kind: "channel",
-            target_id: step.target_id,
-            before: channelSnapshot(after),
-            after: asJson(channelByName.get(step.current_name) ?? { name: step.current_name }),
-            reason: "forward saga failure",
+          const before = channelByName.get(step.target_name);
+          if (!before) throw new PrefixMigrationError(`Cannot rollback ${step.step_id}: renamed channel is absent.`);
+          const after = await conversations.renameChannel({
+            current_name: step.target_name,
+            target_name: step.current_name,
+            on_written: async (written) => {
+              const receipt = migrationReceipt({
+                operation_id,
+                step_id: `${step.step_id}-rollback`,
+                direction: "inverse",
+                outcome: "accepted",
+                target_kind: "channel",
+                target_id: step.target_id,
+                before: channelSnapshot(before),
+                after: channelSnapshot(written),
+                reason: "forward saga failure",
+              });
+              result.rollback.receipts.push(receipt);
+              channelByName.delete(step.target_name);
+              channelByName.set(step.current_name, written);
+              await recordReceipt(options.store, step.project_id, receipt, options);
+            },
           });
-          result.rollback.receipts.push(receipt);
-          step.status = "rolled_back";
-          channelByName.delete(step.target_name);
           channelByName.set(step.current_name, after);
-          await recordReceipt(options.store, step.project_id, receipt, options);
+          step.status = "rolled_back";
         } else {
           const receipt = step.receipt as GuardedProjectMutationReceipt | null;
           if (!receipt?.post_revision) throw new PrefixMigrationError(`Cannot rollback ${step.step_id}: accepted receipt has no post revision.`);
@@ -533,8 +551,8 @@ export async function runProjectPrefixMigration(options: RunProjectPrefixMigrati
             throw new PrefixMigrationError(`Rollback ${step.step_id} did not return an accepted receipt.`);
           }
           result.rollback.receipts.push(rollback.receipt);
-          step.status = "rolled_back";
           if (rollback.after?.primary_path) step.marker = markerWriter(rollback.after);
+          step.status = "rolled_back";
           await recordReceipt(options.store, step.project_id, rollback.receipt, options);
         }
       } catch {
