@@ -3,6 +3,7 @@ import type { Database } from "bun:sqlite";
 import { getDatabase, resetDatabase } from "../db/database.js";
 import { createLocalSqliteTodosStorageAdapter } from "../storage/local-sqlite.js";
 import type { TodosStorageAdapter } from "../storage/interfaces.js";
+import { ResourceConflictError } from "../types/index.js";
 import { handleV1Request, type V1RequestDependencies } from "./v1.js";
 import { createLocalPrGroupLedger } from "../pr-groups/index.js";
 import {
@@ -59,6 +60,297 @@ beforeEach(() => {
 afterEach(() => resetDatabase());
 
 describe("/v1 task-list cloud parity", () => {
+  test("plans and idempotently applies an exact-project task-list repair", async () => {
+    const created = await request("/v1/projects", "POST", {
+      name: "Dubai Fraud",
+      path: "/workspace/dubai-fraud",
+      task_list_id: "dubai-fraud",
+    });
+    expect(created?.status).toBe(201);
+    const project = (await created!.json() as { project: { id: string; updated_at: string } }).project;
+
+    const plan = await request(`/v1/projects/${project.id}/task-list/ensure`);
+    expect(plan?.status).toBe(200);
+    expect(await plan!.json()).toMatchObject({
+      mode: "plan",
+      action: "would_create",
+      project: { id: project.id, name: "Dubai Fraud", task_list_id: "dubai-fraud" },
+      task_list: null,
+      receipt: null,
+    });
+    expect(await store.taskLists.list(project.id)).toEqual([]);
+
+    const first = await request(
+      `/v1/projects/${project.id}/task-list/ensure`,
+      "POST",
+      {
+        expected_project_revision: project.updated_at,
+        idempotency_key: "dubai-fraud-default-task-list",
+      },
+    );
+    expect(first?.status).toBe(201);
+    const firstBody = await first!.json() as {
+      mode: string;
+      action: string;
+      project: { id: string; name: string; task_list_id: string };
+      task_list: { id: string; project_id: string; slug: string; name: string; updated_at: string };
+      receipt: { receipt_id: string; project_id: string; task_list_id: string; result_revision: string; created_by_operation: boolean; rollback_supported: boolean };
+    };
+    expect(firstBody).toMatchObject({
+      mode: "apply",
+      action: "created",
+      project: { id: project.id, name: "Dubai Fraud", task_list_id: "dubai-fraud" },
+      task_list: { project_id: project.id, slug: "dubai-fraud", name: "Dubai Fraud" },
+      receipt: {
+        project_id: project.id,
+        created_by_operation: true,
+        rollback_supported: true,
+      },
+    });
+    expect(firstBody.receipt.task_list_id).toBe(firstBody.task_list.id);
+    expect(firstBody.receipt.result_revision).toBe(firstBody.task_list.updated_at);
+
+    const second = await request(
+      `/v1/projects/${project.id}/task-list/ensure`,
+      "POST",
+      {
+        expected_project_revision: project.updated_at,
+        idempotency_key: "dubai-fraud-default-task-list",
+      },
+    );
+    expect(second?.status).toBe(200);
+    const secondBody = await second!.json() as typeof firstBody;
+    expect(secondBody).toMatchObject({ mode: "apply", action: "already_present" });
+    expect(secondBody.task_list.id).toBe(firstBody.task_list.id);
+    expect(secondBody.receipt.receipt_id).toBe(firstBody.receipt.receipt_id);
+    expect(await store.taskLists.list(project.id)).toHaveLength(1);
+
+    const mismatchedKey = await request(
+      `/v1/projects/${project.id}/task-list/ensure`,
+      "POST",
+      {
+        expected_project_revision: project.updated_at,
+        idempotency_key: "different-operation-key",
+      },
+    );
+    expect(mismatchedKey?.status).toBe(409);
+    expect(await mismatchedKey!.json()).toMatchObject({
+      code: "PROJECT_TASK_LIST_IDEMPOTENCY_CONFLICT",
+    });
+    expect(await store.taskLists.list(project.id)).toHaveLength(1);
+
+    const exactProject = await request(`/v1/projects/${project.id}`);
+    const exactList = await request(`/v1/task-lists/${firstBody.task_list.id}`);
+    expect((await exactProject!.json() as { project: { id: string; name: string } }).project)
+      .toMatchObject({ id: project.id, name: "Dubai Fraud" });
+    expect((await exactList!.json() as { task_list: { id: string; project_id: string; slug: string } }).task_list)
+      .toMatchObject({ id: firstBody.task_list.id, project_id: project.id, slug: "dubai-fraud" });
+  });
+
+  test("rejects a raced create when the project revision changed before conflict reconciliation", async () => {
+    const created = await request("/v1/projects", "POST", {
+      name: "Raced Project",
+      path: "/workspace/raced-project",
+      task_list_id: "raced-project",
+    });
+    const project = (await created!.json() as { project: { id: string; updated_at: string } }).project;
+    const originalCreate = store.taskLists.create;
+    const originalGetProject = store.projects.get;
+    let exposeRacedRevision = false;
+    store.projects.get = async (id) => {
+      const current = await originalGetProject(id);
+      return exposeRacedRevision && current
+        ? { ...current, updated_at: "2099-01-01T00:00:00.000Z" }
+        : current;
+    };
+    store.taskLists.create = async (input) => {
+      await originalCreate(input);
+      exposeRacedRevision = true;
+      throw new ResourceConflictError("TASK_LIST_SLUG_CONFLICT", "simulated raced create");
+    };
+
+    const response = await request(
+      `/v1/projects/${project.id}/task-list/ensure`,
+      "POST",
+      {
+        expected_project_revision: project.updated_at,
+        idempotency_key: "raced-project-task-list",
+      },
+    );
+    expect(response?.status).toBe(409);
+    expect(await response!.json()).toMatchObject({ code: "PROJECT_REVISION_CONFLICT" });
+    expect(await store.taskLists.list(project.id)).toHaveLength(1);
+  });
+
+  test("fails missing declarations and legacy global-slug collisions without mutation", async () => {
+    const missing = await request(
+      "/v1/projects/ffffffff-ffff-4fff-8fff-ffffffffffff/task-list/ensure",
+    );
+    expect({ status: missing?.status, body: await missing!.json() }).toMatchObject({
+      status: 404,
+      body: { code: "PROJECT_NOT_FOUND" },
+    });
+
+    const created = await request("/v1/projects", "POST", {
+      name: "Collision",
+      path: "/workspace/collision",
+      task_list_id: "collision",
+    });
+    const project = (await created!.json() as { project: { id: string } }).project;
+    db.run("UPDATE projects SET task_list_id = NULL WHERE id = ?", [project.id]);
+    const undeclared = await request(`/v1/projects/${project.id}/task-list/ensure`);
+    expect({ status: undeclared?.status, body: await undeclared!.json() }).toMatchObject({
+      status: 409,
+      body: { code: "PROJECT_TASK_LIST_NOT_DECLARED" },
+    });
+    expect(await store.taskLists.list(project.id)).toEqual([]);
+
+    db.run("UPDATE projects SET task_list_id = 'collision' WHERE id = ?", [project.id]);
+    await store.taskLists.create({ name: "Legacy collision", slug: "collision" });
+    const collision = await request(`/v1/projects/${project.id}/task-list/ensure`);
+    expect({ status: collision?.status, body: await collision!.json() }).toMatchObject({
+      status: 409,
+      body: { code: "TASK_LIST_SCOPE_COLLISION" },
+    });
+    expect(await store.taskLists.list(project.id)).toEqual([]);
+  });
+
+  test("conditionally rolls back only an unchanged operation-owned task list", async () => {
+    const created = await request("/v1/projects", "POST", {
+      name: "Rollback",
+      path: "/workspace/rollback",
+      task_list_id: "rollback",
+    });
+    const project = (await created!.json() as { project: { id: string; updated_at: string } }).project;
+    const applied = await request(`/v1/projects/${project.id}/task-list/ensure`, "POST", {
+      expected_project_revision: project.updated_at,
+      idempotency_key: "rollback-default-task-list",
+    });
+    const body = await applied!.json() as {
+      task_list: { id: string; updated_at: string };
+      receipt: { receipt_id: string; result_revision: string };
+    };
+
+    const rolledBack = await request(
+      `/v1/projects/${project.id}/task-list/rollback`,
+      "POST",
+      {
+        receipt_id: body.receipt.receipt_id,
+        expected_task_list_revision: body.receipt.result_revision,
+      },
+    );
+    expect(rolledBack?.status).toBe(200);
+    expect(await rolledBack!.json()).toMatchObject({
+      action: "removed",
+      project_id: project.id,
+      task_list_id: body.task_list.id,
+      accepted_receipt_id: body.receipt.receipt_id,
+    });
+    expect(await store.taskLists.get(body.task_list.id)).toBeNull();
+  });
+
+  test("refuses rollback after the operation-owned task list drifts", async () => {
+    const created = await request("/v1/projects", "POST", {
+      name: "Rollback drift",
+      path: "/workspace/rollback-drift",
+      task_list_id: "rollback-drift",
+    });
+    const project = (await created!.json() as { project: { id: string; updated_at: string } }).project;
+    const applied = await request(`/v1/projects/${project.id}/task-list/ensure`, "POST", {
+      expected_project_revision: project.updated_at,
+      idempotency_key: "rollback-drift-default-task-list",
+    });
+    const body = await applied!.json() as {
+      task_list: { id: string };
+      receipt: { receipt_id: string; result_revision: string };
+    };
+    await store.taskLists.update(body.task_list.id, { description: "operator-owned change" });
+
+    const rollback = await request(
+      `/v1/projects/${project.id}/task-list/rollback`,
+      "POST",
+      {
+        receipt_id: body.receipt.receipt_id,
+        expected_task_list_revision: body.receipt.result_revision,
+      },
+    );
+    expect({ status: rollback?.status, body: await rollback!.json() }).toMatchObject({
+      status: 409,
+      body: { code: "PROJECT_TASK_LIST_ROLLBACK_CONFLICT", conflict: true },
+    });
+    expect(await store.taskLists.get(body.task_list.id)).toMatchObject({
+      id: body.task_list.id,
+      description: "operator-owned change",
+    });
+  });
+
+  test("refuses rollback when dependents exist or the backend lacks atomic conditional delete", async () => {
+    const created = await request("/v1/projects", "POST", {
+      name: "Rollback safety",
+      path: "/workspace/rollback-safety",
+      task_list_id: "rollback-safety",
+    });
+    const project = (await created!.json() as { project: { id: string; updated_at: string } }).project;
+    const applied = await request(`/v1/projects/${project.id}/task-list/ensure`, "POST", {
+      expected_project_revision: project.updated_at,
+      idempotency_key: "rollback-safety-default-list",
+    });
+    const body = await applied!.json() as {
+      task_list: { id: string };
+      receipt: { receipt_id: string; result_revision: string; rollback_supported: boolean };
+    };
+    expect(body.receipt.rollback_supported).toBe(true);
+    await store.tasks.create({
+      title: "Dependent task",
+      project_id: project.id,
+      task_list_id: body.task_list.id,
+    });
+
+    const dependentRollback = await request(
+      `/v1/projects/${project.id}/task-list/rollback`,
+      "POST",
+      {
+        receipt_id: body.receipt.receipt_id,
+        expected_task_list_revision: body.receipt.result_revision,
+      },
+    );
+    expect({ status: dependentRollback?.status, body: await dependentRollback!.json() }).toMatchObject({
+      status: 409,
+      body: { code: "PROJECT_TASK_LIST_ROLLBACK_HAS_DEPENDENTS", conflict: true },
+    });
+    expect(await store.taskLists.get(body.task_list.id)).not.toBeNull();
+
+    const atomicStore = store;
+    store = {
+      ...atomicStore,
+      taskLists: {
+        ...atomicStore.taskLists,
+        deleteIfUnchangedAndUnused: undefined,
+      },
+    };
+    const reapplied = await request(`/v1/projects/${project.id}/task-list/ensure`, "POST", {
+      expected_project_revision: project.updated_at,
+      idempotency_key: "rollback-safety-default-list",
+    });
+    expect(await reapplied!.json()).toMatchObject({
+      action: "already_present",
+      receipt: { rollback_supported: false },
+    });
+    const unsupportedRollback = await request(
+      `/v1/projects/${project.id}/task-list/rollback`,
+      "POST",
+      {
+        receipt_id: body.receipt.receipt_id,
+        expected_task_list_revision: body.receipt.result_revision,
+      },
+    );
+    expect({ status: unsupportedRollback?.status, body: await unsupportedRollback!.json() }).toMatchObject({
+      status: 409,
+      body: { code: "PROJECT_TASK_LIST_ROLLBACK_CONFLICT", conflict: true },
+    });
+    expect(await atomicStore.taskLists.get(body.task_list.id)).not.toBeNull();
+  });
+
   test("routes package-owned conditional project registration through authenticated v1", async () => {
     const capabilityResponse = await request("/v1/project-registration/capability");
     expect(capabilityResponse?.status).toBe(200);

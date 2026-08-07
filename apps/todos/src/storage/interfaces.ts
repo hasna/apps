@@ -319,6 +319,21 @@ export interface TodosTaskListStore {
   list(projectId?: string, context?: TodosStorageContext): MaybePromise<TaskList[]>;
   update(id: string, input: UpdateTaskListInput, context?: TodosStorageContext): MaybePromise<TaskList>;
   delete(id: string, context?: TodosStorageContext): MaybePromise<boolean>;
+  /**
+   * Atomically remove one unchanged task list only when no task or plan refers
+   * to it. Optional because a backend that cannot provide the whole check and
+   * delete as one atomic operation must fail rollback closed rather than
+   * expose a check-then-delete race.
+   */
+  deleteIfUnchangedAndUnused?(
+    id: string,
+    expected: Pick<TaskList, "project_id" | "slug" | "name" | "description" | "metadata" | "updated_at">,
+    context?: TodosStorageContext,
+  ): MaybePromise<{
+    status: "deleted" | "not_found" | "changed" | "has_dependents";
+    task_dependents: number;
+    plan_dependents: number;
+  }>;
 }
 
 export interface TodosTemplateStore {

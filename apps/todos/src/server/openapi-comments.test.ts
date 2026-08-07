@@ -227,6 +227,116 @@ describe("project mutation OpenAPI contract", () => {
     expect(schemas.CreateTaskListInput.properties.slug).toMatchObject({ minLength: 1, pattern: ".*[A-Za-z0-9].*" });
     expect(schemas.UpdateTaskListInput).toMatchObject({ additionalProperties: false, minProperties: 1 });
   });
+
+  test("documents non-mutating task-list planning, idempotent apply, and conditional rollback", () => {
+    const document = buildV1OpenApiDocument("test");
+    const ensure = document.paths["/v1/projects/{id}/task-list/ensure"];
+    const rollback = document.paths["/v1/projects/{id}/task-list/rollback"];
+
+    expect(ensure.get.operationId).toBe("planProjectTaskListEnsure");
+    expect(ensure.post.operationId).toBe("ensureProjectTaskList");
+    expect(ensure.post.responses["201"]).toBeDefined();
+    expect(ensure.post.responses["409"]).toBeDefined();
+    expect(rollback.post.operationId).toBe("rollbackProjectTaskListEnsure");
+    expect(document.components.schemas.ProjectTaskListEnsureApplyInput).toMatchObject({
+      additionalProperties: false,
+      required: ["expected_project_revision"],
+    });
+    expect(document.components.schemas.ProjectTaskListRollbackInput).toMatchObject({
+      additionalProperties: false,
+      required: ["receipt_id", "expected_task_list_revision"],
+    });
+    expect(document.components.schemas.ProjectTaskListEnsureResult.required)
+      .toEqual(["mode", "action", "project", "task_list", "receipt"]);
+  });
+
+  test("generated SDK sends encoded project ids and exact revision/receipt bodies", async () => {
+    const calls: Array<{ method: string; path: string; body?: string }> = [];
+    const project = {
+      id: "project/one",
+      name: "Dubai Fraud",
+      path: "/workspace/dubai-fraud",
+      task_list_id: "dubai-fraud",
+      updated_at: "2026-08-07T10:00:00.000Z",
+    };
+    const taskList = {
+      id: "list-1",
+      project_id: project.id,
+      slug: "dubai-fraud",
+      name: project.name,
+      created_at: "2026-08-07T10:01:00.000Z",
+      updated_at: "2026-08-07T10:01:00.000Z",
+    };
+    const client = new TodosV1Client({
+      baseUrl: "https://todos.test",
+      fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = new URL(String(input)).pathname;
+        calls.push({ method: init?.method ?? "GET", path, body: init?.body as string | undefined });
+        if (path.endsWith("/rollback")) {
+          return Response.json({
+            schema_version: "todos.project-task-list-ensure.v1",
+            action: "removed",
+            project_id: project.id,
+            task_list_id: taskList.id,
+            accepted_receipt_id: "ptlr_fixture",
+            rollback_receipt_id: "ptlr_inverse_fixture",
+            removed_at: "2026-08-07T10:02:00.000Z",
+          });
+        }
+        return Response.json(init?.method === "POST"
+          ? {
+            mode: "apply",
+            action: "created",
+            project,
+            task_list: taskList,
+            receipt: {
+              schema_version: "todos.project-task-list-ensure.v1",
+              receipt_id: "ptlr_fixture",
+              idempotency_key: "dubai-fraud-default-list",
+              project_id: project.id,
+              task_list_id: taskList.id,
+              slug: taskList.slug,
+              created_by_operation: true,
+              result_revision: taskList.updated_at,
+              result_digest: "fixture-digest",
+              rollback_supported: true,
+              created_at: taskList.created_at,
+            },
+          }
+          : { mode: "plan", action: "would_create", project, task_list: null, receipt: null },
+          { status: init?.method === "POST" ? 201 : 200 });
+      }) as typeof fetch,
+    });
+
+    expect((await client.planProjectTaskListEnsure(project.id)).action).toBe("would_create");
+    expect((await client.ensureProjectTaskList(project.id, {
+      expected_project_revision: project.updated_at,
+      idempotency_key: "dubai-fraud-default-list",
+    })).action).toBe("created");
+    expect((await client.rollbackProjectTaskListEnsure(project.id, {
+      receipt_id: "ptlr_fixture",
+      expected_task_list_revision: taskList.updated_at,
+    })).action).toBe("removed");
+    expect(calls).toEqual([
+      { method: "GET", path: "/v1/projects/project%2Fone/task-list/ensure", body: undefined },
+      {
+        method: "POST",
+        path: "/v1/projects/project%2Fone/task-list/ensure",
+        body: JSON.stringify({
+          expected_project_revision: project.updated_at,
+          idempotency_key: "dubai-fraud-default-list",
+        }),
+      },
+      {
+        method: "POST",
+        path: "/v1/projects/project%2Fone/task-list/rollback",
+        body: JSON.stringify({
+          receipt_id: "ptlr_fixture",
+          expected_task_list_revision: taskList.updated_at,
+        }),
+      },
+    ]);
+  });
 });
 
 describe("plan mutation OpenAPI contract", () => {

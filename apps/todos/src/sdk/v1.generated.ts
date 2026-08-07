@@ -2,13 +2,19 @@
 // Regenerate: bun run scripts/generate-sdk.ts
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Todos V1 API 0.13.12
+// Source: Todos V1 API 0.15.7
 
 export interface Task { "id"?: string; "title"?: string; "description"?: string; "status"?: string; "priority"?: string; "project_id"?: string | null; "assigned_to"?: string | null; "agent_id"?: string | null; "tags"?: Array<string>; "version"?: number; "created_at"?: string; "updated_at"?: string }
 
 export interface Project { "id"?: string; "name"?: string; "path"?: string; "description"?: string | null; "task_list_id"?: string | null; "task_prefix"?: string | null; "task_counter"?: number; "created_at"?: string; "updated_at"?: string }
 
 export interface TaskList { "id"?: string; "project_id"?: string | null; "slug"?: string; "name"?: string; "description"?: string | null; "metadata"?: Record<string, unknown>; "created_at"?: string; "updated_at"?: string }
+
+export interface ProjectTaskListEnsureReceipt { "schema_version": "todos.project-task-list-ensure.v1"; "receipt_id": string; "idempotency_key": string; "project_id": string; "task_list_id": string; "slug": string; "created_by_operation": boolean; "result_revision": string; "result_digest": string; "rollback_supported": boolean; "created_at": string }
+
+export interface ProjectTaskListEnsureResult { "mode": "plan" | "apply"; "action": "would_create" | "created" | "already_present"; "project": Project; "task_list": TaskList | null; "receipt": ProjectTaskListEnsureReceipt | null }
+
+export interface ProjectTaskListRollbackResult { "schema_version": "todos.project-task-list-ensure.v1"; "action": "removed"; "project_id": string; "task_list_id": string; "accepted_receipt_id": string; "rollback_receipt_id": string; "removed_at": string }
 
 export interface TaskComment { "id": string; "task_id": string; "agent_id": string | null; "session_id": string | null; "content": string; "type": "comment" | "progress" | "note"; "progress_pct": number | null; "created_at": string }
 
@@ -33,6 +39,10 @@ export interface CreateProjectInput { "name": string; "path": string; "descripti
 export interface UpdateProjectInput { "name"?: string; "path"?: string; "description"?: string | null }
 
 export interface RenameProjectInput { "new_slug": string; "name"?: string }
+
+export interface ProjectTaskListEnsureApplyInput { "expected_project_revision": string; "idempotency_key"?: string }
+
+export interface ProjectTaskListRollbackInput { "receipt_id": string; "expected_task_list_revision": string }
 
 export interface ErrorResponse { "error": string; "code"?: string; "conflict"?: boolean }
 
@@ -286,6 +296,33 @@ export class TodosV1Client {
     /** Atomically rename a project and its canonical task list */
     async renameProject(id: string, body: RenameProjectInput, init?: RequestInit): Promise<{ "project"?: Project; "task_lists_updated"?: number }> {
       return this.request("POST", `/v1/projects/${encodeURIComponent(String(id))}/rename`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Plan a non-mutating repair of a project's declared task list */
+    async planProjectTaskListEnsure(id: string, init?: RequestInit): Promise<ProjectTaskListEnsureResult> {
+      return this.request("GET", `/v1/projects/${encodeURIComponent(String(id))}/task-list/ensure`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Idempotently create an existing project's declared task list */
+    async ensureProjectTaskList(id: string, body: ProjectTaskListEnsureApplyInput, init?: RequestInit): Promise<ProjectTaskListEnsureResult> {
+      return this.request("POST", `/v1/projects/${encodeURIComponent(String(id))}/task-list/ensure`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Conditionally remove an unchanged task list created by an accepted ensure receipt */
+    async rollbackProjectTaskListEnsure(id: string, body: ProjectTaskListRollbackInput, init?: RequestInit): Promise<ProjectTaskListRollbackResult> {
+      return this.request("POST", `/v1/projects/${encodeURIComponent(String(id))}/task-list/rollback`, {
         body,
         query: undefined,
         init,

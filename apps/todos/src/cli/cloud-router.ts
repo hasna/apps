@@ -11,7 +11,7 @@
 import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
 import { normalizeStorageMode } from "@hasna/contracts/mode";
 import { resolve as resolvePath } from "node:path";
-import type { Agent, CreatePlanInput, CreateTaskListInput, CreateTemplateInput, Plan, Project, RegisterAgentInput, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList, TaskTemplate, TemplateWithTasks, UpdatePlanInput, UpdateTaskListInput } from "../types/index.js";
+import type { Agent, CreatePlanInput, CreateTaskListInput, CreateTemplateInput, Plan, Project, ProjectTaskListEnsureResult, ProjectTaskListRollbackResult, RegisterAgentInput, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList, TaskTemplate, TemplateWithTasks, UpdatePlanInput, UpdateTaskListInput } from "../types/index.js";
 import { isBlockingDependencyStatus } from "../types/index.js";
 import type { UpdateTemplateInput } from "../storage/interfaces.js";
 import { redactEvidenceText } from "../lib/redaction.js";
@@ -454,12 +454,18 @@ async function requiredRemoteRoute<T>(
   client: HasnaStorageClient,
   route: string,
   request: () => Promise<T>,
+  recognized404Codes: readonly string[] = [],
 ): Promise<T> {
   try {
     return await request();
   } catch (error) {
     const status = error && typeof error === "object" ? (error as { status?: unknown }).status : undefined;
     if (status === 404) {
+      const body = error && typeof error === "object" ? (error as { body?: unknown }).body : undefined;
+      const code = body && typeof body === "object" && !Array.isArray(body)
+        ? (body as { code?: unknown }).code
+        : undefined;
+      if (typeof code === "string" && recognized404Codes.includes(code)) throw error;
       throw new Error(
         `REMOTE_API_INCOMPATIBLE: configured Todos authority ${remoteAuthorityBase(client)} does not expose ${route}; ` +
           "deploy the @hasna/todos /v1 server contract before retrying; local SQLite fallback is disabled",
@@ -1136,6 +1142,55 @@ export async function cloudDeleteProject(client: HasnaStorageClient, id: string)
     throw error;
   }
   return true;
+}
+
+/** Plan a non-mutating repair of an existing project's declared task list. */
+export async function cloudPlanProjectTaskListEnsure(
+  client: HasnaStorageClient,
+  projectId: string,
+): Promise<ProjectTaskListEnsureResult> {
+  return requiredRemoteRoute(
+    client,
+    "/v1/projects/:id/task-list/ensure",
+    () => client.transport.get<ProjectTaskListEnsureResult>(
+      `/projects/${encodeURIComponent(projectId)}/task-list/ensure`,
+    ),
+    ["PROJECT_NOT_FOUND"],
+  );
+}
+
+/** Apply an exact-revision, idempotent repair of a project's declared task list. */
+export async function cloudApplyProjectTaskListEnsure(
+  client: HasnaStorageClient,
+  projectId: string,
+  input: { expected_project_revision: string; idempotency_key?: string },
+): Promise<ProjectTaskListEnsureResult> {
+  return requiredRemoteRoute(
+    client,
+    "/v1/projects/:id/task-list/ensure",
+    () => client.transport.post<ProjectTaskListEnsureResult>(
+      `/projects/${encodeURIComponent(projectId)}/task-list/ensure`,
+      input,
+    ),
+    ["PROJECT_NOT_FOUND"],
+  );
+}
+
+/** Conditionally remove an unchanged list owned by an accepted ensure receipt. */
+export async function cloudRollbackProjectTaskListEnsure(
+  client: HasnaStorageClient,
+  projectId: string,
+  input: { receipt_id: string; expected_task_list_revision: string },
+): Promise<ProjectTaskListRollbackResult> {
+  return requiredRemoteRoute(
+    client,
+    "/v1/projects/:id/task-list/rollback",
+    () => client.transport.post<ProjectTaskListRollbackResult>(
+      `/projects/${encodeURIComponent(projectId)}/task-list/rollback`,
+      input,
+    ),
+    ["PROJECT_NOT_FOUND", "PROJECT_TASK_LIST_RECEIPT_NOT_FOUND"],
+  );
 }
 
 /** List plans from the cloud (`GET /v1/plans`), optionally scoped to a project. */

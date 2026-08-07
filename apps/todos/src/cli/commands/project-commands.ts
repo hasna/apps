@@ -11,7 +11,7 @@ import {
   updateProject,
 } from "../../db/projects.js";
 import { addComment } from "../../db/comments.js";
-import { getTodosCloudClient, cloudAddComment, cloudCreateProject, cloudDeleteProject, cloudListProjects, cloudListTasks, cloudResolveProject, cloudResolveProjectRef, cloudUpdateProject, cloudAddDependency, cloudRemoveDependency, cloudGetDependencies, cloudGetTaskRelations, cloudRenameProject } from "../cloud-router.js";
+import { getTodosCloudClient, cloudAddComment, cloudApplyProjectTaskListEnsure, cloudCreateProject, cloudDeleteProject, cloudListProjects, cloudListTasks, cloudPlanProjectTaskListEnsure, cloudResolveProject, cloudResolveProjectRef, cloudRollbackProjectTaskListEnsure, cloudUpdateProject, cloudAddDependency, cloudRemoveDependency, cloudGetDependencies, cloudGetTaskRelations, cloudRenameProject } from "../cloud-router.js";
 import { resolveWritableIdentity } from "../../lib/creator-identity.js";
 import {
   buildProjectDependencyGraph,
@@ -37,6 +37,12 @@ import { defaultSyncAgents, syncWithAgent, syncWithAgents } from "../../lib/sync
 import { getAgentTaskListId } from "../../lib/config.js";
 import { autoProject, autoDetectProject, handleError, output, outputRecord, formatTaskLine, parseEnumFlag, parseEnumFlagList, resolveExplicitProject, resolveTaskId, resolveTaskIdForCommand, TASK_PRIORITY_FLAG, TASK_STATUS_FLAG } from "../helpers.js";
 import { redactBroadOutput, redactBroadTasks } from "../output-redaction.js";
+import { createLocalSqliteTodosStorageAdapter } from "../../storage/local-sqlite.js";
+import {
+  applyProjectTaskListEnsure,
+  planProjectTaskListEnsure,
+  rollbackProjectTaskListEnsure,
+} from "../../lib/project-task-list-ensure.js";
 
 function collectOption(value: string, previous: string[] = []): string[] {
   return [...previous, value];
@@ -793,9 +799,92 @@ export function registerProjectCommands(program: Command) {
     .option("--path <path>", "Project path (with --update)")
     .option("--description <text>", "Project description (with --add or --update)")
     .option("--task-list-id <id>", "Custom task list ID (with --add)")
+    .option("--ensure-task-list <project>", "Plan or apply creation of an existing project's declared task list")
+    .option("--rollback-task-list <project>", "Conditionally roll back a task list created by --ensure-task-list")
+    .option("--apply", "Apply --ensure-task-list or --rollback-task-list; ensure plans by default")
+    .option("--idempotency-key <key>", "Stable idempotency key for --ensure-task-list --apply")
+    .option("--receipt <id>", "Accepted ensure receipt for --rollback-task-list --apply")
     .action(async (opts) => {
       const globalOpts = program.opts();
       const cloud = getTodosCloudClient();
+
+      if (opts.ensureTaskList && opts.rollbackTaskList) {
+        handleError(new Error("Choose either --ensure-task-list or --rollback-task-list, not both"));
+      }
+      if (opts.apply && !opts.ensureTaskList && !opts.rollbackTaskList) {
+        handleError(new Error("projects --apply requires --ensure-task-list or --rollback-task-list"));
+      }
+      if (opts.dryRun && opts.apply && (opts.ensureTaskList || opts.rollbackTaskList)) {
+        handleError(new Error("Choose either --dry-run or --apply, not both"));
+      }
+
+      if (opts.ensureTaskList) {
+        const project = cloud
+          ? await cloudResolveProject(cloud, opts.ensureTaskList)
+          : resolveExplicitProject(opts.ensureTaskList);
+        const store = cloud ? null : createLocalSqliteTodosStorageAdapter({ db: getDatabase() });
+        const plan = cloud
+          ? await cloudPlanProjectTaskListEnsure(cloud, project.id)
+          : await planProjectTaskListEnsure(store!, project.id);
+        const result = opts.apply
+          ? cloud
+            ? await cloudApplyProjectTaskListEnsure(cloud, project.id, {
+              expected_project_revision: plan.project.updated_at,
+              ...(opts.idempotencyKey ? { idempotency_key: opts.idempotencyKey } : {}),
+            })
+            : await applyProjectTaskListEnsure(store!, project.id, {
+              expected_project_revision: plan.project.updated_at,
+              ...(opts.idempotencyKey ? { idempotency_key: opts.idempotencyKey } : {}),
+            })
+          : plan;
+        if (globalOpts.json) {
+          output(result, true);
+        } else {
+          const list = result.task_list
+            ? `${result.task_list.slug} (${result.task_list.id})`
+            : result.project.task_list_id;
+          console.log(chalk.green(`${result.mode === "plan" ? "Task-list plan" : "Task-list ensure"}: ${result.action}`));
+          console.log(chalk.dim(`  Project: ${result.project.name} (${result.project.id})`));
+          console.log(chalk.dim(`  Task list: ${list}`));
+          if (result.receipt) console.log(chalk.dim(`  Receipt: ${result.receipt.receipt_id}`));
+        }
+        return;
+      }
+
+      if (opts.rollbackTaskList) {
+        if (!opts.apply) {
+          handleError(new Error("projects --rollback-task-list requires --apply"));
+        }
+        if (!opts.receipt) {
+          handleError(new Error("projects --rollback-task-list requires --receipt"));
+        }
+        const project = cloud
+          ? await cloudResolveProject(cloud, opts.rollbackTaskList)
+          : resolveExplicitProject(opts.rollbackTaskList);
+        const store = cloud ? null : createLocalSqliteTodosStorageAdapter({ db: getDatabase() });
+        const plan = cloud
+          ? await cloudPlanProjectTaskListEnsure(cloud, project.id)
+          : await planProjectTaskListEnsure(store!, project.id);
+        if (!plan.task_list) {
+          handleError(new Error("The project has no exact declared task list to roll back"));
+        }
+        const input = {
+          receipt_id: opts.receipt,
+          expected_task_list_revision: plan.task_list!.updated_at,
+        };
+        const result = cloud
+          ? await cloudRollbackProjectTaskListEnsure(cloud, project.id, input)
+          : await rollbackProjectTaskListEnsure(store!, project.id, input);
+        if (globalOpts.json) {
+          output(result, true);
+        } else {
+          console.log(chalk.green(`Task-list rollback: ${result.action}`));
+          console.log(chalk.dim(`  Project: ${result.project_id}`));
+          console.log(chalk.dim(`  Removed task list: ${result.task_list_id}`));
+          console.log(chalk.dim(`  Rollback receipt: ${result.rollback_receipt_id}`));
+        }
+        return;
+      }
 
       if (opts.show) {
         const project = cloud ? await cloudResolveProject(cloud, opts.show) : resolveExplicitProject(opts.show);
