@@ -404,4 +404,79 @@ describe("project prefix migration", () => {
     expect(renamed.member_count).toBe(3);
     expect(renamed.message_count).toBe(7);
   });
+
+  test("accepts a stable producer collation that is not JavaScript lexical order", async () => {
+    const producerOrder = [
+      ...Array.from({ length: 999 }, (_, index) => channel(`channel-${String(index).padStart(4, "0")}`, null)),
+      channel("zeta", null),
+      channel("Alpha", null),
+    ];
+    expect(producerOrder[999]!.name > producerOrder[1_000]!.name).toBe(true);
+    let traversals = 0;
+    const runner = (args: string[]) => {
+      if (args[0] !== "channel" || args[1] !== "list") {
+        return { ok: false, stdout: "", stderr: "unsupported" };
+      }
+      const cursor = Number(args[args.indexOf("--cursor") + 1]);
+      const limit = Number(args[args.indexOf("--limit") + 1]);
+      if (cursor === 0) traversals++;
+      const page = producerOrder.slice(cursor, cursor + limit);
+      return {
+        ok: true,
+        stdout: JSON.stringify(page),
+        stderr: `Showing ${page.length} of ${producerOrder.length}.`,
+      };
+    };
+
+    const inventory = await createConversationsPrefixPort(runner).listChannels();
+    expect(inventory.channels.map((item) => item.name)).toEqual(producerOrder.map((item) => item.name));
+    expect(inventory.complete).toBe(true);
+    expect(traversals).toBe(2);
+  });
+
+  const firstSnapshot = Array.from(
+    { length: 1_001 },
+    (_, index) => channel(`channel-${String(index).padStart(4, "0")}`, null),
+  );
+  test.each([
+    {
+      label: "sequence reorder",
+      second: [
+        ...firstSnapshot.slice(0, 999),
+        firstSnapshot[1_000]!,
+        firstSnapshot[999]!,
+      ],
+    },
+    {
+      label: "population replacement",
+      second: [
+        ...firstSnapshot.slice(0, 1_000),
+        channel("replacement-channel", null),
+      ],
+    },
+  ])("refuses a $label between complete channel traversals", async ({ second }) => {
+    const snapshots = [
+      firstSnapshot,
+      second,
+    ];
+    let traversal = -1;
+    const runner = (args: string[]) => {
+      if (args[0] !== "channel" || args[1] !== "list") {
+        return { ok: false, stdout: "", stderr: "unsupported" };
+      }
+      const cursor = Number(args[args.indexOf("--cursor") + 1]);
+      const limit = Number(args[args.indexOf("--limit") + 1]);
+      if (cursor === 0) traversal++;
+      const rows = snapshots[Math.min(traversal, snapshots.length - 1)]!;
+      const page = rows.slice(cursor, cursor + limit);
+      return {
+        ok: true,
+        stdout: JSON.stringify(page),
+        stderr: `Showing ${page.length} of ${rows.length}.`,
+      };
+    };
+
+    await expect(createConversationsPrefixPort(runner).listChannels())
+      .rejects.toThrow(/changed between complete traversals/);
+  });
 });
