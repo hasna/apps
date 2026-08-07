@@ -10,8 +10,10 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apiKeyMigrations } from "@hasna/contracts/auth";
+import type { QueryResultRow } from "pg";
 import {
   type AppliedMigration,
+  DEFAULT_MIGRATION_LEDGER_TABLE,
   MigrationLedger,
   defineMigration,
   type Migration,
@@ -20,6 +22,25 @@ import {
 import type { TypedQueryClient } from "../generated/storage-kit/query.js";
 
 export const MIGRATIONS_DIR_ENV = "PROJECTS_MIGRATIONS_DIR";
+
+export interface AppliedMigrationCompatibility {
+  readonly id: string;
+  readonly checksum: string;
+}
+
+/**
+ * Applied-only ledger rows from the pre-rename production schema.
+ *
+ * This is deliberately not an executable migration: fresh databases must not
+ * record it, and no legacy SQL is reconstructed or replayed. The checksum was
+ * emitted by deploy run 31171363160 from the production migration ledger.
+ */
+export const PROJECTS_APPLIED_MIGRATION_COMPATIBILITY = [
+  {
+    id: "projects:0002_tenants",
+    checksum: "sha256:0a93c3c87fa9159545f270a053835f28e3b0eed5d8d13ec886c3aa549287bcd2",
+  },
+] as const satisfies readonly AppliedMigrationCompatibility[];
 
 /** Resolve the on-disk migrations directory across dev, dist, and Docker layouts. */
 export function resolveMigrationsDir(): string {
@@ -71,25 +92,109 @@ export function loadMigrations(): Migration[] {
 export function assertMigrationCompatibility(
   migrations: readonly Migration[],
   applied: readonly AppliedMigration[],
+  compatibility: readonly AppliedMigrationCompatibility[] = [],
 ): void {
   const knownById = new Map(migrations.map((migration) => [migration.id, migration]));
+  const compatibleById = new Map<string, AppliedMigrationCompatibility>();
+
+  for (const entry of compatibility) {
+    if (knownById.has(entry.id)) {
+      throw new Error(
+        `Applied-only migration compatibility '${entry.id}' conflicts with an executable migration.`,
+      );
+    }
+    if (compatibleById.has(entry.id)) {
+      throw new Error(`Duplicate applied-only migration compatibility id: ${entry.id}`);
+    }
+    compatibleById.set(entry.id, entry);
+  }
 
   for (const row of applied) {
-    if (!knownById.has(row.id)) {
+    const expected = knownById.get(row.id)?.checksum ?? compatibleById.get(row.id)?.checksum;
+    if (!expected) {
       throw new Error(
         `Applied migration '${row.id}' (checksum '${row.checksum}') is not recognized by this build (downgrade?).`,
       );
     }
-  }
-
-  for (const row of applied) {
-    const expected = knownById.get(row.id);
-    if (expected && expected.checksum !== row.checksum) {
+    if (expected !== row.checksum) {
       throw new Error(
-        `Migration checksum mismatch for '${row.id}': applied '${row.checksum}', expected '${expected.checksum}'.`,
+        `Migration checksum mismatch for '${row.id}': applied '${row.checksum}', expected '${expected}'.`,
       );
     }
   }
+}
+
+function appliedMigrationKey(row: AppliedMigrationCompatibility): string {
+  return `${row.id}\u0000${row.checksum}`;
+}
+
+/**
+ * Give the unchanged generated ledger a view without exact applied-only rows.
+ *
+ * The complete ledger is validated immediately before and after migration.
+ * This adapter filters only rows matching both the allowlisted id and checksum,
+ * so concurrent unknown rows, checksum drift, and downgrade evidence remain
+ * visible to the generated ledger and continue to fail closed.
+ */
+function createAppliedMigrationCompatibilityClient(
+  client: TypedQueryClient,
+  compatibility: readonly AppliedMigrationCompatibility[],
+): TypedQueryClient {
+  const compatibleRows = new Set(compatibility.map(appliedMigrationKey));
+
+  return {
+    query<T extends QueryResultRow>(sql: string, params?: readonly unknown[]) {
+      return client.query<T>(sql, params);
+    },
+    async many<T extends QueryResultRow>(
+      sql: string,
+      params?: readonly unknown[],
+    ): Promise<T[]> {
+      if (!sql.includes(`FROM ${DEFAULT_MIGRATION_LEDGER_TABLE}`)) {
+        throw new Error(
+          "Applied migration compatibility client received an unexpected ledger query.",
+        );
+      }
+      const rows = await client.many<T>(sql, params);
+      return rows.filter((row) => {
+        const candidate = row as Partial<AppliedMigrationCompatibility>;
+        return !(
+          typeof candidate.id === "string" &&
+          typeof candidate.checksum === "string" &&
+          compatibleRows.has(appliedMigrationKey({
+            id: candidate.id,
+            checksum: candidate.checksum,
+          }))
+        );
+      });
+    },
+    get<T extends QueryResultRow>(sql: string, params?: readonly unknown[]) {
+      return client.get<T>(sql, params);
+    },
+    one<T extends QueryResultRow>(sql: string, params?: readonly unknown[]) {
+      return client.one<T>(sql, params);
+    },
+    execute(sql: string, params?: readonly unknown[]) {
+      return client.execute(sql, params);
+    },
+  };
+}
+
+export async function runMigrationLedgerWithCompatibility(
+  client: TypedQueryClient,
+  migrations: readonly Migration[],
+  compatibility: readonly AppliedMigrationCompatibility[],
+  opts: { dryRun?: boolean } = {},
+): Promise<MigrationResult> {
+  const completeLedger = new MigrationLedger(client, migrations);
+  assertMigrationCompatibility(migrations, await completeLedger.listApplied(), compatibility);
+
+  const migrationClient = createAppliedMigrationCompatibilityClient(client, compatibility);
+  const result = await new MigrationLedger(migrationClient, migrations).migrate(opts);
+
+  const applied = await completeLedger.listApplied();
+  assertMigrationCompatibility(migrations, applied, compatibility);
+  return { ...result, applied };
 }
 
 /** Apply all pending migrations against the given cloud client. */
@@ -98,7 +203,10 @@ export async function runProjectsMigrations(
   opts: { dryRun?: boolean } = {},
 ): Promise<MigrationResult> {
   const migrations = loadMigrations();
-  const ledger = new MigrationLedger(client, migrations);
-  assertMigrationCompatibility(migrations, await ledger.listApplied());
-  return ledger.migrate(opts);
+  return runMigrationLedgerWithCompatibility(
+    client,
+    migrations,
+    PROJECTS_APPLIED_MIGRATION_COMPATIBILITY,
+    opts,
+  );
 }
