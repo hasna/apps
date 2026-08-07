@@ -315,6 +315,9 @@ export interface BillingDiffRow {
   delta_pct: number
 }
 
+/** Why a drift percentage could not be computed; `null` means it could. */
+export type BillingDiffIncomparableReason = 'no_billing_records' | 'zero_actual_billing'
+
 export interface BillingDiffSummary {
   period: Period
   estimated_usd: number
@@ -323,6 +326,13 @@ export interface BillingDiffSummary {
   delta_pct: number
   threshold_pct: number
   is_alert: boolean
+  /**
+   * Whether `delta_pct` is a measurement. False means there was no actual
+   * billing to compare against and `delta_pct` is 0 only because the type is a
+   * number — do not render it as agreement.
+   */
+  comparable: boolean
+  incomparable_reason: BillingDiffIncomparableReason | null
   by_agent: BillingDiffRow[]
   by_provider: Record<string, number>
 }

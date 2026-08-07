@@ -15,6 +15,7 @@ import { existsSync } from 'fs'
 import { join } from 'path'
 import { printCompletion } from './completion.js'
 import { agentPaths } from '../../lib/paths.js'
+import { billingDriftCheck } from '../../lib/billing-diff.js'
 
 function fmt(usd: number): string {
   return '$' + usd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -237,9 +238,7 @@ export function registerExtendedCommands(program: Command): void {
 
       // Billing drift (estimated vs actual provider billing) routes through the
       // Store so it reflects the SAME dataset the reads use in both modes.
-      const diff = await store.billingDiff('month')
-      const drift = Math.abs(diff.delta_pct) / 100
-      checks.push({ ok: !diff.is_alert, msg: `billing drift month: ${(drift * 100).toFixed(1)}%` })
+      checks.push(billingDriftCheck(await store.billingDiff('month')))
 
       console.log()
       console.log(chalk.bold.cyan('  Economy Doctor'))
@@ -337,7 +336,11 @@ export function registerExtendedCommands(program: Command): void {
         console.log(chalk.bold.cyan(`  Billing diff — ${period}`))
         console.log(`  Estimated:  ${fmt(diff.estimated_usd)}`)
         console.log(`  Actual:     ${fmt(diff.actual_usd)}`)
-        console.log(`  Delta:      ${fmt(Math.abs(diff.delta_usd))} (${diff.delta_usd >= 0 ? '+' : ''}${diff.delta_pct.toFixed(1)}%)`)
+        const deltaPct = diff.comparable
+          ? `${diff.delta_usd >= 0 ? '+' : ''}${diff.delta_pct.toFixed(1)}%`
+          : 'n/a'
+        console.log(`  Delta:      ${fmt(Math.abs(diff.delta_usd))} (${deltaPct})`)
+        if (!diff.comparable) console.log(chalk.yellow(`\n  ${billingDriftCheck(diff).msg}`))
         if (diff.is_alert) console.log(chalk.yellow('\n  Suggestion: economy sync --recalculate && economy billing sync'))
         console.log()
       })

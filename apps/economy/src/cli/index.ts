@@ -15,6 +15,7 @@ import { packageMetadata } from '../lib/package-metadata.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
 import { execSync } from 'child_process'
 import { getStore, isCloudStore } from '../lib/store/index.js'
+import { billingDeltaPct } from '../lib/billing-diff.js'
 import { HasnaHttpError } from '../lib/contracts-client/transport.js'
 import type { AccountBreakdown, CostSummary, CostCenterKind, ProjectBreakdown, Period } from '../types/index.js'
 
@@ -1510,8 +1511,15 @@ billingCmd
     console.log(`  ${chalk.bold('Actual total:')}    ${fmt(actual.total_usd)}`)
     console.log(`  ${chalk.dim('Our estimate:')}    ${fmt(estimated.total_usd)}`)
     const diff = estimated.total_usd - actual.total_usd
-    const pct = actual.total_usd > 0 ? (diff / actual.total_usd) * 100 : 0
-    console.log(`  ${chalk.dim('Difference:')}      ${fmt(Math.abs(diff))} (${diff >= 0 ? '+' : ''}${pct.toFixed(1)}%)`)
+    // No actual billing means the ratio is undefined, not zero. Printing "0.0%"
+    // here read as "estimate and billing agree" on a period where nothing had
+    // been imported at all.
+    const pct = billingDeltaPct(estimated.total_usd, actual.total_usd)
+    const rendered = pct === null ? 'n/a' : `${diff >= 0 ? '+' : ''}${pct.toFixed(1)}%`
+    console.log(`  ${chalk.dim('Difference:')}      ${fmt(Math.abs(diff))} (${rendered})`)
+    if (pct === null) {
+      console.log(chalk.yellow(`  ${chalk.dim('Note:')}            no provider billing recorded for ${period} — drift is UNKNOWN, not zero.`))
+    }
     console.log()
   })
 

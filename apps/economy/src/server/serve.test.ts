@@ -427,6 +427,50 @@ describe('REST API server', () => {
     expect(loops.every(row => row['kind'] === 'loop')).toBe(true)
   })
 
+  it('GET /api/breakdown honours since on EVERY dimension, not just project', async () => {
+    // An old row per dimension, distinguishable from the seeded NOW rows.
+    const OLD = '2020-01-01T00:00:00.000Z'
+    upsertCostCenter(db, {
+      id: 'loop:ancient-loop', kind: 'loop', name: 'ancient-loop',
+      repo_path: null, labels_json: '{}', created_at: OLD,
+    })
+    upsertSession(db, {
+      id: 'old-sess', agent: 'gemini', project_path: '/proj/old', project_name: 'proj-old',
+      started_at: OLD, ended_at: null, total_cost_usd: 9, total_tokens: 9, request_count: 1,
+      account_key: 'gemini:old', account_tool: 'gemini', account_name: 'old',
+      account_email: 'old@example.com', account_source: 'current',
+      cost_center_id: 'loop:ancient-loop',
+    })
+    upsertRequest(db, {
+      id: 'old-req', agent: 'gemini', session_id: 'old-sess', model: 'gemini-ancient',
+      input_tokens: 9, output_tokens: 9, cache_read_tokens: 0, cache_create_tokens: 0,
+      cost_usd: 9, cost_basis: 'metered_api', duration_ms: 1, timestamp: OLD, source_request_id: 'old-req',
+      account_key: 'gemini:old', account_tool: 'gemini', account_name: 'old',
+      account_email: 'old@example.com', account_source: 'current',
+      cost_center_id: 'loop:ancient-loop',
+    })
+
+    const rows = async (qs: string) => {
+      const response = await req(handler, `/api/breakdown?${qs}`)
+      expect(response.status).toBe(200)
+      return (response.data as Record<string, unknown>)['data'] as Array<Record<string, unknown>>
+    }
+
+    // `by` omitted is the CLI's default dimension (model) and must filter too.
+    for (const dimension of ['', 'by=model', 'by=agent', 'by=account', 'by=cost-center', 'by=loop']) {
+      const unfiltered = await rows(dimension)
+      const midRange = await rows(`${dimension}${dimension ? '&' : ''}since=2021-01-01T00:00:00.000Z`)
+      const future = await rows(`${dimension}${dimension ? '&' : ''}since=2999-01-01T00:00:00.000Z`)
+
+      // A future `since` can match nothing. Anything else means the filter is inert.
+      expect({ dimension, future: future.length }).toEqual({ dimension, future: 0 })
+      // The row COUNT must change — asserting the flag was accepted is what the defect already does.
+      expect({ dimension, shrank: midRange.length < unfiltered.length }).toEqual({ dimension, shrank: true })
+      // ...and the unfiltered read still returns everything.
+      expect({ dimension, unfiltered: unfiltered.length > 0 }).toEqual({ dimension, unfiltered: true })
+    }
+  })
+
   it('GET /api/breakdown applies machine filters to since-scoped project aliases', async () => {
     upsertSession(db, {
       id: 'spark-session',

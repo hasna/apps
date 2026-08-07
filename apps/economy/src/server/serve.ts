@@ -3,6 +3,7 @@ import {
   querySummary, querySessions, queryTopSessions,
   queryModelBreakdown, queryProjectBreakdown, queryProjectBreakdownSince, queryAgentBreakdown, queryDailyBreakdown, queryHourlyBreakdown,
   queryAccountBreakdown, queryCostCenterBreakdown,
+  queryModelBreakdownSince, queryAgentBreakdownSince, queryAccountBreakdownSince,
   getBudgetStatuses, upsertBudget, deleteBudget,
   listProjects, upsertProject, deleteProject,
   listModelPricing, upsertModelPricing, deleteModelPricing,
@@ -392,12 +393,18 @@ export function createHandler(db: Database, options: HandlerOptions = {}) {
       const period = (url.searchParams.get('period') ?? 'all') as Period
       const since = url.searchParams.get('since') ?? undefined
       const machine = url.searchParams.get('machine') ?? undefined
+      // `since` binds on EVERY dimension. It used to reach only `by=project`,
+      // so the other dimensions — including `model`, which is the CLI's default
+      // and therefore the bare `economy breakdown --since ...` — answered with
+      // the all-time table at HTTP 200. A period-scoped question silently
+      // returning the unscoped answer is worse than an error: the caller quotes
+      // it as the period figure.
       if (by === 'project') return ok(since ? queryProjectBreakdownSince(db, since, machine) : queryProjectBreakdown(db, period, machine))
-      if (by === 'agent') return ok(queryAgentBreakdown(db, period, machine))
-      if (by === 'account') return ok(queryAccountBreakdown(db, period, machine))
-      if (by === 'cost-center') return ok(queryCostCenterBreakdown(db, period, { machine }))
-      if (['loop', 'app', 'repo', 'service', 'team'].includes(by)) return ok(queryCostCenterBreakdown(db, period, { kind: by as CostCenterKind, machine }))
-      return ok(queryModelBreakdown(db))
+      if (by === 'agent') return ok(since ? queryAgentBreakdownSince(db, since) : queryAgentBreakdown(db, period, machine))
+      if (by === 'account') return ok(since ? queryAccountBreakdownSince(db, since) : queryAccountBreakdown(db, period, machine))
+      if (by === 'cost-center') return ok(queryCostCenterBreakdown(db, period, { machine, since }))
+      if (['loop', 'app', 'repo', 'service', 'team'].includes(by)) return ok(queryCostCenterBreakdown(db, period, { kind: by as CostCenterKind, machine, since }))
+      return ok(since ? queryModelBreakdownSince(db, since) : queryModelBreakdown(db))
     }
 
     // Budgets
