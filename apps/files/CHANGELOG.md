@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.3.8 — 2026-08-07
+
+Release of the page-limit fix merged in #26.
+
+- `files list` / `files search` no longer silently truncate a page. Requesting a
+  limit above the 500-row cap previously returned 500 rows with no cursor, no
+  total and no warning — a bounded read indistinguishable from a complete one.
+  It now returns a structured `400` carrying `max_limit`, `requested_limit` and
+  offset guidance. The cap itself is unchanged at 500; under-cap limits reach
+  SQL verbatim.
+- `files search --scope content` over the API is now refused explicitly instead
+  of returning an empty list, so "no matches" and "content scope is unavailable
+  here" are no longer indistinguishable. Cloud results carry
+  `search_match_sources: ["metadata"]` so metadata-only coverage is visible.
+- Closed a path that let a non-integer limit reach SQL.
+
+The new `400` cannot degrade back into a silent empty result: the contracts
+transport wraps non-2xx responses in `HasnaHttpError`, so callers raise rather
+than receive a zero-length list.
+
 ## 0.3.7 — 2026-07-24
 
 Security hardening for `files-serve`:
