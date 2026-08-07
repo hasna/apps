@@ -12,6 +12,13 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
     description: "Resource id or slug",
     schema: { type: "string" },
   } as const;
+  const EXACT_PROJECT_ID_PARAM = {
+    name: "id",
+    in: "path",
+    required: true,
+    description: "Complete stable project id beginning with wks_; slugs and partial ids are refused",
+    schema: { type: "string", pattern: "^wks_[A-Za-z0-9][A-Za-z0-9_-]{11,}$" },
+  } as const;
 
   const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
   const jsonBody = (schemaName: string, required = true) => ({
@@ -227,8 +234,38 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
             offset: { type: "integer", description: "Offset this page starts at." },
             limit: { type: "integer", description: "Effective per-page limit after server clamping." },
             has_more: { type: "boolean", description: "More rows exist past this page." },
+            complete: { type: "boolean", description: "True only when this page proves the complete matching population." },
           },
-          required: ["workspaces", "count", "total", "offset", "limit", "has_more"],
+          required: ["workspaces", "count", "total", "offset", "limit", "has_more", "complete"],
+        },
+        GuardedResponseControl: {
+          type: "object",
+          properties: {
+            response_byte_limit: { type: "integer", minimum: 1 },
+            time_budget_ms: { type: "integer", minimum: 1 },
+            response_bytes: { type: "integer", minimum: 1 },
+            elapsed_ms: { type: "integer", minimum: 0 },
+            complete: { type: "boolean", const: true },
+            truncated: { type: "boolean", const: false },
+          },
+          required: [
+            "response_byte_limit",
+            "time_budget_ms",
+            "response_bytes",
+            "elapsed_ms",
+            "complete",
+            "truncated",
+          ],
+        },
+        GuardedProjectRead: {
+          type: "object",
+          properties: {
+            ok: { type: "boolean", const: true },
+            project_id: { type: "string" },
+            current_revision: { type: "string" },
+            response_control: ref("GuardedResponseControl"),
+          },
+          required: ["ok", "project_id", "current_revision", "response_control"],
         },
         RootList: {
           type: "object",
@@ -362,6 +399,32 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
             { name: "hard", in: "query", required: false, schema: { type: "boolean" } },
           ],
           responses: { "200": jsonResp("DeleteResult"), "404": jsonResp("Error", "Not found") },
+        },
+      },
+      "/v1/projects/{id}/guarded-metadata": {
+        get: {
+          operationId: "guardedReadProject",
+          summary: "Read one project by exact stable id with bounded complete JSON and its current mutation revision",
+          parameters: [
+            EXACT_PROJECT_ID_PARAM,
+            {
+              name: "response_byte_limit",
+              in: "query",
+              required: true,
+              schema: { type: "integer", minimum: 1 },
+            },
+            {
+              name: "time_budget_ms",
+              in: "query",
+              required: true,
+              schema: { type: "integer", minimum: 1 },
+            },
+          ],
+          responses: {
+            "200": jsonResp("GuardedProjectRead"),
+            "400": jsonResp("Error", "Invalid target or budget"),
+            "404": jsonResp("Error", "Not found"),
+          },
         },
       },
       "/v1/projects/{id}/archive": {

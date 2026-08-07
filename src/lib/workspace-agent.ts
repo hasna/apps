@@ -1571,10 +1571,12 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
         fix: z.boolean().optional(),
       }),
       execute: async (input) => {
-        const workspace = resolveProjectTarget(input.project);
+        const workspace = await resolveStoreTargetOrNull(input.project);
         if (!workspace) return { error: `Project not found: ${input.project}` };
-        const doctor = () => doctorWorkspace(workspace, { fix: Boolean(input.fix && approve), dryRun: !approve });
-        return projectPayload(input.fix && approve ? withAgentWorkspaceLock(workspace, actorAgent.id, "project doctor fix", doctor) : doctor());
+        const doctor = () => doctorWorkspace(workspace, { fix: Boolean(input.fix && approve), dryRun: !approve, storageMode: store.mode });
+        return projectPayload(input.fix && approve && store.mode === "local"
+          ? withAgentWorkspaceLock(workspace, actorAgent.id, "project doctor fix", doctor)
+          : doctor());
       },
     }),
     projects_update: tool({

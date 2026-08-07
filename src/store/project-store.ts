@@ -30,8 +30,10 @@ import {
   createWorkspace as dbCreateWorkspace,
   deleteRoot as dbDeleteRoot,
   deleteWorkspace as dbDeleteWorkspace,
+  guardedUpdateWorkspace as dbGuardedUpdateWorkspace,
   getAgent as dbGetAgent,
   getAgentBySlug as dbGetAgentBySlug,
+  getWorkspace as dbGetWorkspace,
   getRecipe as dbGetRecipe,
   getRecipeBySlug as dbGetRecipeBySlug,
   getRoot as dbGetRoot,
@@ -49,11 +51,13 @@ import {
   listWorkspaceEvents as dbListWorkspaceEvents,
   listWorkspaceLocations as dbListWorkspaceLocations,
   listWorkspaceLocks as dbListWorkspaceLocks,
+  lookupGuardedWorkspaceMutationReceipt as dbLookupGuardedWorkspaceMutationReceipt,
   countWorkspaces as dbCountWorkspaces,
   listWorkspaces as dbListWorkspaces,
   rankRoots,
   recordWorkspaceEvent as dbRecordWorkspaceEvent,
   releaseWorkspaceLock,
+  rollbackGuardedWorkspaceMutation as dbRollbackGuardedWorkspaceMutation,
   resolveWorkspace as dbResolveWorkspace,
   scoreRoots as dbScoreRoots,
   unarchiveWorkspace as dbUnarchiveWorkspace,
@@ -70,7 +74,7 @@ import {
   type QueryParams,
 } from "../http/client.js";
 import { resolveRegisteredProjectTargetOrThrow, type ProjectResolverOptions } from "../lib/project-resolver.js";
-import { collectPages } from "./paginate.js";
+import { collectCompletePages, collectPages, type CompletePage } from "./paginate.js";
 import {
   createProjectDataModel as dbCreateProjectDataModel,
   createProjectDataRecord as dbCreateProjectDataRecord,
@@ -108,6 +112,12 @@ import {
   type ProjectChannelEnsureResult,
   type StoreEnsureChannelOptions,
 } from "../lib/project-channel.js";
+import {
+  assertCompleteStableProjectId,
+  assertPositiveBounds,
+  buildGuardedProjectReadResult,
+  withResponseControl,
+} from "../lib/guarded-project-mutation.js";
 import type {
   Agent,
   AgentRun,
@@ -116,6 +126,13 @@ import type {
   CreateRootInput,
   CreateWorkspaceInput,
   EventSource,
+  GuardedProjectMutationReceiptLookupInput,
+  GuardedProjectMutationReceiptLookupResult,
+  GuardedProjectReadRequest,
+  GuardedProjectReadResult,
+  GuardedProjectMutationRequest,
+  GuardedProjectMutationResult,
+  GuardedProjectMutationRollbackRequest,
   JsonObject,
   CreateTmuxProfileInput,
   CreateTmuxProfileWindowInput,
@@ -251,6 +268,13 @@ export interface ProjectListPage {
   readonly complete: boolean;
 }
 
+export interface CompleteProjectPopulation {
+  readonly projects: Workspace[];
+  readonly total: number;
+  readonly pages: number;
+  readonly complete: true;
+}
+
 export interface ProjectStore {
   readonly mode: ProjectStoreMode;
   /** Base `<url>/v1` for api mode; null for local. Never contains the key. */
@@ -260,6 +284,8 @@ export interface ProjectStore {
    * walks the server's pages itself rather than handing back one capped page.
    */
   listProjects(filter?: WorkspaceFilter): Promise<Workspace[]>;
+  /** Full population read with a stable producer total and terminal invariant. */
+  listProjectsComplete(filter?: Omit<WorkspaceFilter, "limit" | "offset">): Promise<CompleteProjectPopulation>;
   /** As `listProjects`, plus the totals that make a bounded read detectable. */
   listProjectsPage(filter?: WorkspaceFilter): Promise<ProjectListPage>;
   getProject(idOrSlug: string): Promise<Workspace | null>;
@@ -271,6 +297,10 @@ export interface ProjectStore {
   resolveTarget(target: string | undefined, options?: ProjectResolverOptions): Promise<Workspace>;
   createProject(input: CreateWorkspaceInput): Promise<Workspace>;
   updateProject(id: string, patch: UpdateWorkspaceInput): Promise<Workspace>;
+  guardedReadProject(input: GuardedProjectReadRequest): Promise<GuardedProjectReadResult>;
+  guardedUpdateProject(input: GuardedProjectMutationRequest): Promise<GuardedProjectMutationResult>;
+  lookupGuardedProjectMutationReceipt(input: GuardedProjectMutationReceiptLookupInput): Promise<GuardedProjectMutationReceiptLookupResult>;
+  rollbackGuardedProjectMutation(input: GuardedProjectMutationRollbackRequest): Promise<GuardedProjectMutationResult>;
   archiveProject(id: string, ctx?: MutationContext): Promise<Workspace>;
   unarchiveProject(id: string, ctx?: MutationContext): Promise<Workspace>;
   deleteProject(id: string, opts: { hard?: boolean }, ctx?: MutationContext): Promise<DeleteProjectResult>;
@@ -459,7 +489,21 @@ class LocalProjectStore implements ProjectStore {
   readonly baseUrl = null;
 
   async listProjects(filter?: WorkspaceFilter): Promise<Workspace[]> {
+    if (filter?.limit === undefined && filter?.offset === undefined) {
+      return (await this.listProjectsComplete(filter)).projects;
+    }
     return dbListWorkspaces(filter ?? {});
+  }
+
+  async listProjectsComplete(filter?: Omit<WorkspaceFilter, "limit" | "offset">): Promise<CompleteProjectPopulation> {
+    const f = filter ?? {};
+    const projects = dbListWorkspaces(f);
+    const total = dbCountWorkspaces(f);
+    const ids = new Set(projects.map((project) => project.id));
+    if (ids.size !== projects.length || projects.length !== total) {
+      throw new Error(`Projects list terminal invariant failed: local producer returned ${projects.length} unique rows for total ${total}.`);
+    }
+    return { projects, total, pages: 1, complete: true };
   }
 
   async listProjectsPage(filter?: WorkspaceFilter): Promise<ProjectListPage> {
@@ -482,6 +526,33 @@ class LocalProjectStore implements ProjectStore {
   async updateProject(id: string, patch: UpdateWorkspaceInput): Promise<Workspace> {
     return withLock(id, { agentId: patch.agent_id, source: patch.source, command: patch.command }, "project update", () =>
       dbUpdateWorkspace(id, patch),
+    );
+  }
+
+  async guardedReadProject(input: GuardedProjectReadRequest): Promise<GuardedProjectReadResult> {
+    const started = Date.now();
+    assertCompleteStableProjectId(input.project_id);
+    assertPositiveBounds(input);
+    const project = dbGetWorkspace(input.project_id);
+    if (!project) throw new Error(`Project not found: ${input.project_id}`);
+    return buildGuardedProjectReadResult(project, input, started);
+  }
+
+  async guardedUpdateProject(input: GuardedProjectMutationRequest): Promise<GuardedProjectMutationResult> {
+    return withLock(input.project_id, { agentId: input.agent_id, source: input.source, command: input.command }, "guarded project update", () =>
+      dbGuardedUpdateWorkspace(input),
+    );
+  }
+
+  async lookupGuardedProjectMutationReceipt(input: GuardedProjectMutationReceiptLookupInput): Promise<GuardedProjectMutationReceiptLookupResult> {
+    const started = Date.now();
+    const receipt = dbLookupGuardedWorkspaceMutationReceipt(input);
+    return withResponseControl({ receipt }, input, started);
+  }
+
+  async rollbackGuardedProjectMutation(input: GuardedProjectMutationRollbackRequest): Promise<GuardedProjectMutationResult> {
+    return withLock(input.project_id, { agentId: input.agent_id, source: input.source, command: input.command }, "guarded project rollback", () =>
+      dbRollbackGuardedWorkspaceMutation(input),
     );
   }
 
@@ -784,18 +855,31 @@ class ApiProjectStore implements ProjectStore {
   private async fetchProjectPage(
     filter: WorkspaceFilter | undefined,
     params: { limit: number; offset: number },
-  ): Promise<{ rows: Workspace[]; total: number | null }> {
+  ): Promise<{
+    rows: Workspace[];
+    total: number | null;
+    offset: number | null;
+    limit: number | null;
+    has_more: boolean | null;
+  }> {
     const raw = await this.client.transport.get<{
       workspaces?: Workspace[];
       projects?: Workspace[];
       total?: number;
+      offset?: number;
+      limit?: number;
+      has_more?: boolean;
     }>("/projects", {
       query: { ...listQuery(filter), limit: params.limit, offset: params.offset },
     });
     const rows = (raw.workspaces ?? raw.projects ?? []).map((row) => normalizeApiWorkspace(row) ?? (row as Workspace));
-    // `total` is served by projects >= 0.1.96; older deployments omit it and we
-    // fall back to what the page walk actually observed.
-    return { rows, total: typeof raw.total === "number" ? raw.total : null };
+    return {
+      rows,
+      total: typeof raw.total === "number" ? raw.total : null,
+      offset: typeof raw.offset === "number" ? raw.offset : null,
+      limit: typeof raw.limit === "number" ? raw.limit : null,
+      has_more: typeof raw.has_more === "boolean" ? raw.has_more : null,
+    };
   }
 
   /**
@@ -809,6 +893,9 @@ class ApiProjectStore implements ProjectStore {
    * hardcoded here and a server-side change needs no client release.
    */
   async listProjects(filter?: WorkspaceFilter): Promise<Workspace[]> {
+    if (filter?.limit === undefined && filter?.offset === undefined) {
+      return (await this.listProjectsComplete(filter)).projects;
+    }
     return collectPages<Workspace>(
       async (params) => (await this.fetchProjectPage(filter, params)).rows,
       (row) => row?.id,
@@ -819,8 +906,33 @@ class ApiProjectStore implements ProjectStore {
     );
   }
 
+  async listProjectsComplete(filter?: Omit<WorkspaceFilter, "limit" | "offset">): Promise<CompleteProjectPopulation> {
+    const f = filter ?? {};
+    const population = await collectCompletePages<Workspace>(
+      async (params): Promise<CompletePage<Workspace>> => {
+        const page = await this.fetchProjectPage(f, params);
+        if (page.total === null || page.offset === null || page.limit === null || page.has_more === null) {
+          throw new Error("Projects producer did not return the complete population contract (total/offset/limit/has_more).");
+        }
+        return {
+          rows: page.rows,
+          total: page.total,
+          offset: page.offset,
+          limit: page.limit,
+          has_more: page.has_more,
+        };
+      },
+      (row) => row?.id,
+    );
+    return { projects: population.rows, total: population.total, pages: population.pages, complete: true };
+  }
+
   async listProjectsPage(filter?: WorkspaceFilter): Promise<ProjectListPage> {
     const f = filter ?? {};
+    if (f.limit === undefined && f.offset === undefined) {
+      const population = await this.listProjectsComplete(f);
+      return buildProjectListPage(population.projects, f, population.total);
+    }
     let serverTotal: number | null = null;
     const projects = await collectPages<Workspace>(
       async (params) => {
@@ -879,6 +991,56 @@ class ApiProjectStore implements ProjectStore {
   async updateProject(id: string, patch: UpdateWorkspaceInput): Promise<Workspace> {
     const updated = await this.client.update<Workspace>(RESOURCE, id, patch);
     return normalizeApiWorkspace(updated) ?? updated;
+  }
+
+  async guardedReadProject(input: GuardedProjectReadRequest): Promise<GuardedProjectReadResult> {
+    assertCompleteStableProjectId(input.project_id);
+    assertPositiveBounds(input);
+    return this.client.transport.get<GuardedProjectReadResult>(
+      `/projects/${encodeURIComponent(input.project_id)}/guarded-metadata`,
+      {
+        query: {
+          response_byte_limit: input.response_byte_limit,
+          time_budget_ms: input.time_budget_ms,
+        },
+        timeoutMs: input.time_budget_ms,
+      },
+    );
+  }
+
+  async guardedUpdateProject(input: GuardedProjectMutationRequest): Promise<GuardedProjectMutationResult> {
+    const res = await this.client.transport.post<GuardedProjectMutationResult>(
+      `/projects/${encodeURIComponent(input.project_id)}/guarded-metadata`,
+      input,
+      { timeoutMs: input.time_budget_ms },
+    );
+    return res;
+  }
+
+  async lookupGuardedProjectMutationReceipt(input: GuardedProjectMutationReceiptLookupInput): Promise<GuardedProjectMutationReceiptLookupResult> {
+    return this.client.transport.get<GuardedProjectMutationReceiptLookupResult>(
+      `/projects/${encodeURIComponent(input.project_id)}/guarded-metadata/receipts`,
+      {
+        query: {
+          operation_id: input.operation_id,
+          step_id: input.step_id,
+          direction: input.direction,
+          idempotency_key: input.idempotency_key,
+          max_items: input.max_items,
+          response_byte_limit: input.response_byte_limit,
+          time_budget_ms: input.time_budget_ms,
+        },
+        timeoutMs: input.time_budget_ms,
+      },
+    );
+  }
+
+  async rollbackGuardedProjectMutation(input: GuardedProjectMutationRollbackRequest): Promise<GuardedProjectMutationResult> {
+    return this.client.transport.post<GuardedProjectMutationResult>(
+      `/projects/${encodeURIComponent(input.project_id)}/guarded-metadata/rollback`,
+      input,
+      { timeoutMs: input.time_budget_ms },
+    );
   }
 
   async archiveProject(id: string): Promise<Workspace> {

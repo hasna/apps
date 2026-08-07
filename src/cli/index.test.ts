@@ -8,9 +8,11 @@ import { join } from "node:path";
 import { acquireWorkspaceLock, completeAgentRun, createRoot, createWorkspace, startAgentRun } from "../db/workspaces.js";
 import { runMigrations } from "../db/schema.js";
 import { closeDatabase } from "../db/database.js";
+import { deriveWorkspaceRegistryFields } from "../lib/workspace-plan.js";
 import { registerWorkspaceCommands } from "./commands/workspaces.js";
 import { API_MODE_ENV_KEYS, testSpawnEnv } from "../testing/spawn-env.js";
 import { __resetProjectStore } from "../store/project-store.js";
+import type { Root, WorkspaceKind } from "../types/workspace.js";
 
 const CLI_PATH = join(process.cwd(), "src/cli/index.ts");
 
@@ -123,6 +125,89 @@ function reserveFreePort(): number {
   server.stop(true);
   if (!port) throw new Error("Failed to reserve test port");
   return port;
+}
+
+function cloudDoctorFixture() {
+  const root = mkdtempSync(join(tmpdir(), "projects-cloud-doctor-"));
+  const dbPath = join(root, "projects.db");
+  const projectPath = join(root, "monthly-filing");
+  const projectId = "wks_oyhvttd02j1b";
+  mkdirSync(projectPath, { recursive: true });
+  writeFileSync(
+    join(projectPath, ".project.json"),
+    JSON.stringify({ schema_version: 1, id: projectId, slug: "monthly-accounting" }, null, 2) + "\n",
+  );
+  const db = new Database(dbPath);
+  runMigrations(db);
+  db.close();
+
+  const port = reserveFreePort();
+  const project = {
+    id: projectId,
+    slug: "monthly-filing",
+    name: "Monthly Filing",
+    description: null,
+    kind: "generic",
+    status: "active",
+    root_id: null,
+    recipe_id: null,
+    canonical_machine: null,
+    primary_path: projectPath,
+    git_remote: null,
+    s3_bucket: null,
+    s3_prefix: null,
+    tags: [],
+    integrations: {},
+    metadata: {},
+    last_opened_at: null,
+    created_at: "2026-08-07 11:42:01.569",
+    updated_at: "2026-08-07 11:42:01.569",
+    synced_at: null,
+  };
+  const requests: Array<{ method: string; path: string }> = [];
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port,
+    fetch(req) {
+      const url = new URL(req.url);
+      requests.push({ method: req.method, path: url.pathname });
+      if (req.method === "GET" && url.pathname === `/v1/projects/${projectId}`) {
+        return Response.json(project);
+      }
+      return Response.json({ error: "Not found" }, { status: 404 });
+    },
+  });
+  const env = {
+    HASNA_PROJECTS_DB_PATH: dbPath,
+    HASNA_PROJECTS_HOME: join(root, "home"),
+    HASNA_PROJECTS_API_URL: `http://127.0.0.1:${port}`,
+    HASNA_PROJECTS_API_KEY: "test-key",
+  };
+  const runDoctor = async (extraArgs: string[]) => {
+    const proc = Bun.spawn({
+      cmd: ["bun", "run", CLI_PATH, "doctor", projectId, "--fix", "--verbose", "--json", ...extraArgs],
+      stdout: "pipe",
+      stderr: "pipe",
+      env: testSpawnEnv(env),
+    });
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    await proc.exited;
+    return { exitCode: proc.exitCode, stdout, stderr };
+  };
+  return {
+    dbPath,
+    projectId,
+    projectPath,
+    requests,
+    runDoctor,
+    close() {
+      server.stop(true);
+      rmSync(root, { recursive: true, force: true });
+    },
+  };
 }
 
 describe("project-first CLI surface", () => {
@@ -518,6 +603,143 @@ describe("project-first CLI surface", () => {
     const get = runProjects(["get", "surface-app", "--json"], env);
     expect(get.exitCode).toBe(0);
     expect((JSON.parse(text(get.stdout)) as { project?: { slug: string } }).project?.slug).toBe("surface-app");
+  });
+
+  test("guarded-read returns a bounded exact-id revision envelope and rejects non-id targets", () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-guarded-read-"));
+    const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
+    const targetPath = join(root, "guarded-read-app");
+
+    try {
+      const create = runProjects([
+        "create",
+        "--name",
+        "Guarded Read App",
+        "--slug",
+        "guarded-read-app",
+        "--path",
+        targetPath,
+        "--json",
+      ], env);
+      expect(create.exitCode).toBe(0);
+      const created = JSON.parse(text(create.stdout)) as {
+        project: { id: string; updated_at: string };
+      };
+
+      const exact = runProjects([
+        "guarded-read",
+        created.project.id,
+        "--response-byte-limit",
+        "16384",
+        "--time-budget-ms",
+        "5000",
+        "--json",
+      ], env);
+      expect(exact.exitCode).toBe(0);
+      const payload = JSON.parse(text(exact.stdout)) as {
+        ok: boolean;
+        project_id: string;
+        current_revision: string;
+        response_control: {
+          response_byte_limit: number;
+          time_budget_ms: number;
+          response_bytes: number;
+          complete: boolean;
+          truncated: boolean;
+        };
+      };
+      expect(payload.ok).toBe(true);
+      expect(payload.project_id).toBe(created.project.id);
+      expect(payload.current_revision).toBe(created.project.updated_at);
+      expect(payload.response_control.response_byte_limit).toBe(16384);
+      expect(payload.response_control.time_budget_ms).toBe(5000);
+      expect(payload.response_control.response_bytes).toBeGreaterThan(0);
+      expect(Buffer.byteLength(text(exact.stdout), "utf8")).toBe(payload.response_control.response_bytes);
+      expect(payload.response_control.complete).toBe(true);
+      expect(payload.response_control.truncated).toBe(false);
+
+      for (const refusedTarget of ["guarded-read-app", created.project.id.slice(0, -1)]) {
+        const refused = runProjects([
+          "guarded-read",
+          refusedTarget,
+          "--response-byte-limit",
+          "16384",
+          "--time-budget-ms",
+          "5000",
+          "--json",
+        ], env);
+        expect(refused.exitCode).toBe(1);
+        expect(text(refused.stderr)).toContain("complete stable project id");
+      }
+
+      const byteLimited = runProjects([
+        "guarded-read",
+        created.project.id,
+        "--response-byte-limit",
+        "1",
+        "--time-budget-ms",
+        "5000",
+        "--json",
+      ], env);
+      expect(byteLimited.exitCode).toBe(1);
+      expect(text(byteLimited.stderr)).toContain("response byte budget exceeded");
+      expect(runProjects(["show", created.project.id, "--json"], env).exitCode).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("guarded-update exposes exact integrations through the guarded contract", () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-guarded-integrations-"));
+    const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
+    try {
+      const create = runProjects([
+        "create",
+        "--name",
+        "Guarded Integrations",
+        "--slug",
+        "guarded-integrations",
+        "--integrations-json",
+        JSON.stringify({ todos_project_id: "todo_before" }),
+        "--json",
+      ], env);
+      expect(create.exitCode).toBe(0);
+      const created = JSON.parse(text(create.stdout)) as { project: { id: string; updated_at: string; integrations: Record<string, string> } };
+      const update = runProjects([
+        "guarded-update",
+        created.project.id,
+        "--expected-revision",
+        created.project.updated_at,
+        "--operation-id",
+        "guarded-integrations-operation",
+        "--step-id",
+        "integrations",
+        "--integrations-json",
+        JSON.stringify({
+          todos_project_id: "todo_after",
+          conversations_channel: "package-arrivals",
+        }),
+        "--response-byte-limit",
+        "20000",
+        "--time-budget-ms",
+        "5000",
+        "--json",
+      ], env);
+      expect(update.exitCode).toBe(0);
+      const payload = JSON.parse(text(update.stdout)) as {
+        outcome: string;
+        after: { integrations: Record<string, string> };
+        receipt: { receipt_id: string };
+      };
+      expect(payload.outcome).toBe("accepted");
+      expect(payload.after.integrations).toEqual({
+        todos_project_id: "todo_after",
+        conversations_channel: "package-arrivals",
+      });
+      expect(payload.receipt.receipt_id).toMatch(/^gpmr_/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("workspace store, app store, loops, and labels use temp home", () => {
@@ -1773,6 +1995,56 @@ describe("project-first CLI surface", () => {
     }
   }, 30000);
 
+  test("doctor --fix --dry-run does not promise a local location write for an API-backed exact target", async () => {
+    const fixture = cloudDoctorFixture();
+    try {
+      const result = await fixture.runDoctor(["--dry-run"]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe("");
+      const rows = JSON.parse(result.stdout) as Array<{
+        checks: Array<{ code: string; fixable?: boolean; message: string }>;
+        fixes: Array<{ code: string; dryRun: boolean }>;
+      }>;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.fixes).toContainEqual(expect.objectContaining({ code: "FIX_WORKSPACE_MARKER", dryRun: true }));
+      expect(rows[0]!.fixes.some((fix) => fix.code === "FIX_WORKSPACE_LOCATION")).toBe(false);
+      expect(rows[0]!.checks).toContainEqual(expect.objectContaining({
+        code: "WORKSPACE_LOCATIONS_LOCAL_ONLY",
+        fixable: false,
+        message: expect.stringContaining("API-backed projects do not own the machine-local location registry"),
+      }));
+      expect(JSON.parse(readFileSync(join(fixture.projectPath, ".project.json"), "utf-8")).slug).toBe("monthly-accounting");
+      expect(fixture.requests).toEqual([{ method: "GET", path: `/v1/projects/${fixture.projectId}` }]);
+    } finally {
+      fixture.close();
+    }
+  }, 30_000);
+
+  test("doctor --fix returns JSON after regenerating an API-backed marker without touching local location or event tables", async () => {
+    const fixture = cloudDoctorFixture();
+    try {
+      const result = await fixture.runDoctor([]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe("");
+      const rows = JSON.parse(result.stdout) as Array<{
+        fixes: Array<{ code: string; changed: boolean }>;
+      }>;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.fixes).toContainEqual(expect.objectContaining({ code: "FIX_WORKSPACE_MARKER", changed: true }));
+      expect(rows[0]!.fixes.some((fix) => fix.code === "FIX_WORKSPACE_LOCATION")).toBe(false);
+      const marker = JSON.parse(readFileSync(join(fixture.projectPath, ".project.json"), "utf-8")) as { id: string; slug: string; name: string };
+      expect(marker).toMatchObject({ id: fixture.projectId, slug: "monthly-filing", name: "Monthly Filing" });
+
+      const db = new Database(fixture.dbPath);
+      expect(db.query("SELECT COUNT(*) AS count FROM workspace_locations").get()).toEqual({ count: 0 });
+      expect(db.query("SELECT COUNT(*) AS count FROM workspace_events").get()).toEqual({ count: 0 });
+      db.close();
+      expect(fixture.requests).toEqual([{ method: "GET", path: `/v1/projects/${fixture.projectId}` }]);
+    } finally {
+      fixture.close();
+    }
+  }, 30_000);
+
   test("channel --ensure succeeds in api mode even when the events route 404s, and is idempotent", async () => {
     // Regression (issue #28): `projects channel <p> --ensure` created the
     // conversations channel and persisted `integrations.conversations_channel`,
@@ -1998,6 +2270,219 @@ describe("project-first CLI surface", () => {
       expect(body.metadata?.priority).toBe("high");
       expect(body.metadata?.owner).toBe("andrei");
       expect(body.integrations?.todos_project_id).toBe("prj_probe");
+    } finally {
+      server.stop(true);
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  test("create in cloud mode derives the same primary_path and channel the dry-run plan promises", async () => {
+    // Regression: `projects create --dry-run` reported a canonical
+    // `primary_path` and a derived `integrations.conversations_channel`, and the
+    // identical real create in api/cloud mode produced `primary_path: null` and
+    // `integrations: {}` — so the plan promised a project the create did not
+    // build, and `projects store inspect` then read primary_is_canonical=false /
+    // exists.workspace=false. Five projects were created that way.
+    //
+    // Both derivations live in the shared registry helper. The client supplies
+    // an id-derived no-root path, while the server derives slug-dependent
+    // fields only after allocating the exact persisted slug.
+    //
+    // The property under test is TRANSPORT PARITY: the same flags must produce
+    // the same registry row whether the store is local or api. The existing
+    // cloud-create test above always passes `--path`, so it could never observe
+    // this — the divergence only appears on the defaulting path.
+    const root = mkdtempSync(join(tmpdir(), "projects-cloud-derive-"));
+    const home = join(root, "home");
+    const rootedBase = join(root, "rooted");
+    const port = reserveFreePort();
+    const requests: Array<{ method: string; path: string; body: Record<string, unknown> | null }> = [];
+    const persistedSlugs = new Set<string>();
+    const rooted: Root = {
+      id: "root_cloud_derive",
+      slug: "cloud-derive-root",
+      name: "Cloud Derive Root",
+      base_path: rootedBase,
+      tags: [],
+      default_kind: "project",
+      default_recipe_id: null,
+      default_tmux_profile_id: null,
+      github_org: null,
+      repo_visibility: null,
+      path_template: "{slug}",
+      name_template: null,
+      allowed_recipes: [],
+      allowed_agents: [],
+      metadata: {},
+      created_at: "2026-08-03 00:00:00",
+      updated_at: "2026-08-03 00:00:00",
+    };
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port,
+      async fetch(req) {
+        const url = new URL(req.url);
+        let body: Record<string, unknown> | null = null;
+        try { body = (await req.json()) as Record<string, unknown>; } catch { body = null; }
+        requests.push({ method: req.method, path: url.pathname, body });
+        if (req.method === "GET" && url.pathname === `/v1/roots/${rooted.slug}`) {
+          return Response.json(rooted);
+        }
+        if (req.method === "POST" && url.pathname === "/v1/projects") {
+          const id = (body?.id as string | undefined) ?? "wks_serverassigned0001";
+          const baseSlug = (body?.slug as string | undefined) ?? "cloud-derive-probe";
+          let slug = baseSlug;
+          let suffix = 1;
+          while (persistedSlugs.has(slug)) {
+            suffix++;
+            slug = `${baseSlug}-${suffix}`;
+          }
+          persistedSlugs.add(slug);
+          const projectRoot = body?.root_id === rooted.id ? rooted : null;
+          const kind = ((body?.kind as WorkspaceKind | undefined) ?? projectRoot?.default_kind ?? "generic") as WorkspaceKind;
+          const derived = deriveWorkspaceRegistryFields({
+            name: (body?.name as string | undefined) ?? "Cloud Derive Probe",
+            primary_path: body?.primary_path as string | undefined,
+            integrations: body?.integrations as Record<string, string> | undefined,
+          }, { root: projectRoot, slug, id, kind });
+          return Response.json({
+            id,
+            slug,
+            name: (body?.name as string | undefined) ?? "Cloud Derive Probe",
+            kind,
+            status: "active",
+            root_id: projectRoot?.id ?? null,
+            primary_path: derived.primary_path,
+            integrations: derived.integrations,
+          });
+        }
+        if (url.pathname === "/v1/projects") return Response.json({ workspaces: [] });
+        return Response.json({});
+      },
+    });
+    const env = {
+      HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
+      HASNA_PROJECTS_HOME: home,
+      HASNA_PROJECTS_API_URL: `http://127.0.0.1:${port}`,
+      HASNA_PROJECTS_API_KEY: "test-key",
+    };
+    const runCreate = async (args: string[]) => {
+      const proc = Bun.spawn({
+        cmd: ["bun", "run", CLI_PATH, "create", ...args],
+        stdout: "pipe",
+        stderr: "pipe",
+        env: testSpawnEnv(env),
+      });
+      const stdout = await new Response(proc.stdout).text();
+      const stderr = await new Response(proc.stderr).text();
+      await proc.exited;
+      return { exitCode: proc.exitCode, stdout, stderr };
+    };
+    const postBodies = () => requests
+      .filter((r) => r.method === "POST" && r.path === "/v1/projects")
+      .map((r) => r.body as {
+        id?: string;
+        slug?: string;
+        primary_path?: string | null;
+        integrations?: Record<string, unknown>;
+      });
+
+    try {
+      // The plan the operator is shown before committing.
+      const planned = await runCreate([
+        "--name", "Cloud Derive Probe",
+        "--slug", "cloud-derive-probe",
+        "--dry-run",
+        "--json",
+      ]);
+      expect(planned.exitCode).toBe(0);
+      // Negative control on the dry run itself: previewing must not create.
+      expect(postBodies()).toHaveLength(0);
+      const plan = JSON.parse(planned.stdout) as {
+        plan: { project: { primary_path: string | null; integrations: Record<string, unknown> } };
+      };
+      const plannedPath = plan.plan.project.primary_path;
+      const plannedChannel = plan.plan.project.integrations?.["conversations_channel"];
+      // The plan is only a meaningful oracle if it actually promises something.
+      expect(plannedPath).toBe(join(home, "workspaces", plannedPath!.split("/").pop()!));
+      expect(plannedChannel).toBe("cloud-derive-probe");
+
+      // The real create, same flags, no --path.
+      const created = await runCreate([
+        "--name", "Cloud Derive Probe",
+        "--slug", "cloud-derive-probe",
+        "--json",
+      ]);
+      expect(created.exitCode).toBe(0);
+      const bodies = postBodies();
+      expect(bodies).toHaveLength(1);
+      const body = bodies[0]!;
+
+      // The create must honour what the plan promised.
+      expect(body.primary_path).not.toBeNull();
+      expect(body.primary_path).toBeDefined();
+      // Tie the path to the id actually sent, so a path for some *other*
+      // project's id cannot pass: the canonical location is derived from the id.
+      expect(body.id).toMatch(/^wks_[A-Za-z0-9_-]+$/);
+      expect(body.primary_path).toBe(join(home, "workspaces", body.id!));
+      // The channel is deliberately absent from the request. The server must
+      // derive it after slug allocation instead of mistaking a client guess for
+      // an explicit integration link.
+      expect(body.integrations?.["conversations_channel"]).toBeUndefined();
+      const createdProject = (JSON.parse(created.stdout) as {
+        project: { primary_path: string; integrations: Record<string, unknown> };
+      }).project;
+      expect(createdProject.primary_path).toBe(body.primary_path!);
+      expect(createdProject.integrations["conversations_channel"]).toBe(plannedChannel);
+
+      // Negative control 1: an explicit --path must still win, so the fix is
+      // "derive a default", not "overwrite whatever the operator asked for".
+      const explicitPath = join(root, "explicit-elsewhere");
+      const explicit = await runCreate([
+        "--name", "Cloud Derive Explicit",
+        "--slug", "cloud-derive-explicit",
+        "--path", explicitPath,
+        "--json",
+      ]);
+      expect(explicit.exitCode).toBe(0);
+      const explicitBody = postBodies()[1]!;
+      expect(explicitBody.primary_path).toBe(explicitPath);
+
+      // Negative control 2: an explicitly linked channel must still win over the
+      // slug-derived default.
+      const pinned = await runCreate([
+        "--name", "Cloud Derive Pinned",
+        "--slug", "cloud-derive-pinned",
+        "--integrations-json", JSON.stringify({ conversations_channel: "pinned-elsewhere" }),
+        "--json",
+      ]);
+      expect(pinned.exitCode).toBe(0);
+      const pinnedBody = postBodies()[2]!;
+      expect(pinnedBody.integrations?.["conversations_channel"]).toBe("pinned-elsewhere");
+
+      // Real duplicate-slug API path: the client cannot know the suffix before
+      // the server checks the registry. A rooted {slug} path and the derived
+      // channel must therefore follow the exact returned/persisted slug.
+      const duplicateArgs = [
+        "--name", "Rooted Duplicate",
+        "--slug", "rooted-duplicate",
+        "--root", rooted.slug,
+        "--json",
+      ];
+      const firstDuplicate = await runCreate(duplicateArgs);
+      const secondDuplicate = await runCreate(duplicateArgs);
+      expect(firstDuplicate.exitCode).toBe(0);
+      expect(secondDuplicate.exitCode).toBe(0);
+      const secondProject = (JSON.parse(secondDuplicate.stdout) as {
+        project: { slug: string; primary_path: string; integrations: Record<string, unknown> };
+      }).project;
+      expect(secondProject.slug).toBe("rooted-duplicate-2");
+      expect(secondProject.primary_path).toBe(join(rootedBase, secondProject.slug));
+      expect(secondProject.integrations["conversations_channel"]).toBe(secondProject.slug);
+
+      const secondDuplicateBody = postBodies()[4]!;
+      expect(secondDuplicateBody.primary_path).toBeUndefined();
+      expect(secondDuplicateBody.integrations?.["conversations_channel"]).toBeUndefined();
     } finally {
       server.stop(true);
       rmSync(root, { recursive: true, force: true });

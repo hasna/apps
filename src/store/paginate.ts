@@ -33,6 +33,23 @@ export interface CollectPagesOptions {
   readonly maxPages?: number;
 }
 
+export interface CompletePage<T> {
+  readonly rows: T[];
+  readonly total: number;
+  readonly offset: number;
+  readonly limit: number;
+  readonly has_more: boolean;
+}
+
+export interface CompletePopulation<T> {
+  readonly rows: T[];
+  readonly total: number;
+  readonly pages: number;
+  readonly complete: true;
+}
+
+export type CompletePageFetcher<T> = (params: { limit: number; offset: number }) => Promise<CompletePage<T>>;
+
 export const DEFAULT_PAGE_REQUEST = 5_000;
 export const DEFAULT_MAX_PAGES = 1_000;
 
@@ -85,7 +102,11 @@ export async function collectPages<T>(
     for (const row of rows) {
       const id = identify(row);
       if (id !== undefined) {
-        if (seen.has(id)) continue;
+        if (seen.has(id)) {
+          throw new PaginationError(
+            `Projects list pagination returned duplicate row "${id}" at offset ${offset}; refusing to deduplicate a possibly missing page.`,
+          );
+        }
         seen.add(id);
       }
       collected.push(row);
@@ -112,4 +133,84 @@ export async function collectPages<T>(
   }
 
   return collected;
+}
+
+/**
+ * Walk a producer that reports its complete match total on every page.
+ *
+ * This is intentionally stricter than `collectPages`: a complete population
+ * is evidence, not a best-effort list. The producer total must remain stable,
+ * offsets must advance exactly by the rows returned, every row must have a
+ * unique identity, and the terminal page must account for the whole total.
+ */
+export async function collectCompletePages<T>(
+  fetchPage: CompletePageFetcher<T>,
+  identify: (row: T) => string | undefined,
+  options: Pick<CollectPagesOptions, "pageSize" | "maxPages"> = {},
+): Promise<CompletePopulation<T>> {
+  const maxPages = options.maxPages ?? DEFAULT_MAX_PAGES;
+  const requestSize = options.pageSize ?? DEFAULT_PAGE_REQUEST;
+  const collected: T[] = [];
+  const seen = new Set<string>();
+  let offset = 0;
+  let expectedTotal: number | undefined;
+  let pages = 0;
+
+  for (; pages < maxPages; pages++) {
+    const page = await fetchPage({ limit: requestSize, offset });
+    if (!Number.isInteger(page.total) || page.total < 0) {
+      throw new PaginationError(`Complete project traversal requires a non-negative integer producer total at offset ${offset}.`);
+    }
+    if (!Number.isInteger(page.offset) || page.offset !== offset) {
+      throw new PaginationError(`Projects list producer returned offset ${page.offset} for requested offset ${offset}; refusing traversal.`);
+    }
+    if (!Number.isInteger(page.limit) || page.limit <= 0) {
+      throw new PaginationError(`Projects list producer returned invalid page limit ${page.limit} at offset ${offset}.`);
+    }
+    if (page.rows.length > page.limit) {
+      throw new PaginationError(`Projects list producer returned ${page.rows.length} rows for limit ${page.limit}; refusing traversal.`);
+    }
+    if (expectedTotal === undefined) expectedTotal = page.total;
+    if (page.total !== expectedTotal) {
+      throw new PaginationError(
+        `Projects list producer total changed during traversal (${expectedTotal} -> ${page.total} at offset ${offset}); refusing a moving population.`,
+      );
+    }
+    const expectedHasMore = offset + page.rows.length < expectedTotal;
+    if (page.has_more !== expectedHasMore) {
+      throw new PaginationError(
+        `Projects list producer has_more=${page.has_more} disagrees with total=${expectedTotal} and rows through ${offset + page.rows.length}.`,
+      );
+    }
+
+    if (page.rows.length === 0) {
+      if (expectedTotal !== 0 || page.has_more) {
+        throw new PaginationError(`Projects list producer returned an empty non-terminal page at offset ${offset}; refusing missing-page traversal.`);
+      }
+      return { rows: collected, total: expectedTotal, pages: pages + 1, complete: true };
+    }
+
+    for (const row of page.rows) {
+      const id = identify(row);
+      if (!id) throw new PaginationError(`Projects list producer returned a row without a stable identity at offset ${offset}.`);
+      if (seen.has(id)) {
+        throw new PaginationError(`Projects list producer returned duplicate row "${id}" at offset ${offset}; refusing traversal.`);
+      }
+      seen.add(id);
+      collected.push(row);
+    }
+
+    if (!page.has_more) {
+      if (collected.length !== expectedTotal) {
+        throw new PaginationError(
+          `Projects list terminal invariant failed: collected ${collected.length} unique rows, producer total is ${expectedTotal}.`,
+        );
+      }
+      return { rows: collected, total: expectedTotal, pages: pages + 1, complete: true };
+    }
+
+    offset += page.rows.length;
+  }
+
+  throw new PaginationError(`Projects list exceeded the ${maxPages}-page safety bound before reaching a terminal invariant.`);
 }

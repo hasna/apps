@@ -4,10 +4,12 @@ import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
   ensureCliAgent,
+  generateWorkspaceId,
   getAgent,
   getAgentBySlug,
   getRecipe,
   getRoot,
+  workspaceSlugify,
   listAgents,
   listRecipes,
   listRoots,
@@ -23,6 +25,7 @@ import {
 } from "../../lib/workspace-runtime.js";
 import {
   cleanupWorkspaceCreationTarget,
+  deriveWorkspaceRegistryFields,
   executeWorkspaceCreation,
   type WorkspaceCreationCleanupTarget,
   type WorkspaceCreationPlanAction,
@@ -68,6 +71,7 @@ import {
   type ProjectStartResult,
 } from "../../lib/project-start.js";
 import { projectTmuxStatus } from "../../lib/project-tmux-status.js";
+import { runProjectPrefixMigration } from "../../lib/project-prefix-migration.js";
 import { buildProjectDetailPayload, buildProjectListRender, buildProjectSessionsPayload, buildProjectStartBulkRender, buildRecentSessionsPayload, buildRecipesRender, buildRootsRender } from "../../lib/project-render.js";
 import {
   buildProjectAgentContext,
@@ -97,7 +101,7 @@ import {
   removeProjectTags,
   unlinkProjectIntegrationFields,
 } from "../../lib/project-management.js";
-import { PROJECT_AGENT_ROLES, WORKSPACE_KINDS, WORKSPACE_STATUSES, type AgentKind, type JsonObject, type Workspace, type WorkspaceEvent, type WorkspaceIntegrations, type WorkspaceKind, type WorkspaceLock, type WorkspaceStatus } from "../../types/workspace.js";
+import { PROJECT_AGENT_ROLES, WORKSPACE_KINDS, WORKSPACE_STATUSES, type AgentKind, type JsonObject, type Recipe, type Root, type Workspace, type WorkspaceEvent, type WorkspaceIntegrations, type WorkspaceKind, type WorkspaceLock, type WorkspaceStatus } from "../../types/workspace.js";
 
 const DEFAULT_LIST_LIMIT = 25;
 const DEFAULT_EVENT_LIMIT = 20;
@@ -300,18 +304,26 @@ async function withWorkspaceLock<T>(
 // BOTH transports (local sqlite or `/v1/roots` + `/v1/recipes` over HTTP), so
 // slug->id resolution must route through the Store — never straight to local
 // sqlite, which would resolve stale local ids on a flipped machine.
-async function resolveRootId(store: ProjectStore, idOrSlug: string | undefined): Promise<string | undefined> {
-  if (!idOrSlug) return undefined;
+async function resolveRoot(store: ProjectStore, idOrSlug: string): Promise<Root> {
   const root = await store.getRoot(idOrSlug);
   if (!root) throw new Error(`Root not found: ${idOrSlug}`);
-  return root.id;
+  return root;
+}
+
+async function resolveRecipe(store: ProjectStore, idOrSlug: string): Promise<Recipe> {
+  const recipe = await store.getRecipe(idOrSlug);
+  if (!recipe) throw new Error(`Recipe not found: ${idOrSlug}`);
+  return recipe;
+}
+
+async function resolveRootId(store: ProjectStore, idOrSlug: string | undefined): Promise<string | undefined> {
+  if (!idOrSlug) return undefined;
+  return (await resolveRoot(store, idOrSlug)).id;
 }
 
 async function resolveRecipeId(store: ProjectStore, idOrSlug: string | undefined): Promise<string | undefined> {
   if (!idOrSlug) return undefined;
-  const recipe = await store.getRecipe(idOrSlug);
-  if (!recipe) throw new Error(`Recipe not found: ${idOrSlug}`);
-  return recipe.id;
+  return (await resolveRecipe(store, idOrSlug)).id;
 }
 
 function resolveAgentId(idOrSlug: string | undefined): string {
@@ -1506,14 +1518,32 @@ function registerProjectCommands(program: Command): void {
           // shared registry resources: resolve slug->id through the Store so the
           // intent is honored (not silently dropped) in api mode. Agent
           // attribution stays server-side (see mutationAgentId).
-          const project = await store.createProject({
+          const root = opts.root ? await resolveRoot(store, opts.root) : null;
+          const recipe = opts.recipe ? await resolveRecipe(store, opts.recipe) : null;
+          // Generate the id client-side so the canonical no-root path can still
+          // describe this client's project store. Slug-dependent defaults are
+          // server-authoritative: a root template may contain {slug}, and the
+          // server may suffix a duplicate slug. Do not send an implicit rooted
+          // path or derived channel, because the server cannot distinguish
+          // those guesses from explicit operator values. It derives missing
+          // fields after selecting the exact slug it persists.
+          const id = generateWorkspaceId();
+          const slug = opts.slug ?? workspaceSlugify(opts.name);
+          const kind = parseKind(opts.kind) ?? recipe?.kind ?? root?.default_kind ?? "generic";
+          const derived = deriveWorkspaceRegistryFields({
             name: opts.name,
-            slug: opts.slug,
-            description: opts.description,
-            kind: parseKind(opts.kind),
-            root_id: await resolveRootId(store, opts.root),
-            recipe_id: await resolveRecipeId(store, opts.recipe),
             primary_path: opts.path ? resolve(opts.path) : undefined,
+            integrations,
+          }, { root, slug, id, kind });
+          const project = await store.createProject({
+            id,
+            name: opts.name,
+            slug,
+            description: opts.description,
+            kind,
+            root_id: root?.id,
+            recipe_id: recipe?.id,
+            primary_path: opts.path || !root ? derived.primary_path ?? undefined : undefined,
             git_remote: opts.gitRemote,
             tags: splitList(opts.tags),
             metadata: Object.keys(managementMetadata).length ? managementMetadata : undefined,
@@ -2266,6 +2296,194 @@ function registerProjectCommands(program: Command): void {
     });
 
   program
+    .command("guarded-read <project-id>")
+    .description("Read one project by exact stable id with bounded complete JSON and its current mutation revision")
+    .requiredOption("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes")
+    .requiredOption("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectId, opts) => {
+      try {
+        const result = await resolveProjectStore().guardedReadProject({
+          project_id: projectId,
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+        });
+        if (wantsJson(opts)) {
+          process.stdout.write(JSON.stringify(result));
+          return;
+        }
+        console.log(chalk.green(`✓ Guarded project read: ${result.project_id}`));
+        console.log(`  ${chalk.dim("revision:")} ${result.current_revision}`);
+        console.log(`  ${chalk.dim("complete:")} ${result.response_control.complete}`);
+        console.log(`  ${chalk.dim("truncated:")} ${result.response_control.truncated}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("guarded-update <project-id>")
+    .description("Safely update an existing project by exact stable id with revision, idempotency, receipt, and dry-run controls")
+    .option("--name <name>", "Project name")
+    .option("--slug <slug>", "Project slug")
+    .option("--description <text>", "Description")
+    .option("--metadata-json <json>", "Replace metadata with a JSON object")
+    .option("--integrations-json <json>", "Replace integrations with a JSON object")
+    .requiredOption("--expected-revision <revision>", "Fresh project updated_at revision from an exact-id read")
+    .requiredOption("--operation-id <id>", "Caller-stable operation id")
+    .requiredOption("--step-id <id>", "Caller-stable step id")
+    .requiredOption("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes")
+    .requiredOption("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds")
+    .option("--dry-run", "Preview without writing or persisting a receipt")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectId, opts) => {
+      try {
+        const patch = {
+          name: opts.name,
+          slug: opts.slug,
+          description: opts.description,
+          metadata: parseJsonObject(opts.metadataJson, "--metadata-json"),
+          integrations: parseIntegrationsJson(opts.integrationsJson),
+        };
+        if (Object.values(patch).every((value) => value === undefined)) throw new Error("Provide at least one guarded metadata field to update");
+        const store = resolveProjectStore();
+        const result = await store.guardedUpdateProject({
+          project_id: projectId,
+          operation_id: opts.operationId,
+          step_id: opts.stepId,
+          expected_revision: opts.expectedRevision,
+          patch,
+          dry_run: Boolean(opts.dryRun),
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+          agent_id: mutationAgentId(store, opts.agent),
+          source: "cli",
+          command: process.argv.join(" "),
+        });
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+        const prefix = result.dry_run ? "[dry-run] " : "";
+        console.log(`${chalk.green(`${prefix}Guarded project mutation ${result.outcome}`)}: ${result.project_id}`);
+        console.log(`  ${chalk.dim("idempotency:")} ${result.idempotency_key}`);
+        if (result.receipt) console.log(`  ${chalk.dim("receipt:")} ${result.receipt.receipt_id}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("guarded-receipt <project-id>")
+    .description("Look up exactly one guarded project mutation terminal receipt")
+    .requiredOption("--operation-id <id>", "Operation id")
+    .requiredOption("--step-id <id>", "Step id")
+    .requiredOption("--direction <direction>", "forward or inverse")
+    .requiredOption("--idempotency-key <key>", "Derived guarded idempotency key")
+    .requiredOption("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes")
+    .requiredOption("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectId, opts) => {
+      try {
+        const direction = String(opts.direction);
+        if (direction !== "forward" && direction !== "inverse") throw new Error("--direction must be forward or inverse");
+        const result = await resolveProjectStore().lookupGuardedProjectMutationReceipt({
+          project_id: projectId,
+          operation_id: opts.operationId,
+          step_id: opts.stepId,
+          direction,
+          idempotency_key: opts.idempotencyKey,
+          max_items: 1,
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+        });
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+        console.log(chalk.green(`✓ Guarded receipt: ${result.receipt.receipt_id} (${result.receipt.outcome})`));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("guarded-rollback <project-id>")
+    .description("Rollback a guarded project mutation using an accepted receipt and current post-write revision")
+    .requiredOption("--accepted-receipt-id <id>", "Forward accepted receipt id")
+    .requiredOption("--expected-current-revision <revision>", "Current revision, which must equal the accepted receipt post_revision")
+    .requiredOption("--operation-id <id>", "Caller-stable rollback operation id")
+    .requiredOption("--step-id <id>", "Caller-stable rollback step id")
+    .requiredOption("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes")
+    .requiredOption("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectId, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const result = await store.rollbackGuardedProjectMutation({
+          project_id: projectId,
+          operation_id: opts.operationId,
+          step_id: opts.stepId,
+          accepted_receipt_id: opts.acceptedReceiptId,
+          expected_current_revision: opts.expectedCurrentRevision,
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+          agent_id: mutationAgentId(store, opts.agent),
+          source: "cli",
+          command: process.argv.join(" "),
+        });
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+        console.log(chalk.green(`✓ Guarded rollback ${result.outcome}: ${result.project_id}`));
+        if (result.receipt) console.log(`  ${chalk.dim("receipt:")} ${result.receipt.receipt_id}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("migrate-prefixes")
+    .description("Preview or apply a receipt-backed removal of leading iproj- and internal-iproj- prefixes")
+    .option("--apply", "Apply the ordered migration; without this flag the command is a read-only dry run")
+    .option("--operation-id <id>", "Caller-stable operation id for retries")
+    .option("--response-byte-limit <n>", "Positive maximum serialized guarded response bytes", "1000000")
+    .option("--time-budget-ms <n>", "Positive guarded operation time budget in milliseconds", "30000")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      try {
+        const store = resolveProjectStore();
+        const result = await runProjectPrefixMigration({
+          store,
+          dry_run: !opts.apply,
+          operation_id: opts.operationId,
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+          agent_id: mutationAgentId(store, opts.agent),
+          command: process.argv.join(" "),
+        });
+        if (wantsJson(opts)) {
+          printObject(result, opts);
+          if (!result.ok) process.exitCode = 1;
+          return;
+        }
+        const prefix = result.dry_run ? "[dry-run] " : "";
+        const action = result.steps.length === 0 ? "No prefixed identities found" : `${result.steps.length} migration step(s)`;
+        console.log(`${result.ok ? chalk.green("✓") : chalk.red("✗")} ${prefix}${action}`);
+        console.log(`  ${chalk.dim("projects:")} ${result.inventory.project_candidates} candidate(s)`);
+        console.log(`  ${chalk.dim("channels:")} ${result.inventory.channel_candidates} candidate(s)`);
+        console.log(`  ${chalk.dim("complete:")} ${result.inventory.complete}`);
+        if (!result.ok) {
+          console.error(chalk.red(`Migration failed: ${result.refusal ?? "unknown failure"}`));
+          console.error(chalk.yellow(`Rollback complete: ${result.rollback.complete}`));
+          process.exitCode = 1;
+        }
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
     .command("tag <id-or-slug> <tags...>")
     .description("Add tags to a project")
     .option("--agent <id-or-slug>", "Attributing agent")
@@ -2627,8 +2845,8 @@ function registerProjectCommands(program: Command): void {
       try {
         const store = resolveProjectStore();
         const runDoctor = (project: Workspace) => opts.fix && !opts.dryRun
-          ? withWorkspaceLock(store, project, mutationAgentId(store), "project doctor fix", () => doctorWorkspace(project, { fix: opts.fix, dryRun: opts.dryRun }))
-          : Promise.resolve(doctorWorkspace(project, { fix: opts.fix, dryRun: opts.dryRun }));
+          ? withWorkspaceLock(store, project, mutationAgentId(store), "project doctor fix", () => doctorWorkspace(project, { fix: opts.fix, dryRun: opts.dryRun, storageMode: store.mode }))
+          : Promise.resolve(doctorWorkspace(project, { fix: opts.fix, dryRun: opts.dryRun, storageMode: store.mode }));
         const json = wantsJson(opts);
         const limit = json ? undefined : parseHumanLimit(opts.limit, DEFAULT_LIST_LIMIT);
         const results = idOrSlug

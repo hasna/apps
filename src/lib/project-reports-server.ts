@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { extname, isAbsolute, join, relative, resolve } from "node:path";
 import { listWorkspaces } from "../db/workspaces.js";
+import { resolveProjectStore } from "../store/project-store.js";
 import type { Workspace } from "../types/workspace.js";
 import { redactProjectValue } from "./redaction.js";
 
@@ -118,7 +119,7 @@ export async function serveProjectReports(
         return textResponse(route.reason, 400);
       }
       if (route.kind === "root") {
-        const projects = listProjectsWithReports({ db: options.db });
+        const projects = await listProjectsWithReports({ db: options.db });
         return htmlResponse(
           reportsRootHtml(projects),
           { csp: reportsPageCsp() },
@@ -126,7 +127,7 @@ export async function serveProjectReports(
       }
       if (route.kind === "not-found") return textResponse("not found", 404);
 
-      const projects = listProjectsWithReports({ db: options.db });
+      const projects = await listProjectsWithReports({ db: options.db });
       const project = projects.find((item) => item.project.slug === route.slug);
       if (!project) return textResponse("not found", 404);
 
@@ -275,10 +276,26 @@ function safeReturnTo(value: string | null): string {
   }
 }
 
-export function listProjectsWithReports(
+/**
+ * Index every registered project that has dated reports on this machine.
+ *
+ * The project list is REGISTRY truth, so it comes from the active
+ * `resolveProjectStore()` transport — the same seam every other registry
+ * surface uses. It is deliberately not read from `db/workspaces.ts` directly:
+ * on a box configured for the hosted API that served a frozen on-box sqlite
+ * snapshot, so any project created after the file went stale returned 404 and
+ * was indistinguishable from a project that does not exist.
+ *
+ * The report FILES stay machine-local by design — only the box holding a
+ * project's directory can enumerate them.
+ *
+ * `options.db` is an explicit local override for tests and embedded callers;
+ * when supplied it is authoritative and no transport is resolved.
+ */
+export async function listProjectsWithReports(
   options: { db?: Database } = {},
-): ProjectReportsSummary[] {
-  const projects = listAllWorkspaces(options.db)
+): Promise<ProjectReportsSummary[]> {
+  const projects = (await listRegisteredProjects(options.db))
     .filter((project) => project.status !== "deleted")
     .flatMap((project) => {
       const dates = listProjectReportDates(project);
@@ -301,7 +318,21 @@ export function listProjectsWithReports(
   return redactProjectValue(projects.sort((left, right) => left.project.name.localeCompare(right.project.name)));
 }
 
-function listAllWorkspaces(db?: Database): Workspace[] {
+/**
+ * Registry rows for the report index.
+ *
+ * With an explicit `db` this walks that database's pages directly. Otherwise it
+ * defers to the active store, which walks the server's pages itself and throws
+ * rather than falling back to local when the environment asks for a registry it
+ * cannot reach — so a misconfigured box fails loudly instead of quietly serving
+ * a different dataset.
+ */
+async function listRegisteredProjects(db?: Database): Promise<Workspace[]> {
+  if (db) return listAllWorkspacesFromDb(db);
+  return resolveProjectStore().listProjects({});
+}
+
+function listAllWorkspacesFromDb(db: Database): Workspace[] {
   const pageSize = 500;
   const projects: Workspace[] = [];
   for (let offset = 0; ; offset += pageSize) {

@@ -11,8 +11,8 @@
 #   3. Pushes it to the app's ECR repo, tagged with the commit SHA.
 #   4. Runs the one-shot DB migration task and fails hard on non-zero exit.
 #   5. Registers a new web task-def revision and updates the ECS service.
-#   6. Waits for the service to reach steady state and asserts the deployment
-#      circuit breaker reported COMPLETED (rollback => job fails).
+#   6. Waits for the service to reach steady state, then verifies the exact live
+#      task definition while allowing rolloutState metadata time to converge.
 #
 # Prereqs (created by the hasna-app module): ECR repo, ECS cluster/service,
 # web + migration task-def families, task/execution roles, and the SSM manifest.
@@ -53,10 +53,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Configure AWS credentials (GitHub OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
           role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/${{ env.APP }}-prod-gha-deploy
           aws-region: ${{ env.AWS_REGION }}
@@ -82,10 +82,10 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Login to Amazon ECR
-        uses: aws-actions/amazon-ecr-login@v2
+        uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64 # v2.1.6
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Build and push native arm64 image
         id: build
@@ -95,13 +95,17 @@ jobs:
           set -euo pipefail
           IMAGE="${ECR_URL}:${GITHUB_SHA}"
           # Runner is arm64, so linux/arm64 builds natively — no emulation.
+          # ECR repo uses IMMUTABLE tags, so we push ONLY the unique SHA tag —
+          # a moving ":latest" cannot be overwritten and would fail the push.
+          # Note the failure mode if anyone re-adds one: buildx pushes the SHA
+          # tag first and only then rejects the moving tag, so the run reports a
+          # failed build while a perfectly good image is already sitting in ECR.
           docker buildx build \
             --platform linux/arm64 \
             --provenance=false \
             --cache-from "type=gha" \
             --cache-to "type=gha,mode=max" \
             --tag "${IMAGE}" \
-            --tag "${ECR_URL}:latest" \
             --push \
             .
           echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
@@ -137,10 +141,50 @@ jobs:
           aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "$TASK_ARN"
           DESC="$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN")"
           EXIT="$(jq -r ".tasks[0].containers[] | select(.name==\"$MIG_CONTAINER\") | .exitCode // \"null\"" <<<"$DESC")"
+          CONTAINER_REASON="$(jq -r ".tasks[0].containers[] | select(.name==\"$MIG_CONTAINER\") | .reason // \"\"" <<<"$DESC")"
+          TASK_DEF="$(jq -r '.tasks[0].taskDefinitionArn // ""' <<<"$DESC")"
+          STOP_CODE="$(jq -r '.tasks[0].stopCode // ""' <<<"$DESC")"
           REASON="$(jq -r '.tasks[0].stoppedReason // ""' <<<"$DESC")"
-          echo "migration exitCode=$EXIT stoppedReason=$REASON"
+          echo "migration taskArn=$TASK_ARN taskDefinition=$TASK_DEF stopCode=$STOP_CODE"
+          echo "migration container=$MIG_CONTAINER exitCode=$EXIT containerReason=${CONTAINER_REASON:-none} stoppedReason=$REASON"
           if [ "$EXIT" != "0" ]; then
-            echo "::error::migration task did not exit 0 (exit=$EXIT, reason=$REASON)"; exit 1
+            LOG_GROUP=""
+            LOG_REGION=""
+            LOG_STREAM=""
+            if [ -n "$TASK_DEF" ]; then
+              TD="$(aws ecs describe-task-definition --task-definition "$TASK_DEF" --query taskDefinition)"
+              LOG_DRIVER="$(jq -r ".containerDefinitions[] | select(.name==\"$MIG_CONTAINER\") | .logConfiguration.logDriver // \"\"" <<<"$TD")"
+              LOG_GROUP="$(jq -r ".containerDefinitions[] | select(.name==\"$MIG_CONTAINER\") | .logConfiguration.options[\"awslogs-group\"] // \"\"" <<<"$TD")"
+              LOG_REGION="$(jq -r ".containerDefinitions[] | select(.name==\"$MIG_CONTAINER\") | .logConfiguration.options[\"awslogs-region\"] // \"\"" <<<"$TD")"
+              LOG_PREFIX="$(jq -r ".containerDefinitions[] | select(.name==\"$MIG_CONTAINER\") | .logConfiguration.options[\"awslogs-stream-prefix\"] // \"\"" <<<"$TD")"
+              TASK_ID="${TASK_ARN##*/}"
+              if [ "$LOG_DRIVER" = "awslogs" ] && [ -n "$LOG_PREFIX" ]; then
+                LOG_STREAM="${LOG_PREFIX}/${MIG_CONTAINER}/${TASK_ID}"
+              fi
+            fi
+            {
+              echo "### Migration task failed"
+              echo
+              echo "- Task ARN: \`$TASK_ARN\`"
+              echo "- Task definition: \`${TASK_DEF:-unknown}\`"
+              echo "- Stop code: \`${STOP_CODE:-unknown}\`"
+              echo "- Container: \`$MIG_CONTAINER\`"
+              echo "- Exit code: \`$EXIT\`"
+              echo "- Container reason: \`${CONTAINER_REASON:-none}\`"
+              echo "- Stopped reason: \`${REASON:-none}\`"
+              echo "- Log group: \`${LOG_GROUP:-unknown}\`"
+              echo "- Log region: \`${LOG_REGION:-unknown}\`"
+              echo "- Log stream: \`${LOG_STREAM:-unknown}\`"
+              if [ -n "$LOG_GROUP" ] && [ -n "$LOG_REGION" ] && [ -n "$LOG_STREAM" ]; then
+                echo
+                echo "Retrieve the migration container evidence with an AWS identity allowed to read this log group:"
+                echo
+                echo "\`aws logs get-log-events --region $LOG_REGION --log-group-name $LOG_GROUP --log-stream-name $LOG_STREAM --limit 100 --start-from-head --query 'events[].message' --output text | node scripts/ci/redact-log-lines.mjs\`"
+              fi
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "migration logGroup=${LOG_GROUP:-unknown} logRegion=${LOG_REGION:-unknown} logStream=${LOG_STREAM:-unknown}"
+            echo "::error::migration task did not exit 0 (exit=$EXIT, containerReason=${CONTAINER_REASON:-none}, stoppedReason=$REASON, logStream=${LOG_STREAM:-unknown})"
+            exit 1
           fi
 
       - name: Deploy service (new revision) and wait for stable
@@ -167,14 +211,7 @@ jobs:
           # After a rollback the PRIMARY deployment can still report COMPLETED (the
           # *rollback* completed) while running the OLD task def, so assert BOTH the
           # rollout state AND that the live PRIMARY task def is the one we deployed.
-          SVC="$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE")"
-          RS="$(jq -r '.services[0].deployments[] | select(.status=="PRIMARY") | .rolloutState' <<<"$SVC")"
-          LIVE_TD="$(jq -r '.services[0].deployments[] | select(.status=="PRIMARY") | .taskDefinition' <<<"$SVC")"
-          echo "primary rolloutState=$RS liveTaskDef=$LIVE_TD deployed=$WEB_ARN"
-          if [ "$RS" != "COMPLETED" ]; then
-            echo "::error::deployment did not complete (rolloutState=$RS) — likely circuit-breaker rollback"; exit 1
-          fi
-          if [ "$LIVE_TD" != "$WEB_ARN" ]; then
-            echo "::error::live task def ($LIVE_TD) != deployed ($WEB_ARN) — deployment was rolled back"; exit 1
-          fi
+          # ECS can briefly return IN_PROGRESS here after services-stable succeeds,
+          # so retry only that state while the exact deployed task def remains live.
+          bash scripts/ci/verify-ecs-rollout.sh "$CLUSTER" "$SERVICE" "$WEB_ARN"
           echo "Deploy of ${APP} @ ${GITHUB_SHA} succeeded."

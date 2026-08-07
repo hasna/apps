@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { MIGRATIONS, runMigrations } from "./schema.js";
@@ -20,6 +20,8 @@ import {
   deleteWorkspace,
   getWorkspaceByPath,
   getWorkspaceBySlug,
+  getWorkspace,
+  guardedUpdateWorkspace,
   inferWorkspaceKind,
   listAgentRuns,
   listMachines,
@@ -31,9 +33,11 @@ import {
   listWorkspaceLocations,
   listWorkspacesByPath,
   listWorkspaces,
+  lookupGuardedWorkspaceMutationReceipt,
   matchRootForPath,
   migrateLegacyProjectsToWorkspaces,
   releaseWorkspaceLock,
+  rollbackGuardedWorkspaceMutation,
   resolveTmuxProfile,
   renderTemplate,
   scoreRoots,
@@ -64,6 +68,36 @@ function tmpDir(): string {
 }
 
 describe("workspace schema", () => {
+  test("doctor local mode repairs the marker and package-owned location registry together", () => {
+    const db = makeDb();
+    const projectPath = tmpDir();
+    try {
+      const workspace = createWorkspace({
+        name: "Local Doctor",
+        slug: "local-doctor",
+        primary_path: projectPath,
+      }, db);
+      db.run("DELETE FROM workspace_locations WHERE workspace_id = ?", [workspace.id]);
+      writeFileSync(
+        workspaceMarkerPath(workspace),
+        JSON.stringify({ schema_version: 1, id: workspace.id, slug: "stale-local-doctor" }, null, 2) + "\n",
+      );
+
+      const dryRun = doctorWorkspace(workspace, { fix: true, dryRun: true, storageMode: "local" }, db);
+      expect(dryRun.fixes.map((fix) => fix.code).sort()).toEqual(["FIX_WORKSPACE_LOCATION", "FIX_WORKSPACE_MARKER"]);
+      expect(listWorkspaceLocations(workspace.id, db)).toHaveLength(0);
+
+      const fixed = doctorWorkspace(workspace, { fix: true, storageMode: "local" }, db);
+      expect(fixed.fixes.map((fix) => fix.code).sort()).toEqual(["FIX_WORKSPACE_LOCATION", "FIX_WORKSPACE_MARKER"]);
+      expect(JSON.parse(readFileSync(workspaceMarkerPath(workspace), "utf-8")).slug).toBe("local-doctor");
+      expect(listWorkspaceLocations(workspace.id, db)).toHaveLength(1);
+      expect(listWorkspaceEvents(workspace.id, db).map((event) => event.event_type)).toContain("workspace_marker_written");
+    } finally {
+      rmSync(projectPath, { recursive: true, force: true });
+      db.close();
+    }
+  });
+
   test("creates generic workspace tables and seeds the machine registry", () => {
     const db = makeDb();
     const tables = db
@@ -112,6 +146,189 @@ describe("workspace schema", () => {
 });
 
 describe("workspace domain services", () => {
+  test("guarded project metadata mutation enforces exact id, revision, idempotency, receipts, dry-run, lookup, and rollback", () => {
+    const db = makeDb();
+    try {
+      const workspace = createWorkspace({ name: "Guarded Demo", slug: "guarded-demo", metadata: { owner: "old" } }, db);
+      const originalRevision = workspace.updated_at;
+
+      expect(() => guardedUpdateWorkspace({
+        project_id: workspace.slug,
+        operation_id: "op-exact-id",
+        step_id: "rename",
+        expected_revision: originalRevision,
+        patch: { name: "Should Not Run" },
+        response_byte_limit: 20_000,
+        time_budget_ms: 2_000,
+        dry_run: true,
+      }, db)).toThrow(/complete stable project id/);
+      expect(() => guardedUpdateWorkspace({
+        project_id: workspace.id.slice(0, 8),
+        operation_id: "op-partial-id",
+        step_id: "rename",
+        expected_revision: originalRevision,
+        patch: { name: "Should Not Run" },
+        response_byte_limit: 20_000,
+        time_budget_ms: 2_000,
+        dry_run: true,
+      }, db)).toThrow(/complete stable project id/);
+
+      const dryRun = guardedUpdateWorkspace({
+        project_id: workspace.id,
+        operation_id: "op-dry-run",
+        step_id: "rename",
+        expected_revision: originalRevision,
+        patch: { name: "Dry Run Only", metadata: { owner: "dry" } },
+        response_byte_limit: 40_000,
+        time_budget_ms: 2_000,
+        dry_run: true,
+      }, db);
+      expect(dryRun.outcome).toBe("planned");
+      expect(dryRun.receipt).toBeNull();
+      expect(dryRun.response_control.complete).toBe(true);
+      expect(dryRun.response_control.truncated).toBe(false);
+      expect(dryRun.response_control.response_bytes).toBeGreaterThan(0);
+      expect(getWorkspace(workspace.id, db)?.name).toBe("Guarded Demo");
+
+      const accepted = guardedUpdateWorkspace({
+        project_id: workspace.id,
+        operation_id: "op-forward",
+        step_id: "rename",
+        expected_revision: originalRevision,
+        patch: { name: "Guarded Renamed", metadata: { owner: "new" } },
+        response_byte_limit: 80_000,
+        time_budget_ms: 2_000,
+        agent_id: undefined,
+        source: "cli",
+        command: "projects guarded-update",
+      }, db);
+      expect(accepted.ok).toBe(true);
+      expect(accepted.outcome).toBe("accepted");
+      expect(accepted.receipt?.outcome).toBe("accepted");
+      expect(accepted.receipt?.result_project_id).toBe(workspace.id);
+      expect(accepted.receipt?.post_revision).toBe(accepted.after?.updated_at);
+      expect(accepted.response_control.complete).toBe(true);
+      expect(accepted.response_control.truncated).toBe(false);
+      expect(getWorkspace(workspace.id, db)?.name).toBe("Guarded Renamed");
+
+      const duplicate = guardedUpdateWorkspace({
+        project_id: workspace.id,
+        operation_id: "op-forward",
+        step_id: "rename",
+        expected_revision: originalRevision,
+        patch: { name: "Guarded Renamed", metadata: { owner: "new" } },
+        response_byte_limit: 80_000,
+        time_budget_ms: 2_000,
+      }, db);
+      expect(duplicate.ok).toBe(true);
+      expect(duplicate.outcome).toBe("duplicate_of_accepted");
+      expect(duplicate.receipt?.outcome).toBe("duplicate_of_accepted");
+      expect(duplicate.receipt?.receipt_id).not.toBe(accepted.receipt?.receipt_id);
+      expect(duplicate.receipt?.duplicate_of_receipt_id).toBe(accepted.receipt?.receipt_id);
+
+      const changedRequest = guardedUpdateWorkspace({
+        project_id: workspace.id,
+        operation_id: "op-forward",
+        step_id: "rename",
+        expected_revision: originalRevision,
+        patch: { name: "Different Request" },
+        response_byte_limit: 80_000,
+        time_budget_ms: 2_000,
+      }, db);
+      expect(changedRequest.ok).toBe(false);
+      expect(changedRequest.receipt?.outcome).toBe("terminal_nonacceptance");
+      expect(changedRequest.receipt?.reason).toBe("changed_request_or_precondition_for_step");
+      expect(getWorkspace(workspace.id, db)?.name).toBe("Guarded Renamed");
+
+      const stale = guardedUpdateWorkspace({
+        project_id: workspace.id,
+        operation_id: "op-stale",
+        step_id: "rename",
+        expected_revision: originalRevision,
+        patch: { name: "Stale Should Fail" },
+        response_byte_limit: 80_000,
+        time_budget_ms: 2_000,
+      }, db);
+      expect(stale.ok).toBe(false);
+      expect(stale.receipt?.outcome).toBe("terminal_nonacceptance");
+      expect(stale.receipt?.reason).toBe("stale_revision");
+      expect(getWorkspace(workspace.id, db)?.name).toBe("Guarded Renamed");
+
+      const lookedUp = lookupGuardedWorkspaceMutationReceipt({
+        project_id: workspace.id,
+        operation_id: "op-forward",
+        step_id: "rename",
+        direction: "forward",
+        idempotency_key: accepted.idempotency_key,
+        max_items: 1,
+        response_byte_limit: 20_000,
+        time_budget_ms: 2_000,
+      }, db);
+      expect(lookedUp.receipt_id).toBe(duplicate.receipt!.receipt_id);
+      expect(lookedUp.duplicate_of_receipt_id).toBe(accepted.receipt!.receipt_id);
+      expect(() => lookupGuardedWorkspaceMutationReceipt({
+        project_id: workspace.id,
+        operation_id: "op-forward",
+        step_id: "rename",
+        direction: "forward",
+        idempotency_key: "missing",
+        max_items: 1,
+        response_byte_limit: 20_000,
+        time_budget_ms: 2_000,
+      }, db)).toThrow(/exactly one terminal receipt, found 0/);
+
+      const rolledBack = rollbackGuardedWorkspaceMutation({
+        project_id: workspace.id,
+        operation_id: "op-rollback",
+        step_id: "restore",
+        accepted_receipt_id: accepted.receipt!.receipt_id,
+        expected_current_revision: accepted.receipt!.post_revision!,
+        response_byte_limit: 80_000,
+        time_budget_ms: 2_000,
+        source: "cli",
+        command: "projects guarded-rollback",
+      }, db);
+      expect(rolledBack.ok).toBe(true);
+      expect(rolledBack.receipt?.direction).toBe("inverse");
+      expect(rolledBack.after?.name).toBe("Guarded Demo");
+      expect(rolledBack.after?.metadata).toEqual({ owner: "old" });
+      expect(getWorkspace(workspace.id, db)?.name).toBe("Guarded Demo");
+    } finally {
+      db.close();
+    }
+  });
+
+  test("guarded project metadata mutation fails closed when the response byte budget is exceeded", () => {
+    const db = makeDb();
+    try {
+      const workspace = createWorkspace({ name: "Tiny Budget" }, db);
+      expect(() => guardedUpdateWorkspace({
+        project_id: workspace.id,
+        operation_id: "op-budget",
+        step_id: "rename",
+        expected_revision: workspace.updated_at,
+        patch: { name: "Too Large For Response Budget" },
+        response_byte_limit: 10,
+        time_budget_ms: 2_000,
+        dry_run: true,
+      }, db)).toThrow(/response byte budget exceeded/);
+      expect(getWorkspace(workspace.id, db)?.name).toBe("Tiny Budget");
+
+      expect(() => guardedUpdateWorkspace({
+        project_id: workspace.id,
+        operation_id: "op-budget-write",
+        step_id: "rename",
+        expected_revision: workspace.updated_at,
+        patch: { name: "Must Not Mutate" },
+        response_byte_limit: 10,
+        time_budget_ms: 2_000,
+      }, db)).toThrow(/response byte budget exceeded/);
+      expect(getWorkspace(workspace.id, db)?.name).toBe("Tiny Budget");
+    } finally {
+      db.close();
+    }
+  });
+
   test("defaults rootless projects to the canonical ID-based workspace store", () => {
     const db = makeDb();
     const previousHome = process.env["HASNA_PROJECTS_HOME"];
@@ -283,6 +500,11 @@ describe("workspace domain services", () => {
     }
     createWorkspace({ name: "Zulu Tagged", slug: "zulu-tagged", tags: ["target"] }, db);
     expect(listWorkspaces({ tags: ["target"], limit: 1 }, db).map((item) => item.slug)).toEqual(["zulu-tagged"]);
+
+    createWorkspace({ id: "wks_aaaaaaaaaaaa", name: "Stable Tie", slug: "stable-tie-a" }, db);
+    createWorkspace({ id: "wks_zzzzzzzzzzzz", name: "Stable Tie", slug: "stable-tie-z" }, db);
+    expect(listWorkspaces({ query: "Stable Tie", limit: 1, offset: 0 }, db)[0]?.id).toBe("wks_aaaaaaaaaaaa");
+    expect(listWorkspaces({ query: "Stable Tie", limit: 1, offset: 1 }, db)[0]?.id).toBe("wks_zzzzzzzzzzzz");
 
     const secondaryPath = tmpDir();
     const secondary = addWorkspaceLocation({

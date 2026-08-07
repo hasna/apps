@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mintApiKey } from "@hasna/contracts/auth";
 import { createFetchHandler } from "./app.js";
-import { NotFoundError, ProjectsPgStore } from "./pg-store.js";
+import { NotFoundError, ProjectsPgStore, ValidationError } from "./pg-store.js";
 import type { Workspace } from "../types/workspace.js";
 
 const SIGNING_SECRET = "test-signing-secret-projects-0000000000";
@@ -209,6 +209,329 @@ describe("projects-serve auth", () => {
       }),
     );
     expect(forbidden.status).toBe(403);
+  });
+
+  test("POST guarded metadata mutation returns explicit bounded complete JSON envelope", async () => {
+    const calls: Array<{ project_id: string; operation_id: string }> = [];
+    const store = {
+      async ping() {
+        return true;
+      },
+      async guardedUpdateWorkspace(input: { project_id: string; operation_id: string; response_byte_limit: number; time_budget_ms: number }) {
+        calls.push({ project_id: input.project_id, operation_id: input.operation_id });
+        return {
+          ok: true,
+          dry_run: false,
+          outcome: "accepted",
+          idempotency_key: "gpm_test",
+          request_digest: "req",
+          precondition_digest: "pre",
+          project_id: input.project_id,
+          expected_revision: "2026-08-07 00:00:00.000",
+          current_revision: "2026-08-07 00:00:00.000",
+          before: fakeWorkspace({ id: input.project_id, name: "Before" }),
+          after: fakeWorkspace({ id: input.project_id, name: "After" }),
+          receipt: {
+            receipt_id: "gpmr_test",
+            operation_id: input.operation_id,
+            step_id: "rename",
+            direction: "forward",
+            idempotency_key: "gpm_test",
+            target_id: input.project_id,
+            request_digest: "req",
+            precondition_digest: "pre",
+            expected_revision: "2026-08-07 00:00:00.000",
+            outcome: "accepted",
+            reason: null,
+            result_project_id: input.project_id,
+            duplicate_of_receipt_id: null,
+            before: {},
+            after: {},
+            post_revision: "2026-08-07 00:00:01.000",
+            created_at: "2026-08-07 00:00:01.000",
+          },
+          response_control: {
+            response_byte_limit: input.response_byte_limit,
+            time_budget_ms: input.time_budget_ms,
+            response_bytes: 1,
+            elapsed_ms: 0,
+            complete: true,
+            truncated: false,
+          },
+        };
+      },
+    } as unknown as ProjectsPgStore;
+    const h = createFetchHandler({ store, version: "9.9.9", app: "projects", signingSecret: SIGNING_SECRET });
+    const token = keyWith(["projects:*"]);
+    const res = await h(
+      new Request("http://x/v1/projects/wks_httpguarded0001/guarded-metadata", {
+        method: "POST",
+        headers: { "x-api-key": token, "content-type": "application/json" },
+        body: JSON.stringify({
+          operation_id: "op-http",
+          step_id: "rename",
+          expected_revision: "2026-08-07 00:00:00.000",
+          patch: { name: "After" },
+          response_byte_limit: 50_000,
+          time_budget_ms: 2_000,
+        }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(calls).toEqual([{ project_id: "wks_httpguarded0001", operation_id: "op-http" }]);
+    expect(body.outcome).toBe("accepted");
+    expect(body.response_control.complete).toBe(true);
+    expect(body.response_control.truncated).toBe(false);
+    expect(body.response_control.response_bytes).toBeGreaterThan(0);
+    expect(body.response_control.response_byte_limit).toBe(50_000);
+  });
+
+  test("GET guarded metadata receipt lookup returns the exact receipt instead of the guarded-read envelope", async () => {
+    const projectId = "wks_httpguarded0001";
+    const receiptId = "gpmr_57183a0201f44adbc903011493be510f";
+    const lookupCalls: Array<Record<string, unknown>> = [];
+    let guardedReadCalls = 0;
+    const store = {
+      async ping() {
+        return true;
+      },
+      async guardedReadWorkspace() {
+        guardedReadCalls += 1;
+        throw new Error("guarded read route must not handle receipt lookup");
+      },
+      async lookupGuardedWorkspaceMutationReceipt(input: Record<string, unknown>) {
+        lookupCalls.push(input);
+        return {
+          receipt: {
+            receipt_id: receiptId,
+            operation_id: input.operation_id,
+            step_id: input.step_id,
+            direction: input.direction,
+            idempotency_key: input.idempotency_key,
+            target_id: input.project_id,
+            request_digest: "req",
+            precondition_digest: "pre",
+            expected_revision: "2026-08-07 11:41:58.001",
+            outcome: "accepted",
+            reason: null,
+            result_project_id: input.project_id,
+            duplicate_of_receipt_id: null,
+            before: { name: "Monthly Accounting" },
+            after: { name: "Monthly Filing" },
+            post_revision: "2026-08-07 11:42:01.569",
+            created_at: "2026-08-07 11:42:01.570",
+          },
+          response_control: {
+            response_byte_limit: input.response_byte_limit,
+            time_budget_ms: input.time_budget_ms,
+            response_bytes: 1,
+            elapsed_ms: 0,
+            complete: true,
+            truncated: false,
+          },
+        };
+      },
+    } as unknown as ProjectsPgStore;
+    const h = createFetchHandler({ store, version: "9.9.9", app: "projects", signingSecret: SIGNING_SECRET });
+    const token = keyWith(["projects:read"]);
+    const query = new URLSearchParams({
+      operation_id: "project-rename-wks_httpguarded0001-20260807",
+      step_id: "metadata-to-monthly-filing",
+      direction: "forward",
+      idempotency_key: "gpm_project-rename-wks_httpguarded0001-20260807",
+      max_items: "1",
+      response_byte_limit: "16384",
+      time_budget_ms: "5000",
+    });
+    const res = await h(new Request(
+      `http://x/v1/projects/${projectId}/guarded-metadata/receipts?${query}`,
+      { headers: { "x-api-key": token } },
+    ));
+
+    expect(res.status).toBe(200);
+    expect(guardedReadCalls).toBe(0);
+    expect(lookupCalls).toEqual([{
+      project_id: projectId,
+      operation_id: "project-rename-wks_httpguarded0001-20260807",
+      step_id: "metadata-to-monthly-filing",
+      direction: "forward",
+      idempotency_key: "gpm_project-rename-wks_httpguarded0001-20260807",
+      max_items: 1,
+      response_byte_limit: 16_384,
+      time_budget_ms: 5_000,
+    }]);
+    const body = await res.json();
+    expect(body.receipt.receipt_id).toBe(receiptId);
+    expect(body.receipt.post_revision).toBe("2026-08-07 11:42:01.569");
+    expect(body.project_id).toBeUndefined();
+    expect(body.current_revision).toBeUndefined();
+    expect(body.response_control.complete).toBe(true);
+    expect(body.response_control.truncated).toBe(false);
+  });
+
+  test("GET guarded metadata receipt lookup preserves not-found, cardinality, and bounds failures", async () => {
+    const failures = [
+      "guarded receipt lookup expected exactly one terminal receipt, found 0",
+      "guarded receipt lookup expected exactly one terminal result, found 2",
+      "guarded receipt lookup max_items must be exactly 1",
+      "guarded mutation response byte budget exceeded",
+    ];
+    const token = keyWith(["projects:read"]);
+
+    for (const message of failures) {
+      let guardedReadCalls = 0;
+      const store = {
+        async ping() {
+          return true;
+        },
+        async guardedReadWorkspace() {
+          guardedReadCalls += 1;
+          throw new Error("guarded read route must not handle receipt lookup failures");
+        },
+        async lookupGuardedWorkspaceMutationReceipt() {
+          throw new ValidationError(message);
+        },
+      } as unknown as ProjectsPgStore;
+      const h = createFetchHandler({ store, version: "9.9.9", app: "projects", signingSecret: SIGNING_SECRET });
+      const query = new URLSearchParams({
+        operation_id: "op-http",
+        step_id: "rename",
+        direction: "forward",
+        idempotency_key: "gpm_http",
+        max_items: "1",
+        response_byte_limit: "16384",
+        time_budget_ms: "5000",
+      });
+      const res = await h(new Request(
+        `http://x/v1/projects/wks_httpguarded0001/guarded-metadata/receipts?${query}`,
+        { headers: { "x-api-key": token } },
+      ));
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: message });
+      expect(guardedReadCalls).toBe(0);
+    }
+  });
+
+  test("GET guarded metadata reads one exact id with producer bounds and revision envelope", async () => {
+    const projectId = "wks_httpguarded0001";
+    const calls: Array<{ project_id: string; response_byte_limit: number; time_budget_ms: number }> = [];
+    const store = {
+      async ping() {
+        return true;
+      },
+      async guardedReadWorkspace(input: { project_id: string; response_byte_limit: number; time_budget_ms: number }) {
+        calls.push(input);
+        return {
+          ok: true,
+          project_id: input.project_id,
+          current_revision: "2026-08-07 00:00:01",
+          response_control: {
+            response_byte_limit: input.response_byte_limit,
+            time_budget_ms: input.time_budget_ms,
+            response_bytes: 512,
+            elapsed_ms: 1,
+            complete: true,
+            truncated: false,
+          },
+        };
+      },
+    } as unknown as ProjectsPgStore;
+    const h = createFetchHandler({ store, version: "9.9.9", app: "projects", signingSecret: SIGNING_SECRET });
+    const token = keyWith(["projects:read"]);
+    const res = await h(new Request(
+      `http://x/v1/projects/${projectId}/guarded-metadata?response_byte_limit=16384&time_budget_ms=5000`,
+      { headers: { "x-api-key": token } },
+    ));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(calls).toEqual([{ project_id: projectId, response_byte_limit: 16_384, time_budget_ms: 5_000 }]);
+    expect(body.project_id).toBe(projectId);
+    expect(body.current_revision).toBe("2026-08-07 00:00:01");
+    expect(body.response_control.complete).toBe(true);
+    expect(body.response_control.truncated).toBe(false);
+  });
+
+  test("POST guarded metadata rollback is not shadowed by the generic guarded update route", async () => {
+    const projectId = "wks_httpguarded0001";
+    let guardedUpdateCalls = 0;
+    const rollbackCalls: Array<Record<string, unknown>> = [];
+    const store = {
+      async ping() {
+        return true;
+      },
+      async guardedUpdateWorkspace() {
+        guardedUpdateCalls += 1;
+        throw new Error("guarded update route must not handle rollback");
+      },
+      async rollbackGuardedWorkspaceMutation(input: Record<string, unknown>) {
+        rollbackCalls.push(input);
+        return {
+          ok: true,
+          dry_run: false,
+          outcome: "accepted",
+          idempotency_key: "gpm_inverse",
+          request_digest: "req-inverse",
+          precondition_digest: "pre-inverse",
+          project_id: input.project_id,
+          expected_revision: input.expected_current_revision,
+          current_revision: input.expected_current_revision,
+          before: fakeWorkspace({ id: projectId, name: "Monthly Filing" }),
+          after: fakeWorkspace({ id: projectId, name: "Monthly Accounting" }),
+          receipt: {
+            receipt_id: "gpmr_inverse",
+            operation_id: input.operation_id,
+            step_id: input.step_id,
+            direction: "inverse",
+            idempotency_key: "gpm_inverse",
+            target_id: input.project_id,
+            request_digest: "req-inverse",
+            precondition_digest: "pre-inverse",
+            expected_revision: input.expected_current_revision,
+            outcome: "accepted",
+            reason: null,
+            result_project_id: input.project_id,
+            duplicate_of_receipt_id: null,
+            before: {},
+            after: {},
+            post_revision: "2026-08-07 11:43:00.000",
+            created_at: "2026-08-07 11:43:00.001",
+          },
+          response_control: {
+            response_byte_limit: input.response_byte_limit,
+            time_budget_ms: input.time_budget_ms,
+            response_bytes: 1,
+            elapsed_ms: 0,
+            complete: true,
+            truncated: false,
+          },
+        };
+      },
+    } as unknown as ProjectsPgStore;
+    const h = createFetchHandler({ store, version: "9.9.9", app: "projects", signingSecret: SIGNING_SECRET });
+    const token = keyWith(["projects:*"]);
+    const body = {
+      operation_id: "project-rollback-wks_httpguarded0001-20260807",
+      step_id: "metadata-from-monthly-filing",
+      accepted_receipt_id: "gpmr_57183a0201f44adbc903011493be510f",
+      expected_current_revision: "2026-08-07 11:42:01.569",
+      response_byte_limit: 16_384,
+      time_budget_ms: 5_000,
+    };
+    const res = await h(new Request(
+      `http://x/v1/projects/${projectId}/guarded-metadata/rollback`,
+      {
+        method: "POST",
+        headers: { "x-api-key": token, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    ));
+
+    expect(res.status).toBe(200);
+    expect(guardedUpdateCalls).toBe(0);
+    expect(rollbackCalls).toEqual([{ ...body, project_id: projectId }]);
+    expect((await res.json()).outcome).toBe("accepted");
   });
 
   test("Authorization: Bearer scheme is accepted", async () => {

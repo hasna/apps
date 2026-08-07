@@ -199,6 +199,23 @@ export type {
 export { projectTmuxStatus } from "./lib/project-tmux-status.js";
 export type { ProjectTmuxStatusOptions, ProjectTmuxStatusResult } from "./lib/project-tmux-status.js";
 export {
+  PROJECT_PREFIXES,
+  PROJECT_PREFIX_MIGRATION_EVENT,
+  createConversationsPrefixPort,
+  runProjectPrefixMigration,
+  stripProjectPrefix,
+} from "./lib/project-prefix-migration.js";
+export type {
+  CompleteChannelPopulation,
+  ConversationsChannelIdentity,
+  ConversationsPrefixPort,
+  PrefixMigrationInventory,
+  PrefixMigrationReceipt,
+  PrefixMigrationResult,
+  PrefixMigrationStep,
+  RunProjectPrefixMigrationOptions,
+} from "./lib/project-prefix-migration.js";
+export {
   isProjectDirectory,
   isProjectPathLike,
   normalizeProjectPath,
@@ -228,6 +245,23 @@ export type {
   ProjectStoreMigrationResult,
   ProjectStorePaths,
 } from "./lib/project-store.js";
+export {
+  BUILD_OUTPUT_DIRS,
+  DATABASE_EXTENSIONS,
+  DEPENDENCY_TREE_DIRS,
+  DEPENDENCY_TREE_MARKERS,
+  PROVIDER_CACHE_DIRS,
+  TOOL_CACHE_DIRS,
+  classifyDirectory,
+  classifyFile,
+} from "./lib/sync-scope.js";
+export type {
+  ClassifyDirectoryOptions,
+  ClassifyFileOptions,
+  DirectoryProbe,
+  SyncExclusionReason,
+  SyncScopeDecision,
+} from "./lib/sync-scope.js";
 export {
   DEFAULT_OSS_MATRIX_LIMIT,
   MAX_OSS_MATRIX_LIMIT,

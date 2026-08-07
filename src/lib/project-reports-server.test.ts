@@ -4,8 +4,10 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { closeDatabase } from "../db/database.js";
 import { runMigrations } from "../db/schema.js";
 import { createWorkspace } from "../db/workspaces.js";
+import { __resetProjectStore } from "../store/project-store.js";
 import {
   isLoopbackReportsHost,
   listProjectsWithReports,
@@ -76,7 +78,7 @@ describe("project reports server", () => {
         primary_path: join(root, "empty"),
       }, db);
 
-      const indexed = listProjectsWithReports({ db });
+      const indexed = await listProjectsWithReports({ db });
       expect(indexed.map((item) => item.project.slug)).toEqual(["alpha", "beta"]);
       expect(indexed[0]?.latestDate).toBe("2026-07-04");
       expect(indexed[0]?.reportCount).toBe(2);
@@ -239,7 +241,7 @@ describe("project reports server", () => {
         primary_path: projectPath,
       }, db);
 
-      expect(listProjectsWithReports({ db }).map((item) => item.project.slug)).not.toContain("symlinked");
+      expect((await listProjectsWithReports({ db })).map((item) => item.project.slug)).not.toContain("symlinked");
 
       const served = await serveProjectReports({ db, host: "127.0.0.1", port: 0 });
       try {
@@ -275,22 +277,31 @@ describe("project reports server", () => {
       serveProjectReports({ host: "0.0.0.0", port: 0 }),
     ).rejects.toThrow("PROJECTS_REPORTS_TOKEN");
 
-    const configured = await serveProjectReports({ host: "127.0.0.1", port: 0 });
+    // These servers serve pages, so they are given an explicit db: without one
+    // the server resolves the machine's configured registry (correctly — that
+    // is the point of the transport fix) and this host-binding test would
+    // depend on the network.
+    const bindingDb = makeDb();
     try {
-      expect(configured.host).toBe("127.0.0.1");
-      expect(configured.url).toBe(`http://127.0.0.1:${configured.port}/`);
-    } finally {
-      configured.server.stop(true);
-    }
+      const configured = await serveProjectReports({ db: bindingDb, host: "127.0.0.1", port: 0 });
+      try {
+        expect(configured.host).toBe("127.0.0.1");
+        expect(configured.url).toBe(`http://127.0.0.1:${configured.port}/`);
+      } finally {
+        configured.server.stop(true);
+      }
 
-    const trusted = await serveProjectReports({ host: "0.0.0.0", port: 0, trustNetwork: true });
-    try {
-      expect(trusted.host).toBe("0.0.0.0");
-      const response = await fetch(`http://127.0.0.1:${trusted.port}/`);
-      expect(response.status).toBe(200);
-      expect(response.headers.get("set-cookie")).toBeNull();
+      const trusted = await serveProjectReports({ db: bindingDb, host: "0.0.0.0", port: 0, trustNetwork: true });
+      try {
+        expect(trusted.host).toBe("0.0.0.0");
+        const response = await fetch(`http://127.0.0.1:${trusted.port}/`);
+        expect(response.status).toBe(200);
+        expect(response.headers.get("set-cookie")).toBeNull();
+      } finally {
+        trusted.server.stop(true);
+      }
     } finally {
-      trusted.server.stop(true);
+      bindingDb.close();
     }
   });
 
@@ -359,6 +370,189 @@ describe("project reports server", () => {
         served.server.stop(true);
       }
     } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// --------------------------------------------------------------------------
+// Registry transport
+//
+// The reports server lists REGISTERED PROJECTS, which is registry truth rather
+// than machine-local runtime state. It must therefore read whichever registry
+// the environment selects, exactly like every other registry surface.
+//
+// Regression: the server read `db/workspaces.ts` directly, bypassing the
+// `resolveProjectStore()` seam. On a box configured for the hosted API that
+// silently served a frozen on-box sqlite snapshot instead — every project
+// created after the file went stale 404s, and the failure is indistinguishable
+// from the project not existing.
+// --------------------------------------------------------------------------
+
+const REGISTRY_ENV_KEYS = [
+  "HASNA_PROJECTS_API_URL",
+  "HASNA_PROJECTS_API_KEY",
+  "HASNA_PROJECTS_STORAGE_MODE",
+  "HASNA_PROJECTS_MODE",
+  "PROJECTS_API_URL",
+  "PROJECTS_API_KEY",
+  "PROJECTS_STORAGE_MODE",
+  "PROJECTS_MODE",
+  "HASNA_PROJECTS_DB_PATH",
+  "HASNA_WORKSPACES_DB_PATH",
+] as const;
+
+function captureRegistryEnv(): Record<string, string | undefined> {
+  const saved: Record<string, string | undefined> = {};
+  for (const key of REGISTRY_ENV_KEYS) saved[key] = process.env[key];
+  return saved;
+}
+
+function restoreRegistryEnv(saved: Record<string, string | undefined>): void {
+  for (const key of REGISTRY_ENV_KEYS) {
+    const value = saved[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+}
+
+/** Write a project's report files to disk and return its primary_path. */
+function writeReportFiles(
+  root: string,
+  slug: string,
+  reports: Record<string, Record<string, string>>,
+): string {
+  const projectPath = join(root, slug);
+  for (const [date, files] of Object.entries(reports)) {
+    const datePath = join(projectPath, "reports", date);
+    mkdirSync(datePath, { recursive: true });
+    for (const [name, body] of Object.entries(files)) {
+      writeFileSync(join(datePath, name), body);
+    }
+  }
+  return projectPath;
+}
+
+describe("project reports server registry transport", () => {
+  test("serves the configured registry, never a stale on-box sqlite snapshot", async () => {
+    const root = join(tmpdir(), `projects-reports-transport-${randomUUID()}`);
+    const savedEnv = captureRegistryEnv();
+    const realFetch = globalThis.fetch;
+    const stalePath = writeReportFiles(root, "stale-alpha", {
+      "2026-07-04": { "daily.md": "# stale alpha" },
+    });
+    const livePath = writeReportFiles(root, "live-beta", {
+      "2026-07-05": { "daily.md": "# live beta" },
+    });
+
+    // The on-box file every un-migrated caller reads. It holds ONLY the stale
+    // project, so reading it is observable rather than inferred.
+    const staleDbPath = join(root, "stale-registry.db");
+    const staleDb = new Database(staleDbPath);
+    staleDb.run("PRAGMA foreign_keys=ON");
+    runMigrations(staleDb);
+    createWorkspace({
+      id: "wks_stale_alpha",
+      name: "Stale Alpha",
+      slug: "stale-alpha",
+      kind: "project",
+      primary_path: stalePath,
+    }, staleDb);
+    staleDb.close();
+
+    let registryRequests = 0;
+    try {
+      process.env["HASNA_PROJECTS_DB_PATH"] = staleDbPath;
+      process.env["HASNA_PROJECTS_API_URL"] = "https://projects.test.invalid";
+      process.env["HASNA_PROJECTS_API_KEY"] = "test-registry-key";
+      delete process.env["HASNA_WORKSPACES_DB_PATH"];
+      delete process.env["HASNA_PROJECTS_STORAGE_MODE"];
+      delete process.env["HASNA_PROJECTS_MODE"];
+
+      globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+        const href = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (!href.startsWith("https://projects.test.invalid")) {
+          return realFetch(input as Parameters<typeof realFetch>[0], init);
+        }
+        registryRequests += 1;
+        const offset = Number(new URL(href).searchParams.get("offset") ?? "0");
+        const workspaces = offset === 0
+          ? [{
+            id: "wks_live_beta",
+            name: "Live Beta",
+            slug: "live-beta",
+            kind: "project",
+            status: "active",
+            primary_path: livePath,
+          }]
+          : [];
+        return new Response(JSON.stringify({
+          workspaces,
+          count: workspaces.length,
+          total: 1,
+          offset,
+          limit: 1000,
+          has_more: offset + workspaces.length < 1,
+          complete: offset === 0 && workspaces.length === 1,
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }) as typeof globalThis.fetch;
+
+      closeDatabase();
+      __resetProjectStore();
+
+      const indexed = await listProjectsWithReports();
+      const slugs = indexed.map((item) => item.project.slug);
+
+      // The configured registry is the one that answers.
+      expect(slugs).toContain("live-beta");
+      // The stale on-box snapshot is NOT consulted for registry truth.
+      expect(slugs).not.toContain("stale-alpha");
+      expect(slugs).toEqual(["live-beta"]);
+      // Positive control: the assertions above are only meaningful if the
+      // configured registry was actually reached. A zero here would mean the
+      // stub never fired and the test proved nothing.
+      expect(registryRequests).toBeGreaterThan(0);
+    } finally {
+      globalThis.fetch = realFetch;
+      restoreRegistryEnv(savedEnv);
+      closeDatabase();
+      __resetProjectStore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an explicitly injected db stays authoritative for that call", async () => {
+    // The `db` option is a deliberate local override (tests, embedded callers).
+    // Routing the default path through the store seam must not break it.
+    const root = join(tmpdir(), `projects-reports-injected-${randomUUID()}`);
+    const savedEnv = captureRegistryEnv();
+    const realFetch = globalThis.fetch;
+    const db = makeDb();
+    try {
+      process.env["HASNA_PROJECTS_API_URL"] = "https://projects.test.invalid";
+      process.env["HASNA_PROJECTS_API_KEY"] = "test-registry-key";
+      globalThis.fetch = (async () => {
+        throw new Error("injected db must not reach the network");
+      }) as unknown as typeof globalThis.fetch;
+
+      makeReportsProject(db, root, {
+        id: "wks_injected",
+        slug: "injected",
+        name: "Injected Project",
+        reports: { "2026-07-04": { "daily.md": "# injected" } },
+      });
+
+      __resetProjectStore();
+      const indexed = await listProjectsWithReports({ db });
+      expect(indexed.map((item) => item.project.slug)).toEqual(["injected"]);
+    } finally {
+      globalThis.fetch = realFetch;
+      restoreRegistryEnv(savedEnv);
+      __resetProjectStore();
       db.close();
       rmSync(root, { recursive: true, force: true });
     }
