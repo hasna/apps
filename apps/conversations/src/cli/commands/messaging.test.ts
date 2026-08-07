@@ -1,6 +1,51 @@
 import { describe, test, expect } from "bun:test";
 import { Command } from "commander";
-import { formatDigestContinuationCommand, registerMessagingCommands } from "./messaging";
+import {
+  formatDigestContinuationCommand,
+  registerMessagingCommands,
+  sendDesktopNotification,
+} from "./messaging";
+
+type RunnerCall = unknown[];
+
+function captureRunner(calls: RunnerCall[]) {
+  return (...args: unknown[]) => {
+    calls.push(args);
+  };
+}
+
+describe("macOS desktop notifications", () => {
+  test("passes injection-shaped title and body as osascript argv data", () => {
+    const calls: RunnerCall[] = [];
+    const title = "sender $(touch /tmp/conversations-title)";
+    const body = "body `touch /tmp/conversations-body`; printf injected";
+
+    sendDesktopNotification(title, body, "darwin", captureRunner(calls));
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.[0]).toBe("osascript");
+    expect(calls[0]?.[1]).toEqual([
+      "-e",
+      'display notification "body `touch /tmp/conversations-body`; printf injected" with title "sender $(touch /tmp/conversations-title)"',
+    ]);
+    expect(calls[0]?.[2]).toEqual({ timeout: 3000 });
+  });
+
+  test("does not hand injection payload to a shell command runner", () => {
+    const calls: RunnerCall[] = [];
+    const payload = '$(touch /tmp/conversations-injected); `touch /tmp/conversations-backtick`';
+    const runner = (...args: unknown[]) => {
+      calls.push(args);
+      if (typeof args[0] === "string" && !Array.isArray(args[1])) {
+        throw new Error("shell command runner received interpolated input");
+      }
+    };
+
+    expect(() => sendDesktopNotification(payload, payload, "darwin", runner)).not.toThrow();
+    expect(calls[0]?.[0]).toBe("osascript");
+    expect(Array.isArray(calls[0]?.[1])).toBe(true);
+  });
+});
 
 describe("registerMessagingCommands", () => {
   test("registers send command", () => {

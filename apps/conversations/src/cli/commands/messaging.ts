@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { execFileSync } from "node:child_process";
 import { getStore } from "../../lib/store/index.js";
 import chalk from "chalk";
 import { normalizeExactIsoTimestamp, normalizeSince } from "../../lib/since.js";
@@ -44,6 +45,31 @@ export function formatDigestContinuationCommand(result: Pick<DigestResult, "chan
   }
   parts.push("--cursor", String(result.next_cursor), "--max-bytes", String(result.max_bytes));
   return parts.join(" ");
+}
+
+type DesktopNotificationRunner = (
+  file: string,
+  args: string[],
+  options: { timeout: number },
+) => unknown;
+
+function escapeAppleScriptString(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+export function sendDesktopNotification(
+  title: string,
+  body: string,
+  platform = process.platform,
+  run: DesktopNotificationRunner = execFileSync as DesktopNotificationRunner,
+): void {
+  if (platform !== "darwin") return;
+
+  try {
+    const t = escapeAppleScriptString(title);
+    const b = escapeAppleScriptString(body.replace(/\r?\n/g, " ").slice(0, 200));
+    run("osascript", [`-e`, `display notification "${b}" with title "${t}"`], { timeout: 3000 });
+  } catch {}
 }
 
 function failCommand(error: unknown, fallback: string): never {
@@ -981,17 +1007,6 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
       const { startNotificationPolling } = require("../../lib/poll-notifications.js");
       const { renderContent: renderContentLocal } = require("../../lib/terminal-markdown.js");
 
-      const desktopNotify = (title: string, body: string) => {
-        if (process.platform === "darwin") {
-          try {
-            const { execSync } = require("child_process");
-            const t = title.replace(/['"\\]/g, " ");
-            const b = body.replace(/['"\\]/g, " ").replace(/\n/g, " ").slice(0, 200);
-            execSync(`osascript -e 'display notification "${b}" with title "${t}"'`, { timeout: 3000 });
-          } catch {}
-        }
-      };
-
       const renderMessage = (msg: import("../../types.js").Message) => {
         const time = chalk.dim(msg.created_at.slice(11, 19));
         const where = msg.channel
@@ -1126,7 +1141,7 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
           // Desktop notification (short preview)
           const where = msg.channel ? `#${msg.channel}` : "DM";
           const preview = buildMessagePreview(msg.content, 150);
-          desktopNotify(`${msg.from_agent} (${where})`, preview);
+          sendDesktopNotification(`${msg.from_agent} (${where})`, preview);
         }
       };
 
@@ -1135,7 +1150,7 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
           const fresh = !renderedNotifications.has(notification.message_id);
           renderNotification(notification);
           if (fresh) {
-            desktopNotify(`${notification.from_agent} (#${notification.channel})`, notification.preview);
+            sendDesktopNotification(`${notification.from_agent} (#${notification.channel})`, notification.preview);
           }
         }
       };
