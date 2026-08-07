@@ -127,6 +127,89 @@ function reserveFreePort(): number {
   return port;
 }
 
+function cloudDoctorFixture() {
+  const root = mkdtempSync(join(tmpdir(), "projects-cloud-doctor-"));
+  const dbPath = join(root, "projects.db");
+  const projectPath = join(root, "monthly-filing");
+  const projectId = "wks_oyhvttd02j1b";
+  mkdirSync(projectPath, { recursive: true });
+  writeFileSync(
+    join(projectPath, ".project.json"),
+    JSON.stringify({ schema_version: 1, id: projectId, slug: "monthly-accounting" }, null, 2) + "\n",
+  );
+  const db = new Database(dbPath);
+  runMigrations(db);
+  db.close();
+
+  const port = reserveFreePort();
+  const project = {
+    id: projectId,
+    slug: "monthly-filing",
+    name: "Monthly Filing",
+    description: null,
+    kind: "generic",
+    status: "active",
+    root_id: null,
+    recipe_id: null,
+    canonical_machine: null,
+    primary_path: projectPath,
+    git_remote: null,
+    s3_bucket: null,
+    s3_prefix: null,
+    tags: [],
+    integrations: {},
+    metadata: {},
+    last_opened_at: null,
+    created_at: "2026-08-07 11:42:01.569",
+    updated_at: "2026-08-07 11:42:01.569",
+    synced_at: null,
+  };
+  const requests: Array<{ method: string; path: string }> = [];
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port,
+    fetch(req) {
+      const url = new URL(req.url);
+      requests.push({ method: req.method, path: url.pathname });
+      if (req.method === "GET" && url.pathname === `/v1/projects/${projectId}`) {
+        return Response.json(project);
+      }
+      return Response.json({ error: "Not found" }, { status: 404 });
+    },
+  });
+  const env = {
+    HASNA_PROJECTS_DB_PATH: dbPath,
+    HASNA_PROJECTS_HOME: join(root, "home"),
+    HASNA_PROJECTS_API_URL: `http://127.0.0.1:${port}`,
+    HASNA_PROJECTS_API_KEY: "test-key",
+  };
+  const runDoctor = async (extraArgs: string[]) => {
+    const proc = Bun.spawn({
+      cmd: ["bun", "run", CLI_PATH, "doctor", projectId, "--fix", "--verbose", "--json", ...extraArgs],
+      stdout: "pipe",
+      stderr: "pipe",
+      env: testSpawnEnv(env),
+    });
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    await proc.exited;
+    return { exitCode: proc.exitCode, stdout, stderr };
+  };
+  return {
+    dbPath,
+    projectId,
+    projectPath,
+    requests,
+    runDoctor,
+    close() {
+      server.stop(true);
+      rmSync(root, { recursive: true, force: true });
+    },
+  };
+}
+
 describe("project-first CLI surface", () => {
   test("registers project-first commands on the main CLI", () => {
     const source = readFileSync("src/cli/index.ts", "utf-8");
@@ -1911,6 +1994,56 @@ describe("project-first CLI surface", () => {
       rmSync(root, { recursive: true, force: true });
     }
   }, 30000);
+
+  test("doctor --fix --dry-run does not promise a local location write for an API-backed exact target", async () => {
+    const fixture = cloudDoctorFixture();
+    try {
+      const result = await fixture.runDoctor(["--dry-run"]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe("");
+      const rows = JSON.parse(result.stdout) as Array<{
+        checks: Array<{ code: string; fixable?: boolean; message: string }>;
+        fixes: Array<{ code: string; dryRun: boolean }>;
+      }>;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.fixes).toContainEqual(expect.objectContaining({ code: "FIX_WORKSPACE_MARKER", dryRun: true }));
+      expect(rows[0]!.fixes.some((fix) => fix.code === "FIX_WORKSPACE_LOCATION")).toBe(false);
+      expect(rows[0]!.checks).toContainEqual(expect.objectContaining({
+        code: "WORKSPACE_LOCATIONS_LOCAL_ONLY",
+        fixable: false,
+        message: expect.stringContaining("API-backed projects do not own the machine-local location registry"),
+      }));
+      expect(JSON.parse(readFileSync(join(fixture.projectPath, ".project.json"), "utf-8")).slug).toBe("monthly-accounting");
+      expect(fixture.requests).toEqual([{ method: "GET", path: `/v1/projects/${fixture.projectId}` }]);
+    } finally {
+      fixture.close();
+    }
+  }, 30_000);
+
+  test("doctor --fix returns JSON after regenerating an API-backed marker without touching local location or event tables", async () => {
+    const fixture = cloudDoctorFixture();
+    try {
+      const result = await fixture.runDoctor([]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe("");
+      const rows = JSON.parse(result.stdout) as Array<{
+        fixes: Array<{ code: string; changed: boolean }>;
+      }>;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.fixes).toContainEqual(expect.objectContaining({ code: "FIX_WORKSPACE_MARKER", changed: true }));
+      expect(rows[0]!.fixes.some((fix) => fix.code === "FIX_WORKSPACE_LOCATION")).toBe(false);
+      const marker = JSON.parse(readFileSync(join(fixture.projectPath, ".project.json"), "utf-8")) as { id: string; slug: string; name: string };
+      expect(marker).toMatchObject({ id: fixture.projectId, slug: "monthly-filing", name: "Monthly Filing" });
+
+      const db = new Database(fixture.dbPath);
+      expect(db.query("SELECT COUNT(*) AS count FROM workspace_locations").get()).toEqual({ count: 0 });
+      expect(db.query("SELECT COUNT(*) AS count FROM workspace_events").get()).toEqual({ count: 0 });
+      db.close();
+      expect(fixture.requests).toEqual([{ method: "GET", path: `/v1/projects/${fixture.projectId}` }]);
+    } finally {
+      fixture.close();
+    }
+  }, 30_000);
 
   test("channel --ensure succeeds in api mode even when the events route 404s, and is idempotent", async () => {
     // Regression (issue #28): `projects channel <p> --ensure` created the

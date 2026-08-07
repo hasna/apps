@@ -1573,7 +1573,7 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
       execute: async (input) => {
         const workspace = resolveProjectTarget(input.project);
         if (!workspace) return { error: `Project not found: ${input.project}` };
-        const doctor = () => doctorWorkspace(workspace, { fix: Boolean(input.fix && approve), dryRun: !approve });
+        const doctor = () => doctorWorkspace(workspace, { fix: Boolean(input.fix && approve), dryRun: !approve, storageMode: store.mode });
         return projectPayload(input.fix && approve ? withAgentWorkspaceLock(workspace, actorAgent.id, "project doctor fix", doctor) : doctor());
       },
     }),
