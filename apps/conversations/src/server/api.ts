@@ -332,8 +332,61 @@ async function renameChannelServer(
     await tx.query(`UPDATE messages SET session_id = $1 WHERE session_id = $2`, [`channel:${to}`, `channel:${from}`]);
     await tx.query(`UPDATE message_mentions SET channel = $1 WHERE channel = $2`, [to, from]);
     await tx.query(`UPDATE tasks SET channel = $1 WHERE channel = $2`, [to, from]);
+    // graph_edges has no FK to channels, so an interrupted or legacy graph
+    // rebuild can leave an orphan edge for the target name. Preserve the
+    // source edge as authoritative, remove only an identical target duplicate,
+    // then perform the rename without violating the graph's unique key.
+    await tx.query(
+      `UPDATE graph_edges AS target
+       SET weight = source.weight, metadata = source.metadata, updated_at = source.updated_at
+       FROM graph_edges AS source
+       WHERE source.from_type = 'channel' AND source.from_id = $2
+         AND target.from_type = source.from_type AND target.from_id = $1
+         AND target.to_type = source.to_type AND target.to_id = source.to_id
+         AND target.relation = source.relation`,
+      [to, from],
+    );
+    await tx.query(
+      `DELETE FROM graph_edges AS source
+       USING graph_edges AS target
+       WHERE source.from_type = 'channel' AND source.from_id = $2
+         AND target.from_type = source.from_type AND target.from_id = $1
+         AND target.to_type = source.to_type AND target.to_id = source.to_id
+         AND target.relation = source.relation`,
+      [to, from],
+    );
     await tx.query(`UPDATE graph_edges SET from_id = $1 WHERE from_type = 'channel' AND from_id = $2`, [to, from]);
+    await tx.query(
+      `UPDATE graph_edges AS target
+       SET weight = source.weight, metadata = source.metadata, updated_at = source.updated_at
+       FROM graph_edges AS source
+       WHERE source.to_type = 'channel' AND source.to_id = $2
+         AND target.to_type = source.to_type AND target.to_id = $1
+         AND target.from_type = source.from_type AND target.from_id = source.from_id
+         AND target.relation = source.relation`,
+      [to, from],
+    );
+    await tx.query(
+      `DELETE FROM graph_edges AS source
+       USING graph_edges AS target
+       WHERE source.to_type = 'channel' AND source.to_id = $2
+         AND target.to_type = source.to_type AND target.to_id = $1
+         AND target.from_type = source.from_type AND target.from_id = source.from_id
+         AND target.relation = source.relation`,
+      [to, from],
+    );
     await tx.query(`UPDATE graph_edges SET to_id = $1 WHERE to_type = 'channel' AND to_id = $2`, [to, from]);
+    // resource_locks is also keyed by the resource name without a channel FK.
+    // Keep an existing target lock and discard only a duplicate source lock.
+    await tx.query(
+      `DELETE FROM resource_locks AS source
+       USING resource_locks AS target
+       WHERE source.resource_type = 'channel' AND source.resource_id = $2
+         AND target.resource_type = source.resource_type
+         AND target.resource_id = $1
+         AND target.lock_type = source.lock_type`,
+      [to, from],
+    );
     await tx.query(`UPDATE resource_locks SET resource_id = $1 WHERE resource_type = 'channel' AND resource_id = $2`, [to, from]);
     await tx.query(`DELETE FROM channels WHERE name = $1`, [from]);
   });

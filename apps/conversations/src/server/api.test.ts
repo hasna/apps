@@ -12,6 +12,10 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
   const channelMembers = new Set<string>();
   const messages: any[] = [];
   const messageMentions: any[] = [];
+  const channelSubscriptions: any[] = [];
+  const tasks: any[] = [];
+  const graphEdges: any[] = [];
+  const resourceLocks: any[] = [];
   const agentPresence = new Map<string, any>();
   const manyCalls: Array<{ sql: string; params: readonly unknown[] }> = [];
   const projects: Record<string, any> = Object.fromEntries(
@@ -49,6 +53,15 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
           member_count: [...channelMembers].filter((entry) => entry.startsWith(`${row.name}:`)).length,
           message_count: messages.filter((message) => message.channel === row.name).length,
         }));
+      }
+      if (/FROM channel_members/i.test(sql)) {
+        const channel = String((_p as any[])[0] ?? "");
+        return [...channelMembers]
+          .filter((entry) => entry.startsWith(`${channel}:`))
+          .map((entry) => {
+            const [, agent] = entry.split(":");
+            return { channel, agent, joined_at: "2026-07-23T08:15:39.781Z" };
+          });
       }
       if (/FROM messages/i.test(sql)) return messages.slice().reverse();
       if (/revoked_at IS NOT NULL/i.test(sql)) return [];
@@ -199,6 +212,10 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
       if (/SELECT name FROM channels WHERE name/i.test(sql)) {
         return channels[(p as any[])[0]] ? { name: (p as any[])[0] } : null;
       }
+      if (/SELECT 1 AS ok FROM channel_members/i.test(sql)) {
+        const [channel, agent] = p as any[];
+        return channelMembers.has(`${channel}:${agent}`) ? { ok: 1 } : null;
+      }
       if (/SELECT \* FROM messages WHERE id/i.test(sql)) {
         return messages.find((row) => row.id === (p as any[])[0]) ?? null;
       }
@@ -249,7 +266,200 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
         channelMembers.add(`${channel}:${agent}`);
       }
     },
-    __debug: { messages, messageMentions, agentPresence, manyCalls, projects },
+    async transaction<T>(fn: (tx: { query: (sql: string, p?: readonly unknown[]) => Promise<{ rows: any[]; rowCount: number }> }) => Promise<T>): Promise<T> {
+      const channelSnapshot = Object.fromEntries(Object.entries(channels).map(([key, value]) => [key, { ...value }]));
+      const memberSnapshot = new Set(channelMembers);
+      const messageSnapshot = messages.map((message) => ({ ...message }));
+      const mentionSnapshot = messageMentions.map((mention) => ({ ...mention }));
+      const subscriptionSnapshot = channelSubscriptions.map((subscription) => ({ ...subscription }));
+      const taskSnapshot = tasks.map((task) => ({ ...task }));
+      const edgeSnapshot = graphEdges.map((edge) => ({ ...edge }));
+      const lockSnapshot = resourceLocks.map((lock) => ({ ...lock }));
+      const tx = {
+        async query(sql: string, p: readonly unknown[] = []): Promise<{ rows: any[]; rowCount: number }> {
+          const [first, second] = p as any[];
+          if (/INSERT INTO channels/i.test(sql) && /SELECT \$1/i.test(sql)) {
+            channels[first] = { ...channels[second], name: first };
+            return { rows: [], rowCount: 1 };
+          }
+          if (/UPDATE channel_members/i.test(sql)) {
+            for (const entry of [...channelMembers]) {
+              if (entry.startsWith(`${second}:`)) {
+                const [, agent] = entry.split(":");
+                channelMembers.delete(entry);
+                channelMembers.add(`${first}:${agent}`);
+              }
+            }
+            return { rows: [], rowCount: 1 };
+          }
+          if (/UPDATE channel_subscriptions/i.test(sql)) {
+            for (const subscription of channelSubscriptions) {
+              if (subscription.channel === second) subscription.channel = first;
+            }
+            return { rows: [], rowCount: 1 };
+          }
+          if (/UPDATE messages SET channel/i.test(sql)) {
+            for (const message of messages) {
+              if (message.channel === second) {
+                message.channel = first;
+                if (message.to_agent === second) message.to_agent = first;
+              }
+            }
+            return { rows: [], rowCount: 1 };
+          }
+          if (/UPDATE messages SET session_id/i.test(sql)) {
+            for (const message of messages) {
+              if (message.session_id === second) message.session_id = first;
+            }
+            return { rows: [], rowCount: 1 };
+          }
+          if (/UPDATE message_mentions/i.test(sql)) {
+            for (const mention of messageMentions) {
+              if (mention.channel === second) mention.channel = first;
+            }
+            return { rows: [], rowCount: 1 };
+          }
+          if (/UPDATE tasks SET channel/i.test(sql)) {
+            for (const task of tasks) {
+              if (task.channel === second) task.channel = first;
+            }
+            return { rows: [], rowCount: 1 };
+          }
+          if (/DELETE FROM graph_edges AS source/i.test(sql)) {
+            const fromDirection = /source\.from_id = \$2/i.test(sql);
+            const toDirection = /source\.to_id = \$2/i.test(sql);
+            for (let index = graphEdges.length - 1; index >= 0; index--) {
+              const edge = graphEdges[index];
+              const duplicate = fromDirection
+                ? edge.from_type === "channel" &&
+                  edge.from_id === second &&
+                  graphEdges.some((target) =>
+                    target.from_type === "channel" &&
+                    target.from_id === first &&
+                    target.to_type === edge.to_type &&
+                    target.to_id === edge.to_id &&
+                    target.relation === edge.relation
+                  )
+                : toDirection
+                  ? edge.to_type === "channel" &&
+                    edge.to_id === second &&
+                    graphEdges.some((target) =>
+                      target.to_type === "channel" &&
+                      target.to_id === first &&
+                      target.from_type === edge.from_type &&
+                      target.from_id === edge.from_id &&
+                      target.relation === edge.relation
+                    )
+                  : false;
+              if (duplicate) graphEdges.splice(index, 1);
+            }
+            return { rows: [], rowCount: 1 };
+          }
+          if (/UPDATE graph_edges AS target SET/i.test(sql)) {
+            return { rows: [], rowCount: 1 };
+          }
+          if (/UPDATE graph_edges SET from_id/i.test(sql)) {
+            const collision = graphEdges.some((edge) =>
+              edge.from_type === "channel" &&
+              edge.from_id === second &&
+              graphEdges.some((target) =>
+                target.from_type === "channel" &&
+                target.from_id === first &&
+                target.to_type === edge.to_type &&
+                target.to_id === edge.to_id &&
+                target.relation === edge.relation
+              )
+            );
+            if (collision) {
+              throw new Error('duplicate key value violates unique constraint "graph_edges_from_to_relation_key"');
+            }
+            for (const edge of graphEdges) {
+              if (edge.from_type === "channel" && edge.from_id === second) edge.from_id = first;
+            }
+            return { rows: [], rowCount: 1 };
+          }
+          if (/UPDATE graph_edges SET to_id/i.test(sql)) {
+            const collision = graphEdges.some((edge) =>
+              edge.to_type === "channel" &&
+              edge.to_id === second &&
+              graphEdges.some((target) =>
+                target.to_type === "channel" &&
+                target.to_id === first &&
+                target.from_type === edge.from_type &&
+                target.from_id === edge.from_id &&
+                target.relation === edge.relation
+              )
+            );
+            if (collision) {
+              throw new Error('duplicate key value violates unique constraint "graph_edges_from_to_relation_key"');
+            }
+            for (const edge of graphEdges) {
+              if (edge.to_type === "channel" && edge.to_id === second) edge.to_id = first;
+            }
+            return { rows: [], rowCount: 1 };
+          }
+          if (/DELETE FROM resource_locks AS source/i.test(sql)) {
+            for (let index = resourceLocks.length - 1; index >= 0; index--) {
+              const lock = resourceLocks[index];
+              if (
+                lock.resource_type === "channel" &&
+                lock.resource_id === second &&
+                resourceLocks.some((target) =>
+                  target.resource_type === "channel" &&
+                  target.resource_id === first &&
+                  target.lock_type === lock.lock_type
+                )
+              ) {
+                resourceLocks.splice(index, 1);
+              }
+            }
+            return { rows: [], rowCount: 1 };
+          }
+          if (/UPDATE resource_locks/i.test(sql)) {
+            for (const lock of resourceLocks) {
+              if (lock.resource_type === "channel" && lock.resource_id === second) lock.resource_id = first;
+            }
+            return { rows: [], rowCount: 1 };
+          }
+          if (/DELETE FROM channels/i.test(sql)) {
+            delete channels[first];
+            return { rows: [], rowCount: 1 };
+          }
+          return { rows: [], rowCount: 0 };
+        },
+      };
+      try {
+        return await fn(tx);
+      } catch (error) {
+        for (const key of Object.keys(channels)) delete channels[key];
+        Object.assign(channels, channelSnapshot);
+        channelMembers.clear();
+        for (const entry of memberSnapshot) channelMembers.add(entry);
+        messages.splice(0, messages.length, ...messageSnapshot);
+        messageMentions.splice(0, messageMentions.length, ...mentionSnapshot);
+        channelSubscriptions.splice(0, channelSubscriptions.length, ...subscriptionSnapshot);
+        tasks.splice(0, tasks.length, ...taskSnapshot);
+        graphEdges.splice(0, graphEdges.length, ...edgeSnapshot);
+        resourceLocks.splice(0, resourceLocks.length, ...lockSnapshot);
+        throw error;
+      }
+    },
+    __debug: {
+      messages,
+      messageMentions,
+      agentPresence,
+      manyCalls,
+      projects,
+      seedChannel(input: Record<string, any>, members: string[], channelMessages: any[]) {
+        channels[input.name] = { ...input };
+        for (const agent of members) channelMembers.add(`${input.name}:${agent}`);
+        messages.push(...channelMessages);
+      },
+      channelSubscriptions,
+      tasks,
+      graphEdges,
+      resourceLocks,
+    },
   };
   return client;
 }
@@ -461,6 +671,86 @@ describe("conversations-serve", () => {
 
     const list = await (await fetch(`${base}/v1/messages?channel=deploys`, { headers: { "x-api-key": rwKey } })).json();
     expect(list.messages.length).toBeGreaterThan(0);
+  });
+
+  test("PATCH renames the reachable iproj channel and preserves its member and message population", async () => {
+    const source = "iproj-aws-consolidation";
+    const target = "aws-consolidation";
+    const renameClient = makeFakeClient([]);
+    renameClient.__debug.seedChannel(
+      {
+        name: source,
+        description: "Project channel for AWS Consolidation (iproj-aws-consolidation)",
+        topic: null,
+        project_id: null,
+        created_by: "belisarius",
+        created_at: "2026-07-23T08:15:39.778Z",
+        archived_at: null,
+        metadata: JSON.stringify({ channel_schema: { class: "work-project" } }),
+        tags: null,
+      },
+      ["belisarius"],
+      Array.from({ length: 28 }, (_, index) => ({
+        id: index + 1,
+        uuid: `message-${index + 1}`,
+        channel: source,
+        session_id: null,
+        from_agent: "belisarius",
+        to_agent: source,
+        content: `message ${index + 1}`,
+        created_at: `2026-07-23T08:${String(16 + Math.floor(index / 60)).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}.000Z`,
+      })),
+    );
+    // Channel inventory cannot see this orphaned target edge because it has no
+    // channels row, but the graph_edges unique key makes the old UPDATE fail.
+    renameClient.__debug.graphEdges.push(
+      { from_type: "agent", from_id: "belisarius", to_type: "channel", to_id: source, relation: "member_of" },
+      { from_type: "agent", from_id: "belisarius", to_type: "channel", to_id: target, relation: "member_of" },
+    );
+    const renameKeys = new ApiKeyStore(renameClient as any);
+    const renameVerifier = verifyApiKey({
+      app: "conversations",
+      signingSecret: SIGNING,
+      isRevoked: async () => false,
+    });
+    const renameServer = startApiServer({
+      port: 0,
+      host: "127.0.0.1",
+      deps: { client: renameClient as any, keys: renameKeys, verifier: renameVerifier },
+    });
+    const renameBase = `http://127.0.0.1:${renameServer.port}`;
+    const headers = { "x-api-key": rwKey, "content-type": "application/json" };
+
+    try {
+      const patch = await fetch(`${renameBase}/v1/channels/${source}`, {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ name: target }),
+      });
+      expect(patch.status).toBe(200);
+      expect((await patch.json()).channel).toMatchObject({
+        name: target,
+        project_id: null,
+        member_count: 1,
+        message_count: 28,
+      });
+
+      const members = await fetch(`${renameBase}/v1/channels/${target}/members`, {
+        headers: { "x-api-key": rwKey },
+      });
+      expect(members.status).toBe(200);
+      expect((await members.json()).members).toEqual([
+        expect.objectContaining({ channel: target, agent: "belisarius" }),
+      ]);
+
+      const messages = await fetch(`${renameBase}/v1/messages?channel=${target}`, {
+        headers: { "x-api-key": rwKey },
+      });
+      expect(messages.status).toBe(200);
+      expect((await messages.json()).messages).toHaveLength(28);
+    } finally {
+      renameServer.stop(true);
+    }
   });
 
   // Regression cover for HC-00148, server layer. POST /v1/messages built its

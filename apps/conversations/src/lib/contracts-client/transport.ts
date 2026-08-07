@@ -230,13 +230,30 @@ export class HasnaHttpError extends Error {
   readonly path: string;
   readonly body: unknown;
   constructor(method: string, path: string, status: number, body: unknown) {
-    super(`Hasna cloud request failed: ${method} ${path} -> ${status}`);
+    const detail = httpErrorDetail(body);
+    super(`Hasna cloud request failed: ${method} ${path} -> ${status}${detail ? `: ${detail}` : ""}`);
     this.name = "HasnaHttpError";
     this.status = status;
     this.method = method;
     this.path = path;
     this.body = body;
   }
+}
+
+/**
+ * Keep the server's actionable error context on the Error itself. Do not
+ * stringify arbitrary response objects: API error bodies can contain fields
+ * that are not intended for logs. These are the documented diagnostic fields.
+ */
+function httpErrorDetail(body: unknown): string {
+  if (typeof body === "string") return body.trim();
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "";
+  const record = body as Record<string, unknown>;
+  const fields = ["error", "reason", "code", "field", "hint"];
+  return fields
+    .filter((field) => typeof record[field] === "string" && String(record[field]).trim())
+    .map((field) => `${field}=${String(record[field]).trim()}`)
+    .join("; ");
 }
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;

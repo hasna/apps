@@ -132,11 +132,32 @@ describe("HasnaHttpError", () => {
 
     expect(error).toBeInstanceOf(Error);
     expect(error.name).toBe("HasnaHttpError");
-    expect(error.message).toBe("Hasna cloud request failed: GET /messages/one -> 403");
+    expect(error.message).toBe("Hasna cloud request failed: GET /messages/one -> 403: error=denied");
     expect(error.status).toBe(403);
     expect(error.method).toBe("GET");
     expect(error.path).toBe("/messages/one");
     expect(error.body).toEqual({ error: "denied" });
+  });
+
+  test("surfaces the full structured server reason for a channel rename failure", () => {
+    const error = new HasnaHttpError(
+      "PATCH",
+      "/channels/iproj-aws-consolidation",
+      400,
+      {
+        error: 'duplicate key value violates unique constraint "graph_edges_from_to_relation_key"',
+        reason: "The channel rename transaction conflicted with an orphaned graph edge.",
+        code: "channel_rename_conflict",
+        field: "name",
+        hint: "Retry after repairing the stale graph edge.",
+      },
+    );
+
+    expect(error.message).toContain("duplicate key value violates unique constraint");
+    expect(error.message).toContain("reason=The channel rename transaction conflicted with an orphaned graph edge.");
+    expect(error.message).toContain("code=channel_rename_conflict");
+    expect(error.message).toContain("field=name");
+    expect(error.message).toContain("hint=Retry after repairing the stale graph edge.");
   });
 });
 
