@@ -1019,6 +1019,11 @@ function unwrapProject(raw: unknown): Project {
   return raw as Project;
 }
 
+async function cloudGetProjectById(client: HasnaStorageClient, id: string): Promise<Project | null> {
+  const raw = await client.get<unknown>("projects", id);
+  return raw == null ? null : unwrapProject(raw);
+}
+
 export async function cloudCreateProject(
   client: HasnaStorageClient,
   input: Record<string, unknown>,
@@ -1997,6 +2002,33 @@ export async function cloudGetTaskList(client: HasnaStorageClient, id: string): 
   return raw == null ? null : unwrapTaskList(raw);
 }
 
+function resolveTaskListFromCandidates(lists: TaskList[], input: string): string | null {
+  const normalizedIdRef = input.toLowerCase();
+  const matchGroups = [
+    lists.filter((list) => list.id.toLowerCase() === normalizedIdRef),
+    lists.filter((list) => list.slug === input),
+    lists.filter((list) => list.id.toLowerCase().startsWith(normalizedIdRef)),
+  ];
+  for (const matches of matchGroups) {
+    if (matches.length === 1) return matches[0]!.id;
+    if (matches.length > 1) {
+      throw new Error(`Task list reference is ambiguous: "${input}"`);
+    }
+  }
+  return null;
+}
+
+async function legacyProjectTaskLists(
+  client: HasnaStorageClient,
+  projectId: string,
+): Promise<TaskList[]> {
+  const project = await cloudGetProjectById(client, projectId);
+  if (!project?.task_list_id) return [];
+  return (await cloudListTaskLists(client)).filter(
+    (list) => list.project_id == null && list.slug === project.task_list_id,
+  );
+}
+
 /** Resolve a cloud task-list UUID, unique UUID prefix, or project-scoped slug. */
 export async function cloudResolveTaskListRef(
   client: HasnaStorageClient,
@@ -2006,27 +2038,39 @@ export async function cloudResolveTaskListRef(
   const input = ref.trim();
   const normalizedIdRef = input.toLowerCase();
   // An unscoped exact UUID is already canonical. A project-scoped UUID must
-  // still be enumerated so create/delete callers cannot cross that boundary.
+  // still be validated so create/update callers cannot cross that boundary.
   if (UUID_RE.test(input) && !projectId) return normalizedIdRef;
 
-  const lists = await cloudListTaskLists(client, projectId);
-
-  const exactIds = lists.filter((list) => list.id.toLowerCase() === normalizedIdRef);
-  if (exactIds.length === 1) return exactIds[0]!.id;
-  if (exactIds.length > 1) {
-    throw new Error(`Task list reference is ambiguous: "${input}"`);
+  if (UUID_RE.test(input) && projectId) {
+    const direct = await cloudGetTaskList(client, normalizedIdRef);
+    if (direct?.id?.toLowerCase() === normalizedIdRef) {
+      if (direct.project_id === projectId) return direct.id;
+      if (direct.project_id == null) {
+        const project = await cloudGetProjectById(client, projectId);
+        if (project?.task_list_id === direct.slug) return direct.id;
+      }
+      throw new Error(`Task list not found: "${input}"`);
+    }
   }
 
-  const slugs = lists.filter((list) => list.slug === input);
-  if (slugs.length === 1) return slugs[0]!.id;
-  if (slugs.length > 1) {
-    throw new Error(`Task list reference is ambiguous: "${input}"`);
-  }
+  const scopedMatch = resolveTaskListFromCandidates(
+    await cloudListTaskLists(client, projectId),
+    input,
+  );
+  if (scopedMatch) return scopedMatch;
 
-  const prefixes = lists.filter((list) => list.id.toLowerCase().startsWith(normalizedIdRef));
-  if (prefixes.length === 1) return prefixes[0]!.id;
-  if (prefixes.length > 1) {
-    throw new Error(`Task list reference is ambiguous: "${input}"`);
+  // Legacy projects can own a globally stored task-list row: the canonical link
+  // is `project.task_list_id === task_list.slug` while the row itself carries
+  // `project_id: null`. A project-filtered list hides that row before UUID/slug
+  // matching, which made `lists --show <uuid>` succeed while add/update --list
+  // rejected the same resolvable list. Follow only that explicit canonical link;
+  // never treat an arbitrary global list as belonging to every project.
+  if (projectId) {
+    const legacyMatch = resolveTaskListFromCandidates(
+      await legacyProjectTaskLists(client, projectId),
+      input,
+    );
+    if (legacyMatch) return legacyMatch;
   }
 
   throw new Error(`Task list not found: "${input}"`);

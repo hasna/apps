@@ -1146,13 +1146,14 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
 
   test("task-list resolution preserves exact UUIDs and resolves project-scoped slugs and unique UUID prefixes", async () => {
     const listId = "abcdef12-1111-4111-8111-111111111111";
-    const calls = installFetch(() => ({
-      body: {
-        task_lists: [
-          { id: listId, project_id: "project-1", slug: "release", name: "Release" },
-        ],
-      },
-    }));
+    const taskList = { id: listId, project_id: "project-1", slug: "release", name: "Release" };
+    const calls = installFetch((call) => {
+      const url = new URL(call.url);
+      if (url.pathname === `/v1/task-lists/${listId}`) {
+        return { body: { task_list: taskList } };
+      }
+      return { body: { task_lists: [taskList] } };
+    });
     const client = getTodosCloudClient(CLOUD_ENV)!;
 
     await expect(cloudResolveTaskListRef(client, `  ${listId.toUpperCase()}  `))
@@ -1167,10 +1168,92 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
       .resolves.toBe(listId);
     await expect(cloudResolveTaskListRef(client, "ABCDEF12"))
       .resolves.toBe(listId);
-    expect(calls).toHaveLength(3);
-    expect(calls[0]!.url).toContain("project_id=project-1");
-    expect(calls[1]!.url).toContain("project_id=project-1");
-    expect(calls[2]!.url).not.toContain("project_id=");
+    expect(calls.map((call) => call.url)).toEqual([
+      "https://todos.example.com/v1/task-lists?project_id=project-1",
+      `https://todos.example.com/v1/task-lists/${listId}`,
+      "https://todos.example.com/v1/task-lists",
+    ]);
+  });
+
+  test.each([
+    ["exact UUID", "09dc7e1d-7c20-4a52-b4fb-7675d7202f90"],
+    ["project canonical slug", "todos-swiss-bank-account"],
+  ])("resolves a legacy global task list through its owning project by %s", async (_label, ref) => {
+    const projectId = "ccb079bb-385d-467c-873d-0bb00978b642";
+    const listId = "09dc7e1d-7c20-4a52-b4fb-7675d7202f90";
+    const slug = "todos-swiss-bank-account";
+    const legacyList = {
+      id: listId,
+      project_id: null,
+      slug,
+      name: "Swiss Bank Account",
+    };
+    const calls = installFetch((call) => {
+      const url = new URL(call.url);
+      if (url.pathname === `/v1/task-lists/${listId}`) {
+        return { body: { task_list: legacyList } };
+      }
+      if (url.pathname === `/v1/projects/${projectId}`) {
+        return {
+          body: {
+            project: {
+              id: projectId,
+              name: "swiss-bank-account",
+              path: "/workspace/swiss-bank-account",
+              task_list_id: slug,
+            },
+          },
+        };
+      }
+      if (url.pathname === "/v1/task-lists" && url.searchParams.get("project_id") === projectId) {
+        return { body: { task_lists: [] } };
+      }
+      if (url.pathname === "/v1/task-lists") {
+        return { body: { task_lists: [legacyList] } };
+      }
+      return { status: 404, body: { error: "not found" } };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudResolveTaskListRef(client, ref, projectId)).resolves.toBe(listId);
+    expect(calls.some((call) => call.url.includes(`/v1/projects/${projectId}`))).toBe(true);
+  });
+
+  test("does not attach an unrelated legacy global task list to a project", async () => {
+    const projectId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const listId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    installFetch((call) => {
+      const url = new URL(call.url);
+      if (url.pathname === `/v1/task-lists/${listId}`) {
+        return {
+          body: {
+            task_list: {
+              id: listId,
+              project_id: null,
+              slug: "other-project",
+              name: "Other Project",
+            },
+          },
+        };
+      }
+      if (url.pathname === `/v1/projects/${projectId}`) {
+        return {
+          body: {
+            project: {
+              id: projectId,
+              name: "Expected Project",
+              path: "/workspace/expected-project",
+              task_list_id: "expected-project",
+            },
+          },
+        };
+      }
+      return { status: 404, body: { error: "not found" } };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudResolveTaskListRef(client, listId, projectId))
+      .rejects.toThrow(`Task list not found: "${listId}"`);
   });
 
   test("project-scoped plan resolution rejects an exact UUID from another project", async () => {
