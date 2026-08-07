@@ -634,11 +634,26 @@ export interface DigestResult {
   since: string | null;
   cursor: number | null;
   /**
-   * The highest message id this page has ACCOUNTED FOR. Every matching message
-   * with `id <= next_cursor` was either delivered on this page (counted in
-   * `shown`) or cannot be delivered at this `max_bytes` on a page of its own
-   * (counted in `skipped_count`). Following it is therefore lossless: nothing
-   * that could have been returned is stepped over.
+   * The highest message id this page has ACCOUNTED FOR, or `null` when the read
+   * is exhausted.
+   *
+   * When non-null, every matching message with `id <= next_cursor` was either
+   * delivered on this page (counted in `shown`) or cannot be delivered at this
+   * `max_bytes` on a page of its own (counted in `skipped_count`). Following it
+   * is therefore lossless: nothing that could have been returned is stepped over.
+   *
+   * `null` means this page accounted for nothing and there is no further page —
+   * so **cursor-presence is a safe loop condition**, matching every other paged
+   * surface in this package (`searchMessagesPage`, the compact list envelopes,
+   * the REST `/v1` endpoints, which `openapi.ts` already declares nullable).
+   * Both drain idioms terminate:
+   *
+   *     while (cursor !== null) { page = digest({ cursor }); cursor = page.next_cursor; }
+   *     do { page = digest({ cursor }); cursor = page.next_cursor; } while (page.has_more);
+   *
+   * A caller that keeps a durable watermark across polls of a live stream reads
+   * `next_cursor ?? cursor` — the input cursor is still reported in `cursor`, so
+   * an exhausted page costs it no state.
    */
   next_cursor: number | null;
   /**
@@ -865,7 +880,25 @@ function buildDigestResult(opts: {
   marked_read?: number;
 }): DigestResult {
   const messageIds = opts.entries.map((message) => message.id);
-  const nextCursor = opts.advance_cursor ?? (messageIds.length > 0 ? messageIds[messageIds.length - 1] : opts.cursor);
+  // Three cases, and the third is the one that used to spin.
+  //
+  //   advance_cursor   a message could not be packed even alone; the cursor MUST
+  //                    step past it or the drain strands on it forever.
+  //   last delivered   the ordinary page.
+  //   null             this page accounted for NOTHING — no entry delivered and
+  //                    nothing skipped.
+  //
+  // That third branch is reachable only when the underlying query returned zero
+  // rows: a non-empty row set either packs a first entry or takes the
+  // `advance_cursor` path, so "no entries and no skip" is exactly "nothing
+  // matches `id > cursor`", i.e. the stream is EXHAUSTED. It used to echo
+  // `opts.cursor` straight back, so `while (next_cursor) fetch(next_cursor)` —
+  // the idiom every other paged surface in this package supports — never ended.
+  //
+  // Nothing is lost by returning null: the envelope still reports the input
+  // cursor in its own `cursor` field, so a caller holding a durable watermark
+  // recovers it as `next_cursor ?? cursor` from this same response.
+  const nextCursor = opts.advance_cursor ?? (messageIds.length > 0 ? messageIds[messageIds.length - 1] : null);
   const skippedCount = opts.skipped_count ?? 0;
   const consumedCount = opts.entries.length + skippedCount;
   const hasMore = opts.total_available > consumedCount;
