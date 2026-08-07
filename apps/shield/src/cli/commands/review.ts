@@ -41,7 +41,16 @@ function safeStagedPath(filePath: string): string {
 function addedLinesForFile(cwd: string, filePath: string): Set<number> {
   const diff = execFileSync(
     "git",
-    ["diff", "--cached", "--unified=0", "--no-color", "--no-ext-diff", "--", filePath],
+    [
+      "--literal-pathspecs",
+      "diff",
+      "--cached",
+      "--unified=0",
+      "--no-color",
+      "--no-ext-diff",
+      "--",
+      filePath,
+    ],
     { cwd, encoding: "utf-8" },
   );
   const addedLines = new Set<number>();
