@@ -5709,7 +5709,7 @@ describe("loops CLI", () => {
     const noArtifactHandoff = spawnSync("bash", ["-lc", command], {
       cwd: repo,
       // Bun's test runner can omit SHLVL; bash -l then reports status 1 after the guarded exit.
-      env: { ...process.env, SHLVL: "1" },
+      env: { ...process.env, HOME: dataDir, SHLVL: "1" },
       encoding: "utf8",
     });
     if (noArtifactHandoff.status !== 0) {
@@ -5782,6 +5782,7 @@ describe("loops CLI", () => {
       cwd: repo,
       env: {
         ...process.env,
+        HOME: dataDir,
         PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
         OPENLOOPS_TEST_CALLS: calls,
         OPENLOOPS_PR_HANDOFF_GIT_BIN: join(fakeBin, "git"),
@@ -5816,6 +5817,7 @@ describe("loops CLI", () => {
       cwd: repo,
       env: {
         ...process.env,
+        HOME: dataDir,
         PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
         OPENLOOPS_TEST_CALLS: calls,
         OPENLOOPS_PR_HANDOFF_GIT_BIN: join(fakeBin, "git"),
@@ -5846,6 +5848,7 @@ describe("loops CLI", () => {
       cwd: repo,
       env: {
         ...process.env,
+        HOME: dataDir,
         PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
         OPENLOOPS_TEST_CALLS: calls,
         OPENLOOPS_PR_HANDOFF_GIT_BIN: join(fakeBin, "git"),
