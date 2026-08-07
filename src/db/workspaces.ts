@@ -716,10 +716,13 @@ export function createWorkspace(input: CreateWorkspaceInput, db?: Database): Wor
   const d = db || getDatabase();
   const id = input.id ? assertProjectWorkspaceId(input.id) : generateWorkspaceId();
   const ts = now();
-  const requestedSlug = workspaceSlugify(input.slug ?? input.name);
+  const requestedSlug = input.slug ?? workspaceSlugify(input.name);
+  const slugBase = input.require_exact_identity
+    ? workspaceSlugify(requestedSlug)
+    : requestedSlug;
   const slug = input.require_exact_identity
-    ? requestedSlug
-    : ensureUniqueSlug("workspaces", requestedSlug, d);
+    ? slugBase
+    : ensureUniqueSlug("workspaces", slugBase, d);
   const root = input.root_id ? getRoot(input.root_id, d) : null;
   if (input.root_id && !root) throw new Error(`Root not found: ${input.root_id}`);
   const recipe = input.recipe_id ? getRecipe(input.recipe_id, d) : null;

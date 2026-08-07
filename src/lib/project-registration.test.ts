@@ -96,6 +96,11 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
   readonly compensated: string[] = [];
   readonly inverseSelectors: string[] = [];
   readonly inverseVerifications: string[] = [];
+  readonly inverseRequests: ProjectRegistrationAuthorityRequest[] = [];
+  readonly inverseDuplicateSteps = new Set<string>();
+  readonly invalidInverseDuplicateSteps = new Set<string>();
+  strictInverseDesired = false;
+  beforeCreate: ((request: ProjectRegistrationAuthorityRequest) => void | Promise<void>) | null = null;
   packageVersion = "test-1.0.0";
 
   constructor(
@@ -128,6 +133,7 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
 
   async create(request: ProjectRegistrationAuthorityRequest): Promise<ProjectRegistrationAuthorityReceipt> {
     this.requests.push(request);
+    await this.beforeCreate?.(request);
     const existing = this.receiptByKey.get(request.idempotency_key);
     if (existing) return existing;
 
@@ -227,12 +233,26 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
   }
 
   async compensate(request: ProjectRegistrationAuthorityRequest): Promise<ProjectRegistrationAuthorityReceipt> {
+    this.inverseRequests.push(request);
     const accepted = request.accepted_receipt;
     if (!accepted?.target_id || !accepted.result_revision || !accepted.result_digest) {
       throw new Error("accepted receipt required");
     }
     if (request.target_selector !== accepted.target_id) {
       throw new Error("inverse selector must match accepted target");
+    }
+    const expectedDesired = {
+      accepted_receipt_id: accepted.receipt_id,
+      target_id: accepted.target_id,
+    };
+    if (
+      this.strictInverseDesired
+      && (
+        canonicalJson(request.desired) !== canonicalJson(expectedDesired)
+        || request.request_digest !== sha256(canonicalJson(expectedDesired))
+      )
+    ) {
+      throw new Error("inverse desired payload must match its request digest");
     }
     this.inverseSelectors.push(request.target_selector);
     const current = this.records.get(accepted.target_id);
@@ -250,7 +270,9 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
       accepted_receipt_id: accepted.receipt_id,
       absent: true,
     }));
-    const receipt = this.makeReceipt(request, {
+    const duplicate = this.inverseDuplicateSteps.has(request.step_id)
+      || this.invalidInverseDuplicateSteps.has(request.step_id);
+    const acceptedInverseReceipt = this.makeReceipt(request, {
       outcome: "accepted",
       target_id: accepted.target_id,
       result_revision: "absent",
@@ -258,6 +280,18 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
       reason: null,
       created_by_operation: false,
       accepted_receipt_id: accepted.receipt_id,
+    });
+    const receipt = this.makeReceipt(request, {
+      outcome: duplicate ? "duplicate_of_accepted" : "accepted",
+      target_id: accepted.target_id,
+      result_revision: "absent",
+      result_digest: absenceDigest,
+      reason: null,
+      created_by_operation: false,
+      accepted_receipt_id: accepted.receipt_id,
+      duplicate_of_receipt_id: duplicate && !this.invalidInverseDuplicateSteps.has(request.step_id)
+        ? acceptedInverseReceipt.receipt_id
+        : null,
     });
     this.receiptByKey.set(request.idempotency_key, receipt);
     return receipt;
@@ -294,6 +328,7 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
       reason: string | null;
       created_by_operation: boolean;
       accepted_receipt_id?: string | null;
+      duplicate_of_receipt_id?: string | null;
     },
   ): ProjectRegistrationAuthorityReceipt {
     return {
@@ -320,7 +355,7 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
       target_id: result.target_id,
       result_revision: result.result_revision,
       result_digest: result.result_digest,
-      duplicate_of_receipt_id: null,
+      duplicate_of_receipt_id: result.duplicate_of_receipt_id ?? null,
       accepted_receipt_id: result.accepted_receipt_id ?? null,
       created_by_operation: result.created_by_operation,
       created_at: "2026-08-07T00:00:00.000Z",
@@ -771,6 +806,153 @@ describe("full project registration transaction", () => {
         }),
       ]));
       expect(db.query("SELECT COUNT(*) AS n FROM workspace_events").get()).toEqual({ n: 0 });
+    } finally {
+      db.close();
+    }
+  });
+
+  test("compensates an accepted channel write when its local receipt cannot persist", async () => {
+    const db = makeDb();
+    const target = tempTarget("channel-receipt-failure");
+    const fakes = fakeAuthorities();
+    db.run(`
+      CREATE TRIGGER inject_channel_receipt_failure
+      BEFORE INSERT ON project_registration_receipts
+      WHEN NEW.step_id = 'conversations_channel' AND NEW.direction = 'forward'
+      BEGIN
+        SELECT RAISE(ABORT, 'injected channel receipt failure');
+      END
+    `);
+    try {
+      const result = await registerFullProject(
+        input("op-full-channel-receipt-failure", target.target),
+        { db, authorities: fakes.authorities },
+      );
+
+      expect(result.outcome).toBe("rolled_back");
+      expect(result.failed_step).toBe("conversations_channel");
+      expect(fakes.conversations.records.size).toBe(0);
+      expect(fakes.conversations.compensated).toHaveLength(1);
+      expect(result.rollback).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          step_id: "conversations_channel",
+          status: "completed",
+        }),
+      ]));
+      expect(result.receipts.some((receipt) =>
+        receipt.step_id === "conversations_channel" && receipt.direction === "forward"
+      )).toBe(false);
+      expect(getWorkspace(result.project_id, db)).toBeNull();
+      expect(existsSync(target.path)).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("binds inverse desired content to its request digest during compensation", async () => {
+    const db = makeDb();
+    const target = tempTarget("inverse-desired");
+    const fakes = fakeAuthorities(["mementos_project"]);
+    fakes.conversations.strictInverseDesired = true;
+    try {
+      const result = await registerFullProject(
+        input("op-full-inverse-desired", target.target),
+        { db, authorities: fakes.authorities },
+      );
+
+      expect(result.outcome).toBe("rolled_back");
+      const inverse = fakes.conversations.inverseRequests[0]!;
+      expect(inverse.desired).toEqual({
+        accepted_receipt_id: inverse.accepted_receipt?.receipt_id,
+        target_id: inverse.accepted_receipt?.target_id,
+      });
+      expect(inverse.request_digest).toBe(sha256(canonicalJson(inverse.desired)));
+    } finally {
+      db.close();
+    }
+  });
+
+  test("accepts a correctly linked duplicate inverse receipt during rollback retry", async () => {
+    const db = makeDb();
+    const target = tempTarget("inverse-duplicate");
+    const fakes = fakeAuthorities(["mementos_project"]);
+    fakes.conversations.inverseDuplicateSteps.add("conversations_channel");
+    try {
+      const result = await registerFullProject(
+        input("op-full-inverse-duplicate", target.target),
+        { db, authorities: fakes.authorities },
+      );
+
+      expect(result.outcome).toBe("rolled_back");
+      expect(result.receipts).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          step_id: "conversations_channel",
+          direction: "inverse",
+          outcome: "duplicate_of_accepted",
+          duplicate_of_receipt_id: expect.any(String),
+        }),
+      ]));
+      expect(fakes.conversations.records.size).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("rejects an inverse duplicate receipt without its accepted inverse link", async () => {
+    const db = makeDb();
+    const target = tempTarget("inverse-duplicate-unlinked");
+    const fakes = fakeAuthorities(["mementos_project"]);
+    fakes.conversations.invalidInverseDuplicateSteps.add("conversations_channel");
+    try {
+      const result = await registerFullProject(
+        input("op-full-inverse-duplicate-unlinked", target.target),
+        { db, authorities: fakes.authorities },
+      );
+
+      expect(result.outcome).toBe("split_state");
+      expect(result.rollback).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          step_id: "conversations_channel",
+          status: "failed",
+          reason_code: "authority_inverse_failed",
+        }),
+      ]));
+      expect(result.receipts.some((receipt) =>
+        receipt.step_id === "conversations_channel"
+        && receipt.direction === "inverse"
+        && receipt.outcome === "duplicate_of_accepted"
+      )).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("refuses project cleanup when canonical machine changes during rollback", async () => {
+    const db = makeDb();
+    const target = tempTarget("project-state-drift");
+    const fakes = fakeAuthorities(["mementos_project"]);
+    fakes.mementos.beforeCreate = (request) => {
+      db.run(
+        "UPDATE workspaces SET canonical_machine = ? WHERE id = ?",
+        ["spark02", request.project_id],
+      );
+    };
+    try {
+      const result = await registerFullProject(
+        input("op-full-project-state-drift", target.target),
+        { db, authorities: fakes.authorities },
+      );
+
+      expect(result.outcome).toBe("split_state");
+      expect(getWorkspace(result.project_id, db)?.canonical_machine).toBe("spark02");
+      expect(result.rollback).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          step_id: "projects_project",
+          status: "failed",
+          reason_code: "project_drift_refuses_cleanup",
+        }),
+      ]));
+      expect(existsSync(target.path)).toBe(true);
     } finally {
       db.close();
     }

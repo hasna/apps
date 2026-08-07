@@ -240,10 +240,13 @@ function plannedWorkspace(input: WorkspaceCreationPlanInput, db?: Database): {
   if (input.recipe_id && !recipe) throw new Error(`Recipe not found: ${input.recipe_id}`);
 
   const id = input.id ? assertProjectWorkspaceId(input.id) : generateWorkspaceId();
-  const requestedSlug = workspaceSlugify(input.slug ?? input.name);
+  const requestedSlug = input.slug ?? workspaceSlugify(input.name);
+  const slugBase = input.require_exact_identity
+    ? workspaceSlugify(requestedSlug)
+    : requestedSlug;
   const slug = input.require_exact_identity
-    ? requestedSlug
-    : uniqueWorkspaceSlug(requestedSlug, db);
+    ? slugBase
+    : uniqueWorkspaceSlug(slugBase, db);
   const kind = input.kind ?? recipe?.kind ?? root?.default_kind ?? "generic";
   const tags = normalizeList([
     ...(root?.tags ?? []),

@@ -693,6 +693,7 @@ function projectStateDigest(project: Workspace): string {
     status: project.status,
     root_id: project.root_id,
     recipe_id: project.recipe_id,
+    canonical_machine: project.canonical_machine,
     primary_path_digest: project.primary_path ? sha256(resolve(project.primary_path)) : null,
     git_remote: project.git_remote,
     s3_bucket: project.s3_bucket,
@@ -700,6 +701,10 @@ function projectStateDigest(project: Workspace): string {
     tags: project.tags,
     integrations: project.integrations,
     metadata: project.metadata,
+    last_opened_at: project.last_opened_at,
+    created_at: project.created_at,
+    updated_at: project.updated_at,
+    synced_at: project.synced_at,
   }));
 }
 
@@ -1112,8 +1117,10 @@ function validateAuthorityReceipt(
     }
   } else {
     if (receipt.outcome === "terminal_nonacceptance") return;
+    const accepted = receipt.outcome === "accepted";
+    const duplicate = receipt.outcome === "duplicate_of_accepted";
     if (
-      receipt.outcome !== "accepted"
+      (!accepted && !duplicate)
       || !receipt.accepted_receipt_id
       || !receipt.target_id
       || !receipt.result_revision
@@ -1123,6 +1130,9 @@ function validateAuthorityReceipt(
     }
     if (receipt.accepted_receipt_id !== request.accepted_receipt?.receipt_id) {
       throw new ProjectRegistrationStepError(request.step_id, "authority_inverse_receipt_mismatch");
+    }
+    if (duplicate && !receipt.duplicate_of_receipt_id) {
+      throw new ProjectRegistrationStepError(request.step_id, "authority_inverse_duplicate_missing_link");
     }
   }
 }
@@ -1358,13 +1368,13 @@ async function executeExternalStep(input: {
     request,
     mutate: () => input.adapter.create(request),
   });
-  const localReceipt = appendAuthorityTerminalReceipt({
-    adapter: input.adapter,
-    request,
-    receipt,
-    db: input.db,
-  });
   if (receipt.outcome === "terminal_nonacceptance") {
+    appendAuthorityTerminalReceipt({
+      adapter: input.adapter,
+      request,
+      receipt,
+      db: input.db,
+    });
     throw new ProjectRegistrationStepError(
       input.step_id,
       receipt.reason ?? "authority_nonacceptance",
@@ -1375,9 +1385,15 @@ async function executeExternalStep(input: {
     capability: input.capability,
     receipt,
     request,
-    local_receipt: localReceipt,
+    local_receipt: null,
   };
   input.accepted_steps.push(accepted);
+  accepted.local_receipt = appendAuthorityTerminalReceipt({
+    adapter: input.adapter,
+    request,
+    receipt,
+    db: input.db,
+  });
   const record = await input.adapter.readExact({
     resource_kind: input.resource_kind,
     target_id: receipt.target_id!,
@@ -1407,10 +1423,11 @@ async function compensateExternalStep(
   db: Database,
 ): Promise<ProjectRegistrationReceipt | null> {
   if (!accepted.receipt.created_by_operation || accepted.receipt.outcome !== "accepted") return null;
-  const requestDigest = sha256(canonicalJson({
+  const desired = {
     accepted_receipt_id: accepted.receipt.receipt_id,
     target_id: accepted.receipt.target_id,
-  }));
+  };
+  const requestDigest = sha256(canonicalJson(desired));
   const preconditionDigest = sha256(canonicalJson({
     expected_revision: accepted.receipt.result_revision,
     expected_digest: accepted.receipt.result_digest,
@@ -1431,6 +1448,7 @@ async function compensateExternalStep(
     request_digest: requestDigest,
     precondition_digest: preconditionDigest,
     accepted_receipt: accepted.receipt,
+    desired,
     ...bounds,
   };
   const inverse = await resolveAuthorityMutation({
@@ -1799,7 +1817,7 @@ function rollbackProjectIntegrations(input: {
   operation_id: string;
   accepted: ProjectRegistrationReceipt;
   db: Database;
-}): ProjectRegistrationReceipt {
+}): { project: Workspace; receipt: ProjectRegistrationReceipt } {
   const rollback = input.accepted.rollback[0] as {
     before_integrations?: WorkspaceIntegrations;
     accepted_revision?: string;
@@ -1847,7 +1865,7 @@ function rollbackProjectIntegrations(input: {
     if (canonicalJson(after.integrations) !== canonicalJson(rollback.before_integrations)) {
       throw new ProjectRegistrationStepError("projects_integrations", "integration_inverse_readback_mismatch");
     }
-    return appendRegistrationReceipt({
+    const receipt = appendRegistrationReceipt({
       operation_id: input.operation_id,
       step_id: "projects_integrations",
       authority: "projects",
@@ -1872,6 +1890,7 @@ function rollbackProjectIntegrations(input: {
       }],
       rollback: [],
     }, input.db);
+    return { project: after, receipt };
   })();
 }
 
@@ -2222,6 +2241,8 @@ export async function registerFullProject(
   let directoryOwnership: OwnedDirectoryIdentity | null = null;
   let integrationReceipt: ProjectRegistrationReceipt | null = null;
   let project: Workspace | null = null;
+  let createdProject: Workspace | null = null;
+  let expectedProjectStateDigest: string | null = null;
   let failedStep = "projects_project";
   let terminalCommitted = false;
 
@@ -2303,6 +2324,8 @@ export async function registerFullProject(
     if (!project || project.id !== validated.project_id || project.slug !== validated.project_slug) {
       throw new ProjectRegistrationStepError("projects_project", "exact_project_readback_mismatch");
     }
+    createdProject = project;
+    expectedProjectStateDigest = projectStateDigest(project);
     failedStep = "projects_directory";
     const directoryAction = execution.prepare.find((action) => action.type === "mkdir");
     if (!directoryAction || directoryAction.status !== "completed") {
@@ -2553,10 +2576,17 @@ export async function registerFullProject(
 
     if (integrationReceipt) {
       try {
-        rollbackProjectIntegrations({
+        const restored = rollbackProjectIntegrations({
           operation_id: input.operation_id,
           accepted: integrationReceipt,
           db,
+        });
+        if (!createdProject) {
+          throw new ProjectRegistrationStepError("projects_project", "creation_state_missing", true);
+        }
+        expectedProjectStateDigest = projectStateDigest({
+          ...createdProject,
+          updated_at: restored.project.updated_at,
         });
         rollback.push({ step_id: "projects_integrations", status: "completed" });
       } catch {
@@ -2596,7 +2626,8 @@ export async function registerFullProject(
     if (createdProjectReceipt) {
       const current = getWorkspace(validated.project_id, db);
       if (current && current.slug === validated.project_slug) {
-        const expectedStateDigest = String(createdProjectReceipt.rollback[0]?.expected_state_digest ?? "");
+        const expectedStateDigest = expectedProjectStateDigest
+          ?? String(createdProjectReceipt.rollback[0]?.expected_state_digest ?? "");
         if (projectStateDigest(current) === expectedStateDigest) {
           try {
             if (directoryOwnership) {
