@@ -16360,7 +16360,7 @@ function resolveKnowledgeModeSelection(env = process.env) {
       normalized = normalizeStorageMode3(value);
     } catch (error51) {
       const message = error51 instanceof Error ? error51.message : String(error51);
-      throw new Error(`knowledge: ${name}=${value} is not a valid mode. ${message}`);
+      throw new Error(`knowledge: ${name}=${value} is not a valid mode. ${message} ` + `Unset ${name} to use the default sqlite backend, or set ${name}=sqlite or ${name}=postgres.`);
     }
     const warnings = [];
     if (name !== canonicalModeKey) {

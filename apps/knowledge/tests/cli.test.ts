@@ -3778,6 +3778,38 @@ describe('a half-configured CLI fails loudly instead of reading the wrong store'
     expect(combined).not.toContain(FAKE_API_URL);
   });
 
+  test('REGRESSION: a removed cloud mode names the unset migration path', () => {
+    const result = runCliNoMode(
+      ['list', '--tag', 'convention', '--limit', '40', '--sort', 'created', '--desc', '--json'],
+      {
+        ...sandboxHome(),
+        HASNA_KNOWLEDGE_STORAGE_MODE: 'cloud',
+      },
+    );
+    const stderr = decode(result.stderr);
+
+    expect(result.exitCode).not.toBe(0);
+    expect(stderr).toContain('HASNA_KNOWLEDGE_STORAGE_MODE=cloud');
+    expect(stderr).toContain('Unset HASNA_KNOWLEDGE_STORAGE_MODE');
+  });
+
+  test('the exact convention read defaults to sqlite after the removed mode is absent', () => {
+    const args = ['list', '--tag', 'convention', '--limit', '40', '--sort', 'created', '--desc', '--json'];
+    const result = runCliNoMode(args, sandboxHome());
+    expect(result.exitCode).toBe(0);
+    expect((JSON.parse(decode(result.stdout)) as { ok: boolean }).ok).toBe(true);
+  });
+
+  test('the exact convention read still succeeds with explicit sqlite', () => {
+    const args = ['list', '--tag', 'convention', '--limit', '40', '--sort', 'created', '--desc', '--json'];
+    const result = runCliNoMode(args, {
+      ...sandboxHome(),
+      HASNA_KNOWLEDGE_STORAGE_MODE: 'sqlite',
+    });
+    expect(result.exitCode).toBe(0);
+    expect((JSON.parse(decode(result.stdout)) as { ok: boolean }).ok).toBe(true);
+  });
+
   test('`mode` still answers in the environment the guard rejects', () => {
     // The command whose entire job is explaining this state must survive it,
     // or the error message points at a diagnostic that also fails.
