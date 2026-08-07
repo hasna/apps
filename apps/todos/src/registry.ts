@@ -20,7 +20,15 @@ export interface TodosPackageSource {
 }
 
 export interface TodosPackageExportContract {
-  subpath: "." | "./sdk" | "./mcp" | "./registry" | "./contracts" | "./storage" | "./testing";
+  subpath:
+    | "."
+    | "./sdk"
+    | "./mcp"
+    | "./registry"
+    | "./contracts"
+    | "./storage"
+    | "./testing"
+    | "./project-registration";
   import: string;
   types: string;
   description: string;
@@ -87,6 +95,13 @@ export const TODOS_PACKAGE_EXPORTS: TodosPackageExportContract[] = [
     import: "./dist/testing.js",
     types: "./dist/testing.d.ts",
     description: "Test-store isolation helpers that keep a consumer's test suite off a shared todos store.",
+    stability: "stable",
+  },
+  {
+    subpath: "./project-registration",
+    import: "./dist/project-registration.js",
+    types: "./dist/project-registration.d.ts",
+    description: "Conditional Projects-to-Todos project and task-list registration authority.",
     stability: "stable",
   },
 ];

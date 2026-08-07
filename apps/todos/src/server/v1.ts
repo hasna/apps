@@ -11,8 +11,15 @@ import { LockError, ProjectNotFoundError, ResourceConflictError, TaskNotStartabl
 import { collapseEnumValues, resolveEnumVocabulary } from "../lib/enum-vocabulary.js";
 import type { CreatePlanInput, CreateProjectInput, CreateTaskInput, CreateTaskListInput, CreateTemplateInput, RenameProjectInput, TaskComment, TemplateTaskInput, UpdateTaskInput, UpdateTaskListInput } from "../types/index.js";
 import type { TodosStorageContext, TodosStorageSnapshot, TodosTaskCompletionOptions, UpdateTemplateInput } from "../storage/interfaces.js";
-import { getCloudPrGroupLedger, getCloudStorageAdapter, getCloudVerifier, ensureCloudSchema } from "./cloud.js";
+import {
+  ensureCloudSchema,
+  getCloudPrGroupLedger,
+  getCloudProjectRegistrationAuthority,
+  getCloudStorageAdapter,
+  getCloudVerifier,
+} from "./cloud.js";
 import { handlePrGroupHttpRequest } from "./pr-groups.js";
+import { handleTodosProjectRegistrationHttpRequest } from "../project-registration/index.js";
 import { redactEvidenceText } from "../lib/redaction.js";
 import { isCanonicalSlug, normalizeSlug } from "../lib/slugs.js";
 import { decodeCommentCursor, encodeCommentCursor } from "../lib/comment-cursor.js";
@@ -22,6 +29,7 @@ export interface V1RequestDependencies {
   ensureSchema?: typeof ensureCloudSchema;
   getStorageAdapter?: typeof getCloudStorageAdapter;
   getPrGroupLedger?: typeof getCloudPrGroupLedger;
+  getProjectRegistrationAuthority?: typeof getCloudProjectRegistrationAuthority;
 }
 
 const JSON_HEADERS = { "Content-Type": "application/json" } as const;
@@ -399,6 +407,17 @@ export async function handleV1Request(
       (dependencies.getPrGroupLedger ?? getCloudPrGroupLedger)(),
       "/v1/pr-groups",
       { actor_id: principal.agent, actor_run_id: principal.kid },
+    );
+  }
+  if (
+    path === "/v1/project-registration"
+    || path.startsWith("/v1/project-registration/")
+  ) {
+    return handleTodosProjectRegistrationHttpRequest(
+      req,
+      url,
+      (dependencies.getProjectRegistrationAuthority
+        ?? getCloudProjectRegistrationAuthority)(),
     );
   }
   const store = (dependencies.getStorageAdapter ?? getCloudStorageAdapter)();

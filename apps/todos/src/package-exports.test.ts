@@ -47,6 +47,10 @@ const expectedExports = {
     types: "./dist/testing.d.ts",
     import: "./dist/testing.js",
   },
+  "./project-registration": {
+    types: "./dist/project-registration.d.ts",
+    import: "./dist/project-registration.js",
+  },
 };
 
 describe("package subpath exports", () => {
@@ -70,7 +74,7 @@ describe("package subpath exports", () => {
     }
   });
 
-  test("declares stable root, SDK, MCP, registry, contracts, and storage exports", () => {
+  test("declares every stable package subpath export", () => {
     expect(packageJson.exports).toEqual(expectedExports);
     expect(TODOS_PACKAGE_EXPORTS.map((entry) => entry.subpath)).toEqual(Object.keys(expectedExports));
 

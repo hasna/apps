@@ -29,6 +29,7 @@
     "src/contracts.ts",
     "src/storage.ts",
     "src/testing.ts",
+    "src/project-registration.ts",
     "src/server/index.ts",
     "src/sdk/index.ts",
     "src/sdk/**/*.ts"

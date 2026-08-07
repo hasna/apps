@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
+import { MIGRATIONS } from "../db/migrations.js";
 import { runMigrations } from "../db/schema.js";
 import {
   PrGroupLedger,
@@ -1520,7 +1521,9 @@ describe("authoritative PR-group ledger", () => {
       SELECT repository, pr_number, base_sha
       FROM pr_group_events WHERE id = 'legacy-event'
     `).get()).toEqual({ repository: "hasna/todos", pr_number: null, base_sha: null });
-    expect(upgradeDb.query("SELECT MAX(id) AS id FROM _migrations").get()).toEqual({ id: 68 });
+    expect(upgradeDb.query("SELECT MAX(id) AS id FROM _migrations").get()).toEqual({
+      id: MIGRATIONS.length,
+    });
 
     const upgradedLedger = new PrGroupLedger(new SqlitePrGroupLedgerPersistence(upgradeDb));
     const legacyAdmission = admission({

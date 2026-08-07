@@ -1,3 +1,5 @@
+import { sqliteTodosProjectRegistrationSchemaSql } from "../project-registration/schema.js";
+
 export const MIGRATIONS = [
   // Migration 1: Initial schema
   `
@@ -1673,5 +1675,11 @@ export const MIGRATIONS = [
   INSERT OR IGNORE INTO _migrations (id) VALUES (68);
   COMMIT;
   PRAGMA foreign_keys = ON;
+  `,
+  // Migration 69: Package-owned conditional Projects → Todos registration authority.
+  `BEGIN;
+  ${sqliteTodosProjectRegistrationSchemaSql()}
+  INSERT OR IGNORE INTO _migrations (id) VALUES (69);
+  COMMIT;
   `,
 ];

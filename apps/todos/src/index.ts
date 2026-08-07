@@ -29,6 +29,46 @@ export type {
   PrGroupWorkRunAdapter,
   RecoverPrGroupInput,
 } from "./pr-groups/index.js";
+export {
+  PackageOwnedTodosProjectRegistrationAuthority,
+  PostgresTodosProjectRegistrationBackend,
+  SqliteTodosProjectRegistrationBackend,
+  TODOS_PROJECT_REGISTRATION_CALLER_ROUTE,
+  TODOS_PROJECT_REGISTRATION_ROUTE,
+  TODOS_PROJECT_REGISTRATION_SCHEMA_VERSION,
+  TodosProjectRegistrationError,
+  TodosProjectRegistrationHttpClient,
+  canonicalProjectRegistrationJson,
+  createLocalTodosProjectRegistrationAuthority,
+  createPostgresTodosProjectRegistrationAuthority,
+  createTodosProjectRegistrationHttpClient,
+  deriveTodosProjectRegistrationIdempotencyKey,
+  digestProjectRegistrationValue,
+  handleTodosProjectRegistrationHttpRequest,
+  postgresTodosProjectRegistrationSchemaSql,
+  sqliteTodosProjectRegistrationSchemaSql,
+} from "./project-registration/index.js";
+export type {
+  PostgresTodosProjectRegistrationBackendOptions,
+  TodosProjectRegistrationAuthority,
+  TodosProjectRegistrationAuthorityOptions,
+  TodosProjectRegistrationBounds,
+  TodosProjectRegistrationCapability,
+  TodosProjectRegistrationDirection,
+  TodosProjectRegistrationErrorCode,
+  TodosProjectRegistrationFaultPoint,
+  TodosProjectRegistrationHttpClientOptions,
+  TodosProjectRegistrationInverseVerification,
+  TodosProjectRegistrationLookupRequest,
+  TodosProjectRegistrationLookupResult,
+  TodosProjectRegistrationOutcome,
+  TodosProjectRegistrationPostgresClient,
+  TodosProjectRegistrationReceipt,
+  TodosProjectRegistrationRecord,
+  TodosProjectRegistrationRequest,
+  TodosProjectRegistrationResourceKind,
+  TodosProjectRegistrationResponseControl,
+} from "./project-registration/index.js";
 
 // Package capability manifest
 export { TODOS_CAPABILITIES, createCapabilityManifest } from "./capabilities.js";

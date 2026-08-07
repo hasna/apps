@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { MIGRATIONS } from "./migrations.js";
+import { sqliteTodosProjectRegistrationSchemaSql } from "../project-registration/schema.js";
 
 export function runMigrations(db: Database): void {
   let strictMigrationFailure: unknown = null;
@@ -1333,6 +1334,11 @@ export function ensureSchema(db: Database): void {
     )`);
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_api_keys_prefix ON api_keys(prefix)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_api_keys_active ON api_keys(revoked_at, expires_at)");
+
+  // Package-owned conditional Projects → Todos registration authority.
+  // Receipts are immutable terminal evidence; bindings are the singleton claim
+  // and conditional-inverse ownership record.
+  db.exec(sqliteTodosProjectRegistrationSchemaSql());
 
   // Authoritative PR-group execution ledger. Identity and receipt indexes are
   // durable fences, not advisory cache keys.

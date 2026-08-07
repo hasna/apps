@@ -19,6 +19,11 @@ import {
   postgresPrGroupSchemaSql,
 } from "../pr-groups/postgres.js";
 import {
+  createPostgresTodosProjectRegistrationAuthority,
+  postgresTodosProjectRegistrationSchemaSql,
+  type TodosProjectRegistrationAuthority,
+} from "../project-registration/index.js";
+import {
   ensurePostgresScopedSlugUniqueIndexes,
   postgresTodosCommentCursorIndexSql,
   postgresTodosTaskShortIdIndexSql,
@@ -73,6 +78,7 @@ let cachedAdapter: TodosStorageAdapter | null = null;
 let cachedStore: ApiKeyStore | null = null;
 let cachedVerifier: ApiKeyVerifier | null = null;
 let cachedPrGroupLedger: PrGroupLedger | null = null;
+let cachedProjectRegistrationAuthority: TodosProjectRegistrationAuthority | null = null;
 let schemaEnsured: Promise<void> | null = null;
 
 function getClient(): TodosCloudQueryClient {
@@ -100,6 +106,21 @@ export function getCloudPrGroupLedger(): PrGroupLedger {
   if (cachedPrGroupLedger) return cachedPrGroupLedger;
   cachedPrGroupLedger = new PrGroupLedger(new PostgresPrGroupLedgerPersistence(getClient()));
   return cachedPrGroupLedger;
+}
+
+/** Conditional singleton Projects → Todos registration authority on Postgres. */
+export function getCloudProjectRegistrationAuthority(): TodosProjectRegistrationAuthority {
+  if (cachedProjectRegistrationAuthority) return cachedProjectRegistrationAuthority;
+  cachedProjectRegistrationAuthority = createPostgresTodosProjectRegistrationAuthority(
+    getClient(),
+    {
+      service: TODOS_APP_SLUG,
+      authorityId: TODOS_APP_SLUG,
+      tenantId: process.env.HASNA_TODOS_TENANT_ID ?? "default",
+      corpusId: process.env.HASNA_TODOS_CORPUS_ID ?? `${TODOS_APP_SLUG}:postgresql`,
+    },
+  );
+  return cachedProjectRegistrationAuthority;
 }
 
 /**
@@ -164,6 +185,9 @@ export async function ensureCloudSchema(): Promise<void> {
       await client.query(sql);
     }
     for (const sql of postgresPrGroupSchemaSql()) {
+      await client.query(sql);
+    }
+    for (const sql of postgresTodosProjectRegistrationSchemaSql()) {
       await client.query(sql);
     }
     await getApiKeyStore().ensureSchema();
@@ -247,5 +271,6 @@ export async function closeCloud(): Promise<void> {
   cachedStore = null;
   cachedVerifier = null;
   cachedPrGroupLedger = null;
+  cachedProjectRegistrationAuthority = null;
   schemaEnsured = null;
 }

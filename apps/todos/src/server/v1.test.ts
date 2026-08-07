@@ -5,6 +5,11 @@ import { createLocalSqliteTodosStorageAdapter } from "../storage/local-sqlite.js
 import type { TodosStorageAdapter } from "../storage/interfaces.js";
 import { handleV1Request, type V1RequestDependencies } from "./v1.js";
 import { createLocalPrGroupLedger } from "../pr-groups/index.js";
+import {
+  createLocalTodosProjectRegistrationAuthority,
+  deriveTodosProjectRegistrationIdempotencyKey,
+  digestProjectRegistrationValue,
+} from "../project-registration/index.js";
 
 let db: Database;
 let store: TodosStorageAdapter;
@@ -38,6 +43,13 @@ beforeEach(() => {
     ensureSchema: async () => {},
     getStorageAdapter: () => store,
     getPrGroupLedger: () => createLocalPrGroupLedger(db),
+    getProjectRegistrationAuthority: () =>
+      createLocalTodosProjectRegistrationAuthority(db, {
+        packageVersion: "0.15.6-test",
+        authorityId: "todos-v1-test",
+        tenantId: "tenant-v1-test",
+        corpusId: "corpus-v1-test",
+      }),
     getVerifier: () => ({
       authenticate: async () => ({ ok: true, principal }),
     }) as ReturnType<NonNullable<V1RequestDependencies["getVerifier"]>>,
@@ -47,6 +59,196 @@ beforeEach(() => {
 afterEach(() => resetDatabase());
 
 describe("/v1 task-list cloud parity", () => {
+  test("routes package-owned conditional project registration through authenticated v1", async () => {
+    const capabilityResponse = await request("/v1/project-registration/capability");
+    expect(capabilityResponse?.status).toBe(200);
+    const { capability } = await capabilityResponse!.json() as {
+      capability: {
+        route: string;
+        package_version: string;
+        authority_id: string;
+        tenant_id: string;
+        corpus_id: string;
+      };
+    };
+    const desired = {
+      source_project_id: "wks_fleetresourcesv1",
+      source_project_slug: "fleet-resources",
+      name: "Fleet Resources",
+    };
+    const requestDigest = digestProjectRegistrationValue(desired);
+    const preconditionDigest = digestProjectRegistrationValue({
+      target_selector: "wks_fleetresourcesv1",
+      expected: "absent",
+    });
+    const registration = {
+      operation_id: "fleet-resources-v1-registration-0001",
+      step_id: "todos_project",
+      resource_kind: "project",
+      direction: "forward",
+      authority_route: capability.route,
+      package_version: capability.package_version,
+      authority_id: capability.authority_id,
+      tenant_id: capability.tenant_id,
+      corpus_id: capability.corpus_id,
+      target_selector: "wks_fleetresourcesv1",
+      idempotency_key: deriveTodosProjectRegistrationIdempotencyKey({
+        operation_id: "fleet-resources-v1-registration-0001",
+        step_id: "todos_project",
+        direction: "forward",
+        target_selector: "wks_fleetresourcesv1",
+        request_digest: requestDigest,
+        precondition_digest: preconditionDigest,
+      }),
+      request_digest: requestDigest,
+      precondition_digest: preconditionDigest,
+      project_id: "wks_fleetresourcesv1",
+      project_slug: "fleet-resources",
+      project_name: "Fleet Resources",
+      desired,
+      response_byte_limit: 65_536,
+      time_budget_ms: 5_000,
+    };
+    const created = await request(
+      "/v1/project-registration/create",
+      "POST",
+      registration,
+    );
+    expect(created?.status).toBe(201);
+    const createdBody = await created!.json() as {
+      receipt: Record<string, unknown> & {
+        receipt_id: string;
+        target_id: string;
+        result_revision: string;
+        result_digest: string;
+        outcome: string;
+      };
+    };
+    const receiptId = createdBody.receipt.receipt_id;
+    const targetId = createdBody.receipt.target_id;
+    expect(createdBody.receipt.outcome).toBe("accepted");
+    expect(typeof targetId).toBe("string");
+
+    const lookup = await request(
+      "/v1/project-registration/receipts/lookup",
+      "POST",
+      {
+        operation_id: registration.operation_id,
+        step_id: registration.step_id,
+        resource_kind: registration.resource_kind,
+        direction: registration.direction,
+        authority: "todos",
+        authority_route: capability.route,
+        package_version: capability.package_version,
+        authority_id: capability.authority_id,
+        tenant_id: capability.tenant_id,
+        corpus_id: capability.corpus_id,
+        target_selector: registration.target_selector,
+        idempotency_key: registration.idempotency_key,
+        target_id: targetId,
+        max_items: 1,
+        response_byte_limit: 65_536,
+        time_budget_ms: 5_000,
+      },
+    );
+    const lookupBody = await lookup!.json();
+    expect({ status: lookup?.status, body: lookupBody }).toMatchObject({
+      status: 200,
+      body: {
+        receipt: {
+          receipt_id: receiptId,
+          target_id: targetId,
+        },
+        response_control: {
+          complete: true,
+          truncated: false,
+        },
+      },
+    });
+
+    const readback = await request(
+      "/v1/project-registration/read-exact",
+      "POST",
+      {
+        resource_kind: "project",
+        target_id: targetId,
+        response_byte_limit: 65_536,
+        time_budget_ms: 5_000,
+      },
+    );
+    expect(readback?.status).toBe(200);
+    expect(await readback!.json()).toEqual({
+      record: {
+        target_id: targetId,
+        revision: createdBody.receipt.result_revision,
+        digest: createdBody.receipt.result_digest,
+      },
+    });
+
+    const inverseDesired = {
+      accepted_receipt_id: receiptId,
+      target_id: targetId,
+    };
+    const inversePrecondition = {
+      expected_revision: createdBody.receipt.result_revision,
+      expected_digest: createdBody.receipt.result_digest,
+    };
+    const inverseRequestDigest = digestProjectRegistrationValue(inverseDesired);
+    const inversePreconditionDigest = digestProjectRegistrationValue(inversePrecondition);
+    const inverse = {
+      ...registration,
+      direction: "inverse",
+      target_selector: targetId,
+      desired: inverseDesired,
+      request_digest: inverseRequestDigest,
+      precondition_digest: inversePreconditionDigest,
+      idempotency_key: deriveTodosProjectRegistrationIdempotencyKey({
+        operation_id: registration.operation_id,
+        step_id: registration.step_id,
+        direction: "inverse",
+        target_selector: targetId,
+        request_digest: inverseRequestDigest,
+        precondition_digest: inversePreconditionDigest,
+      }),
+      accepted_receipt: createdBody.receipt,
+    };
+    const compensated = await request(
+      "/v1/project-registration/compensate",
+      "POST",
+      inverse,
+    );
+    expect({ status: compensated?.status, body: await compensated!.json() })
+      .toMatchObject({
+        status: 201,
+        body: {
+          receipt: {
+            outcome: "accepted",
+            direction: "inverse",
+            target_id: targetId,
+            accepted_receipt_id: receiptId,
+            result_revision: "absent",
+          },
+        },
+      });
+    const verified = await request(
+      "/v1/project-registration/verify-inverse",
+      "POST",
+      inverse,
+    );
+    expect({ status: verified?.status, body: await verified!.json() })
+      .toMatchObject({
+        status: 200,
+        body: {
+          verification: {
+            target_id: targetId,
+            accepted_receipt_id: receiptId,
+            absent: true,
+          },
+        },
+      });
+    expect(await store.projects.get(targetId)).toBeNull();
+  });
+
   test("routes authenticated PR-group state and history through the injected authority", async () => {
     const admitted = await request("/v1/pr-groups/admit", "POST", {
       root_request_id: "request-root",
