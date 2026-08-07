@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { buildGuardedProjectReadResult } from "./guarded-project-mutation.js";
 import type { Workspace } from "../types/workspace.js";
 
-function project(): Workspace {
+function project(id = "wks_guardedread0001"): Workspace {
   return {
-    id: "wks_guardedread0001",
+    id,
     slug: "guarded-read",
     name: "Guarded Read",
     description: null,
@@ -41,6 +41,44 @@ describe("guarded project read response control", () => {
     expect(result.response_control.complete).toBe(true);
     expect(result.response_control.truncated).toBe(false);
     expect(result.response_control.response_bytes).toBeGreaterThan(0);
+  });
+
+  test("accepts generated stable ids with underscore or hyphen immediately after wks_", () => {
+    for (const id of [
+      "wks__Z8qE5BOzztK7rOxQeGo2",
+      "wks_-Z8qE5BOzztK7rOxQeGo2",
+      "wks_A-Z_8qE5BOzztK7rOxQeGo2",
+    ]) {
+      const workspace = project(id);
+      const result = buildGuardedProjectReadResult(workspace, {
+        project_id: id,
+        response_byte_limit: 16_384,
+        time_budget_ms: 5_000,
+      }, Date.now());
+
+      expect(result.project_id).toBe(id);
+      expect(result.response_control.complete).toBe(true);
+    }
+  });
+
+  test("rejects non-id targets and malformed stable ids", () => {
+    for (const id of [
+      "guarded-read",
+      "Guarded Read",
+      "/tmp/guarded-read",
+      " wks_guardedread0001",
+      "wks_guardedread0001 ",
+      "wks_",
+      "wks_abc",
+      "wks_!guardedread0001",
+    ]) {
+      const workspace = project(id);
+      expect(() => buildGuardedProjectReadResult(workspace, {
+        project_id: id,
+        response_byte_limit: 16_384,
+        time_budget_ms: 5_000,
+      }, Date.now())).toThrow(/complete stable project id/);
+    }
   });
 
   test("fails closed when the whole-operation time budget is exceeded", () => {

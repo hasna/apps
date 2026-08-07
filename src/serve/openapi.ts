@@ -3,6 +3,7 @@
 // @hasna/contracts/sdk `generateSdkFromOpenApi` on this exact object).
 
 import { WORKSPACE_LIST_DEFAULT_LIMIT, WORKSPACE_LIST_MAX_LIMIT } from "./pg-store.js";
+import { COMPLETE_STABLE_PROJECT_ID_PATTERN } from "../lib/guarded-project-mutation.js";
 
 export function buildOpenApiSpec(version: string): Record<string, unknown> {
   const ID_PARAM = {
@@ -17,7 +18,7 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
     in: "path",
     required: true,
     description: "Complete stable project id beginning with wks_; slugs and partial ids are refused",
-    schema: { type: "string", pattern: "^wks_[A-Za-z0-9][A-Za-z0-9_-]{11,}$" },
+    schema: { type: "string", pattern: COMPLETE_STABLE_PROJECT_ID_PATTERN },
   } as const;
 
   const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
