@@ -82,6 +82,20 @@ describe("projects-serve migrations", () => {
     expect(migrations.some((m) => /api_key/i.test(m.sql))).toBe(true);
     // Baseline creates the core workspaces table.
     expect(migrations.some((m) => /CREATE TABLE IF NOT EXISTS workspaces/i.test(m.sql))).toBe(true);
+    expect(ids).toContain("projects:0004_guarded_project_mutation_runtime_grants");
+  });
+
+  test("guarded receipt grant migration derives existing DML roles and grants only receipt reads and inserts", () => {
+    const migration = loadMigrations().find(
+      (item) => item.id === "projects:0004_guarded_project_mutation_runtime_grants",
+    );
+    expect(migration).toBeDefined();
+    expect(migration!.sql).toContain("relation.relname = 'workspaces'");
+    expect(migration!.sql).toContain("COUNT(DISTINCT privilege.privilege_type) = 4");
+    expect(migration!.sql.match(/'GRANT [^']+'/g)).toEqual([
+      "'GRANT SELECT, INSERT ON TABLE %I.%I TO %I'",
+    ]);
+    expect(migration!.sql).not.toContain("projects_app");
   });
 
   test("every migration has a sha256 checksum", () => {
