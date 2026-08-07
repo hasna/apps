@@ -4,6 +4,11 @@ import { fileURLToPath } from "url";
 import { ConversationsClient, type ProjectPage } from "./index.js";
 
 describe("generated SDK project linkage and pagination contract", () => {
+  test("generated Channel type exposes the stable channel id without removing name", () => {
+    const source = readFileSync(fileURLToPath(new URL("./index.ts", import.meta.url)), "utf8");
+    expect(source).toContain('export interface Channel { "id"?: string; "name"?: string;');
+  });
+
   test("listProjects accepts limit/cursor/offset and listChannels accepts project_id", () => {
     const source = readFileSync(fileURLToPath(new URL("./index.ts", import.meta.url)), "utf8");
 

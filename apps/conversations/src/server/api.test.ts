@@ -22,6 +22,7 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
     initialProjects.map((project) => [project.id, { ...project }]),
   );
   let nextId = 1;
+  let failRenameAt: RegExp | null = null;
   const client = {
     async many(sql: string, _p: readonly unknown[] = []): Promise<any[]> {
       manyCalls.push({ sql, params: [..._p] });
@@ -194,8 +195,9 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
       // GETs that carry COUNT(*) subqueries for member_count/message_count.
       if (/count\(\*\)::bigint\s+as\s+n/i.test(sql)) return { n: messages.length };
       if (/INSERT INTO channels/i.test(sql)) {
-        const [name, description, topic, project_id, created_by, metadata, tags] = p as any[];
+        const [id, name, description, topic, project_id, created_by, metadata, tags] = p as any[];
         const row = {
+          id,
           name,
           description,
           topic,
@@ -275,10 +277,20 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
       const taskSnapshot = tasks.map((task) => ({ ...task }));
       const edgeSnapshot = graphEdges.map((edge) => ({ ...edge }));
       const lockSnapshot = resourceLocks.map((lock) => ({ ...lock }));
+      let channelIdConstraintDeferred = false;
       const tx = {
         async query(sql: string, p: readonly unknown[] = []): Promise<{ rows: any[]; rowCount: number }> {
           const [first, second] = p as any[];
-          if (/INSERT INTO channels/i.test(sql) && /SELECT \$1/i.test(sql)) {
+          if (failRenameAt?.test(sql)) {
+            failRenameAt = null;
+            throw new Error("injected channel rename failure");
+          }
+          if (/SET CONSTRAINTS channels_id_unique DEFERRED/i.test(sql)) {
+            channelIdConstraintDeferred = true;
+            return { rows: [], rowCount: 0 };
+          }
+          if (/INSERT INTO channels/i.test(sql) && /SELECT\s+(?:id,\s*)?\$1/i.test(sql)) {
+            if (!channelIdConstraintDeferred) throw new Error("duplicate key value violates unique constraint channels_id_unique");
             channels[first] = { ...channels[second], name: first };
             return { rows: [], rowCount: 1 };
           }
@@ -445,6 +457,8 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
       }
     },
     __debug: {
+      channels,
+      channelMembers,
       messages,
       messageMentions,
       agentPresence,
@@ -454,6 +468,9 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
         channels[input.name] = { ...input };
         for (const agent of members) channelMembers.add(`${input.name}:${agent}`);
         messages.push(...channelMessages);
+      },
+      failRenameWhen(pattern: RegExp) {
+        failRenameAt = pattern;
       },
       channelSubscriptions,
       tasks,
@@ -656,10 +673,16 @@ describe("conversations-serve", () => {
       body: JSON.stringify({ name: "deploys", created_by: "test", description: "d" }),
     });
     expect(created.status).toBe(201);
-    expect((await created.json()).channel.name).toBe("deploys");
+    const createdChannel = (await created.json()).channel;
+    expect(createdChannel.name).toBe("deploys");
+    expect(createdChannel.id).toMatch(/^chn_[0-9a-f]{32}$/);
 
     const got = await fetch(`${base}/v1/channels/deploys`, { headers: { "x-api-key": rwKey } });
     expect(got.status).toBe(200);
+    expect((await got.json()).channel.id).toBe(createdChannel.id);
+
+    const channelList = await (await fetch(`${base}/v1/channels`, { headers: { "x-api-key": rwKey } })).json();
+    expect(channelList.channels.find((channel: any) => channel.name === "deploys")?.id).toBe(createdChannel.id);
 
     const sent = await fetch(`${base}/v1/messages`, {
       method: "POST",
@@ -679,6 +702,7 @@ describe("conversations-serve", () => {
     const renameClient = makeFakeClient([]);
     renameClient.__debug.seedChannel(
       {
+        id: "chn_0123456789abcdef0123456789abcdef",
         name: source,
         description: "Project channel for AWS Consolidation (iproj-aws-consolidation)",
         topic: null,
@@ -729,6 +753,7 @@ describe("conversations-serve", () => {
       });
       expect(patch.status).toBe(200);
       expect((await patch.json()).channel).toMatchObject({
+        id: "chn_0123456789abcdef0123456789abcdef",
         name: target,
         project_id: null,
         member_count: 1,
@@ -748,6 +773,73 @@ describe("conversations-serve", () => {
       });
       expect(messages.status).toBe(200);
       expect((await messages.json()).messages).toHaveLength(28);
+    } finally {
+      renameServer.stop(true);
+    }
+  });
+
+  test("PATCH rolls back the channel id and name when a rename dependency update fails", async () => {
+    const source = "rollback-source";
+    const target = "rollback-target";
+    const stableId = "chn_fedcba9876543210fedcba9876543210";
+    const renameClient = makeFakeClient([]);
+    renameClient.__debug.seedChannel(
+      {
+        id: stableId,
+        name: source,
+        description: null,
+        topic: null,
+        project_id: null,
+        created_by: "alice",
+        created_at: "2026-08-07T00:00:00.000Z",
+        archived_at: null,
+        metadata: null,
+        tags: null,
+      },
+      ["alice"],
+      [{
+        id: 1,
+        uuid: "rollback-message",
+        channel: source,
+        session_id: `channel:${source}`,
+        from_agent: "alice",
+        to_agent: source,
+        content: "keep me",
+        created_at: "2026-08-07T00:00:01.000Z",
+      }],
+    );
+    renameClient.__debug.failRenameWhen(/UPDATE channel_members/i);
+    const renameServer = startApiServer({
+      port: 0,
+      host: "127.0.0.1",
+      deps: {
+        client: renameClient as any,
+        keys: new ApiKeyStore(renameClient as any),
+        verifier: verifyApiKey({
+          app: "conversations",
+          signingSecret: SIGNING,
+          isRevoked: async () => false,
+        }),
+      },
+    });
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${renameServer.port}/v1/channels/${source}`, {
+        method: "PATCH",
+        headers: { "x-api-key": rwKey, "content-type": "application/json" },
+        body: JSON.stringify({ name: target }),
+      });
+
+      expect(response.status).toBe(400);
+      expect(renameClient.__debug.channels[source]?.id).toBe(stableId);
+      expect(renameClient.__debug.channels[target]).toBeUndefined();
+      expect(renameClient.__debug.channelMembers.has(`${source}:alice`)).toBe(true);
+      expect(renameClient.__debug.channelMembers.has(`${target}:alice`)).toBe(false);
+      expect(renameClient.__debug.messages[0]).toMatchObject({
+        channel: source,
+        session_id: `channel:${source}`,
+        to_agent: source,
+      });
     } finally {
       renameServer.stop(true);
     }
@@ -1369,5 +1461,6 @@ describe("conversations-serve", () => {
     expect(b.paths["/v1/channels"].get.parameters).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "project_id", in: "query" }),
     ]));
+    expect(b.components.schemas.Channel.properties.id).toEqual({ type: "string" });
   });
 });

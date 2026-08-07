@@ -3,6 +3,7 @@ import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { closeDb, getDb } from "../lib/db.js";
+import { backfilledChannelIdForName } from "../lib/channel-id.js";
 
 const TEST_DB = join(tmpdir(), `conversations-search-compact-${Date.now()}.db`);
 const CLI = ["bun", "run", "./src/cli/index.tsx"];
@@ -34,7 +35,7 @@ describe("search --json compact policy-awareness envelope", () => {
     process.env.CONVERSATIONS_DB_PATH = TEST_DB;
     closeDb();
     const db = getDb();
-    db.prepare(`INSERT INTO channels (name, created_by) VALUES (?, ?)`).run(CHANNEL, "alice");
+    db.prepare(`INSERT INTO channels (id, name, created_by) VALUES (?, ?, ?)`).run(backfilledChannelIdForName(CHANNEL), CHANNEL, "alice");
     const insert = db.prepare(
       `INSERT INTO messages
        (session_id, from_agent, to_agent, channel, content, metadata, attachments, created_at)

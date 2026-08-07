@@ -693,4 +693,44 @@ export const PG_MIGRATIONS: string[] = [
 
   INSERT INTO _migrations (id) VALUES (3) ON CONFLICT DO NOTHING;
   `,
+  // Migration 4: immutable channel identifiers.
+  // Existing stores are backfilled from the exact stored name using the same
+  // SHA-256 namespace as backfilledChannelIdForName() on SQLite.
+  `
+  ALTER TABLE channels ADD COLUMN IF NOT EXISTS id TEXT;
+  UPDATE channels
+  SET id = 'chn_' || substr(
+    encode(digest('hasna-conversations:channel:v1:' || name, 'sha256'), 'hex'),
+    1,
+    32
+  )
+  WHERE id IS NULL OR btrim(id) = '';
+  ALTER TABLE channels ALTER COLUMN id SET NOT NULL;
+  DROP INDEX IF EXISTS idx_channels_id;
+  DO $channel_id_unique$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conname = 'channels_id_unique'
+        AND conrelid = 'channels'::regclass
+    ) THEN
+      ALTER TABLE channels ADD CONSTRAINT channels_id_unique
+        UNIQUE (id) DEFERRABLE INITIALLY IMMEDIATE;
+    END IF;
+  END;
+  $channel_id_unique$;
+  CREATE OR REPLACE FUNCTION prevent_channel_id_update() RETURNS TRIGGER AS $$
+  BEGIN
+    IF NEW.id IS DISTINCT FROM OLD.id THEN
+      RAISE EXCEPTION 'channel id is immutable';
+    END IF;
+    RETURN NEW;
+  END;
+  $$ LANGUAGE plpgsql;
+  DROP TRIGGER IF EXISTS channels_id_immutable ON channels;
+  CREATE TRIGGER channels_id_immutable
+    BEFORE UPDATE OF id ON channels
+    FOR EACH ROW EXECUTE FUNCTION prevent_channel_id_update();
+  INSERT INTO _migrations (id) VALUES (4) ON CONFLICT DO NOTHING;
+  `,
 ];

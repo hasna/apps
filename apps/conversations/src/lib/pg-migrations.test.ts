@@ -102,4 +102,18 @@ describe("PG_MIGRATIONS", () => {
     const sql = PG_MIGRATIONS[0].toLowerCase();
     expect(sql).toContain("insert into _migrations");
   });
+
+  test("stable channel id migration backfills deterministically and enforces identity", () => {
+    expect(PG_MIGRATIONS.length).toBeGreaterThanOrEqual(4);
+    const sql = PG_MIGRATIONS[3].toLowerCase();
+    expect(sql).toContain("alter table channels add column if not exists id text");
+    expect(sql).toContain("hasna-conversations:channel:v1:");
+    expect(sql).toContain("digest(");
+    expect(sql).toContain("alter column id set not null");
+    expect(sql).toContain("add constraint channels_id_unique");
+    expect(sql).toContain("unique (id) deferrable initially immediate");
+    expect(sql).toContain("create trigger channels_id_immutable");
+    expect(sql).toContain("if new.id is distinct from old.id");
+    expect(sql).toContain("insert into _migrations (id) values (4)");
+  });
 });

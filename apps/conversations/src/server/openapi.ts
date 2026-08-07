@@ -53,6 +53,7 @@ export const openapiSpec = {
       Channel: {
         type: "object",
         properties: {
+          id: { type: "string" },
           name: { type: "string" },
           description: { type: "string", nullable: true },
           topic: { type: "string", nullable: true },

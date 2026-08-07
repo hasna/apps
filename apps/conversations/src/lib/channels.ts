@@ -1,5 +1,6 @@
 import { getDb } from "./db.js";
 import { normalizeChannelName } from "./channel-names.js";
+import { newChannelId } from "./channel-id.js";
 import type { Channel, ChannelInfo, ChannelMember } from "../types.js";
 import { CHANNEL_LIST_ORDER, CHANNEL_MEMBER_ORDER, simpleOrderByClause } from "./list-order.js";
 
@@ -25,6 +26,7 @@ function parseJsonArray(value: unknown): string[] {
 
 function parseChannel(row: Record<string, unknown>): Channel {
   return {
+    id: row.id as string,
     name: row.name as string,
     description: (row.description as string) || null,
     topic: (row.topic as string) || null,
@@ -61,10 +63,11 @@ export function createChannel(
   }
 
   const row = db.prepare(`
-    INSERT INTO channels (name, description, topic, project_id, created_by, metadata, tags)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO channels (id, name, description, topic, project_id, created_by, metadata, tags)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     RETURNING *
   `).get(
+    newChannelId(),
     channelName,
     options?.description || null,
     options?.topic || null,
@@ -118,6 +121,7 @@ export function listChannels(options?: {
 }
 
 export interface MemberChannel {
+  id: string;
   name: string;
   description: string | null;
   unread: number;
@@ -130,7 +134,7 @@ export interface MemberChannel {
 export function getMemberChannels(agent: string): MemberChannel[] {
   const db = getDb();
   return db.prepare(`
-    SELECT s.name, s.description,
+    SELECT s.id, s.name, s.description,
       (SELECT COUNT(*) FROM messages m WHERE m.channel = s.name AND m.read_at IS NULL) as unread
     FROM channels s
     JOIN channel_members sm ON sm.channel = s.name

@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join, relative } from "node:path";
 import { tmpdir } from "node:os";
+import { backfilledChannelIdForName } from "../lib/channel-id.js";
 
 /**
  * The regression the unit tests in `src/lib/stdout.test.ts` cannot prove: that
@@ -62,12 +63,14 @@ describe("conversations --json over a pipe", () => {
 
     const db = new Database(dbPath);
     const insert = db.prepare(
-      "INSERT INTO channels (name, description, topic, project_id, created_by, metadata, tags) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO channels (id, name, description, topic, project_id, created_by, metadata, tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     );
     db.exec("BEGIN");
     for (let i = 0; i < CHANNEL_ROWS; i++) {
+      const name = `fixture-channel-${String(i).padStart(4, "0")}`;
       insert.run(
-        `fixture-channel-${String(i).padStart(4, "0")}`,
+        backfilledChannelIdForName(name),
+        name,
         `d`.repeat(200),
         `t`.repeat(120),
         null,

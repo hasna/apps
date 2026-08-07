@@ -4,6 +4,7 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
 import { join, dirname } from "path";
 import { homedir } from "os";
 import { buildLegacyChannelNameMap, normalizeChannelName } from "./channel-names.js";
+import { backfilledChannelIdForName } from "./channel-id.js";
 
 export interface ConversationsStatement<ReturnType = any, ParamsType extends unknown[] = unknown[]> {
   all(...params: ParamsType): ReturnType[];
@@ -324,6 +325,7 @@ function ensureFlatChannelsTable(db: Database): void {
 
   db.exec(`
     CREATE TABLE channels_flat_import (
+      id TEXT,
       name TEXT PRIMARY KEY,
       description TEXT,
       topic TEXT,
@@ -337,8 +339,9 @@ function ensureFlatChannelsTable(db: Database): void {
   `);
   db.exec(`
     INSERT OR IGNORE INTO channels_flat_import
-      (name, description, topic, project_id, created_by, created_at, archived_at, metadata, tags)
+      (id, name, description, topic, project_id, created_by, created_at, archived_at, metadata, tags)
     SELECT
+      ${nullableColumnExpr(columns, "id")},
       name,
       ${nullableColumnExpr(columns, "description")},
       ${nullableColumnExpr(columns, "topic")},
@@ -353,6 +356,36 @@ function ensureFlatChannelsTable(db: Database): void {
   db.exec("DROP TABLE channels");
   db.exec("ALTER TABLE channels_flat_import RENAME TO channels");
   db.exec("CREATE INDEX IF NOT EXISTS idx_channels_project ON channels(project_id)");
+}
+
+function ensureChannelIds(db: Database): void {
+  if (!hasColumn(db, "channels", "id")) {
+    db.exec("ALTER TABLE channels ADD COLUMN id TEXT");
+  }
+
+  const missing = db.prepare(
+    "SELECT name FROM channels WHERE id IS NULL OR trim(id) = '' ORDER BY name",
+  ).all() as { name: string }[];
+  const update = db.prepare("UPDATE channels SET id = ? WHERE name = ?");
+  for (const row of missing) update.run(backfilledChannelIdForName(row.name), row.name);
+
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_channels_id ON channels(id)");
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS channels_require_id_insert
+    BEFORE INSERT ON channels
+    WHEN NEW.id IS NULL OR trim(NEW.id) = ''
+    BEGIN
+      SELECT RAISE(ABORT, 'channel id is required');
+    END
+  `);
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS channels_id_immutable
+    BEFORE UPDATE OF id ON channels
+    WHEN NEW.id IS NOT OLD.id
+    BEGIN
+      SELECT RAISE(ABORT, 'channel id is immutable');
+    END
+  `);
 }
 
 function legacyTimestamp(db: Database): string {
@@ -477,8 +510,8 @@ function insertImportedChannel(
   if (depth > 0) tags.push(`legacy-depth:${depth}`);
 
   db.prepare(`
-    INSERT INTO channels (name, description, topic, project_id, created_by, created_at, archived_at, metadata, tags)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO channels (id, name, description, topic, project_id, created_by, created_at, archived_at, metadata, tags)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(name) DO UPDATE SET
       description = COALESCE(channels.description, excluded.description),
       topic = COALESCE(channels.topic, excluded.topic),
@@ -487,6 +520,7 @@ function insertImportedChannel(
       metadata = COALESCE(channels.metadata, excluded.metadata),
       tags = COALESCE(channels.tags, excluded.tags)
   `).run(
+    backfilledChannelIdForName(channelName),
     channelName,
     row?.description ?? null,
     row?.topic ?? null,
@@ -682,6 +716,7 @@ export function getDb(): Database {
   // Channels table
   db.exec(`
     CREATE TABLE IF NOT EXISTS channels (
+      id TEXT NOT NULL UNIQUE,
       name TEXT PRIMARY KEY,
       description TEXT,
       topic TEXT,
@@ -813,6 +848,7 @@ export function getDb(): Database {
   if (hasLegacyChannels) {
     migrateLegacyChannels(db);
   }
+  ensureChannelIds(db);
   db.exec("CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel)");
 
   // Add edited_at and pinned_at columns if missing

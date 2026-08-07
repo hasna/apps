@@ -7,7 +7,8 @@ import { Database } from "bun:sqlite";
 import { tmpdir } from "os";
 import { join } from "path";
 
-const TEST_DB = join(tmpdir(), `conversations-test-db-${Date.now()}.db`);
+const TEST_DB = join(tmpdir(), `convchanid-db-${process.pid}-${Date.now()}.db`);
+const PEER_TEST_DB = `${TEST_DB}-peer`;
 
 beforeEach(() => {
   process.env.CONVERSATIONS_DB_PATH = TEST_DB;
@@ -19,6 +20,9 @@ afterEach(() => {
   try { unlinkSync(TEST_DB); } catch {}
   try { unlinkSync(TEST_DB + "-wal"); } catch {}
   try { unlinkSync(TEST_DB + "-shm"); } catch {}
+  try { unlinkSync(PEER_TEST_DB); } catch {}
+  try { unlinkSync(PEER_TEST_DB + "-wal"); } catch {}
+  try { unlinkSync(PEER_TEST_DB + "-shm"); } catch {}
   delete process.env.CONVERSATIONS_DB_PATH;
 });
 
@@ -93,6 +97,59 @@ describe("db", () => {
     const cols = db.prepare("PRAGMA table_info(messages)").all() as { name: string }[];
     const colNames = cols.map((c) => c.name);
     expect(colNames).toContain("channel");
+  });
+
+  test("deterministically backfills stable channel ids in equivalent legacy stores", () => {
+    const idsByStore: string[][] = [];
+    for (const path of [TEST_DB, PEER_TEST_DB]) {
+      closeDb();
+      const legacyDb = new Database(path);
+      legacyDb.exec(`
+        CREATE TABLE channels (
+          name TEXT PRIMARY KEY,
+          description TEXT,
+          topic TEXT,
+          project_id TEXT,
+          created_by TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          archived_at TEXT,
+          metadata TEXT,
+          tags TEXT
+        );
+        INSERT INTO channels (name, created_by, created_at)
+        VALUES ('alpha', 'migration', '2026-08-07T00:00:00.000Z'),
+               ('beta', 'migration', '2026-08-07T00:00:00.000Z'),
+               ('General', 'migration', '2026-08-07T00:00:00.000Z'),
+               ('general', 'migration', '2026-08-07T00:00:00.000Z');
+      `);
+      legacyDb.close();
+
+      process.env.CONVERSATIONS_DB_PATH = path;
+      const migrated = getDb();
+      const columns = migrated.prepare("PRAGMA table_info(channels)").all() as { name: string }[];
+      expect(columns.map((column) => column.name)).toContain("id");
+      const rows = migrated.prepare("SELECT id FROM channels ORDER BY name").all() as { id: string }[];
+      expect(rows.map((row) => row.id)).toEqual([
+        expect.stringMatching(/^chn_[0-9a-f]{32}$/),
+        expect.stringMatching(/^chn_[0-9a-f]{32}$/),
+        expect.stringMatching(/^chn_[0-9a-f]{32}$/),
+        expect.stringMatching(/^chn_[0-9a-f]{32}$/),
+      ]);
+      expect(new Set(rows.map((row) => row.id)).size).toBe(4);
+      idsByStore.push(rows.map((row) => row.id));
+    }
+
+    expect(idsByStore[1]).toEqual(idsByStore[0]);
+  });
+
+  test("rejects direct mutation of a channel id", () => {
+    const created = createChannel("immutable-id", "alice");
+    const db = getDb();
+
+    expect(() => db.prepare("UPDATE channels SET id = ? WHERE name = ?")
+      .run("chn_ffffffffffffffffffffffffffffffff", "immutable-id"))
+      .toThrow("channel id is immutable");
+    expect(getChannel("immutable-id")?.id).toBe(created.id);
   });
 
   test("migrates legacy channel messages before creating channel indexes", () => {

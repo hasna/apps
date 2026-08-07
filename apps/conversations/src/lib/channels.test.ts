@@ -25,6 +25,7 @@ afterEach(() => {
 describe("createChannel", () => {
   test("creates a flat channel and returns it", () => {
     const channel = createChannel("general", "alice", { description: "General chat", topic: "Coordination" });
+    expect(channel.id).toMatch(/^chn_[0-9a-f]{32}$/);
     expect(channel.name).toBe("general");
     expect(channel.description).toBe("General chat");
     expect(channel.topic).toBe("Coordination");
@@ -88,6 +89,7 @@ describe("listChannels", () => {
 
     const channels = listChannels();
     expect(channels).toHaveLength(1);
+    expect(channels[0].id).toMatch(/^chn_[0-9a-f]{32}$/);
     expect(channels[0].name).toBe("general");
     expect(channels[0].member_count).toBe(2);
     expect(channels[0].message_count).toBe(1);
@@ -128,6 +130,7 @@ describe("getChannel", () => {
     createChannel("general", "alice", { description: "General chat" });
     const channel = getChannel("general");
     expect(channel).toBeTruthy();
+    expect(channel!.id).toMatch(/^chn_[0-9a-f]{32}$/);
     expect(channel!.name).toBe("general");
     expect(channel!.description).toBe("General chat");
     expect(channel!.member_count).toBe(1);
@@ -225,13 +228,25 @@ describe("updateChannel", () => {
 
 describe("renameChannel", () => {
   test("renames a channel and returns the new channel", () => {
-    createChannel("old-name", "alice", { description: "Desc", topic: "Topic" });
+    const created = createChannel("old-name", "alice", { description: "Desc", topic: "Topic" });
     const channel = renameChannel("old-name", "new-name");
+    expect(channel.id).toBe(created.id);
     expect(channel.name).toBe("new-name");
     expect(channel.description).toBe("Desc");
     expect(channel.topic).toBe("Topic");
     expect(getChannel("old-name")).toBeNull();
     expect(getChannel("new-name")?.name).toBe("new-name");
+  });
+
+  test("allows the vacated name to identify a different future channel", () => {
+    const original = createChannel("old-name", "alice");
+    renameChannel("old-name", "new-name");
+
+    const replacement = createChannel("old-name", "bob");
+
+    expect(replacement.id).not.toBe(original.id);
+    expect(getChannel("new-name")?.id).toBe(original.id);
+    expect(getChannel("old-name")?.id).toBe(replacement.id);
   });
 
   test("normalizes the new name", () => {
@@ -246,9 +261,11 @@ describe("renameChannel", () => {
   });
 
   test("throws when the target name already exists", () => {
-    createChannel("alpha", "alice");
-    createChannel("beta", "alice");
+    const alpha = createChannel("alpha", "alice");
+    const beta = createChannel("beta", "alice");
     expect(() => renameChannel("alpha", "beta")).toThrow("already exists");
+    expect(getChannel("alpha")?.id).toBe(alpha.id);
+    expect(getChannel("beta")?.id).toBe(beta.id);
   });
 
   test("is a no-op when old and new normalize to the same name", () => {

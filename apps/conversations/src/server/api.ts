@@ -24,6 +24,7 @@ import type { ApiKeyVerifier } from "@hasna/contracts/auth";
 import { version as pkgVersion } from "../../package.json";
 import { openapiSpec } from "./openapi.js";
 import { normalizeChannelName, unknownChannelMessage } from "../lib/channel-names.js";
+import { newChannelId } from "../lib/channel-id.js";
 import { extractTopics } from "../lib/topic-extract.js";
 import { assertNoSensitiveContent, redactSensitiveText, redactSensitiveValue } from "../lib/content-safety.js";
 import { resolveSelfSenderId } from "../lib/sender-identity.js";
@@ -216,6 +217,7 @@ function parseServerMessage(row: Record<string, unknown>): Record<string, unknow
 /** Coerce a DB row into the client-facing Channel/ChannelInfo shape. */
 function parseServerChannel(row: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {
+    id: row.id,
     name: row.name,
     description: (row.description as string) || null,
     topic: (row.topic as string) || null,
@@ -318,9 +320,13 @@ async function renameChannelServer(
   const conflict = await client.get(`SELECT name FROM channels WHERE name = $1`, [to]);
   if (conflict) return { ok: false, error: `Channel #${to} already exists.`, status: 409 };
   await client.transaction(async (tx) => {
+    // The source and replacement rows briefly share the same immutable id.
+    // Migration 4 makes this constraint deferrable so uniqueness is checked
+    // after the source row is deleted at transaction commit.
+    await tx.query(`SET CONSTRAINTS channels_id_unique DEFERRED`);
     await tx.query(
-      `INSERT INTO channels (name, description, topic, project_id, created_by, created_at, archived_at, metadata, tags)
-       SELECT $1, description, topic, project_id, created_by, created_at, archived_at, metadata, tags FROM channels WHERE name = $2`,
+      `INSERT INTO channels (id, name, description, topic, project_id, created_by, created_at, archived_at, metadata, tags)
+       SELECT id, $1, description, topic, project_id, created_by, created_at, archived_at, metadata, tags FROM channels WHERE name = $2`,
       [to, from],
     );
     await tx.query(`UPDATE channel_members SET channel = $1 WHERE channel = $2`, [to, from]);
@@ -1375,9 +1381,9 @@ async function handleV1(
     const tags = tagsArr.length ? JSON.stringify(tagsArr) : null;
     const metadata = metadataObj ? JSON.stringify(metadataObj) : null;
     const row = await client.get<Record<string, unknown>>(
-      `INSERT INTO channels (name, description, topic, project_id, created_by, metadata, tags)
-       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-      [name, str(body.description) ?? null, str(body.topic) ?? null, projectId ?? null, createdBy, metadata, tags],
+      `INSERT INTO channels (id, name, description, topic, project_id, created_by, metadata, tags)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      [newChannelId(), name, str(body.description) ?? null, str(body.topic) ?? null, projectId ?? null, createdBy, metadata, tags],
     );
     // Creator auto-joins the channel, mirroring the local createChannel.
     await client.query(
@@ -1391,7 +1397,7 @@ async function handleV1(
     const who = str(url.searchParams.get("agent")) ?? agent ?? undefined;
     if (!who) return json({ error: "agent is required" }, 400);
     const rows = await client.many(
-      `SELECT s.name, s.description,
+      `SELECT s.id, s.name, s.description,
               (SELECT COUNT(*) FROM messages m WHERE m.channel = s.name AND m.read_at IS NULL) AS unread
        FROM channels s
        JOIN channel_members sm ON sm.channel = s.name

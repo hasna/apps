@@ -241,6 +241,7 @@ export class ApiStore implements ConversationsStore {
   getMemberChannels: ConversationsStore["getMemberChannels"] = async (agent) => {
     const body = await this.get<{ channels?: Array<Record<string, unknown>> }>("/channels/mine", { agent });
     return (body.channels ?? []).map((r) => ({
+      id: String(r.id),
       name: String(r.name),
       description: (r.description as string) ?? null,
       unread: Number(r.unread ?? 0),

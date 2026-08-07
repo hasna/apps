@@ -5,6 +5,7 @@ import { join } from "path";
 import { closeDb, getDb } from "../lib/db.js";
 import { DEFAULT_READ_LIMIT } from "../lib/message-window.js";
 import { SINCE_JSON_LIMIT } from "./compact.js";
+import { backfilledChannelIdForName } from "../lib/channel-id.js";
 
 // Regression for todos 2c25973b: every recency-shaped read returned the OLDEST
 // rows. A watcher built on any of them polled ancient history forever and
@@ -92,7 +93,7 @@ describe("CLI recency reads return the newest messages", () => {
     closeDb();
     const db = getDb();
     // The channel row is required: `channel read` refuses an unknown channel.
-    db.prepare(`INSERT INTO channels (name, created_by) VALUES (?, ?)`).run(CHANNEL, "alice");
+    db.prepare(`INSERT INTO channels (id, name, created_by) VALUES (?, ?, ?)`).run(backfilledChannelIdForName(CHANNEL), CHANNEL, "alice");
     const insert = db.prepare(
       `INSERT INTO messages (session_id, from_agent, to_agent, channel, content, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
     );

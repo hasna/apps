@@ -23,8 +23,9 @@ function makeFakeClient() {
       if (/SELECT name FROM channels WHERE name/i.test(sql)) return channels[(p as any[])[0]] ? { name: (p as any[])[0] } : null;
       if (/SELECT \* FROM channels WHERE name/i.test(sql)) return channels[(p as any[])[0]] ?? null;
       if (/INSERT INTO channels/i.test(sql)) {
-        const [name, description, topic, project_id, created_by, metadata, tags] = p as any[];
+        const [id, name, description, topic, project_id, created_by, metadata, tags] = p as any[];
         const row = {
+          id,
           name,
           description,
           topic,
