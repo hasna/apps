@@ -83,6 +83,55 @@ function enumQueryParam<T extends string>(
   return { ok: true, value: collapseEnumValues(result.values) };
 }
 
+/**
+ * Strict RFC 3339 date-time, normalised to one canonical spelling.
+ *
+ * THE VALIDATOR AND THE COMPARATOR MUST ACCEPT THE SAME LANGUAGE. They did not.
+ * `Date.parse` guarded the door while SQLite `julianday()` did the comparing,
+ * and the two disagree about what a string means — measured 2026-08-07:
+ *
+ *     st=200 rows=3 total=3   ?updated_after=2026            <- THE WHOLE TABLE
+ *     st=200 rows=0 total=0   ?updated_after=2026-08
+ *     st=200 rows=0 total=0   ?updated_after=March 5, 2026
+ *
+ * `Date.parse("2026")` is a valid year, so the request passed validation; SQLite
+ * reads a bare number as a raw Julian Day, so the predicate matched everything
+ * and the caller got the entire table back under a 200 — the precise defect this
+ * parameter was added to end, reintroduced through the front door. `2026-08` and
+ * `March 5, 2026` fail the other way, silently returning nothing.
+ *
+ * So: accept exactly RFC 3339 (date, `T`, time, and a MANDATORY `Z` or numeric
+ * offset), then hand every backend one grammar by normalising to
+ * `YYYY-MM-DDTHH:MM:SS.sssZ`. A reduced-precision value is refused rather than
+ * guessed at, because guessing is what produced the two rows above.
+ */
+const RFC3339_DATE_TIME = /^(\d{4})-(\d{2})-(\d{2})[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$/;
+
+function parseSinceCursor(raw: string):
+  | { ok: true; value: string }
+  | { ok: false; message: string } {
+  const shape = `updated_after must be an RFC 3339 date-time with an explicit offset, `
+    + `e.g. 2026-08-07T12:00:00Z or 2026-08-07T12:00:00+03:00; got ${JSON.stringify(raw)}`;
+  const match = RFC3339_DATE_TIME.exec(raw);
+  if (!match) return { ok: false, message: shape };
+  const parsed = Date.parse(raw);
+  if (Number.isNaN(parsed)) return { ok: false, message: shape };
+  // The regex proves the SHAPE; it cannot prove the date EXISTS. `2026-02-30`
+  // satisfies it and `Date.parse` silently rolls it forward to 2026-03-02, so a
+  // caller asking for a day that is not on the calendar would be answered from a
+  // different instant than the one they named, with no way to tell.
+  const [, year, month, day] = match as unknown as [string, string, string, string];
+  const probe = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+  if (
+    probe.getUTCFullYear() !== Number(year)
+    || probe.getUTCMonth() !== Number(month) - 1
+    || probe.getUTCDate() !== Number(day)
+  ) {
+    return { ok: false, message: `updated_after names a date that does not exist: ${JSON.stringify(raw)}` };
+  }
+  return { ok: true, value: new Date(parsed).toISOString() };
+}
+
 function validateTaskCompletion(value: unknown):
   | { ok: true; agentId?: string; options: TodosTaskCompletionOptions }
   | { ok: false; message: string } {
@@ -535,7 +584,17 @@ export async function handleV1Request(
           if (!statusParam.ok) return statusParam.response;
           const priorityParam = enumQueryParam(url, "priority", TASK_PRIORITIES);
           if (!priorityParam.ok) return priorityParam.response;
+          // Since-cursor. Reject a malformed value with 400 rather than dropping
+          // it: an ignored cursor answers 200 with the ENTIRE table while the
+          // caller believes the read was bounded, which is the exact failure this
+          // parameter exists to end.
+          const updatedAfterRaw = url.searchParams.get("updated_after");
+          const updatedAfter = updatedAfterRaw === null ? null : parseSinceCursor(updatedAfterRaw);
+          if (updatedAfter !== null && !updatedAfter.ok) {
+            return error(400, updatedAfter.message);
+          }
           const filter = {
+            ...(updatedAfter !== null && updatedAfter.ok ? { updated_after: updatedAfter.value } : {}),
             ...(url.searchParams.get("q") ? { query: url.searchParams.get("q")! } : {}),
             ...(statusParam.value !== undefined ? { status: statusParam.value } : {}),
             ...(priorityParam.value !== undefined ? { priority: priorityParam.value } : {}),

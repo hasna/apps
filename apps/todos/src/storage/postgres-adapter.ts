@@ -454,6 +454,17 @@ class PostgresJsonRecordStore {
     if (filter.created_by !== undefined) conds.push(`LOWER(payload->>'created_by') = LOWER(${p(filter.created_by)})`);
     // NULL created_by means unattributable, not "someone else" — keep those rows.
     if (filter.not_created_by !== undefined) conds.push(`(payload->>'created_by' IS NULL OR LOWER(payload->>'created_by') <> LOWER(${p(filter.not_created_by)}))`);
+    // Since-cursor. Cast BOTH sides to timestamptz rather than comparing the
+    // jsonb text: stored stamps mix "2026-08-05T18:54:55.814Z" with
+    // "2026-06-10 11:24:47" (measured on the deployed dataset 2026-08-07), and
+    // as text "T" sorts after " ". An unparseable stamp is kept, matching the
+    // SQLite path — see the note in src/db/task-crud.ts.
+    if (filter.updated_after !== undefined) {
+      conds.push(
+        `(todos_try_timestamptz(payload->>'updated_at') IS NULL ` +
+          `OR todos_try_timestamptz(payload->>'updated_at') > ${p(filter.updated_after)}::timestamptz)`,
+      );
+    }
     if (filter.session_id !== undefined) conds.push(`payload->>'session_id' = ${p(filter.session_id)}`);
     if (filter.tags?.length) {
       // ANY-of tag matching, parity with the SQLite path (src/db/task-crud.ts:
