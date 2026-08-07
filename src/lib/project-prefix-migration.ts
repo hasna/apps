@@ -291,8 +291,8 @@ export function createConversationsPrefixPort(
       const population = await this.listChannels();
       const verified = population.channels.find((channel) => channel.name === input.target_name);
       if (!verified) throw new PrefixMigrationError(`Conversations channel rename target "${input.target_name}" is absent from complete readback.`);
-      if (verified.member_count !== before.member_count || verified.message_count !== before.message_count) {
-        throw new PrefixMigrationError(`Conversations channel rename changed member/message counts for "${input.current_name}".`);
+      if (verified.member_count < before.member_count || verified.message_count < before.message_count) {
+        throw new PrefixMigrationError(`Conversations channel rename decreased member/message counts for "${input.current_name}".`);
       }
       return verified;
     },

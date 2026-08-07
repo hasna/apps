@@ -787,6 +787,73 @@ describe("project prefix migration", () => {
     expect(renamed.message_count).toBe(7);
   });
 
+  test("accepts a message count increase during rename readback", async () => {
+    const rows = new Map([
+      ["iproj-count-increase", channel("iproj-count-increase", "wks_count000001")],
+    ]);
+    rows.set("iproj-count-increase", { ...rows.get("iproj-count-increase")!, message_count: 0 });
+    const runner = (args: string[]) => {
+      if (args[0] === "channel" && args[1] === "list") {
+        const cursor = Number(args[args.indexOf("--cursor") + 1]);
+        const limit = Number(args[args.indexOf("--limit") + 1]);
+        const all = [...rows.values()].sort((a, b) => a.name.localeCompare(b.name));
+        const page = all.slice(cursor, cursor + limit);
+        return {
+          ok: true,
+          stdout: JSON.stringify(page),
+          stderr: `Showing ${page.length} of ${all.length}.`,
+        };
+      }
+      if (args[0] === "channel" && args[1] === "rename") {
+        const current = rows.get(args[2]!);
+        rows.delete(args[2]!);
+        rows.set(args[3]!, { ...current!, name: args[3]!, message_count: 11 });
+        return { ok: true, stdout: JSON.stringify({ name: args[3]! }), stderr: "" };
+      }
+      return { ok: false, stdout: "", stderr: "unsupported" };
+    };
+
+    const renamed = await createConversationsPrefixPort(runner).renameChannel({
+      current_name: "iproj-count-increase",
+      target_name: "count-increase",
+      on_written: () => undefined,
+    });
+
+    expect(renamed.message_count).toBe(11);
+  });
+
+  test("rejects a message count decrease during rename readback", async () => {
+    const rows = new Map([
+      ["iproj-count-decrease", { ...channel("iproj-count-decrease", "wks_count000002"), message_count: 11 }],
+    ]);
+    const runner = (args: string[]) => {
+      if (args[0] === "channel" && args[1] === "list") {
+        const cursor = Number(args[args.indexOf("--cursor") + 1]);
+        const limit = Number(args[args.indexOf("--limit") + 1]);
+        const all = [...rows.values()].sort((a, b) => a.name.localeCompare(b.name));
+        const page = all.slice(cursor, cursor + limit);
+        return {
+          ok: true,
+          stdout: JSON.stringify(page),
+          stderr: `Showing ${page.length} of ${all.length}.`,
+        };
+      }
+      if (args[0] === "channel" && args[1] === "rename") {
+        const current = rows.get(args[2]!);
+        rows.delete(args[2]!);
+        rows.set(args[3]!, { ...current!, name: args[3]!, message_count: 10 });
+        return { ok: true, stdout: JSON.stringify({ name: args[3]! }), stderr: "" };
+      }
+      return { ok: false, stdout: "", stderr: "unsupported" };
+    };
+
+    await expect(createConversationsPrefixPort(runner).renameChannel({
+      current_name: "iproj-count-decrease",
+      target_name: "count-decrease",
+      on_written: () => undefined,
+    })).rejects.toThrow(/decreased member\/message counts/);
+  });
+
   test("accepts a stable producer collation that is not JavaScript lexical order", async () => {
     const producerOrder = [
       ...Array.from({ length: 999 }, (_, index) => channel(`channel-${String(index).padStart(4, "0")}`, null)),
