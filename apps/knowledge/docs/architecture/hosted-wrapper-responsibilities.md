@@ -138,6 +138,50 @@ The web UI should use the same API surface as CLI/MCP clients. It should not
 gain hidden write paths that bypass approval gates, source permission checks, or
 run ledgers.
 
+## FCAME-1 Guarded-Write Port Contract
+
+A PostgreSQL wrapper that exposes production Knowledge writes must port the
+package-owned FCAME-1 surface without weakening it:
+
+- Apply `PG_MIGRATIONS` in its append-only package order before enabling the
+  guarded routes. Preserve the `ENABLE ALWAYS` immutability/authority triggers
+  on manifests, steps, claims, receipts, and guarded `knowledge_items`.
+- Configure one stable authority with
+  `HASNA_KNOWLEDGE_AUTHORITY_CLASSIFICATION=hasna_saas` and
+  `HASNA_KNOWLEDGE_AUTHORITY_ID=<stable id>`. Do not derive either value from an
+  untrusted request.
+- Authenticate every guarded request through the contracts API-key verifier.
+  The signed principal `tid` must equal the request tenant, and reads/writes
+  retain their `knowledge:read` / `knowledge:write` scope checks.
+- Preserve the exact `/v1/guarded-manifests`, `/v1/guarded-writes`, immutable
+  receipt reconciliation, and full-ID readback semantics. Do not map them to
+  legacy upsert, a raw store, SQLite, or a wrapper-specific direct database
+  write.
+- Preserve request-stream byte/time limits, response byte/time limits,
+  `Idempotency-Key` equality, disabled blind transport retry, create-if-absent,
+  compare-and-swap, and claim/effect/receipt transaction boundaries.
+- Give guarded runtime writes one dedicated server-only PostgreSQL role. Client,
+  operator, analytics, and human roles must not receive direct DML grants on
+  guarded manifests, steps, claims, receipts, or guarded `knowledge_items`;
+  migration-owner access is append-only setup authority, not a runtime write
+  path. A wrapper that exposes its application database credential has exposed
+  the same claim context the SQL triggers are designed to trust.
+- Do not log request bodies. Private payloads may exist only in caller memory,
+  the authenticated request body in transit, and the canonical Knowledge row;
+  they never belong in argv, environment variables, receipts, access logs, or
+  plaintext temporary files.
+- Keep guarded rows readable only to the signed tenant and mutable only through
+  a live exact FCAME-1 claim. Existing unbound legacy rows keep their current
+  compatibility behavior.
+
+The package can store a cross-authority ordered manifest, but it cannot certify
+an external authority's receipt by inference. A workflow that includes another
+authority remains non-runnable at that boundary until the wrapper is given an
+authority-owned verifier for that external immutable receipt surface. It must
+continue returning
+`external_authority_receipt_verifier_required:<classification>:<authority id>`
+rather than treating absence or a successful HTTP call as completion.
+
 ## Billing, Limits, And Abuse Controls
 
 The hosted wrapper owns:

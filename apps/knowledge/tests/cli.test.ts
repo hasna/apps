@@ -17,6 +17,7 @@ import { recordStorageObjects } from '../src/storage-contract';
 import { recordKnowledgeSyncConflict } from '../src/sync';
 import { defaultKnowledgeConfig, writeKnowledgeConfig } from '../src/workspace';
 import { budget } from './support/budget';
+import { KNOWLEDGE_TEST_ROUTE_ENV_KEYS } from './preload';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI = join(__dirname, '..', 'src', 'cli.ts');
@@ -344,6 +345,10 @@ function writeFailingMachinesBin(bin: string, marker: string): void {
 }
 
 describe('knowledge cli', () => {
+  test('the parent test process is hermetic for direct SQLite helpers', () => {
+    for (const key of KNOWLEDGE_TEST_ROUTE_ENV_KEYS) expect(process.env[key], key).toBeUndefined();
+  });
+
   test('help and subcommand help work', () => {
     const result = runCli(['--help']);
     expect(result.exitCode).toBe(0);

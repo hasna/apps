@@ -14997,7 +14997,7 @@ import { existsSync as existsSync15, readFileSync as readFileSync14, writeFileSy
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.93",
+  version: "0.2.94",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   exports: {
@@ -16563,12 +16563,16 @@ function isNotFound(error51) {
   return Boolean(error51 && typeof error51 === "object" && error51.status === 404);
 }
 function resolveKnowledgeCloudStore(env = process.env) {
+  const client = resolveKnowledgeCloudClient(env);
+  return client ? wrap(client) : null;
+}
+function resolveKnowledgeCloudClient(env) {
   if (resolveKnowledgeModeSelection(env).mode !== "postgres")
     return null;
   const resolved = resolveStorageClient(KNOWLEDGE_APP_SLUG, pinnedTransportEnv(env, "postgres"), transportOverrides(env));
   if (resolved.transport !== "http")
     return null;
-  return wrap(resolved.client);
+  return resolved.client;
 }
 function isKnowledgeApiMode(env = process.env) {
   if (resolveKnowledgeModeSelection(env).mode !== "postgres")

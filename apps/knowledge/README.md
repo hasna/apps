@@ -114,6 +114,127 @@ raw source ownership outside knowledge. Source files remain referenced via
 `open-files://`, `file://`, `s3://`, or web refs; knowledge stores derived
 chunks, citations, indexes, run logs, and generated wiki artifacts.
 
+### FCAME-1 guarded production writes
+
+Production doctrine writes use the package-owned guarded writer, not
+`knowledge add`, raw `/v1/notes` calls, SQLite, the JSON store, a database DSN,
+or direct `ItemStore` mutation. The server must declare its authority:
+
+```text
+HASNA_KNOWLEDGE_AUTHORITY_CLASSIFICATION=user_hosted
+HASNA_KNOWLEDGE_AUTHORITY_ID=<stable authority id>
+```
+
+`HASNA_KNOWLEDGE_AUTHORITY_CLASSIFICATION` is either `user_hosted` or
+`hasna_saas`; it classifies the authority and is not a storage/deployment mode.
+The server data backend remains the existing `sqlite | postgresql` choice, and
+the guarded route is available only on the authenticated PostgreSQL/API path.
+
+The client still resolves the existing authenticated postgres/API transport.
+Private item content is supplied as an opaque in-process descriptor. Its
+enumerable and JSON forms contain only the descriptor ID, hashes, bindings,
+operation/step IDs, precondition, and expiry; the payload is held in a
+module-private `WeakMap` until it is placed directly into the authenticated
+request body. It is never accepted through argv, environment variables, stdin,
+logs, or an ad hoc plaintext temp file. The package root does not export the
+private payload materializer.
+
+```ts
+import {
+  createKnowledgeGuardedWriter,
+  createKnowledgePrivateInputDescriptor,
+} from '@hasna/knowledge';
+
+const binding = {
+  authority: {
+    classification: 'user_hosted' as const,
+    authority_id: 'knowledge-production',
+  },
+  tenant_id: 'tenant-example',
+  scope: 'global',
+  parent_id: 'global:global',
+};
+
+const privateInput = createKnowledgePrivateInputDescriptor({
+  operation_id: 'doctrine-rollout-2026-08',
+  step_id: 'knowledge-item-one',
+  verb: 'create',
+  target_id: 'hasna-doctrine-one',
+  precondition: { kind: 'absent' },
+  binding,
+  payload: {
+    title: 'Doctrine one',
+    content: privateDoctrineText,
+    tags: ['doctrine'],
+  },
+});
+
+const guarded = createKnowledgeGuardedWriter({ binding });
+const result = await guarded.execute(privateInput);
+// result includes one immutable receipt, exact bounded reconciliation, and
+// an exact full-ID readback. A rejection throws KnowledgeGuardedWriteRejectedError.
+```
+
+The deterministic key is:
+
+```text
+fcame1_ + sha256(canonical JSON(
+  contract, authority, tenant, scope, parent,
+  operation_id, step_id, verb, full target_id,
+  payload_digest, precondition, optional manifest binding
+))
+```
+
+Every submission, reconciliation, and readback phase carries positive finite
+call/item/byte/wall-time limits. The server requires `max_calls = 1` and
+`max_items = 1`, enforces request and response byte caps, and reports exactly
+zero or one terminal receipt. The producer disables blind transport retry:
+after an ambiguous submission it reconciles the deterministic key first and
+never replays the mutation without terminal evidence.
+
+For any workflow touching multiple records or authorities, construct all
+descriptors first. Derive the manifest ID with
+`computeKnowledgeGuardedManifestId(maintainerBinding, workflowOperationId)`;
+the authority rejects caller-invented or cross-tenant-colliding IDs. Bind each
+primary descriptor with
+`{ manifest_id, ordinal, phase: 'primary', compensates_receipt_id: null }`.
+Each immutable ordered manifest step freezes its exact authority/tenant/scope/
+parent binding, operation and step IDs, full target ID, verb, semantic payload
+digest, precondition, explicit finite limits, and the dependency list containing
+every prior ordinal. It also freezes one complete executable recovery action:
+either deterministic `forward_repair`, or
+`receipt_scoped_compensation` bound to
+`kwr_<the accepted primary deterministic-key digest>`. Call
+`guarded.createManifest(...)` before step zero and create the writer with
+`require_manifest: true`.
+
+The server executes only the next primary step whose declared predecessors have
+accepted receipts. After interruption, reconcile the manifest first. A declared
+recovery action is submitted through the same protected descriptor with
+`phase: 'recovery'`; compensation must carry the exact accepted receipt ID.
+Once any recovery action reaches a terminal receipt, later primary steps fail
+closed rather than silently resuming the original path. Exact duplicate recovery
+submissions return the same immutable receipt. Manifests, manifest steps,
+operation claims, and receipts cannot be updated or deleted.
+
+`guarded.reconcileManifest(...)` derives workflow progress from immutable
+primary and recovery receipts. Use
+`assertKnowledgeGuardedManifestTerminalCompleteness(...)` before calling a
+workflow complete. Its default requires every primary action to be accepted.
+After a declared forward repair or receipt-scoped compensation reaches its one
+terminal receipt, pass `require_accepted: false` to prove that the exact
+accepted prefix is terminally closed while preserving
+`accepted_complete: false`. Knowledge actions on this authority can become
+`accepted`, `rejected`, or `missing`. A step or recovery action owned by another
+authority, such as
+`@hasna/instructions`, remains `unverified_external_authority`; both
+`terminal_complete` and `accepted_complete` stay false and
+`unsupported_gap` is
+`external_authority_receipt_verifier_required:<classification>:<authority id>`.
+That is an intentional fail-closed boundary: do not claim FCAME-1 completion or
+advance a cross-authority rollout until the external authority exposes a
+verifiable receipt path.
+
 ## Quick Start
 
 ```bash

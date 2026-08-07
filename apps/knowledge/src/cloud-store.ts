@@ -23,7 +23,10 @@
  * request that somehow resolves under `NODE_ENV=test` is refused at the socket
  * boundary instead of reaching the live store.
  */
-import { resolveStorageClient, type HasnaStorageClient } from '@hasna/contracts/client/storage';
+import {
+  resolveStorageClient,
+  type HasnaStorageClient,
+} from '@hasna/contracts/client/storage';
 import type { KnowledgeItem, KnowledgeItemVersion, KnowledgeItemVersionList } from './store';
 import {
   KNOWLEDGE_APP_SLUG,
@@ -274,6 +277,26 @@ function isNotFound(error: unknown): boolean {
  * built, no key is read, and there is nothing for a second layer to infer from.
  */
 export function resolveKnowledgeCloudStore(env: NodeJS.ProcessEnv = process.env): KnowledgeCloudStore | null {
+  const client = resolveKnowledgeCloudClient(env);
+  return client ? wrap(client) : null;
+}
+
+/**
+ * Package-internal production transport resolver used by guarded-write
+ * sub-resources. It intentionally has no local fallback: an FCAME-1 producer
+ * that cannot resolve the authenticated HTTP authority fails closed before it
+ * can touch the local JSON/SQLite stores.
+ *
+ * Not re-exported from the package root; consumers use
+ * `createKnowledgeGuardedWriter()` rather than the raw transport.
+ */
+export function resolveKnowledgeGuardedTransport(
+  env: NodeJS.ProcessEnv = process.env,
+): HasnaStorageClient['transport'] | null {
+  return resolveKnowledgeCloudClient(env)?.transport ?? null;
+}
+
+function resolveKnowledgeCloudClient(env: NodeJS.ProcessEnv): HasnaStorageClient | null {
   if (resolveKnowledgeModeSelection(env).mode !== 'postgres') return null;
   const resolved = resolveStorageClient(
     KNOWLEDGE_APP_SLUG,
@@ -281,7 +304,7 @@ export function resolveKnowledgeCloudStore(env: NodeJS.ProcessEnv = process.env)
     transportOverrides(env),
   );
   if (resolved.transport !== 'http') return null;
-  return wrap(resolved.client);
+  return resolved.client;
 }
 
 /**

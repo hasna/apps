@@ -1,5 +1,6 @@
 import { ApiKeyStore, type ApiKeyVerifier } from '@hasna/contracts/auth';
 import { type KnowledgeItem, type KnowledgeItemVersion, type KnowledgeItemVersionList } from './store.js';
+import { type KnowledgeAuthorityBinding } from './guarded-write-contract.js';
 import type { PoolQueryClient } from './generated/storage-kit/index.js';
 export declare const KNOWLEDGE_SERVE_APP = "knowledge";
 /**
@@ -83,11 +84,11 @@ export declare class NoteRepo {
      */
     private write;
     create(input: NoteInput, options?: NoteWriteOptions): Promise<KnowledgeItem>;
-    list(options?: NoteListOptions): Promise<{
+    list(options?: NoteListOptions, guardedTenantId?: string): Promise<{
         items: KnowledgeItem[];
         total: number;
     }>;
-    get(idOrShort: string): Promise<KnowledgeItem | null>;
+    get(idOrShort: string, guardedTenantId?: string): Promise<KnowledgeItem | null>;
     update(idOrShort: string, patch: Partial<NoteInput> & {
         archived?: boolean;
     }, options?: NoteUpdateOptions): Promise<KnowledgeItem | null>;
@@ -102,10 +103,12 @@ export declare class NoteRepo {
     listVersions(idOrShort: string, options?: {
         limit?: number;
         offset?: number;
-    }): Promise<NoteVersionList | null>;
+    }, guardedTenantId?: string): Promise<NoteVersionList | null>;
     /** One prior snapshot by version number, or `null` if that version is absent. */
-    getVersion(idOrShort: string, version: number): Promise<NoteVersion | null>;
+    getVersion(idOrShort: string, version: number, guardedTenantId?: string): Promise<NoteVersion | null>;
     delete(idOrShort: string): Promise<boolean>;
+}
+export interface KnowledgeServeGuardedAuthority extends KnowledgeAuthorityBinding {
 }
 export declare function knowledgeOpenApi(version: string): Record<string, unknown>;
 export interface ServeDeps {
@@ -113,6 +116,11 @@ export interface ServeDeps {
     verifier: ApiKeyVerifier;
     store: ApiKeyStore;
     version: string;
+    /**
+     * Explicit authority for FCAME-1 production writes. When absent, legacy
+     * routes keep working and guarded routes fail closed with 503.
+     */
+    guardedAuthority?: KnowledgeServeGuardedAuthority;
 }
 export declare function createServeHandler(deps: ServeDeps): (req: Request) => Promise<Response>;
 export interface StartServeOptions {
@@ -125,6 +133,7 @@ export interface RunningServe {
     hostname: string;
     stop: () => Promise<void>;
 }
+export declare function resolveKnowledgeGuardedAuthority(env?: NodeJS.ProcessEnv): KnowledgeServeGuardedAuthority | undefined;
 /**
  * Start the knowledge HTTP service on Bun. Opens a PURE-REMOTE cloud pool and a
  * contracts API-key verifier backed by the api_keys table (revocation).

@@ -1,3 +1,29 @@
+/**
+ * @hasna/knowledge — cloud (self_hosted) storage resolver.
+ * Copyright 2026 Hasna Inc.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * This is the client-side piece that makes `mode=cloud` real for the knowledge
+ * CLI/MCP. When the mode resolves to cloud, ALL knowledge-item reads and writes
+ * are routed to the app's HTTP API (`/v1/notes`) with the bearer key — NOT the
+ * local db.json store, NOT a raw DSN. Otherwise this returns `null` and the CLI
+ * uses its local db.json store (fully reversible: set the mode back to local).
+ *
+ * MODE SELECTION LIVES IN knowledge-mode.ts AND IS EXPLICIT-ONLY. The presence
+ * of `HASNA_KNOWLEDGE_API_URL` / `HASNA_KNOWLEDGE_API_KEY` does NOT select the
+ * cloud backend — those two are pointers, and treating them as a selector is
+ * what let an ambient pair of exported shell variables route a test suite's
+ * writes to the live store. Every entry point below resolves the mode first and
+ * hands the contracts resolver a mode-PINNED env, so the presence-inference
+ * inside @hasna/contracts cannot pick a backend behind us either.
+ *
+ * SAFETY: never logs, returns, or embeds the API key. The key lives only inside
+ * the HTTP transport created by @hasna/contracts. Every transport this module
+ * builds has the outbound request guard in front of its fetch, so a cloud
+ * request that somehow resolves under `NODE_ENV=test` is refused at the socket
+ * boundary instead of reaching the live store.
+ */
+import { type HasnaStorageClient } from '@hasna/contracts/client/storage';
 import type { KnowledgeItem, KnowledgeItemVersion, KnowledgeItemVersionList } from './store';
 import { KNOWLEDGE_APP_SLUG } from './knowledge-mode.js';
 export { KNOWLEDGE_APP_SLUG };
@@ -84,6 +110,16 @@ export interface KnowledgeCloudStore {
  * built, no key is read, and there is nothing for a second layer to infer from.
  */
 export declare function resolveKnowledgeCloudStore(env?: NodeJS.ProcessEnv): KnowledgeCloudStore | null;
+/**
+ * Package-internal production transport resolver used by guarded-write
+ * sub-resources. It intentionally has no local fallback: an FCAME-1 producer
+ * that cannot resolve the authenticated HTTP authority fails closed before it
+ * can touch the local JSON/SQLite stores.
+ *
+ * Not re-exported from the package root; consumers use
+ * `createKnowledgeGuardedWriter()` rather than the raw transport.
+ */
+export declare function resolveKnowledgeGuardedTransport(env?: NodeJS.ProcessEnv): HasnaStorageClient['transport'] | null;
 /**
  * True when this process routes knowledge items to the cloud HTTP transport.
  * The single mode signal the whole client uses: item commands route to the

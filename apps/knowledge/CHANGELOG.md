@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.2.94
+
+- Add the package-owned FCAME-1 production writer. Private Knowledge payloads
+  enter through a metadata-only, in-memory descriptor and travel directly in
+  the authenticated HTTP body; the guarded path has no CLI, argv, stdin,
+  plaintext-temp-file, local JSON/SQLite, or raw-store fallback.
+- Bind every mutation to explicit authority classification/id, signed tenant,
+  logical scope, parent, stable operation/step IDs, a deterministic key, and
+  create-if-absent or compare-and-swap semantics.
+- Add transactional operation claims and immutable terminal receipts, bounded
+  exact reconciliation, terminal-completeness assertions, exact full-ID
+  readback, and same-operation replay proof/refusal.
+- Add immutable ordered workflow manifests with deterministic forward-repair or
+  accepted-receipt-scoped compensation keys. Knowledge-authority steps are
+  enforced in order, and an exact terminal recovery closes only its accepted
+  prefix while leaving accepted completeness false. Cross-authority terminal
+  completeness fails closed as
+  `external_authority_receipt_verifier_required:<classification>:<authority id>`
+  until the external package supplies a verifiable receipt path; this package
+  never certifies an Instructions mutation it cannot verify.
+- Keep legacy `/v1/notes` and local item-store behavior compatible. Guarded
+  routes are additive and remain unavailable until the server has explicit
+  `HASNA_KNOWLEDGE_AUTHORITY_CLASSIFICATION` and
+  `HASNA_KNOWLEDGE_AUTHORITY_ID` configuration.
+
 ## Unreleased — direct store and conflict-agent test coverage
 
 - Added focused tests for every runtime export in `src/store.ts`, including

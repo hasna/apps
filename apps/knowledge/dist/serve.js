@@ -1395,6 +1395,564 @@ function makeShortId(id) {
   return id.replace(/^k_/, "").slice(0, 12);
 }
 
+// src/guarded-write-contract.ts
+import { createHash as createHash3, randomUUID as randomUUID2 } from "crypto";
+var KNOWLEDGE_GUARDED_WRITE_CONTRACT = "FCAME-1";
+var KNOWLEDGE_PRIVATE_INPUT_SCHEMA = "hasna.knowledge.private-input.v1";
+var DEFAULT_KNOWLEDGE_GUARDED_LIMITS = Object.freeze({
+  submission: Object.freeze({
+    max_calls: 1,
+    max_items: 1,
+    max_bytes: 1048576,
+    wall_time_ms: 1e4
+  }),
+  reconciliation: Object.freeze({
+    max_calls: 1,
+    max_items: 1,
+    max_bytes: 262144,
+    wall_time_ms: 5000
+  }),
+  readback: Object.freeze({
+    max_calls: 1,
+    max_items: 1,
+    max_bytes: 1048576,
+    wall_time_ms: 5000
+  })
+});
+var MAX_GUARDED_BYTES = 4 * 1024 * 1024;
+var MAX_GUARDED_WALL_TIME_MS = 30000;
+var MAX_DESCRIPTOR_LIFETIME_MS = 60 * 60 * 1000;
+var PRIVATE_PAYLOADS = new WeakMap;
+function assertObjectKeys(value, field, allowed, required = allowed) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${field} must be an object.`);
+  }
+  const keys = Object.keys(value);
+  const unexpected = keys.filter((key) => !allowed.includes(key));
+  const missing = required.filter((key) => !keys.includes(key));
+  if (unexpected.length > 0 || missing.length > 0) {
+    throw new Error(`${field} keys must match its FCAME-1 schema` + `${unexpected.length > 0 ? `; unexpected: ${unexpected.sort().join(",")}` : ""}` + `${missing.length > 0 ? `; missing: ${missing.sort().join(",")}` : ""}.`);
+  }
+}
+function assertBoundText(value, field, maxLength = 512) {
+  if (typeof value !== "string" || value.length === 0 || value.length > maxLength || value.trim() !== value || /[\u0000-\u001f\u007f]/.test(value)) {
+    throw new Error(`${field} must be a non-empty, trimmed string without control characters.`);
+  }
+}
+function assertKnowledgeGuardedBinding(binding) {
+  assertObjectKeys(binding, "binding", ["authority", "tenant_id", "scope", "parent_id"]);
+  assertObjectKeys(binding.authority, "binding.authority", ["classification", "authority_id"]);
+  if (!["user_hosted", "hasna_saas"].includes(binding.authority.classification)) {
+    throw new Error("binding.authority.classification must be user_hosted or hasna_saas.");
+  }
+  assertBoundText(binding.authority.authority_id, "binding.authority.authority_id");
+  assertBoundText(binding.tenant_id, "binding.tenant_id", 64);
+  assertBoundText(binding.scope, "binding.scope");
+  assertBoundText(binding.parent_id, "binding.parent_id");
+}
+function assertKnowledgeGuardedPrecondition(verb, precondition) {
+  if (!["create", "update"].includes(verb)) {
+    throw new Error("verb must be create or update.");
+  }
+  if (verb === "create") {
+    assertObjectKeys(precondition, "precondition", ["kind"]);
+    if (!precondition || precondition.kind !== "absent") {
+      throw new Error("create requires the create-if-absent precondition.");
+    }
+    return;
+  }
+  assertObjectKeys(precondition, "precondition", ["kind", "expected_version"]);
+  if (!precondition || precondition.kind !== "version" || !Number.isInteger(precondition.expected_version) || precondition.expected_version < 1) {
+    throw new Error("update requires a positive compare-and-swap expected_version.");
+  }
+}
+function assertKnowledgeGuardedManifestBinding(manifest) {
+  assertObjectKeys(manifest, "manifest", ["manifest_id", "ordinal", "phase", "compensates_receipt_id"]);
+  assertBoundText(manifest.manifest_id, "manifest.manifest_id");
+  if (!Number.isInteger(manifest.ordinal) || manifest.ordinal < 0) {
+    throw new Error("manifest.ordinal must be a non-negative integer.");
+  }
+  if (!["primary", "recovery"].includes(manifest.phase)) {
+    throw new Error("manifest.phase must be primary or recovery.");
+  }
+  if (manifest.phase === "primary" && manifest.compensates_receipt_id !== null) {
+    throw new Error("a primary manifest step cannot compensate a receipt.");
+  }
+  if (manifest.compensates_receipt_id !== null && (typeof manifest.compensates_receipt_id !== "string" || !/^kwr_[0-9a-f]{64}$/.test(manifest.compensates_receipt_id))) {
+    throw new Error("manifest.compensates_receipt_id must be null or an immutable guarded receipt id.");
+  }
+}
+function assertKnowledgeGuardedBounds(bounds, field = "limits") {
+  assertObjectKeys(bounds, field, ["max_calls", "max_items", "max_bytes", "wall_time_ms"]);
+  if (bounds.max_calls !== 1)
+    throw new Error(`${field}.max_calls must be exactly 1.`);
+  if (bounds.max_items !== 1)
+    throw new Error(`${field}.max_items must be exactly 1.`);
+  if (!Number.isInteger(bounds.max_bytes) || bounds.max_bytes < 1 || bounds.max_bytes > MAX_GUARDED_BYTES) {
+    throw new Error(`${field}.max_bytes must be a positive integer no greater than ${MAX_GUARDED_BYTES}.`);
+  }
+  if (!Number.isInteger(bounds.wall_time_ms) || bounds.wall_time_ms < 1 || bounds.wall_time_ms > MAX_GUARDED_WALL_TIME_MS) {
+    throw new Error(`${field}.wall_time_ms must be a positive integer no greater than ${MAX_GUARDED_WALL_TIME_MS}.`);
+  }
+}
+function normalizeKnowledgeGuardedLimits(limits = {}) {
+  assertObjectKeys(limits, "limits", ["submission", "reconciliation", "readback"], []);
+  if (limits.submission !== undefined) {
+    assertKnowledgeGuardedBounds(limits.submission, "limits.submission");
+  }
+  if (limits.reconciliation !== undefined) {
+    assertKnowledgeGuardedBounds(limits.reconciliation, "limits.reconciliation");
+  }
+  if (limits.readback !== undefined) {
+    assertKnowledgeGuardedBounds(limits.readback, "limits.readback");
+  }
+  const normalized = {
+    submission: { ...DEFAULT_KNOWLEDGE_GUARDED_LIMITS.submission, ...limits.submission },
+    reconciliation: { ...DEFAULT_KNOWLEDGE_GUARDED_LIMITS.reconciliation, ...limits.reconciliation },
+    readback: { ...DEFAULT_KNOWLEDGE_GUARDED_LIMITS.readback, ...limits.readback }
+  };
+  assertKnowledgeGuardedBounds(normalized.submission, "limits.submission");
+  assertKnowledgeGuardedBounds(normalized.reconciliation, "limits.reconciliation");
+  assertKnowledgeGuardedBounds(normalized.readback, "limits.readback");
+  return Object.freeze({
+    submission: Object.freeze(normalized.submission),
+    reconciliation: Object.freeze(normalized.reconciliation),
+    readback: Object.freeze(normalized.readback)
+  });
+}
+function canonicalValue(value, path) {
+  if (value === null || typeof value === "string" || typeof value === "boolean")
+    return value;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value))
+      throw new Error(`${path} contains a non-finite number.`);
+    return value;
+  }
+  if (Array.isArray(value))
+    return value.map((item, index) => canonicalValue(item, `${path}[${index}]`));
+  if (typeof value !== "object") {
+    throw new Error(`${path} must contain only JSON values.`);
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new Error(`${path} must contain plain JSON objects.`);
+  }
+  const result = {};
+  for (const key of Object.keys(value).sort()) {
+    const child = value[key];
+    if (child === undefined)
+      throw new Error(`${path}.${key} must not be undefined.`);
+    result[key] = canonicalValue(child, `${path}.${key}`);
+  }
+  return result;
+}
+function deepFreezeJson(value) {
+  if (value !== null && typeof value === "object") {
+    for (const child of Object.values(value)) {
+      deepFreezeJson(child);
+    }
+    Object.freeze(value);
+  }
+  return value;
+}
+function canonicalKnowledgeGuardedJson(value) {
+  return JSON.stringify(canonicalValue(value, "value"));
+}
+function knowledgeGuardedDigest(value) {
+  return createHash3("sha256").update(canonicalKnowledgeGuardedJson(value), "utf8").digest("hex");
+}
+function computeKnowledgeGuardedDeterministicKey(input) {
+  assertKnowledgeGuardedBinding(input.binding);
+  assertBoundText(input.operation_id, "operation_id");
+  assertBoundText(input.step_id, "step_id");
+  assertBoundText(input.target_id, "target_id");
+  if (!/^[0-9a-f]{64}$/.test(input.payload_digest)) {
+    throw new Error("payload_digest must be a lowercase sha256 hex digest.");
+  }
+  assertKnowledgeGuardedPrecondition(input.verb, input.precondition);
+  if (input.manifest)
+    assertKnowledgeGuardedManifestBinding(input.manifest);
+  const digest = knowledgeGuardedDigest({
+    contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+    authority: input.binding.authority,
+    tenant_id: input.binding.tenant_id,
+    scope: input.binding.scope,
+    parent_id: input.binding.parent_id,
+    operation_id: input.operation_id,
+    step_id: input.step_id,
+    verb: input.verb,
+    target_id: input.target_id,
+    payload_digest: input.payload_digest,
+    precondition: input.precondition,
+    manifest: input.manifest ?? null
+  });
+  return `fcame1_${digest}`;
+}
+function computeKnowledgeGuardedRecoveryKey(input) {
+  assertBoundText(input.manifest_id, "manifest_id");
+  if (!Number.isInteger(input.ordinal) || input.ordinal < 0) {
+    throw new Error("ordinal must be a non-negative integer.");
+  }
+  if (!/^fcame1_[0-9a-f]{64}$/.test(input.step_deterministic_key)) {
+    throw new Error("step_deterministic_key must be an FCAME-1 deterministic key.");
+  }
+  assertBoundText(input.operation_id, "recovery.operation_id");
+  assertBoundText(input.step_id, "recovery.step_id");
+  assertBoundText(input.target_id, "recovery.target_id");
+  assertKnowledgeGuardedBinding(input.binding);
+  assertKnowledgeGuardedPrecondition(input.verb, input.precondition);
+  const recoveryLimits = normalizeKnowledgeGuardedLimits(input.limits);
+  if (canonicalKnowledgeGuardedJson(recoveryLimits) !== canonicalKnowledgeGuardedJson(input.limits)) {
+    throw new Error("recovery.limits must be explicit and complete.");
+  }
+  if (!/^[0-9a-f]{64}$/.test(input.semantic_digest)) {
+    throw new Error("recovery.semantic_digest must be a lowercase sha256 hex digest.");
+  }
+  if (!["forward_repair", "receipt_scoped_compensation"].includes(input.strategy)) {
+    throw new Error("recovery.strategy must be forward_repair or receipt_scoped_compensation.");
+  }
+  if (input.strategy === "receipt_scoped_compensation" && input.receipt_scope !== "accepted_step_receipt" || input.strategy === "forward_repair" && input.receipt_scope !== null) {
+    throw new Error("receipt_scoped_compensation requires accepted_step_receipt; forward_repair requires null receipt_scope.");
+  }
+  const expectedReceiptId = computeKnowledgeGuardedReceiptId(input.step_deterministic_key);
+  if (input.strategy === "receipt_scoped_compensation" && input.compensates_receipt_id !== expectedReceiptId || input.strategy === "forward_repair" && input.compensates_receipt_id !== null) {
+    throw new Error("receipt-scoped compensation must bind the deterministic accepted-step receipt; " + "forward repair must not bind one.");
+  }
+  return computeKnowledgeGuardedDeterministicKey({
+    binding: input.binding,
+    operation_id: input.operation_id,
+    step_id: input.step_id,
+    verb: input.verb,
+    target_id: input.target_id,
+    payload_digest: input.semantic_digest,
+    precondition: input.precondition,
+    manifest: {
+      manifest_id: input.manifest_id,
+      ordinal: input.ordinal,
+      phase: "recovery",
+      compensates_receipt_id: input.compensates_receipt_id
+    }
+  });
+}
+function computeKnowledgeGuardedReceiptId(deterministicKey) {
+  if (!/^fcame1_[0-9a-f]{64}$/.test(deterministicKey)) {
+    throw new Error("deterministicKey must be an FCAME-1 write key.");
+  }
+  return `kwr_${deterministicKey.slice("fcame1_".length)}`;
+}
+function computeKnowledgeGuardedManifestId(maintainer, operationId) {
+  assertKnowledgeGuardedBinding(maintainer);
+  assertBoundText(operationId, "operation_id");
+  return `kmf_${knowledgeGuardedDigest({
+    contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+    maintainer,
+    operation_id: operationId
+  })}`;
+}
+function assertKnowledgeGuardedManifestStep(manifestId, step, expectedOrdinal) {
+  assertObjectKeys(step, `steps[${expectedOrdinal}]`, [
+    "ordinal",
+    "operation_id",
+    "step_id",
+    "deterministic_key",
+    "verb",
+    "target_id",
+    "binding",
+    "semantic_digest",
+    "precondition",
+    "dependencies",
+    "limits",
+    "recovery"
+  ]);
+  assertObjectKeys(step.recovery, `steps[${expectedOrdinal}].recovery`, [
+    "strategy",
+    "operation_id",
+    "step_id",
+    "deterministic_key",
+    "verb",
+    "target_id",
+    "semantic_digest",
+    "precondition",
+    "binding",
+    "limits",
+    "receipt_scope",
+    "compensates_receipt_id"
+  ]);
+  if (step.ordinal !== expectedOrdinal) {
+    throw new Error(`manifest steps must be ordered contiguously from zero; expected ordinal ${expectedOrdinal}.`);
+  }
+  assertBoundText(step.operation_id, `steps[${expectedOrdinal}].operation_id`);
+  assertBoundText(step.step_id, `steps[${expectedOrdinal}].step_id`);
+  assertBoundText(step.target_id, `steps[${expectedOrdinal}].target_id`);
+  assertKnowledgeGuardedBinding(step.binding);
+  assertKnowledgeGuardedPrecondition(step.verb, step.precondition);
+  if (!/^[0-9a-f]{64}$/.test(step.semantic_digest)) {
+    throw new Error(`steps[${expectedOrdinal}].semantic_digest must be a lowercase sha256 digest.`);
+  }
+  const normalizedLimits = normalizeKnowledgeGuardedLimits(step.limits);
+  if (canonicalKnowledgeGuardedJson(normalizedLimits) !== canonicalKnowledgeGuardedJson(step.limits)) {
+    throw new Error(`steps[${expectedOrdinal}].limits must be explicit and complete.`);
+  }
+  const expectedDependencies = Array.from({ length: expectedOrdinal }, (_unused, index) => index);
+  if (!Array.isArray(step.dependencies) || canonicalKnowledgeGuardedJson(step.dependencies) !== canonicalKnowledgeGuardedJson(expectedDependencies)) {
+    throw new Error(`steps[${expectedOrdinal}].dependencies must name every prior ordinal in order.`);
+  }
+  const expectedStepKey = computeKnowledgeGuardedDeterministicKey({
+    binding: step.binding,
+    operation_id: step.operation_id,
+    step_id: step.step_id,
+    verb: step.verb,
+    target_id: step.target_id,
+    payload_digest: step.semantic_digest,
+    precondition: step.precondition,
+    manifest: {
+      manifest_id: manifestId,
+      ordinal: step.ordinal,
+      phase: "primary",
+      compensates_receipt_id: null
+    }
+  });
+  if (step.deterministic_key !== expectedStepKey) {
+    throw new Error(`steps[${expectedOrdinal}].deterministic_key does not match its frozen tuple.`);
+  }
+  const expectedRecoveryKey = computeKnowledgeGuardedRecoveryKey({
+    manifest_id: manifestId,
+    ordinal: step.ordinal,
+    step_deterministic_key: step.deterministic_key,
+    strategy: step.recovery.strategy,
+    operation_id: step.recovery.operation_id,
+    step_id: step.recovery.step_id,
+    verb: step.recovery.verb,
+    target_id: step.recovery.target_id,
+    semantic_digest: step.recovery.semantic_digest,
+    precondition: step.recovery.precondition,
+    binding: step.recovery.binding,
+    limits: step.recovery.limits,
+    receipt_scope: step.recovery.receipt_scope,
+    compensates_receipt_id: step.recovery.compensates_receipt_id
+  });
+  if (step.recovery.deterministic_key !== expectedRecoveryKey) {
+    throw new Error(`steps[${expectedOrdinal}].recovery.deterministic_key does not match its frozen tuple.`);
+  }
+}
+function assertKnowledgeGuardedManifestOptions(maintainer, options) {
+  assertKnowledgeGuardedBinding(maintainer);
+  assertObjectKeys(options, "manifest", ["manifest_id", "operation_id", "steps"]);
+  assertBoundText(options.manifest_id, "manifest_id");
+  assertBoundText(options.operation_id, "operation_id");
+  const expectedManifestId = computeKnowledgeGuardedManifestId(maintainer, options.operation_id);
+  if (options.manifest_id !== expectedManifestId) {
+    throw new Error("manifest_id must be the deterministic FCAME-1 id for its maintainer and workflow operation.");
+  }
+  if (!Array.isArray(options.steps) || options.steps.length < 2 || options.steps.length > 64) {
+    throw new Error("a guarded workflow manifest must contain between 2 and 64 ordered steps.");
+  }
+  const identities = new Set;
+  const deterministicKeys = new Set;
+  options.steps.forEach((step, index) => {
+    assertKnowledgeGuardedManifestStep(options.manifest_id, step, index);
+    if (step.binding.tenant_id !== maintainer.tenant_id || step.recovery.binding.tenant_id !== maintainer.tenant_id) {
+      throw new Error(`manifest step ${index} crosses tenants without an authority delegation contract.`);
+    }
+    for (const action of [step, step.recovery]) {
+      const identity = `${action.binding.authority.classification}\x00${action.binding.authority.authority_id}` + `\x00${action.binding.tenant_id}\x00${action.binding.scope}\x00${action.binding.parent_id}` + `\x00${action.operation_id}\x00${action.step_id}`;
+      if (identities.has(identity)) {
+        throw new Error(`manifest step ${index} repeats an operation/step identity.`);
+      }
+      identities.add(identity);
+      if (deterministicKeys.has(action.deterministic_key)) {
+        throw new Error(`manifest step ${index} repeats a deterministic action key.`);
+      }
+      deterministicKeys.add(action.deterministic_key);
+    }
+  });
+}
+function computeKnowledgeGuardedManifestDigest(maintainer, options) {
+  assertKnowledgeGuardedManifestOptions(maintainer, options);
+  return knowledgeGuardedDigest({
+    contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+    manifest_id: options.manifest_id,
+    operation_id: options.operation_id,
+    maintainer,
+    steps: options.steps
+  });
+}
+function computeKnowledgeGuardedManifestDeterministicKey(maintainer, options) {
+  return `fcame1_manifest_${computeKnowledgeGuardedManifestDigest(maintainer, options)}`;
+}
+function assertKnowledgeGuardedPayload(verb, payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("payload must be a JSON object.");
+  }
+  canonicalValue(payload, "payload");
+  if (verb === "create") {
+    const title = payload.title;
+    if (typeof title !== "string" || title.trim().length === 0) {
+      throw new Error("create payload.title is required.");
+    }
+  }
+  const allowed = verb === "create" ? new Set(["title", "content", "url", "tags", "metadata"]) : new Set(["title", "content", "url", "tags", "metadata", "archived"]);
+  for (const key of Object.keys(payload)) {
+    if (!allowed.has(key))
+      throw new Error(`payload.${key} is not allowed for ${verb}.`);
+  }
+  if ("title" in payload && payload.title !== undefined) {
+    assertBoundText(payload.title, "payload.title", 2048);
+  }
+  if ("content" in payload && payload.content !== undefined && typeof payload.content !== "string") {
+    throw new Error("payload.content must be a string.");
+  }
+  if ("url" in payload && payload.url !== undefined && payload.url !== null && (typeof payload.url !== "string" || payload.url.length > 8192 || /[\u0000-\u001f\u007f]/.test(payload.url))) {
+    throw new Error("payload.url must be null or a string without control characters.");
+  }
+  if ("tags" in payload && payload.tags !== undefined) {
+    if (!Array.isArray(payload.tags) || payload.tags.length > 256) {
+      throw new Error("payload.tags must be an array of strings.");
+    }
+    payload.tags.forEach((tag, index) => assertBoundText(tag, `payload.tags[${index}]`, 256));
+  }
+  if ("archived" in payload && payload.archived !== undefined && typeof payload.archived !== "boolean") {
+    throw new Error("payload.archived must be a boolean.");
+  }
+  if ("metadata" in payload && payload.metadata !== undefined) {
+    if (payload.metadata === null || typeof payload.metadata !== "object" || Array.isArray(payload.metadata)) {
+      throw new Error("payload.metadata must be a JSON object.");
+    }
+  }
+  if (verb === "update" && Object.keys(payload).length === 0) {
+    throw new Error("update payload must change at least one field.");
+  }
+}
+function createKnowledgePrivateInputDescriptor(options) {
+  assertBoundText(options.operation_id, "operation_id");
+  assertBoundText(options.step_id, "step_id");
+  assertBoundText(options.target_id, "target_id");
+  assertKnowledgeGuardedBinding(options.binding);
+  assertKnowledgeGuardedPrecondition(options.verb, options.precondition);
+  if (options.manifest)
+    assertKnowledgeGuardedManifestBinding(options.manifest);
+  assertKnowledgeGuardedPayload(options.verb, options.payload);
+  const expiresIn = options.expires_in_ms ?? 5 * 60 * 1000;
+  if (!Number.isInteger(expiresIn) || expiresIn < 1 || expiresIn > MAX_DESCRIPTOR_LIFETIME_MS) {
+    throw new Error(`expires_in_ms must be between 1 and ${MAX_DESCRIPTOR_LIFETIME_MS}.`);
+  }
+  const payload = deepFreezeJson(JSON.parse(canonicalKnowledgeGuardedJson(options.payload)));
+  const payloadDigest = knowledgeGuardedDigest(payload);
+  const bindingDigest = knowledgeGuardedDigest({
+    binding: options.binding,
+    operation_id: options.operation_id,
+    step_id: options.step_id,
+    verb: options.verb,
+    target_id: options.target_id,
+    precondition: options.precondition,
+    payload_digest: payloadDigest,
+    manifest: options.manifest ?? null
+  });
+  const expiresAt = new Date(Date.now() + expiresIn).toISOString();
+  const metadata = Object.freeze({
+    contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+    schema: KNOWLEDGE_PRIVATE_INPUT_SCHEMA,
+    descriptor_id: `kpv_${randomUUID2()}`,
+    operation_id: options.operation_id,
+    step_id: options.step_id,
+    verb: options.verb,
+    target_id: options.target_id,
+    payload_digest: payloadDigest,
+    binding_digest: bindingDigest,
+    precondition: Object.freeze({ ...options.precondition }),
+    binding: Object.freeze({
+      authority: Object.freeze({ ...options.binding.authority }),
+      tenant_id: options.binding.tenant_id,
+      scope: options.binding.scope,
+      parent_id: options.binding.parent_id
+    }),
+    manifest: options.manifest ? Object.freeze({
+      manifest_id: options.manifest.manifest_id,
+      ordinal: options.manifest.ordinal,
+      phase: options.manifest.phase,
+      compensates_receipt_id: options.manifest.compensates_receipt_id
+    }) : null,
+    expires_at: expiresAt
+  });
+  const descriptor = Object.freeze({
+    ...metadata,
+    toJSON: () => metadata
+  });
+  PRIVATE_PAYLOADS.set(descriptor, { payload, revoked: false });
+  return descriptor;
+}
+function revokeKnowledgePrivateInputDescriptor(descriptor) {
+  const state = PRIVATE_PAYLOADS.get(descriptor);
+  if (!state)
+    throw new Error("private input descriptor was not created by @hasna/knowledge.");
+  state.revoked = true;
+}
+function materializeKnowledgePrivateInput(descriptor) {
+  const state = PRIVATE_PAYLOADS.get(descriptor);
+  if (!state)
+    throw new Error("private input descriptor was not created by @hasna/knowledge.");
+  if (state.revoked)
+    throw new Error("private input descriptor has been revoked.");
+  if (Date.parse(descriptor.expires_at) <= Date.now()) {
+    throw new Error("private input descriptor has expired.");
+  }
+  return state.payload;
+}
+function assertKnowledgeTerminalCompleteness(reconciliation, expected) {
+  if (reconciliation.contract !== KNOWLEDGE_GUARDED_WRITE_CONTRACT || reconciliation.deterministic_key !== expected.deterministic_key || reconciliation.operation_id !== expected.operation_id || reconciliation.step_id !== expected.step_id || reconciliation.exact !== true || reconciliation.bounded !== true || reconciliation.receipt_count !== 1 || reconciliation.terminal_complete !== true || reconciliation.receipt === null) {
+    throw new Error("terminal_completeness_failed: exact bounded reconciliation did not yield one terminal receipt.");
+  }
+  if (reconciliation.receipt.deterministic_key !== expected.deterministic_key || reconciliation.receipt.operation_id !== expected.operation_id || reconciliation.receipt.step_id !== expected.step_id) {
+    throw new Error("terminal_completeness_failed: receipt identity does not match the frozen operation.");
+  }
+  return reconciliation.receipt;
+}
+function evaluateKnowledgeGuardedManifestCompletion(steps) {
+  if (steps.length === 0 || steps.some((step) => step.state === "unverified_external_authority" || step.recovery_state === "unverified_external_authority")) {
+    return { terminal_complete: false, accepted_complete: false };
+  }
+  const acceptedComplete = steps.every((step) => step.state === "accepted" && step.recovery_state === "missing");
+  if (acceptedComplete) {
+    return { terminal_complete: true, accepted_complete: true };
+  }
+  const allPrimaryTerminal = steps.every((step) => step.state === "accepted" || step.state === "rejected");
+  const allRecoveryMissing = steps.every((step) => step.recovery_state === "missing");
+  if (allPrimaryTerminal && allRecoveryMissing) {
+    return { terminal_complete: true, accepted_complete: false };
+  }
+  const firstNonAccepted = steps.findIndex((step) => step.state !== "accepted");
+  if (firstNonAccepted === 0) {
+    const cleanInitialRejection = steps[0].state === "rejected" && steps.slice(1).every((step) => step.state !== "accepted") && allRecoveryMissing;
+    return { terminal_complete: cleanInitialRejection, accepted_complete: false };
+  }
+  if (firstNonAccepted < 1) {
+    return { terminal_complete: false, accepted_complete: false };
+  }
+  const closingRecoveryOrdinal = firstNonAccepted - 1;
+  const closingRecovery = steps[closingRecoveryOrdinal];
+  const closingRecoveryTerminal = closingRecovery.recovery_state === "accepted" || closingRecovery.recovery_state === "rejected";
+  const exactAcceptedPrefix = steps.slice(0, firstNonAccepted).every((step) => step.state === "accepted");
+  const closedPrimarySuffix = steps.slice(firstNonAccepted).every((step) => step.state !== "accepted");
+  const exactlyOneClosingRecovery = steps.every((step, ordinal) => ordinal === closingRecoveryOrdinal ? closingRecoveryTerminal : step.recovery_state === "missing");
+  return {
+    terminal_complete: closingRecoveryTerminal && exactAcceptedPrefix && closedPrimarySuffix && exactlyOneClosingRecovery,
+    accepted_complete: false
+  };
+}
+function assertKnowledgeGuardedManifestTerminalCompleteness(reconciliation, expected) {
+  const evaluated = evaluateKnowledgeGuardedManifestCompletion(reconciliation.steps);
+  if (reconciliation.contract !== KNOWLEDGE_GUARDED_WRITE_CONTRACT || reconciliation.manifest.manifest_id !== expected.manifest_id || expected.deterministic_key !== undefined && reconciliation.manifest.deterministic_key !== expected.deterministic_key || reconciliation.exact !== true || reconciliation.bounded !== true || reconciliation.terminal_complete !== evaluated.terminal_complete || reconciliation.accepted_complete !== evaluated.accepted_complete || evaluated.terminal_complete !== true || reconciliation.unsupported_gap !== null || reconciliation.steps.length !== reconciliation.manifest.step_count || reconciliation.steps.some((step, ordinal) => step.ordinal !== ordinal || step.deterministic_key !== reconciliation.manifest.steps[ordinal]?.deterministic_key || step.recovery_deterministic_key !== reconciliation.manifest.steps[ordinal]?.recovery.deterministic_key)) {
+    throw new Error("manifest_terminal_completeness_failed: exact bounded reconciliation did not prove " + "an accepted primary sequence or one exact terminal recovery for its accepted prefix.");
+  }
+  if ((expected.require_accepted ?? true) && evaluated.accepted_complete !== true) {
+    throw new Error("manifest_accepted_completeness_failed: at least one ordered primary step was not accepted.");
+  }
+  return reconciliation.manifest;
+}
+function knowledgeGuardedUtf8Bytes(value) {
+  return Buffer.byteLength(JSON.stringify(value), "utf8");
+}
+
 // src/serve.ts
 var KNOWLEDGE_SERVE_APP = "knowledge";
 function normalizeCloudDatabaseUrl(env = process.env) {
@@ -1522,6 +2080,12 @@ class NoteRepo {
     const now = new Date().toISOString();
     const suppliedId = typeof input.id === "string" ? input.id.trim() : "";
     if (suppliedId) {
+      const guarded = await this.client.get(`SELECT TRUE AS guarded FROM knowledge_items
+          WHERE id = $1 AND authority_classification IS NOT NULL
+          LIMIT 1`, [suppliedId]);
+      if (guarded) {
+        throw new HttpError(409, "guarded_item_requires_fcame1_writer");
+      }
       const row2 = await this.write(options, (tx) => tx.get(`INSERT INTO knowledge_items (id, short_id, title, content, url, tags, metadata, archived, created_at, updated_at)
          VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,FALSE,$8,$8)
          ON CONFLICT (id) DO UPDATE SET
@@ -1559,11 +2123,17 @@ class NoteRepo {
     ]));
     return rowToItem(row);
   }
-  async list(options = {}) {
+  async list(options = {}, guardedTenantId) {
     const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
     const offset = Math.max(options.offset ?? 0, 0);
-    const where = [];
     const params = [];
+    const where = [];
+    if (guardedTenantId) {
+      params.push(guardedTenantId);
+      where.push(`(authority_classification IS NULL OR tenant_id = $${params.length})`);
+    } else {
+      where.push("authority_classification IS NULL");
+    }
     if (!options.includeArchived)
       where.push("archived = FALSE");
     const search = options.search?.trim();
@@ -1579,8 +2149,12 @@ class NoteRepo {
     const rows = await this.client.many(`SELECT * FROM knowledge_items ${whereSql} ${orderSql} LIMIT ${limit} OFFSET ${offset}`, params);
     return { items: rows.map(rowToItem), total: Number(totalRow?.count ?? 0) };
   }
-  async get(idOrShort) {
-    const row = await this.client.get(`SELECT * FROM knowledge_items WHERE id = $1 OR short_id = $1 LIMIT 1`, [idOrShort]);
+  async get(idOrShort, guardedTenantId) {
+    const guardedVisibility = guardedTenantId ? "AND (authority_classification IS NULL OR tenant_id = $2)" : "AND authority_classification IS NULL";
+    const row = await this.client.get(`SELECT * FROM knowledge_items
+        WHERE (id = $1 OR short_id = $1)
+          ${guardedVisibility}
+        LIMIT 1`, guardedTenantId ? [idOrShort, guardedTenantId] : [idOrShort]);
     return row ? rowToItem(row) : null;
   }
   async update(idOrShort, patch, options = {}) {
@@ -1623,8 +2197,8 @@ class NoteRepo {
       return null;
     throw new VersionConflictError(expectedVersion, current.version ?? 1);
   }
-  async listVersions(idOrShort, options = {}) {
-    const existing = await this.get(idOrShort);
+  async listVersions(idOrShort, options = {}, guardedTenantId) {
+    const existing = await this.get(idOrShort, guardedTenantId);
     if (!existing)
       return null;
     const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
@@ -1639,8 +2213,8 @@ class NoteRepo {
       items: rows.map(rowToVersion)
     };
   }
-  async getVersion(idOrShort, version) {
-    const existing = await this.get(idOrShort);
+  async getVersion(idOrShort, version, guardedTenantId) {
+    const existing = await this.get(idOrShort, guardedTenantId);
     if (!existing)
       return null;
     const row = await this.client.get(`SELECT * FROM knowledge_item_versions WHERE item_id = $1 AND version = $2`, [existing.id, version]);
@@ -1652,6 +2226,744 @@ class NoteRepo {
       return false;
     await this.client.execute(`DELETE FROM knowledge_items WHERE id = $1`, [existing.id]);
     return true;
+  }
+}
+
+class OperationBindingConflictError extends Error {
+  receipt;
+  constructor(receipt) {
+    super("operation and step are already bound to a different deterministic key");
+    this.receipt = receipt;
+    this.name = "OperationBindingConflictError";
+  }
+}
+
+class ManifestBindingConflictError extends Error {
+  manifest;
+  constructor(manifest) {
+    super("manifest_id is already bound to a different deterministic key");
+    this.manifest = manifest;
+    this.name = "ManifestBindingConflictError";
+  }
+}
+function guardedPreconditionFromRow(row) {
+  return row.precondition_kind === "absent" ? { kind: "absent" } : { kind: "version", expected_version: Number(row.expected_version) };
+}
+function rowToGuardedReceipt(row) {
+  return {
+    contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+    receipt_id: String(row.receipt_id),
+    deterministic_key: String(row.deterministic_key),
+    operation_id: String(row.operation_id),
+    step_id: String(row.step_id),
+    verb: String(row.verb),
+    target_id: String(row.target_id),
+    authority: {
+      classification: String(row.authority_classification),
+      authority_id: String(row.authority_id)
+    },
+    tenant_id: String(row.tenant_id),
+    scope: String(row.scope),
+    parent_id: String(row.parent_id),
+    payload_digest: String(row.payload_digest),
+    precondition: guardedPreconditionFromRow(row),
+    manifest: row.manifest_id == null ? null : {
+      manifest_id: String(row.manifest_id),
+      ordinal: Number(row.manifest_ordinal),
+      phase: String(row.manifest_phase),
+      compensates_receipt_id: row.compensates_receipt_id == null ? null : String(row.compensates_receipt_id)
+    },
+    status: String(row.status),
+    code: String(row.code),
+    effect_count: Number(row.effect_count),
+    result_id: row.result_id == null ? null : String(row.result_id),
+    result_version: row.result_version == null ? null : Number(row.result_version),
+    created_at: String(row.created_at)
+  };
+}
+function rowMatchesGuardedBinding(row, binding) {
+  return row.authority_classification === binding.authority.classification && row.authority_id === binding.authority.authority_id && row.tenant_id === binding.tenant_id && row.scope === binding.scope && row.parent_id === binding.parent_id;
+}
+function rowToManifestStep(row) {
+  return {
+    ordinal: Number(row.ordinal),
+    operation_id: String(row.operation_id),
+    step_id: String(row.step_id),
+    deterministic_key: String(row.deterministic_key),
+    verb: String(row.verb),
+    target_id: String(row.target_id),
+    binding: {
+      authority: {
+        classification: String(row.authority_classification),
+        authority_id: String(row.authority_id)
+      },
+      tenant_id: String(row.tenant_id),
+      scope: String(row.scope),
+      parent_id: String(row.parent_id)
+    },
+    semantic_digest: String(row.semantic_digest),
+    precondition: guardedPreconditionFromRow(row),
+    dependencies: parseJsonColumn(row.dependencies, []),
+    limits: parseJsonColumn(row.limits, normalizeKnowledgeGuardedLimits()),
+    recovery: {
+      strategy: String(row.recovery_strategy),
+      operation_id: String(row.recovery_operation_id),
+      step_id: String(row.recovery_step_id),
+      deterministic_key: String(row.recovery_deterministic_key),
+      verb: String(row.recovery_verb),
+      target_id: String(row.recovery_target_id),
+      semantic_digest: String(row.recovery_semantic_digest),
+      precondition: row.recovery_precondition_kind === "absent" ? { kind: "absent" } : { kind: "version", expected_version: Number(row.recovery_expected_version) },
+      binding: {
+        authority: {
+          classification: String(row.recovery_authority_classification),
+          authority_id: String(row.recovery_authority_id)
+        },
+        tenant_id: String(row.recovery_tenant_id),
+        scope: String(row.recovery_scope),
+        parent_id: String(row.recovery_parent_id)
+      },
+      limits: parseJsonColumn(row.recovery_limits, normalizeKnowledgeGuardedLimits()),
+      receipt_scope: row.recovery_receipt_scope == null ? null : "accepted_step_receipt",
+      compensates_receipt_id: row.recovery_compensates_receipt_id == null ? null : String(row.recovery_compensates_receipt_id)
+    }
+  };
+}
+function rowsToManifest(row, stepRows) {
+  return {
+    contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+    manifest_receipt_id: String(row.manifest_receipt_id),
+    manifest_id: String(row.manifest_id),
+    operation_id: String(row.operation_id),
+    deterministic_key: String(row.deterministic_key),
+    manifest_digest: String(row.manifest_digest),
+    maintainer: {
+      authority: {
+        classification: String(row.maintainer_authority_classification),
+        authority_id: String(row.maintainer_authority_id)
+      },
+      tenant_id: String(row.maintainer_tenant_id),
+      scope: String(row.maintainer_scope),
+      parent_id: String(row.maintainer_parent_id)
+    },
+    step_count: Number(row.step_count),
+    steps: stepRows.map(rowToManifestStep),
+    created_at: String(row.created_at)
+  };
+}
+
+class GuardedWriteRepo {
+  client;
+  authority;
+  constructor(client, authority) {
+    this.client = client;
+    this.authority = authority;
+  }
+  binding(envelope) {
+    return envelope.descriptor.binding;
+  }
+  async receiptById(client, receiptId) {
+    const row = await client.get(`SELECT * FROM knowledge_guarded_write_receipts WHERE receipt_id = $1`, [receiptId]);
+    return row ? rowToGuardedReceipt(row) : null;
+  }
+  async manifestById(client, manifestId) {
+    const row = await client.get(`SELECT * FROM knowledge_guarded_write_manifests WHERE manifest_id = $1`, [manifestId]);
+    if (!row)
+      return null;
+    const steps = await client.many(`SELECT * FROM knowledge_guarded_write_manifest_steps
+        WHERE manifest_id = $1 ORDER BY ordinal ASC`, [manifestId]);
+    return rowsToManifest(row, steps);
+  }
+  async createManifest(envelope) {
+    const { manifest, maintainer } = envelope;
+    return this.client.transaction(async (tx) => {
+      await tx.execute(`INSERT INTO knowledge_guarded_write_manifests (
+           manifest_id, manifest_receipt_id, deterministic_key, operation_id,
+           manifest_digest,
+           maintainer_authority_classification, maintainer_authority_id,
+           maintainer_tenant_id, maintainer_scope, maintainer_parent_id,
+           step_count
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         ON CONFLICT DO NOTHING`, [
+        manifest.manifest_id,
+        `kmr_${envelope.deterministic_key.replace(/^fcame1_manifest_/, "")}`,
+        envelope.deterministic_key,
+        manifest.operation_id,
+        computeKnowledgeGuardedManifestDigest(maintainer, manifest),
+        maintainer.authority.classification,
+        maintainer.authority.authority_id,
+        maintainer.tenant_id,
+        maintainer.scope,
+        maintainer.parent_id,
+        manifest.steps.length
+      ]);
+      const row = await tx.get(`SELECT * FROM knowledge_guarded_write_manifests WHERE manifest_id = $1 FOR UPDATE`, [manifest.manifest_id]);
+      if (!row)
+        throw new Error("guarded manifest was not created.");
+      const existingSteps = await tx.many(`SELECT * FROM knowledge_guarded_write_manifest_steps
+          WHERE manifest_id = $1 ORDER BY ordinal ASC`, [manifest.manifest_id]);
+      if (row.deterministic_key !== envelope.deterministic_key) {
+        throw new ManifestBindingConflictError(rowsToManifest(row, existingSteps));
+      }
+      const duplicate = existingSteps.length > 0;
+      if (!duplicate) {
+        for (const step of manifest.steps) {
+          await tx.execute(`INSERT INTO knowledge_guarded_write_manifest_steps (
+               manifest_id, ordinal, operation_id, step_id, deterministic_key,
+               verb, target_id, semantic_digest, precondition_kind, expected_version,
+               dependencies, limits,
+               authority_classification, authority_id, tenant_id, scope, parent_id,
+               recovery_strategy, recovery_operation_id, recovery_step_id,
+               recovery_deterministic_key, recovery_verb, recovery_target_id,
+               recovery_semantic_digest, recovery_precondition_kind, recovery_expected_version,
+               recovery_authority_classification, recovery_authority_id,
+               recovery_tenant_id, recovery_scope, recovery_parent_id,
+               recovery_limits, recovery_receipt_scope, recovery_compensates_receipt_id
+             ) VALUES (
+               $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
+               $18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34
+             )`, [
+            manifest.manifest_id,
+            step.ordinal,
+            step.operation_id,
+            step.step_id,
+            step.deterministic_key,
+            step.verb,
+            step.target_id,
+            step.semantic_digest,
+            step.precondition.kind,
+            step.precondition.kind === "version" ? step.precondition.expected_version : null,
+            JSON.stringify(step.dependencies),
+            JSON.stringify(step.limits),
+            step.binding.authority.classification,
+            step.binding.authority.authority_id,
+            step.binding.tenant_id,
+            step.binding.scope,
+            step.binding.parent_id,
+            step.recovery.strategy,
+            step.recovery.operation_id,
+            step.recovery.step_id,
+            step.recovery.deterministic_key,
+            step.recovery.verb,
+            step.recovery.target_id,
+            step.recovery.semantic_digest,
+            step.recovery.precondition.kind,
+            step.recovery.precondition.kind === "version" ? step.recovery.precondition.expected_version : null,
+            step.recovery.binding.authority.classification,
+            step.recovery.binding.authority.authority_id,
+            step.recovery.binding.tenant_id,
+            step.recovery.binding.scope,
+            step.recovery.binding.parent_id,
+            JSON.stringify(step.recovery.limits),
+            step.recovery.receipt_scope,
+            step.recovery.compensates_receipt_id
+          ]);
+        }
+      }
+      const stored = await this.manifestById(tx, manifest.manifest_id);
+      if (!stored || stored.steps.length !== manifest.steps.length) {
+        throw new Error("guarded manifest exact readback failed in its creation transaction.");
+      }
+      return {
+        contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+        deterministic_key: envelope.deterministic_key,
+        manifest: stored,
+        duplicate
+      };
+    });
+  }
+  async assertManifestStep(client, envelope) {
+    const manifestBinding = envelope.descriptor.manifest;
+    if (!manifestBinding)
+      return;
+    const lockedManifest = await client.get(`SELECT manifest_id FROM knowledge_guarded_write_manifests
+        WHERE manifest_id = $1
+        FOR UPDATE`, [manifestBinding.manifest_id]);
+    if (!lockedManifest)
+      throw new HttpError(409, "guarded manifest does not exist.");
+    const manifest = await this.manifestById(client, manifestBinding.manifest_id);
+    if (!manifest)
+      throw new Error("locked guarded manifest disappeared inside its transaction.");
+    const step = manifest.steps[manifestBinding.ordinal];
+    if (!step || step.ordinal !== manifestBinding.ordinal) {
+      throw new HttpError(409, "guarded manifest step does not exist.");
+    }
+    const descriptor = envelope.descriptor;
+    const action = manifestBinding.phase === "primary" ? step : step.recovery;
+    if (action.deterministic_key !== envelope.deterministic_key || action.operation_id !== descriptor.operation_id || action.step_id !== descriptor.step_id || action.verb !== descriptor.verb || action.target_id !== descriptor.target_id || action.semantic_digest !== descriptor.payload_digest || canonicalKnowledgeGuardedJson(action.precondition) !== canonicalKnowledgeGuardedJson(descriptor.precondition) || canonicalKnowledgeGuardedJson(action.binding) !== canonicalKnowledgeGuardedJson(descriptor.binding) || canonicalKnowledgeGuardedJson(action.limits) !== canonicalKnowledgeGuardedJson(envelope.limits)) {
+      throw new HttpError(409, "guarded write does not match its immutable manifest step.");
+    }
+    if (manifestBinding.phase === "recovery" && (manifestBinding.compensates_receipt_id !== step.recovery.compensates_receipt_id || step.recovery.strategy === "receipt_scoped_compensation" && manifestBinding.compensates_receipt_id === null)) {
+      throw new HttpError(409, "guarded recovery does not match its receipt-scoped manifest action.");
+    }
+    const existingExactReceipt = await client.get(`SELECT receipt_id FROM knowledge_guarded_write_receipts
+        WHERE deterministic_key = $1
+          AND authority_classification = $2
+          AND authority_id = $3
+          AND tenant_id = $4
+          AND scope = $5
+          AND parent_id = $6
+          AND operation_id = $7
+          AND step_id = $8
+        LIMIT 1`, [
+      envelope.deterministic_key,
+      descriptor.binding.authority.classification,
+      descriptor.binding.authority.authority_id,
+      descriptor.binding.tenant_id,
+      descriptor.binding.scope,
+      descriptor.binding.parent_id,
+      descriptor.operation_id,
+      descriptor.step_id
+    ]);
+    if (existingExactReceipt)
+      return;
+    const prerequisites = manifestBinding.phase === "primary" ? step.dependencies.map((ordinal) => manifest.steps[ordinal]) : manifest.steps.slice(0, step.ordinal + 1);
+    let prefixReceipt = null;
+    for (const prior of prerequisites) {
+      if (prior.binding.authority.classification !== this.authority.classification || prior.binding.authority.authority_id !== this.authority.authority_id) {
+        throw new HttpError(409, "manifest_prior_external_authority_receipt_unverified: this authority cannot certify the prior step.");
+      }
+      const receipt = await client.get(`SELECT * FROM knowledge_guarded_write_receipts
+          WHERE deterministic_key = $1
+            AND authority_classification = $2
+            AND authority_id = $3
+            AND tenant_id = $4
+            AND scope = $5
+            AND parent_id = $6
+          LIMIT 1`, [
+        prior.deterministic_key,
+        prior.binding.authority.classification,
+        prior.binding.authority.authority_id,
+        prior.binding.tenant_id,
+        prior.binding.scope,
+        prior.binding.parent_id
+      ]);
+      if (!receipt || receipt.status !== "accepted") {
+        throw new HttpError(409, "manifest_prior_step_not_accepted.");
+      }
+      if (prior.ordinal === step.ordinal)
+        prefixReceipt = rowToGuardedReceipt(receipt);
+    }
+    if (manifestBinding.phase === "primary") {
+      for (const prior of prerequisites) {
+        if (prior.recovery.binding.authority.classification !== this.authority.classification || prior.recovery.binding.authority.authority_id !== this.authority.authority_id || prior.recovery.binding.tenant_id !== descriptor.binding.tenant_id) {
+          throw new HttpError(409, "external_authority_receipt_verifier_required: " + "this authority cannot prove that a prior recovery action is absent.");
+        }
+        const recoveryReceipt = await client.get(`SELECT status FROM knowledge_guarded_write_receipts
+            WHERE deterministic_key = $1
+              AND authority_classification = $2
+              AND authority_id = $3
+              AND tenant_id = $4
+              AND scope = $5
+              AND parent_id = $6
+              AND operation_id = $7
+              AND step_id = $8
+            LIMIT 1`, [
+          prior.recovery.deterministic_key,
+          prior.recovery.binding.authority.classification,
+          prior.recovery.binding.authority.authority_id,
+          prior.recovery.binding.tenant_id,
+          prior.recovery.binding.scope,
+          prior.recovery.binding.parent_id,
+          prior.recovery.operation_id,
+          prior.recovery.step_id
+        ]);
+        if (recoveryReceipt) {
+          throw new HttpError(409, "manifest_prior_recovery_terminal: the workflow cannot resume its primary path " + "after a declared recovery action reached a terminal receipt.");
+        }
+      }
+    }
+    if (manifestBinding.phase === "recovery" && step.recovery.strategy === "receipt_scoped_compensation" && prefixReceipt?.receipt_id !== step.recovery.compensates_receipt_id) {
+      throw new HttpError(409, "manifest compensation is not scoped to the accepted prefix receipt.");
+    }
+    if (manifestBinding.phase === "recovery") {
+      const next = manifest.steps[step.ordinal + 1];
+      if (!next) {
+        throw new HttpError(409, "manifest has no partial suffix after this prefix; recovery is not runnable.");
+      }
+      if (next.binding.authority.classification !== this.authority.classification || next.binding.authority.authority_id !== this.authority.authority_id || next.binding.tenant_id !== descriptor.binding.tenant_id) {
+        throw new HttpError(409, "external_authority_receipt_verifier_required: recovery cannot infer the next authority state.");
+      }
+      const nextReceipt = await client.get(`SELECT * FROM knowledge_guarded_write_receipts
+          WHERE deterministic_key = $1
+            AND authority_classification = $2
+            AND authority_id = $3
+            AND tenant_id = $4
+            AND scope = $5
+            AND parent_id = $6
+          LIMIT 1`, [
+        next.deterministic_key,
+        next.binding.authority.classification,
+        next.binding.authority.authority_id,
+        next.binding.tenant_id,
+        next.binding.scope,
+        next.binding.parent_id
+      ]);
+      if (nextReceipt?.status === "accepted") {
+        throw new HttpError(409, "manifest prefix has already advanced; this recovery action is no longer runnable.");
+      }
+    }
+  }
+  async finish(client, envelope, status, code, result) {
+    const descriptor = envelope.descriptor;
+    const binding = descriptor.binding;
+    const receiptId = computeKnowledgeGuardedReceiptId(envelope.deterministic_key);
+    const row = await client.get(`INSERT INTO knowledge_guarded_write_receipts (
+         receipt_id, deterministic_key, operation_id, step_id, verb, target_id,
+         authority_classification, authority_id, tenant_id, scope, parent_id,
+         payload_digest, precondition_kind, expected_version,
+         manifest_id, manifest_ordinal, manifest_phase, compensates_receipt_id,
+         status, code, effect_count, result_id, result_version
+       ) VALUES (
+         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23
+       )
+       RETURNING *`, [
+      receiptId,
+      envelope.deterministic_key,
+      descriptor.operation_id,
+      descriptor.step_id,
+      descriptor.verb,
+      descriptor.target_id,
+      binding.authority.classification,
+      binding.authority.authority_id,
+      binding.tenant_id,
+      binding.scope,
+      binding.parent_id,
+      descriptor.payload_digest,
+      descriptor.precondition.kind,
+      descriptor.precondition.kind === "version" ? descriptor.precondition.expected_version : null,
+      descriptor.manifest?.manifest_id ?? null,
+      descriptor.manifest?.ordinal ?? null,
+      descriptor.manifest?.phase ?? null,
+      descriptor.manifest?.compensates_receipt_id ?? null,
+      status,
+      code,
+      status === "accepted" ? 1 : 0,
+      result?.id ?? null,
+      result?.version ?? null
+    ]);
+    const boundClaim = await client.get(`UPDATE knowledge_guarded_write_claims
+          SET receipt_id = $1
+        WHERE deterministic_key = $2 AND receipt_id IS NULL
+        RETURNING deterministic_key`, [receiptId, envelope.deterministic_key]);
+    if (!row)
+      throw new Error("guarded receipt insertion returned no row.");
+    if (boundClaim?.deterministic_key !== envelope.deterministic_key) {
+      throw new Error("guarded receipt was not bound to exactly one live operation claim.");
+    }
+    return rowToGuardedReceipt(row);
+  }
+  async execute(envelope, actor) {
+    const descriptor = envelope.descriptor;
+    const binding = this.binding(envelope);
+    return this.client.transaction(async (tx) => {
+      await tx.execute(`SELECT
+           set_config('hasna.actor', $1, true),
+           set_config('hasna.reason', $2, true),
+           set_config('hasna.knowledge_guarded_deterministic_key', $3, true)`, [
+        actor,
+        `FCAME-1 ${descriptor.operation_id}/${descriptor.step_id}`,
+        envelope.deterministic_key
+      ]);
+      await this.assertManifestStep(tx, envelope);
+      await tx.execute(`INSERT INTO knowledge_guarded_write_claims (
+           deterministic_key, operation_id, step_id,
+           authority_classification, authority_id, tenant_id, scope, parent_id,
+           verb, target_id, payload_digest, precondition_kind, expected_version,
+           manifest_id, manifest_ordinal, manifest_phase, compensates_receipt_id
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+         ON CONFLICT DO NOTHING`, [
+        envelope.deterministic_key,
+        descriptor.operation_id,
+        descriptor.step_id,
+        binding.authority.classification,
+        binding.authority.authority_id,
+        binding.tenant_id,
+        binding.scope,
+        binding.parent_id,
+        descriptor.verb,
+        descriptor.target_id,
+        descriptor.payload_digest,
+        descriptor.precondition.kind,
+        descriptor.precondition.kind === "version" ? descriptor.precondition.expected_version : null,
+        descriptor.manifest?.manifest_id ?? null,
+        descriptor.manifest?.ordinal ?? null,
+        descriptor.manifest?.phase ?? null,
+        descriptor.manifest?.compensates_receipt_id ?? null
+      ]);
+      const claim = await tx.get(`SELECT * FROM knowledge_guarded_write_claims
+          WHERE authority_classification = $1
+            AND authority_id = $2
+            AND tenant_id = $3
+            AND scope = $4
+            AND parent_id = $5
+            AND operation_id = $6
+            AND step_id = $7
+          FOR UPDATE`, [
+        binding.authority.classification,
+        binding.authority.authority_id,
+        binding.tenant_id,
+        binding.scope,
+        binding.parent_id,
+        descriptor.operation_id,
+        descriptor.step_id
+      ]);
+      if (!claim)
+        throw new Error("guarded operation claim was not created.");
+      if (claim.deterministic_key !== envelope.deterministic_key) {
+        const receipt2 = claim.receipt_id ? await this.receiptById(tx, String(claim.receipt_id)) : null;
+        throw new OperationBindingConflictError(receipt2);
+      }
+      if (claim.receipt_id) {
+        const receipt2 = await this.receiptById(tx, String(claim.receipt_id));
+        if (!receipt2)
+          throw new Error("guarded claim references a missing receipt.");
+        return {
+          contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+          deterministic_key: envelope.deterministic_key,
+          receipt: receipt2,
+          duplicate: true
+        };
+      }
+      if (descriptor.verb === "create") {
+        const payload = envelope.payload;
+        const now = new Date().toISOString();
+        const inserted = await tx.get(`INSERT INTO knowledge_items (
+             id, short_id, title, content, url, tags, metadata, archived,
+             created_at, updated_at,
+             authority_classification, authority_id, tenant_id, scope, parent_id
+           ) VALUES (
+             $1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,FALSE,$8,$8,$9,$10,$11,$12,$13
+           )
+           ON CONFLICT (id) DO NOTHING
+           RETURNING *`, [
+          descriptor.target_id,
+          makeShortId(descriptor.target_id),
+          payload.title,
+          payload.content ?? "",
+          payload.url ?? null,
+          JSON.stringify(payload.tags ?? []),
+          JSON.stringify(payload.metadata ?? {}),
+          now,
+          binding.authority.classification,
+          binding.authority.authority_id,
+          binding.tenant_id,
+          binding.scope,
+          binding.parent_id
+        ]);
+        if (!inserted) {
+          const existing2 = await tx.get(`SELECT * FROM knowledge_items WHERE id = $1 FOR UPDATE`, [descriptor.target_id]);
+          const code = existing2 && rowMatchesGuardedBinding(existing2, binding) ? "target_exists" : "binding_mismatch";
+          const receipt3 = await this.finish(tx, envelope, "rejected", code, null);
+          return {
+            contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+            deterministic_key: envelope.deterministic_key,
+            receipt: receipt3,
+            duplicate: false
+          };
+        }
+        const item2 = rowToItem(inserted);
+        const receipt2 = await this.finish(tx, envelope, "accepted", "created", item2);
+        return {
+          contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+          deterministic_key: envelope.deterministic_key,
+          receipt: receipt2,
+          duplicate: false
+        };
+      }
+      const existing = await tx.get(`SELECT * FROM knowledge_items WHERE id = $1 FOR UPDATE`, [descriptor.target_id]);
+      if (!existing) {
+        const receipt2 = await this.finish(tx, envelope, "rejected", "not_found", null);
+        return {
+          contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+          deterministic_key: envelope.deterministic_key,
+          receipt: receipt2,
+          duplicate: false
+        };
+      }
+      if (!rowMatchesGuardedBinding(existing, binding)) {
+        const receipt2 = await this.finish(tx, envelope, "rejected", "binding_mismatch", null);
+        return {
+          contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+          deterministic_key: envelope.deterministic_key,
+          receipt: receipt2,
+          duplicate: false
+        };
+      }
+      const expectedVersion = descriptor.precondition.kind === "version" ? descriptor.precondition.expected_version : 0;
+      const currentVersion = Number(existing.version ?? 1);
+      if (currentVersion !== expectedVersion) {
+        const receipt2 = await this.finish(tx, envelope, "rejected", "version_conflict", null);
+        return {
+          contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+          deterministic_key: envelope.deterministic_key,
+          receipt: receipt2,
+          duplicate: false
+        };
+      }
+      const patch = envelope.payload;
+      const sets = [];
+      const params = [];
+      const push = (column, value, cast = "") => {
+        params.push(value);
+        sets.push(`${column} = $${params.length}${cast}`);
+      };
+      if (patch.title !== undefined)
+        push("title", patch.title);
+      if (patch.content !== undefined)
+        push("content", patch.content);
+      if (patch.url !== undefined)
+        push("url", patch.url);
+      if (patch.tags !== undefined)
+        push("tags", JSON.stringify(patch.tags), "::jsonb");
+      if (patch.metadata !== undefined)
+        push("metadata", JSON.stringify(patch.metadata), "::jsonb");
+      if (patch.archived !== undefined)
+        push("archived", patch.archived);
+      push("updated_at", new Date().toISOString());
+      params.push(descriptor.target_id);
+      const idPosition = params.length;
+      params.push(expectedVersion);
+      const versionPosition = params.length;
+      const updated = await tx.get(`UPDATE knowledge_items
+            SET ${sets.join(", ")}
+          WHERE id = $${idPosition} AND version = $${versionPosition}
+          RETURNING *`, params);
+      if (!updated)
+        throw new Error("guarded compare-and-swap lost its locked target.");
+      const item = rowToItem(updated);
+      const receipt = await this.finish(tx, envelope, "accepted", "updated", item);
+      return {
+        contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+        deterministic_key: envelope.deterministic_key,
+        receipt,
+        duplicate: false
+      };
+    });
+  }
+  async reconcileManifest(manifestId, maintainer, limits) {
+    const manifest = await this.manifestById(this.client, manifestId);
+    if (!manifest || canonicalKnowledgeGuardedJson(manifest.maintainer) !== canonicalKnowledgeGuardedJson(maintainer)) {
+      return null;
+    }
+    const steps = [];
+    const externalAuthorities = new Set;
+    const reconcileAction = async (action) => {
+      const locallyVerifiable = action.binding.authority.classification === this.authority.classification && action.binding.authority.authority_id === this.authority.authority_id && action.binding.tenant_id === maintainer.tenant_id;
+      if (!locallyVerifiable) {
+        const authorityKey = `${action.binding.authority.classification}:${action.binding.authority.authority_id}`;
+        externalAuthorities.add(authorityKey);
+        return { state: "unverified_external_authority", receipt: null };
+      }
+      const row = await this.client.get(`SELECT * FROM knowledge_guarded_write_receipts
+          WHERE deterministic_key = $1
+            AND authority_classification = $2
+            AND authority_id = $3
+            AND tenant_id = $4
+            AND scope = $5
+            AND parent_id = $6
+            AND operation_id = $7
+            AND step_id = $8
+          LIMIT 1`, [
+        action.deterministic_key,
+        action.binding.authority.classification,
+        action.binding.authority.authority_id,
+        action.binding.tenant_id,
+        action.binding.scope,
+        action.binding.parent_id,
+        action.operation_id,
+        action.step_id
+      ]);
+      const receipt = row ? rowToGuardedReceipt(row) : null;
+      return { state: receipt?.status ?? "missing", receipt };
+    };
+    for (const step of manifest.steps) {
+      const primary = await reconcileAction(step);
+      const recovery = await reconcileAction(step.recovery);
+      steps.push({
+        ordinal: step.ordinal,
+        deterministic_key: step.deterministic_key,
+        authority: step.binding.authority,
+        state: primary.state,
+        receipt: primary.receipt,
+        recovery_deterministic_key: step.recovery.deterministic_key,
+        recovery_state: recovery.state,
+        recovery_receipt: recovery.receipt
+      });
+    }
+    const completion = evaluateKnowledgeGuardedManifestCompletion(steps);
+    return {
+      contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+      manifest,
+      exact: true,
+      bounded: true,
+      terminal_complete: completion.terminal_complete,
+      accepted_complete: completion.accepted_complete,
+      unsupported_gap: externalAuthorities.size > 0 ? `external_authority_receipt_verifier_required:${[...externalAuthorities].sort().join(",")}` : null,
+      steps,
+      limits
+    };
+  }
+  async reconcile(deterministicKey, binding, operationId, stepId, limits) {
+    const row = await this.client.get(`SELECT * FROM knowledge_guarded_write_receipts
+        WHERE deterministic_key = $1
+          AND authority_classification = $2
+          AND authority_id = $3
+          AND tenant_id = $4
+          AND scope = $5
+          AND parent_id = $6
+          AND operation_id = $7
+          AND step_id = $8
+        LIMIT 1`, [
+      deterministicKey,
+      binding.authority.classification,
+      binding.authority.authority_id,
+      binding.tenant_id,
+      binding.scope,
+      binding.parent_id,
+      operationId,
+      stepId
+    ]);
+    return {
+      contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+      deterministic_key: deterministicKey,
+      operation_id: operationId,
+      step_id: stepId,
+      exact: true,
+      bounded: true,
+      receipt_count: row ? 1 : 0,
+      terminal_complete: Boolean(row),
+      receipt: row ? rowToGuardedReceipt(row) : null,
+      limits
+    };
+  }
+  async readback(fullId, binding, limits) {
+    const row = await this.client.get(`SELECT * FROM knowledge_items
+        WHERE id = $1
+          AND authority_classification = $2
+          AND authority_id = $3
+          AND tenant_id = $4
+          AND scope = $5
+          AND parent_id = $6
+        LIMIT 1`, [
+      fullId,
+      binding.authority.classification,
+      binding.authority.authority_id,
+      binding.tenant_id,
+      binding.scope,
+      binding.parent_id
+    ]);
+    if (!row)
+      return null;
+    return {
+      contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+      exact: true,
+      bounded: true,
+      item_count: 1,
+      binding,
+      item: rowToItem(row),
+      limits
+    };
   }
 }
 function knowledgeOpenApi(version) {
@@ -1732,6 +3044,57 @@ function knowledgeOpenApi(version) {
     },
     required: ["error", "expected", "current"]
   };
+  const guardedReceipt = {
+    type: "object",
+    description: "Immutable FCAME-1 terminal receipt. Private payload bytes are never stored here.",
+    properties: {
+      contract: { type: "string", enum: [KNOWLEDGE_GUARDED_WRITE_CONTRACT] },
+      receipt_id: { type: "string" },
+      deterministic_key: { type: "string" },
+      operation_id: { type: "string" },
+      step_id: { type: "string" },
+      status: { type: "string", enum: ["accepted", "rejected"] },
+      code: { type: "string" },
+      effect_count: { type: "integer", enum: [0, 1] },
+      result_id: { type: "string", nullable: true },
+      result_version: { type: "integer", nullable: true },
+      created_at: { type: "string" }
+    },
+    required: [
+      "contract",
+      "receipt_id",
+      "deterministic_key",
+      "operation_id",
+      "step_id",
+      "status",
+      "code",
+      "effect_count",
+      "created_at"
+    ]
+  };
+  const guardedLimitParameters = [
+    "max_calls",
+    "max_items",
+    "max_bytes",
+    "wall_time_ms"
+  ].map((name) => ({
+    name,
+    in: "query",
+    required: true,
+    schema: { type: "integer", minimum: 1 }
+  }));
+  const guardedBindingParameters = [
+    "authority_classification",
+    "authority_id",
+    "tenant_id",
+    "scope",
+    "parent_id"
+  ].map((name) => ({
+    name,
+    in: "query",
+    required: true,
+    schema: { type: "string" }
+  }));
   return {
     openapi: "3.0.3",
     info: { title: "Knowledge", version, description: "@hasna/knowledge self-hosted HTTP API" },
@@ -1743,6 +3106,29 @@ function knowledgeOpenApi(version) {
         NotePatch: notePatch,
         NoteVersion: noteVersionSchema,
         VersionConflict: versionConflict,
+        GuardedReceipt: guardedReceipt,
+        GuardedWriteEnvelope: {
+          type: "object",
+          description: "FCAME-1 frozen descriptor metadata, deterministic key, explicit finite limits, and private payload. " + "The payload is accepted only in this authenticated request body.",
+          required: ["contract", "descriptor", "deterministic_key", "limits", "payload"],
+          additionalProperties: true
+        },
+        GuardedManifest: {
+          type: "object",
+          description: "Immutable ordered workflow manifest. Every step declares deterministic forward repair or " + "accepted-receipt-scoped compensation.",
+          required: [
+            "manifest_receipt_id",
+            "manifest_id",
+            "operation_id",
+            "deterministic_key",
+            "manifest_digest",
+            "maintainer",
+            "step_count",
+            "steps",
+            "created_at"
+          ],
+          additionalProperties: true
+        },
         NoteList: {
           type: "object",
           properties: {
@@ -1860,6 +3246,91 @@ function knowledgeOpenApi(version) {
           }
         }
       },
+      "/v1/guarded-writes": {
+        post: {
+          operationId: "executeGuardedKnowledgeWrite",
+          summary: "Execute one FCAME-1 create-if-absent or compare-and-swap write",
+          description: "Requires x-knowledge-tenant-id, Idempotency-Key, and the four x-knowledge-* bound headers. " + "The server stores one immutable terminal receipt and never falls back to local or raw storage.",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/GuardedWriteEnvelope" }
+              }
+            }
+          },
+          responses: {
+            "201": { description: "Accepted with one immutable receipt." },
+            "200": { description: "Same deterministic operation already accepted; duplicate proof returned." },
+            "409": { description: "Terminal rejection or operation/step binding conflict." }
+          }
+        }
+      },
+      "/v1/guarded-writes/receipts/{deterministicKey}": {
+        get: {
+          operationId: "reconcileGuardedKnowledgeWrite",
+          summary: "Bounded exact terminal-receipt reconciliation",
+          parameters: [
+            {
+              name: "deterministicKey",
+              in: "path",
+              required: true,
+              schema: { type: "string" }
+            },
+            ...guardedBindingParameters,
+            { name: "operation_id", in: "query", required: true, schema: { type: "string" } },
+            { name: "step_id", in: "query", required: true, schema: { type: "string" } },
+            ...guardedLimitParameters
+          ],
+          responses: {
+            "200": {
+              description: "Exact bounded result containing zero or one terminal receipt and completeness."
+            }
+          }
+        }
+      },
+      "/v1/guarded-writes/items/{id}": {
+        get: {
+          operationId: "readbackGuardedKnowledgeItem",
+          summary: "Exact full-ID readback under the frozen binding",
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } },
+            ...guardedBindingParameters,
+            ...guardedLimitParameters
+          ],
+          responses: {
+            "200": { description: "Exactly one full-ID and binding match." },
+            "404": { description: "No exact full-ID and binding match." }
+          }
+        }
+      },
+      "/v1/guarded-manifests": {
+        post: {
+          operationId: "createGuardedKnowledgeManifest",
+          summary: "Create an immutable ordered FCAME-1 workflow manifest before step zero",
+          responses: {
+            "201": { description: "Manifest created." },
+            "200": { description: "Exact manifest replay; duplicate proof returned." },
+            "409": { description: "manifest_id is already bound to different semantics." }
+          }
+        }
+      },
+      "/v1/guarded-manifests/{manifestId}": {
+        get: {
+          operationId: "reconcileGuardedKnowledgeManifest",
+          summary: "Derive bounded workflow completeness from immutable authority receipts",
+          description: "External-authority steps remain unverified and keep terminal_complete false until that authority " + "provides a verifiable receipt path.",
+          parameters: [
+            { name: "manifestId", in: "path", required: true, schema: { type: "string" } },
+            ...guardedBindingParameters,
+            ...guardedLimitParameters
+          ],
+          responses: {
+            "200": { description: "Manifest plus per-step receipt state and any unsupported authority gap." },
+            "404": { description: "No exact manifest and maintainer binding match." }
+          }
+        }
+      },
       "/v1/registry": {
         get: {
           operationId: "getRegistry",
@@ -1886,6 +3357,239 @@ function json(body, status = 200) {
     headers: { "content-type": "application/json" }
   });
 }
+function boundedJson(body, status, bounds, startedAt) {
+  if (Date.now() - startedAt > bounds.wall_time_ms) {
+    throw new HttpError(408, "guarded phase exceeded its producer wall-time cap.");
+  }
+  const encoded = JSON.stringify(body);
+  if (Buffer.byteLength(encoded, "utf8") > bounds.max_bytes) {
+    throw new HttpError(413, "guarded phase response exceeds its producer byte cap.");
+  }
+  return new Response(encoded, {
+    status,
+    headers: { "content-type": "application/json" }
+  });
+}
+function parsePositiveInteger(value, field) {
+  const parsed = Number(value);
+  if (!value || !Number.isInteger(parsed) || parsed < 1) {
+    throw new HttpError(400, `${field} must be a positive integer.`);
+  }
+  return parsed;
+}
+function guardedBoundsFromHeaders(req) {
+  const bounds = {
+    max_calls: parsePositiveInteger(req.headers.get("x-knowledge-max-calls"), "x-knowledge-max-calls"),
+    max_items: parsePositiveInteger(req.headers.get("x-knowledge-max-items"), "x-knowledge-max-items"),
+    max_bytes: parsePositiveInteger(req.headers.get("x-knowledge-max-bytes"), "x-knowledge-max-bytes"),
+    wall_time_ms: parsePositiveInteger(req.headers.get("x-knowledge-wall-time-ms"), "x-knowledge-wall-time-ms")
+  };
+  try {
+    assertKnowledgeGuardedBounds(bounds);
+  } catch (error) {
+    throw new HttpError(400, error instanceof Error ? error.message : "invalid guarded bounds.");
+  }
+  return bounds;
+}
+function guardedBoundsFromQuery(req, url) {
+  const fromHeaders = guardedBoundsFromHeaders(req);
+  const fromQuery = {
+    max_calls: parsePositiveInteger(url.searchParams.get("max_calls"), "max_calls"),
+    max_items: parsePositiveInteger(url.searchParams.get("max_items"), "max_items"),
+    max_bytes: parsePositiveInteger(url.searchParams.get("max_bytes"), "max_bytes"),
+    wall_time_ms: parsePositiveInteger(url.searchParams.get("wall_time_ms"), "wall_time_ms")
+  };
+  if (canonicalKnowledgeGuardedJson(fromHeaders) !== canonicalKnowledgeGuardedJson(fromQuery)) {
+    throw new HttpError(400, "guarded query bounds must exactly match the bound headers.");
+  }
+  return fromHeaders;
+}
+async function readBoundedJson(req, bounds, startedAt) {
+  if (!req.body)
+    throw new HttpError(400, "guarded write body is required.");
+  const reader = req.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const remaining = bounds.wall_time_ms - (Date.now() - startedAt);
+      if (remaining <= 0)
+        throw new HttpError(408, "guarded request exceeded its producer wall-time cap.");
+      let timer;
+      const result = await Promise.race([
+        reader.read(),
+        new Promise((_resolve, reject) => {
+          timer = setTimeout(() => reject(new HttpError(408, "guarded request exceeded its producer wall-time cap.")), remaining);
+        })
+      ]).finally(() => {
+        if (timer)
+          clearTimeout(timer);
+      });
+      if (result.done)
+        break;
+      total += result.value.byteLength;
+      if (total > bounds.max_bytes) {
+        throw new HttpError(413, "guarded request exceeds its producer byte cap.");
+      }
+      chunks.push(result.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    throw new HttpError(400, "guarded request body must be valid JSON.");
+  }
+}
+function guardedBindingFromQuery(url) {
+  const binding = {
+    authority: {
+      classification: url.searchParams.get("authority_classification"),
+      authority_id: url.searchParams.get("authority_id")
+    },
+    tenant_id: url.searchParams.get("tenant_id"),
+    scope: url.searchParams.get("scope"),
+    parent_id: url.searchParams.get("parent_id")
+  };
+  try {
+    assertKnowledgeGuardedBinding(binding);
+  } catch (error) {
+    throw new HttpError(400, error instanceof Error ? error.message : "invalid guarded binding.");
+  }
+  return binding;
+}
+function assertConfiguredAuthority(binding, authority) {
+  if (binding.authority.classification !== authority.classification || binding.authority.authority_id !== authority.authority_id) {
+    throw new HttpError(403, "guarded write authority does not match this service authority.");
+  }
+}
+function assertExactRequestKeys(value, field, expected) {
+  const actual = Object.keys(value).sort();
+  const wanted = [...expected].sort();
+  if (canonicalKnowledgeGuardedJson(actual) !== canonicalKnowledgeGuardedJson(wanted)) {
+    throw new Error(`${field} keys do not match the FCAME-1 request schema.`);
+  }
+}
+function validateGuardedEnvelope(value, headerBounds, authority, idempotencyKey) {
+  try {
+    if (!value || typeof value !== "object")
+      throw new Error("guarded write envelope is required.");
+    const envelope = value;
+    assertExactRequestKeys(value, "guarded write envelope", ["contract", "descriptor", "deterministic_key", "limits", "payload"]);
+    const descriptor = envelope.descriptor;
+    if (envelope.contract !== KNOWLEDGE_GUARDED_WRITE_CONTRACT) {
+      throw new Error("unsupported guarded-write contract.");
+    }
+    if (!descriptor || descriptor.contract !== KNOWLEDGE_GUARDED_WRITE_CONTRACT || descriptor.schema !== KNOWLEDGE_PRIVATE_INPUT_SCHEMA) {
+      throw new Error("invalid private input descriptor schema.");
+    }
+    assertExactRequestKeys(descriptor, "private input descriptor", [
+      "contract",
+      "schema",
+      "descriptor_id",
+      "operation_id",
+      "step_id",
+      "verb",
+      "target_id",
+      "payload_digest",
+      "binding_digest",
+      "precondition",
+      "binding",
+      "manifest",
+      "expires_at"
+    ]);
+    if (typeof descriptor.descriptor_id !== "string" || descriptor.descriptor_id.length === 0) {
+      throw new Error("private input descriptor id is required.");
+    }
+    const descriptorExpiresAt = Date.parse(descriptor.expires_at);
+    const descriptorNow = Date.now();
+    if (!Number.isFinite(descriptorExpiresAt) || descriptorExpiresAt <= descriptorNow || descriptorExpiresAt > descriptorNow + 60 * 60 * 1000) {
+      throw new Error("private input descriptor is expired or malformed.");
+    }
+    assertKnowledgeGuardedBinding(descriptor.binding);
+    assertConfiguredAuthority(descriptor.binding, authority);
+    assertKnowledgeGuardedPrecondition(descriptor.verb, descriptor.precondition);
+    assertKnowledgeGuardedPayload(descriptor.verb, envelope.payload);
+    const limits = normalizeKnowledgeGuardedLimits(envelope.limits);
+    if (canonicalKnowledgeGuardedJson(limits) !== canonicalKnowledgeGuardedJson(envelope.limits)) {
+      throw new Error("guarded-write limits must be explicit and complete.");
+    }
+    if (canonicalKnowledgeGuardedJson(limits.submission) !== canonicalKnowledgeGuardedJson(headerBounds)) {
+      throw new Error("submission limits must exactly match the producer bound headers.");
+    }
+    const payloadDigest = knowledgeGuardedDigest(envelope.payload);
+    if (payloadDigest !== descriptor.payload_digest) {
+      throw new Error("private payload digest does not match the frozen descriptor.");
+    }
+    const bindingDigest = knowledgeGuardedDigest({
+      binding: descriptor.binding,
+      operation_id: descriptor.operation_id,
+      step_id: descriptor.step_id,
+      verb: descriptor.verb,
+      target_id: descriptor.target_id,
+      precondition: descriptor.precondition,
+      payload_digest: descriptor.payload_digest,
+      manifest: descriptor.manifest
+    });
+    if (bindingDigest !== descriptor.binding_digest) {
+      throw new Error("private descriptor binding digest does not match.");
+    }
+    const expectedKey = computeKnowledgeGuardedDeterministicKey({
+      binding: descriptor.binding,
+      operation_id: descriptor.operation_id,
+      step_id: descriptor.step_id,
+      verb: descriptor.verb,
+      target_id: descriptor.target_id,
+      payload_digest: descriptor.payload_digest,
+      precondition: descriptor.precondition,
+      manifest: descriptor.manifest
+    });
+    if (envelope.deterministic_key !== expectedKey || idempotencyKey !== expectedKey) {
+      throw new Error("deterministic key must match both the frozen tuple and Idempotency-Key.");
+    }
+    if (knowledgeGuardedUtf8Bytes(envelope) > headerBounds.max_bytes) {
+      throw new Error("guarded write envelope exceeds the producer byte cap.");
+    }
+    return envelope;
+  } catch (error) {
+    if (error instanceof HttpError)
+      throw error;
+    throw new HttpError(400, error instanceof Error ? error.message : "invalid guarded write envelope.");
+  }
+}
+function validateGuardedManifestEnvelope(value, bounds, authority, idempotencyKey) {
+  try {
+    if (!value || typeof value !== "object")
+      throw new Error("guarded manifest envelope is required.");
+    const envelope = value;
+    assertExactRequestKeys(value, "guarded manifest envelope", ["contract", "maintainer", "manifest", "deterministic_key"]);
+    if (envelope.contract !== KNOWLEDGE_GUARDED_WRITE_CONTRACT) {
+      throw new Error("unsupported guarded manifest contract.");
+    }
+    assertKnowledgeGuardedBinding(envelope.maintainer);
+    assertConfiguredAuthority(envelope.maintainer, authority);
+    assertKnowledgeGuardedManifestOptions(envelope.maintainer, envelope.manifest);
+    const expectedKey = computeKnowledgeGuardedManifestDeterministicKey(envelope.maintainer, envelope.manifest);
+    if (envelope.deterministic_key !== expectedKey || idempotencyKey !== expectedKey) {
+      throw new Error("manifest deterministic key must match both the frozen tuple and Idempotency-Key.");
+    }
+    if (knowledgeGuardedUtf8Bytes(envelope) > bounds.max_bytes) {
+      throw new Error("guarded manifest exceeds the producer byte cap.");
+    }
+    return envelope;
+  } catch (error) {
+    if (error instanceof HttpError)
+      throw error;
+    throw new HttpError(400, error instanceof Error ? error.message : "invalid guarded manifest envelope.");
+  }
+}
 function principalActor(principal) {
   return principal.agent ? `agent:${principal.agent}` : `key:${principal.kid}`;
 }
@@ -1910,13 +3614,15 @@ function parseExpectedVersion(req, body) {
 }
 function createServeHandler(deps) {
   const repo = new NoteRepo(deps.client);
+  const guardedRepo = deps.guardedAuthority ? new GuardedWriteRepo(deps.client, deps.guardedAuthority) : null;
   const mode2 = "postgres";
-  const authOrThrow = async (req, requiredScopes) => {
+  const authOrThrow = async (req, requiredScopes, expectedTid) => {
     const url = new URL(req.url);
     const decision = await deps.verifier.authenticate(req.headers, {
       method: req.method,
       path: url.pathname,
-      requiredScopes
+      requiredScopes,
+      ...expectedTid !== undefined ? { expectedTid } : {}
     });
     if (decision.ok === false) {
       throw new HttpError(decision.status, decision.message);
@@ -1955,15 +3661,121 @@ function createServeHandler(deps) {
           artifactUriPrefix: process.env.HASNA_KNOWLEDGE_S3_PREFIX ?? null
         }));
       }
+      if (path === "/v1/guarded-manifests" && method === "POST") {
+        if (!guardedRepo) {
+          return json({ error: "guarded_authority_unconfigured" }, 503);
+        }
+        const startedAt = Date.now();
+        const tenantId = req.headers.get("x-knowledge-tenant-id");
+        if (!tenantId)
+          throw new HttpError(400, "x-knowledge-tenant-id is required.");
+        await authOrThrow(req, ["knowledge:write"], tenantId);
+        const bounds = guardedBoundsFromHeaders(req);
+        const raw = await readBoundedJson(req, bounds, startedAt);
+        const envelope = validateGuardedManifestEnvelope(raw, bounds, guardedRepo.authority, req.headers.get("idempotency-key"));
+        if (envelope.maintainer.tenant_id !== tenantId) {
+          throw new HttpError(403, "manifest tenant does not match the authenticated request tenant.");
+        }
+        try {
+          const submission = await guardedRepo.createManifest(envelope);
+          return boundedJson(submission, submission.duplicate ? 200 : 201, bounds, startedAt);
+        } catch (error) {
+          if (error instanceof ManifestBindingConflictError) {
+            return boundedJson({
+              error: "manifest_binding_conflict",
+              manifest: error.manifest
+            }, 409, bounds, startedAt);
+          }
+          throw error;
+        }
+      }
+      const guardedManifestMatch = path.match(/^\/v1\/guarded-manifests\/([^/]+)$/);
+      if (guardedManifestMatch) {
+        if (method !== "GET")
+          return json({ error: "method_not_allowed" }, 405);
+        if (!guardedRepo)
+          return json({ error: "guarded_authority_unconfigured" }, 503);
+        const startedAt = Date.now();
+        const binding = guardedBindingFromQuery(url);
+        assertConfiguredAuthority(binding, guardedRepo.authority);
+        await authOrThrow(req, ["knowledge:read"], binding.tenant_id);
+        const bounds = guardedBoundsFromQuery(req, url);
+        const reconciliation = await guardedRepo.reconcileManifest(decodeURIComponent(guardedManifestMatch[1]), binding, bounds);
+        return reconciliation ? boundedJson(reconciliation, 200, bounds, startedAt) : boundedJson({ error: "not_found" }, 404, bounds, startedAt);
+      }
+      if (path === "/v1/guarded-writes" && method === "POST") {
+        if (!guardedRepo) {
+          return json({ error: "guarded_authority_unconfigured" }, 503);
+        }
+        const startedAt = Date.now();
+        const tenantId = req.headers.get("x-knowledge-tenant-id");
+        if (!tenantId)
+          throw new HttpError(400, "x-knowledge-tenant-id is required.");
+        const principal = await authOrThrow(req, ["knowledge:write"], tenantId);
+        const bounds = guardedBoundsFromHeaders(req);
+        const raw = await readBoundedJson(req, bounds, startedAt);
+        const envelope = validateGuardedEnvelope(raw, bounds, guardedRepo.authority, req.headers.get("idempotency-key"));
+        if (envelope.descriptor.binding.tenant_id !== tenantId) {
+          throw new HttpError(403, "descriptor tenant does not match the authenticated request tenant.");
+        }
+        try {
+          const submission = await guardedRepo.execute(envelope, principalActor(principal));
+          if (submission.receipt.status === "rejected") {
+            return boundedJson({ error: "guarded_write_rejected", ...submission }, 409, bounds, startedAt);
+          }
+          return boundedJson(submission, submission.duplicate ? 200 : 201, bounds, startedAt);
+        } catch (error) {
+          if (error instanceof OperationBindingConflictError) {
+            return boundedJson({
+              error: "operation_binding_conflict",
+              receipt: error.receipt
+            }, 409, bounds, startedAt);
+          }
+          throw error;
+        }
+      }
+      const guardedReceiptMatch = path.match(/^\/v1\/guarded-writes\/receipts\/([^/]+)$/);
+      if (guardedReceiptMatch) {
+        if (method !== "GET")
+          return json({ error: "method_not_allowed" }, 405);
+        if (!guardedRepo)
+          return json({ error: "guarded_authority_unconfigured" }, 503);
+        const startedAt = Date.now();
+        const binding = guardedBindingFromQuery(url);
+        assertConfiguredAuthority(binding, guardedRepo.authority);
+        await authOrThrow(req, ["knowledge:read"], binding.tenant_id);
+        const bounds = guardedBoundsFromQuery(req, url);
+        const operationId = url.searchParams.get("operation_id");
+        const stepId = url.searchParams.get("step_id");
+        if (!operationId || !stepId) {
+          throw new HttpError(400, "operation_id and step_id are required for exact reconciliation.");
+        }
+        const reconciliation = await guardedRepo.reconcile(decodeURIComponent(guardedReceiptMatch[1]), binding, operationId, stepId, bounds);
+        return boundedJson(reconciliation, 200, bounds, startedAt);
+      }
+      const guardedItemMatch = path.match(/^\/v1\/guarded-writes\/items\/([^/]+)$/);
+      if (guardedItemMatch) {
+        if (method !== "GET")
+          return json({ error: "method_not_allowed" }, 405);
+        if (!guardedRepo)
+          return json({ error: "guarded_authority_unconfigured" }, 503);
+        const startedAt = Date.now();
+        const binding = guardedBindingFromQuery(url);
+        assertConfiguredAuthority(binding, guardedRepo.authority);
+        await authOrThrow(req, ["knowledge:read"], binding.tenant_id);
+        const bounds = guardedBoundsFromQuery(req, url);
+        const readback = await guardedRepo.readback(decodeURIComponent(guardedItemMatch[1]), binding, bounds);
+        return readback ? boundedJson(readback, 200, bounds, startedAt) : boundedJson({ error: "not_found" }, 404, bounds, startedAt);
+      }
       if (path === "/v1/notes") {
         if (method === "GET") {
-          await authOrThrow(req, ["knowledge:read"]);
+          const principal = await authOrThrow(req, ["knowledge:read"]);
           const result = await repo.list({
             limit: url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : undefined,
             offset: url.searchParams.has("offset") ? Number(url.searchParams.get("offset")) : undefined,
             search: url.searchParams.get("search") ?? undefined,
             includeArchived: url.searchParams.get("includeArchived") === "true"
-          });
+          }, principal.tid);
           return json(result);
         }
         if (method === "POST") {
@@ -1978,27 +3790,27 @@ function createServeHandler(deps) {
       if (versionListMatch) {
         if (method !== "GET")
           return json({ error: "method_not_allowed" }, 405);
-        await authOrThrow(req, ["knowledge:read"]);
+        const principal = await authOrThrow(req, ["knowledge:read"]);
         const history = await repo.listVersions(decodeURIComponent(versionListMatch[1]), {
           limit: url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : undefined,
           offset: url.searchParams.has("offset") ? Number(url.searchParams.get("offset")) : undefined
-        });
+        }, principal.tid);
         return history ? json(history) : json({ error: "not_found" }, 404);
       }
       const versionOneMatch = path.match(/^\/v1\/notes\/([^/]+)\/versions\/(\d+)$/);
       if (versionOneMatch) {
         if (method !== "GET")
           return json({ error: "method_not_allowed" }, 405);
-        await authOrThrow(req, ["knowledge:read"]);
-        const snapshot = await repo.getVersion(decodeURIComponent(versionOneMatch[1]), Number(versionOneMatch[2]));
+        const principal = await authOrThrow(req, ["knowledge:read"]);
+        const snapshot = await repo.getVersion(decodeURIComponent(versionOneMatch[1]), Number(versionOneMatch[2]), principal.tid);
         return snapshot ? json(snapshot) : json({ error: "not_found" }, 404);
       }
       const noteMatch = path.match(/^\/v1\/notes\/([^/]+)$/);
       if (noteMatch) {
         const id = decodeURIComponent(noteMatch[1]);
         if (method === "GET") {
-          await authOrThrow(req, ["knowledge:read"]);
-          const item = await repo.get(id);
+          const principal = await authOrThrow(req, ["knowledge:read"]);
+          const item = await repo.get(id, principal.tid);
           return item ? json(item) : json({ error: "not_found" }, 404);
         }
         if (method === "PATCH") {
@@ -2037,6 +3849,26 @@ function createServeHandler(deps) {
     }
   };
 }
+function resolveKnowledgeGuardedAuthority(env = process.env) {
+  const classification = env.HASNA_KNOWLEDGE_AUTHORITY_CLASSIFICATION;
+  const authorityId = env.HASNA_KNOWLEDGE_AUTHORITY_ID;
+  if (!classification && !authorityId)
+    return;
+  if (!classification || !authorityId) {
+    throw new Error("FCAME-1 guarded writes require both HASNA_KNOWLEDGE_AUTHORITY_CLASSIFICATION " + "and HASNA_KNOWLEDGE_AUTHORITY_ID.");
+  }
+  const binding = {
+    authority: {
+      classification,
+      authority_id: authorityId
+    },
+    tenant_id: "validation-only",
+    scope: "validation-only",
+    parent_id: "validation-only"
+  };
+  assertKnowledgeGuardedBinding(binding);
+  return binding.authority;
+}
 async function startKnowledgeServe(options = {}) {
   const env = options.env ?? process.env;
   const port = options.port ?? Number(env.PORT ?? env.HASNA_KNOWLEDGE_SERVE_PORT ?? 8080);
@@ -2055,7 +3887,13 @@ async function startKnowledgeServe(options = {}) {
       }
     }
   });
-  const handler = createServeHandler({ client, verifier, store, version });
+  const handler = createServeHandler({
+    client,
+    verifier,
+    store,
+    version,
+    guardedAuthority: resolveKnowledgeGuardedAuthority(env)
+  });
   const BunGlobal = globalThis.Bun;
   if (!BunGlobal?.serve) {
     throw new Error("knowledge-serve requires the Bun runtime (Bun.serve unavailable).");
@@ -2073,6 +3911,7 @@ async function startKnowledgeServe(options = {}) {
 }
 export {
   startKnowledgeServe,
+  resolveKnowledgeGuardedAuthority,
   normalizeCloudDatabaseUrl,
   knowledgeOpenApi,
   createServeHandler,

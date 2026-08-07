@@ -1780,12 +1780,19 @@ function isNotFound(error) {
   return Boolean(error && typeof error === "object" && error.status === 404);
 }
 function resolveKnowledgeCloudStore(env = process.env) {
+  const client = resolveKnowledgeCloudClient(env);
+  return client ? wrap(client) : null;
+}
+function resolveKnowledgeGuardedTransport(env = process.env) {
+  return resolveKnowledgeCloudClient(env)?.transport ?? null;
+}
+function resolveKnowledgeCloudClient(env) {
   if (resolveKnowledgeModeSelection(env).mode !== "postgres")
     return null;
   const resolved = resolveStorageClient(KNOWLEDGE_APP_SLUG, pinnedTransportEnv(env, "postgres"), transportOverrides(env));
   if (resolved.transport !== "http")
     return null;
-  return wrap(resolved.client);
+  return resolved.client;
 }
 function isKnowledgeApiMode(env = process.env) {
   if (resolveKnowledgeModeSelection(env).mode !== "postgres")
@@ -3018,7 +3025,369 @@ var PG_MIGRATIONS = [
      END IF;
    END
    $knowledge_item_versions_guard$`,
-  `ALTER TABLE knowledge_item_versions ENABLE ALWAYS TRIGGER trg_knowledge_item_versions_append_only`
+  `ALTER TABLE knowledge_item_versions ENABLE ALWAYS TRIGGER trg_knowledge_item_versions_append_only`,
+  `ALTER TABLE knowledge_items
+     ADD COLUMN IF NOT EXISTS authority_classification TEXT,
+     ADD COLUMN IF NOT EXISTS authority_id TEXT,
+     ADD COLUMN IF NOT EXISTS tenant_id TEXT,
+     ADD COLUMN IF NOT EXISTS scope TEXT,
+     ADD COLUMN IF NOT EXISTS parent_id TEXT`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_guarded_binding
+     ON knowledge_items(authority_classification, authority_id, tenant_id, scope, parent_id, id)`,
+  `CREATE TABLE IF NOT EXISTS knowledge_guarded_write_manifests (
+    manifest_id TEXT PRIMARY KEY,
+    manifest_receipt_id TEXT NOT NULL UNIQUE,
+    deterministic_key TEXT NOT NULL UNIQUE,
+    operation_id TEXT NOT NULL,
+    manifest_digest TEXT NOT NULL,
+    maintainer_authority_classification TEXT NOT NULL,
+    maintainer_authority_id TEXT NOT NULL,
+    maintainer_tenant_id TEXT NOT NULL,
+    maintainer_scope TEXT NOT NULL,
+    maintainer_parent_id TEXT NOT NULL,
+    step_count INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    CHECK (maintainer_authority_classification IN ('user_hosted', 'hasna_saas')),
+    CHECK (step_count BETWEEN 2 AND 64)
+  )`,
+  `CREATE TABLE IF NOT EXISTS knowledge_guarded_write_manifest_steps (
+    manifest_id TEXT NOT NULL REFERENCES knowledge_guarded_write_manifests(manifest_id),
+    ordinal INTEGER NOT NULL,
+    operation_id TEXT NOT NULL,
+    step_id TEXT NOT NULL,
+    deterministic_key TEXT NOT NULL,
+    verb TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    semantic_digest TEXT NOT NULL,
+    precondition_kind TEXT NOT NULL,
+    expected_version INTEGER,
+    dependencies JSONB NOT NULL,
+    limits JSONB NOT NULL,
+    authority_classification TEXT NOT NULL,
+    authority_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    parent_id TEXT NOT NULL,
+    recovery_strategy TEXT NOT NULL,
+    recovery_operation_id TEXT NOT NULL,
+    recovery_step_id TEXT NOT NULL,
+    recovery_deterministic_key TEXT NOT NULL,
+    recovery_verb TEXT NOT NULL,
+    recovery_target_id TEXT NOT NULL,
+    recovery_semantic_digest TEXT NOT NULL,
+    recovery_precondition_kind TEXT NOT NULL,
+    recovery_expected_version INTEGER,
+    recovery_authority_classification TEXT NOT NULL,
+    recovery_authority_id TEXT NOT NULL,
+    recovery_tenant_id TEXT NOT NULL,
+    recovery_scope TEXT NOT NULL,
+    recovery_parent_id TEXT NOT NULL,
+    recovery_limits JSONB NOT NULL,
+    recovery_receipt_scope TEXT,
+    recovery_compensates_receipt_id TEXT,
+    PRIMARY KEY (manifest_id, ordinal),
+    UNIQUE (manifest_id, deterministic_key),
+    CHECK (ordinal >= 0),
+    CHECK (authority_classification IN ('user_hosted', 'hasna_saas')),
+    CHECK (recovery_authority_classification IN ('user_hosted', 'hasna_saas')),
+    CHECK (verb IN ('create', 'update')),
+    CHECK (recovery_verb IN ('create', 'update')),
+    CHECK (
+      (verb = 'create' AND precondition_kind = 'absent' AND expected_version IS NULL)
+      OR
+      (verb = 'update' AND precondition_kind = 'version' AND expected_version >= 1)
+    ),
+    CHECK (
+      (
+        recovery_verb = 'create'
+        AND recovery_precondition_kind = 'absent'
+        AND recovery_expected_version IS NULL
+      )
+      OR
+      (
+        recovery_verb = 'update'
+        AND recovery_precondition_kind = 'version'
+        AND recovery_expected_version >= 1
+      )
+    ),
+    CHECK (recovery_strategy IN ('forward_repair', 'receipt_scoped_compensation')),
+    CHECK (
+      (recovery_strategy = 'forward_repair' AND recovery_receipt_scope IS NULL)
+      OR
+      (
+        recovery_strategy = 'receipt_scoped_compensation'
+        AND recovery_receipt_scope = 'accepted_step_receipt'
+        AND recovery_compensates_receipt_id IS NOT NULL
+      )
+    ),
+    CHECK (
+      recovery_strategy = 'receipt_scoped_compensation'
+      OR recovery_compensates_receipt_id IS NULL
+    )
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_guarded_manifest_step_operation
+     ON knowledge_guarded_write_manifest_steps(
+       authority_classification, authority_id, tenant_id, scope, parent_id, operation_id, step_id
+     )`,
+  `CREATE OR REPLACE FUNCTION knowledge_guarded_manifest_immutable()
+   RETURNS TRIGGER AS $knowledge_guarded_manifest_immutable$
+   BEGIN
+     RAISE EXCEPTION 'knowledge guarded workflow manifests are immutable'
+       USING ERRCODE = 'restrict_violation';
+   END
+   $knowledge_guarded_manifest_immutable$ LANGUAGE plpgsql`,
+  `DROP TRIGGER IF EXISTS trg_knowledge_guarded_manifest_immutable ON knowledge_guarded_write_manifests`,
+  `CREATE TRIGGER trg_knowledge_guarded_manifest_immutable
+     BEFORE UPDATE OR DELETE ON knowledge_guarded_write_manifests
+     FOR EACH ROW EXECUTE FUNCTION knowledge_guarded_manifest_immutable()`,
+  `ALTER TABLE knowledge_guarded_write_manifests ENABLE ALWAYS TRIGGER trg_knowledge_guarded_manifest_immutable`,
+  `DROP TRIGGER IF EXISTS trg_knowledge_guarded_manifest_steps_immutable
+     ON knowledge_guarded_write_manifest_steps`,
+  `CREATE TRIGGER trg_knowledge_guarded_manifest_steps_immutable
+     BEFORE UPDATE OR DELETE ON knowledge_guarded_write_manifest_steps
+     FOR EACH ROW EXECUTE FUNCTION knowledge_guarded_manifest_immutable()`,
+  `ALTER TABLE knowledge_guarded_write_manifest_steps
+     ENABLE ALWAYS TRIGGER trg_knowledge_guarded_manifest_steps_immutable`,
+  `CREATE TABLE IF NOT EXISTS knowledge_guarded_write_claims (
+    deterministic_key TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL,
+    step_id TEXT NOT NULL,
+    authority_classification TEXT NOT NULL,
+    authority_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    parent_id TEXT NOT NULL,
+    verb TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    payload_digest TEXT NOT NULL,
+    precondition_kind TEXT NOT NULL,
+    expected_version INTEGER,
+    manifest_id TEXT,
+    manifest_ordinal INTEGER,
+    manifest_phase TEXT,
+    compensates_receipt_id TEXT,
+    receipt_id TEXT,
+    created_at TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    FOREIGN KEY (manifest_id, manifest_ordinal)
+      REFERENCES knowledge_guarded_write_manifest_steps(manifest_id, ordinal),
+    CHECK (authority_classification IN ('user_hosted', 'hasna_saas')),
+    CHECK (verb IN ('create', 'update')),
+    CHECK (
+      (verb = 'create' AND precondition_kind = 'absent' AND expected_version IS NULL)
+      OR
+      (verb = 'update' AND precondition_kind = 'version' AND expected_version >= 1)
+    ),
+    CHECK (
+      (
+        manifest_id IS NULL AND manifest_ordinal IS NULL
+        AND manifest_phase IS NULL AND compensates_receipt_id IS NULL
+      )
+      OR (
+        manifest_id IS NOT NULL AND manifest_ordinal IS NOT NULL
+        AND manifest_phase IN ('primary', 'recovery')
+        AND (
+          (manifest_phase = 'primary' AND compensates_receipt_id IS NULL)
+          OR manifest_phase = 'recovery'
+        )
+      )
+    ),
+    UNIQUE(authority_classification, authority_id, tenant_id, scope, parent_id, operation_id, step_id)
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_guarded_claim_receipt
+     ON knowledge_guarded_write_claims(receipt_id) WHERE receipt_id IS NOT NULL`,
+  `CREATE TABLE IF NOT EXISTS knowledge_guarded_write_receipts (
+    receipt_id TEXT PRIMARY KEY,
+    deterministic_key TEXT NOT NULL UNIQUE,
+    operation_id TEXT NOT NULL,
+    step_id TEXT NOT NULL,
+    verb TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    authority_classification TEXT NOT NULL,
+    authority_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    parent_id TEXT NOT NULL,
+    payload_digest TEXT NOT NULL,
+    precondition_kind TEXT NOT NULL,
+    expected_version INTEGER,
+    manifest_id TEXT,
+    manifest_ordinal INTEGER,
+    manifest_phase TEXT,
+    compensates_receipt_id TEXT,
+    status TEXT NOT NULL,
+    code TEXT NOT NULL,
+    effect_count INTEGER NOT NULL,
+    result_id TEXT,
+    result_version INTEGER,
+    created_at TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    FOREIGN KEY (manifest_id, manifest_ordinal)
+      REFERENCES knowledge_guarded_write_manifest_steps(manifest_id, ordinal),
+    CHECK (authority_classification IN ('user_hosted', 'hasna_saas')),
+    CHECK (verb IN ('create', 'update')),
+    CHECK (
+      (verb = 'create' AND precondition_kind = 'absent' AND expected_version IS NULL)
+      OR
+      (verb = 'update' AND precondition_kind = 'version' AND expected_version >= 1)
+    ),
+    CHECK (
+      (
+        manifest_id IS NULL AND manifest_ordinal IS NULL
+        AND manifest_phase IS NULL AND compensates_receipt_id IS NULL
+      )
+      OR (
+        manifest_id IS NOT NULL AND manifest_ordinal IS NOT NULL
+        AND manifest_phase IN ('primary', 'recovery')
+        AND (
+          (manifest_phase = 'primary' AND compensates_receipt_id IS NULL)
+          OR manifest_phase = 'recovery'
+        )
+      )
+    ),
+    CHECK (status IN ('accepted', 'rejected')),
+    CHECK (effect_count IN (0, 1)),
+    CHECK (
+      (status = 'accepted' AND effect_count = 1 AND result_id IS NOT NULL AND result_version IS NOT NULL)
+      OR
+      (status = 'rejected' AND effect_count = 0 AND result_id IS NULL AND result_version IS NULL)
+    )
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_guarded_receipt_operation
+     ON knowledge_guarded_write_receipts(
+       authority_classification, authority_id, tenant_id, scope, parent_id, operation_id, step_id
+     )`,
+  `CREATE OR REPLACE FUNCTION knowledge_guarded_claim_once()
+   RETURNS TRIGGER AS $knowledge_guarded_claim_once$
+   BEGIN
+     IF TG_OP = 'DELETE' THEN
+       RAISE EXCEPTION 'knowledge guarded write claims are immutable'
+         USING ERRCODE = 'restrict_violation';
+     END IF;
+     IF (OLD.deterministic_key, OLD.operation_id, OLD.step_id,
+         OLD.authority_classification, OLD.authority_id, OLD.tenant_id,
+         OLD.scope, OLD.parent_id, OLD.verb, OLD.target_id,
+         OLD.payload_digest, OLD.precondition_kind, OLD.expected_version,
+         OLD.manifest_id, OLD.manifest_ordinal, OLD.manifest_phase,
+         OLD.compensates_receipt_id, OLD.created_at)
+        IS DISTINCT FROM
+        (NEW.deterministic_key, NEW.operation_id, NEW.step_id,
+         NEW.authority_classification, NEW.authority_id, NEW.tenant_id,
+         NEW.scope, NEW.parent_id, NEW.verb, NEW.target_id,
+         NEW.payload_digest, NEW.precondition_kind, NEW.expected_version,
+         NEW.manifest_id, NEW.manifest_ordinal, NEW.manifest_phase,
+         NEW.compensates_receipt_id, NEW.created_at)
+        OR OLD.receipt_id IS NOT NULL
+        OR NEW.receipt_id IS NULL THEN
+       RAISE EXCEPTION 'knowledge guarded write claim may only bind one terminal receipt'
+         USING ERRCODE = 'restrict_violation';
+     END IF;
+     RETURN NEW;
+   END
+   $knowledge_guarded_claim_once$ LANGUAGE plpgsql`,
+  `DROP TRIGGER IF EXISTS trg_knowledge_guarded_claim_once ON knowledge_guarded_write_claims`,
+  `CREATE TRIGGER trg_knowledge_guarded_claim_once
+     BEFORE UPDATE OR DELETE ON knowledge_guarded_write_claims
+     FOR EACH ROW EXECUTE FUNCTION knowledge_guarded_claim_once()`,
+  `ALTER TABLE knowledge_guarded_write_claims ENABLE ALWAYS TRIGGER trg_knowledge_guarded_claim_once`,
+  `CREATE OR REPLACE FUNCTION knowledge_guarded_receipts_immutable()
+   RETURNS TRIGGER AS $knowledge_guarded_receipts_immutable$
+   BEGIN
+     RAISE EXCEPTION 'knowledge guarded write receipts are immutable'
+       USING ERRCODE = 'restrict_violation';
+   END
+   $knowledge_guarded_receipts_immutable$ LANGUAGE plpgsql`,
+  `DROP TRIGGER IF EXISTS trg_knowledge_guarded_receipts_immutable ON knowledge_guarded_write_receipts`,
+  `CREATE TRIGGER trg_knowledge_guarded_receipts_immutable
+     BEFORE UPDATE OR DELETE ON knowledge_guarded_write_receipts
+     FOR EACH ROW EXECUTE FUNCTION knowledge_guarded_receipts_immutable()`,
+  `ALTER TABLE knowledge_guarded_write_receipts ENABLE ALWAYS TRIGGER trg_knowledge_guarded_receipts_immutable`,
+  `CREATE OR REPLACE FUNCTION knowledge_guarded_item_authority()
+   RETURNS TRIGGER AS $knowledge_guarded_item_authority$
+   DECLARE
+     claim_key TEXT;
+     claim_matches BOOLEAN;
+   BEGIN
+     IF TG_OP = 'DELETE' THEN
+       IF OLD.authority_classification IS NULL THEN
+         RETURN OLD;
+       END IF;
+       RAISE EXCEPTION 'guarded knowledge items cannot be deleted outside a declared FCAME-1 action'
+         USING ERRCODE = 'restrict_violation';
+     END IF;
+
+     IF TG_OP = 'INSERT' AND NEW.authority_classification IS NULL THEN
+       RETURN NEW;
+     END IF;
+
+     IF TG_OP = 'UPDATE'
+        AND OLD.authority_classification IS NULL
+        AND NEW.authority_classification IS NULL THEN
+       RETURN NEW;
+     END IF;
+
+     IF NEW.authority_classification IS NULL OR NEW.authority_id IS NULL
+        OR NEW.tenant_id IS NULL OR NEW.scope IS NULL OR NEW.parent_id IS NULL THEN
+       RAISE EXCEPTION 'guarded knowledge item binding must be complete'
+         USING ERRCODE = 'check_violation';
+     END IF;
+
+     IF TG_OP = 'UPDATE' AND (
+       OLD.id IS DISTINCT FROM NEW.id
+       OR OLD.authority_classification IS DISTINCT FROM NEW.authority_classification
+       OR OLD.authority_id IS DISTINCT FROM NEW.authority_id
+       OR OLD.tenant_id IS DISTINCT FROM NEW.tenant_id
+       OR OLD.scope IS DISTINCT FROM NEW.scope
+       OR OLD.parent_id IS DISTINCT FROM NEW.parent_id
+     ) THEN
+       RAISE EXCEPTION 'guarded knowledge item identity and binding are immutable'
+         USING ERRCODE = 'restrict_violation';
+     END IF;
+
+     claim_key := NULLIF(
+       current_setting('hasna.knowledge_guarded_deterministic_key', true),
+       ''
+     );
+     IF claim_key IS NULL THEN
+       RAISE EXCEPTION 'guarded knowledge item mutation requires an FCAME-1 operation claim'
+         USING ERRCODE = 'insufficient_privilege';
+     END IF;
+
+     SELECT EXISTS (
+       SELECT 1
+         FROM knowledge_guarded_write_claims AS claim
+        WHERE claim.deterministic_key = claim_key
+          AND claim.receipt_id IS NULL
+          AND claim.target_id = NEW.id
+          AND claim.authority_classification = NEW.authority_classification
+          AND claim.authority_id = NEW.authority_id
+          AND claim.tenant_id = NEW.tenant_id
+          AND claim.scope = NEW.scope
+          AND claim.parent_id = NEW.parent_id
+          AND (
+            (
+              TG_OP = 'INSERT'
+              AND claim.verb = 'create'
+              AND claim.precondition_kind = 'absent'
+            )
+            OR (
+              TG_OP = 'UPDATE'
+              AND claim.verb = 'update'
+              AND claim.precondition_kind = 'version'
+              AND claim.expected_version = OLD.version
+            )
+          )
+     ) INTO claim_matches;
+     IF NOT claim_matches THEN
+       RAISE EXCEPTION 'guarded knowledge item mutation does not match its live FCAME-1 operation claim'
+         USING ERRCODE = 'insufficient_privilege';
+     END IF;
+     RETURN NEW;
+   END
+   $knowledge_guarded_item_authority$ LANGUAGE plpgsql`,
+  `DROP TRIGGER IF EXISTS trg_knowledge_items_00_guarded_authority ON knowledge_items`,
+  `CREATE TRIGGER trg_knowledge_items_00_guarded_authority
+     BEFORE INSERT OR UPDATE OR DELETE ON knowledge_items
+     FOR EACH ROW EXECUTE FUNCTION knowledge_guarded_item_authority()`,
+  `ALTER TABLE knowledge_items ENABLE ALWAYS TRIGGER trg_knowledge_items_00_guarded_authority`
 ];
 export {
   wrapExecutor,

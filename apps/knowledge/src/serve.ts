@@ -31,6 +31,40 @@ import {
   type KnowledgeItemVersion,
   type KnowledgeItemVersionList,
 } from './store.js';
+import {
+  KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+  KNOWLEDGE_PRIVATE_INPUT_SCHEMA,
+  assertKnowledgeGuardedBinding,
+  assertKnowledgeGuardedBounds,
+  assertKnowledgeGuardedManifestOptions,
+  assertKnowledgeGuardedPayload,
+  assertKnowledgeGuardedPrecondition,
+  canonicalKnowledgeGuardedJson,
+  computeKnowledgeGuardedDeterministicKey,
+  computeKnowledgeGuardedManifestDeterministicKey,
+  computeKnowledgeGuardedManifestDigest,
+  computeKnowledgeGuardedReceiptId,
+  evaluateKnowledgeGuardedManifestCompletion,
+  knowledgeGuardedDigest,
+  knowledgeGuardedUtf8Bytes,
+  normalizeKnowledgeGuardedLimits,
+  type CreateKnowledgeGuardedManifestOptions,
+  type KnowledgeAuthorityBinding,
+  type KnowledgeGuardedBinding,
+  type KnowledgeGuardedBounds,
+  type KnowledgeGuardedManifest,
+  type KnowledgeGuardedManifestEnvelope,
+  type KnowledgeGuardedManifestReconciliation,
+  type KnowledgeGuardedManifestStep,
+  type KnowledgeGuardedManifestSubmission,
+  type KnowledgeGuardedPayload,
+  type KnowledgeGuardedPrecondition,
+  type KnowledgeGuardedReadback,
+  type KnowledgeGuardedReceipt,
+  type KnowledgeGuardedSubmission,
+  type KnowledgeGuardedWriteEnvelope,
+  type KnowledgeTerminalReconciliation,
+} from './guarded-write-contract.js';
 import type { PoolQueryClient, TypedQueryClient } from './generated/storage-kit/index.js';
 
 export const KNOWLEDGE_SERVE_APP = 'knowledge';
@@ -246,6 +280,15 @@ export class NoteRepo {
     const now = new Date().toISOString();
     const suppliedId = typeof input.id === 'string' ? input.id.trim() : '';
     if (suppliedId) {
+      const guarded = await this.client.get<{ guarded: boolean }>(
+        `SELECT TRUE AS guarded FROM knowledge_items
+          WHERE id = $1 AND authority_classification IS NOT NULL
+          LIMIT 1`,
+        [suppliedId],
+      );
+      if (guarded) {
+        throw new HttpError(409, 'guarded_item_requires_fcame1_writer');
+      }
       // Caller-supplied stable id => idempotent upsert (parity with the local
       // db.json store, where `upsert --id` persists that id so a later get()
       // re-finds it). Without this, cloud create dropped the id and every
@@ -299,11 +342,20 @@ export class NoteRepo {
     return rowToItem(row!);
   }
 
-  async list(options: NoteListOptions = {}): Promise<{ items: KnowledgeItem[]; total: number }> {
+  async list(
+    options: NoteListOptions = {},
+    guardedTenantId?: string,
+  ): Promise<{ items: KnowledgeItem[]; total: number }> {
     const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
     const offset = Math.max(options.offset ?? 0, 0);
-    const where: string[] = [];
     const params: unknown[] = [];
+    const where: string[] = [];
+    if (guardedTenantId) {
+      params.push(guardedTenantId);
+      where.push(`(authority_classification IS NULL OR tenant_id = $${params.length})`);
+    } else {
+      where.push('authority_classification IS NULL');
+    }
     if (!options.includeArchived) where.push('archived = FALSE');
 
     // Full-text search via the weighted tsvector generated column + GIN index
@@ -335,10 +387,16 @@ export class NoteRepo {
     return { items: rows.map(rowToItem), total: Number(totalRow?.count ?? 0) };
   }
 
-  async get(idOrShort: string): Promise<KnowledgeItem | null> {
+  async get(idOrShort: string, guardedTenantId?: string): Promise<KnowledgeItem | null> {
+    const guardedVisibility = guardedTenantId
+      ? 'AND (authority_classification IS NULL OR tenant_id = $2)'
+      : 'AND authority_classification IS NULL';
     const row = await this.client.get<Record<string, unknown>>(
-      `SELECT * FROM knowledge_items WHERE id = $1 OR short_id = $1 LIMIT 1`,
-      [idOrShort],
+      `SELECT * FROM knowledge_items
+        WHERE (id = $1 OR short_id = $1)
+          ${guardedVisibility}
+        LIMIT 1`,
+      guardedTenantId ? [idOrShort, guardedTenantId] : [idOrShort],
     );
     return row ? rowToItem(row) : null;
   }
@@ -398,8 +456,9 @@ export class NoteRepo {
   async listVersions(
     idOrShort: string,
     options: { limit?: number; offset?: number } = {},
+    guardedTenantId?: string,
   ): Promise<NoteVersionList | null> {
-    const existing = await this.get(idOrShort);
+    const existing = await this.get(idOrShort, guardedTenantId);
     if (!existing) return null;
     const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
     const offset = Math.max(options.offset ?? 0, 0);
@@ -421,8 +480,12 @@ export class NoteRepo {
   }
 
   /** One prior snapshot by version number, or `null` if that version is absent. */
-  async getVersion(idOrShort: string, version: number): Promise<NoteVersion | null> {
-    const existing = await this.get(idOrShort);
+  async getVersion(
+    idOrShort: string,
+    version: number,
+    guardedTenantId?: string,
+  ): Promise<NoteVersion | null> {
+    const existing = await this.get(idOrShort, guardedTenantId);
     if (!existing) return null;
     const row = await this.client.get<Record<string, unknown>>(
       `SELECT * FROM knowledge_item_versions WHERE item_id = $1 AND version = $2`,
@@ -436,6 +499,958 @@ export class NoteRepo {
     if (!existing) return false;
     await this.client.execute(`DELETE FROM knowledge_items WHERE id = $1`, [existing.id]);
     return true;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// FCAME-1 guarded production writer.
+// ---------------------------------------------------------------------------
+
+export interface KnowledgeServeGuardedAuthority extends KnowledgeAuthorityBinding {}
+
+class OperationBindingConflictError extends Error {
+  constructor(readonly receipt: KnowledgeGuardedReceipt | null) {
+    super('operation and step are already bound to a different deterministic key');
+    this.name = 'OperationBindingConflictError';
+  }
+}
+
+class ManifestBindingConflictError extends Error {
+  constructor(readonly manifest: KnowledgeGuardedManifest) {
+    super('manifest_id is already bound to a different deterministic key');
+    this.name = 'ManifestBindingConflictError';
+  }
+}
+
+function guardedPreconditionFromRow(row: Record<string, unknown>): KnowledgeGuardedPrecondition {
+  return row.precondition_kind === 'absent'
+    ? { kind: 'absent' }
+    : { kind: 'version', expected_version: Number(row.expected_version) };
+}
+
+function rowToGuardedReceipt(row: Record<string, unknown>): KnowledgeGuardedReceipt {
+  return {
+    contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+    receipt_id: String(row.receipt_id),
+    deterministic_key: String(row.deterministic_key),
+    operation_id: String(row.operation_id),
+    step_id: String(row.step_id),
+    verb: String(row.verb) as KnowledgeGuardedReceipt['verb'],
+    target_id: String(row.target_id),
+    authority: {
+      classification: String(row.authority_classification) as KnowledgeAuthorityBinding['classification'],
+      authority_id: String(row.authority_id),
+    },
+    tenant_id: String(row.tenant_id),
+    scope: String(row.scope),
+    parent_id: String(row.parent_id),
+    payload_digest: String(row.payload_digest),
+    precondition: guardedPreconditionFromRow(row),
+    manifest: row.manifest_id == null
+      ? null
+      : {
+        manifest_id: String(row.manifest_id),
+        ordinal: Number(row.manifest_ordinal),
+        phase: String(row.manifest_phase) as 'primary' | 'recovery',
+        compensates_receipt_id: row.compensates_receipt_id == null
+          ? null
+          : String(row.compensates_receipt_id),
+      },
+    status: String(row.status) as KnowledgeGuardedReceipt['status'],
+    code: String(row.code),
+    effect_count: Number(row.effect_count) as 0 | 1,
+    result_id: row.result_id == null ? null : String(row.result_id),
+    result_version: row.result_version == null ? null : Number(row.result_version),
+    created_at: String(row.created_at),
+  };
+}
+
+function rowMatchesGuardedBinding(row: Record<string, unknown>, binding: KnowledgeGuardedBinding): boolean {
+  return (
+    row.authority_classification === binding.authority.classification
+    && row.authority_id === binding.authority.authority_id
+    && row.tenant_id === binding.tenant_id
+    && row.scope === binding.scope
+    && row.parent_id === binding.parent_id
+  );
+}
+
+function rowToManifestStep(row: Record<string, unknown>): KnowledgeGuardedManifestStep {
+  return {
+    ordinal: Number(row.ordinal),
+    operation_id: String(row.operation_id),
+    step_id: String(row.step_id),
+    deterministic_key: String(row.deterministic_key),
+    verb: String(row.verb) as KnowledgeGuardedManifestStep['verb'],
+    target_id: String(row.target_id),
+    binding: {
+      authority: {
+        classification: String(row.authority_classification) as KnowledgeAuthorityBinding['classification'],
+        authority_id: String(row.authority_id),
+      },
+      tenant_id: String(row.tenant_id),
+      scope: String(row.scope),
+      parent_id: String(row.parent_id),
+    },
+    semantic_digest: String(row.semantic_digest),
+    precondition: guardedPreconditionFromRow(row),
+    dependencies: parseJsonColumn<number[]>(row.dependencies, []),
+    limits: parseJsonColumn(row.limits, normalizeKnowledgeGuardedLimits()),
+    recovery: {
+      strategy: String(row.recovery_strategy) as KnowledgeGuardedManifestStep['recovery']['strategy'],
+      operation_id: String(row.recovery_operation_id),
+      step_id: String(row.recovery_step_id),
+      deterministic_key: String(row.recovery_deterministic_key),
+      verb: String(row.recovery_verb) as KnowledgeGuardedManifestStep['recovery']['verb'],
+      target_id: String(row.recovery_target_id),
+      semantic_digest: String(row.recovery_semantic_digest),
+      precondition: row.recovery_precondition_kind === 'absent'
+        ? { kind: 'absent' }
+        : { kind: 'version', expected_version: Number(row.recovery_expected_version) },
+      binding: {
+        authority: {
+          classification: String(
+            row.recovery_authority_classification,
+          ) as KnowledgeAuthorityBinding['classification'],
+          authority_id: String(row.recovery_authority_id),
+        },
+        tenant_id: String(row.recovery_tenant_id),
+        scope: String(row.recovery_scope),
+        parent_id: String(row.recovery_parent_id),
+      },
+      limits: parseJsonColumn(row.recovery_limits, normalizeKnowledgeGuardedLimits()),
+      receipt_scope: row.recovery_receipt_scope == null
+        ? null
+        : 'accepted_step_receipt',
+      compensates_receipt_id: row.recovery_compensates_receipt_id == null
+        ? null
+        : String(row.recovery_compensates_receipt_id),
+    },
+  };
+}
+
+function rowsToManifest(
+  row: Record<string, unknown>,
+  stepRows: Record<string, unknown>[],
+): KnowledgeGuardedManifest {
+  return {
+    contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+    manifest_receipt_id: String(row.manifest_receipt_id),
+    manifest_id: String(row.manifest_id),
+    operation_id: String(row.operation_id),
+    deterministic_key: String(row.deterministic_key),
+    manifest_digest: String(row.manifest_digest),
+    maintainer: {
+      authority: {
+        classification: String(
+          row.maintainer_authority_classification,
+        ) as KnowledgeAuthorityBinding['classification'],
+        authority_id: String(row.maintainer_authority_id),
+      },
+      tenant_id: String(row.maintainer_tenant_id),
+      scope: String(row.maintainer_scope),
+      parent_id: String(row.maintainer_parent_id),
+    },
+    step_count: Number(row.step_count),
+    steps: stepRows.map(rowToManifestStep),
+    created_at: String(row.created_at),
+  };
+}
+
+class GuardedWriteRepo {
+  constructor(
+    private readonly client: PoolQueryClient,
+    readonly authority: KnowledgeServeGuardedAuthority,
+  ) {}
+
+  private binding(envelope: KnowledgeGuardedWriteEnvelope): KnowledgeGuardedBinding {
+    return envelope.descriptor.binding;
+  }
+
+  private async receiptById(
+    client: TypedQueryClient,
+    receiptId: string,
+  ): Promise<KnowledgeGuardedReceipt | null> {
+    const row = await client.get<Record<string, unknown>>(
+      `SELECT * FROM knowledge_guarded_write_receipts WHERE receipt_id = $1`,
+      [receiptId],
+    );
+    return row ? rowToGuardedReceipt(row) : null;
+  }
+
+  private async manifestById(
+    client: TypedQueryClient,
+    manifestId: string,
+  ): Promise<KnowledgeGuardedManifest | null> {
+    const row = await client.get<Record<string, unknown>>(
+      `SELECT * FROM knowledge_guarded_write_manifests WHERE manifest_id = $1`,
+      [manifestId],
+    );
+    if (!row) return null;
+    const steps = await client.many<Record<string, unknown>>(
+      `SELECT * FROM knowledge_guarded_write_manifest_steps
+        WHERE manifest_id = $1 ORDER BY ordinal ASC`,
+      [manifestId],
+    );
+    return rowsToManifest(row, steps);
+  }
+
+  async createManifest(
+    envelope: KnowledgeGuardedManifestEnvelope,
+  ): Promise<KnowledgeGuardedManifestSubmission> {
+    const { manifest, maintainer } = envelope;
+    return this.client.transaction(async (tx) => {
+      await tx.execute(
+        `INSERT INTO knowledge_guarded_write_manifests (
+           manifest_id, manifest_receipt_id, deterministic_key, operation_id,
+           manifest_digest,
+           maintainer_authority_classification, maintainer_authority_id,
+           maintainer_tenant_id, maintainer_scope, maintainer_parent_id,
+           step_count
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         ON CONFLICT DO NOTHING`,
+        [
+          manifest.manifest_id,
+          `kmr_${envelope.deterministic_key.replace(/^fcame1_manifest_/, '')}`,
+          envelope.deterministic_key,
+          manifest.operation_id,
+          computeKnowledgeGuardedManifestDigest(maintainer, manifest),
+          maintainer.authority.classification,
+          maintainer.authority.authority_id,
+          maintainer.tenant_id,
+          maintainer.scope,
+          maintainer.parent_id,
+          manifest.steps.length,
+        ],
+      );
+      const row = await tx.get<Record<string, unknown>>(
+        `SELECT * FROM knowledge_guarded_write_manifests WHERE manifest_id = $1 FOR UPDATE`,
+        [manifest.manifest_id],
+      );
+      if (!row) throw new Error('guarded manifest was not created.');
+      const existingSteps = await tx.many<Record<string, unknown>>(
+        `SELECT * FROM knowledge_guarded_write_manifest_steps
+          WHERE manifest_id = $1 ORDER BY ordinal ASC`,
+        [manifest.manifest_id],
+      );
+      if (row.deterministic_key !== envelope.deterministic_key) {
+        throw new ManifestBindingConflictError(rowsToManifest(row, existingSteps));
+      }
+      const duplicate = existingSteps.length > 0;
+      if (!duplicate) {
+        for (const step of manifest.steps) {
+          await tx.execute(
+            `INSERT INTO knowledge_guarded_write_manifest_steps (
+               manifest_id, ordinal, operation_id, step_id, deterministic_key,
+               verb, target_id, semantic_digest, precondition_kind, expected_version,
+               dependencies, limits,
+               authority_classification, authority_id, tenant_id, scope, parent_id,
+               recovery_strategy, recovery_operation_id, recovery_step_id,
+               recovery_deterministic_key, recovery_verb, recovery_target_id,
+               recovery_semantic_digest, recovery_precondition_kind, recovery_expected_version,
+               recovery_authority_classification, recovery_authority_id,
+               recovery_tenant_id, recovery_scope, recovery_parent_id,
+               recovery_limits, recovery_receipt_scope, recovery_compensates_receipt_id
+             ) VALUES (
+               $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
+               $18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34
+             )`,
+            [
+              manifest.manifest_id,
+              step.ordinal,
+              step.operation_id,
+              step.step_id,
+              step.deterministic_key,
+              step.verb,
+              step.target_id,
+              step.semantic_digest,
+              step.precondition.kind,
+              step.precondition.kind === 'version' ? step.precondition.expected_version : null,
+              JSON.stringify(step.dependencies),
+              JSON.stringify(step.limits),
+              step.binding.authority.classification,
+              step.binding.authority.authority_id,
+              step.binding.tenant_id,
+              step.binding.scope,
+              step.binding.parent_id,
+              step.recovery.strategy,
+              step.recovery.operation_id,
+              step.recovery.step_id,
+              step.recovery.deterministic_key,
+              step.recovery.verb,
+              step.recovery.target_id,
+              step.recovery.semantic_digest,
+              step.recovery.precondition.kind,
+              step.recovery.precondition.kind === 'version'
+                ? step.recovery.precondition.expected_version
+                : null,
+              step.recovery.binding.authority.classification,
+              step.recovery.binding.authority.authority_id,
+              step.recovery.binding.tenant_id,
+              step.recovery.binding.scope,
+              step.recovery.binding.parent_id,
+              JSON.stringify(step.recovery.limits),
+              step.recovery.receipt_scope,
+              step.recovery.compensates_receipt_id,
+            ],
+          );
+        }
+      }
+      const stored = await this.manifestById(tx, manifest.manifest_id);
+      if (!stored || stored.steps.length !== manifest.steps.length) {
+        throw new Error('guarded manifest exact readback failed in its creation transaction.');
+      }
+      return {
+        contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+        deterministic_key: envelope.deterministic_key,
+        manifest: stored,
+        duplicate,
+      };
+    });
+  }
+
+  private async assertManifestStep(
+    client: TypedQueryClient,
+    envelope: KnowledgeGuardedWriteEnvelope,
+  ): Promise<void> {
+    const manifestBinding = envelope.descriptor.manifest;
+    if (!manifestBinding) return;
+    // Serialize every primary and recovery decision for one manifest through
+    // commit. Without this shared row lock, a next-primary transaction and a
+    // recovery transaction can both observe the other's receipt as absent at
+    // READ COMMITTED, then commit contradictory effects and terminal receipts.
+    const lockedManifest = await client.get<{ manifest_id: string }>(
+      `SELECT manifest_id FROM knowledge_guarded_write_manifests
+        WHERE manifest_id = $1
+        FOR UPDATE`,
+      [manifestBinding.manifest_id],
+    );
+    if (!lockedManifest) throw new HttpError(409, 'guarded manifest does not exist.');
+    const manifest = await this.manifestById(client, manifestBinding.manifest_id);
+    if (!manifest) throw new Error('locked guarded manifest disappeared inside its transaction.');
+    const step = manifest.steps[manifestBinding.ordinal];
+    if (!step || step.ordinal !== manifestBinding.ordinal) {
+      throw new HttpError(409, 'guarded manifest step does not exist.');
+    }
+    const descriptor = envelope.descriptor;
+    const action = manifestBinding.phase === 'primary' ? step : step.recovery;
+    if (
+      action.deterministic_key !== envelope.deterministic_key
+      || action.operation_id !== descriptor.operation_id
+      || action.step_id !== descriptor.step_id
+      || action.verb !== descriptor.verb
+      || action.target_id !== descriptor.target_id
+      || action.semantic_digest !== descriptor.payload_digest
+      || canonicalKnowledgeGuardedJson(action.precondition)
+        !== canonicalKnowledgeGuardedJson(descriptor.precondition)
+      || canonicalKnowledgeGuardedJson(action.binding)
+        !== canonicalKnowledgeGuardedJson(descriptor.binding)
+      || canonicalKnowledgeGuardedJson(action.limits)
+        !== canonicalKnowledgeGuardedJson(envelope.limits)
+    ) {
+      throw new HttpError(409, 'guarded write does not match its immutable manifest step.');
+    }
+    if (
+      manifestBinding.phase === 'recovery'
+      && (
+        manifestBinding.compensates_receipt_id !== step.recovery.compensates_receipt_id
+        || (
+          step.recovery.strategy === 'receipt_scoped_compensation'
+          && manifestBinding.compensates_receipt_id === null
+        )
+      )
+    ) {
+      throw new HttpError(409, 'guarded recovery does not match its receipt-scoped manifest action.');
+    }
+    const existingExactReceipt = await client.get<Record<string, unknown>>(
+      `SELECT receipt_id FROM knowledge_guarded_write_receipts
+        WHERE deterministic_key = $1
+          AND authority_classification = $2
+          AND authority_id = $3
+          AND tenant_id = $4
+          AND scope = $5
+          AND parent_id = $6
+          AND operation_id = $7
+          AND step_id = $8
+        LIMIT 1`,
+      [
+        envelope.deterministic_key,
+        descriptor.binding.authority.classification,
+        descriptor.binding.authority.authority_id,
+        descriptor.binding.tenant_id,
+        descriptor.binding.scope,
+        descriptor.binding.parent_id,
+        descriptor.operation_id,
+        descriptor.step_id,
+      ],
+    );
+    if (existingExactReceipt) return;
+
+    const prerequisites = manifestBinding.phase === 'primary'
+      ? step.dependencies.map((ordinal) => manifest.steps[ordinal]!)
+      : manifest.steps.slice(0, step.ordinal + 1);
+    let prefixReceipt: KnowledgeGuardedReceipt | null = null;
+    for (const prior of prerequisites) {
+      if (
+        prior.binding.authority.classification !== this.authority.classification
+        || prior.binding.authority.authority_id !== this.authority.authority_id
+      ) {
+        throw new HttpError(
+          409,
+          'manifest_prior_external_authority_receipt_unverified: this authority cannot certify the prior step.',
+        );
+      }
+      const receipt = await client.get<Record<string, unknown>>(
+        `SELECT * FROM knowledge_guarded_write_receipts
+          WHERE deterministic_key = $1
+            AND authority_classification = $2
+            AND authority_id = $3
+            AND tenant_id = $4
+            AND scope = $5
+            AND parent_id = $6
+          LIMIT 1`,
+        [
+          prior.deterministic_key,
+          prior.binding.authority.classification,
+          prior.binding.authority.authority_id,
+          prior.binding.tenant_id,
+          prior.binding.scope,
+          prior.binding.parent_id,
+        ],
+      );
+      if (!receipt || receipt.status !== 'accepted') {
+        throw new HttpError(409, 'manifest_prior_step_not_accepted.');
+      }
+      if (prior.ordinal === step.ordinal) prefixReceipt = rowToGuardedReceipt(receipt);
+    }
+    if (manifestBinding.phase === 'primary') {
+      for (const prior of prerequisites) {
+        if (
+          prior.recovery.binding.authority.classification !== this.authority.classification
+          || prior.recovery.binding.authority.authority_id !== this.authority.authority_id
+          || prior.recovery.binding.tenant_id !== descriptor.binding.tenant_id
+        ) {
+          throw new HttpError(
+            409,
+            'external_authority_receipt_verifier_required: '
+            + 'this authority cannot prove that a prior recovery action is absent.',
+          );
+        }
+        const recoveryReceipt = await client.get<Record<string, unknown>>(
+          `SELECT status FROM knowledge_guarded_write_receipts
+            WHERE deterministic_key = $1
+              AND authority_classification = $2
+              AND authority_id = $3
+              AND tenant_id = $4
+              AND scope = $5
+              AND parent_id = $6
+              AND operation_id = $7
+              AND step_id = $8
+            LIMIT 1`,
+          [
+            prior.recovery.deterministic_key,
+            prior.recovery.binding.authority.classification,
+            prior.recovery.binding.authority.authority_id,
+            prior.recovery.binding.tenant_id,
+            prior.recovery.binding.scope,
+            prior.recovery.binding.parent_id,
+            prior.recovery.operation_id,
+            prior.recovery.step_id,
+          ],
+        );
+        if (recoveryReceipt) {
+          throw new HttpError(
+            409,
+            'manifest_prior_recovery_terminal: the workflow cannot resume its primary path '
+            + 'after a declared recovery action reached a terminal receipt.',
+          );
+        }
+      }
+    }
+    if (
+      manifestBinding.phase === 'recovery'
+      && step.recovery.strategy === 'receipt_scoped_compensation'
+      && prefixReceipt?.receipt_id !== step.recovery.compensates_receipt_id
+    ) {
+      throw new HttpError(409, 'manifest compensation is not scoped to the accepted prefix receipt.');
+    }
+    if (manifestBinding.phase === 'recovery') {
+      const next = manifest.steps[step.ordinal + 1];
+      if (!next) {
+        throw new HttpError(409, 'manifest has no partial suffix after this prefix; recovery is not runnable.');
+      }
+      if (
+        next.binding.authority.classification !== this.authority.classification
+        || next.binding.authority.authority_id !== this.authority.authority_id
+        || next.binding.tenant_id !== descriptor.binding.tenant_id
+      ) {
+        throw new HttpError(
+          409,
+          'external_authority_receipt_verifier_required: recovery cannot infer the next authority state.',
+        );
+      }
+      const nextReceipt = await client.get<Record<string, unknown>>(
+        `SELECT * FROM knowledge_guarded_write_receipts
+          WHERE deterministic_key = $1
+            AND authority_classification = $2
+            AND authority_id = $3
+            AND tenant_id = $4
+            AND scope = $5
+            AND parent_id = $6
+          LIMIT 1`,
+        [
+          next.deterministic_key,
+          next.binding.authority.classification,
+          next.binding.authority.authority_id,
+          next.binding.tenant_id,
+          next.binding.scope,
+          next.binding.parent_id,
+        ],
+      );
+      if (nextReceipt?.status === 'accepted') {
+        throw new HttpError(409, 'manifest prefix has already advanced; this recovery action is no longer runnable.');
+      }
+    }
+  }
+
+  private async finish(
+    client: TypedQueryClient,
+    envelope: KnowledgeGuardedWriteEnvelope,
+    status: 'accepted' | 'rejected',
+    code: string,
+    result: KnowledgeItem | null,
+  ): Promise<KnowledgeGuardedReceipt> {
+    const descriptor = envelope.descriptor;
+    const binding = descriptor.binding;
+    const receiptId = computeKnowledgeGuardedReceiptId(envelope.deterministic_key);
+    const row = await client.get<Record<string, unknown>>(
+      `INSERT INTO knowledge_guarded_write_receipts (
+         receipt_id, deterministic_key, operation_id, step_id, verb, target_id,
+         authority_classification, authority_id, tenant_id, scope, parent_id,
+         payload_digest, precondition_kind, expected_version,
+         manifest_id, manifest_ordinal, manifest_phase, compensates_receipt_id,
+         status, code, effect_count, result_id, result_version
+       ) VALUES (
+         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23
+       )
+       RETURNING *`,
+      [
+        receiptId,
+        envelope.deterministic_key,
+        descriptor.operation_id,
+        descriptor.step_id,
+        descriptor.verb,
+        descriptor.target_id,
+        binding.authority.classification,
+        binding.authority.authority_id,
+        binding.tenant_id,
+        binding.scope,
+        binding.parent_id,
+        descriptor.payload_digest,
+        descriptor.precondition.kind,
+        descriptor.precondition.kind === 'version' ? descriptor.precondition.expected_version : null,
+        descriptor.manifest?.manifest_id ?? null,
+        descriptor.manifest?.ordinal ?? null,
+        descriptor.manifest?.phase ?? null,
+        descriptor.manifest?.compensates_receipt_id ?? null,
+        status,
+        code,
+        status === 'accepted' ? 1 : 0,
+        result?.id ?? null,
+        result?.version ?? null,
+      ],
+    );
+    const boundClaim = await client.get<Record<string, unknown>>(
+      `UPDATE knowledge_guarded_write_claims
+          SET receipt_id = $1
+        WHERE deterministic_key = $2 AND receipt_id IS NULL
+        RETURNING deterministic_key`,
+      [receiptId, envelope.deterministic_key],
+    );
+    if (!row) throw new Error('guarded receipt insertion returned no row.');
+    if (boundClaim?.deterministic_key !== envelope.deterministic_key) {
+      throw new Error('guarded receipt was not bound to exactly one live operation claim.');
+    }
+    return rowToGuardedReceipt(row);
+  }
+
+  async execute(
+    envelope: KnowledgeGuardedWriteEnvelope,
+    actor: string,
+  ): Promise<KnowledgeGuardedSubmission> {
+    const descriptor = envelope.descriptor;
+    const binding = this.binding(envelope);
+    return this.client.transaction(async (tx) => {
+      await tx.execute(
+        `SELECT
+           set_config('hasna.actor', $1, true),
+           set_config('hasna.reason', $2, true),
+           set_config('hasna.knowledge_guarded_deterministic_key', $3, true)`,
+        [
+          actor,
+          `FCAME-1 ${descriptor.operation_id}/${descriptor.step_id}`,
+          envelope.deterministic_key,
+        ],
+      );
+      await this.assertManifestStep(tx, envelope);
+      await tx.execute(
+        `INSERT INTO knowledge_guarded_write_claims (
+           deterministic_key, operation_id, step_id,
+           authority_classification, authority_id, tenant_id, scope, parent_id,
+           verb, target_id, payload_digest, precondition_kind, expected_version,
+           manifest_id, manifest_ordinal, manifest_phase, compensates_receipt_id
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+         ON CONFLICT DO NOTHING`,
+        [
+          envelope.deterministic_key,
+          descriptor.operation_id,
+          descriptor.step_id,
+          binding.authority.classification,
+          binding.authority.authority_id,
+          binding.tenant_id,
+          binding.scope,
+          binding.parent_id,
+          descriptor.verb,
+          descriptor.target_id,
+          descriptor.payload_digest,
+          descriptor.precondition.kind,
+          descriptor.precondition.kind === 'version' ? descriptor.precondition.expected_version : null,
+          descriptor.manifest?.manifest_id ?? null,
+          descriptor.manifest?.ordinal ?? null,
+          descriptor.manifest?.phase ?? null,
+          descriptor.manifest?.compensates_receipt_id ?? null,
+        ],
+      );
+      const claim = await tx.get<Record<string, unknown>>(
+        `SELECT * FROM knowledge_guarded_write_claims
+          WHERE authority_classification = $1
+            AND authority_id = $2
+            AND tenant_id = $3
+            AND scope = $4
+            AND parent_id = $5
+            AND operation_id = $6
+            AND step_id = $7
+          FOR UPDATE`,
+        [
+          binding.authority.classification,
+          binding.authority.authority_id,
+          binding.tenant_id,
+          binding.scope,
+          binding.parent_id,
+          descriptor.operation_id,
+          descriptor.step_id,
+        ],
+      );
+      if (!claim) throw new Error('guarded operation claim was not created.');
+      if (claim.deterministic_key !== envelope.deterministic_key) {
+        const receipt = claim.receipt_id
+          ? await this.receiptById(tx, String(claim.receipt_id))
+          : null;
+        throw new OperationBindingConflictError(receipt);
+      }
+      if (claim.receipt_id) {
+        const receipt = await this.receiptById(tx, String(claim.receipt_id));
+        if (!receipt) throw new Error('guarded claim references a missing receipt.');
+        return {
+          contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+          deterministic_key: envelope.deterministic_key,
+          receipt,
+          duplicate: true,
+        };
+      }
+
+      if (descriptor.verb === 'create') {
+        const payload = envelope.payload as Extract<KnowledgeGuardedPayload, { title: string }>;
+        const now = new Date().toISOString();
+        const inserted = await tx.get<Record<string, unknown>>(
+          `INSERT INTO knowledge_items (
+             id, short_id, title, content, url, tags, metadata, archived,
+             created_at, updated_at,
+             authority_classification, authority_id, tenant_id, scope, parent_id
+           ) VALUES (
+             $1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,FALSE,$8,$8,$9,$10,$11,$12,$13
+           )
+           ON CONFLICT (id) DO NOTHING
+           RETURNING *`,
+          [
+            descriptor.target_id,
+            makeShortId(descriptor.target_id),
+            payload.title,
+            payload.content ?? '',
+            payload.url ?? null,
+            JSON.stringify(payload.tags ?? []),
+            JSON.stringify(payload.metadata ?? {}),
+            now,
+            binding.authority.classification,
+            binding.authority.authority_id,
+            binding.tenant_id,
+            binding.scope,
+            binding.parent_id,
+          ],
+        );
+        if (!inserted) {
+          const existing = await tx.get<Record<string, unknown>>(
+            `SELECT * FROM knowledge_items WHERE id = $1 FOR UPDATE`,
+            [descriptor.target_id],
+          );
+          const code = existing && rowMatchesGuardedBinding(existing, binding)
+            ? 'target_exists'
+            : 'binding_mismatch';
+          const receipt = await this.finish(tx, envelope, 'rejected', code, null);
+          return {
+            contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+            deterministic_key: envelope.deterministic_key,
+            receipt,
+            duplicate: false,
+          };
+        }
+        const item = rowToItem(inserted);
+        const receipt = await this.finish(tx, envelope, 'accepted', 'created', item);
+        return {
+          contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+          deterministic_key: envelope.deterministic_key,
+          receipt,
+          duplicate: false,
+        };
+      }
+
+      const existing = await tx.get<Record<string, unknown>>(
+        `SELECT * FROM knowledge_items WHERE id = $1 FOR UPDATE`,
+        [descriptor.target_id],
+      );
+      if (!existing) {
+        const receipt = await this.finish(tx, envelope, 'rejected', 'not_found', null);
+        return {
+          contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+          deterministic_key: envelope.deterministic_key,
+          receipt,
+          duplicate: false,
+        };
+      }
+      if (!rowMatchesGuardedBinding(existing, binding)) {
+        const receipt = await this.finish(tx, envelope, 'rejected', 'binding_mismatch', null);
+        return {
+          contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+          deterministic_key: envelope.deterministic_key,
+          receipt,
+          duplicate: false,
+        };
+      }
+      const expectedVersion = descriptor.precondition.kind === 'version'
+        ? descriptor.precondition.expected_version
+        : 0;
+      const currentVersion = Number(existing.version ?? 1);
+      if (currentVersion !== expectedVersion) {
+        const receipt = await this.finish(tx, envelope, 'rejected', 'version_conflict', null);
+        return {
+          contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+          deterministic_key: envelope.deterministic_key,
+          receipt,
+          duplicate: false,
+        };
+      }
+
+      const patch = envelope.payload as Record<string, unknown>;
+      const sets: string[] = [];
+      const params: unknown[] = [];
+      const push = (column: string, value: unknown, cast = '') => {
+        params.push(value);
+        sets.push(`${column} = $${params.length}${cast}`);
+      };
+      if (patch.title !== undefined) push('title', patch.title);
+      if (patch.content !== undefined) push('content', patch.content);
+      if (patch.url !== undefined) push('url', patch.url);
+      if (patch.tags !== undefined) push('tags', JSON.stringify(patch.tags), '::jsonb');
+      if (patch.metadata !== undefined) push('metadata', JSON.stringify(patch.metadata), '::jsonb');
+      if (patch.archived !== undefined) push('archived', patch.archived);
+      push('updated_at', new Date().toISOString());
+      params.push(descriptor.target_id);
+      const idPosition = params.length;
+      params.push(expectedVersion);
+      const versionPosition = params.length;
+      const updated = await tx.get<Record<string, unknown>>(
+        `UPDATE knowledge_items
+            SET ${sets.join(', ')}
+          WHERE id = $${idPosition} AND version = $${versionPosition}
+          RETURNING *`,
+        params,
+      );
+      if (!updated) throw new Error('guarded compare-and-swap lost its locked target.');
+      const item = rowToItem(updated);
+      const receipt = await this.finish(tx, envelope, 'accepted', 'updated', item);
+      return {
+        contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+        deterministic_key: envelope.deterministic_key,
+        receipt,
+        duplicate: false,
+      };
+    });
+  }
+
+  async reconcileManifest(
+    manifestId: string,
+    maintainer: KnowledgeGuardedBinding,
+    limits: KnowledgeGuardedBounds,
+  ): Promise<KnowledgeGuardedManifestReconciliation | null> {
+    const manifest = await this.manifestById(this.client, manifestId);
+    if (
+      !manifest
+      || canonicalKnowledgeGuardedJson(manifest.maintainer) !== canonicalKnowledgeGuardedJson(maintainer)
+    ) {
+      return null;
+    }
+    const steps: KnowledgeGuardedManifestReconciliation['steps'] = [];
+    const externalAuthorities = new Set<string>();
+    const reconcileAction = async (action: {
+      deterministic_key: string;
+      operation_id: string;
+      step_id: string;
+      binding: KnowledgeGuardedBinding;
+    }): Promise<{
+      state: KnowledgeGuardedManifestReconciliation['steps'][number]['state'];
+      receipt: KnowledgeGuardedReceipt | null;
+    }> => {
+      const locallyVerifiable = (
+        action.binding.authority.classification === this.authority.classification
+        && action.binding.authority.authority_id === this.authority.authority_id
+        && action.binding.tenant_id === maintainer.tenant_id
+      );
+      if (!locallyVerifiable) {
+        const authorityKey = `${action.binding.authority.classification}:${action.binding.authority.authority_id}`;
+        externalAuthorities.add(authorityKey);
+        return { state: 'unverified_external_authority', receipt: null };
+      }
+      const row = await this.client.get<Record<string, unknown>>(
+        `SELECT * FROM knowledge_guarded_write_receipts
+          WHERE deterministic_key = $1
+            AND authority_classification = $2
+            AND authority_id = $3
+            AND tenant_id = $4
+            AND scope = $5
+            AND parent_id = $6
+            AND operation_id = $7
+            AND step_id = $8
+          LIMIT 1`,
+        [
+          action.deterministic_key,
+          action.binding.authority.classification,
+          action.binding.authority.authority_id,
+          action.binding.tenant_id,
+          action.binding.scope,
+          action.binding.parent_id,
+          action.operation_id,
+          action.step_id,
+        ],
+      );
+      const receipt = row ? rowToGuardedReceipt(row) : null;
+      return { state: receipt?.status ?? 'missing', receipt };
+    };
+    for (const step of manifest.steps) {
+      const primary = await reconcileAction(step);
+      const recovery = await reconcileAction(step.recovery);
+      steps.push({
+        ordinal: step.ordinal,
+        deterministic_key: step.deterministic_key,
+        authority: step.binding.authority,
+        state: primary.state,
+        receipt: primary.receipt,
+        recovery_deterministic_key: step.recovery.deterministic_key,
+        recovery_state: recovery.state,
+        recovery_receipt: recovery.receipt,
+      });
+    }
+    const completion = evaluateKnowledgeGuardedManifestCompletion(steps);
+    return {
+      contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+      manifest,
+      exact: true,
+      bounded: true,
+      terminal_complete: completion.terminal_complete,
+      accepted_complete: completion.accepted_complete,
+      unsupported_gap: externalAuthorities.size > 0
+        ? `external_authority_receipt_verifier_required:${[...externalAuthorities].sort().join(',')}`
+        : null,
+      steps,
+      limits,
+    };
+  }
+
+  async reconcile(
+    deterministicKey: string,
+    binding: KnowledgeGuardedBinding,
+    operationId: string,
+    stepId: string,
+    limits: KnowledgeGuardedBounds,
+  ): Promise<KnowledgeTerminalReconciliation> {
+    const row = await this.client.get<Record<string, unknown>>(
+      `SELECT * FROM knowledge_guarded_write_receipts
+        WHERE deterministic_key = $1
+          AND authority_classification = $2
+          AND authority_id = $3
+          AND tenant_id = $4
+          AND scope = $5
+          AND parent_id = $6
+          AND operation_id = $7
+          AND step_id = $8
+        LIMIT 1`,
+      [
+        deterministicKey,
+        binding.authority.classification,
+        binding.authority.authority_id,
+        binding.tenant_id,
+        binding.scope,
+        binding.parent_id,
+        operationId,
+        stepId,
+      ],
+    );
+    return {
+      contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+      deterministic_key: deterministicKey,
+      operation_id: operationId,
+      step_id: stepId,
+      exact: true,
+      bounded: true,
+      receipt_count: row ? 1 : 0,
+      terminal_complete: Boolean(row),
+      receipt: row ? rowToGuardedReceipt(row) : null,
+      limits,
+    };
+  }
+
+  async readback(
+    fullId: string,
+    binding: KnowledgeGuardedBinding,
+    limits: KnowledgeGuardedBounds,
+  ): Promise<KnowledgeGuardedReadback | null> {
+    const row = await this.client.get<Record<string, unknown>>(
+      `SELECT * FROM knowledge_items
+        WHERE id = $1
+          AND authority_classification = $2
+          AND authority_id = $3
+          AND tenant_id = $4
+          AND scope = $5
+          AND parent_id = $6
+        LIMIT 1`,
+      [
+        fullId,
+        binding.authority.classification,
+        binding.authority.authority_id,
+        binding.tenant_id,
+        binding.scope,
+        binding.parent_id,
+      ],
+    );
+    if (!row) return null;
+    return {
+      contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+      exact: true,
+      bounded: true,
+      item_count: 1,
+      binding,
+      item: rowToItem(row),
+      limits,
+    };
   }
 }
 
@@ -523,6 +1538,57 @@ export function knowledgeOpenApi(version: string): Record<string, unknown> {
     },
     required: ['error', 'expected', 'current'],
   };
+  const guardedReceipt = {
+    type: 'object',
+    description: 'Immutable FCAME-1 terminal receipt. Private payload bytes are never stored here.',
+    properties: {
+      contract: { type: 'string', enum: [KNOWLEDGE_GUARDED_WRITE_CONTRACT] },
+      receipt_id: { type: 'string' },
+      deterministic_key: { type: 'string' },
+      operation_id: { type: 'string' },
+      step_id: { type: 'string' },
+      status: { type: 'string', enum: ['accepted', 'rejected'] },
+      code: { type: 'string' },
+      effect_count: { type: 'integer', enum: [0, 1] },
+      result_id: { type: 'string', nullable: true },
+      result_version: { type: 'integer', nullable: true },
+      created_at: { type: 'string' },
+    },
+    required: [
+      'contract',
+      'receipt_id',
+      'deterministic_key',
+      'operation_id',
+      'step_id',
+      'status',
+      'code',
+      'effect_count',
+      'created_at',
+    ],
+  };
+  const guardedLimitParameters = [
+    'max_calls',
+    'max_items',
+    'max_bytes',
+    'wall_time_ms',
+  ].map((name) => ({
+    name,
+    in: 'query',
+    required: true,
+    schema: { type: 'integer', minimum: 1 },
+  }));
+  const guardedBindingParameters = [
+    'authority_classification',
+    'authority_id',
+    'tenant_id',
+    'scope',
+    'parent_id',
+  ].map((name) => ({
+    name,
+    in: 'query',
+    required: true,
+    schema: { type: 'string' },
+  }));
   return {
     openapi: '3.0.3',
     info: { title: 'Knowledge', version, description: '@hasna/knowledge self-hosted HTTP API' },
@@ -534,6 +1600,33 @@ export function knowledgeOpenApi(version: string): Record<string, unknown> {
         NotePatch: notePatch,
         NoteVersion: noteVersionSchema,
         VersionConflict: versionConflict,
+        GuardedReceipt: guardedReceipt,
+        GuardedWriteEnvelope: {
+          type: 'object',
+          description:
+            'FCAME-1 frozen descriptor metadata, deterministic key, explicit finite limits, and private payload. '
+            + 'The payload is accepted only in this authenticated request body.',
+          required: ['contract', 'descriptor', 'deterministic_key', 'limits', 'payload'],
+          additionalProperties: true,
+        },
+        GuardedManifest: {
+          type: 'object',
+          description:
+            'Immutable ordered workflow manifest. Every step declares deterministic forward repair or '
+            + 'accepted-receipt-scoped compensation.',
+          required: [
+            'manifest_receipt_id',
+            'manifest_id',
+            'operation_id',
+            'deterministic_key',
+            'manifest_digest',
+            'maintainer',
+            'step_count',
+            'steps',
+            'created_at',
+          ],
+          additionalProperties: true,
+        },
         NoteList: {
           type: 'object',
           properties: {
@@ -654,6 +1747,95 @@ export function knowledgeOpenApi(version: string): Record<string, unknown> {
           },
         },
       },
+      '/v1/guarded-writes': {
+        post: {
+          operationId: 'executeGuardedKnowledgeWrite',
+          summary: 'Execute one FCAME-1 create-if-absent or compare-and-swap write',
+          description:
+            'Requires x-knowledge-tenant-id, Idempotency-Key, and the four x-knowledge-* bound headers. '
+            + 'The server stores one immutable terminal receipt and never falls back to local or raw storage.',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/GuardedWriteEnvelope' },
+              },
+            },
+          },
+          responses: {
+            '201': { description: 'Accepted with one immutable receipt.' },
+            '200': { description: 'Same deterministic operation already accepted; duplicate proof returned.' },
+            '409': { description: 'Terminal rejection or operation/step binding conflict.' },
+          },
+        },
+      },
+      '/v1/guarded-writes/receipts/{deterministicKey}': {
+        get: {
+          operationId: 'reconcileGuardedKnowledgeWrite',
+          summary: 'Bounded exact terminal-receipt reconciliation',
+          parameters: [
+            {
+              name: 'deterministicKey',
+              in: 'path',
+              required: true,
+              schema: { type: 'string' },
+            },
+            ...guardedBindingParameters,
+            { name: 'operation_id', in: 'query', required: true, schema: { type: 'string' } },
+            { name: 'step_id', in: 'query', required: true, schema: { type: 'string' } },
+            ...guardedLimitParameters,
+          ],
+          responses: {
+            '200': {
+              description: 'Exact bounded result containing zero or one terminal receipt and completeness.',
+            },
+          },
+        },
+      },
+      '/v1/guarded-writes/items/{id}': {
+        get: {
+          operationId: 'readbackGuardedKnowledgeItem',
+          summary: 'Exact full-ID readback under the frozen binding',
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+            ...guardedBindingParameters,
+            ...guardedLimitParameters,
+          ],
+          responses: {
+            '200': { description: 'Exactly one full-ID and binding match.' },
+            '404': { description: 'No exact full-ID and binding match.' },
+          },
+        },
+      },
+      '/v1/guarded-manifests': {
+        post: {
+          operationId: 'createGuardedKnowledgeManifest',
+          summary: 'Create an immutable ordered FCAME-1 workflow manifest before step zero',
+          responses: {
+            '201': { description: 'Manifest created.' },
+            '200': { description: 'Exact manifest replay; duplicate proof returned.' },
+            '409': { description: 'manifest_id is already bound to different semantics.' },
+          },
+        },
+      },
+      '/v1/guarded-manifests/{manifestId}': {
+        get: {
+          operationId: 'reconcileGuardedKnowledgeManifest',
+          summary: 'Derive bounded workflow completeness from immutable authority receipts',
+          description:
+            'External-authority steps remain unverified and keep terminal_complete false until that authority '
+            + 'provides a verifiable receipt path.',
+          parameters: [
+            { name: 'manifestId', in: 'path', required: true, schema: { type: 'string' } },
+            ...guardedBindingParameters,
+            ...guardedLimitParameters,
+          ],
+          responses: {
+            '200': { description: 'Manifest plus per-step receipt state and any unsupported authority gap.' },
+            '404': { description: 'No exact manifest and maintainer binding match.' },
+          },
+        },
+      },
       '/v1/registry': {
         get: {
           operationId: 'getRegistry',
@@ -682,6 +1864,296 @@ function json(body: unknown, status = 200): Response {
     status,
     headers: { 'content-type': 'application/json' },
   });
+}
+
+function boundedJson(
+  body: unknown,
+  status: number,
+  bounds: KnowledgeGuardedBounds,
+  startedAt: number,
+): Response {
+  if (Date.now() - startedAt > bounds.wall_time_ms) {
+    throw new HttpError(408, 'guarded phase exceeded its producer wall-time cap.');
+  }
+  const encoded = JSON.stringify(body);
+  if (Buffer.byteLength(encoded, 'utf8') > bounds.max_bytes) {
+    throw new HttpError(413, 'guarded phase response exceeds its producer byte cap.');
+  }
+  return new Response(encoded, {
+    status,
+    headers: { 'content-type': 'application/json' },
+  });
+}
+
+function parsePositiveInteger(value: string | null, field: string): number {
+  const parsed = Number(value);
+  if (!value || !Number.isInteger(parsed) || parsed < 1) {
+    throw new HttpError(400, `${field} must be a positive integer.`);
+  }
+  return parsed;
+}
+
+function guardedBoundsFromHeaders(req: Request): KnowledgeGuardedBounds {
+  const bounds = {
+    max_calls: parsePositiveInteger(req.headers.get('x-knowledge-max-calls'), 'x-knowledge-max-calls'),
+    max_items: parsePositiveInteger(req.headers.get('x-knowledge-max-items'), 'x-knowledge-max-items'),
+    max_bytes: parsePositiveInteger(req.headers.get('x-knowledge-max-bytes'), 'x-knowledge-max-bytes'),
+    wall_time_ms: parsePositiveInteger(req.headers.get('x-knowledge-wall-time-ms'), 'x-knowledge-wall-time-ms'),
+  };
+  try {
+    assertKnowledgeGuardedBounds(bounds);
+  } catch (error) {
+    throw new HttpError(400, error instanceof Error ? error.message : 'invalid guarded bounds.');
+  }
+  return bounds;
+}
+
+function guardedBoundsFromQuery(req: Request, url: URL): KnowledgeGuardedBounds {
+  const fromHeaders = guardedBoundsFromHeaders(req);
+  const fromQuery = {
+    max_calls: parsePositiveInteger(url.searchParams.get('max_calls'), 'max_calls'),
+    max_items: parsePositiveInteger(url.searchParams.get('max_items'), 'max_items'),
+    max_bytes: parsePositiveInteger(url.searchParams.get('max_bytes'), 'max_bytes'),
+    wall_time_ms: parsePositiveInteger(url.searchParams.get('wall_time_ms'), 'wall_time_ms'),
+  };
+  if (canonicalKnowledgeGuardedJson(fromHeaders) !== canonicalKnowledgeGuardedJson(fromQuery)) {
+    throw new HttpError(400, 'guarded query bounds must exactly match the bound headers.');
+  }
+  return fromHeaders;
+}
+
+async function readBoundedJson(
+  req: Request,
+  bounds: KnowledgeGuardedBounds,
+  startedAt: number,
+): Promise<unknown> {
+  if (!req.body) throw new HttpError(400, 'guarded write body is required.');
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const remaining = bounds.wall_time_ms - (Date.now() - startedAt);
+      if (remaining <= 0) throw new HttpError(408, 'guarded request exceeded its producer wall-time cap.');
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const result = await Promise.race([
+        reader.read(),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(
+            () => reject(new HttpError(408, 'guarded request exceeded its producer wall-time cap.')),
+            remaining,
+          );
+        }),
+      ]).finally(() => {
+        if (timer) clearTimeout(timer);
+      });
+      if (result.done) break;
+      total += result.value.byteLength;
+      if (total > bounds.max_bytes) {
+        throw new HttpError(413, 'guarded request exceeds its producer byte cap.');
+      }
+      chunks.push(result.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    throw new HttpError(400, 'guarded request body must be valid JSON.');
+  }
+}
+
+function guardedBindingFromQuery(url: URL): KnowledgeGuardedBinding {
+  const binding = {
+    authority: {
+      classification: url.searchParams.get('authority_classification'),
+      authority_id: url.searchParams.get('authority_id'),
+    },
+    tenant_id: url.searchParams.get('tenant_id'),
+    scope: url.searchParams.get('scope'),
+    parent_id: url.searchParams.get('parent_id'),
+  } as unknown as KnowledgeGuardedBinding;
+  try {
+    assertKnowledgeGuardedBinding(binding);
+  } catch (error) {
+    throw new HttpError(400, error instanceof Error ? error.message : 'invalid guarded binding.');
+  }
+  return binding;
+}
+
+function assertConfiguredAuthority(
+  binding: KnowledgeGuardedBinding,
+  authority: KnowledgeServeGuardedAuthority,
+): void {
+  if (
+    binding.authority.classification !== authority.classification
+    || binding.authority.authority_id !== authority.authority_id
+  ) {
+    throw new HttpError(403, 'guarded write authority does not match this service authority.');
+  }
+}
+
+function assertExactRequestKeys(
+  value: Record<string, unknown>,
+  field: string,
+  expected: readonly string[],
+): void {
+  const actual = Object.keys(value).sort();
+  const wanted = [...expected].sort();
+  if (canonicalKnowledgeGuardedJson(actual) !== canonicalKnowledgeGuardedJson(wanted)) {
+    throw new Error(`${field} keys do not match the FCAME-1 request schema.`);
+  }
+}
+
+function validateGuardedEnvelope(
+  value: unknown,
+  headerBounds: KnowledgeGuardedBounds,
+  authority: KnowledgeServeGuardedAuthority,
+  idempotencyKey: string | null,
+): KnowledgeGuardedWriteEnvelope {
+  try {
+    if (!value || typeof value !== 'object') throw new Error('guarded write envelope is required.');
+    const envelope = value as KnowledgeGuardedWriteEnvelope;
+    assertExactRequestKeys(
+      value as Record<string, unknown>,
+      'guarded write envelope',
+      ['contract', 'descriptor', 'deterministic_key', 'limits', 'payload'],
+    );
+    const descriptor = envelope.descriptor;
+    if (envelope.contract !== KNOWLEDGE_GUARDED_WRITE_CONTRACT) {
+      throw new Error('unsupported guarded-write contract.');
+    }
+    if (
+      !descriptor
+      || descriptor.contract !== KNOWLEDGE_GUARDED_WRITE_CONTRACT
+      || descriptor.schema !== KNOWLEDGE_PRIVATE_INPUT_SCHEMA
+    ) {
+      throw new Error('invalid private input descriptor schema.');
+    }
+    assertExactRequestKeys(
+      descriptor as Record<string, unknown>,
+      'private input descriptor',
+      [
+        'contract',
+        'schema',
+        'descriptor_id',
+        'operation_id',
+        'step_id',
+        'verb',
+        'target_id',
+        'payload_digest',
+        'binding_digest',
+        'precondition',
+        'binding',
+        'manifest',
+        'expires_at',
+      ],
+    );
+    if (typeof descriptor.descriptor_id !== 'string' || descriptor.descriptor_id.length === 0) {
+      throw new Error('private input descriptor id is required.');
+    }
+    const descriptorExpiresAt = Date.parse(descriptor.expires_at);
+    const descriptorNow = Date.now();
+    if (
+      !Number.isFinite(descriptorExpiresAt)
+      || descriptorExpiresAt <= descriptorNow
+      || descriptorExpiresAt > descriptorNow + 60 * 60 * 1000
+    ) {
+      throw new Error('private input descriptor is expired or malformed.');
+    }
+    assertKnowledgeGuardedBinding(descriptor.binding);
+    assertConfiguredAuthority(descriptor.binding, authority);
+    assertKnowledgeGuardedPrecondition(descriptor.verb, descriptor.precondition);
+    assertKnowledgeGuardedPayload(descriptor.verb, envelope.payload);
+    const limits = normalizeKnowledgeGuardedLimits(envelope.limits);
+    if (canonicalKnowledgeGuardedJson(limits) !== canonicalKnowledgeGuardedJson(envelope.limits)) {
+      throw new Error('guarded-write limits must be explicit and complete.');
+    }
+    if (canonicalKnowledgeGuardedJson(limits.submission) !== canonicalKnowledgeGuardedJson(headerBounds)) {
+      throw new Error('submission limits must exactly match the producer bound headers.');
+    }
+    const payloadDigest = knowledgeGuardedDigest(envelope.payload);
+    if (payloadDigest !== descriptor.payload_digest) {
+      throw new Error('private payload digest does not match the frozen descriptor.');
+    }
+    const bindingDigest = knowledgeGuardedDigest({
+      binding: descriptor.binding,
+      operation_id: descriptor.operation_id,
+      step_id: descriptor.step_id,
+      verb: descriptor.verb,
+      target_id: descriptor.target_id,
+      precondition: descriptor.precondition,
+      payload_digest: descriptor.payload_digest,
+      manifest: descriptor.manifest,
+    });
+    if (bindingDigest !== descriptor.binding_digest) {
+      throw new Error('private descriptor binding digest does not match.');
+    }
+    const expectedKey = computeKnowledgeGuardedDeterministicKey({
+      binding: descriptor.binding,
+      operation_id: descriptor.operation_id,
+      step_id: descriptor.step_id,
+      verb: descriptor.verb,
+      target_id: descriptor.target_id,
+      payload_digest: descriptor.payload_digest,
+      precondition: descriptor.precondition,
+      manifest: descriptor.manifest,
+    });
+    if (envelope.deterministic_key !== expectedKey || idempotencyKey !== expectedKey) {
+      throw new Error('deterministic key must match both the frozen tuple and Idempotency-Key.');
+    }
+    if (knowledgeGuardedUtf8Bytes(envelope) > headerBounds.max_bytes) {
+      throw new Error('guarded write envelope exceeds the producer byte cap.');
+    }
+    return envelope;
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    throw new HttpError(400, error instanceof Error ? error.message : 'invalid guarded write envelope.');
+  }
+}
+
+function validateGuardedManifestEnvelope(
+  value: unknown,
+  bounds: KnowledgeGuardedBounds,
+  authority: KnowledgeServeGuardedAuthority,
+  idempotencyKey: string | null,
+): KnowledgeGuardedManifestEnvelope {
+  try {
+    if (!value || typeof value !== 'object') throw new Error('guarded manifest envelope is required.');
+    const envelope = value as KnowledgeGuardedManifestEnvelope;
+    assertExactRequestKeys(
+      value as Record<string, unknown>,
+      'guarded manifest envelope',
+      ['contract', 'maintainer', 'manifest', 'deterministic_key'],
+    );
+    if (envelope.contract !== KNOWLEDGE_GUARDED_WRITE_CONTRACT) {
+      throw new Error('unsupported guarded manifest contract.');
+    }
+    assertKnowledgeGuardedBinding(envelope.maintainer);
+    assertConfiguredAuthority(envelope.maintainer, authority);
+    assertKnowledgeGuardedManifestOptions(envelope.maintainer, envelope.manifest);
+    const expectedKey = computeKnowledgeGuardedManifestDeterministicKey(
+      envelope.maintainer,
+      envelope.manifest,
+    );
+    if (envelope.deterministic_key !== expectedKey || idempotencyKey !== expectedKey) {
+      throw new Error('manifest deterministic key must match both the frozen tuple and Idempotency-Key.');
+    }
+    if (knowledgeGuardedUtf8Bytes(envelope) > bounds.max_bytes) {
+      throw new Error('guarded manifest exceeds the producer byte cap.');
+    }
+    return envelope;
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    throw new HttpError(400, error instanceof Error ? error.message : 'invalid guarded manifest envelope.');
+  }
 }
 
 /**
@@ -730,21 +2202,31 @@ export interface ServeDeps {
   verifier: ApiKeyVerifier;
   store: ApiKeyStore;
   version: string;
+  /**
+   * Explicit authority for FCAME-1 production writes. When absent, legacy
+   * routes keep working and guarded routes fail closed with 503.
+   */
+  guardedAuthority?: KnowledgeServeGuardedAuthority;
 }
 
 export function createServeHandler(deps: ServeDeps): (req: Request) => Promise<Response> {
   const repo = new NoteRepo(deps.client);
+  const guardedRepo = deps.guardedAuthority
+    ? new GuardedWriteRepo(deps.client, deps.guardedAuthority)
+    : null;
   const mode = 'postgres';
 
   const authOrThrow = async (
     req: Request,
     requiredScopes: string[],
+    expectedTid?: string,
   ): Promise<ApiKeyPrincipal> => {
     const url = new URL(req.url);
     const decision = await deps.verifier.authenticate(req.headers, {
       method: req.method,
       path: url.pathname,
       requiredScopes,
+      ...(expectedTid !== undefined ? { expectedTid } : {}),
     });
     if (decision.ok === false) {
       throw new HttpError(decision.status, decision.message);
@@ -791,16 +2273,163 @@ export function createServeHandler(deps: ServeDeps): (req: Request) => Promise<R
         );
       }
 
+      // ---- FCAME-1 guarded writes ----
+      if (path === '/v1/guarded-manifests' && method === 'POST') {
+        if (!guardedRepo) {
+          return json({ error: 'guarded_authority_unconfigured' }, 503);
+        }
+        const startedAt = Date.now();
+        const tenantId = req.headers.get('x-knowledge-tenant-id');
+        if (!tenantId) throw new HttpError(400, 'x-knowledge-tenant-id is required.');
+        await authOrThrow(req, ['knowledge:write'], tenantId);
+        const bounds = guardedBoundsFromHeaders(req);
+        const raw = await readBoundedJson(req, bounds, startedAt);
+        const envelope = validateGuardedManifestEnvelope(
+          raw,
+          bounds,
+          guardedRepo.authority,
+          req.headers.get('idempotency-key'),
+        );
+        if (envelope.maintainer.tenant_id !== tenantId) {
+          throw new HttpError(403, 'manifest tenant does not match the authenticated request tenant.');
+        }
+        try {
+          const submission = await guardedRepo.createManifest(envelope);
+          return boundedJson(submission, submission.duplicate ? 200 : 201, bounds, startedAt);
+        } catch (error) {
+          if (error instanceof ManifestBindingConflictError) {
+            return boundedJson(
+              {
+                error: 'manifest_binding_conflict',
+                manifest: error.manifest,
+              },
+              409,
+              bounds,
+              startedAt,
+            );
+          }
+          throw error;
+        }
+      }
+
+      const guardedManifestMatch = path.match(/^\/v1\/guarded-manifests\/([^/]+)$/);
+      if (guardedManifestMatch) {
+        if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
+        if (!guardedRepo) return json({ error: 'guarded_authority_unconfigured' }, 503);
+        const startedAt = Date.now();
+        const binding = guardedBindingFromQuery(url);
+        assertConfiguredAuthority(binding, guardedRepo.authority);
+        await authOrThrow(req, ['knowledge:read'], binding.tenant_id);
+        const bounds = guardedBoundsFromQuery(req, url);
+        const reconciliation = await guardedRepo.reconcileManifest(
+          decodeURIComponent(guardedManifestMatch[1]!),
+          binding,
+          bounds,
+        );
+        return reconciliation
+          ? boundedJson(reconciliation, 200, bounds, startedAt)
+          : boundedJson({ error: 'not_found' }, 404, bounds, startedAt);
+      }
+
+      if (path === '/v1/guarded-writes' && method === 'POST') {
+        if (!guardedRepo) {
+          return json({ error: 'guarded_authority_unconfigured' }, 503);
+        }
+        const startedAt = Date.now();
+        const tenantId = req.headers.get('x-knowledge-tenant-id');
+        if (!tenantId) throw new HttpError(400, 'x-knowledge-tenant-id is required.');
+        const principal = await authOrThrow(req, ['knowledge:write'], tenantId);
+        const bounds = guardedBoundsFromHeaders(req);
+        const raw = await readBoundedJson(req, bounds, startedAt);
+        const envelope = validateGuardedEnvelope(
+          raw,
+          bounds,
+          guardedRepo.authority,
+          req.headers.get('idempotency-key'),
+        );
+        if (envelope.descriptor.binding.tenant_id !== tenantId) {
+          throw new HttpError(403, 'descriptor tenant does not match the authenticated request tenant.');
+        }
+        try {
+          const submission = await guardedRepo.execute(envelope, principalActor(principal));
+          if (submission.receipt.status === 'rejected') {
+            return boundedJson(
+              { error: 'guarded_write_rejected', ...submission },
+              409,
+              bounds,
+              startedAt,
+            );
+          }
+          return boundedJson(submission, submission.duplicate ? 200 : 201, bounds, startedAt);
+        } catch (error) {
+          if (error instanceof OperationBindingConflictError) {
+            return boundedJson(
+              {
+                error: 'operation_binding_conflict',
+                receipt: error.receipt,
+              },
+              409,
+              bounds,
+              startedAt,
+            );
+          }
+          throw error;
+        }
+      }
+
+      const guardedReceiptMatch = path.match(/^\/v1\/guarded-writes\/receipts\/([^/]+)$/);
+      if (guardedReceiptMatch) {
+        if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
+        if (!guardedRepo) return json({ error: 'guarded_authority_unconfigured' }, 503);
+        const startedAt = Date.now();
+        const binding = guardedBindingFromQuery(url);
+        assertConfiguredAuthority(binding, guardedRepo.authority);
+        await authOrThrow(req, ['knowledge:read'], binding.tenant_id);
+        const bounds = guardedBoundsFromQuery(req, url);
+        const operationId = url.searchParams.get('operation_id');
+        const stepId = url.searchParams.get('step_id');
+        if (!operationId || !stepId) {
+          throw new HttpError(400, 'operation_id and step_id are required for exact reconciliation.');
+        }
+        const reconciliation = await guardedRepo.reconcile(
+          decodeURIComponent(guardedReceiptMatch[1]!),
+          binding,
+          operationId,
+          stepId,
+          bounds,
+        );
+        return boundedJson(reconciliation, 200, bounds, startedAt);
+      }
+
+      const guardedItemMatch = path.match(/^\/v1\/guarded-writes\/items\/([^/]+)$/);
+      if (guardedItemMatch) {
+        if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
+        if (!guardedRepo) return json({ error: 'guarded_authority_unconfigured' }, 503);
+        const startedAt = Date.now();
+        const binding = guardedBindingFromQuery(url);
+        assertConfiguredAuthority(binding, guardedRepo.authority);
+        await authOrThrow(req, ['knowledge:read'], binding.tenant_id);
+        const bounds = guardedBoundsFromQuery(req, url);
+        const readback = await guardedRepo.readback(
+          decodeURIComponent(guardedItemMatch[1]!),
+          binding,
+          bounds,
+        );
+        return readback
+          ? boundedJson(readback, 200, bounds, startedAt)
+          : boundedJson({ error: 'not_found' }, 404, bounds, startedAt);
+      }
+
       // ---- Notes CRUD ----
       if (path === '/v1/notes') {
         if (method === 'GET') {
-          await authOrThrow(req, ['knowledge:read']);
+          const principal = await authOrThrow(req, ['knowledge:read']);
           const result = await repo.list({
             limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined,
             offset: url.searchParams.has('offset') ? Number(url.searchParams.get('offset')) : undefined,
             search: url.searchParams.get('search') ?? undefined,
             includeArchived: url.searchParams.get('includeArchived') === 'true',
-          });
+          }, principal.tid);
           return json(result);
         }
         if (method === 'POST') {
@@ -819,11 +2448,11 @@ export function createServeHandler(deps: ServeDeps): (req: Request) => Promise<R
       const versionListMatch = path.match(/^\/v1\/notes\/([^/]+)\/versions$/);
       if (versionListMatch) {
         if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
-        await authOrThrow(req, ['knowledge:read']);
+        const principal = await authOrThrow(req, ['knowledge:read']);
         const history = await repo.listVersions(decodeURIComponent(versionListMatch[1]!), {
           limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined,
           offset: url.searchParams.has('offset') ? Number(url.searchParams.get('offset')) : undefined,
-        });
+        }, principal.tid);
         // null = no such entry (404). An entry with no edits yields 200 and an
         // empty list — the two must never collapse into one answer.
         return history ? json(history) : json({ error: 'not_found' }, 404);
@@ -832,10 +2461,11 @@ export function createServeHandler(deps: ServeDeps): (req: Request) => Promise<R
       const versionOneMatch = path.match(/^\/v1\/notes\/([^/]+)\/versions\/(\d+)$/);
       if (versionOneMatch) {
         if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
-        await authOrThrow(req, ['knowledge:read']);
+        const principal = await authOrThrow(req, ['knowledge:read']);
         const snapshot = await repo.getVersion(
           decodeURIComponent(versionOneMatch[1]!),
           Number(versionOneMatch[2]),
+          principal.tid,
         );
         return snapshot ? json(snapshot) : json({ error: 'not_found' }, 404);
       }
@@ -844,8 +2474,8 @@ export function createServeHandler(deps: ServeDeps): (req: Request) => Promise<R
       if (noteMatch) {
         const id = decodeURIComponent(noteMatch[1]!);
         if (method === 'GET') {
-          await authOrThrow(req, ['knowledge:read']);
-          const item = await repo.get(id);
+          const principal = await authOrThrow(req, ['knowledge:read']);
+          const item = await repo.get(id, principal.tid);
           return item ? json(item) : json({ error: 'not_found' }, 404);
         }
         if (method === 'PATCH') {
@@ -900,6 +2530,31 @@ export interface RunningServe {
   stop: () => Promise<void>;
 }
 
+export function resolveKnowledgeGuardedAuthority(
+  env: NodeJS.ProcessEnv = process.env,
+): KnowledgeServeGuardedAuthority | undefined {
+  const classification = env.HASNA_KNOWLEDGE_AUTHORITY_CLASSIFICATION;
+  const authorityId = env.HASNA_KNOWLEDGE_AUTHORITY_ID;
+  if (!classification && !authorityId) return undefined;
+  if (!classification || !authorityId) {
+    throw new Error(
+      'FCAME-1 guarded writes require both HASNA_KNOWLEDGE_AUTHORITY_CLASSIFICATION '
+      + 'and HASNA_KNOWLEDGE_AUTHORITY_ID.',
+    );
+  }
+  const binding = {
+    authority: {
+      classification,
+      authority_id: authorityId,
+    },
+    tenant_id: 'validation-only',
+    scope: 'validation-only',
+    parent_id: 'validation-only',
+  } as KnowledgeGuardedBinding;
+  assertKnowledgeGuardedBinding(binding);
+  return binding.authority;
+}
+
 /**
  * Start the knowledge HTTP service on Bun. Opens a PURE-REMOTE cloud pool and a
  * contracts API-key verifier backed by the api_keys table (revocation).
@@ -929,7 +2584,13 @@ export async function startKnowledgeServe(options: StartServeOptions = {}): Prom
     },
   });
 
-  const handler = createServeHandler({ client, verifier, store, version });
+  const handler = createServeHandler({
+    client,
+    verifier,
+    store,
+    version,
+    guardedAuthority: resolveKnowledgeGuardedAuthority(env),
+  });
 
   // Bun.serve is provided by the Bun runtime the Dockerfile uses.
   const BunGlobal = (globalThis as unknown as { Bun?: { serve: (o: unknown) => { port: number; stop: () => void } } })

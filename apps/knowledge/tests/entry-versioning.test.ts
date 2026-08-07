@@ -281,23 +281,16 @@ describe('entry versioning — schema and trigger', () => {
   });
 
   test('tenancy is carried into the snapshot when the schema has a tenant_id column', async () => {
-    // This repo's knowledge_items has no tenant column; the deployed build's
-    // does. The trigger reads it through to_jsonb(OLD) so ONE migration is
-    // correct against both. Without this test that branch has no input that can
-    // distinguish it from a hardcoded NULL — measured: replacing it with NULL
-    // was the one planted defect the suite did not catch.
+    // FCAME-1 now owns tenant_id in the canonical schema. The trigger still
+    // reads it through to_jsonb(OLD), preserving compatibility with databases
+    // that acquired the column before this migration shipped.
     const { db, repo } = await harness();
-    await db.query(`ALTER TABLE knowledge_items ADD COLUMN tenant_id TEXT`);
-    try {
-      const item = await repo.create({ title: 'T', content: 'a' });
-      await db.query(`UPDATE knowledge_items SET tenant_id = 'tenant-abc' WHERE id = $1`, [item.id]);
-      await db.query(`UPDATE knowledge_items SET content = 'b' WHERE id = $1`, [item.id]);
-      const rows = await versionRows(db, item.id);
-      expect(rows).toHaveLength(1);
-      expect(rows[0]!.tenant_id).toBe('tenant-abc');
-    } finally {
-      await db.query(`ALTER TABLE knowledge_items DROP COLUMN tenant_id`);
-    }
+    const item = await repo.create({ title: 'T', content: 'a' });
+    await db.query(`UPDATE knowledge_items SET tenant_id = 'tenant-abc' WHERE id = $1`, [item.id]);
+    await db.query(`UPDATE knowledge_items SET content = 'b' WHERE id = $1`, [item.id]);
+    const rows = await versionRows(db, item.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.tenant_id).toBe('tenant-abc');
   });
 
   test('a version-worthy change always advances updated_at, even when the caller does not', async () => {
