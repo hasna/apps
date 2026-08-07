@@ -29,6 +29,12 @@ import {
   planProjectTaskListEnsure,
   rollbackProjectTaskListEnsure,
 } from "../lib/project-task-list-ensure.js";
+import {
+  PlanProjectLinkError,
+  applyPlanProjectLink,
+  planPlanProjectLink,
+  rollbackPlanProjectLink,
+} from "../lib/plan-project-link.js";
 
 export interface V1RequestDependencies {
   getVerifier?: typeof getCloudVerifier;
@@ -1058,6 +1064,47 @@ export async function handleV1Request(
         const plan = await store.plans.create(validated.input, contextFromPrincipal(principal, validated.input));
         return json({ plan }, 201);
       }
+      if (id && action === "project-link" && !subId) {
+        if (method === "GET") {
+          const projectId = url.searchParams.get("project_id");
+          if (!projectId?.trim()) return error(400, "project_id query parameter is required");
+          return json(await planPlanProjectLink(store, id, projectId));
+        }
+        if (method !== "POST") return error(405, `method ${method} not allowed on /v1/plans/:id/project-link`);
+        const body = await readJson<Record<string, unknown>>(req);
+        if (!body) return error(400, "invalid JSON body");
+        const allowed = new Set(["project_id", "expected_plan_revision", "expected_project_revision", "idempotency_key"]);
+        const unknown = Object.keys(body).find((key) => !allowed.has(key));
+        if (unknown) return error(400, `unknown plan-project-link field: ${unknown}`);
+        for (const field of ["project_id", "expected_plan_revision", "expected_project_revision", "idempotency_key"] as const) {
+          if (typeof body[field] !== "string" || !body[field].trim()) {
+            return error(400, `${field} must be a non-empty string`);
+          }
+        }
+        const result = await applyPlanProjectLink(store, id, body.project_id as string, {
+          expected_plan_revision: body.expected_plan_revision as string,
+          expected_project_revision: body.expected_project_revision as string,
+          idempotency_key: body.idempotency_key as string,
+        });
+        return json(result, result.action === "linked" ? 201 : 200);
+      }
+      if (id && action === "project-link" && subId === "rollback") {
+        if (method !== "POST") return error(405, `method ${method} not allowed on /v1/plans/:id/project-link/rollback`);
+        const body = await readJson<Record<string, unknown>>(req);
+        if (!body) return error(400, "invalid JSON body");
+        const allowed = new Set(["project_id", "receipt_id", "expected_plan_revision"]);
+        const unknown = Object.keys(body).find((key) => !allowed.has(key));
+        if (unknown) return error(400, `unknown plan-project-link rollback field: ${unknown}`);
+        for (const field of ["project_id", "receipt_id", "expected_plan_revision"] as const) {
+          if (typeof body[field] !== "string" || !body[field].trim()) {
+            return error(400, `${field} must be a non-empty string`);
+          }
+        }
+        return json(await rollbackPlanProjectLink(store, id, body.project_id as string, {
+          receipt_id: body.receipt_id as string,
+          expected_plan_revision: body.expected_plan_revision as string,
+        }));
+      }
       if (id && method === "GET") {
         const plan = await store.plans.get(id);
         return plan ? json({ plan }) : error(404, "plan not found");
@@ -1360,6 +1407,18 @@ export async function handleV1Request(
 
     return error(404, `unknown /v1 resource: ${resource ?? "(root)"}`);
   } catch (e) {
+    if (e instanceof PlanProjectLinkError) {
+      const status = e.code === "PLAN_PROJECT_LINK_PLAN_NOT_FOUND"
+        || e.code === "PLAN_PROJECT_LINK_PROJECT_NOT_FOUND"
+        || e.code === "PLAN_PROJECT_LINK_RECEIPT_NOT_FOUND"
+        ? 404
+        : e.code === "PLAN_PROJECT_LINK_IDEMPOTENCY_KEY_INVALID"
+          ? 400
+          : e.code === "PLAN_PROJECT_LINK_UNSUPPORTED"
+            ? 501
+            : 409;
+      return error(status, e.message, { code: e.code, conflict: status === 409, ...e.details });
+    }
     if (e instanceof ProjectTaskListEnsureError) {
       const status = e.code === "PROJECT_NOT_FOUND"
         || e.code === "PROJECT_TASK_LIST_RECEIPT_NOT_FOUND"

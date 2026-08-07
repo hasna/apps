@@ -7,6 +7,9 @@ import type {
   CreateTaskListInput,
   CreateTemplateInput,
   Plan,
+  PlanProjectLinkReceipt,
+  PlanProjectLinkRollbackResult,
+  PlanProjectLinkResult,
   Project,
   RegisterAgentInput,
   RenameProjectInput,
@@ -54,6 +57,8 @@ export interface TodosStorageAdapter {
   readonly tasks: TodosTaskStore;
   readonly projects: TodosProjectStore;
   readonly plans: TodosPlanStore;
+  /** Atomic guarded linkage for one existing plan and every current member task. */
+  readonly planProjectLinks?: TodosPlanProjectLinkStore;
   readonly agents: TodosAgentStore;
   readonly taskLists: TodosTaskListStore;
   readonly templates: TodosTemplateStore;
@@ -270,6 +275,32 @@ export interface TodosPlanStore {
   list(projectId?: string, context?: TodosStorageContext): MaybePromise<Plan[]>;
   update(id: string, input: UpdatePlanInput, context?: TodosStorageContext): MaybePromise<Plan>;
   delete(id: string, context?: TodosStorageContext): MaybePromise<boolean>;
+}
+
+export interface TodosPlanProjectLinkApplyInput {
+  plan_id: string;
+  project_id: string;
+  expected_plan_revision: string;
+  expected_project_revision: string;
+  idempotency_key: string;
+  receipt_id: string;
+  created_at: string;
+}
+
+export interface TodosPlanProjectLinkRollbackInput {
+  plan_id: string;
+  project_id: string;
+  receipt_id: string;
+  expected_plan_revision: string;
+  rollback_receipt_id: string;
+  restored_at: string;
+}
+
+export interface TodosPlanProjectLinkStore {
+  apply(input: TodosPlanProjectLinkApplyInput, context?: TodosStorageContext): MaybePromise<PlanProjectLinkResult>;
+  rollback(input: TodosPlanProjectLinkRollbackInput, context?: TodosStorageContext): MaybePromise<PlanProjectLinkRollbackResult>;
+  getReceipt(receiptId: string, context?: TodosStorageContext): MaybePromise<PlanProjectLinkReceipt | null>;
+  getReceiptByIdempotencyKey(idempotencyKey: string, context?: TodosStorageContext): MaybePromise<PlanProjectLinkReceipt | null>;
 }
 
 export interface TodosAgentReleaseResult {

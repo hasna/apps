@@ -2,7 +2,7 @@
 // Regenerate: bun run scripts/generate-sdk.ts
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Todos V1 API 0.15.7
+// Source: Todos V1 API 0.15.9
 
 export interface Task { "id"?: string; "title"?: string; "description"?: string; "status"?: string; "priority"?: string; "project_id"?: string | null; "assigned_to"?: string | null; "agent_id"?: string | null; "tags"?: Array<string>; "version"?: number; "created_at"?: string; "updated_at"?: string }
 
@@ -20,6 +20,12 @@ export interface TaskComment { "id": string; "task_id": string; "agent_id": stri
 
 export interface Plan { "id": string; "slug": string | null; "project_id"?: string | null; "task_list_id"?: string | null; "agent_id"?: string | null; "name": string; "description"?: string | null; "status": "active" | "completed" | "archived"; "created_at": string; "updated_at": string }
 
+export interface PlanProjectLinkReceipt { "schema_version": "todos.plan-project-link.v1"; "receipt_id": string; "idempotency_key": string; "plan_id": string; "project_id": string; "prior_plan_project_id": string | null; "prior_task_project_ids": Record<string, string | null>; "task_ids": Array<string>; "task_count": number; "result_plan_revision": string; "result_digest": string; "rollback_supported": true; "created_at": string }
+
+export interface PlanProjectLinkResult { "mode": "plan" | "apply"; "action": "would_link" | "linked" | "already_linked"; "plan": Plan; "project": Project; "tasks": Array<Task>; "receipt": PlanProjectLinkReceipt | null }
+
+export interface PlanProjectLinkRollbackResult { "schema_version": "todos.plan-project-link.v1"; "action": "restored"; "plan": Plan; "tasks": Array<Task>; "accepted_receipt_id": string; "rollback_receipt_id": string; "restored_at": string }
+
 export interface Template { "id": string; "name": string; "title_pattern": string; "description"?: string | null; "priority": "low" | "medium" | "high" | "critical"; "tags": Array<string>; "variables": Array<{ "name"?: string; "required"?: boolean; "default"?: string; "description"?: string }>; "version": number; "project_id"?: string | null; "plan_id"?: string | null; "metadata": Record<string, unknown>; "created_at": string; "tasks"?: Array<TemplateTask> }
 
 export interface TemplateTask { "id": string; "template_id": string; "position": number; "title_pattern": string; "description"?: string | null; "priority": "low" | "medium" | "high" | "critical"; "tags": Array<string>; "task_type"?: string | null; "condition"?: string | null; "include_template_id"?: string | null; "depends_on_positions": Array<number>; "metadata": Record<string, unknown>; "created_at": string }
@@ -28,9 +34,9 @@ export interface TemplateVariable { "name": string; "required": boolean; "defaul
 
 export interface CreateTemplateTaskInput { "position"?: number; "title_pattern": string; "description"?: string | null; "priority"?: "low" | "medium" | "high" | "critical"; "tags"?: Array<string>; "task_type"?: string | null; "condition"?: string | null; "include_template_id"?: string | null; "depends_on"?: Array<number>; "depends_on_positions"?: Array<number>; "metadata"?: Record<string, unknown> }
 
-export interface CreateTaskInput { "title": string; "description"?: string | null; "status"?: string; "priority"?: string; "project_id"?: string; "assigned_to"?: string; "agent_id"?: string; "tags"?: Array<string> }
+export interface CreateTaskInput { "title": string; "description"?: string | null; "status"?: string; "priority"?: string; "project_id"?: string; "plan_id"?: string; "assigned_to"?: string; "agent_id"?: string; "tags"?: Array<string> }
 
-export interface UpdateTaskInput { "title"?: string; "description"?: string; "status"?: string; "priority"?: string; "assigned_to"?: string; "project_id"?: string | null; "task_list_id"?: string | null; "version"?: number }
+export interface UpdateTaskInput { "title"?: string; "description"?: string; "status"?: string; "priority"?: string; "assigned_to"?: string; "project_id"?: string | null; "plan_id"?: string | null; "task_list_id"?: string | null; "version"?: number }
 
 export interface CompleteTaskInput { "agent_id"?: string; "attachment_ids"?: Array<string>; "files_changed"?: Array<string>; "test_results"?: string; "commit_hash"?: string; "notes"?: string; "confidence"?: number }
 
@@ -43,6 +49,10 @@ export interface RenameProjectInput { "new_slug": string; "name"?: string }
 export interface ProjectTaskListEnsureApplyInput { "expected_project_revision": string; "idempotency_key"?: string }
 
 export interface ProjectTaskListRollbackInput { "receipt_id": string; "expected_task_list_revision": string }
+
+export interface PlanProjectLinkApplyInput { "project_id": string; "expected_plan_revision": string; "expected_project_revision": string; "idempotency_key": string }
+
+export interface PlanProjectLinkRollbackInput { "project_id": string; "receipt_id": string; "expected_plan_revision": string }
 
 export interface ErrorResponse { "error": string; "code"?: string; "conflict"?: boolean }
 
@@ -197,6 +207,33 @@ export class TodosV1Client {
     /** Update a plan */
     async updatePlan(id: string, body: UpdatePlanInput, init?: RequestInit): Promise<{ "plan"?: Plan }> {
       return this.request("PATCH", `/v1/plans/${encodeURIComponent(String(id))}`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Plan atomic linkage of an existing plan and every current member task to a project */
+    async planPlanProjectLink(id: string, query?: { "project_id": string }, init?: RequestInit): Promise<PlanProjectLinkResult> {
+      return this.request("GET", `/v1/plans/${encodeURIComponent(String(id))}/project-link`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Atomically and idempotently link an existing plan and every current member task to a project */
+    async applyPlanProjectLink(id: string, body: PlanProjectLinkApplyInput, init?: RequestInit): Promise<PlanProjectLinkResult> {
+      return this.request("POST", `/v1/plans/${encodeURIComponent(String(id))}/project-link`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Conditionally restore every exact prior project link from an accepted receipt */
+    async rollbackPlanProjectLink(id: string, body: PlanProjectLinkRollbackInput, init?: RequestInit): Promise<PlanProjectLinkRollbackResult> {
+      return this.request("POST", `/v1/plans/${encodeURIComponent(String(id))}/project-link/rollback`, {
         body,
         query: undefined,
         init,

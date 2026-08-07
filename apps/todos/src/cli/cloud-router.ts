@@ -11,7 +11,7 @@
 import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
 import { normalizeStorageMode } from "@hasna/contracts/mode";
 import { resolve as resolvePath } from "node:path";
-import type { Agent, CreatePlanInput, CreateTaskListInput, CreateTemplateInput, Plan, Project, ProjectTaskListEnsureResult, ProjectTaskListRollbackResult, RegisterAgentInput, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList, TaskTemplate, TemplateWithTasks, UpdatePlanInput, UpdateTaskListInput } from "../types/index.js";
+import type { Agent, CreatePlanInput, CreateTaskListInput, CreateTemplateInput, Plan, PlanProjectLinkResult, PlanProjectLinkRollbackResult, Project, ProjectTaskListEnsureResult, ProjectTaskListRollbackResult, RegisterAgentInput, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList, TaskTemplate, TemplateWithTasks, UpdatePlanInput, UpdateTaskListInput } from "../types/index.js";
 import { isBlockingDependencyStatus } from "../types/index.js";
 import type { UpdateTemplateInput } from "../storage/interfaces.js";
 import { redactEvidenceText } from "../lib/redaction.js";
@@ -1190,6 +1190,67 @@ export async function cloudRollbackProjectTaskListEnsure(
       input,
     ),
     ["PROJECT_NOT_FOUND", "PROJECT_TASK_LIST_RECEIPT_NOT_FOUND"],
+  );
+}
+
+/** Plan a non-mutating link of one existing plan and all its tasks to a project. */
+export async function cloudPlanPlanProjectLink(
+  client: HasnaStorageClient,
+  planId: string,
+  projectId: string,
+): Promise<PlanProjectLinkResult> {
+  return requiredRemoteRoute(
+    client,
+    "/v1/plans/:id/project-link",
+    () => client.transport.get<PlanProjectLinkResult>(
+      `/plans/${encodeURIComponent(planId)}/project-link`,
+      { query: { project_id: projectId } },
+    ),
+    ["PLAN_PROJECT_LINK_PLAN_NOT_FOUND", "PLAN_PROJECT_LINK_PROJECT_NOT_FOUND"],
+  );
+}
+
+/** Atomically link one existing plan and all its tasks to a project. */
+export async function cloudApplyPlanProjectLink(
+  client: HasnaStorageClient,
+  planId: string,
+  projectId: string,
+  input: {
+    expected_plan_revision: string;
+    expected_project_revision: string;
+    idempotency_key: string;
+  },
+): Promise<PlanProjectLinkResult> {
+  return requiredRemoteRoute(
+    client,
+    "/v1/plans/:id/project-link",
+    () => client.transport.post<PlanProjectLinkResult>(
+      `/plans/${encodeURIComponent(planId)}/project-link`,
+      { project_id: projectId, ...input },
+    ),
+    ["PLAN_PROJECT_LINK_PLAN_NOT_FOUND", "PLAN_PROJECT_LINK_PROJECT_NOT_FOUND"],
+  );
+}
+
+/** Roll back an accepted plan/project link receipt at the exact current revision. */
+export async function cloudRollbackPlanProjectLink(
+  client: HasnaStorageClient,
+  planId: string,
+  projectId: string,
+  input: { receipt_id: string; expected_plan_revision: string },
+): Promise<PlanProjectLinkRollbackResult> {
+  return requiredRemoteRoute(
+    client,
+    "/v1/plans/:id/project-link/rollback",
+    () => client.transport.post<PlanProjectLinkRollbackResult>(
+      `/plans/${encodeURIComponent(planId)}/project-link/rollback`,
+      { project_id: projectId, ...input },
+    ),
+    [
+      "PLAN_PROJECT_LINK_PLAN_NOT_FOUND",
+      "PLAN_PROJECT_LINK_PROJECT_NOT_FOUND",
+      "PLAN_PROJECT_LINK_RECEIPT_NOT_FOUND",
+    ],
   );
 }
 

@@ -65,6 +65,12 @@ import {
 import { addComment, listComments } from "../db/comments.js";
 import { getDatabase } from "../db/database.js";
 import { scanSqliteIntegrity } from "../db/integrity.js";
+import {
+  applyPlanProjectLinkSqlite,
+  getPlanProjectLinkReceipt,
+  getPlanProjectLinkReceiptByIdempotencyKey,
+  rollbackPlanProjectLinkSqlite,
+} from "../db/plan-project-links.js";
 import type { TodosStorageAdapter } from "./interfaces.js";
 import {
   exportSqliteTodosStorageSnapshot,
@@ -235,6 +241,12 @@ export function createLocalSqliteTodosStorageAdapter(
       list: (projectId) => listPlans(projectId, database()),
       update: (id, input) => updatePlan(id, input, database()),
       delete: (id) => deletePlan(id, database()),
+    },
+    planProjectLinks: {
+      apply: (input) => applyPlanProjectLinkSqlite(input, database()),
+      rollback: (input) => rollbackPlanProjectLinkSqlite(input, database()),
+      getReceipt: (receiptId) => getPlanProjectLinkReceipt(receiptId, database()),
+      getReceiptByIdempotencyKey: (key) => getPlanProjectLinkReceiptByIdempotencyKey(key, database()),
     },
     agents: {
       register: (input) => registerAgent(input, database()),

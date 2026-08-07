@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { LockError, ProjectNotFoundError, ResourceConflictError, TaskNotStartableError, TaskReferenceAmbiguousError, isTerminalStatus } from "../types/index.js";
+import { LockError, PlanNotFoundError, ProjectNotFoundError, ResourceConflictError, TaskNotStartableError, TaskReferenceAmbiguousError, isTerminalStatus } from "../types/index.js";
 import type {
   Agent,
   CreateCommentInput,
@@ -9,6 +9,9 @@ import type {
   CreateTaskListInput,
   CreateTemplateInput,
   Plan,
+  PlanProjectLinkReceipt,
+  PlanProjectLinkResult,
+  PlanProjectLinkRollbackResult,
   Project,
   RegisterAgentInput,
   Task,
@@ -40,6 +43,8 @@ import type {
   TodosTaskCommitRecord,
   TodosTaskGitRefRecord,
   TodosLockResult,
+  TodosPlanProjectLinkApplyInput,
+  TodosPlanProjectLinkRollbackInput,
   TodosStorageAdapter,
   TodosStorageContext,
   TodosStorageImportResult,
@@ -53,6 +58,13 @@ import type {
   TodosTaskVerification,
   UpdateTemplateInput,
 } from "./interfaces.js";
+import {
+  PLAN_PROJECT_LINK_SCHEMA_VERSION,
+  PlanProjectLinkError,
+  assertPlanProjectLinkReceipt,
+  planProjectLinkRollbackReceiptId,
+  planProjectLinkResultDigest,
+} from "../lib/plan-project-link-contract.js";
 import {
   DEFAULT_TODOS_POSTGRES_CURSOR_TABLE,
   DEFAULT_TODOS_POSTGRES_SYNC_TABLE,
@@ -78,7 +90,7 @@ import {
   validateSnapshotRoutingRecords,
 } from "../lib/slugs.js";
 
-type RemoteObjectType = TodosPostgresSyncRecordType | "comments" | "dependencies" | "verifications" | "commits" | "refs" | "template_tasks";
+type RemoteObjectType = TodosPostgresSyncRecordType | "comments" | "dependencies" | "verifications" | "commits" | "refs" | "template_tasks" | "plan_project_link_receipts" | "plan_project_link_rollback_receipts";
 
 export interface CreatePostgresTodosStorageAdapterOptions {
   client: TodosPostgresQueryClient;
@@ -178,6 +190,12 @@ export function createPostgresTodosStorageAdapter(
         .sort((a, b) => a.name.localeCompare(b.name)),
       update: (id, input) => updatePlan(id, input, store),
       delete: (id, context) => store.deletePlan(id, context),
+    },
+    planProjectLinks: {
+      apply: (input, context) => store.applyPlanProjectLink(input, context),
+      rollback: (input, context) => store.rollbackPlanProjectLink(input, context),
+      getReceipt: (receiptId) => store.getPlanProjectLinkReceipt(receiptId),
+      getReceiptByIdempotencyKey: (key) => store.getPlanProjectLinkReceiptByIdempotencyKey(key),
     },
     agents: {
       register: (input, context) => registerAgent(input, store, context),
@@ -737,6 +755,148 @@ class PostgresJsonRecordStore {
   }
 
   /**
+   * Serialize task membership changes with guarded plan/project linkage.
+   * Both this write and the link transaction lock the same plan row before
+   * reading or changing membership, so an apply snapshot cannot miss a task
+   * inserted into or moved out of the plan at the CAS point.
+   */
+  async upsertTaskWithPlanMembershipGuard(
+    value: Task,
+    guardedPlanIds: string[],
+    explicitProject: boolean,
+    context: TodosStorageContext = {},
+  ): Promise<Task> {
+    const planIds = [...new Set(guardedPlanIds.filter(Boolean))].sort();
+    if (planIds.length === 0) return this.upsert("tasks", value, context);
+    await this.ensureSchema();
+    const updatedAt = value.updated_at;
+    const targetPlanId = value.plan_id;
+    const result = await this.options.client.query<{
+      all_plans_found: boolean;
+      target_plan_found: boolean;
+      project_conflict: boolean;
+      payload: unknown | null;
+    }>(
+      `/* todos:task-plan-membership-guard */ WITH
+       locked_plans AS MATERIALIZED (
+         SELECT object_id, payload FROM ${this.tableName}
+         WHERE service = $1 AND object_type = 'plans' AND deleted_at IS NULL
+           AND object_id IN (SELECT value FROM jsonb_array_elements_text($7::jsonb))
+         ORDER BY object_id
+         FOR UPDATE
+       ), validation AS (
+         SELECT
+           (SELECT count(*) FROM locked_plans) = jsonb_array_length($7::jsonb) AS all_plans_found,
+           ($8::text IS NULL OR EXISTS (SELECT 1 FROM locked_plans WHERE object_id = $8)) AS target_plan_found,
+           (SELECT payload->>'project_id' FROM locked_plans WHERE object_id = $8) AS target_project_id
+       ), guarded AS (
+         SELECT
+           validation.*,
+           ($9::boolean AND validation.target_project_id IS NOT NULL
+             AND ($3::jsonb->>'project_id') IS DISTINCT FROM validation.target_project_id) AS project_conflict,
+           CASE
+             WHEN validation.target_project_id IS NULL THEN $3::jsonb
+             ELSE jsonb_set($3::jsonb, '{project_id}', to_jsonb(validation.target_project_id), true)
+           END AS payload
+         FROM validation
+       ), stored AS (
+         INSERT INTO ${this.tableName} (
+           service, object_type, object_id, payload, updated_at,
+           deleted_at, source_machine_id, version
+         )
+         SELECT $1, 'tasks', $2, guarded.payload, $4::timestamptz, NULL, $5, $6
+         FROM guarded
+         WHERE guarded.all_plans_found AND guarded.target_plan_found AND NOT guarded.project_conflict
+         ON CONFLICT (service, object_type, object_id) DO UPDATE SET
+           payload = EXCLUDED.payload,
+           updated_at = EXCLUDED.updated_at,
+           deleted_at = NULL,
+           source_machine_id = EXCLUDED.source_machine_id,
+           version = EXCLUDED.version
+         WHERE ${this.tableName}.updated_at IS NULL
+            OR ${this.tableName}.updated_at < EXCLUDED.updated_at
+            OR (${this.tableName}.updated_at = EXCLUDED.updated_at
+                AND COALESCE(${this.tableName}.version, 0) <= COALESCE(EXCLUDED.version, 0))
+         RETURNING payload
+       )
+       SELECT guarded.all_plans_found, guarded.target_plan_found, guarded.project_conflict,
+              (SELECT payload FROM stored) AS payload
+       FROM guarded`,
+      [
+        this.service,
+        value.id,
+        jsonbParam(value),
+        updatedAt,
+        context.requestId ?? this.sourceMachineId ?? null,
+        numberValue(value.version),
+        jsonbParam(planIds),
+        targetPlanId,
+        explicitProject,
+      ],
+    );
+    const row = result.rows[0];
+    if (!row?.all_plans_found || !row.target_plan_found) {
+      throw new PlanProjectLinkError(
+        "PLAN_PROJECT_LINK_PLAN_NOT_FOUND",
+        `Plan membership changed through a missing plan: ${targetPlanId ?? planIds.join(", ")}`,
+        { plan_ids: planIds, target_plan_id: targetPlanId },
+      );
+    }
+    if (row.project_conflict) {
+      throw new ResourceConflictError(
+        "PLAN_PROJECT_LINK_CONFLICT",
+        `Task project conflicts with linked plan ${targetPlanId}`,
+      );
+    }
+    if (!row.payload) {
+      return await requireRecord<Task>("tasks", value.id, this);
+    }
+    return payloadRecord<Task>(row.payload);
+  }
+
+  /** Serialize ordinary plan updates with linkage and preserve its project. */
+  async updatePlanWithProjectLinkGuard(
+    value: Plan,
+    context: TodosStorageContext = {},
+  ): Promise<Plan> {
+    await this.ensureSchema();
+    const result = await this.options.client.query<{ plan_found: boolean; payload: unknown | null }>(
+      `/* todos:plan-update-project-link-guard */ WITH locked_plan AS MATERIALIZED (
+         SELECT payload FROM ${this.tableName}
+         WHERE service = $1 AND object_type = 'plans' AND object_id = $2 AND deleted_at IS NULL
+         FOR UPDATE
+       ), stored AS (
+         UPDATE ${this.tableName} r SET
+           payload = jsonb_set(
+             $3::jsonb,
+             '{project_id}',
+             COALESCE((SELECT payload->'project_id' FROM locked_plan), 'null'::jsonb),
+             true
+           ),
+           updated_at = $4::timestamptz,
+           deleted_at = NULL,
+           source_machine_id = COALESCE($5, r.source_machine_id),
+           version = COALESCE(r.version, 0) + 1
+         FROM locked_plan
+         WHERE r.service = $1 AND r.object_type = 'plans' AND r.object_id = $2 AND r.deleted_at IS NULL
+         RETURNING r.payload
+       )
+       SELECT EXISTS (SELECT 1 FROM locked_plan) AS plan_found,
+              (SELECT payload FROM stored) AS payload`,
+      [
+        this.service,
+        value.id,
+        jsonbParam(value),
+        value.updated_at,
+        context.requestId ?? this.sourceMachineId ?? null,
+      ],
+    );
+    const row = result.rows[0];
+    if (!row?.plan_found || !row.payload) throw new PlanNotFoundError(value.id);
+    return payloadRecord<Plan>(row.payload);
+  }
+
+  /**
    * Create a template and all of its ordered checklist steps in one SQL statement.
    * This is deliberately not composed from `upsert` calls: a server crash or a
    * rejected child write must never expose a half-created reusable checklist.
@@ -1029,6 +1189,411 @@ class PostgresJsonRecordStore {
     }, context);
   }
 
+  async getPlanProjectLinkReceipt(receiptId: string): Promise<PlanProjectLinkReceipt | null> {
+    const value = await this.get<unknown>("plan_project_link_receipts", receiptId);
+    return value ? assertPlanProjectLinkReceipt(value) : null;
+  }
+
+  async getPlanProjectLinkReceiptByIdempotencyKey(idempotencyKey: string): Promise<PlanProjectLinkReceipt | null> {
+    await this.ensureSchema();
+    const result = await this.options.client.query<{ payload: unknown }>(
+      `/* todos:plan-project-link-receipt-by-key */ SELECT payload FROM ${this.tableName}
+       WHERE service = $1 AND object_type = 'plan_project_link_receipts' AND deleted_at IS NULL
+         AND payload->>'idempotency_key' = $2
+       LIMIT 2`,
+      [this.service, idempotencyKey],
+    );
+    if (result.rows.length > 1) {
+      throw new PlanProjectLinkError(
+        "PLAN_PROJECT_LINK_IDEMPOTENCY_CONFLICT",
+        "More than one immutable receipt carries this idempotency key",
+        { idempotency_key: idempotencyKey },
+      );
+    }
+    return result.rows[0] ? assertPlanProjectLinkReceipt(result.rows[0].payload) : null;
+  }
+
+  private async currentPlanProjectLinkResult(
+    receipt: PlanProjectLinkReceipt,
+    action: "linked" | "already_linked",
+  ): Promise<PlanProjectLinkResult> {
+    const [plan, project, tasks] = await Promise.all([
+      this.get<Plan>("plans", receipt.plan_id),
+      this.get<Project>("projects", receipt.project_id),
+      this.listTasks({ plan_id: receipt.plan_id, include_subtasks: true }),
+    ]);
+    const sortedTasks = tasks.sort((left, right) => left.id.localeCompare(right.id));
+    if (!plan || !project || planProjectLinkResultDigest(plan, sortedTasks) !== receipt.result_digest) {
+      throw new PlanProjectLinkError(
+        "PLAN_PROJECT_LINK_RESULT_DRIFT",
+        "The accepted plan-project-link result has drifted",
+        { receipt_id: receipt.receipt_id },
+      );
+    }
+    return { mode: "apply", action, plan, project, tasks: sortedTasks, receipt };
+  }
+
+  async applyPlanProjectLink(
+    input: TodosPlanProjectLinkApplyInput,
+    context: TodosStorageContext = {},
+  ): Promise<PlanProjectLinkResult> {
+    await this.ensureSchema();
+    const existing = await this.getPlanProjectLinkReceipt(input.receipt_id);
+    if (existing) {
+      if (existing.plan_id !== input.plan_id || existing.project_id !== input.project_id) {
+        throw new PlanProjectLinkError(
+          "PLAN_PROJECT_LINK_IDEMPOTENCY_CONFLICT",
+          "The idempotency key was already accepted for a different plan-project link",
+          { idempotency_key: input.idempotency_key, receipt_id: existing.receipt_id },
+        );
+      }
+      const rolledBack = await this.get<unknown>(
+        "plan_project_link_rollback_receipts",
+        planProjectLinkRollbackReceiptId(input.receipt_id),
+      );
+      if (rolledBack) {
+        throw new PlanProjectLinkError(
+          "PLAN_PROJECT_LINK_IDEMPOTENCY_CONFLICT",
+          "The accepted plan-project link has already been rolled back",
+          { receipt_id: input.receipt_id },
+        );
+      }
+      return this.currentPlanProjectLinkResult(existing, "already_linked");
+    }
+
+    const [plan, project, tasks, scopedPlans] = await Promise.all([
+      this.get<Plan>("plans", input.plan_id),
+      this.get<Project>("projects", input.project_id),
+      this.listTasks({ plan_id: input.plan_id, include_subtasks: true }),
+      this.list<Plan>("plans"),
+    ]);
+    if (!plan) throw new PlanProjectLinkError("PLAN_PROJECT_LINK_PLAN_NOT_FOUND", `Plan not found: ${input.plan_id}`);
+    if (!project) throw new PlanProjectLinkError("PLAN_PROJECT_LINK_PROJECT_NOT_FOUND", `Project not found: ${input.project_id}`);
+    if (plan.updated_at !== input.expected_plan_revision) {
+      throw new PlanProjectLinkError(
+        "PLAN_PROJECT_LINK_PLAN_REVISION_CONFLICT",
+        "Plan changed after the link plan; fetch a fresh plan before applying",
+        { expected_plan_revision: input.expected_plan_revision, current_plan_revision: plan.updated_at },
+      );
+    }
+    if (project.updated_at !== input.expected_project_revision) {
+      throw new PlanProjectLinkError(
+        "PLAN_PROJECT_LINK_PROJECT_REVISION_CONFLICT",
+        "Destination project changed after the link plan; fetch a fresh plan before applying",
+        { expected_project_revision: input.expected_project_revision, current_project_revision: project.updated_at },
+      );
+    }
+    const collision = scopedPlans.find((candidate) =>
+      candidate.id !== plan.id && candidate.project_id === project.id && candidate.slug !== null && candidate.slug === plan.slug
+    );
+    if (collision) {
+      throw new PlanProjectLinkError(
+        "PLAN_PROJECT_LINK_SCOPE_COLLISION",
+        "Another plan already owns this slug in the destination project",
+        { conflicting_plan_id: collision.id, slug: plan.slug },
+      );
+    }
+    const sortedTasks = tasks.sort((left, right) => left.id.localeCompare(right.id));
+    const priorTaskProjectIds = Object.fromEntries(sortedTasks.map((task) => [task.id, task.project_id])) as Record<string, string | null>;
+    const projectedPlan = { ...plan, project_id: project.id, updated_at: input.created_at };
+    const projectedTasks = sortedTasks.map((task) => task.project_id === project.id
+      ? task
+      : { ...task, project_id: project.id, updated_at: input.created_at, version: task.version + 1 });
+    const alreadyLinked = plan.project_id === project.id && sortedTasks.every((task) => task.project_id === project.id);
+    const receipt: PlanProjectLinkReceipt = {
+      schema_version: PLAN_PROJECT_LINK_SCHEMA_VERSION,
+      receipt_id: input.receipt_id,
+      idempotency_key: input.idempotency_key,
+      plan_id: plan.id,
+      project_id: project.id,
+      prior_plan_project_id: plan.project_id,
+      prior_task_project_ids: priorTaskProjectIds,
+      task_ids: sortedTasks.map((task) => task.id),
+      task_count: sortedTasks.length,
+      result_plan_revision: projectedPlan.updated_at,
+      result_digest: planProjectLinkResultDigest(projectedPlan, projectedTasks),
+      rollback_supported: true,
+      created_at: input.created_at,
+    };
+    let mutation;
+    try {
+      mutation = await this.options.client.query<{
+        plan_found: boolean;
+        project_found: boolean;
+        plan_revision_ok: boolean;
+        project_revision_ok: boolean;
+        membership_ok: boolean;
+        collision: boolean;
+        existing_receipt: unknown | null;
+        inserted_receipt: unknown | null;
+      }>(
+        `/* todos:plan-project-link-atomic */ WITH
+         target_plan AS MATERIALIZED (
+           SELECT payload FROM ${this.tableName}
+           WHERE service = $1 AND object_type = 'plans' AND object_id = $2 AND deleted_at IS NULL
+           FOR UPDATE
+         ), target_project AS (
+           SELECT payload FROM ${this.tableName}
+           WHERE service = $1 AND object_type = 'projects' AND object_id = $3 AND deleted_at IS NULL
+           FOR UPDATE
+         ), member_tasks AS MATERIALIZED (
+           SELECT object_id, payload FROM ${this.tableName}
+           WHERE service = $1 AND object_type = 'tasks' AND deleted_at IS NULL
+             AND payload->>'plan_id' = $2
+             AND EXISTS (SELECT 1 FROM target_plan)
+           FOR UPDATE
+         ), existing AS (
+           SELECT payload FROM ${this.tableName}
+           WHERE service = $1 AND object_type = 'plan_project_link_receipts'
+             AND object_id = $6 AND deleted_at IS NULL
+           FOR UPDATE
+         ), collision AS (
+           SELECT 1 FROM ${this.tableName} r, target_plan p
+           WHERE r.service = $1 AND r.object_type = 'plans' AND r.deleted_at IS NULL
+             AND r.object_id <> $2 AND r.payload->>'project_id' = $3
+             AND r.payload->>'slug' IS NOT DISTINCT FROM p.payload->>'slug'
+             AND p.payload->>'slug' IS NOT NULL
+           LIMIT 1
+         ), checks AS (
+           SELECT
+             EXISTS (SELECT 1 FROM target_plan) AS plan_found,
+             EXISTS (SELECT 1 FROM target_project) AS project_found,
+             COALESCE((SELECT payload->>'updated_at' = $4 FROM target_plan), false) AS plan_revision_ok,
+             COALESCE((SELECT payload->>'updated_at' = $5 FROM target_project), false) AS project_revision_ok,
+             COALESCE((SELECT jsonb_object_agg(object_id, COALESCE(payload->'project_id', 'null'::jsonb) ORDER BY object_id) FROM member_tasks), '{}'::jsonb) = $8::jsonb
+               AND COALESCE((SELECT jsonb_agg(object_id ORDER BY object_id) FROM member_tasks), '[]'::jsonb) = $9::jsonb AS membership_ok,
+             EXISTS (SELECT 1 FROM collision) AS collision,
+             EXISTS (SELECT 1 FROM existing) AS has_existing
+         ), updated_plan AS (
+           UPDATE ${this.tableName} r SET
+             payload = r.payload || jsonb_build_object('project_id', $3::text, 'updated_at', $10::text),
+             updated_at = $10::timestamptz,
+             version = COALESCE(r.version, 0) + 1,
+             source_machine_id = COALESCE($11, r.source_machine_id)
+           FROM checks
+           WHERE r.service = $1 AND r.object_type = 'plans' AND r.object_id = $2 AND r.deleted_at IS NULL
+             AND checks.plan_found AND checks.project_found AND checks.plan_revision_ok
+             AND checks.project_revision_ok AND checks.membership_ok AND NOT checks.collision AND NOT checks.has_existing
+           RETURNING r.payload
+         ), updated_tasks AS (
+           UPDATE ${this.tableName} r SET
+             payload = r.payload || jsonb_build_object(
+               'project_id', $3::text,
+               'updated_at', $10::text,
+               'version', COALESCE((r.payload->>'version')::int, 0) + 1
+             ),
+             updated_at = $10::timestamptz,
+             version = COALESCE(r.version, 0) + 1,
+             source_machine_id = COALESCE($11, r.source_machine_id)
+           WHERE r.service = $1 AND r.object_type = 'tasks' AND r.deleted_at IS NULL
+             AND r.payload->>'plan_id' = $2
+             AND r.payload->>'project_id' IS DISTINCT FROM $3
+             AND EXISTS (SELECT 1 FROM updated_plan)
+           RETURNING 1
+         ), task_gate AS (
+           SELECT count(*) AS count FROM updated_tasks
+         ), inserted AS (
+           INSERT INTO ${this.tableName}
+             (service, object_type, object_id, payload, updated_at, deleted_at, source_machine_id, version)
+           SELECT $1, 'plan_project_link_receipts', $6, $7::jsonb, $10::timestamptz, NULL, $11, 1
+           FROM checks, task_gate
+           WHERE NOT checks.has_existing AND EXISTS (SELECT 1 FROM updated_plan)
+           RETURNING payload
+         ) SELECT
+           checks.plan_found,
+           checks.project_found,
+           checks.plan_revision_ok,
+           checks.project_revision_ok,
+           checks.membership_ok,
+           checks.collision,
+           (SELECT payload FROM existing) AS existing_receipt,
+           (SELECT payload FROM inserted) AS inserted_receipt
+         FROM checks`,
+        [
+          this.service,
+          plan.id,
+          project.id,
+          input.expected_plan_revision,
+          input.expected_project_revision,
+          receipt.receipt_id,
+          jsonbParam(receipt),
+          jsonbParam(priorTaskProjectIds),
+          jsonbParam(receipt.task_ids),
+          input.created_at,
+          this.machineId(context),
+        ],
+      );
+    } catch (error) {
+      if (isPostgresUniqueViolation(error)) {
+        const raced = await this.getPlanProjectLinkReceipt(input.receipt_id);
+        if (raced && raced.plan_id === input.plan_id && raced.project_id === input.project_id) {
+          return this.currentPlanProjectLinkResult(raced, "already_linked");
+        }
+        throw new PlanProjectLinkError(
+          "PLAN_PROJECT_LINK_IDEMPOTENCY_CONFLICT",
+          "The idempotency key raced with a different plan-project link",
+          { idempotency_key: input.idempotency_key },
+        );
+      }
+      throw error;
+    }
+    const row = mutation.rows[0];
+    if (!row?.plan_found) throw new PlanProjectLinkError("PLAN_PROJECT_LINK_PLAN_NOT_FOUND", `Plan not found: ${plan.id}`);
+    if (!row.project_found) throw new PlanProjectLinkError("PLAN_PROJECT_LINK_PROJECT_NOT_FOUND", `Project not found: ${project.id}`);
+    if (!row.plan_revision_ok) throw new PlanProjectLinkError("PLAN_PROJECT_LINK_PLAN_REVISION_CONFLICT", "Plan changed during the atomic link");
+    if (!row.project_revision_ok) throw new PlanProjectLinkError("PLAN_PROJECT_LINK_PROJECT_REVISION_CONFLICT", "Project changed during the atomic link");
+    if (!row.membership_ok) throw new PlanProjectLinkError("PLAN_PROJECT_LINK_RESULT_DRIFT", "Plan membership changed during the atomic link");
+    if (row.collision) throw new PlanProjectLinkError("PLAN_PROJECT_LINK_SCOPE_COLLISION", "Another plan owns this slug in the destination project");
+    const accepted = assertPlanProjectLinkReceipt(row.existing_receipt ?? row.inserted_receipt);
+    if (accepted.plan_id !== plan.id || accepted.project_id !== project.id) {
+      throw new PlanProjectLinkError("PLAN_PROJECT_LINK_IDEMPOTENCY_CONFLICT", "The idempotency key was accepted for a different target");
+    }
+    return this.currentPlanProjectLinkResult(accepted, alreadyLinked ? "already_linked" : "linked");
+  }
+
+  async rollbackPlanProjectLink(
+    input: TodosPlanProjectLinkRollbackInput,
+    context: TodosStorageContext = {},
+  ): Promise<PlanProjectLinkRollbackResult> {
+    await this.ensureSchema();
+    const existingRollback = await this.get<PlanProjectLinkRollbackResult>(
+      "plan_project_link_rollback_receipts",
+      input.rollback_receipt_id,
+    );
+    if (existingRollback) return existingRollback;
+    const receipt = await this.getPlanProjectLinkReceipt(input.receipt_id);
+    if (!receipt || receipt.plan_id !== input.plan_id || receipt.project_id !== input.project_id) {
+      throw new PlanProjectLinkError(
+        "PLAN_PROJECT_LINK_RECEIPT_NOT_FOUND",
+        "No exact plan-project-link receipt matches this rollback request",
+        { receipt_id: input.receipt_id },
+      );
+    }
+    const [plan, tasks] = await Promise.all([
+      this.get<Plan>("plans", input.plan_id),
+      this.listTasks({ plan_id: input.plan_id, include_subtasks: true }),
+    ]);
+    const sortedTasks = tasks.sort((left, right) => left.id.localeCompare(right.id));
+    if (!plan || plan.updated_at !== input.expected_plan_revision) {
+      throw new PlanProjectLinkError(
+        "PLAN_PROJECT_LINK_PLAN_REVISION_CONFLICT",
+        "Plan changed after the accepted link; fetch an exact readback before rollback",
+      );
+    }
+    if (planProjectLinkResultDigest(plan, sortedTasks) !== receipt.result_digest) {
+      throw new PlanProjectLinkError(
+        "PLAN_PROJECT_LINK_ROLLBACK_CONFLICT",
+        "Plan membership or project linkage drifted; refusing conditional rollback",
+      );
+    }
+    const projectedPlan = { ...plan, project_id: receipt.prior_plan_project_id, updated_at: input.restored_at };
+    const projectedTasks = sortedTasks.map((task) => ({
+      ...task,
+      project_id: receipt.prior_task_project_ids[task.id] ?? null,
+      updated_at: input.restored_at,
+      version: task.version + 1,
+    }));
+    const rollback: PlanProjectLinkRollbackResult = {
+      schema_version: PLAN_PROJECT_LINK_SCHEMA_VERSION,
+      action: "restored",
+      plan: projectedPlan,
+      tasks: projectedTasks,
+      accepted_receipt_id: receipt.receipt_id,
+      rollback_receipt_id: input.rollback_receipt_id,
+      restored_at: input.restored_at,
+    };
+    const currentTaskProjects = Object.fromEntries(sortedTasks.map((task) => [task.id, task.project_id]));
+    const result = await this.options.client.query<{
+      plan_found: boolean;
+      plan_revision_ok: boolean;
+      membership_ok: boolean;
+      existing_rollback: unknown | null;
+      inserted_rollback: unknown | null;
+    }>(
+      `/* todos:plan-project-link-rollback-atomic */ WITH
+       target_plan AS MATERIALIZED (
+         SELECT payload FROM ${this.tableName}
+         WHERE service = $1 AND object_type = 'plans' AND object_id = $2 AND deleted_at IS NULL
+         FOR UPDATE
+       ), member_tasks AS MATERIALIZED (
+         SELECT object_id, payload FROM ${this.tableName}
+         WHERE service = $1 AND object_type = 'tasks' AND deleted_at IS NULL
+           AND payload->>'plan_id' = $2
+           AND EXISTS (SELECT 1 FROM target_plan)
+         FOR UPDATE
+       ), existing AS (
+         SELECT payload FROM ${this.tableName}
+         WHERE service = $1 AND object_type = 'plan_project_link_rollback_receipts'
+           AND object_id = $5 AND deleted_at IS NULL
+         FOR UPDATE
+       ), checks AS (
+         SELECT
+           EXISTS (SELECT 1 FROM target_plan) AS plan_found,
+           COALESCE((SELECT payload->>'updated_at' = $3 FROM target_plan), false) AS plan_revision_ok,
+           COALESCE((SELECT jsonb_object_agg(object_id, COALESCE(payload->'project_id', 'null'::jsonb) ORDER BY object_id) FROM member_tasks), '{}'::jsonb) = $7::jsonb
+             AND COALESCE((SELECT jsonb_agg(object_id ORDER BY object_id) FROM member_tasks), '[]'::jsonb) = $8::jsonb AS membership_ok,
+           EXISTS (SELECT 1 FROM existing) AS has_existing
+       ), updated_plan AS (
+         UPDATE ${this.tableName} r SET
+           payload = r.payload || jsonb_build_object('project_id', $9::jsonb, 'updated_at', $10::text),
+           updated_at = $10::timestamptz,
+           version = COALESCE(r.version, 0) + 1,
+           source_machine_id = COALESCE($11, r.source_machine_id)
+         FROM checks
+         WHERE r.service = $1 AND r.object_type = 'plans' AND r.object_id = $2 AND r.deleted_at IS NULL
+           AND checks.plan_found AND checks.plan_revision_ok AND checks.membership_ok AND NOT checks.has_existing
+         RETURNING 1
+       ), updated_tasks AS (
+         UPDATE ${this.tableName} r SET
+           payload = r.payload || jsonb_build_object(
+             'project_id', COALESCE($12::jsonb -> r.object_id, 'null'::jsonb),
+             'updated_at', $10::text,
+             'version', COALESCE((r.payload->>'version')::int, 0) + 1
+           ),
+           updated_at = $10::timestamptz,
+           version = COALESCE(r.version, 0) + 1,
+           source_machine_id = COALESCE($11, r.source_machine_id)
+         WHERE r.service = $1 AND r.object_type = 'tasks' AND r.deleted_at IS NULL
+           AND r.payload->>'plan_id' = $2 AND EXISTS (SELECT 1 FROM updated_plan)
+         RETURNING 1
+       ), task_gate AS (SELECT count(*) AS count FROM updated_tasks), inserted AS (
+         INSERT INTO ${this.tableName}
+           (service, object_type, object_id, payload, updated_at, deleted_at, source_machine_id, version)
+         SELECT $1, 'plan_project_link_rollback_receipts', $5, $6::jsonb, $10::timestamptz, NULL, $11, 1
+         FROM checks, task_gate
+         WHERE NOT checks.has_existing AND EXISTS (SELECT 1 FROM updated_plan)
+         RETURNING payload
+       ) SELECT
+         checks.plan_found,
+         checks.plan_revision_ok,
+         checks.membership_ok,
+         (SELECT payload FROM existing) AS existing_rollback,
+         (SELECT payload FROM inserted) AS inserted_rollback
+       FROM checks`,
+      [
+        this.service,
+        input.plan_id,
+        input.expected_plan_revision,
+        input.receipt_id,
+        input.rollback_receipt_id,
+        jsonbParam(rollback),
+        jsonbParam(currentTaskProjects),
+        jsonbParam(receipt.task_ids),
+        jsonbParam(receipt.prior_plan_project_id),
+        input.restored_at,
+        this.machineId(context),
+        jsonbParam(receipt.prior_task_project_ids),
+      ],
+    );
+    const row = result.rows[0];
+    if (!row?.plan_found) throw new PlanProjectLinkError("PLAN_PROJECT_LINK_PLAN_NOT_FOUND", `Plan not found: ${input.plan_id}`);
+    if (!row.plan_revision_ok) throw new PlanProjectLinkError("PLAN_PROJECT_LINK_PLAN_REVISION_CONFLICT", "Plan changed during rollback");
+    if (!row.membership_ok) throw new PlanProjectLinkError("PLAN_PROJECT_LINK_ROLLBACK_CONFLICT", "Plan membership changed during rollback");
+    const accepted = (row.existing_rollback ?? row.inserted_rollback) as PlanProjectLinkRollbackResult | null;
+    if (!accepted) throw new PlanProjectLinkError("PLAN_PROJECT_LINK_ROLLBACK_CONFLICT", "Rollback did not produce an immutable receipt");
+    return accepted;
+  }
+
   async deletePlan(id: string, context: TodosStorageContext = {}): Promise<boolean> {
     await this.ensureSchema();
     const timestamp = new Date().toISOString();
@@ -1152,11 +1717,20 @@ class PostgresJsonRecordStore {
 
 async function createTask(input: CreateTaskInput, store: PostgresJsonRecordStore, context?: TodosStorageContext): Promise<Task> {
   const timestamp = new Date().toISOString();
-  const shortId = input.project_id ? await nextTaskShortId(input.project_id, store, context) : null;
+  const linkedPlan = input.plan_id ? await store.get<Plan>("plans", input.plan_id) : null;
+  const requestedProjectId = input.project_id ?? context?.projectId ?? null;
+  if (linkedPlan?.project_id && requestedProjectId && requestedProjectId !== linkedPlan.project_id) {
+    throw new ResourceConflictError(
+      "PLAN_PROJECT_LINK_CONFLICT",
+      `Task project conflicts with linked plan ${input.plan_id}: expected ${linkedPlan.project_id}`,
+    );
+  }
+  const effectiveProjectId = linkedPlan?.project_id ?? requestedProjectId;
+  const shortId = effectiveProjectId ? await nextTaskShortId(effectiveProjectId, store, context) : null;
   const task: Task = {
     id: randomUUID(),
     short_id: shortId,
-    project_id: input.project_id ?? context?.projectId ?? null,
+    project_id: effectiveProjectId,
     parent_id: input.parent_id ?? null,
     plan_id: input.plan_id ?? null,
     task_list_id: input.task_list_id ?? context?.taskListId ?? null,
@@ -1215,15 +1789,44 @@ async function createTask(input: CreateTaskInput, store: PostgresJsonRecordStore
     synced_at: null,
     archived_at: null,
   };
-  await store.upsert("tasks", task, context);
-  await logTaskChange(task.id, "created", "status", null, task.status, task.assigned_by ?? task.agent_id, store, context);
-  return task;
+  const storedTask = await store.upsertTaskWithPlanMembershipGuard(
+    task,
+    task.plan_id ? [task.plan_id] : [],
+    input.project_id !== undefined || context?.projectId !== undefined,
+    context,
+  );
+  await logTaskChange(
+    storedTask.id,
+    "created",
+    "status",
+    null,
+    storedTask.status,
+    storedTask.assigned_by ?? storedTask.agent_id,
+    store,
+    context,
+  );
+  return storedTask;
 }
 
 async function updateTask(id: string, input: UpdateTaskInput, store: PostgresJsonRecordStore): Promise<Task> {
   const existing = await requireRecord<Task>("tasks", id, store);
   if (existing.version !== input.version) {
     throw new Error(`Task ${id} version conflict: expected ${existing.version}, got ${input.version}`);
+  }
+  const effectivePlanId = input.plan_id !== undefined ? input.plan_id : existing.plan_id;
+  const linkedPlan = effectivePlanId ? await store.get<Plan>("plans", effectivePlanId) : null;
+  if (linkedPlan?.project_id) {
+    const effectiveProjectId = input.project_id !== undefined ? input.project_id : existing.project_id;
+    if (effectiveProjectId !== linkedPlan.project_id) {
+      if (input.project_id === undefined && (input.plan_id !== undefined || existing.project_id === null)) {
+        input = { ...input, project_id: linkedPlan.project_id };
+      } else {
+        throw new ResourceConflictError(
+          "PLAN_PROJECT_LINK_CONFLICT",
+          `Task project conflicts with linked plan ${effectivePlanId}: expected ${linkedPlan.project_id}`,
+        );
+      }
+    }
   }
   const reopened = existing.status === "completed"
     && input.status !== undefined
@@ -1261,8 +1864,11 @@ async function updateTask(id: string, input: UpdateTaskInput, store: PostgresJso
       ? null
       : input.completed_at !== undefined ? input.completed_at : existing.completed_at,
   };
-  await store.upsert("tasks", task);
-  return task;
+  return store.upsertTaskWithPlanMembershipGuard(
+    task,
+    [existing.plan_id, effectivePlanId].filter((planId): planId is string => Boolean(planId)),
+    input.project_id !== undefined,
+  );
 }
 
 async function startTask(id: string, agentId: string, store: PostgresJsonRecordStore): Promise<Task> {
@@ -1348,8 +1954,11 @@ async function patchTask(task: Task, patch: Partial<Task>, store: PostgresJsonRe
     version: task.version + 1,
     updated_at: new Date().toISOString(),
   };
-  await store.upsert("tasks", updated);
-  return updated;
+  return store.upsertTaskWithPlanMembershipGuard(
+    updated,
+    [task.plan_id, updated.plan_id].filter((planId): planId is string => Boolean(planId)),
+    Object.prototype.hasOwnProperty.call(patch, "project_id"),
+  );
 }
 
 // Lock lease TTL — keep in lockstep with the local sqlite path (LOCK_EXPIRY_MINUTES).
@@ -1711,7 +2320,12 @@ async function updatePlan(id: string, input: UpdatePlanInput, store: PostgresJso
       excludeId: id,
     });
   }
-  return store.upsert("plans", { ...plan, ...patch, updated_at: new Date().toISOString() });
+  return store.updatePlanWithProjectLinkGuard({
+    ...plan,
+    ...patch,
+    project_id: plan.project_id,
+    updated_at: new Date().toISOString(),
+  });
 }
 
 /**
