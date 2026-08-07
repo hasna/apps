@@ -2295,6 +2295,122 @@ function registerProjectCommands(program: Command): void {
     });
 
   program
+    .command("guarded-update <project-id>")
+    .description("Safely update an existing project by exact stable id with revision, idempotency, receipt, and dry-run controls")
+    .option("--name <name>", "Project name")
+    .option("--slug <slug>", "Project slug")
+    .option("--description <text>", "Description")
+    .option("--metadata-json <json>", "Replace metadata with a JSON object")
+    .requiredOption("--expected-revision <revision>", "Fresh project updated_at revision from an exact-id read")
+    .requiredOption("--operation-id <id>", "Caller-stable operation id")
+    .requiredOption("--step-id <id>", "Caller-stable step id")
+    .requiredOption("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes")
+    .requiredOption("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds")
+    .option("--dry-run", "Preview without writing or persisting a receipt")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectId, opts) => {
+      try {
+        const patch = {
+          name: opts.name,
+          slug: opts.slug,
+          description: opts.description,
+          metadata: parseJsonObject(opts.metadataJson, "--metadata-json"),
+        };
+        if (Object.values(patch).every((value) => value === undefined)) throw new Error("Provide at least one guarded metadata field to update");
+        const store = resolveProjectStore();
+        const result = await store.guardedUpdateProject({
+          project_id: projectId,
+          operation_id: opts.operationId,
+          step_id: opts.stepId,
+          expected_revision: opts.expectedRevision,
+          patch,
+          dry_run: Boolean(opts.dryRun),
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+          agent_id: mutationAgentId(store, opts.agent),
+          source: "cli",
+          command: process.argv.join(" "),
+        });
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+        const prefix = result.dry_run ? "[dry-run] " : "";
+        console.log(`${chalk.green(`${prefix}Guarded project mutation ${result.outcome}`)}: ${result.project_id}`);
+        console.log(`  ${chalk.dim("idempotency:")} ${result.idempotency_key}`);
+        if (result.receipt) console.log(`  ${chalk.dim("receipt:")} ${result.receipt.receipt_id}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("guarded-receipt <project-id>")
+    .description("Look up exactly one guarded project mutation terminal receipt")
+    .requiredOption("--operation-id <id>", "Operation id")
+    .requiredOption("--step-id <id>", "Step id")
+    .requiredOption("--direction <direction>", "forward or inverse")
+    .requiredOption("--idempotency-key <key>", "Derived guarded idempotency key")
+    .requiredOption("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes")
+    .requiredOption("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectId, opts) => {
+      try {
+        const direction = String(opts.direction);
+        if (direction !== "forward" && direction !== "inverse") throw new Error("--direction must be forward or inverse");
+        const result = await resolveProjectStore().lookupGuardedProjectMutationReceipt({
+          project_id: projectId,
+          operation_id: opts.operationId,
+          step_id: opts.stepId,
+          direction,
+          idempotency_key: opts.idempotencyKey,
+          max_items: 1,
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+        });
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+        console.log(chalk.green(`✓ Guarded receipt: ${result.receipt.receipt_id} (${result.receipt.outcome})`));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("guarded-rollback <project-id>")
+    .description("Rollback a guarded project mutation using an accepted receipt and current post-write revision")
+    .requiredOption("--accepted-receipt-id <id>", "Forward accepted receipt id")
+    .requiredOption("--expected-current-revision <revision>", "Current revision, which must equal the accepted receipt post_revision")
+    .requiredOption("--operation-id <id>", "Caller-stable rollback operation id")
+    .requiredOption("--step-id <id>", "Caller-stable rollback step id")
+    .requiredOption("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes")
+    .requiredOption("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectId, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const result = await store.rollbackGuardedProjectMutation({
+          project_id: projectId,
+          operation_id: opts.operationId,
+          step_id: opts.stepId,
+          accepted_receipt_id: opts.acceptedReceiptId,
+          expected_current_revision: opts.expectedCurrentRevision,
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+          agent_id: mutationAgentId(store, opts.agent),
+          source: "cli",
+          command: process.argv.join(" "),
+        });
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+        console.log(chalk.green(`✓ Guarded rollback ${result.outcome}: ${result.project_id}`));
+        if (result.receipt) console.log(`  ${chalk.dim("receipt:")} ${result.receipt.receipt_id}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
     .command("tag <id-or-slug> <tags...>")
     .description("Add tags to a project")
     .option("--agent <id-or-slug>", "Attributing agent")

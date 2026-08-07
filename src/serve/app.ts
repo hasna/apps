@@ -13,6 +13,7 @@ import {
   WORKSPACE_LIST_MAX_LIMIT,
 } from "./pg-store.js";
 import { buildOpenApiSpec } from "./openapi.js";
+import { responseControl } from "../lib/guarded-project-mutation.js";
 
 export interface ServeAppOptions {
   store: ProjectsPgStore;
@@ -33,6 +34,14 @@ function jsonResponse(body: unknown, status = 200, extraHeaders: Record<string, 
     status,
     headers: { "content-type": "application/json", ...extraHeaders },
   });
+}
+
+function boundedJsonResponse(body: unknown, bounds: { response_byte_limit: number; time_budget_ms: number }, startedAtMs: number, status = 200): Response {
+  const payload = {
+    ...(body && typeof body === "object" && !Array.isArray(body) ? body as Record<string, unknown> : { data: body }),
+  };
+  payload["response_control"] = responseControl(payload, bounds, startedAtMs);
+  return jsonResponse(payload, status);
 }
 
 function errorResponse(message: string, status: number, reason?: string): Response {
@@ -133,7 +142,7 @@ async function route(
   store: ProjectsPgStore,
 ): Promise<Response> {
   const segments = path.split("/").filter(Boolean); // e.g. ["v1","projects","abc","events"]
-  const [, resource, id, sub] = segments;
+  const [, resource, id, sub, extra] = segments;
 
   // ---------------- projects ----------------
   if (resource === "projects") {
@@ -186,6 +195,44 @@ async function route(
         return jsonResponse({ deleted: true, hard: result.hard, id: result.workspace.id });
       }
       return errorResponse("Method not allowed", 405);
+    }
+
+    if (sub === "guarded-metadata" && method === "POST") {
+      const started = Date.now();
+      const body = await readJsonBody(req);
+      const bounds = {
+        response_byte_limit: Number(body.response_byte_limit),
+        time_budget_ms: Number(body.time_budget_ms),
+      };
+      const result = await store.guardedUpdateWorkspace({ ...body, project_id: id } as never);
+      return boundedJsonResponse(result, bounds, started);
+    }
+    if (sub === "guarded-metadata" && extra === "receipts" && method === "GET") {
+      const started = Date.now();
+      const bounds = {
+        response_byte_limit: Number(url.searchParams.get("response_byte_limit")),
+        time_budget_ms: Number(url.searchParams.get("time_budget_ms")),
+      };
+      const result = await store.lookupGuardedWorkspaceMutationReceipt({
+        project_id: id,
+        operation_id: url.searchParams.get("operation_id") ?? "",
+        step_id: url.searchParams.get("step_id") ?? "",
+        direction: (url.searchParams.get("direction") ?? "forward") as never,
+        idempotency_key: url.searchParams.get("idempotency_key") ?? "",
+        max_items: Number(url.searchParams.get("max_items")) as 1,
+        ...bounds,
+      });
+      return boundedJsonResponse(result, bounds, started);
+    }
+    if (sub === "guarded-metadata" && extra === "rollback" && method === "POST") {
+      const started = Date.now();
+      const body = await readJsonBody(req);
+      const bounds = {
+        response_byte_limit: Number(body.response_byte_limit),
+        time_budget_ms: Number(body.time_budget_ms),
+      };
+      const result = await store.rollbackGuardedWorkspaceMutation({ ...body, project_id: id } as never);
+      return boundedJsonResponse(result, bounds, started);
     }
 
     if (sub === "archive" && method === "POST") return jsonResponse(await store.archiveWorkspace(id));

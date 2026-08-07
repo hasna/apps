@@ -314,6 +314,115 @@ export interface UpdateWorkspaceInput {
   command?: string;
 }
 
+export type GuardedProjectMutationDirection = "forward" | "inverse";
+export type GuardedProjectMutationOutcome = "accepted" | "duplicate_of_accepted" | "terminal_nonacceptance";
+
+export interface GuardedProjectMutationBounds {
+  response_byte_limit: number;
+  time_budget_ms: number;
+}
+
+export interface GuardedProjectMutationControl extends GuardedProjectMutationBounds {
+  response_bytes: number;
+  elapsed_ms: number;
+  complete: boolean;
+  truncated: boolean;
+}
+
+export interface GuardedProjectMutationReceipt {
+  receipt_id: string;
+  operation_id: string;
+  step_id: string;
+  direction: GuardedProjectMutationDirection;
+  idempotency_key: string;
+  target_id: string;
+  request_digest: string;
+  precondition_digest: string;
+  expected_revision: string;
+  outcome: GuardedProjectMutationOutcome;
+  reason: string | null;
+  result_project_id: string | null;
+  duplicate_of_receipt_id: string | null;
+  before: JsonObject | null;
+  after: JsonObject | null;
+  post_revision: string | null;
+  created_at: string;
+}
+
+export interface GuardedProjectMutationReceiptRow {
+  receipt_id: string;
+  operation_id: string;
+  step_id: string;
+  direction: string;
+  idempotency_key: string;
+  target_id: string;
+  request_digest: string;
+  precondition_digest: string;
+  expected_revision: string;
+  outcome: string;
+  reason: string | null;
+  result_project_id: string | null;
+  duplicate_of_receipt_id: string | null;
+  before_json: string | null;
+  after_json: string | null;
+  post_revision: string | null;
+  created_at: string;
+}
+
+export interface GuardedProjectMutationRequest extends GuardedProjectMutationBounds {
+  project_id: string;
+  operation_id: string;
+  step_id: string;
+  direction?: GuardedProjectMutationDirection;
+  expected_revision: string;
+  patch: UpdateWorkspaceInput;
+  dry_run?: boolean;
+  agent_id?: string;
+  source?: EventSource;
+  command?: string;
+}
+
+export interface GuardedProjectMutationResult {
+  ok: boolean;
+  dry_run: boolean;
+  outcome: GuardedProjectMutationOutcome | "planned";
+  idempotency_key: string;
+  request_digest: string;
+  precondition_digest: string;
+  project_id: string;
+  expected_revision: string;
+  current_revision: string;
+  before: Workspace;
+  after: Workspace | null;
+  receipt: GuardedProjectMutationReceipt | null;
+  response_control: GuardedProjectMutationControl;
+}
+
+export interface GuardedProjectMutationReceiptLookupInput extends GuardedProjectMutationBounds {
+  project_id: string;
+  operation_id: string;
+  step_id: string;
+  direction: GuardedProjectMutationDirection;
+  idempotency_key: string;
+  max_items: 1;
+}
+
+export interface GuardedProjectMutationReceiptLookupResult {
+  receipt: GuardedProjectMutationReceipt;
+  response_control: GuardedProjectMutationControl;
+}
+
+export interface GuardedProjectMutationRollbackRequest extends GuardedProjectMutationBounds {
+  project_id: string;
+  operation_id: string;
+  step_id: string;
+  accepted_receipt_id: string;
+  expected_current_revision: string;
+  agent_id?: string;
+  source?: EventSource;
+  command?: string;
+}
+
 export interface WorkspaceLocation {
   id: string;
   workspace_id: string;
