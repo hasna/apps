@@ -695,6 +695,7 @@ function healthScanMarkdown(scan: LoopsHealthScan): string {
 
 export function classifyRunFailure(run: LoopRun): RunFailureSignal | undefined {
   if (run.status === "succeeded" || run.status === "running") return undefined;
+  if (run.status === "skipped" && run.exitCode === 75) return undefined;
   const rawText = searchableText(run);
   const text = rawText.toLowerCase();
   let classification: RunFailureClassification = "unknown";
@@ -1015,6 +1016,15 @@ function classifyExpectation(store: HealthSource, loop: Loop): LoopExpectationRe
       loop: expectationLoop(loop),
       ok: true,
       check: { id: "latest-run-succeeded", status: "warn", message: "loop has no recorded runs yet" },
+      route,
+    };
+  }
+  if (latestRun.status === "skipped" && latestRun.exitCode === 75) {
+    return {
+      loop: expectationLoop(loop),
+      ok: true,
+      check: { id: "latest-run-succeeded", status: "warn", message: "latest run was skipped" },
+      latestRun: healthRun(latestRun),
       route,
     };
   }

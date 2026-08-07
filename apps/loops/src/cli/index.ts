@@ -2751,7 +2751,7 @@ program
       const value = { ...publicRun(run, opts.showOutput), runNow: { source: result.source, advancesLoop: result.advancedLoop } };
       print(value, `${run.id} ${run.status} source=${result.source} slot=${run.scheduledFor}`);
       if (!isJson() && opts.showOutput) printTextOutput(run);
-      if (run.status !== "succeeded") process.exitCode = 1;
+      if (run.status !== "succeeded" && run.status !== "skipped") process.exitCode = 1;
     } finally {
       store.close();
     }

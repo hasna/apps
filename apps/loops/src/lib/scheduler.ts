@@ -12,6 +12,7 @@ import {
   type CircuitBreakerThreshold,
 } from "./advancement.js";
 import { dueSlots } from "./recurrence.js";
+import { classifyLoopExecutionResult } from "./loop-result.js";
 import type { Store } from "./store.js";
 import { executeLoopTarget } from "./workflow-runner.js";
 
@@ -309,7 +310,8 @@ export async function executeClaimedRun(deps: {
           claimToken: deps.claimToken,
         }),
       })))(deps.loop, deps.run);
-    const finalResult = deps.finalizeResult?.(result, deps.loop, deps.run) ?? result;
+    const transformedResult = deps.finalizeResult?.(result, deps.loop, deps.run) ?? result;
+    const finalResult = classifyLoopExecutionResult(deps.loop, transformedResult);
     deps.beforeFinalize?.(deps.loop, deps.run);
     return deps.store.finalizeRun(deps.run.id, {
       status: finalResult.status,

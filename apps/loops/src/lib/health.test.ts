@@ -225,6 +225,53 @@ describe("loop health classification", () => {
     }
   });
 
+  test("treats configured skipped runs as neutral warnings without failure classification", () => {
+    expect(classifyRunFailure(run({
+      status: "skipped",
+      exitCode: 75,
+      error: "process exited with code 75",
+    }))).toBeUndefined();
+
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "configured-skip-health",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "exit 75", shell: true },
+        overlap: "skip",
+      });
+      const scheduledFor = loop.nextRunAt!;
+      const claim = store.claimRun(loop, scheduledFor, "health-skip", new Date(scheduledFor));
+      expect(claim).toBeTruthy();
+      store.finalizeRun(claim!.run.id, {
+        status: "skipped",
+        finishedAt: scheduledFor,
+        durationMs: 0,
+        stdout: "",
+        stderr: "",
+        error: "process exited with code 75",
+        exitCode: 75,
+      }, {
+        claimedBy: "health-skip",
+        claimToken: claim!.claimToken,
+        now: new Date(scheduledFor),
+      });
+
+      const report = buildHealthReport(store);
+      expect(report.ok).toBe(true);
+      expect(report.summary.unhealthy).toBe(0);
+      expect(report.summary.warnings).toBe(1);
+      expect(report.classifications.unknown).toBe(0);
+      expect(report.expectations[0]?.check).toMatchObject({
+        status: "warn",
+        message: "latest run was skipped",
+      });
+      expect(report.expectations[0]?.recommendedTask).toBeUndefined();
+    } finally {
+      store.close();
+    }
+  });
+
   test("health scan keeps restart-interrupted latest runs out of routeable findings", () => {
     const store = new Store(":memory:");
     try {

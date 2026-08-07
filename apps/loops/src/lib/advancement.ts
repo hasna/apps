@@ -138,7 +138,8 @@ export function planLoopAdvancement(input: {
   retryRandom?: number;
   circuitBreakerThreshold?: CircuitBreakerThreshold;
 }): LoopAdvancementPlan {
-  const { current, run, finishedAt, succeeded } = input;
+  const { current, run, finishedAt } = input;
+  const failed = run.status === "failed" || run.status === "timed_out" || run.status === "abandoned";
   if (run.status === "running") return { kind: "none", reason: "running" };
   if (!current) return { kind: "none", reason: "missing" };
   if (current.archivedAt) return { kind: "none", reason: "archived" };
@@ -174,7 +175,7 @@ export function planLoopAdvancement(input: {
     };
   }
 
-  if (!succeeded && run.attempt < current.maxAttempts) {
+  if (failed && run.attempt < current.maxAttempts) {
     if (current.retryScheduledFor && current.retryScheduledFor !== run.scheduledFor) {
       return { kind: "none", reason: "stale" };
     }
@@ -199,7 +200,7 @@ export function planLoopAdvancement(input: {
 
   if (isStaleFinalization(current, run)) return { kind: "none", reason: "stale" };
 
-  if (!succeeded) {
+  if (failed) {
     const threshold = resolveBreakerThreshold(current, input.circuitBreakerThreshold);
     if (threshold > 0) {
       const failures = consecutiveFailureCountFromRuns(input.recentRuns ?? [], current.maxAttempts);

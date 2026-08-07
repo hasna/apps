@@ -14,6 +14,7 @@ import type {
   WorkflowStepRun,
 } from "../types.js";
 import { executeLoop } from "../lib/executor.js";
+import { classifyLoopExecutionResult } from "../lib/loop-result.js";
 import { executeLoopTarget, type WorkflowExecutionStore } from "../lib/workflow-runner.js";
 import { buildDeploymentStatus, deploymentStatusLine } from "../lib/mode.js";
 import { packageVersion } from "../lib/version.js";
@@ -309,7 +310,8 @@ export async function runRunnerOnce(opts: RunRunnerOnceOptions = {}): Promise<Ru
   const claims = (Array.isArray(claimed.claims) ? claimed.claims : []) as RunnerApiClaim[];
   const completed: LoopRun[] = [];
   for (const claim of claims) {
-    const result = await executeClaimWithHeartbeat(fetchImpl, config, claim, opts);
+    const executionResult = await executeClaimWithHeartbeat(fetchImpl, config, claim, opts);
+    const result = classifyLoopExecutionResult(claim.loop, executionResult);
     const finalized = await postJson(fetchImpl, config, `/v1/runs/${claim.run.id}/finalize`, {
       claimToken: claim.claimToken,
       status: result.status,
@@ -324,7 +326,11 @@ export async function runRunnerOnce(opts: RunRunnerOnceOptions = {}): Promise<Ru
     const run = (finalized.run ?? claim.run) as LoopRun;
     completed.push(run);
   }
-  return { ok: completed.every((run) => run.status === "succeeded"), claimed: claims.length, completed };
+  return {
+    ok: completed.every((run) => run.status === "succeeded" || run.status === "skipped"),
+    claimed: claims.length,
+    completed,
+  };
 }
 
 export async function runRunnerLoop(opts: RunRunnerLoopOptions = {}): Promise<RunnerLoopResult> {

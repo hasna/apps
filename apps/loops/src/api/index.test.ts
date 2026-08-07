@@ -122,7 +122,16 @@ describe("loops-api foundation", () => {
     const document = mod.openApiDocument() as {
       paths: Record<string, {
         get?: { responses?: Record<string, { content?: { "application/json"?: { schema?: { $ref?: string } } } }> };
-        post?: { responses?: Record<string, { content?: { "application/json"?: { schema?: { $ref?: string } } } }> };
+        post?: {
+          responses?: Record<string, { content?: { "application/json"?: { schema?: { $ref?: string } } } }>;
+          requestBody?: {
+            content?: {
+              "application/json"?: {
+                schema?: { properties?: { status?: { enum?: string[] } } };
+              };
+            };
+          };
+        };
         patch?: { responses?: Record<string, { content?: { "application/json"?: { schema?: { $ref?: string } } } }> };
       }>;
       components: { schemas: Record<string, unknown> };
@@ -171,6 +180,11 @@ describe("loops-api foundation", () => {
     const finalizeResponses = document.paths["/v1/runs/{id}/finalize"]?.post?.responses;
     expect(finalizeResponses?.["409"]?.content?.["application/json"]?.schema?.$ref)
       .toBe("#/components/schemas/RunFinalizeConflictResponse");
+    expect(finalizeResponses?.["422"]?.content?.["application/json"]?.schema?.$ref)
+      .toBe("#/components/schemas/RunFinalizeValidationResponse");
+    expect(
+      document.paths["/v1/runs/{id}/finalize"]?.post?.requestBody?.content?.["application/json"]?.schema?.properties?.status?.enum,
+    ).toEqual(["succeeded", "failed", "timed_out", "skipped"]);
     expect(document.paths["/v1/runs/{id}/recover"]?.post?.responses?.["409"]).toBeUndefined();
     expect(document.paths["/v1/leases/recover"]?.post?.responses?.["409"]).toBeUndefined();
     expect(document.paths["/status"]?.get?.responses?.["409"]).toBeUndefined();
@@ -182,6 +196,16 @@ describe("loops-api foundation", () => {
       properties: {
         error: {
           enum: ["stale_claim", "run_not_running", "loop_advancement_conflict"],
+        },
+      },
+    });
+    expect(document.components.schemas.RunFinalizeValidationResponse).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      required: ["ok", "error"],
+      properties: {
+        error: {
+          enum: ["status_required", "skip_status_requires_overlap_skip_exit_75"],
         },
       },
     });
@@ -1876,6 +1900,85 @@ describe("loops-api foundation", () => {
         nextRunAt: "2026-01-01T00:00:15.000Z",
         retryScheduledFor: "2026-01-01T00:00:00.000Z",
       });
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("runner finalization accepts only policy-backed skipped completions and advances recurrence", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = createTestServer(
+      mod,
+      { host: "127.0.0.1", port: 0, storage, now: () => new Date("2026-01-01T00:00:10.000Z") },
+      runnerPrincipal("runner-skip"),
+    );
+
+    try {
+      const loop = await storage.createLoop({
+        name: "api-configured-skip",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "exit 75", shell: true },
+        overlap: "skip",
+        maxAttempts: 3,
+      }, new Date("2025-12-31T00:00:00.000Z"));
+      const claim = await storage.claimRun(
+        loop,
+        "2026-01-01T00:00:00.000Z",
+        "runner-skip",
+        new Date("2026-01-01T00:00:01.000Z"),
+      );
+      expect(claim).toBeTruthy();
+
+      const finalize = () => fetch(apiUrl(server, `/v1/runs/${claim!.run.id}/finalize`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken: claim!.claimToken,
+          status: "skipped",
+          stdout: "",
+          stderr: "configured decline",
+          error: "process exited with code 75",
+          exitCode: 75,
+        }),
+      });
+
+      expect((await finalize()).status).toBe(200);
+      expect(await storage.getRun(claim!.run.id)).toMatchObject({ status: "skipped", exitCode: 75 });
+      expect(await storage.getLoop(loop.id)).toMatchObject({
+        status: "active",
+        nextRunAt: "2026-01-01T00:01:00.000Z",
+        retryScheduledFor: undefined,
+      });
+      expect((await finalize()).status).toBe(200);
+
+      const allowLoop = await storage.createLoop({
+        name: "api-unconfigured-skip",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "exit 75", shell: true },
+        overlap: "allow",
+      }, new Date("2025-12-31T00:00:00.000Z"));
+      const allowClaim = await storage.claimRun(
+        allowLoop,
+        "2026-01-01T00:00:00.000Z",
+        "runner-skip",
+        new Date("2026-01-01T00:00:01.000Z"),
+      );
+      const rejected = await fetch(apiUrl(server, `/v1/runs/${allowClaim!.run.id}/finalize`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken: allowClaim!.claimToken,
+          status: "skipped",
+          stdout: "",
+          stderr: "",
+          exitCode: 75,
+        }),
+      });
+      expect(rejected.status).toBe(422);
+      expect(await rejected.json()).toEqual({ ok: false, error: "skip_status_requires_overlap_skip_exit_75" });
+      expect((await storage.getRun(allowClaim!.run.id))?.status).toBe("running");
     } finally {
       server.stop(true);
       await storage.close();

@@ -1066,6 +1066,35 @@ suite("PostgresLoopStorage (live)", () => {
     expect((await storage.getRunBySlot(loop.id, slot))?.id).toBe(claim!.run.id);
   });
 
+  test("persists skipped as a distinct terminal run status", async () => {
+    const loop = await storage.createLoop(loopInput("runner-configured-skip", {
+      overlap: "skip",
+      leaseMs: 60_000,
+    }));
+    const slot = "2026-07-06T10:05:00.000Z";
+    const claim = await storage.claimRun(loop, slot, "runner-skip");
+    expect(claim).toBeTruthy();
+
+    const finalized = await storage.finalizeRun(
+      claim!.run.id,
+      {
+        status: "skipped",
+        finishedAt: new Date().toISOString(),
+        durationMs: 5,
+        stdout: "",
+        stderr: "configured decline",
+        error: "process exited with code 75",
+        exitCode: 75,
+      },
+      { claimedBy: "runner-skip", claimToken: claim!.claimToken },
+    );
+
+    expect(finalized).toMatchObject({ status: "skipped", exitCode: 75 });
+    expect(await storage.countRuns("skipped")).toBe(1);
+    expect(await storage.countRuns("failed")).toBe(0);
+    expect(await storage.countRuns("succeeded")).toBe(0);
+  });
+
   test("same-runner reclaim fences stale and tokenless PostgreSQL work", async () => {
     const claimedAt = new Date("2026-07-06T10:10:00.000Z");
     const loop = await storage.createLoop(loopInput("pg-same-runner-reclaim", { leaseMs: 10 }));

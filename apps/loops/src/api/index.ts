@@ -63,6 +63,7 @@ import {
   type CircuitBreakerThreshold,
 } from "../lib/advancement.js";
 import { normalizeLoopLabels } from "../lib/labels.js";
+import { supportsConfiguredLoopSkip } from "../lib/loop-result.js";
 import { isLoopStatus, isMaxAttempts, LOOP_STATUSES } from "../lib/loop-status.js";
 import { normalizeRunCompletion } from "../lib/run-completion.js";
 import { scrubSecretsDeep } from "../lib/redact.js";
@@ -1436,9 +1437,9 @@ async function finalizeRun(
   },
 ): Promise<Response> {
   const claimToken = requiredString(body.claimToken, "claimToken");
-  const status = optionalEnum<"succeeded" | "failed" | "timed_out">(
+  const status = optionalEnum<"succeeded" | "failed" | "timed_out" | "skipped">(
     optionalString(body.status) ?? null,
-    ["succeeded", "failed", "timed_out"],
+    ["succeeded", "failed", "timed_out", "skipped"],
   );
   if (!status) throw apiError("status_required", 422);
   const requestedFinishedAt = optionalIsoString(body.finishedAt);
@@ -1450,11 +1451,16 @@ async function finalizeRun(
   const pid = optionalInteger(body.pid);
   const existing = await storage.getRun(runId);
   if (!existing) return fail("run_not_found", 404);
+  const loop = await storage.getLoop(existing.loopId);
+  if (!loop) return fail("loop_not_found", 404);
+  if (status === "skipped" && !supportsConfiguredLoopSkip(loop, exitCode)) {
+    return fail("skip_status_requires_overlap_skip_exit_75", 422);
+  }
   if (existing.status !== "running" || !existing.claimedBy) {
     if (
       existing.claimedBy === principalId &&
       existing.status === status &&
-      ["succeeded", "failed", "timed_out"].includes(existing.status)
+      ["succeeded", "failed", "timed_out", "skipped"].includes(existing.status)
     ) {
       try {
         await storage.finalizeRun(
@@ -1475,24 +1481,19 @@ async function finalizeRun(
         if (!(replayError instanceof RunFinalizationConflictError)) throw replayError;
         if (replayError.reason === "stale_claim") return fail("stale_claim", 409);
       }
-      const loop = await storage.getLoop(existing.loopId);
-      if (loop) {
-        await advanceLoopAfterRun(
-          storage,
-          loop,
-          existing,
-          new Date(existing.updatedAt),
-          existing.status === "succeeded",
-          advancement,
-        );
-      }
+      await advanceLoopAfterRun(
+        storage,
+        loop,
+        existing,
+        new Date(existing.updatedAt),
+        existing.status === "succeeded",
+        advancement,
+      );
       return ok({ run: publicRun(existing, false, { redactError: true }) });
     }
     return fail("run_not_running", 409);
   }
   if (existing.claimedBy !== principalId) return fail("runner_identity_mismatch", 403);
-  const loop = await storage.getLoop(existing.loopId);
-  if (!loop) return fail("loop_not_found", 404);
   const completion = normalizeRunCompletion({
     startedAt: existing.startedAt ?? existing.createdAt,
     requestedFinishedAt,
@@ -1523,7 +1524,7 @@ async function finalizeRun(
       !terminal ||
       terminal.claimedBy !== principalId ||
       terminal.status !== status ||
-      !["succeeded", "failed", "timed_out"].includes(terminal.status)
+      !["succeeded", "failed", "timed_out", "skipped"].includes(terminal.status)
     ) {
       throw error;
     }
