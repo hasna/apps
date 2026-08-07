@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { MIGRATIONS, runMigrations } from "./schema.js";
@@ -68,6 +68,36 @@ function tmpDir(): string {
 }
 
 describe("workspace schema", () => {
+  test("doctor local mode repairs the marker and package-owned location registry together", () => {
+    const db = makeDb();
+    const projectPath = tmpDir();
+    try {
+      const workspace = createWorkspace({
+        name: "Local Doctor",
+        slug: "local-doctor",
+        primary_path: projectPath,
+      }, db);
+      db.run("DELETE FROM workspace_locations WHERE workspace_id = ?", [workspace.id]);
+      writeFileSync(
+        workspaceMarkerPath(workspace),
+        JSON.stringify({ schema_version: 1, id: workspace.id, slug: "stale-local-doctor" }, null, 2) + "\n",
+      );
+
+      const dryRun = doctorWorkspace(workspace, { fix: true, dryRun: true, storageMode: "local" }, db);
+      expect(dryRun.fixes.map((fix) => fix.code).sort()).toEqual(["FIX_WORKSPACE_LOCATION", "FIX_WORKSPACE_MARKER"]);
+      expect(listWorkspaceLocations(workspace.id, db)).toHaveLength(0);
+
+      const fixed = doctorWorkspace(workspace, { fix: true, storageMode: "local" }, db);
+      expect(fixed.fixes.map((fix) => fix.code).sort()).toEqual(["FIX_WORKSPACE_LOCATION", "FIX_WORKSPACE_MARKER"]);
+      expect(JSON.parse(readFileSync(workspaceMarkerPath(workspace), "utf-8")).slug).toBe("local-doctor");
+      expect(listWorkspaceLocations(workspace.id, db)).toHaveLength(1);
+      expect(listWorkspaceEvents(workspace.id, db).map((event) => event.event_type)).toContain("workspace_marker_written");
+    } finally {
+      rmSync(projectPath, { recursive: true, force: true });
+      db.close();
+    }
+  });
+
   test("creates generic workspace tables and seeds the machine registry", () => {
     const db = makeDb();
     const tables = db

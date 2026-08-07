@@ -37,6 +37,12 @@ export interface WorkspaceDoctorResult {
   ok: boolean;
 }
 
+export interface WorkspaceDoctorOptions {
+  fix?: boolean;
+  dryRun?: boolean;
+  storageMode?: "local" | "api";
+}
+
 function checkPath(workspace: Workspace): WorkspaceDoctorCheck {
   if (!workspace.primary_path) {
     return { code: "WORKSPACE_PATH_MISSING", name: "path", status: "warn", message: "no primary path", fixable: false };
@@ -81,7 +87,16 @@ function checkReferences(workspace: Workspace, db?: Database): WorkspaceDoctorCh
   return checks;
 }
 
-function checkLocations(workspace: Workspace, db?: Database): WorkspaceDoctorCheck {
+function checkLocations(workspace: Workspace, storageMode: "local" | "api", db?: Database): WorkspaceDoctorCheck {
+  if (storageMode === "api") {
+    return {
+      code: "WORKSPACE_LOCATIONS_LOCAL_ONLY",
+      name: "locations",
+      status: "warn",
+      message: "API-backed projects do not own the machine-local location registry; location repair is available only for a local project row on the machine that owns the path",
+      fixable: false,
+    };
+  }
   const locations = listWorkspaceLocations(workspace.id, db);
   if (!locations.length) {
     return { code: "WORKSPACE_LOCATIONS_MISSING", name: "locations", status: "warn", message: "no locations registered", fixable: Boolean(workspace.primary_path) };
@@ -129,12 +144,13 @@ function checkMigrationMap(workspace: Workspace, db?: Database): WorkspaceDoctor
   return { code: "WORKSPACE_MIGRATION_MAP_OK", name: "migration", status: "ok", message: migratedFrom };
 }
 
-export function doctorWorkspace(workspace: Workspace, options: { fix?: boolean; dryRun?: boolean } = {}, db?: Database): WorkspaceDoctorResult {
+export function doctorWorkspace(workspace: Workspace, options: WorkspaceDoctorOptions = {}, db?: Database): WorkspaceDoctorResult {
+  const storageMode = options.storageMode ?? "local";
   const checks = [
     checkPath(workspace),
     checkMarker(workspace),
     ...checkReferences(workspace, db),
-    checkLocations(workspace, db),
+    checkLocations(workspace, storageMode, db),
     checkAgentRuns(workspace, db),
     checkMigrationMap(workspace, db),
   ];
@@ -144,7 +160,14 @@ export function doctorWorkspace(workspace: Workspace, options: { fix?: boolean; 
   if (options.fix) {
     const markerCheck = checks.find((check) => check.code.startsWith("WORKSPACE_MARKER_") && check.fixable);
     if (markerCheck && workspace.primary_path && existsSync(workspace.primary_path)) {
-      if (!dryRun) writeWorkspaceMarker(workspace, { source: "cli", command: "projects doctor --fix" });
+      if (!dryRun) {
+        writeWorkspaceMarker(workspace, {
+          source: "cli",
+          command: "projects doctor --fix",
+          recordEvents: storageMode === "local",
+          db,
+        });
+      }
       fixes.push({ code: "FIX_WORKSPACE_MARKER", message: `${dryRun ? "Would write" : "Wrote"} ${workspaceMarkerPath(workspace)}`, changed: !dryRun, dryRun });
     }
     const locationCheck = checks.find((check) => check.code === "WORKSPACE_LOCATIONS_MISSING" && check.fixable);
@@ -157,6 +180,6 @@ export function doctorWorkspace(workspace: Workspace, options: { fix?: boolean; 
   return { workspace, checks, fixes, ok: checks.every((check) => check.status !== "error") };
 }
 
-export function doctorWorkspaces(filter: WorkspaceFilter = {}, options: { fix?: boolean; dryRun?: boolean } = {}, db?: Database): WorkspaceDoctorResult[] {
+export function doctorWorkspaces(filter: WorkspaceFilter = {}, options: WorkspaceDoctorOptions = {}, db?: Database): WorkspaceDoctorResult[] {
   return listWorkspaces({ ...filter, limit: filter.limit ?? 500 }, db).map((workspace) => doctorWorkspace(workspace, options, db));
 }

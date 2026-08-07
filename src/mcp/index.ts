@@ -1911,8 +1911,8 @@ server.tool(
     verbose: z.boolean().optional(),
   },
   async (input) => {
-    const options = { fix: input.fix, dryRun: input.dry_run };
     const store = resolveProjectStore();
+    const options = { fix: input.fix, dryRun: input.dry_run, storageMode: store.mode };
     if (input.id) {
       const project = await findProjectTarget(input.id, store);
       if (!project) return errorText(`Project not found: ${input.id}`);
