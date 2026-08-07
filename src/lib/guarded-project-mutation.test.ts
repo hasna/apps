@@ -28,6 +28,21 @@ function project(): Workspace {
 }
 
 describe("guarded project read response control", () => {
+  test("returns the complete exact project record inside the bounded envelope", () => {
+    const workspace = project();
+    const result = buildGuardedProjectReadResult(workspace, {
+      project_id: workspace.id,
+      response_byte_limit: 16_384,
+      time_budget_ms: 5_000,
+    }, Date.now());
+
+    expect(result.project).toEqual(workspace);
+    expect(result.project_id).toBe(workspace.id);
+    expect(result.response_control.complete).toBe(true);
+    expect(result.response_control.truncated).toBe(false);
+    expect(result.response_control.response_bytes).toBeGreaterThan(0);
+  });
+
   test("fails closed when the whole-operation time budget is exceeded", () => {
     const workspace = project();
     expect(() => buildGuardedProjectReadResult(workspace, {

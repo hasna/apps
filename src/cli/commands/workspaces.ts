@@ -49,6 +49,7 @@ import { importWorkspace, importWorkspaceBulk } from "../../lib/workspace-import
 import { runWorkspaceLegacyMigration } from "../../lib/workspace-migration.js";
 import {
   ensureProjectStore as ensureCanonicalProjectStore,
+  ensureProjectStoreForTarget,
   inspectProjectStore as inspectCanonicalProjectStore,
   migrateProjectToStore,
   planProjectStoreMigration,
@@ -2878,11 +2879,12 @@ function registerProjectCommands(program: Command): void {
 }
 
 /**
- * The canonical on-box store ($HASNA_PROJECTS_HOME/data/<id> + primary-path
- * bookkeeping) is a machine-local resource that the cloud project does not own.
- * `store ensure`/`store migrate` write the local project.db (locations, events)
- * for the target id, which FK-fails for a cloud-only project. Refuse cleanly in
- * api mode instead of touching sqlite for a row that only lives in the cloud.
+ * `store migrate` moves an existing machine-local primary path and rewrites the
+ * local registry's location history. The API registry cannot own or coordinate
+ * that source directory, so migration remains local-only. `store ensure` is
+ * intentionally excluded: it provisions the exact-id machine-local app store
+ * after a bounded guarded API read and uses guarded registry mutation only when
+ * the hosted row has no primary path.
  */
 function assertLocalOnlyStoreOperation(store: ReturnType<typeof resolveProjectStore>, operation: string): void {
   if (store.mode === "api") {
@@ -2973,19 +2975,25 @@ function registerStoreCommand(program: Command): void {
     .action(async (projectIdOrSlug, opts) => {
       try {
         const store = resolveProjectStore();
-        assertLocalOnlyStoreOperation(store, "store ensure");
-        const project = await store.resolveTarget(projectIdOrSlug);
-        const agentId = opts.agent ? resolveAgentId(opts.agent) : ensureCliAgent().id;
-        const ensure = () => ensureCanonicalProjectStore(project, {
+        const agentId = opts.agent
+          ? (store.mode === "local" ? resolveAgentId(opts.agent) : opts.agent)
+          : (store.mode === "local" ? ensureCliAgent().id : undefined);
+        const common = {
           dryRun: opts.dryRun,
           setPrimaryIfMissing: opts.primary,
           agentId,
-          source: "cli",
+          source: "cli" as const,
           command: process.argv.join(" "),
-        });
-        const result = opts.dryRun ? ensure() : await withWorkspaceLock(store, project, agentId, "project store ensure", ensure);
+        };
+        const result = store.mode === "local"
+          ? await (async () => {
+              const project = await store.resolveTarget(projectIdOrSlug);
+              const ensure = () => ensureCanonicalProjectStore(project, common);
+              return opts.dryRun ? ensure() : withWorkspaceLock(store, project, agentId, "project store ensure", ensure);
+            })()
+          : await ensureProjectStoreForTarget(store, projectIdOrSlug, common);
         if (wantsJson(opts)) { printObject(result, opts); return; }
-        console.log(result.dry_run ? chalk.dim(`[dry-run] Store ensure ${project.slug}`) : chalk.green(`✓ Store ensured: ${project.slug}`));
+        console.log(result.dry_run ? chalk.dim(`[dry-run] Store ensure ${result.project.slug}`) : chalk.green(`✓ Store ensured: ${result.project.slug}`));
         console.log(`  ${chalk.dim("workspace:")} ${result.paths.workspace_path}`);
         console.log(`  ${chalk.dim("data:")} ${result.paths.data_path}`);
         if (result.created.length) console.log(`  ${chalk.dim(result.dry_run ? "would create:" : "created:")} ${result.created.join(", ")}`);

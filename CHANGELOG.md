@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- `projects store ensure` now supports API-backed projects by complete stable
+  `wks_...` id. It performs a bounded exact-record read, collision-checks and
+  provisions the station-local canonical app store idempotently, and uses the
+  guarded conditional receipt/rollback path only when the hosted project is
+  missing its primary path. Guarded read/update/receipt/rollback operations are
+  now all represented in OpenAPI and the generated SDK.
+
 ## [0.1.97]
 
 ### Fixed

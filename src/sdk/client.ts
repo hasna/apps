@@ -1,7 +1,7 @@
 // @generated from the projects-serve OpenAPI document by scripts/generate-sdk.ts.
 // DO NOT EDIT BY HAND. Regenerate: bun run sdk:generate
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Projects API 0.1.95
+// Source: Projects API 0.1.102
 
 export interface Root { "id": string; "slug": string; "name": string; "base_path": string; "tags"?: Array<string>; "default_kind"?: string | null; "repo_visibility"?: string | null; "allowed_recipes"?: Array<string>; "allowed_agents"?: Array<string>; "metadata"?: Record<string, unknown>; "created_at"?: string; "updated_at"?: string }
 
@@ -25,7 +25,21 @@ export interface UpdateWorkspace { "name"?: string; "slug"?: string; "descriptio
 
 export interface WorkspaceEvent { "id": string; "workspace_id"?: string | null; "agent_id"?: string | null; "event_type": string; "source": string; "metadata"?: Record<string, unknown>; "created_at"?: string }
 
-export interface WorkspaceList { "workspaces": Array<Workspace>; "count": number }
+export interface WorkspaceList { "workspaces": Array<Workspace>; "count": number; "total": number; "offset": number; "limit": number; "has_more": boolean; "complete": boolean }
+
+export interface GuardedResponseControl { "response_byte_limit": number; "time_budget_ms": number; "response_bytes": number; "elapsed_ms": number; "complete": boolean; "truncated": boolean }
+
+export interface GuardedProjectRead { "ok": boolean; "project_id": string; "project": Workspace; "current_revision": string; "response_control": GuardedResponseControl }
+
+export interface GuardedProjectMutationReceipt { "receipt_id": string; "operation_id": string; "step_id": string; "direction": "forward" | "inverse"; "idempotency_key": string; "target_id": string; "request_digest": string; "precondition_digest": string; "expected_revision": string; "outcome": "accepted" | "duplicate_of_accepted" | "terminal_nonacceptance"; "reason": string | null; "result_project_id": string | null; "duplicate_of_receipt_id": string | null; "before": Record<string, unknown> | null; "after": Record<string, unknown> | null; "post_revision": string | null; "created_at": string }
+
+export interface GuardedProjectMutationRequest { "operation_id": string; "step_id": string; "direction"?: "forward" | "inverse"; "expected_revision": string; "patch": UpdateWorkspace; "dry_run"?: boolean; "agent_id"?: string; "source"?: string; "command"?: string; "response_byte_limit": number; "time_budget_ms": number }
+
+export interface GuardedProjectMutationResult { "ok": boolean; "dry_run": boolean; "outcome": "accepted" | "duplicate_of_accepted" | "terminal_nonacceptance" | "planned"; "idempotency_key": string; "request_digest": string; "precondition_digest": string; "project_id": string; "expected_revision": string; "current_revision": string; "before": Workspace; "after": Workspace | null; "receipt": GuardedProjectMutationReceipt | null; "response_control": GuardedResponseControl }
+
+export interface GuardedProjectMutationReceiptLookup { "receipt": GuardedProjectMutationReceipt; "response_control": GuardedResponseControl }
+
+export interface GuardedProjectMutationRollbackRequest { "operation_id": string; "step_id": string; "accepted_receipt_id": string; "expected_current_revision": string; "agent_id"?: string; "source"?: string; "command"?: string; "response_byte_limit": number; "time_budget_ms": number }
 
 export interface RootList { "roots": Array<Root>; "count": number }
 
@@ -211,6 +225,42 @@ export class ProjectsClient {
     /** Record a custom audit event for a project */
     async recordProjectEvent(id: string, body: RecordEvent, init?: RequestInit): Promise<EventRecorded> {
       return this.request("POST", `/v1/projects/${encodeURIComponent(String(id))}/events`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Read one project by exact stable id with bounded complete JSON and its current mutation revision */
+    async guardedReadProject(id: string, query?: { "response_byte_limit": number; "time_budget_ms": number }, init?: RequestInit): Promise<GuardedProjectRead> {
+      return this.request("GET", `/v1/projects/${encodeURIComponent(String(id))}/guarded-metadata`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Conditionally update one exact project and return a deterministic terminal receipt */
+    async guardedUpdateProject(id: string, body: GuardedProjectMutationRequest, init?: RequestInit): Promise<GuardedProjectMutationResult> {
+      return this.request("POST", `/v1/projects/${encodeURIComponent(String(id))}/guarded-metadata`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Look up exactly one terminal guarded mutation receipt */
+    async lookupGuardedProjectMutationReceipt(id: string, query?: { "operation_id": string; "step_id": string; "direction": "forward" | "inverse"; "idempotency_key": string; "max_items": number; "response_byte_limit": number; "time_budget_ms": number }, init?: RequestInit): Promise<GuardedProjectMutationReceiptLookup> {
+      return this.request("GET", `/v1/projects/${encodeURIComponent(String(id))}/guarded-metadata/receipts`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Conditionally roll back one accepted guarded mutation receipt */
+    async rollbackGuardedProjectMutation(id: string, body: GuardedProjectMutationRollbackRequest, init?: RequestInit): Promise<GuardedProjectMutationResult> {
+      return this.request("POST", `/v1/projects/${encodeURIComponent(String(id))}/guarded-metadata/rollback`, {
         body,
         query: undefined,
         init,

@@ -106,6 +106,7 @@ projects oss matrix --root /home/me/opensource --prefix open- --json
 projects oss matrix --root /home/me/opensource --limit 50 --no-prs --no-tasks
 projects store inspect my-app --json
 projects store ensure my-app --json
+projects store ensure wks_exact_stable_id --dry-run --json  # required target form in API mode
 projects store migrate my-app --json          # dry-run plan
 projects store migrate my-app --apply --json  # explicit move/update
 projects link my-app --github-url https://github.com/hasna/my-app --todos-project-id todo_123 --todos-task-list-id list_123
@@ -224,8 +225,14 @@ folder name.
 
 `projects store inspect` reports the canonical workspace/data paths and whether
 the current primary path is canonical. `projects store ensure` creates missing
-workspace/data directories and only sets the canonical path as primary when the
-project had no primary path. `projects store migrate` is dry-run by default; it
+workspace/data directories, initializes the machine-local `project.db`, and
+only sets the canonical path as primary when the project had no primary path.
+In API mode, ensure requires the complete stable `wks_...` id, reads the full
+project through the producer-bounded guarded endpoint, and uses the guarded
+conditional update/receipt path for a missing primary path. Slugs and partial
+ids are refused before transport; the station-local store is never created from
+an unbounded or mismatched registry response. `projects store migrate` remains
+local-only and is dry-run by default; it
 requires `--apply` or `--yes` to move an existing primary folder into
 `workspaces/<id>`, writes a migration plan under `data/<id>`, preserves git
 history by moving the directory, records the old path as a non-primary location,

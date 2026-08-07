@@ -208,6 +208,7 @@ export function buildGuardedProjectReadResult(
   return withResponseControl({
     ok: true as const,
     project_id: project.id,
+    project,
     current_revision: workspaceRevision(project),
   }, input, startedAtMs, "guarded project read");
 }
