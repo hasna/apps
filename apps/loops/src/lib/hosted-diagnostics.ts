@@ -4,10 +4,12 @@ import type { LoopStore } from "./store/index.js";
 import { ApiStore } from "./store/index.js";
 import {
   buildHealthReport,
+  HEALTH_ELIGIBLE_STATUSES,
   RESTART_INTERRUPTED_RUN_PREFIX,
   type HealthSource,
   type LoopsHealthReport,
 } from "./health.js";
+import { listAllLoops, listAllLoopsByStatus } from "./loop-pagination.js";
 import { localRuntimeChecks, type DoctorCheck, type DoctorReport } from "./doctor.js";
 import { preflightTarget } from "./executor.js";
 import { workflowExecutionOrder } from "./workflow-spec.js";
@@ -77,10 +79,27 @@ class HostedSnapshot implements HealthSource {
   ) {}
 
   listLoops(opts: { status?: LoopStatus; includeArchived?: boolean; limit?: number } = {}): Loop[] {
+    // No default bound. This snapshot holds exactly the loops the caller already
+    // decided to fetch and bound; re-applying a 200-row default here was a
+    // SECOND silent slice, invisible to a caller that had correctly paged the
+    // collection. An explicit limit is still honoured.
+    const matched = this.matching(opts);
+    return opts.limit === undefined ? matched : matched.slice(0, opts.limit);
+  }
+
+  /**
+   * Exact for this snapshot, because the caller paged the collection to
+   * exhaustion before constructing it. That is the whole reason paging had to
+   * come first: a count taken over a windowed snapshot would report the window.
+   */
+  countLoops(status?: LoopStatus, opts: { includeArchived?: boolean } = {}): number {
+    return this.matching({ status, includeArchived: opts.includeArchived }).length;
+  }
+
+  private matching(opts: { status?: LoopStatus; includeArchived?: boolean }): Loop[] {
     return this.loops
       .filter((loop) => (opts.status ? loop.status === opts.status : true))
-      .filter((loop) => (opts.includeArchived ? true : !loop.archivedAt))
-      .slice(0, opts.limit ?? DEFAULT_LOOP_LIMIT);
+      .filter((loop) => (opts.includeArchived ? true : !loop.archivedAt));
   }
 
   listRuns(opts: { loopId?: string; status?: RunStatus; limit?: number } = {}): LoopRun[] {
@@ -120,12 +139,29 @@ export async function buildHostedHealthReport(
   store: LoopStore,
   opts: { limit?: number; includeInactive?: boolean; includeArchived?: boolean; now?: Date } = {},
 ): Promise<HostedHealthResult> {
-  const limit = opts.limit ?? DEFAULT_LOOP_LIMIT;
-  const loops = await store.listLoops({ limit, includeArchived: opts.includeArchived });
+  // Page the CANDIDATE set rather than reading one window of it. A single
+  // unpaged call returned the first 200 rows and presented them as the fleet;
+  // full coverage of active loops was an accident of `status ASC` ordering
+  // putting them first, not a property of this code. Filtering server-side by
+  // status removes the dependency on ordering entirely.
+  const eligible = opts.includeInactive
+    ? await listAllLoops(store, { includeArchived: opts.includeArchived })
+    : await listAllLoopsByStatus(store, HEALTH_ELIGIBLE_STATUSES, { includeArchived: opts.includeArchived });
+  // An explicit --limit still bounds the report, but it now bounds the ELIGIBLE
+  // set, and it is applied here so the per-loop run fetch below costs one call
+  // per loop actually reported rather than one per loop that exists.
+  const limit = opts.limit ?? eligible.length;
+  const loops = eligible.slice(0, limit);
   const runs = new Map<string, LoopRun[]>();
   const unreachable = await latestRunsFor(store, loops.map((loop) => loop.id), runs);
 
-  const snapshot = new HostedSnapshot(loops, runs);
+  // The snapshot carries the FULL eligible set even though runs were fetched
+  // only for the bounded head of it. Handing it the slice instead would make its
+  // countLoops report the slice, and summary.truncated would then read false
+  // precisely when the report HAD been truncated — the defect this change
+  // exists to remove, reintroduced one layer down. buildHealthReport applies the
+  // same bound in the same order, so no run outside `loops` is ever requested.
+  const snapshot = new HostedSnapshot(eligible, runs);
   const reportOptions = {
     limit,
     includeInactive: opts.includeInactive,
@@ -157,7 +193,19 @@ export async function buildHostedHealthReport(
     },
     {
       id: "run-history-depth",
-      reason: `only the latest run of each loop was fetched (limit 1 per loop, ${loops.length} loop(s) at limit ${limit}); older failures in the same loop are not classified.`,
+      reason: `only the latest run of each loop was fetched (limit 1 per loop, across ${loops.length} loop(s)); older failures in the same loop are not classified.`,
+    },
+    {
+      // The population bound gets its own item. It used to be a subclause of
+      // run-history-depth above, so the one number that says whether this report
+      // covers the fleet was findable only inside a sentence about run history.
+      id: "loop-population",
+      reason:
+        report.summary.truncated
+          ? `${eligible.length} loop(s) are eligible for this report and only ${report.summary.loops} were inspected (limit ${limit}); ` +
+            "the uninspected loops are not represented anywhere in this summary. Raise or drop --limit to cover them."
+          : `all ${eligible.length} eligible loop(s) were inspected; the loop collection was paged to exhaustion, ` +
+            `so this is the whole ${opts.includeInactive ? "non-archived" : "active/paused"} population rather than a window over it.`,
     },
   ];
   for (const loopId of new Set([...unreachable, ...snapshot.misses])) {

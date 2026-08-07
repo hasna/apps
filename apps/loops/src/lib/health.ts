@@ -21,7 +21,32 @@ import type { Store } from "./store.js";
 export interface HealthSource {
   listLoops(opts?: { status?: LoopStatus; includeArchived?: boolean; limit?: number }): Loop[];
   listRuns(opts?: { loopId?: string; status?: RunStatus; limit?: number }): LoopRun[];
+  /**
+   * Exact size of a status's population, independent of any read bound.
+   *
+   * Optional so the interface stays narrow for sources that cannot answer it.
+   * Where it is absent the report falls back to probing one row past the bound,
+   * which still detects truncation but cannot say how much was left out — so
+   * `summary.eligible` is then a floor, and `summary.truncated` is what matters.
+   */
+  countLoops?(status?: LoopStatus, opts?: { archived?: boolean; includeArchived?: boolean }): number;
 }
+
+/**
+ * The loop statuses `health` reports on. A loop outside this set is not merely
+ * uninteresting — it must never occupy a slot in the population window, because
+ * the bound is meant to bound the loops being CHECKED.
+ *
+ * Both stores order loops by `status ASC`, and LoopStatus sorts
+ * active < expired < paused < stopped, so `expired` rows sit between active and
+ * paused. Filtering after the bound therefore lets expired loops evict paused
+ * ones from the report while `summary.loops` drops below the cap — worse
+ * coverage that reads as better. Filter first; bound the survivors.
+ */
+export const HEALTH_ELIGIBLE_STATUSES: readonly LoopStatus[] = ["active", "paused"];
+
+/** Default population bound for a health report when the caller names none. */
+export const DEFAULT_HEALTH_LOOP_LIMIT = 200;
 
 /**
  * Grace period before an active loop whose scheduled slot has passed counts as
@@ -158,6 +183,20 @@ export interface LoopsHealthReport {
     warnings: number;
     /** Active loops whose scheduled slot passed unclaimed. */
     overdue: number;
+    /**
+     * Loops eligible for this report before the bound was applied.
+     *
+     * `summary` is the object consumers actually read, so the bound belongs
+     * here. It used to exist only as a subclause of the hosted report's
+     * `run-history-depth` note — a sentence about run history — which meant a
+     * windowed summary was indistinguishable from a complete one at the surface
+     * everyone quotes. `eligible > loops` means loops were not inspected.
+     */
+    eligible: number;
+    /** The population bound in force for this report. */
+    limit: number;
+    /** True when eligible loops were left out; never infer this from `loops`. */
+    truncated: boolean;
   };
   classifications: Record<RunFailureClassification, number>;
   expectations: LoopExpectationResult[];
@@ -471,11 +510,28 @@ function scanLoops(store: HealthSource, statuses: LoopStatus[], opts: Pick<Build
     .slice(0, limit);
 }
 
+/**
+ * Exact size of the scan's own candidate population, for the coverage fields.
+ *
+ * `scanLoops` already filters by status before bounding, so the scan never had
+ * the eviction defect. What it lacked was a way to say whether its slice left
+ * anything out; this supplies that without changing which loops it picks.
+ */
+function scanEligibleCount(
+  store: HealthSource,
+  statuses: LoopStatus[],
+  opts: Pick<BuildHealthScanOptions, "includeArchived" | "limit">,
+): number | undefined {
+  if (!store.countLoops) return undefined;
+  const countOpts = { includeArchived: opts.includeArchived };
+  return statuses.reduce((total, status) => total + store.countLoops!(status, countOpts), 0);
+}
+
 function healthReportForLoops(
   store: HealthSource,
   loops: Loop[],
   generatedAt: string,
-  opts: ExpectationOptions = {},
+  opts: ExpectationOptions & { eligible?: number; limit?: number } = {},
 ): LoopsHealthReport {
   const expectations = loops.map((loop) => expectationForLoop(store, loop, { now: new Date(generatedAt), ...opts }));
   const classifications = Object.fromEntries(CLASSIFICATIONS.map((key) => [key, 0])) as Record<RunFailureClassification, number>;
@@ -485,6 +541,7 @@ function healthReportForLoops(
   const unhealthy = expectations.filter((expectation) => !expectation.ok).length;
   const warnings = expectations.filter((expectation) => expectation.check.status === "warn").length;
   const overdue = expectations.filter((expectation) => expectation.overdue).length;
+  const eligible = opts.eligible ?? expectations.length;
   return {
     ok: unhealthy === 0,
     generatedAt,
@@ -494,6 +551,9 @@ function healthReportForLoops(
       unhealthy,
       warnings,
       overdue,
+      eligible,
+      limit: opts.limit ?? expectations.length,
+      truncated: eligible > expectations.length,
     },
     classifications,
     expectations,
@@ -1098,14 +1158,65 @@ function classifyExpectation(store: HealthSource, loop: Loop): LoopExpectationRe
   };
 }
 
+/**
+ * The loops `health` will report on, with the eligibility filter applied BEFORE
+ * the population bound.
+ *
+ * Returns the bounded set alongside the size of the eligible set it came from,
+ * so the caller can say whether anything was left out instead of leaving a
+ * reader to infer it from the count.
+ */
+function eligibleLoopsForHealth(
+  store: HealthSource,
+  opts: { includeArchived?: boolean; includeInactive?: boolean; limit?: number },
+): { loops: Loop[]; eligible: number; limit: number } {
+  const limit = opts.limit ?? DEFAULT_HEALTH_LOOP_LIMIT;
+  const countOpts = { includeArchived: opts.includeArchived };
+  // Read ONE ROW PAST the bound so truncation is observable even from a source
+  // that cannot count. Without this probe a full page is indistinguishable from
+  // a population that happens to be exactly `limit` long.
+  const probe = limit + 1;
+
+  const fetched: Loop[] = [];
+  const seen = new Set<string>();
+  const take = (rows: Loop[]): void => {
+    for (const loop of rows) {
+      if (seen.has(loop.id)) continue;
+      seen.add(loop.id);
+      fetched.push(loop);
+    }
+  };
+
+  let counted: number | undefined;
+  if (opts.includeInactive) {
+    // No status is excluded, so no loop can be evicted by an ineligible one and
+    // a single query is enough.
+    take(store.listLoops({ includeArchived: opts.includeArchived, limit: probe }));
+    counted = store.countLoops?.(undefined, countOpts);
+  } else {
+    // One query per eligible status. This is what makes coverage independent of
+    // row ordering: an expired or stopped loop is never returned at all, so it
+    // can never occupy a slot that a paused loop needed.
+    for (const status of HEALTH_ELIGIBLE_STATUSES) {
+      take(store.listLoops({ status, includeArchived: opts.includeArchived, limit: probe }));
+    }
+    if (store.countLoops) {
+      counted = HEALTH_ELIGIBLE_STATUSES.reduce((total, status) => total + store.countLoops!(status, countOpts), 0);
+    }
+  }
+
+  // Prefer the exact count. Fall back to what was fetched, which is a FLOOR
+  // rather than a population — never let a bounded read be published as a total.
+  const eligible = counted ?? fetched.length;
+  return { loops: fetched.slice(0, limit), eligible, limit };
+}
+
 export function buildHealthReport(
   store: HealthSource,
   opts: { includeArchived?: boolean; includeInactive?: boolean; limit?: number } & ExpectationOptions = {},
 ): LoopsHealthReport {
   const now = opts.now ?? new Date();
-  const loops = store
-    .listLoops({ includeArchived: opts.includeArchived, limit: opts.limit ?? 200 })
-    .filter((loop) => opts.includeInactive || loop.status === "active" || loop.status === "paused");
+  const { loops, eligible, limit } = eligibleLoopsForHealth(store, opts);
   const expectations = loops.map((loop) => expectationForLoop(store, loop, { now, overdueGraceMs: opts.overdueGraceMs }));
   const classifications = Object.fromEntries(CLASSIFICATIONS.map((key) => [key, 0])) as Record<RunFailureClassification, number>;
   for (const expectation of expectations) {
@@ -1123,6 +1234,9 @@ export function buildHealthReport(
       unhealthy,
       warnings,
       overdue,
+      eligible,
+      limit,
+      truncated: eligible > expectations.length,
     },
     classifications,
     expectations,
@@ -1134,7 +1248,10 @@ export function buildHealthScan(store: Store, opts: BuildHealthScanOptions = {})
   const now = opts.now ?? new Date(generatedAt);
   const includeStatuses = [...includedStatusSet(opts.includeStatuses)];
   const loops = scanLoops(store, includeStatuses, opts);
-  const health = healthReportForLoops(store, loops, generatedAt);
+  const health = healthReportForLoops(store, loops, generatedAt, {
+    eligible: scanEligibleCount(store, includeStatuses, opts),
+    limit: opts.limit ?? DEFAULT_SCAN_LIMIT,
+  });
   const expectationsByLoopId = new Map(health.expectations.map((expectation) => [expectation.loop.id, expectation]));
   const loopsById = new Map(loops.map((loop) => [loop.id, loop]));
   const maxFindings = Math.max(0, opts.maxFindings ?? DEFAULT_MAX_FINDINGS);
