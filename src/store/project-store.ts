@@ -30,6 +30,7 @@ import {
   createWorkspace as dbCreateWorkspace,
   deleteRoot as dbDeleteRoot,
   deleteWorkspace as dbDeleteWorkspace,
+  guardedUpdateWorkspace as dbGuardedUpdateWorkspace,
   getAgent as dbGetAgent,
   getAgentBySlug as dbGetAgentBySlug,
   getRecipe as dbGetRecipe,
@@ -49,11 +50,13 @@ import {
   listWorkspaceEvents as dbListWorkspaceEvents,
   listWorkspaceLocations as dbListWorkspaceLocations,
   listWorkspaceLocks as dbListWorkspaceLocks,
+  lookupGuardedWorkspaceMutationReceipt as dbLookupGuardedWorkspaceMutationReceipt,
   countWorkspaces as dbCountWorkspaces,
   listWorkspaces as dbListWorkspaces,
   rankRoots,
   recordWorkspaceEvent as dbRecordWorkspaceEvent,
   releaseWorkspaceLock,
+  rollbackGuardedWorkspaceMutation as dbRollbackGuardedWorkspaceMutation,
   resolveWorkspace as dbResolveWorkspace,
   scoreRoots as dbScoreRoots,
   unarchiveWorkspace as dbUnarchiveWorkspace,
@@ -110,6 +113,7 @@ import {
   type ProjectChannelEnsureResult,
   type StoreEnsureChannelOptions,
 } from "../lib/project-channel.js";
+import { withResponseControl } from "../lib/guarded-project-mutation.js";
 import type {
   Agent,
   AgentRun,
@@ -118,6 +122,11 @@ import type {
   CreateRootInput,
   CreateWorkspaceInput,
   EventSource,
+  GuardedProjectMutationReceiptLookupInput,
+  GuardedProjectMutationReceiptLookupResult,
+  GuardedProjectMutationRequest,
+  GuardedProjectMutationResult,
+  GuardedProjectMutationRollbackRequest,
   JsonObject,
   CreateTmuxProfileInput,
   CreateTmuxProfileWindowInput,
@@ -273,6 +282,9 @@ export interface ProjectStore {
   resolveTarget(target: string | undefined, options?: ProjectResolverOptions): Promise<Workspace>;
   createProject(input: CreateWorkspaceInput): Promise<Workspace>;
   updateProject(id: string, patch: UpdateWorkspaceInput): Promise<Workspace>;
+  guardedUpdateProject(input: GuardedProjectMutationRequest): Promise<GuardedProjectMutationResult>;
+  lookupGuardedProjectMutationReceipt(input: GuardedProjectMutationReceiptLookupInput): Promise<GuardedProjectMutationReceiptLookupResult>;
+  rollbackGuardedProjectMutation(input: GuardedProjectMutationRollbackRequest): Promise<GuardedProjectMutationResult>;
   archiveProject(id: string, ctx?: MutationContext): Promise<Workspace>;
   unarchiveProject(id: string, ctx?: MutationContext): Promise<Workspace>;
   deleteProject(id: string, opts: { hard?: boolean }, ctx?: MutationContext): Promise<DeleteProjectResult>;
@@ -440,6 +452,24 @@ class LocalProjectStore implements ProjectStore {
   async updateProject(id: string, patch: UpdateWorkspaceInput): Promise<Workspace> {
     return withLock(id, { agentId: patch.agent_id, source: patch.source, command: patch.command }, "project update", () =>
       dbUpdateWorkspace(id, patch),
+    );
+  }
+
+  async guardedUpdateProject(input: GuardedProjectMutationRequest): Promise<GuardedProjectMutationResult> {
+    return withLock(input.project_id, { agentId: input.agent_id, source: input.source, command: input.command }, "guarded project update", () =>
+      dbGuardedUpdateWorkspace(input),
+    );
+  }
+
+  async lookupGuardedProjectMutationReceipt(input: GuardedProjectMutationReceiptLookupInput): Promise<GuardedProjectMutationReceiptLookupResult> {
+    const started = Date.now();
+    const receipt = dbLookupGuardedWorkspaceMutationReceipt(input);
+    return withResponseControl({ receipt }, input, started);
+  }
+
+  async rollbackGuardedProjectMutation(input: GuardedProjectMutationRollbackRequest): Promise<GuardedProjectMutationResult> {
+    return withLock(input.project_id, { agentId: input.agent_id, source: input.source, command: input.command }, "guarded project rollback", () =>
+      dbRollbackGuardedWorkspaceMutation(input),
     );
   }
 
@@ -861,6 +891,41 @@ class ApiProjectStore implements ProjectStore {
   async updateProject(id: string, patch: UpdateWorkspaceInput): Promise<Workspace> {
     const updated = await this.client.update<Workspace>(RESOURCE, id, patch);
     return normalizeApiWorkspace(updated) ?? updated;
+  }
+
+  async guardedUpdateProject(input: GuardedProjectMutationRequest): Promise<GuardedProjectMutationResult> {
+    const res = await this.client.transport.post<GuardedProjectMutationResult>(
+      `/projects/${encodeURIComponent(input.project_id)}/guarded-metadata`,
+      input,
+      { timeoutMs: input.time_budget_ms },
+    );
+    return res;
+  }
+
+  async lookupGuardedProjectMutationReceipt(input: GuardedProjectMutationReceiptLookupInput): Promise<GuardedProjectMutationReceiptLookupResult> {
+    return this.client.transport.get<GuardedProjectMutationReceiptLookupResult>(
+      `/projects/${encodeURIComponent(input.project_id)}/guarded-metadata/receipts`,
+      {
+        query: {
+          operation_id: input.operation_id,
+          step_id: input.step_id,
+          direction: input.direction,
+          idempotency_key: input.idempotency_key,
+          max_items: input.max_items,
+          response_byte_limit: input.response_byte_limit,
+          time_budget_ms: input.time_budget_ms,
+        },
+        timeoutMs: input.time_budget_ms,
+      },
+    );
+  }
+
+  async rollbackGuardedProjectMutation(input: GuardedProjectMutationRollbackRequest): Promise<GuardedProjectMutationResult> {
+    return this.client.transport.post<GuardedProjectMutationResult>(
+      `/projects/${encodeURIComponent(input.project_id)}/guarded-metadata/rollback`,
+      input,
+      { timeoutMs: input.time_budget_ms },
+    );
   }
 
   async archiveProject(id: string): Promise<Workspace> {

@@ -211,6 +211,82 @@ describe("projects-serve auth", () => {
     expect(forbidden.status).toBe(403);
   });
 
+  test("POST guarded metadata mutation returns explicit bounded complete JSON envelope", async () => {
+    const calls: Array<{ project_id: string; operation_id: string }> = [];
+    const store = {
+      async ping() {
+        return true;
+      },
+      async guardedUpdateWorkspace(input: { project_id: string; operation_id: string; response_byte_limit: number; time_budget_ms: number }) {
+        calls.push({ project_id: input.project_id, operation_id: input.operation_id });
+        return {
+          ok: true,
+          dry_run: false,
+          outcome: "accepted",
+          idempotency_key: "gpm_test",
+          request_digest: "req",
+          precondition_digest: "pre",
+          project_id: input.project_id,
+          expected_revision: "2026-08-07 00:00:00.000",
+          current_revision: "2026-08-07 00:00:00.000",
+          before: fakeWorkspace({ id: input.project_id, name: "Before" }),
+          after: fakeWorkspace({ id: input.project_id, name: "After" }),
+          receipt: {
+            receipt_id: "gpmr_test",
+            operation_id: input.operation_id,
+            step_id: "rename",
+            direction: "forward",
+            idempotency_key: "gpm_test",
+            target_id: input.project_id,
+            request_digest: "req",
+            precondition_digest: "pre",
+            expected_revision: "2026-08-07 00:00:00.000",
+            outcome: "accepted",
+            reason: null,
+            result_project_id: input.project_id,
+            duplicate_of_receipt_id: null,
+            before: {},
+            after: {},
+            post_revision: "2026-08-07 00:00:01.000",
+            created_at: "2026-08-07 00:00:01.000",
+          },
+          response_control: {
+            response_byte_limit: input.response_byte_limit,
+            time_budget_ms: input.time_budget_ms,
+            response_bytes: 1,
+            elapsed_ms: 0,
+            complete: true,
+            truncated: false,
+          },
+        };
+      },
+    } as unknown as ProjectsPgStore;
+    const h = createFetchHandler({ store, version: "9.9.9", app: "projects", signingSecret: SIGNING_SECRET });
+    const token = keyWith(["projects:*"]);
+    const res = await h(
+      new Request("http://x/v1/projects/wks_httpguarded0001/guarded-metadata", {
+        method: "POST",
+        headers: { "x-api-key": token, "content-type": "application/json" },
+        body: JSON.stringify({
+          operation_id: "op-http",
+          step_id: "rename",
+          expected_revision: "2026-08-07 00:00:00.000",
+          patch: { name: "After" },
+          response_byte_limit: 50_000,
+          time_budget_ms: 2_000,
+        }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(calls).toEqual([{ project_id: "wks_httpguarded0001", operation_id: "op-http" }]);
+    expect(body.outcome).toBe("accepted");
+    expect(body.response_control.complete).toBe(true);
+    expect(body.response_control.truncated).toBe(false);
+    expect(body.response_control.response_bytes).toBeGreaterThan(0);
+    expect(body.response_control.response_byte_limit).toBe(50_000);
+  });
+
   test("Authorization: Bearer scheme is accepted", async () => {
     const token = keyWith(["projects:read"]);
     const res = await handler()(

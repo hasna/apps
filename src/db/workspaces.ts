@@ -6,6 +6,18 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { getDatabase, now, uuid } from "./database.js";
 import { assertProjectWorkspaceId, projectWorkspaceStorePath } from "../lib/project-store-paths.js";
 import { redactProjectText, redactProjectValue } from "../lib/redaction.js";
+import {
+  assertCompleteStableProjectId,
+  buildReceiptId,
+  deriveGuardedIdempotencyKey,
+  preconditionDigest,
+  requestDigest,
+  rowToGuardedReceipt,
+  timedOut,
+  withResponseControl,
+  workspaceRevision,
+  workspaceSnapshot,
+} from "../lib/guarded-project-mutation.js";
 import type {
   Agent,
   AgentRow,
@@ -18,6 +30,12 @@ import type {
   CreateTmuxProfileWindowInput,
   CreateWorkspaceInput,
   EventSource,
+  GuardedProjectMutationReceipt,
+  GuardedProjectMutationReceiptLookupInput,
+  GuardedProjectMutationReceiptRow,
+  GuardedProjectMutationRequest,
+  GuardedProjectMutationResult,
+  GuardedProjectMutationRollbackRequest,
   JsonObject,
   Machine,
   MachineRow,
@@ -971,6 +989,447 @@ export function updateWorkspace(id: string, input: UpdateWorkspaceInput, db?: Da
     after: after as unknown as JsonObject,
   }, d);
   return after;
+}
+
+function insertGuardedProjectMutationReceipt(
+  input: Omit<GuardedProjectMutationReceipt, "created_at">,
+  db: Database,
+): GuardedProjectMutationReceipt {
+  db.run(
+    `INSERT INTO guarded_project_mutation_receipts (
+      receipt_id, operation_id, step_id, direction, idempotency_key, target_id,
+      request_digest, precondition_digest, expected_revision, outcome, reason,
+      result_project_id, duplicate_of_receipt_id, before_json, after_json,
+      post_revision
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      input.receipt_id,
+      input.operation_id,
+      input.step_id,
+      input.direction,
+      input.idempotency_key,
+      input.target_id,
+      input.request_digest,
+      input.precondition_digest,
+      input.expected_revision,
+      input.outcome,
+      input.reason,
+      input.result_project_id,
+      input.duplicate_of_receipt_id,
+      input.before === null ? null : json(redactProjectValue(input.before)),
+      input.after === null ? null : json(redactProjectValue(input.after)),
+      input.post_revision,
+    ],
+  );
+  const row = db.query("SELECT * FROM guarded_project_mutation_receipts WHERE receipt_id = ?").get(input.receipt_id) as GuardedProjectMutationReceiptRow;
+  return rowToGuardedReceipt(row);
+}
+
+function findGuardedAcceptedReceipt(input: {
+  operation_id: string;
+  step_id: string;
+  direction: "forward" | "inverse";
+  idempotency_key: string;
+  target_id: string;
+}, db: Database): GuardedProjectMutationReceipt | null {
+  const row = db.query(
+    `SELECT * FROM guarded_project_mutation_receipts
+     WHERE operation_id = ? AND step_id = ? AND direction = ? AND idempotency_key = ?
+       AND target_id = ? AND outcome = 'accepted'
+     ORDER BY created_at ASC, receipt_id ASC`,
+  ).get(input.operation_id, input.step_id, input.direction, input.idempotency_key, input.target_id) as GuardedProjectMutationReceiptRow | null;
+  return row ? rowToGuardedReceipt(row) : null;
+}
+
+function findGuardedAcceptedByStep(input: {
+  operation_id: string;
+  step_id: string;
+  direction: "forward" | "inverse";
+  target_id: string;
+}, db: Database): GuardedProjectMutationReceipt | null {
+  const row = db.query(
+    `SELECT * FROM guarded_project_mutation_receipts
+     WHERE operation_id = ? AND step_id = ? AND direction = ? AND target_id = ?
+       AND outcome = 'accepted'
+     ORDER BY created_at ASC, receipt_id ASC`,
+  ).get(input.operation_id, input.step_id, input.direction, input.target_id) as GuardedProjectMutationReceiptRow | null;
+  return row ? rowToGuardedReceipt(row) : null;
+}
+
+function terminalNonacceptanceReceipt(input: {
+  operation_id: string;
+  step_id: string;
+  direction: "forward" | "inverse";
+  idempotency_key: string;
+  target_id: string;
+  request_digest: string;
+  precondition_digest: string;
+  expected_revision: string;
+  reason: string;
+  before?: Workspace | null;
+}, db: Database): GuardedProjectMutationReceipt {
+  return insertGuardedProjectMutationReceipt({
+    receipt_id: buildReceiptId({ ...input, outcome: "terminal_nonacceptance", suffix: input.reason }),
+    operation_id: input.operation_id,
+    step_id: input.step_id,
+    direction: input.direction,
+    idempotency_key: input.idempotency_key,
+    target_id: input.target_id,
+    request_digest: input.request_digest,
+    precondition_digest: input.precondition_digest,
+    expected_revision: input.expected_revision,
+    outcome: "terminal_nonacceptance",
+    reason: input.reason,
+    result_project_id: null,
+    duplicate_of_receipt_id: null,
+    before: input.before ? workspaceSnapshot(input.before) : null,
+    after: null,
+    post_revision: null,
+  }, db);
+}
+
+function duplicateOfAcceptedReceipt(
+  accepted: GuardedProjectMutationReceipt,
+  before: Workspace,
+  db: Database,
+): GuardedProjectMutationReceipt {
+  const receiptId = buildReceiptId({
+    operation_id: accepted.operation_id,
+    step_id: accepted.step_id,
+    direction: accepted.direction,
+    idempotency_key: accepted.idempotency_key,
+    outcome: "duplicate_of_accepted",
+    target_id: accepted.target_id,
+    suffix: accepted.receipt_id,
+  });
+  const existing = db.query("SELECT * FROM guarded_project_mutation_receipts WHERE receipt_id = ?").get(receiptId) as GuardedProjectMutationReceiptRow | null;
+  if (existing) return rowToGuardedReceipt(existing);
+  return insertGuardedProjectMutationReceipt({
+    receipt_id: receiptId,
+    operation_id: accepted.operation_id,
+    step_id: accepted.step_id,
+    direction: accepted.direction,
+    idempotency_key: accepted.idempotency_key,
+    target_id: accepted.target_id,
+    request_digest: accepted.request_digest,
+    precondition_digest: accepted.precondition_digest,
+    expected_revision: accepted.expected_revision,
+    outcome: "duplicate_of_accepted",
+    reason: null,
+    result_project_id: accepted.result_project_id,
+    duplicate_of_receipt_id: accepted.receipt_id,
+    before: workspaceSnapshot(before),
+    after: accepted.after,
+    post_revision: accepted.post_revision,
+  }, db);
+}
+
+function previewWorkspacePatch(before: Workspace, patch: UpdateWorkspaceInput): Workspace {
+  return {
+    ...before,
+    ...(patch.name !== undefined ? { name: patch.name } : {}),
+    ...(patch.slug !== undefined ? { slug: workspaceSlugify(patch.slug) } : {}),
+    ...(patch.description !== undefined ? { description: patch.description } : {}),
+    ...(patch.kind !== undefined ? { kind: patch.kind } : {}),
+    ...(patch.status !== undefined ? { status: patch.status } : {}),
+    ...(patch.root_id !== undefined ? { root_id: patch.root_id } : {}),
+    ...(patch.recipe_id !== undefined ? { recipe_id: patch.recipe_id } : {}),
+    ...(patch.canonical_machine !== undefined ? { canonical_machine: patch.canonical_machine } : {}),
+    ...(patch.primary_path !== undefined ? { primary_path: patch.primary_path } : {}),
+    ...(patch.git_remote !== undefined ? { git_remote: patch.git_remote } : {}),
+    ...(patch.s3_bucket !== undefined ? { s3_bucket: patch.s3_bucket } : {}),
+    ...(patch.s3_prefix !== undefined ? { s3_prefix: patch.s3_prefix } : {}),
+    ...(patch.tags !== undefined ? { tags: patch.tags } : {}),
+    ...(patch.integrations !== undefined ? { integrations: patch.integrations } : {}),
+    ...(patch.metadata !== undefined ? { metadata: patch.metadata } : {}),
+  } as Workspace;
+}
+
+export function guardedUpdateWorkspace(input: GuardedProjectMutationRequest, db?: Database): GuardedProjectMutationResult {
+  const d = db || getDatabase();
+  const started = Date.now();
+  assertCompleteStableProjectId(input.project_id);
+  const direction = input.direction ?? "forward";
+  const reqDigest = requestDigest(input.patch);
+  const preDigest = preconditionDigest({ project_id: input.project_id, expected_revision: input.expected_revision });
+  const idempotencyKey = deriveGuardedIdempotencyKey({
+    operation_id: input.operation_id,
+    step_id: input.step_id,
+    direction,
+    target_id: input.project_id,
+    request_digest: reqDigest,
+    precondition_digest: preDigest,
+  });
+
+  return d.transaction(() => {
+    const before = getWorkspace(input.project_id, d);
+    if (!before) throw new Error(`Workspace not found: ${input.project_id}`);
+    const currentRevision = workspaceRevision(before);
+    const duplicate = findGuardedAcceptedReceipt({
+      operation_id: input.operation_id,
+      step_id: input.step_id,
+      direction,
+      idempotency_key: idempotencyKey,
+      target_id: input.project_id,
+    }, d);
+    if (duplicate) {
+      const duplicateReceipt = duplicateOfAcceptedReceipt(duplicate, before, d);
+      const result = {
+        ok: true,
+        dry_run: false,
+        outcome: "duplicate_of_accepted" as const,
+        idempotency_key: idempotencyKey,
+        request_digest: reqDigest,
+        precondition_digest: preDigest,
+        project_id: input.project_id,
+        expected_revision: input.expected_revision,
+        current_revision: currentRevision,
+        before,
+        after: duplicate.after as unknown as Workspace,
+        receipt: duplicateReceipt,
+      };
+      return withResponseControl(result, input, started);
+    }
+    const priorAccepted = findGuardedAcceptedByStep({
+      operation_id: input.operation_id,
+      step_id: input.step_id,
+      direction,
+      target_id: input.project_id,
+    }, d);
+    if (priorAccepted) {
+      const receipt = terminalNonacceptanceReceipt({
+        operation_id: input.operation_id,
+        step_id: input.step_id,
+        direction,
+        idempotency_key: idempotencyKey,
+        target_id: input.project_id,
+        request_digest: reqDigest,
+        precondition_digest: preDigest,
+        expected_revision: input.expected_revision,
+        reason: "changed_request_or_precondition_for_step",
+        before,
+      }, d);
+      return withResponseControl({
+        ok: false,
+        dry_run: false,
+        outcome: "terminal_nonacceptance" as const,
+        idempotency_key: idempotencyKey,
+        request_digest: reqDigest,
+        precondition_digest: preDigest,
+        project_id: input.project_id,
+        expected_revision: input.expected_revision,
+        current_revision: currentRevision,
+        before,
+        after: null,
+        receipt,
+      }, input, started);
+    }
+    if (currentRevision !== input.expected_revision) {
+      const receipt = terminalNonacceptanceReceipt({
+        operation_id: input.operation_id,
+        step_id: input.step_id,
+        direction,
+        idempotency_key: idempotencyKey,
+        target_id: input.project_id,
+        request_digest: reqDigest,
+        precondition_digest: preDigest,
+        expected_revision: input.expected_revision,
+        reason: "stale_revision",
+        before,
+      }, d);
+      return withResponseControl({
+        ok: false,
+        dry_run: false,
+        outcome: "terminal_nonacceptance" as const,
+        idempotency_key: idempotencyKey,
+        request_digest: reqDigest,
+        precondition_digest: preDigest,
+        project_id: input.project_id,
+        expected_revision: input.expected_revision,
+        current_revision: currentRevision,
+        before,
+        after: null,
+        receipt,
+      }, input, started);
+    }
+    if (input.dry_run) {
+      return withResponseControl({
+        ok: true,
+        dry_run: true,
+        outcome: "planned" as const,
+        idempotency_key: idempotencyKey,
+        request_digest: reqDigest,
+        precondition_digest: preDigest,
+        project_id: input.project_id,
+        expected_revision: input.expected_revision,
+        current_revision: currentRevision,
+        before,
+        after: previewWorkspacePatch(before, input.patch),
+        receipt: null,
+      }, input, started);
+    }
+    if (timedOut(started, input.time_budget_ms)) throw new Error("guarded mutation time budget exceeded before write");
+    const after = updateWorkspace(input.project_id, {
+      ...input.patch,
+      agent_id: input.agent_id ?? input.patch.agent_id,
+      source: input.source ?? input.patch.source ?? "cli",
+      command: input.command ?? input.patch.command,
+    }, d);
+    const receipt = insertGuardedProjectMutationReceipt({
+      receipt_id: buildReceiptId({
+        operation_id: input.operation_id,
+        step_id: input.step_id,
+        direction,
+        idempotency_key: idempotencyKey,
+        outcome: "accepted",
+        target_id: input.project_id,
+      }),
+      operation_id: input.operation_id,
+      step_id: input.step_id,
+      direction,
+      idempotency_key: idempotencyKey,
+      target_id: input.project_id,
+      request_digest: reqDigest,
+      precondition_digest: preDigest,
+      expected_revision: input.expected_revision,
+      outcome: "accepted",
+      reason: null,
+      result_project_id: after.id,
+      duplicate_of_receipt_id: null,
+      before: workspaceSnapshot(before),
+      after: workspaceSnapshot(after),
+      post_revision: workspaceRevision(after),
+    }, d);
+    recordWorkspaceEvent({
+      workspace_id: after.id,
+      agent_id: input.agent_id,
+      event_type: "guarded_metadata_mutation",
+      source: input.source ?? "cli",
+      command: input.command,
+      before: before as unknown as JsonObject,
+      after: after as unknown as JsonObject,
+      metadata: { receipt_id: receipt.receipt_id, operation_id: input.operation_id, step_id: input.step_id, idempotency_key: idempotencyKey },
+    }, d);
+    return withResponseControl({
+      ok: true,
+      dry_run: false,
+      outcome: "accepted" as const,
+      idempotency_key: idempotencyKey,
+      request_digest: reqDigest,
+      precondition_digest: preDigest,
+      project_id: input.project_id,
+      expected_revision: input.expected_revision,
+      current_revision: currentRevision,
+      before,
+      after,
+      receipt,
+    }, input, started);
+  })();
+}
+
+export function lookupGuardedWorkspaceMutationReceipt(
+  input: GuardedProjectMutationReceiptLookupInput,
+  db?: Database,
+): GuardedProjectMutationReceipt {
+  const d = db || getDatabase();
+  assertCompleteStableProjectId(input.project_id);
+  if (input.max_items !== 1) throw new Error("guarded receipt lookup max_items must be exactly 1");
+  const rows = d.query(
+    `SELECT * FROM guarded_project_mutation_receipts
+     WHERE operation_id = ? AND step_id = ? AND direction = ? AND idempotency_key = ? AND target_id = ?
+     ORDER BY created_at ASC, receipt_id ASC
+     LIMIT 2`,
+  ).all(input.operation_id, input.step_id, input.direction, input.idempotency_key, input.project_id) as GuardedProjectMutationReceiptRow[];
+  if (rows.length === 0) throw new Error("guarded receipt lookup expected exactly one terminal receipt, found 0");
+  const receipts = rows.map(rowToGuardedReceipt);
+  const accepted = receipts.find((receipt) => receipt.outcome === "accepted");
+  const duplicates = receipts.filter((receipt) => receipt.outcome === "duplicate_of_accepted");
+  if (receipts.length > 1) {
+    if (!accepted || duplicates.length !== receipts.length - 1 || duplicates.some((receipt) => receipt.duplicate_of_receipt_id !== accepted.receipt_id)) {
+      throw new Error(`guarded receipt lookup expected exactly one terminal result, found ${receipts.length}`);
+    }
+  }
+  const receipt = duplicates.at(-1) ?? accepted ?? receipts[0]!;
+  if (!["accepted", "duplicate_of_accepted", "terminal_nonacceptance"].includes(receipt.outcome)) {
+    throw new Error(`guarded receipt lookup found nonterminal outcome: ${receipt.outcome}`);
+  }
+  return receipt;
+}
+
+function restorePatchFromReceipt(receipt: GuardedProjectMutationReceipt): UpdateWorkspaceInput {
+  const before = receipt.before as unknown as Workspace | null;
+  if (!before) throw new Error("accepted receipt has no before snapshot");
+  return {
+    name: before.name,
+    slug: before.slug,
+    description: before.description,
+    kind: before.kind,
+    status: before.status,
+    root_id: before.root_id,
+    recipe_id: before.recipe_id,
+    canonical_machine: before.canonical_machine,
+    primary_path: before.primary_path,
+    git_remote: before.git_remote,
+    s3_bucket: before.s3_bucket,
+    s3_prefix: before.s3_prefix,
+    tags: before.tags,
+    integrations: before.integrations,
+    metadata: before.metadata,
+  };
+}
+
+export function rollbackGuardedWorkspaceMutation(input: GuardedProjectMutationRollbackRequest, db?: Database): GuardedProjectMutationResult {
+  const d = db || getDatabase();
+  assertCompleteStableProjectId(input.project_id);
+  const acceptedRow = d.query("SELECT * FROM guarded_project_mutation_receipts WHERE receipt_id = ?").get(input.accepted_receipt_id) as GuardedProjectMutationReceiptRow | null;
+  if (!acceptedRow) throw new Error(`accepted receipt not found: ${input.accepted_receipt_id}`);
+  const accepted = rowToGuardedReceipt(acceptedRow);
+  if (accepted.outcome !== "accepted" || accepted.direction !== "forward" || accepted.target_id !== input.project_id) {
+    throw new Error("rollback requires a forward accepted receipt for the same project id");
+  }
+  if (accepted.post_revision !== input.expected_current_revision) {
+    throw new Error("rollback expected_current_revision must equal the accepted receipt post_revision");
+  }
+  const patch = restorePatchFromReceipt(accepted);
+  const reqDigest = requestDigest(patch);
+  const preDigest = preconditionDigest({ project_id: input.project_id, expected_revision: input.expected_current_revision });
+  const idempotencyKey = deriveGuardedIdempotencyKey({
+    operation_id: input.operation_id,
+    step_id: input.step_id,
+    direction: "inverse",
+    target_id: input.project_id,
+    request_digest: reqDigest,
+    precondition_digest: preDigest,
+  });
+  const result = guardedUpdateWorkspace({
+    project_id: input.project_id,
+    operation_id: input.operation_id,
+    step_id: input.step_id,
+    direction: "inverse",
+    expected_revision: input.expected_current_revision,
+    patch,
+    response_byte_limit: input.response_byte_limit,
+    time_budget_ms: input.time_budget_ms,
+    agent_id: input.agent_id,
+    source: input.source ?? "cli",
+    command: input.command,
+  }, d);
+  if (result.receipt?.outcome === "accepted") {
+    recordWorkspaceEvent({
+      workspace_id: input.project_id,
+      agent_id: input.agent_id,
+      event_type: "guarded_metadata_mutation_rollback",
+      source: input.source ?? "cli",
+      command: input.command,
+      metadata: {
+        receipt_id: result.receipt.receipt_id,
+        accepted_receipt_id: accepted.receipt_id,
+        operation_id: input.operation_id,
+        step_id: input.step_id,
+      },
+    }, d);
+  }
+  return result;
 }
 
 export function linkWorkspaceIntegrations(

@@ -9,6 +9,18 @@
 
 import { nanoid } from "nanoid";
 import type { TypedQueryClient } from "../generated/storage-kit/query.js";
+import {
+  assertCompleteStableProjectId,
+  buildReceiptId,
+  deriveGuardedIdempotencyKey,
+  preconditionDigest,
+  requestDigest,
+  rowToGuardedReceipt,
+  timedOut,
+  withResponseControl,
+  workspaceRevision,
+  workspaceSnapshot,
+} from "../lib/guarded-project-mutation.js";
 import { deriveWorkspaceRegistryFields } from "../lib/workspace-plan.js";
 import type {
   Agent,
@@ -18,6 +30,13 @@ import type {
   CreateRootInput,
   CreateWorkspaceInput,
   EventSource,
+  GuardedProjectMutationReceipt,
+  GuardedProjectMutationReceiptLookupInput,
+  GuardedProjectMutationReceiptLookupResult,
+  GuardedProjectMutationReceiptRow,
+  GuardedProjectMutationRequest,
+  GuardedProjectMutationResult,
+  GuardedProjectMutationRollbackRequest,
   JsonObject,
   Recipe,
   RecipeRow,
@@ -34,6 +53,10 @@ import type {
   WorkspaceRow,
   WorkspaceStatus,
 } from "../types/workspace.js";
+
+type TransactionCapableClient = TypedQueryClient & {
+  transaction?: <T>(fn: (client: TypedQueryClient) => Promise<T>) => Promise<T>;
+};
 
 // ---------------------------------------------------------------------------
 // Pure helpers (mirrors of the SQLite core, kept dependency-light)
@@ -200,6 +223,14 @@ export interface WorkspaceFilter {
 
 export class ProjectsPgStore {
   constructor(private readonly db: TypedQueryClient) {}
+
+  private async inTransaction<T>(operation: string, fn: (store: ProjectsPgStore) => Promise<T>): Promise<T> {
+    const transaction = (this.db as TransactionCapableClient).transaction;
+    if (typeof transaction !== "function") {
+      throw new ValidationError(`${operation} requires a transaction-capable Postgres client`);
+    }
+    return transaction.call(this.db, async (client) => fn(new ProjectsPgStore(client))) as Promise<T>;
+  }
 
   // --- slug uniqueness --------------------------------------------------
   private async ensureUniqueSlug(table: string, base: string, excludeId?: string): Promise<string> {
@@ -587,6 +618,326 @@ export class ProjectsPgStore {
       after: after as unknown as JsonObject,
     });
     return after;
+  }
+
+  private async insertGuardedReceipt(input: Omit<GuardedProjectMutationReceipt, "created_at">): Promise<GuardedProjectMutationReceipt> {
+    await this.db.execute(
+      `INSERT INTO guarded_project_mutation_receipts (
+        receipt_id, operation_id, step_id, direction, idempotency_key, target_id,
+        request_digest, precondition_digest, expected_revision, outcome, reason,
+        result_project_id, duplicate_of_receipt_id, before_json, after_json, post_revision
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+      [
+        input.receipt_id,
+        input.operation_id,
+        input.step_id,
+        input.direction,
+        input.idempotency_key,
+        input.target_id,
+        input.request_digest,
+        input.precondition_digest,
+        input.expected_revision,
+        input.outcome,
+        input.reason,
+        input.result_project_id,
+        input.duplicate_of_receipt_id,
+        input.before === null ? null : json(input.before),
+        input.after === null ? null : json(input.after),
+        input.post_revision,
+      ],
+    );
+    const row = await this.db.get<GuardedProjectMutationReceiptRow>("SELECT * FROM guarded_project_mutation_receipts WHERE receipt_id = $1", [input.receipt_id]);
+    return rowToGuardedReceipt(row!);
+  }
+
+  private async guardedAcceptedReceipt(input: { operation_id: string; step_id: string; direction: "forward" | "inverse"; idempotency_key: string; target_id: string }): Promise<GuardedProjectMutationReceipt | null> {
+    const row = await this.db.get<GuardedProjectMutationReceiptRow>(
+      `SELECT * FROM guarded_project_mutation_receipts
+       WHERE operation_id = $1 AND step_id = $2 AND direction = $3 AND idempotency_key = $4
+         AND target_id = $5 AND outcome = 'accepted'
+       ORDER BY created_at ASC, receipt_id ASC`,
+      [input.operation_id, input.step_id, input.direction, input.idempotency_key, input.target_id],
+    );
+    return row ? rowToGuardedReceipt(row) : null;
+  }
+
+  private async guardedAcceptedByStep(input: { operation_id: string; step_id: string; direction: "forward" | "inverse"; target_id: string }): Promise<GuardedProjectMutationReceipt | null> {
+    const row = await this.db.get<GuardedProjectMutationReceiptRow>(
+      `SELECT * FROM guarded_project_mutation_receipts
+       WHERE operation_id = $1 AND step_id = $2 AND direction = $3 AND target_id = $4
+         AND outcome = 'accepted'
+       ORDER BY created_at ASC, receipt_id ASC`,
+      [input.operation_id, input.step_id, input.direction, input.target_id],
+    );
+    return row ? rowToGuardedReceipt(row) : null;
+  }
+
+  private async guardedTerminalNonacceptance(input: {
+    operation_id: string;
+    step_id: string;
+    direction: "forward" | "inverse";
+    idempotency_key: string;
+    target_id: string;
+    request_digest: string;
+    precondition_digest: string;
+    expected_revision: string;
+    reason: string;
+    before?: Workspace | null;
+  }): Promise<GuardedProjectMutationReceipt> {
+    return this.insertGuardedReceipt({
+      receipt_id: buildReceiptId({ ...input, outcome: "terminal_nonacceptance", suffix: input.reason }),
+      operation_id: input.operation_id,
+      step_id: input.step_id,
+      direction: input.direction,
+      idempotency_key: input.idempotency_key,
+      target_id: input.target_id,
+      request_digest: input.request_digest,
+      precondition_digest: input.precondition_digest,
+      expected_revision: input.expected_revision,
+      outcome: "terminal_nonacceptance",
+      reason: input.reason,
+      result_project_id: null,
+      duplicate_of_receipt_id: null,
+      before: input.before ? workspaceSnapshot(input.before) : null,
+      after: null,
+      post_revision: null,
+    });
+  }
+
+  private async duplicateGuardedReceipt(
+    accepted: GuardedProjectMutationReceipt,
+    before: Workspace,
+  ): Promise<GuardedProjectMutationReceipt> {
+    const receiptId = buildReceiptId({
+      operation_id: accepted.operation_id,
+      step_id: accepted.step_id,
+      direction: accepted.direction,
+      idempotency_key: accepted.idempotency_key,
+      outcome: "duplicate_of_accepted",
+      target_id: accepted.target_id,
+      suffix: accepted.receipt_id,
+    });
+    const existing = await this.db.get<GuardedProjectMutationReceiptRow>("SELECT * FROM guarded_project_mutation_receipts WHERE receipt_id = $1", [receiptId]);
+    if (existing) return rowToGuardedReceipt(existing);
+    return this.insertGuardedReceipt({
+      receipt_id: receiptId,
+      operation_id: accepted.operation_id,
+      step_id: accepted.step_id,
+      direction: accepted.direction,
+      idempotency_key: accepted.idempotency_key,
+      target_id: accepted.target_id,
+      request_digest: accepted.request_digest,
+      precondition_digest: accepted.precondition_digest,
+      expected_revision: accepted.expected_revision,
+      outcome: "duplicate_of_accepted",
+      reason: null,
+      result_project_id: accepted.result_project_id,
+      duplicate_of_receipt_id: accepted.receipt_id,
+      before: workspaceSnapshot(before),
+      after: accepted.after,
+      post_revision: accepted.post_revision,
+    });
+  }
+
+  private async guardedConditionalUpdate(id: string, patch: UpdateWorkspaceInput, expectedRevision: string): Promise<Workspace | null> {
+    const before = await this.requireWorkspace(id);
+    const root = patch.root_id ? await this.getRoot(patch.root_id) : null;
+    if (patch.root_id && !root) throw new ValidationError(`Root not found: ${patch.root_id}`);
+    const recipe = patch.recipe_id ? await this.getRecipe(patch.recipe_id) : null;
+    if (patch.recipe_id && !recipe) throw new ValidationError(`Recipe not found: ${patch.recipe_id}`);
+
+    const updates: string[] = [];
+    const params: unknown[] = [];
+    const set = (col: string, val: unknown) => {
+      params.push(val);
+      updates.push(`${col} = $${params.length}`);
+    };
+    if (patch.name !== undefined) set("name", patch.name);
+    if (patch.slug !== undefined) set("slug", await this.ensureUniqueSlug("workspaces", slugify(patch.slug), before.id));
+    if (patch.description !== undefined) set("description", patch.description);
+    if (patch.kind !== undefined) set("kind", patch.kind);
+    if (patch.status !== undefined) set("status", patch.status);
+    if (patch.root_id !== undefined) set("root_id", patch.root_id ? root!.id : null);
+    if (patch.recipe_id !== undefined) set("recipe_id", patch.recipe_id ? recipe!.id : null);
+    if (patch.canonical_machine !== undefined) set("canonical_machine", patch.canonical_machine);
+    if (patch.primary_path !== undefined) set("primary_path", patch.primary_path ?? null);
+    if (patch.git_remote !== undefined) set("git_remote", patch.git_remote);
+    if (patch.s3_bucket !== undefined) set("s3_bucket", patch.s3_bucket);
+    if (patch.s3_prefix !== undefined) set("s3_prefix", patch.s3_prefix);
+    if (patch.tags !== undefined) set("tags", json(normalizeList(patch.tags)));
+    if (patch.integrations !== undefined) set("integrations", json(patch.integrations));
+    if (patch.metadata !== undefined) set("metadata", json(patch.metadata));
+    if (!updates.length) return before;
+    set("updated_at", nowIso());
+    params.push(id);
+    const idIdx = params.length;
+    params.push(expectedRevision);
+    const revIdx = params.length;
+    const row = await this.db.get<WorkspaceRow>(
+      `UPDATE workspaces SET ${updates.join(", ")}
+       WHERE id = $${idIdx} AND updated_at = $${revIdx}
+       RETURNING *`,
+      params,
+    );
+    return row ? rowToWorkspace(row) : null;
+  }
+
+  async guardedUpdateWorkspace(input: GuardedProjectMutationRequest): Promise<GuardedProjectMutationResult> {
+    return this.inTransaction("guarded project metadata mutation", (store) => store.guardedUpdateWorkspaceInCurrentTransaction(input));
+  }
+
+  private async guardedUpdateWorkspaceInCurrentTransaction(input: GuardedProjectMutationRequest): Promise<GuardedProjectMutationResult> {
+    const started = Date.now();
+    assertCompleteStableProjectId(input.project_id);
+    const direction = input.direction ?? "forward";
+    const reqDigest = requestDigest(input.patch);
+    const preDigest = preconditionDigest({ project_id: input.project_id, expected_revision: input.expected_revision });
+    const idempotencyKey = deriveGuardedIdempotencyKey({
+      operation_id: input.operation_id,
+      step_id: input.step_id,
+      direction,
+      target_id: input.project_id,
+      request_digest: reqDigest,
+      precondition_digest: preDigest,
+    });
+    const before = await this.requireWorkspace(input.project_id);
+    const currentRevision = workspaceRevision(before);
+    const duplicate = await this.guardedAcceptedReceipt({ operation_id: input.operation_id, step_id: input.step_id, direction, idempotency_key: idempotencyKey, target_id: input.project_id });
+    if (duplicate) {
+      const duplicateReceipt = await this.duplicateGuardedReceipt(duplicate, before);
+      const result = {
+        ok: true,
+        dry_run: false,
+        outcome: "duplicate_of_accepted" as const,
+        idempotency_key: idempotencyKey,
+        request_digest: reqDigest,
+        precondition_digest: preDigest,
+        project_id: input.project_id,
+        expected_revision: input.expected_revision,
+        current_revision: currentRevision,
+        before,
+        after: duplicate.after as unknown as Workspace,
+        receipt: duplicateReceipt,
+      };
+      return withResponseControl(result, input, started);
+    }
+    const priorAccepted = await this.guardedAcceptedByStep({ operation_id: input.operation_id, step_id: input.step_id, direction, target_id: input.project_id });
+    if (priorAccepted) {
+      const receipt = await this.guardedTerminalNonacceptance({ operation_id: input.operation_id, step_id: input.step_id, direction, idempotency_key: idempotencyKey, target_id: input.project_id, request_digest: reqDigest, precondition_digest: preDigest, expected_revision: input.expected_revision, reason: "changed_request_or_precondition_for_step", before });
+      const result = { ok: false, dry_run: false, outcome: "terminal_nonacceptance" as const, idempotency_key: idempotencyKey, request_digest: reqDigest, precondition_digest: preDigest, project_id: input.project_id, expected_revision: input.expected_revision, current_revision: currentRevision, before, after: null, receipt };
+      return withResponseControl(result, input, started);
+    }
+    if (currentRevision !== input.expected_revision) {
+      const receipt = await this.guardedTerminalNonacceptance({ operation_id: input.operation_id, step_id: input.step_id, direction, idempotency_key: idempotencyKey, target_id: input.project_id, request_digest: reqDigest, precondition_digest: preDigest, expected_revision: input.expected_revision, reason: "stale_revision", before });
+      const result = { ok: false, dry_run: false, outcome: "terminal_nonacceptance" as const, idempotency_key: idempotencyKey, request_digest: reqDigest, precondition_digest: preDigest, project_id: input.project_id, expected_revision: input.expected_revision, current_revision: currentRevision, before, after: null, receipt };
+      return withResponseControl(result, input, started);
+    }
+    if (input.dry_run) {
+      const after = { ...before, ...input.patch } as Workspace;
+      const result = { ok: true, dry_run: true, outcome: "planned" as const, idempotency_key: idempotencyKey, request_digest: reqDigest, precondition_digest: preDigest, project_id: input.project_id, expected_revision: input.expected_revision, current_revision: currentRevision, before, after, receipt: null };
+      return withResponseControl(result, input, started);
+    }
+    if (timedOut(started, input.time_budget_ms)) throw new ValidationError("guarded mutation time budget exceeded before write");
+    const after = await this.guardedConditionalUpdate(input.project_id, { ...input.patch, agent_id: input.agent_id ?? input.patch.agent_id, source: input.source ?? input.patch.source ?? "mcp", command: input.command ?? input.patch.command }, input.expected_revision);
+    if (!after) {
+      const fresh = await this.requireWorkspace(input.project_id);
+      const receipt = await this.guardedTerminalNonacceptance({ operation_id: input.operation_id, step_id: input.step_id, direction, idempotency_key: idempotencyKey, target_id: input.project_id, request_digest: reqDigest, precondition_digest: preDigest, expected_revision: input.expected_revision, reason: "stale_revision", before: fresh });
+      const result = { ok: false, dry_run: false, outcome: "terminal_nonacceptance" as const, idempotency_key: idempotencyKey, request_digest: reqDigest, precondition_digest: preDigest, project_id: input.project_id, expected_revision: input.expected_revision, current_revision: workspaceRevision(fresh), before: fresh, after: null, receipt };
+      return withResponseControl(result, input, started);
+    }
+    const receipt = await this.insertGuardedReceipt({
+      receipt_id: buildReceiptId({ operation_id: input.operation_id, step_id: input.step_id, direction, idempotency_key: idempotencyKey, outcome: "accepted", target_id: input.project_id }),
+      operation_id: input.operation_id,
+      step_id: input.step_id,
+      direction,
+      idempotency_key: idempotencyKey,
+      target_id: input.project_id,
+      request_digest: reqDigest,
+      precondition_digest: preDigest,
+      expected_revision: input.expected_revision,
+      outcome: "accepted",
+      reason: null,
+      result_project_id: after.id,
+      duplicate_of_receipt_id: null,
+      before: workspaceSnapshot(before),
+      after: workspaceSnapshot(after),
+      post_revision: workspaceRevision(after),
+    });
+    await this.recordEvent({ workspace_id: after.id, agent_id: input.agent_id, event_type: direction === "inverse" ? "guarded_metadata_mutation_rollback" : "guarded_metadata_mutation", source: input.source ?? "mcp", command: input.command, before: before as unknown as JsonObject, after: after as unknown as JsonObject, metadata: { receipt_id: receipt.receipt_id, operation_id: input.operation_id, step_id: input.step_id, idempotency_key: idempotencyKey } });
+    const result = { ok: true, dry_run: false, outcome: "accepted" as const, idempotency_key: idempotencyKey, request_digest: reqDigest, precondition_digest: preDigest, project_id: input.project_id, expected_revision: input.expected_revision, current_revision: currentRevision, before, after, receipt };
+    return withResponseControl(result, input, started);
+  }
+
+  async lookupGuardedWorkspaceMutationReceipt(input: GuardedProjectMutationReceiptLookupInput): Promise<GuardedProjectMutationReceiptLookupResult> {
+    const started = Date.now();
+    assertCompleteStableProjectId(input.project_id);
+    if (input.max_items !== 1) throw new ValidationError("guarded receipt lookup max_items must be exactly 1");
+    const rows = await this.db.many<GuardedProjectMutationReceiptRow>(
+      `SELECT * FROM guarded_project_mutation_receipts
+       WHERE operation_id = $1 AND step_id = $2 AND direction = $3 AND idempotency_key = $4 AND target_id = $5
+       ORDER BY created_at ASC, receipt_id ASC
+       LIMIT 2`,
+      [input.operation_id, input.step_id, input.direction, input.idempotency_key, input.project_id],
+    );
+    if (rows.length === 0) throw new ValidationError("guarded receipt lookup expected exactly one terminal receipt, found 0");
+    const receipts = rows.map(rowToGuardedReceipt);
+    const accepted = receipts.find((receipt) => receipt.outcome === "accepted");
+    const duplicates = receipts.filter((receipt) => receipt.outcome === "duplicate_of_accepted");
+    if (receipts.length > 1) {
+      if (!accepted || duplicates.length !== receipts.length - 1 || duplicates.some((receipt) => receipt.duplicate_of_receipt_id !== accepted.receipt_id)) {
+        throw new ValidationError(`guarded receipt lookup expected exactly one terminal result, found ${receipts.length}`);
+      }
+    }
+    const receipt = duplicates.at(-1) ?? accepted ?? receipts[0]!;
+    return withResponseControl({ receipt }, input, started);
+  }
+
+  async rollbackGuardedWorkspaceMutation(input: GuardedProjectMutationRollbackRequest): Promise<GuardedProjectMutationResult> {
+    return this.inTransaction("guarded project metadata rollback", (store) => store.rollbackGuardedWorkspaceMutationInCurrentTransaction(input));
+  }
+
+  private async rollbackGuardedWorkspaceMutationInCurrentTransaction(input: GuardedProjectMutationRollbackRequest): Promise<GuardedProjectMutationResult> {
+    assertCompleteStableProjectId(input.project_id);
+    const row = await this.db.get<GuardedProjectMutationReceiptRow>("SELECT * FROM guarded_project_mutation_receipts WHERE receipt_id = $1", [input.accepted_receipt_id]);
+    if (!row) throw new NotFoundError(`accepted receipt not found: ${input.accepted_receipt_id}`);
+    const accepted = rowToGuardedReceipt(row);
+    if (accepted.outcome !== "accepted" || accepted.direction !== "forward" || accepted.target_id !== input.project_id) {
+      throw new ValidationError("rollback requires a forward accepted receipt for the same project id");
+    }
+    if (accepted.post_revision !== input.expected_current_revision) {
+      throw new ValidationError("rollback expected_current_revision must equal the accepted receipt post_revision");
+    }
+    const before = accepted.before as unknown as Workspace | null;
+    if (!before) throw new ValidationError("accepted receipt has no before snapshot");
+    return this.guardedUpdateWorkspaceInCurrentTransaction({
+      project_id: input.project_id,
+      operation_id: input.operation_id,
+      step_id: input.step_id,
+      direction: "inverse",
+      expected_revision: input.expected_current_revision,
+      patch: {
+        name: before.name,
+        slug: before.slug,
+        description: before.description,
+        kind: before.kind,
+        status: before.status,
+        root_id: before.root_id,
+        recipe_id: before.recipe_id,
+        canonical_machine: before.canonical_machine,
+        primary_path: before.primary_path,
+        git_remote: before.git_remote,
+        s3_bucket: before.s3_bucket,
+        s3_prefix: before.s3_prefix,
+        tags: before.tags,
+        integrations: before.integrations,
+        metadata: before.metadata,
+      },
+      response_byte_limit: input.response_byte_limit,
+      time_budget_ms: input.time_budget_ms,
+      agent_id: input.agent_id,
+      source: input.source ?? "mcp",
+      command: input.command,
+    });
   }
 
   async archiveWorkspace(idOrSlug: string, input: Omit<UpdateWorkspaceInput, "status"> = {}): Promise<Workspace> {
