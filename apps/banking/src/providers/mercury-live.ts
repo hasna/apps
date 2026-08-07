@@ -197,12 +197,39 @@ export function mercuryBaseUrl(environment: ProviderEnvironment): string {
     : "https://api.mercury.com/api/v1";
 }
 
-function readSecretWithCli(key: string): string | undefined {
-  const result = Bun.spawnSync(["secrets", "get", key], {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  if (result.exitCode !== 0) return undefined;
+/**
+ * WHY `exec` AND NOT `get` (todos I22-00057): @hasna/secrets 0.2.9 hardened
+ * `secrets get` to REFUSE to print a value when stdout is not a TTY, so that a
+ * captured read cannot write a credential into a session transcript. This function
+ * spawns with `stdout: "pipe"`, which is never a TTY, so the bare `get` form took
+ * the refusal on every call and returned `undefined` — the Mercury `--secret-key`
+ * path was silently dead from 0.2.9 onward.
+ *
+ * The sanctioned replacement is `secrets exec <key> --as VAR -- <cmd>`, which hands
+ * the value to a child process's environment instead of to stdout. `printenv` is
+ * the child, so the value crosses back exactly once, still never appearing in this
+ * process's argv and never being written to disk. `--show` is deliberately NOT used:
+ * it defeats the redaction the hardening exists to provide.
+ */
+export function readSecretWithCli(key: string): string | undefined {
+  // `env` is passed explicitly on purpose: Bun.spawnSync resolves the executable
+  // against the environment snapshot taken at startup, so without this it ignores
+  // any later change to PATH. Measured: the bare form throws
+  // `ENOENT Executable not found in $PATH` for a binary that PATH does reach.
+  const result = Bun.spawnSync(
+    ["secrets", "exec", key, "--as", "SECRET_VALUE", "--", "printenv", "SECRET_VALUE"],
+    { stdout: "pipe", stderr: "pipe", env: { ...process.env } },
+  );
+  if (result.exitCode !== 0) {
+    // Surface WHY, never the value. The old code discarded stderr, so a refused
+    // read and an absent key were indistinguishable from the caller's side and
+    // both surfaced as the generic "Missing Mercury API key".
+    const reason = new TextDecoder().decode(result.stderr).replace(/\s+/g, " ").trim().slice(0, 200);
+    if (reason.length > 0) {
+      console.warn(`banking: could not read secret "${key}" via the secrets CLI: ${reason}`);
+    }
+    return undefined;
+  }
   return new TextDecoder().decode(result.stdout).trim();
 }
 
