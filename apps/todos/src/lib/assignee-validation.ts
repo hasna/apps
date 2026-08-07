@@ -108,6 +108,80 @@ export type AssigneeVerdict =
     };
 
 /**
+ * What a READ-side `--assigned <ref>` filter is about to do, when that is worth
+ * saying out loud. See {@link describeAssigneeFilter}.
+ */
+export type AssigneeFilterNotice =
+  | { kind: "ok" }
+  | { kind: "ambiguous"; message: string; candidates: KnownAgent[] };
+
+/**
+ * The read-path counterpart to {@link validateAssignee}, for `list --assigned`.
+ *
+ * WHY THIS EXISTS (todos task 0cbf512c). Both storage engines resolve an
+ * `assigned_to` filter through an alias set — `resolveAssignedToAliases`
+ * (db/database.ts) and `resolveAgentForAssignedFilter`
+ * (storage/postgres-adapter.ts). Both deliberately degrade an AMBIGUOUS name,
+ * one that case-insensitively occupies 2+ agent rows, to LITERAL-ONLY matching
+ * rather than picking a row at random. That choice is right and is not changed
+ * here: picking is how a task lands on a stranger.
+ *
+ * What was wrong is that the degradation was SILENT. Both call sites describe
+ * literal-only as "same as no match". It is not. "No match" returns zero rows
+ * and the caller can see it; literal-only returns a POPULATED, PLAUSIBLE,
+ * PARTIAL set at rc=0 with nothing on stderr, so a complete answer and a
+ * truncated one are indistinguishable.
+ *
+ * Measured live on the cloud store, @hasna/todos 0.15.6, 2026-08-07:
+ * `--assigned 01d4cc12` returned 190 rows (`{fabricius: 182, '01d4cc12': 8}`)
+ * while `--assigned fabricius` returned 182 and 0 bytes of stderr. Eight rows
+ * whose `assigned_to` holds a raw agent id are invisible to the name query that
+ * seat actually runs.
+ *
+ * This WARNS rather than refusing, which is the one place it departs from
+ * `validateAssignee`. A write can be refused and retried; a read is run by
+ * scripts and by every agent's own queue check, and making it exit non-zero
+ * would be a worse regression than the defect. The partial set is still the
+ * best available answer — it just has to say that it is partial.
+ *
+ * Bridging two rows into one identity is a separate identity-model decision and
+ * is deliberately NOT attempted here (todos task a37a7137).
+ */
+export function describeAssigneeFilter(input: string, ctx: Pick<AssigneeContext, "agents">): AssigneeFilterNotice {
+  const raw = input.trim();
+  const normalized = normalizeAgentNameInput(raw);
+  if (!normalized) return { kind: "ok" };
+
+  // An exact ID match is the DISAMBIGUATED form and is precisely the query that
+  // already returns the complete set (190 live, above). Warning on it would fire
+  // on the one call that is correct, which is how a warning gets tuned out.
+  if (ctx.agents.some((a) => a.id.toLowerCase() === normalized)) return { kind: "ok" };
+
+  const byName = ctx.agents.filter((a) => normalizeAgentNameInput(a.name) === normalized);
+  // 0 rows: a free-text or not-yet-registered assignee matches literally and
+  // COMPLETELY — nothing is hidden, so there is nothing to warn about. The
+  // empty-result "did you mean" warning in the list command covers that case,
+  // and it is a different claim. 1 row: resolves cleanly, alias set is exact.
+  //
+  // An empty roster also lands here, which is deliberate: the roster fetch
+  // degrades to [] when the store cannot be read (assignee-context.ts), and
+  // every name then looks unambiguous. Emitting nothing is the only honest
+  // option — the same reasoning that suppresses the sibling warning when
+  // `ctx.degraded` is set.
+  if (byName.length <= 1) return { kind: "ok" };
+
+  const ids = byName.map((a) => a.id).sort();
+  return {
+    kind: "ambiguous",
+    candidates: byName,
+    message:
+      `'${raw}' names ${byName.length} registered agents (${ids.join(", ")}), so this result is INCOMPLETE — ` +
+      `rows whose assignee was stored as one of the other ids are missing from it. ` +
+      `Re-run with an agent ID instead to get that agent's full queue.`,
+  };
+}
+
+/**
  * The canonical declarative seat roster, in the `AgentRoster` format shipped
  * by `@hasna/identities`. `identities` has no built-in path for it — every
  * consumer passes `--roster <file>` — so the path is config here, not a

@@ -46,6 +46,7 @@ import { parseTagList, resolveBulkTags, resolveTagArgument } from "../../lib/bul
 import { resolveClaimIdentity } from "../claim-guard.js";
 import { resolveValidatedAssignee } from "../assignee-guard.js";
 import { loadAssigneeContext } from "../../lib/assignee-context.js";
+import { describeAssigneeFilter } from "../../lib/assignee-validation.js";
 import { listAgents } from "../../db/agents.js";
 import {
   formatTaskLine,
@@ -1065,6 +1066,33 @@ export function registerTaskCommands(program: Command) {
       // variable and therefore reports on exactly that, rather than on a value the
       // query dropped.
       if (assignedFilter !== undefined) filter["assigned_to"] = assignedFilter;
+
+      // Start the roster fetch HERE rather than at the warning site below, so it
+      // overlaps the task query instead of adding to it.
+      //
+      // This is a cost decision backed by measurement, not a style preference.
+      // On station01, 2026-08-07, against the cloud store: the roster is 825,714
+      // bytes and takes 2.58-3.62s, while `list --assigned` itself takes
+      // 3.27-4.57s. Awaiting the roster serially after the query would very
+      // nearly DOUBLE the wall time of the single most-run command on this fleet
+      // — every agent finds its work with `todos list --assigned <me>`. Kicked
+      // off here it is already resolved (or nearly) by the time the query
+      // returns, so the added latency is ~0 and the added cost is one request on
+      // exactly the calls that need it.
+      //
+      // Gated on `assignedWasTyped` for the same reason the warnings are: a bare
+      // `todos list` and the identity `--inbox` resolves never needed a roster,
+      // and must not start paying for one.
+      //
+      // The `.catch` is attached IMMEDIATELY and not left to the await below:
+      // an unawaited rejection between here and there is an unhandled rejection,
+      // which on Bun is fatal. Degrading to an empty roster is the same failure
+      // mode `loadAssigneeContext` already defines, and it suppresses both
+      // warnings rather than emitting a false one.
+      const rosterPromise = assignedWasTyped && assignedFilter
+        ? loadAssigneeContext(() => (cloud ? cloudListAgents(cloud) : listAgents()), true)
+            .catch(() => ({ agents: [], seats: new Set<string>(), allowSeat: true, degraded: true }))
+        : undefined;
       if (opts.recurring) filter["has_recurrence"] = true;
       if (opts.limit !== undefined) {
         const parsedLimit = Number.parseInt(String(opts.limit), 10);
@@ -1229,12 +1257,20 @@ export function registerTaskCommands(program: Command) {
       // queue is ordinary and must keep working. Refusing would break more than it
       // fixes, and would be a worse regression than the defect.
       //
-      // The roster is consulted ONLY when the result is empty — the sole case where
-      // the answer is ambiguous — so a query that returns rows pays nothing, and no
-      // request is added to the hot path. `loadAssigneeContext` is TTL-cached and
-      // degrades silently when the roster cannot be fetched, in which case EVERY
-      // name reads as unregistered and the warning is suppressed rather than
-      // asserting something false about a name that may be perfectly valid.
+      // AMENDED (todos 0cbf512c). This previously read "the roster is consulted
+      // ONLY when the result is empty ... so a query that returns rows pays
+      // nothing". That is no longer true: a NON-empty result is exactly where the
+      // ambiguous-name partial hides, so the roster is now consulted whenever
+      // `--assigned`/`--agent-name` was TYPED. The hot-path cost that sentence was
+      // protecting is preserved by a different mechanism — the fetch is kicked off
+      // where the filter is read, in parallel with the query, rather than awaited
+      // after it. A bare `todos list` still pays nothing, because the gate is
+      // `assignedWasTyped`.
+      //
+      // `loadAssigneeContext` is TTL-cached and degrades silently when the roster
+      // cannot be fetched, in which case EVERY name reads as unregistered and BOTH
+      // warnings are suppressed rather than asserting something false about a name
+      // that may be perfectly valid.
       // This names `assignedFilter` — the SAME variable the query filtered on, resolved
       // once where the flags are read. It is deliberately not re-derived from `opts`
       // here: a second derivation is free to disagree with the first, and did.
@@ -1253,27 +1289,49 @@ export function registerTaskCommands(program: Command) {
       // resolves was never typed, so the same message would be false about how it got
       // there. Suppressing it there can only ever remove a warning, never add one, so
       // it cannot regress the registered-but-idle silence this warning depends on.
-      if (assignedWasTyped && assignedFilter && tasks.length === 0) {
+      // The EMPTY case above and the PARTIAL case below are two different false
+      // readings of the same filter, and they are mutually exclusive by
+      // construction — one needs `tasks.length === 0`, the other needs rows — so
+      // they share the one roster fetch started above and can never both fire.
+      //
+      // PARTIAL (todos task 0cbf512c) is the newer of the two and the harder to
+      // notice. An ambiguous name — one occupying 2+ agent rows — is resolved to
+      // literal-only matching by BOTH storage engines, deliberately, rather than
+      // picking a row at random. That is correct; being silent about it was not.
+      // Measured live on 0.15.6: `--assigned fabricius` returned 182 rows and 0
+      // bytes of stderr while `--assigned 01d4cc12` returned 190, the missing 8
+      // being rows whose `assigned_to` holds a raw agent id. A complete answer
+      // and a truncated one were indistinguishable at the call site.
+      //
+      // WARNS and never refuses, for the same reason the empty-result warning
+      // does: this is the query every agent runs to find its own work, and
+      // scripts consume it. It also goes to STDERR specifically so that
+      // `--json` stdout stays a clean parseable array.
+      if (rosterPromise && assignedFilter) {
         try {
-          const roster = await loadAssigneeContext(
-            () => (cloud ? cloudListAgents(cloud) : listAgents()),
-            true,
-          );
+          const roster = await rosterPromise;
           if (!roster.degraded) {
-            const target = canonicalAgentRef(assignedFilter);
-            const known = roster.agents.some(
-              (a) => canonicalAgentRef(a.name) === target || canonicalAgentRef(a.id) === target,
-            );
-            if (!known) {
-              console.error(chalk.yellow(
-                `Warning: no agent named '${assignedFilter}' is registered, so this empty result may be a\n` +
-                `         mistyped name rather than an empty queue. Check with 'todos agents'.`,
-              ));
+            if (tasks.length === 0) {
+              const target = canonicalAgentRef(assignedFilter);
+              const known = roster.agents.some(
+                (a) => canonicalAgentRef(a.name) === target || canonicalAgentRef(a.id) === target,
+              );
+              if (!known) {
+                console.error(chalk.yellow(
+                  `Warning: no agent named '${assignedFilter}' is registered, so this empty result may be a\n` +
+                  `         mistyped name rather than an empty queue. Check with 'todos agents'.`,
+                ));
+              }
+            } else {
+              const notice = describeAssigneeFilter(assignedFilter, { agents: roster.agents });
+              if (notice.kind === "ambiguous") {
+                console.error(chalk.yellow(`Warning: ${notice.message}`));
+              }
             }
           }
         } catch {
           // Advisory only. A roster lookup must never turn a working list into a
-          // failure, and the empty result below is still reported either way.
+          // failure, and the result below is still reported either way.
         }
       }
 
