@@ -15,6 +15,8 @@ const FIXTURE_CHANNELS = [
   "cursor-past",
   "defer",
   "semantics",
+  "drain",
+  "empty-channel",
 ];
 
 beforeEach(() => {
@@ -271,5 +273,113 @@ describe("digest cursor contract", () => {
     expect(past.message_ids).toEqual([]);
     expect(past.total_available).toBe(0);
     expect(past.has_more).toBe(false);
+    // This test stopped exactly one assertion short of the termination defect:
+    // it established the page was empty and never asked what cursor the empty
+    // page handed back. It handed back the input, unchanged.
+    expect(past.next_cursor).toBeNull();
   });
+});
+
+// ---------------------------------------------------------------------------
+// TERMINATION. The section above proves paging is LOSSLESS — that following
+// `next_cursor` skips nothing. That is a different property from paging being
+// FINITE, and a reader who has only seen the section above will reasonably
+// assume the whole cursor contract is settled. It was not: `next_cursor` stayed
+// populated once the stream was exhausted, so the natural drain idiom
+// `while (next_cursor) fetch(cursor)` never ended.
+// ---------------------------------------------------------------------------
+
+describe("digest cursor termination", () => {
+  test("an exhausted page reports next_cursor null rather than echoing the input", () => {
+    const ids = seedMixedChannel("drain", 5);
+    const last = Math.max(...ids);
+
+    const exhausted = readDigest({ channel: "drain", cursor: last, max_bytes: 65536 });
+
+    expect(exhausted.count).toBe(0);
+    expect(exhausted.has_more).toBe(false);
+    // The defect, stated as its own assertion: the page delivered nothing, so it
+    // accounted for nothing new, so there is no cursor to hand on.
+    expect(exhausted.next_cursor).toBeNull();
+    // The input cursor is NOT lost by nulling next_cursor — the envelope still
+    // echoes it in its own field. A caller keeping a durable watermark recovers
+    // it with `next_cursor ?? cursor` from this same response, so nulling costs
+    // a tailing consumer no state.
+    expect(exhausted.cursor).toBe(last);
+  });
+
+  test("an empty result set reports next_cursor null with no cursor supplied", () => {
+    const empty = readDigest({ channel: "empty-channel", max_bytes: 65536 });
+
+    expect(empty.count).toBe(0);
+    expect(empty.has_more).toBe(false);
+    expect(empty.next_cursor).toBeNull();
+  });
+
+  test("a loop keyed ONLY on cursor-presence terminates on an exhausted stream", () => {
+    const ids = seedMixedChannel("drain", 24);
+
+    // Deliberately the NAIVE idiom: termination decided by cursor-presence
+    // alone, with `has_more` never consulted. That is the shape a caller writes
+    // against the convention every other paged surface in this package follows,
+    // and it is the shape that used to spin.
+    //
+    // The bound is a test harness, not the termination condition: a suite that
+    // hangs reports nothing, so the loop is capped and the cap itself is then
+    // asserted to have gone unused. Without that second assertion the bound
+    // would silently BE the terminator and the test could not fail.
+    const GUARD = 200;
+    const delivered: number[] = [];
+    let cursor: number | undefined;
+    let iterations = 0;
+    let hitGuard = true;
+
+    for (; iterations < GUARD; iterations++) {
+      const page = readDigest({ channel: "drain", max_bytes: 1400, cursor });
+      delivered.push(...page.message_ids);
+      if (page.next_cursor === null) { hitGuard = false; break; }
+      cursor = page.next_cursor;
+    }
+
+    expect(hitGuard).toBe(false);
+    expect(iterations).toBeLessThan(GUARD);
+    // Terminating is worthless if it terminated early: the drain must still
+    // have delivered the whole population, exactly once each.
+    expect(new Set(delivered).size).toBe(delivered.length);
+    expect(delivered.slice().sort((a, b) => a - b)).toEqual(ids);
+  });
+
+  test("a page that is NOT exhausted still hands back a usable, advancing cursor", () => {
+    // The other side of the same change, and the regression that would matter
+    // most: nulling too eagerly would terminate every drain after one page and
+    // silently lose the tail. A mid-stream page must still carry a cursor.
+    const ids = seedMixedChannel("drain", 24);
+
+    const first = readDigest({ channel: "drain", max_bytes: 1400 });
+    expect(first.has_more).toBe(true);
+    expect(first.next_cursor).not.toBeNull();
+    expect(first.count).toBeGreaterThan(0);
+    // Exclusive semantics: the cursor names the last id this page accounted for.
+    expect(first.next_cursor).toBe(first.message_ids[first.message_ids.length - 1]);
+
+    const second = readDigest({ channel: "drain", max_bytes: 1400, cursor: first.next_cursor ?? undefined });
+    expect(second.count).toBeGreaterThan(0);
+    expect(second.message_ids.every((id) => id > (first.next_cursor as number))).toBe(true);
+    // Strictly advancing — a cursor that repeats is the spin this section guards.
+    expect(second.next_cursor).not.toBe(first.next_cursor);
+    // And nothing fell down the gap between the two pages.
+    const seen = [...first.message_ids, ...second.message_ids];
+    expect(seen).toEqual(ids.slice(0, seen.length));
+  });
+
+  // The remaining side of this change — a page that delivers ZERO rows because
+  // one message cannot be packed at all, which must still carry a cursor or the
+  // drain strands on that message forever — is already guarded above by
+  // "a message that cannot fit even alone IS skipped, and says so". That test
+  // asserts `next_cursor === second.id` on a page with `count 0` and
+  // `has_more false`, which is exactly the shape a careless fix would break.
+  //
+  // It is deliberately NOT restated here. The fix below keys on the emptiness of
+  // the underlying query rather than on `count === 0` or `has_more === false`,
+  // and that existing test is what proves the distinction holds.
 });
