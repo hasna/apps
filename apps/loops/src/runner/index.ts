@@ -355,8 +355,7 @@ export async function runRunnerOnce(opts: RunRunnerOnceOptions = {}): Promise<Ru
   const claims = (Array.isArray(claimed.claims) ? claimed.claims : []) as RunnerApiClaim[];
   const completed: LoopRun[] = [];
   for (const claim of claims) {
-    const result = await executeClaimWithHeartbeat(fetchImpl, config, claim, opts);
-    const finalized = await finalizeClaimedRun(fetchImpl, config, claim, result, opts);
+    const finalized = await executeAndFinalizeClaimWithHeartbeat(fetchImpl, config, claim, opts);
     const run = (finalized.run ?? claim.run) as LoopRun;
     completed.push(run);
   }
@@ -554,12 +553,12 @@ export async function runRunnerLoop(opts: RunRunnerLoopOptions = {}): Promise<Ru
   };
 }
 
-async function executeClaimWithHeartbeat(
+async function executeAndFinalizeClaimWithHeartbeat(
   fetchImpl: typeof fetch,
   config: { apiUrl: string; token?: string },
   claim: RunnerApiClaim,
   opts: RunRunnerOnceOptions,
-): Promise<ExecutorResult> {
+): Promise<Record<string, unknown>> {
   const execute = opts.execute ?? (
     claim.loop.target.type === "workflow"
       ? ((loop, run, executeOpts) => {
@@ -598,7 +597,11 @@ async function executeClaimWithHeartbeat(
     );
   }, heartbeatIntervalMs);
   try {
-    return await execute(claim.loop, claim.run, { signal: controller.signal });
+    const result = await execute(claim.loop, claim.run, { signal: controller.signal });
+    // Finalization is still part of owning the claim. Keep renewing the lease
+    // through retries and the minimal compensating write so their own delay
+    // cannot turn a recoverable 413/503 into stale_claim and strand the row.
+    return await finalizeClaimedRun(fetchImpl, config, claim, result, opts);
   } finally {
     clearInterval(timer);
   }

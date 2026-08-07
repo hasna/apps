@@ -43,6 +43,55 @@ function finalizeAttempts(bodies: string[]): Array<Record<string, unknown>> {
 }
 
 describe("runner finalize failure handling", () => {
+  test("keeps the claim lease alive while a refused finalize is retried", async () => {
+    let leaseExpiresAt = 0;
+    let finalizeCalls = 0;
+    let storedStatus = "running";
+    const fetchImpl = (async (url: string | URL) => {
+      const target = String(url);
+      if (target.endsWith("/v1/runners/claim")) return jsonResponse({ ok: true, claims: [CLAIM] });
+      if (target.includes("/heartbeat")) {
+        leaseExpiresAt = Date.now() + 1_000;
+        return jsonResponse({ ok: true });
+      }
+      if (target.includes("/finalize")) {
+        finalizeCalls += 1;
+        if (Date.now() >= leaseExpiresAt) return jsonResponse({ error: "stale_claim" }, 409);
+        if (finalizeCalls === 1) {
+          // The first refusal and the runner's 500 ms retry delay together
+          // cross the 1 s lease unless the heartbeat survives execution.
+          await Bun.sleep(200);
+          return jsonResponse({ error: "body_too_large" }, 413);
+        }
+        storedStatus = "failed";
+        return jsonResponse({ ok: true, run: { ...CLAIM.run, status: storedStatus } });
+      }
+      return jsonResponse({}, 404);
+    }) as unknown as typeof fetch;
+
+    const capture = captureStderr();
+    let result;
+    try {
+      result = await runRunnerOnce({
+        apiUrl: "http://127.0.0.1:1/",
+        apiKey: "[REDACTED_SECRET]",
+        runnerId: "runner-lease-retry",
+        heartbeatIntervalMs: 500,
+        fetchImpl,
+        execute: async () => {
+          await Bun.sleep(950);
+          return RESULT;
+        },
+      });
+    } finally {
+      capture.restore();
+    }
+
+    expect(finalizeCalls).toBe(2);
+    expect(storedStatus).toBe("failed");
+    expect(result.completed[0]).toMatchObject({ id: "run-1", status: "failed" });
+  });
+
   test("a refused finalize is retried rather than abandoning the run", async () => {
     const finalizeBodies: string[] = [];
     let finalizeCalls = 0;
