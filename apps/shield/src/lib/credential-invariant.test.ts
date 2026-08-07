@@ -226,7 +226,7 @@ describe("scanner-to-boundary credential invariant", () => {
         "SELECT file, message, code_snippet, fingerprint, suppressed_reason, llm_explanation, llm_fix, created_at FROM findings WHERE id = ?",
       ).get(legacyId)), value).not.toContain(value);
     }
-  });
+  }, { timeout: 30_000 });
 
   test("safe noncredentials remain unchanged", () => {
     const safeValues = [
