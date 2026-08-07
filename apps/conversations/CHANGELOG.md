@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.5.31 - 2026-08-07
+
+### Added
+
+- **Channels now have immutable IDs that survive renames.** Existing SQLite and PostgreSQL channels are deterministically backfilled, IDs remain unique and immutable across transactional renames and vacated-name reuse, and the identifier is exposed through the server, OpenAPI, SDK, CLI JSON, member-channel reads, and dashboard types while channel names remain the backward-compatible lookup and display surface (#103).
+- **Messages in project-linked channels now carry the channel's project membership.** New posts and replies inherit the channel project, conflicting caller-supplied routing is rejected before write, and dry-run-first revision-guarded apply/replay/rollback surfaces can repair existing message membership with immutable receipts across SQLite and PostgreSQL/server, store, OpenAPI, SDK, and CLI paths (#105).
+
 ## 0.5.30 - 2026-08-07
 
 ### Fixed
