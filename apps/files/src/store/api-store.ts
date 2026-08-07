@@ -29,6 +29,7 @@ import type {
   ListFilesOptions,
   Machine,
   Project,
+  SearchMatchSource,
   SearchResult,
   Source,
   Tag,
@@ -149,8 +150,21 @@ export class ApiStore implements FilesStore {
     return orNull(this.http.get<FileWithTags>("/files/by-path", { query: { source_id: sourceId, path } }));
   }
   async searchFiles(query: string, opts: Omit<ListFilesOptions, "query"> = {}): Promise<SearchResult[]> {
-    // The cloud /v1/files endpoint exposes a substring `q` filter; results are
-    // returned as SearchResult (rank defaulted — FTS ranking is local-only).
+    // The cloud /v1/files endpoint exposes ONE substring filter — `q`, matched
+    // against name and path. There is no derived-content index behind it: the
+    // extracted-text FTS tables live in the on-box SQLite store.
+    //
+    // So a content-scoped search here cannot be served. It used to be accepted
+    // and answered with the metadata matches, which for a term that appears
+    // only inside document bodies is an empty list at rc=0 — indistinguishable
+    // from "no such text anywhere". Refuse it instead, and name the route that
+    // can serve it.
+    const scope = opts.search_scope ?? "all";
+    if (scope === "content") {
+      throw new Error(
+        "--scope content is unavailable in cloud (api) mode: /v1/files matches file name and path only, and the extracted-content index is on-box. Search from a local store, or use --scope metadata to search names and paths.",
+      );
+    }
     const files = (await this.client.list<FileWithTags>("files", {
       query: {
         q: query,
@@ -161,7 +175,12 @@ export class ApiStore implements FilesStore {
         offset: opts.offset,
       },
     })).items;
-    return files.map((f) => ({ ...f, rank: 0 }));
+    // Stamp what actually matched. `--scope all` promises names, paths AND
+    // content; over this transport it delivers the first two, so every row says
+    // so rather than letting the caller assume its body was searched. Rank is
+    // defaulted because FTS ranking is local-only.
+    const matchedOn: SearchMatchSource[] = ["metadata"];
+    return files.map((f) => ({ ...f, rank: 0, search_match_sources: [...matchedOn] }));
   }
   async recentFiles(agentId?: string, limit = 20): Promise<RecentFile[]> {
     return this.http.get<RecentFile[]>("/files/recent", { query: { agent_id: agentId, limit } });

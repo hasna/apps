@@ -205,6 +205,75 @@ export async function deleteSource(client: TypedQueryClient, id: string): Promis
   return true;
 }
 
+// ── Paging ────────────────────────────────────────────────────────────────
+/**
+ * Largest page `/v1` will serve. The bound is real — every row costs a second
+ * round trip for its tags — so it is kept and made *visible* rather than
+ * removed.
+ *
+ * These endpoints answer with a bare JSON array: no `total`, no `has_more`, no
+ * `next_cursor`. The row count is therefore the caller's only signal about
+ * coverage, and silently rewriting it to the cap made "this is everything" and
+ * "this is the first 500 of 18,212" print identically at rc=0. So an
+ * unservable page is now refused, never truncated: a caller either gets the
+ * page it asked for or an error telling it how to page.
+ */
+export const MAX_PAGE_SIZE = 500;
+
+/** Largest `recent` page; the recency feed is a peek, not a bulk export. */
+export const MAX_RECENT_PAGE_SIZE = 200;
+
+/**
+ * A page the server will not serve. Carries the numbers so the HTTP layer can
+ * answer 400 with structured fields instead of re-parsing the message.
+ */
+export class PageLimitError extends Error {
+  readonly requested_limit: number;
+  readonly max_limit: number;
+  constructor(requested: number, max: number) {
+    super(
+      `limit ${String(requested)} is out of range: ask for 1..${max} rows per page and walk the rest with offset`,
+    );
+    this.name = "PageLimitError";
+    this.requested_limit = requested;
+    this.max_limit = max;
+  }
+}
+
+/** An offset the server will not serve. */
+export class PageOffsetError extends Error {
+  readonly requested_offset: number;
+  constructor(requested: number) {
+    super(`offset ${String(requested)} is out of range: it must be an integer >= 0`);
+    this.name = "PageOffsetError";
+    this.requested_offset = requested;
+  }
+}
+
+/**
+ * Resolve a requested page size, or refuse it. Returns `fallback` only when the
+ * caller supplied nothing; anything present and unservable throws rather than
+ * being coerced to a neighbouring value.
+ *
+ * Validating here is also what makes the `LIMIT ${n}` interpolation below safe:
+ * the value that reaches SQL is a proven integer, where `Number("abc")` used to
+ * reach it as `NaN`.
+ */
+function pageLimit(requested: number | undefined, fallback: number, max: number): number {
+  if (requested === undefined || requested === null) return fallback;
+  const n = Number(requested);
+  if (!Number.isInteger(n) || n < 1 || n > max) throw new PageLimitError(n, max);
+  return n;
+}
+
+/** Resolve a requested offset, or refuse it. */
+function pageOffset(requested: number | undefined): number {
+  if (requested === undefined || requested === null) return 0;
+  const n = Number(requested);
+  if (!Number.isInteger(n) || n < 0) throw new PageOffsetError(n);
+  return n;
+}
+
 // ── Files ─────────────────────────────────────────────────────────────────
 async function fileTags(client: TypedQueryClient, fileId: string): Promise<string[]> {
   const rows = await client.many<{ name: string }>(
@@ -255,8 +324,8 @@ export async function listFiles(client: TypedQueryClient, opts: ListFilesQuery):
   if (opts.machine_id) add("machine_id = $?", opts.machine_id);
   if (opts.ext) add("ext = $?", opts.ext);
   if (opts.q) add("(name ILIKE $? OR path ILIKE $?)".replace("$?", `$${params.length + 1}`).replace("$?", `$${params.length + 1}`), `%${opts.q}%`);
-  const limit = Math.min(Math.max(Number(opts.limit ?? 50), 1), 500);
-  const offset = Math.max(Number(opts.offset ?? 0), 0);
+  const limit = pageLimit(opts.limit, 50, MAX_PAGE_SIZE);
+  const offset = pageOffset(opts.offset);
   const sql = `SELECT * FROM files WHERE ${where.join(" AND ")} ORDER BY indexed_at DESC LIMIT ${limit} OFFSET ${offset}`;
   const rows = await client.many<Record<string, unknown>>(sql, params);
   const out: FileWithTags[] = [];
@@ -278,7 +347,7 @@ export async function getFileByPath(client: TypedQueryClient, sourceId: string, 
 
 /** Files most recently touched by agent activity. */
 export async function recentFiles(client: TypedQueryClient, agentId?: string, limit = 20): Promise<FileWithTags[]> {
-  const lim = Math.min(Math.max(Number(limit) || 20, 1), 200);
+  const lim = pageLimit(limit, 20, MAX_RECENT_PAGE_SIZE);
   const rows = agentId
     ? await client.many<{ file_id: string; last_touched: string }>(
         "SELECT file_id, MAX(created_at) AS last_touched FROM agent_activity WHERE file_id IS NOT NULL AND agent_id = $1 GROUP BY file_id ORDER BY last_touched DESC LIMIT " + lim,
@@ -309,7 +378,7 @@ export async function findDuplicates(client: TypedQueryClient, sourceId?: string
 
 /** Files with a sync conflict. */
 export async function listConflicts(client: TypedQueryClient, sourceId?: string, limit = 50): Promise<FileWithTags[]> {
-  const lim = Math.min(Math.max(Number(limit) || 50, 1), 500);
+  const lim = pageLimit(limit, 50, MAX_PAGE_SIZE);
   const rows = sourceId
     ? await client.many<Record<string, unknown>>("SELECT * FROM files WHERE sync_status='conflict' AND source_id=$1 LIMIT " + lim, [sourceId])
     : await client.many<Record<string, unknown>>("SELECT * FROM files WHERE sync_status='conflict' LIMIT " + lim);
@@ -717,8 +786,8 @@ function activityWhere(column: string, value: string, opts: ActivityQuery): { sq
   if (opts.after) { params.push(opts.after); conditions.push(`created_at >= $${params.length}`); }
   if (opts.before) { params.push(opts.before); conditions.push(`created_at <= $${params.length}`); }
   if (opts.action) { params.push(opts.action); conditions.push(`action = $${params.length}`); }
-  const limit = Math.min(Math.max(Number(opts.limit) || 50, 1), 500);
-  const offset = Math.max(Number(opts.offset) || 0, 0);
+  const limit = pageLimit(opts.limit, 50, MAX_PAGE_SIZE);
+  const offset = pageOffset(opts.offset);
   const sql = `SELECT * FROM agent_activity WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`;
   return { sql, params };
 }
