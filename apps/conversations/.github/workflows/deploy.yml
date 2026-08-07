@@ -54,6 +54,22 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The v* namespace is not covered by this repository's protected npm/**
+      # tag ruleset, and workflow_dispatch can select a non-default ref. Bind
+      # every deploy to reviewed main history before the job can request an AWS
+      # identity or perform any production mutation.
+      - name: Require the deploy commit on protected main
+        run: |
+          set -euo pipefail
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" "refs/remotes/origin/main"; then
+            echo "::error::deploy commit ${GITHUB_SHA} is not contained in protected main"
+            exit 1
+          fi
+          echo "deploy commit ${GITHUB_SHA} is contained in protected main"
 
       - name: Configure AWS credentials (GitHub OIDC)
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
