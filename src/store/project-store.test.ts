@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -268,6 +268,18 @@ describe("projects store api transport (roots/agents/recipes)", () => {
       });
     });
 
+    test("inspectAppStore reports a missing store without creating it", async () => {
+      await withTempHome(async () => {
+        const { store } = stubStore(() => ({}));
+        const summary = await store.inspectAppStore(project as never);
+
+        expect(summary.exists).toBe(false);
+        expect(summary.schema_version).toBeNull();
+        expect(summary.counts).toEqual({ data_models: 0, data_records: 0, loop_links: 0 });
+        expect(existsSync(summary.paths.db_path)).toBe(false);
+      });
+    });
+
     test("inspectAppStoreWithLoops surfaces the linked loop, not loops:[]", async () => {
       await withTempHome(async () => {
         ensureProjectStore(project);
@@ -386,9 +398,32 @@ describe("projects store api transport (roots/agents/recipes)", () => {
 
   test("guardedReadProject uses the bounded exact-id API route and rejects slugs before transport", async () => {
     const projectId = "wks_guardedread0001";
+    const project = {
+      id: projectId,
+      slug: "guarded-read",
+      name: "Guarded Read",
+      description: null,
+      kind: "generic" as const,
+      status: "active" as const,
+      root_id: null,
+      recipe_id: null,
+      canonical_machine: null,
+      primary_path: null,
+      git_remote: null,
+      s3_bucket: null,
+      s3_prefix: null,
+      tags: [],
+      integrations: {},
+      metadata: {},
+      last_opened_at: null,
+      created_at: "2026-08-07 00:00:00",
+      updated_at: "2026-08-07 00:00:01",
+      synced_at: null,
+    };
     const response = {
       ok: true as const,
       project_id: projectId,
+      project,
       current_revision: "2026-08-07 00:00:01",
       response_control: {
         response_byte_limit: 16_384,
@@ -416,6 +451,7 @@ describe("projects store api transport (roots/agents/recipes)", () => {
     expect(result).toMatchObject({
       ok: true,
       project_id: projectId,
+      project: { id: projectId, slug: "guarded-read" },
       current_revision: "2026-08-07 00:00:01",
       response_control: {
         response_byte_limit: 16_384,

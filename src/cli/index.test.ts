@@ -1995,6 +1995,145 @@ describe("project-first CLI surface", () => {
     }
   }, 30000);
 
+  test("store ensure provisions an exact API-backed project locally, stays idempotent, and fails closed on invalid targets", async () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-api-store-ensure-"));
+    const projectsHome = join(root, "home");
+    const projectId = "wks_apistoreensure0001";
+    const project = {
+      id: projectId,
+      slug: "api-store-ensure",
+      name: "API Store Ensure",
+      description: null,
+      kind: "generic",
+      status: "active",
+      root_id: null,
+      recipe_id: null,
+      canonical_machine: null,
+      primary_path: join(projectsHome, "workspaces", projectId),
+      git_remote: null,
+      s3_bucket: null,
+      s3_prefix: null,
+      tags: [],
+      integrations: {},
+      metadata: {},
+      last_opened_at: null,
+      created_at: "2026-08-07 00:00:00",
+      updated_at: "2026-08-07 00:00:01",
+      synced_at: null,
+    };
+    const requests: Array<{ method: string; path: string }> = [];
+    const port = reserveFreePort();
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port,
+      fetch(req) {
+        const url = new URL(req.url);
+        requests.push({ method: req.method, path: url.pathname });
+        if (req.method === "GET" && url.pathname === `/v1/projects/${projectId}/guarded-metadata`) {
+          return Response.json({
+            ok: true,
+            project_id: projectId,
+            project,
+            current_revision: project.updated_at,
+            response_control: {
+              response_byte_limit: Number(url.searchParams.get("response_byte_limit")),
+              time_budget_ms: Number(url.searchParams.get("time_budget_ms")),
+              response_bytes: 1024,
+              elapsed_ms: 1,
+              complete: true,
+              truncated: false,
+            },
+          });
+        }
+        return Response.json({ error: "Not found" }, { status: 404 });
+      },
+    });
+    const env = {
+      HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
+      HASNA_PROJECTS_HOME: projectsHome,
+      HASNA_PROJECTS_API_URL: `http://127.0.0.1:${port}`,
+      HASNA_PROJECTS_API_KEY: "test-key",
+    };
+    const runEnsure = async (target: string, extraArgs: string[] = []) => {
+      const proc = Bun.spawn({
+        cmd: ["bun", "run", CLI_PATH, "store", "ensure", target, ...extraArgs, "--json"],
+        stdout: "pipe",
+        stderr: "pipe",
+        env: testSpawnEnv(env),
+      });
+      const stdout = await new Response(proc.stdout).text();
+      const stderr = await new Response(proc.stderr).text();
+      await proc.exited;
+      return { exitCode: proc.exitCode, stdout, stderr };
+    };
+
+    try {
+      const dryRun = await runEnsure(projectId, ["--dry-run"]);
+      expect(dryRun.exitCode).toBe(0);
+      expect(dryRun.stderr).toBe("");
+      const planned = JSON.parse(dryRun.stdout) as { dry_run: boolean; project: { id: string }; created: string[] };
+      expect(planned.dry_run).toBe(true);
+      expect(planned.project.id).toBe(projectId);
+      expect(planned.created).toContain(join(projectsHome, "data", projectId));
+      expect(existsSync(join(projectsHome, "data", projectId, "project.db"))).toBe(false);
+
+      const applied = await runEnsure(projectId);
+      expect(applied.exitCode).toBe(0);
+      expect(applied.stderr).toBe("");
+      const created = JSON.parse(applied.stdout) as { dry_run: boolean; project: { id: string }; created: string[]; app_store: { exists: boolean; project_id: string } };
+      expect(created.dry_run).toBe(false);
+      expect(created.project.id).toBe(projectId);
+      expect(created.app_store).toMatchObject({ exists: true, project_id: projectId });
+      expect(existsSync(join(projectsHome, "data", projectId, "project.db"))).toBe(true);
+
+      const repeated = await runEnsure(projectId);
+      expect(repeated.exitCode).toBe(0);
+      const noOp = JSON.parse(repeated.stdout) as { created: string[]; app_store: { exists: boolean } };
+      expect(noOp.created).toEqual([]);
+      expect(noOp.app_store.exists).toBe(true);
+
+      const requestCount = requests.length;
+      const slugRefused = await runEnsure(project.slug, ["--dry-run"]);
+      expect(slugRefused.exitCode).toBe(1);
+      expect(slugRefused.stderr).toContain("complete stable project id");
+      expect(requests).toHaveLength(requestCount);
+
+      const missing = await runEnsure("wks_apistoremissing0001", ["--dry-run"]);
+      expect(missing.exitCode).toBe(1);
+      expect(missing.stderr).toContain("404");
+      expect(existsSync(join(projectsHome, "data", "wks_apistoremissing0001"))).toBe(false);
+
+      const collisionId = "wks_apistorecollision01";
+      const collisionPath = join(projectsHome, "workspaces", collisionId);
+      mkdirSync(collisionPath, { recursive: true });
+      writeFileSync(join(collisionPath, ".project.json"), JSON.stringify({ id: "wks_someotherproject0001" }));
+      const collisionProject = { ...project, id: collisionId, primary_path: collisionPath };
+      server.reload({
+        fetch(req) {
+          const url = new URL(req.url);
+          requests.push({ method: req.method, path: url.pathname });
+          if (req.method === "GET" && url.pathname === `/v1/projects/${collisionId}/guarded-metadata`) {
+            return Response.json({
+              ok: true,
+              project_id: collisionId,
+              project: collisionProject,
+              current_revision: collisionProject.updated_at,
+              response_control: { response_byte_limit: 65_536, time_budget_ms: 10_000, response_bytes: 1024, elapsed_ms: 1, complete: true, truncated: false },
+            });
+          }
+          return Response.json({ error: "Not found" }, { status: 404 });
+        },
+      });
+      const collision = await runEnsure(collisionId, ["--dry-run"]);
+      expect(collision.exitCode).toBe(1);
+      expect(collision.stderr).toContain("belongs to project wks_someotherproject0001");
+      expect(existsSync(join(projectsHome, "data", collisionId, "project.db"))).toBe(false);
+    } finally {
+      server.stop(true);
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   test("doctor --fix --dry-run does not promise a local location write for an API-backed exact target", async () => {
     const fixture = cloudDoctorFixture();
     try {

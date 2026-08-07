@@ -11,7 +11,8 @@ import {
 import type { JsonObject, Workspace } from "../types/workspace.js";
 
 export { PROJECTS_HOME_ENV } from "../lib/project-store-paths.js";
-export const PROJECT_STORE_SCHEMA_VERSION = 2 as const;
+export const PROJECT_STORE_SCHEMA_VERSION = 3 as const;
+export const PROJECT_STORE_OWNER_META_KEY = "owner_project_id" as const;
 export const LEGACY_PROJECT_CANVAS_EXPORT_SCHEMA = "hasna.projects_legacy_canvas_export.v1" as const;
 export const PROJECT_STORE_TABLES = [
   "project_meta",
@@ -392,10 +393,8 @@ export function runProjectStoreMigrations(db: Database): void {
     );
   `);
 
-  const migrated = db.query("SELECT id FROM project_store_migrations WHERE id = 2").get();
-  if (migrated) return;
-
-  db.exec(`
+  const migratedV2 = db.query("SELECT id FROM project_store_migrations WHERE id = 2").get();
+  if (!migratedV2) db.exec(`
     CREATE TABLE IF NOT EXISTS project_meta (
       key TEXT PRIMARY KEY,
       value_json TEXT NOT NULL,
@@ -444,15 +443,61 @@ export function runProjectStoreMigrations(db: Database): void {
       VALUES ('schema_version', '2', datetime('now'));
     INSERT OR IGNORE INTO project_store_migrations (id) VALUES (2);
   `);
+
+  const migratedV3 = db.query("SELECT id FROM project_store_migrations WHERE id = 3").get();
+  if (!migratedV3) db.exec(`
+    INSERT OR REPLACE INTO project_meta (key, value_json, updated_at)
+      VALUES ('schema_version', '3', datetime('now'));
+    INSERT OR IGNORE INTO project_store_migrations (id) VALUES (3);
+  `);
+}
+
+function projectStoreOwner(db: Database): string | null {
+  const table = db.query<{ name: string }, []>(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'project_meta'",
+  ).get();
+  if (!table) return null;
+  const row = db.query<{ value_json: string }, [string]>(
+    "SELECT value_json FROM project_meta WHERE key = ?",
+  ).get(PROJECT_STORE_OWNER_META_KEY);
+  if (!row) return null;
+  const value = parseJson<unknown>(row.value_json, null);
+  return typeof value === "string" ? value : null;
+}
+
+function bindProjectStoreOwner(db: Database, projectId: string): void {
+  const owner = projectStoreOwner(db);
+  if (owner && owner !== projectId) {
+    throw new Error(`Project store collision: canonical app store belongs to project ${owner}, not ${projectId}`);
+  }
+  if (!owner) {
+    db.run(
+      "INSERT INTO project_meta (key, value_json, updated_at) VALUES (?, ?, ?)",
+      [PROJECT_STORE_OWNER_META_KEY, json(projectId), now()],
+    );
+  }
+}
+
+export function inspectProjectStoreOwner(project: string | Pick<Workspace, "id">): string | null {
+  const paths = getProjectStorePaths(project);
+  if (!existsSync(paths.db_path)) return null;
+  const db = new Database(paths.db_path, { readonly: true });
+  try {
+    return projectStoreOwner(db);
+  } finally {
+    db.close();
+  }
 }
 
 export function getProjectDatabase(project: string | Pick<Workspace, "id">): Database {
-  const paths = ensureProjectStoreDirs(project);
+  const projectId = projectIdOf(project);
+  const paths = ensureProjectStoreDirs(projectId);
   const db = new Database(paths.db_path);
   db.run("PRAGMA busy_timeout=5000");
   db.run("PRAGMA journal_mode=WAL");
   db.run("PRAGMA foreign_keys=ON");
   runProjectStoreMigrations(db);
+  bindProjectStoreOwner(db, projectId);
   return db;
 }
 
@@ -746,6 +791,16 @@ export function inspectProjectStore(
 ): ProjectStoreSummary {
   const paths = getProjectStorePaths(project);
   const exists = existsSync(paths.db_path);
+  if (!exists) {
+    return {
+      project_id: paths.project_id,
+      paths,
+      exists: false,
+      schema_version: null,
+      counts: { data_models: 0, data_records: 0, loop_links: 0 },
+      legacy_canvas_storage: inspectLegacyProjectCanvasStorage(project),
+    };
+  }
   const opened = openDbForProject(project, options.db);
   try {
     const schemaVersion = opened.db
@@ -766,6 +821,45 @@ export function inspectProjectStore(
     };
   } finally {
     closeIfOwned(opened.db, opened.owned);
+  }
+}
+
+/**
+ * Inspect an already-present app store without running migrations or binding
+ * ownership. This is the producer for dry-run planning: reading a preview must
+ * never initialize or upgrade the file it is describing.
+ */
+export function inspectProjectStoreReadOnly(project: string | Pick<Workspace, "id">): ProjectStoreSummary {
+  const paths = getProjectStorePaths(project);
+  if (!existsSync(paths.db_path)) {
+    return {
+      project_id: paths.project_id,
+      paths,
+      exists: false,
+      schema_version: null,
+      counts: { data_models: 0, data_records: 0, loop_links: 0 },
+      legacy_canvas_storage: inspectLegacyProjectCanvasStorage(project),
+    };
+  }
+  const db = new Database(paths.db_path, { readonly: true });
+  try {
+    const schemaVersion = hasTable(db, "project_meta")
+      ? db.query<{ value_json: string }, []>("SELECT value_json FROM project_meta WHERE key = 'schema_version'").get()
+      : null;
+    return {
+      project_id: paths.project_id,
+      paths,
+      exists: true,
+      schema_version: schemaVersion ? Number.parseInt(schemaVersion.value_json, 10) : null,
+      counts: {
+        data_models: hasTable(db, "project_data_models") ? tableCount(db, "project_data_models") : 0,
+        data_records: hasTable(db, "project_data_records") ? tableCount(db, "project_data_records") : 0,
+        loop_links: hasTable(db, "project_loop_links") ? tableCount(db, "project_loop_links") : 0,
+      },
+      legacy_canvas_storage: inspectLegacyProjectCanvasStorage(project, db),
+    };
+  } finally {
+    db.close();
   }
 }
 
