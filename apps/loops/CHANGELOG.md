@@ -18,6 +18,9 @@ unless noted.
   advances recurrence without retry or circuit-breaker impact, stays distinct
   from success, and is exposed consistently by runner finalization, OpenAPI,
   the generated HTTP SDK, CLI exit behavior, and health reporting.
+- **Runner dependency advisories:** security overrides now resolve
+  `fast-uri` 3.1.5, `ip-address` 10.3.1, and `hono` 4.12.34 so the packaged
+  runner clears dependency-audit and CRITICAL/HIGH image-scan gates.
 
 ## 0.4.37 (2026-08-01)
 
