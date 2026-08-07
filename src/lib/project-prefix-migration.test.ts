@@ -1,0 +1,335 @@
+import { describe, expect, test } from "bun:test";
+import type {
+  GuardedProjectMutationReceipt,
+  GuardedProjectMutationResult,
+  Workspace,
+} from "../types/workspace.js";
+import type { ProjectStore } from "../store/project-store.js";
+import {
+  createConversationsPrefixPort,
+  runProjectPrefixMigration,
+  stripProjectPrefix,
+  type ConversationsChannelIdentity,
+  type ConversationsPrefixPort,
+} from "./project-prefix-migration.js";
+
+function project(input: Partial<Workspace> & Pick<Workspace, "id" | "name" | "status" | "integrations">): Workspace {
+  return {
+    id: input.id,
+    slug: input.slug ?? input.id.replace(/^wks_/, "project-"),
+    name: input.name,
+    description: null,
+    kind: "project",
+    status: input.status,
+    root_id: null,
+    recipe_id: null,
+    canonical_machine: null,
+    primary_path: `/tmp/${input.id}`,
+    git_remote: null,
+    s3_bucket: null,
+    s3_prefix: null,
+    tags: [],
+    integrations: input.integrations,
+    metadata: {},
+    last_opened_at: null,
+    created_at: "2026-08-07T00:00:00Z",
+    updated_at: input.updated_at ?? `${input.id}-revision`,
+    synced_at: null,
+  };
+}
+
+function channel(name: string, project_id: string | null, archived_at: string | null = null): ConversationsChannelIdentity {
+  return { name, project_id, archived_at, member_count: 3, message_count: 7 };
+}
+
+function makeHarness(initialProjects: Workspace[], initialChannels: ConversationsChannelIdentity[]) {
+  const projects = new Map(initialProjects.map((item) => [item.id, structuredClone(item)]));
+  const channels = new Map(initialChannels.map((item) => [item.name, structuredClone(item)]));
+  const markers: Workspace[] = [];
+  const events: unknown[] = [];
+
+  const conversations: ConversationsPrefixPort = {
+    async listChannels() {
+      const rows = [...channels.values()].sort((a, b) => a.name.localeCompare(b.name));
+      return { channels: rows, total: rows.length, pages: 1, complete: true };
+    },
+    async renameChannel({ current_name, target_name }) {
+      const before = channels.get(current_name);
+      if (!before) throw new Error(`missing channel ${current_name}`);
+      if (channels.has(target_name)) throw new Error(`collision ${target_name}`);
+      const after = { ...before, name: target_name };
+      channels.delete(current_name);
+      channels.set(target_name, after);
+      return after;
+    },
+  };
+
+  function receipt(projectId: string, stepId: string, before: Workspace, after: Workspace): GuardedProjectMutationReceipt {
+    return {
+      receipt_id: `gpmr-${stepId}`,
+      operation_id: "test-operation",
+      step_id: stepId,
+      direction: "forward",
+      idempotency_key: `idem-${stepId}`,
+      target_id: projectId,
+      request_digest: `request-${stepId}`,
+      precondition_digest: `precondition-${stepId}`,
+      expected_revision: before.updated_at,
+      outcome: "accepted",
+      reason: null,
+      result_project_id: projectId,
+      duplicate_of_receipt_id: null,
+      before: before as unknown as Record<string, unknown>,
+      after: after as unknown as Record<string, unknown>,
+      post_revision: after.updated_at,
+      created_at: "2026-08-07T00:00:00Z",
+    };
+  }
+
+  const store = {
+    mode: "local",
+    baseUrl: null,
+    async listProjectsComplete() {
+      const rows = [...projects.values()].sort((a, b) => a.name.localeCompare(b.name));
+      return { projects: rows, total: rows.length, pages: 1, complete: true as const };
+    },
+    async guardedUpdateProject(input: {
+      project_id: string;
+      step_id: string;
+      expected_revision: string;
+      patch: { name?: string; integrations?: Workspace["integrations"] };
+    }): Promise<GuardedProjectMutationResult> {
+      const before = projects.get(input.project_id)!;
+      const after = {
+        ...before,
+        ...input.patch,
+        updated_at: `${before.updated_at}-next`,
+      };
+      projects.set(after.id, after);
+      return {
+        ok: true,
+        dry_run: false,
+        outcome: "accepted",
+        idempotency_key: `idem-${input.step_id}`,
+        request_digest: `request-${input.step_id}`,
+        precondition_digest: `precondition-${input.step_id}`,
+        project_id: after.id,
+        expected_revision: input.expected_revision,
+        current_revision: after.updated_at,
+        before,
+        after,
+        receipt: receipt(after.id, input.step_id, before, after),
+        response_control: {
+          response_byte_limit: 1_000_000,
+          time_budget_ms: 30_000,
+          response_bytes: 100,
+          elapsed_ms: 1,
+          complete: true,
+          truncated: false,
+        },
+      };
+    },
+    async rollbackGuardedProjectMutation(input: {
+      project_id: string;
+      step_id: string;
+      accepted_receipt_id: string;
+      expected_current_revision: string;
+    }): Promise<GuardedProjectMutationResult> {
+      const before = projects.get(input.project_id)!;
+      const original = initialProjects.find((item) => item.id === input.project_id)!;
+      const after = { ...original, updated_at: `${before.updated_at}-rolled-back` };
+      projects.set(after.id, after);
+      const rolledBack = receipt(after.id, input.step_id, before, after);
+      rolledBack.direction = "inverse";
+      return {
+        ok: true,
+        dry_run: false,
+        outcome: "accepted",
+        idempotency_key: `idem-${input.step_id}`,
+        request_digest: `request-${input.step_id}`,
+        precondition_digest: `precondition-${input.step_id}`,
+        project_id: after.id,
+        expected_revision: input.expected_current_revision,
+        current_revision: after.updated_at,
+        before,
+        after,
+        receipt: rolledBack,
+        response_control: {
+          response_byte_limit: 1_000_000,
+          time_budget_ms: 30_000,
+          response_bytes: 100,
+          elapsed_ms: 1,
+          complete: true,
+          truncated: false,
+        },
+      };
+    },
+    async recordEvent(_id: string, input: unknown) {
+      events.push(input);
+      return {} as never;
+    },
+  } as unknown as ProjectStore;
+
+  return {
+    store,
+    conversations,
+    markers,
+    events,
+    projects,
+    channels,
+    write_marker: (updated: Workspace) => {
+      markers.push(updated);
+      return { type: "workspace_marker", target: `${updated.primary_path}/.project.json`, status: "completed" as const };
+    },
+  };
+}
+
+describe("project prefix migration", () => {
+  test("strips exactly one leading prefix and leaves ordinary names unchanged", () => {
+    expect(stripProjectPrefix("internal-iproj-package-arrivals")).toEqual({
+      name: "package-arrivals",
+      prefix: "internal-iproj-",
+    });
+    expect(stripProjectPrefix("iproj-package-arrivals")).toEqual({
+      name: "package-arrivals",
+      prefix: "iproj-",
+    });
+    expect(stripProjectPrefix("package-arrivals")).toEqual({ name: "package-arrivals", prefix: null });
+    expect(stripProjectPrefix("internal-iproj-iproj-package-arrivals").name).toBe("iproj-package-arrivals");
+  });
+
+  test("dry-run inventories active and archived identities, then apply regenerates markers from updated rows", async () => {
+    const active = project({
+      id: "wks_active00001",
+      name: "internal-iproj-package-arrivals",
+      status: "active",
+      integrations: { conversations_channel: "internal-iproj-package-arrivals" },
+    });
+    const archived = project({
+      id: "wks_archived001",
+      name: "iproj-archive-lane",
+      status: "archived",
+      integrations: { conversations_channel: "iproj-archive-lane" },
+    });
+    const harness = makeHarness(
+      [active, archived],
+      [channel("internal-iproj-package-arrivals", active.id), channel("iproj-archive-lane", archived.id, "2026-08-06T00:00:00Z")],
+    );
+
+    const planned = await runProjectPrefixMigration({
+      store: harness.store,
+      conversations: harness.conversations,
+      write_marker: harness.write_marker,
+    });
+    expect(planned.dry_run).toBe(true);
+    expect(planned.inventory.complete).toBe(true);
+    expect(planned.inventory.project_candidates).toBe(2);
+    expect(planned.inventory.channel_candidates).toBe(2);
+    expect(planned.steps).toHaveLength(4);
+    expect(harness.markers).toHaveLength(0);
+    expect([...harness.channels.keys()]).toContain("internal-iproj-package-arrivals");
+
+    const applied = await runProjectPrefixMigration({
+      store: harness.store,
+      conversations: harness.conversations,
+      write_marker: harness.write_marker,
+      dry_run: false,
+      operation_id: planned.operation_id,
+    });
+    expect(applied.ok).toBe(true);
+    expect(applied.rollback.complete).toBe(true);
+    expect(harness.markers.map((item) => item.name).sort()).toEqual(["archive-lane", "package-arrivals"]);
+    expect([...harness.channels.keys()].sort()).toEqual(["archive-lane", "package-arrivals"]);
+    expect(harness.events).toHaveLength(4);
+
+    const rerun = await runProjectPrefixMigration({
+      store: harness.store,
+      conversations: harness.conversations,
+      write_marker: harness.write_marker,
+      dry_run: false,
+      operation_id: planned.operation_id,
+    });
+    expect(rerun.ok).toBe(true);
+    expect(rerun.steps).toHaveLength(0);
+  });
+
+  test("refuses project and channel target collisions before any write", async () => {
+    const prefixed = project({
+      id: "wks_prefixed0001",
+      name: "iproj-collision",
+      status: "active",
+      integrations: {},
+    });
+    const existing = project({
+      id: "wks_existing0001",
+      name: "collision",
+      status: "active",
+      integrations: {},
+    });
+    const harness = makeHarness([prefixed, existing], []);
+    await expect(runProjectPrefixMigration({
+      store: harness.store,
+      conversations: harness.conversations,
+    })).rejects.toThrow(/Project target collision/);
+    expect(harness.projects.get(prefixed.id)!.name).toBe("iproj-collision");
+  });
+
+  test("failure injection rolls back channel first and leaves project/history state intact", async () => {
+    const source = project({
+      id: "wks_failure0001",
+      name: "iproj-failure-lane",
+      status: "active",
+      integrations: { conversations_channel: "iproj-failure-lane" },
+    });
+    const harness = makeHarness([source], [channel("iproj-failure-lane", source.id)]);
+    const result = await runProjectPrefixMigration({
+      store: harness.store,
+      conversations: harness.conversations,
+      dry_run: false,
+      operation_id: "failure-operation",
+      fail_step_id: "step-0002",
+    });
+    expect(result.ok).toBe(false);
+    expect(result.rollback.attempted).toBe(true);
+    expect(result.rollback.complete).toBe(true);
+    expect(result.steps.find((step) => step.step_id === "step-0002")?.status).toBe("terminal_nonacceptance");
+    expect(result.steps.find((step) => step.step_id === "step-0002")?.receipt).not.toBeNull();
+    expect(harness.projects.get(source.id)!.name).toBe("iproj-failure-lane");
+    expect([...harness.channels.keys()]).toEqual(["iproj-failure-lane"]);
+  });
+
+  test("installed Conversations CLI adapter requires complete paged inventory and verifies rename preservation", async () => {
+    const rows = new Map([
+      ["iproj-cli-lane", channel("iproj-cli-lane", "wks_cli0000001")],
+      ["plain-cli-lane", channel("plain-cli-lane", null)],
+    ]);
+    const runner = (args: string[]) => {
+      if (args[0] === "channel" && args[1] === "list") {
+        const cursor = Number(args[args.indexOf("--cursor") + 1]);
+        const limit = Number(args[args.indexOf("--limit") + 1]);
+        const all = [...rows.values()].sort((a, b) => a.name.localeCompare(b.name));
+        const page = all.slice(cursor, cursor + limit);
+        return {
+          ok: true,
+          stdout: JSON.stringify(page),
+          stderr: `Showing ${page.length} of ${all.length}.${cursor + page.length < all.length ? " More available: rerun with --cursor " + (cursor + page.length) + "." : ""}`,
+        };
+      }
+      if (args[0] === "channel" && args[1] === "rename") {
+        const current = rows.get(args[2]!);
+        rows.delete(args[2]!);
+        rows.set(args[3]!, { ...current!, name: args[3]! });
+        return { ok: true, stdout: JSON.stringify({ name: args[3]! }), stderr: "" };
+      }
+      return { ok: false, stdout: "", stderr: "unsupported" };
+    };
+    const port = createConversationsPrefixPort(runner);
+    const inventory = await port.listChannels();
+    expect(inventory.complete).toBe(true);
+    expect(inventory.total).toBe(2);
+    const renamed = await port.renameChannel({ current_name: "iproj-cli-lane", target_name: "cli-lane" });
+    expect(renamed.name).toBe("cli-lane");
+    expect(renamed.member_count).toBe(3);
+    expect(renamed.message_count).toBe(7);
+  });
+});

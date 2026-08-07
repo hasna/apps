@@ -606,6 +606,59 @@ describe("project-first CLI surface", () => {
     }
   });
 
+  test("guarded-update exposes exact integrations through the guarded contract", () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-guarded-integrations-"));
+    const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
+    try {
+      const create = runProjects([
+        "create",
+        "--name",
+        "Guarded Integrations",
+        "--slug",
+        "guarded-integrations",
+        "--integrations-json",
+        JSON.stringify({ todos_project_id: "todo_before" }),
+        "--json",
+      ], env);
+      expect(create.exitCode).toBe(0);
+      const created = JSON.parse(text(create.stdout)) as { project: { id: string; updated_at: string; integrations: Record<string, string> } };
+      const update = runProjects([
+        "guarded-update",
+        created.project.id,
+        "--expected-revision",
+        created.project.updated_at,
+        "--operation-id",
+        "guarded-integrations-operation",
+        "--step-id",
+        "integrations",
+        "--integrations-json",
+        JSON.stringify({
+          todos_project_id: "todo_after",
+          conversations_channel: "package-arrivals",
+        }),
+        "--response-byte-limit",
+        "20000",
+        "--time-budget-ms",
+        "5000",
+        "--json",
+      ], env);
+      expect(update.exitCode).toBe(0);
+      const payload = JSON.parse(text(update.stdout)) as {
+        outcome: string;
+        after: { integrations: Record<string, string> };
+        receipt: { receipt_id: string };
+      };
+      expect(payload.outcome).toBe("accepted");
+      expect(payload.after.integrations).toEqual({
+        todos_project_id: "todo_after",
+        conversations_channel: "package-arrivals",
+      });
+      expect(payload.receipt.receipt_id).toMatch(/^gpmr_/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("workspace store, app store, loops, and labels use temp home", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-store-"));
     const env = {

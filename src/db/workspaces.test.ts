@@ -471,6 +471,11 @@ describe("workspace domain services", () => {
     createWorkspace({ name: "Zulu Tagged", slug: "zulu-tagged", tags: ["target"] }, db);
     expect(listWorkspaces({ tags: ["target"], limit: 1 }, db).map((item) => item.slug)).toEqual(["zulu-tagged"]);
 
+    createWorkspace({ id: "wks_aaaaaaaaaaaa", name: "Stable Tie", slug: "stable-tie-a" }, db);
+    createWorkspace({ id: "wks_zzzzzzzzzzzz", name: "Stable Tie", slug: "stable-tie-z" }, db);
+    expect(listWorkspaces({ query: "Stable Tie", limit: 1, offset: 0 }, db)[0]?.id).toBe("wks_aaaaaaaaaaaa");
+    expect(listWorkspaces({ query: "Stable Tie", limit: 1, offset: 1 }, db)[0]?.id).toBe("wks_zzzzzzzzzzzz");
+
     const secondaryPath = tmpDir();
     const secondary = addWorkspaceLocation({
       workspace_id: workspace.id,

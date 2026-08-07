@@ -266,8 +266,8 @@ describe("projects list pagination (server row cap)", () => {
   /**
    * A fake registry that behaves like the deployed server: it clamps any
    * requested limit to `cap`, defaults to `defaultLimit` when none is sent,
-   * honours `offset`, and reports `count` as the PAGE length (not the total) —
-   * which is exactly why the truncation was undetectable.
+   * honours `offset`, and reports the complete total/offset contract required
+   * for a migration to prove that its inventory is complete.
    */
   function fakeRegistry(options: { total: number; cap: number; defaultLimit?: number; ignoreOffset?: boolean }) {
     const rows = Array.from({ length: options.total }, (_, i) => ({
@@ -291,7 +291,15 @@ describe("projects list pagination (server row cap)", () => {
       const limit = Math.min(Math.max(requested, 1), options.cap);
       const offset = options.ignoreOffset ? 0 : Math.max(Number(q.get("offset") ?? 0), 0);
       const page = rows.slice(offset, offset + limit);
-      return new Response(JSON.stringify({ workspaces: page, count: page.length }), {
+      return new Response(JSON.stringify({
+        workspaces: page,
+        count: page.length,
+        total: rows.length,
+        offset,
+        limit,
+        has_more: offset + page.length < rows.length,
+        complete: offset === 0 && offset + page.length === rows.length,
+      }), {
         status: 200,
         headers: { "content-type": "application/json" },
       });

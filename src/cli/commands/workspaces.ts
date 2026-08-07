@@ -71,6 +71,7 @@ import {
   type ProjectStartResult,
 } from "../../lib/project-start.js";
 import { projectTmuxStatus } from "../../lib/project-tmux-status.js";
+import { runProjectPrefixMigration } from "../../lib/project-prefix-migration.js";
 import { buildProjectDetailPayload, buildProjectListRender, buildProjectSessionsPayload, buildProjectStartBulkRender, buildRecentSessionsPayload, buildRecipesRender, buildRootsRender } from "../../lib/project-render.js";
 import {
   buildProjectAgentContext,
@@ -2328,6 +2329,7 @@ function registerProjectCommands(program: Command): void {
     .option("--slug <slug>", "Project slug")
     .option("--description <text>", "Description")
     .option("--metadata-json <json>", "Replace metadata with a JSON object")
+    .option("--integrations-json <json>", "Replace integrations with a JSON object")
     .requiredOption("--expected-revision <revision>", "Fresh project updated_at revision from an exact-id read")
     .requiredOption("--operation-id <id>", "Caller-stable operation id")
     .requiredOption("--step-id <id>", "Caller-stable step id")
@@ -2343,6 +2345,7 @@ function registerProjectCommands(program: Command): void {
           slug: opts.slug,
           description: opts.description,
           metadata: parseJsonObject(opts.metadataJson, "--metadata-json"),
+          integrations: parseIntegrationsJson(opts.integrationsJson),
         };
         if (Object.values(patch).every((value) => value === undefined)) throw new Error("Provide at least one guarded metadata field to update");
         const store = resolveProjectStore();
@@ -2431,6 +2434,49 @@ function registerProjectCommands(program: Command): void {
         if (wantsJson(opts)) { printObject(result, opts); return; }
         console.log(chalk.green(`✓ Guarded rollback ${result.outcome}: ${result.project_id}`));
         if (result.receipt) console.log(`  ${chalk.dim("receipt:")} ${result.receipt.receipt_id}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("migrate-prefixes")
+    .description("Preview or apply a receipt-backed removal of leading iproj- and internal-iproj- prefixes")
+    .option("--apply", "Apply the ordered migration; without this flag the command is a read-only dry run")
+    .option("--operation-id <id>", "Caller-stable operation id for retries")
+    .option("--response-byte-limit <n>", "Positive maximum serialized guarded response bytes", "1000000")
+    .option("--time-budget-ms <n>", "Positive guarded operation time budget in milliseconds", "30000")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      try {
+        const store = resolveProjectStore();
+        const result = await runProjectPrefixMigration({
+          store,
+          dry_run: !opts.apply,
+          operation_id: opts.operationId,
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+          agent_id: mutationAgentId(store, opts.agent),
+          command: process.argv.join(" "),
+        });
+        if (wantsJson(opts)) {
+          printObject(result, opts);
+          if (!result.ok) process.exitCode = 1;
+          return;
+        }
+        const prefix = result.dry_run ? "[dry-run] " : "";
+        const action = result.steps.length === 0 ? "No prefixed identities found" : `${result.steps.length} migration step(s)`;
+        console.log(`${result.ok ? chalk.green("✓") : chalk.red("✗")} ${prefix}${action}`);
+        console.log(`  ${chalk.dim("projects:")} ${result.inventory.project_candidates} candidate(s)`);
+        console.log(`  ${chalk.dim("channels:")} ${result.inventory.channel_candidates} candidate(s)`);
+        console.log(`  ${chalk.dim("complete:")} ${result.inventory.complete}`);
+        if (!result.ok) {
+          console.error(chalk.red(`Migration failed: ${result.refusal ?? "unknown failure"}`));
+          console.error(chalk.yellow(`Rollback complete: ${result.rollback.complete}`));
+          process.exitCode = 1;
+        }
       } catch (err) {
         console.error(chalk.red(err instanceof Error ? err.message : String(err)));
         process.exit(1);
