@@ -2,8 +2,10 @@ import type { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
+  acquireWorkspaceLock,
   addWorkspaceLocation,
   recordWorkspaceEvent,
+  releaseWorkspaceLock,
   resolveWorkspace,
 } from "../db/workspaces.js";
 import type { EventSource, JsonObject, Workspace, WorkspaceLocation } from "../types/workspace.js";
@@ -112,9 +114,12 @@ export function projectStorePaths(workspaceId: string): ProjectStorePaths {
 }
 
 function ensureDir(path: string, created: string[], dryRun: boolean): void {
-  if (existsSync(path)) return;
-  created.push(path);
-  if (!dryRun) mkdirSync(path, { recursive: true });
+  if (dryRun) {
+    if (!existsSync(path)) created.push(path);
+    return;
+  }
+  const firstCreated = mkdirSync(path, { recursive: true });
+  if (firstCreated !== undefined) created.push(path);
 }
 
 function ensureDataDirs(paths: ProjectStorePaths, dryRun: boolean): string[] {
@@ -294,44 +299,68 @@ export async function ensureProjectStoreForTarget(
     );
   }
 
-  let localResult: ProjectStoreEnsureResult | null = null;
-  try {
-    localResult = ensureProjectStore(guardedProject, {
-      ...options,
-      setPrimaryIfMissing: false,
-      recordRegistryEvent: false,
-    });
-
-    if (!guardedProject.primary_path && options.setPrimaryIfMissing !== false) {
-      const registryMutation = await store.guardedUpdateProject({
-        project_id: target,
-        operation_id: `project-store-ensure:${target}`,
-        step_id: "set-canonical-primary",
-        expected_revision: guarded.current_revision,
-        patch: { primary_path: localResult.paths.workspace_path },
-        dry_run: Boolean(options.dryRun),
-        agent_id: options.agentId,
-        source: options.source ?? "cli",
-        command: options.command,
-        response_byte_limit: responseByteLimit,
-        time_budget_ms: timeBudgetMs,
+  const run = async (): Promise<ProjectStoreEnsureResult> => {
+    let localResult: ProjectStoreEnsureResult | null = null;
+    try {
+      localResult = ensureProjectStore(guardedProject, {
+        ...options,
+        setPrimaryIfMissing: false,
+        recordRegistryEvent: false,
       });
-      if (!registryMutation.ok || !registryMutation.after) {
-        throw new Error(`Guarded primary-path update did not accept project ${target}: ${registryMutation.outcome}`);
+
+      if (!guardedProject.primary_path && options.setPrimaryIfMissing !== false) {
+        const registryMutation = await store.guardedUpdateProject({
+          project_id: target,
+          operation_id: `project-store-ensure:${target}`,
+          step_id: "set-canonical-primary",
+          expected_revision: guarded.current_revision,
+          patch: { primary_path: localResult.paths.workspace_path },
+          dry_run: Boolean(options.dryRun),
+          agent_id: options.agentId,
+          source: options.source ?? "cli",
+          command: options.command,
+          response_byte_limit: responseByteLimit,
+          time_budget_ms: timeBudgetMs,
+        });
+        if (!registryMutation.ok || !registryMutation.after) {
+          throw new Error(`Guarded primary-path update did not accept project ${target}: ${registryMutation.outcome}`);
+        }
+        return {
+          ...localResult,
+          project: registryMutation.after,
+          primary_updated: true,
+          registry_mutation: registryMutation,
+        };
       }
-      return {
-        ...localResult,
-        project: registryMutation.after,
-        primary_updated: true,
-        registry_mutation: registryMutation,
-      };
+      return localResult;
+    } catch (error) {
+      if (localResult && !localResult.dry_run) {
+        compensateCreatedStorePaths(localResult.created, localResult.paths);
+      }
+      throw error;
     }
-    return localResult;
+  };
+
+  if (options.dryRun) return run();
+  const lockKey = `workspace:${target}`;
+  try {
+    acquireWorkspaceLock({
+      lock_key: lockKey,
+      workspace_id: resolveWorkspace(target) ? target : undefined,
+      reason: "project store ensure",
+      ttl_seconds: 600,
+    });
   } catch (error) {
-    if (localResult && !localResult.dry_run) {
-      compensateCreatedStorePaths(localResult.created, localResult.paths);
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.startsWith("Workspace lock already held:")) {
+      throw new Error(message.replace("Workspace lock", "Project lock"));
     }
     throw error;
+  }
+  try {
+    return await run();
+  } finally {
+    releaseWorkspaceLock(lockKey);
   }
 }
 

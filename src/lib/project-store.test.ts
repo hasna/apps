@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { closeDatabase } from "../db/database.js";
+import { acquireWorkspaceLock, releaseWorkspaceLock } from "../db/workspaces.js";
 import type { ProjectStore } from "../store/project-store.js";
 import type {
   GuardedProjectMutationRequest,
@@ -113,8 +115,11 @@ describe("API-backed project store ensure", () => {
   test("rejects a cross-target guarded response before creating local state", async () => {
     const root = mkdtempSync(join(tmpdir(), "projects-store-target-guard-"));
     const previousHome = process.env.HASNA_PROJECTS_HOME;
+    const previousDbPath = process.env.HASNA_PROJECTS_DB_PATH;
     const home = join(root, "home");
     process.env.HASNA_PROJECTS_HOME = home;
+    process.env.HASNA_PROJECTS_DB_PATH = join(root, "registry.db");
+    closeDatabase();
     const requestedId = "wks_hostedstoretarget001";
     const returned = workspace("wks_hostedstoretarget002", null);
     try {
@@ -125,6 +130,9 @@ describe("API-backed project store ensure", () => {
     } finally {
       if (previousHome === undefined) delete process.env.HASNA_PROJECTS_HOME;
       else process.env.HASNA_PROJECTS_HOME = previousHome;
+      closeDatabase();
+      if (previousDbPath === undefined) delete process.env.HASNA_PROJECTS_DB_PATH;
+      else process.env.HASNA_PROJECTS_DB_PATH = previousDbPath;
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -132,7 +140,10 @@ describe("API-backed project store ensure", () => {
   test("previews then applies the null primary-path repair with a deterministic guarded receipt", async () => {
     const root = mkdtempSync(join(tmpdir(), "projects-store-hosted-"));
     const previousHome = process.env.HASNA_PROJECTS_HOME;
+    const previousDbPath = process.env.HASNA_PROJECTS_DB_PATH;
     process.env.HASNA_PROJECTS_HOME = join(root, "home");
+    process.env.HASNA_PROJECTS_DB_PATH = join(root, "registry.db");
+    closeDatabase();
     const id = "wks_hostedstoreensure01";
     const project = workspace(id, null);
     const updates: GuardedProjectMutationRequest[] = [];
@@ -158,6 +169,9 @@ describe("API-backed project store ensure", () => {
     } finally {
       if (previousHome === undefined) delete process.env.HASNA_PROJECTS_HOME;
       else process.env.HASNA_PROJECTS_HOME = previousHome;
+      closeDatabase();
+      if (previousDbPath === undefined) delete process.env.HASNA_PROJECTS_DB_PATH;
+      else process.env.HASNA_PROJECTS_DB_PATH = previousDbPath;
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -165,8 +179,11 @@ describe("API-backed project store ensure", () => {
   test("compensates only files created by a failed hosted repair", async () => {
     const root = mkdtempSync(join(tmpdir(), "projects-store-compensate-"));
     const previousHome = process.env.HASNA_PROJECTS_HOME;
+    const previousDbPath = process.env.HASNA_PROJECTS_DB_PATH;
     const home = join(root, "home");
     process.env.HASNA_PROJECTS_HOME = home;
+    process.env.HASNA_PROJECTS_DB_PATH = join(root, "registry.db");
+    closeDatabase();
     const id = "wks_hostedstorefailure01";
     const dataPath = join(home, "data", id);
     const sentinel = join(dataPath, "keep.txt");
@@ -182,6 +199,35 @@ describe("API-backed project store ensure", () => {
     } finally {
       if (previousHome === undefined) delete process.env.HASNA_PROJECTS_HOME;
       else process.env.HASNA_PROJECTS_HOME = previousHome;
+      closeDatabase();
+      if (previousDbPath === undefined) delete process.env.HASNA_PROJECTS_DB_PATH;
+      else process.env.HASNA_PROJECTS_DB_PATH = previousDbPath;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("refuses a concurrent apply before either invocation can claim the same paths", async () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-store-lock-"));
+    const previousHome = process.env.HASNA_PROJECTS_HOME;
+    const previousDbPath = process.env.HASNA_PROJECTS_DB_PATH;
+    const home = join(root, "home");
+    process.env.HASNA_PROJECTS_HOME = home;
+    process.env.HASNA_PROJECTS_DB_PATH = join(root, "registry.db");
+    closeDatabase();
+    const id = "wks_hostedstorelocked001";
+    const lockKey = `workspace:${id}`;
+    try {
+      acquireWorkspaceLock({ lock_key: lockKey, reason: "concurrent ensure control", ttl_seconds: 600 });
+      await expect(ensureProjectStoreForTarget(apiStore(workspace(id, null), []), id))
+        .rejects.toThrow("Project lock already held");
+      expect(existsSync(join(home, "data", id))).toBe(false);
+    } finally {
+      releaseWorkspaceLock(lockKey);
+      if (previousHome === undefined) delete process.env.HASNA_PROJECTS_HOME;
+      else process.env.HASNA_PROJECTS_HOME = previousHome;
+      closeDatabase();
+      if (previousDbPath === undefined) delete process.env.HASNA_PROJECTS_DB_PATH;
+      else process.env.HASNA_PROJECTS_DB_PATH = previousDbPath;
       rmSync(root, { recursive: true, force: true });
     }
   });
