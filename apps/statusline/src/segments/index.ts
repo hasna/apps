@@ -1,9 +1,9 @@
 import { hostname } from "node:os";
-import type { Segment, StatusContext } from "../providers/types.js";
+import type { Segment, SegmentColor, StatusContext } from "../providers/types.js";
 import { compactAge, compactDuration, compactNum, money } from "../format.js";
 import { gitBranch, gitProjectName, lastCommitEpoch, trackedLineCount } from "../git.js";
 import { contextUsage } from "../context-window.js";
-import { sessionAccount, sessionAccountEmail } from "../accounts.js";
+import { sessionAccount, sessionAccountEmail, sessionUsage } from "../accounts.js";
 import { sessionFastMode } from "../settings.js";
 
 /**
@@ -40,6 +40,26 @@ function modelName(ctx: StatusContext): string | null {
 /** Gauge value for colour escalation; an unreported window never escalates. */
 function limitPercent(pct: number | undefined): number {
   return typeof pct === "number" ? pct : 0;
+}
+
+/**
+ * Render one usage window's remaining percent behind a short label, or a
+ * neutral dash when it is unavailable — never a blank and never a wrong number.
+ */
+function usageLabel(prefix: string, headroom: number | null): string {
+  return headroom === null ? `${prefix} —` : `${prefix} ${headroom}%`;
+}
+
+/**
+ * Colour a usage segment by how much is left. Low headroom escalates through
+ * yellow to red; a binding limit (weekly) also shows green while healthy so it
+ * reads at a glance. An unknown value is dimmed, matching its neutral marker.
+ */
+function usageColor(headroom: number | null, binding = false): SegmentColor | null {
+  if (headroom === null) return "dim";
+  if (headroom < 20) return "red";
+  if (headroom < 50) return "yellow";
+  return binding ? "green" : null;
 }
 
 export const segments: Segment[] = [
@@ -174,6 +194,23 @@ export const segments: Segment[] = [
       const pct = ctx.rateLimits?.sevenDay?.usedPercentage;
       return typeof pct === "number" ? `7d:${Math.round(pct)}%` : null;
     },
+  },
+  {
+    id: "usage-session",
+    description: "Session (5-hour) usage remaining for this pane's own account, from the local accounts usage cache",
+    defaultEnabled: false,
+    // Resolved from this process's own config dir and read from the on-disk
+    // usage cache the accounts warmer maintains — never the cloud API, which
+    // the launched session cannot reach.
+    color: () => usageColor(sessionUsage(process.env).sessionHeadroom),
+    render: () => usageLabel("5h", sessionUsage(process.env).sessionHeadroom),
+  },
+  {
+    id: "usage-weekly",
+    description: "Weekly usage remaining for this pane's own account — the binding limit — from the local accounts usage cache",
+    defaultEnabled: false,
+    color: () => usageColor(sessionUsage(process.env).weeklyHeadroom, true),
+    render: () => usageLabel("7d", sessionUsage(process.env).weeklyHeadroom),
   },
   {
     id: "thread-title",

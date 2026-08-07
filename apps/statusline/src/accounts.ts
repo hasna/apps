@@ -82,6 +82,36 @@ const STATE_FILE_SUFFIX = ".json";
 const CUSTOM_OAUTH_ENV = "CLAUDE_CODE_CUSTOM_OAUTH_URL";
 const OAUTH_VARIANTS = ["", "-custom-oauth", "-local-oauth", "-staging-oauth"];
 
+/**
+ * Where the accounts usage warmer keeps its per-account cache. `@hasna/accounts`
+ * writes `<accountsHome>/cache/usage/<accountUuid>.json` on a background refresh,
+ * so a statusline can read the pane account's headroom without the cloud round
+ * trip the CLI would cost on every render. `accountsHome()` there is exactly
+ * `ACCOUNTS_HOME` or the default below — no other override touches it — so this
+ * resolves synchronously without importing the package.
+ */
+const CACHE_SUBDIR = "cache";
+const USAGE_CACHE_SUBDIR = "usage";
+/**
+ * How old a cache entry may be before it is treated as absent. The warmer
+ * refreshes on the order of a minute; past this bound it is not running, and a
+ * measurement that stale can no longer be trusted for the ~5-hour session
+ * window — better a neutral marker than a wrong number.
+ */
+const USAGE_CACHE_MAX_AGE_MS = 15 * 60 * 1000;
+/**
+ * A session window resets at most every 5 hours. A reset horizon beyond that
+ * marks a weekly window when neither `group` nor `id` classifies it — the same
+ * rule `@hasna/accounts` uses.
+ */
+const SESSION_WINDOW_MAX_MS = 5 * 60 * 60 * 1000;
+/**
+ * The cache filename is the account uuid. Refuse anything that is not a plain
+ * uuid-shaped token so a doctored login record cannot point the read outside
+ * the cache directory. Mirrors the accounts package's own `safeUuid` guard.
+ */
+const SAFE_UUID = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/;
+
 type Env = Record<string, string | undefined>;
 
 interface RegistryEntry {
@@ -335,5 +365,138 @@ export async function sessionAccountEmail(env: Env = process.env, tool?: string)
     return str(registryEntry(paths.store, configDir, env, tool)?.email);
   } catch {
     return null;
+  }
+}
+
+/**
+ * Account state directory for this environment. `@hasna/accounts` keys every
+ * cache path off `accountsHome()`, which is `ACCOUNTS_HOME` or the documented
+ * default and nothing else — so resolving it here stays in step with the
+ * package without paying for its (optional) import.
+ */
+function accountsHomeDir(env: Env): string {
+  const override = str(env[ACCOUNTS_HOME_ENV]);
+  return override ? expandHome(override, env) : join(home(env), ...DEFAULT_ACCOUNTS_HOME);
+}
+
+/**
+ * The account uuid the host agent recorded as logged in for this config dir.
+ * Read from the same live state blob `sessionAccountEmail` prefers, so it names
+ * whoever is actually signed in now — the account whose usage the warmer
+ * cached — rather than a registry entry that can lag a re-login or a switch.
+ * Returns null when no record is present or the value is not a safe cache key.
+ */
+export function sessionAccountUuid(env: Env = process.env): string | null {
+  try {
+    const stateFile = sessionStateFile(env);
+    if (!stateFile) return null;
+    const uuid = str(readJson(stateFile)?.oauthAccount?.accountUuid);
+    return uuid && SAFE_UUID.test(uuid) ? uuid : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Usage headroom for this session's account, as percent still available. */
+export interface SessionUsage {
+  /** The ~5-hour session window's remaining percent, or null when unknown. */
+  sessionHeadroom: number | null;
+  /** The weekly window's remaining percent — the binding limit — or null. */
+  weeklyHeadroom: number | null;
+}
+
+interface UsageWindow {
+  id?: unknown;
+  utilization?: unknown;
+  scoped?: unknown;
+  group?: unknown;
+  resetsAt?: unknown;
+}
+
+type WindowClass = "session" | "weekly" | "scoped" | "unknown";
+
+/**
+ * Classify a window the way accounts does: an explicit `scoped` flag or
+ * `group`/`id` wins, and a reset horizon past the 5-hour session bound is the
+ * last resort. Scoped windows describe a sub-limit and never set the headroom.
+ */
+function classifyWindow(w: UsageWindow, fetchedAt: number | null): WindowClass {
+  if (w.scoped === true) return "scoped";
+  const group = str(w.group);
+  if (group === "session" || group === "weekly") return group;
+  const id = str(w.id);
+  if (id) {
+    if (id.includes("session")) return "session";
+    if (id.includes("weekly")) return "weekly";
+  }
+  const resetsAt = typeof w.resetsAt === "string" ? Date.parse(w.resetsAt) : Number.NaN;
+  if (Number.isFinite(resetsAt) && fetchedAt !== null && resetsAt - fetchedAt > SESSION_WINDOW_MAX_MS) {
+    return "weekly";
+  }
+  return "unknown";
+}
+
+/**
+ * Remaining percent for one window. A window whose reset has passed since it
+ * was fetched has rolled over and is fully replenished — reporting its stale
+ * high utilization would be a wrong number. null when utilization is unusable.
+ */
+function windowHeadroom(w: UsageWindow, now: number, fetchedAt: number | null): number | null {
+  const resetsAt = typeof w.resetsAt === "string" ? Date.parse(w.resetsAt) : Number.NaN;
+  const rolled = Number.isFinite(resetsAt) && resetsAt <= now && (fetchedAt === null || resetsAt > fetchedAt);
+  if (rolled) return 100;
+  const util = typeof w.utilization === "number" && Number.isFinite(w.utilization) ? w.utilization : null;
+  if (util === null) return null;
+  return Math.max(0, Math.min(100, Math.round(100 - util)));
+}
+
+/** Reduce the cache's windows to session and weekly headroom. */
+function deriveUsage(usage: unknown, now: number): SessionUsage {
+  const u = (usage ?? {}) as { windows?: unknown; fetchedAt?: unknown };
+  const windows: UsageWindow[] = Array.isArray(u.windows) ? (u.windows as UsageWindow[]) : [];
+  const fetchedAtMs = typeof u.fetchedAt === "string" ? Date.parse(u.fetchedAt) : Number.NaN;
+  const fetchedAt = Number.isFinite(fetchedAtMs) ? fetchedAtMs : null;
+  let session: number | null = null;
+  let weekly: number | null = null;
+  let unknownMin: number | null = null;
+  for (const w of windows) {
+    const cls = classifyWindow(w, fetchedAt);
+    if (cls === "scoped") continue;
+    const h = windowHeadroom(w, now, fetchedAt);
+    if (h === null) continue;
+    if (cls === "session") session = session === null ? h : Math.min(session, h);
+    else if (cls === "weekly") weekly = weekly === null ? h : Math.min(weekly, h);
+    else unknownMin = unknownMin === null ? h : Math.min(unknownMin, h);
+  }
+  // An unclassified non-scoped window can only pull weekly headroom down, never
+  // raise it — the same conservative fold accounts applies.
+  const weeklyHeadroom =
+    weekly !== null ? (unknownMin !== null ? Math.min(weekly, unknownMin) : weekly) : unknownMin;
+  return { sessionHeadroom: session, weeklyHeadroom };
+}
+
+/**
+ * Session and weekly usage headroom for the account this pane is running as,
+ * read straight from the accounts usage cache — never the cloud API, which the
+ * launched, registry-stripped session cannot reach and could not afford on
+ * every render anyway. Returns nulls (so a segment shows a neutral marker)
+ * whenever the account is unknown, the cache is missing, stale, corrupt, or
+ * keyed to a different account. Never throws.
+ */
+export function sessionUsage(env: Env = process.env, now: Date = new Date()): SessionUsage {
+  const empty: SessionUsage = { sessionHeadroom: null, weeklyHeadroom: null };
+  try {
+    const uuid = sessionAccountUuid(env);
+    if (!uuid) return empty;
+    const path = join(accountsHomeDir(env), CACHE_SUBDIR, USAGE_CACHE_SUBDIR, `${uuid}.json`);
+    if (!existsSync(path)) return empty;
+    const entry = readJson(path);
+    // The cache stamps the account it belongs to; a filename match is not enough.
+    if (!entry || entry.accountUuid !== uuid) return empty;
+    const fetchedAt = typeof entry.fetchedAt === "string" ? Date.parse(entry.fetchedAt) : Number.NaN;
+    if (!Number.isFinite(fetchedAt) || now.getTime() - fetchedAt > USAGE_CACHE_MAX_AGE_MS) return empty;
+    return deriveUsage(entry.usage, now.getTime());
+  } catch {
+    return empty;
   }
 }

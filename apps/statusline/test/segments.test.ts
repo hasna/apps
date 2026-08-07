@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { hostname } from "node:os";
@@ -449,5 +449,80 @@ describe("newline segment", () => {
   test("exists for row breaks and renders nothing itself", async () => {
     expect(getSegment("newline")).toBeDefined();
     expect(await getSegment("newline")!.render(ctx())).toBeNull();
+  });
+});
+
+describe("usage segments (from the local accounts cache)", () => {
+  const accountsRoot = mkdtempSync(join(tmpdir(), "statusline-seg-usage-"));
+  const profileDir = mkdtempSync(join(tmpdir(), "statusline-seg-usage-cfg-"));
+  const uuid = "3ea5952d-28c7-4179-9371-5028123478a4";
+  let saved: Record<string, string | undefined>;
+
+  function writeCache(windows: unknown[], fetchedAt = new Date().toISOString()) {
+    const dir = join(accountsRoot, "cache", "usage");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, `${uuid}.json`),
+      JSON.stringify({ accountUuid: uuid, fetchedAt, usage: { windows, fetchedAt } }),
+    );
+  }
+  function clearCache() {
+    rmSync(join(accountsRoot, "cache", "usage", `${uuid}.json`), { force: true });
+  }
+
+  beforeAll(() => {
+    writeFileSync(
+      join(profileDir, ".claude.json"),
+      JSON.stringify({ oauthAccount: { emailAddress: "agent@example.com", accountUuid: uuid } }),
+    );
+    saved = { ACCOUNTS_HOME: process.env.ACCOUNTS_HOME, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
+    process.env.ACCOUNTS_HOME = accountsRoot;
+    process.env.CLAUDE_CONFIG_DIR = profileDir;
+  });
+
+  afterAll(() => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  const fresh = () => new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
+
+  test("session segment shows the 5-hour headroom remaining", async () => {
+    writeCache([{ id: "session", group: "session", scoped: false, utilization: 13, resetsAt: fresh() }]);
+    expect(await getSegment("usage-session")!.render(ctx())).toBe("5h 87%");
+  });
+
+  test("weekly segment shows the weekly headroom remaining", async () => {
+    writeCache([{ id: "weekly_all", group: "weekly", scoped: false, utilization: 8, resetsAt: fresh() }]);
+    expect(await getSegment("usage-weekly")!.render(ctx())).toBe("7d 92%");
+  });
+
+  test("both render zero rather than dropping a used-up window", async () => {
+    writeCache([
+      { id: "session", group: "session", scoped: false, utilization: 100, resetsAt: fresh() },
+      { id: "weekly_all", group: "weekly", scoped: false, utilization: 100, resetsAt: fresh() },
+    ]);
+    expect(await getSegment("usage-session")!.render(ctx())).toBe("5h 0%");
+    expect(await getSegment("usage-weekly")!.render(ctx())).toBe("7d 0%");
+  });
+
+  test("neutral marker when no usage is cached — never a crash, never a wrong number", async () => {
+    clearCache();
+    expect(await getSegment("usage-session")!.render(ctx())).toBe("5h —");
+    expect(await getSegment("usage-weekly")!.render(ctx())).toBe("7d —");
+  });
+
+  test("weekly segment escalates to red as headroom runs low", () => {
+    writeCache([{ id: "weekly_all", group: "weekly", scoped: false, utilization: 90, resetsAt: fresh() }]);
+    const color = getSegment("usage-weekly")!.color as (c: StatusContext) => string | null;
+    expect(color(ctx())).toBe("red");
+  });
+
+  test("weekly segment is not red while headroom is healthy", () => {
+    writeCache([{ id: "weekly_all", group: "weekly", scoped: false, utilization: 8, resetsAt: fresh() }]);
+    const color = getSegment("usage-weekly")!.color as (c: StatusContext) => string | null;
+    expect(color(ctx())).not.toBe("red");
   });
 });

@@ -2,7 +2,14 @@ import { describe, expect, test, beforeEach } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { sessionAccount, sessionAccountEmail, sessionConfigDir, sessionStateFile } from "../src/accounts";
+import {
+  sessionAccount,
+  sessionAccountEmail,
+  sessionAccountUuid,
+  sessionConfigDir,
+  sessionStateFile,
+  sessionUsage,
+} from "../src/accounts";
 
 let home: string;
 
@@ -369,5 +376,181 @@ describe("config dirs claimed by more than one tool", () => {
     const dir = mkdtempSync(join(tmpdir(), "statusline-untyped-"));
     writeFileSync(join(root, "accounts.json"), JSON.stringify({ profiles: [{ name: "untyped", dir }] }));
     expect((await sessionAccount(env(root, dir), "claude")).profile).toBe("untyped");
+  });
+});
+
+/** Write a usage-warmer cache entry for an account uuid under an accounts home. */
+function writeUsageCache(
+  root: string,
+  uuid: string,
+  windows: unknown[],
+  opts: { fetchedAt?: string; headroom?: number; bindingWindow?: string } = {},
+) {
+  const dir = join(root, "cache", "usage");
+  mkdirSync(dir, { recursive: true });
+  const fetchedAt = opts.fetchedAt ?? new Date().toISOString();
+  writeFileSync(
+    join(dir, `${uuid}.json`),
+    JSON.stringify({
+      accountUuid: uuid,
+      fetchedAt,
+      usage: { windows, headroom: opts.headroom ?? 0, bindingWindow: opts.bindingWindow ?? "weekly_all", fetchedAt },
+    }),
+  );
+}
+
+/** Log the config dir in as an account carrying a uuid, the way the live agent records it. */
+function loginUuid(configDir: string, uuid: string | null, email = "agent@example.com") {
+  const oauthAccount: Record<string, unknown> = { emailAddress: email };
+  if (uuid !== null) oauthAccount.accountUuid = uuid;
+  writeFileSync(join(configDir, ".claude.json"), JSON.stringify({ oauthAccount }));
+}
+
+const UUID = "3ea5952d-28c7-4179-9371-5028123478a4";
+const futureIso = () => new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
+
+describe("sessionAccountUuid", () => {
+  test("reads the live account uuid the agent recorded for this config dir", () => {
+    const dir = mkdtempSync(join(tmpdir(), "statusline-uuid-"));
+    loginUuid(dir, UUID);
+    expect(sessionAccountUuid({ CLAUDE_CONFIG_DIR: dir })).toBe(UUID);
+  });
+
+  test("null when the config dir has no account record", () => {
+    const dir = mkdtempSync(join(tmpdir(), "statusline-uuid-"));
+    expect(sessionAccountUuid({ CLAUDE_CONFIG_DIR: dir })).toBeNull();
+  });
+
+  test("null when the record carries no uuid", () => {
+    const dir = mkdtempSync(join(tmpdir(), "statusline-uuid-"));
+    loginUuid(dir, null);
+    expect(sessionAccountUuid({ CLAUDE_CONFIG_DIR: dir })).toBeNull();
+  });
+
+  test("rejects a uuid that is not a safe cache key", () => {
+    const dir = mkdtempSync(join(tmpdir(), "statusline-uuid-"));
+    loginUuid(dir, "../../etc/passwd");
+    expect(sessionAccountUuid({ CLAUDE_CONFIG_DIR: dir })).toBeNull();
+  });
+});
+
+describe("sessionUsage", () => {
+  function fixtureEnv() {
+    const root = mkdtempSync(join(tmpdir(), "statusline-usage-"));
+    const dir = mkdtempSync(join(tmpdir(), "statusline-usage-cfg-"));
+    loginUuid(dir, UUID);
+    return { root, dir, env: { ACCOUNTS_HOME: root, CLAUDE_CONFIG_DIR: dir } };
+  }
+
+  test("reports session and weekly headroom as percent remaining for the pane's account", () => {
+    const { root, env } = fixtureEnv();
+    writeUsageCache(root, UUID, [
+      { id: "session", group: "session", scoped: false, utilization: 13, resetsAt: futureIso() },
+      { id: "weekly_all", group: "weekly", scoped: false, utilization: 8, resetsAt: futureIso() },
+      { id: "weekly_scoped", group: "weekly", scoped: true, utilization: 90, resetsAt: futureIso() },
+    ]);
+    const usage = sessionUsage(env);
+    expect(usage.sessionHeadroom).toBe(87);
+    expect(usage.weeklyHeadroom).toBe(92); // the scoped weekly window is ignored, exactly as accounts does
+  });
+
+  test("a used-up window reads zero remaining rather than dropping out", () => {
+    const { root, env } = fixtureEnv();
+    writeUsageCache(root, UUID, [
+      { id: "session", group: "session", scoped: false, utilization: 100, resetsAt: futureIso() },
+      { id: "weekly_all", group: "weekly", scoped: false, utilization: 0, resetsAt: futureIso() },
+    ]);
+    const usage = sessionUsage(env);
+    expect(usage.sessionHeadroom).toBe(0);
+    expect(usage.weeklyHeadroom).toBe(100);
+  });
+
+  test("a window past its reset reads as fully replenished, never a stale high utilization", () => {
+    const { root, env } = fixtureEnv();
+    const fetchedAt = new Date(Date.now() - 60 * 1000).toISOString();
+    writeUsageCache(
+      root,
+      UUID,
+      [
+        { id: "session", group: "session", scoped: false, utilization: 95, resetsAt: new Date(Date.now() - 30 * 1000).toISOString() },
+        { id: "weekly_all", group: "weekly", scoped: false, utilization: 20, resetsAt: futureIso() },
+      ],
+      { fetchedAt },
+    );
+    expect(sessionUsage(env).sessionHeadroom).toBe(100);
+  });
+
+  test("no cache for this account yields no numbers, so the segment can show a neutral marker", () => {
+    const { env } = fixtureEnv(); // account home exists but no cache file was written
+    const usage = sessionUsage(env);
+    expect(usage.sessionHeadroom).toBeNull();
+    expect(usage.weeklyHeadroom).toBeNull();
+  });
+
+  test("stale cache is refused — with a positive control proving the same data reads fresh", () => {
+    const { root, env } = fixtureEnv();
+    const windows = [
+      { id: "session", group: "session", scoped: false, utilization: 13, resetsAt: futureIso() },
+      { id: "weekly_all", group: "weekly", scoped: false, utilization: 8, resetsAt: futureIso() },
+    ];
+    // fresh: reads
+    writeUsageCache(root, UUID, windows);
+    expect(sessionUsage(env).sessionHeadroom).toBe(87);
+    // stale: same windows, an hour old -> refused
+    writeUsageCache(root, UUID, windows, { fetchedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString() });
+    const usage = sessionUsage(env);
+    expect(usage.sessionHeadroom).toBeNull();
+    expect(usage.weeklyHeadroom).toBeNull();
+  });
+
+  test("an error entry (provider rate-limited) reads as no numbers, never a stale one", () => {
+    // Observed live: when the usage endpoint 429s the warmer overwrites the
+    // entry with { accountUuid, fetchedAt, error } and no `usage` field.
+    const { root, env } = fixtureEnv();
+    const dir = join(root, "cache", "usage");
+    mkdirSync(dir, { recursive: true });
+    const fetchedAt = new Date().toISOString();
+    writeFileSync(
+      join(dir, `${UUID}.json`),
+      JSON.stringify({ accountUuid: UUID, fetchedAt, error: { kind: "http", status: 429 } }),
+    );
+    const usage = sessionUsage(env);
+    expect(usage.sessionHeadroom).toBeNull();
+    expect(usage.weeklyHeadroom).toBeNull();
+  });
+
+  test("a corrupt cache file degrades to no numbers rather than crashing", () => {
+    const { root, env } = fixtureEnv();
+    const dir = join(root, "cache", "usage");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `${UUID}.json`), "{not json");
+    expect(sessionUsage(env).sessionHeadroom).toBeNull();
+  });
+
+  test("a cache entry keyed to a different account is not used for this one", () => {
+    const { root, env } = fixtureEnv();
+    // file lives at UUID.json but its body claims another account -> reject
+    const dir = join(root, "cache", "usage");
+    mkdirSync(dir, { recursive: true });
+    const fetchedAt = new Date().toISOString();
+    writeFileSync(
+      join(dir, `${UUID}.json`),
+      JSON.stringify({
+        accountUuid: "11111111-2222-3333-4444-555555555555",
+        fetchedAt,
+        usage: { windows: [{ id: "session", group: "session", scoped: false, utilization: 5 }], fetchedAt },
+      }),
+    );
+    expect(sessionUsage(env).sessionHeadroom).toBeNull();
+  });
+
+  test("no numbers when the pane's config dir carries no account uuid", () => {
+    const root = mkdtempSync(join(tmpdir(), "statusline-usage-"));
+    const dir = mkdtempSync(join(tmpdir(), "statusline-usage-cfg-"));
+    loginUuid(dir, null);
+    writeUsageCache(root, UUID, [{ id: "session", group: "session", scoped: false, utilization: 5 }]);
+    const usage = sessionUsage({ ACCOUNTS_HOME: root, CLAUDE_CONFIG_DIR: dir });
+    expect(usage.sessionHeadroom).toBeNull();
+    expect(usage.weeklyHeadroom).toBeNull();
   });
 });

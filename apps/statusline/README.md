@@ -45,6 +45,8 @@ anything that returns `null` or throws. A failed segment never breaks the host U
 | `auth-email` | off | Account email this session is logged in as | the agent's own login record for this config dir, else the registry | no login recorded | `dev@example.com` |
 | `five-hour-limit` | off | Percentage of the 5-hour rate limit used | `rate_limits.five_hour.used_percentage` | host reports no limit data | `5h:42%` |
 | `seven-day-limit` | off | Percentage of the 7-day rate limit used | `rate_limits.seven_day.used_percentage` | host reports no limit data | `7d:12%` |
+| `usage-session` | off | Session (5-hour) usage **remaining** for this pane's own account | this process's `CLAUDE_CONFIG_DIR` account uuid → the accounts usage cache at `~/.hasna/accounts/cache/usage/<uuid>.json` (kept warm by `@hasna/accounts`; **no cloud call**) | never omitted — shows `5h —` when usage is unknown, missing, stale, or rate-limited | `5h 87%` |
+| `usage-weekly` | off | Weekly usage **remaining** for this pane's own account (the binding limit) | same local usage cache as `usage-session` | never omitted — shows `7d —` when usage is unavailable | `7d 92%` |
 | `thread-title` | off | Thread title set with `/rename` | `session_name` | thread not renamed | `ship it` |
 | `context-used` | off | Percentage of context window used | session transcript JSONL (`contextUsage`) | transcript missing/unreadable | `10%` |
 | `context-remaining` | on | Percentage of context window remaining | transcript via `contextUsage` | transcript missing/unreadable | `90% left` |
