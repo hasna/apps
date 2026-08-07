@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.5.33 - 2026-08-07
+
+### Fixed
+
+- **Human message reads no longer crash on PostgreSQL timestamps.** Response redaction preserves `Date` values and other explicit internal-slot built-ins instead of flattening them to `{}`, so `conversations show <id>` and `conversations channel read` receive serializable timestamps again. Plain objects, null-prototype bags, and class instances remain traversed so nested credential values are still redacted (#109).
+
 ## 0.5.32 - 2026-08-08
 
 ### Fixed
