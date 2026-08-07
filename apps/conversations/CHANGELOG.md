@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.5.32 - 2026-08-08
+
+### Fixed
+
+- **`digest` no longer loses every message it skips.** `next_cursor` named the id of the SKIPPED message rather than the last DELIVERED one, and the next page began after a message that was never handed to the caller — so a poller following `has_more`/`next_cursor` to exhaustion silently dropped one message per truncated page. Measured on a live channel before the fix: 81 delivered + 6 skipped against 87 available, six lost. The loss is positional rather than size-based: whichever message crosses the cumulative byte cap is the one lost (#107).
+
 ## 0.5.31 - 2026-08-07
 
 ### Added
