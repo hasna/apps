@@ -727,18 +727,83 @@ export function domainsCloudEnv(env: Env = process.env): Env {
   return env;
 }
 
+/** Env var that deliberately re-enables the cloud transport inside a test run. */
+export const ALLOW_CLOUD_IN_TESTS = "HASNA_DOMAINS_ALLOW_CLOUD_IN_TESTS";
+
+/**
+ * True when this process is a test runner. Measured on bun 1.3.14: `bun test`
+ * sets `NODE_ENV=test` and does NOT set `BUN_TEST`, so NODE_ENV is the signal.
+ * The jest/vitest worker vars are accepted too for non-bun runners.
+ */
+function underTest(env: Env): boolean {
+  return (
+    env.NODE_ENV === "test" ||
+    Boolean(env.VITEST) ||
+    Boolean(env.JEST_WORKER_ID)
+  );
+}
+
+let warnedCloudDowngrade = false;
+
+/**
+ * FAIL CLOSED: a test run must never reach the production dataset.
+ *
+ * `DOMAINS_DIR` / `DOMAINS_DB_PATH` — the variables every suite in this repo
+ * sets to a mkdtemp directory for isolation — are inputs to `getDbPath()` in
+ * `database.ts`, which is reached ONLY from {@link LocalStore}, i.e. only after
+ * the transport has already been chosen. They are not inputs to the transport
+ * decision at all. So on any box that exports `HASNA_DOMAINS_API_URL` +
+ * `HASNA_DOMAINS_API_KEY`, every `createDomain()` in the suite went to the
+ * production API while the author believed it was writing to a temp directory.
+ * That is not a hypothetical: 122 rows landed in the production portfolio in
+ * one hour on 2026-07-11, and twelve more across 2026-07-24/30/31, each one
+ * carrying its own run's mkdtemp path inside the persisted domain name.
+ *
+ * Setting an isolation variable is a REQUEST. Only the resolved transport says
+ * whether it was honoured — which is why this guard keys on the resolved
+ * transport rather than on whether an isolation variable was set.
+ *
+ * Default behaviour is to downgrade to {@link LocalStore}, which is what the
+ * suite intended, and to say so once on stderr so the downgrade is never
+ * silent. Set `HASNA_DOMAINS_TEST_GUARD=throw` to hard-fail instead, or
+ * `HASNA_DOMAINS_ALLOW_CLOUD_IN_TESTS=1` for a genuine cloud integration test.
+ */
+function cloudAllowedHere(env: Env): boolean {
+  if (!underTest(env)) return true;
+  if (env[ALLOW_CLOUD_IN_TESTS]) return true;
+  if (env.HASNA_DOMAINS_TEST_GUARD === "throw") {
+    throw new Error(
+      "Refusing to resolve the cloud/self_hosted domains store inside a test run: " +
+        "a test would read and write the PRODUCTION portfolio. Note that DOMAINS_DIR and " +
+        "DOMAINS_DB_PATH do not affect this decision — they only choose the sqlite file " +
+        `AFTER a local transport has been selected. Unset HASNA_DOMAINS_API_URL/API_KEY, or set ${ALLOW_CLOUD_IN_TESTS}=1 ` +
+        "if you really intend this test to hit the cloud API.",
+    );
+  }
+  if (!warnedCloudDowngrade) {
+    warnedCloudDowngrade = true;
+    console.error(
+      `[domains] test run detected: refusing the cloud store, using local sqlite instead. Set ${ALLOW_CLOUD_IN_TESTS}=1 to override.`,
+    );
+  }
+  return false;
+}
+
 /**
  * Resolve the active {@link DomainsStore} for the current environment. Returns an
  * {@link ApiStore} when the client-flip contract resolves to cloud-http
  * (self_hosted/cloud), else a {@link LocalStore}. Throws if cloud was requested
  * but is misconfigured (so callers can never silently read the wrong dataset).
+ * Inside a test run the cloud transport is refused — see {@link cloudAllowedHere}.
  */
 export function getStore(env: Env = process.env): DomainsStore {
   const resolved = resolveStorageClient(APP, domainsCloudEnv(env));
-  return resolved.transport === "cloud-http" ? new ApiStore(resolved.client) : new LocalStore();
+  if (resolved.transport !== "cloud-http") return new LocalStore();
+  return cloudAllowedHere(env) ? new ApiStore(resolved.client) : new LocalStore();
 }
 
 /** True when the resolved store is the cloud HTTP transport. */
 export function isCloudStore(env: Env = process.env): boolean {
-  return resolveStorageClient(APP, domainsCloudEnv(env)).transport === "cloud-http";
+  if (resolveStorageClient(APP, domainsCloudEnv(env)).transport !== "cloud-http") return false;
+  return cloudAllowedHere(env);
 }
