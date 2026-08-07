@@ -7,7 +7,7 @@ const workflow = readFileSync(join(import.meta.dir, "..", "..", ".github", "work
 const rolloutVerifier = join(import.meta.dir, "verify-ecs-rollout.sh");
 
 function runRolloutVerifier(
-  responses: Array<{ rolloutState: string; taskDefinition: string }>,
+  responses: Array<{ rolloutState: string; taskDefinition: string; status?: string }>,
   expectedTaskDefinition = "arn:aws:ecs:us-east-1:123456789012:task-definition/projects-prod:12",
 ) {
   const fixtureRoot = mkdtempSync(join(tmpdir(), "projects-rollout-"));
@@ -37,7 +37,7 @@ cat "$fixture"
         {
           deployments: [
             {
-              status: "PRIMARY",
+              status: response.status ?? "PRIMARY",
               rolloutState: response.rolloutState,
               taskDefinition: response.taskDefinition,
             },
@@ -137,6 +137,21 @@ describe("deploy rollout verification", () => {
     expect(result.exitCode).toBe(1);
     expect(result.stdout.toString()).toContain(
       "::error::deployment did not complete (rolloutState=FAILED) — likely circuit-breaker rollback",
+    );
+  });
+
+  test("rejects a response with no PRIMARY deployment", () => {
+    const result = runRolloutVerifier([
+      {
+        status: "ACTIVE",
+        rolloutState: "COMPLETED",
+        taskDefinition: expectedTaskDefinition,
+      },
+    ]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout.toString()).toContain(
+      "::error::unable to verify exactly one PRIMARY deployment (failures=0 primaryCount=0)",
     );
   });
 
