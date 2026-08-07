@@ -753,6 +753,124 @@ describe("/v1 task-list cloud parity", () => {
   });
 });
 
+describe("/v1 guarded plan/project linkage", () => {
+  test("plans, atomically applies, enforces future membership, and rolls back exact prior links", async () => {
+    const priorProjectResponse = await request("/v1/projects", "POST", {
+      name: "Prior project",
+      path: "/workspace/prior-project",
+    });
+    const targetProjectResponse = await request("/v1/projects", "POST", {
+      name: "Target project",
+      path: "/workspace/target-project",
+    });
+    const priorProject = (await priorProjectResponse!.json() as { project: { id: string } }).project;
+    const targetProject = (await targetProjectResponse!.json() as {
+      project: { id: string; updated_at: string };
+    }).project;
+    const planResponse = await request("/v1/plans", "POST", { name: "Existing plan" });
+    const plan = (await planResponse!.json() as {
+      plan: { id: string; updated_at: string; project_id: string | null };
+    }).plan;
+    const memberResponse = await request("/v1/tasks", "POST", {
+      title: "Existing member",
+      plan_id: plan.id,
+      project_id: priorProject.id,
+    });
+    const member = (await memberResponse!.json() as { task: { id: string } }).task;
+
+    const plannedResponse = await request(
+      `/v1/plans/${encodeURIComponent(plan.id)}/project-link?project_id=${encodeURIComponent(targetProject.id)}`,
+    );
+    expect(plannedResponse?.status).toBe(200);
+    const planned = await plannedResponse!.json() as {
+      action: string;
+      plan: { updated_at: string };
+      project: { updated_at: string };
+      tasks: Array<{ id: string; project_id: string | null }>;
+    };
+    expect(planned).toMatchObject({
+      action: "would_link",
+      tasks: [{ id: member.id, project_id: priorProject.id }],
+    });
+
+    const appliedResponse = await request(
+      `/v1/plans/${encodeURIComponent(plan.id)}/project-link`,
+      "POST",
+      {
+        project_id: targetProject.id,
+        expected_plan_revision: planned.plan.updated_at,
+        expected_project_revision: planned.project.updated_at,
+        idempotency_key: "v1-plan-project-link-fixture",
+      },
+    );
+    expect(appliedResponse?.status).toBe(201);
+    const applied = await appliedResponse!.json() as {
+      plan: { updated_at: string; project_id: string | null };
+      tasks: Array<{ id: string; project_id: string | null }>;
+      receipt: { receipt_id: string };
+    };
+    expect(applied.plan.project_id).toBe(targetProject.id);
+    expect(applied.tasks).toEqual([expect.objectContaining({ id: member.id, project_id: targetProject.id })]);
+
+    const inheritedResponse = await request("/v1/tasks", "POST", {
+      title: "Future member",
+      plan_id: plan.id,
+    });
+    expect(inheritedResponse?.status).toBe(201);
+    const inherited = (await inheritedResponse!.json() as {
+      task: { id: string; project_id: string | null };
+    }).task;
+    expect(inherited.project_id).toBe(targetProject.id);
+
+    const conflictingCreate = await request("/v1/tasks", "POST", {
+      title: "Conflicting member",
+      plan_id: plan.id,
+      project_id: priorProject.id,
+    });
+    expect(conflictingCreate?.status).toBe(409);
+    expect(await conflictingCreate!.json()).toMatchObject({ code: "PLAN_PROJECT_LINK_CONFLICT" });
+
+    const conflictingUpdate = await request(`/v1/tasks/${encodeURIComponent(member.id)}`, "PATCH", {
+      project_id: priorProject.id,
+    });
+    expect(conflictingUpdate?.status).toBe(409);
+    expect(await conflictingUpdate!.json()).toMatchObject({ code: "PLAN_PROJECT_LINK_CONFLICT" });
+
+    // A new member changes the accepted membership digest, so rollback must
+    // fail closed instead of partially restoring a plan whose membership moved.
+    const rollbackConflict = await request(
+      `/v1/plans/${encodeURIComponent(plan.id)}/project-link/rollback`,
+      "POST",
+      {
+        project_id: targetProject.id,
+        receipt_id: applied.receipt.receipt_id,
+        expected_plan_revision: applied.plan.updated_at,
+      },
+    );
+    expect(rollbackConflict?.status).toBe(409);
+
+    const cleared = await request(`/v1/tasks/${encodeURIComponent(inherited.id)}`, "PATCH", { plan_id: null });
+    expect(cleared?.status).toBe(200);
+    const currentPlanResponse = await request(`/v1/plans/${encodeURIComponent(plan.id)}`);
+    const currentPlan = (await currentPlanResponse!.json() as { plan: { updated_at: string } }).plan;
+    const rolledBackResponse = await request(
+      `/v1/plans/${encodeURIComponent(plan.id)}/project-link/rollback`,
+      "POST",
+      {
+        project_id: targetProject.id,
+        receipt_id: applied.receipt.receipt_id,
+        expected_plan_revision: currentPlan.updated_at,
+      },
+    );
+    expect(rolledBackResponse?.status).toBe(200);
+    expect(await rolledBackResponse!.json()).toMatchObject({
+      action: "restored",
+      plan: { id: plan.id, project_id: null },
+      tasks: [{ id: member.id, project_id: priorProject.id }],
+    });
+  });
+});
+
 describe("/v1 plan cloud parity", () => {
   test("create, list, get, complete, and delete share one canonical id", async () => {
     const created = await request("/v1/plans", "POST", {

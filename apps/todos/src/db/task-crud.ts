@@ -10,6 +10,7 @@ import type {
   UpsertTaskByFingerprintResult,
 } from "../types/index.js";
 import {
+  ResourceConflictError,
   TaskNotFoundError,
   VersionConflictError,
   isBlockingDependencyStatus,
@@ -25,6 +26,7 @@ import { logTaskChange } from "./audit.js";
 import { dispatchWebhook } from "./webhooks.js";
 import { getChecklist } from "./checklists.js";
 import { currentStorageMachineId, recordStorageTombstone } from "./storage-tombstones.js";
+import { guardPlanRowsSqlite } from "./plan-row-serialization.js";
 import { sanitizePreWriteText, sanitizePreWriteValue } from "../lib/prewrite-secrets.js";
 
 // Re-export helpers for use by other modules
@@ -90,9 +92,26 @@ function sanitizeUpdateTaskInput(input: UpdateTaskInput): UpdateTaskInput {
   };
 }
 
-export function createTask(input: CreateTaskInput, db?: Database): Task {
-  input = sanitizeCreateTaskInput(input);
-  const d = db || getDatabase();
+function linkedPlanProjectId(planId: string | null | undefined, db: Database): string | null {
+  if (!planId) return null;
+  const row = db.query("SELECT project_id FROM plans WHERE id = ?").get(planId) as { project_id: string | null } | null;
+  return row?.project_id ?? null;
+}
+
+function resolveCreateProjectForPlan(input: CreateTaskInput, db: Database): string | null {
+  const linkedProjectId = linkedPlanProjectId(input.plan_id, db);
+  if (!linkedProjectId) return input.project_id || null;
+  if (input.project_id !== undefined && input.project_id !== linkedProjectId) {
+    throw new ResourceConflictError(
+      "PLAN_PROJECT_LINK_CONFLICT",
+      `Task project conflicts with linked plan ${input.plan_id}: expected ${linkedProjectId}`,
+    );
+  }
+  return linkedProjectId;
+}
+
+function createTaskStored(input: CreateTaskInput, d: Database): Task {
+  const effectiveProjectId = resolveCreateProjectForPlan(input, d);
   const timestamp = now();
   const tags = input.tags || [];
   const machineId = currentStorageMachineId(d);
@@ -117,7 +136,7 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
         [
           id,
           null,
-          input.project_id || null,
+          effectiveProjectId,
           input.parent_id || null,
           input.plan_id || null,
           input.task_list_id || null,
@@ -171,7 +190,18 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
     insertTaskTags(id, tags, d);
   }
 
-  const task = getTask(id, d)!;
+  return getTask(id, d)!;
+}
+
+export function createTask(input: CreateTaskInput, db?: Database): Task {
+  input = sanitizeCreateTaskInput(input);
+  const d = db || getDatabase();
+  const task = input.plan_id
+    ? d.transaction(() => {
+      guardPlanRowsSqlite([input.plan_id], d);
+      return createTaskStored(input, d);
+    })()
+    : createTaskStored(input, d);
   const payload = taskEventData(task);
   const databasePath = databasePathFromDatabase(d);
   dispatchWebhook("task.created", payload, d).catch(() => {});
@@ -616,7 +646,7 @@ export function countTasks(filter: Omit<TaskFilter, 'limit' | 'offset'> = {}, db
   return row.count;
 }
 
-export function updateTask(
+function updateTaskStored(
   id: string,
   input: UpdateTaskInput,
   db?: Database,
@@ -630,6 +660,22 @@ export function updateTask(
     throw new VersionConflictError(id, input.version, task.version);
   }
   input = sanitizeUpdateTaskInput(input);
+
+  const effectivePlanId = input.plan_id !== undefined ? input.plan_id : task.plan_id;
+  const linkedProjectId = linkedPlanProjectId(effectivePlanId, d);
+  if (linkedProjectId) {
+    const effectiveProjectId = input.project_id !== undefined ? input.project_id : task.project_id;
+    if (effectiveProjectId !== linkedProjectId) {
+      if (input.project_id === undefined && (input.plan_id !== undefined || task.project_id === null)) {
+        input = { ...input, project_id: linkedProjectId };
+      } else {
+        throw new ResourceConflictError(
+          "PLAN_PROJECT_LINK_CONFLICT",
+          `Task project conflicts with linked plan ${effectivePlanId}: expected ${linkedProjectId}`,
+        );
+      }
+    }
+  }
 
   const timestamp = now();
   const completionTimestamp = input.completed_at ?? timestamp;
@@ -898,6 +944,24 @@ export function updateTask(
 
   // Return updated task without re-fetching from DB
   return updatedTask;
+}
+
+export function updateTask(
+  id: string,
+  input: UpdateTaskInput,
+  db?: Database,
+): Task {
+  const d = db || getDatabase();
+  const before = getTask(id, d);
+  if (!before) throw new TaskNotFoundError(id);
+  const guardedPlanIds = [before.plan_id, input.plan_id];
+  if (!guardedPlanIds.some(Boolean)) return updateTaskStored(id, input, d);
+  return d.transaction(() => {
+    guardPlanRowsSqlite(guardedPlanIds, d);
+    const current = getTask(id, d);
+    guardPlanRowsSqlite([current?.plan_id, input.plan_id], d);
+    return updateTaskStored(id, input, d);
+  })();
 }
 
 export function deleteTask(id: string, db?: Database): boolean {

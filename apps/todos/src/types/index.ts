@@ -128,6 +128,41 @@ export interface ProjectTaskListRollbackResult {
   removed_at: string;
 }
 
+export interface PlanProjectLinkReceipt {
+  schema_version: "todos.plan-project-link.v1";
+  receipt_id: string;
+  idempotency_key: string;
+  plan_id: string;
+  project_id: string;
+  prior_plan_project_id: string | null;
+  prior_task_project_ids: Record<string, string | null>;
+  task_ids: string[];
+  task_count: number;
+  result_plan_revision: string;
+  result_digest: string;
+  rollback_supported: true;
+  created_at: string;
+}
+
+export interface PlanProjectLinkResult {
+  mode: "plan" | "apply";
+  action: "would_link" | "linked" | "already_linked";
+  plan: Plan;
+  project: Project;
+  tasks: Task[];
+  receipt: PlanProjectLinkReceipt | null;
+}
+
+export interface PlanProjectLinkRollbackResult {
+  schema_version: "todos.plan-project-link.v1";
+  action: "restored";
+  plan: Plan;
+  tasks: Task[];
+  accepted_receipt_id: string;
+  rollback_receipt_id: string;
+  restored_at: string;
+}
+
 // Org
 export interface Org {
   id: string;
@@ -1273,7 +1308,7 @@ export class ProjectNotFoundError extends Error {
 
 export class ResourceConflictError extends Error {
   constructor(
-    public readonly code: "PROJECT_SLUG_CONFLICT" | "TASK_LIST_SLUG_CONFLICT" | "PLAN_SLUG_CONFLICT",
+    public readonly code: "PROJECT_SLUG_CONFLICT" | "TASK_LIST_SLUG_CONFLICT" | "PLAN_SLUG_CONFLICT" | "PLAN_PROJECT_LINK_CONFLICT",
     message: string,
   ) {
     super(message);

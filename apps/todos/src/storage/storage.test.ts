@@ -14,6 +14,7 @@ import {
 } from "../db/task-runs.js";
 import { artifactStorePath } from "../lib/artifact-store.js";
 import { INTEGRITY_CONDITIONS } from "../lib/integrity.js";
+import { applyPlanProjectLink, planPlanProjectLink } from "../lib/plan-project-link.js";
 import {
   CANONICAL_TODOS_RDS_CLUSTER_ENV,
   CANONICAL_TODOS_RDS_DATABASE,
@@ -354,6 +355,7 @@ describe("storage adapter contracts", () => {
     const reparented = await adapter.tasks.update(task.id, {
       version: updated.version,
       project_id: projectB.id,
+      plan_id: null,
       task_list_id: null,
     });
     expect(reparented.id).toBe(task.id);
@@ -2155,6 +2157,64 @@ describe("storage adapter contracts", () => {
     expect(await adapter.plans.delete(plan.id)).toBe(false);
   });
 
+  test("Postgres linkage and membership writes share the plan-row lock and receipt exact membership", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({
+      client: postgres.client,
+      sourceMachineId: "spark01",
+    });
+    const project = await adapter.projects.create({ name: "Guarded project", path: "/guarded-project" });
+    const plan = await adapter.plans.create({ name: "Guarded existing plan" });
+    const first = await adapter.tasks.create({ title: "First member", plan_id: plan.id });
+    const second = await adapter.tasks.create({ title: "Second member", plan_id: plan.id });
+    const planned = await planPlanProjectLink(adapter, plan.id, project.id);
+    const applied = await applyPlanProjectLink(adapter, plan.id, project.id, {
+      expected_plan_revision: planned.plan.updated_at,
+      expected_project_revision: planned.project.updated_at,
+      idempotency_key: "postgres-lock-membership-fixture",
+    });
+
+    expect(applied.receipt).toMatchObject({
+      task_ids: [first.id, second.id].sort(),
+      task_count: 2,
+    });
+    expect(applied.tasks.map((task) => task.project_id)).toEqual([project.id, project.id]);
+    const future = await adapter.tasks.create({ title: "Future member", plan_id: plan.id });
+    expect(future.project_id).toBe(project.id);
+    await expect(adapter.tasks.create({
+      title: "Conflicting member",
+      plan_id: plan.id,
+      project_id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+    })).rejects.toMatchObject({ code: "PLAN_PROJECT_LINK_CONFLICT" });
+
+    const membershipGuardsBeforeStart = postgres.calls.filter((call) =>
+      call.sql.includes("todos:task-plan-membership-guard")
+    ).length;
+    const started = await adapter.tasks.start(future.id, "guarded-agent");
+    expect(started.project_id).toBe(project.id);
+    expect(postgres.calls.filter((call) =>
+      call.sql.includes("todos:task-plan-membership-guard")
+    ).length).toBe(membershipGuardsBeforeStart + 1);
+
+    const runtimeOnlyOverwrite = { name: "Guarded existing plan renamed", project_id: null };
+    const renamed = await adapter.plans.update(plan.id, runtimeOnlyOverwrite);
+    expect(renamed.project_id).toBe(project.id);
+    expect(await adapter.plans.get(plan.id)).toMatchObject({
+      name: "Guarded existing plan renamed",
+      project_id: project.id,
+    });
+
+    const linkSql = postgres.calls.find((call) => call.sql.includes("todos:plan-project-link-atomic"))?.sql;
+    const membershipSql = postgres.calls.find((call) => call.sql.includes("todos:task-plan-membership-guard"))?.sql;
+    const planUpdateSql = postgres.calls.find((call) => call.sql.includes("todos:plan-update-project-link-guard"))?.sql;
+    expect(linkSql).toContain("target_plan AS MATERIALIZED");
+    expect(linkSql).toContain("EXISTS (SELECT 1 FROM target_plan)");
+    expect(membershipSql).toContain("locked_plans AS MATERIALIZED");
+    expect(membershipSql).toContain("FOR UPDATE");
+    expect(planUpdateSql).toContain("locked_plan AS MATERIALIZED");
+    expect(planUpdateSql).toContain("FOR UPDATE");
+  });
+
   test("preserves direct Postgres tombstone clocks and rejects stale import records", async () => {
     const postgres = createMemoryPostgresClient();
     const adapter = createPostgresTodosStorageAdapter({
@@ -3038,6 +3098,125 @@ function createMemoryPostgresClient(): {
           deleted.push({ object_type: row.objectType });
         }
         return { rows: deleted as T[] };
+      }
+
+      if (sql.includes("todos:plan-project-link-atomic")) {
+        const [service, planId, projectId, expectedPlanRevision, expectedProjectRevision,
+          receiptId, rawReceipt, rawTaskProjects, rawTaskIds, updatedAt] = values;
+        const planRow = rows.get(recordKey(service, "plans", planId));
+        const projectRow = rows.get(recordKey(service, "projects", projectId));
+        const receiptRow = rows.get(recordKey(service, "plan_project_link_receipts", receiptId));
+        const plan = planRow?.payload as Record<string, unknown> | undefined;
+        const project = projectRow?.payload as Record<string, unknown> | undefined;
+        const tasks = [...rows.values()]
+          .filter((row) => row.service === service && row.objectType === "tasks" && !row.deletedAt)
+          .filter((row) => (row.payload as Record<string, unknown>)["plan_id"] === planId)
+          .sort((left, right) => left.objectId.localeCompare(right.objectId));
+        const currentTaskIds = tasks.map((row) => row.objectId);
+        const currentTaskProjects = Object.fromEntries(tasks.map((row) => [
+          row.objectId,
+          (row.payload as Record<string, unknown>)["project_id"] ?? null,
+        ]));
+        const expectedTaskIds = parseJsonb(rawTaskIds) as string[];
+        const expectedTaskProjects = parseJsonb(rawTaskProjects) as Record<string, unknown>;
+        const collision = Boolean(plan && [...rows.values()].some((row) => {
+          const candidate = row.payload as Record<string, unknown>;
+          return row.service === service && row.objectType === "plans" && !row.deletedAt &&
+            row.objectId !== planId && candidate["project_id"] === projectId &&
+            candidate["slug"] === plan["slug"] && plan["slug"] !== null;
+        }));
+        const flags = {
+          plan_found: Boolean(planRow && !planRow.deletedAt),
+          project_found: Boolean(projectRow && !projectRow.deletedAt),
+          plan_revision_ok: plan?.["updated_at"] === expectedPlanRevision,
+          project_revision_ok: project?.["updated_at"] === expectedProjectRevision,
+          membership_ok: JSON.stringify(currentTaskIds) === JSON.stringify(expectedTaskIds) &&
+            JSON.stringify(currentTaskProjects) === JSON.stringify(expectedTaskProjects),
+          collision,
+        };
+        let insertedReceipt: unknown | null = null;
+        if (flags.plan_found && flags.project_found && flags.plan_revision_ok &&
+            flags.project_revision_ok && flags.membership_ok && !flags.collision && !receiptRow) {
+          plan!["project_id"] = projectId;
+          plan!["updated_at"] = updatedAt;
+          planRow!.updatedAt = String(updatedAt);
+          planRow!.version = (planRow!.version ?? 0) + 1;
+          for (const row of tasks) {
+            const task = row.payload as Record<string, unknown>;
+            if (task["project_id"] === projectId) continue;
+            task["project_id"] = projectId;
+            task["updated_at"] = updatedAt;
+            task["version"] = Number(task["version"] ?? 0) + 1;
+            row.updatedAt = String(updatedAt);
+            row.version = (row.version ?? 0) + 1;
+          }
+          insertedReceipt = parseJsonb(rawReceipt);
+          rows.set(recordKey(service, "plan_project_link_receipts", receiptId), {
+            service: String(service),
+            objectType: "plan_project_link_receipts",
+            objectId: String(receiptId),
+            payload: insertedReceipt,
+            updatedAt: String(updatedAt),
+            deletedAt: null,
+            version: 1,
+          });
+        }
+        return { rows: [{
+          ...flags,
+          existing_receipt: receiptRow?.payload ?? null,
+          inserted_receipt: insertedReceipt,
+        }] as T[] };
+      }
+
+      if (sql.includes("todos:task-plan-membership-guard")) {
+        const [service, taskId, rawPayload, updatedAt, , version, rawPlanIds, targetPlanId, explicitProject] = values;
+        const planIds = parseJsonb(rawPlanIds) as string[];
+        const task = parseJsonb(rawPayload) as Record<string, unknown>;
+        const plans = planIds.map((planId) => rows.get(recordKey(service, "plans", planId)))
+          .filter((row): row is Row => Boolean(row && !row.deletedAt));
+        const targetPlan = targetPlanId ? rows.get(recordKey(service, "plans", targetPlanId)) : null;
+        const targetProjectId = targetPlan && !targetPlan.deletedAt
+          ? (targetPlan.payload as Record<string, unknown>)["project_id"] ?? null
+          : null;
+        const allPlansFound = plans.length === planIds.length;
+        const targetPlanFound = !targetPlanId || Boolean(targetPlan && !targetPlan.deletedAt);
+        const projectConflict = Boolean(
+          explicitProject && targetProjectId && (task["project_id"] ?? null) !== targetProjectId,
+        );
+        if (targetProjectId) task["project_id"] = targetProjectId;
+        if (allPlansFound && targetPlanFound && !projectConflict) {
+          rows.set(recordKey(service, "tasks", taskId), {
+            service: String(service),
+            objectType: "tasks",
+            objectId: String(taskId),
+            payload: task,
+            updatedAt: String(updatedAt),
+            deletedAt: null,
+            version: nullableNumber(version),
+          });
+        }
+        return { rows: [{
+          all_plans_found: allPlansFound,
+          target_plan_found: targetPlanFound,
+          project_conflict: projectConflict,
+          payload: allPlansFound && targetPlanFound && !projectConflict ? task : null,
+        }] as T[] };
+      }
+
+      if (sql.includes("todos:plan-update-project-link-guard")) {
+        const [service, planId, rawPayload, updatedAt] = values;
+        const planRow = rows.get(recordKey(service, "plans", planId));
+        if (!planRow || planRow.deletedAt) {
+          return { rows: [{ plan_found: false, payload: null }] as T[] };
+        }
+        const current = planRow.payload as Record<string, unknown>;
+        const updated = parseJsonb(rawPayload) as Record<string, unknown>;
+        updated["project_id"] = current["project_id"] ?? null;
+        updated["updated_at"] = updatedAt;
+        planRow.payload = updated;
+        planRow.updatedAt = String(updatedAt);
+        planRow.version = (planRow.version ?? 0) + 1;
+        return { rows: [{ plan_found: true, payload: updated }] as T[] };
       }
 
       if (sql.includes("INSERT INTO todos_sync_records")) {

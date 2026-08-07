@@ -53,3 +53,25 @@ agent identity, task reference, evidence, and next action. Never record secrets.
   UUID through both exact UUID and canonical-slug inputs.
 - Next: stage the exact candidate, run `shield review`, commit with the required
   `Agent: Quintilian` trailer, push, and open the unmerged pull request.
+
+### 2026-08-07T21:52:28+03:00 — Theophrastus implementation sub-agent
+
+- Task: `409db44f-3300-4774-a001-602ff5443d64`; added guarded existing-plan
+  project linkage across SQLite and PostgreSQL storage, authenticated v1 HTTP,
+  generated SDK, and local/cloud CLI paths.
+- The apply path uses exact plan, project, and sorted member-task revisions;
+  immutable idempotent receipts and conditional rollback preserve prior links,
+  while future plan members inherit the authoritative project and conflicting
+  membership writes fail closed.
+- Verification: focused linkage/storage/HTTP/OpenAPI/CLI gate `130 pass, 0
+  fail`; typecheck `rc=0`; production build and no-cloud boundary `rc=0`.
+  The full repository suite reported `3497 pass, 50 skip, 1 fail`; its sole
+  failure is the separately tracked ambient `/tmp/node_modules` server-bundle
+  resolver defect, not a changed linkage lane.
+- Test isolation was repaired to use an explicit in-memory database. Incident
+  `679082` preserved a redacted exact fixture snapshot in task comment
+  `e1b0546b-ff69-492c-b4cb-acea95d8dd8f`; the 12 station02-local fixture
+  objects were removed through supported CLI commands, all negative readbacks
+  passed, and unrelated local plus hosted Dubai controls remained present.
+- Next: stage the exact candidate, run `shield review`, commit once with the
+  required `Agent: Theophrastus` trailer, push, and open the draft pull request.
