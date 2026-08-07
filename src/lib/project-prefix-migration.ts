@@ -305,18 +305,36 @@ function validateCollisions(projects: Workspace[], channels: ConversationsChanne
 }
 
 function validateAmbiguousLinks(projects: Workspace[], channels: ConversationsChannelIdentity[]): void {
-  const byProject = new Map<string, ConversationsChannelIdentity[]>();
-  for (const channel of channels) {
-    if (channel.project_id) {
-      if (!projects.some((project) => project.id === channel.project_id)) {
-        throw new PrefixMigrationError(`Ambiguous channel effect: "${channel.name}" points to missing project ${channel.project_id}.`);
-      }
-      const list = byProject.get(channel.project_id) ?? [];
-      list.push(channel);
-      byProject.set(channel.project_id, list);
+  const projectById = new Map(projects.map((project) => [project.id, project]));
+  const candidateChannels = channels.filter((channel) => stripProjectPrefix(channel.name).prefix);
+  const candidateChannelNames = new Set(candidateChannels.map((channel) => channel.name));
+  const affectedProjectIds = new Set(
+    projects
+      .filter((project) => stripProjectPrefix(project.name).prefix)
+      .map((project) => project.id),
+  );
+
+  for (const channel of candidateChannels) {
+    if (!channel.project_id) continue;
+    if (!projectById.has(channel.project_id)) {
+      throw new PrefixMigrationError(`Ambiguous channel effect: "${channel.name}" points to missing project ${channel.project_id}.`);
     }
+    affectedProjectIds.add(channel.project_id);
   }
   for (const project of projects) {
+    const explicit = project.integrations.conversations_channel?.trim();
+    if (explicit && candidateChannelNames.has(explicit)) affectedProjectIds.add(project.id);
+  }
+
+  const byProject = new Map<string, ConversationsChannelIdentity[]>();
+  for (const channel of channels) {
+    if (!channel.project_id || !projectById.has(channel.project_id)) continue;
+    const list = byProject.get(channel.project_id) ?? [];
+    list.push(channel);
+    byProject.set(channel.project_id, list);
+  }
+  for (const project of projects) {
+    if (!affectedProjectIds.has(project.id)) continue;
     const linked = byProject.get(project.id) ?? [];
     const explicit = project.integrations.conversations_channel?.trim();
     if (linked.length > 1 && (stripProjectPrefix(project.name).prefix || linked.some((channel) => stripProjectPrefix(channel.name).prefix))) {

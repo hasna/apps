@@ -280,6 +280,45 @@ describe("project prefix migration", () => {
     expect(harness.projects.get(prefixed.id)!.name).toBe("iproj-collision");
   });
 
+  test("ignores stale project links on unrelated non-candidate channels", async () => {
+    const candidate = project({
+      id: "wks_candidate001",
+      name: "iproj-candidate-lane",
+      status: "active",
+      integrations: { conversations_channel: "iproj-candidate-lane" },
+    });
+    const harness = makeHarness(
+      [candidate],
+      [
+        channel("iproj-candidate-lane", candidate.id),
+        channel("agent-ea", "fa467316-ca8d-4627-a0b9-c76c3410daf7"),
+      ],
+    );
+
+    const planned = await runProjectPrefixMigration({
+      store: harness.store,
+      conversations: harness.conversations,
+    });
+
+    expect(planned.ok).toBe(true);
+    expect(planned.steps.map((step) => [step.target_kind, step.current_name, step.target_name])).toEqual([
+      ["channel", "iproj-candidate-lane", "candidate-lane"],
+      ["project", "iproj-candidate-lane", "candidate-lane"],
+    ]);
+  });
+
+  test("refuses stale project links on migration candidate channels", async () => {
+    const harness = makeHarness(
+      [],
+      [channel("iproj-orphan-lane", "wks_missing0001")],
+    );
+
+    await expect(runProjectPrefixMigration({
+      store: harness.store,
+      conversations: harness.conversations,
+    })).rejects.toThrow(/Ambiguous channel effect: "iproj-orphan-lane" points to missing project wks_missing0001/);
+  });
+
   test("failure injection rolls back channel first and leaves project/history state intact", async () => {
     const source = project({
       id: "wks_failure0001",
