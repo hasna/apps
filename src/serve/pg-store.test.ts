@@ -233,6 +233,20 @@ describe("pg-store guarded exact project read", () => {
 });
 
 describe("pg-store workspace creation defaults", () => {
+  test("preserves an explicit workspace slug by default", async () => {
+    const store = new ProjectsPgStore(duplicateSlugClient());
+
+    const created = await store.createWorkspace({
+      id: "wks_explicit_spelling",
+      name: "Team One",
+      slug: "Team_One",
+      root_id: "root_projects",
+    });
+
+    expect(created.slug).toBe("Team_One");
+    expect(created.primary_path).toBe("/srv/projects/Team_One");
+  });
+
   test("duplicate slug derives path and channel from the persisted server slug", async () => {
     const store = new ProjectsPgStore(duplicateSlugClient());
 

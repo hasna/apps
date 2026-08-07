@@ -275,6 +275,12 @@ export interface CreateWorkspaceInput {
   id?: string;
   name: string;
   slug?: string;
+  /**
+   * Persist the requested slug exactly and let the authority's unique
+   * constraints reject a conflict. Ordinary create keeps its historical
+   * suffix-allocation behavior when this is unset.
+   */
+  require_exact_identity?: boolean;
   description?: string;
   kind?: WorkspaceKind;
   root_id?: string;

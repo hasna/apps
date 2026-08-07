@@ -9,6 +9,7 @@ import { acquireWorkspaceLock, completeAgentRun, createRoot, createWorkspace, st
 import { runMigrations } from "../db/schema.js";
 import { closeDatabase } from "../db/database.js";
 import { deriveWorkspaceRegistryFields } from "../lib/workspace-plan.js";
+import { PROJECT_REGISTRATION_DEPENDENCY_TASKS } from "../lib/project-registration.js";
 import { registerWorkspaceCommands } from "./commands/workspaces.js";
 import { API_MODE_ENV_KEYS, testSpawnEnv } from "../testing/spawn-env.js";
 import { __resetProjectStore } from "../store/project-store.js";
@@ -24,6 +25,34 @@ function runProjects(args: string[], env: Record<string, string> = {}, cwd = pro
     env: testSpawnEnv(env),
     cwd,
   });
+}
+
+async function runProjectsWithStdin(
+  args: string[],
+  stdin: string,
+  env: Record<string, string> = {},
+  cwd = process.cwd(),
+) {
+  const proc = Bun.spawn({
+    cmd: ["bun", "run", CLI_PATH, ...args],
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+    env: testSpawnEnv(env),
+    cwd,
+  });
+  proc.stdin.write(stdin);
+  proc.stdin.end();
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).arrayBuffer(),
+    new Response(proc.stderr).arrayBuffer(),
+    proc.exited,
+  ]);
+  return {
+    exitCode,
+    stdout: Buffer.from(stdout),
+    stderr: Buffer.from(stderr),
+  };
 }
 
 async function runWorkspaceCommandInProcess(args: string[], env: Record<string, string> = {}) {
@@ -227,6 +256,7 @@ describe("project-first CLI surface", () => {
       expect(stdout).toContain("High-level project management and launcher CLI");
       expect(stdout).toContain("start");
       expect(stdout).toContain("create");
+      expect(stdout).toContain("register-full");
       expect(stdout).toContain("list");
       expect(stdout).toContain("show");
       expect(stdout).toContain("sessions");
@@ -241,6 +271,48 @@ describe("project-first CLI surface", () => {
       expect(stdout).toContain("reports");
     } finally {
       rmSync(eventsDir, { recursive: true, force: true });
+    }
+  });
+
+  test("register-full consumes a bounded stdin request and fails closed before local mutation when authority contracts are unavailable", async () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-register-full-"));
+    const dbPath = join(root, "projects.db");
+    const targetPath = join(root, "fleet-resources");
+    const payload = JSON.stringify({
+      operation_id: "op-cli-register-full",
+      project: {
+        name: "Fleet Resources",
+        slug: "fleet-resources",
+        kind: "project",
+      },
+      target_path: targetPath,
+      goals_markdown: "# Goals\n\n- Register safely.\n",
+      response_byte_limit: 512_000,
+      time_budget_ms: 10_000,
+    });
+    try {
+      const result = await runProjectsWithStdin(
+        ["register-full", "--json"],
+        payload,
+        { HASNA_PROJECTS_DB_PATH: dbPath },
+      );
+      expect(result.exitCode).toBe(1);
+      expect(text(result.stderr)).toBe("");
+      const body = JSON.parse(text(result.stdout)) as {
+        ok: boolean;
+        outcome: string;
+        dependencies: Array<{ dependency_task_id: string }>;
+      };
+      expect(body.ok).toBe(false);
+      expect(body.outcome).toBe("no_go");
+      expect(body.dependencies.map((item) => item.dependency_task_id).sort()).toEqual(
+        Object.values(PROJECT_REGISTRATION_DEPENDENCY_TASKS).sort(),
+      );
+      expect(existsSync(dbPath)).toBe(false);
+      expect(existsSync(targetPath)).toBe(false);
+      expect(text(result.stdout)).not.toContain(targetPath);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

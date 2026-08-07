@@ -26,6 +26,12 @@ export interface WorkspaceRuntimeAction {
 
 export interface PrepareWorkspaceOptions {
   createDirectory?: boolean;
+  /**
+   * Refuse a pre-existing target directory. Used by all-or-nothing project
+   * registration so the attempt never adopts or writes into someone else's
+   * path. Ordinary create keeps its historical reuse behavior when unset.
+   */
+  requireAbsentDirectory?: boolean;
   gitInit?: boolean;
   writeMarker?: boolean;
   recordEvents?: boolean;
@@ -162,7 +168,14 @@ export function prepareWorkspaceDirectory(
 
   if (options.createDirectory || options.gitInit || options.writeMarker) {
     if (options.dryRun) {
+      if (options.requireAbsentDirectory && existsSync(path)) {
+        throw new Error(`Project directory already exists: ${path}`);
+      }
       actions.push({ type: "mkdir", target: path, status: "planned" });
+    } else if (options.requireAbsentDirectory) {
+      if (existsSync(path)) throw new Error(`Project directory already exists: ${path}`);
+      mkdirSync(path);
+      actions.push({ type: "mkdir", target: path, status: "completed" });
     } else if (existsSync(path)) {
       actions.push({ type: "mkdir", target: path, status: "skipped", message: "Directory already exists" });
     } else {

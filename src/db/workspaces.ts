@@ -716,7 +716,13 @@ export function createWorkspace(input: CreateWorkspaceInput, db?: Database): Wor
   const d = db || getDatabase();
   const id = input.id ? assertProjectWorkspaceId(input.id) : generateWorkspaceId();
   const ts = now();
-  const slug = ensureUniqueSlug("workspaces", input.slug ?? workspaceSlugify(input.name), d);
+  const requestedSlug = input.slug ?? workspaceSlugify(input.name);
+  const slugBase = input.require_exact_identity
+    ? workspaceSlugify(requestedSlug)
+    : requestedSlug;
+  const slug = input.require_exact_identity
+    ? slugBase
+    : ensureUniqueSlug("workspaces", slugBase, d);
   const root = input.root_id ? getRoot(input.root_id, d) : null;
   if (input.root_id && !root) throw new Error(`Root not found: ${input.root_id}`);
   const recipe = input.recipe_id ? getRecipe(input.recipe_id, d) : null;
@@ -1466,28 +1472,31 @@ export function unarchiveWorkspace(id: string, input: Omit<UpdateWorkspaceInput,
 
 export function deleteWorkspace(
   id: string,
-  input: Omit<UpdateWorkspaceInput, "status"> & { hard?: boolean } = {},
+  input: Omit<UpdateWorkspaceInput, "status"> & { hard?: boolean; recordEvent?: boolean } = {},
   db?: Database,
 ): { workspace: Workspace; hard: boolean } {
   const d = db || getDatabase();
   const before = getWorkspace(id, d);
   if (!before) throw new Error(`Workspace not found: ${id}`);
+  const { hard, recordEvent, ...updateInput } = input;
 
-  if (!input.hard) {
-    const workspace = updateWorkspace(id, { ...input, status: "deleted" }, d);
+  if (!hard) {
+    const workspace = updateWorkspace(id, { ...updateInput, status: "deleted" }, d);
     return { workspace, hard: false };
   }
 
-  recordWorkspaceEvent({
-    workspace_id: id,
-    agent_id: input.agent_id,
-    event_type: "deleted",
-    source: input.source ?? "cli",
-    prompt: input.prompt,
-    command: input.command,
-    before: before as unknown as JsonObject,
-    metadata: { hard: true },
-  }, d);
+  if (recordEvent !== false) {
+    recordWorkspaceEvent({
+      workspace_id: id,
+      agent_id: updateInput.agent_id,
+      event_type: "deleted",
+      source: updateInput.source ?? "cli",
+      prompt: updateInput.prompt,
+      command: updateInput.command,
+      before: before as unknown as JsonObject,
+      metadata: { hard: true },
+    }, d);
+  }
   d.run("DELETE FROM workspaces WHERE id = ?", [id]);
   return { workspace: before, hard: true };
 }

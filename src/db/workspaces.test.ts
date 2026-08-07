@@ -706,6 +706,25 @@ describe("workspace domain services", () => {
     db.close();
   });
 
+  test("preserves an explicit workspace slug by default in planning and local creation", () => {
+    const db = makeDb();
+    try {
+      const planned = planWorkspaceCreation({
+        name: "Team One",
+        slug: "Team_One",
+      }, { db });
+      const created = createWorkspace({
+        name: "Team One",
+        slug: "Team_One",
+      }, db);
+
+      expect(planned.workspace.slug).toBe("Team_One");
+      expect(created.slug).toBe("Team_One");
+    } finally {
+      db.close();
+    }
+  });
+
   test("cleans up workspace creation artifacts from rollback records", async () => {
     const db = makeDb();
     const rootDir = tmpDir();
