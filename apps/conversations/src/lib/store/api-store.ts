@@ -16,7 +16,7 @@ import type { ConversationsStore } from "./index.js";
 import { normalizeChannelName } from "../channel-names.js";
 import { loggableUrl } from "../loggable-url.js";
 import { AGENT_LIST_ORDER, CHANNEL_LIST_ORDER, SEARCH_RECENT_ORDER, describeMessageOrder } from "../list-order.js";
-import { normalizeSince } from "../since.js";
+import { normalizeExactIsoTimestamp, normalizeSince } from "../since.js";
 import { resolveReadLimit, resolveReadWindow } from "../message-window.js";
 import { parseProject } from "../projects.js";
 import { attachSendRedaction } from "../content-safety.js";
@@ -773,7 +773,7 @@ export class ApiStore implements ConversationsStore {
     return page.items as never;
   };
   searchMessagesPage: ConversationsStore["searchMessagesPage"] = async (opts) => {
-    const since = normalizeSince(opts.since);
+    const since = opts.since === undefined ? undefined : normalizeExactIsoTimestamp(opts.since, "search since timestamp");
     const requested = Number.isFinite(opts.limit) && (opts.limit as number) > 0
       ? Math.floor(opts.limit as number)
       : DEFAULT_SEARCH_LIMIT;

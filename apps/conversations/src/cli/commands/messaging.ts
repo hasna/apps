@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { getStore } from "../../lib/store/index.js";
 import chalk from "chalk";
-import { normalizeSince } from "../../lib/since.js";
+import { normalizeExactIsoTimestamp, normalizeSince } from "../../lib/since.js";
 // Reads/writes route through getStore(): ApiStore (self_hosted/cloud) or LocalStore.
 import { closeDb } from "../../lib/db.js";
 import { resolveIdentities, resolveIdentity } from "../../lib/identity.js";
@@ -9,7 +9,7 @@ import { renderContent } from "../../lib/terminal-markdown.js";
 import { buildMessagePreview } from "../../lib/channel-notifications.js";
 import { readChannelNotificationsUnion } from "../../lib/poll-notifications.js";
 import { resolveSelfSenderId } from "../../lib/sender-identity.js";
-import { previewText } from "../../lib/compact-output.js";
+import { buildCompactSearchEnvelope, previewText } from "../../lib/compact-output.js";
 import { getCliWindow, pageFromQuery, printCompactFooter, printJsonDisclosure, queryLimitFor, warnIfPageFull, SINCE_JSON_LIMIT } from "../compact.js";
 import { BLOCKERS_LIST_ORDER, PINNED_LIST_ORDER } from "../../lib/list-order.js";
 import { printMessageEntry } from "../message-output.js";
@@ -315,20 +315,20 @@ export function registerMessagingCommands(program: Command): void {
     .option("--sender <agent>", SENDER_HELP)
     .option("--from <agent>", FROM_ALIAS_HELP)
     .option("--to <agent>", "Filter by recipient")
+    .option("--since <timestamp>", "Only messages at or after this absolute ISO-8601 timestamp")
     .option("--limit <n>", "Max results to return (the server caps a single page at 500)", parseInt)
     .option("--cursor <n>", "Skip first N results for pagination", parseInt)
-    .option("--verbose", "Show full message bodies")
+    .option("--verbose", "Show full message bodies in human output")
     .option("-j, --json", "Output as JSON")
     .addHelpText("after", `
-Two limits bound what this verb can tell you. Both are silent by default, and
-both bite hardest on the thing search is most used for — auditing a sender or a
-channel, which is an ABSENCE claim.
+Search is bounded in two ways. Both bite hardest on the thing search is most
+used for — auditing a sender or a channel, which is an ABSENCE claim.
 
   1. PAGE SIZE. A single page is capped at 500 rows server-side; --limit above
-     that is clamped, not honoured. The cap is now always disclosed: text output
-     prints "More available: rerun with --cursor N", and --json prints the same
-     line to stderr while stdout stays a bare array. Page with --cursor until
-     the notice stops. Never read a 500-row result as a population.
+     that is clamped, not honoured. The cap is always disclosed: text output
+     prints "More available: rerun with --cursor N", and --json returns a
+     compact envelope carrying has_more, next_cursor, max_bytes, and byte_length.
+     Page with --cursor until has_more is false.
 
   2. THE QUERY IS A CONTENT FILTER, NOT A SENDER LISTING. search returns
      messages MATCHING THE QUERY, filtered by --from — not "this sender's
@@ -367,6 +367,12 @@ channel, which is an ABSENCE claim.
       const senderFilter = resolveSenderFilter(opts);
       if (senderFilter.viaFromAlias) noteSenderFilterAlias(senderFilter.sender as string);
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
+      let since: string | undefined;
+      try {
+        since = opts.since === undefined ? undefined : normalizeExactIsoTimestamp(opts.since, "--since timestamp");
+      } catch (error) {
+        emitCliError(error instanceof Error ? error.message : String(error), opts);
+      }
 
       // The store pages this verb now. `--json` used to pass the raw limit and
       // then hardcode `hasMore: false`, so a result cut short by the backend's
@@ -376,6 +382,7 @@ channel, which is an ABSENCE claim.
         channel: opts.channel,
         from: senderFilter.sender,
         to: opts.to,
+        since,
         limit: opts.json ? opts.limit : window.limit,
         offset: opts.json ? opts.cursor : window.offset,
       });
@@ -395,10 +402,15 @@ channel, which is an ABSENCE claim.
       };
 
       if (opts.json) {
-        printJson(result.items);
-        // stdout stays a bare array — every monitor on this fleet parses it as
-        // one — so the truncation notice goes to stderr alongside it.
-        printJsonDisclosure(disclosure);
+        printJsonLine(buildCompactSearchEnvelope({
+          page: result,
+          query: q,
+          channel: opts.channel,
+          from: senderFilter.sender,
+          to: opts.to,
+          since,
+          cursor: opts.cursor,
+        }));
       } else {
         if (result.items.length === 0) {
           printLine(chalk.dim("No messages found."));

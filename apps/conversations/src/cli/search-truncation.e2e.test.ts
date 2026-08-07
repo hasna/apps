@@ -59,27 +59,25 @@ describe("search discloses truncation", () => {
     try { unlinkSync(`${TEST_DB}-shm`); } catch {}
   });
 
-  test("--json: a truncated page says so on stderr while stdout stays a bare array", () => {
+  test("--json: a truncated page says so in the compact envelope", () => {
     const res = runCli(["search", TOKEN, "--from", SENDER, "--limit", "3", "--json"], "reader");
     expect(res.exitCode).toBe(0);
 
-    // stdout contract is unchanged: a bare array of exactly the page.
-    const rows = JSON.parse(res.stdout);
-    expect(Array.isArray(rows)).toBe(true);
-    expect(rows).toHaveLength(3);
-
-    // ...and the caller is told the set is incomplete, with the way to continue.
-    expect(res.stderr).toContain("More available");
-    expect(res.stderr).toContain("--cursor 3");
+    const payload = JSON.parse(res.stdout);
+    expect(payload.messages).toHaveLength(3);
+    expect(payload.has_more).toBe(true);
+    expect(payload.next_cursor).toBe(3);
+    expect(res.stderr).not.toContain("More available");
   });
 
   test("--json: a complete page stays silent, so the notice means something", () => {
     const res = runCli(["search", TOKEN, "--from", SENDER, "--limit", "20", "--json"], "reader");
     expect(res.exitCode).toBe(0);
 
-    const rows = JSON.parse(res.stdout);
-    expect(rows).toHaveLength(7);
-    expect(res.stderr).not.toContain("More available");
+    const payload = JSON.parse(res.stdout);
+    expect(payload.messages).toHaveLength(7);
+    expect(payload.has_more).toBe(false);
+    expect(payload.next_cursor).toBeNull();
   });
 
   test("--json: the page honours --limit exactly rather than leaking the probe row", () => {
@@ -87,26 +85,22 @@ describe("search discloses truncation", () => {
     // never reach the caller, or every bounded read returns one row too many.
     const res = runCli(["search", TOKEN, "--from", SENDER, "--limit", "1", "--json"], "reader");
     expect(res.exitCode).toBe(0);
-    expect(JSON.parse(res.stdout)).toHaveLength(1);
-    expect(res.stderr).toContain("--cursor 1");
+    expect(JSON.parse(res.stdout)).toMatchObject({ count: 1, has_more: true, next_cursor: 1 });
   });
 
   test("--json: paging with --cursor walks to the end and the notice stops", () => {
     const first = runCli(["search", TOKEN, "--from", SENDER, "--limit", "5", "--json"], "reader");
-    expect(JSON.parse(first.stdout)).toHaveLength(5);
-    expect(first.stderr).toContain("--cursor 5");
+    expect(JSON.parse(first.stdout)).toMatchObject({ count: 5, has_more: true, next_cursor: 5 });
 
     const second = runCli(["search", TOKEN, "--from", SENDER, "--limit", "5", "--cursor", "5", "--json"], "reader");
     expect(second.exitCode).toBe(0);
-    expect(JSON.parse(second.stdout)).toHaveLength(2);
-    expect(second.stderr).not.toContain("More available");
+    expect(JSON.parse(second.stdout)).toMatchObject({ count: 2, has_more: false, next_cursor: null });
   });
 
   test("--json: no matches is exhaustion, not truncation", () => {
     const res = runCli(["search", "zzqxnotarealtokenhere", "--from", SENDER, "--limit", "3", "--json"], "reader");
     expect(res.exitCode).toBe(0);
-    expect(JSON.parse(res.stdout)).toHaveLength(0);
-    expect(res.stderr).not.toContain("More available");
+    expect(JSON.parse(res.stdout)).toMatchObject({ count: 0, has_more: false, next_cursor: null });
   });
 
   test("text output discloses truncation in the footer, and only when truncated", () => {

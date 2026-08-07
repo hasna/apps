@@ -11,12 +11,14 @@ function makeFakeClient() {
   const messages: any[] = [];
   const messageMentions: any[] = [];
   const agentPresence = new Map<string, any>();
+  const manyCalls: Array<{ sql: string; params: readonly unknown[] }> = [];
   const projects: Record<string, any> = {
     "proj-valid": { id: "proj-valid", name: "Chief of Harness" },
   };
   let nextId = 1;
   const client = {
     async many(sql: string, _p: readonly unknown[] = []): Promise<any[]> {
+      manyCalls.push({ sql, params: [..._p] });
       if (/FROM channels/i.test(sql)) {
         return Object.values(channels).map((row) => ({
           ...row,
@@ -224,7 +226,7 @@ function makeFakeClient() {
         channelMembers.add(`${channel}:${agent}`);
       }
     },
-    __debug: { messages, messageMentions, agentPresence },
+    __debug: { messages, messageMentions, agentPresence, manyCalls },
   };
   return client;
 }
@@ -894,6 +896,22 @@ describe("conversations-serve", () => {
   test("GET /v1/messages?count=1 returns a numeric count", async () => {
     const b = await (await fetch(`${base}/v1/messages?count=1`, { headers: { "x-api-key": rwKey } })).json();
     expect(typeof b.count).toBe("number");
+  });
+
+  test("HTTP search accepts an exact cutoff and rejects malformed timestamps", async () => {
+    const valid = await fetch(`${base}/v1/messages?q=POLICY&since=2026-08-02T12%3A00%3A00.000Z`, {
+      headers: { "x-api-key": rwKey },
+    });
+    expect(valid.status).toBe(200);
+    const searchQuery = activeFakeClient!.__debug.manyCalls.at(-1)!;
+    expect(searchQuery.sql).toContain("created_at >= $");
+    expect(searchQuery.params).toContain("2026-08-02T12:00:00.000Z");
+
+    const invalid = await fetch(`${base}/v1/messages?q=POLICY&since=yesterday`, {
+      headers: { "x-api-key": rwKey },
+    });
+    expect(invalid.status).toBe(400);
+    expect((await invalid.json()).error).toContain("Invalid search since timestamp");
   });
 
   test("POST /v1/messages blocks sensitive content without echoing it", async () => {

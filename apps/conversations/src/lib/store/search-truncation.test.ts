@@ -164,4 +164,23 @@ describe("ApiStore.searchMessagesPage — truncation is disclosed, both states",
     expect(page.has_more).toBe(false);
     expect(page.next_cursor).toBeNull();
   });
+
+  test("forwards one canonical exact since cutoff to the HTTP search route", async () => {
+    const { client, seen } = recordingClient({ messages: rows(1), has_more: false });
+    await new ApiStore(client).searchMessagesPage({
+      query: "the",
+      since: "2026-08-02T14:00:00+02:00",
+      limit: 10,
+    });
+
+    expect(seen[0]?.since).toBe("2026-08-02T12:00:00.000Z");
+  });
+
+  test("rejects an invalid HTTP search cutoff before making a request", async () => {
+    const { client, seen } = recordingClient({ messages: rows(1) });
+    await expect(new ApiStore(client).searchMessagesPage({ query: "the", since: "yesterday" })).rejects.toThrow(
+      "Invalid search since timestamp",
+    );
+    expect(seen).toHaveLength(0);
+  });
 });

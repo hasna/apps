@@ -176,7 +176,7 @@ export function formatAppliedFilters(filters: AppliedFilters): string {
  *
  * Goes to stderr in both output modes: the text surface's stdout stays exactly
  * "No messages found." for anything matching on it, and the `--json` surface's
- * stdout stays a bare array.
+ * stdout stays a parseable machine payload without a prose warning mixed in.
  */
 export function discloseEmptyResult(
   filters: AppliedFilters,

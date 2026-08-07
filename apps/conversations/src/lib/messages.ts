@@ -1,5 +1,6 @@
 import { getDb, getDataDir } from "./db.js";
 import type { Message, Attachment, SendMessageOptions, ReadMessagesOptions, SearchMessagesOptions, SearchResult, SearchMessagesPage } from "../types.js";
+import { normalizeExactIsoTimestamp } from "./since.js";
 import { createHash, randomUUID } from "crypto";
 import { mkdirSync, copyFileSync, closeSync, openSync, readSync, statSync, existsSync, realpathSync } from "fs";
 import { join, basename, resolve } from "path";
@@ -1231,6 +1232,7 @@ export function describeSearchOrder(sort?: string | null): SortDescriptor {
 
 export function searchMessages(opts: SearchMessagesOptions): SearchResult[] {
   const db = getDb();
+  const since = opts.since === undefined ? undefined : normalizeExactIsoTimestamp(opts.since, "search since timestamp");
 
   const limit = Number.isFinite(opts.limit) && (opts.limit as number) > 0
     ? Math.floor(opts.limit as number)
@@ -1265,7 +1267,7 @@ export function searchMessages(opts: SearchMessagesOptions): SearchResult[] {
     if (opts.channel) { extraWhere += " AND m.channel = ?"; ftsParams.push(normalizeChannelName(opts.channel)); }
     if (opts.from) { extraWhere += " AND m.from_agent = ?"; ftsParams.push(opts.from); }
     if (opts.to) { extraWhere += " AND m.to_agent = ?"; ftsParams.push(opts.to); }
-    if (opts.since) { extraWhere += " AND m.created_at >= ?"; ftsParams.push(opts.since); }
+    if (since) { extraWhere += " AND m.created_at >= ?"; ftsParams.push(since); }
     if (opts.until) { extraWhere += " AND m.created_at <= ?"; ftsParams.push(opts.until); }
 
     const orderClause = sortByRelevance ? "ORDER BY rank" : "ORDER BY m.created_at DESC, m.id DESC";
@@ -1303,7 +1305,7 @@ export function searchMessages(opts: SearchMessagesOptions): SearchResult[] {
   if (opts.channel) { conditions.push("channel = ?"); params.push(normalizeChannelName(opts.channel)); }
   if (opts.from) { conditions.push("from_agent = ?"); params.push(opts.from); }
   if (opts.to) { conditions.push("to_agent = ?"); params.push(opts.to); }
-  if (opts.since) { conditions.push("created_at >= ?"); params.push(opts.since); }
+  if (since) { conditions.push("created_at >= ?"); params.push(since); }
   if (opts.until) { conditions.push("created_at <= ?"); params.push(opts.until); }
 
   const where = `WHERE ${conditions.join(" AND ")}`;

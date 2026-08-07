@@ -309,19 +309,18 @@ describe("sender filter is never silent", () => {
     expect(res.stderr).toContain("drop --sender to search all senders");
   });
 
-  // ---- the --json stdout contract is unchanged ----
+  // ---- the --json compact envelope stays parseable ----
 
-  test("--json: stdout stays a bare array and the disclosure goes to stderr", () => {
+  test("--json: stdout stays a compact envelope and the disclosure goes to stderr", () => {
     const res = runCli(
       ["search", TOKEN, "--channel", CHANNEL, "--from", COORDINATOR, "--json"],
       COORDINATOR,
     );
     expect(res.exitCode).toBe(0);
-    const rows = JSON.parse(res.stdout);
-    expect(Array.isArray(rows)).toBe(true);
-    expect(rows).toHaveLength(0);
-    // Every monitor on this fleet parses stdout as an array, so the disclosure
-    // must not land there.
+    const payload = JSON.parse(res.stdout);
+    expect(payload).toMatchObject({ count: 0, has_more: false, next_cursor: null, compact: true });
+    expect(payload.messages).toHaveLength(0);
+    // Human guidance stays off the structured stdout surface.
     expect(res.stderr.toLowerCase()).toContain("--sender");
   });
 

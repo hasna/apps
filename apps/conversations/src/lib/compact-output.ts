@@ -4,6 +4,7 @@ import type {
   Message,
   ProjectInfo,
   SearchResult,
+  SearchMessagesPage,
   SearchResultTask,
   Session,
   TaskInfo,
@@ -13,6 +14,7 @@ import { takeWindow } from "./message-window.js";
 export const DEFAULT_COMPACT_LIMIT = 10;
 export const DEFAULT_PREVIEW_CHARS = 160;
 export const MAX_COMPACT_LIMIT = 100;
+export const DEFAULT_SEARCH_MAX_BYTES = 48 * 1024;
 
 export interface OutputWindow {
   limit: number;
@@ -132,11 +134,86 @@ export function summarizeMessage(msg: Message, maxChars = DEFAULT_PREVIEW_CHARS)
 }
 
 export function summarizeSearchMessage(msg: SearchResult, maxChars = DEFAULT_PREVIEW_CHARS) {
+  const preview = previewText(msg.content, maxChars);
   return {
     ...summarizeMessage(msg, maxChars),
-    snippet: msg.snippet ? previewText(msg.snippet, maxChars) : null,
+    snippet: previewText(msg.snippet || preview, maxChars),
     relevance_score: msg.relevance_score,
   };
+}
+
+export interface CompactSearchEnvelope {
+  query: string;
+  channel: string | null;
+  from: string | null;
+  to: string | null;
+  since: string | null;
+  messages: ReturnType<typeof summarizeSearchMessage>[];
+  count: number;
+  limit: number;
+  cursor: number;
+  next_cursor: number | null;
+  has_more: boolean;
+  max_bytes: number;
+  byte_length: number;
+  compact: true;
+  hint: string;
+}
+
+function finalizeCompactSearchEnvelope(envelope: CompactSearchEnvelope): CompactSearchEnvelope {
+  for (let i = 0; i < 3; i++) {
+    envelope.byte_length = Buffer.byteLength(JSON.stringify(envelope), "utf8");
+  }
+  return envelope;
+}
+
+/** Build a preview-only, byte-bounded search page with in-band completeness. */
+export function buildCompactSearchEnvelope(opts: {
+  page: SearchMessagesPage;
+  query: string;
+  channel?: string;
+  from?: string;
+  to?: string;
+  since?: string;
+  cursor?: number;
+  maxBytes?: number;
+}): CompactSearchEnvelope {
+  const cursor = Math.max(0, Math.floor(opts.cursor ?? 0));
+  const maxBytes = Math.max(1024, Math.min(Math.floor(opts.maxBytes ?? DEFAULT_SEARCH_MAX_BYTES), DEFAULT_SEARCH_MAX_BYTES));
+  const summaries = opts.page.items.map((message) => summarizeSearchMessage(message));
+  const messages = [...summaries];
+
+  const build = (): CompactSearchEnvelope => {
+    const byteLimited = messages.length < summaries.length;
+    const hasMore = opts.page.has_more || byteLimited;
+    return finalizeCompactSearchEnvelope({
+      query: opts.query,
+      channel: opts.channel ?? null,
+      from: opts.from ?? null,
+      to: opts.to ?? null,
+      since: opts.since ?? null,
+      messages: [...messages],
+      count: messages.length,
+      limit: opts.page.effective_limit,
+      cursor,
+      next_cursor: hasMore ? cursor + messages.length : null,
+      has_more: hasMore,
+      max_bytes: maxBytes,
+      byte_length: 0,
+      compact: true,
+      hint: "Use show <id> for one full message; continue with next_cursor when has_more is true.",
+    });
+  };
+
+  let envelope = build();
+  while (envelope.byte_length > maxBytes && messages.length > 0) {
+    messages.pop();
+    envelope = build();
+  }
+  if (envelope.byte_length > maxBytes) {
+    throw new Error(`Search envelope exceeds max_bytes (${envelope.byte_length} > ${maxBytes}).`);
+  }
+  return envelope;
 }
 
 export function summarizeTask(task: TaskInfo | SearchResultTask, maxChars = DEFAULT_PREVIEW_CHARS) {

@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { normalizeSince, parseRelativeDurationMs } from "./since";
+import { normalizeExactIsoTimestamp, normalizeSince, parseRelativeDurationMs } from "./since";
 
 // Fixed reference clock: 2026-07-08T12:00:00.000Z
 const NOW = Date.UTC(2026, 6, 8, 12, 0, 0, 0);
@@ -49,5 +49,18 @@ describe("normalizeSince", () => {
     expect(normalizeSince(null, NOW)).toBeUndefined();
     expect(normalizeSince("", NOW)).toBeUndefined();
     expect(normalizeSince("   ", NOW)).toBeUndefined();
+  });
+});
+
+describe("normalizeExactIsoTimestamp", () => {
+  test("canonicalizes valid absolute timestamps without changing their instant", () => {
+    expect(normalizeExactIsoTimestamp("2026-08-02T14:00:00+02:00")).toBe("2026-08-02T12:00:00.000Z");
+    expect(normalizeExactIsoTimestamp("2026-08-02T12:00:00.001Z")).toBe("2026-08-02T12:00:00.001Z");
+  });
+
+  test("rejects dates, relative durations, and malformed values", () => {
+    for (const value of ["2026-08-02", "7d", "not-a-timestamp", "2026-99-99T12:00:00Z", "2026-02-30T12:00:00Z"]) {
+      expect(() => normalizeExactIsoTimestamp(value)).toThrow("expected an absolute ISO-8601 timestamp");
+    }
   });
 });

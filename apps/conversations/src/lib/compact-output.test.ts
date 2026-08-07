@@ -1,13 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import {
   compactCollection,
+  buildCompactSearchEnvelope,
   previewText,
   resolveOutputWindow,
   summarizeMessage,
   summarizeSession,
   windowItems,
 } from "./compact-output";
-import type { Message, Session } from "../types";
+import type { Message, SearchResult, Session } from "../types";
 
 describe("compact output helpers", () => {
   test("previewText normalizes whitespace and truncates long values", () => {
@@ -79,6 +80,49 @@ describe("compact output helpers", () => {
     expect(summary.truncated).toBe(true);
     expect(summary).not.toHaveProperty("content");
     expect(summary.unread).toBe(true);
+  });
+
+  test("compact search envelopes trim on the byte cap and keep a truthful cursor", () => {
+    const rows: SearchResult[] = Array.from({ length: 20 }, (_, index) => ({
+      id: index + 1,
+      uuid: String(index + 1).padStart(32, "0"),
+      session_id: "session-1",
+      from_agent: "alice",
+      to_agent: "announcements",
+      channel: "announcements",
+      project_id: null,
+      content: `[POLICY] ${"long preview ".repeat(40)}`,
+      priority: "normal",
+      working_dir: null,
+      repository: null,
+      branch: null,
+      metadata: { raw: "not returned" },
+      created_at: "2026-08-02T12:00:00.000Z",
+      read_at: null,
+      edited_at: null,
+      pinned_at: null,
+      blocking: false,
+      attachments: [{ name: "not-returned.txt", path: "/not-returned.txt", size: 12, mime_type: "text/plain" }],
+      reply_to: null,
+      snippet: null,
+      relevance_score: 0,
+    }));
+
+    const result = buildCompactSearchEnvelope({
+      page: { items: rows, has_more: false, next_cursor: null, effective_limit: 20 },
+      query: "POLICY",
+      channel: "announcements",
+      cursor: 7,
+      maxBytes: 1024,
+    });
+
+    expect(result.byte_length).toBeLessThanOrEqual(result.max_bytes);
+    expect(result.count).toBeGreaterThan(0);
+    expect(result.count).toBeLessThan(rows.length);
+    expect(result.has_more).toBe(true);
+    expect(result.next_cursor).toBe(7 + result.count);
+    expect(result.messages[0]).not.toHaveProperty("content");
+    expect(result.messages[0].snippet).not.toBeNull();
   });
 
   test("summarizeSession bounds participant lists", () => {

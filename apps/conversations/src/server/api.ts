@@ -28,6 +28,7 @@ import { extractTopics } from "../lib/topic-extract.js";
 import { assertNoSensitiveContent, redactSensitiveText, redactSensitiveValue } from "../lib/content-safety.js";
 import { resolveSelfSenderId } from "../lib/sender-identity.js";
 import { normalizeMessageUuid, parseMessageReference } from "../lib/message-reference.js";
+import { normalizeExactIsoTimestamp } from "../lib/since.js";
 
 export const APP = "conversations";
 const SCOPE_READ = `${APP}:read`;
@@ -609,7 +610,18 @@ async function handleV1(
     if (session) { params.push(session); clauses.push(`session_id = $${params.length}`); }
     if (projectId) { params.push(projectId); clauses.push(`project_id = $${params.length}`); }
     if (uuid) { params.push(uuid); clauses.push(`uuid = $${params.length}`); }
-    if (since) { params.push(since); clauses.push(`created_at > $${params.length}`); }
+    if (since) {
+      let normalizedSince = since;
+      if (q) {
+        try {
+          normalizedSince = normalizeExactIsoTimestamp(since, "search since timestamp");
+        } catch (error) {
+          return json({ error: error instanceof Error ? error.message : String(error) }, 400);
+        }
+      }
+      params.push(normalizedSince);
+      clauses.push(`created_at ${q ? ">=" : ">"} $${params.length}`);
+    }
     if (sinceIdRaw && Number.isFinite(Number(sinceIdRaw))) { params.push(Number(sinceIdRaw)); clauses.push(`id > $${params.length}`); }
     if (q) { params.push(`%${q}%`); clauses.push(`content ILIKE $${params.length}`); }
     if (mentionsOnly) {
