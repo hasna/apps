@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.5.29 - 2026-08-07
+
+### Added
+
+- **Project listings can now be traversed without silent truncation.** `/v1/projects` accepts strict positive `limit` and non-negative `offset`/`cursor` values and returns truthful `count`, `limit`, `offset`, `next_cursor`, and `has_more` metadata. `conversations project list` adds matching pagination flags plus `--page-json` while preserving the legacy `--json` array and human output, and the generated SDK exposes `ProjectPage` plus project-filtered channel listing (#96).
+
 ## 0.5.28 - 2026-08-07
 
 ### Fixed
