@@ -234,8 +234,9 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
             offset: { type: "integer", description: "Offset this page starts at." },
             limit: { type: "integer", description: "Effective per-page limit after server clamping." },
             has_more: { type: "boolean", description: "More rows exist past this page." },
+            complete: { type: "boolean", description: "True only when this page proves the complete matching population." },
           },
-          required: ["workspaces", "count", "total", "offset", "limit", "has_more"],
+          required: ["workspaces", "count", "total", "offset", "limit", "has_more", "complete"],
         },
         GuardedResponseControl: {
           type: "object",

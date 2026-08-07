@@ -883,7 +883,7 @@ export function listWorkspaces(filter: WorkspaceFilter = {}, db?: Database): Wor
   const d = db || getDatabase();
   const { where, params } = workspaceFilterSql(filter);
   const rows = d
-    .query(`SELECT * FROM workspaces ${where} ORDER BY name ASC LIMIT ? OFFSET ?`)
+    .query(`SELECT * FROM workspaces ${where} ORDER BY name ASC, id ASC LIMIT ? OFFSET ?`)
     .all(...params, filter.limit ?? -1, filter.offset ?? 0) as WorkspaceRow[];
 
   return rows.map(rowToWorkspace);

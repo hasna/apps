@@ -487,7 +487,15 @@ describe("project reports server registry transport", () => {
             primary_path: livePath,
           }]
           : [];
-        return new Response(JSON.stringify({ workspaces, total: 1 }), {
+        return new Response(JSON.stringify({
+          workspaces,
+          count: workspaces.length,
+          total: 1,
+          offset,
+          limit: 1000,
+          has_more: offset + workspaces.length < 1,
+          complete: offset === 0 && workspaces.length === 1,
+        }), {
           status: 200,
           headers: { "content-type": "application/json" },
         });

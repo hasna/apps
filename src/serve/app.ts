@@ -180,6 +180,7 @@ async function route(
           offset,
           limit: Math.min(Math.max(filter.limit ?? WORKSPACE_LIST_DEFAULT_LIMIT, 1), WORKSPACE_LIST_MAX_LIMIT),
           has_more: offset + workspaces.length < total,
+          complete: offset === 0 && workspaces.length === total,
         });
       }
       if (method === "POST") {

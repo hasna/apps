@@ -464,7 +464,7 @@ export class ProjectsPgStore {
     params.push(Math.max(filter.offset ?? 0, 0));
     const offsetIdx = params.length;
     const rows = await this.db.many<WorkspaceRow>(
-      `SELECT * FROM workspaces ${where} ORDER BY name ASC LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+      `SELECT * FROM workspaces ${where} ORDER BY name ASC, id ASC LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
       params,
     );
     return rows.map(rowToWorkspace);
