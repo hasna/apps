@@ -25,6 +25,7 @@
 // embedded in any value produced here. Only the HTTP transport ever holds it.
 
 import { resolveStorageClient, type HasnaStorageClient } from "../contracts-client/storage.js";
+import { assertAmbientCloudAllowed } from "./test-runtime.js";
 import { clientTransportEnvKeys } from "../contracts-client/transport.js";
 import { envToken, normalizeStorageMode } from "../contracts-client/mode.js";
 import { normalizeChannelName } from "../channel-names.js";
@@ -704,11 +705,30 @@ let localSingleton: LocalStore | null = null;
  * An API URL that cannot be parsed is an ERROR wherever cloud is expected, never a
  * quiet fall-back. No error message ever contains a credential value — only names.
  */
-export function getStore(env: Env = process.env): ConversationsStore {
-  const client = resolveConversationsCloud(env);
-  if (client) return new ApiStore(client);
+export function getStore(env?: Env): ConversationsStore {
+  // AMBIENT means "whatever the operator's shell happens to hold". The fleet
+  // exports the API URL and key into every interactive shell, so an ambient
+  // resolution inside a test runner reaches the LIVE deployment — measured in
+  // this repository at conversations.hasna.xyz with no isolation variable set.
+  // A caller that passes an env has named its own target and is left alone.
+  const ambient = env === undefined || env === process.env;
+  const resolvedEnv = env ?? process.env;
+  const client = resolveConversationsCloud(resolvedEnv);
+  if (client) {
+    if (ambient) assertAmbientCloudAllowed(client.baseUrl, resolvedEnv, DB_PATH_KEYS);
+    return new ApiStore(client);
+  }
   if (!localSingleton) localSingleton = new LocalStore();
   return localSingleton;
 }
 
 export { normalizeChannelName };
+export {
+  ALLOW_CLOUD_IN_TESTS_ENV_KEY,
+  ConversationsCloudInTestError,
+  detectTestRuntime,
+  isLoopbackApiUrl,
+  type TestRuntimeProbeInputs,
+  type TestRuntimeSignal,
+} from "./test-runtime.js";
+
