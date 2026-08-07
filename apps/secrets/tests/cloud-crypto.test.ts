@@ -100,6 +100,20 @@ describe("cloud-crypto", () => {
     expect((thrown as Error).message).not.toMatch(/requires a master key/i);
   });
 
+  test("decrypts ciphertext with a configured previous master key after rotation", () => {
+    const previousKey = Buffer.alloc(32, 8).toString("base64");
+    const activeKey = Buffer.alloc(32, 9).toString("base64");
+    const ct = encryptValue("synthetic-rotated-value", {
+      HASNA_SECRETS_MASTER_KEY: previousKey,
+    });
+
+    _resetCloudMasterKey();
+    expect(decryptValue(ct, {
+      HASNA_SECRETS_MASTER_KEY: activeKey,
+      HASNA_SECRETS_PREVIOUS_MASTER_KEYS: JSON.stringify([previousKey]),
+    })).toBe("synthetic-rotated-value");
+  });
+
   test("passphrase key derives 32 bytes", () => {
     _resetCloudMasterKey();
     const pEnv = { HASNA_SECRETS_MASTER_KEY: "a-long-operator-passphrase" } as NodeJS.ProcessEnv;

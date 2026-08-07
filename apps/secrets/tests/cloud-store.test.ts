@@ -76,7 +76,9 @@ beforeEach(() => {
 
 afterEach(() => {
   delete process.env.HASNA_SECRETS_MASTER_KEY;
+  delete process.env.HASNA_SECRETS_PREVIOUS_MASTER_KEYS;
   delete process.env.SECRETS_MASTER_KEY;
+  delete process.env.SECRETS_PREVIOUS_MASTER_KEYS;
   _resetCloudMasterKey();
 });
 
@@ -236,6 +238,44 @@ describe("cloud Postgres store", () => {
     _resetCloudMasterKey();
     expect(decryptValue(newlyStored, { HASNA_SECRETS_MASTER_KEY: activeKey }))
       .toBe("synthetic-new-value");
+  });
+
+  it("rewrites a secret read with a previous rotation key", async () => {
+    const previousKey = Buffer.alloc(32, 11).toString("base64");
+    const activeKey = Buffer.alloc(32, 12).toString("base64");
+
+    _resetCloudMasterKey();
+    const stored = encryptValue("synthetic-rotated-value", {
+      HASNA_SECRETS_MASTER_KEY: previousKey,
+    });
+    process.env.HASNA_SECRETS_MASTER_KEY = activeKey;
+    process.env.HASNA_SECRETS_PREVIOUS_MASTER_KEYS = JSON.stringify([previousKey]);
+    _resetCloudMasterKey();
+
+    const db = new FakeDb();
+    db.getResults.push({
+      key: "synthetic/rotation/live/value",
+      value: stored,
+      type: "other",
+      label: null,
+      expires_at: null,
+      created_at: now,
+      updated_at: now,
+    });
+    const entry = await new CloudSecretsStore(db as any).getSecret("synthetic/rotation/live/value", "synthetic-agent");
+
+    expect(entry).toMatchObject({
+      key: "synthetic/rotation/live/value",
+      value: "synthetic-rotated-value",
+    });
+    const rewrite = db.executed.find((call) => call.sql.includes("UPDATE secrets SET value"));
+    expect(rewrite?.params?.[1]).toBe("synthetic/rotation/live/value");
+    expect(rewrite?.params?.[2]).toBe(stored);
+    expect(typeof rewrite?.params?.[0]).toBe("string");
+    _resetCloudMasterKey();
+    expect(decryptValue(rewrite?.params?.[0] as string, {
+      HASNA_SECRETS_MASTER_KEY: activeKey,
+    })).toBe("synthetic-rotated-value");
   });
 
   it("validates, normalizes, stores, reads, lists, searches, and deletes vault items", async () => {
