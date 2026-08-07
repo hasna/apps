@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.5.27 - 2026-08-07
+
+### Fixed
+
+- **Policy-awareness search is bounded, complete, and safe for machine consumers.** `conversations search` now accepts an exact ISO-8601 `--since` cutoff, rejects invalid timestamps, and returns compact non-null previews instead of full message bodies, raw metadata, or attachments by default. JSON responses include in-band count, cursor, byte-cap, and completeness metadata, with matching local and HTTP/API behavior; full single-message content remains available through `conversations show <id>` (#91).
+
 ## 0.5.26 - 2026-08-05
 
 ### Fixed
