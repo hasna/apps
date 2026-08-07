@@ -136,6 +136,24 @@ describe("detectTestRuntime", () => {
     expect(signal.indicators.some((i) => i.startsWith("entrypoint"))).toBe(true);
   });
 
+  test("ordinary production CLI data arguments are not test-runner evidence", () => {
+    const signal = detectTestRuntime({
+      env: { PATH: "/usr/bin" },
+      entrypoint: "/repo/bin/index.js",
+      argv: [
+        "/usr/local/bin/bun",
+        "/repo/bin/index.js",
+        "send",
+        "src/lib/example.test.ts",
+        "--to",
+        "peer",
+      ],
+      globals: {},
+    });
+    expect(signal.detected).toBe(false);
+    expect(signal.indicators).toEqual([]);
+  });
+
   test("vitest and jest runtimes are detected too", () => {
     const base = { entrypoint: "/srv/app/main.js", argv: ["bun", "/srv/app/main.js"], globals: {} };
     expect(detectTestRuntime({ ...base, env: { VITEST: "true" } }).detected).toBe(true);
