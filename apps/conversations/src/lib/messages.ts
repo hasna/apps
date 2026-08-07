@@ -633,7 +633,20 @@ export interface DigestResult {
   to: string | null;
   since: string | null;
   cursor: number | null;
+  /**
+   * The highest message id this page has ACCOUNTED FOR. Every matching message
+   * with `id <= next_cursor` was either delivered on this page (counted in
+   * `shown`) or cannot be delivered at this `max_bytes` on a page of its own
+   * (counted in `skipped_count`). Following it is therefore lossless: nothing
+   * that could have been returned is stepped over.
+   */
   next_cursor: number | null;
+  /**
+   * How `next_cursor` must be consumed, stated in the envelope so a caller never
+   * has to infer it. `"exclusive"` means the next page is requested with
+   * `cursor = next_cursor` and returns messages with `id > next_cursor`.
+   */
+  cursor_semantics: "exclusive";
   max_bytes: number;
   byte_length: number;
   limit: number;
@@ -740,7 +753,9 @@ function makeDigestMessage(message: Message, snippetBytes: number): DigestMessag
   };
 }
 
-function digestHash(input: Omit<DigestResult, "digest_id" | "byte_length" | "hint">): string {
+// `cursor_semantics` is a constant describing the protocol, not page content, so
+// it stays out of the identity hash and existing digest_ids do not shift.
+function digestHash(input: Omit<DigestResult, "digest_id" | "byte_length" | "hint" | "cursor_semantics">): string {
   return createHash("sha256")
     .update(JSON.stringify(input))
     .digest("hex")
@@ -864,6 +879,7 @@ function buildDigestResult(opts: {
     since: opts.since,
     cursor: opts.cursor,
     next_cursor: nextCursor ?? null,
+    cursor_semantics: "exclusive",
     max_bytes: opts.max_bytes,
     byte_length: 0,
     limit: opts.limit,
@@ -973,14 +989,23 @@ export function assembleDigest(
     }
 
     if (!best) {
-      const skipped = build(entries, {
-        skipped_count: 1,
-        advance_cursor: message.id,
-        marked_read: markReadRequested ? entries.length : 0,
-      });
-
-      if (skipped.byte_length > norm.maxBytes && entries.length > 0) {
-        // Even skipping this message overflows: drop it, keep the cursor put.
+      // This message does not fit alongside what is already packed.
+      if (entries.length > 0) {
+        // That is a PAGE BOUNDARY, not a property of the message: on a page of
+        // its own it may well fit. End the page here and let `next_cursor`
+        // default to the last DELIVERED id, so the caller re-reads this message
+        // at the top of the next page with the whole byte budget available.
+        //
+        // Skipping it here is what used to lose it: `next_cursor` named the
+        // skipped message while `--cursor` means `id > cursor`, so following the
+        // documented protocol stepped straight past it — exactly one message
+        // lost per byte-truncated page.
+        //
+        // Which message that was is determined by POSITION, not size: the victim
+        // is whichever message lands where the REMAINING budget runs out, and
+        // that remainder ranges from the full cap down to nearly zero. A short
+        // message arriving at a nearly-full page is lost just as readily as a
+        // long one.
         const captured = entries;
         return {
           markableEntries: captured,
@@ -992,12 +1017,15 @@ export function assembleDigest(
         };
       }
 
-      const captured = entries;
+      // Nothing is packed yet, so this message cannot be delivered at this
+      // `max_bytes` even on a page of its own. Advancing past it is the only way
+      // to make forward progress; it is reported in `skipped_count` and it is
+      // the ONLY case in which `next_cursor` exceeds the last delivered id.
       const capturedAdvance = message.id;
       return {
-        markableEntries: captured,
+        markableEntries: [],
         rebuild: (markedRead: number) => {
-          const s = build(captured, {
+          const s = build([], {
             skipped_count: 1,
             advance_cursor: capturedAdvance,
             marked_read: markedRead,
