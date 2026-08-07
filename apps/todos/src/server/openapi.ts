@@ -1022,6 +1022,15 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             { name: "assigned_to", in: "query", schema: { type: "string" } },
             { name: "agent_id", in: "query", schema: { type: "string" } },
             { name: "tags", in: "query", schema: { type: "string" }, description: "Comma-separated tags; matches tasks carrying any of them" },
+            {
+              name: "updated_after",
+              in: "query",
+              schema: { type: "string", format: "date-time" },
+              description:
+                "Since-cursor. Returns only tasks whose updated_at is strictly after this instant, and `total` respects it too. "
+                + "Intended for pollers: re-read what changed instead of the whole table. A malformed value is rejected with 400 "
+                + "rather than ignored.",
+            },
             { name: "limit", in: "query", schema: { type: "integer", minimum: 1 } },
             { name: "offset", in: "query", schema: { type: "integer", minimum: 0 } },
           ],

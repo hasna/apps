@@ -334,6 +334,17 @@ export function listTasks(filter: TaskFilter = {}, db?: Database): Task[] {
     params.push(filter.not_created_by);
   }
 
+  // Since-cursor. Compared as an INSTANT via julianday(), not as text: stored
+  // stamps mix "2026-08-05T18:54:55.814Z" with "2026-06-10 11:24:47", and as
+  // text "T" sorts after " ", so a string comparison mis-orders them.
+  // A stamp julianday() cannot parse yields NULL; those rows are KEPT, because
+  // "we cannot read this row's timestamp" is not the same claim as "this row is
+  // older than the cursor" — dropping them would silently hide changed work.
+  if (filter.updated_after) {
+    conditions.push("(julianday(updated_at) IS NULL OR julianday(updated_at) > julianday(?))");
+    params.push(filter.updated_after);
+  }
+
   if (filter.session_id) {
     conditions.push("session_id = ?");
     params.push(filter.session_id);
@@ -564,6 +575,17 @@ export function countTasks(filter: Omit<TaskFilter, 'limit' | 'offset'> = {}, db
     // is not the same claim as "someone else filed it".
     conditions.push("(created_by IS NULL OR LOWER(created_by) != LOWER(?))");
     params.push(filter.not_created_by);
+  }
+
+  // Since-cursor. Compared as an INSTANT via julianday(), not as text: stored
+  // stamps mix "2026-08-05T18:54:55.814Z" with "2026-06-10 11:24:47", and as
+  // text "T" sorts after " ", so a string comparison mis-orders them.
+  // A stamp julianday() cannot parse yields NULL; those rows are KEPT, because
+  // "we cannot read this row's timestamp" is not the same claim as "this row is
+  // older than the cursor" — dropping them would silently hide changed work.
+  if (filter.updated_after) {
+    conditions.push("(julianday(updated_at) IS NULL OR julianday(updated_at) > julianday(?))");
+    params.push(filter.updated_after);
   }
 
   if (filter.session_id) {

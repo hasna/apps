@@ -77,9 +77,17 @@ describe("task list and completion OpenAPI contract", () => {
       "assigned_to",
       "agent_id",
       "tags",
+      "updated_after",
       "limit",
       "offset",
     ]);
+    // The since-cursor must be DECLARED, not merely implemented: an undeclared
+    // parameter is dropped silently, so every caller believes it is bounding a
+    // read that is in fact returning the whole table.
+    expect(list.parameters.find((parameter) => parameter.name === "updated_after")).toMatchObject({
+      in: "query",
+      schema: { type: "string", format: "date-time" },
+    });
     expect(list.responses["200"].content["application/json"].schema.required).toEqual(["tasks", "count", "total"]);
     expect(list.responses["200"].content["application/json"].schema.properties.total).toMatchObject({ type: "integer", minimum: 0 });
 

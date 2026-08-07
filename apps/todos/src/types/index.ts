@@ -724,6 +724,21 @@ export interface TaskFilter {
    *  inbox query operating rule 29 requires: work assigned to me that someone ELSE created.
    *  Rows with a null `created_by` are unattributable and are NOT excluded. */
   not_created_by?: string;
+  /**
+   * Since-cursor: return only tasks whose `updated_at` is STRICTLY AFTER this
+   * instant (ISO-8601). Lets a poller re-read only what changed instead of the
+   * whole table.
+   *
+   * Measured 2026-08-07 on the deployed API: `/v1/tasks?limit=200` returns
+   * 420,696 bytes for 200 of 59,547 rows, and every cursor spelling was inert —
+   * a cursor dated after every row still returned the full page. `conversations`
+   * already honours the equivalent parameter and answers 15 bytes.
+   *
+   * Compared as an INSTANT, not as a string: production rows carry both
+   * "2026-08-05T18:54:55.814Z" and "2026-06-10 11:24:47", which sort
+   * differently as text ("T" > " ") than they do as time.
+   */
+  updated_after?: string;
   session_id?: string;
   tags?: string[];
   has_recurrence?: boolean;

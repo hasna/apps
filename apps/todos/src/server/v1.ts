@@ -529,7 +529,16 @@ export async function handleV1Request(
           if (!statusParam.ok) return statusParam.response;
           const priorityParam = enumQueryParam(url, "priority", TASK_PRIORITIES);
           if (!priorityParam.ok) return priorityParam.response;
+          // Since-cursor. Reject a malformed value with 400 rather than dropping
+          // it: an ignored cursor answers 200 with the ENTIRE table while the
+          // caller believes the read was bounded, which is the exact failure this
+          // parameter exists to end.
+          const updatedAfterRaw = url.searchParams.get("updated_after");
+          if (updatedAfterRaw !== null && Number.isNaN(Date.parse(updatedAfterRaw))) {
+            return error(400, `updated_after must be an ISO-8601 timestamp; got ${JSON.stringify(updatedAfterRaw)}`);
+          }
           const filter = {
+            ...(updatedAfterRaw !== null ? { updated_after: updatedAfterRaw } : {}),
             ...(url.searchParams.get("q") ? { query: url.searchParams.get("q")! } : {}),
             ...(statusParam.value !== undefined ? { status: statusParam.value } : {}),
             ...(priorityParam.value !== undefined ? { priority: priorityParam.value } : {}),

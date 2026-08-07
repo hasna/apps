@@ -105,6 +105,21 @@ export function postgresTodosSyncSchemaSql(
       RETURNS text
       LANGUAGE sql IMMUTABLE PARALLEL SAFE STRICT
       AS $$ SELECT unaccent('unaccent', $1) $$`,
+    // Timestamp coercion for the `updated_after` since-cursor. A plain
+    // `::timestamptz` cast raises on a malformed stamp and takes the whole query
+    // with it, and the stored dataset genuinely mixes formats
+    // ("2026-08-05T18:54:55.814Z" alongside "2026-06-10 11:24:47", measured
+    // 2026-08-07). This returns NULL instead of raising, so one bad row cannot
+    // fail a list call. IMMUTABLE so it can back an expression index.
+    `CREATE OR REPLACE FUNCTION todos_try_timestamptz(text)
+      RETURNS timestamptz
+      LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE
+      AS $$ BEGIN RETURN $1::timestamptz; EXCEPTION WHEN others THEN RETURN NULL; END $$`,
+    // Backs the since-cursor predicate so a poller's incremental read is an
+    // index scan rather than a sequential scan over every task row.
+    `CREATE INDEX IF NOT EXISTS ${tableName}_task_updated_at_idx
+      ON ${tableName} (todos_try_timestamptz(payload->>'updated_at'))
+      WHERE object_type = 'tasks' AND deleted_at IS NULL`,
     `ALTER TABLE ${tableName}
       ADD COLUMN IF NOT EXISTS task_search_tsv tsvector
       GENERATED ALWAYS AS (
