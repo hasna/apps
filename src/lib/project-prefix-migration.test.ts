@@ -209,13 +209,19 @@ describe("project prefix migration", () => {
       id: "wks_active00001",
       name: "internal-iproj-package-arrivals",
       status: "active",
-      integrations: { conversations_channel: "internal-iproj-package-arrivals" },
+      integrations: {
+        conversations_project_id: "wks_active00001",
+        conversations_channel: "internal-iproj-package-arrivals",
+      },
     });
     const archived = project({
       id: "wks_archived001",
       name: "iproj-archive-lane",
       status: "archived",
-      integrations: { conversations_channel: "iproj-archive-lane" },
+      integrations: {
+        conversations_project_id: "wks_archived001",
+        conversations_channel: "iproj-archive-lane",
+      },
     });
     const harness = makeHarness(
       [active, archived],
@@ -285,7 +291,10 @@ describe("project prefix migration", () => {
       id: "wks_candidate001",
       name: "iproj-candidate-lane",
       status: "active",
-      integrations: { conversations_channel: "iproj-candidate-lane" },
+      integrations: {
+        conversations_project_id: "wks_candidate001",
+        conversations_channel: "iproj-candidate-lane",
+      },
     });
     const harness = makeHarness(
       [candidate],
@@ -307,6 +316,45 @@ describe("project prefix migration", () => {
     ]);
   });
 
+  test("resolves candidate channel project ids through the Conversations integration namespace", async () => {
+    const conversationsProjectId = "4718abfb-8a86-422b-8994-a7cbf53311ea";
+    const candidate = project({
+      id: "wks_Shf9CvaMT6BC2p5jPWYvf",
+      name: "iproj-cluj-glass-terrace",
+      status: "active",
+      integrations: {
+        conversations_project_id: conversationsProjectId,
+        conversations_space: conversationsProjectId,
+        conversations_channel: "iproj-cluj-glass-terrace",
+      },
+    });
+    const harness = makeHarness(
+      [candidate],
+      [channel("iproj-cluj-glass-terrace", conversationsProjectId)],
+    );
+
+    const planned = await runProjectPrefixMigration({
+      store: harness.store,
+      conversations: harness.conversations,
+    });
+
+    expect(planned.ok).toBe(true);
+    expect(planned.steps).toEqual([
+      expect.objectContaining({
+        target_kind: "channel",
+        project_id: candidate.id,
+        current_name: "iproj-cluj-glass-terrace",
+        target_name: "cluj-glass-terrace",
+      }),
+      expect.objectContaining({
+        target_kind: "project",
+        project_id: candidate.id,
+        current_name: "iproj-cluj-glass-terrace",
+        target_name: "cluj-glass-terrace",
+      }),
+    ]);
+  });
+
   test("refuses stale project links on migration candidate channels", async () => {
     const harness = makeHarness(
       [],
@@ -316,7 +364,103 @@ describe("project prefix migration", () => {
     await expect(runProjectPrefixMigration({
       store: harness.store,
       conversations: harness.conversations,
-    })).rejects.toThrow(/Ambiguous channel effect: "iproj-orphan-lane" points to missing project wks_missing0001/);
+    })).rejects.toThrow(/Ambiguous channel effect: "iproj-orphan-lane" points to missing Conversations project wks_missing0001/);
+  });
+
+  test("migrates a standalone candidate channel while preserving its null project link", async () => {
+    const harness = makeHarness(
+      [],
+      [channel("iproj-accounting-books", null)],
+    );
+
+    const planned = await runProjectPrefixMigration({
+      store: harness.store,
+      conversations: harness.conversations,
+    });
+
+    expect(planned.ok).toBe(true);
+    expect(planned.steps).toEqual([
+      expect.objectContaining({
+        target_kind: "channel",
+        project_id: null,
+        current_name: "iproj-accounting-books",
+        target_name: "accounting-books",
+      }),
+    ]);
+
+    const applied = await runProjectPrefixMigration({
+      store: harness.store,
+      conversations: harness.conversations,
+      dry_run: false,
+      operation_id: planned.operation_id,
+    });
+
+    expect(applied.ok).toBe(true);
+    expect(applied.steps).toEqual([
+      expect.objectContaining({
+        target_kind: "channel",
+        project_id: null,
+        status: "accepted",
+        receipt: expect.objectContaining({
+          target_kind: "channel",
+          outcome: "accepted",
+        }),
+      }),
+    ]);
+    expect([...harness.channels.keys()]).toEqual(["accounting-books"]);
+    expect(harness.events).toHaveLength(0);
+  });
+
+  test("refuses candidate channel links shared by multiple Projects records", async () => {
+    const conversationsProjectId = "conversations-shared-project";
+    const first = project({
+      id: "wks_sharedfirst1",
+      name: "first-project",
+      status: "active",
+      integrations: { conversations_project_id: conversationsProjectId },
+    });
+    const second = project({
+      id: "wks_sharedsecond",
+      name: "second-project",
+      status: "active",
+      integrations: { conversations_project_id: conversationsProjectId },
+    });
+    const harness = makeHarness(
+      [first, second],
+      [channel("iproj-shared-lane", conversationsProjectId)],
+    );
+
+    await expect(runProjectPrefixMigration({
+      store: harness.store,
+      conversations: harness.conversations,
+    })).rejects.toThrow(/shared by 2 Projects records/);
+  });
+
+  test("refuses explicit candidate channel ownership mismatches in the Conversations namespace", async () => {
+    const explicitOwner = project({
+      id: "wks_explicit001",
+      name: "iproj-explicit-owner",
+      status: "active",
+      integrations: {
+        conversations_project_id: "conversations-explicit-owner",
+        conversations_channel: "iproj-explicit-lane",
+      },
+    });
+    const channelOwner = project({
+      id: "wks_channelowner",
+      name: "channel-owner",
+      status: "active",
+      integrations: { conversations_project_id: "conversations-channel-owner" },
+    });
+    const harness = makeHarness(
+      [explicitOwner, channelOwner],
+      [channel("iproj-explicit-lane", "conversations-channel-owner")],
+    );
+
+    await expect(runProjectPrefixMigration({
+      store: harness.store,
+      conversations: harness.conversations,
+    })).rejects.toThrow(/project wks_explicit001 links channel "iproj-explicit-lane" owned by conversations-channel-owner/);
   });
 
   test("failure injection rolls back channel first and leaves project/history state intact", async () => {
@@ -324,7 +468,10 @@ describe("project prefix migration", () => {
       id: "wks_failure0001",
       name: "iproj-failure-lane",
       status: "active",
-      integrations: { conversations_channel: "iproj-failure-lane" },
+      integrations: {
+        conversations_project_id: "wks_failure0001",
+        conversations_channel: "iproj-failure-lane",
+      },
     });
     const harness = makeHarness([source], [channel("iproj-failure-lane", source.id)]);
     const result = await runProjectPrefixMigration({
@@ -377,7 +524,7 @@ describe("project prefix migration", () => {
       id: "wks_channelfail0001",
       name: "plain-project",
       status: "active",
-      integrations: {},
+      integrations: { conversations_project_id: "wks_channelfail0001" },
     });
     const harness = makeHarness([source], [channel("iproj-channel-lane", source.id)]);
     let renameCalls = 0;

@@ -304,8 +304,29 @@ function validateCollisions(projects: Workspace[], channels: ConversationsChanne
   }
 }
 
+function projectsByConversationsProjectId(projects: Workspace[]): Map<string, Workspace[]> {
+  const indexed = new Map<string, Workspace[]>();
+  for (const project of projects) {
+    const conversationsProjectId = project.integrations.conversations_project_id?.trim();
+    if (!conversationsProjectId) continue;
+    const matches = indexed.get(conversationsProjectId) ?? [];
+    matches.push(project);
+    indexed.set(conversationsProjectId, matches);
+  }
+  return indexed;
+}
+
+function uniquelyLinkedProject(
+  indexed: Map<string, Workspace[]>,
+  conversationsProjectId: string | null,
+): Workspace | null {
+  if (!conversationsProjectId) return null;
+  const matches = indexed.get(conversationsProjectId) ?? [];
+  return matches.length === 1 ? matches[0]! : null;
+}
+
 function validateAmbiguousLinks(projects: Workspace[], channels: ConversationsChannelIdentity[]): void {
-  const projectById = new Map(projects.map((project) => [project.id, project]));
+  const projectsByConversationsId = projectsByConversationsProjectId(projects);
   const candidateChannels = channels.filter((channel) => stripProjectPrefix(channel.name).prefix);
   const candidateChannelNames = new Set(candidateChannels.map((channel) => channel.name));
   const affectedProjectIds = new Set(
@@ -316,10 +337,14 @@ function validateAmbiguousLinks(projects: Workspace[], channels: ConversationsCh
 
   for (const channel of candidateChannels) {
     if (!channel.project_id) continue;
-    if (!projectById.has(channel.project_id)) {
-      throw new PrefixMigrationError(`Ambiguous channel effect: "${channel.name}" points to missing project ${channel.project_id}.`);
+    const matches = projectsByConversationsId.get(channel.project_id) ?? [];
+    if (matches.length === 0) {
+      throw new PrefixMigrationError(`Ambiguous channel effect: "${channel.name}" points to missing Conversations project ${channel.project_id}.`);
     }
-    affectedProjectIds.add(channel.project_id);
+    if (matches.length > 1) {
+      throw new PrefixMigrationError(`Ambiguous channel effect: "${channel.name}" points to Conversations project ${channel.project_id}, shared by ${matches.length} Projects records.`);
+    }
+    affectedProjectIds.add(matches[0]!.id);
   }
   for (const project of projects) {
     const explicit = project.integrations.conversations_channel?.trim();
@@ -328,13 +353,18 @@ function validateAmbiguousLinks(projects: Workspace[], channels: ConversationsCh
 
   const byProject = new Map<string, ConversationsChannelIdentity[]>();
   for (const channel of channels) {
-    if (!channel.project_id || !projectById.has(channel.project_id)) continue;
-    const list = byProject.get(channel.project_id) ?? [];
+    const project = uniquelyLinkedProject(projectsByConversationsId, channel.project_id);
+    if (!project) continue;
+    const list = byProject.get(project.id) ?? [];
     list.push(channel);
-    byProject.set(channel.project_id, list);
+    byProject.set(project.id, list);
   }
   for (const project of projects) {
     if (!affectedProjectIds.has(project.id)) continue;
+    const conversationsProjectId = project.integrations.conversations_project_id?.trim();
+    if (conversationsProjectId && (projectsByConversationsId.get(conversationsProjectId)?.length ?? 0) !== 1) {
+      throw new PrefixMigrationError(`Ambiguous channel effect: project ${project.id} shares Conversations project ${conversationsProjectId}.`);
+    }
     const linked = byProject.get(project.id) ?? [];
     const explicit = project.integrations.conversations_channel?.trim();
     if (linked.length > 1 && (stripProjectPrefix(project.name).prefix || linked.some((channel) => stripProjectPrefix(channel.name).prefix))) {
@@ -343,7 +373,7 @@ function validateAmbiguousLinks(projects: Workspace[], channels: ConversationsCh
     if (explicit) {
       const matches = channels.filter((channel) => channel.name === explicit);
       if (matches.length !== 1) throw new PrefixMigrationError(`Ambiguous channel effect: project ${project.id} explicitly links missing or duplicate channel "${explicit}".`);
-      if (matches[0]!.project_id && matches[0]!.project_id !== project.id) {
+      if (matches[0]!.project_id && matches[0]!.project_id !== conversationsProjectId) {
         throw new PrefixMigrationError(`Ambiguous channel effect: project ${project.id} links channel "${explicit}" owned by ${matches[0]!.project_id}.`);
       }
     }
@@ -357,16 +387,18 @@ function validateAmbiguousLinks(projects: Workspace[], channels: ConversationsCh
 
 function buildSteps(projects: Workspace[], channels: ConversationsChannelIdentity[]): PrefixMigrationStep[] {
   const projectById = new Map(projects.map((project) => [project.id, project]));
+  const projectsByConversationsId = projectsByConversationsProjectId(projects);
   const candidates: Array<{ target_kind: "project" | "channel"; target_id: string; project_id: string | null; current_name: string; target_name: string; sort: string }> = [];
   for (const channel of channels) {
     const target = stripProjectPrefix(channel.name);
+    const linkedProject = uniquelyLinkedProject(projectsByConversationsId, channel.project_id);
     if (target.prefix) candidates.push({
       target_kind: "channel",
       target_id: channelId(channel),
-      project_id: channel.project_id,
+      project_id: linkedProject?.id ?? null,
       current_name: channel.name,
       target_name: target.name,
-      sort: `${channel.project_id ?? "~"}:${channel.name}:0`,
+      sort: `${linkedProject?.id ?? "~"}:${channel.name}:0`,
     });
   }
   for (const project of projects) {
