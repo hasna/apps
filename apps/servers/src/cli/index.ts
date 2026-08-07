@@ -997,7 +997,7 @@ program
 program
   .command("traces")
   .description("List audit trail entries")
-  .option("-s, --server <id>", "Filter by server")
+  .option("-s, --server <id>", "Filter by server ID, partial ID, or slug")
   .option("-a, --agent <id>", "Filter by agent")
   .option("-l, --limit <n>", `Limit rows shown (default: ${DEFAULT_LIST_LIMIT}; JSON keeps legacy ${LEGACY_JSON_TRACE_LIMIT})`)
   .option("--cursor <n>", "Zero-based row offset for pagination")
@@ -1012,7 +1012,11 @@ program
     if (opts.agent) {
       fetched = listTracesByAgent(opts.agent, cursor + limit + (json ? 0 : 1), db);
     } else {
-      fetched = listTraces(opts.server, undefined, cursor + limit + (json ? 0 : 1), db);
+      // traces.server_id always holds the full UUID, so an unresolved slug or the
+      // 8-char ID this table renders would match nothing and print an empty result
+      // at rc=0 — indistinguishable from a server with no traces.
+      const serverId = opts.server ? resolveServerOrExit(opts.server, db).id : undefined;
+      fetched = listTraces(serverId, undefined, cursor + limit + (json ? 0 : 1), db);
     }
     const traces = fetched.slice(cursor, cursor + limit);
     if (json) {
