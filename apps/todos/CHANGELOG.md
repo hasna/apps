@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.7] - 2026-08-07
+
+### Added
+
+- **Protected conditional project and task-list registration.** The package-owned
+  `@hasna/todos/project-registration` SDK and authenticated `/v1/project-registration`
+  routes create or bind an exact project/list pair under immutable request digests,
+  deterministic retries, exact receipt readback, and bounded ambiguity reconciliation
+  across SQLite and hosted PostgreSQL.
+
+### Fixed
+
+- **Registration compensation now refuses unsafe rollback.** Receipt-scoped
+  compensation verifies ownership, parent state, and dependent records before removing
+  an accepted registration, and refuses without mutation when foreign or user-created
+  data would otherwise be detached or deleted.
+
 ## [0.15.6] - 2026-08-06
 
 ### Fixed
