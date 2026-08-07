@@ -11,13 +11,26 @@ export interface Page<T> {
   hasMore: boolean;
 }
 
-export function parseLimit(value: string | number | undefined, fallback = DEFAULT_LIST_LIMIT): number {
+/**
+ * Parse a --limit value.
+ *
+ * `maxLimit` caps the result. It defaults to MAX_LIST_LIMIT, which is a *display*
+ * bound for human output. Machine-readable output MUST pass `Infinity` instead:
+ * silently clamping a requested limit and then echoing the clamped value back as
+ * `limit` produces a response that is self-consistent with a request the caller
+ * never made, which is indistinguishable from a complete read.
+ */
+export function parseLimit(
+  value: string | number | undefined,
+  fallback = DEFAULT_LIST_LIMIT,
+  maxLimit: number = MAX_LIST_LIMIT
+): number {
   if (value === undefined || value === null || value === "") return fallback;
   const parsed = typeof value === "number" ? value : Number(value);
   if (!Number.isInteger(parsed) || parsed < 0) {
     throw new Error("--limit must be a non-negative integer");
   }
-  return Math.min(parsed, MAX_LIST_LIMIT);
+  return Math.min(parsed, maxLimit);
 }
 
 export function parseOffset(value: string | number | undefined): number {
@@ -31,10 +44,18 @@ export function parseOffset(value: string | number | undefined): number {
 
 export function pageItems<T>(
   items: T[],
-  options: { limit?: string | number; offset?: string | number; all?: boolean; fallbackLimit?: number } = {}
+  options: {
+    limit?: string | number;
+    offset?: string | number;
+    all?: boolean;
+    fallbackLimit?: number;
+    maxLimit?: number;
+  } = {}
 ): Page<T> {
   const offset = parseOffset(options.offset);
-  const limit = options.all ? Math.max(items.length - offset, 0) : parseLimit(options.limit, options.fallbackLimit);
+  const limit = options.all
+    ? Math.max(items.length - offset, 0)
+    : parseLimit(options.limit, options.fallbackLimit, options.maxLimit);
   const page = items.slice(offset, offset + limit);
   return {
     items: page,
@@ -48,7 +69,13 @@ export function pageItems<T>(
 
 export function pageItemsOrExit<T>(
   items: T[],
-  options: { limit?: string | number; offset?: string | number; all?: boolean; fallbackLimit?: number } = {}
+  options: {
+    limit?: string | number;
+    offset?: string | number;
+    all?: boolean;
+    fallbackLimit?: number;
+    maxLimit?: number;
+  } = {}
 ): Page<T> {
   try {
     return pageItems(items, options);

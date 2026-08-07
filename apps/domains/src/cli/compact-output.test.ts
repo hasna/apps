@@ -101,4 +101,72 @@ describe("compact CLI output", () => {
     expect(invalidStderr).toContain("--limit must be a non-negative integer");
     expect(invalidStderr).not.toContain("compact-output.ts");
   });
+
+  // Regression: `domain list --json --limit N` above MAX_LIST_LIMIT (200) used to
+  // clamp to 200 rows AND echo `limit: 200`, so `count === limit` was self-consistent
+  // with a request the caller never made. Truncation was undetectable from the payload.
+  test("domain list --json honours a limit above MAX_LIST_LIMIT and never echoes a clamped limit", async () => {
+    const { dbPath } = await seedDomainDb(230);
+
+    const over = runDomains(["domain", "list", "--json", "--limit", "5000"], dbPath);
+    expect(over.exitCode).toBe(0);
+    const body = JSON.parse(text(over.stdout)) as {
+      count: number; total: number; shown: number; limit: number | null;
+      offset: number; has_more: boolean; domains: unknown[];
+    };
+    // The bug returned 200 here. Assert the true population, not merely "more than 200".
+    expect(body.domains).toHaveLength(230);
+    expect(body.count).toBe(230);
+    expect(body.total).toBe(230);
+    // The echoed limit must be the REQUEST, never the cap.
+    expect(body.limit).toBe(5000);
+    expect(body.limit).not.toBe(200);
+    expect(body.has_more).toBe(false);
+  });
+
+  // Negative control: a genuinely truncating limit must still truncate AND must now
+  // say so. Without this the test above would pass on a build that ignored --limit.
+  test("domain list --json reports truncation via total/has_more when the limit really binds", async () => {
+    const { dbPath } = await seedDomainDb(230);
+
+    const short = runDomains(["domain", "list", "--json", "--limit", "10"], dbPath);
+    expect(short.exitCode).toBe(0);
+    const body = JSON.parse(text(short.stdout)) as {
+      count: number; total: number; limit: number | null; has_more: boolean; domains: unknown[];
+    };
+    expect(body.domains).toHaveLength(10);
+    expect(body.count).toBe(10);
+    // The population is visible even though only a page was returned.
+    expect(body.total).toBe(230);
+    expect(body.has_more).toBe(true);
+    expect(body.limit).toBe(10);
+  });
+
+  // Regression: `--all` discarded --offset entirely (`!opts.all && ...`), so a caller
+  // paging with `--all --offset N` received the FULL population on every iteration.
+  test("domain list --json --all honours --offset instead of silently ignoring it", async () => {
+    const { dbPath } = await seedDomainDb(25);
+
+    const all = runDomains(["domain", "list", "--json", "--all"], dbPath);
+    expect(all.exitCode).toBe(0);
+    const allBody = JSON.parse(text(all.stdout)) as { count: number; total: number; limit: number | null; has_more: boolean };
+    expect(allBody.count).toBe(25);
+    expect(allBody.total).toBe(25);
+    expect(allBody.limit).toBeNull(); // null == "no bound applied", a positive signal
+    expect(allBody.has_more).toBe(false);
+
+    const offsetted = runDomains(["domain", "list", "--json", "--all", "--offset", "20"], dbPath);
+    expect(offsetted.exitCode).toBe(0);
+    const offBody = JSON.parse(text(offsetted.stdout)) as { count: number; total: number; offset: number };
+    // The bug returned 25 here — the whole population, offset ignored.
+    expect(offBody.count).toBe(5);
+    expect(offBody.offset).toBe(20);
+    expect(offBody.total).toBe(25);
+
+    const pastEnd = runDomains(["domain", "list", "--json", "--all", "--offset", "9999"], dbPath);
+    expect(pastEnd.exitCode).toBe(0);
+    const pastBody = JSON.parse(text(pastEnd.stdout)) as { count: number; total: number };
+    expect(pastBody.count).toBe(0);
+    expect(pastBody.total).toBe(25);
+  });
 });

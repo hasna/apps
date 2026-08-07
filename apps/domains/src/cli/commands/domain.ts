@@ -81,9 +81,13 @@ export function registerDomainCommand(program: Command): void {
     .option("-j, --json", "Output JSON")
     .action(async (opts: { status?: string; registrar?: string; premium?: boolean; limit?: string; offset?: string; all?: boolean; verbose?: boolean; json?: boolean }) => {
       let limit: number | undefined;
+      let jsonLimit: number | undefined;
       let offset: number;
       try {
+        // Human output keeps the MAX_LIST_LIMIT display cap. JSON must not clamp:
+        // echoing a clamped limit back asserts a bound the caller never requested.
         limit = opts.limit === undefined ? undefined : parseLimit(opts.limit);
+        jsonLimit = opts.limit === undefined ? undefined : parseLimit(opts.limit, undefined, Infinity);
         offset = parseOffset(opts.offset);
       } catch (error) {
         console.error(error instanceof Error ? error.message : String(error));
@@ -95,13 +99,34 @@ export function registerDomainCommand(program: Command): void {
         registrar: opts.registrar,
         is_premium: opts.premium ? true : undefined,
       };
-      const jsonPaging = !opts.all && (opts.limit !== undefined || offset > 0) ? { limit, offset } : {};
-      const domains = opts.json
-        ? await listDomains({ ...filters, ...jsonPaging })
-        : await listDomains(filters);
+      // Always read the full filtered set so `total` is the real population rather
+      // than the size of the page we happened to ask for, then page in process.
+      const domains = await listDomains(filters);
 
       if (opts.json) {
-        console.log(JSON.stringify({ domains, count: domains.length, limit: limit ?? null, offset }, null, 2));
+        const jsonPage = pageItemsOrExit(domains, {
+          limit: jsonLimit,
+          offset,
+          all: opts.all,
+          fallbackLimit: Infinity,
+          maxLimit: Infinity,
+        });
+        console.log(
+          JSON.stringify(
+            {
+              domains: jsonPage.items,
+              count: jsonPage.shown,
+              total: jsonPage.total,
+              shown: jsonPage.shown,
+              // null is a positive signal: no bound was applied.
+              limit: opts.all ? null : (jsonLimit ?? null),
+              offset: jsonPage.offset,
+              has_more: jsonPage.hasMore,
+            },
+            null,
+            2
+          )
+        );
         return;
       }
       const page = pageItemsOrExit(domains, { limit, offset, all: opts.all });
