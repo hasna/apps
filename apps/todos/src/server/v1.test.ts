@@ -3,6 +3,7 @@ import type { Database } from "bun:sqlite";
 import { getDatabase, resetDatabase } from "../db/database.js";
 import { createLocalSqliteTodosStorageAdapter } from "../storage/local-sqlite.js";
 import type { TodosStorageAdapter } from "../storage/interfaces.js";
+import { ResourceConflictError } from "../types/index.js";
 import { handleV1Request, type V1RequestDependencies } from "./v1.js";
 import { createLocalPrGroupLedger } from "../pr-groups/index.js";
 import {
@@ -124,12 +125,61 @@ describe("/v1 task-list cloud parity", () => {
     expect(secondBody.receipt.receipt_id).toBe(firstBody.receipt.receipt_id);
     expect(await store.taskLists.list(project.id)).toHaveLength(1);
 
+    const mismatchedKey = await request(
+      `/v1/projects/${project.id}/task-list/ensure`,
+      "POST",
+      {
+        expected_project_revision: project.updated_at,
+        idempotency_key: "different-operation-key",
+      },
+    );
+    expect(mismatchedKey?.status).toBe(409);
+    expect(await mismatchedKey!.json()).toMatchObject({
+      code: "PROJECT_TASK_LIST_IDEMPOTENCY_CONFLICT",
+    });
+    expect(await store.taskLists.list(project.id)).toHaveLength(1);
+
     const exactProject = await request(`/v1/projects/${project.id}`);
     const exactList = await request(`/v1/task-lists/${firstBody.task_list.id}`);
     expect((await exactProject!.json() as { project: { id: string; name: string } }).project)
       .toMatchObject({ id: project.id, name: "Dubai Fraud" });
     expect((await exactList!.json() as { task_list: { id: string; project_id: string; slug: string } }).task_list)
       .toMatchObject({ id: firstBody.task_list.id, project_id: project.id, slug: "dubai-fraud" });
+  });
+
+  test("rejects a raced create when the project revision changed before conflict reconciliation", async () => {
+    const created = await request("/v1/projects", "POST", {
+      name: "Raced Project",
+      path: "/workspace/raced-project",
+      task_list_id: "raced-project",
+    });
+    const project = (await created!.json() as { project: { id: string; updated_at: string } }).project;
+    const originalCreate = store.taskLists.create;
+    const originalGetProject = store.projects.get;
+    let exposeRacedRevision = false;
+    store.projects.get = async (id) => {
+      const current = await originalGetProject(id);
+      return exposeRacedRevision && current
+        ? { ...current, updated_at: "2099-01-01T00:00:00.000Z" }
+        : current;
+    };
+    store.taskLists.create = async (input) => {
+      await originalCreate(input);
+      exposeRacedRevision = true;
+      throw new ResourceConflictError("TASK_LIST_SLUG_CONFLICT", "simulated raced create");
+    };
+
+    const response = await request(
+      `/v1/projects/${project.id}/task-list/ensure`,
+      "POST",
+      {
+        expected_project_revision: project.updated_at,
+        idempotency_key: "raced-project-task-list",
+      },
+    );
+    expect(response?.status).toBe(409);
+    expect(await response!.json()).toMatchObject({ code: "PROJECT_REVISION_CONFLICT" });
+    expect(await store.taskLists.list(project.id)).toHaveLength(1);
   });
 
   test("fails missing declarations and legacy global-slug collisions without mutation", async () => {

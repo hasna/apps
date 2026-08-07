@@ -1189,7 +1189,7 @@ export async function cloudRollbackProjectTaskListEnsure(
       `/projects/${encodeURIComponent(projectId)}/task-list/rollback`,
       input,
     ),
-    ["PROJECT_NOT_FOUND"],
+    ["PROJECT_NOT_FOUND", "PROJECT_TASK_LIST_RECEIPT_NOT_FOUND"],
   );
 }
 

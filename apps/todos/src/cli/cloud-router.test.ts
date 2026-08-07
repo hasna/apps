@@ -1236,6 +1236,25 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
     });
   });
 
+  test("project task-list rollback preserves a domain receipt-not-found response", async () => {
+    installFetch(() => ({
+      status: 404,
+      body: {
+        error: "No exact operation-owned task list matches this rollback receipt",
+        code: "PROJECT_TASK_LIST_RECEIPT_NOT_FOUND",
+      },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudRollbackProjectTaskListEnsure(client, "project-1", {
+      receipt_id: "ptlr_missing",
+      expected_task_list_revision: "2026-08-07T10:01:00.000Z",
+    })).rejects.toMatchObject({
+      status: 404,
+      body: { code: "PROJECT_TASK_LIST_RECEIPT_NOT_FOUND" },
+    });
+  });
+
   test("task-list resolution preserves exact UUIDs and resolves project-scoped slugs and unique UUID prefixes", async () => {
     const listId = "abcdef12-1111-4111-8111-111111111111";
     const taskList = { id: listId, project_id: "project-1", slug: "release", name: "Release" };

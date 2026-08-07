@@ -29,6 +29,7 @@ export type ProjectTaskListEnsureErrorCode =
   | "PROJECT_REVISION_CONFLICT"
   | "TASK_LIST_SCOPE_COLLISION"
   | "PROJECT_TASK_LIST_IDEMPOTENCY_KEY_INVALID"
+  | "PROJECT_TASK_LIST_IDEMPOTENCY_CONFLICT"
   | "PROJECT_TASK_LIST_RECEIPT_NOT_FOUND"
   | "PROJECT_TASK_LIST_ROLLBACK_CONFLICT"
   | "PROJECT_TASK_LIST_ROLLBACK_HAS_DEPENDENTS";
@@ -113,6 +114,17 @@ function receiptFor(
 ): ProjectTaskListEnsureReceipt {
   const marker = storedMarker(list);
   const owned = marker?.project_id === project.id && marker.slug === list.slug;
+  if (owned && marker.idempotency_key !== idempotencyKey) {
+    throw new ProjectTaskListEnsureError(
+      "PROJECT_TASK_LIST_IDEMPOTENCY_CONFLICT",
+      "The operation-owned task list was created under a different idempotency key",
+      {
+        project_id: project.id,
+        task_list_id: list.id,
+        receipt_id: marker.receipt_id,
+      },
+    );
+  }
   return {
     schema_version: PROJECT_TASK_LIST_ENSURE_SCHEMA_VERSION,
     receipt_id: owned
@@ -246,6 +258,20 @@ export async function applyProjectTaskListEnsure(
     if (!(error instanceof ResourceConflictError)) throw error;
     const raced = await exactProjectState(store, projectId);
     if (!raced.scoped) throw error;
+    if (
+      raced.project.updated_at !== options.expected_project_revision
+      || raced.project.task_list_id !== slug
+    ) {
+      throw new ProjectTaskListEnsureError(
+        "PROJECT_REVISION_CONFLICT",
+        "Project changed while the task list was being created; fetch a fresh plan before retrying",
+        {
+          project_id: raced.project.id,
+          expected_project_revision: options.expected_project_revision,
+          current_project_revision: raced.project.updated_at,
+        },
+      );
+    }
     return {
       mode: "apply",
       action: "already_present",
