@@ -2,7 +2,7 @@
 
 All notable changes to `@hasna/statusline` are documented here.
 
-## Unreleased
+## 0.0.7 - 2026-08-07
 
 - Add two opt-in usage segments — `usage-session` (session/5-hour) and
   `usage-weekly` (weekly, the binding limit) — showing the percent **remaining**
