@@ -17,7 +17,12 @@ import {
   inspectProjectStoreOwner,
   type ProjectStoreSummary,
 } from "../db/project-store.js";
-import { assertCompleteStableProjectId } from "./guarded-project-mutation.js";
+import {
+  assertCompleteStableProjectId,
+  deriveGuardedIdempotencyKey,
+  preconditionDigest,
+  requestDigest,
+} from "./guarded-project-mutation.js";
 import { prepareWorkspaceDirectory } from "./workspace-runtime.js";
 import {
   getProjectsHome,
@@ -69,6 +74,72 @@ export interface ProjectStoreEnsureResult {
 
 export const PROJECT_STORE_ENSURE_RESPONSE_BYTE_LIMIT = 65_536 as const;
 export const PROJECT_STORE_ENSURE_TIME_BUDGET_MS = 10_000 as const;
+
+const PROJECT_STORE_ENSURE_STEP_ID = "set-canonical-primary" as const;
+
+function receiptWorkspace(
+  value: JsonObject | null,
+  label: "before" | "after",
+  projectId: string,
+): Workspace {
+  if (!value || value.id !== projectId) {
+    throw new Error(`Guarded project store receipt ${label} snapshot does not match exact project ${projectId}`);
+  }
+  return value as unknown as Workspace;
+}
+
+function recoveredProjectStoreMutation(
+  lookup: Awaited<ReturnType<ProjectStore["lookupGuardedProjectMutationReceipt"]>>,
+  input: Parameters<ProjectStore["guardedUpdateProject"]>[0],
+  idempotencyKey: string,
+  canonicalPath: string,
+): GuardedProjectMutationResult {
+  const receipt = lookup.receipt;
+  const expectedRequestDigest = requestDigest(input.patch);
+  const expectedPreconditionDigest = preconditionDigest({
+    project_id: input.project_id,
+    expected_revision: input.expected_revision,
+  });
+  if (
+    receipt.operation_id !== input.operation_id
+    || receipt.step_id !== input.step_id
+    || receipt.direction !== "forward"
+    || receipt.idempotency_key !== idempotencyKey
+    || receipt.target_id !== input.project_id
+    || receipt.request_digest !== expectedRequestDigest
+    || receipt.precondition_digest !== expectedPreconditionDigest
+    || receipt.expected_revision !== input.expected_revision
+  ) {
+    throw new Error(`Guarded project store receipt reconciliation mismatch for exact project ${input.project_id}`);
+  }
+  if (receipt.outcome === "terminal_nonacceptance") {
+    throw new Error(`Guarded primary-path update authoritatively returned terminal_nonacceptance for project ${input.project_id}: ${receipt.reason ?? "unspecified"}`);
+  }
+  const before = receiptWorkspace(receipt.before, "before", input.project_id);
+  const after = receiptWorkspace(receipt.after, "after", input.project_id);
+  if (
+    receipt.result_project_id !== input.project_id
+    || !receipt.post_revision
+    || after.primary_path !== canonicalPath
+  ) {
+    throw new Error(`Guarded project store accepted receipt has an invalid result for exact project ${input.project_id}`);
+  }
+  return {
+    ok: true,
+    dry_run: false,
+    outcome: receipt.outcome,
+    idempotency_key: receipt.idempotency_key,
+    request_digest: receipt.request_digest,
+    precondition_digest: receipt.precondition_digest,
+    project_id: input.project_id,
+    expected_revision: input.expected_revision,
+    current_revision: receipt.post_revision,
+    before,
+    after,
+    receipt,
+    response_control: lookup.response_control,
+  };
+}
 
 export interface ProjectStoreMigrationAction {
   type: "file" | "db" | "verification";
@@ -301,6 +372,7 @@ export async function ensureProjectStoreForTarget(
 
   const run = async (): Promise<ProjectStoreEnsureResult> => {
     let localResult: ProjectStoreEnsureResult | null = null;
+    let compensationAuthorized = false;
     try {
       localResult = ensureProjectStore(guardedProject, {
         ...options,
@@ -309,20 +381,70 @@ export async function ensureProjectStoreForTarget(
       });
 
       if (!guardedProject.primary_path && options.setPrimaryIfMissing !== false) {
-        const registryMutation = await store.guardedUpdateProject({
+        const operationId = `project-store-ensure:${target}`;
+        const patch = { primary_path: localResult.paths.workspace_path };
+        const mutationInput = {
           project_id: target,
-          operation_id: `project-store-ensure:${target}`,
-          step_id: "set-canonical-primary",
+          operation_id: operationId,
+          step_id: PROJECT_STORE_ENSURE_STEP_ID,
           expected_revision: guarded.current_revision,
-          patch: { primary_path: localResult.paths.workspace_path },
+          patch,
           dry_run: Boolean(options.dryRun),
           agent_id: options.agentId,
           source: options.source ?? "cli",
           command: options.command,
           response_byte_limit: responseByteLimit,
           time_budget_ms: timeBudgetMs,
-        });
+        } as const;
+        let registryMutation: GuardedProjectMutationResult;
+        try {
+          registryMutation = await store.guardedUpdateProject(mutationInput);
+        } catch (updateError) {
+          if (options.dryRun) throw updateError;
+          const expectedRequestDigest = requestDigest(patch);
+          const expectedPreconditionDigest = preconditionDigest({
+            project_id: target,
+            expected_revision: guarded.current_revision,
+          });
+          const idempotencyKey = deriveGuardedIdempotencyKey({
+            operation_id: operationId,
+            step_id: PROJECT_STORE_ENSURE_STEP_ID,
+            direction: "forward",
+            target_id: target,
+            request_digest: expectedRequestDigest,
+            precondition_digest: expectedPreconditionDigest,
+          });
+          try {
+            const lookup = await store.lookupGuardedProjectMutationReceipt({
+              project_id: target,
+              operation_id: operationId,
+              step_id: PROJECT_STORE_ENSURE_STEP_ID,
+              direction: "forward",
+              idempotency_key: idempotencyKey,
+              max_items: 1,
+              response_byte_limit: responseByteLimit,
+              time_budget_ms: timeBudgetMs,
+            });
+            if (lookup.receipt.outcome === "terminal_nonacceptance") compensationAuthorized = true;
+            registryMutation = recoveredProjectStoreMutation(
+              lookup,
+              mutationInput,
+              idempotencyKey,
+              localResult.paths.workspace_path,
+            );
+          } catch (reconciliationError) {
+            if (compensationAuthorized) throw reconciliationError;
+            const updateMessage = updateError instanceof Error ? updateError.message : String(updateError);
+            const reconciliationMessage = reconciliationError instanceof Error
+              ? reconciliationError.message
+              : String(reconciliationError);
+            throw new Error(
+              `Guarded primary-path update outcome remains ambiguous for project ${target}; local store preserved. Update error: ${updateMessage}. Receipt reconciliation error: ${reconciliationMessage}`,
+            );
+          }
+        }
         if (!registryMutation.ok || !registryMutation.after) {
+          if (registryMutation.outcome === "terminal_nonacceptance") compensationAuthorized = true;
           throw new Error(`Guarded primary-path update did not accept project ${target}: ${registryMutation.outcome}`);
         }
         return {
@@ -334,7 +456,7 @@ export async function ensureProjectStoreForTarget(
       }
       return localResult;
     } catch (error) {
-      if (localResult && !localResult.dry_run) {
+      if (compensationAuthorized && localResult && !localResult.dry_run) {
         compensateCreatedStorePaths(localResult.created, localResult.paths);
       }
       throw error;

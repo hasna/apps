@@ -6,12 +6,14 @@ import { closeDatabase } from "../db/database.js";
 import { acquireWorkspaceLock, releaseWorkspaceLock } from "../db/workspaces.js";
 import type { ProjectStore } from "../store/project-store.js";
 import type {
+  GuardedProjectMutationReceiptLookupInput,
   GuardedProjectMutationRequest,
   GuardedProjectMutationResult,
   GuardedProjectReadRequest,
   JsonObject,
   Workspace,
 } from "../types/workspace.js";
+import { deriveGuardedIdempotencyKey, preconditionDigest, requestDigest } from "./guarded-project-mutation.js";
 import { ensureProjectStoreForTarget } from "./project-store.js";
 
 function workspace(id: string, primaryPath: string | null): Workspace {
@@ -41,13 +43,23 @@ function workspace(id: string, primaryPath: string | null): Workspace {
 
 function mutationResult(input: GuardedProjectMutationRequest, project: Workspace): GuardedProjectMutationResult {
   const after = { ...project, primary_path: input.patch.primary_path ?? project.primary_path, updated_at: "2026-08-07 00:00:02" };
+  const requestHash = requestDigest(input.patch);
+  const preconditionHash = preconditionDigest({ project_id: project.id, expected_revision: input.expected_revision });
+  const idempotencyKey = deriveGuardedIdempotencyKey({
+    operation_id: input.operation_id,
+    step_id: input.step_id,
+    direction: input.direction ?? "forward",
+    target_id: project.id,
+    request_digest: requestHash,
+    precondition_digest: preconditionHash,
+  });
   return {
     ok: true,
     dry_run: Boolean(input.dry_run),
     outcome: input.dry_run ? "planned" : "accepted",
-    idempotency_key: "gpm_store_ensure",
-    request_digest: "request",
-    precondition_digest: "precondition",
+    idempotency_key: idempotencyKey,
+    request_digest: requestHash,
+    precondition_digest: preconditionHash,
     project_id: project.id,
     expected_revision: input.expected_revision,
     current_revision: after.updated_at,
@@ -58,10 +70,10 @@ function mutationResult(input: GuardedProjectMutationRequest, project: Workspace
       operation_id: input.operation_id,
       step_id: input.step_id,
       direction: "forward",
-      idempotency_key: "gpm_store_ensure",
+      idempotency_key: idempotencyKey,
       target_id: project.id,
-      request_digest: "request",
-      precondition_digest: "precondition",
+      request_digest: requestHash,
+      precondition_digest: preconditionHash,
       expected_revision: input.expected_revision,
       outcome: "accepted",
       reason: null,
@@ -109,6 +121,12 @@ function apiStore(project: Workspace, updates: GuardedProjectMutationRequest[], 
       return mutationResult(input, project);
     },
   } as unknown as ProjectStore;
+}
+
+function abortError(message: string): Error {
+  const error = new Error(message);
+  error.name = "AbortError";
+  return error;
 }
 
 describe("API-backed project store ensure", () => {
@@ -176,7 +194,7 @@ describe("API-backed project store ensure", () => {
     }
   });
 
-  test("compensates only files created by a failed hosted repair", async () => {
+  test("preserves created files when a failed hosted repair has no authoritative receipt outcome", async () => {
     const root = mkdtempSync(join(tmpdir(), "projects-store-compensate-"));
     const previousHome = process.env.HASNA_PROJECTS_HOME;
     const previousDbPath = process.env.HASNA_PROJECTS_DB_PATH;
@@ -190,11 +208,106 @@ describe("API-backed project store ensure", () => {
     mkdirSync(dataPath, { recursive: true });
     writeFileSync(sentinel, "pre-existing\n");
     try {
-      await expect(ensureProjectStoreForTarget(apiStore(workspace(id, null), [], true), id)).rejects.toThrow("guarded update failed");
+      await expect(ensureProjectStoreForTarget(apiStore(workspace(id, null), [], true), id)).rejects.toThrow("outcome remains ambiguous");
       expect(existsSync(sentinel)).toBe(true);
       expect(existsSync(dataPath)).toBe(true);
-      expect(existsSync(join(dataPath, "project.db"))).toBe(false);
-      expect(existsSync(join(dataPath, "assets"))).toBe(false);
+      expect(existsSync(join(dataPath, "project.db"))).toBe(true);
+      expect(existsSync(join(dataPath, "assets"))).toBe(true);
+      expect(existsSync(join(home, "workspaces", id))).toBe(true);
+    } finally {
+      if (previousHome === undefined) delete process.env.HASNA_PROJECTS_HOME;
+      else process.env.HASNA_PROJECTS_HOME = previousHome;
+      closeDatabase();
+      if (previousDbPath === undefined) delete process.env.HASNA_PROJECTS_DB_PATH;
+      else process.env.HASNA_PROJECTS_DB_PATH = previousDbPath;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("reconciles an accepted receipt after an ambiguous transport abort before preserving the local store", async () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-store-ambiguous-accepted-"));
+    const previousHome = process.env.HASNA_PROJECTS_HOME;
+    const previousDbPath = process.env.HASNA_PROJECTS_DB_PATH;
+    const home = join(root, "home");
+    process.env.HASNA_PROJECTS_HOME = home;
+    process.env.HASNA_PROJECTS_DB_PATH = join(root, "registry.db");
+    closeDatabase();
+    const id = "wks_hostedambiguous001";
+    const project = workspace(id, null);
+    let accepted: GuardedProjectMutationResult | null = null;
+    const store = apiStore(project, []);
+    store.guardedUpdateProject = async (input) => {
+      accepted = mutationResult(input, project);
+      throw abortError("connection closed after hosted acceptance");
+    };
+    store.lookupGuardedProjectMutationReceipt = async (input: GuardedProjectMutationReceiptLookupInput) => {
+      expect(accepted).not.toBeNull();
+      expect(input).toMatchObject({
+        project_id: id,
+        operation_id: `project-store-ensure:${id}`,
+        step_id: "set-canonical-primary",
+        direction: "forward",
+        idempotency_key: accepted!.idempotency_key,
+        max_items: 1,
+      });
+      return {
+        receipt: accepted!.receipt!,
+        response_control: accepted!.response_control,
+      };
+    };
+    try {
+      const applied = await ensureProjectStoreForTarget(store, id);
+      expect(applied.registry_mutation?.receipt?.receipt_id).toBe("gpmr_store_ensure");
+      expect(applied.project.primary_path).toBe(applied.paths.workspace_path);
+      expect(existsSync(applied.paths.project_db_path)).toBe(true);
+      expect(existsSync(applied.paths.assets_path)).toBe(true);
+    } finally {
+      if (previousHome === undefined) delete process.env.HASNA_PROJECTS_HOME;
+      else process.env.HASNA_PROJECTS_HOME = previousHome;
+      closeDatabase();
+      if (previousDbPath === undefined) delete process.env.HASNA_PROJECTS_DB_PATH;
+      else process.env.HASNA_PROJECTS_DB_PATH = previousDbPath;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("compensates only after an exact receipt proves the hosted repair never accepted", async () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-store-ambiguous-rejected-"));
+    const previousHome = process.env.HASNA_PROJECTS_HOME;
+    const previousDbPath = process.env.HASNA_PROJECTS_DB_PATH;
+    const home = join(root, "home");
+    process.env.HASNA_PROJECTS_HOME = home;
+    process.env.HASNA_PROJECTS_DB_PATH = join(root, "registry.db");
+    closeDatabase();
+    const id = "wks_hostedneveraccepted01";
+    const project = workspace(id, null);
+    const store = apiStore(project, []);
+    let attempted: GuardedProjectMutationRequest | null = null;
+    store.guardedUpdateProject = async (input) => {
+      attempted = input;
+      throw abortError("connection closed before hosted acceptance");
+    };
+    store.lookupGuardedProjectMutationReceipt = async (input: GuardedProjectMutationReceiptLookupInput) => {
+      expect(attempted).not.toBeNull();
+      const terminal = mutationResult(attempted!, project);
+      return {
+        receipt: {
+          ...terminal.receipt!,
+          receipt_id: "gpmr_store_never_accepted",
+          idempotency_key: input.idempotency_key,
+          outcome: "terminal_nonacceptance",
+          reason: "revision_mismatch",
+          result_project_id: null,
+          after: null,
+          post_revision: null,
+        },
+        response_control: terminal.response_control,
+      };
+    };
+    try {
+      await expect(ensureProjectStoreForTarget(store, id)).rejects.toThrow("terminal_nonacceptance");
+      expect(existsSync(join(home, "data", id, "project.db"))).toBe(false);
+      expect(existsSync(join(home, "data", id, "assets"))).toBe(false);
       expect(existsSync(join(home, "workspaces", id))).toBe(false);
     } finally {
       if (previousHome === undefined) delete process.env.HASNA_PROJECTS_HOME;
