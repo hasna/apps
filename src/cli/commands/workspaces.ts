@@ -30,6 +30,12 @@ import {
   type WorkspaceCreationCleanupTarget,
   type WorkspaceCreationPlanAction,
 } from "../../lib/workspace-plan.js";
+import {
+  ProjectRegistrationPathHandle,
+  registerFullProject,
+  unavailableProjectRegistrationAuthorities,
+  type FullProjectRegistrationProjectInput,
+} from "../../lib/project-registration.js";
 import { doctorWorkspace } from "../../lib/workspace-doctor.js";
 import { resolveProjectStore, type ProjectStore } from "../../store/project-store.js";
 
@@ -106,6 +112,7 @@ import { PROJECT_AGENT_ROLES, WORKSPACE_KINDS, WORKSPACE_STATUSES, type AgentKin
 const DEFAULT_LIST_LIMIT = 25;
 const DEFAULT_EVENT_LIMIT = 20;
 const MAX_HUMAN_LIMIT = 200;
+const FULL_REGISTRATION_STDIN_LIMIT = 64 * 1024;
 
 function wantsRenderSpec(opts?: { renderSpec?: boolean }): boolean {
   return Boolean(opts?.renderSpec || process.argv.includes("--render-spec"));
@@ -201,6 +208,57 @@ function parseJsonObject(value: string | undefined, label: string): JsonObject |
     throw new Error(`${label} must be a JSON object`);
   }
   return parsed as JsonObject;
+}
+
+async function readBoundedStdinJson(maxBytes = FULL_REGISTRATION_STDIN_LIMIT): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  for await (const chunk of process.stdin) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    bytes += buffer.length;
+    if (bytes > maxBytes) {
+      throw new Error(`register-full stdin exceeds ${maxBytes} bytes`);
+    }
+    chunks.push(buffer);
+  }
+  if (bytes === 0) throw new Error("register-full requires one JSON object on stdin");
+  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+}
+
+function parseFullRegistrationPayload(value: unknown): {
+  operation_id: string;
+  project: FullProjectRegistrationProjectInput;
+  target_path: string;
+  goals_markdown: string;
+  response_byte_limit: number;
+  time_budget_ms: number;
+} {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("register-full stdin must be a JSON object");
+  }
+  const payload = value as Record<string, unknown>;
+  if (typeof payload.operation_id !== "string") throw new Error("register-full operation_id must be a string");
+  if (typeof payload.target_path !== "string") throw new Error("register-full target_path must be a string");
+  if (typeof payload.goals_markdown !== "string") throw new Error("register-full goals_markdown must be a string");
+  if (!payload.project || typeof payload.project !== "object" || Array.isArray(payload.project)) {
+    throw new Error("register-full project must be a JSON object");
+  }
+  const project = payload.project as Record<string, unknown>;
+  if (typeof project.name !== "string") throw new Error("register-full project.name must be a string");
+  if (payload.response_byte_limit !== undefined && typeof payload.response_byte_limit !== "number") {
+    throw new Error("register-full response_byte_limit must be a number");
+  }
+  if (payload.time_budget_ms !== undefined && typeof payload.time_budget_ms !== "number") {
+    throw new Error("register-full time_budget_ms must be a number");
+  }
+  return {
+    operation_id: payload.operation_id,
+    project: payload.project as FullProjectRegistrationProjectInput,
+    target_path: payload.target_path,
+    goals_markdown: payload.goals_markdown,
+    response_byte_limit: payload.response_byte_limit ?? 512_000,
+    time_budget_ms: payload.time_budget_ms ?? 30_000,
+  };
 }
 
 function parseJsonArray<T>(value: string | undefined, label: string): T[] | undefined {
@@ -1424,6 +1482,51 @@ function registerProjectStartCommand(program: Command): void {
 }
 
 function registerProjectCommands(program: Command): void {
+  program
+    .command("register-full")
+    .description("Run bounded all-or-nothing project registration from one JSON object on stdin")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      try {
+        const payload = parseFullRegistrationPayload(await readBoundedStdinJson());
+        const result = await registerFullProject({
+          operation_id: payload.operation_id,
+          project: payload.project,
+          target: ProjectRegistrationPathHandle.fromPath(payload.target_path),
+          goals_markdown: payload.goals_markdown,
+          response_byte_limit: payload.response_byte_limit,
+          time_budget_ms: payload.time_budget_ms,
+        }, {
+          authorities: unavailableProjectRegistrationAuthorities(),
+        });
+        if (wantsJson(opts)) {
+          printObject(result, opts);
+        } else if (result.ok) {
+          console.log(chalk.green(`✓ Full project registration: ${result.project_slug}`));
+        } else {
+          console.error(chalk.red(`Full project registration refused: ${result.reason_code}`));
+          for (const dependency of result.dependencies) {
+            console.error(chalk.dim(`  ${dependency.authority}: Todos ${dependency.dependency_task_id}`));
+          }
+        }
+        if (!result.ok) process.exitCode = 1;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (wantsJson(opts)) {
+          printObject({
+            ok: false,
+            outcome: "no_go",
+            reason_code: "invalid_bounded_stdin_request",
+            error: message,
+          }, opts);
+          process.exitCode = 1;
+          return;
+        }
+        console.error(chalk.red(message));
+        process.exitCode = 1;
+      }
+    });
+
   program
     .command("create")
     .description("Create or plan a project anywhere on disk")

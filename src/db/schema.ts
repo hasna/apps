@@ -370,6 +370,75 @@ export const MIGRATIONS: string[] = [
 
   INSERT OR IGNORE INTO _migrations (id) VALUES (8);
   `,
+
+  // Migration 9: Immutable full project-registration manifests and receipts
+  `
+  CREATE TABLE IF NOT EXISTS project_registration_manifests (
+    operation_id TEXT PRIMARY KEY,
+    route TEXT NOT NULL,
+    request_digest TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    project_slug TEXT NOT NULL,
+    plan_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS project_registration_receipts (
+    receipt_id TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL REFERENCES project_registration_manifests(operation_id),
+    sequence INTEGER NOT NULL,
+    step_id TEXT NOT NULL,
+    authority TEXT NOT NULL,
+    resource_kind TEXT NOT NULL,
+    direction TEXT NOT NULL CHECK(direction IN ('forward', 'inverse')),
+    idempotency_key TEXT NOT NULL,
+    target_id TEXT,
+    request_digest TEXT NOT NULL,
+    precondition_digest TEXT NOT NULL,
+    outcome TEXT NOT NULL CHECK(outcome IN ('accepted', 'duplicate_of_accepted', 'terminal_nonacceptance')),
+    reason TEXT,
+    result_revision TEXT,
+    result_digest TEXT,
+    duplicate_of_receipt_id TEXT,
+    authority_receipt_json TEXT,
+    artifacts_json TEXT NOT NULL DEFAULT '[]',
+    preconditions_json TEXT NOT NULL DEFAULT '[]',
+    rollback_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(operation_id, sequence)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_project_registration_receipts_lookup
+    ON project_registration_receipts(operation_id, step_id, direction, idempotency_key);
+  CREATE INDEX IF NOT EXISTS idx_project_registration_receipts_target
+    ON project_registration_receipts(authority, resource_kind, target_id, created_at);
+
+  CREATE TRIGGER IF NOT EXISTS project_registration_manifests_no_update
+  BEFORE UPDATE ON project_registration_manifests
+  BEGIN
+    SELECT RAISE(ABORT, 'project registration manifests are immutable');
+  END;
+
+  CREATE TRIGGER IF NOT EXISTS project_registration_manifests_no_delete
+  BEFORE DELETE ON project_registration_manifests
+  BEGIN
+    SELECT RAISE(ABORT, 'project registration manifests are immutable');
+  END;
+
+  CREATE TRIGGER IF NOT EXISTS project_registration_receipts_no_update
+  BEFORE UPDATE ON project_registration_receipts
+  BEGIN
+    SELECT RAISE(ABORT, 'project registration receipts are immutable');
+  END;
+
+  CREATE TRIGGER IF NOT EXISTS project_registration_receipts_no_delete
+  BEFORE DELETE ON project_registration_receipts
+  BEGIN
+    SELECT RAISE(ABORT, 'project registration receipts are immutable');
+  END;
+
+  INSERT OR IGNORE INTO _migrations (id) VALUES (9);
+  `,
 ];
 
 export function runMigrations(db: Database): void {

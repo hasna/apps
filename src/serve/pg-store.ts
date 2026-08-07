@@ -511,7 +511,10 @@ export class ProjectsPgStore {
     if (!input.name?.trim()) throw new ValidationError("workspace name is required");
     const id = input.id ?? generateWorkspaceId();
     const ts = nowIso();
-    const slug = await this.ensureUniqueSlug("workspaces", input.slug ?? slugify(input.name));
+    const requestedSlug = slugify(input.slug ?? input.name);
+    const slug = input.require_exact_identity
+      ? requestedSlug
+      : await this.ensureUniqueSlug("workspaces", requestedSlug);
 
     const root = input.root_id ? await this.getRoot(input.root_id) : null;
     if (input.root_id && !root) throw new ValidationError(`Root not found: ${input.root_id}`);

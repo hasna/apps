@@ -47,6 +47,7 @@ import { assertProjectWorkspaceId, projectWorkspaceStorePath } from "./project-s
 
 export interface WorkspaceCreationPlanInput extends CreateWorkspaceInput {
   createDirectory?: boolean;
+  requireAbsentDirectory?: boolean;
   gitInit?: boolean;
   writeMarker?: boolean;
   tmux?: {
@@ -137,6 +138,10 @@ export interface ExecuteWorkspaceCreationOptions {
    * (directory/git/tmux/channel) below are intentionally NOT part of the seam.
    */
   createProject?: (input: CreateWorkspaceInput) => Promise<Workspace>;
+  /** Preserve the legacy creation_failed event by default; registration owns a separate immutable failure ledger. */
+  recordFailureEvent?: boolean;
+  /** Preserve the legacy creation_executed event by default. */
+  recordExecutionEvent?: boolean;
 }
 
 export interface CleanupWorkspaceCreationOptions {
@@ -146,6 +151,10 @@ export interface CleanupWorkspaceCreationOptions {
   source?: EventSource;
   prompt?: string;
   command?: string;
+  /** Preserve the legacy hard-delete event by default. */
+  recordDeletionEvent?: boolean;
+  /** Preserve the legacy creation_cleanup_applied event by default. */
+  recordCleanupEvent?: boolean;
 }
 
 function normalizeList(values: string[] | undefined): string[] {
@@ -231,7 +240,10 @@ function plannedWorkspace(input: WorkspaceCreationPlanInput, db?: Database): {
   if (input.recipe_id && !recipe) throw new Error(`Recipe not found: ${input.recipe_id}`);
 
   const id = input.id ? assertProjectWorkspaceId(input.id) : generateWorkspaceId();
-  const slug = uniqueWorkspaceSlug(input.slug ?? workspaceSlugify(input.name), db);
+  const requestedSlug = workspaceSlugify(input.slug ?? input.name);
+  const slug = input.require_exact_identity
+    ? requestedSlug
+    : uniqueWorkspaceSlug(requestedSlug, db);
   const kind = input.kind ?? recipe?.kind ?? root?.default_kind ?? "generic";
   const tags = normalizeList([
     ...(root?.tags ?? []),
@@ -274,6 +286,7 @@ function plannedWorkspace(input: WorkspaceCreationPlanInput, db?: Database): {
       id,
       name: input.name,
       slug,
+      require_exact_identity: input.require_exact_identity,
       description: input.description,
       kind: kind as WorkspaceKind,
       root_id: root?.id,
@@ -327,6 +340,7 @@ function runtimePlan(workspace: Workspace, input: WorkspaceCreationPlanInput): {
     return {
       actions: prepareWorkspaceDirectory(workspace, {
         createDirectory: input.createDirectory || input.gitInit,
+        requireAbsentDirectory: input.requireAbsentDirectory,
         gitInit: input.gitInit,
         writeMarker: input.writeMarker,
         dryRun: true,
@@ -561,6 +575,7 @@ function applyCleanupAction(
       if (options.dryRun) return cleanupResult(action, "planned");
       deleteWorkspace(workspace.id, {
         hard: true,
+        recordEvent: options.recordDeletionEvent,
         agent_id: options.agentId,
         source: options.source ?? "cli",
         prompt: options.prompt,
@@ -588,7 +603,7 @@ export function cleanupWorkspaceCreationTarget(
     .map((action) => applyCleanupAction(target, action, options));
   const errors = actions.filter((action) => action.status === "failed").map((action) => `${action.action} ${action.target}: ${action.message ?? "failed"}`);
 
-  if (!options.dryRun) {
+  if (!options.dryRun && options.recordCleanupEvent !== false) {
     recordWorkspaceEvent({
       workspace_id: getWorkspaceBySlug(target.workspace_slug, options.db)?.id,
       agent_id: options.agentId,
@@ -666,6 +681,7 @@ export async function executeWorkspaceCreation(
     const runtimeDryRun = Boolean(options.runtimeDryRun);
     const prepare = prepareWorkspaceDirectory(workspace, {
       createDirectory: input.createDirectory || input.gitInit,
+      requireAbsentDirectory: input.requireAbsentDirectory,
       gitInit: input.gitInit,
       writeMarker: input.writeMarker,
       dryRun: runtimeDryRun,
@@ -714,16 +730,18 @@ export async function executeWorkspaceCreation(
       workspace = channel.project;
     }
 
-    recordWorkspaceEvent({
-      workspace_id: workspace.id,
-      agent_id: input.agent_id,
-      event_type: runtimeDryRun ? "creation_runtime_planned" : "creation_executed",
-      source,
-      prompt: input.prompt,
-      command: input.command,
-      after: { plan, prepare, tmux, channel } as unknown as JsonObject,
-      metadata: { rollback_actions: plan.rollback_actions },
-    }, options.db);
+    if (options.recordExecutionEvent !== false) {
+      recordWorkspaceEvent({
+        workspace_id: workspace.id,
+        agent_id: input.agent_id,
+        event_type: runtimeDryRun ? "creation_runtime_planned" : "creation_executed",
+        source,
+        prompt: input.prompt,
+        command: input.command,
+        after: { plan, prepare, tmux, channel } as unknown as JsonObject,
+        metadata: { rollback_actions: plan.rollback_actions },
+      }, options.db);
+    }
 
     released = releaseLocks(acquired, options.db);
     return {
@@ -740,16 +758,18 @@ export async function executeWorkspaceCreation(
       rollback_actions: plan.rollback_actions,
     };
   } catch (err) {
-    recordWorkspaceEvent({
-      workspace_id: workspace?.id,
-      agent_id: input.agent_id,
-      event_type: "creation_failed",
-      source,
-      prompt: input.prompt,
-      command: input.command,
-      after: { plan, error: err instanceof Error ? err.message : String(err) } as unknown as JsonObject,
-      metadata: { rollback_actions: plan.rollback_actions },
-    }, options.db);
+    if (options.recordFailureEvent !== false) {
+      recordWorkspaceEvent({
+        workspace_id: workspace?.id,
+        agent_id: input.agent_id,
+        event_type: "creation_failed",
+        source,
+        prompt: input.prompt,
+        command: input.command,
+        after: { plan, error: err instanceof Error ? err.message : String(err) } as unknown as JsonObject,
+        metadata: { rollback_actions: plan.rollback_actions },
+      }, options.db);
+    }
     throw err;
   } finally {
     if (released.length === 0) releaseLocks(acquired, options.db);
