@@ -122,6 +122,46 @@ function duplicateSlugClient(): TypedQueryClient {
   } as TypedQueryClient;
 }
 
+function guardedReadClient() {
+  const workspace: WorkspaceRow = {
+    id: "wks_guardedread0001",
+    slug: "guarded-read",
+    name: "Guarded Read",
+    description: null,
+    kind: "project",
+    status: "active",
+    root_id: null,
+    recipe_id: null,
+    canonical_machine: null,
+    primary_path: "/srv/projects/guarded-read",
+    git_remote: null,
+    s3_bucket: null,
+    s3_prefix: null,
+    tags: "[]",
+    integrations: "{}",
+    metadata: "{}",
+    last_opened_at: null,
+    created_at: "2026-08-07 00:00:00",
+    updated_at: "2026-08-07 00:00:01",
+    synced_at: null,
+  };
+  const queries: Array<{ sql: string; params: readonly unknown[] }> = [];
+  const client = {
+    async get<T>(sql: string, params: readonly unknown[] = []): Promise<T | null> {
+      queries.push({ sql, params });
+      if (sql === "SELECT * FROM workspaces WHERE id = $1" && params[0] === workspace.id) {
+        return workspace as T;
+      }
+      return null;
+    },
+    async execute() { throw new Error("guarded read must not write"); },
+    async many() { throw new Error("Unexpected many query"); },
+    async one() { throw new Error("Unexpected one query"); },
+    async query() { throw new Error("Unexpected query"); },
+  } as TypedQueryClient;
+  return { client, workspace, queries };
+}
+
 describe("pg-store pure helpers", () => {
   test("slugify normalizes to kebab-case", () => {
     expect(slugify("Hello, World!")).toBe("hello-world");
@@ -131,6 +171,63 @@ describe("pg-store pure helpers", () => {
   test("id generators carry stable prefixes", () => {
     expect(generateWorkspaceId()).toMatch(/^wks_/);
     expect(generateRootId()).toMatch(/^root_/);
+  });
+});
+
+describe("pg-store guarded exact project read", () => {
+  test("reads only by exact id and returns the current revision in a complete envelope", async () => {
+    const { client, workspace, queries } = guardedReadClient();
+    const result = await new ProjectsPgStore(client).guardedReadWorkspace({
+      project_id: workspace.id,
+      response_byte_limit: 16_384,
+      time_budget_ms: 5_000,
+    });
+
+    expect(result.project_id).toBe(workspace.id);
+    expect(result.current_revision).toBe(workspace.updated_at);
+    expect(result.response_control.complete).toBe(true);
+    expect(result.response_control.truncated).toBe(false);
+    expect(queries).toEqual([{
+      sql: "SELECT * FROM workspaces WHERE id = $1",
+      params: [workspace.id],
+    }]);
+  });
+
+  test("rejects slug and partial targets before querying", async () => {
+    const { client, workspace, queries } = guardedReadClient();
+    const store = new ProjectsPgStore(client);
+    await expect(store.guardedReadWorkspace({
+      project_id: workspace.slug,
+      response_byte_limit: 16_384,
+      time_budget_ms: 5_000,
+    })).rejects.toThrow(/complete stable project id/);
+    expect(queries).toHaveLength(0);
+
+    const partial = workspace.id.slice(0, -1);
+    await expect(store.guardedReadWorkspace({
+      project_id: partial,
+      response_byte_limit: 16_384,
+      time_budget_ms: 5_000,
+    })).rejects.toThrow(`Workspace not found: ${partial}`);
+    expect(queries).toEqual([{
+      sql: "SELECT * FROM workspaces WHERE id = $1",
+      params: [partial],
+    }]);
+  });
+
+  test("fails closed on response-byte and whole-operation time limits without writing", async () => {
+    const { client, workspace } = guardedReadClient();
+    const store = new ProjectsPgStore(client);
+    await expect(store.guardedReadWorkspace({
+      project_id: workspace.id,
+      response_byte_limit: 1,
+      time_budget_ms: 5_000,
+    })).rejects.toThrow(/response byte budget exceeded/);
+    await expect(store.guardedReadWorkspace({
+      project_id: workspace.id,
+      response_byte_limit: 16_384,
+      time_budget_ms: 1,
+    }, Date.now() - 50)).rejects.toThrow(/time budget exceeded/);
   });
 });
 

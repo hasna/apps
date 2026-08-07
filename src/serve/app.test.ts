@@ -287,6 +287,45 @@ describe("projects-serve auth", () => {
     expect(body.response_control.response_byte_limit).toBe(50_000);
   });
 
+  test("GET guarded metadata reads one exact id with producer bounds and revision envelope", async () => {
+    const projectId = "wks_httpguarded0001";
+    const calls: Array<{ project_id: string; response_byte_limit: number; time_budget_ms: number }> = [];
+    const store = {
+      async ping() {
+        return true;
+      },
+      async guardedReadWorkspace(input: { project_id: string; response_byte_limit: number; time_budget_ms: number }) {
+        calls.push(input);
+        return {
+          ok: true,
+          project_id: input.project_id,
+          current_revision: "2026-08-07 00:00:01",
+          response_control: {
+            response_byte_limit: input.response_byte_limit,
+            time_budget_ms: input.time_budget_ms,
+            response_bytes: 512,
+            elapsed_ms: 1,
+            complete: true,
+            truncated: false,
+          },
+        };
+      },
+    } as unknown as ProjectsPgStore;
+    const h = createFetchHandler({ store, version: "9.9.9", app: "projects", signingSecret: SIGNING_SECRET });
+    const token = keyWith(["projects:read"]);
+    const res = await h(new Request(
+      `http://x/v1/projects/${projectId}/guarded-metadata?response_byte_limit=16384&time_budget_ms=5000`,
+      { headers: { "x-api-key": token } },
+    ));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(calls).toEqual([{ project_id: projectId, response_byte_limit: 16_384, time_budget_ms: 5_000 }]);
+    expect(body.project_id).toBe(projectId);
+    expect(body.current_revision).toBe("2026-08-07 00:00:01");
+    expect(body.response_control.complete).toBe(true);
+    expect(body.response_control.truncated).toBe(false);
+  });
+
   test("Authorization: Bearer scheme is accepted", async () => {
     const token = keyWith(["projects:read"]);
     const res = await handler()(

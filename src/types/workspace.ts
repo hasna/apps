@@ -329,6 +329,17 @@ export interface GuardedProjectMutationControl extends GuardedProjectMutationBou
   truncated: boolean;
 }
 
+export interface GuardedProjectReadRequest extends GuardedProjectMutationBounds {
+  project_id: string;
+}
+
+export interface GuardedProjectReadResult {
+  ok: true;
+  project_id: string;
+  current_revision: string;
+  response_control: GuardedProjectMutationControl;
+}
+
 export interface GuardedProjectMutationReceipt {
   receipt_id: string;
   operation_id: string;
