@@ -2,13 +2,15 @@
 // Regenerate: bun run sdk:generate
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: ConversationsClient 0.5.22
+// Source: ConversationsClient 0.5.28
 
 export interface Message { "id"?: number; "uuid"?: string; "session_id"?: string; "from_agent"?: string; "to_agent"?: string; "channel"?: string | null; "project_id"?: string | null; "content"?: string; "priority"?: string; "blocking"?: boolean; "reply_to"?: number | null; "created_at"?: string }
 
 export interface Channel { "name"?: string; "description"?: string | null; "topic"?: string | null; "project_id"?: string | null; "created_by"?: string; "created_at"?: string; "archived_at"?: string | null; "metadata"?: Record<string, unknown> | null; "tags"?: Array<string> }
 
 export interface Project { "id"?: string; "name"?: string; "description"?: string | null; "path"?: string | null; "repository"?: string | null; "created_by"?: string; "status"?: string; "created_at"?: string }
+
+export interface ProjectPage { "projects": Array<Project>; "count": number; "cursor": number; "limit"?: number | null; "has_more": boolean; "next_cursor": number | null }
 
 export interface Agent { "agent"?: string; "session_id"?: string | null; "role"?: string; "project_id"?: string; "status"?: string; "last_seen_at"?: string }
 
@@ -115,7 +117,7 @@ export class ConversationsClient {
       });
     }
 
-    async listChannels(query?: { "include_archived"?: boolean }, init?: RequestInit): Promise<Record<string, unknown>> {
+    async listChannels(query?: { "include_archived"?: boolean; "project_id"?: string }, init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("GET", `/v1/channels`, {
         body: undefined,
         query,
@@ -206,7 +208,7 @@ export class ConversationsClient {
       });
     }
 
-    async listProjects(query?: { "status"?: string }, init?: RequestInit): Promise<Record<string, unknown>> {
+    async listProjects(query?: { "status"?: string; "limit"?: number; "cursor"?: number; "offset"?: number }, init?: RequestInit): Promise<ProjectPage> {
       return this.request("GET", `/v1/projects`, {
         body: undefined,
         query,

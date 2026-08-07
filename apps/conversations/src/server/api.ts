@@ -29,6 +29,7 @@ import { assertNoSensitiveContent, redactSensitiveText, redactSensitiveValue } f
 import { resolveSelfSenderId } from "../lib/sender-identity.js";
 import { normalizeMessageUuid, parseMessageReference } from "../lib/message-reference.js";
 import { normalizeExactIsoTimestamp } from "../lib/since.js";
+import { PROJECT_LIST_ORDER, simpleOrderByClause } from "../lib/list-order.js";
 
 export const APP = "conversations";
 const SCOPE_READ = `${APP}:read`;
@@ -1461,15 +1462,46 @@ async function handleV1(
     if (name) { params.push(name); clauses.push(`name = $${params.length}`); }
     if (tag) { params.push(`%"${tag}"%`); clauses.push(`tags LIKE $${params.length}`); }
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-    const limitRaw = str(url.searchParams.get("limit"));
-    const limitClause = limitRaw && /^\d+$/.test(limitRaw) ? ` LIMIT ${Math.min(Number(limitRaw), 1000)}` : "";
-    const rows = await client.many<Record<string, unknown>>(
+    const limitRaw = url.searchParams.get("limit");
+    const cursorRaw = url.searchParams.get("cursor");
+    const offsetRaw = url.searchParams.get("offset");
+    if (limitRaw !== null && !/^[1-9]\d*$/.test(limitRaw)) {
+      return fieldError("limit", limitRaw, "limit must be a positive integer.", "Pass limit=1 or greater.");
+    }
+    for (const [field, raw] of [["cursor", cursorRaw], ["offset", offsetRaw]] as const) {
+      if (raw !== null && !/^\d+$/.test(raw)) {
+        return fieldError(field, raw, `${field} must be a non-negative integer.`, `Pass ${field}=0 or greater.`);
+      }
+    }
+
+    const limit = limitRaw === null ? undefined : Math.min(Number(limitRaw), 1000);
+    const offset = Number(cursorRaw ?? offsetRaw ?? "0");
+    let paginationClause = "";
+    if (limit !== undefined) {
+      params.push(limit + 1);
+      paginationClause += ` LIMIT $${params.length}`;
+    }
+    if (offset > 0) {
+      params.push(offset);
+      paginationClause += ` OFFSET $${params.length}`;
+    }
+
+    const fetched = await client.many<Record<string, unknown>>(
       `SELECT p.id, p.name, p.description, p.path, p.repository, p.created_by, p.created_at, p.status, p.tags, p.metadata, p.settings,
               (SELECT COUNT(*) FROM channels WHERE project_id = p.id)::int AS channel_count
-       FROM projects p ${where} ORDER BY p.created_at DESC${limitClause}`,
+       FROM projects p ${where} ${simpleOrderByClause(PROJECT_LIST_ORDER, "p.")}${paginationClause}`,
       params,
     );
-    return json({ projects: rows.map(parseServerProject) });
+    const hasMore = limit !== undefined && fetched.length > limit;
+    const page = hasMore ? fetched.slice(0, limit) : fetched;
+    return json({
+      projects: page.map(parseServerProject),
+      count: page.length,
+      cursor: offset,
+      limit: limit ?? null,
+      has_more: hasMore,
+      next_cursor: hasMore ? offset + page.length : null,
+    });
   }
 
   if (sub === "projects" && method === "POST") {

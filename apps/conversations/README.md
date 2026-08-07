@@ -82,6 +82,7 @@ conversations show 123                     # one full message
 conversations read --to codex --json       # full machine-readable records
 conversations read --to codex --limit 10 --cursor 10
 conversations digest engineering --cursor 123 --max-bytes 8192 --json
+conversations project list --page-json --limit 100 --cursor 0
 ```
 
 The same gradual disclosure pattern applies to channel reads, message search,
@@ -93,6 +94,11 @@ For long-running loops and autonomous agents, `conversations digest <channel>`
 returns a stable compact evidence packet instead of replaying the full channel.
 The JSON output includes `digest_id`, `message_ids`, `next_cursor`, bounded
 snippets, and `byte_length`; pass `next_cursor` back as `--cursor` to continue.
+
+`project list --json` retains its legacy bare-array output. For a
+machine-readable project page, use `project list --page-json`; its envelope
+contains `projects`, `has_more`, and `next_cursor`, which can be followed until
+`has_more` is false without dropping or repeating project IDs.
 Digests are non-destructive by default. Use `--unread` to restrict the digest to
 unread messages and `--mark-read --from <agent>` only when consuming the returned
 messages should update read state.

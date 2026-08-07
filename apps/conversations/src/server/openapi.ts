@@ -77,6 +77,18 @@ export const openapiSpec = {
           created_at: { type: "string" },
         },
       },
+      ProjectPage: {
+        type: "object",
+        required: ["projects", "count", "cursor", "has_more", "next_cursor"],
+        properties: {
+          projects: { type: "array", items: { $ref: "#/components/schemas/Project" } },
+          count: { type: "integer" },
+          cursor: { type: "integer" },
+          limit: { type: "integer", nullable: true },
+          has_more: { type: "boolean" },
+          next_cursor: { type: "integer", nullable: true },
+        },
+      },
       Agent: {
         type: "object",
         properties: {
@@ -226,7 +238,10 @@ export const openapiSpec = {
     "/v1/channels": {
       get: {
         operationId: "listChannels",
-        parameters: [{ name: "include_archived", in: "query", schema: { type: "boolean" } }],
+        parameters: [
+          { name: "include_archived", in: "query", schema: { type: "boolean" } },
+          { name: "project_id", in: "query", schema: { type: "string" } },
+        ],
         responses: { "200": { description: "channels", content: { "application/json": { schema: okObject } } } },
       },
       post: {
@@ -278,8 +293,19 @@ export const openapiSpec = {
     "/v1/projects": {
       get: {
         operationId: "listProjects",
-        parameters: [{ name: "status", in: "query", schema: { type: "string" } }],
-        responses: { "200": { description: "projects", content: { "application/json": { schema: okObject } } } },
+        parameters: [
+          { name: "status", in: "query", schema: { type: "string" } },
+          { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 1000 } },
+          { name: "cursor", in: "query", description: "Zero-based continuation offset", schema: { type: "integer", minimum: 0 } },
+          { name: "offset", in: "query", description: "Alias for cursor", schema: { type: "integer", minimum: 0 } },
+        ],
+        responses: {
+          "200": {
+            description: "project page",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/ProjectPage" } } },
+          },
+          "400": { description: "invalid pagination", content: { "application/json": { schema: errorObject } } },
+        },
       },
       post: {
         operationId: "createProject",

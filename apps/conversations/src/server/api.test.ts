@@ -5,20 +5,44 @@ import { verifyApiKey, ApiKeyStore } from "@hasna/contracts/auth";
 
 // In-memory query shim standing in for the vendored kit's TypedQueryClient.
 // Exercises the router + auth without a live Postgres.
-function makeFakeClient() {
+function makeFakeClient(initialProjects: Array<Record<string, any>> = [
+  { id: "proj-valid", name: "Chief of Harness" },
+]) {
   const channels: Record<string, any> = {};
   const channelMembers = new Set<string>();
   const messages: any[] = [];
   const messageMentions: any[] = [];
   const agentPresence = new Map<string, any>();
   const manyCalls: Array<{ sql: string; params: readonly unknown[] }> = [];
-  const projects: Record<string, any> = {
-    "proj-valid": { id: "proj-valid", name: "Chief of Harness" },
-  };
+  const projects: Record<string, any> = Object.fromEntries(
+    initialProjects.map((project) => [project.id, { ...project }]),
+  );
   let nextId = 1;
   const client = {
     async many(sql: string, _p: readonly unknown[] = []): Promise<any[]> {
       manyCalls.push({ sql, params: [..._p] });
+      // Project list SQL contains a channel-count subquery, so identify the
+      // outer projects query before the broader channel matcher below.
+      if (/FROM projects/i.test(sql)) {
+        let rows = Object.values(projects);
+        if (/ORDER BY p\.name ASC/i.test(sql)) {
+          rows = rows.slice().sort((a, b) => String(a.name).localeCompare(String(b.name)));
+        }
+
+        const parameterValue = (keyword: "LIMIT" | "OFFSET"): number | undefined => {
+          const match = sql.match(new RegExp(`${keyword}\\s+\\$(\\d+)`, "i"));
+          if (!match) return undefined;
+          const value = Number(_p[Number(match[1]) - 1]);
+          return Number.isFinite(value) ? value : undefined;
+        };
+        const literalValue = (keyword: "LIMIT" | "OFFSET"): number | undefined => {
+          const match = sql.match(new RegExp(`${keyword}\\s+(\\d+)`, "i"));
+          return match ? Number(match[1]) : undefined;
+        };
+        const offset = parameterValue("OFFSET") ?? literalValue("OFFSET") ?? 0;
+        const limit = parameterValue("LIMIT") ?? literalValue("LIMIT");
+        return limit === undefined ? rows.slice(offset) : rows.slice(offset, offset + limit);
+      }
       if (/FROM channels/i.test(sql)) {
         return Object.values(channels).map((row) => ({
           ...row,
@@ -27,7 +51,6 @@ function makeFakeClient() {
         }));
       }
       if (/FROM messages/i.test(sql)) return messages.slice().reverse();
-      if (/FROM projects/i.test(sql)) return Object.values(projects);
       if (/revoked_at IS NOT NULL/i.test(sql)) return [];
       return [];
     },
@@ -226,7 +249,7 @@ function makeFakeClient() {
         channelMembers.add(`${channel}:${agent}`);
       }
     },
-    __debug: { messages, messageMentions, agentPresence, manyCalls },
+    __debug: { messages, messageMentions, agentPresence, manyCalls, projects },
   };
   return client;
 }
@@ -261,6 +284,69 @@ beforeAll(() => {
 afterAll(() => { server.stop(true); });
 
 describe("conversations-serve", () => {
+  test("GET /v1/projects pages three stable ids without overlap and reports continuation", async () => {
+    const projectClient = makeFakeClient([
+      { id: "project-alpha", name: "Alpha", created_at: "2026-08-07T00:00:00.000Z", status: "active" },
+      { id: "project-bravo", name: "Bravo", created_at: "2026-08-07T00:00:01.000Z", status: "active" },
+      { id: "project-charlie", name: "Charlie", created_at: "2026-08-07T00:00:02.000Z", status: "active" },
+    ]);
+    const projectKeys = new ApiKeyStore(projectClient as any);
+    const projectVerifier = verifyApiKey({
+      app: "conversations",
+      signingSecret: SIGNING,
+      isRevoked: async () => false,
+    });
+    const projectServer = startApiServer({
+      port: 0,
+      host: "127.0.0.1",
+      deps: { client: projectClient as any, keys: projectKeys, verifier: projectVerifier },
+    });
+    const projectBase = `http://127.0.0.1:${projectServer.port}`;
+    const projectKey = mintApiKey({
+      app: "conversations",
+      agent: "project-reader",
+      scopes: ["conversations:read"],
+      signingSecret: SIGNING,
+    }).token;
+    const headers = { "x-api-key": projectKey };
+
+    try {
+      const firstResponse = await fetch(`${projectBase}/v1/projects?limit=2`, { headers });
+      expect(firstResponse.status).toBe(200);
+      const first = await firstResponse.json() as any;
+      expect(first.projects.map((project: any) => project.id)).toEqual(["project-alpha", "project-bravo"]);
+      expect(first.has_more).toBe(true);
+      expect(first.next_cursor).toBe(2);
+
+      const secondResponse = await fetch(`${projectBase}/v1/projects?limit=2&cursor=${first.next_cursor}`, { headers });
+      expect(secondResponse.status).toBe(200);
+      const second = await secondResponse.json() as any;
+      expect(second.projects.map((project: any) => project.id)).toEqual(["project-charlie"]);
+      expect(second.has_more).toBe(false);
+      expect(second.next_cursor).toBeNull();
+
+      const firstIds = first.projects.map((project: any) => project.id);
+      const secondIds = second.projects.map((project: any) => project.id);
+      expect(new Set([...firstIds, ...secondIds])).toEqual(
+        new Set(["project-alpha", "project-bravo", "project-charlie"]),
+      );
+      expect(firstIds.filter((id: string) => secondIds.includes(id))).toEqual([]);
+    } finally {
+      projectServer.stop(true);
+    }
+  });
+
+  test("GET /v1/projects rejects malformed limit and cursor values", async () => {
+    for (const query of ["limit=0", "limit=abc", "cursor=-1", "cursor=1.5"]) {
+      const response = await fetch(`${base}/v1/projects?${query}`, {
+        headers: { "x-api-key": roKey },
+      });
+      expect(response.status).toBe(400);
+      const body = await response.json() as any;
+      expect(body.error).toBe("Validation failed");
+    }
+  });
+
   test("GET /health is unauthenticated and returns status+version+mode", async () => {
     const r = await fetch(`${base}/health`);
     expect(r.status).toBe(200);
@@ -985,5 +1071,13 @@ describe("conversations-serve", () => {
       type: "integer",
       nullable: true,
     });
+    expect(b.paths["/v1/projects"].get.parameters).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "limit", in: "query" }),
+      expect.objectContaining({ name: "cursor", in: "query" }),
+      expect.objectContaining({ name: "offset", in: "query" }),
+    ]));
+    expect(b.paths["/v1/channels"].get.parameters).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "project_id", in: "query" }),
+    ]));
   });
 });

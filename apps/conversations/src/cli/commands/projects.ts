@@ -5,7 +5,7 @@ import { createConversationsProjectPanel } from "../../lib/project-panel.js";
 import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { previewText } from "../../lib/compact-output.js";
-import { getCliWindow, pageFromQuery, printCompactFooter, printJsonDisclosure, queryLimitFor, windowJsonList } from "../compact.js";
+import { getCliWindow, getJsonWindow, pageFromQuery, printCompactFooter, printJsonDisclosure, queryLimitFor } from "../compact.js";
 import { PROJECT_LIST_ORDER } from "../../lib/list-order.js";
 import { emitCliError } from "../cli-error.js";
 import { printErrorLine, printJson, printJsonLine, printLine } from "../../lib/stdout.js";
@@ -16,20 +16,34 @@ export function requireDeleteConfirmation(confirmed?: boolean): void {
   }
 }
 
-export function parseProjectListPagination(limitInput: unknown, offsetInput: unknown): {
+export function parseProjectListPagination(limitInput: unknown, offsetInput: unknown, cursorInput?: unknown): {
   limit: number | undefined;
   offset: number | undefined;
+  cursor: number | undefined;
 } {
-  if (limitInput !== undefined && (!Number.isFinite(limitInput) || Number(limitInput) <= 0)) {
-    throw new Error('--limit must be a positive integer.');
-  }
-  if (offsetInput !== undefined && (!Number.isFinite(offsetInput) || Number(offsetInput) < 0)) {
-    throw new Error('--offset must be a non-negative integer.');
-  }
+  const parseInteger = (input: unknown, flag: "limit" | "offset" | "cursor"): number | undefined => {
+    if (input === undefined) return undefined;
 
-  const limit = Number.isFinite(limitInput) ? Math.floor(Number(limitInput)) : undefined;
-  const offset = Number.isFinite(offsetInput) ? Math.floor(Number(offsetInput)) : undefined;
-  return { limit, offset };
+    const message = flag === "limit"
+      ? "--limit must be a positive integer."
+      : `--${flag} must be a non-negative integer.`;
+    const pattern = flag === "limit" ? /^[1-9]\d*$/ : /^(?:0|[1-9]\d*)$/;
+
+    if (typeof input === "string") {
+      if (!pattern.test(input)) throw new Error(message);
+      return Number(input);
+    }
+
+    if (typeof input !== "number" || !Number.isInteger(input) || (flag === "limit" ? input <= 0 : input < 0)) {
+      throw new Error(message);
+    }
+    return input;
+  };
+
+  const limit = parseInteger(limitInput, "limit");
+  const offset = parseInteger(offsetInput, "offset");
+  const cursor = parseInteger(cursorInput, "cursor");
+  return { limit, offset, cursor };
 }
 
 export function registerProjectCommands(program: Command): void {
@@ -123,39 +137,56 @@ export function registerProjectCommands(program: Command): void {
     .command("list")
     .description("List all projects")
     .option("--status <status>", "Filter by status (active/archived)")
-    .option("--limit <n>", "Limit results", parseInt)
-    .option("--offset <n>", "Skip first N results", parseInt)
-    .option("--cursor <n>", "Skip first N results for pagination", parseInt)
+    .option("--limit <n>", "Limit results")
+    .option("--offset <n>", "Skip first N results")
+    .option("--cursor <n>", "Skip first N results for pagination")
+    .option("--page-json", "Output a paged JSON envelope with has_more and next_cursor")
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
       const status = opts.status === "active" || opts.status === "archived" ? opts.status : undefined;
 
       let limit: number | undefined;
       let offset: number | undefined;
+      let parsedCursor: number | undefined;
       try {
-        ({ limit, offset } = parseProjectListPagination(opts.limit, opts.offset));
+        ({ limit, offset, cursor: parsedCursor } = parseProjectListPagination(opts.limit, opts.offset, opts.cursor));
       } catch (e: any) {
         emitCliError(e.message, opts);
       }
-      const cursor = opts.cursor ?? offset;
-      const window = getCliWindow({ limit, cursor });
+      const cursor = parsedCursor ?? offset ?? 0;
+      const textWindow = getCliWindow({ limit, cursor });
+      const pagedJsonWindow = opts.pageJson
+        ? getJsonWindow({ limit, cursor, defaultLimit: 10 })
+        : null;
+      const legacyJsonWindow = opts.json && limit !== undefined
+        ? getJsonWindow({ limit, cursor, defaultLimit: limit })
+        : null;
+      const queryWindow = pagedJsonWindow ?? legacyJsonWindow ?? (!opts.json ? textWindow : null);
       const projects = await getStore().listProjects({
         ...(status ? { status } : {}),
-        ...(opts.json ? (limit !== undefined ? { limit } : {}) : { limit: queryLimitFor(window) }),
-        ...(opts.json ? (cursor !== undefined ? { offset: cursor } : {}) : { offset: window.offset }),
+        ...(queryWindow ? { limit: queryLimitFor(queryWindow) } : {}),
+        ...(cursor > 0 ? { offset: cursor } : {}),
       });
-      const page = opts.json
-        ? { items: projects, count: projects.length, hasMore: false, nextCursor: null }
-        : pageFromQuery(projects, window);
+      const page = queryWindow
+        ? pageFromQuery(projects, queryWindow)
+        : { items: projects, count: projects.length, hasMore: false, nextCursor: null };
 
-      if (opts.json) {
-        const listing = windowJsonList(projects, opts);
-        printJson(listing.rows);
+      if (opts.pageJson) {
+        printJson({
+          projects: page.items,
+          count: page.count,
+          cursor,
+          limit: pagedJsonWindow!.limit,
+          has_more: page.hasMore,
+          next_cursor: page.nextCursor,
+          sort: PROJECT_LIST_ORDER,
+        });
+      } else if (opts.json) {
+        printJson(page.items);
         printJsonDisclosure({
-          shown: listing.rows.length,
-          total: listing.page.total,
-          hasMore: listing.bounded && listing.page.hasMore,
-          nextCursor: listing.page.nextCursor,
+          shown: page.count,
+          hasMore: page.hasMore,
+          nextCursor: page.nextCursor,
           sort: PROJECT_LIST_ORDER,
         });
       } else {
@@ -171,7 +202,7 @@ export function registerProjectCommands(program: Command): void {
             shown: page.count,
             hasMore: page.hasMore,
             nextCursor: page.nextCursor,
-            limitCapped: window.limitCapped,
+            limitCapped: textWindow.limitCapped,
             sort: PROJECT_LIST_ORDER,
             detailHint: "Use conversations project get <id-or-name> for details.",
           });
