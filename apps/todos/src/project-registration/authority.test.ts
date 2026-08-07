@@ -695,6 +695,158 @@ describe("Todos package-owned project registration authority", () => {
     });
   }
 
+  test("does not roll back an ordinary task write interleaved while a registration fault hook is held", async () => {
+    const preexistingTask = createTask({ title: "Preexisting task" }, db);
+    let signalFaultEntered!: () => void;
+    let releaseFault!: () => void;
+    const faultEntered = new Promise<void>((resolve) => {
+      signalFaultEntered = resolve;
+    });
+    const faultRelease = new Promise<void>((resolve) => {
+      releaseFault = resolve;
+    });
+    authority = createLocalTodosProjectRegistrationAuthority(db, {
+      packageVersion: "0.15.6-test",
+      authorityId: "todos-test-authority",
+      tenantId: "tenant-test",
+      corpusId: "corpus-test",
+      async faultInjector(point) {
+        if (point !== "after_object_write") return;
+        signalFaultEntered();
+        await faultRelease;
+        throw new Error("injected:after_object_write");
+      },
+    });
+
+    const registrationAttempt = authority.create(projectRequest({
+      operation_id: "fleet-resources-interleaved-task-write-0001",
+    }));
+    await faultEntered;
+
+    let unrelatedTaskId: string | null = null;
+    let unrelatedTaskVisibleBeforeRollback = false;
+    let unrelatedCreateError: unknown = null;
+    try {
+      unrelatedTaskId = createTask({ title: "Unrelated task" }, db).id;
+      unrelatedTaskVisibleBeforeRollback = getTask(unrelatedTaskId, db) !== null;
+    } catch (error) {
+      unrelatedCreateError = error;
+    } finally {
+      releaseFault();
+    }
+
+    const terminal = await registrationAttempt;
+    expect(unrelatedCreateError).toBeNull();
+    expect(unrelatedTaskId).not.toBeNull();
+    expect(unrelatedTaskVisibleBeforeRollback).toBe(true);
+    expect(terminal).toMatchObject({
+      outcome: "terminal_nonacceptance",
+      reason: "write_failed:after_object_write",
+    });
+    expect(getTask(preexistingTask.id, db)).not.toBeNull();
+    expect(getTask(unrelatedTaskId!, db)).not.toBeNull();
+  });
+
+  test("commits registration without absorbing an ordinary task write interleaved at a successful hook", async () => {
+    let signalFaultEntered!: () => void;
+    let releaseFault!: () => void;
+    const faultEntered = new Promise<void>((resolve) => {
+      signalFaultEntered = resolve;
+    });
+    const faultRelease = new Promise<void>((resolve) => {
+      releaseFault = resolve;
+    });
+    authority = createLocalTodosProjectRegistrationAuthority(db, {
+      packageVersion: "0.15.6-test",
+      authorityId: "todos-test-authority",
+      tenantId: "tenant-test",
+      corpusId: "corpus-test",
+      async faultInjector(point) {
+        if (point !== "after_object_write") return;
+        signalFaultEntered();
+        await faultRelease;
+      },
+    });
+
+    const registrationAttempt = authority.create(projectRequest({
+      operation_id: "fleet-resources-successful-interleaved-task-write-0001",
+    }));
+    await faultEntered;
+    const unrelatedTask = createTask({ title: "Successful unrelated task" }, db);
+    expect(getTask(unrelatedTask.id, db)).not.toBeNull();
+    releaseFault();
+
+    const accepted = await registrationAttempt;
+    expect(accepted.outcome).toBe("accepted");
+    expect(getProject(accepted.target_id!, db)).not.toBeNull();
+    expect(getTask(unrelatedTask.id, db)).not.toBeNull();
+  });
+
+  test("re-evaluates a registration when a relevant ordinary project wins before commit", async () => {
+    let signalFaultEntered!: () => void;
+    let releaseFault!: () => void;
+    const faultEntered = new Promise<void>((resolve) => {
+      signalFaultEntered = resolve;
+    });
+    const faultRelease = new Promise<void>((resolve) => {
+      releaseFault = resolve;
+    });
+    authority = createLocalTodosProjectRegistrationAuthority(db, {
+      packageVersion: "0.15.6-test",
+      authorityId: "todos-test-authority",
+      tenantId: "tenant-test",
+      corpusId: "corpus-test",
+      async faultInjector(point) {
+        if (point !== "after_object_write") return;
+        signalFaultEntered();
+        await faultRelease;
+      },
+    });
+
+    const registrationAttempt = authority.create(projectRequest({
+      operation_id: "fleet-resources-relevant-concurrent-write-0001",
+    }));
+    await faultEntered;
+    const ordinaryWinner = createProject({
+      name: "Ordinary winner",
+      path: "/ordinary-winner",
+      task_list_id: "todos-fleet-resources",
+      task_prefix: "WIN",
+    }, db);
+    releaseFault();
+
+    const terminal = await registrationAttempt;
+    expect(terminal).toMatchObject({
+      outcome: "terminal_nonacceptance",
+      reason: "target_already_exists",
+      target_id: ordinaryWinner.id,
+      created_by_operation: false,
+    });
+    expect(getProject(ordinaryWinner.id, db)).not.toBeNull();
+    expect(db.query("SELECT COUNT(*) AS count FROM projects").get()).toEqual({ count: 1 });
+  });
+
+  test("serializes concurrent identical authority calls into one accepted object", async () => {
+    const request = projectRequest({
+      operation_id: "fleet-resources-concurrent-identical-calls-0001",
+    });
+    const [first, second] = await Promise.all([
+      authority.create(request),
+      authority.create(structuredClone(request)),
+    ]);
+    const accepted = [first, second].find((receipt) => receipt.outcome === "accepted");
+    const duplicate = [first, second].find(
+      (receipt) => receipt.outcome === "duplicate_of_accepted",
+    );
+    expect(accepted).toBeDefined();
+    expect(duplicate).toMatchObject({
+      target_id: accepted!.target_id,
+      duplicate_of_receipt_id: accepted!.receipt_id,
+      created_by_operation: false,
+    });
+    expect(db.query("SELECT COUNT(*) AS count FROM projects").get()).toEqual({ count: 1 });
+  });
+
   test("reconciles an ambiguous post-commit failure through exact terminal lookup", async () => {
     const request = projectRequest({
       operation_id: "fleet-resources-after-commit-0001",
@@ -852,6 +1004,50 @@ describe("Todos package-owned project registration authority", () => {
       expect((await exactLookup(inverse)).receipt).toEqual(terminal);
     });
   }
+
+  test("does not roll back an ordinary task write interleaved with a failing inverse", async () => {
+    const forward = projectRequest({
+      operation_id: "fleet-resources-interleaved-inverse-write-0001",
+    });
+    const accepted = await authority.create(forward);
+    const inverse = inverseRequest(accepted, forward);
+    let signalFaultEntered!: () => void;
+    let releaseFault!: () => void;
+    const faultEntered = new Promise<void>((resolve) => {
+      signalFaultEntered = resolve;
+    });
+    const faultRelease = new Promise<void>((resolve) => {
+      releaseFault = resolve;
+    });
+    authority = createLocalTodosProjectRegistrationAuthority(db, {
+      packageVersion: "0.15.6-test",
+      authorityId: "todos-test-authority",
+      tenantId: "tenant-test",
+      corpusId: "corpus-test",
+      async faultInjector(point) {
+        if (point !== "after_object_write") return;
+        signalFaultEntered();
+        await faultRelease;
+        throw new Error("injected:after_object_write");
+      },
+    });
+
+    const inverseAttempt = authority.compensate(inverse);
+    await faultEntered;
+    const unrelatedTask = createTask({ title: "Inverse-unrelated task" }, db);
+    expect(getTask(unrelatedTask.id, db)).not.toBeNull();
+    releaseFault();
+
+    const terminal = await inverseAttempt;
+    expect(terminal).toMatchObject({
+      outcome: "terminal_nonacceptance",
+      reason: "write_failed:after_object_write",
+      target_id: accepted.target_id,
+      accepted_receipt_id: accepted.receipt_id,
+    });
+    expect(getProject(accepted.target_id!, db)).not.toBeNull();
+    expect(getTask(unrelatedTask.id, db)).not.toBeNull();
+  });
 
   test("reconciles an ambiguous inverse post-commit failure through exact lookup", async () => {
     const forward = projectRequest({
