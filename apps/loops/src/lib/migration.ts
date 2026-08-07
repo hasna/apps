@@ -1134,7 +1134,7 @@ export function publicMigrationBundle(bundle: LoopsMigrationBundle): Record<stri
     data: {
       workflows: bundle.data.workflows.map(publicWorkflow),
       loops: bundle.data.loops.map(publicLoop),
-      runs: bundle.data.runs.map((run) => publicRun(run, false, { redactError: true })),
+      runs: bundle.data.runs.map((run) => publicRun(run, false)),
     },
   };
 }

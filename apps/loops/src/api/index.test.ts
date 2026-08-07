@@ -1882,7 +1882,50 @@ describe("loops-api foundation", () => {
     }
   });
 
-  test("run listing redacts output unless explicitly requested", async () => {
+  // todos 744651ec. This test previously asserted `error: "[redacted 13 chars]"`
+  // on BOTH the default and the ?showOutput=true response — the API-boundary
+  // encoding of the defect, because it means no query parameter existed that
+  // returned the error at all. stdout/stderr stay opt-in (a response-size
+  // control); the error is now always a readable diagnostic.
+  // The other side of the todos 744651ec trade, asserted at the API boundary
+  // rather than only in the format unit tests: surfacing the error must not
+  // surface credential material that happens to land in it.
+  test("run error is scrubbed of credential shapes on the way out", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+
+    try {
+      const loop = await storage.createLoop({
+        name: "api-run-error-scrub-loop",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: { type: "command", command: "false" },
+      });
+      const claim = await storage.claimRun(loop, "2026-01-01T00:00:00.000Z", "api-runner", new Date("2026-01-01T00:00:00Z"));
+      const syntheticKey = ["sk-", "ant-api03-abcDEF123456789_-suffix"].join("");
+      await storage.finalizeRun(claim!.run.id, {
+        status: "failed",
+        finishedAt: "2026-01-01T00:00:01.000Z",
+        durationMs: 1_000,
+        stdout: "",
+        stderr: "",
+        error: `spawn failed: api_key=${syntheticKey}`,
+      });
+
+      const response = await fetch(apiUrl(server, `/v1/runs/${claim!.run.id}?showOutput=true`));
+      const body = (await response.json()) as { run: { error?: string } };
+      expect(response.status).toBe(200);
+      expect(body.run.error).toContain("[SCRUBBED]");
+      expect(body.run.error).not.toContain("sk-ant-");
+      // ...and the surrounding diagnostic still survives.
+      expect(body.run.error).toContain("spawn failed:");
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("run listing hides output unless requested and always surfaces the error", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
     const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
@@ -1900,7 +1943,7 @@ describe("loops-api foundation", () => {
         durationMs: 1_000,
         stdout: "private stdout",
         stderr: "private stderr",
-        error: "private error",
+        error: "command failed with exit 1",
       });
 
       const redactedResponse = await fetch(apiUrl(server, `/v1/runs?loopId=${loop.id}`));
@@ -1910,7 +1953,7 @@ describe("loops-api foundation", () => {
         id: claim!.run.id,
         stdout: "[redacted 14 chars]",
         stderr: "[redacted 14 chars]",
-        error: "[redacted 13 chars]",
+        error: "command failed with exit 1",
       });
 
       const rawResponse = await fetch(apiUrl(server, `/v1/runs/${claim!.run.id}?showOutput=true`));
@@ -1918,7 +1961,7 @@ describe("loops-api foundation", () => {
       expect(rawResponse.status).toBe(200);
       expect(raw.run.stdout).toBe("private stdout");
       expect(raw.run.stderr).toBe("private stderr");
-      expect(raw.run.error).toBe("[redacted 13 chars]");
+      expect(raw.run.error).toBe("command failed with exit 1");
 
       const secondLoop = await storage.createLoop({
         name: "api-run-output-loop-page-2",

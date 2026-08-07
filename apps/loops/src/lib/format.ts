@@ -20,6 +20,62 @@ const TEXT_OUTPUT_LIMIT = 32 * 1024;
 const SENSITIVE_PAYLOAD_KEYS = new Set(["env", "error", "prompt", "reason", "stderr", "stdout"]);
 
 /**
+ * Max characters of a run/step/executor error surfaced to clients. Errors are
+ * short operational diagnostics, but `error` also carries arbitrary
+ * `Error.message` text from a failed spawn, so it is bounded rather than
+ * unbounded. 4 KiB leaves every real diagnostic intact — the longest observed
+ * in the incident below was 275 characters.
+ */
+const ERROR_OUTPUT_LIMIT = 4 * 1024;
+
+/**
+ * Surface a run error as a diagnostic instead of destroying it.
+ *
+ * Run `error` used to be blanket length-preservingly redacted on every hosted
+ * API path (`publicRun(run, showOutput, { redactError: true })`), with no query
+ * parameter that turned it off — so "command failed with exit 1" reached
+ * operators as "[redacted 26 chars]". Ten loops failed continuously for a week
+ * and all four root causes (a macOS cwd on a Linux runner, three dead auth
+ * profiles, a missing --auth-profile flag, an unreclaimed lease) were sitting in
+ * the fields that redaction deleted.
+ *
+ * Blanket redaction here protected nothing that the write path had not already
+ * handled: run stdout/stderr are scrubbed by `persistedRunOutput` and error by
+ * `finalizeRun`, both via shape-based `scrubSecrets`, before anything is
+ * persisted. Re-scrubbing on read stays correct because `scrubSecrets` is
+ * idempotent, and it still covers rows written before that scrubbing existed.
+ *
+ * The trade is deliberate and is the one the incident asked for: redaction that
+ * fires on credential SHAPES, not on every character. `format.test.ts` gates it
+ * two-sided — a credential-shaped error must still yield `[SCRUBBED]`, and
+ * "command failed with exit 1" must survive verbatim.
+ */
+function diagnosticError(value: string | undefined): string | undefined {
+  if (value === undefined) return value;
+  const scrubbed = scrubSecrets(value);
+  if (scrubbed.length <= ERROR_OUTPUT_LIMIT) return scrubbed;
+  return `${scrubbed.slice(0, ERROR_OUTPUT_LIMIT)}... [truncated ${scrubbed.length - ERROR_OUTPUT_LIMIT} chars]`;
+}
+
+/**
+ * Placeholder for stdout/stderr withheld until the caller asks for it
+ * (`--show-output`, `?showOutput=true`). Unlike the error above this is a size
+ * control, not a secrecy control, and the output is recoverable on request.
+ *
+ * Idempotent for the same reason `redact` is (incident 607176): publicRun and
+ * publicWorkflowStepRun used to build this placeholder inline, bypassing that
+ * guard, so a control-plane client that formatted an already-public run
+ * reported the PLACEHOLDER's length — a 2279-char stdout printed as "[redacted
+ * 21 chars]". The recorded length is the only handle an operator has on hidden
+ * output, so a second pass must not overwrite it.
+ */
+function hiddenOutput(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  if (isRedactionPlaceholder(value)) return value;
+  return `[redacted ${value.length} chars]`;
+}
+
+/**
  * Replace `value` with a placeholder recording how long it was.
  *
  * Idempotent: redacting an already-redacted value returns it unchanged rather
@@ -97,12 +153,12 @@ export function publicLoop(loop: Loop): Record<string, unknown> {
   };
 }
 
-export function publicRun(run: LoopRun, showOutput = false, opts: { redactError?: boolean } = {}): Record<string, unknown> {
+export function publicRun(run: LoopRun, showOutput = false): Record<string, unknown> {
   return {
     ...run,
-    stdout: showOutput ? scrubOptional(run.stdout) : run.stdout ? `[redacted ${run.stdout.length} chars]` : undefined,
-    stderr: showOutput ? scrubOptional(run.stderr) : run.stderr ? `[redacted ${run.stderr.length} chars]` : undefined,
-    error: opts.redactError ? redact(run.error) : scrubOptional(run.error),
+    stdout: showOutput ? scrubOptional(run.stdout) : hiddenOutput(run.stdout),
+    stderr: showOutput ? scrubOptional(run.stderr) : hiddenOutput(run.stderr),
+    error: diagnosticError(run.error),
   };
 }
 
@@ -113,9 +169,9 @@ export function publicRunReceipt(receipt: RunReceipt): Record<string, unknown> {
 export function publicExecutorResult(result: ExecutorResult, showOutput = false): Record<string, unknown> {
   return {
     ...result,
-    stdout: showOutput ? scrubOptional(result.stdout) : result.stdout ? `[redacted ${result.stdout.length} chars]` : undefined,
-    stderr: showOutput ? scrubOptional(result.stderr) : result.stderr ? `[redacted ${result.stderr.length} chars]` : undefined,
-    error: redact(result.error),
+    stdout: showOutput ? scrubOptional(result.stdout) : hiddenOutput(result.stdout),
+    stderr: showOutput ? scrubOptional(result.stderr) : hiddenOutput(result.stderr),
+    error: diagnosticError(result.error),
   };
 }
 
@@ -135,7 +191,7 @@ export function publicWorkflow(workflow: WorkflowSpec): Record<string, unknown> 
 }
 
 export function publicWorkflowRun(run: WorkflowRun): Record<string, unknown> {
-  return { ...run, error: redact(run.error) };
+  return { ...run, error: diagnosticError(run.error) };
 }
 
 export function publicWorkflowInvocation(invocation: WorkflowInvocation): Record<string, unknown> {
@@ -149,9 +205,9 @@ export function publicWorkflowWorkItem(item: WorkflowWorkItem): Record<string, u
 export function publicWorkflowStepRun(run: WorkflowStepRun, showOutput = false): Record<string, unknown> {
   return {
     ...run,
-    stdout: showOutput ? scrubOptional(run.stdout) : run.stdout ? `[redacted ${run.stdout.length} chars]` : undefined,
-    stderr: showOutput ? scrubOptional(run.stderr) : run.stderr ? `[redacted ${run.stderr.length} chars]` : undefined,
-    error: redact(run.error),
+    stdout: showOutput ? scrubOptional(run.stdout) : hiddenOutput(run.stdout),
+    stderr: showOutput ? scrubOptional(run.stderr) : hiddenOutput(run.stderr),
+    error: diagnosticError(run.error),
   };
 }
 

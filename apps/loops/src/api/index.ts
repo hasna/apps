@@ -338,9 +338,9 @@ async function handleV1Request(ctx: V1RequestContext): Promise<Response> {
       circuitBreakerThreshold: ctx.circuitBreakerThreshold,
     });
     return ok({
-      abandoned: recovered.abandoned.map((run) => publicRun(run, false, { redactError: true })),
-      deferred: recovered.deferred.map((run) => publicRun(run, false, { redactError: true })),
-      advancementDeferred: advancementDeferred.map((run) => publicRun(run, false, { redactError: true })),
+      abandoned: recovered.abandoned.map((run) => publicRun(run, false)),
+      deferred: recovered.deferred.map((run) => publicRun(run, false)),
+      advancementDeferred: advancementDeferred.map((run) => publicRun(run, false)),
     });
   }
   return fail("not_found", 404);
@@ -742,9 +742,9 @@ async function handleRunsRequest(ctx: V1RequestContext, segments: string[]): Pro
       circuitBreakerThreshold: ctx.circuitBreakerThreshold,
     });
     return ok({
-      abandoned: abandoned.map((run) => publicRun(run, false, { redactError: true })),
-      deferred: deferred.map((run) => publicRun(run, false, { redactError: true })),
-      advancementDeferred: advancementDeferred.map((run) => publicRun(run, false, { redactError: true })),
+      abandoned: abandoned.map((run) => publicRun(run, false)),
+      deferred: deferred.map((run) => publicRun(run, false)),
+      advancementDeferred: advancementDeferred.map((run) => publicRun(run, false)),
     });
   }
 
@@ -766,13 +766,13 @@ async function handleRunsRequest(ctx: V1RequestContext, segments: string[]): Pro
       limit: optionalLimit(ctx.url.searchParams.get("limit")),
       offset: optionalOffset(ctx.url.searchParams.get("offset")),
     });
-    return ok({ runs: runs.map((run) => publicRun(run, showOutput, { redactError: true })) });
+    return ok({ runs: runs.map((run) => publicRun(run, showOutput)) });
   }
   if (!id) return fail("not_found", 404);
   if (segments.length === 1 && ctx.request.method === "GET") {
     const run = await storage.getRun(id);
     if (!run) return fail("run_not_found", 404);
-    return ok({ run: publicRun(run, showOutput, { redactError: true }) });
+    return ok({ run: publicRun(run, showOutput) });
   }
   return fail("not_found", 404);
 }
@@ -1334,7 +1334,7 @@ async function claimRuns(
       ) ?? claim.run;
       claims.push({
         loop: claim.loop,
-        run: publicRun(run, false, { redactError: true }),
+        run: publicRun(run, false),
         claimToken: claim.claimToken,
         ...(workflow ? { workflow } : {}),
       });
@@ -1421,7 +1421,7 @@ async function heartbeatRun(storage: LoopStorageContract, principalId: string, r
     { claimToken },
   );
   if (!heartbeat) return fail("stale_claim", 409);
-  return ok({ run: publicRun(heartbeat, false, { redactError: true }) });
+  return ok({ run: publicRun(heartbeat, false) });
 }
 
 async function finalizeRun(
@@ -1486,7 +1486,7 @@ async function finalizeRun(
           advancement,
         );
       }
-      return ok({ run: publicRun(existing, false, { redactError: true }) });
+      return ok({ run: publicRun(existing, false) });
     }
     return fail("run_not_running", 409);
   }
@@ -1538,7 +1538,7 @@ async function finalizeRun(
     finalized.status === "succeeded",
     advancement,
   );
-  return ok({ run: publicRun(finalized, false, { redactError: true }) });
+  return ok({ run: publicRun(finalized, false) });
 }
 
 async function acceptRunEvidence(storage: LoopStorageContract, principalId: string, runId: string, body: Record<string, unknown>, now: Date): Promise<Response> {
