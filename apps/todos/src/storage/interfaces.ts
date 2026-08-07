@@ -320,10 +320,10 @@ export interface TodosTaskListStore {
   update(id: string, input: UpdateTaskListInput, context?: TodosStorageContext): MaybePromise<TaskList>;
   delete(id: string, context?: TodosStorageContext): MaybePromise<boolean>;
   /**
-   * Atomically remove one unchanged task list only when no task or plan refers
-   * to it. Optional because a backend that cannot provide the whole check and
-   * delete as one atomic operation must fail rollback closed rather than
-   * expose a check-then-delete race.
+   * Atomically remove one unchanged task list only when no supported record
+   * refers to it. Optional because a backend that cannot provide the whole
+   * check and delete as one atomic operation must fail rollback closed rather
+   * than expose a check-then-delete race.
    */
   deleteIfUnchangedAndUnused?(
     id: string,
@@ -333,6 +333,9 @@ export interface TodosTaskListStore {
     status: "deleted" | "not_found" | "changed" | "has_dependents";
     task_dependents: number;
     plan_dependents: number;
+    board_dependents: number;
+    dispatch_dependents: number;
+    webhook_dependents: number;
   }>;
 }
 

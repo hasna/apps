@@ -4,6 +4,9 @@ import { getDatabase, resetDatabase } from "../db/database.js";
 import { createLocalSqliteTodosStorageAdapter } from "../storage/local-sqlite.js";
 import type { TodosStorageAdapter } from "../storage/interfaces.js";
 import { ResourceConflictError } from "../types/index.js";
+import { createTaskBoard, getTaskBoard } from "../db/boards.js";
+import { createDispatch, getDispatch } from "../db/dispatches.js";
+import { createWebhook, getWebhook } from "../db/webhooks.js";
 import { handleV1Request, type V1RequestDependencies } from "./v1.js";
 import { createLocalPrGroupLedger } from "../pr-groups/index.js";
 import {
@@ -349,6 +352,59 @@ describe("/v1 task-list cloud parity", () => {
       body: { code: "PROJECT_TASK_LIST_ROLLBACK_CONFLICT", conflict: true },
     });
     expect(await atomicStore.taskLists.get(body.task_list.id)).not.toBeNull();
+  });
+
+  test("refuses rollback when boards, dispatches, or webhooks still use the task list", async () => {
+    const created = await request("/v1/projects", "POST", {
+      name: "Rollback scoped dependents",
+      path: "/workspace/rollback-scoped-dependents",
+      task_list_id: "rollback-scoped-dependents",
+    });
+    const project = (await created!.json() as { project: { id: string; updated_at: string } }).project;
+    const applied = await request(`/v1/projects/${project.id}/task-list/ensure`, "POST", {
+      expected_project_revision: project.updated_at,
+      idempotency_key: "rollback-scoped-dependents-list",
+    });
+    const body = await applied!.json() as {
+      task_list: { id: string };
+      receipt: { receipt_id: string; result_revision: string };
+    };
+    const board = createTaskBoard({
+      name: "Rollback scoped dependent board",
+      task_list_id: body.task_list.id,
+    }, db);
+    const dispatch = createDispatch({
+      target_window: "main",
+      task_list_id: body.task_list.id,
+    }, db);
+    const webhook = createWebhook({
+      url: "https://example.com/rollback-scoped-dependent",
+      task_list_id: body.task_list.id,
+    }, db);
+
+    const rollback = await request(
+      `/v1/projects/${project.id}/task-list/rollback`,
+      "POST",
+      {
+        receipt_id: body.receipt.receipt_id,
+        expected_task_list_revision: body.receipt.result_revision,
+      },
+    );
+
+    expect({ status: rollback?.status, body: await rollback!.json() }).toMatchObject({
+      status: 409,
+      body: {
+        code: "PROJECT_TASK_LIST_ROLLBACK_HAS_DEPENDENTS",
+        conflict: true,
+        board_dependents: 1,
+        dispatch_dependents: 1,
+        webhook_dependents: 1,
+      },
+    });
+    expect(await store.taskLists.get(body.task_list.id)).not.toBeNull();
+    expect(getTaskBoard(board.id, db)?.task_list_id).toBe(body.task_list.id);
+    expect(getDispatch(dispatch.id, db)?.task_list_id).toBe(body.task_list.id);
+    expect(getWebhook(webhook.id, db)?.task_list_id).toBe(body.task_list.id);
   });
 
   test("routes package-owned conditional project registration through authenticated v1", async () => {

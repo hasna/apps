@@ -390,6 +390,9 @@ export async function rollbackProjectTaskListEnsure(
         task_list_id: list.id,
         task_dependents: deletion.task_dependents,
         plan_dependents: deletion.plan_dependents,
+        board_dependents: deletion.board_dependents,
+        dispatch_dependents: deletion.dispatch_dependents,
+        webhook_dependents: deletion.webhook_dependents,
       },
     );
   }

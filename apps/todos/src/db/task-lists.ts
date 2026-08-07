@@ -134,16 +134,29 @@ export function deleteTaskListIfUnchangedAndUnused(
   status: "deleted" | "not_found" | "changed" | "has_dependents";
   task_dependents: number;
   plan_dependents: number;
+  board_dependents: number;
+  dispatch_dependents: number;
+  webhook_dependents: number;
 } {
   const d = db || getDatabase();
   return d.transaction((): {
     status: "deleted" | "not_found" | "changed" | "has_dependents";
     task_dependents: number;
     plan_dependents: number;
+    board_dependents: number;
+    dispatch_dependents: number;
+    webhook_dependents: number;
   } => {
     const current = getTaskList(id, d);
     if (!current) {
-      return { status: "not_found", task_dependents: 0, plan_dependents: 0 };
+      return {
+        status: "not_found",
+        task_dependents: 0,
+        plan_dependents: 0,
+        board_dependents: 0,
+        dispatch_dependents: 0,
+        webhook_dependents: 0,
+      };
     }
     const changed = current.project_id !== expected.project_id
       || current.slug !== expected.slug
@@ -152,7 +165,14 @@ export function deleteTaskListIfUnchangedAndUnused(
       || current.updated_at !== expected.updated_at
       || JSON.stringify(current.metadata) !== JSON.stringify(expected.metadata);
     if (changed) {
-      return { status: "changed", task_dependents: 0, plan_dependents: 0 };
+      return {
+        status: "changed",
+        task_dependents: 0,
+        plan_dependents: 0,
+        board_dependents: 0,
+        dispatch_dependents: 0,
+        webhook_dependents: 0,
+      };
     }
     const taskDependents = Number((d.query(
       "SELECT COUNT(*) AS count FROM tasks WHERE task_list_id = ?",
@@ -160,11 +180,29 @@ export function deleteTaskListIfUnchangedAndUnused(
     const planDependents = Number((d.query(
       "SELECT COUNT(*) AS count FROM plans WHERE task_list_id = ?",
     ).get(id) as { count: number }).count);
-    if (taskDependents > 0 || planDependents > 0) {
+    const boardDependents = Number((d.query(
+      "SELECT COUNT(*) AS count FROM task_boards WHERE task_list_id = ?",
+    ).get(id) as { count: number }).count);
+    const dispatchDependents = Number((d.query(
+      "SELECT COUNT(*) AS count FROM dispatches WHERE task_list_id = ?",
+    ).get(id) as { count: number }).count);
+    const webhookDependents = Number((d.query(
+      "SELECT COUNT(*) AS count FROM webhooks WHERE task_list_id = ?",
+    ).get(id) as { count: number }).count);
+    if (
+      taskDependents > 0
+      || planDependents > 0
+      || boardDependents > 0
+      || dispatchDependents > 0
+      || webhookDependents > 0
+    ) {
       return {
         status: "has_dependents",
         task_dependents: taskDependents,
         plan_dependents: planDependents,
+        board_dependents: boardDependents,
+        dispatch_dependents: dispatchDependents,
+        webhook_dependents: webhookDependents,
       };
     }
     recordStorageTombstone({
@@ -178,6 +216,9 @@ export function deleteTaskListIfUnchangedAndUnused(
       status: deleted ? "deleted" : "not_found",
       task_dependents: 0,
       plan_dependents: 0,
+      board_dependents: 0,
+      dispatch_dependents: 0,
+      webhook_dependents: 0,
     };
   })();
 }
