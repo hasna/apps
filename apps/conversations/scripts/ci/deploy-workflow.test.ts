@@ -1,8 +1,78 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 const workflow = readFileSync(join(import.meta.dir, "..", "..", ".github", "workflows", "deploy.yml"), "utf8");
+const resolver = join(import.meta.dir, "resolve-ecr-image.sh");
+
+type ResolverMode = "absent" | "existing" | "error" | "empty";
+const sourceSha = "61ed8989bf599b9151aef86129dd59c12833a00c";
+
+function runResolver(mode: ResolverMode) {
+  const root = mkdtempSync(join(tmpdir(), "conversations-deploy-contract-"));
+  const bin = join(root, "bin");
+  const output = join(root, "github-output");
+  const calls = join(root, "calls");
+  const aws = join(bin, "aws");
+  const docker = join(bin, "docker");
+
+  try {
+    mkdirSync(bin);
+    writeFileSync(
+      aws,
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "${calls}"
+if [[ "$*" == *"list-images"* ]]; then
+  case "${mode}" in
+    absent) printf '%s\\n' None ;;
+    existing) printf '%s\\n' sha256:existing ;;
+    empty) printf '\\n' ;;
+    error) printf '%s\\n' 'AccessDeniedException: denied' >&2; exit 254 ;;
+  esac
+  exit 0
+fi
+if [[ "$*" == *"describe-images"* ]]; then
+  printf '%s\\n' sha256:after-push
+  exit 0
+fi
+printf '%s\\n' 'unexpected aws command' >&2
+exit 2
+`,
+    );
+    writeFileSync(
+      docker,
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf 'docker %s\\n' "$*" >> "${calls}"
+`,
+    );
+    chmodSync(aws, 0o755);
+    chmodSync(docker, 0o755);
+
+    const result = Bun.spawnSync(["bash", resolver], {
+      cwd: root,
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        ECR_URL: "123456789012.dkr.ecr.us-east-1.amazonaws.com/conversations",
+        GITHUB_SHA: sourceSha,
+        GITHUB_OUTPUT: output,
+      },
+      stderr: "pipe",
+      stdout: "pipe",
+    });
+
+    return {
+      result,
+      output: existsSync(output) ? readFileSync(output, "utf8") : "",
+      calls: existsSync(calls) ? readFileSync(calls, "utf8") : "",
+    };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
 
 describe("production deploy workflow gates", () => {
   test("pins every privileged third-party action to an immutable commit", () => {
@@ -27,5 +97,54 @@ describe("production deploy workflow gates", () => {
     expect(workflow).toContain("for ((i=1; i<=MAX_ROLLOUT_POLLS; i++))");
     expect(workflow).toContain('if [ "$LIVE_TD" != "$WEB_ARN" ]; then');
     expect(workflow).toContain('if [ "$i" -eq "$MAX_ROLLOUT_POLLS" ]; then');
+  });
+
+  test("uses the resolver's digest-pinned image for migration and deploy", () => {
+    expect(workflow).toContain("bash scripts/ci/resolve-ecr-image.sh");
+    expect(workflow).toContain("IMAGE: ${{ steps.build.outputs.image }}");
+    expect(readFileSync(resolver, "utf8")).toContain('IMAGE="${ECR_URL}@${DIGEST}"');
+    expect(workflow).not.toContain(":latest");
+  });
+
+  test("rebuilds and pushes only when the exact source tag is proven absent", () => {
+    const { result, output, calls } = runResolver("absent");
+    expect(result.exitCode).toBe(0);
+    expect(output).toContain("image=123456789012.dkr.ecr.us-east-1.amazonaws.com/conversations@sha256:after-push");
+    expect(output).toContain(`tag=${sourceSha}`);
+    expect(calls).toContain("list-images");
+    expect(calls).toContain(sourceSha);
+    expect(calls).toContain("describe-images");
+    expect(calls).toContain(`docker buildx build --platform linux/arm64`);
+    expect(calls).toContain(`--tag 123456789012.dkr.ecr.us-east-1.amazonaws.com/conversations:${sourceSha}`);
+    expect(calls).toContain("--push");
+  });
+
+  test("reuses the existing source tag digest without rebuilding or pushing", () => {
+    const { result, output, calls } = runResolver("existing");
+    expect(result.exitCode).toBe(0);
+    expect(output).toContain("image=123456789012.dkr.ecr.us-east-1.amazonaws.com/conversations@sha256:existing");
+    expect(output).toContain(`tag=${sourceSha}`);
+    expect(calls).toContain("list-images");
+    expect(calls).toContain(sourceSha);
+    expect(calls).not.toContain("describe-images");
+    expect(calls).not.toContain("docker buildx build");
+  });
+
+  test("fails closed when the registry lookup fails", () => {
+    const { result, output, calls } = runResolver("error");
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr.toString()).toContain("AccessDeniedException: denied");
+    expect(output).toBe("");
+    expect(calls).toContain("list-images");
+    expect(calls).not.toContain("docker buildx build");
+  });
+
+  test("fails closed on an empty successful registry response", () => {
+    const { result, output, calls } = runResolver("empty");
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr.toString()).toContain("empty digest lookup");
+    expect(output).toBe("");
+    expect(calls).toContain("list-images");
+    expect(calls).not.toContain("docker buildx build");
   });
 });
