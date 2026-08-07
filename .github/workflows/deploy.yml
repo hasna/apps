@@ -11,8 +11,8 @@
 #   3. Pushes it to the app's ECR repo, tagged with the commit SHA.
 #   4. Runs the one-shot DB migration task and fails hard on non-zero exit.
 #   5. Registers a new web task-def revision and updates the ECS service.
-#   6. Waits for the service to reach steady state and asserts the deployment
-#      circuit breaker reported COMPLETED (rollback => job fails).
+#   6. Waits for the service to reach steady state, then verifies the exact live
+#      task definition while allowing rolloutState metadata time to converge.
 #
 # Prereqs (created by the hasna-app module): ECR repo, ECS cluster/service,
 # web + migration task-def families, task/execution roles, and the SSM manifest.
@@ -211,14 +211,7 @@ jobs:
           # After a rollback the PRIMARY deployment can still report COMPLETED (the
           # *rollback* completed) while running the OLD task def, so assert BOTH the
           # rollout state AND that the live PRIMARY task def is the one we deployed.
-          SVC="$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE")"
-          RS="$(jq -r '.services[0].deployments[] | select(.status=="PRIMARY") | .rolloutState' <<<"$SVC")"
-          LIVE_TD="$(jq -r '.services[0].deployments[] | select(.status=="PRIMARY") | .taskDefinition' <<<"$SVC")"
-          echo "primary rolloutState=$RS liveTaskDef=$LIVE_TD deployed=$WEB_ARN"
-          if [ "$RS" != "COMPLETED" ]; then
-            echo "::error::deployment did not complete (rolloutState=$RS) — likely circuit-breaker rollback"; exit 1
-          fi
-          if [ "$LIVE_TD" != "$WEB_ARN" ]; then
-            echo "::error::live task def ($LIVE_TD) != deployed ($WEB_ARN) — deployment was rolled back"; exit 1
-          fi
+          # ECS can briefly return IN_PROGRESS here after services-stable succeeds,
+          # so retry only that state while the exact deployed task def remains live.
+          bash scripts/ci/verify-ecs-rollout.sh "$CLUSTER" "$SERVICE" "$WEB_ARN"
           echo "Deploy of ${APP} @ ${GITHUB_SHA} succeeded."
