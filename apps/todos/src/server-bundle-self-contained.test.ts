@@ -140,9 +140,11 @@ function unresolvableSpecifiers(app: string, cache: string, home: string): strin
       let resolved;
       try { resolved = Bun.resolveSync(spec, from); } catch { bad.push(spec + " (unresolvable)"); continue; }
       if (resolved.startsWith("node:") || resolved.startsWith("bun:")) continue;
-      // Resolved to a real file: it must live inside the image, not in a cache
-      // Bun populated from the network moments ago.
-      if (!resolved.startsWith(process.env.APP_DIR)) bad.push(spec + " (resolved outside the image: " + resolved + ")");
+      // Resolved to a real file: it must live inside the image. Normalize any
+      // host-only resolution to the runner's actual view (unresolvable), rather
+      // than making the result depend on an ambient /tmp/node_modules created by
+      // another concurrently running test.
+      if (!resolved.startsWith(process.env.APP_DIR)) bad.push(spec + " (unresolvable)");
     }
     console.log(JSON.stringify(bad));
   `;

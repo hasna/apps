@@ -48,6 +48,7 @@ export {
   postgresTodosProjectRegistrationSchemaSql,
   sqliteTodosProjectRegistrationSchemaSql,
 } from "./project-registration/index.js";
+export * from "./task-manifest/index.js";
 export type {
   PostgresTodosProjectRegistrationBackendOptions,
   TodosProjectRegistrationAuthority,
