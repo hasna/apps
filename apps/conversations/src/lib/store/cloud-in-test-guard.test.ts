@@ -38,9 +38,12 @@ import {
   ConversationsCloudInTestError,
   DB_PATH_KEYS,
   ENV_KEYS,
+  cloudApiUrl,
   detectTestRuntime,
   getStore,
+  isCloudStore,
   isLoopbackApiUrl,
+  resolveConversationsCloud,
 } from "./index.js";
 
 const URL_VAR = ENV_KEYS.apiUrlKeys[0]!;
@@ -161,6 +164,36 @@ describe("detectTestRuntime", () => {
     expect(detectTestRuntime({ ...base, env: {}, globals: { __vitest_worker__: {} } }).detected).toBe(true);
   });
 
+  test("EVERY env probe is reachable under the runner it names — BUN_TEST is not", () => {
+    // MEASURED on bun 1.3.14 (0d9b296a), probe in a bun-discoverable directory:
+    //     BUN_TEST_IS=UNDEFINED
+    //     CONTROL_PATH_IS=SET          <- the control: the read works
+    // and the FULL env-key delta between `bun test` and `bun run` is three names:
+    // NODE_ENV, plus HASNA_TEST_GUARD_HELD / HASNA_TEST_GUARD_SLOT, which are NOT
+    // bun — `bun` on this fleet is a bash wrapper (`hasna-test-guard v1`). Re-checked
+    // under a scrubbed `env -i` with a fresh HOME: still no BUN_TEST.
+    //
+    // So bun sets NO test-specific variable, and a BUN_TEST probe can never fire.
+    // It was removed rather than kept, because a reader assessing this detector
+    // counts probes: a dead one inflates the apparent indicator count, which is the
+    // one number a reader uses to judge whether the guard is load-bearing.
+    //
+    // VITEST and JEST_WORKER_ID are deliberately NOT removed by the same argument —
+    // those runners really do set them, so they are correct-but-unexercised here,
+    // not dead.
+    //
+    // IF A FUTURE BUN SHIPS `BUN_TEST`: delete this case and add the probe back.
+    // This assertion exists to record that the absence was measured, not overlooked.
+    const signal = detectTestRuntime({
+      env: { BUN_TEST: "1" },
+      entrypoint: "/srv/app/dist/cli.js",
+      argv: ["/usr/local/bin/bun", "/srv/app/dist/cli.js"],
+      globals: {},
+    });
+    expect(signal.indicators).toEqual([]);
+    expect(signal.detected).toBe(false);
+  });
+
   test("FAILS CLOSED: a probe that throws counts as a HIT, never as a pass", () => {
     const hostile = {
       get NODE_ENV(): string {
@@ -229,6 +262,82 @@ describe("getStore refuses the production store when it resolved it AMBIENTLY", 
       const rendered = `${err.message}\n${err.stack ?? ""}\n${JSON.stringify({ h: err.host, i: err.indicators })}`;
       expect(rendered).not.toContain(FAKE_KEY);
     });
+  });
+});
+
+describe("the guard covers the whole PUBLIC surface, not one entry point", () => {
+  // `src/index.ts` re-exports this module with `export *`, so every exported
+  // function here is package public API. Guarding `getStore` alone left a sibling
+  // that MINTS THE SAME CAPABILITY unguarded, and an SDK consumer reaches it
+  // directly. MEASURED on 92f632c3 inside a test process, before this change:
+  //     A_getStore:                  REFUSED  ConversationsCloudInTestError
+  //     B_resolveConversationsCloud: RETURNED_CLIENT baseUrl=https://conversations.hasna.xyz/v1
+  //                                  hasCreate=true hasUpdate=true hasDelete=true
+  // The client was constructed and inspected; no method was called, so the
+  // capability is demonstrated and no write was issued.
+
+  test("THE REGRESSION: ambient resolveConversationsCloud() no longer mints a production client", () => {
+    withAmbientCloudEnv(() => {
+      expect(() => resolveConversationsCloud()).toThrow(ConversationsCloudInTestError);
+    });
+  });
+
+  test("resolveConversationsCloud(process.env) is the same ambient read and is refused identically", () => {
+    withAmbientCloudEnv(() => {
+      expect(() => resolveConversationsCloud(process.env)).toThrow(ConversationsCloudInTestError);
+    });
+  });
+
+  test("an EXPLICIT env still mints a client — a named target is not this guard's to overturn", () => {
+    withAmbientCloudEnv(() => {
+      const client = resolveConversationsCloud({ [URL_VAR]: PROD_URL, [KEY_VAR]: FAKE_KEY });
+      expect(client).not.toBeNull();
+      expect(client!.baseUrl).toContain("conversations.hasna.xyz");
+    });
+  });
+
+  // THE PREDICATES ARE NOT THE CAPABILITY, AND MUST NOT START THROWING.
+  // `isCloudStore()` is called BARE in production code (admin-redaction.ts) to
+  // decide a branch, and a suite here deliberately exports cloud credentials so
+  // that bare call resolves true. A predicate hands back a boolean, never a client
+  // that can write, so guarding it would break a real caller to close nothing.
+  test("ambient isCloudStore() still answers instead of throwing", () => {
+    withAmbientCloudEnv(() => {
+      expect(isCloudStore()).toBe(true);
+    });
+  });
+
+  test("ambient cloudApiUrl() still answers instead of throwing", () => {
+    withAmbientCloudEnv(() => {
+      expect(cloudApiUrl()).toBe(PROD_URL);
+    });
+  });
+});
+
+describe("the guard's scope is IN-PROCESS, and that boundary is asserted", () => {
+  // NOT A REGRESSION TEST — a boundary-pinning test. This case passes on
+  // 92f632c3 too. It exists so that the scope is a stated, checkable decision
+  // rather than an accident of which probes happen to exist.
+  //
+  // MEASURED: a child spawned from a `bun test` parent with a curated env has no
+  // test entrypoint and no test argv, so nothing fires —
+  //     CURATED_CHILD -> CHILD_INDICATORS=[] detected=false
+  //     CHILD_OUTCOME=cloud-http-REACHED baseUrl=https://conversations.hasna.xyz/v1
+  //
+  // THAT IS DELIBERATE. A child's environment is CONSTRUCTED BY ITS SPAWNER, so it
+  // is not ambient from the spawner's point of view — it is an authored env, and
+  // this guard's own rule is that a caller which names its target is left alone.
+  // Guarding children while leaving `getStore(explicitEnv)` unguarded would apply
+  // two different rules to the same act one level apart.
+  test("a child-shaped process is NOT detected, and that is the documented boundary", () => {
+    const childShaped = detectTestRuntime({
+      env: { NODE_ENV: "production", PATH: "/usr/bin" },
+      entrypoint: "/repo/probe/child.ts",
+      argv: ["/usr/local/bin/bun", "run", "/repo/probe/child.ts"],
+      globals: {},
+    });
+    expect(childShaped.detected).toBe(false);
+    expect(childShaped.indicators).toEqual([]);
   });
 });
 

@@ -307,15 +307,54 @@ export function conversationsCloudEnv(env: Env = process.env): Env {
   return env;
 }
 
-/** Resolve the cloud HTTP client, or `null` when the app should use local. */
-export function resolveConversationsCloud(env: Env = process.env): HasnaStorageClient | null {
+/**
+ * The raw resolution, module-private and deliberately UNGUARDED.
+ *
+ * It answers "which transport does this env select", which is a QUESTION. The
+ * exported wrapper below answers "hand me a client I can write with", which is a
+ * CAPABILITY. The test-context guard belongs on the second and not the first.
+ */
+function resolveCloudClientUnguarded(env: Env): HasnaStorageClient | null {
   const resolved = resolveStorageClient(APP, conversationsCloudEnv(env));
   return resolved.transport === "cloud-http" ? resolved.client : null;
 }
 
-/** True when reads/writes are routed to the cloud API. */
+/**
+ * Resolve the cloud HTTP client, or `null` when the app should use local.
+ *
+ * GUARDED AT THE MINT POINT, NOT AT ONE CALLER. `src/index.ts` re-exports this
+ * module with `export *`, so this function is package public API and an SDK
+ * consumer reaches it without ever touching {@link getStore}. Measured on
+ * 92f632c3 inside a test process, with the guard on `getStore` alone:
+ * `getStore()` refused, while `resolveConversationsCloud()` returned a client at
+ * `https://conversations.hasna.xyz/v1` carrying create/update/delete. A guard on
+ * one entry point of a module whose siblings are re-exported wholesale protects
+ * the entry point, not the module — so the guard moved to the single place a
+ * writable client is produced, and every caller inherits it.
+ */
+export function resolveConversationsCloud(env: Env = process.env): HasnaStorageClient | null {
+  const client = resolveCloudClientUnguarded(env);
+  // AMBIENT means "whatever the operator's shell happens to hold". A caller that
+  // passes its own env has named its target, and that decision is not this
+  // guard's to overturn. The default parameter makes the bare call identical to
+  // an explicit `process.env`, so both are the same ambient read.
+  if (client && env === process.env) {
+    assertAmbientCloudAllowed(client.baseUrl, env, DB_PATH_KEYS);
+  }
+  return client;
+}
+
+/**
+ * True when reads/writes are routed to the cloud API.
+ *
+ * Reads the UNGUARDED resolution ON PURPOSE. This is a predicate: it returns a
+ * boolean, never a client that can write, so it closes nothing to guard it and
+ * breaks a real caller if it throws — `admin-redaction.ts` calls it bare to pick
+ * a branch, and a suite in this repository deliberately exports cloud
+ * credentials so that bare call resolves true.
+ */
 export function isCloudStore(env: Env = process.env): boolean {
-  return resolveConversationsCloud(env) !== null;
+  return resolveCloudClientUnguarded(env) !== null;
 }
 
 /** The resolved cloud API base URL when in cloud mode (else null). */
@@ -706,16 +745,16 @@ let localSingleton: LocalStore | null = null;
  * quiet fall-back. No error message ever contains a credential value — only names.
  */
 export function getStore(env?: Env): ConversationsStore {
-  // AMBIENT means "whatever the operator's shell happens to hold". The fleet
-  // exports the API URL and key into every interactive shell, so an ambient
-  // resolution inside a test runner reaches the LIVE deployment — measured in
-  // this repository at conversations.hasna.xyz with no isolation variable set.
-  // A caller that passes an env has named its own target and is left alone.
-  const ambient = env === undefined || env === process.env;
-  const resolvedEnv = env ?? process.env;
-  const client = resolveConversationsCloud(resolvedEnv);
+  // The test-context guard lives in `resolveConversationsCloud`, which is the
+  // single place a writable client is produced, so it applies here by inheritance
+  // rather than by a second copy. The fleet exports the API URL and key into
+  // every interactive shell, so an ambient resolution inside a test runner
+  // reaches the LIVE deployment — measured in this repository at
+  // conversations.hasna.xyz with no isolation variable set. A caller that passes
+  // an env has named its own target and is left alone; passing `process.env`
+  // through unchanged keeps the bare call an ambient read.
+  const client = resolveConversationsCloud(env ?? process.env);
   if (client) {
-    if (ambient) assertAmbientCloudAllowed(client.baseUrl, resolvedEnv, DB_PATH_KEYS);
     return new ApiStore(client);
   }
   if (!localSingleton) localSingleton = new LocalStore();
