@@ -20,6 +20,28 @@
 // WHAT THIS DELIBERATELY DOES NOT DO. It is dormant outside a test runner. An
 // operator running the CLI by hand against production is the intended production
 // path, not the defect, and nothing here should slow it down.
+//
+// SCOPE: IN-PROCESS, AND THAT IS A DECISION RATHER THAN AN OVERSIGHT. Every probe
+// below reads state belonging to THIS process. A CHILD process spawned by a test
+// is NOT covered, and measurement says so plainly — a child launched from a
+// `bun test` parent with a curated env reports `CHILD_INDICATORS=[] detected=false`
+// and reaches `https://conversations.hasna.xyz/v1`.
+//
+// The boundary holds because a child's environment is CONSTRUCTED BY ITS SPAWNER.
+// That makes it an authored env, not an ambient one, and this module's whole rule
+// is that a caller which names its target is left alone — the same rule that keeps
+// `getStore(explicitEnv)` unguarded. Refusing a child while permitting
+// `getStore({...process.env})` would apply two different rules to the same act one
+// level apart. A spawner that wants its children isolated sets a db-path variable
+// in the env it builds, which is what all five e2e spawners in this repository do.
+//
+// The rejected alternative, recorded so it is not re-proposed as new: exporting a
+// marker into children from module load. It mutates the caller's environment as an
+// import side effect, propagates to every unrelated child of that process, and
+// covers only children of a process that imported this module at all — so a test
+// that merely spawns the CLI gets nothing while a reader believes children are
+// covered. Partial coverage with invisible gaps is the property that makes a guard
+// dangerous, and it is the property this file exists to remove.
 
 /** The values a probe reads. Injectable so both outcomes are testable. */
 export interface TestRuntimeProbeInputs {
@@ -57,11 +79,26 @@ function defaultEntrypoint(): string | null {
  * marks the signal `degraded`. A guard that passes when its own instrument
  * breaks is worse than no guard, because it reports safety it never checked.
  *
- * TWO INDEPENDENT INDICATORS, ON PURPOSE. `NODE_ENV` alone is not the
- * instrument — measured on bun 1.3.14, `NODE_ENV=production bun test` leaves
- * `NODE_ENV` at `"production"`, so a single export defeats a NODE_ENV-only
- * detector. The entry-point probe survives that, and neither depends on the
- * other.
+ * INDEPENDENT INDICATORS, ON PURPOSE. `NODE_ENV` alone is not the instrument —
+ * measured on bun 1.3.14, `NODE_ENV=production bun test` leaves `NODE_ENV` at
+ * `"production"`, so a single export defeats a NODE_ENV-only detector. Under bun
+ * the entry-point and argv probes both survive that, and neither depends on
+ * `NODE_ENV`.
+ *
+ * THERE IS NO `BUN_TEST` PROBE, AND ITS ABSENCE IS MEASURED RATHER THAN
+ * OVERLOOKED. On bun 1.3.14 `bun test` does not set `BUN_TEST` — read as
+ * `UNDEFINED` against a live control that read `PATH` as `SET` in the same
+ * process. The complete env-key delta between `bun test` and `bun run` is
+ * `NODE_ENV` plus two names belonging to a local `bun` wrapper script, not to
+ * bun. So bun exports no test-specific variable at all, and a `BUN_TEST` probe
+ * could never fire. It was removed rather than left in place because a reader
+ * judging this detector counts the probes; a dead one inflates that count, which
+ * is the single number the reader uses to decide whether the guard is
+ * load-bearing. If a future bun ships the variable, add the probe back.
+ *
+ * `VITEST` and `JEST_WORKER_ID` stay for the opposite reason: those runners
+ * really do set them. They are correct-but-unexercised here, which is not the
+ * same as dead.
  */
 export function detectTestRuntime(inputs: Partial<TestRuntimeProbeInputs> = {}): TestRuntimeSignal {
   const indicators: string[] = [];
@@ -84,7 +121,6 @@ export function detectTestRuntime(inputs: Partial<TestRuntimeProbeInputs> = {}):
   const globals = inputs.globals ?? (globalThis as unknown as Record<string, unknown>);
 
   probe("NODE_ENV", () => (env.NODE_ENV === "test" ? "NODE_ENV=test" : null));
-  probe("BUN_TEST", () => (env.BUN_TEST ? "BUN_TEST" : null));
   probe("VITEST", () => (env.VITEST ? "VITEST" : null));
   probe("JEST_WORKER_ID", () => (env.JEST_WORKER_ID !== undefined ? "JEST_WORKER_ID" : null));
   probe("entrypoint", () => (entrypoint && TEST_ENTRYPOINT.test(entrypoint) ? `entrypoint:${entrypoint}` : null));
