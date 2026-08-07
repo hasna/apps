@@ -225,7 +225,7 @@ describe("Brandsight Domain API", () => {
     })).resolves.toEqual({ success: true, orderId: "renew-123" });
   });
 
-  it("paginates DNS records using offset as a page number", async () => {
+  it("paginates DNS records by skipping rows, as the offset parameter documents", async () => {
     const first = Array.from({ length: 1000 }, (_, i) => ({
       type: "TXT",
       name: `record-${i}`,
@@ -238,10 +238,11 @@ describe("Brandsight Domain API", () => {
     _setFetch((async (input: RequestInfo | URL) => {
       const url = String(input);
       urls.push(url);
-      if (url.includes("offset=1")) {
-        return new Response(JSON.stringify(second), { status: 200 });
-      }
-      return new Response(JSON.stringify(first), { status: 200 });
+      // Parse the offset rather than substring-matching it: "offset=1000"
+      // contains "offset=1", so a substring test cannot tell a row offset from
+      // a page index and passes against either implementation.
+      const offset = Number(new URL(url).searchParams.get("offset"));
+      return new Response(JSON.stringify(offset === 0 ? first : second), { status: 200 });
     }) as typeof fetch);
 
     const records = await getDnsRecords("example.com", {
@@ -252,7 +253,7 @@ describe("Brandsight Domain API", () => {
 
     expect(records).toHaveLength(1001);
     expect(urls[0]).toContain("offset=0&limit=1000");
-    expect(urls[1]).toContain("offset=1&limit=1000");
+    expect(urls[1]).toContain("offset=1000&limit=1000");
   });
 
   it("normalizes Brandsight DNS TTLs to the documented 600 second minimum", async () => {

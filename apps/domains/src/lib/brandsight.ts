@@ -508,6 +508,7 @@ export async function getThreatAssessment(domain: string): Promise<ThreatAssessm
 export async function listDomains(config?: BrandsightConfig): Promise<BrandsightDomain[]> {
   const cfg = requireDomainConfig(config);
   const domains: BrandsightDomain[] = [];
+  const seenDomains = new Set<string>();
   const seenMarkers = new Set<string>();
   let marker: string | undefined;
 
@@ -520,7 +521,20 @@ export async function listDomains(config?: BrandsightConfig): Promise<Brandsight
       cfg,
     );
     if (!Array.isArray(batch) || batch.length === 0) break;
-    domains.push(...batch.map(normalizeBrandsightDomain).filter((d) => d.domain));
+    // The cursor is documented only as "Marker Domain to use as the offset in
+    // results"; whether it is inclusive is not stated. If it is, every page
+    // after the first repeats the row the previous page ended on. `seenMarkers`
+    // below guards loop termination, not row identity, so the repeat was kept.
+    // Dedupe on the domain name -- unique per registrar account, so this can
+    // never discard a distinct row -- which makes the read correct under either
+    // reading of the cursor.
+    for (const normalized of batch.map(normalizeBrandsightDomain)) {
+      if (!normalized.domain || seenDomains.has(normalized.domain)) continue;
+      seenDomains.add(normalized.domain);
+      domains.push(normalized);
+    }
+    // Page fullness is a property of what the server returned, so this stays on
+    // the raw batch length rather than the deduped count.
     if (batch.length < 500) break;
     const nextMarker = String(batch[batch.length - 1]?.domain ?? "");
     if (!nextMarker || seenMarkers.has(nextMarker)) break;
@@ -709,7 +723,12 @@ export async function getDnsRecords(domain: string, config?: BrandsightConfig): 
     if (!Array.isArray(batch) || batch.length === 0) break;
     records.push(...batch);
     if (batch.length < limit) break;
-    offset++;
+    // `offset` is documented as "Number of results to skip for pagination" -- a
+    // row offset, not a page index. Advancing by one re-requested a window that
+    // overlapped the previous page by limit-1 rows, so every record but the last
+    // was returned once per iteration and the loop only terminated after
+    // total-limit+2 requests.
+    offset += limit;
   }
 
   return records;
