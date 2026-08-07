@@ -1028,8 +1028,10 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
               schema: { type: "string", format: "date-time" },
               description:
                 "Since-cursor. Returns only tasks whose updated_at is strictly after this instant, and `total` respects it too. "
-                + "Intended for pollers: re-read what changed instead of the whole table. A malformed value is rejected with 400 "
-                + "rather than ignored.",
+                + "Intended for pollers: re-read what changed instead of the whole table. Must be a full RFC 3339 date-time with "
+                + "an explicit offset (e.g. 2026-08-07T12:00:00Z or 2026-08-07T12:00:00+03:00); a reduced-precision value such as "
+                + "`2026` or `2026-08`, or any other malformed value, is rejected with 400 rather than ignored. Timestamps stored "
+                + "without an offset are read as UTC on every backend.",
             },
             { name: "limit", in: "query", schema: { type: "integer", minimum: 1 } },
             { name: "offset", in: "query", schema: { type: "integer", minimum: 0 } },

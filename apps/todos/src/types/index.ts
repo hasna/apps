@@ -737,6 +737,17 @@ export interface TaskFilter {
    * Compared as an INSTANT, not as a string: production rows carry both
    * "2026-08-05T18:54:55.814Z" and "2026-06-10 11:24:47", which sort
    * differently as text ("T" > " ") than they do as time.
+   *
+   * A STORED STAMP CARRYING NO OFFSET IS READ AS UTC ON BOTH BACKENDS. SQLite's
+   * `julianday()` already does this; Postgres is pinned to match by
+   * `todos_try_timestamptz` (src/storage/postgres-sync.ts), because a bare
+   * `::timestamptz` cast resolves such a stamp against the session `TimeZone` and
+   * the two backends then answer the same cursor differently by the server's UTC
+   * offset — measured 2 rows against 3 on an identical fixture.
+   *
+   * The HTTP layer normalises to `YYYY-MM-DDTHH:MM:SS.sssZ` before this is set,
+   * so both backends receive one grammar rather than each interpreting whatever
+   * the caller typed.
    */
   updated_after?: string;
   session_id?: string;

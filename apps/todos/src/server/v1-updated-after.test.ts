@@ -132,14 +132,71 @@ describe("GET /v1/tasks?updated_after", () => {
     expect(String(body.error ?? "")).toContain("updated_after");
   });
 
-  test("tolerates the space-separated timestamps already stored in production", async () => {
-    // Measured on todos.hasna.xyz 2026-08-07: some rows carry
-    // "2026-06-10 11:24:47" rather than ISO-8601 with a Z. A cursor that
-    // string-compares would mis-sort these against "2026-06-10T...".
+  // The validator and the comparator must accept the SAME language. They did
+  // not: `Date.parse` guarded the door and SQLite `julianday()` did the
+  // comparing. `?updated_after=2026` passed validation as a valid year and then
+  // matched EVERY row, because SQLite reads a bare number as a raw Julian Day —
+  // so a caller bounding a read received the whole table under a 200. That is
+  // the exact defect this parameter exists to end, arriving through the front
+  // door. Each case below is a value one side accepts and the other misreads.
+  test.each([
+    ["2026", "a bare year — returned the WHOLE TABLE at 200 before this fix"],
+    ["2026-08", "reduced precision — silently returned nothing"],
+    ["March 5, 2026", "Date.parse accepts it; julianday does not"],
+    ["2026-08-07", "date only, no time"],
+    ["2026-08-07T12:00:00", "no offset — the instant is undefined"],
+    ["2026-02-30T00:00:00Z", "shape is valid but the date is not on the calendar"],
+  ])("rejects %j with 400 rather than guessing (%s)", async (cursor) => {
+    const response = await request(`/v1/tasks?updated_after=${encodeURIComponent(cursor)}`);
+    expect(response?.status).toBe(400);
+    // Specifically NOT a 200 carrying rows: silence and the whole table are the
+    // two wrong answers this replaces, and both look like success.
+  });
+
+  test("accepts a non-Z offset and normalises it to the same instant", async () => {
+    // 2026-06-15T15:00:00+03:00 IS 2026-06-15T12:00:00Z, which is exactly MID.
+    // Strictly-after MID leaves only the NEW row, so an offset that is parsed
+    // but not converted would return a different count here.
+    const offset = await listTasks(`?updated_after=${encodeURIComponent("2026-06-15T15:00:00+03:00")}`);
+    const zform = await listTasks(`?updated_after=${MID}`);
+    expect(offset.tasks.length).toBe(1);
+    expect(offset.total).toBe(zform.total);
+    expect(offset.tasks.map((t) => t.id)).toEqual(zform.tasks.map((t) => t.id));
+  });
+
+  test("compares a space-separated production stamp as an INSTANT, not as text", async () => {
+    // Measured on todos.hasna.xyz 2026-08-07: rows carry "2026-06-10 11:24:47"
+    // as well as "2026-08-05T18:54:55.814Z".
+    //
+    // THIS FIXTURE IS CHOSEN TO DISCRIMINATE, and the previous one was not. Its
+    // predecessor asserted only `toContain` against a cursor a week earlier, so
+    // it passed with the cursor REMOVED ENTIRELY — with no filter, every row
+    // comes back and every `toContain` holds. It also compared a June cursor to
+    // a July row, where text order and time order happen to agree, so it could
+    // not have caught the bug it was named for.
+    //
+    // Same-date is what separates them: as text, " " (0x20) sorts BEFORE "T"
+    // (0x54), so "2026-07-01 08:00:00" reads as EARLIER than
+    // "2026-07-01T00:00:00.000Z" and a string comparison drops it. Measured:
+    // TEXT rows=0, JULIANDAY rows=1.
     const legacy = await store.tasks.create({ title: "legacy stamp" });
     stampUpdatedAt(legacy.id, "2026-07-01 08:00:00");
-    const cursored = await listTasks(`?updated_after=2026-06-20T00:00:00.000Z`);
-    const ids = cursored.tasks.map((t) => t.id);
+
+    const cursored = await listTasks("?updated_after=2026-07-01T00:00:00.000Z");
+    const ids = cursored.tasks.map((t) => t.id).sort();
+
+    // The legacy row is genuinely after the cursor and must come back...
     expect(ids).toContain(legacy.id);
+    // ...and the exact-set assertion is what makes this test able to FAIL:
+    // OLD and MID are before the cursor, so a removed or text-based comparison
+    // changes this number. Only NEW and the legacy row qualify.
+    expect(cursored.tasks.length).toBe(2);
+    expect(cursored.total).toBe(2);
+    // A no-offset stamp is read as UTC, matching the Postgres path — see
+    // todos_try_timestamptz in src/storage/postgres-sync.ts. At 08:00 UTC the
+    // row is after the cursor; read as local time on a UTC+9 server it would
+    // not be, which is the cross-backend disagreement that pinning removes.
+    const beforeInUtc = await listTasks("?updated_after=2026-07-01T09:00:00.000Z");
+    expect(beforeInUtc.tasks.map((t) => t.id)).not.toContain(legacy.id);
   });
 });
