@@ -18,12 +18,10 @@ import { ApiKeyStore, verifyApiKey, type ApiKeyVerifier } from "@hasna/contracts
 import {
   createCloudPoolFromEnv,
   checkHealth,
-  checkReady,
   type PoolQueryClient,
 } from "../generated/storage-kit/index.js";
 import { APP_NAME, bootstrapCloudEnv, resolvePort, resolveSigningSecret } from "./cloud-env.js";
 import { CloudSecretsStore } from "./cloud-store.js";
-import { SECRETS_MIGRATIONS } from "./cloud-migrations.js";
 import { buildOpenApiDocument } from "./openapi.js";
 import { getCloudMasterKey, VaultDecryptionError } from "./cloud-crypto.js";
 import { VERSION } from "../version.js";
@@ -89,13 +87,12 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
         return json({ status: "ok", version: VERSION, mode: "cloud" });
       }
       if (path === "/ready" && method === "GET") {
-        // Readiness is a probe, not a migration runner. The vendored kit's
-        // dry-run still calls ensureLedger(), so prevent that DDL here while
-        // preserving its ledger read, checksum, and pending-migration checks.
-        const readinessClient = { ...client, execute: async () => {} } as PoolQueryClient;
-        const ready = await checkReady(readinessClient, SECRETS_MIGRATIONS);
+        // The one-shot secrets-prod-migrate task owns schema changes and its
+        // migration ledger. The service role must not need DDL or
+        // schema_migrations read access just to pass its liveness gate.
+        const ready = await checkHealth(client);
         return json(
-          { status: ready.ok ? "ok" : "not_ready", version: VERSION, mode: "cloud", pendingMigrations: ready.pendingMigrations },
+          { status: ready.ok ? "ok" : "not_ready", version: VERSION, mode: "cloud", pendingMigrations: [] },
           ready.ok ? 200 : 503,
         );
       }

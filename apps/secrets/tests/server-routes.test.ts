@@ -162,7 +162,7 @@ describe("cloud server route matrix", () => {
     expect(res.status).toBe(503);
     expect(await body(res)).toMatchObject({ status: "degraded" });
 
-    const unready = makeHandler(completeStore(), client({ async many() { throw "schema unavailable"; } }));
+    const unready = makeHandler(completeStore(), client({ async get() { throw "schema unavailable"; } }));
     res = await unready.handle(request("/ready"));
     expect(res.status).toBe(503);
     expect(await body(res)).toMatchObject({ status: "not_ready", pendingMigrations: [] });
@@ -195,6 +195,21 @@ describe("cloud server route matrix", () => {
     );
 
     const res = await readOnlyRuntime.handle(request("/ready"));
+
+    expect(res.status).toBe(200);
+    expect(await body(res)).toMatchObject({ status: "ok", pendingMigrations: [] });
+  });
+
+  it("keeps readiness healthy when the service role cannot read the migration ledger", async () => {
+    const runtimeRole = makeHandler(
+      completeStore(),
+      client({
+        async many() { throw new Error("permission denied for relation schema_migrations"); },
+        async execute() { throw new Error("permission denied for schema public"); },
+      }),
+    );
+
+    const res = await runtimeRole.handle(request("/ready"));
 
     expect(res.status).toBe(200);
     expect(await body(res)).toMatchObject({ status: "ok", pendingMigrations: [] });
