@@ -33,6 +33,7 @@ import {
   guardedUpdateWorkspace as dbGuardedUpdateWorkspace,
   getAgent as dbGetAgent,
   getAgentBySlug as dbGetAgentBySlug,
+  getWorkspace as dbGetWorkspace,
   getRecipe as dbGetRecipe,
   getRecipeBySlug as dbGetRecipeBySlug,
   getRoot as dbGetRoot,
@@ -113,7 +114,12 @@ import {
   type ProjectChannelEnsureResult,
   type StoreEnsureChannelOptions,
 } from "../lib/project-channel.js";
-import { withResponseControl } from "../lib/guarded-project-mutation.js";
+import {
+  assertCompleteStableProjectId,
+  assertPositiveBounds,
+  buildGuardedProjectReadResult,
+  withResponseControl,
+} from "../lib/guarded-project-mutation.js";
 import type {
   Agent,
   AgentRun,
@@ -124,6 +130,8 @@ import type {
   EventSource,
   GuardedProjectMutationReceiptLookupInput,
   GuardedProjectMutationReceiptLookupResult,
+  GuardedProjectReadRequest,
+  GuardedProjectReadResult,
   GuardedProjectMutationRequest,
   GuardedProjectMutationResult,
   GuardedProjectMutationRollbackRequest,
@@ -282,6 +290,7 @@ export interface ProjectStore {
   resolveTarget(target: string | undefined, options?: ProjectResolverOptions): Promise<Workspace>;
   createProject(input: CreateWorkspaceInput): Promise<Workspace>;
   updateProject(id: string, patch: UpdateWorkspaceInput): Promise<Workspace>;
+  guardedReadProject(input: GuardedProjectReadRequest): Promise<GuardedProjectReadResult>;
   guardedUpdateProject(input: GuardedProjectMutationRequest): Promise<GuardedProjectMutationResult>;
   lookupGuardedProjectMutationReceipt(input: GuardedProjectMutationReceiptLookupInput): Promise<GuardedProjectMutationReceiptLookupResult>;
   rollbackGuardedProjectMutation(input: GuardedProjectMutationRollbackRequest): Promise<GuardedProjectMutationResult>;
@@ -453,6 +462,15 @@ class LocalProjectStore implements ProjectStore {
     return withLock(id, { agentId: patch.agent_id, source: patch.source, command: patch.command }, "project update", () =>
       dbUpdateWorkspace(id, patch),
     );
+  }
+
+  async guardedReadProject(input: GuardedProjectReadRequest): Promise<GuardedProjectReadResult> {
+    const started = Date.now();
+    assertCompleteStableProjectId(input.project_id);
+    assertPositiveBounds(input);
+    const project = dbGetWorkspace(input.project_id);
+    if (!project) throw new Error(`Project not found: ${input.project_id}`);
+    return buildGuardedProjectReadResult(project, input, started);
   }
 
   async guardedUpdateProject(input: GuardedProjectMutationRequest): Promise<GuardedProjectMutationResult> {
@@ -891,6 +909,21 @@ class ApiProjectStore implements ProjectStore {
   async updateProject(id: string, patch: UpdateWorkspaceInput): Promise<Workspace> {
     const updated = await this.client.update<Workspace>(RESOURCE, id, patch);
     return normalizeApiWorkspace(updated) ?? updated;
+  }
+
+  async guardedReadProject(input: GuardedProjectReadRequest): Promise<GuardedProjectReadResult> {
+    assertCompleteStableProjectId(input.project_id);
+    assertPositiveBounds(input);
+    return this.client.transport.get<GuardedProjectReadResult>(
+      `/projects/${encodeURIComponent(input.project_id)}/guarded-metadata`,
+      {
+        query: {
+          response_byte_limit: input.response_byte_limit,
+          time_budget_ms: input.time_budget_ms,
+        },
+        timeoutMs: input.time_budget_ms,
+      },
+    );
   }
 
   async guardedUpdateProject(input: GuardedProjectMutationRequest): Promise<GuardedProjectMutationResult> {

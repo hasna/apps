@@ -2295,6 +2295,33 @@ function registerProjectCommands(program: Command): void {
     });
 
   program
+    .command("guarded-read <project-id>")
+    .description("Read one project by exact stable id with bounded complete JSON and its current mutation revision")
+    .requiredOption("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes")
+    .requiredOption("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectId, opts) => {
+      try {
+        const result = await resolveProjectStore().guardedReadProject({
+          project_id: projectId,
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+        });
+        if (wantsJson(opts)) {
+          process.stdout.write(JSON.stringify(result));
+          return;
+        }
+        console.log(chalk.green(`✓ Guarded project read: ${result.project_id}`));
+        console.log(`  ${chalk.dim("revision:")} ${result.current_revision}`);
+        console.log(`  ${chalk.dim("complete:")} ${result.response_control.complete}`);
+        console.log(`  ${chalk.dim("truncated:")} ${result.response_control.truncated}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
     .command("guarded-update <project-id>")
     .description("Safely update an existing project by exact stable id with revision, idempotency, receipt, and dry-run controls")
     .option("--name <name>", "Project name")

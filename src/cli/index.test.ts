@@ -522,6 +522,90 @@ describe("project-first CLI surface", () => {
     expect((JSON.parse(text(get.stdout)) as { project?: { slug: string } }).project?.slug).toBe("surface-app");
   });
 
+  test("guarded-read returns a bounded exact-id revision envelope and rejects non-id targets", () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-guarded-read-"));
+    const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
+    const targetPath = join(root, "guarded-read-app");
+
+    try {
+      const create = runProjects([
+        "create",
+        "--name",
+        "Guarded Read App",
+        "--slug",
+        "guarded-read-app",
+        "--path",
+        targetPath,
+        "--json",
+      ], env);
+      expect(create.exitCode).toBe(0);
+      const created = JSON.parse(text(create.stdout)) as {
+        project: { id: string; updated_at: string };
+      };
+
+      const exact = runProjects([
+        "guarded-read",
+        created.project.id,
+        "--response-byte-limit",
+        "16384",
+        "--time-budget-ms",
+        "5000",
+        "--json",
+      ], env);
+      expect(exact.exitCode).toBe(0);
+      const payload = JSON.parse(text(exact.stdout)) as {
+        ok: boolean;
+        project_id: string;
+        current_revision: string;
+        response_control: {
+          response_byte_limit: number;
+          time_budget_ms: number;
+          response_bytes: number;
+          complete: boolean;
+          truncated: boolean;
+        };
+      };
+      expect(payload.ok).toBe(true);
+      expect(payload.project_id).toBe(created.project.id);
+      expect(payload.current_revision).toBe(created.project.updated_at);
+      expect(payload.response_control.response_byte_limit).toBe(16384);
+      expect(payload.response_control.time_budget_ms).toBe(5000);
+      expect(payload.response_control.response_bytes).toBeGreaterThan(0);
+      expect(Buffer.byteLength(text(exact.stdout), "utf8")).toBe(payload.response_control.response_bytes);
+      expect(payload.response_control.complete).toBe(true);
+      expect(payload.response_control.truncated).toBe(false);
+
+      for (const refusedTarget of ["guarded-read-app", created.project.id.slice(0, -1)]) {
+        const refused = runProjects([
+          "guarded-read",
+          refusedTarget,
+          "--response-byte-limit",
+          "16384",
+          "--time-budget-ms",
+          "5000",
+          "--json",
+        ], env);
+        expect(refused.exitCode).toBe(1);
+        expect(text(refused.stderr)).toContain("complete stable project id");
+      }
+
+      const byteLimited = runProjects([
+        "guarded-read",
+        created.project.id,
+        "--response-byte-limit",
+        "1",
+        "--time-budget-ms",
+        "5000",
+        "--json",
+      ], env);
+      expect(byteLimited.exitCode).toBe(1);
+      expect(text(byteLimited.stderr)).toContain("response byte budget exceeded");
+      expect(runProjects(["show", created.project.id, "--json"], env).exitCode).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("workspace store, app store, loops, and labels use temp home", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-store-"));
     const env = {

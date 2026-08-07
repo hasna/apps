@@ -3,6 +3,8 @@ import type {
   GuardedProjectMutationBounds,
   GuardedProjectMutationControl,
   GuardedProjectMutationDirection,
+  GuardedProjectReadRequest,
+  GuardedProjectReadResult,
   GuardedProjectMutationReceipt,
   GuardedProjectMutationReceiptRow,
   JsonObject,
@@ -150,15 +152,16 @@ export function responseControl(
   payload: unknown,
   bounds: GuardedProjectMutationBounds,
   startedAtMs: number,
+  operation = "guarded mutation",
 ): GuardedProjectMutationControl {
   assertPositiveBounds(bounds);
   const bytes = Buffer.byteLength(JSON.stringify(payload), "utf8");
   const elapsed = Math.max(Date.now() - startedAtMs, 0);
   if (bytes > bounds.response_byte_limit) {
-    throw new Error(`guarded mutation response byte budget exceeded: ${bytes} > ${bounds.response_byte_limit}`);
+    throw new Error(`${operation} response byte budget exceeded: ${bytes} > ${bounds.response_byte_limit}`);
   }
   if (elapsed > bounds.time_budget_ms) {
-    throw new Error(`guarded mutation time budget exceeded: ${elapsed} > ${bounds.time_budget_ms}`);
+    throw new Error(`${operation} time budget exceeded: ${elapsed} > ${bounds.time_budget_ms}`);
   }
   return {
     response_byte_limit: bounds.response_byte_limit,
@@ -174,6 +177,7 @@ export function withResponseControl<T extends Record<string, unknown>>(
   payload: T,
   bounds: GuardedProjectMutationBounds,
   startedAtMs: number,
+  operation = "guarded mutation",
 ): T & { response_control: GuardedProjectMutationControl } {
   const envelope = {
     ...payload,
@@ -186,9 +190,26 @@ export function withResponseControl<T extends Record<string, unknown>>(
       truncated: false,
     },
   };
-  envelope.response_control = responseControl(envelope, bounds, startedAtMs);
-  envelope.response_control = responseControl(envelope, bounds, startedAtMs);
+  envelope.response_control = responseControl(envelope, bounds, startedAtMs, operation);
+  envelope.response_control = responseControl(envelope, bounds, startedAtMs, operation);
   return envelope;
+}
+
+export function buildGuardedProjectReadResult(
+  project: Workspace,
+  input: GuardedProjectReadRequest,
+  startedAtMs: number,
+): GuardedProjectReadResult {
+  assertCompleteStableProjectId(input.project_id);
+  assertPositiveBounds(input);
+  if (project.id !== input.project_id) {
+    throw new Error(`guarded project read target mismatch: requested ${input.project_id}, received ${project.id}`);
+  }
+  return withResponseControl({
+    ok: true as const,
+    project_id: project.id,
+    current_revision: workspaceRevision(project),
+  }, input, startedAtMs, "guarded project read");
 }
 
 export function buildReceiptId(input: {

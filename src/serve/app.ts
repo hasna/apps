@@ -204,6 +204,15 @@ async function route(
       return errorResponse("Method not allowed", 405);
     }
 
+    if (sub === "guarded-metadata" && method === "GET") {
+      const started = Date.now();
+      const bounds = {
+        response_byte_limit: Number(url.searchParams.get("response_byte_limit")),
+        time_budget_ms: Number(url.searchParams.get("time_budget_ms")),
+      };
+      const result = await store.guardedReadWorkspace({ project_id: id, ...bounds }, started);
+      return guardedJsonResponse(result, bounds, started);
+    }
     if (sub === "guarded-metadata" && method === "POST") {
       const started = Date.now();
       const body = await readJsonBody(req);

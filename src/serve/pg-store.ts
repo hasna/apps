@@ -11,6 +11,8 @@ import { nanoid } from "nanoid";
 import type { TypedQueryClient } from "../generated/storage-kit/query.js";
 import {
   assertCompleteStableProjectId,
+  assertPositiveBounds,
+  buildGuardedProjectReadResult,
   buildReceiptId,
   deriveGuardedIdempotencyKey,
   preconditionDigest,
@@ -34,6 +36,8 @@ import type {
   GuardedProjectMutationReceiptLookupInput,
   GuardedProjectMutationReceiptLookupResult,
   GuardedProjectMutationReceiptRow,
+  GuardedProjectReadRequest,
+  GuardedProjectReadResult,
   GuardedProjectMutationRequest,
   GuardedProjectMutationResult,
   GuardedProjectMutationRollbackRequest,
@@ -476,6 +480,25 @@ export class ProjectsPgStore {
   async getWorkspace(idOrSlug: string): Promise<Workspace | null> {
     const row = await this.db.get<WorkspaceRow>("SELECT * FROM workspaces WHERE id = $1 OR slug = $1", [idOrSlug]);
     return row ? rowToWorkspace(row) : null;
+  }
+
+  async guardedReadWorkspace(
+    input: GuardedProjectReadRequest,
+    startedAtMs = Date.now(),
+  ): Promise<GuardedProjectReadResult> {
+    try {
+      assertCompleteStableProjectId(input.project_id);
+      assertPositiveBounds(input);
+    } catch (err) {
+      throw new ValidationError(err instanceof Error ? err.message : String(err));
+    }
+    const row = await this.db.get<WorkspaceRow>("SELECT * FROM workspaces WHERE id = $1", [input.project_id]);
+    if (!row) throw new NotFoundError(`Workspace not found: ${input.project_id}`);
+    try {
+      return buildGuardedProjectReadResult(rowToWorkspace(row), input, startedAtMs);
+    } catch (err) {
+      throw new ValidationError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   async requireWorkspace(idOrSlug: string): Promise<Workspace> {

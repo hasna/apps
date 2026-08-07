@@ -202,6 +202,53 @@ describe("projects store api transport (roots/agents/recipes)", () => {
     const { store } = stubStore(() => ({ workspaces: [{ id: "a", slug: "a" }], count: 1 }));
     expect(await store.getProject("iproj-x")).toBeNull();
   });
+
+  test("guardedReadProject uses the bounded exact-id API route and rejects slugs before transport", async () => {
+    const projectId = "wks_guardedread0001";
+    const response = {
+      ok: true as const,
+      project_id: projectId,
+      current_revision: "2026-08-07 00:00:01",
+      response_control: {
+        response_byte_limit: 16_384,
+        time_budget_ms: 5_000,
+        response_bytes: 512,
+        elapsed_ms: 1,
+        complete: true,
+        truncated: false,
+      },
+    };
+    const { store, calls } = stubStore(() => response);
+
+    await expect(store.guardedReadProject({
+      project_id: "guarded-read",
+      response_byte_limit: 16_384,
+      time_budget_ms: 5_000,
+    })).rejects.toThrow(/complete stable project id/);
+    expect(calls).toHaveLength(0);
+
+    const result = await store.guardedReadProject({
+      project_id: projectId,
+      response_byte_limit: 16_384,
+      time_budget_ms: 5_000,
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      project_id: projectId,
+      current_revision: "2026-08-07 00:00:01",
+      response_control: {
+        response_byte_limit: 16_384,
+        time_budget_ms: 5_000,
+        complete: true,
+        truncated: false,
+      },
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.method).toBe("GET");
+    expect(calls[0]!.path).toBe(
+      `/v1/projects/${projectId}/guarded-metadata?response_byte_limit=16384&time_budget_ms=5000`,
+    );
+  });
 });
 
 // Regression for dc3ba294: the projects API hard-caps every list response at
