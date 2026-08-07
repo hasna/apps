@@ -136,6 +136,57 @@ describe("loops-runner", () => {
     }
   });
 
+  test("runRunnerOnce finalizes configured exit-75 declines as neutral skipped runs", async () => {
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = createRunnerServer(
+      storage,
+      "runner-skip",
+      () => new Date("2026-01-01T00:00:00Z"),
+    );
+    try {
+      const loop = await storage.createLoop(
+        {
+          name: "runner-skip-loop",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "exit 75", shell: true },
+          overlap: "skip",
+          maxAttempts: 3,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+
+      const result = await runRunnerOnce({
+        apiUrl: `http://127.0.0.1:${server.port}`,
+        apiKey: "runner-key",
+        runnerId: "runner-skip",
+        now: new Date("2026-01-01T00:00:00Z"),
+        execute: async (_loop, run) => ({
+          status: "failed",
+          startedAt: run.startedAt ?? "2026-01-01T00:00:00.000Z",
+          finishedAt: "2026-01-01T00:00:01.000Z",
+          durationMs: 1_000,
+          stdout: "",
+          stderr: "",
+          error: "process exited with code 75",
+          exitCode: 75,
+        }),
+      });
+
+      expect(result).toMatchObject({ ok: true, claimed: 1 });
+      expect(result.completed[0]).toMatchObject({ status: "skipped", exitCode: 75 });
+      expect(await storage.getLoop(loop.id)).toMatchObject({
+        status: "active",
+        nextRunAt: "2026-01-01T00:01:00.000Z",
+        retryScheduledFor: undefined,
+      });
+      expect(await storage.countRuns("skipped")).toBe(1);
+      expect(await storage.countRuns("failed")).toBe(0);
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
   test("runRunnerOnce executes a workflow claim through runner-scoped API state", async () => {
     const root = mkdtempSync(join(tmpdir(), "loops-runner-workflow-"));
     const marker = join(root, "marker.txt");

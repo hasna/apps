@@ -153,6 +153,44 @@ describe("executeLoop", () => {
     }
   });
 
+  test("keeps raw exit 75 failures generic until the loop finalization boundary", async () => {
+    const store = new Store(":memory:");
+    try {
+      const skippedLoop = store.createLoop({
+        name: "configured-skip",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: { type: "command", command: "exit 75", shell: true },
+        overlap: "skip",
+      });
+      const skippedClaim = store.claimRun(skippedLoop, new Date().toISOString(), "test");
+      expect(skippedClaim).toBeDefined();
+      expect(await executeLoop(skippedLoop, skippedClaim!.run)).toMatchObject({
+        status: "failed",
+        exitCode: 75,
+      });
+
+      const allowedLoop = store.createLoop({
+        name: "unconfigured-skip",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: { type: "command", command: "exit 75", shell: true },
+        overlap: "allow",
+      });
+      const allowedClaim = store.claimRun(allowedLoop, new Date().toISOString(), "test");
+      expect(allowedClaim).toBeDefined();
+      expect(await executeLoop(allowedLoop, allowedClaim!.run)).toMatchObject({
+        status: "failed",
+        exitCode: 75,
+      });
+
+      expect(await executeTarget({ type: "command", command: "exit 75", shell: true })).toMatchObject({
+        status: "failed",
+        exitCode: 75,
+      });
+    } finally {
+      store.close();
+    }
+  });
+
   // Regression: todos de1f78af. The live runner's bootstrap script sources only
   // its own env file, and composeExecutionEnv bases the child env on the runner's
   // process.env. The child is `/bin/sh -c` (dash), which reads no rc file and ignores

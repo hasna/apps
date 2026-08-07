@@ -289,6 +289,46 @@ describe("scheduler", () => {
     }
   });
 
+  test("executeClaimedRun persists injected exit 75 as skipped only for overlap-skip loops", async () => {
+    const store = new Store(":memory:");
+    try {
+      const now = new Date("2026-01-01T00:00:00.000Z");
+      const loop = store.createLoop({
+        name: "scheduler-configured-skip",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "exit 75", shell: true },
+        overlap: "skip",
+        maxAttempts: 3,
+      }, now);
+      const claim = store.claimRun(loop, loop.nextRunAt!, "scheduler-skip", new Date(loop.nextRunAt!));
+      expect(claim).toBeTruthy();
+
+      const finalized = await executeClaimedRun({
+        store,
+        runnerId: "scheduler-skip",
+        claimToken: claim!.claimToken,
+        loop: claim!.loop,
+        run: claim!.run,
+        now: () => new Date("2026-01-01T00:01:01.000Z"),
+        execute: async () => ({
+          status: "failed",
+          exitCode: 75,
+          stdout: "",
+          stderr: "configured decline",
+          error: "process exited with code 75",
+          startedAt: "2026-01-01T00:01:00.000Z",
+          finishedAt: "2026-01-01T00:01:01.000Z",
+          durationMs: 1_000,
+        }),
+      });
+
+      expect(finalized).toMatchObject({ status: "skipped", exitCode: 75 });
+      expect(consecutiveFailureCount(store, loop.id, loop.maxAttempts)).toBe(0);
+    } finally {
+      store.close();
+    }
+  });
+
   test("stale daemon tick cannot recover expired runs or advance loop cursor after database lease loss", async () => {
     const store = new Store(":memory:");
     try {

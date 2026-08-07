@@ -5,6 +5,23 @@ documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
 unless noted.
 
+## 0.4.39 (2026-08-07)
+
+### Fixed
+
+- **Expired hosted run leases:** runner polling carries the lease-aware claim
+  and bounded recovery path merged after the deployed 0.4.28 image. A dead
+  runner's expired `running` row no longer suppresses every later occurrence of
+  an `overlap: "skip"` loop while the loop continues to report active.
+- **Configured overlap declines:** a non-workflow `overlap: "skip"` loop whose
+  target exits 75 is persisted as the neutral terminal `skipped` status. It
+  advances recurrence without retry or circuit-breaker impact, stays distinct
+  from success, and is exposed consistently by runner finalization, OpenAPI,
+  the generated HTTP SDK, CLI exit behavior, and health reporting.
+- **Runner dependency advisories:** security overrides now resolve
+  `fast-uri` 3.1.5, `ip-address` 10.3.1, and `hono` 4.12.34 so the packaged
+  runner clears dependency-audit and CRITICAL/HIGH image-scan gates.
+
 ## 0.4.37 (2026-08-01)
 
 ### Fixed

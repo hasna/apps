@@ -674,6 +674,20 @@ describe("loops CLI", () => {
     expect(value.runNow.advancesLoop).toBe(false);
   });
 
+  test("run-now exits zero for configured overlap-skip exit 75 without reporting success", () => {
+    const dataDir = freshDataDir("loops-cli-skip-");
+    const create = runCli(dataDir, ["create", "command", "skip", "--at", futureAt(), "--cmd", "exit 75"]);
+    expect(create.status).toBe(0);
+
+    const run = runCli(dataDir, ["--json", "run-now", "skip"]);
+    expect(run.status).toBe(0);
+    const value = JSON.parse(run.stdout);
+    expect(value.status).toBe("skipped");
+    expect(value.exitCode).toBe(75);
+    expect(value.runNow.source).toBe("ad_hoc");
+    expect(value.runNow.advancesLoop).toBe(false);
+  });
+
   test("create agent rejects unsupported provider add dirs before storing", () => {
     const dataDir = freshDataDir("loops-cli-create-agent-adddirs-");
 

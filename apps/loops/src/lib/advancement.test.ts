@@ -323,6 +323,41 @@ describe("shared loop advancement policy", () => {
     expect(consecutiveFailureCountFromRuns([marker, ...failures], 2)).toBe(0);
   });
 
+  test("treats configured skips as neutral for retries, recurrence, and failure streaks", () => {
+    const skipped = runFixture({
+      id: "configured-skip",
+      status: "skipped",
+      attempt: 1,
+      scheduledFor: "2026-01-01T00:02:00.000Z",
+      exitCode: 75,
+      error: "process exited with code 75",
+    });
+    const priorFailure = runFixture({
+      id: "prior-failure",
+      attempt: 2,
+      scheduledFor: "2026-01-01T00:01:00.000Z",
+    });
+
+    expect(consecutiveFailureCountFromRuns([skipped], 2)).toBe(0);
+    expect(consecutiveFailureCountFromRuns([skipped, priorFailure], 2)).toBe(1);
+    expect(planLoopAdvancement({
+      current: loopFixture({ maxAttempts: 2, nextRunAt: skipped.scheduledFor }),
+      run: skipped,
+      finishedAt: new Date("2026-01-01T00:02:10.000Z"),
+      succeeded: false,
+      recentRuns: [skipped, priorFailure],
+      circuitBreakerThreshold: 1,
+    })).toEqual({
+      kind: "update",
+      reason: "recurrence",
+      patch: {
+        status: "active",
+        nextRunAt: "2026-01-01T00:03:00.000Z",
+        retryScheduledFor: undefined,
+      },
+    });
+  });
+
   test("does not open the breaker for transient Bun signal-exit interop failures", () => {
     const interopError =
       "SyntaxError: Missing 'default' export in module /home/hasna/.bun/install/global/node_modules/signal-exit/dist/mjs/index.js";

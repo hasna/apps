@@ -1550,6 +1550,16 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "The completion status is missing or skipped is not backed by an overlap-skip loop exiting with code 75",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunFinalizeValidationResponse"
+                }
+              }
+            }
           }
         },
         "x-authorization-operation": "runs.finalize",
@@ -1588,10 +1598,12 @@
                   },
                   "status": {
                     "type": "string",
+                    "description": "skipped is accepted only for a non-workflow overlap-skip loop whose process exits with code 75.",
                     "enum": [
                       "succeeded",
                       "failed",
-                      "timed_out"
+                      "timed_out",
+                      "skipped"
                     ]
                   },
                   "finishedAt": {
@@ -3658,6 +3670,27 @@
               "stale_claim",
               "run_not_running",
               "loop_advancement_conflict"
+            ]
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ]
+      },
+      "RunFinalizeValidationResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "type": "string",
+            "enum": [
+              "status_required",
+              "skip_status_requires_overlap_skip_exit_75"
             ]
           }
         },
