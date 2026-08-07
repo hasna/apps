@@ -398,8 +398,24 @@ export interface ProjectStore {
 
 function withLock<T>(workspaceId: string, ctx: MutationContext | undefined, reason: string, fn: () => T): T {
   const key = `workspace:${workspaceId}`;
+  // `workspace_locks.workspace_id` is FK-constrained to the machine-local
+  // `workspaces` table (db/schema.ts). Since the app-store methods are now also
+  // reachable in api mode, the project may be cloud-only and have no local
+  // registry row, in which case supplying the id fails the FK and the write
+  // never reaches the local project.db.
+  //
+  // The column is nullable and mutual exclusion keys on the UNIQUE `lock_key`,
+  // not on `workspace_id`, so omitting the id when no local row exists keeps the
+  // locking semantics identical and only drops the row-to-row association.
+  const hasLocalWorkspaceRow = dbGetWorkspace(workspaceId) !== null;
   try {
-    acquireWorkspaceLock({ lock_key: key, workspace_id: workspaceId, agent_id: ctx?.agentId, reason, ttl_seconds: 600 });
+    acquireWorkspaceLock({
+      lock_key: key,
+      workspace_id: hasLocalWorkspaceRow ? workspaceId : undefined,
+      agent_id: ctx?.agentId,
+      reason,
+      ttl_seconds: 600,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (message.startsWith("Workspace lock already held:")) {

@@ -9,6 +9,7 @@ import {
   type LoopsClientLike,
   type ProjectStoreProject,
 } from "../db/project-store.js";
+import { getWorkspace } from "../db/workspaces.js";
 import { resolveProjectStore, __resetProjectStore } from "./project-store.js";
 
 describe("projects store resolution (client-flip)", () => {
@@ -220,12 +221,18 @@ describe("projects store api transport (roots/agents/recipes)", () => {
     // Isolation is asserted, not assumed: every test drives a fresh temp
     // PROJECTS_HOME and the finally-block removes it, so no production store
     // under ~/.hasna/projects is opened, migrated, or written by this suite.
-    function withTempHome<T>(fn: (root: string) => T): T {
+    // Awaits `fn` before restoring the env and removing the temp root. Declared
+    // synchronous previously, while every call site passes an async callback, so
+    // the finally block ran when the promise was RETURNED rather than when it
+    // resolved -- restoring PROJECTS_HOME and deleting the root at the callback's
+    // first await. The comment above asserted isolation that the helper did not
+    // actually provide.
+    async function withTempHome<T>(fn: (root: string) => T | Promise<T>): Promise<T> {
       const root = mkdtempSync(join(tmpdir(), "store-api-loops-"));
       const previous = process.env[PROJECTS_HOME_ENV];
       process.env[PROJECTS_HOME_ENV] = root;
       try {
-        return fn(root);
+        return await fn(root);
       } finally {
         if (previous === undefined) delete process.env[PROJECTS_HOME_ENV];
         else process.env[PROJECTS_HOME_ENV] = previous;
@@ -288,6 +295,56 @@ describe("projects store api transport (roots/agents/recipes)", () => {
         expect(await store.listLoopLinks(project as never)).toEqual([]);
       });
     });
+
+    // Regression for the write half. Making the app store resolve in api mode
+    // also made createDataModel / createDataRecord / linkLoop reachable there,
+    // and each routes through withLock(project.id, ...). workspace_locks
+    // .workspace_id is FK-constrained to the machine-local `workspaces` table,
+    // so an api-created / cloud-only project -- which by definition has no local
+    // registry row -- failed with "FOREIGN KEY constraint failed" before ever
+    // touching its project.db. The reads this PR fixes were fine; the writes it
+    // newly enabled were not.
+    //
+    // `project` here is deliberately never inserted into the local `workspaces`
+    // table, which is exactly the cloud-only shape.
+    test("api-mode writes succeed for a cloud-only project with no local workspaces row", async () => {
+      await withTempHome(async () => {
+        ensureProjectStore(project);
+
+        // Precondition: the local registry genuinely has no row for this id, so
+        // the test cannot pass by accident on a project that happens to be local.
+        expect(getWorkspace(project.id)).toBeNull();
+
+        const { store } = stubStore(() => ({}));
+
+        const link = await store.linkLoop(
+          project as never,
+          { loop_id: "loop_api", loop_name: "Api Loop", role: "maintenance" } as never,
+          { source: "cli" } as never,
+        );
+        expect(link.loop_id).toBe("loop_api");
+
+        const model = await store.createDataModel(
+          project as never,
+          { name: "notes", schema: { fields: [] } } as never,
+          { source: "cli" } as never,
+        );
+        expect(model.name).toBe("notes");
+
+        // The write actually landed in the machine-local store, rather than the
+        // call merely not throwing.
+        expect(await store.listLoopLinks(project as never)).toHaveLength(1);
+
+        // The lock is released, not leaked, so a second write still succeeds.
+        const second = await store.createDataModel(
+          project as never,
+          { name: "notes-2", schema: { fields: [] } } as never,
+          { source: "cli" } as never,
+        );
+        expect(second.name).toBe("notes-2");
+      });
+    });
+
   });
 
   // Regression: resolving "." (or any path/marker target) in api mode must NOT
