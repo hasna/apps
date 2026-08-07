@@ -100,6 +100,40 @@ describe("review staged-diff boundary", () => {
     expect(sourceFile.stdout).toContain("CRITICAL  fixture.ts:1");
   });
 
+  test("treats staged filenames as literal git pathspecs", () => {
+    const repo = createRepo("literal-pathspec");
+    const fileName = ":(literal)fixture.ts";
+    writeFileSync(join(repo, fileName), `const token = "${syntheticGitHubToken}";\n`);
+    execFileSync("git", ["--literal-pathspecs", "add", "--", fileName], { cwd: repo });
+
+    const result = runReview(repo);
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain(`CRITICAL  ${fileName}:1`);
+    expect(result.stdout).not.toContain("No security issues found in staged changes.");
+
+    const normalRepo = createRepo("normal-pathspec-control");
+    writeFileSync(
+      join(normalRepo, "fixture.ts"),
+      `const token = "${syntheticGitHubToken}";\n`,
+    );
+    execFileSync("git", ["add", "--", "fixture.ts"], { cwd: normalRepo });
+
+    const normal = runReview(normalRepo);
+    expect(normal.status).toBe(0);
+    expect(normal.stderr).toBe("");
+    expect(normal.stdout).toContain("CRITICAL  fixture.ts:1");
+
+    const safeRepo = createRepo("safe-pathspec-control");
+    writeFileSync(join(safeRepo, "fixture.ts"), "const safe = true;\n");
+    execFileSync("git", ["add", "--", "fixture.ts"], { cwd: safeRepo });
+
+    const safe = runReview(safeRepo);
+    expect(safe.status).toBe(0);
+    expect(safe.stderr).toBe("");
+    expect(safe.stdout).toContain("No security issues found in staged changes.");
+  });
+
   test("scans the staged index content rather than later unstaged edits", () => {
     const repo = createRepo("index-content");
     writeFileSync(join(repo, "fixture.ts"), "const safe = true;\n");
