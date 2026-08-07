@@ -11,6 +11,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apiKeyMigrations } from "@hasna/contracts/auth";
 import {
+  type AppliedMigration,
   MigrationLedger,
   defineMigration,
   type Migration,
@@ -63,11 +64,41 @@ export function loadMigrations(): Migration[] {
   return [...schema, ...apiKeys];
 }
 
+/**
+ * Add checksum evidence to the storage kit's drift/downgrade guard without
+ * accepting unknown migrations or changing the ledger.
+ */
+export function assertMigrationCompatibility(
+  migrations: readonly Migration[],
+  applied: readonly AppliedMigration[],
+): void {
+  const knownById = new Map(migrations.map((migration) => [migration.id, migration]));
+
+  for (const row of applied) {
+    if (!knownById.has(row.id)) {
+      throw new Error(
+        `Applied migration '${row.id}' (checksum '${row.checksum}') is not recognized by this build (downgrade?).`,
+      );
+    }
+  }
+
+  for (const row of applied) {
+    const expected = knownById.get(row.id);
+    if (expected && expected.checksum !== row.checksum) {
+      throw new Error(
+        `Migration checksum mismatch for '${row.id}': applied '${row.checksum}', expected '${expected.checksum}'.`,
+      );
+    }
+  }
+}
+
 /** Apply all pending migrations against the given cloud client. */
 export async function runProjectsMigrations(
   client: TypedQueryClient,
   opts: { dryRun?: boolean } = {},
 ): Promise<MigrationResult> {
-  const ledger = new MigrationLedger(client, loadMigrations());
+  const migrations = loadMigrations();
+  const ledger = new MigrationLedger(client, migrations);
+  assertMigrationCompatibility(migrations, await ledger.listApplied());
   return ledger.migrate(opts);
 }

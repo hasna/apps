@@ -141,10 +141,50 @@ jobs:
           aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "$TASK_ARN"
           DESC="$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN")"
           EXIT="$(jq -r ".tasks[0].containers[] | select(.name==\"$MIG_CONTAINER\") | .exitCode // \"null\"" <<<"$DESC")"
+          CONTAINER_REASON="$(jq -r ".tasks[0].containers[] | select(.name==\"$MIG_CONTAINER\") | .reason // \"\"" <<<"$DESC")"
+          TASK_DEF="$(jq -r '.tasks[0].taskDefinitionArn // ""' <<<"$DESC")"
+          STOP_CODE="$(jq -r '.tasks[0].stopCode // ""' <<<"$DESC")"
           REASON="$(jq -r '.tasks[0].stoppedReason // ""' <<<"$DESC")"
-          echo "migration exitCode=$EXIT stoppedReason=$REASON"
+          echo "migration taskArn=$TASK_ARN taskDefinition=$TASK_DEF stopCode=$STOP_CODE"
+          echo "migration container=$MIG_CONTAINER exitCode=$EXIT containerReason=${CONTAINER_REASON:-none} stoppedReason=$REASON"
           if [ "$EXIT" != "0" ]; then
-            echo "::error::migration task did not exit 0 (exit=$EXIT, reason=$REASON)"; exit 1
+            LOG_GROUP=""
+            LOG_REGION=""
+            LOG_STREAM=""
+            if [ -n "$TASK_DEF" ]; then
+              TD="$(aws ecs describe-task-definition --task-definition "$TASK_DEF" --query taskDefinition)"
+              LOG_DRIVER="$(jq -r ".containerDefinitions[] | select(.name==\"$MIG_CONTAINER\") | .logConfiguration.logDriver // \"\"" <<<"$TD")"
+              LOG_GROUP="$(jq -r ".containerDefinitions[] | select(.name==\"$MIG_CONTAINER\") | .logConfiguration.options[\"awslogs-group\"] // \"\"" <<<"$TD")"
+              LOG_REGION="$(jq -r ".containerDefinitions[] | select(.name==\"$MIG_CONTAINER\") | .logConfiguration.options[\"awslogs-region\"] // \"\"" <<<"$TD")"
+              LOG_PREFIX="$(jq -r ".containerDefinitions[] | select(.name==\"$MIG_CONTAINER\") | .logConfiguration.options[\"awslogs-stream-prefix\"] // \"\"" <<<"$TD")"
+              TASK_ID="${TASK_ARN##*/}"
+              if [ "$LOG_DRIVER" = "awslogs" ] && [ -n "$LOG_PREFIX" ]; then
+                LOG_STREAM="${LOG_PREFIX}/${MIG_CONTAINER}/${TASK_ID}"
+              fi
+            fi
+            {
+              echo "### Migration task failed"
+              echo
+              echo "- Task ARN: \`$TASK_ARN\`"
+              echo "- Task definition: \`${TASK_DEF:-unknown}\`"
+              echo "- Stop code: \`${STOP_CODE:-unknown}\`"
+              echo "- Container: \`$MIG_CONTAINER\`"
+              echo "- Exit code: \`$EXIT\`"
+              echo "- Container reason: \`${CONTAINER_REASON:-none}\`"
+              echo "- Stopped reason: \`${REASON:-none}\`"
+              echo "- Log group: \`${LOG_GROUP:-unknown}\`"
+              echo "- Log region: \`${LOG_REGION:-unknown}\`"
+              echo "- Log stream: \`${LOG_STREAM:-unknown}\`"
+              if [ -n "$LOG_GROUP" ] && [ -n "$LOG_REGION" ] && [ -n "$LOG_STREAM" ]; then
+                echo
+                echo "Retrieve the migration container evidence with an AWS identity allowed to read this log group:"
+                echo
+                echo "\`aws logs get-log-events --region $LOG_REGION --log-group-name $LOG_GROUP --log-stream-name $LOG_STREAM --limit 100 --start-from-head --query 'events[].message' --output text | node scripts/ci/redact-log-lines.mjs\`"
+              fi
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "migration logGroup=${LOG_GROUP:-unknown} logRegion=${LOG_REGION:-unknown} logStream=${LOG_STREAM:-unknown}"
+            echo "::error::migration task did not exit 0 (exit=$EXIT, containerReason=${CONTAINER_REASON:-none}, stoppedReason=$REASON, logStream=${LOG_STREAM:-unknown})"
+            exit 1
           fi
 
       - name: Deploy service (new revision) and wait for stable

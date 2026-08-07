@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { loadMigrations, resolveMigrationsDir } from "./migrations.js";
+import { defineMigration, type AppliedMigration } from "../generated/storage-kit/index.js";
+import {
+  assertMigrationCompatibility,
+  loadMigrations,
+  resolveMigrationsDir,
+} from "./migrations.js";
 
 describe("projects-serve migrations", () => {
   test("resolves the on-disk migrations directory", () => {
@@ -23,5 +28,32 @@ describe("projects-serve migrations", () => {
     for (const m of loadMigrations()) {
       expect(m.checksum).toMatch(/^sha256:[0-9a-f]{64}$/);
     }
+  });
+
+  test("unknown applied migrations fail closed with the non-secret checksum", () => {
+    const applied: AppliedMigration[] = [{
+      id: "projects:0002_tenants",
+      checksum: "sha256:legacy-checksum",
+      appliedAt: "2026-07-13T00:00:00.000Z",
+    }];
+
+    expect(() => assertMigrationCompatibility([defineMigration("projects:0001_baseline", "SELECT 1")], applied))
+      .toThrow(
+        "Applied migration 'projects:0002_tenants' (checksum 'sha256:legacy-checksum') is not recognized by this build (downgrade?).",
+      );
+  });
+
+  test("checksum drift reports applied and expected checksums without accepting it", () => {
+    const migration = defineMigration("projects:0001_baseline", "SELECT 1");
+    const applied: AppliedMigration[] = [{
+      id: migration.id,
+      checksum: "sha256:changed",
+      appliedAt: "2026-07-13T00:00:00.000Z",
+    }];
+
+    expect(() => assertMigrationCompatibility([migration], applied))
+      .toThrow(
+        `Migration checksum mismatch for '${migration.id}': applied 'sha256:changed', expected '${migration.checksum}'.`,
+      );
   });
 });
