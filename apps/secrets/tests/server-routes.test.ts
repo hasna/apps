@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { createHandler, type ServeDeps } from "../src/server/serve.js";
+import { SECRETS_MIGRATIONS } from "../src/server/cloud-migrations.js";
 
 function verifier(principal: { agent?: string; kid: string } = { kid: "kid-only" }) {
   return {
@@ -161,7 +162,7 @@ describe("cloud server route matrix", () => {
     expect(res.status).toBe(503);
     expect(await body(res)).toMatchObject({ status: "degraded" });
 
-    const unready = makeHandler(completeStore(), client({ async execute() { throw "schema unavailable"; } }));
+    const unready = makeHandler(completeStore(), client({ async many() { throw "schema unavailable"; } }));
     res = await unready.handle(request("/ready"));
     expect(res.status).toBe(503);
     expect(await body(res)).toMatchObject({ status: "not_ready", pendingMigrations: [] });
@@ -177,5 +178,25 @@ describe("cloud server route matrix", () => {
     res = await makeHandler(throwsString).handle(request("/v1/secrets"));
     expect(res.status).toBe(500);
     expect(await body(res)).toEqual({ error: "string failure" });
+  });
+
+  it("keeps an already-migrated service ready when the runtime role cannot run DDL", async () => {
+    const applied = SECRETS_MIGRATIONS.map((migration) => ({
+      id: migration.id,
+      checksum: migration.checksum,
+      applied_at: "2026-08-07T00:00:00.000Z",
+    }));
+    const readOnlyRuntime = makeHandler(
+      completeStore(),
+      client({
+        async many() { return applied; },
+        async execute() { throw new Error("permission denied for schema public"); },
+      }),
+    );
+
+    const res = await readOnlyRuntime.handle(request("/ready"));
+
+    expect(res.status).toBe(200);
+    expect(await body(res)).toMatchObject({ status: "ok", pendingMigrations: [] });
   });
 });

@@ -89,7 +89,11 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
         return json({ status: "ok", version: VERSION, mode: "cloud" });
       }
       if (path === "/ready" && method === "GET") {
-        const ready = await checkReady(client, SECRETS_MIGRATIONS);
+        // Readiness is a probe, not a migration runner. The vendored kit's
+        // dry-run still calls ensureLedger(), so prevent that DDL here while
+        // preserving its ledger read, checksum, and pending-migration checks.
+        const readinessClient = { ...client, execute: async () => {} } as PoolQueryClient;
+        const ready = await checkReady(readinessClient, SECRETS_MIGRATIONS);
         return json(
           { status: ready.ok ? "ok" : "not_ready", version: VERSION, mode: "cloud", pendingMigrations: ready.pendingMigrations },
           ready.ok ? 200 : 503,
