@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.5.28 - 2026-08-07
+
+### Fixed
+
+- **macOS desktop notifications no longer execute message content through a shell.** `conversations watch` now launches `osascript` with an argument vector and escapes AppleScript string delimiters, so command substitutions and backtick expressions from sender, channel, or message previews remain notification text instead of shell commands (#93).
+
 ## 0.5.27 - 2026-08-07
 
 ### Fixed
