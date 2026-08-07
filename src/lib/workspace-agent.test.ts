@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDatabase } from "../db/database.js";
@@ -238,6 +238,36 @@ async function invoke(toolDef: unknown, input: Record<string, unknown>): Promise
 }
 
 describe("prompt-agent mutations route through the Store in api/cloud mode", () => {
+  afterEach(() => {
+    closeDatabase();
+    delete process.env["HASNA_PROJECTS_DB_PATH"];
+  });
+
+  test("projects_doctor repairs a cloud-only project without local resolution or locking", async () => {
+    const root = mkdtempSync(join(tmpdir(), "project-agent-cloud-doctor-"));
+    process.env["HASNA_PROJECTS_DB_PATH"] = join(root, "projects.db");
+    const projectPath = join(root, "cloud-project");
+    const markerPath = join(projectPath, ".project.json");
+    const project = makeCloudProject({ primary_path: projectPath });
+    const { store, calls } = makeFakeApiStore();
+    (store.resolveTarget as unknown as (target: string) => Promise<Workspace>) = async (target) => {
+      calls.push({ method: "resolveTarget", args: [target] });
+      return project;
+    };
+    mkdirSync(projectPath, { recursive: true });
+    writeFileSync(markerPath, JSON.stringify({ id: "stale", slug: "stale" }), "utf-8");
+
+    const tools = apiTools(store);
+    const result = await invoke(tools.projects_doctor, { project: project.id, fix: true });
+
+    expect(result.error).toBeUndefined();
+    expect((result.project as { id: string }).id).toBe(project.id);
+    expect((result.checks as Array<{ code: string }>).some((check) => check.code === "WORKSPACE_LOCATIONS_LOCAL_ONLY")).toBe(true);
+    expect((result.fixes as Array<{ code: string }>).map((fix) => fix.code)).toEqual(["FIX_WORKSPACE_MARKER"]);
+    expect(JSON.parse(readFileSync(markerPath, "utf-8"))).toMatchObject({ id: project.id, slug: project.slug });
+    expect(calls.filter((call) => call.method === "resolveTarget")).toHaveLength(1);
+  });
+
   test("projects_update calls store.updateProject (not local sqlite) with server-attributed agent", async () => {
     const { store, calls } = makeFakeApiStore();
     const tools = apiTools(store);

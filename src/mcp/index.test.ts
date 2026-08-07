@@ -1,7 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
-import { readFileSync } from "node:fs";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runMigrations } from "../db/schema.js";
@@ -94,6 +93,107 @@ describe("projects-mcp CLI flags", () => {
 });
 
 describe("projects-mcp project-first surface", () => {
+  test("projects_doctor repairs an API-backed marker without local location or event writes", async () => {
+    const root = mkdtempSync(join(tmpdir(), "project-mcp-cloud-doctor-"));
+    const dbPath = join(root, "projects.db");
+    const projectPath = join(root, "cloud-project");
+    const projectId = "wks_cloud_doctor";
+    mkdirSync(projectPath, { recursive: true });
+    writeFileSync(join(projectPath, ".project.json"), JSON.stringify({ id: projectId, slug: "stale" }), "utf-8");
+    const db = new Database(dbPath);
+    runMigrations(db);
+    db.close();
+
+    const requests: Array<{ method: string; path: string }> = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        requests.push({ method: req.method, path: url.pathname });
+        if (req.method === "GET" && url.pathname === `/v1/projects/${projectId}`) {
+          return Response.json({
+            id: projectId,
+            slug: "cloud-doctor",
+            name: "Cloud Doctor",
+            description: null,
+            kind: "generic",
+            status: "active",
+            root_id: null,
+            recipe_id: null,
+            canonical_machine: null,
+            primary_path: projectPath,
+            git_remote: null,
+            s3_bucket: null,
+            s3_prefix: null,
+            tags: [],
+            integrations: {},
+            metadata: {},
+            last_opened_at: null,
+            created_at: "2026-08-07 12:00:00.000",
+            updated_at: "2026-08-07 12:00:00.000",
+            synced_at: null,
+          });
+        }
+        return Response.json({ error: "Not found" }, { status: 404 });
+      },
+    });
+
+    try {
+      const messages = [
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-06-18",
+            capabilities: {},
+            clientInfo: { name: "project-mcp-test", version: "0" },
+          },
+        },
+        { jsonrpc: "2.0", method: "notifications/initialized", params: {} },
+        { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "projects_doctor", arguments: { id: projectId, fix: true, verbose: true } } },
+      ];
+      const proc = Bun.spawn({
+        cmd: ["node", "src/testing/mcp-stdio-client.mjs", JSON.stringify(messages)],
+        stdout: "pipe",
+        stderr: "pipe",
+        env: testSpawnEnv({
+          HASNA_PROJECTS_DB_PATH: dbPath,
+          HASNA_PROJECTS_API_URL: `http://127.0.0.1:${server.port}`,
+          HASNA_PROJECTS_API_KEY: "test-key",
+        }),
+      });
+      const stdout = await new Response(proc.stdout).text();
+      const stderr = await new Response(proc.stderr).text();
+      await proc.exited;
+
+      expect(proc.exitCode).toBe(0);
+      expect(stderr).toBe("");
+      const responses = stdout.trim().split("\n").map((line) => JSON.parse(line)) as Array<{
+        id?: number;
+        result?: { content?: Array<{ type: string; text: string }> };
+      }>;
+      const payload = JSON.parse(responses.find((response) => response.id === 2)?.result?.content?.[0]?.text ?? "[]") as Array<{
+        checks: Array<{ code: string }>;
+        fixes: Array<{ code: string; changed: boolean }>;
+      }>;
+      expect(payload).toHaveLength(1);
+      expect(payload[0]!.checks.some((check) => check.code === "WORKSPACE_LOCATIONS_LOCAL_ONLY")).toBe(true);
+      expect(payload[0]!.fixes).toContainEqual(expect.objectContaining({ code: "FIX_WORKSPACE_MARKER", changed: true }));
+      expect(JSON.parse(readFileSync(join(projectPath, ".project.json"), "utf-8"))).toMatchObject({ id: projectId, slug: "cloud-doctor" });
+
+      const localDb = new Database(dbPath);
+      expect(localDb.query("SELECT COUNT(*) AS count FROM workspace_locations").get()).toEqual({ count: 0 });
+      expect(localDb.query("SELECT COUNT(*) AS count FROM workspace_events").get()).toEqual({ count: 0 });
+      localDb.close();
+      expect(requests).toEqual([{ method: "GET", path: `/v1/projects/${projectId}` }]);
+    } finally {
+      server.stop(true);
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   test("registers project-first MCP tools and removes workspace aliases", () => {
     const source = readFileSync("src/mcp/index.ts", "utf-8");
     const legacyAliasEnv = "PROJECTS_ENABLE_" + "WORKSPACE_MCP_ALIASES";
