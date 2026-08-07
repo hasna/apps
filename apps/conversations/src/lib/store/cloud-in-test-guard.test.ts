@@ -36,6 +36,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   ALLOW_CLOUD_IN_TESTS_ENV_KEY,
   ConversationsCloudInTestError,
+  DB_PATH_KEYS,
   ENV_KEYS,
   detectTestRuntime,
   getStore,
@@ -49,31 +50,53 @@ const PROD_URL = "https://conversations.hasna.xyz";
 const FAKE_KEY = ["hasna", "conversations", "FAKE", "NOT", "A", "REAL", "KEY"].join("_");
 
 /**
- * Run `fn` with a simulated fleet shell, then restore process.env exactly.
+ * EVERY variable that can select a store, in precedence order.
+ *
+ * A case here asserts what the RESOLVER does with a named environment. It can only
+ * do that if it CONSTRUCTS that environment — clearing the exact key it cares about
+ * and inheriting the rest turns the assertion into a statement about whatever the
+ * runner happens to hold. That is not hypothetical: `bun test` loads every file into
+ * ONE process, roughly forty suites in this repository assign
+ * `process.env.CONVERSATIONS_DB_PATH` at module top level and never restore it, and
+ * `assertUnambiguousStoreEnv` returns at its FIRST step on any db-path variable —
+ * before the half-configured check below is ever reached. Which of those two
+ * outcomes you get is decided by file execution order, so the case passed locally
+ * and failed in CI at the same commit.
+ */
+const STORE_SELECTING_KEYS: readonly string[] = [
+  ...DB_PATH_KEYS,
+  ...ENV_KEYS.modeKeys,
+  ...ENV_KEYS.apiUrlKeys,
+  ...ENV_KEYS.apiKeyKeys,
+  ALLOW_CLOUD_IN_TESTS_ENV_KEY,
+];
+
+/**
+ * Run `fn` with EXACTLY `only` set among the store-selecting names, then restore
+ * process.env precisely — including names `only` never mentions.
  *
  * Every case below is synchronous and issues no request, so the window in which
  * these names are set cannot be observed by another test file — which is the
  * hazard the poll/channel suites in this repo already document.
  */
-function withAmbientCloudEnv<T>(fn: () => T, extra: Record<string, string> = {}): T {
-  const names = [URL_VAR, KEY_VAR, ALLOW_CLOUD_IN_TESTS_ENV_KEY, ...Object.keys(extra)];
+function withOnlyStoreEnv<T>(fn: () => T, only: Record<string, string> = {}): T {
+  const names = [...new Set([...STORE_SELECTING_KEYS, ...Object.keys(only)])];
   const saved = new Map(names.map((n) => [n, process.env[n]]));
-  const savedDbPaths = new Map(
-    ["CONVERSATIONS_DB_PATH", "HASNA_CONVERSATIONS_DB_PATH"].map((n) => [n, process.env[n]]),
-  );
   try {
-    for (const n of savedDbPaths.keys()) delete process.env[n];
-    delete process.env[ALLOW_CLOUD_IN_TESTS_ENV_KEY];
-    process.env[URL_VAR] = PROD_URL;
-    process.env[KEY_VAR] = FAKE_KEY;
-    for (const [k, v] of Object.entries(extra)) process.env[k] = v;
+    for (const n of names) delete process.env[n];
+    for (const [k, v] of Object.entries(only)) process.env[k] = v;
     return fn();
   } finally {
-    for (const [n, v] of [...saved, ...savedDbPaths]) {
+    for (const [n, v] of saved) {
       if (v === undefined) delete process.env[n];
       else process.env[n] = v;
     }
   }
+}
+
+/** A simulated fleet shell: url + key present, nothing else selecting a store. */
+function withAmbientCloudEnv<T>(fn: () => T, extra: Record<string, string> = {}): T {
+  return withOnlyStoreEnv(fn, { [URL_VAR]: PROD_URL, [KEY_VAR]: FAKE_KEY, ...extra });
 }
 
 afterEach(() => {
@@ -235,26 +258,25 @@ describe("the guard stays silent where it must — known-negative cases", () => 
     // Half a cloud configuration was already an error here. The guard must not
     // shadow that message, or an operator debugging a missing key is told the
     // wrong thing.
-    const saved = process.env[KEY_VAR];
-    const savedUrl = process.env[URL_VAR];
-    try {
-      delete process.env[KEY_VAR];
-      process.env[URL_VAR] = PROD_URL;
-      let caught: unknown;
-      try {
-        getStore();
-      } catch (error) {
-        caught = error;
-      }
-      expect(caught).toBeInstanceOf(Error);
-      expect(caught).not.toBeInstanceOf(ConversationsCloudInTestError);
-      expect((caught as Error).message).toContain(KEY_VAR);
-    } finally {
-      if (saved === undefined) delete process.env[KEY_VAR];
-      else process.env[KEY_VAR] = saved;
-      if (savedUrl === undefined) delete process.env[URL_VAR];
-      else process.env[URL_VAR] = savedUrl;
-    }
+    //
+    // A URL AND NOTHING ELSE is the whole point of the case, so every other
+    // store-selecting name is cleared rather than inherited — a leaked db-path
+    // variable short-circuits the resolver one step earlier and nothing throws at
+    // all, which is exactly how this passed on a workstation and failed in CI.
+    withOnlyStoreEnv(
+      () => {
+        let caught: unknown;
+        try {
+          getStore();
+        } catch (error) {
+          caught = error;
+        }
+        expect(caught).toBeInstanceOf(Error);
+        expect(caught).not.toBeInstanceOf(ConversationsCloudInTestError);
+        expect((caught as Error).message).toContain(KEY_VAR);
+      },
+      { [URL_VAR]: PROD_URL },
+    );
   });
 });
 
