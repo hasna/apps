@@ -16,6 +16,7 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
   const tasks: any[] = [];
   const graphEdges: any[] = [];
   const resourceLocks: any[] = [];
+  const linkageReceipts: any[] = [];
   const agentPresence = new Map<string, any>();
   const manyCalls: Array<{ sql: string; params: readonly unknown[] }> = [];
   const projects: Record<string, any> = Object.fromEntries(
@@ -23,6 +24,19 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
   );
   let nextId = 1;
   let failRenameAt: RegExp | null = null;
+  const deferred = () => {
+    let resolve!: () => void;
+    const promise = new Promise<void>((done) => { resolve = done; });
+    return { promise, resolve };
+  };
+  let transactionTail = Promise.resolve();
+  let pendingTransactions = 0;
+  let linkageBulkRace: null | {
+    paused: ReturnType<typeof deferred>;
+    release: ReturnType<typeof deferred>;
+    concurrentAttempt: ReturnType<typeof deferred>;
+    pauseConsumed: boolean;
+  } = null;
   const client = {
     async many(sql: string, _p: readonly unknown[] = []): Promise<any[]> {
       manyCalls.push({ sql, params: [..._p] });
@@ -64,6 +78,9 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
             return { channel, agent, joined_at: "2026-07-23T08:15:39.781Z" };
           });
       }
+      if (/FROM messages WHERE channel = \$1 ORDER BY id ASC/i.test(sql)) {
+        return messages.filter((message) => message.channel === _p[0]).slice().sort((a, b) => a.id - b.id);
+      }
       if (/FROM messages/i.test(sql)) return messages.slice().reverse();
       if (/revoked_at IS NOT NULL/i.test(sql)) return [];
       return [];
@@ -95,6 +112,7 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
             inserted++;
           }
         }
+        linkageBulkRace?.concurrentAttempt.resolve();
         return { rows, rowCount: inserted };
       }
       if (/INSERT INTO message_mentions/i.test(sql)) {
@@ -122,6 +140,12 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
     },
     async get(sql: string, p: readonly unknown[] = []): Promise<any> {
       if (/SELECT 1 AS ok/i.test(sql)) return { ok: 1 };
+      if (/FROM channel_project_linkage_receipts WHERE idempotency_key/i.test(sql)) {
+        return linkageReceipts.find((receipt) => receipt.idempotency_key === p[0]) ?? null;
+      }
+      if (/FROM channel_project_linkage_receipts WHERE id =/i.test(sql)) {
+        return linkageReceipts.find((receipt) => receipt.id === p[0]) ?? null;
+      }
       if (/SELECT id FROM projects WHERE id/i.test(sql)) {
         return projects[(p as any[])[0]] ?? null;
       }
@@ -214,6 +238,10 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
       if (/SELECT name FROM channels WHERE name/i.test(sql)) {
         return channels[(p as any[])[0]] ? { name: (p as any[])[0] } : null;
       }
+      if (/SELECT name, project_id FROM channels WHERE name/i.test(sql)) {
+        const row = channels[(p as any[])[0]];
+        return row ? { name: row.name, project_id: row.project_id ?? null } : null;
+      }
       if (/SELECT 1 AS ok FROM channel_members/i.test(sql)) {
         const [channel, agent] = p as any[];
         return channelMembers.has(`${channel}:${agent}`) ? { ok: 1 } : null;
@@ -223,6 +251,9 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
       }
       if (/SELECT \* FROM messages WHERE uuid/i.test(sql)) {
         return messages.find((row) => row.uuid === (p as any[])[0]) ?? null;
+      }
+      if (/FROM messages WHERE id = \$1 AND uuid = \$2/i.test(sql)) {
+        return messages.find((row) => row.id === p[0] && row.uuid === p[1]) ?? null;
       }
       if (/SELECT id, uuid, session_id, channel FROM messages WHERE uuid/i.test(sql)) {
         const found = messages.find((row) => row.uuid === (p as any[])[0]);
@@ -254,6 +285,23 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
         messages.push(row);
         return row;
       }
+      if (/INSERT INTO channel_project_linkage_receipts/i.test(sql)) {
+        const rollback = /'rollback'/i.test(sql);
+        const row = rollback
+          ? {
+              id: p[0], idempotency_key: p[1], operation: "rollback", channel: p[2], project_id: p[3],
+              source_receipt_id: p[4], request_hash: p[5], payload: p[6], created_at: p[7],
+            }
+          : {
+              id: p[0], idempotency_key: p[1], operation: "apply", channel: p[2], project_id: p[3],
+              source_receipt_id: null, request_hash: p[4], payload: p[5], created_at: p[6],
+            };
+        if (linkageReceipts.some((receipt) => receipt.idempotency_key === row.idempotency_key)) {
+          throw new Error("duplicate idempotency key");
+        }
+        linkageReceipts.push(row);
+        return { id: row.id };
+      }
       if (/INSERT INTO projects/i.test(sql)) {
         const [id, name, description, path, repository, created_by] = p as any[];
         const row = { id, name, description, path, repository, created_by, status: "active", created_at: new Date().toISOString() };
@@ -269,6 +317,12 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
       }
     },
     async transaction<T>(fn: (tx: { query: (sql: string, p?: readonly unknown[]) => Promise<{ rows: any[]; rowCount: number }> }) => Promise<T>): Promise<T> {
+      const waitForPrevious = transactionTail;
+      const releaseTransaction = deferred();
+      transactionTail = releaseTransaction.promise;
+      if (pendingTransactions > 0) linkageBulkRace?.concurrentAttempt.resolve();
+      pendingTransactions++;
+      await waitForPrevious;
       const channelSnapshot = Object.fromEntries(Object.entries(channels).map(([key, value]) => [key, { ...value }]));
       const memberSnapshot = new Set(channelMembers);
       const messageSnapshot = messages.map((message) => ({ ...message }));
@@ -278,9 +332,13 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
       const edgeSnapshot = graphEdges.map((edge) => ({ ...edge }));
       const lockSnapshot = resourceLocks.map((lock) => ({ ...lock }));
       let channelIdConstraintDeferred = false;
+      const linkageReceiptSnapshot = linkageReceipts.map((receipt) => ({ ...receipt }));
       const tx = {
         async query(sql: string, p: readonly unknown[] = []): Promise<{ rows: any[]; rowCount: number }> {
           const [first, second] = p as any[];
+          if (/INSERT INTO messages/i.test(sql) && /ON CONFLICT/i.test(sql)) {
+            return client.query(sql, p);
+          }
           if (failRenameAt?.test(sql)) {
             failRenameAt = null;
             throw new Error("injected channel rename failure");
@@ -433,11 +491,45 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
             }
             return { rows: [], rowCount: 1 };
           }
+          if (/UPDATE messages SET project_id = \$1/i.test(sql)) {
+            const [projectId, id, uuid, channel, expectedProjectId] = p as any[];
+            const message = messages.find((row) =>
+              row.id === id && row.uuid === uuid && row.channel === channel &&
+              (/project_id IS NULL/i.test(sql) ? row.project_id == null : row.project_id === expectedProjectId)
+            );
+            if (!message) return { rows: [], rowCount: 0 };
+            message.project_id = projectId ?? null;
+            return { rows: [{ id }], rowCount: 1 };
+          }
           if (/DELETE FROM channels/i.test(sql)) {
             delete channels[first];
             return { rows: [], rowCount: 1 };
           }
           return { rows: [], rowCount: 0 };
+        },
+        async many(sql: string, p: readonly unknown[] = []): Promise<any[]> {
+          return client.many(sql, p);
+        },
+        async get(sql: string, p: readonly unknown[] = []): Promise<any> {
+          if (
+            linkageBulkRace &&
+            !linkageBulkRace.pauseConsumed &&
+            /INSERT INTO channel_project_linkage_receipts/i.test(sql) &&
+            /'apply'/i.test(sql)
+          ) {
+            linkageBulkRace.pauseConsumed = true;
+            linkageBulkRace.paused.resolve();
+            await linkageBulkRace.release.promise;
+          }
+          return client.get(sql, p);
+        },
+        async one(sql: string, p: readonly unknown[] = []): Promise<any> {
+          const row = await client.get(sql, p);
+          if (!row) throw new Error("Expected exactly one row, got 0.");
+          return row;
+        },
+        async execute(sql: string, p: readonly unknown[] = []): Promise<void> {
+          await client.execute(sql, p);
         },
       };
       try {
@@ -453,7 +545,11 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
         tasks.splice(0, tasks.length, ...taskSnapshot);
         graphEdges.splice(0, graphEdges.length, ...edgeSnapshot);
         resourceLocks.splice(0, resourceLocks.length, ...lockSnapshot);
+        linkageReceipts.splice(0, linkageReceipts.length, ...linkageReceiptSnapshot);
         throw error;
+      } finally {
+        pendingTransactions--;
+        releaseTransaction.resolve();
       }
     },
     __debug: {
@@ -472,10 +568,25 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
       failRenameWhen(pattern: RegExp) {
         failRenameAt = pattern;
       },
+      armProjectLinkageBulkRace() {
+        const race = {
+          paused: deferred(),
+          release: deferred(),
+          concurrentAttempt: deferred(),
+          pauseConsumed: false,
+        };
+        linkageBulkRace = race;
+        return {
+          paused: race.paused.promise,
+          concurrentAttempt: race.concurrentAttempt.promise,
+          release: race.release.resolve,
+        };
+      },
       channelSubscriptions,
       tasks,
       graphEdges,
       resourceLocks,
+      linkageReceipts,
     },
   };
   return client;
@@ -694,6 +805,208 @@ describe("conversations-serve", () => {
 
     const list = await (await fetch(`${base}/v1/messages?channel=deploys`, { headers: { "x-api-key": rwKey } })).json();
     expect(list.messages.length).toBeGreaterThan(0);
+  });
+
+  test("project-linked channel sends inherit the channel project and reject explicit conflicts", async () => {
+    const created = await fetch(`${base}/v1/channels`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ name: "linked-send", created_by: "a", project_id: "proj-valid" }),
+    });
+    expect(created.status).toBe(201);
+
+    const inherited = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ from: "a", to: "linked-send", channel: "linked-send", content: "inherits" }),
+    });
+    expect(inherited.status).toBe(201);
+    expect((await inherited.json()).message.project_id).toBe("proj-valid");
+
+    const conflict = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        from: "a", to: "linked-send", channel: "linked-send", content: "conflict", project_id: "proj-other",
+      }),
+    });
+    expect(conflict.status).toBe(400);
+    expect((await conflict.json()).error).toContain("conflicts with channel project");
+
+    const tenant = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ from: "a", to: "linked-send", channel: "linked-send", content: "tenant", tenant_id: "other" }),
+    });
+    expect(tenant.status).toBe(400);
+    expect((await tenant.json()).error).toContain("tenant_id is owned by the authenticated storage context");
+  });
+
+  test("guarded project-message linkage plans, applies, replays, rejects stale state, and rolls back", async () => {
+    const fake = activeFakeClient!;
+    const rows = [
+      {
+        id: 90001, uuid: "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa", session_id: "channel:linkage-backfill",
+        from_agent: "a", to_agent: "linkage-backfill", channel: "linkage-backfill", project_id: null,
+        content: "legacy one", priority: "normal", blocking: false, reply_to: null,
+        created_at: "2026-08-07T10:00:00.000Z", read_at: null,
+      },
+      {
+        id: 90002, uuid: "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb", session_id: "channel:linkage-backfill",
+        from_agent: "b", to_agent: "linkage-backfill", channel: "linkage-backfill", project_id: null,
+        content: "legacy two", priority: "high", blocking: true, reply_to: 90001,
+        created_at: "2026-08-07T10:01:00.000Z", read_at: "2026-08-07T10:02:00.000Z",
+      },
+    ];
+    fake.__debug.seedChannel(
+      { name: "linkage-backfill", project_id: "proj-valid", created_by: "a", created_at: "2026-08-07T09:00:00.000Z" },
+      ["a", "b"],
+      rows,
+    );
+
+    const planResponse = await fetch(`${base}/v1/channels/linkage-backfill/project-message-linkage`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ project_id: "proj-valid", apply: false }),
+    });
+    expect(planResponse.status).toBe(200);
+    const plan = await planResponse.json();
+    expect(plan.message_ids).toEqual([90001, 90002]);
+    expect(plan.message_uuids).toEqual(rows.map((row) => row.uuid));
+    expect(plan.target_count).toBe(2);
+
+    const request = {
+      project_id: "proj-valid",
+      expected_revision: plan.revision,
+      idempotency_key: "server-linkage-apply",
+      apply: true,
+    };
+    const appliedResponse = await fetch(`${base}/v1/channels/linkage-backfill/project-message-linkage`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify(request),
+    });
+    expect(appliedResponse.status).toBe(201);
+    const applied = await appliedResponse.json();
+    expect(applied.replayed).toBe(false);
+    expect(fake.__debug.messages.filter((row: any) => row.channel === "linkage-backfill").map((row: any) => row.project_id))
+      .toEqual(["proj-valid", "proj-valid"]);
+
+    const replayResponse = await fetch(`${base}/v1/channels/linkage-backfill/project-message-linkage`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify(request),
+    });
+    expect(replayResponse.status).toBe(200);
+    expect((await replayResponse.json()).receipt_id).toBe(applied.receipt_id);
+
+    const staleResponse = await fetch(`${base}/v1/channels/linkage-backfill/project-message-linkage`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ ...request, idempotency_key: "server-linkage-stale" }),
+    });
+    expect(staleResponse.status).toBe(409);
+    expect((await staleResponse.json()).error).toContain("Stale project-message linkage revision");
+
+    const rollbackRequest = {
+      receipt_id: applied.receipt_id,
+      expected_revision: applied.target_revision,
+      idempotency_key: "server-linkage-rollback",
+    };
+    const rollbackPlan = await fetch(`${base}/v1/channels/project-message-linkage/rollback`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ ...rollbackRequest, apply: false }),
+    });
+    expect(rollbackPlan.status).toBe(200);
+    expect((await rollbackPlan.json()).target_count).toBe(2);
+
+    const rollbackResponse = await fetch(`${base}/v1/channels/project-message-linkage/rollback`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ ...rollbackRequest, apply: true }),
+    });
+    expect(rollbackResponse.status).toBe(201);
+    expect((await rollbackResponse.json()).restored_count).toBe(2);
+    expect(fake.__debug.messages.filter((row: any) => row.channel === "linkage-backfill").map((row: any) => row.project_id))
+      .toEqual([null, null]);
+  });
+
+  test("bulk ingest cannot escape a guarded project-message linkage final snapshot", async () => {
+    const fake = activeFakeClient!;
+    fake.__debug.seedChannel(
+      {
+        name: "linkage-bulk-race",
+        project_id: "proj-valid",
+        created_by: "a",
+        created_at: "2026-08-07T09:00:00.000Z",
+      },
+      ["a"],
+      [{
+        id: 90101,
+        uuid: "cccccccc-3333-4333-8333-cccccccccccc",
+        session_id: "channel:linkage-bulk-race",
+        from_agent: "a",
+        to_agent: "linkage-bulk-race",
+        channel: "linkage-bulk-race",
+        project_id: null,
+        content: "legacy",
+        priority: "normal",
+        blocking: false,
+        reply_to: null,
+        created_at: "2026-08-07T10:00:00.000Z",
+        read_at: null,
+      }],
+    );
+
+    const planResponse = await fetch(`${base}/v1/channels/linkage-bulk-race/project-message-linkage`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ project_id: "proj-valid", apply: false }),
+    });
+    const plan = await planResponse.json();
+    const race = fake.__debug.armProjectLinkageBulkRace();
+    const applyPromise = fetch(`${base}/v1/channels/linkage-bulk-race/project-message-linkage`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        project_id: "proj-valid",
+        expected_revision: plan.revision,
+        idempotency_key: "server-linkage-bulk-race",
+        apply: true,
+      }),
+    });
+
+    await race.paused;
+    const bulkPromise = fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ messages: [{
+        uuid: "dddddddd-4444-4444-8444-dddddddddddd",
+        from: "b",
+        to: "linkage-bulk-race",
+        channel: "linkage-bulk-race",
+        content: "arrived during apply",
+      }] }),
+    });
+    await race.concurrentAttempt;
+    const escapedBeforeApplyCommit = fake.__debug.messages.find(
+      (message: any) => message.uuid === "dddddddd-4444-4444-8444-dddddddddddd",
+    );
+    race.release();
+
+    const [applyResponse, bulkResponse] = await Promise.all([applyPromise, bulkPromise]);
+    const applied = await applyResponse.json();
+    const inserted = fake.__debug.messages.find(
+      (message: any) => message.uuid === "dddddddd-4444-4444-8444-dddddddddddd",
+    );
+
+    expect(planResponse.status).toBe(200);
+    expect(escapedBeforeApplyCommit).toBeUndefined();
+    expect(applyResponse.status).toBe(201);
+    expect(applied.target_message_uuids).toEqual(["cccccccc-3333-4333-8333-cccccccccccc"]);
+    expect(bulkResponse.status).toBe(200);
+    expect(inserted?.project_id).toBe("proj-valid");
   });
 
   test("PATCH renames the reachable iproj channel and preserves its member and message population", async () => {

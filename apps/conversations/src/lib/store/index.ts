@@ -51,6 +51,7 @@ import * as notificationsLib from "../channel-notifications.js";
 import * as summaryLib from "../summary.js";
 import * as hotLib from "../hot.js";
 import * as messagesLib from "../messages.js";
+import * as projectMessageLinkageLib from "../project-message-linkage.js";
 import { attachSendRedaction } from "../content-safety.js";
 
 /**
@@ -467,6 +468,9 @@ export interface ConversationsStore {
 
   // messages
   sendMessage: Async<typeof messagesLib.sendMessage>;
+  planChannelProjectMessageLinkage: Async<typeof projectMessageLinkageLib.planChannelProjectMessageLinkage>;
+  applyChannelProjectMessageLinkage: Async<typeof projectMessageLinkageLib.applyChannelProjectMessageLinkage>;
+  rollbackChannelProjectMessageLinkage: Async<typeof projectMessageLinkageLib.rollbackChannelProjectMessageLinkage>;
   getMessageById: Async<typeof messagesLib.getMessageById>;
   getMessageByUuid: Async<typeof messagesLib.getMessageByUuid>;
   deleteMessage: Async<typeof messagesLib.deleteMessage>;
@@ -630,6 +634,9 @@ export class LocalStore implements ConversationsStore {
 
   // messages
   sendMessage: ConversationsStore["sendMessage"] = async (...a) => attachSendRedaction(a[0]?.content ?? "", messagesLib.sendMessage(...a));
+  planChannelProjectMessageLinkage: ConversationsStore["planChannelProjectMessageLinkage"] = async (...a) => projectMessageLinkageLib.planChannelProjectMessageLinkage(...a);
+  applyChannelProjectMessageLinkage: ConversationsStore["applyChannelProjectMessageLinkage"] = async (...a) => projectMessageLinkageLib.applyChannelProjectMessageLinkage(...a);
+  rollbackChannelProjectMessageLinkage: ConversationsStore["rollbackChannelProjectMessageLinkage"] = async (...a) => projectMessageLinkageLib.rollbackChannelProjectMessageLinkage(...a);
   getMessageById: ConversationsStore["getMessageById"] = async (...a) => messagesLib.getMessageById(...a);
   getMessageByUuid: ConversationsStore["getMessageByUuid"] = async (...a) => messagesLib.getMessageByUuid(...a);
   deleteMessage: ConversationsStore["deleteMessage"] = async (...a) => messagesLib.deleteMessage(...a);

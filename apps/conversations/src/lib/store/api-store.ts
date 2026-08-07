@@ -620,7 +620,38 @@ export class ApiStore implements ConversationsStore {
   };
 
   // ── messages ────────────────────────────────────────────────────────────────
+  planChannelProjectMessageLinkage: ConversationsStore["planChannelProjectMessageLinkage"] = async (options) => {
+    return this.post(
+      `/channels/${encodeURIComponent(normalizeChannelName(options.channel))}/project-message-linkage`,
+      { project_id: options.project_id, apply: false },
+    ) as never;
+  };
+  applyChannelProjectMessageLinkage: ConversationsStore["applyChannelProjectMessageLinkage"] = async (options) => {
+    return this.post(
+      `/channels/${encodeURIComponent(normalizeChannelName(options.channel))}/project-message-linkage`,
+      {
+        project_id: options.project_id,
+        expected_revision: options.expected_revision,
+        idempotency_key: options.idempotency_key,
+        apply: true,
+      },
+    ) as never;
+  };
+  rollbackChannelProjectMessageLinkage: ConversationsStore["rollbackChannelProjectMessageLinkage"] = async (options) => {
+    return this.post(
+      "/channels/project-message-linkage/rollback",
+      {
+        receipt_id: options.receipt_id,
+        expected_revision: options.expected_revision,
+        idempotency_key: options.idempotency_key,
+        apply: options.apply,
+      },
+    ) as never;
+  };
   sendMessage: ConversationsStore["sendMessage"] = async (opts) => {
+    if (opts.tenant_id !== undefined) {
+      throw new Error("tenant_id is owned by the active storage context and cannot be supplied on a message write.");
+    }
     const replyUuid = opts.reply_to_uuid === undefined
       ? null
       : normalizeMessageUuid(opts.reply_to_uuid);

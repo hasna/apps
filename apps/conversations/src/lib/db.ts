@@ -731,6 +731,34 @@ export function getDb(): Database {
 
   db.exec("CREATE INDEX IF NOT EXISTS idx_channels_project ON channels(project_id)");
 
+  // Immutable receipts for the guarded channel-message project linkage
+  // repair. Rollback creates a second receipt; it never mutates the apply
+  // receipt that carries the exact pre-change row identities and hashes.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS channel_project_linkage_receipts (
+      id TEXT PRIMARY KEY,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      operation TEXT NOT NULL CHECK (operation IN ('apply', 'rollback')),
+      channel TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      source_receipt_id TEXT,
+      request_hash TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )
+  `);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_channel_project_linkage_receipts_channel ON channel_project_linkage_receipts(channel, created_at)");
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS channel_project_linkage_receipts_no_update
+    BEFORE UPDATE ON channel_project_linkage_receipts
+    BEGIN SELECT RAISE(ABORT, 'channel project linkage receipts are immutable'); END
+  `);
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS channel_project_linkage_receipts_no_delete
+    BEFORE DELETE ON channel_project_linkage_receipts
+    BEGIN SELECT RAISE(ABORT, 'channel project linkage receipts are immutable'); END
+  `);
+
   // Channel members table
   db.exec(`
     CREATE TABLE IF NOT EXISTS channel_members (

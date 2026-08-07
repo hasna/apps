@@ -91,6 +91,22 @@ describe("registerChannelCommands", () => {
     expect(create?.options.some((o) => o.long === "--class")).toBe(true);
     expect(update?.options.some((o) => o.long === "--class")).toBe(true);
   });
+
+  test("registers guarded project-message linkage commands", () => {
+    const program = new Command();
+    registerChannelCommands(program);
+
+    const channel = program.commands.find((c) => c.name() === "channel");
+    const apply = channel?.commands.find((c) => c.name() === "link-project-messages");
+    const rollback = channel?.commands.find((c) => c.name() === "rollback-project-message-linkage");
+    expect(apply).toBeDefined();
+    expect(apply?.options.some((o) => o.long === "--apply")).toBe(true);
+    expect(apply?.options.some((o) => o.long === "--expected-revision")).toBe(true);
+    expect(apply?.options.some((o) => o.long === "--idempotency-key")).toBe(true);
+    expect(rollback).toBeDefined();
+    expect(rollback?.options.some((o) => o.long === "--receipt")).toBe(true);
+    expect(rollback?.options.some((o) => o.long === "--apply")).toBe(true);
+  });
 });
 
 describe("mergeChannelClassMetadata", () => {

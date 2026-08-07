@@ -731,6 +731,39 @@ export const PG_MIGRATIONS: string[] = [
   CREATE TRIGGER channels_id_immutable
     BEFORE UPDATE OF id ON channels
     FOR EACH ROW EXECUTE FUNCTION prevent_channel_id_update();
+
   INSERT INTO _migrations (id) VALUES (4) ON CONFLICT DO NOTHING;
+  `,
+  // Migration 5: immutable receipts for guarded project linkage of every
+  // message in one exact channel. Apply and rollback each append a receipt;
+  // neither updates or deletes prior evidence.
+  `
+  CREATE TABLE IF NOT EXISTS channel_project_linkage_receipts (
+    id TEXT PRIMARY KEY,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    operation TEXT NOT NULL CHECK (operation IN ('apply', 'rollback')),
+    channel TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    source_receipt_id TEXT REFERENCES channel_project_linkage_receipts(id),
+    request_hash TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS idx_channel_project_linkage_receipts_channel
+    ON channel_project_linkage_receipts(channel, created_at);
+
+  CREATE OR REPLACE FUNCTION conversations_reject_linkage_receipt_mutation()
+  RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    RAISE EXCEPTION 'channel project linkage receipts are immutable';
+  END;
+  $$;
+  DROP TRIGGER IF EXISTS channel_project_linkage_receipts_no_mutation
+    ON channel_project_linkage_receipts;
+  CREATE TRIGGER channel_project_linkage_receipts_no_mutation
+    BEFORE UPDATE OR DELETE ON channel_project_linkage_receipts
+    FOR EACH ROW EXECUTE FUNCTION conversations_reject_linkage_receipt_mutation();
+
+  INSERT INTO _migrations (id) VALUES (5) ON CONFLICT DO NOTHING;
   `,
 ];

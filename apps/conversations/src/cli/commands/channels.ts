@@ -308,6 +308,100 @@ export function registerChannelCommands(program: Command): void {
     });
 
   channel
+    .command("link-project-messages")
+    .description("Plan or apply guarded project linkage for every message in a project channel")
+    .argument("<channel>", "Channel name")
+    .requiredOption("--project <id>", "Expected channel project ID")
+    .option("--apply", "Apply the planned linkage (default is dry-run)")
+    .option("--expected-revision <hash>", "Exact revision returned by a current dry-run")
+    .option("--idempotency-key <key>", "Stable key for safe apply replay")
+    .option("-j, --json", "Output as JSON")
+    .action(async (name, opts) => {
+      const channelName = typeof name === "string" ? name.trim() : "";
+      const projectId = typeof opts.project === "string" ? opts.project.trim() : "";
+      if (!channelName) {
+        printErrorLine(chalk.red("Channel name cannot be empty."));
+        process.exit(1);
+      }
+      if (!projectId) {
+        printErrorLine(chalk.red("Project ID cannot be empty."));
+        process.exit(1);
+      }
+      if (opts.apply && (!opts.expectedRevision?.trim() || !opts.idempotencyKey?.trim())) {
+        printErrorLine(chalk.red("--apply requires --expected-revision and --idempotency-key."));
+        process.exit(1);
+      }
+
+      try {
+        const store = getStore();
+        if (opts.apply) {
+          const result = await store.applyChannelProjectMessageLinkage({
+            channel: channelName,
+            project_id: projectId,
+            expected_revision: opts.expectedRevision.trim(),
+            idempotency_key: opts.idempotencyKey.trim(),
+          });
+          if (opts.json) {
+            printJson(result);
+          } else {
+            printLine(chalk.green(`Linked ${result.target_count} message(s) in #${result.channel} to project ${result.project_id}.`));
+            printLine(chalk.dim(`Receipt: ${result.receipt_id}; post revision: ${result.post_revision}`));
+          }
+        } else {
+          const result = await store.planChannelProjectMessageLinkage({ channel: channelName, project_id: projectId });
+          if (opts.json) {
+            printJson(result);
+          } else {
+            printLine(`Dry run: ${result.target_count} of ${result.count} message(s) in #${result.channel} require project linkage.`);
+            printLine(chalk.dim(`Revision: ${result.revision}`));
+          }
+        }
+      } catch (error) {
+        return failCommand(error, "Failed to link channel messages to their project.");
+      }
+      closeDb();
+    });
+
+  channel
+    .command("rollback-project-message-linkage")
+    .description("Plan or apply an exact conditional rollback from an immutable linkage receipt")
+    .requiredOption("--receipt <id>", "Apply receipt ID to roll back")
+    .requiredOption("--expected-revision <hash>", "Exact target revision recorded by the apply receipt")
+    .requiredOption("--idempotency-key <key>", "Stable key for safe rollback replay")
+    .option("--apply", "Apply the rollback (default is dry-run)")
+    .option("-j, --json", "Output as JSON")
+    .action(async (opts) => {
+      const receiptId = typeof opts.receipt === "string" ? opts.receipt.trim() : "";
+      const expectedRevision = typeof opts.expectedRevision === "string" ? opts.expectedRevision.trim() : "";
+      const idempotencyKey = typeof opts.idempotencyKey === "string" ? opts.idempotencyKey.trim() : "";
+      if (!receiptId || !expectedRevision || !idempotencyKey) {
+        printErrorLine(chalk.red("Receipt, expected revision, and idempotency key cannot be empty."));
+        process.exit(1);
+      }
+
+      try {
+        const result = await getStore().rollbackChannelProjectMessageLinkage({
+          receipt_id: receiptId,
+          expected_revision: expectedRevision,
+          idempotency_key: idempotencyKey,
+          apply: Boolean(opts.apply),
+        });
+        if (opts.json) {
+          printJson(result);
+        } else if (opts.apply) {
+          printLine(chalk.green(`Restored ${result.restored_count} message(s) from receipt ${result.source_receipt_id}.`));
+          printLine(chalk.dim(`Rollback receipt: ${result.receipt_id}; replayed: ${result.replayed ? "yes" : "no"}`));
+        } else {
+          printLine(`Dry run: ${result.target_count} message(s) from receipt ${result.source_receipt_id} can be restored.`);
+          printLine(chalk.dim(`Current revision: ${result.current_revision}`));
+        }
+      } catch (error) {
+        return failCommand(error, "Failed to roll back channel project-message linkage.");
+      }
+      closeDb();
+    });
+
+  channel
     .command("send")
     .description("Send a message to a channel")
     .argument("<channel>", "Channel name")
