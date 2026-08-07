@@ -77,18 +77,29 @@ export function ReconciliationTab() {
               Estimated spend differs from provider billing by more than {data.threshold_pct}%.
             </div>
           )}
+          {data && !data.comparable && (
+            <div className="flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+              <AlertTriangleIcon className="size-4 shrink-0" />
+              Drift is UNKNOWN, not zero:{" "}
+              {data.incomparable_reason === "no_billing_records"
+                ? "no provider billing records were imported for this period."
+                : "provider billing records exist but total $0.00."}
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             {[
               { label: "Estimated (telemetry)", value: data?.estimated_usd },
               { label: "Actual (billing)", value: data?.actual_usd },
               { label: "Delta", value: data?.delta_usd },
-              { label: "Delta %", value: data?.delta_pct, isPct: true },
+              // An incomparable diff has no percentage. Rendering its 0 as "0.0%"
+              // is the same false agreement the API used to report.
+              { label: "Delta %", value: data && !data.comparable ? null : data?.delta_pct, isPct: true },
             ].map((item) => (
               <div key={item.label} className="rounded-md border p-4">
                 <div className="text-xs font-medium uppercase text-muted-foreground">{item.label}</div>
                 <div className="mt-1 text-xl font-semibold">
                   {loading ? "…" : item.isPct
-                    ? `${(item.value ?? 0).toFixed(1)}%`
+                    ? (item.value == null ? "n/a" : `${item.value.toFixed(1)}%`)
                     : formatUsd(item.value ?? 0)}
                 </div>
               </div>
