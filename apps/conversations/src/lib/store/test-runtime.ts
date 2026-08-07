@@ -64,7 +64,7 @@ export interface TestRuntimeSignal {
 /** A path that only a test runner is the entry point for. */
 const TEST_ENTRYPOINT = /(?:^|[\\/])(?:[^\\/]+\.(?:test|spec)\.[cm]?[jt]sx?|__tests__[\\/])/i;
 
-/** A runner binary appearing anywhere in argv (vitest, jest, mocha, ava, node --test). */
+/** A runner binary in argv's launcher/entrypoint slot (vitest, jest, mocha, ava, node --test). */
 const TEST_RUNNER_ARG = /(?:^|[\\/])(?:vitest|jest(?:-worker)?|mocha|ava)(?:\.[cm]?js)?$|^--test$/i;
 
 function defaultEntrypoint(): string | null {
@@ -125,7 +125,13 @@ export function detectTestRuntime(inputs: Partial<TestRuntimeProbeInputs> = {}):
   probe("JEST_WORKER_ID", () => (env.JEST_WORKER_ID !== undefined ? "JEST_WORKER_ID" : null));
   probe("entrypoint", () => (entrypoint && TEST_ENTRYPOINT.test(entrypoint) ? `entrypoint:${entrypoint}` : null));
   probe("argv", () => {
-    const hit = [...argv].slice(1).find((a) => TEST_RUNNER_ARG.test(a) || TEST_ENTRYPOINT.test(a));
+    // argv after index 1 is application data. The conversations CLI puts message
+    // content there, so scanning the whole vector makes a message such as
+    // `src/example.test.ts` impersonate test-runner control state.
+    const launcher = argv[1];
+    const hit = launcher && (TEST_RUNNER_ARG.test(launcher) || TEST_ENTRYPOINT.test(launcher))
+      ? launcher
+      : null;
     return hit ? `argv:${hit}` : null;
   });
   probe("globals", () => {

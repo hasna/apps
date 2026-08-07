@@ -401,9 +401,77 @@ export function redactSensitiveText(text: string): string {
   return redacted;
 }
 
+/**
+ * Objects whose state lives in internal slots rather than own enumerable
+ * properties, and which therefore must NOT go through the object-rebuild
+ * branch of `redactSensitiveValue`.
+ *
+ * The rebuild replaces a value with a fresh plain object assembled from
+ * `Object.entries`. For a Date that list is EMPTY — the time is an internal
+ * slot, not a property — so the rebuild silently yields `{}` and the timestamp
+ * is gone. That is not hypothetical: it took every message `created_at` on the
+ * hosted service to `{}` the moment the server first deployed the redactor,
+ * breaking `conversations show` and `channel read` fleet-wide, because
+ * production reads TIMESTAMPTZ through `pg`, which hands back real Dates
+ * (incident todos eb4184d7, root cause #679793). `edited_at`, `pinned_at` and
+ * `read_at` are the same shape and would have followed the instant they were
+ * non-null.
+ *
+ * Typed arrays fail differently and just as badly: `Object.entries` DOES see
+ * their indices, so a Buffer would be rebuilt as `{"0":72,"1":105,...}` —
+ * every byte inflated into an object entry.
+ *
+ * ERRING TOWARD WALKING IS THE FAIL-SAFE DIRECTION. Wrongly treating a value
+ * as opaque means we stop descending and a secret inside it survives — a leak.
+ * Wrongly walking an exotic costs shape, never secrecy. So this is a narrow,
+ * explicit list of built-ins, not a "looks plain enough" heuristic:
+ *
+ *   PASSED THROUGH UNTOUCHED — Date, RegExp, Map, Set, WeakMap, WeakSet,
+ *   Promise, ArrayBuffer/SharedArrayBuffer, and every ArrayBuffer view
+ *   (DataView, all TypedArrays, and Node's Buffer). None of these carry
+ *   author-supplied text at their own enumerable properties, so descending
+ *   into them can only destroy them, never find anything.
+ *
+ *   STILL WALKED — ordinary object literals; NULL-PROTOTYPE objects, which are
+ *   genuine data bags (a `getPrototypeOf(x) === Object.prototype` gate would
+ *   have skipped them and opened exactly the leak described above); class
+ *   instances, whose own enumerable fields ARE their data; and cross-realm
+ *   built-ins, which `instanceof` does not recognise. A cross-realm Date is
+ *   therefore still flattened — unchanged from today's behaviour, and the safe
+ *   side of the trade. `pg` and `JSON.parse` both produce same-realm values,
+ *   so this does not arise on any path that reaches here.
+ *
+ * `instanceof` is used rather than a `Symbol.toStringTag` check precisely
+ * because a tag is forgeable: it is the one probe an attacker could set to
+ * make a payload look opaque and skip redaction. JSON cannot express a symbol
+ * key, so no DB-sourced value can reach a prototype chain it did not earn.
+ *
+ * Errors are deliberately absent. `Object.entries(new Error("x"))` is also
+ * empty, so an Error still flattens to `{}` — but `JSON.stringify` does the
+ * same, so across the HTTP boundary that is every caller of this function,
+ * nothing changes. Adding Errors here would newly expose `message` and `stack`
+ * to callers holding the object directly, which is a leak this fix has no
+ * mandate to introduce.
+ */
+function hasOpaqueInternalState(value: object): boolean {
+  return (
+    value instanceof Date ||
+    value instanceof RegExp ||
+    value instanceof Map ||
+    value instanceof Set ||
+    value instanceof WeakMap ||
+    value instanceof WeakSet ||
+    value instanceof Promise ||
+    value instanceof ArrayBuffer ||
+    (typeof SharedArrayBuffer !== "undefined" && value instanceof SharedArrayBuffer) ||
+    ArrayBuffer.isView(value)
+  );
+}
+
 export function redactSensitiveValue<T>(value: T): T {
   if (typeof value === "string") return redactSensitiveText(value) as T;
   if (Array.isArray(value)) return value.map((item) => redactSensitiveValue(item)) as T;
+  if (value && typeof value === "object" && hasOpaqueInternalState(value)) return value;
   if (value && typeof value === "object") {
     const result: Record<string, unknown> = {};
     for (const [key, nested] of Object.entries(value)) {
