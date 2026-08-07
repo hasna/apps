@@ -6,6 +6,8 @@
 
 export interface Message { "id"?: number; "uuid"?: string; "session_id"?: string; "from_agent"?: string; "to_agent"?: string; "channel"?: string | null; "project_id"?: string | null; "content"?: string; "priority"?: string; "blocking"?: boolean; "reply_to"?: number | null; "created_at"?: string }
 
+export interface ProjectMessageLinkageHash { "id": number; "uuid": string; "hash": string; "preserved_hash": string }
+
 export interface Channel { "id"?: string; "name"?: string; "description"?: string | null; "topic"?: string | null; "project_id"?: string | null; "created_by"?: string; "created_at"?: string; "archived_at"?: string | null; "metadata"?: Record<string, unknown> | null; "tags"?: Array<string> }
 
 export interface Project { "id"?: string; "name"?: string; "description"?: string | null; "path"?: string | null; "repository"?: string | null; "created_by"?: string; "status"?: string; "created_at"?: string }
@@ -141,6 +143,15 @@ export class ConversationsClient {
       });
     }
 
+    /** Plan or apply an exact conditional rollback from an immutable linkage receipt */
+    async rollbackChannelProjectMessageLinkage(body: { "receipt_id": string; "expected_revision": string; "idempotency_key": string; "apply": boolean }, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/channels/project-message-linkage/rollback`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     async getChannel(name: string, init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("GET", `/v1/channels/${encodeURIComponent(String(name))}`, {
         body: undefined,
@@ -151,6 +162,15 @@ export class ConversationsClient {
 
     async updateChannel(name: string, body: Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("PATCH", `/v1/channels/${encodeURIComponent(String(name))}`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Plan or apply guarded project linkage for every message in one exact project-linked channel */
+    async applyChannelProjectMessageLinkage(name: string, body: { "project_id": string; "apply": boolean; "expected_revision"?: string; "idempotency_key"?: string }, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/channels/${encodeURIComponent(String(name))}/project-message-linkage`, {
         body,
         query: undefined,
         init,

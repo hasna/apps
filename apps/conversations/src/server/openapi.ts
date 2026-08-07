@@ -50,6 +50,16 @@ export const openapiSpec = {
           created_at: { type: "string" },
         },
       },
+      ProjectMessageLinkageHash: {
+        type: "object",
+        required: ["id", "uuid", "hash", "preserved_hash"],
+        properties: {
+          id: { type: "integer" },
+          uuid: { type: "string" },
+          hash: { type: "string" },
+          preserved_hash: { type: "string" },
+        },
+      },
       Channel: {
         type: "object",
         properties: {
@@ -289,6 +299,61 @@ export const openapiSpec = {
         parameters: [{ name: "name", in: "path", required: true, schema: { type: "string" } }],
         requestBody: { content: { "application/json": { schema: okObject } } },
         responses: { "200": { description: "updated", content: { "application/json": { schema: okObject } } } },
+      },
+    },
+    "/v1/channels/{name}/project-message-linkage": {
+      post: {
+        operationId: "applyChannelProjectMessageLinkage",
+        summary: "Plan or apply guarded project linkage for every message in one exact project-linked channel",
+        description:
+          "With apply=false, returns a non-mutating complete-membership snapshot and revision. " +
+          "With apply=true, expected_revision and idempotency_key are required; the server locks " +
+          "the channel and its message rows, appends an immutable receipt, and updates only null project_id values.",
+        parameters: [{ name: "name", in: "path", required: true, schema: { type: "string" } }],
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: {
+            type: "object",
+            additionalProperties: false,
+            required: ["project_id", "apply"],
+            properties: {
+              project_id: { type: "string" },
+              apply: { type: "boolean" },
+              expected_revision: { type: "string" },
+              idempotency_key: { type: "string" },
+            },
+          } } },
+        },
+        responses: {
+          "200": { description: "dry-run plan or idempotent replay", content: { "application/json": { schema: okObject } } },
+          "201": { description: "immutable apply receipt", content: { "application/json": { schema: okObject } } },
+          "409": { description: "stale revision, conflicting project, or inconsistent idempotency key", content: { "application/json": { schema: errorObject } } },
+        },
+      },
+    },
+    "/v1/channels/project-message-linkage/rollback": {
+      post: {
+        operationId: "rollbackChannelProjectMessageLinkage",
+        summary: "Plan or apply an exact conditional rollback from an immutable linkage receipt",
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: {
+            type: "object",
+            additionalProperties: false,
+            required: ["receipt_id", "expected_revision", "idempotency_key", "apply"],
+            properties: {
+              receipt_id: { type: "string" },
+              expected_revision: { type: "string" },
+              idempotency_key: { type: "string" },
+              apply: { type: "boolean" },
+            },
+          } } },
+        },
+        responses: {
+          "200": { description: "dry-run plan or idempotent replay", content: { "application/json": { schema: okObject } } },
+          "201": { description: "immutable rollback receipt", content: { "application/json": { schema: okObject } } },
+          "409": { description: "stale target rows or inconsistent idempotency key", content: { "application/json": { schema: errorObject } } },
+        },
       },
     },
     "/v1/projects": {

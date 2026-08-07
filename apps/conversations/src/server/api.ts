@@ -31,6 +31,20 @@ import { resolveSelfSenderId } from "../lib/sender-identity.js";
 import { normalizeMessageUuid, parseMessageReference } from "../lib/message-reference.js";
 import { normalizeExactIsoTimestamp } from "../lib/since.js";
 import { PROJECT_LIST_ORDER, simpleOrderByClause } from "../lib/list-order.js";
+import {
+  PROJECT_MESSAGE_LINKAGE_RECEIPTS_TABLE,
+  buildProjectMessageLinkagePlan,
+  projectMessageLinkageHashes,
+  projectMessageLinkageRevision,
+  projectMessageLinkageTargetRevision,
+  stableProjectMessageLinkageHash,
+  type ProjectMessageLinkageRow,
+} from "../lib/project-message-linkage.js";
+import type {
+  ProjectMessageLinkageHash,
+  ProjectMessageLinkageReceipt,
+  ProjectMessageLinkageRollbackResult,
+} from "../types.js";
 
 export const APP = "conversations";
 const SCOPE_READ = `${APP}:read`;
@@ -174,6 +188,125 @@ const BULK_MAX = 2000;
 async function messageTotal(client: TypedQueryClient): Promise<number> {
   const row = await client.get<{ n: string | number }>("SELECT count(*)::bigint AS n FROM messages");
   return Number(row?.n ?? 0);
+}
+
+const PROJECT_LINKAGE_MESSAGE_COLUMNS = [
+  "id", "uuid", "session_id", "from_agent", "to_agent", "channel", "project_id",
+  "content", "priority", "working_dir", "repository", "branch", "metadata",
+  "edited_at", "pinned_at", "blocking", "attachments", "reply_to", "created_at", "read_at",
+].join(", ");
+
+type StoredProjectLinkageReceipt = {
+  id: string;
+  idempotency_key: string;
+  operation: "apply" | "rollback";
+  channel: string;
+  project_id: string;
+  source_receipt_id: string | null;
+  request_hash: string;
+  payload: string;
+  created_at: string;
+};
+
+async function readProjectLinkageChannel(
+  client: TypedQueryClient,
+  channel: string,
+  expectedProjectId?: string,
+  lock: "share" | "update" | null = null,
+): Promise<{ channel: string; project_id: string }> {
+  const lockSql = lock === "share" ? " FOR SHARE" : lock === "update" ? " FOR UPDATE" : "";
+  const row = await client.get<{ name: string; project_id: string | null }>(
+    `SELECT name, project_id FROM channels WHERE name = $1${lockSql}`,
+    [channel],
+  );
+  if (!row) throw new Error(`Channel not found: ${channel}`);
+  if (!row.project_id) throw new Error(`Channel ${channel} is not linked to a project.`);
+  if (expectedProjectId !== undefined && row.project_id !== expectedProjectId) {
+    throw new Error(`Project ${expectedProjectId} conflicts with channel project ${row.project_id}.`);
+  }
+  return { channel, project_id: row.project_id };
+}
+
+async function readProjectLinkageRows(
+  client: TypedQueryClient,
+  channel: string,
+  forUpdate = false,
+): Promise<ProjectMessageLinkageRow[]> {
+  return client.many<ProjectMessageLinkageRow>(
+    `SELECT ${PROJECT_LINKAGE_MESSAGE_COLUMNS} FROM messages WHERE channel = $1 ORDER BY id ASC${forUpdate ? " FOR UPDATE" : ""}`,
+    [channel],
+  );
+}
+
+async function readProjectLinkageReceiptByKey(
+  client: TypedQueryClient,
+  key: string,
+): Promise<StoredProjectLinkageReceipt | null> {
+  return client.get<StoredProjectLinkageReceipt>(
+    `SELECT * FROM ${PROJECT_MESSAGE_LINKAGE_RECEIPTS_TABLE} WHERE idempotency_key = $1`,
+    [key],
+  );
+}
+
+async function readProjectLinkageReceiptById(
+  client: TypedQueryClient,
+  id: string,
+): Promise<StoredProjectLinkageReceipt | null> {
+  return client.get<StoredProjectLinkageReceipt>(
+    `SELECT * FROM ${PROJECT_MESSAGE_LINKAGE_RECEIPTS_TABLE} WHERE id = $1`,
+    [id],
+  );
+}
+
+function replayProjectLinkageReceipt<T extends { replayed?: boolean }>(
+  existing: StoredProjectLinkageReceipt,
+  requestHash: string,
+): T {
+  if (existing.request_hash !== requestHash) {
+    throw new Error("Idempotency key was already used with a different request.");
+  }
+  return { ...(JSON.parse(existing.payload) as T), replayed: true };
+}
+
+function assertProjectLinkagePreserved(
+  beforeHashes: ProjectMessageLinkageHash[],
+  afterRows: ProjectMessageLinkageRow[],
+): void {
+  const after = new Map(
+    projectMessageLinkageHashes(afterRows).map((entry) => [`${entry.id}:${entry.uuid}`, entry]),
+  );
+  for (const before of beforeHashes) {
+    if (after.get(`${before.id}:${before.uuid}`)?.preserved_hash !== before.preserved_hash) {
+      throw new Error(`Message ${before.id}/${before.uuid} changed outside project_id during linkage.`);
+    }
+  }
+}
+
+function projectLinkageError(error: unknown): Response {
+  const message = (error as Error).message;
+  const status = /not found/i.test(message)
+    ? 404
+    : /stale|conflict|changed|idempotency|verification/i.test(message)
+      ? 409
+      : 400;
+  return json({ error: message }, status);
+}
+
+async function readProjectLinkageTargetRows(
+  client: TypedQueryClient,
+  targets: Array<{ id: number; uuid: string }>,
+  forUpdate = false,
+): Promise<ProjectMessageLinkageRow[]> {
+  const rows: ProjectMessageLinkageRow[] = [];
+  for (const target of targets) {
+    const row = await client.get<ProjectMessageLinkageRow>(
+      `SELECT ${PROJECT_LINKAGE_MESSAGE_COLUMNS} FROM messages WHERE id = $1 AND uuid = $2${forUpdate ? " FOR UPDATE" : ""}`,
+      [target.id, target.uuid],
+    );
+    if (!row) throw new Error(`Message ${target.id}/${target.uuid} from the linkage receipt no longer exists.`);
+    rows.push(row);
+  }
+  return rows.sort((a, b) => Number(a.id) - Number(b.id));
 }
 
 // ---- shared row parsers (match the local store's parse* shapes) --------------
@@ -956,8 +1089,219 @@ async function handleV1(
     return json({ items });
   }
 
+  const projectLinkageMatch = sub.match(/^channels\/([^/]+)\/project-message-linkage$/);
+  if (projectLinkageMatch && method === "POST") {
+    const channel = normalizeChannelName(decodeURIComponent(projectLinkageMatch[1]));
+    const body = await readJson(req);
+    if (body.tenant_id !== undefined) {
+      return json({ error: "tenant_id is owned by the authenticated storage context and cannot be supplied." }, 400);
+    }
+    const projectId = str(body.project_id);
+    if (!projectId) return json({ error: "project_id is required" }, 400);
+    const apply = body.apply === true;
+
+    if (!apply) {
+      try {
+        const plan = await client.transaction(async (tx) => {
+          const target = await readProjectLinkageChannel(tx, channel, projectId, "share");
+          return buildProjectMessageLinkagePlan(
+            target.channel,
+            target.project_id,
+            await readProjectLinkageRows(tx, target.channel),
+          );
+        });
+        return json(plan);
+      } catch (error) {
+        return projectLinkageError(error);
+      }
+    }
+
+    const expectedRevision = str(body.expected_revision);
+    const idempotencyKey = str(body.idempotency_key);
+    if (!expectedRevision) return json({ error: "expected_revision is required" }, 400);
+    if (!idempotencyKey) return json({ error: "idempotency_key is required" }, 400);
+    const requestHash = stableProjectMessageLinkageHash({
+      operation: "apply",
+      channel,
+      project_id: projectId,
+      expected_revision: expectedRevision,
+    });
+
+    try {
+      const early = await readProjectLinkageReceiptByKey(client, idempotencyKey);
+      if (early) return json(replayProjectLinkageReceipt<ProjectMessageLinkageReceipt>(early, requestHash));
+      const receipt = await client.transaction(async (tx) => {
+        const target = await readProjectLinkageChannel(tx, channel, projectId, "update");
+        const existing = await readProjectLinkageReceiptByKey(tx, idempotencyKey);
+        if (existing) return replayProjectLinkageReceipt<ProjectMessageLinkageReceipt>(existing, requestHash);
+        const beforeRows = await readProjectLinkageRows(tx, target.channel, true);
+        const plan = buildProjectMessageLinkagePlan(target.channel, target.project_id, beforeRows);
+        if (plan.revision !== expectedRevision) {
+          throw new Error(`Stale project-message linkage revision: expected ${expectedRevision}, current ${plan.revision}.`);
+        }
+        const targets = plan.before_project_ids.filter((entry) => entry.project_id === null);
+        for (const targetMessage of targets) {
+          const updated = await tx.query(
+            `UPDATE messages SET project_id = $1
+             WHERE id = $2 AND uuid = $3 AND channel = $4 AND project_id IS NULL
+             RETURNING id`,
+            [target.project_id, targetMessage.id, targetMessage.uuid, target.channel],
+          );
+          if (updated.rowCount !== 1) {
+            throw new Error(`Message ${targetMessage.id}/${targetMessage.uuid} changed during linkage.`);
+          }
+        }
+        const afterRows = await readProjectLinkageRows(tx, target.channel, true);
+        if (afterRows.length !== beforeRows.length) throw new Error("Channel membership changed during linkage.");
+        assertProjectLinkagePreserved(plan.before_hashes, afterRows);
+        if (afterRows.some((row) => row.project_id !== target.project_id)) {
+          throw new Error(`Project-message linkage verification failed for channel ${target.channel}.`);
+        }
+        const afterByKey = new Map(afterRows.map((row) => [`${row.id}:${row.uuid}`, row]));
+        const targetRows = targets.map((entry) => afterByKey.get(`${entry.id}:${entry.uuid}`)!).filter(Boolean);
+        const createdAt = new Date().toISOString();
+        const result: ProjectMessageLinkageReceipt = {
+          ...plan,
+          dry_run: false,
+          receipt_id: randomUUID(),
+          idempotency_key: idempotencyKey,
+          request_hash: requestHash,
+          pre_revision: plan.revision,
+          post_revision: projectMessageLinkageRevision(target.channel, target.project_id, afterRows),
+          target_revision: projectMessageLinkageTargetRevision(targetRows),
+          target_message_ids: targets.map((entry) => entry.id),
+          target_message_uuids: targets.map((entry) => entry.uuid),
+          created_at: createdAt,
+          replayed: false,
+        };
+        await tx.get(
+          `INSERT INTO ${PROJECT_MESSAGE_LINKAGE_RECEIPTS_TABLE} (
+             id, idempotency_key, operation, channel, project_id, source_receipt_id,
+             request_hash, payload, created_at
+           ) VALUES ($1,$2,'apply',$3,$4,NULL,$5,$6,$7)
+           RETURNING id`,
+          [result.receipt_id, idempotencyKey, target.channel, target.project_id, requestHash, JSON.stringify(result), createdAt],
+        );
+        return result;
+      });
+      return json(receipt, receipt.replayed ? 200 : 201);
+    } catch (error) {
+      return projectLinkageError(error);
+    }
+  }
+
+  if (sub === "channels/project-message-linkage/rollback" && method === "POST") {
+    const body = await readJson(req);
+    if (body.tenant_id !== undefined) {
+      return json({ error: "tenant_id is owned by the authenticated storage context and cannot be supplied." }, 400);
+    }
+    const receiptId = str(body.receipt_id);
+    const expectedRevision = str(body.expected_revision);
+    const idempotencyKey = str(body.idempotency_key);
+    const apply = body.apply === true;
+    if (!receiptId) return json({ error: "receipt_id is required" }, 400);
+    if (!expectedRevision) return json({ error: "expected_revision is required" }, 400);
+    if (!idempotencyKey) return json({ error: "idempotency_key is required" }, 400);
+
+    try {
+      const storedSource = await readProjectLinkageReceiptById(client, receiptId);
+      if (!storedSource || storedSource.operation !== "apply") {
+        throw new Error(`Project-message linkage apply receipt not found: ${receiptId}`);
+      }
+      const source = JSON.parse(storedSource.payload) as ProjectMessageLinkageReceipt;
+      const targets = source.before_project_ids.filter((entry) => source.target_message_ids.includes(entry.id));
+      const requestHash = stableProjectMessageLinkageHash({
+        operation: "rollback",
+        source_receipt_id: source.receipt_id,
+        expected_revision: expectedRevision,
+      });
+      const buildResult = (currentRevision: string): ProjectMessageLinkageRollbackResult => ({
+        operation: "rollback",
+        dry_run: !apply,
+        source_receipt_id: source.receipt_id,
+        channel: source.channel,
+        project_id: source.project_id,
+        expected_revision: expectedRevision,
+        current_revision: currentRevision,
+        target_count: targets.length,
+        target_message_ids: source.target_message_ids,
+        target_message_uuids: source.target_message_uuids,
+        restored_count: 0,
+      });
+
+      if (!apply) {
+        const currentRows = await readProjectLinkageTargetRows(client, targets);
+        const currentRevision = projectMessageLinkageTargetRevision(currentRows);
+        if (expectedRevision !== source.target_revision || currentRevision !== expectedRevision) {
+          throw new Error(`Stale project-message linkage rollback revision: expected ${expectedRevision}, current ${currentRevision}.`);
+        }
+        return json(buildResult(currentRevision));
+      }
+
+      const early = await readProjectLinkageReceiptByKey(client, idempotencyKey);
+      if (early) return json(replayProjectLinkageReceipt<ProjectMessageLinkageRollbackResult>(early, requestHash));
+      const result = await client.transaction(async (tx) => {
+        await readProjectLinkageChannel(tx, source.channel, source.project_id, "update");
+        const existing = await readProjectLinkageReceiptByKey(tx, idempotencyKey);
+        if (existing) return replayProjectLinkageReceipt<ProjectMessageLinkageRollbackResult>(existing, requestHash);
+        const currentRows = await readProjectLinkageTargetRows(tx, targets, true);
+        const currentRevision = projectMessageLinkageTargetRevision(currentRows);
+        if (expectedRevision !== source.target_revision || currentRevision !== expectedRevision) {
+          throw new Error(`Stale project-message linkage rollback revision: expected ${expectedRevision}, current ${currentRevision}.`);
+        }
+        for (const target of targets) {
+          const updated = await tx.query(
+            `UPDATE messages SET project_id = $1
+             WHERE id = $2 AND uuid = $3 AND channel = $4 AND project_id = $5
+             RETURNING id`,
+            [target.project_id, target.id, target.uuid, source.channel, source.project_id],
+          );
+          if (updated.rowCount !== 1) throw new Error(`Message ${target.id}/${target.uuid} changed during linkage rollback.`);
+        }
+        const restoredRows = await readProjectLinkageTargetRows(tx, targets, true);
+        const beforeByKey = new Map(source.before_hashes.map((entry) => [`${entry.id}:${entry.uuid}`, entry]));
+        assertProjectLinkagePreserved(
+          targets.map((target) => beforeByKey.get(`${target.id}:${target.uuid}`)!).filter(Boolean),
+          restoredRows,
+        );
+        for (let index = 0; index < targets.length; index++) {
+          if ((restoredRows[index].project_id ?? null) !== targets[index].project_id) {
+            throw new Error(`Message ${targets[index].id}/${targets[index].uuid} rollback verification failed.`);
+          }
+        }
+        const createdAt = new Date().toISOString();
+        const rollback: ProjectMessageLinkageRollbackResult = {
+          ...buildResult(currentRevision),
+          dry_run: false,
+          restored_count: targets.length,
+          receipt_id: randomUUID(),
+          idempotency_key: idempotencyKey,
+          request_hash: requestHash,
+          post_revision: projectMessageLinkageTargetRevision(restoredRows),
+          created_at: createdAt,
+          replayed: false,
+        };
+        await tx.get(
+          `INSERT INTO ${PROJECT_MESSAGE_LINKAGE_RECEIPTS_TABLE} (
+             id, idempotency_key, operation, channel, project_id, source_receipt_id,
+             request_hash, payload, created_at
+           ) VALUES ($1,$2,'rollback',$3,$4,$5,$6,$7,$8)
+           RETURNING id`,
+          [rollback.receipt_id, idempotencyKey, source.channel, source.project_id, source.receipt_id, requestHash, JSON.stringify(rollback), createdAt],
+        );
+        return rollback;
+      });
+      return json(result, result.replayed ? 200 : 201);
+    } catch (error) {
+      return projectLinkageError(error);
+    }
+  }
+
   if (sub === "messages" && method === "POST") {
     const body = await readJson(req);
+    if (body.tenant_id !== undefined) {
+      return json({ error: "tenant_id is owned by the authenticated storage context and cannot be supplied." }, 400);
+    }
     const from = str(body.from) ?? agent ?? undefined;
     const content = str(body.content);
     const requestedChannel = body.channel ? normalizeChannelName(String(body.channel)) : null;
@@ -1032,12 +1376,8 @@ async function handleV1(
     // stay in step, because a guard present on only one backend is absent
     // exactly where it matters.
     // Existence only: archived channels still accept sends, as before.
-    if (requestedChannel && !replyParent) {
-      const channelRow = await client.get(`SELECT name FROM channels WHERE name = $1`, [requestedChannel]);
-      if (!channelRow) return json({ error: unknownChannelMessage(requestedChannel) }, 404);
-    }
     assertNoSensitiveContent(content, "Message content");
-    const projectId = str(body.project_id);
+    const requestedProjectId = str(body.project_id) ?? null;
     // Mirror the local sendMessage session derivation so channel history and
     // notifications group identically on the cloud.
     const sessionId = replyParent?.session_id ?? (
@@ -1050,19 +1390,40 @@ async function handleV1(
     assertNoSensitiveContent(from, "Message sender");
     assertNoSensitiveContent(toAgent, "Message recipient");
     assertNoSensitiveOptionalText(channelName ?? undefined, "Message channel");
-    assertNoSensitiveOptionalText(projectId, "Message project");
+    assertNoSensitiveOptionalText(requestedProjectId ?? undefined, "Message project");
     assertNoSensitiveContent(sessionId, "Message session");
     const blocking = body.blocking === true;
     // Persist the local numeric FK only after an immutable UUID lookup resolved
     // it in this authenticated tenant/store. Numeric-only reply identities are
     // refused above because a wrong id can name a different reachable message.
     const replyTo = replyParent ? Number(replyParent.id) : null;
-    const row = await client.get<{ id: number }>(
-      `INSERT INTO messages (uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, blocking, reply_to)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-       RETURNING id, uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, blocking, reply_to, created_at`,
-      [messageUuid, sessionId, from, toAgent, channelName ?? null, projectId ?? null, content, priority, blocking, replyTo],
-    );
+    const row = await client.transaction(async (tx) => {
+      let projectId = requestedProjectId;
+      if (channelName) {
+        const channelRow = await tx.get<{ name: string; project_id: string | null }>(
+          "SELECT name, project_id FROM channels WHERE name = $1 FOR SHARE",
+          [channelName],
+        );
+        if (!channelRow) {
+          // Replies to legacy orphan-channel rows retain the existing exception;
+          // every new non-reply channel send remains fail-closed.
+          if (!replyParent) throw new Error(unknownChannelMessage(channelName));
+        } else {
+          if (projectId !== null && projectId !== channelRow.project_id) {
+            throw new Error(
+              `Message project ${projectId} conflicts with channel project ${channelRow.project_id ?? "(unlinked)"}.`,
+            );
+          }
+          projectId = channelRow.project_id;
+        }
+      }
+      return tx.get<{ id: number }>(
+        `INSERT INTO messages (uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, blocking, reply_to)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         RETURNING id, uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, blocking, reply_to, created_at`,
+        [messageUuid, sessionId, from, toAgent, channelName ?? null, projectId, content, priority, blocking, replyTo],
+      );
+    });
     if (!row) return json({ error: "Message insert returned no row" }, 500);
     // Clone before mention fanout: supported query adapters may reuse row
     // objects internally, while fanout performs additional INSERTs.
@@ -1100,6 +1461,12 @@ async function handleV1(
 
     const params: unknown[] = [];
     const rowsSql: string[] = [];
+    const channelProjectParams: Array<{
+      channel: string;
+      requestedProjectId: string | null;
+      projectParamIndex: number;
+    }> = [];
+    const projectIdx = cols.indexOf("project_id");
     for (let i = 0; i < items.length; i++) {
       const raw = items[i];
       if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
@@ -1151,14 +1518,48 @@ async function handleV1(
       );
       rowsSql.push(`(${placeholders.join(", ")})`);
       params.push(...values);
+      if (channel) {
+        channelProjectParams.push({
+          channel,
+          requestedProjectId: projectId ?? null,
+          projectParamIndex: base + projectIdx,
+        });
+      }
     }
 
-    const result = await client.query<{ id: number; from_agent: string; channel: string | null; content: string }>(
-      `INSERT INTO messages (${cols.join(", ")}) VALUES ${rowsSql.join(", ")}
-       ON CONFLICT (uuid) DO NOTHING
-       RETURNING id, from_agent, channel, content`,
-      params,
-    );
+    const result = await client.transaction(async (tx) => {
+      // Serialize every existing-channel insert with guarded project linkage.
+      // A SHARE lock makes an in-flight bulk insert finish before linkage takes
+      // its UPDATE lock, or wait until linkage commits and then inherit the
+      // channel's project. Unknown legacy backfill channels retain the existing
+      // free-text behavior because no guarded linkage can target a missing row.
+      const channelProjects = new Map<string, string | null>();
+      const channels = [...new Set(channelProjectParams.map((entry) => entry.channel))].sort();
+      for (const channel of channels) {
+        const channelRow = await tx.get<{ name: string; project_id: string | null }>(
+          "SELECT name, project_id FROM channels WHERE name = $1 FOR SHARE",
+          [channel],
+        );
+        if (channelRow) channelProjects.set(channel, channelRow.project_id ?? null);
+      }
+      for (const entry of channelProjectParams) {
+        if (!channelProjects.has(entry.channel)) continue;
+        const channelProjectId = channelProjects.get(entry.channel) ?? null;
+        if (entry.requestedProjectId !== null && entry.requestedProjectId !== channelProjectId) {
+          throw new Error(
+            `Message project ${entry.requestedProjectId} conflicts with channel project ${channelProjectId ?? "(unlinked)"}.`,
+          );
+        }
+        params[entry.projectParamIndex] = channelProjectId;
+      }
+
+      return tx.query<{ id: number; from_agent: string; channel: string | null; content: string }>(
+        `INSERT INTO messages (${cols.join(", ")}) VALUES ${rowsSql.join(", ")}
+         ON CONFLICT (uuid) DO NOTHING
+         RETURNING id, from_agent, channel, content`,
+        params,
+      );
+    });
     for (const row of result.rows) {
       if (row.channel && row.id != null) {
         try { await processMentions(client, Number(row.id), row.from_agent, row.channel, row.content); } catch { /* best-effort */ }

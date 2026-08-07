@@ -147,6 +147,72 @@ export interface SendMessageOptions {
   attachments?: { name: string; source_path: string }[];
   reply_to?: number;
   reply_to_uuid?: string;
+  /**
+   * Tenant routing is owned by the selected storage/auth context. Callers may
+   * not override it on a message write; a supplied value is rejected.
+   */
+  tenant_id?: string;
+}
+
+export interface ProjectMessageLinkageHash {
+  id: number;
+  uuid: string;
+  hash: string;
+  preserved_hash: string;
+}
+
+export interface ProjectMessageLinkagePriorProject {
+  id: number;
+  uuid: string;
+  project_id: string | null;
+}
+
+export interface ProjectMessageLinkagePlan {
+  operation: "apply";
+  dry_run: true;
+  channel: string;
+  project_id: string;
+  revision: string;
+  count: number;
+  target_count: number;
+  message_ids: number[];
+  message_uuids: string[];
+  before_hashes: ProjectMessageLinkageHash[];
+  before_project_ids: ProjectMessageLinkagePriorProject[];
+}
+
+export interface ProjectMessageLinkageReceipt extends Omit<ProjectMessageLinkagePlan, "dry_run"> {
+  dry_run: false;
+  receipt_id: string;
+  idempotency_key: string;
+  request_hash: string;
+  pre_revision: string;
+  post_revision: string;
+  target_revision: string;
+  target_message_ids: number[];
+  target_message_uuids: string[];
+  created_at: string;
+  replayed: boolean;
+}
+
+export interface ProjectMessageLinkageRollbackResult {
+  operation: "rollback";
+  dry_run: boolean;
+  source_receipt_id: string;
+  channel: string;
+  project_id: string;
+  expected_revision: string;
+  current_revision: string;
+  target_count: number;
+  target_message_ids: number[];
+  target_message_uuids: string[];
+  restored_count: number;
+  receipt_id?: string;
+  idempotency_key?: string;
+  request_hash?: string;
+  post_revision?: string;
+  created_at?: string;
+  replayed?: boolean;
 }
 
 export interface ReadMessagesOptions {

@@ -202,13 +202,10 @@ function assertNoSensitiveSendFields(opts: SendMessageOptions, serializedMetadat
   }
 }
 
-/** Refuse a send to a channel with no row, rather than writing an orphan. */
-function assertChannelExists(db: ReturnType<typeof getDb>, channel: string): void {
-  const row = db.prepare(`SELECT name FROM channels WHERE name = ?`).get(channel);
-  if (!row) throw new Error(unknownChannelMessage(channel));
-}
-
 export function sendMessage(opts: SendMessageOptions): Message {
+  if (opts.tenant_id !== undefined) {
+    throw new Error("tenant_id is owned by the active storage context and cannot be supplied on a message write.");
+  }
   assertMessageSize(opts.content);
   const metadata = opts.metadata ? JSON.stringify(opts.metadata) ?? null : null;
   assertNoSensitiveSendFields(opts, metadata);
@@ -248,45 +245,6 @@ export function sendMessage(opts: SendMessageOptions): Message {
   if (opts.reply_to_uuid && !requestedReplyUuid) {
     throw new Error("reply_to_uuid must be a valid message UUID.");
   }
-  if (requestedChannel && !requestedReplyUuid) {
-    assertChannelExists(db, requestedChannel);
-  }
-
-  let replyTo: number | null = null;
-  let channelName = requestedChannel;
-  let sessionId: string;
-  if (requestedReplyUuid) {
-    const parent = db.prepare(
-      "SELECT id, uuid, session_id, channel FROM messages WHERE uuid = ?"
-    ).get(requestedReplyUuid) as { id: number; uuid: string; session_id: string; channel: string | null } | null;
-    if (!parent) {
-      throw new Error(`reply_to_uuid message ${requestedReplyUuid} not found.`);
-    }
-    if (requestedReplyId !== null && requestedReplyId !== parent.id) {
-      throw new Error(
-        `reply_to identity mismatch: id ${requestedReplyId} belongs to a different message than UUID ${requestedReplyUuid}.`
-      );
-    }
-    const parentChannel = parent.channel ? normalizeChannelName(parent.channel) : null;
-    if (requestedChannel !== null && requestedChannel !== parentChannel) {
-      throw new Error(
-        `reply channel ${requestedChannel} does not match parent channel ${parentChannel ?? "(direct message)"}.`
-      );
-    }
-    if (explicitSession && explicitSession !== parent.session_id) {
-      throw new Error(
-        `reply session ${explicitSession} does not match parent session ${parent.session_id}.`
-      );
-    }
-    replyTo = parent.id;
-    channelName = parentChannel;
-    sessionId = parent.session_id;
-  } else {
-    sessionId = channelName
-      ? `channel:${channelName}`
-      : explicitSession ?? `${[opts.from, opts.to].sort().join("-")}-${randomUUID().slice(0, 8)}`;
-  }
-  const toAgent = channelName ?? opts.to;
   const normalizedPriority = (opts.priority === "low" || opts.priority === "normal" || opts.priority === "high" || opts.priority === "urgent")
     ? opts.priority
     : "normal";
@@ -300,30 +258,83 @@ export function sendMessage(opts: SendMessageOptions): Message {
     throw new Error("Message uuid must be a valid UUID.");
   }
 
-  const stmt = db.prepare(`
-    INSERT INTO messages (uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, working_dir, repository, branch, metadata, blocking, reply_to)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    RETURNING *
-  `);
+  const message = db.transaction(() => {
+    let replyTo: number | null = null;
+    let channelName = requestedChannel;
+    let sessionId: string;
+    if (requestedReplyUuid) {
+      const parent = db.prepare(
+        "SELECT id, uuid, session_id, channel FROM messages WHERE uuid = ?"
+      ).get(requestedReplyUuid) as { id: number; uuid: string; session_id: string; channel: string | null } | null;
+      if (!parent) {
+        throw new Error(`reply_to_uuid message ${requestedReplyUuid} not found.`);
+      }
+      if (requestedReplyId !== null && requestedReplyId !== parent.id) {
+        throw new Error(
+          `reply_to identity mismatch: id ${requestedReplyId} belongs to a different message than UUID ${requestedReplyUuid}.`
+        );
+      }
+      const parentChannel = parent.channel ? normalizeChannelName(parent.channel) : null;
+      if (requestedChannel !== null && requestedChannel !== parentChannel) {
+        throw new Error(
+          `reply channel ${requestedChannel} does not match parent channel ${parentChannel ?? "(direct message)"}.`
+        );
+      }
+      if (explicitSession && explicitSession !== parent.session_id) {
+        throw new Error(
+          `reply session ${explicitSession} does not match parent session ${parent.session_id}.`
+        );
+      }
+      replyTo = parent.id;
+      channelName = parentChannel;
+      sessionId = parent.session_id;
+    } else {
+      sessionId = channelName
+        ? `channel:${channelName}`
+        : explicitSession ?? `${[opts.from, opts.to].sort().join("-")}-${randomUUID().slice(0, 8)}`;
+    }
 
-  const row = stmt.get(
-    msgUuid,
-    sessionId,
-    opts.from,
-    toAgent,
-    channelName,
-    opts.project_id || null,
-    opts.content,
-    normalizedPriority,
-    opts.working_dir || null,
-    opts.repository || null,
-    opts.branch || null,
-    metadata,
-    blocking,
-    replyTo
-  ) as Record<string, unknown>;
+    let projectId = opts.project_id || null;
+    if (channelName) {
+      const channel = db.prepare("SELECT name, project_id FROM channels WHERE name = ?").get(channelName) as {
+        name: string;
+        project_id: string | null;
+      } | null;
+      if (!channel) {
+        // Preserve the documented legacy-orphan reply exception, but keep new
+        // non-reply channel sends fail-closed.
+        if (!requestedReplyUuid) throw new Error(unknownChannelMessage(channelName));
+      } else {
+        if (projectId !== null && projectId !== channel.project_id) {
+          throw new Error(`Message project ${projectId} conflicts with channel project ${channel.project_id ?? "(unlinked)"}.`);
+        }
+        projectId = channel.project_id;
+      }
+    }
 
-  const message = parseMessage(row);
+    const toAgent = channelName ?? opts.to;
+    const row = db.prepare(`
+      INSERT INTO messages (uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, working_dir, repository, branch, metadata, blocking, reply_to)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      RETURNING *
+    `).get(
+      msgUuid,
+      sessionId,
+      opts.from,
+      toAgent,
+      channelName,
+      projectId,
+      opts.content,
+      normalizedPriority,
+      opts.working_dir || null,
+      opts.repository || null,
+      opts.branch || null,
+      metadata,
+      blocking,
+      replyTo,
+    ) as Record<string, unknown>;
+    return parseMessage(row);
+  });
 
   // Handle file attachments
   if (validatedAttachments.length > 0) {
@@ -349,10 +360,10 @@ export function sendMessage(opts: SendMessageOptions): Message {
   }
 
   // Parse @mentions and create notification DMs (non-blocking)
-  if (channelName) {
+  if (message.channel) {
     const mentions = parseMentions(opts.content);
     if (mentions.length > 0) {
-      void processMentions(message.id, opts.from, channelName, mentions, db);
+      void processMentions(message.id, opts.from, message.channel, mentions, db);
     }
   }
 

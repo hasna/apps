@@ -116,4 +116,15 @@ describe("PG_MIGRATIONS", () => {
     expect(sql).toContain("if new.id is distinct from old.id");
     expect(sql).toContain("insert into _migrations (id) values (4)");
   });
+
+  test("project-message linkage receipts are append-only in PostgreSQL", () => {
+    expect(PG_MIGRATIONS.length).toBeGreaterThanOrEqual(5);
+    const sql = PG_MIGRATIONS[4].toLowerCase();
+    expect(sql).toContain("create table if not exists channel_project_linkage_receipts");
+    expect(sql).toContain("idempotency_key text not null unique");
+    expect(sql).toContain("source_receipt_id text references channel_project_linkage_receipts(id)");
+    expect(sql).toContain("before update or delete on channel_project_linkage_receipts");
+    expect(sql).toContain("channel project linkage receipts are immutable");
+    expect(sql).toContain("insert into _migrations (id) values (5)");
+  });
 });
