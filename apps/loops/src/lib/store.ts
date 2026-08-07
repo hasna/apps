@@ -47,6 +47,7 @@ import {
   WorkflowRunHasLiveStepsError,
   WorkflowRunNotRunningError,
 } from "./errors.js";
+import { clampTextToChars } from "./text-budget.js";
 import { genId, nowIso } from "./ids.js";
 import { dbPath } from "./paths.js";
 import { processStartTimeMs, sameProcessStart, verifiedProcessStart, START_TIME_TOLERANCE_MS } from "./process-identity.js";
@@ -982,15 +983,6 @@ export function persistedRunOutput(value: string | undefined | null): string | n
 /** Scrub structured string leaves before stringify, then scrub the encoded JSON. */
 export function persistedJson(value: unknown): string {
   return scrubSecrets(JSON.stringify(scrubSecretsDeep(value)));
-}
-
-function clampTextToChars(value: string, maxChars: number, reason: string): string {
-  if (value.length <= maxChars) return value;
-  const marker = `\n...[truncated by ${reason}]...\n`;
-  const budget = Math.max(0, maxChars - marker.length);
-  const headLength = Math.ceil(budget / 2);
-  const tailLength = Math.floor(budget / 2);
-  return `${value.slice(0, headLength)}${marker}${value.slice(value.length - tailLength)}`;
 }
 
 function boundedWorkflowEventPayloadJson(scrubbedJson: string): string {

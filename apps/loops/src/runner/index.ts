@@ -16,6 +16,7 @@ import type {
 import { executeLoop } from "../lib/executor.js";
 import { executeLoopTarget, type WorkflowExecutionStore } from "../lib/workflow-runner.js";
 import { buildDeploymentStatus, deploymentStatusLine } from "../lib/mode.js";
+import { budgetJsonBody } from "../lib/text-budget.js";
 import { packageVersion } from "../lib/version.js";
 
 const program = new Command();
@@ -26,6 +27,27 @@ const DEFAULT_RUNNER_POLL_INTERVAL_MS = 5_000;
 // certainly expired our lease (and may have handed the run to another runner),
 // so we abort execution instead of racing a second executor.
 const MAX_CONSECUTIVE_HEARTBEAT_FAILURES = 3;
+
+/**
+ * Byte budget for the finalize request body.
+ *
+ * The executor captures up to 256 KiB per stream (DEFAULT_MAX_OUTPUT_BYTES in
+ * lib/executor.ts) while the control plane accepts a 64 KiB body
+ * (DEFAULT_BODY_LIMIT_BYTES in api/index.ts) and rejects anything larger with
+ * 413 before the finalize handler runs. Sending the captured output verbatim
+ * therefore left the run row in `running` for good.
+ *
+ * The default sits below the control plane's limit on purpose: the runner
+ * cannot see the limit of the server it is talking to, that server may be older
+ * or configured lower, and a body that is refused costs the whole run. Override
+ * with HASNA_LOOPS_RUNNER_FINALIZE_MAX_BYTES where a deployment knows better.
+ */
+const DEFAULT_FINALIZE_BODY_LIMIT_BYTES = 56 * 1024;
+const FINALIZE_TRUNCATION_REASON = "loops runner finalize budget";
+/** Output tails carry the failure; heads carry the setup. Keep more of the tail. */
+const FINALIZE_TAIL_SHARE = 0.7;
+const FINALIZE_TEXT_FIELDS = ["stdout", "stderr", "error"] as const;
+const FINALIZE_RETRY_DELAY_MS = 500;
 
 program
   .name("loops-runner")
@@ -122,6 +144,30 @@ function endpoint(base: string, path: string): string {
   return new URL(path.replace(/^\//, ""), base.endsWith("/") ? base : `${base}/`).toString();
 }
 
+/**
+ * A non-2xx from the control plane, carrying the HTTP status and the server's
+ * error CODE as structured fields.
+ *
+ * Both are needed to tell the two run-abandoning failures apart: 413
+ * `body_too_large` is the runner's fault and is retryable with a smaller body,
+ * while 409 on a lapsed lease means another runner owns the run and no retry
+ * will help. Before this the only surviving signal was the string
+ * "loops-api request failed: <status>" inside a message the failure logger
+ * deliberately discards, so the two were indistinguishable after the fact.
+ */
+export class LoopsApiRequestError extends Error {
+  readonly status: number;
+  /** The server's `error` token (`body_too_large`, `run_not_found`, …) — an enum-like code, never free text. */
+  readonly code?: string;
+
+  constructor(status: number, code?: string) {
+    super(code ?? `loops-api request failed: ${status}`);
+    this.name = "LoopsApiRequestError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
 async function postJson(fetchImpl: typeof fetch, config: { apiUrl: string; token?: string }, path: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
   const response = await fetchImpl(endpoint(config.apiUrl, path), {
     method: "POST",
@@ -132,7 +178,7 @@ async function postJson(fetchImpl: typeof fetch, config: { apiUrl: string; token
     body: JSON.stringify(body),
   });
   const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
-  if (!response.ok) throw new Error(typeof payload.error === "string" ? payload.error : `loops-api request failed: ${response.status}`);
+  if (!response.ok) throw new LoopsApiRequestError(response.status, typeof payload.error === "string" ? payload.error : undefined);
   return payload;
 }
 
@@ -310,8 +356,33 @@ export async function runRunnerOnce(opts: RunRunnerOnceOptions = {}): Promise<Ru
   const completed: LoopRun[] = [];
   for (const claim of claims) {
     const result = await executeClaimWithHeartbeat(fetchImpl, config, claim, opts);
-    const finalized = await postJson(fetchImpl, config, `/v1/runs/${claim.run.id}/finalize`, {
-      claimToken: claim.claimToken,
+    const finalized = await finalizeClaimedRun(fetchImpl, config, claim, result, opts);
+    const run = (finalized.run ?? claim.run) as LoopRun;
+    completed.push(run);
+  }
+  return { ok: completed.every((run) => run.status === "succeeded"), claimed: claims.length, completed };
+}
+
+export function finalizeBodyLimitBytes(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.HASNA_LOOPS_RUNNER_FINALIZE_MAX_BYTES?.trim();
+  if (!raw) return DEFAULT_FINALIZE_BODY_LIMIT_BYTES;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 1_024) return DEFAULT_FINALIZE_BODY_LIMIT_BYTES;
+  return parsed;
+}
+
+/**
+ * Build a finalize body whose serialized size fits the control plane's request
+ * limit, clamping stdout/stderr/error together rather than one at a time.
+ */
+export function buildFinalizeBody(
+  claimToken: string,
+  result: ExecutorResult,
+  limitBytes: number,
+): { body: Record<string, unknown>; truncated: boolean; bytes: number } {
+  const budgeted = budgetJsonBody(
+    {
+      claimToken,
       status: result.status,
       finishedAt: result.finishedAt,
       durationMs: result.durationMs,
@@ -320,11 +391,113 @@ export async function runRunnerOnce(opts: RunRunnerOnceOptions = {}): Promise<Ru
       error: result.error,
       exitCode: result.exitCode,
       pid: result.pid,
-    });
-    const run = (finalized.run ?? claim.run) as LoopRun;
-    completed.push(run);
+    } as Record<string, unknown>,
+    FINALIZE_TEXT_FIELDS as unknown as string[],
+    limitBytes,
+    FINALIZE_TRUNCATION_REASON,
+    { tailShare: FINALIZE_TAIL_SHARE },
+  );
+  return { body: budgeted.body, truncated: budgeted.truncated, bytes: budgeted.bytes };
+}
+
+/**
+ * The status-bearing half of the finalize body, with every text field dropped.
+ *
+ * This is the compensating write: if a budgeted body is still refused, the run
+ * must not be left `running`, because a `running` run with `overlap: "skip"`
+ * suppresses its loop for good. Recording the terminal status without the
+ * output is a large loss of evidence and a small one next to losing the loop.
+ */
+function minimalFinalizeBody(claimToken: string, result: ExecutorResult, cause: string): Record<string, unknown> {
+  return {
+    claimToken,
+    status: result.status,
+    finishedAt: result.finishedAt,
+    durationMs: result.durationMs,
+    stdout: "",
+    stderr: "",
+    error: `[loops runner: output dropped, the control plane refused the finalize body (${cause})]`,
+    exitCode: result.exitCode,
+    pid: result.pid,
+  };
+}
+
+/**
+ * Finalize a claimed run, and do not let a refused request abandon it.
+ *
+ * The unguarded POST this replaces was the whole defect: any non-2xx threw, the
+ * throw propagated past every writer, and the run row was never touched again.
+ */
+async function finalizeClaimedRun(
+  fetchImpl: typeof fetch,
+  config: { apiUrl: string; token?: string },
+  claim: RunnerApiClaim,
+  result: ExecutorResult,
+  opts: RunRunnerOnceOptions,
+): Promise<Record<string, unknown>> {
+  const path = `/v1/runs/${claim.run.id}/finalize`;
+  const limitBytes = finalizeBodyLimitBytes(opts.env ?? process.env);
+  const { body, truncated } = buildFinalizeBody(claim.claimToken, result, limitBytes);
+  if (truncated) logRunnerFinalizeTruncated(claim.run.id, limitBytes);
+
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      return await postJson(fetchImpl, config, path, body);
+    } catch (error) {
+      lastError = error;
+      logRunnerFinalizeFailure(claim.run.id, error, attempt);
+      if (attempt < 2) await sleepMs(FINALIZE_RETRY_DELAY_MS);
+    }
   }
-  return { ok: completed.every((run) => run.status === "succeeded"), claimed: claims.length, completed };
+
+  // Last resort: keep the run's terminal status even though its output is lost.
+  const hadText = FINALIZE_TEXT_FIELDS.some((field) => typeof body[field] === "string" && (body[field] as string).length > 0);
+  if (hadText) {
+    try {
+      const minimal = await postJson(fetchImpl, config, path, minimalFinalizeBody(claim.claimToken, result, describeFailure(lastError)));
+      logRunnerFinalizeDegraded(claim.run.id);
+      return minimal;
+    } catch (error) {
+      logRunnerFinalizeFailure(claim.run.id, error, 3);
+    }
+  }
+  throw lastError;
+}
+
+function describeFailure(error: unknown): string {
+  return error instanceof LoopsApiRequestError ? (error.code ?? `status ${error.status}`) : "unavailable";
+}
+
+function logRunnerFinalizeTruncated(runId: string, limitBytes: number): void {
+  console.error(JSON.stringify({ evt: "loops_runner_finalize_truncated", runId, limitBytes }));
+}
+
+function logRunnerFinalizeDegraded(runId: string): void {
+  console.error(JSON.stringify({ evt: "loops_runner_finalize_degraded", runId }));
+}
+
+function logRunnerFinalizeFailure(runId: string, error: unknown, attempt: number): void {
+  console.error(JSON.stringify({
+    evt: "loops_runner_finalize_failed",
+    runId,
+    attempt,
+    ...apiErrorFields(error),
+  }));
+}
+
+/**
+ * Structured, non-secret-bearing fields describing a control-plane failure.
+ *
+ * The status and the server's error code are enum-like and safe to log. The
+ * error MESSAGE is not: it can carry a connection string, which is why
+ * `logRunnerCommandFailure` suppresses it (see the regression in index.test.ts).
+ */
+function apiErrorFields(error: unknown): Record<string, unknown> {
+  if (error instanceof LoopsApiRequestError) {
+    return { status: error.status, code: error.code ?? null, errorType: "error" };
+  }
+  return { errorType: error instanceof Error ? "error" : typeof error };
 }
 
 export async function runRunnerLoop(opts: RunRunnerLoopOptions = {}): Promise<RunnerLoopResult> {
@@ -550,9 +723,19 @@ if (import.meta.main) {
   });
 }
 
+/**
+ * Log a command failure without leaking provider details.
+ *
+ * The error MESSAGE stays suppressed on purpose — it can be a Postgres
+ * connection string, which is what the regression in index.test.ts pins. What
+ * is added here is the HTTP status and the server's error code for control-plane
+ * failures: both are enum-like tokens, and without them 413 (our body was too
+ * big) and 409 (our lease lapsed) are indistinguishable after the fact, which
+ * is why the abandoned-run defect went undiagnosed for as long as it did.
+ */
 export function logRunnerCommandFailure(error: unknown): void {
   console.error(JSON.stringify({
     evt: "loops_runner_command_failed",
-    errorType: error instanceof Error ? "error" : typeof error,
+    ...apiErrorFields(error),
   }));
 }
