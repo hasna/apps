@@ -342,6 +342,7 @@ export interface GuardedProjectReadRequest extends GuardedProjectMutationBounds 
 export interface GuardedProjectReadResult {
   ok: true;
   project_id: string;
+  project: Workspace;
   current_revision: string;
   response_control: GuardedProjectMutationControl;
 }

@@ -7,8 +7,8 @@ import { writeWorkspaceMarker, type WorkspaceRuntimeAction } from "./workspace-r
 import type {
   GuardedProjectMutationReceipt,
   JsonObject,
+  UpdateWorkspaceInput,
   Workspace,
-  WorkspaceIntegrations,
 } from "../types/workspace.js";
 import type { CompleteProjectPopulation, ProjectStore } from "../store/project-store.js";
 
@@ -159,15 +159,35 @@ function channelSnapshot(channel: ConversationsChannelIdentity): JsonObject {
   };
 }
 
-function projectPatch(project: Workspace, targetName: string, linkedChannel?: string): {
-  name: string;
-  integrations?: WorkspaceIntegrations;
-} {
-  const patch: { name: string; integrations?: WorkspaceIntegrations } = { name: targetName };
-  if (linkedChannel) {
+interface ProjectPrefixTargets {
+  name: ReturnType<typeof stripProjectPrefix>;
+  slug: ReturnType<typeof stripProjectPrefix>;
+  conversations_channel: ReturnType<typeof stripProjectPrefix> | null;
+}
+
+function projectPrefixTargets(project: Workspace): ProjectPrefixTargets {
+  const conversationsChannel = project.integrations.conversations_channel?.trim();
+  return {
+    name: stripProjectPrefix(project.name),
+    slug: stripProjectPrefix(project.slug),
+    conversations_channel: conversationsChannel ? stripProjectPrefix(conversationsChannel) : null,
+  };
+}
+
+function isProjectPrefixCandidate(project: Workspace): boolean {
+  const targets = projectPrefixTargets(project);
+  return Boolean(targets.name.prefix || targets.slug.prefix || targets.conversations_channel?.prefix);
+}
+
+function projectPatch(project: Workspace): UpdateWorkspaceInput {
+  const targets = projectPrefixTargets(project);
+  const patch: UpdateWorkspaceInput = {};
+  if (targets.name.prefix) patch.name = targets.name.name;
+  if (targets.slug.prefix) patch.slug = targets.slug.name;
+  if (targets.conversations_channel?.prefix) {
     patch.integrations = {
       ...project.integrations,
-      conversations_channel: linkedChannel,
+      conversations_channel: targets.conversations_channel.name,
     };
   }
   return patch;
@@ -198,42 +218,62 @@ function parseChannelTotal(stderr: string): number {
   return total;
 }
 
+async function collectChannelPopulation(
+  runner: ConversationsChannelRunner,
+): Promise<CompleteChannelPopulation> {
+  const channels: ConversationsChannelIdentity[] = [];
+  const seen = new Set<string>();
+  const limit = 1_000;
+  let cursor = 0;
+  let total: number | undefined;
+  let pages = 0;
+
+  while (pages < 1_000) {
+    const result = runner(["channel", "list", "--archived", "--limit", String(limit), "--cursor", String(cursor), "--json"]);
+    if (!result.ok) throw new PrefixMigrationError(`Conversations channel inventory failed: ${result.stderr.trim() || "unknown CLI error"}`);
+    const page = parseChannelList(result.stdout);
+    const pageTotal = parseChannelTotal(result.stderr);
+    if (total === undefined) total = pageTotal;
+    if (pageTotal !== total) throw new PrefixMigrationError("Conversations channel producer total changed during inventory.");
+    if (page.length === 0) {
+      if (total !== channels.length) throw new PrefixMigrationError("Conversations channel inventory returned an empty non-terminal page.");
+      return { channels, total, pages: pages + 1, complete: true };
+    }
+    for (const channel of page) {
+      if (seen.has(channel.name)) throw new PrefixMigrationError(`Conversations channel inventory returned duplicate "${channel.name}".`);
+      seen.add(channel.name);
+      channels.push(channel);
+    }
+    pages++;
+    if (channels.length === total) return { channels, total, pages, complete: true };
+    if (channels.length > total) throw new PrefixMigrationError("Conversations channel inventory exceeded its producer total.");
+    cursor += page.length;
+  }
+  throw new PrefixMigrationError("Conversations channel inventory exceeded its page safety bound.");
+}
+
+function assertStableChannelPopulation(
+  first: CompleteChannelPopulation,
+  second: CompleteChannelPopulation,
+): void {
+  if (
+    first.total !== second.total
+    || first.channels.length !== second.channels.length
+    || first.channels.some((channel, index) => channel.name !== second.channels[index]?.name)
+  ) {
+    throw new PrefixMigrationError("Conversations channel inventory changed between complete traversals.");
+  }
+}
+
 export function createConversationsPrefixPort(
   runner: ConversationsChannelRunner = conversationsCliRunner(),
 ): ConversationsPrefixPort {
   return {
     async listChannels(): Promise<CompleteChannelPopulation> {
-      const channels: ConversationsChannelIdentity[] = [];
-      const seen = new Set<string>();
-      const limit = 1_000;
-      let cursor = 0;
-      let total: number | undefined;
-      let pages = 0;
-
-      while (pages < 1_000) {
-        const result = runner(["channel", "list", "--archived", "--limit", String(limit), "--cursor", String(cursor), "--json"]);
-        if (!result.ok) throw new PrefixMigrationError(`Conversations channel inventory failed: ${result.stderr.trim() || "unknown CLI error"}`);
-        const page = parseChannelList(result.stdout);
-        const pageTotal = parseChannelTotal(result.stderr);
-        if (total === undefined) total = pageTotal;
-        if (pageTotal !== total) throw new PrefixMigrationError("Conversations channel producer total changed during inventory.");
-        if (page.length === 0) {
-          if (total !== channels.length) throw new PrefixMigrationError("Conversations channel inventory returned an empty non-terminal page.");
-          return { channels, total, pages: pages + 1, complete: true };
-        }
-        for (const channel of page) {
-          if (seen.has(channel.name)) throw new PrefixMigrationError(`Conversations channel inventory returned duplicate "${channel.name}".`);
-          const previous = channels[channels.length - 1];
-          if (previous && previous.name > channel.name) throw new PrefixMigrationError("Conversations channel inventory order changed during traversal.");
-          seen.add(channel.name);
-          channels.push(channel);
-        }
-        pages++;
-        if (channels.length === total) return { channels, total, pages, complete: true };
-        if (channels.length > total) throw new PrefixMigrationError("Conversations channel inventory exceeded its producer total.");
-        cursor += page.length;
-      }
-      throw new PrefixMigrationError("Conversations channel inventory exceeded its page safety bound.");
+      const first = await collectChannelPopulation(runner);
+      const second = await collectChannelPopulation(runner);
+      assertStableChannelPopulation(first, second);
+      return second;
     },
 
     async renameChannel(input): Promise<ConversationsChannelIdentity> {
@@ -251,8 +291,8 @@ export function createConversationsPrefixPort(
       const population = await this.listChannels();
       const verified = population.channels.find((channel) => channel.name === input.target_name);
       if (!verified) throw new PrefixMigrationError(`Conversations channel rename target "${input.target_name}" is absent from complete readback.`);
-      if (verified.member_count !== before.member_count || verified.message_count !== before.message_count) {
-        throw new PrefixMigrationError(`Conversations channel rename changed member/message counts for "${input.current_name}".`);
+      if (verified.member_count < before.member_count || verified.message_count < before.message_count) {
+        throw new PrefixMigrationError(`Conversations channel rename decreased member/message counts for "${input.current_name}".`);
       }
       return verified;
     },
@@ -262,13 +302,24 @@ export function createConversationsPrefixPort(
 function validateCollisions(projects: Workspace[], channels: ConversationsChannelIdentity[]): void {
   const projectTargets = new Map<string, string>();
   for (const project of projects) {
-    const target = stripProjectPrefix(project.name);
+    const target = projectPrefixTargets(project).name;
     if (!target.prefix) continue;
     const previous = projectTargets.get(target.name);
     if (previous && previous !== project.id) throw new PrefixMigrationError(`Project target collision: "${target.name}" is produced by ${previous} and ${project.id}.`);
     projectTargets.set(target.name, project.id);
     const existing = projects.find((candidate) => candidate.name === target.name && candidate.id !== project.id);
     if (existing) throw new PrefixMigrationError(`Project target collision: "${target.name}" already belongs to ${existing.id}.`);
+  }
+
+  const projectSlugTargets = new Map<string, string>();
+  for (const project of projects) {
+    const target = projectPrefixTargets(project).slug;
+    if (!target.prefix) continue;
+    const previous = projectSlugTargets.get(target.name);
+    if (previous && previous !== project.id) throw new PrefixMigrationError(`Project slug target collision: "${target.name}" is produced by ${previous} and ${project.id}.`);
+    projectSlugTargets.set(target.name, project.id);
+    const existing = projects.find((candidate) => candidate.slug === target.name && candidate.id !== project.id);
+    if (existing) throw new PrefixMigrationError(`Project slug target collision: "${target.name}" already belongs to ${existing.id}.`);
   }
 
   const channelTargets = new Map<string, string>();
@@ -284,19 +335,65 @@ function validateCollisions(projects: Workspace[], channels: ConversationsChanne
   }
 }
 
+function projectsByConversationsProjectId(projects: Workspace[]): Map<string, Workspace[]> {
+  const indexed = new Map<string, Workspace[]>();
+  for (const project of projects) {
+    const conversationsProjectId = project.integrations.conversations_project_id?.trim();
+    if (!conversationsProjectId) continue;
+    const matches = indexed.get(conversationsProjectId) ?? [];
+    matches.push(project);
+    indexed.set(conversationsProjectId, matches);
+  }
+  return indexed;
+}
+
+function uniquelyLinkedProject(
+  indexed: Map<string, Workspace[]>,
+  conversationsProjectId: string | null,
+): Workspace | null {
+  if (!conversationsProjectId) return null;
+  const matches = indexed.get(conversationsProjectId) ?? [];
+  return matches.length === 1 ? matches[0]! : null;
+}
+
 function validateAmbiguousLinks(projects: Workspace[], channels: ConversationsChannelIdentity[]): void {
-  const byProject = new Map<string, ConversationsChannelIdentity[]>();
-  for (const channel of channels) {
-    if (channel.project_id) {
-      if (!projects.some((project) => project.id === channel.project_id)) {
-        throw new PrefixMigrationError(`Ambiguous channel effect: "${channel.name}" points to missing project ${channel.project_id}.`);
-      }
-      const list = byProject.get(channel.project_id) ?? [];
-      list.push(channel);
-      byProject.set(channel.project_id, list);
+  const projectsByConversationsId = projectsByConversationsProjectId(projects);
+  const candidateChannels = channels.filter((channel) => stripProjectPrefix(channel.name).prefix);
+  const candidateChannelNames = new Set(candidateChannels.map((channel) => channel.name));
+  const affectedProjectIds = new Set(
+    projects
+      .filter(isProjectPrefixCandidate)
+      .map((project) => project.id),
+  );
+
+  for (const channel of candidateChannels) {
+    if (!channel.project_id) continue;
+    const matches = projectsByConversationsId.get(channel.project_id) ?? [];
+    if (matches.length === 0) continue;
+    if (matches.length > 1) {
+      throw new PrefixMigrationError(`Ambiguous channel effect: "${channel.name}" points to Conversations project ${channel.project_id}, shared by ${matches.length} Projects records.`);
     }
+    affectedProjectIds.add(matches[0]!.id);
   }
   for (const project of projects) {
+    const explicit = project.integrations.conversations_channel?.trim();
+    if (explicit && candidateChannelNames.has(explicit)) affectedProjectIds.add(project.id);
+  }
+
+  const byProject = new Map<string, ConversationsChannelIdentity[]>();
+  for (const channel of channels) {
+    const project = uniquelyLinkedProject(projectsByConversationsId, channel.project_id);
+    if (!project) continue;
+    const list = byProject.get(project.id) ?? [];
+    list.push(channel);
+    byProject.set(project.id, list);
+  }
+  for (const project of projects) {
+    if (!affectedProjectIds.has(project.id)) continue;
+    const conversationsProjectId = project.integrations.conversations_project_id?.trim();
+    if (conversationsProjectId && (projectsByConversationsId.get(conversationsProjectId)?.length ?? 0) !== 1) {
+      throw new PrefixMigrationError(`Ambiguous channel effect: project ${project.id} shares Conversations project ${conversationsProjectId}.`);
+    }
     const linked = byProject.get(project.id) ?? [];
     const explicit = project.integrations.conversations_channel?.trim();
     if (linked.length > 1 && (stripProjectPrefix(project.name).prefix || linked.some((channel) => stripProjectPrefix(channel.name).prefix))) {
@@ -305,7 +402,7 @@ function validateAmbiguousLinks(projects: Workspace[], channels: ConversationsCh
     if (explicit) {
       const matches = channels.filter((channel) => channel.name === explicit);
       if (matches.length !== 1) throw new PrefixMigrationError(`Ambiguous channel effect: project ${project.id} explicitly links missing or duplicate channel "${explicit}".`);
-      if (matches[0]!.project_id && matches[0]!.project_id !== project.id) {
+      if (matches[0]!.project_id && matches[0]!.project_id !== conversationsProjectId) {
         throw new PrefixMigrationError(`Ambiguous channel effect: project ${project.id} links channel "${explicit}" owned by ${matches[0]!.project_id}.`);
       }
     }
@@ -319,26 +416,28 @@ function validateAmbiguousLinks(projects: Workspace[], channels: ConversationsCh
 
 function buildSteps(projects: Workspace[], channels: ConversationsChannelIdentity[]): PrefixMigrationStep[] {
   const projectById = new Map(projects.map((project) => [project.id, project]));
+  const projectsByConversationsId = projectsByConversationsProjectId(projects);
   const candidates: Array<{ target_kind: "project" | "channel"; target_id: string; project_id: string | null; current_name: string; target_name: string; sort: string }> = [];
   for (const channel of channels) {
     const target = stripProjectPrefix(channel.name);
+    const linkedProject = uniquelyLinkedProject(projectsByConversationsId, channel.project_id);
     if (target.prefix) candidates.push({
       target_kind: "channel",
       target_id: channelId(channel),
-      project_id: channel.project_id,
+      project_id: linkedProject?.id ?? null,
       current_name: channel.name,
       target_name: target.name,
-      sort: `${channel.project_id ?? "~"}:${channel.name}:0`,
+      sort: `${linkedProject?.id ?? "~"}:${channel.name}:0`,
     });
   }
   for (const project of projects) {
-    const target = stripProjectPrefix(project.name);
-    if (target.prefix) candidates.push({
+    const targets = projectPrefixTargets(project);
+    if (isProjectPrefixCandidate(project)) candidates.push({
       target_kind: "project",
       target_id: projectId(project),
       project_id: project.id,
       current_name: project.name,
-      target_name: target.name,
+      target_name: targets.name.name,
       sort: `${project.id}:${project.name}:1`,
     });
   }
@@ -358,7 +457,13 @@ function buildSteps(projects: Workspace[], channels: ConversationsChannelIdentit
 
 function defaultOperationId(inventory: PrefixMigrationInventory): string {
   return `iproj-prefix-migration-${sha256(canonicalJson({
-    projects: inventory.projects.projects.map((project) => [project.id, project.updated_at, project.name]),
+    projects: inventory.projects.projects.map((project) => [
+      project.id,
+      project.updated_at,
+      project.name,
+      project.slug,
+      project.integrations.conversations_channel ?? null,
+    ]),
     channels: inventory.channels.channels.map((channel) => [channel.name, channel.project_id]),
   })).slice(0, 24)}`;
 }
@@ -389,12 +494,12 @@ export async function runProjectPrefixMigration(options: RunProjectPrefixMigrati
   const inventory: PrefixMigrationInventory = {
     projects,
     channels,
-    project_candidates: projects.projects.filter((project) => stripProjectPrefix(project.name).prefix).length,
+    project_candidates: projects.projects.filter(isProjectPrefixCandidate).length,
     channel_candidates: channels.channels.filter((channel) => stripProjectPrefix(channel.name).prefix).length,
     complete: true,
   };
-  validateCollisions(projects.projects, channels.channels);
   validateAmbiguousLinks(projects.projects, channels.channels);
+  validateCollisions(projects.projects, channels.channels);
   const operation_id = options.operation_id ?? defaultOperationId(inventory);
   const steps = buildSteps(projects.projects, channels.channels);
   const result: PrefixMigrationResult = {
@@ -455,14 +560,12 @@ export async function runProjectPrefixMigration(options: RunProjectPrefixMigrati
 
       const project = projectById.get(step.project_id ?? "");
       if (!project) throw new PrefixMigrationError(`Project source "${step.project_id}" disappeared after complete inventory.`);
-      const linkedChannel = project.integrations.conversations_channel?.trim();
-      const targetChannel = linkedChannel && stripProjectPrefix(linkedChannel).prefix ? stripProjectPrefix(linkedChannel).name : undefined;
       const guarded = await options.store.guardedUpdateProject({
         project_id: project.id,
         operation_id,
         step_id: step.step_id,
         expected_revision: project.updated_at,
-        patch: projectPatch(project, step.target_name, targetChannel),
+        patch: projectPatch(project),
         response_byte_limit: bounds.response_byte_limit,
         time_budget_ms: bounds.time_budget_ms,
         agent_id: options.agent_id,

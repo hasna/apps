@@ -1,4 +1,15 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  PROJECTS_HOME_ENV,
+  ensureProjectStore,
+  linkProjectLoop,
+  type LoopsClientLike,
+  type ProjectStoreProject,
+} from "../db/project-store.js";
+import { getWorkspace } from "../db/workspaces.js";
 import { resolveProjectStore, __resetProjectStore } from "./project-store.js";
 
 describe("projects store resolution (client-flip)", () => {
@@ -166,6 +177,188 @@ describe("projects store api transport (roots/agents/recipes)", () => {
     await expect(store.acquireLock({ key: "k" })).rejects.toThrow(/local-only/);
   });
 
+  // Regression for the vacuous-read defect (todos 4c17afb1): the per-project app
+  // store is a machine-local sqlite FILE (data/<id>/project.db), and the server
+  // exposes no loop endpoints at all — so in api mode the ApiProjectStore used to
+  // answer every app-store read from a hardcoded empty summary. `loops list`
+  // returned `loops: []` and `store inspect` reported `exists: false` /
+  // `loop_links: 0` against a file that demonstrably held rows, at rc=0.
+  //
+  // That is the vacuous-check shape in its worst form: there was NO input for
+  // which the reader returned non-empty, so every zero looked like a real answer.
+  // These tests pin the fix the tmux-profile precedent already established —
+  // machine-local resources resolve against local sqlite in BOTH transports.
+  //
+  // The `calls` assertion is load-bearing in the other direction: it proves the
+  // rows came from the local store rather than from the network, so a stub that
+  // merely returned data could not make these pass.
+  describe("machine-local app store resolves in api mode (todos 4c17afb1)", () => {
+    const project: ProjectStoreProject = {
+      id: "wks_apiloops",
+      name: "Api Loops",
+      slug: "api-loops",
+      status: "active",
+      kind: "project",
+      primary_path: null,
+    };
+
+    const fakeLoops: LoopsClientLike = {
+      get(idOrName) {
+        if (idOrName !== "loop_api") throw new Error("missing");
+        return {
+          id: "loop_api",
+          name: "Api Loop",
+          status: "active",
+          schedule: { type: "interval", everyMs: 3_600_000 },
+          target: { type: "command" },
+          nextRunAt: "2026-08-04T00:00:00.000Z",
+          updatedAt: "2026-08-03T00:00:00.000Z",
+        };
+      },
+      runs: () => [],
+    };
+
+    // Isolation is asserted, not assumed: every test drives a fresh temp
+    // PROJECTS_HOME and the finally-block removes it, so no production store
+    // under ~/.hasna/projects is opened, migrated, or written by this suite.
+    // Awaits `fn` before restoring the env and removing the temp root. Declared
+    // synchronous previously, while every call site passes an async callback, so
+    // the finally block ran when the promise was RETURNED rather than when it
+    // resolved -- restoring PROJECTS_HOME and deleting the root at the callback's
+    // first await. The comment above asserted isolation that the helper did not
+    // actually provide.
+    async function withTempHome<T>(fn: (root: string) => T | Promise<T>): Promise<T> {
+      const root = mkdtempSync(join(tmpdir(), "store-api-loops-"));
+      const previous = process.env[PROJECTS_HOME_ENV];
+      process.env[PROJECTS_HOME_ENV] = root;
+      try {
+        return await fn(root);
+      } finally {
+        if (previous === undefined) delete process.env[PROJECTS_HOME_ENV];
+        else process.env[PROJECTS_HOME_ENV] = previous;
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+
+    test("listLoopLinks returns the rows on disk instead of a hardcoded []", async () => {
+      await withTempHome(async () => {
+        ensureProjectStore(project);
+        linkProjectLoop(project, { loop_id: "loop_api", loop_name: "Api Loop", role: "maintenance" });
+
+        const { store, calls } = stubStore(() => ({}));
+        const links = await store.listLoopLinks(project as never);
+
+        expect(links).toHaveLength(1);
+        expect(links[0]?.loop_id).toBe("loop_api");
+        expect(calls).toHaveLength(0); // read the local file, not the network
+      });
+    });
+
+    test("inspectAppStore reports exists:true and the real loop_links count", async () => {
+      await withTempHome(async () => {
+        ensureProjectStore(project);
+        linkProjectLoop(project, { loop_id: "loop_api", loop_name: "Api Loop", role: "maintenance" });
+
+        const { store } = stubStore(() => ({}));
+        const summary = await store.inspectAppStore(project as never);
+
+        // The exact pair the audit measured as false/0 on a 5-row store.
+        expect(summary.exists).toBe(true);
+        expect(summary.counts.loop_links).toBe(1);
+      });
+    });
+
+    test("inspectAppStore reports a missing store without creating it", async () => {
+      await withTempHome(async () => {
+        const { store } = stubStore(() => ({}));
+        const summary = await store.inspectAppStore(project as never);
+
+        expect(summary.exists).toBe(false);
+        expect(summary.schema_version).toBeNull();
+        expect(summary.counts).toEqual({ data_models: 0, data_records: 0, loop_links: 0 });
+        expect(existsSync(summary.paths.db_path)).toBe(false);
+      });
+    });
+
+    test("inspectAppStoreWithLoops surfaces the linked loop, not loops:[]", async () => {
+      await withTempHome(async () => {
+        ensureProjectStore(project);
+        linkProjectLoop(project, { loop_id: "loop_api", loop_name: "Api Loop", role: "maintenance" });
+
+        const { store } = stubStore(() => ({}));
+        const summary = await store.inspectAppStoreWithLoops(project as never, { loopsClient: fakeLoops } as never);
+
+        expect(summary.loops).toHaveLength(1);
+        expect(summary.loops?.[0]?.link.loop_id).toBe("loop_api");
+      });
+    });
+
+    // The instrument must be able to return a genuine zero, or the tests above
+    // only prove it always returns rows. An empty store must still read empty.
+    test("negative control: an empty store still reports 0 links in api mode", async () => {
+      await withTempHome(async () => {
+        ensureProjectStore(project);
+
+        const { store } = stubStore(() => ({}));
+        const summary = await store.inspectAppStore(project as never);
+
+        expect(summary.exists).toBe(true);
+        expect(summary.counts.loop_links).toBe(0);
+        expect(await store.listLoopLinks(project as never)).toEqual([]);
+      });
+    });
+
+    // Regression for the write half. Making the app store resolve in api mode
+    // also made createDataModel / createDataRecord / linkLoop reachable there,
+    // and each routes through withLock(project.id, ...). workspace_locks
+    // .workspace_id is FK-constrained to the machine-local `workspaces` table,
+    // so an api-created / cloud-only project -- which by definition has no local
+    // registry row -- failed with "FOREIGN KEY constraint failed" before ever
+    // touching its project.db. The reads this PR fixes were fine; the writes it
+    // newly enabled were not.
+    //
+    // `project` here is deliberately never inserted into the local `workspaces`
+    // table, which is exactly the cloud-only shape.
+    test("api-mode writes succeed for a cloud-only project with no local workspaces row", async () => {
+      await withTempHome(async () => {
+        ensureProjectStore(project);
+
+        // Precondition: the local registry genuinely has no row for this id, so
+        // the test cannot pass by accident on a project that happens to be local.
+        expect(getWorkspace(project.id)).toBeNull();
+
+        const { store } = stubStore(() => ({}));
+
+        const link = await store.linkLoop(
+          project as never,
+          { loop_id: "loop_api", loop_name: "Api Loop", role: "maintenance" } as never,
+          { source: "cli" } as never,
+        );
+        expect(link.loop_id).toBe("loop_api");
+
+        const model = await store.createDataModel(
+          project as never,
+          { name: "notes", schema: { fields: [] } } as never,
+          { source: "cli" } as never,
+        );
+        expect(model.name).toBe("notes");
+
+        // The write actually landed in the machine-local store, rather than the
+        // call merely not throwing.
+        expect(await store.listLoopLinks(project as never)).toHaveLength(1);
+
+        // The lock is released, not leaked, so a second write still succeeds.
+        const second = await store.createDataModel(
+          project as never,
+          { name: "notes-2", schema: { fields: [] } } as never,
+          { source: "cli" } as never,
+        );
+        expect(second.name).toBe("notes-2");
+      });
+    });
+
+  });
+
   // Regression: resolving "." (or any path/marker target) in api mode must NOT
   // hit the API — the URL parser collapses `/projects/.` to the collection
   // route `/projects/`, returning a LIST payload that then masqueraded as a
@@ -205,9 +398,32 @@ describe("projects store api transport (roots/agents/recipes)", () => {
 
   test("guardedReadProject uses the bounded exact-id API route and rejects slugs before transport", async () => {
     const projectId = "wks_guardedread0001";
+    const project = {
+      id: projectId,
+      slug: "guarded-read",
+      name: "Guarded Read",
+      description: null,
+      kind: "generic" as const,
+      status: "active" as const,
+      root_id: null,
+      recipe_id: null,
+      canonical_machine: null,
+      primary_path: null,
+      git_remote: null,
+      s3_bucket: null,
+      s3_prefix: null,
+      tags: [],
+      integrations: {},
+      metadata: {},
+      last_opened_at: null,
+      created_at: "2026-08-07 00:00:00",
+      updated_at: "2026-08-07 00:00:01",
+      synced_at: null,
+    };
     const response = {
       ok: true as const,
       project_id: projectId,
+      project,
       current_revision: "2026-08-07 00:00:01",
       response_control: {
         response_byte_limit: 16_384,
@@ -235,6 +451,7 @@ describe("projects store api transport (roots/agents/recipes)", () => {
     expect(result).toMatchObject({
       ok: true,
       project_id: projectId,
+      project: { id: projectId, slug: "guarded-read" },
       current_revision: "2026-08-07 00:00:01",
       response_control: {
         response_byte_limit: 16_384,

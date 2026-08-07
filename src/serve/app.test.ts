@@ -110,6 +110,25 @@ describe("projects-serve probes", () => {
     const spec = await res.json();
     expect(spec.openapi).toBe("3.1.0");
     expect(spec.paths["/v1/projects"]).toBeDefined();
+    expect(spec.paths["/v1/projects/{id}/guarded-metadata"].get.operationId).toBe("guardedReadProject");
+    expect(spec.paths["/v1/projects/{id}/guarded-metadata"].post.operationId).toBe("guardedUpdateProject");
+    expect(spec.paths["/v1/projects/{id}/guarded-metadata/receipts"].get.operationId).toBe("lookupGuardedProjectMutationReceipt");
+    expect(spec.paths["/v1/projects/{id}/guarded-metadata/rollback"].post.operationId).toBe("rollbackGuardedProjectMutation");
+    expect(spec.components.schemas.GuardedProjectRead.required).toContain("project");
+    expect(spec.components.schemas.Workspace.required).toEqual(expect.arrayContaining([
+      "s3_bucket",
+      "s3_prefix",
+      "last_opened_at",
+      "synced_at",
+    ]));
+    expect(spec.components.schemas.GuardedProjectMutationResult.properties.after.anyOf).toEqual([
+      { $ref: "#/components/schemas/Workspace" },
+      { type: "null" },
+    ]);
+    expect(spec.components.schemas.GuardedProjectMutationResult.properties.receipt.anyOf).toEqual([
+      { $ref: "#/components/schemas/GuardedProjectMutationReceipt" },
+      { type: "null" },
+    ]);
   });
 });
 
@@ -426,6 +445,7 @@ describe("projects-serve auth", () => {
         return {
           ok: true,
           project_id: input.project_id,
+          project: fakeWorkspace({ id: input.project_id, slug: "guarded-read", name: "Guarded Read" }),
           current_revision: "2026-08-07 00:00:01",
           response_control: {
             response_byte_limit: input.response_byte_limit,
@@ -448,6 +468,7 @@ describe("projects-serve auth", () => {
     const body = await res.json();
     expect(calls).toEqual([{ project_id: projectId, response_byte_limit: 16_384, time_budget_ms: 5_000 }]);
     expect(body.project_id).toBe(projectId);
+    expect(body.project).toMatchObject({ id: projectId, slug: "guarded-read", name: "Guarded Read" });
     expect(body.current_revision).toBe("2026-08-07 00:00:01");
     expect(body.response_control.complete).toBe(true);
     expect(body.response_control.truncated).toBe(false);

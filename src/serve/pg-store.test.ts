@@ -184,6 +184,7 @@ describe("pg-store guarded exact project read", () => {
     });
 
     expect(result.project_id).toBe(workspace.id);
+    expect(result.project).toMatchObject({ id: workspace.id, slug: workspace.slug, name: workspace.name });
     expect(result.current_revision).toBe(workspace.updated_at);
     expect(result.response_control.complete).toBe(true);
     expect(result.response_control.truncated).toBe(false);

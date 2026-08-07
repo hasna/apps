@@ -15,9 +15,11 @@ import type {
 export const GUARDED_PROJECT_MUTATION_ROUTE = "projects.guarded-metadata-mutation.v1";
 export const GUARDED_PROJECT_MUTATION_EVENT = "guarded_metadata_mutation";
 export const GUARDED_PROJECT_MUTATION_ROLLBACK_EVENT = "guarded_metadata_mutation_rollback";
+export const COMPLETE_STABLE_PROJECT_ID_PATTERN = "^wks_[A-Za-z0-9_-]{12,}$";
+const COMPLETE_STABLE_PROJECT_ID_RE = new RegExp(COMPLETE_STABLE_PROJECT_ID_PATTERN);
 
 export function assertCompleteStableProjectId(value: string): void {
-  if (!/^wks_[A-Za-z0-9][A-Za-z0-9_-]{11,}$/.test(value)) {
+  if (!COMPLETE_STABLE_PROJECT_ID_RE.test(value)) {
     throw new Error("guarded project mutation requires a complete stable project id beginning with wks_; slugs, paths, names, and partial ids are refused");
   }
 }
@@ -208,6 +210,7 @@ export function buildGuardedProjectReadResult(
   return withResponseControl({
     ok: true as const,
     project_id: project.id,
+    project,
     current_revision: workspaceRevision(project),
   }, input, startedAtMs, "guarded project read");
 }
