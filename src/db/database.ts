@@ -6,14 +6,23 @@ import { runMigrations } from "./schema.js";
 export const PROJECTS_DB_PATH_ENV = "HASNA_PROJECTS_DB_PATH";
 export const LEGACY_WORKSPACES_DB_PATH_ENV = "HASNA_WORKSPACES_DB_PATH";
 
-export function getDbPath(): string {
-  if (process.env[PROJECTS_DB_PATH_ENV]) {
-    return process.env[PROJECTS_DB_PATH_ENV];
+/**
+ * Resolve the local sqlite path.
+ *
+ * `env` is injectable so that callers which must REPORT the path (store
+ * provenance) can resolve it for an arbitrary environment without touching the
+ * process, and so tests never have to mutate `process.env` to ask where a
+ * store would live. Defaulting to `process.env` keeps every existing caller
+ * unchanged.
+ */
+export function getDbPath(env: Record<string, string | undefined> = process.env): string {
+  if (env[PROJECTS_DB_PATH_ENV]) {
+    return env[PROJECTS_DB_PATH_ENV];
   }
-  if (process.env[LEGACY_WORKSPACES_DB_PATH_ENV]) {
-    return process.env[LEGACY_WORKSPACES_DB_PATH_ENV];
+  if (env[LEGACY_WORKSPACES_DB_PATH_ENV]) {
+    return env[LEGACY_WORKSPACES_DB_PATH_ENV];
   }
-  const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
+  const home = env["HOME"] || env["USERPROFILE"] || "~";
   return join(home, ".hasna", "projects", "projects.db");
 }
 

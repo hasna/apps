@@ -31,7 +31,39 @@ import {
   type WorkspaceCreationPlanAction,
 } from "../../lib/workspace-plan.js";
 import { doctorWorkspace } from "../../lib/workspace-doctor.js";
-import { resolveProjectStore, type ProjectStore } from "../../store/project-store.js";
+import {
+  describeProjectStore,
+  resolveProjectStore as resolveProjectStoreFromEnv,
+  type ProjectStore,
+} from "../../store/project-store.js";
+
+let storeProvenanceAnnounced = false;
+
+/**
+ * Resolve the registry store and, at most once per process, say on stderr WHICH
+ * store answered when the transport fell back to local sqlite.
+ *
+ * todos 8bebf379: with `HASNA_PROJECTS_API_URL` unset, `projects list --json`
+ * returned 174 rows instead of 2539 — same command, same rc=0, and an stderr of
+ * exactly 0 bytes. Every cron job, systemd unit and credential-zero sandbox on
+ * the fleet inherits that environment, so each of them was reporting 7% of the
+ * registry as the whole of it, confidently.
+ *
+ * The notice goes to stderr so a `--json` consumer's stdout stays a clean
+ * document, and it fires once so a multi-store command does not repeat it. It
+ * is deliberately NOT emitted for an explicitly declared local mode: a warning
+ * on a correctly configured machine is how a warning gets ignored on a
+ * misconfigured one.
+ */
+function resolveProjectStore(): ProjectStore {
+  const store = resolveProjectStoreFromEnv();
+  if (!storeProvenanceAnnounced) {
+    storeProvenanceAnnounced = true;
+    const { notice } = describeProjectStore();
+    if (notice) console.error(chalk.yellow(notice));
+  }
+  return store;
+}
 
 // Drop keys whose value is `undefined` so a cloud PATCH only carries fields the
 // caller actually set (an explicit `null` still clears the field server-side).
@@ -1924,13 +1956,17 @@ function registerProjectCommands(program: Command): void {
             exclude_eval_artifacts: !opts.includeEvals,
             limit: parsePositiveInteger(opts.limit, "--limit"),
           });
+          // Idempotent belt-and-braces: BOTH transports now apply the eval
+          // predicate themselves, so this drops nothing. It used to be the only
+          // thing applying it on the api path, which is exactly what put
+          // `total`/`offset` in the server's row space while `count` and the
+          // rows were in the client's (todos 4a2e375f).
           const projects = filterProjectEvalArtifacts(page.projects, opts.includeEvals);
           const rows = projects.map(projectWithManagement);
-          // Eval fixtures are dropped client-side on the api path (the server
-          // has no such filter), so a complete read knows its own true total;
-          // a bounded one can only report the server's, minus what it dropped.
-          const dropped = page.projects.length - projects.length;
-          const total = page.complete ? rows.length : Math.max(page.total - dropped, rows.length);
+          // `page.total` is now counted with the same predicate as the rows, so
+          // it can be reported as-is instead of being reconstructed from a
+          // client-side drop count.
+          const total = page.total;
           if (opts.meta) {
             printObject(
               {

@@ -19,6 +19,8 @@
 // SAFETY: the api transport carries a bearer key ONLY (never a DB DSN). The key
 // value is never logged or embedded in output.
 
+import { statSync } from "node:fs";
+import { getDbPath } from "../db/database.js";
 import {
   acquireWorkspaceLock,
   addWorkspaceLocation as dbAddWorkspaceLocation,
@@ -68,13 +70,17 @@ import {
   type WorkspaceFilter,
 } from "../db/workspaces.js";
 import {
+  firstPresentEnv,
   resolveStorageClient,
+  resolveTransport,
+  storageEnvKeys,
   type Env,
   type StorageClient,
   type QueryParams,
 } from "../http/client.js";
 import { resolveRegisteredProjectTargetOrThrow, type ProjectResolverOptions } from "../lib/project-resolver.js";
-import { collectCompletePages, collectPages, type CompletePage } from "./paginate.js";
+import { collectCompletePages, collectPages, type CompletePage, type CompletePopulation } from "./paginate.js";
+import { isProjectEvalArtifact } from "../lib/project-eval-artifacts.js";
 import {
   createProjectDataModel as dbCreateProjectDataModel,
   createProjectDataRecord as dbCreateProjectDataRecord,
@@ -874,25 +880,74 @@ class ApiProjectStore implements ProjectStore {
    * whatever the first response actually contained, so the cap is never
    * hardcoded here and a server-side change needs no client release.
    */
+  /**
+   * The one filter the registry cannot express, applied here instead.
+   *
+   * The API models no eval-fixture concept, so `exclude_eval_artifacts` is not
+   * in `listQuery()` and cannot be pushed down the way status/kind/tag are. It
+   * therefore has to be applied client-side — and it must be applied BEFORE
+   * limit/offset, or the caller's window addresses a different row space from
+   * the rows and the total it gets back.
+   *
+   * That drift is the defect in todos 4a2e375f: `--offset 2530` addressed the
+   * server's 2603-row space while the CLI printed a 2539-row count, so paging
+   * by the CLI's own numbers re-read 73 rows and skipped others. The local
+   * store never had the bug because `workspaceFilterSql` is shared between
+   * listing and counting, deliberately, "so listing and counting can never
+   * drift apart" — this restores the same invariant on the api transport.
+   */
+  private evalArtifactPredicate(filter: WorkspaceFilter): ((row: Workspace) => boolean) | null {
+    if (!filter.exclude_eval_artifacts) return null;
+    return (row) => !isProjectEvalArtifact(row);
+  }
+
+  /**
+   * Rows matching a client-side predicate, as ONE row space.
+   *
+   * Cost is honest and stated rather than hidden: a filtered read walks the
+   * whole population, because the number of rows surviving a client-side
+   * predicate is not knowable without looking at all of them. The unbounded
+   * read already did exactly this walk; what changes is that a `--limit` or
+   * `--offset` read now pays for it too, in exchange for a total and a window
+   * that mean the same thing. A lower-bound "total" would be cheaper and is
+   * precisely the drift being fixed.
+   */
+  private async listFilteredWindow(
+    filter: WorkspaceFilter,
+    keep: (row: Workspace) => boolean,
+  ): Promise<{ rows: Workspace[]; total: number }> {
+    const { limit: _limit, offset: _offset, ...base } = filter;
+    const population = await this.fetchCompletePopulation(base);
+    const matching = population.rows.filter(keep);
+    const offset = filter.offset ?? 0;
+    const end = filter.limit === undefined ? undefined : offset + filter.limit;
+    return { rows: matching.slice(offset, end), total: matching.length };
+  }
+
   async listProjects(filter?: WorkspaceFilter): Promise<Workspace[]> {
-    if (filter?.limit === undefined && filter?.offset === undefined) {
-      return (await this.listProjectsComplete(filter)).projects;
+    const f = filter ?? {};
+    const keep = this.evalArtifactPredicate(f);
+    if (keep) return (await this.listFilteredWindow(f, keep)).rows;
+    if (f.limit === undefined && f.offset === undefined) {
+      return (await this.listProjectsComplete(f)).projects;
     }
     return collectPages<Workspace>(
-      async (params) => (await this.fetchProjectPage(filter, params)).rows,
+      async (params) => (await this.fetchProjectPage(f, params)).rows,
       (row) => row?.id,
       {
-        ...(filter?.limit !== undefined ? { want: filter.limit } : {}),
-        ...(filter?.offset !== undefined ? { offset: filter.offset } : {}),
+        ...(f.limit !== undefined ? { want: f.limit } : {}),
+        ...(f.offset !== undefined ? { offset: f.offset } : {}),
       },
     );
   }
 
-  async listProjectsComplete(filter?: Omit<WorkspaceFilter, "limit" | "offset">): Promise<CompleteProjectPopulation> {
-    const f = filter ?? {};
-    const population = await collectCompletePages<Workspace>(
+  /** The raw server population, before any client-side predicate. */
+  private async fetchCompletePopulation(
+    filter: Omit<WorkspaceFilter, "limit" | "offset">,
+  ): Promise<CompletePopulation<Workspace>> {
+    return collectCompletePages<Workspace>(
       async (params): Promise<CompletePage<Workspace>> => {
-        const page = await this.fetchProjectPage(f, params);
+        const page = await this.fetchProjectPage(filter, params);
         if (page.total === null || page.offset === null || page.limit === null || page.has_more === null) {
           throw new Error("Projects producer did not return the complete population contract (total/offset/limit/has_more).");
         }
@@ -906,11 +961,25 @@ class ApiProjectStore implements ProjectStore {
       },
       (row) => row?.id,
     );
-    return { projects: population.rows, total: population.total, pages: population.pages, complete: true };
+  }
+
+  async listProjectsComplete(filter?: Omit<WorkspaceFilter, "limit" | "offset">): Promise<CompleteProjectPopulation> {
+    const f = filter ?? {};
+    const population = await this.fetchCompletePopulation(f);
+    const keep = this.evalArtifactPredicate(f);
+    // The predicate the API cannot express is applied to the rows AND to the
+    // total, together, so a complete population is complete in one row space.
+    const projects = keep ? population.rows.filter(keep) : population.rows;
+    return { projects, total: projects.length, pages: population.pages, complete: true };
   }
 
   async listProjectsPage(filter?: WorkspaceFilter): Promise<ProjectListPage> {
     const f = filter ?? {};
+    const keep = this.evalArtifactPredicate(f);
+    if (keep) {
+      const window = await this.listFilteredWindow(f, keep);
+      return buildProjectListPage(window.rows, f, window.total);
+    }
     if (f.limit === undefined && f.offset === undefined) {
       const population = await this.listProjectsComplete(f);
       return buildProjectListPage(population.projects, f, population.total);
@@ -1296,4 +1365,121 @@ export function resolveProjectStore(
 /** Test/di seam: clear the process-env cached store. */
 export function __resetProjectStore(): void {
   cached = null;
+}
+
+// --------------------------------------------------------------------------
+// Store provenance
+// --------------------------------------------------------------------------
+
+/**
+ * Why the resolver picked the transport it picked.
+ *
+ * `partial-cloud-config` is the one that matters: exactly one of API_URL /
+ * API_KEY present is positive evidence of an environment that INTENDED cloud
+ * and lost a variable — a cron job, a systemd unit, an e2b sandbox, or a bare
+ * `env -i` shell. `resolveTransport` folds that case into plain "local" with
+ * `misconfigured: false`, so nothing downstream could previously tell an
+ * accident from a choice.
+ */
+export type ProjectStoreTransportReason =
+  | "cloud"
+  | "declared-local"
+  | "partial-cloud-config"
+  | "no-cloud-config";
+
+export interface ProjectStoreProvenance {
+  readonly transport: "local" | "api";
+  readonly reason: ProjectStoreTransportReason;
+  /** Local sqlite path when the local store answers, else null. */
+  readonly db_path: string | null;
+  /** ISO mtime of that file, or null when it does not exist / cannot be read. */
+  readonly db_last_written: string | null;
+  readonly base_url: string | null;
+  /** Cloud variables that are absent, named exactly. Never carries a value. */
+  readonly missing_env: string[];
+  /**
+   * Human line for stderr, or null when the resolved store is the one the
+   * operator actually asked for. Never contains a credential value.
+   */
+  readonly notice: string | null;
+}
+
+function fileLastWritten(path: string): string | null {
+  try {
+    return statSync(path).mtime.toISOString();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Describe WHICH store will answer, and say so when that store is a FALLBACK.
+ *
+ * todos 8bebf379: `projects list --json` returned 2539 rows with the cloud
+ * variables set and 174 rows without them — same command, same rc=0, and an
+ * stderr of exactly 0 bytes in both cases. A count was reported as the
+ * population with nothing naming the store it came from.
+ *
+ * Silence is the defect, so this returns a `notice` for a fallback and null for
+ * a store the operator declared. An explicitly declared local mode stays quiet
+ * deliberately: warning on a machine that is correctly configured for local use
+ * would train every reader to ignore the line, and the line only earns its
+ * place by being rare.
+ */
+export function describeProjectStore(env: Env = process.env): ProjectStoreProvenance {
+  const resolution = resolveTransport(APP, env);
+  const keys = storageEnvKeys(APP);
+  const urlPresent = Boolean(firstPresentEnv(env, keys.apiUrlKeys));
+  const keyPresent = Boolean(firstPresentEnv(env, keys.apiKeyKeys));
+
+  if (resolution.transport === "cloud-http") {
+    return {
+      transport: "api",
+      reason: "cloud",
+      db_path: null,
+      db_last_written: null,
+      base_url: resolution.baseUrl,
+      missing_env: [],
+      notice: null,
+    };
+  }
+
+  const dbPath = getDbPath(env);
+  const lastWritten = fileLastWritten(dbPath);
+  const missing: string[] = [];
+  if (!urlPresent) missing.push(keys.apiUrlKeys[0]!);
+  if (!keyPresent) missing.push(keys.apiKeyKeys[0]!);
+
+  // An explicit STORAGE_MODE is the operator saying "local is what I want".
+  const declaredLocal = Boolean(firstPresentEnv(env, keys.modeKeys));
+  if (declaredLocal) {
+    return {
+      transport: "local",
+      reason: "declared-local",
+      db_path: dbPath,
+      db_last_written: lastWritten,
+      base_url: null,
+      missing_env: missing,
+      notice: null,
+    };
+  }
+
+  const partial = urlPresent !== keyPresent;
+  const written = lastWritten ? `, last written ${lastWritten}` : "";
+  const notice = partial
+    ? `projects: answering from local sqlite at ${dbPath}${written} — ${missing.join(" and ")} `
+      + `${missing.length === 1 ? "is" : "are"} unset while ${urlPresent ? keys.apiUrlKeys[0] : keys.apiKeyKeys[0]} is set. `
+      + `This is a cloud environment missing a variable, not a local install; counts describe the local store only.`
+    : `projects: answering from local sqlite at ${dbPath}${written} — ${missing.join(" and ")} unset. `
+      + `Counts describe the local store only, not the shared registry.`;
+
+  return {
+    transport: "local",
+    reason: partial ? "partial-cloud-config" : "no-cloud-config",
+    db_path: dbPath,
+    db_last_written: lastWritten,
+    base_url: null,
+    missing_env: missing,
+    notice,
+  };
 }

@@ -37,10 +37,26 @@ export function defaultCloudBaseUrl(name: string): string {
   return `https://${name}.hasna.xyz`;
 }
 
-interface EnvKeys {
+export interface EnvKeys {
   modeKeys: string[];
   apiUrlKeys: string[];
   apiKeyKeys: string[];
+}
+
+/**
+ * The environment variable names this app reads, in precedence order.
+ *
+ * Exported so that callers which must REPORT a configuration gap ("API_URL is
+ * unset") can name the exact variable rather than hardcoding a string that
+ * would silently drift from the resolver the day these keys change.
+ */
+export function storageEnvKeys(name: string): EnvKeys {
+  return envKeys(name);
+}
+
+/** First non-empty value among `keys`, or null. The resolver's own predicate. */
+export function firstPresentEnv(env: Env, keys: readonly string[]): { key: string; value: string } | null {
+  return firstEnv(env, keys);
 }
 
 function envKeys(name: string): EnvKeys {

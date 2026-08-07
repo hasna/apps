@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { resolveProjectStore, __resetProjectStore } from "./project-store.js";
+import { resolveProjectStore, __resetProjectStore, describeProjectStore } from "./project-store.js";
 
 describe("projects store resolution (client-flip)", () => {
   test("no env -> local store", () => {
@@ -379,5 +379,197 @@ describe("projects list pagination (server row cap)", () => {
     expect(all.total).toBe(2399);
     expect(all.has_more).toBe(false);
     expect(all.complete).toBe(true);
+  });
+});
+
+// Regression for todos 8bebf379: with HASNA_PROJECTS_API_URL unset the CLI
+// answered from a stale local sqlite and reported ITS count as the population.
+// Measured on station01, installed 0.1.98:
+//
+//   projects list --json                       -> 2539 rows, rc=0, stderr 0 bytes
+//   env -u API_URL -u API_KEY projects list -j ->  174 rows, rc=0, stderr 0 bytes
+//
+// Root cause: resolveTransport() infers cloud only from API_URL *and* API_KEY
+// both being present, and its local branch returns `misconfigured: false,
+// warning: null` — so an ACCIDENTAL fallback is indistinguishable in the type
+// from a deliberate local install. resolveProjectStore() then discarded the
+// resolution entirely, so even that much provenance never reached a caller.
+//
+// These assert the LITERAL provenance values, not that some marker appears.
+describe("store provenance is never silent (todos 8bebf379)", () => {
+  const DB = "/tmp/does-not-exist-projects-fixture.db";
+
+  test("a cloud environment reports the api store and emits no notice", () => {
+    const p = describeProjectStore({
+      HASNA_PROJECTS_API_URL: "https://projects.hasna.xyz",
+      HASNA_PROJECTS_API_KEY: "k",
+      HASNA_PROJECTS_DB_PATH: DB,
+    });
+    expect(p.transport).toBe("api");
+    expect(p.reason).toBe("cloud");
+    expect(p.notice).toBeNull();
+    expect(p.missing_env).toEqual([]);
+  });
+
+  test("API_URL unset while the KEY is set is a fallback, and names the missing variable", () => {
+    const p = describeProjectStore({
+      HASNA_PROJECTS_API_KEY: "k",
+      HASNA_PROJECTS_DB_PATH: DB,
+    });
+    expect(p.transport).toBe("local");
+    expect(p.reason).toBe("partial-cloud-config");
+    expect(p.missing_env).toEqual(["HASNA_PROJECTS_API_URL"]);
+    expect(p.notice).toContain("HASNA_PROJECTS_API_URL");
+    expect(p.notice).toContain(DB);
+  });
+
+  test("API_KEY unset while the URL is set is the mirror case and names the key", () => {
+    const p = describeProjectStore({
+      HASNA_PROJECTS_API_URL: "https://projects.hasna.xyz",
+      HASNA_PROJECTS_DB_PATH: DB,
+    });
+    expect(p.transport).toBe("local");
+    expect(p.reason).toBe("partial-cloud-config");
+    expect(p.missing_env).toEqual(["HASNA_PROJECTS_API_KEY"]);
+    expect(p.notice).toContain("HASNA_PROJECTS_API_KEY");
+  });
+
+  test("no cloud configuration at all still names the store that answered", () => {
+    const p = describeProjectStore({ HASNA_PROJECTS_DB_PATH: DB });
+    expect(p.transport).toBe("local");
+    expect(p.reason).toBe("no-cloud-config");
+    expect(p.db_path).toBe(DB);
+    expect(p.notice).toContain(DB);
+    // The bare-cron case: this is the exact environment a systemd unit or e2b
+    // sandbox gets, and it must not be silent.
+    expect(p.notice).not.toBeNull();
+  });
+
+  test("an explicitly declared local mode is the operator's choice and stays quiet", () => {
+    const p = describeProjectStore({
+      HASNA_PROJECTS_STORAGE_MODE: "local",
+      HASNA_PROJECTS_DB_PATH: DB,
+    });
+    expect(p.transport).toBe("local");
+    expect(p.reason).toBe("declared-local");
+    expect(p.notice).toBeNull();
+  });
+
+  test("the notice never contains the api key", () => {
+    const p = describeProjectStore({
+      HASNA_PROJECTS_API_KEY: "super-secret-key",
+      HASNA_PROJECTS_DB_PATH: DB,
+    });
+    expect(p.notice ?? "").not.toContain("super-secret-key");
+  });
+});
+
+// Regression for the third defect recorded in todos 4a2e375f ("--offset paging
+// is broken"). The OBSERVATION reproduced; the MECHANISM in that row did not.
+// Discriminating probe on installed 0.1.98, station01:
+//
+//   projects list --json --offset 2530                 -> 73 rows, all already in page 1
+//   projects list --json --include-evals --offset 2530 -> 73 rows, fids[2530:] == oids  (EXACT TAIL)
+//
+// The server honours offset precisely. What differs is the ROW SPACE:
+// `exclude_eval_artifacts` is applied in SQL by the local store
+// (src/db/workspaces.ts:857, sharing one predicate between list and count "so
+// listing and counting can never drift apart"), but it is NOT in listQuery(),
+// so the api store ignored it and the CLI filtered client-side AFTER paging.
+// offset/total were therefore in SERVER space while rows/count were in CLIENT
+// space — the exact drift the local path's author called out as "worse than no
+// total at all", reintroduced on the other transport.
+describe("api store honours exclude_eval_artifacts in ONE row space (todos 4a2e375f)", () => {
+  const CLOUD_ENV = {
+    HASNA_PROJECTS_API_URL: "https://projects.hasna.xyz",
+    HASNA_PROJECTS_API_KEY: "secret-key",
+  };
+
+  /**
+   * A fake registry whose rows INTERLEAVE eval fixtures with real projects, so
+   * a client-side filter applied after paging produces a different row space
+   * from the server's. Every 5th row is an eval artifact: 100 total, 20 evals,
+   * 80 real.
+   */
+  function fakeRegistryWithEvals(options: { total: number; cap: number; evalEvery: number }) {
+    const rows = Array.from({ length: options.total }, (_, i) => {
+      const isEval = i % options.evalEvery === 0;
+      return {
+        id: `wks_${String(i).padStart(5, "0")}`,
+        slug: isEval ? `eval-${String(i).padStart(5, "0")}` : `proj-${String(i).padStart(5, "0")}`,
+        name: isEval ? `Eval ${i}` : `Project ${i}`,
+        status: "active",
+        tags: [],
+        metadata: {},
+        integrations: {},
+      };
+    });
+    const fetchImpl = async (input: string, init?: RequestInit): Promise<Response> => {
+      const url = new URL(input);
+      if (url.pathname !== "/v1/projects" || (init?.method ?? "GET").toUpperCase() !== "GET") {
+        return new Response(JSON.stringify({}), { status: 200 });
+      }
+      const q = url.searchParams;
+      const requested = q.get("limit") ? Number(q.get("limit")) : 100;
+      const limit = Math.min(Math.max(requested, 1), options.cap);
+      const offset = Math.max(Number(q.get("offset") ?? 0), 0);
+      const page = rows.slice(offset, offset + limit);
+      return new Response(JSON.stringify({
+        workspaces: page,
+        count: page.length,
+        total: rows.length,
+        offset,
+        limit,
+        has_more: offset + page.length < rows.length,
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    };
+    __resetProjectStore();
+    const real = rows.filter((r) => !r.slug.startsWith("eval-"));
+    return { store: resolveProjectStore(CLOUD_ENV, fetchImpl), rows, real };
+  }
+
+  test("the filter is applied by the store, not left to the caller", async () => {
+    const { store } = fakeRegistryWithEvals({ total: 100, cap: 40, evalEvery: 5 });
+    const projects = await store.listProjects({ exclude_eval_artifacts: true });
+    expect(projects).toHaveLength(80);
+    expect(projects.every((p) => !p.slug.startsWith("eval-"))).toBe(true);
+  });
+
+  test("total counts the SAME predicate as the rows", async () => {
+    const { store } = fakeRegistryWithEvals({ total: 100, cap: 40, evalEvery: 5 });
+    const page = await store.listProjectsPage({ exclude_eval_artifacts: true, limit: 30 });
+    expect(page.projects).toHaveLength(30);
+    // 80, not the server's 100: a total computed from a different predicate
+    // than the rows is the defect.
+    expect(page.total).toBe(80);
+    expect(page.has_more).toBe(true);
+    expect(page.complete).toBe(false);
+  });
+
+  test("offset addresses the FILTERED row space, so paging never re-reads a row", async () => {
+    const { store, real } = fakeRegistryWithEvals({ total: 100, cap: 40, evalEvery: 5 });
+    const p1 = await store.listProjectsPage({ exclude_eval_artifacts: true, limit: 30, offset: 0 });
+    const p2 = await store.listProjectsPage({ exclude_eval_artifacts: true, limit: 30, offset: 30 });
+    const p3 = await store.listProjectsPage({ exclude_eval_artifacts: true, limit: 30, offset: 60 });
+
+    expect(p1.projects).toHaveLength(30);
+    expect(p2.projects).toHaveLength(30);
+    expect(p3.projects).toHaveLength(20);
+
+    const ids = [...p1.projects, ...p2.projects, ...p3.projects].map((p) => p.id);
+    // The measured symptom was "collected 2603 but only 2530 unique".
+    expect(ids).toHaveLength(80);
+    expect(new Set(ids).size).toBe(80);
+    // and the walk covers exactly the real population, in order
+    expect(ids).toEqual(real.map((r) => r.id));
+    // the tail page is terminal
+    expect(p3.has_more).toBe(false);
+  });
+
+  test("with the filter off, offset still addresses the server's full row space", async () => {
+    const { store, rows } = fakeRegistryWithEvals({ total: 100, cap: 40, evalEvery: 5 });
+    const page = await store.listProjectsPage({ limit: 30, offset: 90 });
+    expect(page.total).toBe(100);
+    expect(page.projects.map((p) => p.id)).toEqual(rows.slice(90).map((r) => r.id));
   });
 });
