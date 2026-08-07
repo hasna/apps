@@ -37,6 +37,9 @@ import {
   cloudTimeline,
   cloudCreateTaskList,
   cloudDeleteTaskList,
+  cloudPlanProjectTaskListEnsure,
+  cloudApplyProjectTaskListEnsure,
+  cloudRollbackProjectTaskListEnsure,
   cloudResolveProjectRef,
   cloudResolvePlan,
   cloudResolveTaskListRef,
@@ -1142,6 +1145,95 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
     await expect(cloudDeleteTaskList(client, "12345678-full")).resolves.toBe(true);
     expect(calls.some((call) => call.method === "POST" && call.url.endsWith("/v1/task-lists"))).toBe(true);
     expect(calls.some((call) => call.method === "DELETE" && call.url.endsWith("/v1/task-lists/12345678-full"))).toBe(true);
+  });
+
+  test("project task-list ensure forwards plan, exact-revision apply, and conditional rollback", async () => {
+    const project = {
+      id: "project-1",
+      name: "Dubai Fraud",
+      path: "/workspace/dubai-fraud",
+      task_list_id: "dubai-fraud",
+      updated_at: "2026-08-07T10:00:00.000Z",
+    };
+    const taskList = {
+      id: "list-1",
+      project_id: project.id,
+      slug: "dubai-fraud",
+      name: project.name,
+      created_at: "2026-08-07T10:01:00.000Z",
+      updated_at: "2026-08-07T10:01:00.000Z",
+    };
+    const receipt = {
+      schema_version: "todos.project-task-list-ensure.v1",
+      receipt_id: "ptlr_fixture",
+      idempotency_key: "dubai-fraud-default-list",
+      project_id: project.id,
+      task_list_id: taskList.id,
+      slug: taskList.slug,
+      created_by_operation: true,
+      result_revision: taskList.updated_at,
+      result_digest: "fixture-digest",
+      rollback_supported: true,
+      created_at: taskList.created_at,
+    };
+    const calls = installFetch((call) => {
+      if (call.url.endsWith("/v1/projects/project-1/task-list/rollback")) {
+        return {
+          body: {
+            schema_version: receipt.schema_version,
+            action: "removed",
+            project_id: project.id,
+            task_list_id: taskList.id,
+            accepted_receipt_id: receipt.receipt_id,
+            rollback_receipt_id: "ptlr_inverse_fixture",
+            removed_at: "2026-08-07T10:02:00.000Z",
+          },
+        };
+      }
+      if (call.method === "POST") {
+        return { status: 201, body: { mode: "apply", action: "created", project, task_list: taskList, receipt } };
+      }
+      return { body: { mode: "plan", action: "would_create", project, task_list: null, receipt: null } };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudPlanProjectTaskListEnsure(client, project.id))
+      .resolves.toMatchObject({ mode: "plan", action: "would_create", task_list: null });
+    await expect(cloudApplyProjectTaskListEnsure(client, project.id, {
+      expected_project_revision: project.updated_at,
+      idempotency_key: receipt.idempotency_key,
+    })).resolves.toMatchObject({ mode: "apply", action: "created", receipt });
+    await expect(cloudRollbackProjectTaskListEnsure(client, project.id, {
+      receipt_id: receipt.receipt_id,
+      expected_task_list_revision: taskList.updated_at,
+    })).resolves.toMatchObject({ action: "removed", task_list_id: taskList.id });
+
+    expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
+      "GET https://todos.example.com/v1/projects/project-1/task-list/ensure",
+      "POST https://todos.example.com/v1/projects/project-1/task-list/ensure",
+      "POST https://todos.example.com/v1/projects/project-1/task-list/rollback",
+    ]);
+    expect(calls[1]!.body).toEqual({
+      expected_project_revision: project.updated_at,
+      idempotency_key: receipt.idempotency_key,
+    });
+    expect(calls[2]!.body).toEqual({
+      receipt_id: receipt.receipt_id,
+      expected_task_list_revision: taskList.updated_at,
+    });
+  });
+
+  test("project task-list ensure preserves a domain PROJECT_NOT_FOUND response", async () => {
+    installFetch(() => ({
+      status: 404,
+      body: { error: "Project not found: missing", code: "PROJECT_NOT_FOUND" },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudPlanProjectTaskListEnsure(client, "missing")).rejects.toMatchObject({
+      status: 404,
+      body: { code: "PROJECT_NOT_FOUND" },
+    });
   });
 
   test("task-list resolution preserves exact UUIDs and resolves project-scoped slugs and unique UUID prefixes", async () => {

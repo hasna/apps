@@ -23,6 +23,12 @@ import { handleTodosProjectRegistrationHttpRequest } from "../project-registrati
 import { redactEvidenceText } from "../lib/redaction.js";
 import { isCanonicalSlug, normalizeSlug } from "../lib/slugs.js";
 import { decodeCommentCursor, encodeCommentCursor } from "../lib/comment-cursor.js";
+import {
+  ProjectTaskListEnsureError,
+  applyProjectTaskListEnsure,
+  planProjectTaskListEnsure,
+  rollbackProjectTaskListEnsure,
+} from "../lib/project-task-list-ensure.js";
 
 export interface V1RequestDependencies {
   getVerifier?: typeof getCloudVerifier;
@@ -949,6 +955,52 @@ export async function handleV1Request(
         }
         return error(405, `method ${method} not allowed on /v1/projects`);
       }
+      if (action === "task-list" && subId === "ensure") {
+        if (method === "GET") {
+          return json(await planProjectTaskListEnsure(store, id));
+        }
+        if (method !== "POST") {
+          return error(405, `method ${method} not allowed on /v1/projects/:id/task-list/ensure`);
+        }
+        const body = await readJson<Record<string, unknown>>(req);
+        if (!body) return error(400, "invalid JSON body");
+        const unknown = Object.keys(body).find((key) =>
+          !["expected_project_revision", "idempotency_key"].includes(key)
+        );
+        if (unknown) return error(400, `unknown task-list ensure field: ${unknown}`);
+        if (typeof body.expected_project_revision !== "string" || !body.expected_project_revision.trim()) {
+          return error(400, "expected_project_revision must be a non-empty string from a fresh ensure plan");
+        }
+        if (body.idempotency_key !== undefined && typeof body.idempotency_key !== "string") {
+          return error(400, "idempotency_key must be a string");
+        }
+        const result = await applyProjectTaskListEnsure(store, id, {
+          expected_project_revision: body.expected_project_revision,
+          ...(typeof body.idempotency_key === "string" ? { idempotency_key: body.idempotency_key } : {}),
+        });
+        return json(result, result.action === "created" ? 201 : 200);
+      }
+      if (action === "task-list" && subId === "rollback") {
+        if (method !== "POST") {
+          return error(405, `method ${method} not allowed on /v1/projects/:id/task-list/rollback`);
+        }
+        const body = await readJson<Record<string, unknown>>(req);
+        if (!body) return error(400, "invalid JSON body");
+        const unknown = Object.keys(body).find((key) =>
+          !["receipt_id", "expected_task_list_revision"].includes(key)
+        );
+        if (unknown) return error(400, `unknown task-list rollback field: ${unknown}`);
+        if (typeof body.receipt_id !== "string" || !body.receipt_id.trim()) {
+          return error(400, "receipt_id must be a non-empty string");
+        }
+        if (typeof body.expected_task_list_revision !== "string" || !body.expected_task_list_revision.trim()) {
+          return error(400, "expected_task_list_revision must be a non-empty string from the accepted receipt");
+        }
+        return json(await rollbackProjectTaskListEnsure(store, id, {
+          receipt_id: body.receipt_id,
+          expected_task_list_revision: body.expected_task_list_revision,
+        }));
+      }
       if (action === "rename") {
         if (method !== "POST") return error(405, `method ${method} not allowed on /v1/projects/:id/rename`);
         const body = await readJson<RenameProjectInput>(req);
@@ -1308,6 +1360,15 @@ export async function handleV1Request(
 
     return error(404, `unknown /v1 resource: ${resource ?? "(root)"}`);
   } catch (e) {
+    if (e instanceof ProjectTaskListEnsureError) {
+      const status = e.code === "PROJECT_NOT_FOUND"
+        || e.code === "PROJECT_TASK_LIST_RECEIPT_NOT_FOUND"
+        ? 404
+        : e.code === "PROJECT_TASK_LIST_IDEMPOTENCY_KEY_INVALID"
+          ? 400
+          : 409;
+      return error(status, e.message, { code: e.code, conflict: status === 409, ...e.details });
+    }
     if (e instanceof TaskReferenceAmbiguousError) {
       return error(409, e.message, {
         code: TaskReferenceAmbiguousError.code,

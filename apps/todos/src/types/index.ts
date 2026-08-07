@@ -96,6 +96,38 @@ export interface RenameProjectResult {
   task_lists_updated: number;
 }
 
+export interface ProjectTaskListEnsureReceipt {
+  schema_version: "todos.project-task-list-ensure.v1";
+  receipt_id: string;
+  idempotency_key: string;
+  project_id: string;
+  task_list_id: string;
+  slug: string;
+  created_by_operation: boolean;
+  result_revision: string;
+  result_digest: string;
+  rollback_supported: boolean;
+  created_at: string;
+}
+
+export interface ProjectTaskListEnsureResult {
+  mode: "plan" | "apply";
+  action: "would_create" | "created" | "already_present";
+  project: Project;
+  task_list: TaskList | null;
+  receipt: ProjectTaskListEnsureReceipt | null;
+}
+
+export interface ProjectTaskListRollbackResult {
+  schema_version: "todos.project-task-list-ensure.v1";
+  action: "removed";
+  project_id: string;
+  task_list_id: string;
+  accepted_receipt_id: string;
+  rollback_receipt_id: string;
+  removed_at: string;
+}
+
 // Org
 export interface Org {
   id: string;

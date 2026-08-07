@@ -53,6 +53,83 @@ const taskListSchema = {
   },
 } as const;
 
+const projectTaskListEnsureReceiptSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "schema_version",
+    "receipt_id",
+    "idempotency_key",
+    "project_id",
+    "task_list_id",
+    "slug",
+    "created_by_operation",
+    "result_revision",
+    "result_digest",
+    "rollback_supported",
+    "created_at",
+  ],
+  properties: {
+    schema_version: { type: "string", enum: ["todos.project-task-list-ensure.v1"] },
+    receipt_id: { type: "string" },
+    idempotency_key: { type: "string" },
+    project_id: { type: "string" },
+    task_list_id: { type: "string" },
+    slug: { type: "string" },
+    created_by_operation: { type: "boolean" },
+    result_revision: { type: "string" },
+    result_digest: { type: "string" },
+    rollback_supported: { type: "boolean" },
+    created_at: { type: "string", format: "date-time" },
+  },
+} as const;
+
+const projectTaskListEnsureResultSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["mode", "action", "project", "task_list", "receipt"],
+  properties: {
+    mode: { type: "string", enum: ["plan", "apply"] },
+    action: { type: "string", enum: ["would_create", "created", "already_present"] },
+    project: { $ref: "#/components/schemas/Project" },
+    task_list: {
+      oneOf: [
+        { $ref: "#/components/schemas/TaskList" },
+        { type: "null" },
+      ],
+    },
+    receipt: {
+      oneOf: [
+        { $ref: "#/components/schemas/ProjectTaskListEnsureReceipt" },
+        { type: "null" },
+      ],
+    },
+  },
+} as const;
+
+const projectTaskListRollbackResultSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "schema_version",
+    "action",
+    "project_id",
+    "task_list_id",
+    "accepted_receipt_id",
+    "rollback_receipt_id",
+    "removed_at",
+  ],
+  properties: {
+    schema_version: { type: "string", enum: ["todos.project-task-list-ensure.v1"] },
+    action: { type: "string", enum: ["removed"] },
+    project_id: { type: "string" },
+    task_list_id: { type: "string" },
+    accepted_receipt_id: { type: "string" },
+    rollback_receipt_id: { type: "string" },
+    removed_at: { type: "string", format: "date-time" },
+  },
+} as const;
+
 const taskCommentSchema = {
   type: "object",
   required: ["id", "task_id", "agent_id", "session_id", "content", "type", "progress_pct", "created_at"],
@@ -175,6 +252,9 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
         Task: taskSchema,
         Project: projectSchema,
         TaskList: taskListSchema,
+        ProjectTaskListEnsureReceipt: projectTaskListEnsureReceiptSchema,
+        ProjectTaskListEnsureResult: projectTaskListEnsureResultSchema,
+        ProjectTaskListRollbackResult: projectTaskListRollbackResultSchema,
         TaskComment: taskCommentSchema,
         Plan: planSchema,
         Template: templateSchema,
@@ -250,6 +330,29 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           properties: {
             new_slug: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
             name: { type: "string", minLength: 1 },
+          },
+        },
+        ProjectTaskListEnsureApplyInput: {
+          type: "object",
+          additionalProperties: false,
+          required: ["expected_project_revision"],
+          properties: {
+            expected_project_revision: { type: "string", minLength: 1 },
+            idempotency_key: {
+              type: "string",
+              minLength: 8,
+              maxLength: 128,
+              pattern: "^[A-Za-z0-9._:-]+$",
+            },
+          },
+        },
+        ProjectTaskListRollbackInput: {
+          type: "object",
+          additionalProperties: false,
+          required: ["receipt_id", "expected_task_list_revision"],
+          properties: {
+            receipt_id: { type: "string", minLength: 1 },
+            expected_task_list_revision: { type: "string", minLength: 1 },
           },
         },
         ErrorResponse: {
@@ -1138,6 +1241,51 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           summary: "Delete a project",
           parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
           responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { deleted: { type: "boolean" }, id: { type: "string" } } } } } } },
+        },
+      },
+      "/v1/projects/{id}/task-list/ensure": {
+        get: {
+          operationId: "planProjectTaskListEnsure",
+          summary: "Plan a non-mutating repair of a project's declared task list",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: {
+            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/ProjectTaskListEnsureResult" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+        post: {
+          operationId: "ensureProjectTaskList",
+          summary: "Idempotently create an existing project's declared task list",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/ProjectTaskListEnsureApplyInput" } } },
+          },
+          responses: {
+            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/ProjectTaskListEnsureResult" } } } },
+            "201": { content: { "application/json": { schema: { $ref: "#/components/schemas/ProjectTaskListEnsureResult" } } } },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/projects/{id}/task-list/rollback": {
+        post: {
+          operationId: "rollbackProjectTaskListEnsure",
+          summary: "Conditionally remove an unchanged task list created by an accepted ensure receipt",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/ProjectTaskListRollbackInput" } } },
+          },
+          responses: {
+            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/ProjectTaskListRollbackResult" } } } },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
         },
       },
       "/v1/projects/{id}/rename": {

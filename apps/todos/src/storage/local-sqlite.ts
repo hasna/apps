@@ -47,6 +47,7 @@ import {
   listTaskLists,
   updateTaskList,
   deleteTaskList,
+  deleteTaskListIfUnchangedAndUnused,
 } from "../db/task-lists.js";
 import {
   createTemplate,
@@ -249,6 +250,8 @@ export function createLocalSqliteTodosStorageAdapter(
       list: (projectId) => listTaskLists(projectId, database()),
       update: (id, input) => updateTaskList(id, input, database()),
       delete: (id) => deleteTaskList(id, database()),
+      deleteIfUnchangedAndUnused: (id, expected) =>
+        deleteTaskListIfUnchangedAndUnused(id, expected, database()),
     },
     templates: {
       create: (input) => createTemplate(input, database()),

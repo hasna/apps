@@ -296,6 +296,57 @@ describe("CLI QoL commands", () => {
     expect(lists).toEqual([expect.objectContaining({ slug: "next-slug" })]);
   }, 15_000);
 
+  it("projects --ensure-task-list plans safely, applies once, and conditionally rolls back", () => {
+    const projectPath = join(tmpDir, "ensure-project-task-list");
+    const project = JSON.parse(run(
+      `--json projects --add ${projectPath} --name 'Ensure Project' --task-list-id ensure-project`,
+    ));
+
+    const plan = JSON.parse(run(`--json projects --ensure-task-list ${project.id}`));
+    expect(plan).toMatchObject({
+      mode: "plan",
+      action: "would_create",
+      project: { id: project.id, name: "Ensure Project", task_list_id: "ensure-project" },
+      task_list: null,
+      receipt: null,
+    });
+    expect(JSON.parse(run(`--project ${project.id} --json lists`))).toEqual([]);
+
+    const first = JSON.parse(run(
+      `--json projects --ensure-task-list ${project.id} --apply --idempotency-key ensure-project-default-list`,
+    ));
+    const second = JSON.parse(run(
+      `--json projects --ensure-task-list ${project.id} --apply --idempotency-key ensure-project-default-list`,
+    ));
+    expect(first).toMatchObject({
+      mode: "apply",
+      action: "created",
+      task_list: { project_id: project.id, slug: "ensure-project", name: "Ensure Project" },
+      receipt: { created_by_operation: true, rollback_supported: true },
+    });
+    expect(second).toMatchObject({
+      mode: "apply",
+      action: "already_present",
+      task_list: { id: first.task_list.id },
+      receipt: { receipt_id: first.receipt.receipt_id },
+    });
+    const lists = JSON.parse(run(`--project ${project.id} --json lists`));
+    expect(lists).toEqual([
+      expect.objectContaining({ id: first.task_list.id, project_id: project.id, slug: "ensure-project" }),
+    ]);
+
+    const rollback = JSON.parse(run(
+      `--json projects --rollback-task-list ${project.id} --apply --receipt ${first.receipt.receipt_id}`,
+    ));
+    expect(rollback).toMatchObject({
+      action: "removed",
+      project_id: project.id,
+      task_list_id: first.task_list.id,
+      accepted_receipt_id: first.receipt.receipt_id,
+    });
+    expect(JSON.parse(run(`--project ${project.id} --json lists`))).toEqual([]);
+  }, 30_000);
+
   it("project-panel --json should emit a project panel contract", () => {
     const projPath = join(tmpDir, "panel-project");
     const proj = JSON.parse(run(`--json projects --add ${projPath} --name 'Panel Project'`));
