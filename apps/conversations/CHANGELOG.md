@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.5.30 - 2026-08-07
+
+### Fixed
+
+- **Channel renames are collision-safe.** Identical stale graph edges are merged while preserving source edge data, duplicate stale resource-lock rows are removed before rekeying, and the transaction keeps channel-member and message rewrites atomic (#98).
+- **Structured server diagnostics are preserved in client HTTP errors.** Documented diagnostic fields from failed server requests are surfaced instead of hiding the database reason behind a generic 400 (#98).
+
 ## 0.5.29 - 2026-08-07
 
 ### Added
