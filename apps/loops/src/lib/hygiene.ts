@@ -1,6 +1,6 @@
 import { basename } from "node:path";
 import { homedir } from "node:os";
-import type { Loop, LoopRun, ScheduleSpec } from "../types.js";
+import type { Loop, LoopRun, RunStatus, ScheduleSpec } from "../types.js";
 import type { Store } from "./store.js";
 import { advanceLoop } from "./scheduler.js";
 
@@ -353,6 +353,13 @@ export interface StuckRunReport {
   entries: StuckRunEntry[];
   /** Loop ids whose nextRunAt was advanced immediately after reclaiming a run, unblocking their cadence without waiting for a daemon tick. */
   advancedLoopIds: string[];
+  /**
+   * Checks this report did NOT perform, each with the reason. Present on the
+   * hosted preview, which cannot observe process liveness from a machine that
+   * did not claim the run; absent on the local path, which does check it. An
+   * all-green or a large count must never read as more certain than it is.
+   */
+  unchecked?: Array<{ id: string; reason: string }>;
 }
 
 function toStuckRunEntry(run: LoopRun, reclaimed: boolean, deferredReason?: "live_process"): StuckRunEntry {
@@ -507,5 +514,101 @@ export function buildStuckRunReport(store: Store, opts: { apply?: boolean; limit
     liveDeferred: liveDeferredCount,
     entries,
     advancedLoopIds,
+  };
+}
+
+/**
+ * Hosted-transport counterpart of {@link buildStuckRunReport} (todos 2582d190).
+ *
+ * `loops hygiene stuck` documents itself as the remedy for 7cf8d8c1 and used to
+ * refuse whenever the CLI was flipped to the hosted Loops API — which is where
+ * the wedged loops actually live. Four were measured stuck `running` for 60-74h
+ * against 30-50m leases, so the tool that fixes the defect could not reach the
+ * population that had it. This mirrors the ratified hosted-mode pattern already
+ * applied to `loops health` and `loops doctor` (19cc44ba).
+ *
+ * The split between the two halves is deliberate and is a safety property:
+ *
+ *   PREVIEW  read-only. Lists `running` runs and selects those whose lease has
+ *            already expired. Issues no mutating request, so it is safe to run
+ *            against production to see what WOULD be reclaimed.
+ *   APPLY    calls `POST /v1/leases/recover`, which recovers expired leases AND
+ *            advances the affected loops server-side.
+ *
+ * Why apply is a single server call rather than a client-side loop: liveness is
+ * a property of the machine that CLAIMED the run, so an arbitrary CLI host
+ * cannot check whether a pid is alive elsewhere. Only the server can, and it
+ * already does — including the `defer_count` grace ceiling that keeps a
+ * live-looking run from being reclaimed prematurely. That is why the preview
+ * reports every expired-lease run as `checked` and does not pretend to
+ * classify liveness: it reports what it can actually see, and says so, rather
+ * than inventing a `liveDeferred` split it has no evidence for.
+ */
+export async function buildHostedStuckRunReport(
+  store: {
+    listRuns(opts?: { status?: RunStatus; limit?: number }): Promise<LoopRun[]>;
+    recoverExpiredRunLeases(opts?: { limit?: number }): Promise<{ abandoned: LoopRun[]; deferred: LoopRun[]; advancementDeferred: LoopRun[] }>;
+  },
+  opts: { apply?: boolean; limit?: number; now?: Date } = {},
+): Promise<StuckRunReport> {
+  const now = opts.now ?? new Date();
+  const limit = opts.limit ?? 100;
+
+  if (!opts.apply) {
+    const running = await store.listRuns({ status: "running", limit });
+    const expired = running.filter((run) => run.leaseExpiresAt !== undefined && Date.parse(run.leaseExpiresAt) <= now.getTime());
+    return {
+      ok: expired.length === 0,
+      generatedAt: now.toISOString(),
+      applied: false,
+      checked: expired.length,
+      // NOT the same predicate as the local report's `stuck`, and the
+      // difference is load-bearing rather than pedantic. Locally `stuck` means
+      // "expired lease AND no live process"; here it can only mean "expired
+      // lease", because liveness belongs to the machine that claimed the run.
+      // A run whose lease lapsed seconds ago is very likely still alive and
+      // renewing — measured on the live fleet, a preview at 15:00:42Z listed a
+      // run whose lease expired at 15:00:17Z — so this count is an UPPER BOUND
+      // on what `--apply` would reclaim, never a prediction of it.
+      stuck: expired.length,
+      // Deliberately 0 rather than a guess: reporting a liveDeferred split
+      // would claim a classification this transport has no evidence for.
+      liveDeferred: 0,
+      entries: expired.map((run) => toStuckRunEntry(run, false)),
+      advancedLoopIds: [],
+      // Same "say what you did not check" contract the hosted health report
+      // uses, so an all-green or a large count is never read as more certain
+      // than it is.
+      unchecked: [
+        {
+          id: "run-liveness",
+          reason:
+            "process liveness is only observable on the machine that claimed the run; this preview selects on lease expiry alone, so `stuck` is an upper bound. --apply defers to the server, which applies the defer_count grace ceiling before reclaiming.",
+        },
+      ],
+    };
+  }
+
+  // A transport or authorization failure propagates. It must never be caught
+  // and flattened into an empty report: "nothing needed reclaiming" and "the
+  // server refused me" are opposite facts, and the incident that produced this
+  // command was read as the former when it was the latter.
+  const result = await store.recoverExpiredRunLeases({ limit });
+  const advancementDeferredIds = new Set(result.advancementDeferred.map((run) => run.id));
+  return {
+    ok: result.abandoned.length === 0,
+    generatedAt: now.toISOString(),
+    applied: true,
+    checked: result.abandoned.length + result.deferred.length,
+    stuck: result.abandoned.length,
+    liveDeferred: result.deferred.length,
+    entries: [
+      ...result.abandoned.map((run) => toStuckRunEntry(run, true)),
+      ...result.deferred.map((run) => toStuckRunEntry(run, false, "live_process")),
+    ],
+    // Only runs the server actually advanced; a reclaim whose advancement was
+    // deferred has NOT had its cadence restored and must not be reported as if
+    // it had.
+    advancedLoopIds: result.abandoned.filter((run) => !advancementDeferredIds.has(run.id)).map((run) => run.loopId),
   };
 }

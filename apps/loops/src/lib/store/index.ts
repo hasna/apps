@@ -49,6 +49,22 @@ import { HasnaHttpError } from "../cloud/transport.js";
 import type { Env } from "../cloud/mode.js";
 import { Store } from "../store.js";
 import type { PruneHistoryOptions, PruneHistorySummary } from "../store.js";
+// scheduler.ts imports only `type { Store }` from ../store.js, never this
+// module, so this import introduces no cycle.
+import { advanceLoop } from "../scheduler.js";
+
+/**
+ * Outcome of a lease-reclamation pass, shaped to match the hosted
+ * `POST /v1/leases/recover` response so both transports report identically.
+ */
+export interface LeaseRecoveryResult {
+  /** Runs whose lease was reclaimed and whose status moved to `abandoned`. */
+  abandoned: LoopRun[];
+  /** Expired-lease runs left alone this pass (a still-live backing process). */
+  deferred: LoopRun[];
+  /** Reclaimed runs whose loop cursor could not be advanced this pass. */
+  advancementDeferred: LoopRun[];
+}
 
 /** Which transport backs a resolved store (for banners/diagnostics only). */
 export type StoreTransport = "local" | "cloud-http";
@@ -137,6 +153,16 @@ export interface LoopStore {
   // ── Runs & receipts ────────────────────────────────────────────────────────────
   listRuns(opts?: { loopId?: string; status?: RunStatus; labels?: string[]; limit?: number; offset?: number }): Promise<LoopRun[]>;
   getRun(id: string): Promise<LoopRun | undefined>;
+  /**
+   * Reclaim runs wedged in `status: "running"` past their lease and advance
+   * their loop's cursor (7cf8d8c1). MUTATING on both transports.
+   *
+   * Both implementations recover AND advance, so a caller never has to know
+   * which transport it holds — the local one would otherwise leave `nextRunAt`
+   * frozen under `overlap: "skip"`, which is the half of the defect that keeps
+   * a loop dead after its run is reclaimed.
+   */
+  recoverExpiredRunLeases(opts?: { limit?: number }): Promise<LeaseRecoveryResult>;
   writeRunReceipt(input: WriteRunReceiptInput): Promise<RunReceipt>;
   getRunReceipt(runId: string): Promise<RunReceipt | undefined>;
   listRunReceipts(opts?: {
@@ -309,6 +335,35 @@ export class LocalStore implements LoopStore {
   }
   async getRun(id: string): Promise<LoopRun | undefined> {
     return this.store.getRun(id);
+  }
+  /**
+   * Local reclaim. Mirrors what the hosted API does server-side in
+   * `POST /v1/leases/recover`: recover the expired leases, then advance each
+   * reclaimed run's loop so `overlap: "skip"` re-admits work immediately
+   * rather than waiting on a daemon tick that may never come.
+   *
+   * `advanceLoop` is a documented no-op for a non-active loop, so a paused or
+   * stopped loop's cursor stays exactly where an operator left it.
+   */
+  async recoverExpiredRunLeases(opts: { limit?: number } = {}): Promise<LeaseRecoveryResult> {
+    const now = new Date();
+    const result = this.store.recoverExpiredRunLeasesDetailed(now, { limit: opts.limit });
+    const advancementDeferred: LoopRun[] = [];
+    for (const run of result.abandoned) {
+      const loop = this.store.getLoop(run.loopId);
+      if (!loop) {
+        advancementDeferred.push(run);
+        continue;
+      }
+      try {
+        advanceLoop(this.store, loop, run, now, false);
+      } catch {
+        // Best-effort: the run is reclaimed either way — that half never rolls
+        // back — and the daemon's own tick repairs a wedged terminal slot.
+        advancementDeferred.push(run);
+      }
+    }
+    return { abandoned: result.abandoned, deferred: result.deferred, advancementDeferred };
   }
   async writeRunReceipt(input: WriteRunReceiptInput): Promise<RunReceipt> {
     return this.store.writeRunReceipt(input);
@@ -628,6 +683,24 @@ export class ApiStore implements LoopStore {
     } catch {
       return undefined;
     }
+  }
+  /**
+   * Hosted reclaim. The endpoint already recovers expired leases AND advances
+   * the affected loops server-side, which is why this is a thin call rather
+   * than a client-side loop: liveness is a property of the machine that
+   * claimed the run, so only the server can judge it.
+   *
+   * Errors are deliberately NOT swallowed into an empty result. A refusal here
+   * (the endpoint requires an admin/service principal) must surface as a
+   * failure, never as "nothing needed reclaiming".
+   */
+  async recoverExpiredRunLeases(opts: { limit?: number } = {}): Promise<LeaseRecoveryResult> {
+    const raw = await this.t.post("/leases/recover", clean({ limit: opts.limit }));
+    return {
+      abandoned: pickArray<LoopRun>(raw, "abandoned"),
+      deferred: pickArray<LoopRun>(raw, "deferred"),
+      advancementDeferred: pickArray<LoopRun>(raw, "advancementDeferred"),
+    };
   }
   async writeRunReceipt(input: WriteRunReceiptInput): Promise<RunReceipt> {
     return pickObject<RunReceipt>(await this.t.post("/receipts", input), "receipt")!;

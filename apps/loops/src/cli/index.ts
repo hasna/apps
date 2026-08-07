@@ -66,6 +66,7 @@ import {
   buildNameHygieneReport,
   buildScriptInventoryReport,
   buildStuckRunReport,
+  buildHostedStuckRunReport,
 } from "../lib/hygiene.js";
 import { listOpenMachines, resolveLoopMachine } from "../lib/machines.js";
 import { packageVersion } from "../lib/version.js";
@@ -2572,11 +2573,40 @@ hygiene
   )
   .option("--apply", "abandon reclaimable runs and immediately advance their loop's nextRunAt")
   .option("--limit <n>", "maximum runs to reclaim in one pass", "100")
-  .action(runAction((opts) => {
-    assertLocalOnlyCommand("hygiene stuck");
+  .action(runAction(async (opts) => {
+    const limit = positiveInteger(opts.limit, "--limit") ?? 100;
+
+    // todos 2582d190: this used to `assertLocalOnlyCommand("hygiene stuck")`,
+    // which refused against the hosted store — where the wedged loops actually
+    // are. The refusal also printed advice that is a trap: unsetting
+    // HASNA_LOOPS_API_URL/HASNA_LOOPS_API_KEY does not make the verb reach
+    // those runs, it points the CLI at a DIFFERENT (local) store that does not
+    // contain them. Answer against the hosted control plane instead, the way
+    // `loops health` and `loops doctor` already do (19cc44ba).
+    if (isCloudStore()) {
+      const hosted = await withStore(async (store) => {
+        const report = await buildHostedStuckRunReport(store, { apply: Boolean(opts.apply), limit });
+        return { ...report, backend: { transport: store.transport } };
+      });
+      // There is no local sqlite file to snapshot when the mutation happens
+      // server-side, so no backup path is reported here.
+      if (isJson()) console.log(JSON.stringify(hosted, null, 2));
+      else {
+        console.log(
+          `hygiene_stuck checked=${hosted.checked} stuck=${hosted.stuck} live_deferred=${hosted.liveDeferred} applied=${hosted.applied} backend=${hosted.backend.transport}`,
+        );
+        for (const entry of hosted.entries) {
+          const verb = entry.reclaimed ? "reclaimed" : entry.deferredReason === "live_process" ? "live-deferred" : "would-reclaim";
+          console.log(`${verb} run=${entry.runId} loop=${entry.loopId} (${entry.loopName}) lease_expired=${entry.leaseExpiresAt ?? ""} pid=${entry.pid ?? ""}`);
+        }
+        for (const loopId of hosted.advancedLoopIds) console.log(`advanced loop=${loopId}`);
+      }
+      if (!hosted.ok && !hosted.applied) process.exitCode = 1;
+      return;
+    }
+
     const store = new Store();
     try {
-      const limit = positiveInteger(opts.limit, "--limit") ?? 100;
       const preview = buildStuckRunReport(store, { apply: false, limit });
       // A live-looking-but-deferred run still gets mutated on apply (its
       // lease_expires_at and defer_count both advance toward the grace
