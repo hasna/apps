@@ -259,6 +259,44 @@ describe("CLI integration tests", () => {
     }
   });
 
+  test("traces --server resolves full ID, short ID, slug, and name, and rejects unknown identifiers", async () => {
+    const { dbFlag, cleanup } = withTmpDb();
+    try {
+      await run(`${CLI} ${dbFlag} servers:add -n "Alpha Server" --slug alpha-srv`);
+      await run(`${CLI} ${dbFlag} servers:add -n "Beta Server" --slug beta-srv`);
+      await run(`${CLI} ${dbFlag} trace:add --server alpha-srv --event "alpha.event"`);
+      await run(`${CLI} ${dbFlag} trace:add --server beta-srv --event "beta.event"`);
+
+      const { stdout: allJson } = await run(`${CLI} ${dbFlag} traces --json`);
+      const all = JSON.parse(allJson) as { event: string; server_id: string }[];
+      expect(all.map(t => t.event).sort()).toEqual(["alpha.event", "beta.event"]);
+      const alphaId = all.find(t => t.event === "alpha.event")!.server_id;
+
+      const events = async (identifier: string) => {
+        const { stdout } = await run(`${CLI} ${dbFlag} traces --server ${identifier} --json`);
+        return (JSON.parse(stdout) as { event: string }[]).map(t => t.event);
+      };
+
+      // Positive control: the full UUID already resolved before this fix, so a
+      // failure here means the fixture or the harness is wrong, not the filter.
+      expect(await events(alphaId)).toEqual(["alpha.event"]);
+
+      // The short ID is the value the traces table itself renders in its SERVER column.
+      expect(await events(alphaId.slice(0, 8))).toEqual(["alpha.event"]);
+
+      expect(await events("alpha-srv")).toEqual(["alpha.event"]);
+      expect(await events('"Beta Server"')).toEqual(["beta.event"]);
+
+      // An unknown identifier must fail loudly. Printing an empty table at rc=0 is
+      // indistinguishable from a real server that genuinely has no traces.
+      const unknown = await runExpectFailure(`${CLI} ${dbFlag} traces --server zzz-not-a-server-zzz`);
+      expect(unknown.stderr).toContain("Server not found");
+      expect(unknown.code).not.toBe(0);
+    } finally {
+      cleanup();
+    }
+  });
+
   test("list commands default to compact paginated output while JSON can stay complete", async () => {
     const { dbFlag, cleanup } = withTmpDb();
     try {
