@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.10] - 2026-08-07
+
+### Added
+
+- **Existing plans can now be linked atomically to one authoritative project.**
+  Linkage validates exact plan, project, and member-task revisions; records
+  immutable apply and rollback receipts with every prior task link; and enforces
+  the chosen project for future plan members across SQLite, PostgreSQL, the v1
+  API, SDK, and CLI ([#215](https://github.com/hasna/todos/pull/215)).
+
 ## [0.15.9] - 2026-08-07
 
 ### Fixed
