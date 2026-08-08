@@ -6,6 +6,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.110]
+
+### Added
+
+- Typed project resource links now accept Todos `task` targets identified by
+  complete external UUIDs, preserve Contacts compatibility, and enforce the
+  same closed contract across the CLI, SDK, OpenAPI, SQLite, and PostgreSQL.
+
 ## [0.1.109]
 
 ### Fixed
