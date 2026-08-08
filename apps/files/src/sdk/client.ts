@@ -29,6 +29,8 @@ export interface Ok { "ok": boolean }
 
 export interface Stats { "total_files": number; "total_size": number; "by_ext"?: Array<Record<string, unknown>>; "by_source"?: Array<Record<string, unknown>> }
 
+export interface ExtractedText { "source_ref": string; "file_id"?: string; "revision_id"?: string; "status": string; "mime": string; "bytes_read": number; "total_size"?: number; "truncated": boolean; "redacted": boolean; "segments": Array<Record<string, unknown>>; "metadata": Record<string, unknown> }
+
 export interface FilesClientOptions {
   /** Base URL, e.g. process.env.APP_API_URL. */
   baseUrl: string;
@@ -133,6 +135,15 @@ export class FilesClient {
     async getFile(id: string, init?: RequestInit): Promise<File> {
       return this.request("GET", `/files/${encodeURIComponent(String(id))}`, {
         body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Retrieve authorized derived text extraction */
+    async extractFileText(id: string, body?: { "max_bytes"?: number; "max_segment_chars"?: number; "redact_patterns"?: Array<string> }, init?: RequestInit): Promise<ExtractedText> {
+      return this.request("POST", `/files/${encodeURIComponent(String(id))}/extract-text`, {
+        body,
         query: undefined,
         init,
       });

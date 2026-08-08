@@ -20,6 +20,12 @@ import {
 } from "../lib/evidence.js";
 import type { FileAssetStatus } from "../types/index.js";
 import type { TypedQueryClient } from "../generated/storage-kit/query.js";
+import {
+  extractRemoteFileText,
+  readRemoteObject,
+  type RemoteFileLocator,
+  type RemoteObjectReader,
+} from "./file-content.js";
 
 const FILE_ASSET_STATUSES: readonly FileAssetStatus[] = [
   "pending_upload", "uploaded", "verified", "archived", "deleted",
@@ -61,20 +67,30 @@ export interface V1Handler {
   keyStore(): ApiKeyStore;
 }
 
-export function createV1Handler(): V1Handler {
+export interface V1HandlerOptions {
+  getClient?: () => TypedQueryClient;
+  verifier?: ApiKeyVerifier;
+  signingSecret?: string;
+  readObject?: RemoteObjectReader;
+}
+
+export function createV1Handler(options: V1HandlerOptions = {}): V1Handler {
   let verifier: ApiKeyVerifier | null = null;
   let keys: ApiKeyStore | null = null;
+  const resolveClient = options.getClient ?? getCloudClient;
+  const objectReader = options.readObject ?? readRemoteObject;
 
   function ensureKeys(client: TypedQueryClient): ApiKeyStore {
     if (!keys) keys = new ApiKeyStore(client);
     return keys;
   }
   function ensureVerifier(client: TypedQueryClient): ApiKeyVerifier {
+    if (options.verifier) return options.verifier;
     if (!verifier) {
       const ks = ensureKeys(client);
       verifier = verifyApiKey({
         app: "files",
-        signingSecret: signingSecret(),
+        signingSecret: options.signingSecret ?? signingSecret(),
         isRevoked: (kid) => ks.isRevoked(kid),
         audit: (e) => { if (e.outcome === "deny") console.warn(`[auth] deny kid=${e.kid ?? "-"} reason=${e.reason} ${e.method} ${e.path}`); },
       });
@@ -84,7 +100,7 @@ export function createV1Handler(): V1Handler {
 
   return {
     keyStore() {
-      return ensureKeys(getCloudClient());
+      return ensureKeys(resolveClient());
     },
     async handle(req: Request, url: URL): Promise<Response | null> {
       const path = url.pathname;
@@ -92,14 +108,15 @@ export function createV1Handler(): V1Handler {
 
       let client: TypedQueryClient;
       try {
-        client = getCloudClient();
+        client = resolveClient();
       } catch (e) {
         return err(`storage unavailable: ${(e as Error).message}`, 503);
       }
 
       const method = req.method;
       const isRead = method === "GET" || method === "HEAD";
-      const requiredScopes = [isRead ? "files:read" : "files:write"];
+      const isContentRead = /^\/v1\/files\/[^/]+\/(?:content|extract-text)$/.test(path);
+      const requiredScopes = [isRead || isContentRead ? "files:read" : "files:write"];
 
       // ── Authenticate ───────────────────────────────────────────────────
       let decision;
@@ -196,6 +213,42 @@ export function createV1Handler(): V1Handler {
           if (seg.length === 2 && method === "POST" && seg[1] === "purge") {
             const b = await body();
             return json({ purged: await store.purgeDeleted(client, b.source_id as string | undefined, b.older_than as string | undefined) });
+          }
+          if (seg.length === 3 && seg[2] === "content" && method === "GET") {
+            const locator = await authorizedFileLocator(client, decision.principal.kid, seg[1]!);
+            if (!locator) return err("File not found", 404);
+            try {
+              const object = await objectReader(locator);
+              if (!object) return err("File not found", 404);
+              return new Response(object.body, {
+                status: 200,
+                headers: {
+                  "Content-Type": locator.mime || "application/octet-stream",
+                  "Cache-Control": "private, no-store",
+                  "X-Content-Type-Options": "nosniff",
+                },
+              });
+            } catch {
+              return err("File content unavailable", 502);
+            }
+          }
+          if (seg.length === 3 && seg[2] === "extract-text" && method === "POST") {
+            const locator = await authorizedFileLocator(client, decision.principal.kid, seg[1]!);
+            if (!locator) return err("File not found", 404);
+            const b = await body();
+            try {
+              const result = await extractRemoteFileText(locator, objectReader, {
+                max_bytes: typeof b.max_bytes === "number" ? b.max_bytes : undefined,
+                max_segment_chars: typeof b.max_segment_chars === "number" ? b.max_segment_chars : undefined,
+                redact_patterns: Array.isArray(b.redact_patterns)
+                  ? b.redact_patterns.filter((value): value is string => typeof value === "string")
+                  : undefined,
+              });
+              return result ? json(result) : err("File not found", 404);
+            } catch (error) {
+              if (error instanceof SyntaxError) return err("Invalid extraction options", 400);
+              return err("File content unavailable", 502);
+            }
           }
           if (seg.length === 2 && method === "GET") {
             const f = await store.getFile(client, seg[1]!);
@@ -503,4 +556,21 @@ export function createV1Handler(): V1Handler {
       }
     },
   };
+}
+
+async function authorizedFileLocator(
+  client: TypedQueryClient,
+  kid: string,
+  fileId: string,
+): Promise<RemoteFileLocator | null> {
+  const tenantId = await store.getApiKeyTenant(client, kid);
+  if (!tenantId) return null;
+
+  const locator = await store.getRemoteFileLocator(client, fileId);
+  if (!locator) return null;
+
+  // Private content always fails closed: both the verified key and the
+  // server-owned object must carry the same explicit tenant binding.
+  if (!locator.tenant_id || tenantId !== locator.tenant_id) return null;
+  return locator;
 }

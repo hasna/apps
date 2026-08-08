@@ -18,6 +18,7 @@ import { normalizeStorageMode } from "@hasna/contracts/mode";
 
 /** Transport overrides (test injection: fetchImpl, headers, timeout, retry). */
 type StorageClientOverrides = Parameters<typeof resolveStorageClient>[2];
+export type AuthenticatedFilesFetch = (path: string, init?: RequestInit) => Promise<Response>;
 
 /** The files app slug used for the HASNA_<APP>_* env lookups. */
 export const FILES_APP = "files";
@@ -56,6 +57,14 @@ const API_KEY_KEYS = ["HASNA_FILES_API_KEY", "FILES_API_KEY"] as const;
 /** True when any of `keys` carries a non-blank value. The value is never read out. */
 function anySet(source: NodeJS.ProcessEnv, keys: readonly string[]): boolean {
   return keys.some((k) => (source[k]?.trim() ?? "") !== "");
+}
+
+function firstSet(source: NodeJS.ProcessEnv, keys: readonly string[]): string | null {
+  for (const key of keys) {
+    const value = source[key]?.trim();
+    if (value) return value;
+  }
+  return null;
 }
 
 /**
@@ -129,10 +138,16 @@ export type FilesCloudStorage =
       readonly active: true;
       /** The ready HTTP storage client. */
       readonly client: HasnaStorageClient;
+      /**
+       * Authenticated raw-response fetch for private file bytes. The key stays
+       * captured inside this function and is never returned or logged.
+       */
+      readonly fetchContent: AuthenticatedFilesFetch;
     }
   | {
       readonly active: false;
       readonly client: null;
+      readonly fetchContent: null;
     };
 
 /**
@@ -150,8 +165,25 @@ export function resolveFilesCloudStorage(
   env: NodeJS.ProcessEnv = process.env,
   overrides?: StorageClientOverrides,
 ): FilesCloudStorage {
-  const resolved = resolveStorageClient(FILES_APP, filesCloudEnv(env), overrides);
-  return resolved.transport === "cloud-http"
-    ? { active: true, client: resolved.client }
-    : { active: false, client: null };
+  const pinnedEnv = filesCloudEnv(env);
+  const resolved = resolveStorageClient(FILES_APP, pinnedEnv, overrides);
+  if (resolved.transport !== "cloud-http") {
+    return { active: false, client: null, fetchContent: null };
+  }
+
+  const apiKey = firstSet(pinnedEnv, API_KEY_KEYS);
+  if (!apiKey) {
+    throw new Error("Files cloud storage resolved without an API key.");
+  }
+  const fetchImpl = overrides?.fetchImpl ?? globalThis.fetch;
+  const inheritedHeaders = overrides?.headers ?? {};
+  const fetchContent: AuthenticatedFilesFetch = async (path, init = {}) => {
+    const headers = new Headers(inheritedHeaders);
+    for (const [name, value] of new Headers(init.headers)) headers.set(name, value);
+    headers.set("x-api-key", apiKey);
+    headers.set("authorization", `Bearer ${apiKey}`);
+    return fetchImpl(`${resolved.client.baseUrl}${path}`, { ...init, headers });
+  };
+
+  return { active: true, client: resolved.client, fetchContent };
 }

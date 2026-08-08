@@ -74,6 +74,24 @@ export const openApiDocument = {
       TagsBody: { type: "object", properties: { tags: { type: "array", items: { type: "string" } } }, required: ["tags"] },
       Ok: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] },
       Stats: { type: "object", properties: { total_files: { type: "integer" }, total_size: { type: "integer" }, by_ext: { type: "array", items: { type: "object", additionalProperties: true } }, by_source: { type: "array", items: { type: "object", additionalProperties: true } } }, required: ["total_files", "total_size"] },
+      ExtractedText: {
+        type: "object",
+        additionalProperties: true,
+        properties: {
+          source_ref: { type: "string" },
+          file_id: { type: "string" },
+          revision_id: { type: "string" },
+          status: { type: "string" },
+          mime: { type: "string" },
+          bytes_read: { type: "integer" },
+          total_size: { type: "integer" },
+          truncated: { type: "boolean" },
+          redacted: { type: "boolean" },
+          segments: { type: "array", items: { type: "object", additionalProperties: true } },
+          metadata: { type: "object", additionalProperties: true },
+        },
+        required: ["source_ref", "status", "mime", "bytes_read", "truncated", "redacted", "segments", "metadata"],
+      },
     },
   },
   security: [{ apiKey: [] }],
@@ -110,6 +128,34 @@ export const openApiDocument = {
       },
     },
     "/files/{id}": { get: { operationId: "getFile", summary: "Get a file", parameters: [idParam("id")], responses: { "200": ok(ref("File")) } } },
+    // `/files/{id}/content` is intentionally handled by ApiStore's
+    // authenticated raw-response transport rather than this generated JSON
+    // client. The current generator parses every response as text/JSON and
+    // would expose a binary operation as Promise<void>, silently discarding
+    // the downloaded bytes.
+    "/files/{id}/extract-text": {
+      post: {
+        operationId: "extractFileText",
+        summary: "Retrieve authorized derived text extraction",
+        parameters: [idParam("id")],
+        requestBody: {
+          required: false,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  max_bytes: { type: "integer" },
+                  max_segment_chars: { type: "integer" },
+                  redact_patterns: { type: "array", items: { type: "string" } },
+                },
+              },
+            },
+          },
+        },
+        responses: { "200": ok(ref("ExtractedText")) },
+      },
+    },
     "/files/{id}/tags": {
       post: { operationId: "addFileTags", summary: "Add tags to a file", parameters: [idParam("id")], requestBody: { required: true, content: { "application/json": { schema: ref("TagsBody") } } }, responses: { "200": ok(ref("Ok")) } },
       delete: { operationId: "removeFileTags", summary: "Remove tags from a file", parameters: [idParam("id")], requestBody: { required: true, content: { "application/json": { schema: ref("TagsBody") } } }, responses: { "200": ok(ref("Ok")) } },

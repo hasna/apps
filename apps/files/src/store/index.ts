@@ -25,7 +25,7 @@ let cache: FilesStore | undefined;
 /** Resolve the active {@link FilesStore} for the current environment. */
 export function resolveStore(env: NodeJS.ProcessEnv = process.env): FilesStore {
   const cloud = resolveFilesCloudStorage(env);
-  return cloud.active ? new ApiStore(cloud.client) : new LocalStore();
+  return cloud.active ? new ApiStore(cloud.client, cloud.fetchContent) : new LocalStore();
 }
 
 /** Memoized {@link resolveStore} for the process lifetime. */

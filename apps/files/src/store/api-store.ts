@@ -33,7 +33,9 @@ import type {
   SearchResult,
   Source,
   Tag,
+  ExtractedTextResult,
 } from "../types/index.js";
+import type { AuthenticatedFilesFetch } from "../lib/cloud-storage.js";
 import {
   redactEvidenceUploadCredentials,
   type CreateEvidenceUploadInput,
@@ -94,7 +96,10 @@ async function deletedOk(p: Promise<unknown>): Promise<boolean> {
 export class ApiStore implements FilesStore {
   readonly transport = "api" as const;
 
-  constructor(private readonly client: HasnaStorageClient) {}
+  constructor(
+    private readonly client: HasnaStorageClient,
+    private readonly fetchContent?: AuthenticatedFilesFetch,
+  ) {}
 
   private get http() {
     return this.client.transport;
@@ -223,6 +228,35 @@ export class ApiStore implements FilesStore {
   }
   async resolveConflict(fileId: string): Promise<boolean> {
     return (await orNull(this.http.post(`/files/${seg(fileId)}/resolve-conflict`))) !== null;
+  }
+
+  async downloadFileContent(
+    fileId: string,
+    write: (chunk: Uint8Array) => void | Promise<void>,
+  ): Promise<void> {
+    if (!this.fetchContent) throw new Error("Authenticated file-content transport is unavailable.");
+    const path = `/files/${seg(fileId)}/content`;
+    const response = await this.fetchContent(path, { method: "GET" });
+    if (!response.ok) throw await remoteContentError("GET", path, response);
+    if (!response.body) throw new Error("The file-content response was empty.");
+
+    const reader = response.body.getReader();
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      await write(next.value);
+    }
+  }
+
+  async extractFileText(
+    fileId: string,
+    input: {
+      max_bytes?: number;
+      max_segment_chars?: number;
+      redact_patterns?: string[];
+    } = {},
+  ): Promise<ExtractedTextResult> {
+    return this.http.post<ExtractedTextResult>(`/files/${seg(fileId)}/extract-text`, input);
   }
 
   // ── tags ─────────────────────────────────────────────────────────────────
@@ -413,4 +447,14 @@ export class ApiStore implements FilesStore {
   async listEvidenceAccessEvents(assetId: string, limit = 50): Promise<FileAccessEvent[]> {
     return this.http.get<FileAccessEvent[]>(`/evidence/assets/${seg(assetId)}/access-events`, { query: { limit } });
   }
+}
+
+async function remoteContentError(method: string, path: string, response: Response): Promise<HasnaHttpError> {
+  let body: unknown = null;
+  try {
+    body = await response.json();
+  } catch {
+    // Private file bytes and provider errors are never reflected into the CLI.
+  }
+  return new HasnaHttpError(method, path, response.status, body);
 }

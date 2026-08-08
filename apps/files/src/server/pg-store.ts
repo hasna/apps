@@ -35,6 +35,7 @@ import type {
   Tag,
 } from "../types/index.js";
 import type { CreateUploadIntentInput, UpdateFileAssetStatusInput } from "../lib/evidence.js";
+import type { RemoteFileLocator } from "./file-content.js";
 
 const APP = "files";
 
@@ -352,6 +353,82 @@ export async function getFileByPath(client: TypedQueryClient, sourceId: string, 
   const row = await client.get<Record<string, unknown>>("SELECT * FROM files WHERE source_id = $1 AND path = $2", [sourceId, path]);
   if (!row) return null;
   return toFile(row, await fileTags(client, String(row.id)));
+}
+
+/** Resolve the server-side tenant bound to a verified API-key id. */
+export async function getApiKeyTenant(client: TypedQueryClient, kid: string): Promise<string | null> {
+  const row = await client.get<{ tenant_id: string }>(
+    `SELECT bindings.tenant_id
+     FROM api_key_tenants bindings
+     JOIN api_keys keys ON keys.kid = bindings.kid
+     WHERE bindings.kid = $1
+       AND keys.app = 'files'
+       AND keys.revoked_at IS NULL
+       AND (keys.expires_at IS NULL OR keys.expires_at > now())`,
+    [kid],
+  );
+  return row?.tenant_id ?? null;
+}
+
+/**
+ * Resolve private object storage for one active file without returning provider
+ * coordinates through the HTTP API. The caller must apply tenant authorization
+ * before passing this locator to the server-owned object reader.
+ */
+export async function getRemoteFileLocator(
+  client: TypedQueryClient,
+  fileId: string,
+): Promise<RemoteFileLocator | null> {
+  const row = await client.get<Record<string, unknown>>(
+    `SELECT
+       f.id AS file_id,
+       f.mime AS file_mime,
+       f.size AS file_size,
+       fv.id AS revision_id,
+       fv.source_ref,
+       fv.storage_provider,
+       o.bucket,
+       o.region,
+       o.object_key,
+       o.version_id,
+       o.org_id AS tenant_id
+     FROM files f
+     LEFT JOIN LATERAL (
+       SELECT id, source_ref, storage_provider, bucket, region, object_key, s3_object_id
+       FROM file_versions
+       WHERE file_id = f.id AND state = 'active'
+       ORDER BY created_at DESC
+       LIMIT 1
+     ) fv ON TRUE
+     JOIN s3_objects o
+       ON o.id = fv.s3_object_id
+      AND o.org_id IS NOT NULL
+     WHERE f.id = $1 AND f.status = 'active'`,
+    [fileId],
+  );
+  if (
+    !row
+    || row.storage_provider !== "s3"
+    || row.bucket == null
+    || row.object_key == null
+    || row.source_ref == null
+    || row.tenant_id == null
+  ) {
+    return null;
+  }
+
+  return {
+    file_id: String(row.file_id),
+    revision_id: row.revision_id == null ? undefined : String(row.revision_id),
+    source_ref: String(row.source_ref),
+    mime: String(row.file_mime ?? "application/octet-stream"),
+    size: Number(row.file_size ?? 0),
+    bucket: String(row.bucket),
+    object_key: String(row.object_key),
+    version_id: row.version_id == null ? undefined : String(row.version_id),
+    region: row.region == null ? undefined : String(row.region),
+    tenant_id: String(row.tenant_id),
+  };
 }
 
 /** Files most recently touched by agent activity. */
