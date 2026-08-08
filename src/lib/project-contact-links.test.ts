@@ -187,6 +187,7 @@ function membership(linked: boolean, version: string): ContactProjectMembershipS
 class FakeMembershipAuthority implements ContactProjectMembershipAuthority {
   readonly service_instance = serviceInstance;
   readonly mutations: Array<{ kind: "attach" | "detach"; expected_version: string; operation_id: string; step_id: string }> = [];
+  readonly receipts = new Map<string, ContactProjectMembershipMutationResult>();
   snapshot = membership(false, "contacts-v1");
   projectContactIds = [contactId];
   failCompensation = false;
@@ -210,12 +211,18 @@ class FakeMembershipAuthority implements ContactProjectMembershipAuthority {
     step_id: string;
   }): Promise<ContactProjectMembershipMutationResult> {
     this.mutations.push({ kind: "attach", ...input });
-    if (this.failCompensation && input.step_id.endsWith(":compensate")) {
+    const receiptKey = `attach:${input.operation_id}:${input.step_id}`;
+    const duplicate = this.receipts.get(receiptKey);
+    if (duplicate) return { ...duplicate, outcome: "duplicate_of_accepted" };
+    if (this.failCompensation && input.step_id.includes(":compensate:")) {
       throw new Error("contacts compensation failed");
+    }
+    if (input.expected_version !== this.snapshot.version) {
+      throw new Error("contacts membership expected_version conflict");
     }
     const before = this.snapshot;
     this.snapshot = membership(true, `${before.version}:attach`);
-    return {
+    const result: ContactProjectMembershipMutationResult = {
       outcome: before.linked ? "duplicate_of_accepted" : "accepted",
       operation_id: input.operation_id,
       step_id: input.step_id,
@@ -223,6 +230,8 @@ class FakeMembershipAuthority implements ContactProjectMembershipAuthority {
       after: this.snapshot,
       receipt_id: `contacts-${input.step_id}`,
     };
+    this.receipts.set(receiptKey, result);
+    return result;
   }
 
   async detach(input: {
@@ -231,12 +240,18 @@ class FakeMembershipAuthority implements ContactProjectMembershipAuthority {
     step_id: string;
   }): Promise<ContactProjectMembershipMutationResult> {
     this.mutations.push({ kind: "detach", ...input });
-    if (this.failCompensation && input.step_id.endsWith(":compensate")) {
+    const receiptKey = `detach:${input.operation_id}:${input.step_id}`;
+    const duplicate = this.receipts.get(receiptKey);
+    if (duplicate) return { ...duplicate, outcome: "duplicate_of_accepted" };
+    if (this.failCompensation && input.step_id.includes(":compensate:")) {
       throw new Error("contacts compensation failed");
+    }
+    if (input.expected_version !== this.snapshot.version) {
+      throw new Error("contacts membership expected_version conflict");
     }
     const before = this.snapshot;
     this.snapshot = membership(false, `${before.version}:detach`);
-    return {
+    const result: ContactProjectMembershipMutationResult = {
       outcome: before.linked ? "accepted" : "duplicate_of_accepted",
       operation_id: input.operation_id,
       step_id: input.step_id,
@@ -244,6 +259,8 @@ class FakeMembershipAuthority implements ContactProjectMembershipAuthority {
       after: this.snapshot,
       receipt_id: `contacts-${input.step_id}`,
     };
+    this.receipts.set(receiptKey, result);
+    return result;
   }
 }
 
@@ -297,7 +314,7 @@ describe("project contact-link coordination", () => {
         kind: "attach",
         expected_version: "contacts-v1",
         operation_id: "attach-bianca",
-        step_id: "contacts-membership",
+        step_id: expect.stringMatching(/^contacts-membership:forward:[0-9a-f]{16}$/),
       }),
     ]);
     expect(projects.mutations).toHaveLength(1);
@@ -317,7 +334,7 @@ describe("project contact-link coordination", () => {
       }],
     });
     expect(result.evidence.map((item) => item.step_id)).toEqual([
-      "contacts-membership",
+      expect.stringMatching(/^contacts-membership:forward:[0-9a-f]{16}$/),
       "projects-resource-link",
     ]);
   });
@@ -362,13 +379,48 @@ describe("project contact-link coordination", () => {
     } satisfies Partial<ProjectContactLinkOperationError>);
 
     expect(contacts.mutations).toEqual([
-      expect.objectContaining({ kind: "attach", step_id: "contacts-membership" }),
+      expect.objectContaining({
+        kind: "attach",
+        step_id: expect.stringMatching(/^contacts-membership:forward:[0-9a-f]{16}$/),
+      }),
       expect.objectContaining({
         kind: "detach",
         expected_version: "contacts-v1:attach",
-        step_id: "contacts-membership:compensate",
+        step_id: expect.stringMatching(/^contacts-membership:compensate:[0-9a-f]{16}$/),
       }),
     ]);
+  });
+
+  test("retries attach with a new revision-bound step after successful compensation", async () => {
+    const projects = new FakeProjectStore();
+    projects.failMutation = new Error("project resource link expected_revision conflict");
+    const contacts = new FakeMembershipAuthority();
+    const input = {
+      project_id: projectId,
+      contact_id: contactId,
+      operation_id: "attach-bianca-retry",
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+      max_items: 1000,
+    };
+
+    await expect(attachProjectContact(dependencies(projects, contacts), input)).rejects.toMatchObject({
+      code: "PROJECT_CONTACT_LINK_PROJECT_WRITE_FAILED_COMPENSATED",
+      compensated: true,
+    } satisfies Partial<ProjectContactLinkOperationError>);
+    expect(contacts.snapshot.linked).toBe(false);
+
+    projects.failMutation = null;
+    const retried = await attachProjectContact(dependencies(projects, contacts), input);
+
+    const forwardSteps = contacts.mutations
+      .filter((mutation) => mutation.kind === "attach" && mutation.step_id.includes(":forward:"))
+      .map((mutation) => mutation.step_id);
+    expect(forwardSteps).toHaveLength(2);
+    expect(new Set(forwardSteps).size).toBe(2);
+    expect(contacts.snapshot.linked).toBe(true);
+    expect(retried.membership.linked).toBe(true);
+    expect(retried.project_link).not.toBeNull();
   });
 
   test("preserves an exact uncompensated Projects conflict when Contacts was already linked", async () => {
@@ -433,7 +485,7 @@ describe("project contact-link coordination", () => {
       expect.objectContaining({
         kind: "detach",
         expected_version: "contacts-v2",
-        step_id: "contacts-membership",
+        step_id: expect.stringMatching(/^contacts-membership:forward:[0-9a-f]{16}$/),
       }),
     ]);
     expect(projects.mutations[0]).toMatchObject({
@@ -443,5 +495,39 @@ describe("project contact-link coordination", () => {
         locator: { kind: "external_uuid", value: otherContactId },
       })],
     });
+  });
+
+  test("retries detach with a new revision-bound step after successful compensation", async () => {
+    const projects = new FakeProjectStore();
+    projects.read = projectRead([resourceLink()]);
+    projects.failMutation = new Error("project resource link expected_revision conflict");
+    const contacts = new FakeMembershipAuthority();
+    contacts.snapshot = membership(true, "contacts-v2");
+    const input = {
+      project_id: projectId,
+      contact_id: contactId,
+      operation_id: "detach-bianca-retry",
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+      max_items: 1000,
+    };
+
+    await expect(detachProjectContact(dependencies(projects, contacts), input)).rejects.toMatchObject({
+      code: "PROJECT_CONTACT_LINK_PROJECT_WRITE_FAILED_COMPENSATED",
+      compensated: true,
+    } satisfies Partial<ProjectContactLinkOperationError>);
+    expect(contacts.snapshot.linked).toBe(true);
+
+    projects.failMutation = null;
+    const retried = await detachProjectContact(dependencies(projects, contacts), input);
+
+    const forwardSteps = contacts.mutations
+      .filter((mutation) => mutation.kind === "detach" && mutation.step_id.includes(":forward:"))
+      .map((mutation) => mutation.step_id);
+    expect(forwardSteps).toHaveLength(2);
+    expect(new Set(forwardSteps).size).toBe(2);
+    expect(contacts.snapshot.linked).toBe(false);
+    expect(retried.membership.linked).toBe(false);
+    expect(retried.project_link).toBeNull();
   });
 });

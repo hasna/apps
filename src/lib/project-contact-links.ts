@@ -5,6 +5,7 @@ import type {
   ProjectResourceLinkInput,
   ProjectResourceLinkMutationResult,
 } from "../types/workspace.js";
+import { sha256 } from "./guarded-project-mutation.js";
 import { normalizeProjectResourceLink } from "./project-resource-links.js";
 
 export const PROJECT_CONTACT_RESOURCE_LINK_TYPE = {
@@ -165,6 +166,13 @@ function uniqueSorted(values: readonly string[]): string[] {
   return [...new Set(values)].sort((a, b) => a.localeCompare(b));
 }
 
+function contactsMembershipStepId(
+  direction: "forward" | "compensate",
+  expectedVersion: string,
+): string {
+  return `${PROJECT_CONTACT_LINK_STEPS.contactsMembership}:${direction}:${sha256(expectedVersion).slice(0, 16)}`;
+}
+
 export function projectContactResourceLink(
   serviceInstance: string,
   contactId: string,
@@ -251,16 +259,17 @@ async function compensateContacts(
   direction: "attach" | "detach",
   dependencies: ProjectContactLinkDependencies,
   input: ProjectContactLinkMutationInput,
+  contactId: string,
   expectedVersion: string,
 ): Promise<ContactProjectMembershipMutationResult> {
   const mutation = direction === "attach"
     ? dependencies.contacts.attach.bind(dependencies.contacts)
     : dependencies.contacts.detach.bind(dependencies.contacts);
   return mutation({
-    contact_id: input.contact_id,
+    contact_id: contactId,
     project_id: input.project_id,
     operation_id: input.operation_id,
-    step_id: `${PROJECT_CONTACT_LINK_STEPS.contactsMembership}:compensate`,
+    step_id: contactsMembershipStepId("compensate", expectedVersion),
     expected_version: expectedVersion,
   });
 }
@@ -346,7 +355,7 @@ export async function attachProjectContact(
         contact_id: desiredLink.locator.value,
         project_id: input.project_id,
         operation_id: input.operation_id,
-        step_id: PROJECT_CONTACT_LINK_STEPS.contactsMembership,
+        step_id: contactsMembershipStepId("forward", membershipBefore.version),
         expected_version: membershipBefore.version,
       });
       membershipAfter = membershipMutation.after;
@@ -386,7 +395,13 @@ export async function attachProjectContact(
       });
     }
     try {
-      await compensateContacts("detach", dependencies, input, membershipAfter.version);
+      await compensateContacts(
+        "detach",
+        dependencies,
+        input,
+        desiredLink.locator.value,
+        membershipAfter.version,
+      );
       throw new ProjectContactLinkOperationError({
         code: "PROJECT_CONTACT_LINK_PROJECT_WRITE_FAILED_COMPENSATED",
         stage: PROJECT_CONTACT_LINK_STEPS.projectsResourceLink,
@@ -473,7 +488,7 @@ export async function detachProjectContact(
         contact_id: normalized.locator.value,
         project_id: input.project_id,
         operation_id: input.operation_id,
-        step_id: PROJECT_CONTACT_LINK_STEPS.contactsMembership,
+        step_id: contactsMembershipStepId("forward", membershipBefore.version),
         expected_version: membershipBefore.version,
       });
       membershipAfter = membershipMutation.after;
@@ -517,7 +532,13 @@ export async function detachProjectContact(
         });
       }
       try {
-        await compensateContacts("attach", dependencies, input, membershipAfter.version);
+        await compensateContacts(
+          "attach",
+          dependencies,
+          input,
+          normalized.locator.value,
+          membershipAfter.version,
+        );
         throw new ProjectContactLinkOperationError({
           code: "PROJECT_CONTACT_LINK_PROJECT_WRITE_FAILED_COMPENSATED",
           stage: PROJECT_CONTACT_LINK_STEPS.projectsResourceLink,
