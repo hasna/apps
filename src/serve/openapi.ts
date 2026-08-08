@@ -319,7 +319,7 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
             },
             target_kind: {
               type: "string",
-              enum: ["org", "project", "task_list", "plan", "channel", "collection", "item"],
+              enum: ["org", "project", "task", "task_list", "plan", "channel", "collection", "item"],
             },
             locator: ref("ProjectResourceLinkLocator"),
             scope: { type: "string", enum: ["resource", "collection"] },

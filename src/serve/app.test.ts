@@ -124,6 +124,7 @@ describe("projects-serve probes", () => {
     expect(spec.components.schemas.ProjectResourceLinkInput.properties.authority.enum).toContain("orgs");
     expect(spec.components.schemas.ProjectResourceLinkInput.properties.source_package.enum).toContain("@hasna/orgs");
     expect(spec.components.schemas.ProjectResourceLinkInput.properties.target_kind.enum).toContain("org");
+    expect(spec.components.schemas.ProjectResourceLinkInput.properties.target_kind.enum).toContain("task");
     expect(spec.components.schemas.ProjectResourceLinkLocator.properties.kind.enum).toEqual([
       "external_uuid",
       "canonical_uri",

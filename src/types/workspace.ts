@@ -468,6 +468,7 @@ export const PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS = 1_000;
 export type ProjectResourceTargetKind =
   | "org"
   | "project"
+  | "task"
   | "task_list"
   | "plan"
   | "channel"

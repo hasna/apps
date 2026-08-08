@@ -4,6 +4,8 @@ import { createWorkspace, mutateProjectResourceLinks, readProjectResourceLinks, 
 import { runMigrations } from "../db/schema.js";
 import {
   normalizeProjectResourceLink,
+  normalizeProjectResourceLinks,
+  projectResourceLinkId,
   type ProjectResourceLinkInput,
 } from "./project-resource-links.js";
 
@@ -41,6 +43,21 @@ function todosProject(): ProjectResourceLinkInput {
     },
     scope: "collection",
     labels: { name: "Email Triage" },
+  };
+}
+
+function todosTask(): ProjectResourceLinkInput {
+  return {
+    authority: "todos",
+    service_instance: "urn:hasna:todos:service:primary",
+    source_package: "@hasna/todos",
+    target_kind: "task",
+    locator: {
+      kind: "external_uuid",
+      value: "e2f791bd-f26b-4fac-a762-2cba96202aa5",
+    },
+    scope: "resource",
+    labels: { name: "Anchor Dubai fraud project" },
   };
 }
 
@@ -153,6 +170,42 @@ describe("project resource-link schema", () => {
     })).toThrow(/target_kind/);
   });
 
+  test("accepts complete Todos task UUIDs while every other authority remains closed", () => {
+    expect(normalizeProjectResourceLink(todosTask())).toMatchObject({
+      authority: "todos",
+      source_package: "@hasna/todos",
+      target_kind: "task",
+      locator: {
+        kind: "external_uuid",
+        value: "e2f791bd-f26b-4fac-a762-2cba96202aa5",
+      },
+      scope: "resource",
+    });
+    expect(() => normalizeProjectResourceLink({
+      ...todosTask(),
+      locator: { kind: "external_uuid", value: "e2f791bd" },
+    })).toThrow(/complete UUID/);
+    expect(() => normalizeProjectResourceLink({
+      ...todosTask(),
+      locator: {
+        kind: "canonical_uri",
+        value: "urn:hasna:todos:task:e2f791bd-f26b-4fac-a762-2cba96202aa5",
+      },
+    })).toThrow(/complete external_uuid task ID/);
+
+    for (const foreign of [
+      { authority: "conversations", source_package: "@hasna/conversations" },
+      { authority: "knowledge", source_package: "@hasna/knowledge" },
+      { authority: "mementos", source_package: "@hasna/mementos" },
+      { authority: "orgs", source_package: "@hasna/orgs" },
+    ] as const) {
+      expect(() => normalizeProjectResourceLink({
+        ...todosTask(),
+        ...foreign,
+      })).toThrow(/target_kind/);
+    }
+  });
+
   test("stores immutable locator columns and rejects direct identity mutation", () => {
     const db = makeDb();
     const project = createWorkspace({ name: "Immutable Links", slug: "immutable-links" }, db);
@@ -176,6 +229,57 @@ describe("project resource-link schema", () => {
 });
 
 describe("project resource-link guarded lifecycle", () => {
+  test("keeps Todos task identity stable through replay, rollback, reapply, and request collisions", () => {
+    const db = makeDb();
+    const project = createWorkspace({ name: "Task Link", slug: "task-link" }, db);
+    const task = todosTask();
+    const expectedId = projectResourceLinkId(project.id, task);
+    expect(projectResourceLinkId(project.id, { ...task, labels: { name: "Relabeled" } })).toBe(expectedId);
+    expect(() => normalizeProjectResourceLinks([
+      task,
+      { ...task, labels: { name: "Duplicate identity" } },
+    ])).toThrow(/duplicate resource link identity/);
+
+    const input = {
+      project_id: project.id,
+      operation_id: "op-task-link",
+      step_id: "task-link",
+      mode: "add" as const,
+      expected_revision: project.updated_at,
+      links: [task],
+      response_byte_limit: 64_000,
+      time_budget_ms: 5_000,
+    };
+    const added = mutateProjectResourceLinks(input, db);
+    expect(added.outcome).toBe("accepted");
+    expect(added.after?.links.map((link) => link.id)).toEqual([expectedId]);
+
+    const replay = mutateProjectResourceLinks(input, db);
+    expect(replay.outcome).toBe("duplicate_of_accepted");
+    expect(replay.receipt?.duplicate_of_receipt_id).toBe(added.receipt?.receipt_id);
+
+    const rolledBack = rollbackProjectResourceLinks({
+      project_id: project.id,
+      operation_id: "op-task-link-rollback",
+      step_id: "task-link",
+      accepted_receipt_id: added.receipt!.receipt_id,
+      expected_current_revision: added.after!.project.updated_at,
+      response_byte_limit: 64_000,
+      time_budget_ms: 5_000,
+    }, db);
+    expect(rolledBack.outcome).toBe("accepted");
+    expect(rolledBack.after?.links).toEqual([]);
+
+    const reapplied = mutateProjectResourceLinks({
+      ...input,
+      operation_id: "op-task-link-reapply",
+      expected_revision: rolledBack.after!.project.updated_at,
+    }, db);
+    expect(reapplied.outcome).toBe("accepted");
+    expect(reapplied.after?.links.map((link) => link.id)).toEqual([expectedId]);
+    db.close();
+  });
+
   test("adds several resources, projects legacy scalars, and retries idempotently", () => {
     const db = makeDb();
     const project = createWorkspace({ name: "Email Triage", slug: "email-triage" }, db);

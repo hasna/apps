@@ -35,7 +35,7 @@ export interface ProjectResourceLinkLabels { "name"?: string; "channel_name"?: s
 
 export interface ProjectResourceLinkLocator { "kind": "external_uuid" | "canonical_uri" | "conversations_channel_id"; "value": string }
 
-export interface ProjectResourceLinkInput { "authority": "todos" | "conversations" | "knowledge" | "mementos" | "orgs"; "service_instance": string; "source_package": "@hasna/todos" | "@hasna/conversations" | "@hasna/knowledge" | "@hasna/mementos" | "@hasna/orgs"; "target_kind": "org" | "project" | "task_list" | "plan" | "channel" | "collection" | "item"; "locator": ProjectResourceLinkLocator; "scope": "resource" | "collection"; "labels"?: ProjectResourceLinkLabels }
+export interface ProjectResourceLinkInput { "authority": "todos" | "conversations" | "knowledge" | "mementos" | "orgs"; "service_instance": string; "source_package": "@hasna/todos" | "@hasna/conversations" | "@hasna/knowledge" | "@hasna/mementos" | "@hasna/orgs"; "target_kind": "org" | "project" | "task" | "task_list" | "plan" | "channel" | "collection" | "item"; "locator": ProjectResourceLinkLocator; "scope": "resource" | "collection"; "labels"?: ProjectResourceLinkLabels }
 
 export type ProjectResourceLink = ProjectResourceLinkInput & { "id": string; "project_id": string; "labels": ProjectResourceLinkLabels; "created_at": string; "updated_at": string };
 

@@ -27,7 +27,7 @@ const SOURCE_PACKAGE_BY_AUTHORITY: Record<ProjectResourceAuthority, string> = {
 };
 
 const TARGET_KINDS_BY_AUTHORITY: Record<ProjectResourceAuthority, readonly ProjectResourceTargetKind[]> = {
-  todos: ["project", "task_list", "plan"],
+  todos: ["project", "task", "task_list", "plan"],
   conversations: ["project", "channel"],
   knowledge: ["collection", "item"],
   mementos: ["project", "item"],
@@ -159,6 +159,9 @@ export function normalizeProjectResourceLink(input: ProjectResourceLinkInput): P
     throw new Error(
       "resource link conversations_channel_id is only valid for Conversations channel links",
     );
+  }
+  if (authority === "todos" && input.target_kind === "task" && locator.kind !== "external_uuid") {
+    throw new Error("Todos task links require a complete external_uuid task ID");
   }
   if (authority === "conversations" && input.target_kind === "channel") {
     if (locator.kind !== "external_uuid" && locator.kind !== "conversations_channel_id") {

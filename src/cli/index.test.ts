@@ -788,6 +788,18 @@ describe("project-first CLI surface", () => {
       scope: "collection",
       labels: { name: "Typed Links Tasks", tags: ["project"] },
     };
+    const todosTaskLink = {
+      authority: "todos",
+      service_instance: "urn:hasna:todos:test",
+      source_package: "@hasna/todos",
+      target_kind: "task",
+      locator: {
+        kind: "external_uuid",
+        value: "e2f791bd-f26b-4fac-a762-2cba96202aa5",
+      },
+      scope: "resource",
+      labels: { name: "Anchor Dubai fraud project" },
+    };
 
     try {
       const create = runProjects([
@@ -803,11 +815,44 @@ describe("project-first CLI surface", () => {
         project: { id: string; updated_at: string };
       };
 
+      for (const [suffix, invalidLink, message] of [
+        [
+          "partial-task-id",
+          { ...todosTaskLink, locator: { kind: "external_uuid", value: "e2f791bd" } },
+          "complete UUID",
+        ],
+        [
+          "cross-authority-task",
+          { ...todosTaskLink, authority: "knowledge", source_package: "@hasna/knowledge" },
+          "target_kind",
+        ],
+      ] as const) {
+        const rejected = runProjects([
+          "resource-links-add",
+          created.project.id,
+          "--links-json",
+          JSON.stringify([invalidLink]),
+          "--expected-revision",
+          created.project.updated_at,
+          "--operation-id",
+          `cli-resource-links-${suffix}`,
+          "--step-id",
+          "reject-invalid-task-link",
+          "--response-byte-limit",
+          "100000",
+          "--time-budget-ms",
+          "5000",
+          "--json",
+        ], env);
+        expect(rejected.exitCode).toBe(1);
+        expect(text(rejected.stderr)).toContain(message);
+      }
+
       const addArgs = [
         "resource-links-add",
         created.project.id,
         "--links-json",
-        JSON.stringify([channelLink, todosCollectionLink]),
+        JSON.stringify([channelLink, todosCollectionLink, todosTaskLink]),
         "--expected-revision",
         created.project.updated_at,
         "--operation-id",
@@ -826,13 +871,14 @@ describe("project-first CLI surface", () => {
         outcome: string;
         after: {
           project: { updated_at: string; integrations: Record<string, string> };
-          links: Array<{ scope: string; labels: Record<string, unknown> }>;
+          links: Array<{ target_kind: string; scope: string; labels: Record<string, unknown> }>;
         };
         receipt: { receipt_id: string };
       };
       expect(added.outcome).toBe("accepted");
-      expect(added.after.links).toHaveLength(2);
+      expect(added.after.links).toHaveLength(3);
       expect(added.after.links.some((link) => link.scope === "collection")).toBe(true);
+      expect(added.after.links.some((link) => link.target_kind === "task")).toBe(true);
       expect(added.after.project.integrations).toEqual({
         conversations_channel: "typed-links",
         todos_task_list_id: "urn:hasna:todos:task-list:typed-links",
@@ -858,7 +904,7 @@ describe("project-first CLI surface", () => {
         link_count: number;
         complete: boolean;
         truncated: boolean;
-      }).toMatchObject({ link_count: 2, complete: true, truncated: false });
+      }).toMatchObject({ link_count: 3, complete: true, truncated: false });
 
       const reconciledChannel = {
         ...channelLink,
@@ -924,7 +970,7 @@ describe("project-first CLI surface", () => {
         };
       };
       expect(rolledBack.outcome).toBe("accepted");
-      expect(rolledBack.after.links).toHaveLength(2);
+      expect(rolledBack.after.links).toHaveLength(3);
       expect(rolledBack.after.project.integrations).toEqual({
         conversations_channel: "typed-links",
         todos_task_list_id: "urn:hasna:todos:task-list:typed-links",
@@ -945,7 +991,7 @@ describe("project-first CLI surface", () => {
       expect(JSON.parse(text(guarded.stdout)) as {
         resource_link_count: number;
         resource_links: unknown[];
-      }).toMatchObject({ resource_link_count: 2 });
+      }).toMatchObject({ resource_link_count: 3 });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
