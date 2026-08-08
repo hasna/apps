@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { getDb } from "./database.js";
 import { type SearchResult, type SearchProviderName, generateId } from "../types/index.js";
+import { redactContentSearchResult } from "../lib/redaction.js";
 
 interface ResultRow {
   id: string;
@@ -19,7 +20,7 @@ interface ResultRow {
 }
 
 function rowToResult(row: ResultRow): SearchResult {
-  return {
+  return redactContentSearchResult({
     id: row.id,
     searchId: row.search_id,
     title: row.title,
@@ -33,7 +34,7 @@ function rowToResult(row: ResultRow): SearchResult {
     thumbnail: row.thumbnail,
     metadata: JSON.parse(row.metadata) as Record<string, unknown>,
     createdAt: row.created_at,
-  };
+  });
 }
 
 export function createResult(
@@ -56,27 +57,7 @@ export function createResult(
   const d = db ?? getDb();
   const id = data.id ?? generateId();
   const now = new Date().toISOString();
-
-  d.prepare(
-    `INSERT INTO search_results (id, search_id, title, url, snippet, source, provider, rank, score, published_at, thumbnail, metadata, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    id,
-    data.searchId,
-    data.title,
-    data.url,
-    data.snippet,
-    data.source,
-    data.provider,
-    data.rank,
-    data.score ?? null,
-    data.publishedAt ?? null,
-    data.thumbnail ?? null,
-    JSON.stringify(data.metadata ?? {}),
-    now,
-  );
-
-  return {
+  const result = redactContentSearchResult({
     id,
     searchId: data.searchId,
     title: data.title,
@@ -90,7 +71,28 @@ export function createResult(
     thumbnail: data.thumbnail ?? null,
     metadata: data.metadata ?? {},
     createdAt: now,
-  };
+  });
+
+  d.prepare(
+    `INSERT INTO search_results (id, search_id, title, url, snippet, source, provider, rank, score, published_at, thumbnail, metadata, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    result.id,
+    result.searchId,
+    result.title,
+    result.url,
+    result.snippet,
+    result.source,
+    result.provider,
+    result.rank,
+    result.score,
+    result.publishedAt,
+    result.thumbnail,
+    JSON.stringify(result.metadata),
+    result.createdAt,
+  );
+
+  return result;
 }
 
 export function createResults(
@@ -124,22 +126,7 @@ export function createResults(
   try {
     for (const data of results) {
       const id = data.id ?? generateId();
-      stmt.run(
-        id,
-        data.searchId,
-        data.title,
-        data.url,
-        data.snippet,
-        data.source,
-        data.provider,
-        data.rank,
-        data.score ?? null,
-        data.publishedAt ?? null,
-        data.thumbnail ?? null,
-        JSON.stringify(data.metadata ?? {}),
-        now,
-      );
-      created.push({
+      const result = redactContentSearchResult({
         id,
         searchId: data.searchId,
         title: data.title,
@@ -154,6 +141,22 @@ export function createResults(
         metadata: data.metadata ?? {},
         createdAt: now,
       });
+      stmt.run(
+        result.id,
+        result.searchId,
+        result.title,
+        result.url,
+        result.snippet,
+        result.source,
+        result.provider,
+        result.rank,
+        result.score,
+        result.publishedAt,
+        result.thumbnail,
+        JSON.stringify(result.metadata),
+        result.createdAt,
+      );
+      created.push(result);
     }
     d.exec("COMMIT");
   } catch (err) {

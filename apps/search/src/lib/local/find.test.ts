@@ -81,6 +81,30 @@ describe("findLocal", () => {
     expect(res.results[0]!.snippet).toContain("needleword");
   });
 
+  test("redacts credential assignments without changing safe content or location metadata", () => {
+    const syntheticValue = "synthetic-only-not-live-7a31";
+    const sensitiveLine = `needleword service_password = ${syntheticValue}`;
+    const safeLine = "needleword documents password handling without an assigned value";
+    setup({
+      "config.txt": `heading\n${sensitiveLine}\nfooter`,
+      "guide.txt": safeLine,
+    });
+
+    const res = findLocal("needleword", { kind: "content", refresh: false }, db);
+    const sensitive = res.results.find((result) => result.path.endsWith("config.txt"))!;
+    const safe = res.results.find((result) => result.path.endsWith("guide.txt"))!;
+
+    expect(sensitive.path).toBe(join(root, "config.txt"));
+    expect(sensitive.line).toBe(2);
+    expect(sensitive.snippet?.includes(syntheticValue)).toBe(false);
+    expect(sensitive.snippet).toBe("needleword service_password = [REDACTED]");
+    expect(sensitive.matches).toEqual([
+      { line: 2, text: "needleword service_password = [REDACTED]" },
+    ]);
+    expect(safe.snippet).toBe(safeLine);
+    expect(safe.matches).toEqual([{ line: 1, text: safeLine }]);
+  });
+
   test("respects limit", () => {
     const files: Record<string, string> = {};
     for (let i = 0; i < 30; i++) files[`dir/widget-${i}.ts`] = `widget ${i}`;

@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { getIndexDb } from "../../db/index-db.js";
 import { getRoot } from "./indexer.js";
 import { buildFtsQueryFromRegex, compileSearchRegex } from "./regex.js";
+import { redactCredentialBearingText } from "../redaction.js";
 
 export interface FileHit {
   rootId: string;
@@ -56,6 +57,13 @@ const MAX_MATCHES_PER_FILE = 5;
 const MAX_PATH_CANDIDATES = 20_000;
 const MAX_CONTENT_CANDIDATES = 50_000;
 const MAX_REGEX_CANDIDATES = 50_000;
+
+function emittedLineMatch(line: number, rawText: string): LineMatch {
+  return {
+    line,
+    text: redactCredentialBearingText(rawText.trim()).slice(0, MAX_LINE_LENGTH),
+  };
+}
 
 export function tokenize(query: string): string[] {
   // Control chars (NUL especially) would terminate FTS5's string parsing.
@@ -304,7 +312,7 @@ function findLineMatches(
   for (let i = 0; i < lines.length; i++) {
     const text = lines[i]!;
     const lower = text.toLowerCase();
-    const match: LineMatch = { line: i + 1, text: text.trim().slice(0, MAX_LINE_LENGTH) };
+    const match = emittedLineMatch(i + 1, text);
 
     if (phrase.length > 0 && lower.includes(phrase)) phraseHits.push(match);
     else if (lowered.every((t) => lower.includes(t))) allTokenHits.push(match);
@@ -424,7 +432,7 @@ export function searchFileContentRegex(
       const matches: LineMatch[] = [];
       for (let n = 0; n < lines.length && matches.length < MAX_MATCHES_PER_FILE; n++) {
         if (regex.test(lines[n]!)) {
-          matches.push({ line: n + 1, text: lines[n]!.trim().slice(0, MAX_LINE_LENGTH) });
+          matches.push(emittedLineMatch(n + 1, lines[n]!));
         }
       }
       if (matches.length === 0) continue;

@@ -5,7 +5,13 @@ import { tmpdir } from "node:os";
 import type { Database } from "bun:sqlite";
 import { getIndexDbForTesting } from "../../db/index-db.js";
 import { addRoot, indexRoot } from "./indexer.js";
-import { searchFilePaths, searchFileContent, buildFtsQuery, tokenize } from "./query.js";
+import {
+  searchFilePaths,
+  searchFileContent,
+  searchFileContentRegex,
+  buildFtsQuery,
+  tokenize,
+} from "./query.js";
 
 let root: string;
 let db: Database;
@@ -348,5 +354,60 @@ describe("searchFileContent", () => {
     setup({ "many.txt": lines });
     const hits = searchFileContent("repeatedsymbol", {}, db);
     expect(hits[0]!.matches.length).toBeLessThanOrEqual(5);
+  });
+
+  test("redacts emitted credential assignments in plain and regex searches while preserving safe prose", () => {
+    const syntheticValue = "synthetic-only-not-live-7a31";
+    const sensitiveLine = `needleword service_password = ${syntheticValue}`;
+    const safeLine = "needleword documents password handling without an assigned value";
+    setup({
+      "config.txt": `heading\n${sensitiveLine}\nfooter`,
+      "guide.txt": safeLine,
+    });
+
+    const plainHits = searchFileContent("needleword", {}, db);
+    const plainSensitive = plainHits.find((hit) => hit.relPath === "config.txt")!;
+    const plainSafe = plainHits.find((hit) => hit.relPath === "guide.txt")!;
+    expect(plainSensitive.line).toBe(2);
+    expect(plainSensitive.lineText.includes(syntheticValue)).toBe(false);
+    expect(plainSensitive.lineText).toBe("needleword service_password = [REDACTED]");
+    expect(plainSensitive.matches).toEqual([
+      { line: 2, text: "needleword service_password = [REDACTED]" },
+    ]);
+    expect(plainSafe.lineText).toBe(safeLine);
+    expect(plainSafe.matches).toEqual([{ line: 1, text: safeLine }]);
+
+    const regexHits = searchFileContentRegex("needleword.*service_password", {}, db);
+    expect(regexHits[0]!.line).toBe(2);
+    expect(regexHits[0]!.lineText.includes(syntheticValue)).toBe(false);
+    expect(regexHits[0]!.lineText).toBe("needleword service_password = [REDACTED]");
+    expect(regexHits[0]!.matches).toEqual([
+      { line: 2, text: "needleword service_password = [REDACTED]" },
+    ]);
+  });
+
+  test("redacts camelCase assignments without changing comparisons or type annotations", () => {
+    const syntheticValue = "synthetic-only-not-live-review";
+    const sensitiveLine = `needlecamel dbPassword = "${syntheticValue}"`;
+    const comparisonLine = 'needlecomparison if (password === "") return;';
+    const typeLine = "needletype password: string";
+    setup({
+      "camel.ts": sensitiveLine,
+      "comparison.ts": comparisonLine,
+      "type.ts": typeLine,
+    });
+
+    const plainHit = searchFileContent("needlecamel", {}, db)[0]!;
+    expect(plainHit.line).toBe(1);
+    expect(plainHit.lineText.includes(syntheticValue)).toBe(false);
+    expect(plainHit.lineText).toBe('needlecamel dbPassword = "[REDACTED]"');
+
+    const regexHit = searchFileContentRegex("needlecamel.*dbPassword", {}, db)[0]!;
+    expect(regexHit.line).toBe(1);
+    expect(regexHit.lineText.includes(syntheticValue)).toBe(false);
+    expect(regexHit.lineText).toBe('needlecamel dbPassword = "[REDACTED]"');
+
+    expect(searchFileContent("needlecomparison", {}, db)[0]!.lineText).toBe(comparisonLine);
+    expect(searchFileContent("needletype", {}, db)[0]!.lineText).toBe(typeLine);
   });
 });

@@ -113,6 +113,55 @@ describe("results CRUD", () => {
     expect(ftsResults.length).toBe(1);
     expect(ftsResults[0]!.title).toBe("TypeScript Guide");
   });
+
+  it("redacts persisted content-result output, including legacy rows, without changing safe results", () => {
+    const syntheticValue = "synthetic-only-not-live-7a31";
+    const sensitiveLine = `needleword service_password = ${syntheticValue}`;
+    const safeLine = "needleword documents password handling without an assigned value";
+    const s = createSearch({ query: "needleword", providers: ["content", "google"] }, db);
+    const content = createResult(
+      {
+        searchId: s.id,
+        title: "config.txt",
+        url: "file:///synthetic/config.txt",
+        snippet: sensitiveLine,
+        source: "content",
+        provider: "Local Content",
+        rank: 1,
+        metadata: { line: 2, matches: [{ line: 2, text: sensitiveLine }] },
+      },
+      db,
+    );
+    const safe = createResult(
+      {
+        searchId: s.id,
+        title: "Guide",
+        url: "https://example.com/guide",
+        snippet: safeLine,
+        source: "google",
+        provider: "Google",
+        rank: 2,
+      },
+      db,
+    );
+
+    expect(content.snippet.includes(syntheticValue)).toBe(false);
+    expect(content.snippet).toBe("needleword service_password = [REDACTED]");
+    expect(JSON.stringify(content.metadata).includes(syntheticValue)).toBe(false);
+    expect(safe.snippet).toBe(safeLine);
+
+    db.prepare("UPDATE search_results SET snippet = ?, metadata = ? WHERE id = ?").run(
+      sensitiveLine,
+      JSON.stringify({ line: 2, matches: [{ line: 2, text: sensitiveLine }] }),
+      content.id,
+    );
+
+    const legacy = getResult(content.id, db)!;
+    expect(legacy.snippet.includes(syntheticValue)).toBe(false);
+    expect(legacy.snippet).toBe("needleword service_password = [REDACTED]");
+    expect(JSON.stringify(legacy.metadata).includes(syntheticValue)).toBe(false);
+    expect(listResults(s.id, {}, db).find((result) => result.id === content.id)).toEqual(legacy);
+  });
 });
 
 describe("saved searches CRUD", () => {
