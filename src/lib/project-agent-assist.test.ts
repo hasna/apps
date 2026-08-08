@@ -8,7 +8,6 @@ import {
   startAgentRun,
   completeAgentRun,
   ensureCliAgent,
-  linkWorkspaceIntegrations,
 } from "../db/workspaces.js";
 import type { Workspace } from "../types/workspace.js";
 import { closeDatabase, getDatabase, PROJECTS_DB_PATH_ENV } from "../db/database.js";
@@ -173,8 +172,30 @@ describe("project-agent-assist: handoff", () => {
 
   test("handoff prefers an explicitly linked channel over the derived one", async () => {
     const project = makeProject();
-    linkWorkspaceIntegrations(project.id, { conversations_channel: "internal-legacy-lane" });
-    const h = await buildProjectHandoff(localStore(), { target: project.slug });
+    const store = localStore();
+    await store.mutateProjectResourceLinks({
+      project_id: project.id,
+      operation_id: "handoff-explicit-channel",
+      step_id: "add-channel",
+      mode: "add",
+      expected_revision: project.updated_at,
+      links: [{
+        authority: "conversations",
+        service_instance: "urn:hasna:conversations:test",
+        source_package: "@hasna/conversations",
+        target_kind: "channel",
+        locator: {
+          kind: "conversations_channel_id",
+          value: "chn_79fa9c68937a1d020d6031dcaa3dd8d7",
+        },
+        scope: "resource",
+        labels: { channel_name: "internal-legacy-lane" },
+      }],
+      max_items: 10,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    });
+    const h = await buildProjectHandoff(store, { target: project.slug });
     const integrations = h.integrations as Record<string, unknown>;
     expect(integrations["conversations_channel"]).toBe("internal-legacy-lane");
     expect(integrations["conversations_channel_source"]).toBe("integration");

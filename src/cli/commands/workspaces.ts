@@ -117,7 +117,25 @@ import {
   removeProjectTags,
   unlinkProjectIntegrationFields,
 } from "../../lib/project-management.js";
-import { PROJECT_AGENT_ROLES, WORKSPACE_KINDS, WORKSPACE_STATUSES, type AgentKind, type JsonObject, type ProjectResourceLinkInput, type Recipe, type Root, type Workspace, type WorkspaceEvent, type WorkspaceIntegrations, type WorkspaceKind, type WorkspaceLock, type WorkspaceStatus } from "../../types/workspace.js";
+import { PROJECT_RESOURCE_LINK_INTEGRATION_KEYS } from "../../lib/project-resource-links.js";
+import {
+  PROJECT_AGENT_ROLES,
+  WORKSPACE_KINDS,
+  WORKSPACE_STATUSES,
+  type AgentKind,
+  type JsonObject,
+  type ProjectResourceLinkInput,
+  type ProjectResourceLinkMigrationItem,
+  type ProjectResourceLinkProducerEvidence,
+  type Recipe,
+  type Root,
+  type Workspace,
+  type WorkspaceEvent,
+  type WorkspaceIntegrations,
+  type WorkspaceKind,
+  type WorkspaceLock,
+  type WorkspaceStatus,
+} from "../../types/workspace.js";
 
 const DEFAULT_LIST_LIMIT = 25;
 const DEFAULT_EVENT_LIMIT = 20;
@@ -150,6 +168,16 @@ function splitVariadicList(values: string[] | undefined): string[] {
 
 function splitLabelFilters(...values: Array<string | undefined>): string[] {
   return [...new Set(values.flatMap((value) => splitList(value)))];
+}
+
+function assertNoLegacyResourceLinkIntegrationWrites(keys: string[]): void {
+  const ownedKeys = new Set<string>(PROJECT_RESOURCE_LINK_INTEGRATION_KEYS);
+  const attempted = keys.find((key) => ownedKeys.has(key));
+  if (attempted) {
+    throw new Error(
+      `integration '${attempted}' is a typed resource-link compatibility projection and must be changed through resource-links`,
+    );
+  }
 }
 
 function printObject(value: unknown, opts?: { json?: boolean }): void {
@@ -2663,6 +2691,213 @@ function registerProjectCommands(program: Command): void {
     });
 
   program
+    .command("resource-link-migration-plan <project-id>")
+    .description("Persist a durable resource-link migration manifest before any producer or Projects write")
+    .requiredOption("--operation-id <id>", "Caller-stable migration operation id")
+    .requiredOption("--step-id <id>", "Caller-stable migration step id")
+    .requiredOption("--expected-project-revision <revision>", "Fresh complete Projects collection revision")
+    .requiredOption("--items-json <json>", "Closed JSON array of link, producer_resource_kind, and producer_binding objects")
+    .option("--max-items <n>", "Maximum complete collection size", "1000")
+    .requiredOption("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes")
+    .requiredOption("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectId, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const bounds = {
+          max_items: parsePositiveInteger(opts.maxItems, "--max-items")!,
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+        };
+        const result = await store.planProjectResourceLinkMigration({
+          project_id: projectId,
+          operation_id: opts.operationId,
+          step_id: opts.stepId,
+          expected_project_revision: opts.expectedProjectRevision,
+          links: parseJsonArray<Omit<ProjectResourceLinkMigrationItem, "link_id" | "producer_evidence">>(
+            opts.itemsJson,
+            "--items-json",
+          ) ?? [],
+          ...bounds,
+        });
+        const readback = await store.readProjectResourceLinkMigration({
+          project_id: projectId,
+          manifest_id: result.manifest.manifest_id,
+          ...bounds,
+        });
+        if (
+          readback.manifest.transition_version !== result.manifest.transition_version
+          || readback.manifest.state !== result.manifest.state
+        ) {
+          throw new Error("migration plan readback does not match the persisted manifest transition");
+        }
+        if (wantsJson(opts)) { printObject(readback, opts); return; }
+        console.log(chalk.green(`✓ Resource-link migration planned: ${readback.manifest.manifest_id}`));
+        console.log(`  ${chalk.dim("state:")} ${readback.manifest.state}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("resource-link-migration-read <project-id>")
+    .description("Read one durable resource-link migration manifest and its complete immutable events")
+    .requiredOption("--manifest-id <id>", "Exact migration manifest id")
+    .option("--max-items <n>", "Maximum complete event population size", "1000")
+    .requiredOption("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes")
+    .requiredOption("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectId, opts) => {
+      try {
+        const result = await resolveProjectStore().readProjectResourceLinkMigration({
+          project_id: projectId,
+          manifest_id: opts.manifestId,
+          max_items: parsePositiveInteger(opts.maxItems, "--max-items")!,
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+        });
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+        console.log(chalk.green(`✓ Resource-link migration: ${result.manifest.manifest_id}`));
+        console.log(`  ${chalk.dim("state:")} ${result.manifest.state}`);
+        console.log(`  ${chalk.dim("events:")} ${result.events.length}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("resource-link-migration-advance <project-id>")
+    .description("CAS-advance a durable migration manifest using exact producer or Projects evidence")
+    .requiredOption("--manifest-id <id>", "Exact migration manifest id")
+    .requiredOption("--expected-transition-version <n>", "Current manifest transition version")
+    .requiredOption(
+      "--next-state <state>",
+      "producer_applied, projects_applied, verified, or failed_reconcilable",
+    )
+    .option("--producer-evidence-json <json>", "Closed JSON array of exact producer receipt/readback evidence")
+    .option("--projects-forward-receipt-id <id>", "Accepted Projects forward receipt bound to the manifest")
+    .option("--last-verified-projects-revision <revision>", "Fresh complete Projects revision")
+    .option("--last-verified-projects-digest <digest>", "Fresh complete Projects collection digest")
+    .requiredOption("--evidence-json <json>", "Immutable transition evidence JSON object")
+    .option("--max-items <n>", "Maximum complete event population size", "1000")
+    .requiredOption("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes")
+    .requiredOption("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectId, opts) => {
+      try {
+        const allowedStates = new Set(["producer_applied", "projects_applied", "verified", "failed_reconcilable"]);
+        if (!allowedStates.has(opts.nextState)) {
+          throw new Error("--next-state must be producer_applied, projects_applied, verified, or failed_reconcilable");
+        }
+        const store = resolveProjectStore();
+        const bounds = {
+          max_items: parsePositiveInteger(opts.maxItems, "--max-items")!,
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+        };
+        const result = await store.advanceProjectResourceLinkMigration({
+          project_id: projectId,
+          manifest_id: opts.manifestId,
+          expected_transition_version: parsePositiveInteger(
+            opts.expectedTransitionVersion,
+            "--expected-transition-version",
+          )!,
+          next_state: opts.nextState,
+          producer_evidence: parseJsonArray<ProjectResourceLinkProducerEvidence>(
+            opts.producerEvidenceJson,
+            "--producer-evidence-json",
+          ),
+          projects_forward_receipt_id: opts.projectsForwardReceiptId,
+          last_verified_projects_revision: opts.lastVerifiedProjectsRevision,
+          last_verified_projects_digest: opts.lastVerifiedProjectsDigest,
+          evidence: parseJsonObject(opts.evidenceJson, "--evidence-json") ?? {},
+          response_byte_limit: bounds.response_byte_limit,
+          time_budget_ms: bounds.time_budget_ms,
+        });
+        const readback = await store.readProjectResourceLinkMigration({
+          project_id: projectId,
+          manifest_id: result.manifest.manifest_id,
+          ...bounds,
+        });
+        if (
+          readback.manifest.transition_version !== result.manifest.transition_version
+          || readback.manifest.state !== result.manifest.state
+        ) {
+          throw new Error("migration advance readback does not match the persisted manifest transition");
+        }
+        if (wantsJson(opts)) { printObject(readback, opts); return; }
+        console.log(chalk.green(`✓ Resource-link migration advanced: ${readback.manifest.manifest_id}`));
+        console.log(`  ${chalk.dim("state:")} ${readback.manifest.state}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("resource-link-migration-rollback <project-id>")
+    .description("Remove Projects references first, persist proof, and record the producer rollback outcome")
+    .requiredOption("--manifest-id <id>", "Exact migration manifest id")
+    .requiredOption("--expected-transition-version <n>", "Current manifest transition version")
+    .requiredOption(
+      "--producer-outcome <outcome>",
+      "pending, complete, retained_target, or failed_reconcilable",
+    )
+    .requiredOption("--evidence-json <json>", "Immutable rollback evidence JSON object")
+    .option("--max-items <n>", "Maximum complete link and event population size", "1000")
+    .requiredOption("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes")
+    .requiredOption("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectId, opts) => {
+      try {
+        const allowedOutcomes = new Set(["pending", "complete", "retained_target", "failed_reconcilable"]);
+        if (!allowedOutcomes.has(opts.producerOutcome)) {
+          throw new Error("--producer-outcome must be pending, complete, retained_target, or failed_reconcilable");
+        }
+        const store = resolveProjectStore();
+        const bounds = {
+          max_items: parsePositiveInteger(opts.maxItems, "--max-items")!,
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+        };
+        const result = await store.rollbackProjectResourceLinkMigration({
+          project_id: projectId,
+          manifest_id: opts.manifestId,
+          expected_transition_version: parsePositiveInteger(
+            opts.expectedTransitionVersion,
+            "--expected-transition-version",
+          )!,
+          producer_outcome: opts.producerOutcome,
+          evidence: parseJsonObject(opts.evidenceJson, "--evidence-json") ?? {},
+          ...bounds,
+          agent_id: mutationAgentId(store, opts.agent),
+          source: "cli",
+          command: process.argv.join(" "),
+        });
+        const readback = await store.readProjectResourceLinkMigration({
+          project_id: projectId,
+          manifest_id: result.manifest.manifest_id,
+          ...bounds,
+        });
+        if (
+          readback.manifest.transition_version !== result.manifest.transition_version
+          || readback.manifest.state !== result.manifest.state
+        ) {
+          throw new Error("migration rollback readback does not match the persisted manifest transition");
+        }
+        if (wantsJson(opts)) { printObject(readback, opts); return; }
+        console.log(chalk.green(`✓ Resource-link migration rollback reconciled: ${readback.manifest.manifest_id}`));
+        console.log(`  ${chalk.dim("state:")} ${readback.manifest.state}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
     .command("guarded-update <project-id>")
     .description("Safely update an existing project by exact stable id with revision, idempotency, receipt, and dry-run controls")
     .option("--name <name>", "Project name")
@@ -2928,6 +3163,11 @@ function registerProjectCommands(program: Command): void {
           parseIntegrationPairs(opts.integration),
           parseIntegrationsJson(opts.integrationsJson),
         );
+        assertNoLegacyResourceLinkIntegrationWrites(
+          Object.entries(integrations)
+            .filter(([, value]) => value !== undefined)
+            .map(([key]) => key),
+        );
         const updated = await store.updateProject(project.id, {
           integrations: mergeProjectIntegrations(project.integrations, normalizeWorkspaceIntegrations(integrations)),
           agent_id: mutationAgentId(store, opts.agent),
@@ -2971,6 +3211,7 @@ function registerProjectCommands(program: Command): void {
         ];
         const expandedKeys = expandProjectIntegrationUnlinkKeys(requestedKeys);
         if (expandedKeys.length === 0) throw new Error("Provide at least one integration key or group to unlink");
+        assertNoLegacyResourceLinkIntegrationWrites(expandedKeys);
         const nextIntegrations = unlinkProjectIntegrationFields(project.integrations, requestedKeys);
         const updated = await store.updateProject(project.id, {
           integrations: nextIntegrations,

@@ -479,6 +479,30 @@ describe("projects store api transport (roots/agents/recipes)", () => {
       const url = new URL(input);
       const body = init?.body ? JSON.parse(init.body as string) : undefined;
       calls.push({ method, path: `${url.pathname}${url.search}`, body });
+      if (method === "GET" && url.pathname.endsWith("/resource-links")) {
+        const collectionDigest = "a".repeat(64);
+        return Response.json({
+          project_id: projectId,
+          current_revision: "revision",
+          links: [],
+          link_count: 0,
+          max_items: 10,
+          collection_digest: collectionDigest,
+          complete: true,
+          truncated: false,
+          contract: {
+            schema: "hasna.project_resource_link_collection.v1",
+            project_id: projectId,
+            current_revision: "revision",
+            links: [],
+            link_count: 0,
+            max_items: 10,
+            collection_digest: collectionDigest,
+            complete: true,
+            truncated: false,
+          },
+        });
+      }
       return Response.json({});
     };
     __resetProjectStore();
@@ -543,6 +567,105 @@ describe("projects store api transport (roots/agents/recipes)", () => {
     expect(calls[2]?.body).toEqual(expect.objectContaining({
       accepted_receipt_id: "gpmr_resource_api",
     }));
+  });
+
+  test("resource-link migration methods preserve API routes, bounds, manifest identity, and CAS bodies", async () => {
+    const projectId = "wks_resourcemigration01";
+    const manifestId = "prlm_resource_migration";
+    const calls: Array<{ method: string; path: string; body: unknown }> = [];
+    const fetchImpl = async (input: string, init?: RequestInit): Promise<Response> => {
+      const method = (init?.method ?? "GET").toUpperCase();
+      const url = new URL(input);
+      calls.push({
+        method,
+        path: `${url.pathname}${url.search}`,
+        body: init?.body ? JSON.parse(init.body as string) : undefined,
+      });
+      return Response.json({});
+    };
+    __resetProjectStore();
+    const store = resolveProjectStore(CLOUD_ENV, fetchImpl);
+    const plan = {
+      project_id: projectId,
+      operation_id: "resource-migration",
+      step_id: "plan",
+      expected_project_revision: "revision-1",
+      links: [{
+        link: {
+          authority: "contacts" as const,
+          service_instance: "urn:hasna:contacts:test",
+          source_package: "@hasna/contacts" as const,
+          target_kind: "contact" as const,
+          locator: {
+            kind: "external_uuid" as const,
+            value: "6b68e131-abe5-43b7-92cd-9930b04611df",
+          },
+          scope: "resource" as const,
+        },
+        producer_resource_kind: "contact",
+        producer_binding: {
+          authority_id: "contacts",
+          tenant_id: "tenant-primary",
+          corpus_id: null,
+          capability_digest: "sha256:contacts-capability",
+        },
+      }],
+      max_items: 10,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    };
+    const advance = {
+      project_id: projectId,
+      manifest_id: manifestId,
+      expected_transition_version: 1,
+      next_state: "producer_applied" as const,
+      producer_evidence: [{
+        created_by_operation: true,
+        forward_receipt_id: "contacts-receipt-1",
+        child_link_receipt_ids: [],
+        target_revision: "contacts-revision-1",
+        target_digest: "contacts-digest-1",
+        inverse_verified: false,
+        inverse_outcome: "pending",
+      }],
+      evidence: { phase: "producer" },
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    };
+    const rollback = {
+      project_id: projectId,
+      manifest_id: manifestId,
+      expected_transition_version: 2,
+      max_items: 10,
+      producer_outcome: "pending" as const,
+      evidence: { reason: "test" },
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    };
+
+    await store.planProjectResourceLinkMigration(plan);
+    await store.readProjectResourceLinkMigration({
+      project_id: projectId,
+      manifest_id: manifestId,
+      max_items: 10,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    });
+    await store.advanceProjectResourceLinkMigration(advance);
+    await store.rollbackProjectResourceLinkMigration(rollback);
+
+    expect(calls.map((call) => [call.method, call.path])).toEqual([
+      ["POST", `/v1/projects/${projectId}/resource-link-migrations/plan`],
+      [
+        "GET",
+        `/v1/projects/${projectId}/resource-link-migrations/${manifestId}?max_items=10&response_byte_limit=100000&time_budget_ms=5000`,
+      ],
+      ["POST", `/v1/projects/${projectId}/resource-link-migrations/${manifestId}/advance`],
+      ["POST", `/v1/projects/${projectId}/resource-link-migrations/${manifestId}/rollback`],
+    ]);
+    expect(calls[0]?.body).toEqual(plan);
+    expect(calls[2]?.body).toEqual(advance);
+    expect(calls[3]?.body).toEqual(rollback);
   });
 
   test("resource-link POST retries an ambiguous transport outcome with one stable idempotency key", async () => {

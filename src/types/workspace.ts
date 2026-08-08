@@ -1,3 +1,13 @@
+import type {
+  ProjectResourceAuthority as ContractsProjectResourceAuthority,
+  ProjectResourceLink as ContractsProjectResourceLink,
+  ProjectResourceLinkCollectionV1,
+  ProjectResourceLinkInput as ContractsProjectResourceLinkInput,
+  ProjectResourceLinkLabels as ContractsProjectResourceLinkLabels,
+  ProjectResourceLinkLocator as ContractsProjectResourceLinkLocator,
+  ProjectResourceTargetKind as ContractsProjectResourceTargetKind,
+} from "@hasna/contracts/schemas";
+
 export const WORKSPACE_STATUSES = ["active", "archived", "deleted"] as const;
 export type WorkspaceStatus = (typeof WORKSPACE_STATUSES)[number];
 
@@ -452,7 +462,7 @@ export interface GuardedProjectMutationRollbackRequest extends GuardedProjectMut
 }
 
 export const PROJECT_RESOURCE_AUTHORITIES = ["todos", "conversations", "knowledge", "mementos", "orgs", "contacts"] as const;
-export type ProjectResourceAuthority = (typeof PROJECT_RESOURCE_AUTHORITIES)[number];
+export type ProjectResourceAuthority = ContractsProjectResourceAuthority;
 
 export const PROJECT_RESOURCE_LOCATOR_KINDS = [
   "external_uuid",
@@ -465,88 +475,13 @@ export const PROJECT_RESOURCE_LINK_SCOPES = ["resource", "collection"] as const;
 export type ProjectResourceLinkScope = (typeof PROJECT_RESOURCE_LINK_SCOPES)[number];
 export const PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS = 1_000;
 
-export type ProjectResourceTargetKind =
-  | "contact"
-  | "org"
-  | "project"
-  | "task"
-  | "task_list"
-  | "plan"
-  | "channel"
-  | "collection"
-  | "item";
-
-export interface ProjectResourceLinkLabels {
-  name?: string;
-  channel_name?: string;
-  path?: string;
-  tags?: string[];
-}
-
-export interface ProjectResourceExternalUuidLocator {
-  kind: "external_uuid";
-  value: string;
-}
-
-export type ProjectResourceLinkLocator =
-  | ProjectResourceExternalUuidLocator
-  | { kind: "canonical_uri"; value: string }
-  | { kind: "conversations_channel_id"; value: string };
-
-interface ProjectResourceLinkInputBase {
-  service_instance: string;
-  locator: ProjectResourceLinkLocator;
-  scope: ProjectResourceLinkScope;
-  labels?: ProjectResourceLinkLabels;
-}
-
-export type ProjectResourceLinkInput = ProjectResourceLinkInputBase & (
-  | {
-      authority: "todos";
-      source_package: "@hasna/todos";
-      target_kind: "project" | "task_list" | "plan";
-    }
-  | {
-      authority: "todos";
-      source_package: "@hasna/todos";
-      target_kind: "task";
-      locator: ProjectResourceExternalUuidLocator;
-    }
-  | {
-      authority: "conversations";
-      source_package: "@hasna/conversations";
-      target_kind: "project" | "channel";
-    }
-  | {
-      authority: "knowledge";
-      source_package: "@hasna/knowledge";
-      target_kind: "collection" | "item";
-    }
-  | {
-      authority: "mementos";
-      source_package: "@hasna/mementos";
-      target_kind: "project" | "item";
-    }
-  | {
-      authority: "orgs";
-      source_package: "@hasna/orgs";
-      target_kind: "org" | "project";
-    }
-  | {
-      authority: "contacts";
-      source_package: "@hasna/contacts";
-      target_kind: "contact";
-      locator: ProjectResourceExternalUuidLocator;
-    }
-);
-
-export type ProjectResourceLink = ProjectResourceLinkInput & {
-  id: string;
-  project_id: string;
-  labels: ProjectResourceLinkLabels;
-  created_at: string;
-  updated_at: string;
-};
+export type ProjectResourceTargetKind = ContractsProjectResourceTargetKind;
+export type ProjectResourceLinkLabels = ContractsProjectResourceLinkLabels;
+export type ProjectResourceLinkLocator = ContractsProjectResourceLinkLocator;
+export type ProjectResourceExternalUuidLocator = Extract<ProjectResourceLinkLocator, { kind: "external_uuid" }>;
+export type ProjectResourceLinkInput = ContractsProjectResourceLinkInput;
+export type ProjectResourceLink = ContractsProjectResourceLink;
+export type { ProjectResourceLinkCollectionV1 };
 
 export interface ProjectResourceLinkRow {
   id: string;
@@ -585,6 +520,7 @@ export interface ProjectResourceLinkReadResult {
   collection_digest: string;
   complete: true;
   truncated: false;
+  contract: ProjectResourceLinkCollectionV1;
   response_control: GuardedProjectMutationControl;
 }
 
@@ -633,6 +569,165 @@ export interface ProjectResourceLinkRollbackRequest extends GuardedProjectMutati
   agent_id?: string;
   source?: EventSource;
   command?: string;
+}
+
+export const PROJECT_RESOURCE_LINK_MIGRATION_STATES = [
+  "planned",
+  "producer_applied",
+  "projects_applied",
+  "verified",
+  "rollback_in_progress",
+  "rolled_back",
+  "retained_target",
+  "failed_reconcilable",
+] as const;
+export type ProjectResourceLinkMigrationState = (typeof PROJECT_RESOURCE_LINK_MIGRATION_STATES)[number];
+
+export interface ProjectResourceLinkProducerBinding {
+  authority_id: string;
+  tenant_id: string;
+  corpus_id: string | null;
+  capability_digest: string;
+}
+
+export interface ProjectResourceLinkProducerEvidence {
+  created_by_operation: boolean;
+  forward_receipt_id: string | null;
+  child_link_receipt_ids: string[];
+  target_revision: string;
+  target_digest: string;
+  inverse_verified: boolean | null;
+  inverse_outcome: string | null;
+}
+
+export interface ProjectResourceLinkMigrationItem {
+  link: ProjectResourceLinkInput;
+  link_id: string;
+  producer_resource_kind: string;
+  producer_binding: ProjectResourceLinkProducerBinding;
+  producer_evidence: ProjectResourceLinkProducerEvidence | null;
+}
+
+export type ProjectResourceLinkProjectsReferenceProof =
+  | {
+      kind: "accepted_inverse";
+      forward_receipt_id: string;
+      inverse_receipt_id: string;
+      verified_revision: string;
+      collection_digest: string;
+      link_ids_checked: string[];
+      complete: true;
+      truncated: false;
+      request_digest: string;
+      precondition_digest: string;
+    }
+  | {
+      kind: "no_projects_write";
+      verified_revision: string;
+      collection_digest: string;
+      link_ids_checked: string[];
+      complete: true;
+      truncated: false;
+      request_digest: string;
+      precondition_digest: string;
+    };
+
+export interface ProjectResourceLinkMigrationManifestV1 {
+  schema: "projects.project_resource_link_migration_manifest.v1";
+  manifest_id: string;
+  project_id: string;
+  operation_id: string;
+  step_id: string;
+  state: ProjectResourceLinkMigrationState;
+  expected_project_revision: string;
+  desired_collection_digest: string;
+  links: ProjectResourceLinkMigrationItem[];
+  projects_forward_receipt_id: string | null;
+  projects_inverse_receipt_id: string | null;
+  projects_reference_proof: ProjectResourceLinkProjectsReferenceProof | null;
+  last_verified_projects_revision: string | null;
+  last_verified_projects_digest: string | null;
+  transition_version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectResourceLinkMigrationManifestRow {
+  manifest_id: string;
+  project_id: string;
+  operation_id: string;
+  step_id: string;
+  state: string;
+  expected_project_revision: string;
+  desired_collection_digest: string;
+  links_json: string;
+  projects_forward_receipt_id: string | null;
+  projects_inverse_receipt_id: string | null;
+  projects_reference_proof_json: string | null;
+  last_verified_projects_revision: string | null;
+  last_verified_projects_digest: string | null;
+  transition_version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectResourceLinkMigrationEvent {
+  event_id: string;
+  manifest_id: string;
+  transition_version: number;
+  from_state: ProjectResourceLinkMigrationState | null;
+  to_state: ProjectResourceLinkMigrationState;
+  request_digest: string;
+  precondition_digest: string;
+  evidence: JsonObject;
+  created_at: string;
+}
+
+export interface ProjectResourceLinkMigrationPlanRequest extends GuardedProjectMutationBounds {
+  project_id: string;
+  operation_id: string;
+  step_id: string;
+  expected_project_revision: string;
+  links: Array<Omit<ProjectResourceLinkMigrationItem, "link_id" | "producer_evidence">>;
+  max_items?: number;
+}
+
+export interface ProjectResourceLinkMigrationReadRequest extends GuardedProjectMutationBounds {
+  project_id: string;
+  manifest_id: string;
+  max_items?: number;
+}
+
+export interface ProjectResourceLinkMigrationAdvanceRequest extends GuardedProjectMutationBounds {
+  project_id: string;
+  manifest_id: string;
+  expected_transition_version: number;
+  next_state: "producer_applied" | "projects_applied" | "verified" | "failed_reconcilable";
+  producer_evidence?: ProjectResourceLinkProducerEvidence[];
+  projects_forward_receipt_id?: string;
+  last_verified_projects_revision?: string;
+  last_verified_projects_digest?: string;
+  evidence: JsonObject;
+}
+
+export interface ProjectResourceLinkMigrationRollbackRequest extends GuardedProjectMutationBounds {
+  project_id: string;
+  manifest_id: string;
+  expected_transition_version: number;
+  max_items?: number;
+  producer_outcome: "pending" | "complete" | "retained_target" | "failed_reconcilable";
+  evidence: JsonObject;
+  agent_id?: string;
+  source?: EventSource;
+  command?: string;
+}
+
+export interface ProjectResourceLinkMigrationResult {
+  ok: boolean;
+  outcome: "accepted" | "duplicate_of_accepted" | "terminal_nonacceptance";
+  manifest: ProjectResourceLinkMigrationManifestV1;
+  events: ProjectResourceLinkMigrationEvent[];
+  response_control: GuardedProjectMutationControl;
 }
 
 export interface WorkspaceLocation {

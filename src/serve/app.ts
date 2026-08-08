@@ -4,7 +4,12 @@
 // the ProjectsPgStore. Auth is @hasna/contracts API-key verification
 // (verifyApiKey), scoped projects:read for reads and projects:write for writes.
 
-import { verifyApiKey, type ApiKeyVerifier, type AuthAuditHook } from "@hasna/contracts/auth";
+import {
+  verifyApiKey,
+  type ApiKeyStatus,
+  type ApiKeyVerifier,
+  type AuthAuditHook,
+} from "@hasna/contracts/auth";
 import {
   NotFoundError,
   ProjectsPgStore,
@@ -29,7 +34,8 @@ export interface ServeAppOptions {
   version: string;
   app?: string;
   signingSecret: string | Buffer;
-  isRevoked?: (kid: string) => boolean | Promise<boolean>;
+  keyStatus?: (kid: string) => ApiKeyStatus | Promise<ApiKeyStatus>;
+  allowUnregisteredKeys?: boolean;
   audit?: AuthAuditHook;
   /** Reported by the legacy /version and root responses. Defaults to "cloud". */
   mode?: string;
@@ -107,7 +113,8 @@ export function createFetchHandler(options: ServeAppOptions): (req: Request) => 
   const verifier: ApiKeyVerifier = verifyApiKey({
     app: appName,
     signingSecret: options.signingSecret,
-    ...(options.isRevoked ? { isRevoked: options.isRevoked } : {}),
+    ...(options.keyStatus ? { keyStatus: options.keyStatus } : {}),
+    ...(options.allowUnregisteredKeys ? { allowUnregisteredKeys: true } : {}),
     ...(options.audit ? { audit: options.audit } : {}),
   });
 
@@ -312,6 +319,58 @@ async function route(
         time_budget_ms: Number(body.time_budget_ms),
       };
       const result = await store.rollbackProjectResourceLinks({ ...body, project_id: id } as never);
+      return guardedJsonResponse(result, bounds, started);
+    }
+    if (sub === "resource-link-migrations" && extra === "plan" && action === undefined && method === "POST") {
+      const started = Date.now();
+      const body = await readJsonBody(req);
+      const bounds = {
+        response_byte_limit: Number(body.response_byte_limit),
+        time_budget_ms: Number(body.time_budget_ms),
+      };
+      const result = await store.planProjectResourceLinkMigration({ ...body, project_id: id } as never);
+      return guardedJsonResponse(result, bounds, started);
+    }
+    if (sub === "resource-link-migrations" && extra && action === undefined && method === "GET") {
+      const started = Date.now();
+      const bounds = {
+        response_byte_limit: Number(url.searchParams.get("response_byte_limit")),
+        time_budget_ms: Number(url.searchParams.get("time_budget_ms")),
+      };
+      const result = await store.readProjectResourceLinkMigration({
+        project_id: id,
+        manifest_id: extra,
+        max_items: Number(url.searchParams.get("max_items")),
+        ...bounds,
+      });
+      return guardedJsonResponse(result, bounds, started);
+    }
+    if (sub === "resource-link-migrations" && extra && action === "advance" && method === "POST") {
+      const started = Date.now();
+      const body = await readJsonBody(req);
+      const bounds = {
+        response_byte_limit: Number(body.response_byte_limit),
+        time_budget_ms: Number(body.time_budget_ms),
+      };
+      const result = await store.advanceProjectResourceLinkMigration({
+        ...body,
+        project_id: id,
+        manifest_id: extra,
+      } as never);
+      return guardedJsonResponse(result, bounds, started);
+    }
+    if (sub === "resource-link-migrations" && extra && action === "rollback" && method === "POST") {
+      const started = Date.now();
+      const body = await readJsonBody(req);
+      const bounds = {
+        response_byte_limit: Number(body.response_byte_limit),
+        time_budget_ms: Number(body.time_budget_ms),
+      };
+      const result = await store.rollbackProjectResourceLinkMigration({
+        ...body,
+        project_id: id,
+        manifest_id: extra,
+      } as never);
       return guardedJsonResponse(result, bounds, started);
     }
     if (sub === "contacts") {

@@ -4,11 +4,49 @@
   "name": "projects",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.4.1",
-  "description": "High-level project/workspace management: CLI, MCP server, HTTP API (projects-serve), and typed SDK. Amendment A1 pure-remote: the serve reads/writes cloud Postgres directly.",
+  "kitVersion": "0.8.4",
+  "description": "High-level project/workspace management: CLI, MCP server, HTTP API (projects-serve), and typed SDK.",
   "bins": ["projects", "projects-mcp", "projects-serve"],
+  "hosting": ["user-hosted"],
+  "serviceSurfaces": [
+    {
+      "name": "http-api",
+      "kind": "api",
+      "status": "supported",
+      "bin": "projects-serve",
+      "authMode": "api-key",
+      "health": { "method": "GET", "path": "/health", "public": true },
+      "readiness": { "method": "GET", "path": "/ready", "public": false },
+      "version": { "method": "GET", "path": "/version", "public": true },
+      "apiBasePath": "/v1",
+      "openApiPath": "/openapi.json"
+    },
+    {
+      "name": "typescript-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "api-key",
+      "exportSubpath": "./sdk",
+      "generatedFrom": "/openapi.json"
+    },
+    {
+      "name": "mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "projects-mcp",
+      "authMode": "local-only"
+    },
+    {
+      "name": "cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "projects",
+      "authMode": "local-only"
+    }
+  ],
   "storage": {
-    "mode": "cloud",
+    "backend": "postgresql",
+    "engines": ["sqlite", "postgresql"],
     "envPrefix": "HASNA_PROJECTS_",
     "aliasEnvPrefix": "PROJECTS_",
     "databaseUrlSecretRef": "hasna/oss/projects/database-url",

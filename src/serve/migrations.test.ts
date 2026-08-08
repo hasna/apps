@@ -88,6 +88,7 @@ describe("projects-serve migrations", () => {
     expect(ids).toContain("projects:0008_orgs_resource_links");
     expect(ids).toContain("projects:0009_contacts_resource_links");
     expect(ids).toContain("projects:0009_todos_task_resource_links");
+    expect(ids).toContain("projects:0010_project_resource_link_contract_v1");
   });
 
   test("guarded receipt grant migration derives existing DML roles and grants only receipt reads and inserts", () => {
@@ -169,6 +170,26 @@ describe("projects-serve migrations", () => {
     expect(migration!.sql).not.toContain("project_resource_links_source_package_check");
     expect(migration!.sql).not.toContain("DROP TABLE");
     expect(migration!.sql).not.toContain("DELETE FROM");
+  });
+
+  test("resource-link contract v1 keeps scope mutable and persists an append-only migration saga", () => {
+    const migration = loadMigrations().find(
+      (item) => item.id === "projects:0010_project_resource_link_contract_v1",
+    );
+    expect(migration).toBeDefined();
+    expect(migration!.sql).toContain("CREATE TABLE IF NOT EXISTS project_resource_link_migration_manifests");
+    expect(migration!.sql).toContain("CREATE TABLE IF NOT EXISTS project_resource_link_migration_events");
+    expect(migration!.sql).toContain("project resource link migration events are append-only");
+    expect(migration!.sql).toContain("UNIQUE(project_id, operation_id, step_id)");
+    expect(migration!.sql).toContain("UNIQUE(manifest_id, transition_version)");
+    expect(migration!.sql).toContain("COUNT(DISTINCT privilege.privilege_type) = 4");
+    expect(migration!.sql).toContain("GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE");
+    const identityFunction = migration!.sql.slice(
+      migration!.sql.indexOf("CREATE OR REPLACE FUNCTION reject_project_resource_link_identity_mutation"),
+      migration!.sql.indexOf("CREATE TABLE IF NOT EXISTS project_resource_link_migration_manifests"),
+    );
+    expect(identityFunction).not.toContain("NEW.scope");
+    expect(identityFunction).not.toContain("OLD.scope");
   });
 
   test("every migration has a sha256 checksum", () => {
