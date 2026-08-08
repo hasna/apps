@@ -35,4 +35,20 @@ describe("PostgreSQL migration artifacts", () => {
     expect(migration).toContain("CREATE INDEX IF NOT EXISTS idx_contact_projects_contact");
     expect(migration).toContain("ON CONFLICT DO NOTHING");
   });
+
+  test("keeps retained membership authority synchronized with legacy rollback writes", () => {
+    const migration = PG_MIGRATIONS.find((sql) =>
+      sql.includes("CREATE TABLE IF NOT EXISTS contact_project_membership_states"));
+
+    expect(migration).toContain("AFTER INSERT OR DELETE ON contact_projects");
+    expect(migration).toContain("target_linked := TRUE");
+    expect(migration).toContain("target_linked := FALSE");
+    expect(migration).toContain(
+      "contact_project_membership_states.linked IS DISTINCT FROM EXCLUDED.linked",
+    );
+    expect(migration).toContain("contact_project_membership_states.revision + 1");
+    expect(migration).toContain(
+      "IF NOT EXISTS (SELECT 1 FROM contacts WHERE id = target_contact_id)",
+    );
+  });
 });

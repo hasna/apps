@@ -637,6 +637,47 @@ const MIGRATIONS = [
     ON contact_project_membership_states(project_id, linked, contact_id);
   CREATE INDEX IF NOT EXISTS idx_contact_project_membership_receipts_target
     ON contact_project_membership_receipts(contact_id, project_id, created_at);
+
+  CREATE TRIGGER IF NOT EXISTS sync_contact_project_membership_state_after_insert
+  AFTER INSERT ON contact_projects
+  BEGIN
+    INSERT INTO contact_project_membership_states
+      (contact_id, project_id, linked, revision, updated_at)
+    VALUES (NEW.contact_id, NEW.project_id, 1, 1, datetime('now'))
+    ON CONFLICT(contact_id, project_id) DO UPDATE SET
+      linked = 1,
+      revision = CASE
+        WHEN contact_project_membership_states.linked = 1
+          THEN contact_project_membership_states.revision
+        ELSE contact_project_membership_states.revision + 1
+      END,
+      updated_at = CASE
+        WHEN contact_project_membership_states.linked = 1
+          THEN contact_project_membership_states.updated_at
+        ELSE datetime('now')
+      END;
+  END;
+
+  CREATE TRIGGER IF NOT EXISTS sync_contact_project_membership_state_after_delete
+  AFTER DELETE ON contact_projects
+  WHEN EXISTS (SELECT 1 FROM contacts WHERE id = OLD.contact_id)
+  BEGIN
+    INSERT INTO contact_project_membership_states
+      (contact_id, project_id, linked, revision, updated_at)
+    VALUES (OLD.contact_id, OLD.project_id, 0, 1, datetime('now'))
+    ON CONFLICT(contact_id, project_id) DO UPDATE SET
+      linked = 0,
+      revision = CASE
+        WHEN contact_project_membership_states.linked = 0
+          THEN contact_project_membership_states.revision
+        ELSE contact_project_membership_states.revision + 1
+      END,
+      updated_at = CASE
+        WHEN contact_project_membership_states.linked = 0
+          THEN contact_project_membership_states.updated_at
+        ELSE datetime('now')
+      END;
+  END;
   `,
 ];
 

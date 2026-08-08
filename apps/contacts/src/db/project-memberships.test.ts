@@ -124,4 +124,69 @@ describe("guarded contact-project membership mutations", () => {
     expect(readContactProjectMembership(contact.id, firstProjectId, db).linked).toBe(false);
     expect(readContactProjectMembership(contact.id, secondProjectId, db).linked).toBe(true);
   });
+
+  test("keeps retained authority state synchronized across legacy rollback attach and detach writes", () => {
+    const db = getDatabase();
+    const contact = createContact({ display_name: "Bianca Sipos" }, db);
+    const projectId = "wks_eHb1kcLUzgQVJQt6L0CCB";
+    const initial = readContactProjectMembership(contact.id, projectId, db);
+
+    const attached = mutateContactProjectMembership("attach", {
+      contact_id: contact.id,
+      project_id: projectId,
+      operation_id: "rollback-sync-candidate-attach",
+      step_id: "contacts-membership:forward:v1",
+      expected_version: initial.version,
+    }, db);
+    const afterCandidateAttach = db.query(
+      `SELECT linked, revision
+       FROM contact_project_membership_states
+       WHERE contact_id = ? AND project_id = ?`,
+    ).get(contact.id, projectId) as { linked: number; revision: number };
+    expect(afterCandidateAttach).toEqual({ linked: 1, revision: 1 });
+    expect(attached.after.version).toBe(readContactProjectMembership(contact.id, projectId, db).version);
+
+    // Simulate a rolled-back 0.6.34 binary, which only knows contact_projects.
+    db.run(
+      `DELETE FROM contact_projects WHERE contact_id = ? AND project_id = ?`,
+      [contact.id, projectId],
+    );
+    const afterLegacyDetach = readContactProjectMembership(contact.id, projectId, db);
+    const detachedState = db.query(
+      `SELECT linked, revision
+       FROM contact_project_membership_states
+       WHERE contact_id = ? AND project_id = ?`,
+    ).get(contact.id, projectId) as { linked: number; revision: number };
+    expect(afterLegacyDetach.linked).toBe(false);
+    expect(afterLegacyDetach.version).not.toBe(attached.after.version);
+    expect(detachedState).toEqual({ linked: 0, revision: 2 });
+
+    db.run(
+      `INSERT INTO contact_projects (contact_id, project_id) VALUES (?, ?)`,
+      [contact.id, projectId],
+    );
+    const afterLegacyAttach = readContactProjectMembership(contact.id, projectId, db);
+    const reattachedState = db.query(
+      `SELECT linked, revision
+       FROM contact_project_membership_states
+       WHERE contact_id = ? AND project_id = ?`,
+    ).get(contact.id, projectId) as { linked: number; revision: number };
+    expect(afterLegacyAttach.linked).toBe(true);
+    expect(afterLegacyAttach.version).not.toBe(afterLegacyDetach.version);
+    expect(reattachedState).toEqual({ linked: 1, revision: 3 });
+
+    const receipt = db.query(
+      `SELECT after_json
+       FROM contact_project_membership_receipts
+       WHERE operation_id = ? AND step_id = ?`,
+    ).get("rollback-sync-candidate-attach", "contacts-membership:forward:v1") as { after_json: string };
+    expect(JSON.parse(receipt.after_json)).toEqual(attached.after);
+
+    db.run(`DELETE FROM contacts WHERE id = ?`, [contact.id]);
+    expect(db.query(
+      `SELECT 1 AS present
+       FROM contact_project_membership_states
+       WHERE contact_id = ?`,
+    ).get(contact.id)).toBeNull();
+  });
 });
