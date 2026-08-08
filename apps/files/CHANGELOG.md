@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.12 — 2026-08-09
+
+- Preserve the `files list` JSON-array contract while fulfilling logical
+  limits above the hosted API's 500-row per-request bound through internal
+  pagination. A requested 1,000 rows can no longer return 500 at exit 0 with
+  no indication that the result was truncated.
+- Preserve caller offsets across internal pages and stop when the service
+  returns a short page, without adding unnecessary requests for limits already
+  within the server contract.
+
 ## 0.3.11 — 2026-08-08
 
 Release of the hosted extension-filter normalization fix merged in #34.
