@@ -10,6 +10,11 @@ import {
   rollbackProjectResourceLinkMigration,
 } from "../db/workspaces.js";
 import { runMigrations } from "../db/schema.js";
+import {
+  projectResourceLinkProducerAttestationId,
+  projectResourceLinkProducerEvidenceDigest,
+  type ProjectResourceLinkProducerEvidenceVerifier,
+} from "./project-resource-link-migrations.js";
 import type {
   ProjectResourceLinkInput,
   ProjectResourceLinkProducerEvidence,
@@ -85,6 +90,76 @@ function producerInverseEvidence(
     inverse_verified: true,
     inverse_outcome: inverseOutcome,
   }];
+}
+
+const trustedProducerEvidenceVerifier: ProjectResourceLinkProducerEvidenceVerifier = (input) => {
+  const evidenceDigest = projectResourceLinkProducerEvidenceDigest(
+    input.manifest,
+    input.phase,
+    input.producer_evidence,
+  );
+  return {
+    attestation_id: projectResourceLinkProducerAttestationId(
+      input.manifest.manifest_id,
+      input.phase,
+      evidenceDigest,
+    ),
+    manifest_id: input.manifest.manifest_id,
+    phase: input.phase,
+    evidence_digest: evidenceDigest,
+    verifier: "test-producer-authority-readback",
+    verified_at: "2026-08-08T20:00:00.000Z",
+  };
+};
+
+function prepareProjectsAppliedMigration(db: Database, suffix: string) {
+  const project = createWorkspace({
+    name: `Migration Attestation ${suffix}`,
+    slug: `migration-attestation-${suffix}`,
+  }, db);
+  const planned = planProjectResourceLinkMigration({
+    project_id: project.id,
+    operation_id: `migration-attestation-${suffix}`,
+    step_id: "links",
+    expected_project_revision: project.updated_at,
+    links: migrationItems(),
+    max_items: 10,
+    ...BOUNDS,
+  }, db);
+  const producerApplied = advanceProjectResourceLinkMigration({
+    project_id: project.id,
+    manifest_id: planned.manifest.manifest_id,
+    expected_transition_version: planned.manifest.transition_version,
+    next_state: "producer_applied",
+    producer_evidence: producerEvidence(),
+    evidence: { producer_receipt: "todos-receipt-forward" },
+    ...BOUNDS,
+  }, db);
+  const projectsWrite = mutateProjectResourceLinks({
+    project_id: project.id,
+    operation_id: planned.manifest.operation_id,
+    step_id: planned.manifest.step_id,
+    mode: "reconcile",
+    expected_revision: project.updated_at,
+    links: [todosProjectLink()],
+    max_items: 10,
+    ...BOUNDS,
+  }, db);
+  const projectsApplied = advanceProjectResourceLinkMigration({
+    project_id: project.id,
+    manifest_id: planned.manifest.manifest_id,
+    expected_transition_version: producerApplied.manifest.transition_version,
+    next_state: "projects_applied",
+    projects_forward_receipt_id: projectsWrite.receipt!.receipt_id,
+    evidence: { projects_receipt: projectsWrite.receipt!.receipt_id },
+    ...BOUNDS,
+  }, db);
+  const current = readProjectResourceLinks({
+    project_id: project.id,
+    max_items: 10,
+    ...BOUNDS,
+  }, db);
+  return { project, planned, projectsApplied, current };
 }
 
 describe("project resource-link migration manifest", () => {
@@ -165,7 +240,7 @@ describe("project resource-link migration manifest", () => {
       producer_evidence: producerInverseEvidence(),
       evidence: { producer_inverse: "verified" },
       ...BOUNDS,
-    }, db);
+    }, db, trustedProducerEvidenceVerifier);
     expect(completed.manifest.state).toBe("rolled_back");
     expect(completed.events.map((event) => event.to_state)).toEqual([
       "planned",
@@ -248,8 +323,12 @@ describe("project resource-link migration manifest", () => {
       last_verified_projects_digest: current.collection_digest,
       evidence: { complete_readback: true },
       ...BOUNDS,
-    }, db);
+    }, db, trustedProducerEvidenceVerifier);
     expect(verified.manifest.state).toBe("verified");
+    expect(verified.events.at(-1)?.evidence.producer_attestation).toEqual(expect.objectContaining({
+      phase: "readback",
+      verifier: "test-producer-authority-readback",
+    }));
 
     const referenceRollback = rollbackProjectResourceLinkMigration({
       project_id: project.id,
@@ -282,7 +361,7 @@ describe("project resource-link migration manifest", () => {
       producer_evidence: producerInverseEvidence("retained_target"),
       evidence: { dependent_children: 1, producer_refusal: "target-not-empty" },
       ...BOUNDS,
-    }, db);
+    }, db, trustedProducerEvidenceVerifier);
     expect(retained.manifest.state).toBe("retained_target");
     expect(retained.events.map((event) => event.to_state)).toEqual([
       "planned",
@@ -375,9 +454,12 @@ describe("project resource-link migration manifest", () => {
       producer_evidence: producerReadbackEvidence(),
       last_verified_projects_revision: current.current_revision,
       last_verified_projects_digest: current.collection_digest,
-      evidence: { producer_readback: "verified" },
+      evidence: {
+        producer_readback: "verified",
+        producer_attestation: { caller_fabricated: true },
+      },
       ...BOUNDS,
-    }, db);
+    }, db, trustedProducerEvidenceVerifier);
     const rollbackProof = rollbackProjectResourceLinkMigration({
       project_id: project.id,
       manifest_id: planned.manifest.manifest_id,
@@ -421,9 +503,88 @@ describe("project resource-link migration manifest", () => {
       producer_evidence: producerInverseEvidence(),
       evidence: { producer_inverse: "verified" },
       ...BOUNDS,
-    } as never, db);
+    } as never, db, trustedProducerEvidenceVerifier);
     expect(completed.manifest.state).toBe("rolled_back");
     expect(completed.manifest.links[0]?.producer_evidence).toEqual(producerInverseEvidence()[0]);
+    expect(completed.events.at(-1)?.evidence.producer_attestation).toEqual(expect.objectContaining({
+      phase: "inverse_complete",
+      verifier: "test-producer-authority-readback",
+    }));
+    db.close();
+  });
+
+  test("rejects caller-fabricated matching producer readback before verified", () => {
+    const db = makeDb();
+    const { project, planned, projectsApplied, current } = prepareProjectsAppliedMigration(db, "verified");
+
+    expect(() => advanceProjectResourceLinkMigration({
+      project_id: project.id,
+      manifest_id: planned.manifest.manifest_id,
+      expected_transition_version: projectsApplied.manifest.transition_version,
+      next_state: "verified",
+      producer_evidence: producerReadbackEvidence(),
+      last_verified_projects_revision: current.current_revision,
+      last_verified_projects_digest: current.collection_digest,
+      evidence: {
+        caller_fabricated_nonempty_proof: true,
+        producer_attestation: { caller_fabricated: true },
+      },
+      ...BOUNDS,
+    }, db)).toThrow(/trusted producer receipt\/readback attestation/i);
+
+    expect(readProjectResourceLinkMigration({
+      project_id: project.id,
+      manifest_id: planned.manifest.manifest_id,
+      max_items: 10,
+      ...BOUNDS,
+    }, db).manifest.state).toBe("projects_applied");
+    db.close();
+  });
+
+  test("rejects caller-fabricated matching producer inverse before rolled_back", () => {
+    const db = makeDb();
+    const { project, planned, projectsApplied, current } = prepareProjectsAppliedMigration(db, "rolled-back");
+    const verified = advanceProjectResourceLinkMigration({
+      project_id: project.id,
+      manifest_id: planned.manifest.manifest_id,
+      expected_transition_version: projectsApplied.manifest.transition_version,
+      next_state: "verified",
+      producer_evidence: producerReadbackEvidence(),
+      last_verified_projects_revision: current.current_revision,
+      last_verified_projects_digest: current.collection_digest,
+      evidence: { producer_readback: "verified" },
+      ...BOUNDS,
+    }, db, trustedProducerEvidenceVerifier);
+    const rollbackProof = rollbackProjectResourceLinkMigration({
+      project_id: project.id,
+      manifest_id: planned.manifest.manifest_id,
+      expected_transition_version: verified.manifest.transition_version,
+      max_items: 10,
+      producer_outcome: "pending",
+      evidence: { projects_references: "removed" },
+      ...BOUNDS,
+    }, db);
+
+    expect(() => rollbackProjectResourceLinkMigration({
+      project_id: project.id,
+      manifest_id: planned.manifest.manifest_id,
+      expected_transition_version: rollbackProof.manifest.transition_version,
+      max_items: 10,
+      producer_outcome: "complete",
+      producer_evidence: producerInverseEvidence(),
+      evidence: {
+        caller_fabricated_nonempty_proof: true,
+        producer_attestation: { caller_fabricated: true },
+      },
+      ...BOUNDS,
+    }, db)).toThrow(/trusted producer receipt\/readback attestation/i);
+
+    expect(readProjectResourceLinkMigration({
+      project_id: project.id,
+      manifest_id: planned.manifest.manifest_id,
+      max_items: 10,
+      ...BOUNDS,
+    }, db).manifest.state).toBe("rollback_in_progress");
     db.close();
   });
 

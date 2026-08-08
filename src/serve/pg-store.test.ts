@@ -11,8 +11,33 @@ import type {
   WorkspaceEventRow,
   WorkspaceRow,
 } from "../types/workspace.js";
+import {
+  projectResourceLinkProducerAttestationId,
+  projectResourceLinkProducerEvidenceDigest,
+  type AsyncProjectResourceLinkProducerEvidenceVerifier,
+} from "../lib/project-resource-link-migrations.js";
 import { runProjectsMigrations } from "./migrations.js";
 import { ProjectsPgStore, generateWorkspaceId, generateRootId, slugify } from "./pg-store.js";
+
+const trustedProducerEvidenceVerifier: AsyncProjectResourceLinkProducerEvidenceVerifier = (input) => {
+  const evidenceDigest = projectResourceLinkProducerEvidenceDigest(
+    input.manifest,
+    input.phase,
+    input.producer_evidence,
+  );
+  return {
+    attestation_id: projectResourceLinkProducerAttestationId(
+      input.manifest.manifest_id,
+      input.phase,
+      evidenceDigest,
+    ),
+    manifest_id: input.manifest.manifest_id,
+    phase: input.phase,
+    evidence_digest: evidenceDigest,
+    verifier: "test-producer-authority-readback",
+    verified_at: "2026-08-08T20:00:00.000Z",
+  };
+};
 
 function eventAgentFkClient() {
   const createdAt = "2026-08-08 00:00:00";
@@ -850,6 +875,7 @@ describe("pg-store typed resource-link transaction model", () => {
   test("requires exact producer proof for terminal migration states and bounds event reads", async () => {
     const harness = resourceLinkMutationClient();
     const store = new ProjectsPgStore(harness.client);
+    const trustedStore = new ProjectsPgStore(harness.client, trustedProducerEvidenceVerifier);
     const bounds = {
       response_byte_limit: 100_000,
       time_budget_ms: 5_000,
@@ -924,6 +950,7 @@ describe("pg-store typed resource-link transaction model", () => {
       .rejects.toThrow(/producer readback proof/i);
     await expect(store.advanceProjectResourceLinkMigration({
       ...verifiedInput,
+      evidence: { producer_attestation: { caller_fabricated: true } },
       producer_evidence: [{
         ...producerEvidence[0]!,
         forward_receipt_id: "forged-receipt",
@@ -931,7 +958,16 @@ describe("pg-store typed resource-link transaction model", () => {
         target_digest: "sha256:conversations-target-2",
       }],
     })).rejects.toThrow(/persisted producer receipt/i);
-    const verified = await store.advanceProjectResourceLinkMigration({
+    await expect(store.advanceProjectResourceLinkMigration({
+      ...verifiedInput,
+      evidence: { producer_attestation: { caller_fabricated: true } },
+      producer_evidence: [{
+        ...producerEvidence[0]!,
+        target_revision: "conversations-revision-2",
+        target_digest: "sha256:conversations-target-2",
+      }],
+    })).rejects.toThrow(/trusted producer receipt\/readback attestation/i);
+    const verified = await trustedStore.advanceProjectResourceLinkMigration({
       ...verifiedInput,
       producer_evidence: [{
         ...producerEvidence[0]!,
@@ -944,6 +980,10 @@ describe("pg-store typed resource-link transaction model", () => {
       forward_receipt_id: "conversations-forward-receipt",
       target_revision: "conversations-revision-2",
     });
+    expect(verified.events.at(-1)?.evidence.producer_attestation).toEqual(expect.objectContaining({
+      phase: "readback",
+      verifier: "test-producer-authority-readback",
+    }));
 
     const bounded = await store.readProjectResourceLinkMigration({
       project_id: harness.workspace().id,
@@ -977,6 +1017,7 @@ describe("pg-store typed resource-link transaction model", () => {
       .rejects.toThrow(/producer inverse proof/i);
     await expect(store.rollbackProjectResourceLinkMigration({
       ...rollbackInput,
+      evidence: { producer_attestation: { caller_fabricated: true } },
       producer_evidence: [{
         ...producerEvidence[0]!,
         target_revision: "conversations-revision-3",
@@ -985,7 +1026,18 @@ describe("pg-store typed resource-link transaction model", () => {
         inverse_outcome: "complete",
       }],
     })).rejects.toThrow(/inverse_verified=true/i);
-    const rolledBack = await store.rollbackProjectResourceLinkMigration({
+    await expect(store.rollbackProjectResourceLinkMigration({
+      ...rollbackInput,
+      evidence: { producer_attestation: { caller_fabricated: true } },
+      producer_evidence: [{
+        ...producerEvidence[0]!,
+        target_revision: "conversations-revision-3",
+        target_digest: "sha256:conversations-target-3",
+        inverse_verified: true,
+        inverse_outcome: "complete",
+      }],
+    })).rejects.toThrow(/trusted producer receipt\/readback attestation/i);
+    const rolledBack = await trustedStore.rollbackProjectResourceLinkMigration({
       ...rollbackInput,
       producer_evidence: [{
         ...producerEvidence[0]!,
@@ -1000,6 +1052,10 @@ describe("pg-store typed resource-link transaction model", () => {
       inverse_verified: true,
       inverse_outcome: "complete",
     });
+    expect(rolledBack.events.at(-1)?.evidence.producer_attestation).toEqual(expect.objectContaining({
+      phase: "inverse_complete",
+      verifier: "test-producer-authority-readback",
+    }));
   });
 });
 
