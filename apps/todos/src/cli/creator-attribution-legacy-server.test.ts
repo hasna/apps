@@ -185,7 +185,12 @@ describe("--inbox against a server that ignores the creator filter", () => {
       const limitsSent = seen
         .map((search) => new URLSearchParams(search).get("limit"))
         .filter((value): value is string => value !== null);
-      expect(limitsSent).toEqual(["1000"]);
+      expect(limitsSent).toEqual(["1000", "1000"]);
+      const statusesSent = seen
+        .map((search) => new URLSearchParams(search).get("status"))
+        .filter((value): value is string => value !== null)
+        .sort();
+      expect(statusesSent).toEqual(["in_progress", "pending"]);
     } finally {
       server.stop(true);
     }
