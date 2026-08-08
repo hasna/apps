@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { mintApiKey, verifyApiKey } from "@hasna/contracts/auth";
 import { createHandler } from "../src/server/serve.js";
 import {
@@ -10,10 +10,18 @@ import {
 import type { CloudSecretsStore } from "../src/server/cloud-store.js";
 
 const SIGNING = "test-signing-secret-please-rotate";
+const TEST_TENANT = "11111111-2222-4333-8444-555555555555";
+const persistedTenantByKid = new Map<string, string>();
 
 function fakeClient() {
   return {
-    async get() { return { ok: 1 }; },
+    async get(sql: string, params?: readonly unknown[]) {
+      if (sql.includes("SELECT tenant_id FROM api_keys")) {
+        const tenantId = persistedTenantByKid.get(String(params?.[0]));
+        return tenantId ? { tenant_id: tenantId } : null;
+      }
+      return { ok: 1 };
+    },
     async many() { return []; },
     async one() { return { ok: 1 }; },
     async query() { return { rows: [], rowCount: 0 }; },
@@ -25,9 +33,11 @@ function fakeClient() {
 function fakeStore() {
   const secrets = new Map<string, any>();
   return {
-    async setSecret(key, value, type, label, expiresAt, _actor) {
+    tenantWrites: [] as string[],
+    async setSecret(key, value, type, label, expiresAt, _actor, tenantId) {
       const now = new Date().toISOString();
       const entry = { key, value, type, label, expires_at: expiresAt, created_at: now, updated_at: now };
+      this.tenantWrites.push(tenantId);
       secrets.set(key, entry);
       return entry;
     },
@@ -51,11 +61,17 @@ function handler(store = fakeStore()) {
   return createHandler({ client: fakeClient(), store, verifier });
 }
 
-function keyWith(scopes: string[]): string {
-  return mintApiKey({ app: "secrets", scopes, signingSecret: SIGNING }).token;
+function keyWith(scopes: string[], persistTenant = true): string {
+  const minted = mintApiKey({ app: "secrets", scopes, signingSecret: SIGNING });
+  if (persistTenant) persistedTenantByKid.set(minted.kid, TEST_TENANT);
+  return minted.token;
 }
 
 describe("secrets serve", () => {
+  beforeEach(() => {
+    persistedTenantByKid.clear();
+  });
+
   test("health/version/ready need no auth", async () => {
     const h = handler();
     for (const path of ["/health", "/version", "/ready"]) {
@@ -105,6 +121,7 @@ describe("secrets serve", () => {
     let res = await h(new Request("http://x/v1/secrets", { method: "POST", headers: authz, body: JSON.stringify({ key: "openai/api_key", value: "sk-123", type: "api_key" }) }));
     expect(res.status).toBe(200);
     expect((await res.json()).value).toBeUndefined(); // metadata only
+    expect(store.tenantWrites).toEqual([TEST_TENANT]);
 
     // read
     res = await h(new Request("http://x/v1/secrets/get?key=openai/api_key", { headers: { "x-api-key": key } }));
@@ -122,6 +139,23 @@ describe("secrets serve", () => {
     // gone
     res = await h(new Request("http://x/v1/secrets/get?key=openai/api_key", { headers: { "x-api-key": key } }));
     expect(res.status).toBe(404);
+  });
+
+  test("a valid minted key without a persisted tenant assignment is denied before writes", async () => {
+    const store = fakeStore();
+    const key = keyWith(["secrets:write"], false);
+
+    const res = await handler(store)(
+      new Request("http://x/v1/secrets", {
+        method: "POST",
+        headers: { "x-api-key": key, "content-type": "application/json" },
+        body: JSON.stringify({ key: "openai/api_key", value: "sk-123" }),
+      }),
+    );
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "API key has no tenant assignment" });
+    expect(store.tenantWrites).toHaveLength(0);
   });
 
   test("returns a typed actionable 422 when the master key cannot decrypt a secret", async () => {
