@@ -8,10 +8,6 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  LOOP_DEPLOYMENT_MODES,
-  normalizeLoopDeploymentMode,
-} from "../src/lib/mode.ts";
-import {
   formatContractConformance,
   repoRoot,
   runContractConformance,
@@ -100,7 +96,7 @@ describe("Loops repository contract conformance", () => {
     expect(manifest.metadata.conformance?.binCompatibilityWaivers).toBeUndefined();
   });
 
-  test("declares the exact package, deployment, and split DSN contracts", () => {
+  test("declares the exact package, storage, and split DSN contracts", () => {
     const packageJson = readJson(join(repoRoot, "package.json"));
     const manifest = readJson(join(repoRoot, "hasna.contract.json"));
     const httpSurface = manifest.serviceSurfaces.find(
@@ -124,18 +120,23 @@ describe("Loops repository contract conformance", () => {
       types: "./dist/api/index.d.ts",
       import: "./dist/api/index.js",
     });
-    expect(httpSurface.deploymentModes).toEqual(["self-hosted"]);
-    expect(serviceMetadata.deploymentModeMapping).toEqual({
-      contract: "self-hosted",
-      runtime: "self_hosted",
-    });
-    expect(
-      LOOP_DEPLOYMENT_MODES.includes(
-        normalizeLoopDeploymentMode(
-          serviceMetadata.deploymentModeMapping.runtime,
-        ),
-      ),
-    ).toBe(true);
+    // The local|self_hosted|cloud placement axis was removed from the contract
+    // schema. These assert the dead vocabulary stays gone rather than pinning it.
+    expect(manifest.deploymentModes).toBeUndefined();
+    expect(httpSurface.deploymentModes).toBeUndefined();
+    expect(httpSurface.deploymentMode).toBeUndefined();
+    expect(serviceMetadata.deploymentModeMapping).toBeUndefined();
+
+    // The only technical switch is the SERVER data backend. `loops-serve` opens
+    // Postgres unconditionally — src/serve/index.ts resolves the runtime DSN and
+    // throws when it is absent, and imports no sqlite storage — so the active
+    // backend is postgresql. sqlite remains a supported engine for the CLI client,
+    // which is what `engines` records.
+    expect(manifest.storage.mode).toBeUndefined();
+    expect(manifest.storage.backend).toBe("postgresql");
+    expect(manifest.storage.engines).toEqual(["sqlite", "postgresql"]);
+    expect(serveSource).toContain("HASNA_LOOPS_DATABASE_URL");
+    expect(serveSource).not.toContain("storage/sqlite");
 
     expect(manifest.storage.databaseUrlSecretRef).toBeUndefined();
     expect(
