@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.14.76 — Receipt-backed project registration authority
+## 0.14.77 — Receipt-backed project registration authority
+
+**Immutable release recovery.** Version 0.14.76 was tagged but never published:
+its release workflow invoked the package-local `contracts` binary as a raw shell
+command, outside Bun's package-runner path, and exited `127`. This release keeps
+that failed tag unchanged and publishes the repaired candidate as 0.14.77.
 
 **Additive authority path.** Integrations can now create a project only when
 absent, read it back by exact full ID, retrieve an immutable bounded terminal
@@ -31,6 +36,9 @@ receipt. Existing `registerProject` callers retain their current behaviour.
   of discarding them. (#61)
 - Test-only: isolate API-mode project-update tests from local database path
   selectors. (#58)
+- Run the release contract scan through `bun run contracts`, with a two-sided
+  regression proving the raw shell invocation fails in an isolated environment
+  while the package-runner invocation resolves the repository dependency. (#67)
 
 ## 0.14.73 — `save` refuses an unresolvable `--agent`/`--project`
 
