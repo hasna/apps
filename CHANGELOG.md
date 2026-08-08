@@ -6,6 +6,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.109]
+
+### Fixed
+
+- API-backed `projects start` operations now write events and
+  `last_opened_at` through the hosted project store instead of a machine-local
+  SQLite database, avoiding foreign-key failures for hosted-only projects.
+- PostgreSQL event recording now stores `null` when a CLI-provided agent ID is
+  not registered with the service, allowing start events from machine-local
+  agent identities to succeed.
+
 ## [0.1.108]
 
 ### Added
