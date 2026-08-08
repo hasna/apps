@@ -2,6 +2,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  planProjectLinkReceiptId,
+  planProjectLinkResultDigest,
+  planProjectLinkRollbackReceiptId,
+} from "../lib/plan-project-link-contract.js";
 
 const REPO_ROOT = join(import.meta.dir, "../..");
 const TEST_API_KEY = "hasna_todos_test_key";
@@ -199,6 +204,9 @@ describe("cloud CLI plan commands", () => {
 
   test("plans, applies, and rolls back guarded project linkage through the remote authority", async () => {
     const projectId = "88888888-8888-4888-8888-888888888888";
+    const idempotencyKey = "cli-link-fixture";
+    const receiptId = planProjectLinkReceiptId(idempotencyKey);
+    const rollbackReceiptId = planProjectLinkRollbackReceiptId(receiptId);
     const requests: Array<{ method: string; path: string; query: string; body?: unknown }> = [];
     let plan = {
       id: PLAN_ID,
@@ -219,6 +227,7 @@ describe("cloud CLI plan commands", () => {
       description: null,
       task_list_id: null,
       task_prefix: null,
+      task_counter: 0,
       machine_paths: [],
       metadata: {},
       created_at: "2026-08-07T00:00:00.000Z",
@@ -249,8 +258,19 @@ describe("cloud CLI plan commands", () => {
             project,
             tasks: [],
             receipt: {
-              receipt_id: "ppl_cli_fixture",
+              schema_version: "todos.plan-project-link.v1",
+              receipt_id: receiptId,
+              idempotency_key: idempotencyKey,
+              plan_id: plan.id,
+              project_id: project.id,
+              prior_plan_project_id: null,
+              prior_task_project_ids: {},
+              task_ids: [],
               task_count: 0,
+              result_plan_revision: plan.updated_at,
+              result_digest: planProjectLinkResultDigest(plan, []),
+              rollback_supported: true,
+              created_at: plan.updated_at,
             },
           }, { status: 201 });
         }
@@ -261,8 +281,8 @@ describe("cloud CLI plan commands", () => {
             action: "restored",
             plan,
             tasks: [],
-            accepted_receipt_id: "ppl_cli_fixture",
-            rollback_receipt_id: "pplr_cli_fixture",
+            accepted_receipt_id: receiptId,
+            rollback_receipt_id: rollbackReceiptId,
             restored_at: plan.updated_at,
           });
         }
@@ -284,24 +304,24 @@ describe("cloud CLI plan commands", () => {
       const applied = await runCli(
         [
           "--json", "plans", "--link-project", PLAN_ID, "--to-project", projectId,
-          "--apply", "--idempotency-key", "cli-link-fixture",
+          "--apply", "--idempotency-key", idempotencyKey,
         ],
         root,
         baseUrl,
       );
       expect(applied).toMatchObject({ exitCode: 0, stderr: "" });
-      expect(JSON.parse(applied.stdout)).toMatchObject({ action: "linked", receipt: { receipt_id: "ppl_cli_fixture" } });
+      expect(JSON.parse(applied.stdout)).toMatchObject({ action: "linked", receipt: { receipt_id: receiptId } });
 
       const rolledBack = await runCli(
         [
           "--json", "plans", "--rollback-project-link", PLAN_ID, "--to-project", projectId,
-          "--receipt", "ppl_cli_fixture",
+          "--receipt", receiptId,
         ],
         root,
         baseUrl,
       );
       expect(rolledBack).toMatchObject({ exitCode: 0, stderr: "" });
-      expect(JSON.parse(rolledBack.stdout)).toMatchObject({ action: "restored", rollback_receipt_id: "pplr_cli_fixture" });
+      expect(JSON.parse(rolledBack.stdout)).toMatchObject({ action: "restored", rollback_receipt_id: rollbackReceiptId });
 
       const linkCalls = requests.filter((entry) => entry.path.includes("/project-link"));
       expect(linkCalls).toEqual([
@@ -315,7 +335,7 @@ describe("cloud CLI plan commands", () => {
             project_id: projectId,
             expected_plan_revision: "2026-08-07T00:01:00.000Z",
             expected_project_revision: project.updated_at,
-            idempotency_key: "cli-link-fixture",
+            idempotency_key: idempotencyKey,
           },
         },
         {
@@ -324,10 +344,79 @@ describe("cloud CLI plan commands", () => {
           query: "",
           body: {
             project_id: projectId,
-            receipt_id: "ppl_cli_fixture",
+            receipt_id: receiptId,
             expected_plan_revision: "2026-08-07T00:03:00.000Z",
           },
         },
+      ]);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("fails closed when a stale authority returns an ordinary plan for the project-link route", async () => {
+    const projectId = "88888888-8888-4888-8888-888888888888";
+    const plan = {
+      id: PLAN_ID,
+      slug: "link-existing-plan",
+      name: "Link existing plan",
+      description: null,
+      status: "active" as const,
+      project_id: null,
+      task_list_id: null,
+      agent_id: null,
+      created_at: "2026-08-07T00:00:00.000Z",
+      updated_at: "2026-08-07T00:01:00.000Z",
+    };
+    const project = {
+      id: projectId,
+      name: "Target project",
+      path: "/workspace/target-project",
+      description: null,
+      task_list_id: null,
+      task_prefix: null,
+      task_counter: 0,
+      created_at: "2026-08-07T00:00:00.000Z",
+      updated_at: "2026-08-07T00:02:00.000Z",
+    };
+    const requests: Array<{ method: string; path: string }> = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        requests.push({ method: request.method, path: url.pathname });
+        if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "GET") {
+          return Response.json({ plan });
+        }
+        if (url.pathname === "/v1/projects" && request.method === "GET") {
+          return Response.json({ projects: [project], count: 1 });
+        }
+        if (url.pathname === `/v1/plans/${PLAN_ID}/project-link` && request.method === "GET") {
+          return Response.json(plan);
+        }
+        return Response.json({ error: "mutation must not run" }, { status: 500 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-plan-project-link-stale-route-"));
+    tempRoots.push(root);
+    try {
+      const result = await runCli(
+        ["--json", "plans", "--link-project", PLAN_ID, "--to-project", projectId],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain("REMOTE_API_INCOMPATIBLE");
+      expect(result.stderr).toContain("todos.plan-project-link.v1 plan response");
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        error: expect.stringContaining("REMOTE_API_INCOMPATIBLE"),
+      });
+      expect(JSON.parse(result.stdout).error).toContain("todos.plan-project-link.v1 plan response");
+      expect(requests).toEqual([
+        { method: "GET", path: `/v1/plans/${PLAN_ID}` },
+        { method: "GET", path: "/v1/projects" },
+        { method: "GET", path: `/v1/plans/${PLAN_ID}/project-link` },
       ]);
     } finally {
       server.stop(true);

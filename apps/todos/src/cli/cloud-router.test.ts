@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  planProjectLinkReceiptId,
+  planProjectLinkResultDigest,
+  planProjectLinkRollbackReceiptId,
+} from "../lib/plan-project-link-contract.js";
+import type { Plan, PlanProjectLinkReceipt, Project, Task } from "../types/index.js";
+import {
   getTodosCloudClient,
   getTodosRemoteAuthorityConfigStatus,
   resolveTodosCliStorageMode,
@@ -40,6 +46,9 @@ import {
   cloudPlanProjectTaskListEnsure,
   cloudApplyProjectTaskListEnsure,
   cloudRollbackProjectTaskListEnsure,
+  cloudPlanPlanProjectLink,
+  cloudApplyPlanProjectLink,
+  cloudRollbackPlanProjectLink,
   cloudResolveProjectRef,
   cloudResolvePlan,
   cloudResolveTaskListRef,
@@ -80,6 +89,119 @@ function installFetch(handler: (call: Call) => { status?: number; body?: unknown
     });
   };
   return calls;
+}
+
+function planProjectLinkPlanFixture(overrides: Partial<Plan> = {}): Plan {
+  return {
+    id: "plan-1",
+    slug: "dubai-fraud",
+    project_id: null,
+    task_list_id: null,
+    agent_id: null,
+    name: "Dubai Fraud",
+    description: null,
+    status: "active",
+    created_at: "2026-08-08T00:00:00.000Z",
+    updated_at: "2026-08-08T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function planProjectLinkProjectFixture(overrides: Partial<Project> = {}): Project {
+  return {
+    id: "project-1",
+    name: "Dubai Fraud",
+    path: "/workspace/dubai-fraud",
+    description: null,
+    task_list_id: null,
+    task_prefix: null,
+    task_counter: 0,
+    created_at: "2026-08-08T00:00:01.000Z",
+    updated_at: "2026-08-08T00:00:01.000Z",
+    ...overrides,
+  };
+}
+
+function planProjectLinkTaskFixture(overrides: Partial<Task> = {}): Task {
+  return {
+    id: "task-1",
+    short_id: "dubai-1",
+    project_id: null,
+    parent_id: null,
+    plan_id: "plan-1",
+    task_list_id: null,
+    title: "Investigate Dubai fraud",
+    description: null,
+    status: "pending",
+    priority: "medium",
+    agent_id: null,
+    assigned_to: null,
+    session_id: null,
+    working_dir: null,
+    tags: [],
+    metadata: {},
+    version: 1,
+    locked_by: null,
+    locked_at: null,
+    created_at: "2026-08-08T00:00:00.000Z",
+    updated_at: "2026-08-08T00:00:00.000Z",
+    started_at: null,
+    completed_at: null,
+    due_at: null,
+    estimated_minutes: null,
+    actual_minutes: null,
+    requires_approval: false,
+    approved_by: null,
+    approved_at: null,
+    recurrence_rule: null,
+    recurrence_parent_id: null,
+    spawns_template_id: null,
+    confidence: null,
+    reason: null,
+    spawned_from_session: null,
+    assigned_by: null,
+    created_by: null,
+    assigned_from_project: null,
+    task_type: null,
+    cost_tokens: 0,
+    cost_usd: 0,
+    delegated_from: null,
+    delegation_depth: 0,
+    retry_count: 0,
+    max_retries: 3,
+    retry_after: null,
+    sla_minutes: null,
+    runner_id: null,
+    runner_started_at: null,
+    runner_completed_at: null,
+    current_step: null,
+    total_steps: null,
+    ...overrides,
+  };
+}
+
+function planProjectLinkReceiptFixture(
+  plan: Plan,
+  tasks: Task[],
+  overrides: Partial<PlanProjectLinkReceipt> = {},
+): PlanProjectLinkReceipt {
+  const idempotencyKey = overrides.idempotency_key ?? "link-fixture";
+  return {
+    schema_version: "todos.plan-project-link.v1",
+    receipt_id: planProjectLinkReceiptId(idempotencyKey),
+    idempotency_key: idempotencyKey,
+    plan_id: plan.id,
+    project_id: plan.project_id!,
+    prior_plan_project_id: null,
+    prior_task_project_ids: Object.fromEntries(tasks.map((task) => [task.id, null])),
+    task_ids: tasks.map((task) => task.id),
+    task_count: tasks.length,
+    result_plan_revision: plan.updated_at,
+    result_digest: planProjectLinkResultDigest(plan, tasks),
+    rollback_supported: true,
+    created_at: "2026-08-08T00:00:02.000Z",
+    ...overrides,
+  };
 }
 
 afterEach(() => {
@@ -1253,6 +1375,268 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
       status: 404,
       body: { code: "PROJECT_TASK_LIST_RECEIPT_NOT_FOUND" },
     });
+  });
+
+  test.each([
+    ["a bare ordinary plan", {
+      id: "plan-1",
+      slug: "dubai-fraud",
+      name: "Dubai Fraud",
+      project_id: null,
+      updated_at: "2026-08-08T00:00:00.000Z",
+    }],
+    ["a partial linkage envelope", {
+      mode: "plan",
+      action: "would_link",
+      plan: { id: "plan-1", project_id: null, updated_at: "2026-08-08T00:00:00.000Z" },
+      project: { id: "project-1", updated_at: "2026-08-08T00:00:00.000Z" },
+      tasks: [],
+    }],
+    ["the wrong operation", {
+      mode: "apply",
+      action: "linked",
+      plan: { id: "plan-1", project_id: "project-1", updated_at: "2026-08-08T00:00:00.000Z" },
+      project: { id: "project-1", updated_at: "2026-08-08T00:00:00.000Z" },
+      tasks: [],
+      receipt: null,
+    }],
+  ])("plan-project-link rejects HTTP 2xx carrying %s", async (_label, body) => {
+    installFetch(() => ({ body }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudPlanPlanProjectLink(client, "plan-1", "project-1"))
+      .rejects.toThrow(/REMOTE_API_INCOMPATIBLE:.*todos\.plan-project-link\.v1 plan response/i);
+  });
+
+  test("plan-project-link accepts the exact non-mutating response envelope", async () => {
+    const plan = planProjectLinkPlanFixture();
+    const project = planProjectLinkProjectFixture();
+    const task = planProjectLinkTaskFixture();
+    installFetch(() => ({
+      body: { mode: "plan", action: "would_link", plan, project, tasks: [task], receipt: null },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudPlanPlanProjectLink(client, plan.id, project.id)).resolves.toEqual({
+      mode: "plan",
+      action: "would_link",
+      plan,
+      project,
+      tasks: [task],
+      receipt: null,
+    });
+  });
+
+  test.each([
+    ["Plan", {
+      mode: "plan",
+      action: "would_link",
+      plan: { ...planProjectLinkPlanFixture(), name: undefined, updated_at: "not-a-date" },
+      project: planProjectLinkProjectFixture(),
+      tasks: [planProjectLinkTaskFixture()],
+      receipt: null,
+    }],
+    ["Project", {
+      mode: "plan",
+      action: "would_link",
+      plan: planProjectLinkPlanFixture(),
+      project: { ...planProjectLinkProjectFixture(), path: undefined, created_at: "not-a-date" },
+      tasks: [planProjectLinkTaskFixture()],
+      receipt: null,
+    }],
+    ["Task", {
+      mode: "plan",
+      action: "would_link",
+      plan: planProjectLinkPlanFixture(),
+      project: planProjectLinkProjectFixture(),
+      tasks: [{ ...planProjectLinkTaskFixture(), title: undefined, updated_at: "not-a-date" }],
+      receipt: null,
+    }],
+  ])("plan-project-link rejects a malformed nested %s entity", async (_label, body) => {
+    installFetch(() => ({ body }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudPlanPlanProjectLink(client, "plan-1", "project-1"))
+      .rejects.toThrow(/REMOTE_API_INCOMPATIBLE:.*todos\.plan-project-link\.v1 plan response/i);
+  });
+
+  test.each([
+    ["a mismatched plan identity", { plan_id: "other-plan" }],
+    ["a mismatched count", { task_count: 2 }],
+    ["a mismatched result revision", { result_plan_revision: "2026-08-08T00:00:01.000Z" }],
+    ["a nondeterministic receipt identity", { receipt_id: "pplr_arbitrary" }],
+    ["an inconsistent result digest", { result_digest: "0".repeat(64) }],
+    ["an invalid creation timestamp", { created_at: "not-a-date" }],
+  ] as const)("plan-project-link apply rejects HTTP 2xx carrying %s", async (_label, overrides) => {
+    const plan = planProjectLinkPlanFixture({
+      project_id: "project-1",
+      updated_at: "2026-08-08T00:00:02.000Z",
+    });
+    const project = planProjectLinkProjectFixture();
+    const task = planProjectLinkTaskFixture({ project_id: project.id, updated_at: plan.updated_at });
+    const receipt = { ...planProjectLinkReceiptFixture(plan, [task]), ...overrides };
+    installFetch(() => ({
+      status: 201,
+      body: { mode: "apply", action: "linked", plan, project, tasks: [task], receipt },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudApplyPlanProjectLink(client, plan.id, project.id, {
+      expected_plan_revision: "2026-08-08T00:00:00.000Z",
+      expected_project_revision: project.updated_at,
+      idempotency_key: "link-fixture",
+    })).rejects.toThrow(/REMOTE_API_INCOMPATIBLE:.*todos\.plan-project-link\.v1 apply response/i);
+  });
+
+  test("plan-project-link apply rejects a partial receipt with full nested entities", async () => {
+    const plan = planProjectLinkPlanFixture({
+      project_id: "project-1",
+      updated_at: "2026-08-08T00:00:02.000Z",
+    });
+    const project = planProjectLinkProjectFixture();
+    const task = planProjectLinkTaskFixture({ project_id: project.id, updated_at: plan.updated_at });
+    installFetch(() => ({
+      status: 201,
+      body: {
+        mode: "apply",
+        action: "linked",
+        plan,
+        project,
+        tasks: [task],
+        receipt: { schema_version: "todos.plan-project-link.v1", task_count: 1 },
+      },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudApplyPlanProjectLink(client, plan.id, project.id, {
+      expected_plan_revision: "2026-08-08T00:00:00.000Z",
+      expected_project_revision: project.updated_at,
+      idempotency_key: "link-fixture",
+    })).rejects.toThrow(/REMOTE_API_INCOMPATIBLE:.*todos\.plan-project-link\.v1 apply response/i);
+  });
+
+  test("plan-project-link apply rejects an HTTP 2xx plan operation", async () => {
+    const plan = planProjectLinkPlanFixture();
+    const project = planProjectLinkProjectFixture();
+    const task = planProjectLinkTaskFixture();
+    installFetch(() => ({
+      body: { mode: "plan", action: "would_link", plan, project, tasks: [task], receipt: null },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudApplyPlanProjectLink(client, plan.id, project.id, {
+      expected_plan_revision: plan.updated_at,
+      expected_project_revision: project.updated_at,
+      idempotency_key: "link-fixture",
+    })).rejects.toThrow(/REMOTE_API_INCOMPATIBLE:.*todos\.plan-project-link\.v1 apply response/i);
+  });
+
+  test.each(["linked", "already_linked"] as const)(
+    "plan-project-link apply accepts an exact %s response",
+    async (action) => {
+      const plan = planProjectLinkPlanFixture({
+        project_id: "project-1",
+        updated_at: "2026-08-08T00:00:02.000Z",
+      });
+      const project = planProjectLinkProjectFixture();
+      const task = planProjectLinkTaskFixture({ project_id: project.id, updated_at: plan.updated_at });
+      const receipt = planProjectLinkReceiptFixture(plan, [task]);
+      installFetch(() => ({
+        status: action === "linked" ? 201 : 200,
+        body: { mode: "apply", action, plan, project, tasks: [task], receipt },
+      }));
+      const client = getTodosCloudClient(CLOUD_ENV)!;
+
+      await expect(cloudApplyPlanProjectLink(client, plan.id, project.id, {
+        expected_plan_revision: "2026-08-08T00:00:00.000Z",
+        expected_project_revision: project.updated_at,
+        idempotency_key: receipt.idempotency_key,
+      })).resolves.toMatchObject({ mode: "apply", action, receipt });
+    },
+  );
+
+  test("plan-project-link apply normalizes the idempotency key before POST and response validation", async () => {
+    const plan = planProjectLinkPlanFixture({
+      project_id: "project-1",
+      updated_at: "2026-08-08T00:00:02.000Z",
+    });
+    const project = planProjectLinkProjectFixture();
+    const task = planProjectLinkTaskFixture({ project_id: project.id, updated_at: plan.updated_at });
+    const receipt = planProjectLinkReceiptFixture(plan, [task]);
+    const calls = installFetch(() => ({
+      status: 201,
+      body: { mode: "apply", action: "linked", plan, project, tasks: [task], receipt },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudApplyPlanProjectLink(client, plan.id, project.id, {
+      expected_plan_revision: "2026-08-08T00:00:00.000Z",
+      expected_project_revision: project.updated_at,
+      idempotency_key: `  ${receipt.idempotency_key}  `,
+    })).resolves.toMatchObject({ mode: "apply", receipt });
+    expect(calls[0]!.body).toMatchObject({ idempotency_key: receipt.idempotency_key });
+  });
+
+  test.each([
+    ["the wrong schema", {
+      schema_version: "wrong",
+      action: "restored",
+      plan: { id: "plan-1", project_id: null, updated_at: "2026-08-08T00:00:03.000Z" },
+      tasks: [],
+      accepted_receipt_id: "pplr_fixture",
+      rollback_receipt_id: "pplr_inverse_fixture",
+      restored_at: "2026-08-08T00:00:03.000Z",
+    }],
+    ["a mismatched accepted receipt", {
+      schema_version: "todos.plan-project-link.v1",
+      action: "restored",
+      plan: { id: "plan-1", project_id: null, updated_at: "2026-08-08T00:00:03.000Z" },
+      tasks: [{ id: "task-1", plan_id: "plan-1", project_id: null }],
+      accepted_receipt_id: "other-receipt",
+      rollback_receipt_id: "pplr_inverse_fixture",
+      restored_at: "2026-08-08T00:00:03.000Z",
+    }],
+    ["a partial rollback envelope", {
+      schema_version: "todos.plan-project-link.v1",
+      action: "restored",
+    }],
+    ["the wrong rollback operation", {
+      schema_version: "todos.plan-project-link.v1",
+      action: "linked",
+      plan: { id: "plan-1", project_id: null, updated_at: "2026-08-08T00:00:03.000Z" },
+      tasks: [],
+      accepted_receipt_id: "pplr_fixture",
+      rollback_receipt_id: "pplr_inverse_fixture",
+      restored_at: "2026-08-08T00:00:03.000Z",
+    }],
+  ])("plan-project-link rollback rejects HTTP 2xx carrying %s", async (_label, body) => {
+    installFetch(() => ({ body }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudRollbackPlanProjectLink(client, "plan-1", "project-1", {
+      receipt_id: "pplr_fixture",
+      expected_plan_revision: "2026-08-08T00:00:02.000Z",
+    })).rejects.toThrow(/REMOTE_API_INCOMPATIBLE:.*todos\.plan-project-link\.v1 rollback response/i);
+  });
+
+  test("plan-project-link rollback accepts the exact response envelope", async () => {
+    const acceptedReceiptId = planProjectLinkReceiptId("link-fixture");
+    const body = {
+      schema_version: "todos.plan-project-link.v1",
+      action: "restored",
+      plan: planProjectLinkPlanFixture({ updated_at: "2026-08-08T00:00:03.000Z" }),
+      tasks: [planProjectLinkTaskFixture({ updated_at: "2026-08-08T00:00:03.000Z" })],
+      accepted_receipt_id: acceptedReceiptId,
+      rollback_receipt_id: planProjectLinkRollbackReceiptId(acceptedReceiptId),
+      restored_at: "2026-08-08T00:00:03.000Z",
+    };
+    installFetch(() => ({ body }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudRollbackPlanProjectLink(client, "plan-1", "project-1", {
+      receipt_id: body.accepted_receipt_id,
+      expected_plan_revision: "2026-08-08T00:00:02.000Z",
+    })).resolves.toEqual(body);
   });
 
   test("task-list resolution preserves exact UUIDs and resolves project-scoped slugs and unique UUID prefixes", async () => {
