@@ -269,4 +269,48 @@ describe("tenant API authentication", () => {
     );
     expect(decision).toMatchObject({ ok: false, status: 401, reason: "key_record_mismatch" });
   });
+
+  test("a polluted Object.prototype.agent cannot satisfy the principal binding", async () => {
+    // Minted with NO agent claim: `agent` is optional in ApiKeyClaims, so the
+    // own property is absent and a bare `claims.agent` read falls through to
+    // Object.prototype.
+    const token = mintApiKey({ app: "loops", scopes: ["loops:read"], signingSecret: secret, kid: "kid-poison", nowMs: now });
+    expect(Object.hasOwn(token.claims, "agent")).toBe(false);
+
+    const { client } = clientFor(token);
+    let decision: Awaited<ReturnType<TenantApiAuthenticator["authenticate"]>>;
+    try {
+      // The attacker sets the polluted value to the TARGET row's principal_id.
+      (Object.prototype as unknown as Record<string, unknown>).agent = "principal-a";
+      decision = await new TenantApiAuthenticator(client, secret, () => now).authenticate(
+        headers(token.token),
+        { method: "GET", path: "/v1/loops", policy: readPolicy },
+      );
+    } finally {
+      // Restore in finally so pollution cannot leak into sibling suites and
+      // resurface later as unrelated flakiness.
+      delete (Object.prototype as unknown as Record<string, unknown>).agent;
+    }
+    expect("agent" in {}).toBe(false); // prototype actually restored
+    expect(decision.ok).toBe(false);
+    expect(decision).toMatchObject({ status: 401, reason: "key_record_mismatch" });
+  });
+
+  test("the principal binding still denies a real mismatch and allows a real match", async () => {
+    // Guards the other direction: a fix that denied everything would pass the
+    // pollution test above and break every legitimate caller.
+    const mismatch = mintApiKey({ app: "loops", agent: "principal-b", scopes: ["loops:read"], signingSecret: secret, kid: "kid-mismatch", nowMs: now });
+    const denied = await new TenantApiAuthenticator(clientFor(mismatch).client, secret, () => now).authenticate(
+      headers(mismatch.token),
+      { method: "GET", path: "/v1/loops", policy: readPolicy },
+    );
+    expect(denied).toMatchObject({ ok: false, status: 401, reason: "key_record_mismatch" });
+
+    const match = mintApiKey({ app: "loops", agent: "principal-a", scopes: ["loops:read"], signingSecret: secret, kid: "kid-match", nowMs: now });
+    const allowed = await new TenantApiAuthenticator(clientFor(match).client, secret, () => now).authenticate(
+      headers(match.token),
+      { method: "GET", path: "/v1/loops", policy: readPolicy },
+    );
+    expect(allowed.ok).toBe(true);
+  });
 });
