@@ -23,4 +23,5 @@ export type {
   UpdateCompanyInput as ContactsV1UpdateCompanyInput,
   CreateTagInput as ContactsV1CreateTagInput,
   UpdateTagInput as ContactsV1UpdateTagInput,
+  ProjectIdsInput as ContactsV1ProjectIdsInput,
 } from "./v1.generated.js";

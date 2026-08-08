@@ -17,6 +17,9 @@ describe("buildV1OpenApiDocument", () => {
       expect(doc.paths).toHaveProperty(p);
     }
     expect(doc.paths).toHaveProperty("/v1/contacts/{contact_id}/tags/{tag_id}");
+    expect(doc.paths).toHaveProperty("/v1/contacts/{contact_id}/projects");
+    expect(doc.paths).toHaveProperty("/v1/contacts/{contact_id}/projects/{project_id}");
+    expect(doc.paths).toHaveProperty("/v1/projects/{project_id}/contacts");
     expect(doc.paths["/v1/tags"].get.parameters).toContainEqual({
       name: "name",
       in: "query",
@@ -34,6 +37,11 @@ describe("buildV1OpenApiDocument", () => {
     expect(doc.components.schemas.Contact.required).toContain("tags");
     expect(doc.paths["/v1/contacts/{contact_id}/tags/{tag_id}"].put.operationId).toBe("addTagToContact");
     expect(doc.paths["/v1/contacts/{contact_id}/tags/{tag_id}"].delete.operationId).toBe("removeTagFromContact");
+    expect(doc.paths["/v1/contacts/{contact_id}/projects"].get.operationId).toBe("getContactProjectIds");
+    expect(doc.paths["/v1/contacts/{contact_id}/projects"].put.operationId).toBe("setContactProjects");
+    expect(doc.paths["/v1/contacts/{contact_id}/projects/{project_id}"].put.operationId).toBe("linkContactToProject");
+    expect(doc.paths["/v1/contacts/{contact_id}/projects/{project_id}"].delete.operationId).toBe("unlinkContactFromProject");
+    expect(doc.paths["/v1/projects/{project_id}/contacts"].get.operationId).toBe("listContactIdsByProject");
   });
 
   test("requires api-key security", () => {

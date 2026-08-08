@@ -22,6 +22,8 @@ export interface CreateTagInput { "name": string; "color"?: string; "description
 
 export interface UpdateTagInput { "name"?: string; "color"?: string; "description"?: string }
 
+export interface ProjectIdsInput { "project_ids": Array<string> }
+
 export interface ContactsV1ClientOptions {
   /** Base URL, e.g. process.env.APP_API_URL. */
   baseUrl: string;
@@ -140,6 +142,42 @@ export class ContactsV1Client {
       });
     }
 
+    /** List project ids attached to a contact */
+    async getContactProjectIds(contactId: string, init?: RequestInit): Promise<{ "contact_id"?: string; "project_ids"?: Array<string> }> {
+      return this.request("GET", `/v1/contacts/${encodeURIComponent(String(contactId))}/projects`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Atomically replace a contact's project memberships */
+    async setContactProjects(contactId: string, body: ProjectIdsInput, init?: RequestInit): Promise<{ "contact_id"?: string; "project_ids"?: Array<string> }> {
+      return this.request("PUT", `/v1/contacts/${encodeURIComponent(String(contactId))}/projects`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Attach a contact to a project idempotently */
+    async linkContactToProject(contactId: string, projectId: string, init?: RequestInit): Promise<{ "attached"?: boolean; "contact_id"?: string; "project_id"?: string }> {
+      return this.request("PUT", `/v1/contacts/${encodeURIComponent(String(contactId))}/projects/${encodeURIComponent(String(projectId))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Detach a contact from a project */
+    async unlinkContactFromProject(contactId: string, projectId: string, init?: RequestInit): Promise<{ "removed"?: boolean; "contact_id"?: string; "project_id"?: string }> {
+      return this.request("DELETE", `/v1/contacts/${encodeURIComponent(String(contactId))}/projects/${encodeURIComponent(String(projectId))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Attach a tag to a contact idempotently */
     async addTagToContact(contactId: string, tagId: string, init?: RequestInit): Promise<{ "attached"?: boolean; "contact_id"?: string; "tag_id"?: string }> {
       return this.request("PUT", `/v1/contacts/${encodeURIComponent(String(contactId))}/tags/${encodeURIComponent(String(tagId))}`, {
@@ -180,6 +218,15 @@ export class ContactsV1Client {
     async updateContact(id: string, body: UpdateContactInput, init?: RequestInit): Promise<{ "contact"?: Contact }> {
       return this.request("PATCH", `/v1/contacts/${encodeURIComponent(String(id))}`, {
         body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** List contact ids attached to a project */
+    async listContactIdsByProject(projectId: string, init?: RequestInit): Promise<{ "project_id"?: string; "contact_ids"?: Array<string> }> {
+      return this.request("GET", `/v1/projects/${encodeURIComponent(String(projectId))}/contacts`, {
+        body: undefined,
         query: undefined,
         init,
       });

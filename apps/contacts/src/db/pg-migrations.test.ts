@@ -25,4 +25,14 @@ describe("PostgreSQL migration artifacts", () => {
       expect(normalizeSql(artifact)).toBe(normalizeSql(migration));
     }
   });
+
+  test("keeps contact-project membership additive, idempotent, and cascade-safe", () => {
+    const migration = PG_MIGRATIONS.find((sql) => sql.includes("CREATE TABLE IF NOT EXISTS contact_projects"));
+
+    expect(migration).toContain("contact_id TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE");
+    expect(migration).toContain("PRIMARY KEY (contact_id, project_id)");
+    expect(migration).toContain("CREATE INDEX IF NOT EXISTS idx_contact_projects_project");
+    expect(migration).toContain("CREATE INDEX IF NOT EXISTS idx_contact_projects_contact");
+    expect(migration).toContain("ON CONFLICT DO NOTHING");
+  });
 });
