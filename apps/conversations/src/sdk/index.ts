@@ -62,7 +62,7 @@ export class ConversationsClient {
     this.baseHeaders = options.headers ?? {};
   }
 
-  private async request<T>(method: string, path: string, opts: { body?: unknown; query?: Record<string, unknown>; init?: RequestInit }): Promise<T> {
+  private async request<T>(method: string, path: string, opts: { body?: unknown; query?: Record<string, unknown>; init?: RequestInit; responseType?: "json" | "arrayBuffer" }): Promise<T> {
     const url = new URL(this.baseUrl + path);
     if (opts.query) {
       for (const [key, value] of Object.entries(opts.query)) {
@@ -77,6 +77,9 @@ export class ConversationsClient {
       payload = JSON.stringify(opts.body);
     }
     const response = await this.fetchImpl(url.toString(), { ...opts.init, method, headers, body: payload });
+    if (response.ok && opts.responseType === "arrayBuffer") {
+      return await response.arrayBuffer() as T;
+    }
     const text = await response.text();
     const data = text ? (() => { try { return JSON.parse(text); } catch { return text; } })() : undefined;
     if (!response.ok) {
@@ -187,7 +190,7 @@ export class ConversationsClient {
     }
 
     /** Send a message */
-    async sendMessage(body: { "uuid"?: string; "from"?: string; "to": string; "content": string; "channel"?: string; "project_id"?: string; "session_id"?: string; "priority"?: string; "blocking"?: boolean; "reply_to"?: number; "reply_to_uuid"?: string }, init?: RequestInit): Promise<Record<string, unknown>> {
+    async sendMessage(body: { "uuid"?: string; "from"?: string; "to": string; "content": string; "channel"?: string; "project_id"?: string; "session_id"?: string; "priority"?: string; "blocking"?: boolean; "reply_to"?: number; "reply_to_uuid"?: string; "attachments"?: Array<{ "name": string; "content_base64": string }> }, init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("POST", `/v1/messages`, {
         body,
         query: undefined,
@@ -225,6 +228,16 @@ export class ConversationsClient {
         body: undefined,
         query,
         init,
+      });
+    }
+
+    /** Download one message attachment */
+    async downloadMessageAttachment(id: number, name: string, init?: RequestInit): Promise<ArrayBuffer> {
+      return this.request("GET", `/v1/messages/${encodeURIComponent(String(id))}/attachments/${encodeURIComponent(String(name))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+        responseType: "arrayBuffer",
       });
     }
 

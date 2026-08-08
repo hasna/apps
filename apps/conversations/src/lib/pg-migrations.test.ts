@@ -127,4 +127,18 @@ describe("PG_MIGRATIONS", () => {
     expect(sql).toContain("channel project linkage receipts are immutable");
     expect(sql).toContain("insert into _migrations (id) values (5)");
   });
+
+  test("message attachment bytes are added by an incremental PostgreSQL migration", () => {
+    expect(PG_MIGRATIONS.length).toBeGreaterThanOrEqual(6);
+    const first = PG_MIGRATIONS[0].toLowerCase();
+    const sql = PG_MIGRATIONS[5].toLowerCase();
+
+    expect(first).not.toContain("create table if not exists message_attachments");
+    expect(sql).toContain("create table if not exists message_attachments");
+    expect(sql).toContain("references messages(id) on delete cascade");
+    expect(sql).toContain("content bytea not null");
+    expect(sql).toContain("primary key (message_id, name)");
+    expect(sql).toContain("idx_message_attachments_message");
+    expect(sql).toContain("insert into _migrations (id) values (6)");
+  });
 });

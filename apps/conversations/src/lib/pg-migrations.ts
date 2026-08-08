@@ -105,6 +105,7 @@ export const PG_MIGRATIONS: string[] = [
   -- The CREATE TABLE above declares uuid UNIQUE, but older tables may have had
   -- uuid added via ALTER without the constraint; this guarantees it either way.
   CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_uuid ON messages(uuid);
+
   UPDATE channel_subscriptions ss
   SET since_message_id = COALESCE(
     (SELECT MAX(m.id) FROM messages m WHERE m.channel = ss.channel),
@@ -765,5 +766,23 @@ export const PG_MIGRATIONS: string[] = [
     FOR EACH ROW EXECUTE FUNCTION conversations_reject_linkage_receipt_mutation();
 
   INSERT INTO _migrations (id) VALUES (5) ON CONFLICT DO NOTHING;
+  `,
+  // Migration 6: attachment bytes for remote/API message storage. Metadata
+  // remains on messages.attachments for list/read compatibility, while the
+  // binary payload is kept in a cascade-owned table.
+  `
+  CREATE TABLE IF NOT EXISTS message_attachments (
+    message_id BIGINT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    size BIGINT NOT NULL,
+    content BYTEA NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (message_id, name)
+  );
+  CREATE INDEX IF NOT EXISTS idx_message_attachments_message
+    ON message_attachments(message_id);
+
+  INSERT INTO _migrations (id) VALUES (6) ON CONFLICT DO NOTHING;
   `,
 ];

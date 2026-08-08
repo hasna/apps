@@ -2,6 +2,7 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { startApiServer, type ApiServerDeps } from "./api.js";
 import { mintApiKey } from "@hasna/contracts/auth";
 import { verifyApiKey, ApiKeyStore } from "@hasna/contracts/auth";
+import { gzipSync } from "node:zlib";
 
 // In-memory query shim standing in for the vendored kit's TypedQueryClient.
 // Exercises the router + auth without a live Postgres.
@@ -11,6 +12,7 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
   const channels: Record<string, any> = {};
   const channelMembers = new Set<string>();
   const messages: any[] = [];
+  const messageAttachments: any[] = [];
   const messageMentions: any[] = [];
   const channelSubscriptions: any[] = [];
   const tasks: any[] = [];
@@ -252,6 +254,9 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
       if (/SELECT \* FROM messages WHERE uuid/i.test(sql)) {
         return messages.find((row) => row.uuid === (p as any[])[0]) ?? null;
       }
+      if (/FROM message_attachments WHERE message_id/i.test(sql)) {
+        return messageAttachments.find((row) => row.message_id === p[0] && row.name === p[1]) ?? null;
+      }
       if (/FROM messages WHERE id = \$1 AND uuid = \$2/i.test(sql)) {
         return messages.find((row) => row.id === p[0] && row.uuid === p[1]) ?? null;
       }
@@ -326,6 +331,7 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
       const channelSnapshot = Object.fromEntries(Object.entries(channels).map(([key, value]) => [key, { ...value }]));
       const memberSnapshot = new Set(channelMembers);
       const messageSnapshot = messages.map((message) => ({ ...message }));
+      const attachmentSnapshot = messageAttachments.map((attachment) => ({ ...attachment }));
       const mentionSnapshot = messageMentions.map((mention) => ({ ...mention }));
       const subscriptionSnapshot = channelSubscriptions.map((subscription) => ({ ...subscription }));
       const taskSnapshot = tasks.map((task) => ({ ...task }));
@@ -336,6 +342,21 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
       const tx = {
         async query(sql: string, p: readonly unknown[] = []): Promise<{ rows: any[]; rowCount: number }> {
           const [first, second] = p as any[];
+          if (/INSERT INTO message_attachments/i.test(sql)) {
+            let inserted = 0;
+            for (let index = 0; index < p.length; index += 5) {
+              const [message_id, name, mime_type, size, content] = (p as any[]).slice(index, index + 5);
+              messageAttachments.push({ message_id, name, mime_type, size, content });
+              inserted++;
+            }
+            return { rows: [], rowCount: inserted };
+          }
+          if (/UPDATE messages SET attachments = \$1 WHERE id = \$2/i.test(sql)) {
+            const message = messages.find((row) => row.id === second);
+            if (!message) return { rows: [], rowCount: 0 };
+            message.attachments = first;
+            return { rows: [], rowCount: 1 };
+          }
           if (/INSERT INTO messages/i.test(sql) && /ON CONFLICT/i.test(sql)) {
             return client.query(sql, p);
           }
@@ -540,6 +561,7 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
         channelMembers.clear();
         for (const entry of memberSnapshot) channelMembers.add(entry);
         messages.splice(0, messages.length, ...messageSnapshot);
+        messageAttachments.splice(0, messageAttachments.length, ...attachmentSnapshot);
         messageMentions.splice(0, messageMentions.length, ...mentionSnapshot);
         channelSubscriptions.splice(0, channelSubscriptions.length, ...subscriptionSnapshot);
         tasks.splice(0, tasks.length, ...taskSnapshot);
@@ -556,6 +578,7 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
       channels,
       channelMembers,
       messages,
+      messageAttachments,
       messageMentions,
       agentPresence,
       manyCalls,
@@ -1342,6 +1365,124 @@ describe("conversations-serve", () => {
     expect((await r.json()).error).toContain("positive integer");
   });
 
+  test("POST /v1/messages stores attachment bytes atomically and GET reads them back exactly", async () => {
+    const text = Buffer.from("synthetic API attachment\n");
+    const pdf = Buffer.from("synthetic API PDF\n");
+    const sent = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        from: "alice",
+        to: "threads",
+        channel: "threads",
+        content: "remote files",
+        attachments: [
+          { name: "evidence.txt", content_base64: text.toString("base64") },
+          { name: "handoff.pdf", content_base64: pdf.toString("base64") },
+        ],
+      }),
+    });
+
+    expect(sent.status).toBe(201);
+    const message = (await sent.json()).message;
+    expect(message.attachments).toEqual([
+      {
+        name: "evidence.txt",
+        path: `/v1/messages/${message.id}/attachments/evidence.txt`,
+        size: text.length,
+        mime_type: "text/plain",
+      },
+      {
+        name: "handoff.pdf",
+        path: `/v1/messages/${message.id}/attachments/handoff.pdf`,
+        size: pdf.length,
+        mime_type: "application/pdf",
+      },
+    ]);
+    expect(JSON.stringify(message)).not.toContain("content_base64");
+    expect(activeFakeClient!.__debug.messageAttachments).toHaveLength(2);
+
+    const downloadedText = await fetch(
+      `${base}/v1/messages/${message.id}/attachments/evidence.txt`,
+      { headers: { "x-api-key": rwKey } },
+    );
+    expect(downloadedText.status).toBe(200);
+    expect(downloadedText.headers.get("content-type")).toBe("text/plain");
+    expect(Buffer.from(await downloadedText.arrayBuffer())).toEqual(text);
+
+    const downloadedPdf = await fetch(
+      `${base}/v1/messages/${message.id}/attachments/handoff.pdf`,
+      { headers: { "x-api-key": rwKey } },
+    );
+    expect(downloadedPdf.status).toBe(200);
+    expect(downloadedPdf.headers.get("content-type")).toBe("application/pdf");
+    expect(Buffer.from(await downloadedPdf.arrayBuffer())).toEqual(pdf);
+  });
+
+  test("POST /v1/messages rejects invalid or unsupported attachments before inserting a message", async () => {
+    const before = activeFakeClient!.__debug.messages.length;
+    const invalidBase64 = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        from: "alice",
+        to: "threads",
+        channel: "threads",
+        content: "invalid attachment",
+        attachments: [{ name: "evidence.txt", content_base64: "not base64!" }],
+      }),
+    });
+    expect(invalidBase64.status).toBe(400);
+
+    const unsupported = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        from: "alice",
+        to: "threads",
+        channel: "threads",
+        content: "unsupported attachment",
+        attachments: [{
+          name: "payload.exe",
+          content_base64: Buffer.from("synthetic unsupported payload\n").toString("base64"),
+        }],
+      }),
+    });
+    expect(unsupported.status).toBe(400);
+    expect(activeFakeClient!.__debug.messages).toHaveLength(before);
+    expect(activeFakeClient!.__debug.messageAttachments).toHaveLength(2);
+  });
+
+  test("POST /v1/messages rejects archive and compressed attachment extensions before inserting a message", async () => {
+    const beforeMessages = activeFakeClient!.__debug.messages.length;
+    const beforeAttachments = activeFakeClient!.__debug.messageAttachments.length;
+    const compressedFinding = gzipSync(Buffer.from(`attachment ${syntheticDatabaseUrl()}`));
+
+    for (const extension of ["bundle", "zip", "gz", "tgz", "tar"]) {
+      const response = await fetch(`${base}/v1/messages`, {
+        method: "POST",
+        headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          from: "alice",
+          to: "threads",
+          channel: "threads",
+          content: `must not persist ${extension}`,
+          attachments: [{
+            name: `opaque.${extension}`,
+            content_base64: compressedFinding.toString("base64"),
+          }],
+        }),
+      });
+
+      expect(response.status).toBe(400);
+      expect((await response.json()).error).toContain(
+        "Archive and compressed attachment types are not supported securely",
+      );
+      expect(activeFakeClient!.__debug.messages).toHaveLength(beforeMessages);
+      expect(activeFakeClient!.__debug.messageAttachments).toHaveLength(beforeAttachments);
+    }
+  });
+
   test("POST /v1/channels links a valid project id", async () => {
     const created = await fetch(`${base}/v1/channels`, {
       method: "POST",
@@ -1761,6 +1902,16 @@ describe("conversations-serve", () => {
     expect(sendProperties.uuid).toEqual({ type: "string" });
     expect(sendProperties.reply_to).toEqual({ type: "integer" });
     expect(sendProperties.reply_to_uuid).toEqual({ type: "string" });
+    expect(sendProperties.attachments).toMatchObject({
+      type: "array",
+      maxItems: 16,
+      items: {
+        type: "object",
+        required: ["name", "content_base64"],
+      },
+    });
+    expect(b.paths["/v1/messages/{id}/attachments/{name}"].get.operationId)
+      .toBe("downloadMessageAttachment");
     expect(b.paths["/v1/messages/by-uuid/{uuid}"].get.operationId).toBe("getMessageByUuid");
     expect(b.components.schemas.Message.properties.reply_to).toEqual({
       type: "integer",

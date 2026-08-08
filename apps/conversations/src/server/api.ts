@@ -31,6 +31,7 @@ import { resolveSelfSenderId } from "../lib/sender-identity.js";
 import { normalizeMessageUuid, parseMessageReference } from "../lib/message-reference.js";
 import { normalizeExactIsoTimestamp } from "../lib/since.js";
 import { PROJECT_LIST_ORDER, simpleOrderByClause } from "../lib/list-order.js";
+import { decodeAttachmentUploads } from "../lib/attachments.js";
 import {
   PROJECT_MESSAGE_LINKAGE_RECEIPTS_TABLE,
   buildProjectMessageLinkagePlan,
@@ -1308,6 +1309,12 @@ async function handleV1(
     const requestedSession = str(body.session_id);
     const messageUuid = body.uuid === undefined ? randomUUID() : normalizeMessageUuid(body.uuid);
     if (!messageUuid) return json({ error: "uuid must be a valid message UUID" }, 400);
+    let attachmentUploads;
+    try {
+      attachmentUploads = decodeAttachmentUploads(body.attachments);
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
 
     const replyIdPresent = body.reply_to !== undefined && body.reply_to !== null;
     const replyUuidPresent = body.reply_to_uuid !== undefined && body.reply_to_uuid !== null;
@@ -1417,12 +1424,42 @@ async function handleV1(
           projectId = channelRow.project_id;
         }
       }
-      return tx.get<{ id: number }>(
+      const inserted = await tx.get<Record<string, unknown>>(
         `INSERT INTO messages (uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, blocking, reply_to)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
          RETURNING id, uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, blocking, reply_to, created_at`,
         [messageUuid, sessionId, from, toAgent, channelName ?? null, projectId, content, priority, blocking, replyTo],
       );
+      if (!inserted) return null;
+
+      if (attachmentUploads.length > 0) {
+        const metadata = attachmentUploads.map((attachment) => ({
+          name: attachment.name,
+          path: `/v1/messages/${inserted.id}/attachments/${encodeURIComponent(attachment.name)}`,
+          size: attachment.size,
+          mime_type: attachment.mimeType,
+        }));
+        const params: unknown[] = [];
+        const values: string[] = [];
+        for (const attachment of attachmentUploads) {
+          params.push(inserted.id, attachment.name, attachment.mimeType, attachment.size, attachment.content);
+          const offset = params.length - 4;
+          values.push(`($${offset},$${offset + 1},$${offset + 2},$${offset + 3},$${offset + 4})`);
+        }
+        await tx.query(
+          `INSERT INTO message_attachments (message_id, name, mime_type, size, content)
+           VALUES ${values.join(", ")}`,
+          params,
+        );
+        await tx.query(
+          "UPDATE messages SET attachments = $1 WHERE id = $2",
+          [JSON.stringify(metadata), inserted.id],
+        );
+        inserted.attachments = metadata;
+      } else {
+        inserted.attachments = null;
+      }
+      return inserted;
     });
     if (!row) return json({ error: "Message insert returned no row" }, 500);
     // Clone before mention fanout: supported query adapters may reuse row
@@ -1434,6 +1471,37 @@ async function handleV1(
       try { await processMentions(client, Number(insertedMessage.id), from, channelName, content); } catch { /* best-effort */ }
     }
     return json({ message: redactResponse(insertedMessage) }, 201);
+  }
+
+  const attachmentMatch = sub.match(/^messages\/(\d+)\/attachments\/([^/]+)$/);
+  if (attachmentMatch && method === "GET") {
+    const messageId = Number(attachmentMatch[1]);
+    const name = decodeURIComponent(attachmentMatch[2]);
+    const row = await client.get<{
+      content: Buffer | Uint8Array;
+      mime_type: string;
+      size: number | string;
+    }>(
+      "SELECT content, mime_type, size FROM message_attachments WHERE message_id = $1 AND name = $2",
+      [messageId, name],
+    );
+    if (!row) return json({ error: "Attachment not found" }, 404);
+    const content = row.content instanceof Uint8Array
+      ? row.content
+      : Buffer.from(row.content);
+    const body = content.buffer.slice(
+      content.byteOffset,
+      content.byteOffset + content.byteLength,
+    ) as ArrayBuffer;
+    return new Response(body, {
+      status: 200,
+      headers: {
+        ...SECURITY_HEADERS,
+        "Content-Type": row.mime_type,
+        "Content-Length": String(Number(row.size)),
+        "Content-Disposition": `attachment; filename="${name.replace(/["\\]/g, "_")}"`,
+      },
+    });
   }
 
   // ---- bulk message ingest (backfill local -> cloud to parity) ----

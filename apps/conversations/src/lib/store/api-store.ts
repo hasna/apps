@@ -21,6 +21,7 @@ import { resolveReadLimit, resolveReadWindow } from "../message-window.js";
 import { parseProject } from "../projects.js";
 import { attachSendRedaction } from "../content-safety.js";
 import { normalizeMessageUuid } from "../message-reference.js";
+import { encodeAttachmentUploads, prepareAttachmentSources } from "../attachments.js";
 import {
   parseMessage,
   compactMessage,
@@ -667,6 +668,7 @@ export class ApiStore implements ConversationsStore {
     if (!messageUuid) {
       throw new Error("Message uuid must be a valid UUID.");
     }
+    const attachmentUploads = encodeAttachmentUploads(prepareAttachmentSources(opts.attachments));
     const body = await this.client.create<{ message: Record<string, unknown> }>("messages", {
       uuid: messageUuid,
       from: opts.from, to: opts.to, content: opts.content, channel: opts.channel,
@@ -678,6 +680,7 @@ export class ApiStore implements ConversationsStore {
       // SQLite path (and its tests) stayed correct.
       reply_to: opts.reply_to ?? undefined,
       reply_to_uuid: replyUuid ?? undefined,
+      attachments: attachmentUploads.length > 0 ? attachmentUploads : undefined,
     });
     const returned = parseMessage(body.message);
     if (returned.uuid === messageUuid) {

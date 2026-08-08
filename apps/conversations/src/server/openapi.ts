@@ -168,6 +168,18 @@ export const openapiSpec = {
               session_id: { type: "string" }, priority: { type: "string" }, blocking: { type: "boolean" },
               reply_to: { type: "integer" },
               reply_to_uuid: { type: "string" },
+              attachments: {
+                type: "array",
+                maxItems: 16,
+                items: {
+                  type: "object",
+                  required: ["name", "content_base64"],
+                  properties: {
+                    name: { type: "string" },
+                    content_base64: { type: "string", format: "byte" },
+                  },
+                },
+              },
             },
           } } },
         },
@@ -237,6 +249,23 @@ export const openapiSpec = {
           { name: "from", in: "query", schema: { type: "string" } },
         ],
         responses: { "200": { description: "deleted", content: { "application/json": { schema: okObject } } } },
+      },
+    },
+    "/v1/messages/{id}/attachments/{name}": {
+      get: {
+        operationId: "downloadMessageAttachment",
+        summary: "Download one message attachment",
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "integer" } },
+          { name: "name", in: "path", required: true, schema: { type: "string" } },
+        ],
+        responses: {
+          "200": {
+            description: "attachment bytes",
+            content: { "application/octet-stream": { schema: { type: "string", format: "binary" } } },
+          },
+          "404": { description: "not found" },
+        },
       },
     },
     "/v1/messages/by-uuid/{uuid}": {
