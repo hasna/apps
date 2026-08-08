@@ -135,7 +135,7 @@ jobs:
         run: |
           set -euo pipefail
           bun run contracts:conformance
-          contracts no-cloud-scan .
+          bun run contracts no-cloud-scan .
 
       - name: Build and scan the package artifact
         run: |

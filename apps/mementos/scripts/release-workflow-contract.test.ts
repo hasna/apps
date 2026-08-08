@@ -1,4 +1,7 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "bun:test";
 
 type WorkflowStep = {
@@ -31,6 +34,7 @@ type Workflow = {
 };
 
 const workflowPath = new URL("../.github/workflows/release.yml", import.meta.url);
+const repositoryRoot = fileURLToPath(new URL("..", import.meta.url));
 const workflowSource = readFileSync(workflowPath, "utf8");
 const workflow = Bun.YAML.parse(workflowSource) as Workflow;
 const publish = workflow.jobs?.publish;
@@ -97,6 +101,60 @@ describe("npm release workflow contract", () => {
       "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
       "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6",
     ]);
+  });
+
+  test("resolves the package-local contracts binary through Bun", () => {
+    const bash = Bun.which("bash");
+    expect(bash).not.toBeNull();
+    const isolatedBin = mkdtempSync(join(tmpdir(), "mementos-contract-path-"));
+    symlinkSync(process.execPath, join(isolatedBin, "bun"));
+    try {
+      const isolatedEnvironment = {
+        ...process.env,
+        BASH_ENV: "",
+        ENV: "",
+        PATH: isolatedBin,
+      };
+
+      const raw = Bun.spawnSync(
+        [
+          bash ?? "bash",
+          "--noprofile",
+          "--norc",
+          "-c",
+          "contracts no-cloud-scan .",
+        ],
+        {
+          cwd: repositoryRoot,
+          env: isolatedEnvironment,
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      expect(raw.exitCode).toBe(127);
+      expect(raw.stderr.toString()).toContain("contracts: command not found");
+
+      const packageRunner = Bun.spawnSync(
+        [process.execPath, "run", "contracts", "no-cloud-scan", "."],
+        {
+          cwd: repositoryRoot,
+          env: isolatedEnvironment,
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      expect(packageRunner.exitCode, packageRunner.stderr.toString()).toBe(0);
+      expect(packageRunner.stdout.toString()).toContain(
+        "ok hasna.no_cloud_evidence_pack.v1 .",
+      );
+    } finally {
+      rmSync(isolatedBin, { force: true, recursive: true });
+    }
+
+    const verifyContracts = command("Verify package contracts");
+    expect(verifyContracts).toContain("bun run contracts:conformance");
+    expect(verifyContracts).toContain("bun run contracts no-cloud-scan .");
+    expect(verifyContracts).not.toMatch(/^\s*contracts no-cloud-scan \.\s*$/m);
   });
 
   test("binds one preserved tarball through quarantine, verification, and promotion", () => {
