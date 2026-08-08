@@ -31,10 +31,20 @@ const EXACT_TENANT_COLUMN_SCHEMA = [
   { table_name: "audit_log", column_name: "user_id", udt_name: "text" },
 ] as const;
 
+const EXACT_BACKFILL_TENANT_SCHEMA = [
+  { table_name: "secrets", column_name: "tenant_id", udt_name: "uuid" },
+  { table_name: "vault_items", column_name: "tenant_id", udt_name: "uuid" },
+  { table_name: "users", column_name: "tenant_id", udt_name: "uuid" },
+  { table_name: "feedback", column_name: "tenant_id", udt_name: "uuid" },
+  { table_name: "audit_log", column_name: "tenant_id", udt_name: "uuid" },
+  { table_name: "api_keys", column_name: "tenant_id", udt_name: "uuid" },
+] as const;
+
 class MemoryMigrationClient implements TypedQueryClient {
   rows: Array<{ id: string; checksum: string; applied_at: string | Date }> = [];
   schemaRows: Array<{ table_name: string; column_name: string; udt_name: string }> = [];
   schemaError: Error | undefined;
+  executedSql: string[] = [];
 
   async query<T>(): Promise<{ rows: T[]; rowCount: number }> {
     return { rows: [], rowCount: 0 };
@@ -69,7 +79,9 @@ class MemoryMigrationClient implements TypedQueryClient {
         checksum: String(params![1]),
         applied_at: new Date("2025-01-01"),
       });
+      return;
     }
+    this.executedSql.push(sql);
   }
 }
 
@@ -228,6 +240,93 @@ describe("cloud migration lineage", () => {
       checksum: "sha256:legacy-production-lineage",
       applied_at: "2026-08-08T00:00:00.000Z",
     });
+
+    const ledger = await createSecretsMigrationLedger(client);
+    await expect(ledger.migrate({ dryRun: true })).rejects.toThrow("checksum mismatch");
+  });
+
+  it("plans an idempotent repair for the proven production backfill lineage", async () => {
+    const migration = SECRETS_MIGRATIONS.find((item) => item.id === "secrets_0012_backfill")!;
+    const client = new MemoryMigrationClient();
+    client.rows.push({
+      id: migration.id,
+      checksum: "sha256:e1d6a79fba95064f6060f28a751a016eb0194c865486ba39656df581419c6231",
+      applied_at: "2026-08-08T01:59:02.030Z",
+    });
+    client.schemaRows = [...EXACT_BACKFILL_TENANT_SCHEMA];
+
+    const ledger = await createSecretsMigrationLedger(client);
+    const result = await ledger.migrate({ dryRun: true });
+
+    expect(result.plan.find((item) => item.migration.id === migration.id)).toMatchObject({
+      state: "already_applied",
+    });
+    expect(result.plan.find((item) => item.migration.id === "secrets_0012_backfill_reconcile")).toMatchObject({
+      state: "pending",
+    });
+  });
+
+  it("executes and records the checksummed reconciliation through the normal migration path", async () => {
+    const migration = SECRETS_MIGRATIONS.find((item) => item.id === "secrets_0012_backfill")!;
+    const client = new MemoryMigrationClient();
+    client.rows.push({
+      id: migration.id,
+      checksum: "sha256:e1d6a79fba95064f6060f28a751a016eb0194c865486ba39656df581419c6231",
+      applied_at: "2026-08-08T01:59:02.030Z",
+    });
+    client.schemaRows = [...EXACT_BACKFILL_TENANT_SCHEMA];
+
+    const ledger = await createSecretsMigrationLedger(client);
+    const result = await ledger.migrate();
+
+    expect(client.executedSql).toContain(migration.sql);
+    expect(result.applied.find((item) => item.id === "secrets_0012_backfill_reconcile")).toBeDefined();
+  });
+
+  it("keeps the backfill mismatch fatal when any required tenant column is absent", async () => {
+    const migration = SECRETS_MIGRATIONS.find((item) => item.id === "secrets_0012_backfill")!;
+    const client = new MemoryMigrationClient();
+    client.rows.push({
+      id: migration.id,
+      checksum: "sha256:e1d6a79fba95064f6060f28a751a016eb0194c865486ba39656df581419c6231",
+      applied_at: "2026-08-08T01:59:02.030Z",
+    });
+    client.schemaRows = [...EXACT_BACKFILL_TENANT_SCHEMA.slice(0, -1)];
+
+    const ledger = await createSecretsMigrationLedger(client);
+    await expect(ledger.migrate({ dryRun: true })).rejects.toThrow("checksum mismatch");
+  });
+
+  it("keeps an unknown backfill checksum fatal even when the schema matches", async () => {
+    const migration = SECRETS_MIGRATIONS.find((item) => item.id === "secrets_0012_backfill")!;
+    const client = new MemoryMigrationClient();
+    client.rows.push({
+      id: migration.id,
+      checksum: "sha256:unknown-backfill-lineage",
+      applied_at: "2026-08-08T01:59:02.030Z",
+    });
+    client.schemaRows = [...EXACT_BACKFILL_TENANT_SCHEMA];
+
+    const ledger = await createSecretsMigrationLedger(client);
+    await expect(ledger.migrate({ dryRun: true })).rejects.toThrow("checksum mismatch");
+  });
+
+  it("keeps later reconciliation SQL drift fatal", async () => {
+    const migration = SECRETS_MIGRATIONS.find((item) => item.id === "secrets_0012_backfill")!;
+    const client = new MemoryMigrationClient();
+    client.rows.push(
+      {
+        id: migration.id,
+        checksum: "sha256:e1d6a79fba95064f6060f28a751a016eb0194c865486ba39656df581419c6231",
+        applied_at: "2026-08-08T01:59:02.030Z",
+      },
+      {
+        id: "secrets_0012_backfill_reconcile",
+        checksum: "sha256:changed-after-application",
+        applied_at: "2026-08-08T02:00:00.000Z",
+      },
+    );
+    client.schemaRows = [...EXACT_BACKFILL_TENANT_SCHEMA];
 
     const ledger = await createSecretsMigrationLedger(client);
     await expect(ledger.migrate({ dryRun: true })).rejects.toThrow("checksum mismatch");
