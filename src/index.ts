@@ -94,6 +94,15 @@ export type {
   ProjectContactLinkMutationOutput,
 } from "./lib/project-contact-links.js";
 export {
+  ContactsAuthorityHttpError,
+  ContactsHttpProjectMembershipAuthority,
+  createContactsProjectMembershipAuthorityFromEnv,
+} from "./lib/contacts-authority-adapter.js";
+export type {
+  ContactsAuthorityEnvironment,
+  ContactsHttpProjectMembershipAuthorityOptions,
+} from "./lib/contacts-authority-adapter.js";
+export {
   listProjectResourceLinks,
   mutateProjectResourceLinks,
   readProjectResourceLinks,

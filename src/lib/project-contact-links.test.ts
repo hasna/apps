@@ -135,12 +135,37 @@ function projectMutation(
   };
 }
 
+function terminalProjectMutation(
+  request: ProjectResourceLinkMutationRequest,
+  before: ProjectResourceLinkReadResult,
+  reason: string,
+): ProjectResourceLinkMutationResult {
+  const result = projectMutation(request, before, before.links);
+  return {
+    ...result,
+    ok: false,
+    outcome: "terminal_nonacceptance",
+    current_revision: before.current_revision,
+    after: null,
+    receipt: {
+      ...result.receipt!,
+      outcome: "terminal_nonacceptance",
+      reason,
+      result_project_id: null,
+      after: null,
+      post_revision: null,
+    },
+  };
+}
+
 class FakeProjectStore {
   readonly mode = "api" as const;
   readonly mutations: ProjectResourceLinkMutationRequest[] = [];
   readonly rollbacks: ProjectResourceLinkRollbackRequest[] = [];
   read = projectRead();
-  failMutation: Error | null = null;
+  throwMutation: Error | null = null;
+  terminalMutationReason: string | null = null;
+  commitBeforeThrow = false;
 
   async readProjectResourceLinks(): Promise<ProjectResourceLinkReadResult> {
     return this.read;
@@ -150,7 +175,6 @@ class FakeProjectStore {
     request: ProjectResourceLinkMutationRequest,
   ): Promise<ProjectResourceLinkMutationResult> {
     this.mutations.push(request);
-    if (this.failMutation) throw this.failMutation;
     const requested = request.links.map((input) => ({
       ...input,
       id: resourceLink(input.locator.value).id,
@@ -164,7 +188,16 @@ class FakeProjectStore {
         !this.read.links.some((existing) => existing.id === candidate.id)
       ))]
       : requested;
-    return projectMutation(request, this.read, afterLinks);
+    if (this.terminalMutationReason) {
+      return terminalProjectMutation(request, this.read, this.terminalMutationReason);
+    }
+    const result = projectMutation(request, this.read, afterLinks);
+    if (this.commitBeforeThrow) {
+      this.read = projectRead(afterLinks, result.current_revision);
+    }
+    if (this.throwMutation) throw this.throwMutation;
+    this.read = projectRead(afterLinks, result.current_revision);
+    return result;
   }
 
   async rollbackProjectResourceLinks(
@@ -361,7 +394,7 @@ describe("project contact-link coordination", () => {
 
   test("compensates Contacts when the Projects attach CAS fails", async () => {
     const projects = new FakeProjectStore();
-    projects.failMutation = new Error("project resource link expected_revision conflict");
+    projects.terminalMutationReason = "stale_revision";
     const contacts = new FakeMembershipAuthority();
 
     await expect(attachProjectContact(dependencies(projects, contacts), {
@@ -393,7 +426,7 @@ describe("project contact-link coordination", () => {
 
   test("retries attach with a new revision-bound step after successful compensation", async () => {
     const projects = new FakeProjectStore();
-    projects.failMutation = new Error("project resource link expected_revision conflict");
+    projects.terminalMutationReason = "stale_revision";
     const contacts = new FakeMembershipAuthority();
     const input = {
       project_id: projectId,
@@ -410,7 +443,7 @@ describe("project contact-link coordination", () => {
     } satisfies Partial<ProjectContactLinkOperationError>);
     expect(contacts.snapshot.linked).toBe(false);
 
-    projects.failMutation = null;
+    projects.terminalMutationReason = null;
     const retried = await attachProjectContact(dependencies(projects, contacts), input);
 
     const forwardSteps = contacts.mutations
@@ -423,9 +456,54 @@ describe("project contact-link coordination", () => {
     expect(retried.project_link).not.toBeNull();
   });
 
+  test("does not compensate an ambiguous Projects attach and same-operation retry completes it", async () => {
+    const projects = new FakeProjectStore();
+    projects.throwMutation = new Error("connection closed before Projects response");
+    const contacts = new FakeMembershipAuthority();
+    const input = {
+      project_id: projectId,
+      contact_id: contactId,
+      operation_id: "attach-bianca-ambiguous",
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+      max_items: 1000,
+    };
+
+    await expect(attachProjectContact(dependencies(projects, contacts), input)).rejects.toMatchObject({
+      code: "PROJECT_CONTACT_LINK_PARTIAL_FAILURE",
+      stage: "projects-resource-link",
+      compensated: false,
+    } satisfies Partial<ProjectContactLinkOperationError>);
+    expect(contacts.snapshot.linked).toBe(true);
+    expect(contacts.mutations).toHaveLength(1);
+    expect(projects.read.links).toEqual([]);
+
+    projects.throwMutation = null;
+    const retried = await attachProjectContact(dependencies(projects, contacts), input);
+
+    expect(retried.outcome).toBe("accepted");
+    expect(retried.membership.linked).toBe(true);
+    expect(retried.project_link).not.toBeNull();
+    expect(contacts.mutations).toHaveLength(1);
+    expect(projects.mutations).toHaveLength(2);
+    expect(projects.mutations.map((mutation) => ({
+      operation_id: mutation.operation_id,
+      step_id: mutation.step_id,
+    }))).toEqual([
+      {
+        operation_id: "attach-bianca-ambiguous",
+        step_id: "projects-resource-link",
+      },
+      {
+        operation_id: "attach-bianca-ambiguous",
+        step_id: "projects-resource-link",
+      },
+    ]);
+  });
+
   test("preserves an exact uncompensated Projects conflict when Contacts was already linked", async () => {
     const projects = new FakeProjectStore();
-    projects.failMutation = new Error("project resource link expected_revision conflict");
+    projects.terminalMutationReason = "stale_revision";
     const contacts = new FakeMembershipAuthority();
     contacts.snapshot = membership(true, "contacts-v2");
 
@@ -446,7 +524,7 @@ describe("project contact-link coordination", () => {
 
   test("reports an uncompensated partial failure when the inverse Contacts write also fails", async () => {
     const projects = new FakeProjectStore();
-    projects.failMutation = new Error("project resource link expected_revision conflict");
+    projects.terminalMutationReason = "stale_revision";
     const contacts = new FakeMembershipAuthority();
     contacts.failCompensation = true;
 
@@ -500,7 +578,7 @@ describe("project contact-link coordination", () => {
   test("retries detach with a new revision-bound step after successful compensation", async () => {
     const projects = new FakeProjectStore();
     projects.read = projectRead([resourceLink()]);
-    projects.failMutation = new Error("project resource link expected_revision conflict");
+    projects.terminalMutationReason = "stale_revision";
     const contacts = new FakeMembershipAuthority();
     contacts.snapshot = membership(true, "contacts-v2");
     const input = {
@@ -518,7 +596,7 @@ describe("project contact-link coordination", () => {
     } satisfies Partial<ProjectContactLinkOperationError>);
     expect(contacts.snapshot.linked).toBe(true);
 
-    projects.failMutation = null;
+    projects.terminalMutationReason = null;
     const retried = await detachProjectContact(dependencies(projects, contacts), input);
 
     const forwardSteps = contacts.mutations
@@ -529,5 +607,41 @@ describe("project contact-link coordination", () => {
     expect(contacts.snapshot.linked).toBe(false);
     expect(retried.membership.linked).toBe(false);
     expect(retried.project_link).toBeNull();
+  });
+
+  test("does not compensate a committed-but-unacknowledged Projects detach and same-operation retry converges", async () => {
+    const projects = new FakeProjectStore();
+    projects.read = projectRead([resourceLink()]);
+    projects.commitBeforeThrow = true;
+    projects.throwMutation = new Error("connection closed after Projects commit");
+    const contacts = new FakeMembershipAuthority();
+    contacts.snapshot = membership(true, "contacts-v2");
+    const input = {
+      project_id: projectId,
+      contact_id: contactId,
+      operation_id: "detach-bianca-ambiguous",
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+      max_items: 1000,
+    };
+
+    await expect(detachProjectContact(dependencies(projects, contacts), input)).rejects.toMatchObject({
+      code: "PROJECT_CONTACT_LINK_PARTIAL_FAILURE",
+      stage: "projects-resource-link",
+      compensated: false,
+    } satisfies Partial<ProjectContactLinkOperationError>);
+    expect(contacts.snapshot.linked).toBe(false);
+    expect(contacts.mutations).toHaveLength(1);
+    expect(projects.read.links).toEqual([]);
+
+    projects.commitBeforeThrow = false;
+    projects.throwMutation = null;
+    const retried = await detachProjectContact(dependencies(projects, contacts), input);
+
+    expect(retried.outcome).toBe("duplicate_of_accepted");
+    expect(retried.membership.linked).toBe(false);
+    expect(retried.project_link).toBeNull();
+    expect(contacts.mutations).toHaveLength(1);
+    expect(projects.mutations).toHaveLength(1);
   });
 });

@@ -27,6 +27,26 @@ function runProjects(args: string[], env: Record<string, string> = {}, cwd = pro
   });
 }
 
+async function runProjectsAsync(args: string[], env: Record<string, string> = {}, cwd = process.cwd()) {
+  const proc = Bun.spawn({
+    cmd: ["bun", "run", CLI_PATH, ...args],
+    stdout: "pipe",
+    stderr: "pipe",
+    env: testSpawnEnv(env),
+    cwd,
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).arrayBuffer(),
+    new Response(proc.stderr).arrayBuffer(),
+    proc.exited,
+  ]);
+  return {
+    exitCode,
+    stdout: Buffer.from(stdout),
+    stderr: Buffer.from(stderr),
+  };
+}
+
 async function runProjectsWithStdin(
   args: string[],
   stdin: string,
@@ -1008,6 +1028,186 @@ describe("project-first CLI surface", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  test("contacts commands run attach, exact retry, list, detach, and reattach through the HTTP authority", async () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-contacts-authority-"));
+    const contactId = "6b68e131-abe5-43b7-92cd-9930b04611df";
+    let linked = false;
+    let membershipVersion = 1;
+    const receipts = new Map<string, Record<string, unknown>>();
+    const requests: Array<{
+      method: string;
+      path: string;
+      authorization: string | null;
+      body: Record<string, unknown> | null;
+    }> = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(req) {
+        const url = new URL(req.url);
+        const body = req.method === "POST"
+          ? await req.json() as Record<string, unknown>
+          : null;
+        requests.push({
+          method: req.method,
+          path: url.pathname,
+          authorization: req.headers.get("authorization"),
+          body,
+        });
+        const match = url.pathname.match(
+          /^\/v1\/projects\/([^/]+)\/contact-memberships(?:\/([^/]+)(?:\/(attach|detach))?)?$/,
+        );
+        if (!match) return Response.json({ error: "Not found" }, { status: 404 });
+        const projectId = decodeURIComponent(match[1]!);
+        const requestedContactId = match[2] ? decodeURIComponent(match[2]) : undefined;
+        const direction = match[3] as "attach" | "detach" | undefined;
+        const snapshot = () => ({
+          project_id: projectId,
+          contact_id: contactId,
+          linked,
+          version: `membership-v${membershipVersion}`,
+        });
+
+        if (req.method === "GET" && requestedContactId) return Response.json(snapshot());
+        if (req.method === "GET") {
+          return Response.json({
+            project_id: projectId,
+            contact_ids: linked ? [contactId] : [],
+            complete: true,
+            membership_revision: `membership-v${membershipVersion}`,
+          });
+        }
+        if (!body || !direction || requestedContactId !== contactId) {
+          return Response.json({ error: "Invalid membership mutation" }, { status: 400 });
+        }
+        const receiptKey = `${direction}:${String(body.operation_id)}:${String(body.step_id)}`;
+        const existing = receipts.get(receiptKey);
+        if (existing) return Response.json({ ...existing, outcome: "duplicate_of_accepted" });
+        if (body.expected_version !== `membership-v${membershipVersion}`) {
+          return Response.json({ error: "expected_version conflict" }, { status: 409 });
+        }
+        const before = snapshot();
+        linked = direction === "attach";
+        membershipVersion += 1;
+        const result = {
+          outcome: "accepted",
+          operation_id: body.operation_id,
+          step_id: body.step_id,
+          before,
+          after: snapshot(),
+          receipt_id: `cmr_${receipts.size + 1}`,
+        };
+        receipts.set(receiptKey, result);
+        return Response.json(result);
+      },
+    });
+    const env = {
+      HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
+      HASNA_CONTACTS_API_URL: `http://127.0.0.1:${server.port}`,
+      HASNA_CONTACTS_API_KEY: "test-contact-key",
+      HASNA_CONTACTS_SERVICE_INSTANCE: "urn:hasna:contacts:test",
+    };
+
+    try {
+      const create = runProjects([
+        "create",
+        "--name",
+        "Contacts Authority",
+        "--slug",
+        "contacts-authority",
+        "--json",
+      ], env);
+      expect(create.exitCode).toBe(0);
+      const projectId = (JSON.parse(text(create.stdout)) as { project: { id: string } }).project.id;
+      const attachArgs = [
+        "contacts",
+        "attach",
+        projectId,
+        contactId,
+        "--operation-id",
+        "cli-contacts-attach",
+        "--json",
+      ];
+
+      const attach = await runProjectsAsync(attachArgs, env);
+      expect(attach.exitCode).toBe(0);
+      expect(JSON.parse(text(attach.stdout))).toMatchObject({
+        outcome: "accepted",
+        contact_id: contactId,
+        membership: { linked: true },
+        project_link: { locator: { value: contactId } },
+      });
+
+      const retry = await runProjectsAsync(attachArgs, env);
+      expect(retry.exitCode).toBe(0);
+      expect(JSON.parse(text(retry.stdout))).toMatchObject({
+        outcome: "duplicate_of_accepted",
+        contact_id: contactId,
+        membership: { linked: true },
+        evidence: [],
+      });
+
+      const list = await runProjectsAsync(["contacts", "list", projectId, "--json"], env);
+      expect(list.exitCode).toBe(0);
+      expect(JSON.parse(text(list.stdout))).toMatchObject({
+        contact_ids: [contactId],
+        synchronized_contact_ids: [contactId],
+        missing_project_link_contact_ids: [],
+        stale_project_link_contact_ids: [],
+      });
+
+      const detach = await runProjectsAsync([
+        "contacts",
+        "detach",
+        projectId,
+        contactId,
+        "--operation-id",
+        "cli-contacts-detach",
+        "--json",
+      ], env);
+      expect(detach.exitCode).toBe(0);
+      expect(JSON.parse(text(detach.stdout))).toMatchObject({
+        outcome: "accepted",
+        membership: { linked: false },
+        project_link: null,
+      });
+
+      const empty = await runProjectsAsync(["contacts", "list", projectId, "--json"], env);
+      expect(empty.exitCode).toBe(0);
+      expect(JSON.parse(text(empty.stdout))).toMatchObject({
+        contact_ids: [],
+        synchronized_contact_ids: [],
+        project_links: [],
+      });
+
+      const reattach = await runProjectsAsync([
+        "contacts",
+        "attach",
+        projectId,
+        contactId,
+        "--operation-id",
+        "cli-contacts-reattach",
+        "--json",
+      ], env);
+      expect(reattach.exitCode).toBe(0);
+      expect(JSON.parse(text(reattach.stdout))).toMatchObject({
+        outcome: "accepted",
+        membership: { linked: true },
+      });
+
+      expect(requests.filter((request) => request.method === "POST").map((request) => request.path))
+        .toEqual([
+          `/v1/projects/${projectId}/contact-memberships/${contactId}/attach`,
+          `/v1/projects/${projectId}/contact-memberships/${contactId}/detach`,
+          `/v1/projects/${projectId}/contact-memberships/${contactId}/attach`,
+        ]);
+      expect(requests.every((request) => request.authorization === "Bearer test-contact-key")).toBe(true);
+    } finally {
+      server.stop(true);
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30000);
 
   test("guarded-update exposes exact integrations through the guarded contract", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-guarded-integrations-"));

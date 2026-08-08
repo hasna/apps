@@ -120,8 +120,13 @@ import {
   assertCompleteStableProjectId,
   assertPositiveBounds,
   buildGuardedProjectReadResult,
+  canonicalJson,
+  deriveGuardedIdempotencyKey,
+  preconditionDigest,
+  sha256,
   withResponseControl,
 } from "../lib/guarded-project-mutation.js";
+import { normalizeProjectResourceLinks } from "../lib/project-resource-links.js";
 import type {
   Agent,
   AgentRun,
@@ -1079,10 +1084,27 @@ class ApiProjectStore implements ProjectStore {
   }
 
   async mutateProjectResourceLinks(input: ProjectResourceLinkMutationRequest): Promise<ProjectResourceLinkMutationResult> {
+    const normalized = normalizeProjectResourceLinks(input.links);
+    const requestHash = sha256(canonicalJson({ mode: input.mode, links: normalized }));
+    const preconditionHash = preconditionDigest({
+      project_id: input.project_id,
+      expected_revision: input.expected_revision,
+    });
+    const idempotencyKey = deriveGuardedIdempotencyKey({
+      operation_id: input.operation_id,
+      step_id: input.step_id,
+      direction: "forward",
+      target_id: input.project_id,
+      request_digest: requestHash,
+      precondition_digest: preconditionHash,
+    });
     return this.client.transport.post<ProjectResourceLinkMutationResult>(
       `/projects/${encodeURIComponent(input.project_id)}/resource-links/${input.mode}`,
       input,
-      { timeoutMs: input.time_budget_ms },
+      {
+        idempotencyKey,
+        timeoutMs: input.time_budget_ms,
+      },
     );
   }
 

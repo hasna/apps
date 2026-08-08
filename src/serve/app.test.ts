@@ -2,7 +2,16 @@ import { describe, expect, test } from "bun:test";
 import { mintApiKey } from "@hasna/contracts/auth";
 import { createFetchHandler } from "./app.js";
 import { NotFoundError, ProjectsPgStore, ValidationError } from "./pg-store.js";
-import type { Workspace } from "../types/workspace.js";
+import type {
+  ProjectResourceLink,
+  ProjectResourceLinkMutationRequest,
+  ProjectResourceLinkReadResult,
+  Workspace,
+} from "../types/workspace.js";
+import type {
+  ContactProjectMembershipAuthority,
+  ContactProjectMembershipSnapshot,
+} from "../lib/project-contact-links.js";
 
 const SIGNING_SECRET = "test-signing-secret-projects-0000000000";
 
@@ -78,6 +87,154 @@ function fakeStore(): ProjectsPgStore {
 
 function handler(store = fakeStore()) {
   return createFetchHandler({ store, version: "9.9.9", app: "projects", signingSecret: SIGNING_SECRET });
+}
+
+function contactRouteFixture() {
+  const projectId = "wks_eHb1kcLUzgQVJQt6L0CCB";
+  const contactId = "6b68e131-abe5-43b7-92cd-9930b04611df";
+  const serviceInstance = "urn:hasna:contacts:test";
+  let revision = "2026-08-08 12:00:00";
+  let links: ProjectResourceLink[] = [];
+  let membership: ContactProjectMembershipSnapshot = {
+    project_id: projectId,
+    contact_id: contactId,
+    linked: false,
+    version: "membership-v1",
+  };
+  const project = fakeWorkspace({ id: projectId, slug: "reges-kpmg", updated_at: revision });
+
+  const readProjectResourceLinks = async (
+    input: { project_id: string; max_items?: number },
+  ): Promise<ProjectResourceLinkReadResult> => ({
+    ok: true,
+    project_id: input.project_id,
+    project: { ...project, updated_at: revision },
+    current_revision: revision,
+    links,
+    link_count: links.length,
+    max_items: input.max_items ?? 1000,
+    collection_digest: `digest-${links.length}-${revision}`,
+    complete: true,
+    truncated: false,
+    response_control: {
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+      response_bytes: 1_000,
+      elapsed_ms: 1,
+      complete: true,
+      truncated: false,
+    },
+  });
+
+  const store = {
+    ...fakeStore(),
+    readProjectResourceLinks,
+    async mutateProjectResourceLinks(input: ProjectResourceLinkMutationRequest) {
+      const before = await readProjectResourceLinks(input);
+      revision = revision.endsWith("00") ? "2026-08-08 12:00:01" : "2026-08-08 12:00:02";
+      links = input.links.map((candidate) => ({
+        ...candidate,
+        id: `prl_${contactId.replaceAll("-", "")}`,
+        project_id: projectId,
+        labels: candidate.labels ?? {},
+        created_at: revision,
+        updated_at: revision,
+      }));
+      return {
+        ok: true,
+        dry_run: false,
+        outcome: "accepted" as const,
+        mode: input.mode,
+        idempotency_key: `${input.operation_id}:${input.step_id}`,
+        request_digest: "request",
+        precondition_digest: "precondition",
+        project_id: projectId,
+        expected_revision: input.expected_revision,
+        current_revision: revision,
+        before: {
+          project: before.project,
+          links: before.links,
+          collection_digest: before.collection_digest,
+        },
+        after: {
+          project: { ...project, updated_at: revision },
+          links,
+          collection_digest: `digest-${links.length}-${revision}`,
+        },
+        receipt: {
+          receipt_id: `gpr_${input.operation_id}`,
+          operation_id: input.operation_id,
+          step_id: input.step_id,
+          direction: "forward" as const,
+          idempotency_key: `${input.operation_id}:${input.step_id}`,
+          target_id: projectId,
+          request_digest: "request",
+          precondition_digest: "precondition",
+          expected_revision: input.expected_revision,
+          outcome: "accepted" as const,
+          reason: null,
+          result_project_id: projectId,
+          duplicate_of_receipt_id: null,
+          before: null,
+          after: null,
+          post_revision: revision,
+          created_at: revision,
+        },
+        response_control: before.response_control,
+      };
+    },
+  } as unknown as ProjectsPgStore;
+
+  const contacts: ContactProjectMembershipAuthority = {
+    service_instance: serviceInstance,
+    async readMembership() {
+      return membership;
+    },
+    async listProjectMemberships() {
+      return {
+        project_id: projectId,
+        contact_ids: membership.linked ? [contactId] : [],
+        complete: true,
+        membership_revision: membership.version,
+      };
+    },
+    async attach(input) {
+      const before = membership;
+      membership = { ...membership, linked: true, version: "membership-v2" };
+      return {
+        outcome: "accepted",
+        operation_id: input.operation_id,
+        step_id: input.step_id,
+        before,
+        after: membership,
+        receipt_id: `cmr_${input.operation_id}`,
+      };
+    },
+    async detach(input) {
+      const before = membership;
+      membership = { ...membership, linked: false, version: "membership-v3" };
+      return {
+        outcome: "accepted",
+        operation_id: input.operation_id,
+        step_id: input.step_id,
+        before,
+        after: membership,
+        receipt_id: `cmr_${input.operation_id}`,
+      };
+    },
+  };
+
+  return {
+    projectId,
+    contactId,
+    handler: createFetchHandler({
+      store,
+      contacts,
+      version: "9.9.9",
+      app: "projects",
+      signingSecret: SIGNING_SECRET,
+    }),
+  };
 }
 
 function keyWith(scopes: string[]): string {
@@ -167,6 +324,17 @@ describe("projects-serve probes", () => {
     expect(spec.paths["/v1/projects/{id}/resource-links/add"].post.operationId).toBe("addProjectResourceLinks");
     expect(spec.paths["/v1/projects/{id}/resource-links/reconcile"].post.operationId).toBe("reconcileProjectResourceLinks");
     expect(spec.paths["/v1/projects/{id}/resource-links/rollback"].post.operationId).toBe("rollbackProjectResourceLinks");
+    expect(spec.paths["/v1/projects/{id}/contacts"].get.operationId).toBe("listProjectContacts");
+    expect(spec.paths["/v1/projects/{id}/contacts/{contact_id}/attach"].post.operationId)
+      .toBe("attachProjectContact");
+    expect(spec.paths["/v1/projects/{id}/contacts/{contact_id}/detach"].post.operationId)
+      .toBe("detachProjectContact");
+    expect(spec.components.schemas.ProjectContactLinkMutationRequest.required).toEqual([
+      "operation_id",
+      "max_items",
+      "response_byte_limit",
+      "time_budget_ms",
+    ]);
     expect(spec.components.schemas.GuardedProjectRead.required).toContain("project");
     expect(spec.components.schemas.GuardedProjectRead.required).toContain("resource_links");
     const resourceLinkBranches = spec.components.schemas.ProjectResourceLinkInput.oneOf;
@@ -222,6 +390,63 @@ describe("projects-serve probes", () => {
       { $ref: "#/components/schemas/GuardedProjectMutationReceipt" },
       { type: "null" },
     ]);
+  });
+});
+
+describe("projects-serve contact membership coordination", () => {
+  test("exposes attach, list, and detach through the authenticated production API surface", async () => {
+    const fixture = contactRouteFixture();
+    const apiKey = keyWith(["projects:read", "projects:write"]);
+    const headers = {
+      authorization: `Bearer ${apiKey}`,
+      "content-type": "application/json",
+    };
+    const mutationBody = {
+      operation_id: "projects-api-contact-attach",
+      max_items: 1000,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    };
+
+    const attach = await fixture.handler(new Request(
+      `http://x/v1/projects/${fixture.projectId}/contacts/${fixture.contactId}/attach`,
+      { method: "POST", headers, body: JSON.stringify(mutationBody) },
+    ));
+    expect(attach.status).toBe(200);
+    expect(await attach.json()).toMatchObject({
+      outcome: "accepted",
+      authority: "contacts",
+      project_id: fixture.projectId,
+      contact_id: fixture.contactId,
+      membership: { linked: true },
+    });
+
+    const list = await fixture.handler(new Request(
+      `http://x/v1/projects/${fixture.projectId}/contacts?max_items=1000&response_byte_limit=100000&time_budget_ms=5000`,
+      { headers: { authorization: `Bearer ${apiKey}` } },
+    ));
+    expect(list.status).toBe(200);
+    expect(await list.json()).toMatchObject({
+      contact_ids: [fixture.contactId],
+      synchronized_contact_ids: [fixture.contactId],
+      missing_project_link_contact_ids: [],
+      stale_project_link_contact_ids: [],
+    });
+
+    const detach = await fixture.handler(new Request(
+      `http://x/v1/projects/${fixture.projectId}/contacts/${fixture.contactId}/detach`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ ...mutationBody, operation_id: "projects-api-contact-detach" }),
+      },
+    ));
+    expect(detach.status).toBe(200);
+    expect(await detach.json()).toMatchObject({
+      outcome: "accepted",
+      membership: { linked: false },
+      project_link: null,
+    });
   });
 });
 

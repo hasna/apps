@@ -82,6 +82,14 @@ import { projectTmuxStatus } from "../../lib/project-tmux-status.js";
 import { runProjectPrefixMigration } from "../../lib/project-prefix-migration.js";
 import { buildProjectDetailPayload, buildProjectListRender, buildProjectSessionsPayload, buildProjectStartBulkRender, buildRecentSessionsPayload, buildRecipesRender, buildRootsRender } from "../../lib/project-render.js";
 import {
+  createContactsProjectMembershipAuthorityFromEnv,
+} from "../../lib/contacts-authority-adapter.js";
+import {
+  attachProjectContact,
+  detachProjectContact,
+  listProjectContacts,
+} from "../../lib/project-contact-links.js";
+import {
   buildProjectAgentContext,
   buildProjectHandoff,
   explainProjectResolution,
@@ -764,6 +772,7 @@ export function registerWorkspaceCommands(program: Command): void {
   registerProjectStatusCommand(program);
   registerProjectSessionsCommand(program);
   registerProjectCommands(program);
+  registerProjectContactCommands(program);
   registerProjectContextBundleCommand(program);
   registerBudgetCommands(program);
   registerAgentAssistCommands(program);
@@ -777,6 +786,89 @@ export function registerWorkspaceCommands(program: Command): void {
   registerRecipesCommand(program);
   registerAgentsCommand(program);
   registerTmuxProfilesCommand(program);
+}
+
+function registerProjectContactCommands(program: Command): void {
+  const cmd = program
+    .command("contacts")
+    .description("Manage authoritative Contact memberships and synchronized Project resource links");
+
+  cmd
+    .command("list <project-id>")
+    .description("List authoritative Contacts memberships and compare them with Project resource links")
+    .option("--max-items <n>", "Maximum complete contact/link collection size", "1000")
+    .option("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes", "1048576")
+    .option("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds", "30000")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectId, opts) => {
+      try {
+        const result = await listProjectContacts({
+          projects: resolveProjectStore(),
+          contacts: createContactsProjectMembershipAuthorityFromEnv(),
+        }, {
+          project_id: projectId,
+          max_items: parsePositiveInteger(opts.maxItems, "--max-items")!,
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+        });
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+        console.log(chalk.green(`✓ Project contacts: ${result.project_id}`));
+        console.log(`  ${chalk.dim("authoritative contacts:")} ${result.contact_ids.length}`);
+        console.log(`  ${chalk.dim("synchronized:")} ${result.synchronized_contact_ids.length}`);
+        console.log(`  ${chalk.dim("missing project links:")} ${result.missing_project_link_contact_ids.length}`);
+        console.log(`  ${chalk.dim("stale project links:")} ${result.stale_project_link_contact_ids.length}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  for (const direction of ["attach", "detach"] as const) {
+    cmd
+      .command(`${direction} <project-id> <contact-id>`)
+      .description(
+        `${direction === "attach" ? "Attach" : "Detach"} a Contact through Contacts-authoritative, compensation-safe coordination`,
+      )
+      .requiredOption("--operation-id <id>", "Caller-stable operation id reused for retries of this logical operation")
+      .option("--labels-json <json>", "Optional Project resource-link labels JSON")
+      .option("--max-items <n>", "Maximum complete contact/link collection size", "1000")
+      .option("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes", "1048576")
+      .option("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds", "30000")
+      .option("--agent <id-or-slug>", "Attributing agent")
+      .option("-j, --json", "Output JSON")
+      .action(async (projectId, contactId, opts) => {
+        try {
+          const projects = resolveProjectStore();
+          const mutation = direction === "attach" ? attachProjectContact : detachProjectContact;
+          const result = await mutation({
+            projects,
+            contacts: createContactsProjectMembershipAuthorityFromEnv(),
+          }, {
+            project_id: projectId,
+            contact_id: contactId,
+            operation_id: opts.operationId,
+            labels: parseJsonObject(opts.labelsJson, "--labels-json"),
+            max_items: parsePositiveInteger(opts.maxItems, "--max-items")!,
+            response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+            time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+            agent_id: mutationAgentId(projects, opts.agent),
+            source: "cli",
+            command: process.argv.join(" "),
+          });
+          if (wantsJson(opts)) { printObject(result, opts); return; }
+          console.log(chalk.green(`✓ Contact ${direction} ${result.outcome}: ${result.contact_id}`));
+          for (const evidence of result.evidence) {
+            console.log(
+              `  ${chalk.dim(`${evidence.system}/${evidence.step_id}:`)} ${evidence.outcome}`
+              + `${evidence.compensated ? " (compensated)" : ""}`,
+            );
+          }
+        } catch (err) {
+          console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+          process.exit(1);
+        }
+      });
+  }
 }
 
 function registerProjectContextBundleCommand(program: Command): void {
