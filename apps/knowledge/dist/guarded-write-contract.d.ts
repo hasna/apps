@@ -291,7 +291,6 @@ export declare function computeKnowledgeGuardedManifestDeterministicKey(maintain
 export declare function assertKnowledgeGuardedPayload(verb: KnowledgeGuardedWriteVerb, payload: KnowledgeGuardedPayload): void;
 export declare function createKnowledgePrivateInputDescriptor(options: CreateKnowledgePrivateInputDescriptorOptions): KnowledgePrivateInputDescriptor;
 export declare function revokeKnowledgePrivateInputDescriptor(descriptor: KnowledgePrivateInputDescriptor): void;
-export declare function materializeKnowledgePrivateInput(descriptor: KnowledgePrivateInputDescriptor): KnowledgeGuardedPayload;
 export declare function assertKnowledgeTerminalCompleteness(reconciliation: KnowledgeTerminalReconciliation, expected: {
     deterministic_key: string;
     operation_id: string;

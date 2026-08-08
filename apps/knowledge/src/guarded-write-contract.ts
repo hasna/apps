@@ -953,6 +953,7 @@ export function revokeKnowledgePrivateInputDescriptor(descriptor: KnowledgePriva
   state.revoked = true;
 }
 
+/** @internal */
 export function materializeKnowledgePrivateInput(
   descriptor: KnowledgePrivateInputDescriptor,
 ): KnowledgeGuardedPayload {

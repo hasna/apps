@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import * as builtPackageRoot from '../dist/index.js';
 import { budget } from './support/budget';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -42,6 +43,13 @@ const forbiddenPackagePaths = [
   'docs/canonical-secrets-bootstrap-2026-06-08.md',
   'scripts/validate-public-package.mjs',
 ].sort();
+
+const rootRuntimeExports = builtPackageRoot as Record<string, unknown>;
+
+function declarationExportsIdentifier(source: string, identifier: string): boolean {
+  return new RegExp(`\\bexport\\s+(?:declare\\s+)?(?:function|const|class|interface|type)\\s+${identifier}\\b`).test(source)
+    || new RegExp(`\\bexport\\s*\\{[^}]*\\b${identifier}\\b`, 's').test(source);
+}
 
 describe('public package release safety', () => {
   // Node's builtin list, hardcoded on purpose. `builtinModules` under `bun test` returns BUN's
@@ -98,6 +106,19 @@ describe('public package release safety', () => {
     for (const path of forbiddenPackagePaths) {
       expect(packageJson.files).not.toContain(path);
     }
+  });
+
+  test('guarded private-input public declarations match the runtime export contract', () => {
+    const rootDeclaration = readFileSync(join(repoRoot, 'dist/index.d.ts'), 'utf8');
+    const guardedContractDeclaration = readFileSync(join(repoRoot, 'dist/guarded-write-contract.d.ts'), 'utf8');
+
+    expect(rootRuntimeExports.createKnowledgePrivateInputDescriptor).toBeFunction();
+    expect(declarationExportsIdentifier(rootDeclaration, 'createKnowledgePrivateInputDescriptor')).toBe(true);
+    expect(declarationExportsIdentifier(guardedContractDeclaration, 'createKnowledgePrivateInputDescriptor')).toBe(true);
+
+    expect(rootRuntimeExports.materializeKnowledgePrivateInput).toBeUndefined();
+    expect(declarationExportsIdentifier(rootDeclaration, 'materializeKnowledgePrivateInput')).toBe(false);
+    expect(declarationExportsIdentifier(guardedContractDeclaration, 'materializeKnowledgePrivateInput')).toBe(false);
   });
 
   /**
