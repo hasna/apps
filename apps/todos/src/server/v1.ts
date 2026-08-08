@@ -16,10 +16,12 @@ import {
   getCloudPrGroupLedger,
   getCloudProjectRegistrationAuthority,
   getCloudStorageAdapter,
+  getCloudTaskManifestAuthority,
   getCloudVerifier,
 } from "./cloud.js";
 import { handlePrGroupHttpRequest } from "./pr-groups.js";
 import { handleTodosProjectRegistrationHttpRequest } from "../project-registration/index.js";
+import { handleTodosTaskManifestHttpRequest } from "../task-manifest/index.js";
 import { redactEvidenceText } from "../lib/redaction.js";
 import { isCanonicalSlug, normalizeSlug } from "../lib/slugs.js";
 import { decodeCommentCursor, encodeCommentCursor } from "../lib/comment-cursor.js";
@@ -42,6 +44,7 @@ export interface V1RequestDependencies {
   getStorageAdapter?: typeof getCloudStorageAdapter;
   getPrGroupLedger?: typeof getCloudPrGroupLedger;
   getProjectRegistrationAuthority?: typeof getCloudProjectRegistrationAuthority;
+  getTaskManifestAuthority?: typeof getCloudTaskManifestAuthority;
 }
 
 const JSON_HEADERS = { "Content-Type": "application/json" } as const;
@@ -479,6 +482,13 @@ export async function handleV1Request(
       url,
       (dependencies.getProjectRegistrationAuthority
         ?? getCloudProjectRegistrationAuthority)(),
+    );
+  }
+  if (path === "/v1/task-manifest" || path.startsWith("/v1/task-manifest/")) {
+    return handleTodosTaskManifestHttpRequest(
+      req,
+      url,
+      (dependencies.getTaskManifestAuthority ?? getCloudTaskManifestAuthority)(),
     );
   }
   const store = (dependencies.getStorageAdapter ?? getCloudStorageAdapter)();

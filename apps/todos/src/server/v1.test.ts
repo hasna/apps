@@ -11,6 +11,7 @@ import {
   deriveTodosProjectRegistrationIdempotencyKey,
   digestProjectRegistrationValue,
 } from "../project-registration/index.js";
+import { createSqliteTodosTaskManifestAuthority } from "../task-manifest/index.js";
 
 let db: Database;
 let store: TodosStorageAdapter;
@@ -51,6 +52,11 @@ beforeEach(() => {
         tenantId: "tenant-v1-test",
         corpusId: "corpus-v1-test",
       }),
+    getTaskManifestAuthority: () =>
+      createSqliteTodosTaskManifestAuthority({
+        database: db,
+        tenantId: "tenant-v1-test",
+      }),
     getVerifier: () => ({
       authenticate: async () => ({ ok: true, principal }),
     }) as ReturnType<NonNullable<V1RequestDependencies["getVerifier"]>>,
@@ -58,6 +64,25 @@ beforeEach(() => {
 });
 
 afterEach(() => resetDatabase());
+
+describe("/v1 task-manifest routing", () => {
+  test("routes binding lookup through the package-owned authority", async () => {
+    const response = await request("/v1/task-manifest/bindings/lookup", "POST", {
+      authority: "todos",
+      route: "todos.task-manifest.v1",
+      schema_version: 1,
+      tenant_id: "tenant-v1-test",
+      plan_id: "11111111-1111-4111-8111-111111111111",
+      max_items: 1,
+    });
+
+    expect(response?.status).toBe(404);
+    expect(await response!.json()).toMatchObject({
+      code: "TODOS_TASK_MANIFEST_BINDING_NOT_FOUND",
+      authoritative: true,
+    });
+  });
+});
 
 describe("/v1 task-list cloud parity", () => {
   test("plans and idempotently applies an exact-project task-list repair", async () => {
