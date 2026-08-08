@@ -1,9 +1,13 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { ApiKeyStore, mintApiKey, verifyApiKey } from '@hasna/contracts/auth';
 import type { PGlite } from '@electric-sql/pglite';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import * as publicApi from '../src/index';
 import {
   DEFAULT_KNOWLEDGE_GUARDED_LIMITS,
+  KNOWLEDGE_GUARDED_WRITE_CONTRACT,
   KnowledgeGuardedManifestConflictError,
   KnowledgeGuardedManifestStepRefusedError,
   KnowledgeGuardedOperationConflictError,
@@ -42,6 +46,8 @@ const BINDING: KnowledgeGuardedBinding = {
   scope: 'global',
   parent_id: 'global:global',
 };
+const SUPPLIED_SENTINEL_KEY = 'fake-supplied-guarded-writer-env-key';
+const AMBIENT_SENTINEL_KEY = 'fake-ambient-guarded-writer-env-key';
 
 let db: PGlite;
 let server: { port: number; stop: (closeActive?: boolean) => void };
@@ -123,6 +129,74 @@ function writer(binding: KnowledgeGuardedBinding = BINDING, requireManifest = fa
     require_manifest: requireManifest,
   });
 }
+
+test('REGRESSION: guarded writer uses the supplied env endpoint and credential, not ambient credentials', async () => {
+  const originalFetch = globalThis.fetch;
+  const savedAmbient = {
+    mode: process.env.HASNA_KNOWLEDGE_STORAGE_MODE,
+    url: process.env.HASNA_KNOWLEDGE_API_URL,
+    key: process.env.HASNA_KNOWLEDGE_API_KEY,
+  };
+  const home = mkdtempSync(join(tmpdir(), 'knowledge-guarded-writer-env-'));
+  const credentialDir = join(home, '.hasna', 'cloud');
+  mkdirSync(credentialDir, { recursive: true });
+  await Bun.write(
+    join(credentialDir, 'knowledge.env'),
+    `HASNA_KNOWLEDGE_API_KEY=${AMBIENT_SENTINEL_KEY}\n`,
+  );
+
+  const captured: Array<{ url: string; xApiKey: string | null; authorization: string | null }> = [];
+  globalThis.fetch = (async (input, init) => {
+    const headers = new Headers(init?.headers);
+    captured.push({
+      url: String(input),
+      xApiKey: headers.get('x-api-key'),
+      authorization: headers.get('authorization'),
+    });
+    return new Response(JSON.stringify({
+      contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+      exact: true,
+      bounded: true,
+      manifest: { manifest_id: 'manifest-env-precedence' },
+    }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  }) as typeof fetch;
+
+  try {
+    process.env.HASNA_KNOWLEDGE_STORAGE_MODE = 'postgres';
+    process.env.HASNA_KNOWLEDGE_API_URL = 'http://127.0.0.1:65530/ambient';
+    process.env.HASNA_KNOWLEDGE_API_KEY = AMBIENT_SENTINEL_KEY;
+
+    const suppliedEnv = {
+      ...process.env,
+      HOME: home,
+      HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
+      HASNA_KNOWLEDGE_API_URL: 'http://127.0.0.1:65531/supplied',
+      HASNA_KNOWLEDGE_API_KEY: SUPPLIED_SENTINEL_KEY,
+      KNOWLEDGE_API_KEY: SUPPLIED_SENTINEL_KEY,
+    } as NodeJS.ProcessEnv;
+
+    const guarded = createKnowledgeGuardedWriter({ binding: BINDING, env: suppliedEnv });
+    await guarded.reconcileManifest('manifest-env-precedence');
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0].url).toStartWith('http://127.0.0.1:65531/supplied/v1/guarded-manifests/');
+    expect(captured[0].xApiKey).toBe(SUPPLIED_SENTINEL_KEY);
+    expect(captured[0].authorization).toBe(`Bearer ${SUPPLIED_SENTINEL_KEY}`);
+    expect(captured[0].xApiKey).not.toBe(AMBIENT_SENTINEL_KEY);
+  } finally {
+    globalThis.fetch = originalFetch;
+    rmSync(home, { recursive: true, force: true });
+    if (savedAmbient.mode === undefined) delete process.env.HASNA_KNOWLEDGE_STORAGE_MODE;
+    else process.env.HASNA_KNOWLEDGE_STORAGE_MODE = savedAmbient.mode;
+    if (savedAmbient.url === undefined) delete process.env.HASNA_KNOWLEDGE_API_URL;
+    else process.env.HASNA_KNOWLEDGE_API_URL = savedAmbient.url;
+    if (savedAmbient.key === undefined) delete process.env.HASNA_KNOWLEDGE_API_KEY;
+    else process.env.HASNA_KNOWLEDGE_API_KEY = savedAmbient.key;
+  }
+});
 
 function deterministicManifestId(
   operationId: string,

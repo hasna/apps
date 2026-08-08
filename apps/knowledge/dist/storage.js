@@ -1108,6 +1108,10 @@ function clientTransportEnvKeys2(name) {
     apiKeyKeys: [`HASNA_${envSegment}_API_KEY`, `${envSegment}_API_KEY`]
   };
 }
+function credentialOverrideEnvKey2(name) {
+  return `HASNA_${envToken2(name)}_API_KEY_OVERRIDE`;
+}
+var CREDENTIAL_PROFILE_ENV_KEY2 = "HASNA_PROFILE";
 var MAX_CREDENTIAL_FILE_BYTES2 = 64 * 1024;
 var INSPECT_CUSTOM2 = Symbol.for("nodejs.util.inspect.custom");
 var DEPRECATION_REGISTRY2 = Symbol.for("hasna:contracts:credentialDeprecationNotices");
@@ -1784,12 +1788,21 @@ function resolveKnowledgeCloudStore(env = process.env) {
   return client ? wrap(client) : null;
 }
 function resolveKnowledgeGuardedTransport(env = process.env) {
-  return resolveKnowledgeCloudClient(env)?.transport ?? null;
+  return resolveKnowledgeCloudClient(env, { guarded: true })?.transport ?? null;
 }
-function resolveKnowledgeCloudClient(env) {
+function guardedTransportEnv(env) {
+  const guardedEnv = { ...env };
+  delete guardedEnv.HOME;
+  delete guardedEnv.USERPROFILE;
+  delete guardedEnv[CREDENTIAL_PROFILE_ENV_KEY2];
+  delete guardedEnv[credentialOverrideEnvKey2(KNOWLEDGE_APP_SLUG)];
+  return guardedEnv;
+}
+function resolveKnowledgeCloudClient(env, options = {}) {
   if (resolveKnowledgeModeSelection(env).mode !== "postgres")
     return null;
-  const resolved = resolveStorageClient(KNOWLEDGE_APP_SLUG, pinnedTransportEnv(env, "postgres"), transportOverrides(env));
+  const transportEnv = options.guarded ? guardedTransportEnv(env) : env;
+  const resolved = resolveStorageClient(KNOWLEDGE_APP_SLUG, pinnedTransportEnv(transportEnv, "postgres"), transportOverrides(transportEnv));
   if (resolved.transport !== "http")
     return null;
   return resolved.client;

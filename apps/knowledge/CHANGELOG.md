@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Fix the FCAME-1 guarded writer so `createKnowledgeGuardedWriter({ env })`
+  authenticates guarded HTTP requests with the API endpoint and credential from
+  the supplied env, rather than allowing ambient profile, override, or disk
+  credential tiers to outrank that caller-supplied transport env.
+
 ## 0.2.96
 
 - Align the public declaration surface with the runtime export contract by
