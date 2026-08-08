@@ -6,6 +6,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.106]
+
+### Fixed
+
+- `projects register-full` now accepts real immutable Conversations channel
+  IDs in `chn_<32hex>` form, while preserving legacy UUID channel IDs and
+  continuing to fail closed on malformed identifiers.
+
 ## [0.1.105]
 
 ### Added
