@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.11] - 2026-08-08
+
+### Fixed
+
+- **Hosted guarded plan/project linkage now fails closed on invalid success
+  payloads.** The cloud client validates complete nested plan, project, task,
+  count, revision, receipt, digest, and rollback invariants before accepting an
+  HTTP 2xx response, and normalizes idempotency keys before both the remote write
+  and receipt validation so a successful mutation cannot be reported as a
+  client-side failure ([#220](https://github.com/hasna/todos/pull/220)).
+
 ## [0.15.10] - 2026-08-07
 
 ### Added
