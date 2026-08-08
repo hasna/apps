@@ -7,6 +7,8 @@ its release workflow invoked the package-local `contracts` binary as a raw shell
 command, outside Bun's package-runner path, and exited `127`. This release keeps
 that failed tag unchanged and publishes the repaired candidate as 0.14.77.
 
+**Provenance note.** The 0.14.77 release tag is cut from this protected-main provenance follow-up after the content-identical metadata merge, preserving published history without rewriting it.
+
 **Additive authority path.** Integrations can now create a project only when
 absent, read it back by exact full ID, retrieve an immutable bounded terminal
 receipt, and compensate only the unchanged object created by that accepted
