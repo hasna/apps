@@ -7,7 +7,8 @@
  * the vendored kit's pooled query client. There are NO stubs: every method runs
  * a parameterized SQL statement against the live database.
  */
-import type { PoolQueryClient } from "../generated/storage-kit/query.js";
+import { createHash } from "node:crypto";
+import type { PoolQueryClient, TypedQueryClient } from "../generated/storage-kit/query.js";
 import type {
   Company,
   Contact,
@@ -23,6 +24,14 @@ import type {
   UpdateContactInput,
   UpdateTagInput,
 } from "../types/index.js";
+import type {
+  ContactProjectMembershipListResult,
+  ContactProjectMembershipMutationDirection,
+  ContactProjectMembershipMutationInput,
+  ContactProjectMembershipMutationResult,
+  ContactProjectMembershipSnapshot,
+} from "../types/project-memberships.js";
+import { ContactProjectMembershipConflictError } from "../types/project-memberships.js";
 
 /**
  * Contact read responses carry their child collections, matching what the
@@ -69,6 +78,72 @@ function newUuid(): string {
 /** Current ISO timestamp for TEXT date/timestamp columns written by the app. */
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+interface ContactProjectMembershipStateRow {
+  contact_id: string;
+  project_id: string;
+  linked: boolean;
+  revision: string | number;
+}
+
+interface ContactProjectMembershipReceiptRow {
+  direction: ContactProjectMembershipMutationDirection;
+  contact_id: string;
+  project_id: string;
+  operation_id: string;
+  step_id: string;
+  expected_version: string;
+  before_json: unknown;
+  after_json: unknown;
+  receipt_id: string;
+}
+
+function contactProjectDigest(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function contactProjectMembershipVersion(row: ContactProjectMembershipStateRow): string {
+  return `cpmv_${contactProjectDigest(JSON.stringify([
+    row.contact_id,
+    row.project_id,
+    Boolean(row.linked),
+    Number(row.revision),
+  ])).slice(0, 32)}`;
+}
+
+function contactProjectMembershipSnapshot(
+  row: ContactProjectMembershipStateRow,
+): ContactProjectMembershipSnapshot {
+  return {
+    contact_id: row.contact_id,
+    project_id: row.project_id,
+    linked: Boolean(row.linked),
+    version: contactProjectMembershipVersion(row),
+  };
+}
+
+function parseMembershipSnapshot(value: unknown): ContactProjectMembershipSnapshot {
+  if (typeof value === "string") return JSON.parse(value) as ContactProjectMembershipSnapshot;
+  return value as ContactProjectMembershipSnapshot;
+}
+
+function requiredMembershipValue(value: string, name: string): string {
+  const normalized = value.trim();
+  if (!normalized) throw new Error(`${name} is required`);
+  return normalized;
+}
+
+function normalizeMembershipMutationInput(
+  input: ContactProjectMembershipMutationInput,
+): ContactProjectMembershipMutationInput {
+  return {
+    contact_id: requiredMembershipValue(input.contact_id, "contact_id"),
+    project_id: requiredMembershipValue(input.project_id, "project_id"),
+    operation_id: requiredMembershipValue(input.operation_id, "operation_id"),
+    step_id: requiredMembershipValue(input.step_id, "step_id"),
+    expected_version: requiredMembershipValue(input.expected_version, "expected_version"),
+  };
 }
 
 // ─── row → domain mappers ───────────────────────────────────────────────────
@@ -467,19 +542,14 @@ export class ContactsPgStore {
 
   // ---- contact ↔ project links ----
   async linkContactToProject(contactId: string, projectId: string): Promise<void> {
-    await this.client.execute(
-      `INSERT INTO contact_projects (contact_id, project_id) VALUES ($1, $2)
-       ON CONFLICT (contact_id, project_id) DO NOTHING`,
-      [contactId, projectId],
-    );
+    await this.client.transaction(async (client) => {
+      await this.transitionContactProjectMembershipWithoutReceipt(client, contactId, projectId, true);
+    });
   }
 
   async unlinkContactFromProject(contactId: string, projectId: string): Promise<boolean> {
-    const result = await this.client.query(
-      `DELETE FROM contact_projects WHERE contact_id = $1 AND project_id = $2`,
-      [contactId, projectId],
-    );
-    return result.rowCount > 0;
+    return this.client.transaction((client) =>
+      this.transitionContactProjectMembershipWithoutReceipt(client, contactId, projectId, false));
   }
 
   async getContactProjectIds(contactId: string): Promise<string[]> {
@@ -494,17 +564,24 @@ export class ContactsPgStore {
   }
 
   async setContactProjects(contactId: string, projectIds: string[]): Promise<string[]> {
-    const uniqueProjectIds = [...new Set(projectIds)];
+    const uniqueProjectIds = [...new Set(
+      projectIds.map((projectId) => requiredMembershipValue(projectId, "project_id")),
+    )];
     await this.client.transaction(async (client) => {
-      await client.execute(`DELETE FROM contact_projects WHERE contact_id = $1`, [contactId]);
-      if (uniqueProjectIds.length === 0) return;
-      await client.execute(
-        `INSERT INTO contact_projects (contact_id, project_id)
-         SELECT $1, project_id
-         FROM UNNEST($2::text[]) AS project(project_id)
-         ON CONFLICT (contact_id, project_id) DO NOTHING`,
-        [contactId, uniqueProjectIds],
+      const current = await client.many<{ project_id: string }>(
+        `SELECT project_id FROM contact_projects WHERE contact_id = $1`,
+        [contactId],
       );
+      const desired = new Set(uniqueProjectIds);
+      const population = new Set([...current.map((row) => row.project_id), ...uniqueProjectIds]);
+      for (const projectId of population) {
+        await this.transitionContactProjectMembershipWithoutReceipt(
+          client,
+          contactId,
+          projectId,
+          desired.has(projectId),
+        );
+      }
     });
     return uniqueProjectIds;
   }
@@ -518,6 +595,231 @@ export class ContactsPgStore {
       [projectId],
     );
     return rows.map((row) => row.contact_id);
+  }
+
+  private async contactProjectMembershipState(
+    client: TypedQueryClient,
+    contactId: string,
+    projectId: string,
+    forUpdate = false,
+  ): Promise<ContactProjectMembershipStateRow> {
+    let row = await client.get<ContactProjectMembershipStateRow>(
+      `SELECT contact_id, project_id, linked, revision
+       FROM contact_project_membership_states
+       WHERE contact_id = $1 AND project_id = $2${forUpdate ? " FOR UPDATE" : ""}`,
+      [contactId, projectId],
+    );
+    if (row) return row;
+    const linked = Boolean(await client.get<{ present: number }>(
+      `SELECT 1 AS present FROM contact_projects WHERE contact_id = $1 AND project_id = $2`,
+      [contactId, projectId],
+    ));
+    if (!forUpdate) {
+      return { contact_id: contactId, project_id: projectId, linked, revision: 0 };
+    }
+    await client.execute(
+      `INSERT INTO contact_project_membership_states
+         (contact_id, project_id, linked, revision, updated_at)
+       VALUES ($1, $2, $3, 0, NOW())
+       ON CONFLICT (contact_id, project_id) DO NOTHING`,
+      [contactId, projectId, linked],
+    );
+    row = await client.get<ContactProjectMembershipStateRow>(
+      `SELECT contact_id, project_id, linked, revision
+       FROM contact_project_membership_states
+       WHERE contact_id = $1 AND project_id = $2
+       FOR UPDATE`,
+      [contactId, projectId],
+    );
+    if (!row) throw new Error("failed to initialize contact project membership state");
+    return row;
+  }
+
+  private async transitionContactProjectMembershipWithoutReceipt(
+    client: TypedQueryClient,
+    contactId: string,
+    projectId: string,
+    linked: boolean,
+  ): Promise<boolean> {
+    const normalizedContactId = requiredMembershipValue(contactId, "contact_id");
+    const normalizedProjectId = requiredMembershipValue(projectId, "project_id");
+    const before = await this.contactProjectMembershipState(
+      client,
+      normalizedContactId,
+      normalizedProjectId,
+      true,
+    );
+    const changed = Boolean(before.linked) !== linked;
+    const revision = Number(before.revision) + (changed ? 1 : 0);
+    await client.execute(
+      `UPDATE contact_project_membership_states
+       SET linked = $3, revision = $4, updated_at = NOW()
+       WHERE contact_id = $1 AND project_id = $2`,
+      [normalizedContactId, normalizedProjectId, linked, revision],
+    );
+    if (linked) {
+      await client.execute(
+        `INSERT INTO contact_projects (contact_id, project_id) VALUES ($1, $2)
+         ON CONFLICT (contact_id, project_id) DO NOTHING`,
+        [normalizedContactId, normalizedProjectId],
+      );
+    } else {
+      await client.execute(
+        `DELETE FROM contact_projects WHERE contact_id = $1 AND project_id = $2`,
+        [normalizedContactId, normalizedProjectId],
+      );
+    }
+    return changed;
+  }
+
+  async readContactProjectMembership(
+    contactId: string,
+    projectId: string,
+  ): Promise<ContactProjectMembershipSnapshot> {
+    return contactProjectMembershipSnapshot(
+      await this.contactProjectMembershipState(this.client, contactId, projectId),
+    );
+  }
+
+  async listContactProjectMemberships(
+    projectId: string,
+    maxItems: number,
+  ): Promise<ContactProjectMembershipListResult> {
+    if (!Number.isInteger(maxItems) || maxItems < 1) throw new Error("max_items must be a positive integer");
+    const rows = await this.client.many<ContactProjectMembershipStateRow>(
+      `SELECT cp.contact_id, cp.project_id,
+              COALESCE(state.linked, TRUE) AS linked,
+              COALESCE(state.revision, 0) AS revision
+       FROM contact_projects cp
+       LEFT JOIN contact_project_membership_states state
+         ON state.contact_id = cp.contact_id AND state.project_id = cp.project_id
+       WHERE cp.project_id = $1
+       ORDER BY cp.contact_id ASC
+       LIMIT $2`,
+      [projectId, maxItems + 1],
+    );
+    if (rows.length > maxItems) {
+      throw new Error(`contact project membership collection exceeds max_items=${maxItems}`);
+    }
+    return {
+      project_id: projectId,
+      contact_ids: rows.map((row) => row.contact_id),
+      complete: true,
+      membership_revision: `cpml_${contactProjectDigest(JSON.stringify(
+        rows.map(contactProjectMembershipSnapshot),
+      )).slice(0, 32)}`,
+    };
+  }
+
+  async mutateContactProjectMembership(
+    direction: ContactProjectMembershipMutationDirection,
+    rawInput: ContactProjectMembershipMutationInput,
+  ): Promise<ContactProjectMembershipMutationResult> {
+    const input = normalizeMembershipMutationInput(rawInput);
+    return this.client.transaction(async (client) => {
+      await client.execute(
+        `SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`,
+        [input.operation_id, input.step_id],
+      );
+      const receipt = await client.get<ContactProjectMembershipReceiptRow>(
+        `SELECT direction, contact_id, project_id, operation_id, step_id, expected_version,
+                before_json, after_json, receipt_id
+         FROM contact_project_membership_receipts
+         WHERE operation_id = $1 AND step_id = $2`,
+        [input.operation_id, input.step_id],
+      );
+      if (receipt) {
+        if (
+          receipt.direction !== direction
+          || receipt.contact_id !== input.contact_id
+          || receipt.project_id !== input.project_id
+          || receipt.expected_version !== input.expected_version
+        ) {
+          throw new ContactProjectMembershipConflictError(
+            "operation_id/step_id already accepted for a different contact-project membership mutation",
+          );
+        }
+        return {
+          outcome: "duplicate_of_accepted",
+          operation_id: receipt.operation_id,
+          step_id: receipt.step_id,
+          before: parseMembershipSnapshot(receipt.before_json),
+          after: parseMembershipSnapshot(receipt.after_json),
+          receipt_id: receipt.receipt_id,
+        };
+      }
+
+      const contact = await client.get<{ id: string }>(`SELECT id FROM contacts WHERE id = $1`, [input.contact_id]);
+      if (!contact) throw new Error(`contact not found: ${input.contact_id}`);
+      const beforeRow = await this.contactProjectMembershipState(
+        client,
+        input.contact_id,
+        input.project_id,
+        true,
+      );
+      const before = contactProjectMembershipSnapshot(beforeRow);
+      if (before.version !== input.expected_version) {
+        throw new ContactProjectMembershipConflictError(
+          `contact project membership expected_version conflict: expected ${input.expected_version}, current ${before.version}`,
+        );
+      }
+
+      const desiredLinked = direction === "attach";
+      const changed = before.linked !== desiredLinked;
+      const revision = Number(beforeRow.revision) + (changed ? 1 : 0);
+      const afterRow = { ...beforeRow, linked: desiredLinked, revision };
+      await client.execute(
+        `UPDATE contact_project_membership_states
+         SET linked = $3, revision = $4, updated_at = NOW()
+         WHERE contact_id = $1 AND project_id = $2`,
+        [input.contact_id, input.project_id, desiredLinked, revision],
+      );
+      if (desiredLinked) {
+        await client.execute(
+          `INSERT INTO contact_projects (contact_id, project_id) VALUES ($1, $2)
+           ON CONFLICT (contact_id, project_id) DO NOTHING`,
+          [input.contact_id, input.project_id],
+        );
+      } else {
+        await client.execute(
+          `DELETE FROM contact_projects WHERE contact_id = $1 AND project_id = $2`,
+          [input.contact_id, input.project_id],
+        );
+      }
+
+      const after = contactProjectMembershipSnapshot(afterRow);
+      const id = `cpmr_${contactProjectDigest(JSON.stringify([
+        input.operation_id,
+        input.step_id,
+        input.contact_id,
+        input.project_id,
+      ])).slice(0, 32)}`;
+      await client.execute(
+        `INSERT INTO contact_project_membership_receipts (
+           receipt_id, direction, contact_id, project_id, operation_id, step_id,
+           expected_version, before_json, after_json
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb)`,
+        [
+          id,
+          direction,
+          input.contact_id,
+          input.project_id,
+          input.operation_id,
+          input.step_id,
+          input.expected_version,
+          JSON.stringify(before),
+          JSON.stringify(after),
+        ],
+      );
+      return {
+        outcome: changed ? "accepted" : "duplicate_of_accepted",
+        operation_id: input.operation_id,
+        step_id: input.step_id,
+        before,
+        after,
+        receipt_id: id,
+      };
+    });
   }
 
   // ---- companies ----

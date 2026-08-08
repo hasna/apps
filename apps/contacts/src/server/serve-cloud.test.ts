@@ -344,7 +344,8 @@ describe("ContactsPgStore", () => {
   });
 
   test("defines the forward tag-first index required by filtered count and pagination", () => {
-    const tagFilterMigration = PG_MIGRATIONS.at(-1)!;
+    const tagFilterMigration = PG_MIGRATIONS.find((sql) =>
+      sql.includes("idx_contact_tags_tag_contact"))!;
 
     expect(tagFilterMigration).toContain(
       "CREATE INDEX IF NOT EXISTS idx_contact_tags_tag_contact ON contact_tags(tag_id, contact_id)",

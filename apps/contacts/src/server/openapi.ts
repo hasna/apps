@@ -159,6 +159,47 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             },
           },
         },
+        ContactProjectMembershipSnapshot: {
+          type: "object",
+          required: ["contact_id", "project_id", "linked", "version"],
+          properties: {
+            contact_id: { type: "string" },
+            project_id: { type: "string" },
+            linked: { type: "boolean" },
+            version: { type: "string" },
+          },
+        },
+        ContactProjectMembershipMutationInput: {
+          type: "object",
+          required: ["operation_id", "step_id", "expected_version"],
+          properties: {
+            operation_id: { type: "string", minLength: 1 },
+            step_id: { type: "string", minLength: 1 },
+            expected_version: { type: "string", minLength: 1 },
+          },
+        },
+        ContactProjectMembershipMutationResult: {
+          type: "object",
+          required: ["outcome", "operation_id", "step_id", "before", "after", "receipt_id"],
+          properties: {
+            outcome: { type: "string", enum: ["accepted", "duplicate_of_accepted"] },
+            operation_id: { type: "string" },
+            step_id: { type: "string" },
+            before: { $ref: "#/components/schemas/ContactProjectMembershipSnapshot" },
+            after: { $ref: "#/components/schemas/ContactProjectMembershipSnapshot" },
+            receipt_id: { type: "string" },
+          },
+        },
+        ContactProjectMembershipListResult: {
+          type: "object",
+          required: ["project_id", "contact_ids", "complete", "membership_revision"],
+          properties: {
+            project_id: { type: "string" },
+            contact_ids: { type: "array", items: { type: "string" } },
+            complete: { type: "boolean", const: true },
+            membership_revision: { type: "string" },
+          },
+        },
       },
     },
     security: [{ apiKey: [] }],
@@ -425,6 +466,98 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             project_id: { type: "string" },
             contact_ids: { type: "array", items: { type: "string" } },
           }),
+        },
+      },
+      "/v1/projects/{project_id}/contact-memberships": {
+        get: {
+          operationId: "listContactProjectMemberships",
+          summary: "List the complete authoritative contact membership collection for a project",
+          parameters: [
+            { name: "project_id", in: "path", required: true, schema: { type: "string" } },
+            { name: "max_items", in: "query", required: true, schema: { type: "integer", minimum: 1 } },
+          ],
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/ContactProjectMembershipListResult" },
+                },
+              },
+            },
+          },
+        },
+      },
+      "/v1/projects/{project_id}/contact-memberships/{contact_id}": {
+        get: {
+          operationId: "readContactProjectMembership",
+          summary: "Read one authoritative contact-project membership snapshot",
+          parameters: [
+            { name: "project_id", in: "path", required: true, schema: { type: "string" } },
+            { name: "contact_id", in: "path", required: true, schema: { type: "string" } },
+          ],
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/ContactProjectMembershipSnapshot" },
+                },
+              },
+            },
+          },
+        },
+      },
+      "/v1/projects/{project_id}/contact-memberships/{contact_id}/attach": {
+        post: {
+          operationId: "attachContactProjectMembership",
+          summary: "Attach a contact to a project under expected-version CAS with a replay-safe receipt",
+          parameters: [
+            { name: "project_id", in: "path", required: true, schema: { type: "string" } },
+            { name: "contact_id", in: "path", required: true, schema: { type: "string" } },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/ContactProjectMembershipMutationInput" },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/ContactProjectMembershipMutationResult" },
+                },
+              },
+            },
+          },
+        },
+      },
+      "/v1/projects/{project_id}/contact-memberships/{contact_id}/detach": {
+        post: {
+          operationId: "detachContactProjectMembership",
+          summary: "Detach a contact from a project under expected-version CAS with a replay-safe receipt",
+          parameters: [
+            { name: "project_id", in: "path", required: true, schema: { type: "string" } },
+            { name: "contact_id", in: "path", required: true, schema: { type: "string" } },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/ContactProjectMembershipMutationInput" },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/ContactProjectMembershipMutationResult" },
+                },
+              },
+            },
+          },
         },
       },
       "/v1/stats": {

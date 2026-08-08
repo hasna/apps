@@ -603,6 +603,41 @@ const MIGRATIONS = [
 
   CREATE INDEX IF NOT EXISTS idx_contacts_tombstones_deleted_at ON _contacts_tombstones(deleted_at);
   `,
+
+  `
+  CREATE TABLE IF NOT EXISTS contact_project_membership_states (
+    contact_id TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+    project_id TEXT NOT NULL,
+    linked INTEGER NOT NULL CHECK(linked IN (0, 1)),
+    revision INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0),
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (contact_id, project_id)
+  );
+
+  INSERT OR IGNORE INTO contact_project_membership_states
+    (contact_id, project_id, linked, revision, updated_at)
+  SELECT contact_id, project_id, 1, 0, datetime('now')
+  FROM contact_projects;
+
+  CREATE TABLE IF NOT EXISTS contact_project_membership_receipts (
+    receipt_id TEXT PRIMARY KEY,
+    direction TEXT NOT NULL CHECK(direction IN ('attach', 'detach')),
+    contact_id TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+    project_id TEXT NOT NULL,
+    operation_id TEXT NOT NULL,
+    step_id TEXT NOT NULL,
+    expected_version TEXT NOT NULL,
+    before_json TEXT NOT NULL,
+    after_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(operation_id, step_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_contact_project_membership_states_project
+    ON contact_project_membership_states(project_id, linked, contact_id);
+  CREATE INDEX IF NOT EXISTS idx_contact_project_membership_receipts_target
+    ON contact_project_membership_receipts(contact_id, project_id, created_at);
+  `,
 ];
 
 export type ContactsDatabase = SqliteAdapter;
