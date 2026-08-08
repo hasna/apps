@@ -1,5 +1,11 @@
 import { canonicalDigest, canonicalJson } from "./canonical.js";
-import type { NormalizedTaskManifest, PreparedTaskManifestFaults, TodosTaskManifestBackend } from "./backend.js";
+import {
+  validateTaskManifestBindingLookupRows,
+  type NormalizedTaskManifest,
+  type PreparedTaskManifestFaults,
+  type TaskManifestBindingLookupRow,
+  type TodosTaskManifestBackend,
+} from "./backend.js";
 import { postgresTaskManifestForeignReferenceSql } from "./reference-guard.js";
 import { postgresTodosTaskManifestSchemaSql } from "./schema-sql.js";
 import { DEFAULT_TODOS_POSTGRES_SYNC_TABLE, postgresTodosSyncSchemaSql, type TodosPostgresQueryClient } from "../storage/postgres-sync.js";
@@ -262,6 +268,30 @@ export class PostgresTodosTaskManifestBackend implements TodosTaskManifestBacken
     );
     if (!result.rows[0]) throw new TodosTaskManifestError("TODOS_TASK_MANIFEST_RECEIPT_NOT_FOUND", `Apply receipt not found: ${receiptId}`);
     return { ...parseJson<TodosTaskManifestApplyResult>(result.rows[0]["result_json"]), duplicate: false };
+  }
+
+  async lookupBindingByPlanId(planId: string) {
+    await this.ensureSchema();
+    const result = await this.client.query<TaskManifestBindingLookupRow>(`
+      SELECT
+        b.apply_receipt_id AS apply_receipt_id,
+        b.state AS state,
+        b.version AS binding_version,
+        b.operation_id AS binding_operation_id,
+        b.result_json #>> '{graph,plan_id}' AS binding_plan_id,
+        r.authority AS receipt_authority,
+        r.route AS receipt_route,
+        r.schema_version AS receipt_schema_version,
+        r.kind AS receipt_kind,
+        r.operation_id AS receipt_operation_id,
+        r.result_json #>> '{graph,plan_id}' AS receipt_plan_id
+      FROM todos_task_manifest_bindings b
+      LEFT JOIN todos_task_manifest_receipts r
+        ON r.receipt_id = b.apply_receipt_id
+      WHERE b.result_json #>> '{graph,plan_id}' = $1
+      LIMIT 2
+    `, [planId]);
+    return validateTaskManifestBindingLookupRows(result.rows, planId);
   }
 
   async markOutboxDelivered(outboxId: string, deliveredAt: string): Promise<void> {

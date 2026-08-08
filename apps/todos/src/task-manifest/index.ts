@@ -14,6 +14,7 @@ export {
 export { canonicalDigest as digestTodosTaskManifest, canonicalJson as canonicalTodosTaskManifestJson, deterministicUuid as deterministicTodosTaskManifestId } from "./canonical.js";
 export {
   TODOS_TASK_MANIFEST_BOUNDS,
+  parseTodosTaskManifestBindingLookup,
   parseTodosTaskManifestCompensation,
 } from "./schema.js";
 export { postgresTodosTaskManifestSchemaSql, sqliteTodosTaskManifestSchemaSql } from "./schema-sql.js";

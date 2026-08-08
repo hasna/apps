@@ -40,6 +40,54 @@ const projectSchema = {
   },
 } as const;
 
+const taskManifestBindingLookupRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["authority", "route", "schema_version", "tenant_id", "plan_id", "max_items"],
+  properties: {
+    authority: { type: "string", enum: ["todos"] },
+    route: { type: "string", enum: ["todos.task-manifest.v1"] },
+    schema_version: { type: "integer", enum: [1] },
+    tenant_id: { type: "string", minLength: 1, maxLength: 200 },
+    plan_id: { type: "string", format: "uuid" },
+    max_items: { type: "integer", enum: [1] },
+  },
+} as const;
+
+const taskManifestBindingLookupResultSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "authority",
+    "route",
+    "schema_version",
+    "tenant_id",
+    "plan_id",
+    "apply_receipt_id",
+    "binding_version",
+    "state",
+  ],
+  properties: {
+    authority: { type: "string", enum: ["todos"] },
+    route: { type: "string", enum: ["todos.task-manifest.v1"] },
+    schema_version: { type: "integer", enum: [1] },
+    tenant_id: { type: "string" },
+    plan_id: { type: "string", format: "uuid" },
+    apply_receipt_id: { type: "string", format: "uuid" },
+    binding_version: { type: "integer", minimum: 1 },
+    state: { type: "string", enum: ["applied", "compensated"] },
+  },
+} as const;
+
+const taskManifestBindingLookupResponseSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["result"],
+  properties: {
+    result: { $ref: "#/components/schemas/TaskManifestBindingLookupResult" },
+  },
+} as const;
+
 const taskListSchema = {
   type: "object",
   properties: {
@@ -334,6 +382,9 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
       schemas: {
         Task: taskSchema,
         Project: projectSchema,
+        TaskManifestBindingLookupRequest: taskManifestBindingLookupRequestSchema,
+        TaskManifestBindingLookupResult: taskManifestBindingLookupResultSchema,
+        TaskManifestBindingLookupResponse: taskManifestBindingLookupResponseSchema,
         TaskList: taskListSchema,
         ProjectTaskListEnsureReceipt: projectTaskListEnsureReceiptSchema,
         ProjectTaskListEnsureResult: projectTaskListEnsureResultSchema,
@@ -1090,6 +1141,32 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
     },
     security: [{ apiKey: [] }],
     paths: {
+      "/v1/task-manifest/bindings/lookup": {
+        post: {
+          operationId: "lookupTaskManifestBinding",
+          summary: "Recover one exact task-manifest apply receipt from its managed plan id",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/TaskManifestBindingLookupRequest" },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/TaskManifestBindingLookupResponse" },
+                },
+              },
+            },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
       "/v1/tasks": {
         get: {
           operationId: "listTasks",

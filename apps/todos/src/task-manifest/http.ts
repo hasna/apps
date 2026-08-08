@@ -2,6 +2,8 @@ import {
   TodosTaskManifestError,
   type TodosTaskManifestApplyResult,
   type TodosTaskManifestAuthority,
+  type TodosTaskManifestBindingLookupRequest,
+  type TodosTaskManifestBindingLookupResult,
   type TodosTaskManifestCapability,
   type TodosTaskManifestCompensateRequest,
   type TodosTaskManifestCompensationResult,
@@ -20,7 +22,8 @@ function status(error: TodosTaskManifestError): number {
     case "TODOS_TASK_MANIFEST_INVALID_INPUT":
     case "TODOS_TASK_MANIFEST_BOUNDS_EXCEEDED":
     case "TODOS_TASK_MANIFEST_FOREIGN_REFERENCE": return 400;
-    case "TODOS_TASK_MANIFEST_RECEIPT_NOT_FOUND": return 404;
+    case "TODOS_TASK_MANIFEST_RECEIPT_NOT_FOUND":
+    case "TODOS_TASK_MANIFEST_BINDING_NOT_FOUND": return 404;
     case "TODOS_TASK_MANIFEST_ATOMICITY_UNAVAILABLE": return 503;
     default: return 409;
   }
@@ -87,6 +90,11 @@ export async function handleTodosTaskManifestHttpRequest(
         throw new TodosTaskManifestError("TODOS_TASK_MANIFEST_INVALID_INPUT", "receipt_id is required");
       }
       return json({ result: await authority.readExact(input.receipt_id) });
+    }
+    if (action === "bindings/lookup") {
+      return json({
+        result: await authority.lookupBinding(await body(request) as TodosTaskManifestBindingLookupRequest),
+      });
     }
     if (action === "compensate") {
       return json({ result: await authority.compensate(await body(request) as TodosTaskManifestCompensateRequest) }, 201);
@@ -158,6 +166,15 @@ export class TodosTaskManifestHttpClient implements TodosTaskManifestAuthority {
 
   async readExact(receiptId: string): Promise<TodosTaskManifestApplyResult> {
     return (await this.request<{ result: TodosTaskManifestApplyResult }>("/read-exact", { method: "POST", body: JSON.stringify({ receipt_id: receiptId }) })).result;
+  }
+
+  async lookupBinding(
+    input: TodosTaskManifestBindingLookupRequest,
+  ): Promise<TodosTaskManifestBindingLookupResult> {
+    return (await this.request<{ result: TodosTaskManifestBindingLookupResult }>(
+      "/bindings/lookup",
+      { method: "POST", body: JSON.stringify(input) },
+    )).result;
   }
 
   async markOutboxDelivered(outboxId: string): Promise<void> {

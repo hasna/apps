@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 import { runMigrations } from "../db/schema.js";
 import {
   TODOS_TASK_MANIFEST_BOUNDS,
+  TODOS_TASK_MANIFEST_ROUTE,
   TodosTaskManifestError,
   createSqliteTodosTaskManifestAuthority,
   createTodosTaskManifestHttpClient,
@@ -11,6 +12,7 @@ import {
 } from "./index.js";
 
 const PROJECT_ID = "a0000000-0000-4000-8000-000000000001";
+const TENANT_ID = "tenant-http-receipt-recovery";
 
 function input(): TodosTaskManifest {
   return {
@@ -35,7 +37,11 @@ describe("task-manifest HTTP authority", () => {
   afterEach(() => db.close());
 
   test("round-trips capability, apply, exact receipt read, delivery, and authoritative errors", async () => {
-    const authority = createSqliteTodosTaskManifestAuthority({ database: db, now: () => "2026-08-07T00:00:00.000Z" });
+    const authority = createSqliteTodosTaskManifestAuthority({
+      database: db,
+      tenantId: TENANT_ID,
+      now: () => "2026-08-07T00:00:00.000Z",
+    });
     const fetch = async (request: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const req = new Request(request, init);
       return await handleTodosTaskManifestHttpRequest(req, new URL(req.url), authority)
@@ -44,6 +50,23 @@ describe("task-manifest HTTP authority", () => {
     const client = createTodosTaskManifestHttpClient({ baseUrl: "https://todos.example.invalid", fetch });
     expect(await client.capability()).toMatchObject({ backend: "sqlite", transcript_safe: false, exact_bounded_readback: true });
     const applied = await client.apply(input());
+    expect(await client.lookupBinding({
+      authority: "todos",
+      route: TODOS_TASK_MANIFEST_ROUTE,
+      schema_version: 1,
+      tenant_id: TENANT_ID,
+      plan_id: applied.graph.plan_id,
+      max_items: 1,
+    })).toEqual({
+      authority: "todos",
+      route: TODOS_TASK_MANIFEST_ROUTE,
+      schema_version: 1,
+      tenant_id: TENANT_ID,
+      plan_id: applied.graph.plan_id,
+      apply_receipt_id: applied.receipt.receipt_id,
+      binding_version: 1,
+      state: "applied",
+    });
     expect((await client.readExact(applied.receipt.receipt_id)).graph).toEqual(applied.graph);
     await client.markOutboxDelivered(applied.outbox_ids[0]!);
     await expect(client.compensate({
@@ -55,6 +78,16 @@ describe("task-manifest HTTP authority", () => {
     }));
     await expect(client.readExact("missing")).rejects.toEqual(expect.objectContaining<TodosTaskManifestError>({
       code: "TODOS_TASK_MANIFEST_RECEIPT_NOT_FOUND",
+    }));
+    await expect(client.lookupBinding({
+      authority: "todos",
+      route: TODOS_TASK_MANIFEST_ROUTE,
+      schema_version: 1,
+      tenant_id: TENANT_ID,
+      plan_id: crypto.randomUUID(),
+      max_items: 1,
+    })).rejects.toEqual(expect.objectContaining<TodosTaskManifestError>({
+      code: "TODOS_TASK_MANIFEST_BINDING_NOT_FOUND",
     }));
   });
 

@@ -1,6 +1,12 @@
 import type { Database } from "bun:sqlite";
 import { canonicalDigest, canonicalJson } from "./canonical.js";
-import type { NormalizedTaskManifest, PreparedTaskManifestFaults, TodosTaskManifestBackend } from "./backend.js";
+import {
+  validateTaskManifestBindingLookupRows,
+  type NormalizedTaskManifest,
+  type PreparedTaskManifestFaults,
+  type TaskManifestBindingLookupRow,
+  type TodosTaskManifestBackend,
+} from "./backend.js";
 import { findSqliteTaskManifestForeignReference } from "./reference-guard.js";
 import { sqliteTodosTaskManifestSchemaSql } from "./schema-sql.js";
 import {
@@ -190,6 +196,29 @@ export class SqliteTodosTaskManifestBackend implements TodosTaskManifestBackend 
     const row = this.db.query("SELECT result_json FROM todos_task_manifest_receipts WHERE receipt_id = ? AND kind = 'apply' LIMIT 1").get(receiptId) as { result_json: string } | null;
     if (!row) throw new TodosTaskManifestError("TODOS_TASK_MANIFEST_RECEIPT_NOT_FOUND", `Apply receipt not found: ${receiptId}`);
     return parseApplyResult(row.result_json, false);
+  }
+
+  async lookupBindingByPlanId(planId: string) {
+    const rows = this.db.query(`
+      SELECT
+        b.apply_receipt_id AS apply_receipt_id,
+        b.state AS state,
+        b.version AS binding_version,
+        b.operation_id AS binding_operation_id,
+        json_extract(b.result_json, '$.graph.plan_id') AS binding_plan_id,
+        r.authority AS receipt_authority,
+        r.route AS receipt_route,
+        r.schema_version AS receipt_schema_version,
+        r.kind AS receipt_kind,
+        r.operation_id AS receipt_operation_id,
+        json_extract(r.result_json, '$.graph.plan_id') AS receipt_plan_id
+      FROM todos_task_manifest_bindings b
+      LEFT JOIN todos_task_manifest_receipts r
+        ON r.receipt_id = b.apply_receipt_id
+      WHERE json_extract(b.result_json, '$.graph.plan_id') = ?
+      LIMIT 2
+    `).all(planId) as TaskManifestBindingLookupRow[];
+    return validateTaskManifestBindingLookupRows(rows, planId);
   }
 
   async markOutboxDelivered(outboxId: string, deliveredAt: string): Promise<void> {

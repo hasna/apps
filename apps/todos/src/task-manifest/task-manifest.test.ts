@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { runMigrations } from "../db/schema.js";
 import { addChecklistItem } from "../db/checklists.js";
 import {
+  TODOS_TASK_MANIFEST_ROUTE,
   TodosTaskManifestError,
   createSqliteTodosTaskManifestAuthority,
   parseTodosTaskManifest,
@@ -14,6 +15,7 @@ import {
 } from "./index.js";
 
 const PROJECT_ID = "3583f012-71bb-40e5-997f-05dfdb2c2542";
+const TENANT_ID = "tenant-receipt-recovery";
 
 function manifest(operationId = "email-triage-graph-v1"): TodosTaskManifest {
   return {
@@ -136,6 +138,156 @@ describe("task-manifest SQLite authority", () => {
     expect(db.query("SELECT count(*) AS count FROM todos_task_manifest_outbox").get()).toEqual({ count: 2 });
     expect(() => db.run("UPDATE todos_task_manifest_receipts SET result_digest = 'changed'"))
       .toThrow(/immutable/);
+  });
+
+  test("recovers one exact managed binding by plan id without returning manifest or request content", async () => {
+    const authority = createSqliteTodosTaskManifestAuthority({
+      database: db,
+      tenantId: TENANT_ID,
+      now: () => "2026-08-08T00:00:00.000Z",
+    });
+    const sensitive = manifest("receipt-recovery");
+    const fakeToken = ["ghp", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"].join("_");
+    sensitive.plan.name = `Sensitive plan ${fakeToken}`;
+    sensitive.tasks[0]!.title = `Sensitive task ${fakeToken}`;
+    const applied = await authority.apply(sensitive);
+
+    const recovered = await authority.lookupBinding({
+      authority: "todos",
+      route: TODOS_TASK_MANIFEST_ROUTE,
+      schema_version: 1,
+      tenant_id: TENANT_ID,
+      plan_id: applied.graph.plan_id,
+      max_items: 1,
+    });
+
+    expect(recovered).toEqual({
+      authority: "todos",
+      route: TODOS_TASK_MANIFEST_ROUTE,
+      schema_version: 1,
+      tenant_id: TENANT_ID,
+      plan_id: applied.graph.plan_id,
+      apply_receipt_id: applied.receipt.receipt_id,
+      binding_version: 1,
+      state: "applied",
+    });
+    expect(Object.keys(recovered).sort()).toEqual([
+      "apply_receipt_id",
+      "authority",
+      "binding_version",
+      "plan_id",
+      "route",
+      "schema_version",
+      "state",
+      "tenant_id",
+    ]);
+    const serialized = JSON.stringify(recovered);
+    expect(serialized).not.toContain(fakeToken);
+    expect(serialized).not.toContain(sensitive.idempotency_key);
+    expect(serialized).not.toContain(sensitive.plan.name);
+    expect(serialized).not.toContain(sensitive.tasks[0]!.title);
+
+    await authority.compensate({
+      receipt_id: applied.receipt.receipt_id,
+      idempotency_key: "receipt-recovery:compensate",
+      if_binding_version: applied.receipt.binding_version,
+    });
+    expect(await authority.lookupBinding({
+      authority: "todos",
+      route: TODOS_TASK_MANIFEST_ROUTE,
+      schema_version: 1,
+      tenant_id: TENANT_ID,
+      plan_id: applied.graph.plan_id,
+      max_items: 1,
+    })).toMatchObject({
+      apply_receipt_id: applied.receipt.receipt_id,
+      binding_version: 2,
+      state: "compensated",
+    });
+  });
+
+  test("fails closed for missing, non-managed, ambiguous, conflicting, or foreign lookup identity", async () => {
+    const authority = createSqliteTodosTaskManifestAuthority({ database: db, tenantId: TENANT_ID });
+    const applied = await authority.apply(manifest("lookup-fail-closed"));
+    const request = {
+      authority: "todos" as const,
+      route: TODOS_TASK_MANIFEST_ROUTE,
+      schema_version: 1 as const,
+      tenant_id: TENANT_ID,
+      plan_id: applied.graph.plan_id,
+      max_items: 1 as const,
+    };
+
+    const unmanagedPlanId = crypto.randomUUID();
+    db.run(
+      "INSERT INTO plans (id, project_id, name, status, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?)",
+      [unmanagedPlanId, PROJECT_ID, "Unmanaged", "2026-08-08T00:00:00.000Z", "2026-08-08T00:00:00.000Z"],
+    );
+    await expect(authority.lookupBinding({ ...request, plan_id: unmanagedPlanId }))
+      .rejects.toEqual(expect.objectContaining<TodosTaskManifestError>({
+        code: "TODOS_TASK_MANIFEST_BINDING_NOT_FOUND",
+      }));
+    await expect(authority.lookupBinding({ ...request, plan_id: crypto.randomUUID() }))
+      .rejects.toEqual(expect.objectContaining<TodosTaskManifestError>({
+        code: "TODOS_TASK_MANIFEST_BINDING_NOT_FOUND",
+      }));
+
+    for (const mismatch of [
+      { authority: "projects" },
+      { route: "todos.task-manifest.v2" },
+      { schema_version: 2 },
+      { tenant_id: "tenant-foreign" },
+    ]) {
+      await expect(authority.lookupBinding({ ...request, ...mismatch } as never))
+        .rejects.toEqual(expect.objectContaining<TodosTaskManifestError>({
+          code: "TODOS_TASK_MANIFEST_CAPABILITY_MISMATCH",
+        }));
+    }
+    await expect(authority.lookupBinding({ ...request, max_items: 2 } as never))
+      .rejects.toEqual(expect.objectContaining<TodosTaskManifestError>({
+        code: "TODOS_TASK_MANIFEST_BOUNDS_EXCEEDED",
+      }));
+    await expect(authority.lookupBinding({ ...request, plan_id: `${applied.graph.plan_id.slice(0, 8)}` } as never))
+      .rejects.toEqual(expect.objectContaining<TodosTaskManifestError>({
+        code: "TODOS_TASK_MANIFEST_INVALID_INPUT",
+      }));
+
+    db.run(
+      "UPDATE todos_task_manifest_bindings SET result_json = json_set(result_json, '$.graph.plan_id', ?) WHERE operation_id = ?",
+      [crypto.randomUUID(), "lookup-fail-closed"],
+    );
+    await expect(authority.lookupBinding(request))
+      .rejects.toEqual(expect.objectContaining<TodosTaskManifestError>({
+        code: "TODOS_TASK_MANIFEST_BINDING_NOT_FOUND",
+      }));
+
+    db.run(
+      "UPDATE todos_task_manifest_bindings SET result_json = json_set(result_json, '$.graph.plan_id', ?) WHERE operation_id = ?",
+      [request.plan_id, "lookup-fail-closed"],
+    );
+    const conflictingPlanId = crypto.randomUUID();
+    db.run(
+      "UPDATE todos_task_manifest_bindings SET result_json = json_set(result_json, '$.graph.plan_id', ?) WHERE operation_id = ?",
+      [conflictingPlanId, "lookup-fail-closed"],
+    );
+    await expect(authority.lookupBinding({ ...request, plan_id: conflictingPlanId }))
+      .rejects.toEqual(expect.objectContaining<TodosTaskManifestError>({
+        code: "TODOS_TASK_MANIFEST_LOOKUP_CONFLICT",
+      }));
+    db.run(
+      "UPDATE todos_task_manifest_bindings SET result_json = json_set(result_json, '$.graph.plan_id', ?) WHERE operation_id = ?",
+      [request.plan_id, "lookup-fail-closed"],
+    );
+
+    const second = await authority.apply(manifest("lookup-ambiguous"));
+    db.run(
+      "UPDATE todos_task_manifest_bindings SET result_json = json_set(result_json, '$.graph.plan_id', ?) WHERE operation_id = ?",
+      [request.plan_id, second.receipt.operation_id],
+    );
+    await expect(authority.lookupBinding(request))
+      .rejects.toEqual(expect.objectContaining<TodosTaskManifestError>({
+        code: "TODOS_TASK_MANIFEST_LOOKUP_CONFLICT",
+      }));
   });
 
   test("serializes concurrent duplicates and applies the graph exactly once", async () => {

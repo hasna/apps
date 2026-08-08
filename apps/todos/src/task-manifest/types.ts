@@ -125,6 +125,7 @@ export interface TodosTaskManifestCapability {
   authority: "todos";
   route: typeof TODOS_TASK_MANIFEST_ROUTE;
   schema_version: 1;
+  tenant_id: string;
   backend: "sqlite" | "postgresql" | "http";
   deterministic_ids: true;
   immutable_receipts: true;
@@ -145,6 +146,26 @@ export interface TodosTaskManifestCapability {
   };
 }
 
+export interface TodosTaskManifestBindingLookupRequest {
+  authority: "todos";
+  route: typeof TODOS_TASK_MANIFEST_ROUTE;
+  schema_version: 1;
+  tenant_id: string;
+  plan_id: string;
+  max_items: 1;
+}
+
+export interface TodosTaskManifestBindingLookupResult {
+  authority: "todos";
+  route: typeof TODOS_TASK_MANIFEST_ROUTE;
+  schema_version: 1;
+  tenant_id: string;
+  plan_id: string;
+  apply_receipt_id: string;
+  binding_version: number;
+  state: "applied" | "compensated";
+}
+
 export type TodosTaskManifestFaultPoint =
   | "after_plan_write"
   | "after_task_write"
@@ -158,11 +179,13 @@ export interface TodosTaskManifestAuthority {
   capability(): Promise<TodosTaskManifestCapability>;
   apply(input: unknown): Promise<TodosTaskManifestApplyResult>;
   readExact(receiptId: string): Promise<TodosTaskManifestApplyResult>;
+  lookupBinding(input: TodosTaskManifestBindingLookupRequest): Promise<TodosTaskManifestBindingLookupResult>;
   markOutboxDelivered(outboxId: string): Promise<void>;
   compensate(input: TodosTaskManifestCompensateRequest): Promise<TodosTaskManifestCompensationResult>;
 }
 
 export interface TodosTaskManifestAuthorityOptions {
+  tenantId?: string;
   now?: () => string;
   faultInjector?: (point: TodosTaskManifestFaultPoint) => boolean | void | Promise<boolean | void>;
 }
@@ -188,6 +211,9 @@ export type TodosTaskManifestErrorCode =
   | "TODOS_TASK_MANIFEST_CAS_CONFLICT"
   | "TODOS_TASK_MANIFEST_GRAPH_CONFLICT"
   | "TODOS_TASK_MANIFEST_RECEIPT_NOT_FOUND"
+  | "TODOS_TASK_MANIFEST_BINDING_NOT_FOUND"
+  | "TODOS_TASK_MANIFEST_CAPABILITY_MISMATCH"
+  | "TODOS_TASK_MANIFEST_LOOKUP_CONFLICT"
   | "TODOS_TASK_MANIFEST_READBACK_MISMATCH"
   | "TODOS_TASK_MANIFEST_COMPENSATION_REFUSED"
   | "TODOS_TASK_MANIFEST_ATOMICITY_UNAVAILABLE"

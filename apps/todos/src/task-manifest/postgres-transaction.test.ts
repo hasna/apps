@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { createPostgresTodosTaskManifestAuthority, type TodosTaskManifestPostgresClient } from "./index.js";
+import {
+  TODOS_TASK_MANIFEST_ROUTE,
+  createPostgresTodosTaskManifestAuthority,
+  type TodosTaskManifestPostgresClient,
+} from "./index.js";
 
 describe("task-manifest PostgreSQL transaction contract", () => {
   test("requires and uses the authoritative transaction callback for every graph write", async () => {
@@ -43,5 +47,63 @@ describe("task-manifest PostgreSQL transaction contract", () => {
     expect(() => createPostgresTodosTaskManifestAuthority({
       query: async () => ({ rows: [] }),
     } as TodosTaskManifestPostgresClient)).toThrow(/transaction\(callback\)/);
+  });
+
+  test("uses one parameterized bounded read-only query for exact plan binding recovery", async () => {
+    const planId = "a0000000-0000-4000-8000-000000000099";
+    const receiptId = "b0000000-0000-4000-8000-000000000099";
+    const queries: Array<{ sql: string; params?: unknown[] }> = [];
+    const client: TodosTaskManifestPostgresClient = {
+      async query(sql, params) {
+        queries.push({ sql, params });
+        if (sql.includes("#>> '{graph,plan_id}'")) {
+          return {
+            rows: [{
+              apply_receipt_id: receiptId,
+              state: "applied",
+              binding_version: 1,
+              binding_operation_id: "postgres-lookup",
+              binding_plan_id: planId,
+              receipt_authority: "todos",
+              receipt_route: TODOS_TASK_MANIFEST_ROUTE,
+              receipt_schema_version: 1,
+              receipt_kind: "apply",
+              receipt_operation_id: "postgres-lookup",
+              receipt_plan_id: planId,
+            }],
+          };
+        }
+        return { rows: [] };
+      },
+      async transaction(fn) {
+        return fn({ query: async () => ({ rows: [] }) });
+      },
+    };
+    const authority = createPostgresTodosTaskManifestAuthority(client, { tenantId: "tenant-postgres-lookup" });
+
+    expect(await authority.lookupBinding({
+      authority: "todos",
+      route: TODOS_TASK_MANIFEST_ROUTE,
+      schema_version: 1,
+      tenant_id: "tenant-postgres-lookup",
+      plan_id: planId,
+      max_items: 1,
+    })).toEqual({
+      authority: "todos",
+      route: TODOS_TASK_MANIFEST_ROUTE,
+      schema_version: 1,
+      tenant_id: "tenant-postgres-lookup",
+      plan_id: planId,
+      apply_receipt_id: receiptId,
+      binding_version: 1,
+      state: "applied",
+    });
+
+    const lookup = queries.find((entry) => entry.sql.includes("#>> '{graph,plan_id}'"));
+    expect(lookup?.params).toEqual([planId]);
+    expect(lookup?.sql).toMatch(/\bLIMIT 2\b/);
+    expect(lookup?.sql).toMatch(/^\s*SELECT\b/i);
+    expect(lookup?.sql).not.toMatch(/\b(INSERT|UPDATE|DELETE)\b/i);
+    expect(lookup?.sql).not.toContain("manifest_json");
   });
 });
