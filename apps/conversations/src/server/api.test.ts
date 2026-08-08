@@ -1871,6 +1871,17 @@ describe("conversations-serve", () => {
     expect(typeof b.count).toBe("number");
   });
 
+  test("GET /v1/messages with since_id selects the oldest unseen ids", async () => {
+    const response = await fetch(`${base}/v1/messages?since_id=42&limit=2&order=desc`, {
+      headers: { "x-api-key": rwKey },
+    });
+    expect(response.status).toBe(200);
+    const query = activeFakeClient!.__debug.manyCalls.at(-1)!;
+    expect(query.sql).toContain("id > $");
+    expect(query.sql).toContain("ORDER BY id ASC");
+    expect(query.sql).not.toContain("ORDER BY created_at");
+  });
+
   test("HTTP search accepts an exact cutoff and rejects malformed timestamps", async () => {
     const valid = await fetch(`${base}/v1/messages?q=POLICY&since=2026-08-02T12%3A00%3A00.000Z`, {
       headers: { "x-api-key": rwKey },

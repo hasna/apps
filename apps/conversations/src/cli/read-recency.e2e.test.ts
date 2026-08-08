@@ -35,7 +35,7 @@ import { isolatedStoreChildEnv, pinStoreToDb, restoreStoreEnv } from "../lib/sto
 // known-newest message rather than a row count — a full-looking count with the
 // newest missing is exactly how this defect hid.
 
-const TEST_DB = join(tmpdir(), `conversations-cli-recency-${Date.now()}.db`);
+const TEST_DB = join(tmpdir(), `556e6366-conversations-cli-recency-${Date.now()}-${process.pid}.db`);
 const CLI = ["bun", "run", "./src/cli/index.tsx"];
 const CHANNEL = "recency-ch";
 // Above `conversations since --json`'s 200 default, which is the largest cap the
@@ -159,6 +159,19 @@ describe("CLI recency reads return the newest messages", () => {
     const page2 = runCli(["read", "--channel", CHANNEL, "--limit", "3", "--cursor", "3", "--json"], "bob");
     expect(page2.exitCode).toBe(0);
     expect(bodiesOf(page2.stdout)).toEqual([body(TOTAL - 5), body(TOTAL - 4), body(TOTAL - 3)]);
+  });
+
+  test("--since-id pages forward from the oldest unseen message", () => {
+    const res = runCli([
+      "read",
+      "--since-id",
+      String(TOTAL - 5),
+      "--limit",
+      "2",
+      "--json",
+    ], "bob");
+    expect(res.exitCode).toBe(0);
+    expect(bodiesOf(res.stdout)).toEqual([body(TOTAL - 4), body(TOTAL - 3)]);
   });
 
   // ── shape 2: --since, whose cap is defaulted rather than passed ───────────

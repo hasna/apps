@@ -11,7 +11,7 @@ import { renderContent } from "../../lib/terminal-markdown.js";
 import { buildMessagePreview } from "../../lib/channel-notifications.js";
 import { readChannelNotificationsUnion } from "../../lib/poll-notifications.js";
 import { resolveSelfSenderId } from "../../lib/sender-identity.js";
-import { buildCompactSearchEnvelope, previewText } from "../../lib/compact-output.js";
+import { buildCompactSearchEnvelope, parseNonNegativeInteger, previewText } from "../../lib/compact-output.js";
 import { getCliWindow, pageFromQuery, printCompactFooter, printJsonDisclosure, queryLimitFor, warnIfPageFull, SINCE_JSON_LIMIT } from "../compact.js";
 import { BLOCKERS_LIST_ORDER, PINNED_LIST_ORDER } from "../../lib/list-order.js";
 import { printMessageEntry } from "../message-output.js";
@@ -242,6 +242,7 @@ export function registerMessagingCommands(program: Command): void {
     .option("--to <agent>", "Filter by recipient")
     .option("--channel <name>", "Filter by channel")
     .option("--since <timestamp>", "Messages after this ISO timestamp")
+    .option("--since-id <message-id>", "Messages after this numeric ID (oldest unseen first)", parseInt)
     .option("--limit <n>", "Max messages to return", parseInt)
     .option("--cursor <n>", "Skip first N messages for pagination", parseInt)
     .option("--unread", "Only unread messages")
@@ -253,12 +254,19 @@ export function registerMessagingCommands(program: Command): void {
       const senderFilter = resolveSenderFilter(opts);
       if (senderFilter.viaFromAlias) noteSenderFilterAlias(senderFilter.sender as string);
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
+      const sinceId = opts.sinceId === undefined
+        ? undefined
+        : parseNonNegativeInteger(opts.sinceId);
+      if (opts.sinceId !== undefined && sinceId === undefined) {
+        emitCliError("--since-id must be a non-negative integer.", opts);
+      }
       const query = {
         session_id: opts.session,
         from: senderFilter.sender,
         to: opts.to,
         channel: opts.channel,
         since: opts.since,
+        since_id: sinceId,
         limit: opts.json ? opts.limit : queryLimitFor(window),
         offset: opts.json ? opts.cursor : window.offset,
         unread_only: opts.unread || opts.unreadOnly,

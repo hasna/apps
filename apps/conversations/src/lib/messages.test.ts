@@ -10,7 +10,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { pinStoreToDb, restoreStoreEnv } from "./store/isolated-test-env.js";
 
-const TEST_DB = join(tmpdir(), `conversations-test-msg-${Date.now()}.db`);
+const TEST_DB = join(tmpdir(), `556e6366-conversations-test-msg-${Date.now()}-${process.pid}.db`);
 
 function syntheticPrivateKey(): string {
   return [
@@ -351,6 +351,20 @@ describe("readMessages", () => {
     test("since_id cursor keeps forward paging: the OLDEST N after the anchor", () => {
       const seeded = ["1", "2", "3", "4", "5"].map((n) => sendMessage({ from: "a", to: "b", content: n }));
       const msgs = readMessages({ since_id: seeded[0].id, limit: 2 });
+      expect(msgs.map((m) => m.content)).toEqual(["2", "3"]);
+    });
+
+    test("since_id cursor follows id order when imported timestamps are out of order", () => {
+      const seeded = ["1", "2", "3", "4", "5"].map((n) => sendMessage({ from: "a", to: "b", content: n }));
+      const db = getDb();
+      const setCreatedAt = db.prepare("UPDATE messages SET created_at = ? WHERE id = ?");
+      setCreatedAt.run("2030-01-01T00:00:00.000Z", seeded[1].id);
+      setCreatedAt.run("2026-01-01T00:00:00.000Z", seeded[2].id);
+      setCreatedAt.run("2027-01-01T00:00:00.000Z", seeded[3].id);
+      setCreatedAt.run("2028-01-01T00:00:00.000Z", seeded[4].id);
+
+      const msgs = readMessages({ since_id: seeded[0].id, limit: 2 });
+      expect(msgs.map((m) => m.id)).toEqual([seeded[1].id, seeded[2].id]);
       expect(msgs.map((m) => m.content)).toEqual(["2", "3"]);
     });
 

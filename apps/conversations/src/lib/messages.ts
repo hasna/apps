@@ -411,14 +411,16 @@ export function readMessages(opts: ReadMessagesOptions = {}): Message[] {
   // cap — is a recency window: SELECT the newest N and hand them back
   // chronologically. Selecting ascending returned the OLDEST N (todos 2c25973b).
   const window = resolveReadWindow(opts);
-  const order = window.select === "desc" ? "DESC" : "ASC";
+  const idCursor = opts.since_id !== undefined;
+  const order = idCursor ? "ASC" : (window.select === "desc" ? "DESC" : "ASC");
+  const orderBy = idCursor ? "id ASC" : `created_at ${order}, id ${order}`;
 
   // SQLite LIMIT/OFFSET require literal integers — validated and bounded here
   const resolvedOffset = Number.isFinite(opts.offset) ? Math.floor(opts.offset as number) : 0;
   const safeLimit = Math.max(1, Math.min(resolvedLimit, 10000));
   const safeOffset = Math.max(0, Math.floor(resolvedOffset));
   const rows = db.prepare(
-    `SELECT * FROM messages ${where} ORDER BY created_at ${order}, id ${order} LIMIT ${safeLimit} OFFSET ${safeOffset}`
+    `SELECT * FROM messages ${where} ORDER BY ${orderBy} LIMIT ${safeLimit} OFFSET ${safeOffset}`
   ).all(...params) as Record<string, unknown>[];
   if (window.reverse) rows.reverse();
 

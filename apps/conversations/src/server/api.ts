@@ -904,9 +904,14 @@ async function handleV1(
     const unreadOnly = isTrue(url.searchParams.get("unread_only"));
     const threadsOnly = isTrue(url.searchParams.get("threads_only"));
     const includeReplyCounts = isTrue(url.searchParams.get("include_reply_counts"));
-    // Default DESC (newest first) preserves the original behaviour; ?order=asc
-    // gives chronological order for read_channel-style paging.
-    const order = str(url.searchParams.get("order"))?.toLowerCase() === "asc" ? "ASC" : "DESC";
+    const idCursor = sinceIdRaw !== undefined && Number.isFinite(Number(sinceIdRaw));
+    // An id cursor is a prefix walk, so its bounded page must be selected by id
+    // ascending regardless of a caller-supplied presentation order. Otherwise
+    // imported timestamps can move a lower unseen id behind a committed cursor.
+    // Non-cursor reads retain the existing DESC default and explicit ASC path.
+    const order = idCursor
+      ? "ASC"
+      : (str(url.searchParams.get("order"))?.toLowerCase() === "asc" ? "ASC" : "DESC");
     const limit = clampLimit(url.searchParams.get("limit"));
     const offsetRaw = parseInt(url.searchParams.get("offset") || url.searchParams.get("cursor") || "0", 10);
     const offset = Number.isFinite(offsetRaw) && offsetRaw > 0 ? offsetRaw : 0;
@@ -930,7 +935,7 @@ async function handleV1(
       params.push(normalizedSince);
       clauses.push(`created_at ${q ? ">=" : ">"} $${params.length}`);
     }
-    if (sinceIdRaw && Number.isFinite(Number(sinceIdRaw))) { params.push(Number(sinceIdRaw)); clauses.push(`id > $${params.length}`); }
+    if (idCursor) { params.push(Number(sinceIdRaw)); clauses.push(`id > $${params.length}`); }
     if (q) { params.push(`%${q}%`); clauses.push(`content ILIKE $${params.length}`); }
     if (mentionsOnly) {
       params.push(mentionsOnly.toLowerCase());
@@ -964,11 +969,12 @@ async function handleV1(
     const limitIdx = params.length;
     params.push(offset);
     const offsetIdx = params.length;
+    const orderBy = idCursor ? "id ASC" : `created_at ${order}, id ${order}`;
     const fetched = await client.many(
       `SELECT id, uuid, session_id, from_agent, to_agent, channel, project_id, content, priority,
               blocking, reply_to, working_dir, repository, branch, metadata, edited_at, pinned_at,
               attachments, created_at, read_at${replyCountSelect}
-       FROM messages ${where} ORDER BY created_at ${order}, id ${order} LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+       FROM messages ${where} ORDER BY ${orderBy} LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
       params,
     );
     if (!probeForMore) return json({ messages: redactResponse(fetched) });
