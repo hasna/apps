@@ -844,10 +844,12 @@ export function verifyCandidateArtifact(value: ReleaseCandidate): Buffer {
 }
 
 function assertToolchain(root: string): void {
+  const node = run("node", ["--version"], root).trim();
   const npm = run("npm", ["--version"], root).trim();
+  const expectedNode = `v${RELEASE_NODE_VERSION}`;
   check(
-    process.versions.node === RELEASE_NODE_VERSION,
-    `Node ${process.versions.node} is not pinned release version ${RELEASE_NODE_VERSION}`,
+    node === expectedNode,
+    `Node executable ${node || "<empty>"} is not pinned release version ${expectedNode}`,
   );
   check(
     npm === RELEASE_NPM_VERSION,

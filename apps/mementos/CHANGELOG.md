@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.14.78 — Validate the release Node executable
+
+**Immutable release recovery.** Version 0.14.77 was tagged from protected main
+but never published: the provenance process ran under Bun and compared Bun's
+embedded Node compatibility version (`24.3.0`) with the separately installed
+release Node executable pinned at `24.18.0`. The failed 0.14.77 tag remains
+unchanged; this release prepares the repaired candidate as 0.14.78.
+
+- Validate the actual external `node --version` output against exact release
+  version `v24.18.0`, while preserving the exact npm `11.16.0` and Bun `1.3.14`
+  checks.
+- Add a Bun-executed regression with controlled external Node executables:
+  the exact version advances past the toolchain gate, while a mismatch is
+  rejected with the observed executable version in the diagnostic.
+
 ## 0.14.77 — Receipt-backed project registration authority
 
 **Immutable release recovery.** Version 0.14.76 was tagged but never published:

@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -28,6 +29,8 @@ import {
   PROVENANCE_PREDICATE,
   PUBLISH_PREDICATE,
   publishArguments,
+  RELEASE_BUN_VERSION,
+  RELEASE_NODE_VERSION,
   releaseCertificateIdentityPolicy,
   releaseTag,
   repositorySlug,
@@ -49,6 +52,7 @@ import { describe, expect, test } from "bun:test";
 
 const bytes = Buffer.from("reviewed mementos release candidate");
 const digestHex = createHash("sha512").update(bytes).digest("hex");
+const repositoryRoot = join(import.meta.dir, "..");
 
 const candidate: ReleaseCandidate = {
   schema: "hasna.mementos.release-candidate/v1",
@@ -258,7 +262,64 @@ function pack(integrity = candidate.integrity) {
   };
 }
 
+function runToolchainProbe(nodeVersion: string) {
+  const isolatedBin = mkdtempSync(join(tmpdir(), "mementos-toolchain-path-"));
+  const writeVersionExecutable = (name: string, version: string) => {
+    const executable = join(isolatedBin, name);
+    writeFileSync(executable, `#!/bin/sh\nprintf '%s\\n' '${version}'\n`);
+    chmodSync(executable, 0o755);
+  };
+  writeVersionExecutable("node", nodeVersion);
+  writeVersionExecutable("npm", "11.16.0");
+  try {
+    return Bun.spawnSync(
+      [
+        process.execPath,
+        "run",
+        "scripts/release-provenance.ts",
+        "candidate",
+        "--out",
+        join(isolatedBin, "candidate.json"),
+        "--artifact",
+        join(isolatedBin, "candidate.tgz"),
+      ],
+      {
+        cwd: repositoryRoot,
+        env: {
+          ...process.env,
+          GITHUB_ACTIONS: "false",
+          PATH: `${isolatedBin}:${process.env.PATH ?? ""}`,
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+  } finally {
+    rmSync(isolatedBin, { force: true, recursive: true });
+  }
+}
+
 describe("release candidate identity and command binding", () => {
+  test("validates the external Node executable instead of Bun's embedded Node version", () => {
+    expect(Bun.version).toBe(RELEASE_BUN_VERSION);
+    expect(process.versions.node).not.toBe(RELEASE_NODE_VERSION);
+
+    const exact = runToolchainProbe(`v${RELEASE_NODE_VERSION}`);
+    expect(exact.exitCode).toBe(1);
+    expect(exact.stderr.toString()).toContain(
+      "GITHUB_ACTIONS must be true; received false",
+    );
+    expect(exact.stderr.toString()).not.toContain(
+      `Node ${process.versions.node} is not pinned release version`,
+    );
+
+    const mismatch = runToolchainProbe("v24.18.1");
+    expect(mismatch.exitCode).toBe(1);
+    expect(mismatch.stderr.toString()).toContain(
+      "Node executable v24.18.1 is not pinned release version v24.18.0",
+    );
+  });
+
   test("derives the canonical repository, tag, staging tag, and purl", () => {
     const manifest = {
       name: candidate.name,
