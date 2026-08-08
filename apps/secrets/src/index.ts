@@ -649,6 +649,21 @@ switch (command) {
 
   case "scan": {
     const [target = "workspace", root] = positional;
+    const scanUsage =
+      "Usage: secrets scan workspace|history|staged [path] [--limit <n>] [--cursor <cursor>] [--max-bytes <n>] [--max-files <n>] [--max-scan-bytes <n>] [--max-commits <n>] [--timeout-ms <n>] [--subtree] [--pretty] [--json]";
+    const allowedFlags = {
+      workspace: new Set(["cursor", "limit", "max-bytes", "max-files", "max-scan-bytes", "timeout-ms", "pretty", "json"]),
+      history: new Set(["cursor", "limit", "max-commits", "timeout-ms", "pretty", "json"]),
+      staged: new Set(["limit", "max-bytes", "max-files", "max-scan-bytes", "timeout-ms", "subtree", "pretty", "json"]),
+    }[target];
+    if (allowedFlags) {
+      const unsupportedFlags = Object.keys(flags).filter((flag) => !allowedFlags.has(flag));
+      if (unsupportedFlags.length > 0) {
+        console.error(`Unsupported option for secrets scan: ${unsupportedFlags.map((flag) => `--${flag}`).join(", ")}`);
+        console.error(scanUsage);
+        process.exit(1);
+      }
+    }
     const { scanWorkspaceExposures, scanHistoryExposures, scanStagedExposures, stagedScanExitCode } =
       await import("./scanner.js");
     const common = {
@@ -666,6 +681,7 @@ switch (command) {
           timeoutMs: positiveIntegerFlag(flags, "timeout-ms"),
         });
         console.log(formatJson(result, flags.pretty === "true"));
+        if (result.stats.errors.length > 0) process.exitCode = 2;
         break;
       }
       case "history": {
@@ -675,6 +691,7 @@ switch (command) {
           timeoutMs: positiveIntegerFlag(flags, "timeout-ms"),
         });
         console.log(formatJson(result, flags.pretty === "true"));
+        if (result.stats.errors.length > 0) process.exitCode = 2;
         break;
       }
       case "staged": {
@@ -697,7 +714,7 @@ switch (command) {
         break;
       }
       default:
-        console.error("Usage: secrets scan workspace|history|staged [path] [--limit <n>] [--cursor <cursor>] [--max-bytes <n>] [--max-files <n>] [--max-scan-bytes <n>] [--max-commits <n>] [--timeout-ms <n>] [--subtree] [--pretty] [--json]");
+        console.error(scanUsage);
         process.exit(1);
     }
     break;
