@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.11 — 2026-08-08
+
+Release of the hosted extension-filter normalization fix merged in #34.
+
+- Accept extension filters with or without a leading dot in hosted list and
+  metadata-search requests.
+- Normalize extension filters to lowercase so values such as `PDF` match the
+  canonical stored `.pdf` extension.
+
 ## 0.3.10 — 2026-08-08
 
 Release of the PostgreSQL migration compatibility fix merged in #32.
