@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.12] - 2026-08-08
+
+### Fixed
+
+- **Remote `todos list` no longer reports an empty queue when `--status` is
+  omitted.** The default pending-plus-in-progress filter was serialized as one
+  comma-separated query; a contract-incompatible authority answered it with HTTP
+  200, valid empty JSON, and no stderr even though both scalar status reads were
+  populated. Multi-status cloud reads now issue bounded scalar queries, deduplicate
+  their union by task ID, restore the global task order, and apply offset/limit last.
+
 ## [0.15.11] - 2026-08-08
 
 ### Fixed

@@ -1238,7 +1238,7 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
     expect(uuidMissMessage).toBe(`Project not found: "${missingUuid}"`);
   });
 
-  test("list forwards task-list, parent, and multi-status filters", async () => {
+  test("list preserves task-list and parent filters on each scalar status request", async () => {
     const calls = installFetch(() => ({ body: { tasks: [] } }));
     const client = getTodosCloudClient(CLOUD_ENV)!;
     await cloudListTasks(client, {
@@ -1246,9 +1246,14 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
       parent_id: "parent-1",
       status: ["pending", "in_progress"],
     });
-    expect(calls[0]!.url).toContain("task_list_id=list-1");
-    expect(calls[0]!.url).toContain("parent_id=parent-1");
-    expect(calls[0]!.url).toContain("status=pending%2Cin_progress");
+    expect(calls).toHaveLength(2);
+    const urls = calls.map((call) => new URL(call.url));
+    for (const url of urls) {
+      expect(url.searchParams.get("task_list_id")).toBe("list-1");
+      expect(url.searchParams.get("parent_id")).toBe("parent-1");
+    }
+    expect(urls.map((url) => url.searchParams.get("status")).sort())
+      .toEqual(["in_progress", "pending"]);
   });
 
   test("task-list create/delete and slug/prefix resolution use /v1/task-lists", async () => {
