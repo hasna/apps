@@ -143,8 +143,8 @@ describe("todos list bounds every remote task query", () => {
    * detecting the withheld-limit path rather than agreeing with a CLI that happens to
    * put a limit on every request.
    */
-  test("still forwards the caller's own limit when nothing reorders after the query", async () => {
-    const result = await runRemote(["list", "--limit", "2", "--json"], 5);
+  test("still forwards the caller's own limit for one scalar status when nothing reorders", async () => {
+    const result = await runRemote(["list", "--status", "pending", "--limit", "2", "--json"], 5);
     expect(result.exitCode).toBe(0);
     expect(requestedLimit(result.taskQueries[0]!)).toBe(2);
   });

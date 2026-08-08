@@ -1156,7 +1156,15 @@ export function registerTaskCommands(program: Command) {
       // matching set when no limit is given, so withholding the limit alongside one
       // of them fetches no more than the same command without `--limit` does.
       const requestedLimit = filter["limit"] as number | undefined;
-      const reordersAfterQuery = Boolean(opts.sort);
+      // The default active-status filter is also reordered after the query: the
+      // remote compatibility path reads each scalar status separately, unions the
+      // pages, and restores the authoritative global order. Leaving the caller's
+      // window on those scalar reads can discard a newer equal-priority row before
+      // the union sees it, so it needs the same bounded scan treatment as --sort.
+      const combinesScalarStatusPages = Boolean(
+        cloud && Array.isArray(filter["status"]) && filter["status"].length > 1,
+      );
+      const reordersAfterQuery = Boolean(opts.sort) || combinesScalarStatusPages;
       const narrowsAfterQuery = Boolean(opts.dueToday) || Boolean(opts.overdue) || (creatorFilterActive && cloud);
       const withholdLimit = requestedLimit !== undefined && (reordersAfterQuery || narrowsAfterQuery);
 

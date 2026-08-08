@@ -20,9 +20,15 @@ type CliResult = {
   stdout: string;
   stderr: string;
   statusQueries: string[];
+  requestedLimits: Array<number | undefined>;
 };
 
-function task(id: string, status: "pending" | "in_progress", priority: "critical" | "high") {
+function task(
+  id: string,
+  status: "pending" | "in_progress",
+  priority: "critical" | "high",
+  createdAt = status === "pending" ? "2026-08-08T07:00:00.000Z" : "2026-08-08T08:00:00.000Z",
+) {
   return {
     id,
     short_id: id.slice(0, 8),
@@ -30,8 +36,8 @@ function task(id: string, status: "pending" | "in_progress", priority: "critical
     status,
     priority,
     assigned_to: ASSIGNEE,
-    created_at: status === "pending" ? "2026-08-08T07:00:00.000Z" : "2026-08-08T08:00:00.000Z",
-    updated_at: status === "pending" ? "2026-08-08T07:00:00.000Z" : "2026-08-08T08:00:00.000Z",
+    created_at: createdAt,
+    updated_at: createdAt,
   };
 }
 
@@ -41,12 +47,19 @@ const ROWS = {
 };
 
 const SAME_PRIORITY_ROWS = {
-  pending: [task("44444444-4444-4444-8444-444444444444", "pending", "high")],
-  in_progress: [task("55555555-5555-4555-8555-555555555555", "in_progress", "high")],
+  pending: [
+    task("44444444-4444-4444-8444-444444444444", "pending", "high", "2026-08-08T07:00:00.000Z"),
+    task("66666666-6666-4666-8666-666666666666", "pending", "high", "2026-08-08T11:00:00.000Z"),
+  ],
+  in_progress: [
+    task("55555555-5555-4555-8555-555555555555", "in_progress", "high", "2026-08-08T08:00:00.000Z"),
+    task("77777777-7777-4777-8777-777777777777", "in_progress", "high", "2026-08-08T10:00:00.000Z"),
+  ],
 };
 
 async function runRemote(args: string[], fixture = ROWS): Promise<CliResult> {
   const statusQueries: string[] = [];
+  const requestedLimits: Array<number | undefined> = [];
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -54,12 +67,21 @@ async function runRemote(args: string[], fixture = ROWS): Promise<CliResult> {
       const url = new URL(request.url);
       if (url.pathname === "/v1/tasks") {
         const status = url.searchParams.get("status") ?? "";
+        const limitValue = url.searchParams.get("limit");
+        const limit = limitValue === null ? undefined : Number.parseInt(limitValue, 10);
         statusQueries.push(status);
-        const tasks = status === "pending"
+        requestedLimits.push(limit);
+        const matchingTasks = status === "pending"
           ? fixture.pending
           : status === "in_progress"
             ? fixture.in_progress
             : [];
+        // The current PostgreSQL authority orders equal-priority scalar pages
+        // oldest-first. Enforce the requested limit so the fixture exposes rows
+        // discarded before the client can restore the global newest-first order.
+        const tasks = [...matchingTasks]
+          .sort((a, b) => a.created_at.localeCompare(b.created_at))
+          .slice(0, limit);
         return Response.json({ tasks, count: tasks.length, total: tasks.length });
       }
       if (url.pathname === "/v1/agents") {
@@ -95,7 +117,7 @@ async function runRemote(args: string[], fixture = ROWS): Promise<CliResult> {
       new Response(proc.stderr).text(),
       proc.exited,
     ]);
-    return { stdout, stderr, exitCode, statusQueries };
+    return { stdout, stderr, exitCode, statusQueries, requestedLimits };
   } finally {
     await server.stop(true);
     rmSync(root, { recursive: true, force: true });
@@ -143,8 +165,9 @@ describe("remote todos list without --status", () => {
     ], SAME_PRIORITY_ROWS);
 
     expect(limited).toMatchObject({ exitCode: 0, stderr: "" });
-    expect(rows(limited).map((row) => row.id)).toEqual([SAME_PRIORITY_ROWS.in_progress[0]!.id]);
+    expect(rows(limited).map((row) => row.id)).toEqual([SAME_PRIORITY_ROWS.pending[1]!.id]);
     expect(limited.statusQueries.sort()).toEqual(["in_progress", "pending"]);
+    expect(limited.requestedLimits).toEqual([101, 101]);
   });
 
   test("keeps an explicit scalar status as one scalar request", async () => {
