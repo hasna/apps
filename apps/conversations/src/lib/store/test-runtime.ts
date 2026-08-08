@@ -27,21 +27,79 @@
 // `bun test` parent with a curated env reports `CHILD_INDICATORS=[] detected=false`
 // and reaches `https://conversations.hasna.xyz/v1`.
 //
-// The boundary holds because a child's environment is CONSTRUCTED BY ITS SPAWNER.
-// That makes it an authored env, not an ambient one, and this module's whole rule
-// is that a caller which names its target is left alone — the same rule that keeps
-// `getStore(explicitEnv)` unguarded. Refusing a child while permitting
-// `getStore({...process.env})` would apply two different rules to the same act one
-// level apart. A spawner that wants its children isolated sets a db-path variable
-// in the env it builds, which is what all five e2e spawners in this repository do.
+// WHAT HOLDS THAT BOUNDARY IS A CONVENTION IN THE SUITES, NOT A PROPERTY OF CHILD
+// PROCESSES. An earlier version of this comment argued the boundary from AUTHORSHIP:
+// a child's environment is constructed by its spawner, key by key, so it is an
+// authored env rather than an ambient one. THAT IS FALSE AS A DESCRIPTION OF THIS
+// REPOSITORY. It is corrected here rather than quietly rewritten, because a reader
+// who believes it concludes that a spawner forwarding the whole parent environment
+// is an exotic mistake, when it is the default shape in this tree.
 //
-// The rejected alternative, recorded so it is not re-proposed as new: exporting a
-// marker into children from module load. It mutates the caller's environment as an
-// import side effect, propagates to every unrelated child of that process, and
-// covers only children of a process that imported this module at all — so a test
-// that merely spawns the CLI gets nothing while a reader believes children are
-// covered. Partial coverage with invisible gaps is the property that makes a guard
-// dangerous, and it is the property this file exists to remove.
+// Measured on this tree — 36 spawn sites across 26 test files, every one of which
+// passes an `env`:
+//
+//     forward `...process.env` as the base env      34
+//     author the env key by key                      2   serve-store.e2e.test.ts:80
+//                                                         store-divergence.e2e.test.ts:37
+//
+// FORWARDING IS THE NORM, NOT THE EDGE CASE. On a fleet machine that parent
+// environment carries the live transport keys, so each of those 34 children starts
+// from an env that WOULD resolve production.
+//
+// THE INVARIANT TO PRESERVE, stated so it can be checked rather than believed: of
+// the 31 sites whose child actually imports the store, 27 PUT A DB-PATH KEY IN THE
+// CHILD ENV — inline in the spawn literal, or via a `cliEnv()` helper, or (the five
+// in blocker-hook.test.ts) by setting `process.env.CONVERSATIONS_DB_PATH` in the
+// parent's `beforeEach` and then forwarding it. A db-path key is the
+// highest-precedence signal in `./index.ts` and forces mode `local`, so that key is
+// the whole of the protection.
+//
+// THE OTHER FOUR ARE EACH SAFE FOR A DIFFERENT REASON, and none of them is
+// authorship. The two authored envs clear every transport key, so no cloud URL
+// exists to resolve. `channel-cloud.e2e.test.ts:61` sets BOTH db-path keys to `""`
+// on purpose — blank reads as unset — and points its child at a `127.0.0.1` fixture,
+// which `isLoopbackApiUrl` exempts by design. The fourth is the deliberate residual
+// below. Five further sites are outside the invariant entirely because their child
+// never imports the store: the four `bun -e` probes in redaction-notice.e2e.test.ts
+// and the `bash` resolver in scripts/ci/deploy-workflow.test.ts.
+//
+// SO: IF YOU ADD A SPAWNER WHOSE CHILD TOUCHES THE STORE, PUT A DB-PATH KEY IN THE
+// ENV YOU BUILD. Copying the surrounding `...process.env` and omitting that key is a
+// live path to the production store, and nothing in this module will stop it.
+//
+// THE RESIDUAL IS REACHED, NOT HYPOTHETICAL, AND THIS REPOSITORY REACHES IT ON
+// PURPOSE. The subprocess pair at cloud-in-test-guard.test.ts:445-465 builds
+// `{...process.env}`, DELETES both db-path keys, and points the child at
+// `https://conversations.hasna.xyz`; its `bun run` leg asserts `OUTCOME=cloud-http`
+// against that host. It is harmless as written — the key is a synthetic
+// non-credential and the fixture reads `getStore().transport` without calling a
+// method, so no request is issued — and it is named here so nobody reads the
+// residual as unexercised.
+//
+// The guard stays scoped in-process deliberately. Refusing a child while permitting
+// an in-process `getStore({...process.env})` would apply two different rules to the
+// same act one level apart, and a caller that names its target is the caller this
+// module leaves alone.
+//
+// TWO ALTERNATIVES FOR COVERING CHILDREN, recorded so neither is re-proposed as new.
+//
+// REJECTED — exporting a marker into children from module load. It mutates the
+// caller's environment as an import side effect, propagates to every unrelated child
+// of that process, and covers only children of a process that imported this module
+// at all — so a test that merely spawns the CLI gets nothing while a reader believes
+// children are covered. Partial coverage with invisible gaps is the property that
+// makes a guard dangerous, and it is the property this file exists to remove.
+//
+// NOT TAKEN, AND NOT REFUTED — ancestry inspection: read `/proc/<ppid>/cmdline` and
+// treat a `bun test` ancestor as a test context. Neither objection above applies to
+// it: no import side effect, and it covers any descendant regardless of what that
+// descendant imports. The fleet's own `bun` wrapper already performs exactly this
+// read (`$HOME/.bun/bin/bun`, lines 124-125), so it is a known-workable technique
+// rather than a sketch. Its costs are why it is not here: `/proc` is Linux-only, so
+// macOS and Windows would need separate implementations or would silently lose the
+// guard; it puts a filesystem read on the store-resolution path, which is hot; and a
+// long-lived daemon whose ancestry happens to include a test runner is misclassified.
+// Stated as an option carrying those costs, not as a recommendation.
 
 /** The values a probe reads. Injectable so both outcomes are testable. */
 export interface TestRuntimeProbeInputs {
