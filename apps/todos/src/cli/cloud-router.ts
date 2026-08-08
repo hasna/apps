@@ -615,7 +615,7 @@ function priorityRank(priority?: string | null): number {
 /** The authoritative remote task order before limit/offset are applied. */
 function compareCloudTaskOrder(a: Task, b: Task): number {
   return priorityRank(a.priority) - priorityRank(b.priority)
-    || a.created_at.localeCompare(b.created_at)
+    || b.created_at.localeCompare(a.created_at)
     || a.id.localeCompare(b.id);
 }
 

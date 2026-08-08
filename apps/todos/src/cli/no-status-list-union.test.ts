@@ -40,7 +40,12 @@ const ROWS = {
   in_progress: [task("22222222-2222-4222-8222-222222222222", "in_progress", "critical")],
 };
 
-async function runRemote(args: string[]): Promise<CliResult> {
+const SAME_PRIORITY_ROWS = {
+  pending: [task("44444444-4444-4444-8444-444444444444", "pending", "high")],
+  in_progress: [task("55555555-5555-4555-8555-555555555555", "in_progress", "high")],
+};
+
+async function runRemote(args: string[], fixture = ROWS): Promise<CliResult> {
   const statusQueries: string[] = [];
   const server = Bun.serve({
     hostname: "127.0.0.1",
@@ -51,9 +56,9 @@ async function runRemote(args: string[]): Promise<CliResult> {
         const status = url.searchParams.get("status") ?? "";
         statusQueries.push(status);
         const tasks = status === "pending"
-          ? ROWS.pending
+          ? fixture.pending
           : status === "in_progress"
-            ? ROWS.in_progress
+            ? fixture.in_progress
             : [];
         return Response.json({ tasks, count: tasks.length, total: tasks.length });
       }
@@ -129,6 +134,16 @@ describe("remote todos list without --status", () => {
 
     expect(limited).toMatchObject({ exitCode: 0, stderr: "" });
     expect(rows(limited).map((row) => row.id)).toEqual([ROWS.in_progress[0]!.id]);
+    expect(limited.statusQueries.sort()).toEqual(["in_progress", "pending"]);
+  });
+
+  test("orders equal-priority tasks by newest creation time before applying --limit", async () => {
+    const limited = await runRemote([
+      "--json", "list", "--assigned", ASSIGNEE, "--limit", "1",
+    ], SAME_PRIORITY_ROWS);
+
+    expect(limited).toMatchObject({ exitCode: 0, stderr: "" });
+    expect(rows(limited).map((row) => row.id)).toEqual([SAME_PRIORITY_ROWS.in_progress[0]!.id]);
     expect(limited.statusQueries.sort()).toEqual(["in_progress", "pending"]);
   });
 
