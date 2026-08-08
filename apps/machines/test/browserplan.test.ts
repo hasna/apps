@@ -296,6 +296,41 @@ describe("BrowserPlan fleet contract", () => {
     }
   });
 
+  test("does not report transport-unavailable BrowserPlan capabilities as missing", () => {
+    const dir = setupTemp("machines-browserplan-unavailable-");
+    try {
+      addBrowserPlanFixtureMachines();
+      const topology = discoverMachineTopology({ includeTailscale: false, limit: null });
+      const fleet = getBrowserPlanFleet({
+        machineIds: ["machine001"],
+        topology,
+        includeInstallState: true,
+        runner: (machineId) => ({
+          machineId,
+          source: "ssh",
+          stdout: "",
+          stderr: "Permission denied (publickey,password).",
+          exitCode: 255,
+        }),
+        now: new Date("2026-06-23T09:00:00.000Z"),
+      });
+
+      const machine = fleet.machines[0];
+      expect(machine?.install_state.browserplan_cli).toMatchObject({
+        state: "failed",
+        detail: "execution unavailable (exit 255): Permission denied (publickey,password).",
+      });
+      expect(machine?.operation_hooks.find((hook) => hook.id === "profile_setup")).toMatchObject({
+        readiness: "blocked",
+        available: false,
+        blocked_by: ["browserplan_cli_unavailable"],
+      });
+      expect(machine?.operation_hooks.flatMap((hook) => hook.blocked_by).some((reason) => reason.endsWith("_missing"))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("reports missing BrowserPlan target machines as coverage gaps", () => {
     const dir = setupTemp("machines-browserplan-missing-");
     try {

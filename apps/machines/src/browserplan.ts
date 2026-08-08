@@ -394,6 +394,7 @@ function statusForMachine(machine: MachineTopologyEntry | null): BrowserPlanMach
 function compatibilityState(check: CompatibilityCheck | undefined): BrowserPlanCapabilityState {
   if (!check) return "unknown";
   if (check.status === "ok") return "available";
+  if (check.actual === "unavailable") return "failed";
   if (check.detail.toLowerCase().includes("failed") || check.detail.toLowerCase().includes("timed out")) return "failed";
   return "missing";
 }
@@ -570,16 +571,16 @@ function operationHook(input: {
   if (!input.known) blockedBy.push("machine_missing_from_open_machines_topology");
   if (!input.routeReady) blockedBy.push("route_unavailable_or_low_confidence");
   if (input.installState.checked && input.requiredCapabilities.includes("browserplan_cli") && input.installState.browserplan_cli.state !== "available") {
-    blockedBy.push("browserplan_cli_missing");
+    blockedBy.push(input.installState.browserplan_cli.state === "missing" ? "browserplan_cli_missing" : "browserplan_cli_unavailable");
   }
   if (input.installState.checked && input.requiredCapabilities.includes("bun") && input.installState.bun.state !== "available") {
-    blockedBy.push("bun_missing");
+    blockedBy.push(input.installState.bun.state === "missing" ? "bun_missing" : "bun_unavailable");
   }
   if (input.installState.checked && input.requiredCapabilities.includes("git") && input.installState.git.state !== "available") {
-    blockedBy.push("git_missing");
+    blockedBy.push(input.installState.git.state === "missing" ? "git_missing" : "git_unavailable");
   }
   if (input.installState.checked && input.requiredCapabilities.includes("chrome") && input.installState.chrome.state !== "available") {
-    blockedBy.push("chrome_missing");
+    blockedBy.push(input.installState.chrome.state === "missing" ? "chrome_missing" : "chrome_unavailable");
   }
   const readiness = blockedBy.length > 0 ? "blocked" : input.installState.checked ? "ready" : "unknown";
   return {
