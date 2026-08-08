@@ -36,6 +36,7 @@ import {
   sha256,
 } from "./guarded-project-mutation.js";
 import { deriveProjectChannel } from "./project-channel.js";
+import { projectResourceLinkConversationsChannelLocatorKind } from "./project-resource-links.js";
 import { assertProjectWorkspaceId } from "./project-store-paths.js";
 import {
   cleanupWorkspaceCreation,
@@ -1768,7 +1769,8 @@ function registrationResourceLink(input: {
     encodeURIComponent(input.capability.corpus_id),
   ].join(":");
   if (authority === "conversations" && input.target_kind === "channel") {
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(targetId)) {
+    const locatorKind = projectResourceLinkConversationsChannelLocatorKind(targetId);
+    if (!locatorKind) {
       throw new ProjectRegistrationStepError(input.receipt.step_id, "channel_immutable_uuid_missing");
     }
     return {
@@ -1776,7 +1778,7 @@ function registrationResourceLink(input: {
       service_instance: serviceInstance,
       source_package: sourcePackage,
       target_kind: input.target_kind,
-      locator: { kind: "external_uuid", value: targetId },
+      locator: { kind: locatorKind, value: targetId },
       scope: input.scope,
       labels: input.labels,
     };
