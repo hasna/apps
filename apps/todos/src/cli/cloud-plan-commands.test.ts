@@ -2,6 +2,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  planProjectLinkReceiptId,
+  planProjectLinkResultDigest,
+  planProjectLinkRollbackReceiptId,
+} from "../lib/plan-project-link-contract.js";
 
 const REPO_ROOT = join(import.meta.dir, "../..");
 const TEST_API_KEY = "hasna_todos_test_key";
@@ -199,6 +204,9 @@ describe("cloud CLI plan commands", () => {
 
   test("plans, applies, and rolls back guarded project linkage through the remote authority", async () => {
     const projectId = "88888888-8888-4888-8888-888888888888";
+    const idempotencyKey = "cli-link-fixture";
+    const receiptId = planProjectLinkReceiptId(idempotencyKey);
+    const rollbackReceiptId = planProjectLinkRollbackReceiptId(receiptId);
     const requests: Array<{ method: string; path: string; query: string; body?: unknown }> = [];
     let plan = {
       id: PLAN_ID,
@@ -219,6 +227,7 @@ describe("cloud CLI plan commands", () => {
       description: null,
       task_list_id: null,
       task_prefix: null,
+      task_counter: 0,
       machine_paths: [],
       metadata: {},
       created_at: "2026-08-07T00:00:00.000Z",
@@ -250,8 +259,8 @@ describe("cloud CLI plan commands", () => {
             tasks: [],
             receipt: {
               schema_version: "todos.plan-project-link.v1",
-              receipt_id: "ppl_cli_fixture",
-              idempotency_key: "cli-link-fixture",
+              receipt_id: receiptId,
+              idempotency_key: idempotencyKey,
               plan_id: plan.id,
               project_id: project.id,
               prior_plan_project_id: null,
@@ -259,7 +268,7 @@ describe("cloud CLI plan commands", () => {
               task_ids: [],
               task_count: 0,
               result_plan_revision: plan.updated_at,
-              result_digest: "fixture-digest",
+              result_digest: planProjectLinkResultDigest(plan, []),
               rollback_supported: true,
               created_at: plan.updated_at,
             },
@@ -272,8 +281,8 @@ describe("cloud CLI plan commands", () => {
             action: "restored",
             plan,
             tasks: [],
-            accepted_receipt_id: "ppl_cli_fixture",
-            rollback_receipt_id: "pplr_cli_fixture",
+            accepted_receipt_id: receiptId,
+            rollback_receipt_id: rollbackReceiptId,
             restored_at: plan.updated_at,
           });
         }
@@ -295,24 +304,24 @@ describe("cloud CLI plan commands", () => {
       const applied = await runCli(
         [
           "--json", "plans", "--link-project", PLAN_ID, "--to-project", projectId,
-          "--apply", "--idempotency-key", "cli-link-fixture",
+          "--apply", "--idempotency-key", idempotencyKey,
         ],
         root,
         baseUrl,
       );
       expect(applied).toMatchObject({ exitCode: 0, stderr: "" });
-      expect(JSON.parse(applied.stdout)).toMatchObject({ action: "linked", receipt: { receipt_id: "ppl_cli_fixture" } });
+      expect(JSON.parse(applied.stdout)).toMatchObject({ action: "linked", receipt: { receipt_id: receiptId } });
 
       const rolledBack = await runCli(
         [
           "--json", "plans", "--rollback-project-link", PLAN_ID, "--to-project", projectId,
-          "--receipt", "ppl_cli_fixture",
+          "--receipt", receiptId,
         ],
         root,
         baseUrl,
       );
       expect(rolledBack).toMatchObject({ exitCode: 0, stderr: "" });
-      expect(JSON.parse(rolledBack.stdout)).toMatchObject({ action: "restored", rollback_receipt_id: "pplr_cli_fixture" });
+      expect(JSON.parse(rolledBack.stdout)).toMatchObject({ action: "restored", rollback_receipt_id: rollbackReceiptId });
 
       const linkCalls = requests.filter((entry) => entry.path.includes("/project-link"));
       expect(linkCalls).toEqual([
@@ -326,7 +335,7 @@ describe("cloud CLI plan commands", () => {
             project_id: projectId,
             expected_plan_revision: "2026-08-07T00:01:00.000Z",
             expected_project_revision: project.updated_at,
-            idempotency_key: "cli-link-fixture",
+            idempotency_key: idempotencyKey,
           },
         },
         {
@@ -335,7 +344,7 @@ describe("cloud CLI plan commands", () => {
           query: "",
           body: {
             project_id: projectId,
-            receipt_id: "ppl_cli_fixture",
+            receipt_id: receiptId,
             expected_plan_revision: "2026-08-07T00:03:00.000Z",
           },
         },

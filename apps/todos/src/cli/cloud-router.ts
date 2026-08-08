@@ -20,6 +20,7 @@ import {
   PLAN_PROJECT_LINK_SCHEMA_VERSION,
   assertPlanProjectLinkResponse,
   assertPlanProjectLinkRollbackResponse,
+  normalizePlanProjectLinkIdempotencyKey,
 } from "../lib/plan-project-link-contract.js";
 import type { PrGroupEventListOptions, PrGroupEventPage, PrGroupStateView } from "../pr-groups/types.js";
 import { parsePrGroupEventPage, parsePrGroupStateView } from "../pr-groups/http-client.js";
@@ -1238,12 +1239,16 @@ export async function cloudApplyPlanProjectLink(
   },
 ): Promise<PlanProjectLinkResult> {
   const route = `/v1/plans/${encodeURIComponent(planId)}/project-link`;
+  const normalizedInput = {
+    ...input,
+    idempotency_key: normalizePlanProjectLinkIdempotencyKey(input.idempotency_key),
+  };
   const response = await requiredRemoteRoute(
     client,
     "/v1/plans/:id/project-link",
     () => client.transport.post<unknown>(
       `/plans/${encodeURIComponent(planId)}/project-link`,
-      { project_id: projectId, ...input },
+      { project_id: projectId, ...normalizedInput },
     ),
     ["PLAN_PROJECT_LINK_PLAN_NOT_FOUND", "PLAN_PROJECT_LINK_PROJECT_NOT_FOUND"],
   );
@@ -1252,7 +1257,7 @@ export async function cloudApplyPlanProjectLink(
       mode: "apply",
       plan_id: planId,
       project_id: projectId,
-      idempotency_key: input.idempotency_key,
+      idempotency_key: normalizedInput.idempotency_key,
     });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);

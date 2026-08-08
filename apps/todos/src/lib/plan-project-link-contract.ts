@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { PLAN_STATUSES, TASK_PRIORITIES, TASK_STATUSES } from "../types/index.js";
 import type {
   Plan,
   PlanProjectLinkReceipt,
@@ -149,13 +150,94 @@ function responseNullableString(value: unknown, label: string): string | null {
   return value;
 }
 
+function responseNumber(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`${label} must be a finite number`);
+  }
+  return value;
+}
+
+function responseBoolean(value: unknown, label: string): boolean {
+  if (typeof value !== "boolean") throw new Error(`${label} must be a boolean`);
+  return value;
+}
+
+function responseDateTime(value: unknown, label: string): string {
+  const timestamp = responseString(value, label);
+  if (
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(timestamp)
+    || !Number.isFinite(Date.parse(timestamp))
+  ) {
+    throw new Error(`${label} must be an RFC 3339 date-time`);
+  }
+  return timestamp;
+}
+
+function responseNullableDateTime(value: unknown, label: string): string | null {
+  if (value === null) return null;
+  return responseDateTime(value, label);
+}
+
+function responseOptionalNullableString(
+  record: Record<string, unknown>,
+  field: string,
+  label: string,
+): void {
+  if (field in record) responseNullableString(record[field], `${label}.${field}`);
+}
+
+function responseOptionalNullableDateTime(
+  record: Record<string, unknown>,
+  field: string,
+  label: string,
+): void {
+  if (field in record) responseNullableDateTime(record[field], `${label}.${field}`);
+}
+
+function responseStringArray(value: unknown, label: string): string[] {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+    throw new Error(`${label} must be an array of strings`);
+  }
+  return value;
+}
+
+function responseProjectSources(value: unknown, expectedProjectId: string): void {
+  if (!Array.isArray(value)) throw new Error("project.sources must be an array");
+  value.forEach((item, index) => {
+    const label = `project.sources[${index}]`;
+    const source = responseRecord(item, label);
+    responseString(source.id, `${label}.id`);
+    if (responseString(source.project_id, `${label}.project_id`) !== expectedProjectId) {
+      throw new Error(`${label}.project_id must match project.id`);
+    }
+    responseString(source.type, `${label}.type`);
+    responseString(source.name, `${label}.name`);
+    responseString(source.uri, `${label}.uri`);
+    responseNullableString(source.description, `${label}.description`);
+    responseRecord(source.metadata, `${label}.metadata`);
+    responseDateTime(source.created_at, `${label}.created_at`);
+    responseDateTime(source.updated_at, `${label}.updated_at`);
+  });
+}
+
 function responsePlan(value: unknown, expectedPlanId: string): Record<string, unknown> {
   const plan = responseRecord(value, "plan");
   if (responseString(plan.id, "plan.id") !== expectedPlanId) {
     throw new Error(`plan.id must match requested plan ${expectedPlanId}`);
   }
-  responseString(plan.updated_at, "plan.updated_at");
+  responseNullableString(plan.slug, "plan.slug");
   responseNullableString(plan.project_id, "plan.project_id");
+  responseNullableString(plan.task_list_id, "plan.task_list_id");
+  responseNullableString(plan.agent_id, "plan.agent_id");
+  responseString(plan.name, "plan.name");
+  responseNullableString(plan.description, "plan.description");
+  if (typeof plan.status !== "string" || !PLAN_STATUSES.includes(plan.status as Plan["status"])) {
+    throw new Error(`plan.status must be one of: ${PLAN_STATUSES.join(", ")}`);
+  }
+  responseDateTime(plan.created_at, "plan.created_at");
+  responseDateTime(plan.updated_at, "plan.updated_at");
+  responseOptionalNullableString(plan, "machine_id", "plan");
+  responseOptionalNullableDateTime(plan, "synced_at", "plan");
   return plan;
 }
 
@@ -164,7 +246,19 @@ function responseProject(value: unknown, expectedProjectId: string): Record<stri
   if (responseString(project.id, "project.id") !== expectedProjectId) {
     throw new Error(`project.id must match requested project ${expectedProjectId}`);
   }
-  responseString(project.updated_at, "project.updated_at");
+  responseString(project.name, "project.name");
+  responseString(project.path, "project.path");
+  responseNullableString(project.description, "project.description");
+  responseNullableString(project.task_list_id, "project.task_list_id");
+  responseNullableString(project.task_prefix, "project.task_prefix");
+  responseNumber(project.task_counter, "project.task_counter");
+  responseDateTime(project.created_at, "project.created_at");
+  responseDateTime(project.updated_at, "project.updated_at");
+  responseOptionalNullableString(project, "machine_id", "project");
+  responseOptionalNullableDateTime(project, "synced_at", "project");
+  if ("sources" in project && project.sources !== undefined) {
+    responseProjectSources(project.sources, expectedProjectId);
+  }
   return project;
 }
 
@@ -179,7 +273,49 @@ function responseTasks(value: unknown, expectedPlanId: string): Array<Record<str
     if (task.plan_id !== expectedPlanId) {
       throw new Error(`tasks[${index}].plan_id must match requested plan ${expectedPlanId}`);
     }
+    const label = `tasks[${index}]`;
+    responseNullableString(task.short_id, `${label}.short_id`);
     responseNullableString(task.project_id, `tasks[${index}].project_id`);
+    responseNullableString(task.parent_id, `${label}.parent_id`);
+    responseNullableString(task.task_list_id, `${label}.task_list_id`);
+    responseString(task.title, `${label}.title`);
+    responseNullableString(task.description, `${label}.description`);
+    if (typeof task.status !== "string" || !TASK_STATUSES.includes(task.status as Task["status"])) {
+      throw new Error(`${label}.status must be one of: ${TASK_STATUSES.join(", ")}`);
+    }
+    if (typeof task.priority !== "string" || !TASK_PRIORITIES.includes(task.priority as Task["priority"])) {
+      throw new Error(`${label}.priority must be one of: ${TASK_PRIORITIES.join(", ")}`);
+    }
+    for (const field of [
+      "agent_id", "assigned_to", "session_id", "working_dir", "locked_by",
+      "approved_by", "recurrence_rule", "recurrence_parent_id", "spawns_template_id",
+      "reason", "spawned_from_session", "assigned_by", "created_by",
+      "assigned_from_project", "task_type", "delegated_from", "runner_id", "current_step",
+    ]) {
+      responseNullableString(task[field], `${label}.${field}`);
+    }
+    responseStringArray(task.tags, `${label}.tags`);
+    responseRecord(task.metadata, `${label}.metadata`);
+    for (const field of [
+      "version", "cost_tokens", "cost_usd", "delegation_depth", "retry_count", "max_retries",
+    ]) {
+      responseNumber(task[field], `${label}.${field}`);
+    }
+    for (const field of ["estimated_minutes", "actual_minutes", "confidence", "sla_minutes", "total_steps"]) {
+      if (task[field] !== null) responseNumber(task[field], `${label}.${field}`);
+    }
+    responseBoolean(task.requires_approval, `${label}.requires_approval`);
+    responseDateTime(task.created_at, `${label}.created_at`);
+    responseDateTime(task.updated_at, `${label}.updated_at`);
+    for (const field of [
+      "locked_at", "started_at", "completed_at", "due_at", "approved_at", "retry_after",
+      "runner_started_at", "runner_completed_at",
+    ]) {
+      responseNullableDateTime(task[field], `${label}.${field}`);
+    }
+    responseOptionalNullableString(task, "machine_id", label);
+    responseOptionalNullableDateTime(task, "synced_at", label);
+    responseOptionalNullableDateTime(task, "archived_at", label);
     return task;
   });
 }
@@ -209,7 +345,10 @@ function responseReceipt(
   if (receipt.schema_version !== PLAN_PROJECT_LINK_SCHEMA_VERSION) {
     throw new Error(`receipt.schema_version must be ${PLAN_PROJECT_LINK_SCHEMA_VERSION}`);
   }
-  responseString(receipt.receipt_id, "receipt.receipt_id");
+  const expectedReceiptId = planProjectLinkReceiptId(expectation.idempotency_key);
+  if (responseString(receipt.receipt_id, "receipt.receipt_id") !== expectedReceiptId) {
+    throw new Error("receipt.receipt_id must match the deterministic apply receipt identity");
+  }
   if (responseString(receipt.idempotency_key, "receipt.idempotency_key") !== expectation.idempotency_key) {
     throw new Error("receipt.idempotency_key must match the apply request");
   }
@@ -251,11 +390,14 @@ function responseReceipt(
   if (responseString(receipt.result_plan_revision, "receipt.result_plan_revision") !== planRevision) {
     throw new Error("receipt.result_plan_revision must equal plan.updated_at");
   }
-  responseString(receipt.result_digest, "receipt.result_digest");
+  const resultDigest = responseString(receipt.result_digest, "receipt.result_digest");
+  if (!/^[a-f0-9]{64}$/.test(resultDigest)) {
+    throw new Error("receipt.result_digest must be a lowercase SHA-256 digest");
+  }
   if (receipt.rollback_supported !== true) {
     throw new Error("receipt.rollback_supported must be true");
   }
-  responseString(receipt.created_at, "receipt.created_at");
+  responseDateTime(receipt.created_at, "receipt.created_at");
   return receipt as unknown as PlanProjectLinkReceipt;
 }
 
@@ -291,12 +433,19 @@ export function assertPlanProjectLinkResponse(
     if (response.receipt !== null) throw new Error("receipt must be null for a plan response");
   } else {
     if (!expectation.idempotency_key) throw new Error("apply validation requires the request idempotency key");
-    responseReceipt(
+    const receipt = responseReceipt(
       response.receipt,
       expectation as Required<PlanProjectLinkResponseExpectation>,
       plan.updated_at as string,
       tasks.map((task) => task.id as string),
     );
+    const expectedDigest = planProjectLinkResultDigest(
+      plan as unknown as Pick<Plan, "id" | "project_id">,
+      tasks as unknown as Task[],
+    );
+    if (receipt.result_digest !== expectedDigest) {
+      throw new Error("receipt.result_digest must match the returned plan and tasks");
+    }
   }
   return value as PlanProjectLinkResult;
 }
@@ -325,8 +474,11 @@ export function assertPlanProjectLinkRollbackResponse(
   if (responseString(response.accepted_receipt_id, "accepted_receipt_id") !== expectation.receipt_id) {
     throw new Error("accepted_receipt_id must match the rollback request");
   }
-  responseString(response.rollback_receipt_id, "rollback_receipt_id");
-  const restoredAt = responseString(response.restored_at, "restored_at");
+  const expectedRollbackReceiptId = planProjectLinkRollbackReceiptId(expectation.receipt_id);
+  if (responseString(response.rollback_receipt_id, "rollback_receipt_id") !== expectedRollbackReceiptId) {
+    throw new Error("rollback_receipt_id must match the deterministic rollback receipt identity");
+  }
+  const restoredAt = responseDateTime(response.restored_at, "restored_at");
   if (plan.updated_at !== restoredAt) {
     throw new Error("restored_at must equal plan.updated_at");
   }
