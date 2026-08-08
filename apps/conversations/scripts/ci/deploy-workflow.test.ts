@@ -7,9 +7,10 @@ const workflow = readFileSync(join(import.meta.dir, "..", "..", ".github", "work
 const resolver = join(import.meta.dir, "resolve-ecr-image.sh");
 
 type ResolverMode = "absent" | "existing" | "error" | "empty";
-const sourceSha = "61ed8989bf599b9151aef86129dd59c12833a00c";
+const sourceSha = "a".repeat(40);
+const differentSourceSha = "b".repeat(40);
 
-function runResolver(mode: ResolverMode) {
+function runResolver(mode: ResolverMode, sha = sourceSha) {
   const root = mkdtempSync(join(tmpdir(), "conversations-deploy-contract-"));
   const bin = join(root, "bin");
   const output = join(root, "github-output");
@@ -57,7 +58,7 @@ printf 'docker %s\\n' "$*" >> "${calls}"
         ...process.env,
         PATH: `${bin}:${process.env.PATH ?? ""}`,
         ECR_URL: "123456789012.dkr.ecr.us-east-1.amazonaws.com/conversations",
-        GITHUB_SHA: sourceSha,
+        GITHUB_SHA: sha,
         GITHUB_OUTPUT: output,
       },
       stderr: "pipe",
@@ -117,6 +118,21 @@ describe("production deploy workflow gates", () => {
     expect(calls).toContain(`docker buildx build --platform linux/arm64`);
     expect(calls).toContain(`--tag 123456789012.dkr.ecr.us-east-1.amazonaws.com/conversations:${sourceSha}`);
     expect(calls).toContain("--push");
+  });
+
+  test("binds each newly built artifact to its own full source SHA", () => {
+    const first = runResolver("absent", sourceSha);
+    const second = runResolver("absent", differentSourceSha);
+
+    expect(first.result.exitCode).toBe(0);
+    expect(second.result.exitCode).toBe(0);
+    expect([
+      first.calls.includes(`--build-arg BUILD_SHA=${sourceSha}`),
+      first.calls.includes("--build-arg REQUIRE_BUILD_SHA=1"),
+      second.calls.includes(`--build-arg BUILD_SHA=${differentSourceSha}`),
+      second.calls.includes("--build-arg REQUIRE_BUILD_SHA=1"),
+      !second.calls.includes(`--build-arg BUILD_SHA=${sourceSha}`),
+    ]).toEqual([true, true, true, true, true]);
   });
 
   test("reuses the existing source tag digest without rebuilding or pushing", () => {

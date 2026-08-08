@@ -42,6 +42,8 @@ if [ "$DIGEST" = "None" ]; then
     --provenance=false \
     --cache-from "type=gha" \
     --cache-to "type=gha,mode=max" \
+    --build-arg "BUILD_SHA=${GITHUB_SHA}" \
+    --build-arg "REQUIRE_BUILD_SHA=1" \
     --tag "$IMAGE" \
     --push \
     .
