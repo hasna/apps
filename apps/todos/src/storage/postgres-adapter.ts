@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { LockError, PlanNotFoundError, ProjectNotFoundError, ResourceConflictError, TaskNotStartableError, TaskReferenceAmbiguousError, isTerminalStatus } from "../types/index.js";
+import { LockError, PlanNotFoundError, ProjectNotFoundError, ResourceConflictError, TaskNotFoundError, TaskNotStartableError, TaskReferenceAmbiguousError, isTerminalStatus } from "../types/index.js";
 import type {
   Agent,
   CreateCommentInput,
@@ -761,6 +761,9 @@ class PostgresJsonRecordStore {
       // that actually won so the caller isn't misled into thinking it persisted.
       const current = await this.get<T>(type, value.id);
       if (current) return current;
+      throw new Error(
+        `POSTGRES_WRITE_PERSISTENCE_UNVERIFIED: ${type} ${value.id} was not accepted and no persisted readback exists`,
+      );
     }
     return value;
   }
@@ -1728,6 +1731,9 @@ class PostgresJsonRecordStore {
 
 async function createTask(input: CreateTaskInput, store: PostgresJsonRecordStore, context?: TodosStorageContext): Promise<Task> {
   const timestamp = new Date().toISOString();
+  if (input.parent_id && !(await store.get<Task>("tasks", input.parent_id))) {
+    throw new TaskNotFoundError(input.parent_id);
+  }
   const linkedPlan = input.plan_id ? await store.get<Plan>("plans", input.plan_id) : null;
   const requestedProjectId = input.project_id ?? context?.projectId ?? null;
   if (linkedPlan?.project_id && requestedProjectId && requestedProjectId !== linkedPlan.project_id) {

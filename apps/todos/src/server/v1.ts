@@ -7,7 +7,7 @@
  * require `todos:write` (a `todos:*` key satisfies both). This is a real wrapper
  * over the core storage lib — there are NO stubs; unimplemented routes 404.
  */
-import { LockError, ProjectNotFoundError, ResourceConflictError, TaskNotStartableError, TaskReferenceAmbiguousError, TASK_PRIORITIES, TASK_STATUSES } from "../types/index.js";
+import { LockError, ProjectNotFoundError, ResourceConflictError, TaskNotFoundError, TaskNotStartableError, TaskReferenceAmbiguousError, TASK_PRIORITIES, TASK_STATUSES } from "../types/index.js";
 import { collapseEnumValues, resolveEnumVocabulary } from "../lib/enum-vocabulary.js";
 import type { CreatePlanInput, CreateProjectInput, CreateTaskInput, CreateTaskListInput, CreateTemplateInput, RenameProjectInput, TaskComment, TemplateTaskInput, UpdateTaskInput, UpdateTaskListInput } from "../types/index.js";
 import type { TodosStorageContext, TodosStorageSnapshot, TodosTaskCompletionOptions, UpdateTemplateInput } from "../storage/interfaces.js";
@@ -631,8 +631,36 @@ export async function handleV1Request(
           if (!body || typeof body.title !== "string" || !body.title.trim()) {
             return error(400, "title is required");
           }
-          const task = await store.tasks.create(body, contextFromPrincipal(principal, body));
-          return json({ task }, 201);
+          const storageContext = contextFromPrincipal(principal, body);
+          if (body.parent_id !== undefined) {
+            if (typeof body.parent_id !== "string" || !body.parent_id.trim()) {
+              return error(400, "parent_id must be a non-empty task id", {
+                code: "PARENT_TASK_ID_INVALID",
+              });
+            }
+            if (!(await store.tasks.get(body.parent_id, storageContext))) {
+              return error(404, `parent task not found: ${body.parent_id}`, {
+                code: "PARENT_TASK_NOT_FOUND",
+              });
+            }
+          }
+
+          const created = await store.tasks.create(body, storageContext);
+          const persisted = created?.id
+            ? await store.tasks.get(created.id, storageContext)
+            : null;
+          if (
+            !persisted
+            || persisted.id !== created.id
+            || (persisted.parent_id ?? null) !== (body.parent_id ?? null)
+          ) {
+            return error(
+              500,
+              "TASK_CREATE_PERSISTENCE_UNVERIFIED: task create was acknowledged but authoritative readback did not return the same stored task id and parent_id",
+              { code: "TASK_CREATE_PERSISTENCE_UNVERIFIED" },
+            );
+          }
+          return json({ task: persisted }, 201);
         }
         return error(405, `method ${method} not allowed on /v1/tasks`);
       }
@@ -1493,6 +1521,9 @@ export async function handleV1Request(
         candidate_project_ids: e.candidateProjectIds,
         candidate_task_ids: e.candidateTaskIds,
       });
+    }
+    if (e instanceof TaskNotFoundError) {
+      return error(404, e.message, { code: TaskNotFoundError.code });
     }
     if (e instanceof LockError) return error(409, e.message, { code: LockError.code });
     if (e instanceof TaskNotStartableError) {

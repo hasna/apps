@@ -62,11 +62,25 @@ export function jsonModeRequested(argv: readonly string[] = process.argv): boole
  * one extra correct detail line, never a wrong one.
  */
 function remoteErrorDetail(e: unknown): string | null {
-  if (!e || typeof e !== "object") return null;
-  const body = (e as { body?: unknown }).body;
-  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
-  const detail = (body as { error?: unknown }).error;
-  return typeof detail === "string" && detail.trim() ? detail.trim() : null;
+  const seen = new Set<object>();
+  let current = e;
+
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    const body = (current as { body?: unknown }).body;
+    if (body && typeof body === "object" && !Array.isArray(body)) {
+      const detail = (body as { error?: unknown }).error;
+      if (typeof detail === "string" && detail.trim()) return detail.trim();
+    }
+    // Remote classification wraps transport errors to name the configured
+    // authority and failure class. Preserve the server's body reason through
+    // that wrapper instead of turning a precise refusal into a generic 5xx
+    // line. The seen-set also prevents a malformed cyclic cause chain from
+    // recursing forever while the CLI is already handling an error.
+    current = (current as { cause?: unknown }).cause;
+  }
+
+  return null;
 }
 
 /**

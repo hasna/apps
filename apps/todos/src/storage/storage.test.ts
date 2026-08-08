@@ -54,7 +54,7 @@ import {
 import { s3CredentialsFromEnv } from "../cli/commands/storage-commands.js";
 import { handleV1Request, type V1RequestDependencies } from "../server/v1.js";
 import type { ApiKeyVerifier } from "@hasna/contracts/auth";
-import { LockError, TaskNotStartableError, type Task, type TaskComment } from "../types/index.js";
+import { LockError, TaskNotFoundError, TaskNotStartableError, type Task, type TaskComment } from "../types/index.js";
 
 let db: Database;
 
@@ -936,6 +936,39 @@ describe("storage adapter contracts", () => {
       status: "in_progress",
       locked_by: "silvanus",
     });
+  });
+
+  test("Postgres task create requires an existing parent and persists a valid parent_id", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client: postgres.client });
+
+    await expect(Promise.resolve(adapter.tasks.create({
+      title: "dangling child",
+      parent_id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+    }))).rejects.toBeInstanceOf(TaskNotFoundError);
+    expect(await adapter.tasks.count({ include_subtasks: true })).toBe(0);
+
+    const parent = await adapter.tasks.create({ title: "stored parent" });
+    const child = await adapter.tasks.create({ title: "stored child", parent_id: parent.id });
+    expect(child.parent_id).toBe(parent.id);
+    expect(await adapter.tasks.get(child.id)).toMatchObject({
+      id: child.id,
+      parent_id: parent.id,
+    });
+    expect(await adapter.tasks.count({ include_subtasks: true })).toBe(2);
+  });
+
+  test("Postgres upsert never returns an unwritten input object as a successful create", async () => {
+    const postgres = createMemoryPostgresClient({ rejectWritesForObjectType: "tasks" });
+    const adapter = createPostgresTodosStorageAdapter({ client: postgres.client });
+
+    await expect(Promise.resolve(adapter.tasks.create({ title: "rejected create" })))
+      .rejects.toThrow("POSTGRES_WRITE_PERSISTENCE_UNVERIFIED");
+    expect(await adapter.tasks.count({ include_subtasks: true })).toBe(0);
+    expect(postgres.calls.filter((call) =>
+      call.sql.includes("INSERT INTO todos_sync_records")
+      && call.values?.[1] === "tasks"
+    )).toHaveLength(1);
   });
 
   test("Postgres completion atomically merges evidence and completion metadata without dropping omitted keys", async () => {
@@ -2787,7 +2820,7 @@ function fakeRemoteAdapter(): TodosStorageAdapter {
   };
 }
 
-function createMemoryPostgresClient(): {
+function createMemoryPostgresClient(options: { rejectWritesForObjectType?: string } = {}): {
   client: TodosPostgresQueryClient;
   calls: Array<{ sql: string; values?: readonly unknown[] }>;
 } {
@@ -3221,6 +3254,9 @@ function createMemoryPostgresClient(): {
 
       if (sql.includes("INSERT INTO todos_sync_records")) {
         const [service, objectType, objectId, payload, updatedAt] = values;
+        if (String(objectType) === options.rejectWritesForObjectType) {
+          return { rows: [] as T[] };
+        }
         const syncStoreInsert = sql.includes("$6::timestamptz");
         const key = recordKey(service, objectType, objectId);
         const existing = rows.get(key);

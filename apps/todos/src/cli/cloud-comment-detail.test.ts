@@ -239,6 +239,21 @@ describe("cloud task detail comments", () => {
             },
           }, { status: 201 });
         }
+        if (url.pathname === `/v1/tasks/${TASK_ID}` && request.method === "GET") {
+          return Response.json({
+            task: {
+              id: TASK_ID,
+              title: createBody?.["title"],
+              parent_id: createBody?.["parent_id"] ?? null,
+              status: "pending",
+              priority: "medium",
+              tags: [],
+              version: 1,
+              created_at: "2026-07-10T00:00:00.000Z",
+              updated_at: "2026-07-10T00:00:00.000Z",
+            },
+          });
+        }
         return Response.json({ error: "not found" }, { status: 404 });
       },
     });

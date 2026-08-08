@@ -601,15 +601,63 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     expect(gone).toBeNull();
   });
 
-  test("create -> POST /v1/tasks with Idempotency-Key, unwraps { task }", async () => {
+  test("parentless create preserves the established one-POST response path", async () => {
     const calls = installFetch(() => ({ status: 201, body: { task: { id: "new1", title: "made" } } }));
     const client = getTodosCloudClient(CLOUD_ENV)!;
     const task = await cloudCreateTask(client, { title: "made" });
     expect(task.id).toBe("new1");
+    expect(calls).toHaveLength(1);
     expect(calls[0]!.method).toBe("POST");
     expect(calls[0]!.url).toBe("https://todos.example.com/v1/tasks");
     expect(calls[0]!.body).toEqual({ title: "made" });
     expect(calls[0]!.headers["idempotency-key"]).toBeTruthy();
+  });
+
+  test("parented create -> one POST plus authoritative GET readback, returning the stored task", async () => {
+    const calls = installFetch(() => ({
+      status: 201,
+      body: { task: { id: "new1", title: "made", parent_id: "parent1" } },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const task = await cloudCreateTask(client, { title: "made", parent_id: "parent1" });
+    expect(task.id).toBe("new1");
+    expect(task.parent_id).toBe("parent1");
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.method).toBe("POST");
+    expect(calls[0]!.url).toBe("https://todos.example.com/v1/tasks");
+    expect(calls[0]!.body).toEqual({ title: "made", parent_id: "parent1" });
+    expect(calls[0]!.headers["idempotency-key"]).toBeTruthy();
+    expect(calls[1]!.method).toBe("GET");
+    expect(calls[1]!.url).toBe("https://todos.example.com/v1/tasks/new1");
+  });
+
+  test("create refuses a POST task that is absent from authoritative GET readback", async () => {
+    const calls = installFetch((call) =>
+      call.method === "POST"
+        ? { status: 201, body: { task: { id: "ghost1", title: "made", parent_id: "parent1" } } }
+        : { status: 404, body: { error: "task not found" } },
+    );
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudCreateTask(client, { title: "made", parent_id: "parent1" }))
+      .rejects.toThrow("TASK_CREATE_PERSISTENCE_UNVERIFIED");
+    expect(calls.map((call) => call.method)).toEqual(["POST", "GET"]);
+  });
+
+  test("create never replays a task POST when the authority rejects acceptance", async () => {
+    const calls = installFetch(() => ({
+      status: 500,
+      body: {
+        error: "TASK_CREATE_PERSISTENCE_UNVERIFIED: stored task readback failed",
+        code: "TASK_CREATE_PERSISTENCE_UNVERIFIED",
+      },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudCreateTask(client, { title: "single attempt", parent_id: "parent1" }))
+      .rejects.toThrow("REMOTE_API_UNAVAILABLE");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.method).toBe("POST");
   });
 
   test("update -> PATCH /v1/tasks/:id, unwraps { task }", async () => {

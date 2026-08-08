@@ -1167,10 +1167,28 @@ describe("/v1 task hierarchy and lock authorization", () => {
     const created = await request("/v1/tasks", "POST", { title: "child", parent_id: parent.id });
     const createdBody = await created!.json() as { task: { id: string; parent_id: string | null } };
     expect(createdBody.task.parent_id).toBe(parent.id);
+    expect(await store.tasks.get(createdBody.task.id)).toMatchObject({
+      id: createdBody.task.id,
+      parent_id: parent.id,
+    });
 
     const response = await request(`/v1/tasks?parent_id=${parent.id}`);
     const body = await response!.json() as { tasks: Array<{ id: string }> };
     expect(body.tasks.map((task) => task.id)).toEqual([createdBody.task.id]);
+  });
+
+  test("create rejects a nonexistent parent before emitting a task", async () => {
+    const response = await request("/v1/tasks", "POST", {
+      title: "invalid child",
+      parent_id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+    });
+
+    expect(response?.status).toBe(404);
+    expect(await response!.json()).toMatchObject({
+      code: "PARENT_TASK_NOT_FOUND",
+      error: "parent task not found: ffffffff-ffff-4fff-8fff-ffffffffffff",
+    });
+    expect(await store.tasks.count({ include_subtasks: true })).toBe(0);
   });
 
   test("include_subtasks=true returns roots and descendants with an inclusive total", async () => {

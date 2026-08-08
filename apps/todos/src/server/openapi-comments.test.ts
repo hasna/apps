@@ -90,6 +90,11 @@ describe("task list and completion OpenAPI contract", () => {
     });
     expect(list.responses["200"].content["application/json"].schema.required).toEqual(["tasks", "count", "total"]);
     expect(list.responses["200"].content["application/json"].schema.properties.total).toMatchObject({ type: "integer", minimum: 0 });
+    expect(document.components.schemas.CreateTaskInput.properties.parent_id).toMatchObject({ type: "string" });
+    expect(document.components.schemas.Task.properties.parent_id).toMatchObject({
+      type: "string",
+      nullable: true,
+    });
 
     const complete = document.paths["/v1/tasks/{id}/complete"].post;
     expect(complete.requestBody.content["application/json"].schema.$ref).toBe("#/components/schemas/CompleteTaskInput");

@@ -2,9 +2,9 @@
 // Regenerate: bun run scripts/generate-sdk.ts
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Todos V1 API 0.15.11
+// Source: Todos V1 API 0.15.12
 
-export interface Task { "id"?: string; "title"?: string; "description"?: string; "status"?: string; "priority"?: string; "project_id"?: string | null; "assigned_to"?: string | null; "agent_id"?: string | null; "tags"?: Array<string>; "version"?: number; "created_at"?: string; "updated_at"?: string }
+export interface Task { "id"?: string; "title"?: string; "description"?: string; "status"?: string; "priority"?: string; "project_id"?: string | null; "parent_id"?: string | null; "assigned_to"?: string | null; "agent_id"?: string | null; "tags"?: Array<string>; "version"?: number; "created_at"?: string; "updated_at"?: string }
 
 export interface Project { "id"?: string; "name"?: string; "path"?: string; "description"?: string | null; "task_list_id"?: string | null; "task_prefix"?: string | null; "task_counter"?: number; "created_at"?: string; "updated_at"?: string }
 
@@ -36,7 +36,7 @@ export interface TemplateVariable { "name": string; "required": boolean; "defaul
 
 export interface CreateTemplateTaskInput { "position"?: number; "title_pattern": string; "description"?: string | null; "priority"?: "low" | "medium" | "high" | "critical"; "tags"?: Array<string>; "task_type"?: string | null; "condition"?: string | null; "include_template_id"?: string | null; "depends_on"?: Array<number>; "depends_on_positions"?: Array<number>; "metadata"?: Record<string, unknown> }
 
-export interface CreateTaskInput { "title": string; "description"?: string | null; "status"?: string; "priority"?: string; "project_id"?: string; "plan_id"?: string; "assigned_to"?: string; "agent_id"?: string; "tags"?: Array<string> }
+export interface CreateTaskInput { "title": string; "description"?: string | null; "status"?: string; "priority"?: string; "project_id"?: string; "parent_id"?: string; "plan_id"?: string; "assigned_to"?: string; "agent_id"?: string; "tags"?: Array<string> }
 
 export interface UpdateTaskInput { "title"?: string; "description"?: string; "status"?: string; "priority"?: string; "assigned_to"?: string; "project_id"?: string | null; "plan_id"?: string | null; "task_list_id"?: string | null; "version"?: number }
 

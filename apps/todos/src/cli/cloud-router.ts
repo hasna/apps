@@ -764,9 +764,52 @@ export async function cloudGetTask(client: HasnaStorageClient, id: string): Prom
   return raw == null ? null : unwrapTask(raw);
 }
 
-/** Create a task (`POST /v1/tasks`, retry-safe idempotency key). */
+/** Create a task (`POST /v1/tasks`). */
 export async function cloudCreateTask(client: HasnaStorageClient, input: Record<string, unknown>): Promise<Task> {
-  return unwrapTask(await requiredRemoteRoute(client, "/v1/tasks", () => client.create<unknown>("tasks", input)));
+  const expectedParentId = typeof input["parent_id"] === "string" ? input["parent_id"] : null;
+  const created = unwrapTask(await requiredRemoteRoute(
+    client,
+    "/v1/tasks",
+    // The /v1 task route does not yet implement Idempotency-Key replay
+    // deduplication. A transient/error response after a parented store write can
+    // therefore replay the exact failure under investigation into multiple
+    // subtasks. Keep parented creates single-attempt; leave the established
+    // parentless transport behavior unchanged.
+    () => expectedParentId === null
+      ? client.create<unknown>("tasks", input)
+      : client.create<unknown>("tasks", input, { retry: false }),
+    ["PARENT_TASK_NOT_FOUND"],
+  ));
+  if (!created || typeof created.id !== "string" || !created.id.trim()) {
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: configured Todos authority ${remoteAuthorityBase(client)} returned a task create ` +
+        "response without a stored task id; no success row or local SQLite fallback is permitted",
+    );
+  }
+
+  // Preserve the existing parentless CLI path. Current source still performs an
+  // authoritative server-side readback for every create, while this additional
+  // client guard is specifically for stale authorities exhibiting PLA-03362.
+  if (expectedParentId === null) return created;
+
+  // A parented POST response is an acknowledgement, not proof that the authority
+  // made the subtask readable. The hosted PLA-03362 failure returned two
+  // complete-looking task objects here, then GET-by-id returned 404 for both.
+  // Read the exact id back before any CLI/MCP caller is allowed to print success,
+  // and return that stored row rather than the optimistic POST body.
+  const persisted = await cloudGetTask(client, created.id);
+  if (
+    !persisted
+    || persisted.id !== created.id
+    || (persisted.parent_id ?? null) !== expectedParentId
+  ) {
+    throw new Error(
+      `TASK_CREATE_PERSISTENCE_UNVERIFIED: configured Todos authority ${remoteAuthorityBase(client)} accepted ` +
+        `POST /v1/tasks but authoritative GET /v1/tasks/${encodeURIComponent(created.id)} did not return the same ` +
+        "stored task id and parent_id; no success row or local SQLite fallback is permitted",
+    );
+  }
+  return persisted;
 }
 
 /** Update a task (`PATCH /v1/tasks/:id`). */
