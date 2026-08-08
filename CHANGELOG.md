@@ -6,6 +6,23 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.104]
+
+### Added
+
+- `projects register-full` now provides a feature-gated, fail-closed
+  cross-authority registration transaction with capability preflight,
+  deterministic idempotency, immutable bounded receipts, exact-ID readback, and
+  attempt-scoped compensation that never deletes pre-existing resources.
+
+### Fixed
+
+- Full-registration rollback now tracks accepted external writes before local
+  receipt persistence, detects drift across all supported project state,
+  preserves explicit slugs when compatibility normalization is disabled, binds
+  inverse requests to their exact desired payload and digest, and accepts only
+  correctly linked duplicate inverse receipts on retry.
+
 ## [0.1.103]
 
 ### Fixed
