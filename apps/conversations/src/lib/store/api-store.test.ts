@@ -295,7 +295,15 @@ describe("ApiStore.sendMessage wire body", () => {
       create: async (_resource: string, body: Record<string, unknown>) => {
         sent.push(body);
         // Echo the request back as the stored row, the way the real server does.
-        return { message: { id: 1, ...body, from_agent: body.from, to_agent: body.to } };
+        return {
+          message: {
+            id: 1,
+            ...body,
+            from_agent: body.from,
+            to_agent: body.to,
+            metadata: body.metadata ? JSON.stringify(body.metadata) : null,
+          },
+        };
       },
     } as unknown as HasnaStorageClient;
     return { client, sent };
@@ -319,6 +327,32 @@ describe("ApiStore.sendMessage wire body", () => {
     // The exact assertion the defect failed: reply_to never reached the body.
     expect(sent[0]).toHaveProperty("reply_to", 602449);
     expect(sent[0]).toHaveProperty("reply_to_uuid", parentUuid);
+  });
+
+  test("forwards metadata for direct and channel sends and parses the stored value", async () => {
+    const { client, sent } = capturingClient();
+    const store = new ApiStore(client);
+    const metadata = { goal_id: "goal-metadata-roundtrip", receipt: { kind: "coordination" } };
+
+    const direct = await store.sendMessage({
+      from: "alice",
+      to: "bob",
+      content: "direct metadata",
+      metadata,
+    });
+    const channel = await store.sendMessage({
+      from: "alice",
+      to: "work-status",
+      channel: "work-status",
+      content: "channel metadata",
+      metadata,
+    });
+
+    expect(sent).toHaveLength(2);
+    expect(sent[0]).toHaveProperty("metadata", metadata);
+    expect(sent[1]).toHaveProperty("metadata", metadata);
+    expect(direct.metadata).toEqual(metadata);
+    expect(channel.metadata).toEqual(metadata);
   });
 
   test("omits reply_to for a non-reply send (must not thread everything)", async () => {
