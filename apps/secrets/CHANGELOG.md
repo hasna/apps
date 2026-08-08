@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.17 — 2026-08-08
+
+- Reject unsupported `secrets scan` flags instead of silently scanning the
+  current workspace.
+- Return a nonzero exit when workspace or history scans report errors, while
+  preserving redacted JSON evidence and successful directory scans.
+
 ## 0.2.16 — 2026-08-08
 
 - Reconcile production tenant-migration lineage through schema verification
