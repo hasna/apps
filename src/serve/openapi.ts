@@ -620,6 +620,20 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
           properties: { status: { type: "string" }, version: { type: "string" } },
           required: ["status", "version"],
         },
+        LegacyVersionResponse: {
+          type: "object",
+          description: "Legacy compatibility response for /version.",
+          properties: {
+            status: { type: "string" },
+            version: { type: "string" },
+            mode: {
+              type: "string",
+              deprecated: true,
+              description: "Deprecated compatibility field; do not use it for deployment branching.",
+            },
+          },
+          required: ["status", "version", "mode"],
+        },
         Error: {
           type: "object",
           properties: { error: { type: "string" }, reason: { type: "string" } },
@@ -650,7 +664,7 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
           operationId: "getVersion",
           summary: "Service version",
           security: [],
-          responses: { "200": jsonResp("Health") },
+          responses: { "200": jsonResp("LegacyVersionResponse") },
         },
       },
       "/v1/projects": {

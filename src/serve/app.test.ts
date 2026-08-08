@@ -92,10 +92,21 @@ describe("projects-serve probes", () => {
     expect(body).toEqual({ status: "ok", version: "9.9.9" });
   });
 
-  test("GET /version returns version", async () => {
+  test("GET /version preserves the exact legacy compatibility response", async () => {
     const res = await handler()(new Request("http://x/version"));
     expect(res.status).toBe(200);
-    expect((await res.json()).version).toBe("9.9.9");
+    expect(await res.json()).toEqual({ status: "ok", version: "9.9.9", mode: "cloud" });
+  });
+
+  test("GET / preserves the exact legacy compatibility response", async () => {
+    const res = await handler()(new Request("http://x/"));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      name: "projects-serve",
+      version: "9.9.9",
+      mode: "cloud",
+      openapi: "/openapi.json",
+    });
   });
 
   test("GET /ready returns ready when db pings", async () => {
@@ -129,6 +140,23 @@ describe("projects-serve probes", () => {
       type: "object",
       properties: { status: { type: "string" }, version: { type: "string" } },
       required: ["status", "version"],
+    });
+    expect(spec.components.schemas.LegacyVersionResponse).toEqual({
+      type: "object",
+      description: "Legacy compatibility response for /version.",
+      properties: {
+        status: { type: "string" },
+        version: { type: "string" },
+        mode: {
+          type: "string",
+          deprecated: true,
+          description: "Deprecated compatibility field; do not use it for deployment branching.",
+        },
+      },
+      required: ["status", "version", "mode"],
+    });
+    expect(spec.paths["/version"].get.responses["200"].content["application/json"].schema).toEqual({
+      $ref: "#/components/schemas/LegacyVersionResponse",
     });
     expect(spec.paths["/v1/projects"]).toBeDefined();
     expect(spec.paths["/v1/projects/{id}/guarded-metadata"].get.operationId).toBe("guardedReadProject");
