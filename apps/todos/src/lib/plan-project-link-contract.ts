@@ -289,11 +289,13 @@ function responseTasks(value: unknown, expectedPlanId: string): Array<Record<str
     for (const field of [
       "agent_id", "assigned_to", "session_id", "working_dir", "locked_by",
       "approved_by", "recurrence_rule", "recurrence_parent_id", "spawns_template_id",
-      "reason", "spawned_from_session", "assigned_by", "created_by",
+      "reason", "spawned_from_session", "assigned_by",
       "assigned_from_project", "task_type", "delegated_from", "runner_id", "current_step",
     ]) {
       responseNullableString(task[field], `${label}.${field}`);
     }
+    responseOptionalNullableString(task, "created_by", label);
+    if (!("created_by" in task)) task["created_by"] = null;
     responseStringArray(task.tags, `${label}.tags`);
     responseRecord(task.metadata, `${label}.metadata`);
     for (const field of [

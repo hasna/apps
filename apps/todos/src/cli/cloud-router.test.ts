@@ -1432,6 +1432,40 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
     });
   });
 
+  test("plan-project-link accepts a supported task response without created_by", async () => {
+    const plan = planProjectLinkPlanFixture();
+    const project = planProjectLinkProjectFixture();
+    const task = planProjectLinkTaskFixture();
+    const legacyTask = { ...task } as Record<string, unknown>;
+    delete legacyTask["created_by"];
+    installFetch(() => ({
+      body: { mode: "plan", action: "would_link", plan, project, tasks: [legacyTask], receipt: null },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudPlanPlanProjectLink(client, plan.id, project.id)).resolves.toEqual({
+      mode: "plan",
+      action: "would_link",
+      plan,
+      project,
+      tasks: [task],
+      receipt: null,
+    });
+  });
+
+  test("plan-project-link still rejects an invalid present created_by", async () => {
+    const plan = planProjectLinkPlanFixture();
+    const project = planProjectLinkProjectFixture();
+    const task = { ...planProjectLinkTaskFixture(), created_by: 42 };
+    installFetch(() => ({
+      body: { mode: "plan", action: "would_link", plan, project, tasks: [task], receipt: null },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudPlanPlanProjectLink(client, plan.id, project.id))
+      .rejects.toThrow(/tasks\[0\]\.created_by must be a string or null/);
+  });
+
   test.each([
     ["Plan", {
       mode: "plan",
