@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.112]
+
+### Fixed
+
+- Contacts authority URLs now use the same canonical URI representation as
+  typed Project resource links, so attach results, exact retries, listing,
+  detach, and reattach recognize the same service instance with or without a
+  trailing slash.
+
 ## [0.1.110]
 
 ### Added

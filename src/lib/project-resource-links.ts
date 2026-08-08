@@ -71,7 +71,7 @@ function requiredString(value: unknown, label: string): string {
   return value.trim();
 }
 
-function canonicalUri(value: string, label: string): string {
+export function canonicalProjectResourceLinkUri(value: string, label: string): string {
   if (URN_RE.test(value)) return value;
   let url: URL;
   try {
@@ -113,7 +113,10 @@ export function normalizeProjectResourceLink(input: ProjectResourceLinkInput): P
     throw new Error("resource link authority is unsupported");
   }
   const authority = input.authority;
-  const serviceInstance = canonicalUri(requiredString(input.service_instance, "resource link service_instance"), "resource link service_instance");
+  const serviceInstance = canonicalProjectResourceLinkUri(
+    requiredString(input.service_instance, "resource link service_instance"),
+    "resource link service_instance",
+  );
   const expectedPackage = SOURCE_PACKAGE_BY_AUTHORITY[authority];
   if (input.source_package !== expectedPackage) {
     throw new Error(`resource link source_package for ${authority} must be ${expectedPackage}`);
@@ -133,7 +136,7 @@ export function normalizeProjectResourceLink(input: ProjectResourceLinkInput): P
     }
     normalizedLocatorValue = locatorValue.toLowerCase();
   } else if (input.locator.kind === "canonical_uri") {
-    normalizedLocatorValue = canonicalUri(locatorValue, "resource link canonical_uri");
+    normalizedLocatorValue = canonicalProjectResourceLinkUri(locatorValue, "resource link canonical_uri");
   } else if (input.locator.kind === "conversations_channel_id") {
     if (
       projectResourceLinkConversationsChannelLocatorKind(locatorValue)

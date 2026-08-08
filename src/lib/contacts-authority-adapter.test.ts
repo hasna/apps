@@ -8,6 +8,23 @@ import type { ProjectStore } from "../store/project-store.js";
 import type { ProjectResourceLinkMutationRequest } from "../types/workspace.js";
 
 describe("ContactsHttpProjectMembershipAuthority", () => {
+  test("canonicalizes the default service instance identically with or without a trailing slash", () => {
+    const fetchImpl = async (): Promise<Response> => Response.json({});
+    const withoutSlash = new ContactsHttpProjectMembershipAuthority({
+      baseUrl: "https://contacts.example.test",
+      apiKey: "test-key",
+      fetchImpl,
+    });
+    const withSlash = new ContactsHttpProjectMembershipAuthority({
+      baseUrl: "https://contacts.example.test/",
+      apiKey: "test-key",
+      fetchImpl,
+    });
+
+    expect(withoutSlash.service_instance).toBe("https://contacts.example.test/");
+    expect(withSlash.service_instance).toBe(withoutSlash.service_instance);
+  });
+
   test("maps the concrete Contacts membership API to the coordinator contract", async () => {
     const requests: Array<{ method: string; path: string; authorization: string | null; body: unknown }> = [];
     const fetchImpl = async (input: string, init?: RequestInit): Promise<Response> => {
