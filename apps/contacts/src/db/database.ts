@@ -603,6 +603,82 @@ const MIGRATIONS = [
 
   CREATE INDEX IF NOT EXISTS idx_contacts_tombstones_deleted_at ON _contacts_tombstones(deleted_at);
   `,
+
+  `
+  CREATE TABLE IF NOT EXISTS contact_project_membership_states (
+    contact_id TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+    project_id TEXT NOT NULL,
+    linked INTEGER NOT NULL CHECK(linked IN (0, 1)),
+    revision INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0),
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (contact_id, project_id)
+  );
+
+  INSERT OR IGNORE INTO contact_project_membership_states
+    (contact_id, project_id, linked, revision, updated_at)
+  SELECT contact_id, project_id, 1, 0, datetime('now')
+  FROM contact_projects;
+
+  CREATE TABLE IF NOT EXISTS contact_project_membership_receipts (
+    receipt_id TEXT PRIMARY KEY,
+    direction TEXT NOT NULL CHECK(direction IN ('attach', 'detach')),
+    contact_id TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+    project_id TEXT NOT NULL,
+    operation_id TEXT NOT NULL,
+    step_id TEXT NOT NULL,
+    expected_version TEXT NOT NULL,
+    before_json TEXT NOT NULL,
+    after_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(operation_id, step_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_contact_project_membership_states_project
+    ON contact_project_membership_states(project_id, linked, contact_id);
+  CREATE INDEX IF NOT EXISTS idx_contact_project_membership_receipts_target
+    ON contact_project_membership_receipts(contact_id, project_id, created_at);
+
+  CREATE TRIGGER IF NOT EXISTS sync_contact_project_membership_state_after_insert
+  AFTER INSERT ON contact_projects
+  BEGIN
+    INSERT INTO contact_project_membership_states
+      (contact_id, project_id, linked, revision, updated_at)
+    VALUES (NEW.contact_id, NEW.project_id, 1, 1, datetime('now'))
+    ON CONFLICT(contact_id, project_id) DO UPDATE SET
+      linked = 1,
+      revision = CASE
+        WHEN contact_project_membership_states.linked = 1
+          THEN contact_project_membership_states.revision
+        ELSE contact_project_membership_states.revision + 1
+      END,
+      updated_at = CASE
+        WHEN contact_project_membership_states.linked = 1
+          THEN contact_project_membership_states.updated_at
+        ELSE datetime('now')
+      END;
+  END;
+
+  CREATE TRIGGER IF NOT EXISTS sync_contact_project_membership_state_after_delete
+  AFTER DELETE ON contact_projects
+  WHEN EXISTS (SELECT 1 FROM contacts WHERE id = OLD.contact_id)
+  BEGIN
+    INSERT INTO contact_project_membership_states
+      (contact_id, project_id, linked, revision, updated_at)
+    VALUES (OLD.contact_id, OLD.project_id, 0, 1, datetime('now'))
+    ON CONFLICT(contact_id, project_id) DO UPDATE SET
+      linked = 0,
+      revision = CASE
+        WHEN contact_project_membership_states.linked = 0
+          THEN contact_project_membership_states.revision
+        ELSE contact_project_membership_states.revision + 1
+      END,
+      updated_at = CASE
+        WHEN contact_project_membership_states.linked = 0
+          THEN contact_project_membership_states.updated_at
+        ELSE datetime('now')
+      END;
+  END;
+  `,
 ];
 
 export type ContactsDatabase = SqliteAdapter;

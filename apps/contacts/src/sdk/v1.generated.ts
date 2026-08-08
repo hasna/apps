@@ -24,6 +24,14 @@ export interface UpdateTagInput { "name"?: string; "color"?: string; "descriptio
 
 export interface ProjectIdsInput { "project_ids": Array<string> }
 
+export interface ContactProjectMembershipSnapshot { "contact_id": string; "project_id": string; "linked": boolean; "version": string }
+
+export interface ContactProjectMembershipMutationInput { "operation_id": string; "step_id": string; "expected_version": string }
+
+export interface ContactProjectMembershipMutationResult { "outcome": "accepted" | "duplicate_of_accepted"; "operation_id": string; "step_id": string; "before": ContactProjectMembershipSnapshot; "after": ContactProjectMembershipSnapshot; "receipt_id": string }
+
+export interface ContactProjectMembershipListResult { "project_id": string; "contact_ids": Array<string>; "complete": boolean; "membership_revision": string }
+
 export interface ContactsV1ClientOptions {
   /** Base URL, e.g. process.env.APP_API_URL. */
   baseUrl: string;
@@ -217,6 +225,42 @@ export class ContactsV1Client {
     /** Update a contact */
     async updateContact(id: string, body: UpdateContactInput, init?: RequestInit): Promise<{ "contact"?: Contact }> {
       return this.request("PATCH", `/v1/contacts/${encodeURIComponent(String(id))}`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** List the complete authoritative contact membership collection for a project */
+    async listContactProjectMemberships(projectId: string, query?: { "max_items": number }, init?: RequestInit): Promise<ContactProjectMembershipListResult> {
+      return this.request("GET", `/v1/projects/${encodeURIComponent(String(projectId))}/contact-memberships`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Read one authoritative contact-project membership snapshot */
+    async readContactProjectMembership(projectId: string, contactId: string, init?: RequestInit): Promise<ContactProjectMembershipSnapshot> {
+      return this.request("GET", `/v1/projects/${encodeURIComponent(String(projectId))}/contact-memberships/${encodeURIComponent(String(contactId))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Attach a contact to a project under expected-version CAS with a replay-safe receipt */
+    async attachContactProjectMembership(projectId: string, contactId: string, body: ContactProjectMembershipMutationInput, init?: RequestInit): Promise<ContactProjectMembershipMutationResult> {
+      return this.request("POST", `/v1/projects/${encodeURIComponent(String(projectId))}/contact-memberships/${encodeURIComponent(String(contactId))}/attach`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Detach a contact from a project under expected-version CAS with a replay-safe receipt */
+    async detachContactProjectMembership(projectId: string, contactId: string, body: ContactProjectMembershipMutationInput, init?: RequestInit): Promise<ContactProjectMembershipMutationResult> {
+      return this.request("POST", `/v1/projects/${encodeURIComponent(String(projectId))}/contact-memberships/${encodeURIComponent(String(contactId))}/detach`, {
         body,
         query: undefined,
         init,

@@ -31,6 +31,7 @@ import { getDatabase } from "../db/database.js";
 import * as storageDb from "../db/storage.js";
 import type { ContactsStorageStatus } from "../db/storage.js";
 import * as contactsDb from "../db/contacts.js";
+import * as projectMembershipsDb from "../db/project-memberships.js";
 import * as companiesDb from "../db/companies.js";
 import * as tagsDb from "../db/tags.js";
 import * as groupsDb from "../db/groups.js";
@@ -72,6 +73,13 @@ import * as vaultLib from "../lib/vault.js";
 import * as mailerySyncLib from "../lib/mailery-sync.js";
 import { findEmailDuplicates, findNameDuplicates } from "../lib/dedup.js";
 import { resolveStorageClient, type StorageClient, type QueryParams } from "../cloud/http-storage.js";
+import type {
+  ContactProjectMembershipListResult,
+  ContactProjectMembershipMutationDirection,
+  ContactProjectMembershipMutationInput,
+  ContactProjectMembershipMutationResult,
+  ContactProjectMembershipSnapshot,
+} from "../types/project-memberships.js";
 
 // ── Convenience shorthands for input / result types (track the db layer) ──
 type CreateContactInput = Parameters<typeof contactsDb.createContact>[0];
@@ -159,6 +167,12 @@ export interface Store {
   getContactProjectIds(contactId: string): Promise<string[]>;
   setContactProjects(contactId: string, projectIds: string[]): Promise<void>;
   listContactIdsByProject(projectId: string): Promise<string[]>;
+  readContactProjectMembership(contactId: string, projectId: string): Promise<ContactProjectMembershipSnapshot>;
+  listContactProjectMemberships(projectId: string, maxItems: number): Promise<ContactProjectMembershipListResult>;
+  mutateContactProjectMembership(
+    direction: ContactProjectMembershipMutationDirection,
+    input: ContactProjectMembershipMutationInput,
+  ): Promise<ContactProjectMembershipMutationResult>;
 
   // Companies
   createCompany(input: CreateCompanyInput): Promise<unknown>;
@@ -435,6 +449,18 @@ class LocalStore implements Store {
   async getContactProjectIds(contactId: string) { return contactsDb.getContactProjectIds(contactId, this.db); }
   async setContactProjects(contactId: string, projectIds: string[]) { contactsDb.setContactProjects(contactId, projectIds, this.db); }
   async listContactIdsByProject(projectId: string) { return contactsDb.listContactIdsByProject(projectId, this.db); }
+  async readContactProjectMembership(contactId: string, projectId: string) {
+    return projectMembershipsDb.readContactProjectMembership(contactId, projectId, this.db);
+  }
+  async listContactProjectMemberships(projectId: string, maxItems: number) {
+    return projectMembershipsDb.listContactProjectMemberships(projectId, maxItems, this.db);
+  }
+  async mutateContactProjectMembership(
+    direction: ContactProjectMembershipMutationDirection,
+    input: ContactProjectMembershipMutationInput,
+  ) {
+    return projectMembershipsDb.mutateContactProjectMembership(direction, input, this.db);
+  }
 
   // Companies
   async createCompany(input: CreateCompanyInput) { return companiesDb.createCompany(input, this.db); }
@@ -855,6 +881,30 @@ class ApiStore implements Store {
   }
   async listContactIdsByProject(projectId: string) {
     return pick<string[]>(await this.g(`/projects/${this.enc(projectId)}/contacts`), "contact_ids") ?? [];
+  }
+  async readContactProjectMembership(contactId: string, projectId: string) {
+    return this.client.transport.get<ContactProjectMembershipSnapshot>(
+      `/projects/${this.enc(projectId)}/contact-memberships/${this.enc(contactId)}`,
+    );
+  }
+  async listContactProjectMemberships(projectId: string, maxItems: number) {
+    return this.client.transport.get<ContactProjectMembershipListResult>(
+      `/projects/${this.enc(projectId)}/contact-memberships`,
+      { query: { max_items: maxItems } },
+    );
+  }
+  async mutateContactProjectMembership(
+    direction: ContactProjectMembershipMutationDirection,
+    input: ContactProjectMembershipMutationInput,
+  ) {
+    return this.client.transport.post<ContactProjectMembershipMutationResult>(
+      `/projects/${this.enc(input.project_id)}/contact-memberships/${this.enc(input.contact_id)}/${direction}`,
+      {
+        operation_id: input.operation_id,
+        step_id: input.step_id,
+        expected_version: input.expected_version,
+      },
+    );
   }
 
   // Companies

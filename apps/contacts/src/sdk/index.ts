@@ -24,4 +24,8 @@ export type {
   CreateTagInput as ContactsV1CreateTagInput,
   UpdateTagInput as ContactsV1UpdateTagInput,
   ProjectIdsInput as ContactsV1ProjectIdsInput,
+  ContactProjectMembershipSnapshot as ContactsV1ProjectMembershipSnapshot,
+  ContactProjectMembershipMutationInput as ContactsV1ProjectMembershipMutationInput,
+  ContactProjectMembershipMutationResult as ContactsV1ProjectMembershipMutationResult,
+  ContactProjectMembershipListResult as ContactsV1ProjectMembershipListResult,
 } from "./v1.generated.js";

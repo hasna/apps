@@ -23,6 +23,40 @@ function projectStore(overrides: Record<string, unknown> = {}) {
     async listContactIdsByProject() {
       return ["contact-1", "contact-2"];
     },
+    async readContactProjectMembership(contactId: string, projectId: string) {
+      return { contact_id: contactId, project_id: projectId, linked: false, version: "cpmv_1" };
+    },
+    async listContactProjectMemberships(projectId: string) {
+      return {
+        project_id: projectId,
+        contact_ids: ["contact-1"],
+        complete: true as const,
+        membership_revision: "cpml_1",
+      };
+    },
+    async mutateContactProjectMembership(
+      direction: "attach" | "detach",
+      input: { contact_id: string; project_id: string; operation_id: string; step_id: string; expected_version: string },
+    ) {
+      return {
+        outcome: "accepted" as const,
+        operation_id: input.operation_id,
+        step_id: input.step_id,
+        before: {
+          contact_id: input.contact_id,
+          project_id: input.project_id,
+          linked: direction === "detach",
+          version: input.expected_version,
+        },
+        after: {
+          contact_id: input.contact_id,
+          project_id: input.project_id,
+          linked: direction === "attach",
+          version: "cpmv_2",
+        },
+        receipt_id: "cpmr_1",
+      };
+    },
     ...overrides,
   };
 }
@@ -134,5 +168,45 @@ describe("authenticated contact project routes", () => {
       { operation: "replace", args: ["contact-1", "project-b", "project-a", "project-b"] },
       { operation: "detach", args: ["contact-1", "project/a"] },
     ]);
+  });
+
+  test("exposes guarded membership read, list, attach, and detach contracts", async () => {
+    const store = projectStore();
+    const read = await handleContactProjectsRoute(
+      request("/v1/projects/project-1/contact-memberships/contact-1"),
+      "GET",
+      ["v1", "projects", "project-1", "contact-memberships", "contact-1"],
+      store,
+    );
+    expect(await read?.json()).toMatchObject({ linked: false, version: "cpmv_1" });
+
+    const list = await handleContactProjectsRoute(
+      request("/v1/projects/project-1/contact-memberships?max_items=1000"),
+      "GET",
+      ["v1", "projects", "project-1", "contact-memberships"],
+      store,
+    );
+    expect(await list?.json()).toMatchObject({ contact_ids: ["contact-1"], complete: true });
+
+    for (const action of ["attach", "detach"] as const) {
+      const response = await handleContactProjectsRoute(
+        request(`/v1/projects/project-1/contact-memberships/contact-1/${action}`, {
+          method: "POST",
+          body: JSON.stringify({
+            operation_id: `${action}-contact-1`,
+            step_id: `contacts-membership:forward:${action}`,
+            expected_version: "cpmv_1",
+          }),
+        }),
+        "POST",
+        ["v1", "projects", "project-1", "contact-memberships", "contact-1", action],
+        store,
+      );
+      expect(await response?.json()).toMatchObject({
+        outcome: "accepted",
+        receipt_id: "cpmr_1",
+        after: { linked: action === "attach" },
+      });
+    }
   });
 });

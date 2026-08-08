@@ -74,7 +74,8 @@ describe("published package consumer contract", () => {
       },
     );
     expect(version.exitCode, version.stderr.toString()).toBe(0);
-    expect(version.stdout.toString().trim()).toBe("0.6.34");
+    expect(typeof installedManifest.version).toBe("string");
+    expect(version.stdout.toString().trim()).toBe(installedManifest.version);
     expect(version.stderr.toString()).not.toContain("Contacts MCP server running");
   }, 60_000);
 });

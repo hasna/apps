@@ -15,6 +15,13 @@ import type {
   UpdateContactInput,
   UpdateTagInput,
 } from "../types/index.js";
+import type {
+  ContactProjectMembershipListResult,
+  ContactProjectMembershipMutationInput,
+  ContactProjectMembershipMutationResult,
+  ContactProjectMembershipSnapshot,
+} from "../types/project-memberships.js";
+import { ContactProjectMembershipConflictError } from "../types/project-memberships.js";
 import { getCloudClient, getCloudVerifier, ensureCloudSchemaBestEffort, CONTACTS_APP_SLUG } from "./cloud.js";
 import { getContactsPgStore, type ContactListFilter } from "./pg-store.js";
 
@@ -57,6 +64,12 @@ type ContactProjectsStore = {
   getContactProjectIds(contactId: string): Promise<string[]>;
   setContactProjects(contactId: string, projectIds: string[]): Promise<string[]>;
   listContactIdsByProject(projectId: string): Promise<string[]>;
+  readContactProjectMembership(contactId: string, projectId: string): Promise<ContactProjectMembershipSnapshot>;
+  listContactProjectMemberships(projectId: string, maxItems: number): Promise<ContactProjectMembershipListResult>;
+  mutateContactProjectMembership(
+    direction: "attach" | "detach",
+    input: ContactProjectMembershipMutationInput,
+  ): Promise<ContactProjectMembershipMutationResult>;
 };
 
 /**
@@ -114,6 +127,54 @@ export async function handleContactProjectsRoute(
       return json({ project_id: id, contact_ids: await store.listContactIdsByProject(id) });
     }
     return error(405, `method ${method} not allowed on /v1/projects/:project_id/contacts`);
+  }
+
+  if (resource === "projects" && id && sub === "contact-memberships") {
+    const contactId = segments[4];
+    const action = segments[5];
+    if (!contactId) {
+      if (method !== "GET") {
+        return error(405, `method ${method} not allowed on /v1/projects/:project_id/contact-memberships`);
+      }
+      const rawMaxItems = new URL(req.url).searchParams.get("max_items");
+      const maxItems = rawMaxItems === null ? 1000 : Number(rawMaxItems);
+      if (!Number.isInteger(maxItems) || maxItems < 1) return error(400, "max_items must be a positive integer");
+      return json(await store.listContactProjectMemberships(id, maxItems));
+    }
+    if (!action) {
+      if (method !== "GET") {
+        return error(405, `method ${method} not allowed on /v1/projects/:project_id/contact-memberships/:contact_id`);
+      }
+      const contact = await store.getContact(contactId);
+      if (!contact) return error(404, "contact not found");
+      return json(await store.readContactProjectMembership(contactId, id));
+    }
+    if ((action === "attach" || action === "detach") && method === "POST") {
+      const body = await readJson<{
+        operation_id?: unknown;
+        step_id?: unknown;
+        expected_version?: unknown;
+      }>(req);
+      if (
+        !body
+        || typeof body.operation_id !== "string"
+        || typeof body.step_id !== "string"
+        || typeof body.expected_version !== "string"
+        || body.operation_id.trim().length === 0
+        || body.step_id.trim().length === 0
+        || body.expected_version.trim().length === 0
+      ) {
+        return error(400, "operation_id, step_id, and expected_version are required non-empty strings");
+      }
+      return json(await store.mutateContactProjectMembership(action, {
+        contact_id: contactId,
+        project_id: id,
+        operation_id: body.operation_id,
+        step_id: body.step_id,
+        expected_version: body.expected_version,
+      }));
+    }
+    return error(405, `method ${method} not allowed on contact-project membership route`);
   }
 
   return null;
@@ -577,6 +638,7 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
     return error(404, `unknown /v1 resource: ${resource ?? "(root)"}`);
   } catch (e) {
     const msg = (e as Error).message || "internal error";
+    if (e instanceof ContactProjectMembershipConflictError) return error(409, msg);
     // Foreign-key / constraint violations surface as 400 to the client.
     if (/violates|constraint|invalid input|duplicate key/i.test(msg)) return error(400, msg);
     return error(500, msg);

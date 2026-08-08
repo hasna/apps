@@ -24,6 +24,14 @@ export {
   type ContactsStorageStatus,
   type StorageTableStatus,
 } from "./store/index.js";
+export type {
+  ContactProjectMembershipListResult,
+  ContactProjectMembershipMutationDirection,
+  ContactProjectMembershipMutationInput,
+  ContactProjectMembershipMutationResult,
+  ContactProjectMembershipSnapshot,
+} from "./types/project-memberships.js";
+export { ContactProjectMembershipConflictError } from "./types/project-memberships.js";
 
 // ─── Shared domain types + errors ───────────────────────────────────────────────
 export type {
@@ -167,6 +175,10 @@ export type {
   ContactsV1UpdateCompanyInput,
   ContactsV1CreateTagInput,
   ContactsV1UpdateTagInput,
+  ContactsV1ProjectMembershipSnapshot,
+  ContactsV1ProjectMembershipMutationInput,
+  ContactsV1ProjectMembershipMutationResult,
+  ContactsV1ProjectMembershipListResult,
 } from "./sdk/index.js";
 
 // ─── Serve OpenAPI document (source of truth for the SDK) ───────────────────────

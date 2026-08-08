@@ -28,6 +28,10 @@ import { ContactNotFoundError } from "../types/index.js";
 import { getDatabase, now, uuid } from "./database.js";
 import { logActivity } from "./activity.js";
 import { recordTombstone } from "./tombstones.js";
+import {
+  replaceContactProjectMembershipsWithoutReceipts,
+  setContactProjectMembershipWithoutReceipt,
+} from "./project-memberships.js";
 
 // ─── Row mappers ──────────────────────────────────────────────────────────────
 
@@ -644,12 +648,12 @@ export function autoLinkContactToCompany(contactId: string, db?: ContactsDatabas
 
 export function linkContactToProject(contactId: string, projectId: string, db?: ContactsDatabase): void {
   const d = db || getDatabase();
-  d.run(`INSERT OR IGNORE INTO contact_projects (contact_id, project_id) VALUES (?, ?)`, [contactId, projectId]);
+  setContactProjectMembershipWithoutReceipt(contactId, projectId, true, d);
 }
 
 export function unlinkContactFromProject(contactId: string, projectId: string, db?: ContactsDatabase): void {
   const d = db || getDatabase();
-  d.run(`DELETE FROM contact_projects WHERE contact_id = ? AND project_id = ?`, [contactId, projectId]);
+  setContactProjectMembershipWithoutReceipt(contactId, projectId, false, d);
 }
 
 export function getContactProjectIds(contactId: string, db?: ContactsDatabase): string[] {
@@ -666,11 +670,5 @@ export function listContactIdsByProject(projectId: string, db?: ContactsDatabase
 
 export function setContactProjects(contactId: string, projectIds: string[], db?: ContactsDatabase): void {
   const d = db || getDatabase();
-  const uniqueProjectIds = [...new Set(projectIds)];
-  d.transaction(() => {
-    d.run(`DELETE FROM contact_projects WHERE contact_id = ?`, [contactId]);
-    for (const pid of uniqueProjectIds) {
-      d.run(`INSERT OR IGNORE INTO contact_projects (contact_id, project_id) VALUES (?, ?)`, [contactId, pid]);
-    }
-  });
+  replaceContactProjectMembershipsWithoutReceipts(contactId, projectIds, d);
 }
