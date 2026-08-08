@@ -257,6 +257,26 @@ describe("exposure scanner", () => {
     expect(result.findingCount).toBe(0);
   });
 
+  it("does not treat task-first slugs as OpenAI keys while preserving synthetic key detection", () => {
+    const taskFirstSlug = ["global-signal-to-ta", "sk", "-first-never-drift"].join("");
+    const syntheticOpenAiKey = fakeOpenAiToken();
+    const slugDir = join(testDir, "slug-only");
+    expect(taskFirstSlug).toBe("global-signal-to-task-first-never-drift");
+
+    mkdirSync(slugDir);
+    writeFileSync(join(slugDir, "slug.txt"), `${taskFirstSlug}\n`);
+    writeFileSync(join(testDir, "positive.env"), `OPENAI_API_KEY=${syntheticOpenAiKey}\n`);
+
+    const slugOnly = scanWorkspaceExposures({ root: slugDir });
+    const withPositiveControl = scanWorkspaceExposures({ root: testDir });
+    const serialized = JSON.stringify(withPositiveControl);
+
+    expect(slugOnly.findingCount).toBe(0);
+    expect(withPositiveControl.findings.map((finding) => finding.detector)).toEqual(["openai_api_key"]);
+    expect(serialized).not.toContain(syntheticOpenAiKey);
+    expect(withPositiveControl.findings[0].preview).toContain("***REDACTED***");
+  });
+
   it("detects PEM private-key blocks, Stripe keys and AWS access-key ids by content", () => {
     const stripeKey = ["sk", "live", "51abcDEF0123ghijKLMN4567"].join("_");
     const awsId = ["AK", "IA", "IOSFODNN7EXAMPLE"].join("");
