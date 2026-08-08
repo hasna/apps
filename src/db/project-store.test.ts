@@ -3,22 +3,19 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import * as publicProjectStoreExports from "../project-store.js";
+import * as rootExports from "../index.js";
 import {
-  deleteProjectDataModelsExact as publicDeleteProjectDataModelsExact,
-  deleteProjectDataRecordsExact as publicDeleteProjectDataRecordsExact,
-  withProjectDataTransaction as publicWithProjectDataTransaction,
+  deleteProjectDataExact as publicDeleteProjectDataExact,
 } from "../project-store.js";
 import {
-  deleteProjectDataModelsExact as rootDeleteProjectDataModelsExact,
-  deleteProjectDataRecordsExact as rootDeleteProjectDataRecordsExact,
-  withProjectDataTransaction as rootWithProjectDataTransaction,
+  deleteProjectDataExact as rootDeleteProjectDataExact,
 } from "../index.js";
 import {
   PROJECTS_HOME_ENV,
   createProjectDataModel,
   createProjectDataRecord,
-  deleteProjectDataModelsExact,
-  deleteProjectDataRecordsExact,
+  deleteProjectDataExact,
   ensureProjectStore,
   getProjectDataModel,
   getProjectDataRecord,
@@ -29,7 +26,6 @@ import {
   listProjectDataModels,
   listProjectDataRecords,
   listProjectLoopSummaries,
-  withProjectDataTransaction,
   type LoopsClientLike,
   type ProjectStoreProject,
 } from "./project-store.js";
@@ -141,13 +137,23 @@ describe("project store", () => {
     }
   });
 
-  test("exports exact project-data transaction and delete APIs through both public surfaces", () => {
-    expect(publicWithProjectDataTransaction).toBe(withProjectDataTransaction);
-    expect(publicDeleteProjectDataRecordsExact).toBe(deleteProjectDataRecordsExact);
-    expect(publicDeleteProjectDataModelsExact).toBe(deleteProjectDataModelsExact);
-    expect(rootWithProjectDataTransaction).toBe(withProjectDataTransaction);
-    expect(rootDeleteProjectDataRecordsExact).toBe(deleteProjectDataRecordsExact);
-    expect(rootDeleteProjectDataModelsExact).toBe(deleteProjectDataModelsExact);
+  test("exports only the atomic composite project-data delete through both public surfaces", () => {
+    expect(publicDeleteProjectDataExact).toBe(deleteProjectDataExact);
+    expect(rootDeleteProjectDataExact).toBe(deleteProjectDataExact);
+
+    for (const unsafeExport of [
+      "withProjectDataTransaction",
+      "deleteProjectDataRecordsExact",
+      "deleteProjectDataModelsExact",
+    ]) {
+      expect(unsafeExport in publicProjectStoreExports).toBe(false);
+      expect(unsafeExport in rootExports).toBe(false);
+    }
+
+    // @ts-expect-error The generic callback transaction surface must remain absent.
+    expect(publicProjectStoreExports.withProjectDataTransaction).toBeUndefined();
+    // @ts-expect-error The root package surface must not re-export the callback either.
+    expect(rootExports.withProjectDataTransaction).toBeUndefined();
   });
 
   test("atomically validates, deletes exact records before empty models, and preserves other projects", () => {
@@ -177,36 +183,27 @@ describe("project store", () => {
         model_id: otherModel.id,
         key: "other",
       });
+      db.run("PRAGMA busy_timeout=1");
+      db.run("PRAGMA foreign_keys=OFF");
 
-      const result = withProjectDataTransaction(project, db, (transactionDb) => {
-        expect(transactionDb).toBe(db);
-        expect(listProjectDataRecords(project, targetModel.id, transactionDb)).toHaveLength(2);
-
-        const records = deleteProjectDataRecordsExact(project, transactionDb, {
-          targets: [
-            { id: targetRecordA.id, model_id: targetModel.id },
-            { id: targetRecordB.id, model_id: targetModel.id },
-          ],
-          expected_count: 2,
-        });
-        expect(listProjectDataRecords(project, targetModel.id, transactionDb)).toEqual([]);
-
-        const models = deleteProjectDataModelsExact(project, transactionDb, {
-          targets: [{ id: targetModel.id, slug: targetModel.slug }],
-          expected_count: 1,
-        });
-        expect(getProjectDataModel(project, targetModel.id, transactionDb)).toBeNull();
-        return { records, models };
+      const result = deleteProjectDataExact(project, db, {
+        record_targets: [
+          { id: targetRecordA.id, model_id: targetModel.id },
+          { id: targetRecordB.id, model_id: targetModel.id },
+        ],
+        expected_record_count: 2,
+        model_targets: [{ id: targetModel.id, slug: targetModel.slug }],
+        expected_model_count: 1,
       });
 
-      expect(result.records).toEqual({
-        deleted_ids: [targetRecordA.id, targetRecordB.id],
-        deleted_count: 2,
+      expect(result).toEqual({
+        deleted_record_ids: [targetRecordA.id, targetRecordB.id],
+        deleted_record_count: 2,
+        deleted_model_ids: [targetModel.id],
+        deleted_model_count: 1,
       });
-      expect(result.models).toEqual({
-        deleted_ids: [targetModel.id],
-        deleted_count: 1,
-      });
+      expect(listProjectDataRecords(project, targetModel.id, db)).toEqual([]);
+      expect(getProjectDataModel(project, targetModel.id, db)).toBeNull();
       expect(getProjectDataRecord(project, survivorModel.id, survivorRecord.id, db)).toEqual(survivorRecord);
       expect(getProjectDataRecord(otherProject, otherModel.id, otherRecord.id)).toEqual(otherRecord);
       expect(db.query<{ value: number }, []>("SELECT 1 AS value").get()?.value).toBe(1);
@@ -229,8 +226,11 @@ describe("project store", () => {
       const model = createProjectDataModel(project, { name: "Owned Model" }, db);
       const otherModel = createProjectDataModel(otherProject, { name: "Other Model" });
 
-      expect(() => withProjectDataTransaction(otherProject, db, () => {
-        throw new Error("must not run");
+      expect(() => deleteProjectDataExact(otherProject, db, {
+        record_targets: [],
+        expected_record_count: 0,
+        model_targets: [{ id: otherModel.id, slug: otherModel.slug }],
+        expected_model_count: 1,
       })).toThrow(/canonical project\.db|belongs to project/i);
 
       expect(getProjectDataModel(project, model.id, db)).toEqual(model);
@@ -254,35 +254,35 @@ describe("project store", () => {
       const recordA = createProjectDataRecord(project, { model_id: model.id, key: "a" }, db);
       const recordB = createProjectDataRecord(project, { model_id: model.id, key: "b" }, db);
 
-      expect(() => withProjectDataTransaction(project, db, (transactionDb) => {
-        deleteProjectDataRecordsExact(project, transactionDb, {
-          targets: [
-            { id: recordA.id, model_id: model.id },
-            { id: recordA.id, model_id: model.id },
-          ],
-          expected_count: 2,
-        });
+      expect(() => deleteProjectDataExact(project, db, {
+        record_targets: [
+          { id: recordA.id, model_id: model.id },
+          { id: recordA.id, model_id: model.id },
+        ],
+        expected_record_count: 2,
+        model_targets: [],
+        expected_model_count: 0,
       })).toThrow(/duplicate/i);
 
-      expect(() => withProjectDataTransaction(project, db, (transactionDb) => {
-        deleteProjectDataRecordsExact(project, transactionDb, {
-          targets: [{ id: recordA.id, model_id: model.id }],
-          expected_count: 2,
-        });
+      expect(() => deleteProjectDataExact(project, db, {
+        record_targets: [{ id: recordA.id, model_id: model.id }],
+        expected_record_count: 2,
+        model_targets: [],
+        expected_model_count: 0,
       })).toThrow(/expected_count/i);
 
-      expect(() => withProjectDataTransaction(project, db, (transactionDb) => {
-        deleteProjectDataRecordsExact(project, transactionDb, {
-          targets: [{ id: "pdr_missing", model_id: model.id }],
-          expected_count: 1,
-        });
+      expect(() => deleteProjectDataExact(project, db, {
+        record_targets: [{ id: "pdr_missing", model_id: model.id }],
+        expected_record_count: 1,
+        model_targets: [],
+        expected_model_count: 0,
       })).toThrow(/not found/i);
 
-      expect(() => withProjectDataTransaction(project, db, (transactionDb) => {
-        deleteProjectDataRecordsExact(project, transactionDb, {
-          targets: [{ id: recordA.id, model_id: otherModel.id }],
-          expected_count: 1,
-        });
+      expect(() => deleteProjectDataExact(project, db, {
+        record_targets: [{ id: recordA.id, model_id: otherModel.id }],
+        expected_record_count: 1,
+        model_targets: [],
+        expected_model_count: 0,
       })).toThrow(/model/i);
 
       db.run(`
@@ -293,17 +293,79 @@ describe("project store", () => {
           SELECT RAISE(IGNORE);
         END
       `);
-      expect(() => withProjectDataTransaction(project, db, (transactionDb) => {
-        deleteProjectDataRecordsExact(project, transactionDb, {
-          targets: [
-            { id: recordA.id, model_id: model.id },
-            { id: recordB.id, model_id: model.id },
-          ],
-          expected_count: 2,
-        });
+      expect(() => deleteProjectDataExact(project, db, {
+        record_targets: [
+          { id: recordA.id, model_id: model.id },
+          { id: recordB.id, model_id: model.id },
+        ],
+        expected_record_count: 2,
+        model_targets: [],
+        expected_model_count: 0,
       })).toThrow(/affected-count mismatch/i);
 
       expect(listProjectDataRecords(project, model.id, db)).toHaveLength(2);
+      expect(db.query<{ value: number }, []>("SELECT 1 AS value").get()?.value).toBe(1);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects invalid model targets and rolls back record deletes on model affected-count mismatch", () => {
+    const root = mkdtempSync(join(tmpdir(), "project-store-model-guards-"));
+    process.env[PROJECTS_HOME_ENV] = root;
+    const project = projectFixture("wks_modelguards", "Model Guards");
+    const db = getProjectDatabase(project);
+
+    try {
+      const model = createProjectDataModel(project, { name: "Guarded Model" }, db);
+      const record = createProjectDataRecord(project, { model_id: model.id, key: "guarded" }, db);
+      const recordTarget = [{ id: record.id, model_id: model.id }];
+
+      expect(() => deleteProjectDataExact(project, db, {
+        record_targets: recordTarget,
+        expected_record_count: 1,
+        model_targets: [
+          { id: model.id, slug: model.slug },
+          { id: model.id, slug: model.slug },
+        ],
+        expected_model_count: 2,
+      })).toThrow(/duplicate/i);
+      expect(getProjectDataRecord(project, model.id, record.id, db)).toEqual(record);
+
+      expect(() => deleteProjectDataExact(project, db, {
+        record_targets: recordTarget,
+        expected_record_count: 1,
+        model_targets: [{ id: "pdm_missing", slug: "missing" }],
+        expected_model_count: 1,
+      })).toThrow(/not found/i);
+      expect(getProjectDataRecord(project, model.id, record.id, db)).toEqual(record);
+
+      expect(() => deleteProjectDataExact(project, db, {
+        record_targets: recordTarget,
+        expected_record_count: 1,
+        model_targets: [{ id: model.id, slug: model.slug }],
+        expected_model_count: 2,
+      })).toThrow(/expected_count/i);
+      expect(getProjectDataRecord(project, model.id, record.id, db)).toEqual(record);
+
+      db.exec(`
+        CREATE TRIGGER ignore_guarded_model_delete
+        BEFORE DELETE ON project_data_models
+        WHEN OLD.id = '${model.id}'
+        BEGIN
+          SELECT RAISE(IGNORE);
+        END
+      `);
+      expect(() => deleteProjectDataExact(project, db, {
+        record_targets: recordTarget,
+        expected_record_count: 1,
+        model_targets: [{ id: model.id, slug: model.slug }],
+        expected_model_count: 1,
+      })).toThrow(/affected-count mismatch/i);
+
+      expect(getProjectDataRecord(project, model.id, record.id, db)).toEqual(record);
+      expect(getProjectDataModel(project, model.id, db)).toEqual(model);
       expect(db.query<{ value: number }, []>("SELECT 1 AS value").get()?.value).toBe(1);
     } finally {
       db.close();
@@ -324,24 +386,20 @@ describe("project store", () => {
         key: "must-delete-first",
       }, db);
 
-      expect(() => withProjectDataTransaction(project, db, (transactionDb) => {
-        deleteProjectDataModelsExact(project, transactionDb, {
-          targets: [{ id: model.id, slug: model.slug }],
-          expected_count: 1,
-        });
+      expect(() => deleteProjectDataExact(project, db, {
+        record_targets: [],
+        expected_record_count: 0,
+        model_targets: [{ id: model.id, slug: model.slug }],
+        expected_model_count: 1,
       })).toThrow(/not empty/i);
       expect(getProjectDataRecord(project, model.id, record.id, db)).toEqual(record);
       expect(getProjectDataModel(project, model.id, db)).toEqual(model);
 
-      withProjectDataTransaction(project, db, (transactionDb) => {
-        deleteProjectDataRecordsExact(project, transactionDb, {
-          targets: [{ id: record.id, model_id: model.id }],
-          expected_count: 1,
-        });
-        deleteProjectDataModelsExact(project, transactionDb, {
-          targets: [{ id: model.id, slug: model.slug }],
-          expected_count: 1,
-        });
+      deleteProjectDataExact(project, db, {
+        record_targets: [{ id: record.id, model_id: model.id }],
+        expected_record_count: 1,
+        model_targets: [{ id: model.id, slug: model.slug }],
+        expected_model_count: 1,
       });
       expect(listProjectDataModels(project, db)).toEqual([]);
     } finally {
@@ -350,31 +408,32 @@ describe("project store", () => {
     }
   });
 
-  test("rolls back callback throws, invalid modes, async callbacks, and keeps the caller DB open", () => {
+  test("rejects active caller transactions and empty requests while keeping the caller DB open", () => {
     const root = mkdtempSync(join(tmpdir(), "project-store-transaction-guards-"));
     process.env[PROJECTS_HOME_ENV] = root;
     const project = projectFixture("wks_txguards", "Transaction Guards");
     const db = getProjectDatabase(project);
 
     try {
-      const model = createProjectDataModel(project, { name: "Rollback Model" }, db);
-      const record = createProjectDataRecord(project, { model_id: model.id, key: "rollback" }, db);
+      const model = createProjectDataModel(project, { name: "Guarded Model" }, db);
+      const record = createProjectDataRecord(project, { model_id: model.id, key: "guarded" }, db);
 
-      expect(() => withProjectDataTransaction(project, db, (transactionDb) => {
-        deleteProjectDataRecordsExact(project, transactionDb, {
-          targets: [{ id: record.id, model_id: model.id }],
-          expected_count: 1,
-        });
-        throw new Error("callback failed");
-      })).toThrow("callback failed");
-      expect(getProjectDataRecord(project, model.id, record.id, db)).toEqual(record);
+      db.exec("BEGIN IMMEDIATE");
+      expect(() => deleteProjectDataExact(project, db, {
+        record_targets: [{ id: record.id, model_id: model.id }],
+        expected_record_count: 1,
+        model_targets: [],
+        expected_model_count: 0,
+      })).toThrow(/active transaction/i);
+      db.exec("ROLLBACK");
 
-      expect(() => withProjectDataTransaction(project, db, () => undefined, {
-        mode: "deferred" as "immediate",
-      })).toThrow(/transaction mode/i);
+      expect(() => deleteProjectDataExact(project, db, {
+        record_targets: [],
+        expected_record_count: 0,
+        model_targets: [],
+        expected_model_count: 0,
+      })).toThrow(/at least one/i);
 
-      expect(() => withProjectDataTransaction(project, db, (async () => undefined) as never))
-        .toThrow(/synchronous callback/i);
       expect(getProjectDataRecord(project, model.id, record.id, db)).toEqual(record);
       expect(db.query<{ value: number }, []>("SELECT 1 AS value").get()?.value).toBe(1);
     } finally {
@@ -383,7 +442,38 @@ describe("project store", () => {
     }
   });
 
-  test("BEGIN IMMEDIATE excludes concurrent project-data writers and releases the lock after commit", () => {
+  test("atomically rolls back exact record deletion when a later model target mismatches", () => {
+    const root = mkdtempSync(join(tmpdir(), "project-store-composite-rollback-"));
+    process.env[PROJECTS_HOME_ENV] = root;
+    const project = projectFixture("wks_compositerollback", "Composite Rollback");
+    const db = getProjectDatabase(project);
+
+    try {
+      const model = createProjectDataModel(project, { name: "Protected Model" }, db);
+      const record = createProjectDataRecord(project, {
+        model_id: model.id,
+        key: "must-rollback",
+      }, db);
+
+      expect(() => deleteProjectDataExact(project, db, {
+        record_targets: [{ id: record.id, model_id: model.id }],
+        expected_record_count: 1,
+        model_targets: [{ id: model.id, slug: "wrong-slug" }],
+        expected_model_count: 1,
+      })).toThrow(/slug/i);
+
+      expect(getProjectDataRecord(project, model.id, record.id, db)).toEqual(record);
+      expect(getProjectDataModel(project, model.id, db)).toEqual(model);
+      expect(db.query<{ value: number }, []>("SELECT 1 AS value").get()?.value).toBe(1);
+      expect(publicDeleteProjectDataExact).toBe(deleteProjectDataExact);
+      expect(rootDeleteProjectDataExact).toBe(deleteProjectDataExact);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("BEGIN IMMEDIATE waits for a concurrent project-data writer and leaves both connections open", async () => {
     const root = mkdtempSync(join(tmpdir(), "project-store-exclusive-"));
     process.env[PROJECTS_HOME_ENV] = root;
     const project = projectFixture("wks_exclusive", "Exclusive");
@@ -392,20 +482,39 @@ describe("project store", () => {
 
     try {
       const model = createProjectDataModel(project, { name: "Exclusive Model" }, db);
-      concurrentDb.run("PRAGMA busy_timeout=10");
-
-      withProjectDataTransaction(project, db, () => {
-        expect(() => createProjectDataRecord(project, {
-          model_id: model.id,
-          key: "blocked-writer",
-        }, concurrentDb)).toThrow(/locked|busy/i);
-      });
-
       const record = createProjectDataRecord(project, {
         model_id: model.id,
-        key: "writer-after-commit",
-      }, concurrentDb);
-      expect(getProjectDataRecord(project, model.id, record.id, db)).toEqual(record);
+        key: "delete-after-writer",
+      }, db);
+      const dbPath = getProjectStorePaths(project).db_path;
+      const holder = Bun.spawn({
+        cmd: [process.execPath, "-e", `
+          import { Database } from "bun:sqlite";
+          const db = new Database(${JSON.stringify(dbPath)});
+          db.exec("BEGIN IMMEDIATE");
+          console.log("LOCKED");
+          await Bun.sleep(150);
+          db.exec("ROLLBACK");
+          db.close();
+        `],
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const reader = holder.stdout.getReader();
+      const firstOutput = await reader.read();
+      expect(new TextDecoder().decode(firstOutput.value)).toContain("LOCKED");
+
+      const startedAt = performance.now();
+      const result = deleteProjectDataExact(project, concurrentDb, {
+        record_targets: [{ id: record.id, model_id: model.id }],
+        expected_record_count: 1,
+        model_targets: [{ id: model.id, slug: model.slug }],
+        expected_model_count: 1,
+      });
+      expect(performance.now() - startedAt).toBeGreaterThanOrEqual(100);
+      expect(await holder.exited).toBe(0);
+      expect(result.deleted_record_ids).toEqual([record.id]);
+      expect(getProjectDataModel(project, model.id, db)).toBeNull();
       expect(db.query<{ value: number }, []>("SELECT 1 AS value").get()?.value).toBe(1);
       expect(concurrentDb.query<{ value: number }, []>("SELECT 1 AS value").get()?.value).toBe(1);
     } finally {

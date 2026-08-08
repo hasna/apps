@@ -148,23 +148,18 @@ export interface ProjectDataModelDeleteTarget {
   slug: string;
 }
 
-export interface DeleteProjectDataRecordsExactInput {
-  targets: readonly ProjectDataRecordDeleteTarget[];
-  expected_count: number;
+export interface DeleteProjectDataExactInput {
+  record_targets: readonly ProjectDataRecordDeleteTarget[];
+  expected_record_count: number;
+  model_targets: readonly ProjectDataModelDeleteTarget[];
+  expected_model_count: number;
 }
 
-export interface DeleteProjectDataModelsExactInput {
-  targets: readonly ProjectDataModelDeleteTarget[];
-  expected_count: number;
-}
-
-export interface ProjectDataDeleteResult extends JsonObject {
-  deleted_ids: string[];
-  deleted_count: number;
-}
-
-export interface ProjectDataTransactionOptions {
-  mode?: "immediate";
+export interface ProjectDataExactDeleteResult extends JsonObject {
+  deleted_record_ids: string[];
+  deleted_record_count: number;
+  deleted_model_ids: string[];
+  deleted_model_count: number;
 }
 
 export interface ProjectLoopLink extends JsonObject {
@@ -449,12 +444,6 @@ function assertCallerProjectDatabase(
   return projectId;
 }
 
-function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
-  return (
-    (typeof value === "object" && value !== null) || typeof value === "function"
-  ) && typeof (value as { then?: unknown }).then === "function";
-}
-
 function rollbackOpenProjectDataTransaction(db: Database): void {
   if (!db.inTransaction) return;
   try {
@@ -469,8 +458,8 @@ function validateExactDeleteInput<T extends { id: string }>(
   targets: readonly T[],
   expectedCount: number,
 ): void {
-  if (!Number.isSafeInteger(expectedCount) || expectedCount < 1) {
-    throw new Error(`${kind} delete expected_count must be a positive safe integer`);
+  if (!Number.isSafeInteger(expectedCount) || expectedCount < 0) {
+    throw new Error(`${kind} delete expected_count must be a non-negative safe integer`);
   }
   if (targets.length !== expectedCount) {
     throw new Error(
@@ -485,9 +474,9 @@ function validateExactDeleteInput<T extends { id: string }>(
   }
 }
 
-function requireProjectDataTransaction(db: Database): void {
+function requireOwnedProjectDataTransaction(db: Database): void {
   if (!db.inTransaction) {
-    throw new Error("Exact project-data deletes must run inside withProjectDataTransaction");
+    throw new Error("Atomic project-data delete lost its package-owned transaction");
   }
 }
 
@@ -633,34 +622,6 @@ export function getProjectDatabase(project: string | Pick<Workspace, "id">): Dat
   return db;
 }
 
-export function withProjectDataTransaction<T>(
-  project: string | Pick<Workspace, "id">,
-  db: Database,
-  callback: (db: Database) => T,
-  options: ProjectDataTransactionOptions = {},
-): T {
-  if ((options.mode ?? "immediate") !== "immediate") {
-    throw new Error(`Unsupported project-data transaction mode: ${String(options.mode)}`);
-  }
-  if (db.inTransaction) {
-    throw new Error("Caller database already has an active transaction");
-  }
-
-  assertCallerProjectDatabase(project, db, { configure: true });
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const result = callback(db);
-    if (isPromiseLike(result)) {
-      throw new Error("withProjectDataTransaction requires a synchronous callback");
-    }
-    db.exec("COMMIT");
-    return result;
-  } catch (error) {
-    rollbackOpenProjectDataTransaction(db);
-    throw error;
-  }
-}
-
 export function ensureProjectStore(project: string | Pick<Workspace, "id">): ProjectStoreSummary {
   const db = getProjectDatabase(project);
   try {
@@ -779,105 +740,147 @@ export function getProjectDataRecord(project: string | Pick<Workspace, "id">, mo
   }
 }
 
-export function deleteProjectDataRecordsExact(
-  project: string | Pick<Workspace, "id">,
+function deleteProjectDataRecordsExact(
   db: Database,
-  input: DeleteProjectDataRecordsExactInput,
-): ProjectDataDeleteResult {
-  requireProjectDataTransaction(db);
-  try {
-    assertCallerProjectDatabase(project, db, { configure: false });
-    validateExactDeleteInput("record", input.targets, input.expected_count);
+  targets: readonly ProjectDataRecordDeleteTarget[],
+  expectedCount: number,
+): { deletedIds: string[]; deletedCount: number } {
+  requireOwnedProjectDataTransaction(db);
+  validateExactDeleteInput("record", targets, expectedCount);
 
-    for (const target of input.targets) {
-      if (!target.model_id) throw new Error(`Record delete target ${target.id} requires model_id`);
-      const row = db
-        .query<{ id: string; model_id: string }, [string]>(
-          "SELECT id, model_id FROM project_data_records WHERE id = ? LIMIT 1",
-        )
-        .get(target.id);
-      if (!row) throw new Error(`Project data record not found: ${target.id}`);
-      if (row.model_id !== target.model_id) {
-        throw new Error(
-          `Project data record ${target.id} belongs to model ${row.model_id}, not ${target.model_id}`,
-        );
-      }
-    }
-
-    let deletedCount = 0;
-    for (const target of input.targets) {
-      deletedCount += db.run(
-        "DELETE FROM project_data_records WHERE id = ? AND model_id = ?",
-        [target.id, target.model_id],
-      ).changes;
-    }
-    if (deletedCount !== input.expected_count) {
+  for (const target of targets) {
+    if (!target.model_id) throw new Error(`Record delete target ${target.id} requires model_id`);
+    const row = db
+      .query<{ id: string; model_id: string }, [string]>(
+        "SELECT id, model_id FROM project_data_records WHERE id = ? LIMIT 1",
+      )
+      .get(target.id);
+    if (!row) throw new Error(`Project data record not found: ${target.id}`);
+    if (row.model_id !== target.model_id) {
       throw new Error(
-        `Project data record affected-count mismatch: expected ${input.expected_count}, deleted ${deletedCount}`,
+        `Project data record ${target.id} belongs to model ${row.model_id}, not ${target.model_id}`,
       );
     }
-    return {
-      deleted_ids: input.targets.map((target) => target.id),
-      deleted_count: deletedCount,
-    };
-  } catch (error) {
-    rollbackOpenProjectDataTransaction(db);
-    throw error;
   }
+
+  let deletedCount = 0;
+  for (const target of targets) {
+    deletedCount += db.run(
+      "DELETE FROM project_data_records WHERE id = ? AND model_id = ?",
+      [target.id, target.model_id],
+    ).changes;
+  }
+  if (deletedCount !== expectedCount) {
+    throw new Error(
+      `Project data record affected-count mismatch: expected ${expectedCount}, deleted ${deletedCount}`,
+    );
+  }
+  for (const target of targets) {
+    const remaining = db
+      .query<{ id: string }, [string]>("SELECT id FROM project_data_records WHERE id = ? LIMIT 1")
+      .get(target.id);
+    if (remaining) {
+      throw new Error(`Project data record post-delete verification failed: ${target.id}`);
+    }
+  }
+  return {
+    deletedIds: targets.map((target) => target.id),
+    deletedCount,
+  };
 }
 
-export function deleteProjectDataModelsExact(
-  project: string | Pick<Workspace, "id">,
+function deleteProjectDataModelsExact(
   db: Database,
-  input: DeleteProjectDataModelsExactInput,
-): ProjectDataDeleteResult {
-  requireProjectDataTransaction(db);
-  try {
-    assertCallerProjectDatabase(project, db, { configure: false });
-    validateExactDeleteInput("model", input.targets, input.expected_count);
+  targets: readonly ProjectDataModelDeleteTarget[],
+  expectedCount: number,
+): { deletedIds: string[]; deletedCount: number } {
+  requireOwnedProjectDataTransaction(db);
+  validateExactDeleteInput("model", targets, expectedCount);
 
-    for (const target of input.targets) {
-      if (!target.slug) throw new Error(`Model delete target ${target.id} requires slug`);
-      const row = db
-        .query<{ id: string; slug: string }, [string]>(
-          "SELECT id, slug FROM project_data_models WHERE id = ? LIMIT 1",
-        )
-        .get(target.id);
-      if (!row) throw new Error(`Project data model not found: ${target.id}`);
-      if (row.slug !== target.slug) {
-        throw new Error(
-          `Project data model ${target.id} has slug ${row.slug}, not ${target.slug}`,
-        );
-      }
-      const records = db
-        .query<{ count: number }, [string]>(
-          "SELECT COUNT(*) AS count FROM project_data_records WHERE model_id = ?",
-        )
-        .get(target.id)?.count ?? 0;
-      if (records !== 0) {
-        throw new Error(`Project data model ${target.id} is not empty (${records} record(s))`);
-      }
-    }
-
-    let deletedCount = 0;
-    for (const target of input.targets) {
-      deletedCount += db.run(
-        `DELETE FROM project_data_models
-         WHERE id = ? AND slug = ?
-           AND NOT EXISTS (
-             SELECT 1 FROM project_data_records WHERE model_id = project_data_models.id
-           )`,
-        [target.id, target.slug],
-      ).changes;
-    }
-    if (deletedCount !== input.expected_count) {
+  for (const target of targets) {
+    if (!target.slug) throw new Error(`Model delete target ${target.id} requires slug`);
+    const row = db
+      .query<{ id: string; slug: string }, [string]>(
+        "SELECT id, slug FROM project_data_models WHERE id = ? LIMIT 1",
+      )
+      .get(target.id);
+    if (!row) throw new Error(`Project data model not found: ${target.id}`);
+    if (row.slug !== target.slug) {
       throw new Error(
-        `Project data model affected-count mismatch: expected ${input.expected_count}, deleted ${deletedCount}`,
+        `Project data model ${target.id} has slug ${row.slug}, not ${target.slug}`,
       );
     }
+    const records = db
+      .query<{ count: number }, [string]>(
+        "SELECT COUNT(*) AS count FROM project_data_records WHERE model_id = ?",
+      )
+      .get(target.id)?.count ?? 0;
+    if (records !== 0) {
+      throw new Error(`Project data model ${target.id} is not empty (${records} record(s))`);
+    }
+  }
+
+  let deletedCount = 0;
+  for (const target of targets) {
+    deletedCount += db.run(
+      `DELETE FROM project_data_models
+       WHERE id = ? AND slug = ?
+         AND NOT EXISTS (
+           SELECT 1 FROM project_data_records WHERE model_id = project_data_models.id
+         )`,
+      [target.id, target.slug],
+    ).changes;
+  }
+  if (deletedCount !== expectedCount) {
+    throw new Error(
+      `Project data model affected-count mismatch: expected ${expectedCount}, deleted ${deletedCount}`,
+    );
+  }
+  for (const target of targets) {
+    const remaining = db
+      .query<{ id: string }, [string]>("SELECT id FROM project_data_models WHERE id = ? LIMIT 1")
+      .get(target.id);
+    if (remaining) {
+      throw new Error(`Project data model post-delete verification failed: ${target.id}`);
+    }
+  }
+  return {
+    deletedIds: targets.map((target) => target.id),
+    deletedCount,
+  };
+}
+
+export function deleteProjectDataExact(
+  project: string | Pick<Workspace, "id">,
+  db: Database,
+  input: DeleteProjectDataExactInput,
+): ProjectDataExactDeleteResult {
+  if (db.inTransaction) {
+    throw new Error("Caller database already has an active transaction");
+  }
+  if (input.record_targets.length === 0 && input.model_targets.length === 0) {
+    throw new Error("Atomic project-data delete requires at least one record or model target");
+  }
+
+  assertCallerProjectDatabase(project, db, { configure: true });
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const records = deleteProjectDataRecordsExact(
+      db,
+      input.record_targets,
+      input.expected_record_count,
+    );
+    const models = deleteProjectDataModelsExact(
+      db,
+      input.model_targets,
+      input.expected_model_count,
+    );
+    db.exec("COMMIT");
     return {
-      deleted_ids: input.targets.map((target) => target.id),
-      deleted_count: deletedCount,
+      deleted_record_ids: records.deletedIds,
+      deleted_record_count: records.deletedCount,
+      deleted_model_ids: models.deletedIds,
+      deleted_model_count: models.deletedCount,
     };
   } catch (error) {
     rollbackOpenProjectDataTransaction(db);
