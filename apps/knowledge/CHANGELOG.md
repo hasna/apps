@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.97
 
 - Fix the FCAME-1 guarded writer so `createKnowledgeGuardedWriter({ env })`
   authenticates guarded HTTP requests with the API endpoint and credential from
