@@ -34,10 +34,14 @@ import {
 } from "../lib/project-resource-links.js";
 import {
   applyProjectResourceLinkMigrationTransition,
+  assertProjectResourceLinkProducerAttestation,
   buildProjectResourceLinkMigrationPlan,
   migrationEvent,
+  migrationEvidenceWithProducerAttestation,
   reconcileProjectResourceLinkProducerProof,
   rowToProjectResourceLinkMigrationManifest,
+  type ProjectResourceLinkProducerAttestation,
+  type ProjectResourceLinkProducerEvidenceVerifier,
 } from "../lib/project-resource-link-migrations.js";
 import type {
   Agent,
@@ -1891,6 +1895,7 @@ export function readProjectResourceLinkMigration(
 export function advanceProjectResourceLinkMigration(
   input: ProjectResourceLinkMigrationAdvanceRequest,
   db?: Database,
+  producerEvidenceVerifier?: ProjectResourceLinkProducerEvidenceVerifier,
 ): ProjectResourceLinkMigrationResult {
   const d = db || getDatabase();
   const started = Date.now();
@@ -1907,6 +1912,7 @@ export function advanceProjectResourceLinkMigration(
     }, input, started, "project resource link migration advance");
   }
   let producerEvidence = input.producer_evidence;
+  let producerAttestation: ProjectResourceLinkProducerAttestation | undefined;
   if (input.next_state === "producer_applied") {
     producerEvidence = reconcileProjectResourceLinkProducerProof(before, input.producer_evidence, "forward");
   }
@@ -1930,6 +1936,16 @@ export function advanceProjectResourceLinkMigration(
   }
   if (input.next_state === "verified") {
     producerEvidence = reconcileProjectResourceLinkProducerProof(before, input.producer_evidence, "readback");
+    producerAttestation = assertProjectResourceLinkProducerAttestation(
+      before,
+      "readback",
+      producerEvidence,
+      producerEvidenceVerifier?.({
+        manifest: before,
+        phase: "readback",
+        producer_evidence: producerEvidence,
+      }),
+    );
     const read = readProjectResourceLinks({
       project_id: input.project_id,
       max_items: Math.max(PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS, before.links.length),
@@ -1950,7 +1966,10 @@ export function advanceProjectResourceLinkMigration(
     last_verified_projects_revision: input.last_verified_projects_revision,
     last_verified_projects_digest: input.last_verified_projects_digest,
   });
-  d.transaction(() => persistProjectResourceLinkMigrationTransition(before, after, input.evidence, d))();
+  const transitionEvidence = producerAttestation
+    ? migrationEvidenceWithProducerAttestation(input.evidence, producerAttestation)
+    : input.evidence;
+  d.transaction(() => persistProjectResourceLinkMigrationTransition(before, after, transitionEvidence, d))();
   return withResponseControl({
     ok: true,
     outcome: "accepted" as const,
@@ -1962,6 +1981,7 @@ export function advanceProjectResourceLinkMigration(
 export function rollbackProjectResourceLinkMigration(
   input: ProjectResourceLinkMigrationRollbackRequest,
   db?: Database,
+  producerEvidenceVerifier?: ProjectResourceLinkProducerEvidenceVerifier,
 ): ProjectResourceLinkMigrationResult {
   const d = db || getDatabase();
   const started = Date.now();
@@ -2086,6 +2106,18 @@ export function rollbackProjectResourceLinkMigration(
       nextState === "rolled_back" ? "complete" : "retained_target",
     )
     : undefined;
+  const producerAttestation = terminalProducerEvidence
+    ? assertProjectResourceLinkProducerAttestation(
+      before,
+      nextState === "rolled_back" ? "inverse_complete" : "inverse_retained_target",
+      terminalProducerEvidence,
+      producerEvidenceVerifier?.({
+        manifest: before,
+        phase: nextState === "rolled_back" ? "inverse_complete" : "inverse_retained_target",
+        producer_evidence: terminalProducerEvidence,
+      }),
+    )
+    : undefined;
   const after = applyProjectResourceLinkMigrationTransition(before, nextState, now(), {
     producer_evidence: terminalProducerEvidence,
     projects_inverse_receipt_id: inverseReceiptId,
@@ -2093,7 +2125,10 @@ export function rollbackProjectResourceLinkMigration(
     last_verified_projects_revision: proof.verified_revision,
     last_verified_projects_digest: proof.collection_digest,
   });
-  d.transaction(() => persistProjectResourceLinkMigrationTransition(before, after, input.evidence, d))();
+  const transitionEvidence = producerAttestation
+    ? migrationEvidenceWithProducerAttestation(input.evidence, producerAttestation)
+    : input.evidence;
+  d.transaction(() => persistProjectResourceLinkMigrationTransition(before, after, transitionEvidence, d))();
   before = after;
   return withResponseControl({
     ok: true,

@@ -26,6 +26,116 @@ const TRANSITIONS: Record<ProjectResourceLinkMigrationState, readonly ProjectRes
   failed_reconcilable: ["rollback_in_progress"],
 };
 
+export type ProjectResourceLinkProducerAttestationPhase =
+  | "readback"
+  | "inverse_complete"
+  | "inverse_retained_target";
+
+export interface ProjectResourceLinkProducerAttestation {
+  attestation_id: string;
+  manifest_id: string;
+  phase: ProjectResourceLinkProducerAttestationPhase;
+  evidence_digest: string;
+  verifier: string;
+  verified_at: string;
+}
+
+export interface ProjectResourceLinkProducerVerificationInput {
+  manifest: ProjectResourceLinkMigrationManifestV1;
+  phase: ProjectResourceLinkProducerAttestationPhase;
+  producer_evidence: ProjectResourceLinkProducerEvidence[];
+}
+
+/**
+ * Trusted, out-of-band producer verifier. Implementations must look up the
+ * named producer receipts and perform exact target readback; request JSON must
+ * never supply or select this function. Its returned attestation is validated
+ * here and persisted in the immutable migration transition event.
+ */
+export type ProjectResourceLinkProducerEvidenceVerifier = (
+  input: ProjectResourceLinkProducerVerificationInput,
+) => ProjectResourceLinkProducerAttestation;
+
+export type AsyncProjectResourceLinkProducerEvidenceVerifier = (
+  input: ProjectResourceLinkProducerVerificationInput,
+) => ProjectResourceLinkProducerAttestation | Promise<ProjectResourceLinkProducerAttestation>;
+
+export function projectResourceLinkProducerEvidenceDigest(
+  manifest: ProjectResourceLinkMigrationManifestV1,
+  phase: ProjectResourceLinkProducerAttestationPhase,
+  producerEvidence: ProjectResourceLinkProducerEvidence[],
+): string {
+  return sha256(canonicalJson({
+    manifest_id: manifest.manifest_id,
+    phase,
+    producer_context: manifest.links.map((item) => ({
+      link_id: item.link_id,
+      producer_resource_kind: item.producer_resource_kind,
+      producer_binding: item.producer_binding,
+    })),
+    producer_evidence: producerEvidence,
+  }));
+}
+
+export function projectResourceLinkProducerAttestationId(
+  manifestId: string,
+  phase: ProjectResourceLinkProducerAttestationPhase,
+  evidenceDigest: string,
+): string {
+  return `prlpa_${sha256(canonicalJson({
+    manifest_id: manifestId,
+    phase,
+    evidence_digest: evidenceDigest,
+  })).slice(0, 36)}`;
+}
+
+export function assertProjectResourceLinkProducerAttestation(
+  manifest: ProjectResourceLinkMigrationManifestV1,
+  phase: ProjectResourceLinkProducerAttestationPhase,
+  producerEvidence: ProjectResourceLinkProducerEvidence[],
+  attestation: ProjectResourceLinkProducerAttestation | undefined,
+): ProjectResourceLinkProducerAttestation {
+  if (!attestation) {
+    throw new Error(
+      `project resource link migration ${phase} requires trusted producer receipt/readback attestation`,
+    );
+  }
+  const evidenceDigest = projectResourceLinkProducerEvidenceDigest(
+    manifest,
+    phase,
+    producerEvidence,
+  );
+  const attestationId = projectResourceLinkProducerAttestationId(
+    manifest.manifest_id,
+    phase,
+    evidenceDigest,
+  );
+  if (
+    attestation.attestation_id !== attestationId
+    || attestation.manifest_id !== manifest.manifest_id
+    || attestation.phase !== phase
+    || attestation.evidence_digest !== evidenceDigest
+  ) {
+    throw new Error("producer attestation does not bind the exact manifest, phase, and producer evidence");
+  }
+  requireNonemptyProofValue(attestation.verifier, "producer attestation verifier");
+  requireNonemptyProofValue(attestation.verified_at, "producer attestation verified_at");
+  if (!Number.isFinite(Date.parse(attestation.verified_at))) {
+    throw new Error("producer attestation verified_at must be an ISO-8601 timestamp");
+  }
+  return { ...attestation };
+}
+
+export function migrationEvidenceWithProducerAttestation(
+  evidence: JsonObject,
+  attestation: ProjectResourceLinkProducerAttestation,
+): JsonObject {
+  return {
+    ...evidence,
+    producer_attestation: { ...attestation },
+  };
+}
+
 function requireNonemptyProofValue(value: string | null, label: string): string {
   if (!value?.trim()) throw new Error(`${label} must be a nonempty producer proof value`);
   return value;

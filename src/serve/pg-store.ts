@@ -40,10 +40,14 @@ import {
 } from "../lib/project-resource-links.js";
 import {
   applyProjectResourceLinkMigrationTransition,
+  assertProjectResourceLinkProducerAttestation,
   buildProjectResourceLinkMigrationPlan,
   migrationEvent,
+  migrationEvidenceWithProducerAttestation,
   reconcileProjectResourceLinkProducerProof,
   rowToProjectResourceLinkMigrationManifest,
+  type AsyncProjectResourceLinkProducerEvidenceVerifier,
+  type ProjectResourceLinkProducerAttestation,
 } from "../lib/project-resource-link-migrations.js";
 import { deriveWorkspaceRegistryFields } from "../lib/workspace-plan.js";
 import type {
@@ -291,14 +295,20 @@ export interface WorkspaceFilter {
 }
 
 export class ProjectsPgStore {
-  constructor(private readonly db: TypedQueryClient) {}
+  constructor(
+    private readonly db: TypedQueryClient,
+    private readonly producerEvidenceVerifier?: AsyncProjectResourceLinkProducerEvidenceVerifier,
+  ) {}
 
   private async inTransaction<T>(operation: string, fn: (store: ProjectsPgStore) => Promise<T>): Promise<T> {
     const transaction = (this.db as TransactionCapableClient).transaction;
     if (typeof transaction !== "function") {
       throw new ValidationError(`${operation} requires a transaction-capable Postgres client`);
     }
-    return transaction.call(this.db, async (client) => fn(new ProjectsPgStore(client))) as Promise<T>;
+    return transaction.call(
+      this.db,
+      async (client) => fn(new ProjectsPgStore(client, this.producerEvidenceVerifier)),
+    ) as Promise<T>;
   }
 
   // --- slug uniqueness --------------------------------------------------
@@ -1554,6 +1564,7 @@ export class ProjectsPgStore {
       }, input, started, "project resource link migration advance");
     }
     let producerEvidence = input.producer_evidence;
+    let producerAttestation: ProjectResourceLinkProducerAttestation | undefined;
     if (input.next_state === "producer_applied") {
       try {
         producerEvidence = reconcileProjectResourceLinkProducerProof(before, input.producer_evidence, "forward");
@@ -1586,6 +1597,16 @@ export class ProjectsPgStore {
     if (input.next_state === "verified") {
       try {
         producerEvidence = reconcileProjectResourceLinkProducerProof(before, input.producer_evidence, "readback");
+        producerAttestation = assertProjectResourceLinkProducerAttestation(
+          before,
+          "readback",
+          producerEvidence,
+          await this.producerEvidenceVerifier?.({
+            manifest: before,
+            phase: "readback",
+            producer_evidence: producerEvidence,
+          }),
+        );
       } catch (error) {
         throw new ValidationError(error instanceof Error ? error.message : String(error));
       }
@@ -1609,8 +1630,11 @@ export class ProjectsPgStore {
       last_verified_projects_revision: input.last_verified_projects_revision,
       last_verified_projects_digest: input.last_verified_projects_digest,
     });
+    const transitionEvidence = producerAttestation
+      ? migrationEvidenceWithProducerAttestation(input.evidence, producerAttestation)
+      : input.evidence;
     await this.inTransaction("project resource link migration advance", (store) =>
-      store.persistResourceLinkMigrationTransition(before, after, input.evidence));
+      store.persistResourceLinkMigrationTransition(before, after, transitionEvidence));
     return withResponseControl({
       ok: true,
       outcome: "accepted" as const,
@@ -1738,6 +1762,7 @@ export class ProjectsPgStore {
         ? "retained_target"
         : "failed_reconcilable";
     let terminalProducerEvidence = input.producer_evidence;
+    let producerAttestation: ProjectResourceLinkProducerAttestation | undefined;
     if (nextState === "rolled_back" || nextState === "retained_target") {
       try {
         terminalProducerEvidence = reconcileProjectResourceLinkProducerProof(
@@ -1745,6 +1770,17 @@ export class ProjectsPgStore {
           input.producer_evidence,
           "inverse",
           nextState === "rolled_back" ? "complete" : "retained_target",
+        );
+        const phase = nextState === "rolled_back" ? "inverse_complete" : "inverse_retained_target";
+        producerAttestation = assertProjectResourceLinkProducerAttestation(
+          before,
+          phase,
+          terminalProducerEvidence,
+          await this.producerEvidenceVerifier?.({
+            manifest: before,
+            phase,
+            producer_evidence: terminalProducerEvidence,
+          }),
         );
       } catch (error) {
         throw new ValidationError(error instanceof Error ? error.message : String(error));
@@ -1757,8 +1793,11 @@ export class ProjectsPgStore {
       last_verified_projects_revision: proof.verified_revision,
       last_verified_projects_digest: proof.collection_digest,
     });
+    const transitionEvidence = producerAttestation
+      ? migrationEvidenceWithProducerAttestation(input.evidence, producerAttestation)
+      : input.evidence;
     await this.inTransaction("project resource link migration rollback", (store) =>
-      store.persistResourceLinkMigrationTransition(before, after, input.evidence));
+      store.persistResourceLinkMigrationTransition(before, after, transitionEvidence));
     return withResponseControl({
       ok: true,
       outcome: "accepted" as const,

@@ -88,6 +88,13 @@ export {
   buildProjectResourceLinkMigrationPlan,
   projectResourceLinkMigrationEventId,
   projectResourceLinkMigrationManifestId,
+  projectResourceLinkProducerAttestationId,
+  projectResourceLinkProducerEvidenceDigest,
+  type AsyncProjectResourceLinkProducerEvidenceVerifier,
+  type ProjectResourceLinkProducerAttestation,
+  type ProjectResourceLinkProducerAttestationPhase,
+  type ProjectResourceLinkProducerEvidenceVerifier,
+  type ProjectResourceLinkProducerVerificationInput,
 } from "./lib/project-resource-link-migrations.js";
 export {
   ProjectResourceAuthoritySchema,
