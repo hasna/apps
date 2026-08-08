@@ -313,7 +313,7 @@ HASNA_CONVERSATIONS_DATABASE_URL_OWNER="postgres://…" bun run src/server/migra
 
 Endpoints:
 
-- `GET /health` · `GET /ready` · `GET /version` → `{status, version, mode}` (unauthenticated probes)
+- Successful `GET /health` · `GET /ready` → `{status, version, app}`; `GET /version` also returns `build_sha` (unauthenticated probes)
 - `GET /v1/openapi.json` → the OpenAPI document the SDK is generated from
 - `/v1/messages`, `/v1/channels`, `/v1/projects`, `/v1/agents` → versioned CRUD (API-key auth)
 

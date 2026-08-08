@@ -134,17 +134,21 @@ export const openapiSpec = {
     "/version": {
       get: {
         operationId: "getVersion",
-        summary: "Package version, mode, and artifact-baked source SHA",
+        summary: "Package version and artifact-baked source SHA",
         security: [],
         responses: { "200": { description: "version", content: { "application/json": { schema: {
           type: "object",
-          required: ["status", "version", "mode", "app", "build_sha"],
+          required: ["status", "version", "app", "build_sha"],
           properties: {
             status: { type: "string", const: "ok" },
             version: { type: "string" },
-            mode: { type: "string" },
             app: { type: "string", const: "conversations" },
-            build_sha: { type: ["string", "null"], pattern: "^[0-9a-f]{40}$" },
+            build_sha: {
+              oneOf: [
+                { type: "string", pattern: "^[0-9a-f]{40}$" },
+                { type: "null" },
+              ],
+            },
           },
         } } } } },
       },

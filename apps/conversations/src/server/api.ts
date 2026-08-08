@@ -8,8 +8,8 @@
  *
  * Surfaces:
  *   GET  /health   liveness (unauthenticated, trivial)
- *   GET  /ready    readiness — pings Postgres; {status,version,mode}
- *   GET  /version  {status,version,mode,build_sha}
+ *   GET  /ready    readiness — pings Postgres; {status,version,app}
+ *   GET  /version  {status,version,app,build_sha}
  *   /v1/*          versioned API, guarded by @hasna/contracts API-key auth
  *
  * The /v1 surface covers the app's core operations: messages, channels,
@@ -753,14 +753,13 @@ export function startApiServer(options: StartApiServerOptions = {}) {
       try {
         // ---- liveness (unauthenticated) ----
         if (path === "/health" && method === "GET") {
-          return json({ status: "ok", version: pkgVersion, mode: "cloud", app: APP });
+          return json({ status: "ok", version: pkgVersion, app: APP });
         }
 
         if (path === "/version" && method === "GET") {
           return json({
             status: "ok",
             version: pkgVersion,
-            mode: "cloud",
             app: APP,
             build_sha: BAKED_BUILD_SHA,
           });
@@ -773,9 +772,9 @@ export function startApiServer(options: StartApiServerOptions = {}) {
         if (path === "/ready" && method === "GET") {
           try {
             await client.get<{ ok: number }>("SELECT 1 AS ok");
-            return json({ status: "ok", version: pkgVersion, mode: "cloud", app: APP });
+            return json({ status: "ok", version: pkgVersion, app: APP });
           } catch (e) {
-            return json({ status: "unavailable", version: pkgVersion, mode: "cloud", error: (e as Error).message }, 503);
+            return json({ status: "unavailable", version: pkgVersion, error: (e as Error).message }, 503);
           }
         }
 
@@ -806,7 +805,7 @@ export function startApiServer(options: StartApiServerOptions = {}) {
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 
-  console.log(`conversations-serve listening on http://${host}:${port} (mode=cloud, version=${pkgVersion})`);
+  console.log(`conversations-serve listening on http://${host}:${port} (version=${pkgVersion})`);
   return server;
 }
 
