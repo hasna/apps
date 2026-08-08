@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { addWorkspaceLocation, createTmuxProfile, createWorkspace, getWorkspaceByPath } from "../db/workspaces.js";
 import { runMigrations } from "../db/schema.js";
+import { __resetProjectStore } from "../store/project-store.js";
 import { parseProjectStartAgent, parseProjectStartSessionPolicy, projectStartCommand, startProject } from "./project-start.js";
 
 function makeDb(): Database {
@@ -268,6 +269,100 @@ describe("project start service", () => {
 
     rmSync(path, { recursive: true, force: true });
     db.close();
+  });
+
+  test("routes API-mode start writes through the hosted project store", async () => {
+    const db = makeDb();
+    const root = mkdtempSync(join(tmpdir(), "project-start-api-write-"));
+    const binDir = join(root, "bin");
+    const projectPath = join(root, "cloud-project");
+    const fakeTmux = join(binDir, "tmux");
+    mkdirSync(binDir, { recursive: true });
+    mkdirSync(projectPath, { recursive: true });
+    writeFileSync(fakeTmux, "#!/bin/sh\nexit 0\n", "utf-8");
+    chmodSync(fakeTmux, 0o755);
+
+    const project = {
+      id: "cloud-project-id",
+      slug: "cloud-project",
+      name: "Cloud Project",
+      description: null,
+      kind: "project" as const,
+      status: "active" as const,
+      root_id: null,
+      recipe_id: null,
+      canonical_machine: null,
+      primary_path: projectPath,
+      git_remote: null,
+      s3_bucket: null,
+      s3_prefix: null,
+      tags: [],
+      integrations: {},
+      metadata: {},
+      last_opened_at: null,
+      created_at: "2026-08-08T10:00:00.000Z",
+      updated_at: "2026-08-08T10:00:00.000Z",
+      synced_at: null,
+    };
+    const requests: Array<{ method: string; path: string; body: Record<string, unknown> | null }> = [];
+    const originalFetch = globalThis.fetch;
+    const originalEnv = {
+      apiUrl: process.env["HASNA_PROJECTS_API_URL"],
+      apiKey: process.env["HASNA_PROJECTS_API_KEY"],
+      path: process.env.PATH,
+    };
+
+    process.env["HASNA_PROJECTS_API_URL"] = "https://projects.test.invalid";
+    process.env["HASNA_PROJECTS_API_KEY"] = "test-key";
+    process.env.PATH = `${binDir}${delimiter}${originalEnv.path ?? ""}`;
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
+      const method = (init?.method ?? "GET").toUpperCase();
+      const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : null;
+      requests.push({ method, path: url.pathname, body });
+      if (method === "GET" && url.pathname === "/v1/projects/cloud-project") {
+        return Response.json(project);
+      }
+      if (method === "PATCH" && url.pathname === "/v1/projects/cloud-project-id") {
+        return Response.json({ ...project, ...body });
+      }
+      if (method === "POST" && url.pathname === "/v1/projects/cloud-project-id/events") {
+        return Response.json({ event: { id: "cloud-event-id", ...body } });
+      }
+      return Response.json({ error: "Not found" }, { status: 404 });
+    }) as typeof globalThis.fetch;
+    __resetProjectStore();
+
+    try {
+      const result = await startProject("cloud-project", {
+        agentTool: "none",
+        ensureChannel: false,
+        db,
+      });
+
+      expect(result.tmux.success).toBe(true);
+      expect(result.project.last_opened_at).not.toBeNull();
+      expect(db.query("SELECT COUNT(*) AS count FROM workspaces").get()).toEqual({ count: 0 });
+      expect(requests.map(({ method, path }) => `${method} ${path}`)).toEqual([
+        "GET /v1/projects/cloud-project",
+        "POST /v1/projects/cloud-project-id/events",
+        "PATCH /v1/projects/cloud-project-id",
+        "POST /v1/projects/cloud-project-id/events",
+      ]);
+      expect(requests[1]?.body?.event_type).toBe("tmux_applied");
+      expect(requests[3]?.body?.event_type).toBe("started");
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalEnv.apiUrl === undefined) delete process.env["HASNA_PROJECTS_API_URL"];
+      else process.env["HASNA_PROJECTS_API_URL"] = originalEnv.apiUrl;
+      if (originalEnv.apiKey === undefined) delete process.env["HASNA_PROJECTS_API_KEY"];
+      else process.env["HASNA_PROJECTS_API_KEY"] = originalEnv.apiKey;
+      if (originalEnv.path === undefined) delete process.env.PATH;
+      else process.env.PATH = originalEnv.path;
+      __resetProjectStore();
+      rmSync(root, { recursive: true, force: true });
+      db.close();
+    }
   });
 
   test("maps supported start agents to their default commands", () => {

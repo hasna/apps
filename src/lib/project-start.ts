@@ -425,6 +425,7 @@ export async function startProject(
   options: ProjectStartOptions = {},
 ): Promise<ProjectStartResult> {
   const { project, resolution } = await resolveProjectStartTarget(target, options);
+  const store = resolveProjectStore();
   const defaults = projectManagementSummary(project);
   const defaultWindows = defaults.start_windows;
   const agentTool = parseProjectStartAgent(options.agentTool ?? defaults.start_agent ?? undefined);
@@ -463,7 +464,18 @@ export async function startProject(
     source: options.source ?? "cli",
     command: options.auditCommand,
     db: options.db,
+    recordEvents: store.mode === "local",
   });
+
+  if (!options.dryRun && store.mode === "api") {
+    await store.recordEvent(project.id, {
+      event_type: "tmux_applied",
+      source: options.source ?? "cli",
+      agentId: options.agentId,
+      command: options.auditCommand,
+      after: tmux as unknown as JsonObject,
+    });
+  }
 
   let channel: ProjectChannelEnsureResult | null = null;
   if (options.ensureChannel ?? shouldEnsureProjectChannel()) {
@@ -485,9 +497,9 @@ export async function startProject(
       source: options.source ?? "cli" as const,
       command: options.auditCommand,
     };
-    startedProject = options.db
+    startedProject = store.mode === "local" && options.db
       ? updateWorkspace(project.id, patch, options.db)
-      : await resolveProjectStore().updateProject(project.id, patch);
+      : await store.updateProject(project.id, patch);
   }
 
   let attached = false;
@@ -497,9 +509,7 @@ export async function startProject(
   }
 
   if (!options.dryRun) {
-    recordWorkspaceEvent({
-      workspace_id: project.id,
-      agent_id: options.agentId,
+    const event = {
       event_type: "started",
       source: options.source ?? "cli",
       command: options.auditCommand,
@@ -521,7 +531,19 @@ export async function startProject(
         channel,
         attached,
       } as unknown as JsonObject,
-    }, options.db);
+    };
+    if (store.mode === "local" && options.db) {
+      recordWorkspaceEvent({
+        workspace_id: project.id,
+        agent_id: options.agentId,
+        ...event,
+      }, options.db);
+    } else {
+      await store.recordEvent(project.id, {
+        agentId: options.agentId,
+        ...event,
+      });
+    }
   }
 
   const resultWithoutRender = {
