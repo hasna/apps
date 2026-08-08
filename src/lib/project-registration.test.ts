@@ -101,6 +101,7 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
   readonly invalidInverseDuplicateSteps = new Set<string>();
   strictInverseDesired = false;
   beforeCreate: ((request: ProjectRegistrationAuthorityRequest) => void | Promise<void>) | null = null;
+  channelTargetIdFactory: ((selectorDigest: string) => string) | null = null;
   packageVersion = "test-1.0.0";
 
   constructor(
@@ -158,7 +159,7 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
     const selector = canonicalJson(request.desired);
     const selectorDigest = sha256(selector);
     const targetId = this.authority === "conversations" && request.resource_kind === "channel"
-      ? [
+      ? this.channelTargetIdFactory?.(selectorDigest) ?? [
         selectorDigest.slice(0, 8),
         selectorDigest.slice(8, 12),
         `4${selectorDigest.slice(13, 16)}`,
@@ -482,6 +483,16 @@ describe("full project registration transaction", () => {
       expect(project?.integrations.todos_task_list_id).toMatch(/^td_task_list_/);
       expect(project?.integrations.mementos_project_id).toMatch(/^mm_project_/);
       expect(project?.integrations.conversations_channel).toBe("fleet-resources");
+      expect(db.query(
+        `SELECT locator_kind, locator_value
+         FROM project_resource_links
+         WHERE project_id = ? AND authority = 'conversations' AND target_kind = 'channel'`,
+      ).get(result.project_id)).toEqual({
+        locator_kind: "external_uuid",
+        locator_value: expect.stringMatching(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+        ),
+      });
 
       const taskListRequest = fakes.todos.requests.find((request) => request.step_id === "todos_task_list");
       expect(taskListRequest?.desired.todos_project_id).toBe(project?.integrations.todos_project_id);
@@ -545,6 +556,61 @@ describe("full project registration transaction", () => {
         }),
       ]));
       expect(JSON.stringify(manifest)).not.toContain(target.path);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("links a real immutable Conversations channel ID without relabeling it as a UUID", async () => {
+    const db = makeDb();
+    const target = tempTarget("immutable-channel-id");
+    const fakes = fakeAuthorities();
+    fakes.conversations.channelTargetIdFactory = (selectorDigest) =>
+      `chn_${selectorDigest.slice(0, 32)}`;
+    try {
+      const result = await registerFullProject(
+        input("op-full-immutable-channel-id", target.target),
+        { db, authorities: fakes.authorities },
+      );
+
+      expect(result.outcome).toBe("accepted");
+      const channelReceipt = result.receipts.find((receipt) =>
+        receipt.step_id === "conversations_channel" && receipt.direction === "forward"
+      );
+      expect(channelReceipt?.target_id).toMatch(/^chn_[0-9a-f]{32}$/);
+      expect(db.query(
+        `SELECT locator_kind, locator_value, labels_json
+         FROM project_resource_links
+         WHERE project_id = ? AND authority = 'conversations' AND target_kind = 'channel'`,
+      ).get(result.project_id)).toEqual({
+        locator_kind: "conversations_channel_id",
+        locator_value: channelReceipt!.target_id,
+        labels_json: JSON.stringify({ channel_name: "fleet-resources" }),
+      });
+      expect(getWorkspace(result.project_id, db)?.integrations.conversations_channel)
+        .toBe("fleet-resources");
+    } finally {
+      db.close();
+    }
+  });
+
+  test("fails closed when a Conversations channel receipt uses a malformed immutable ID", async () => {
+    const db = makeDb();
+    const target = tempTarget("malformed-channel-id");
+    const fakes = fakeAuthorities();
+    fakes.conversations.channelTargetIdFactory = () => "chn_not-a-complete-id";
+    try {
+      const result = await registerFullProject(
+        input("op-full-malformed-channel-id", target.target),
+        { db, authorities: fakes.authorities },
+      );
+
+      expect(result.outcome).toBe("rolled_back");
+      expect(result.failed_step).toBe("conversations_channel");
+      expect(result.reason_code).toBe("channel_immutable_uuid_missing");
+      expect(fakes.conversations.records.size).toBe(0);
+      expect(getWorkspace(result.project_id, db)).toBeNull();
+      expect(existsSync(target.path)).toBe(false);
     } finally {
       db.close();
     }

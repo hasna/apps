@@ -44,6 +44,14 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-
 const CONVERSATIONS_CHANNEL_ID_RE = /^chn_[0-9a-f]{32}$/i;
 const URN_RE = /^urn:[a-z0-9][a-z0-9-]{0,31}:[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+$/;
 
+export function projectResourceLinkConversationsChannelLocatorKind(
+  value: string,
+): "external_uuid" | "conversations_channel_id" | null {
+  if (UUID_RE.test(value)) return "external_uuid";
+  if (CONVERSATIONS_CHANNEL_ID_RE.test(value)) return "conversations_channel_id";
+  return null;
+}
+
 function assertClosedObject(value: object, allowed: ReadonlySet<string>, label: string): void {
   for (const key of Object.keys(value)) {
     if (!allowed.has(key)) throw new Error(`${label} contains unknown field '${key}'`);
@@ -112,12 +120,17 @@ export function normalizeProjectResourceLink(input: ProjectResourceLinkInput): P
   const locatorValue = requiredString(input.locator.value, "resource link locator.value");
   let normalizedLocatorValue: string;
   if (input.locator.kind === "external_uuid") {
-    if (!UUID_RE.test(locatorValue)) throw new Error("resource link external_uuid must be a complete UUID");
+    if (projectResourceLinkConversationsChannelLocatorKind(locatorValue) !== "external_uuid") {
+      throw new Error("resource link external_uuid must be a complete UUID");
+    }
     normalizedLocatorValue = locatorValue.toLowerCase();
   } else if (input.locator.kind === "canonical_uri") {
     normalizedLocatorValue = canonicalUri(locatorValue, "resource link canonical_uri");
   } else if (input.locator.kind === "conversations_channel_id") {
-    if (!CONVERSATIONS_CHANNEL_ID_RE.test(locatorValue)) {
+    if (
+      projectResourceLinkConversationsChannelLocatorKind(locatorValue)
+      !== "conversations_channel_id"
+    ) {
       throw new Error("resource link conversations channel ID must match chn_<32hex>");
     }
     normalizedLocatorValue = locatorValue.toLowerCase();
