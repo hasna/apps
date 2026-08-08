@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { gzipSync } from "node:zlib";
 import { MAX_ATTACHMENT_BYTES } from "../lib/attachments.js";
 import { isolatedStoreChildEnv } from "../lib/store/isolated-test-env.js";
 
@@ -67,6 +68,10 @@ function messagesIn(channel: string): Array<Record<string, unknown>> {
   return JSON.parse(result.stdout) as Array<Record<string, unknown>>;
 }
 
+function syntheticDatabaseUrl(): string {
+  return ["postgres", "://", "app_user:synthetic-password", "@db.example.invalid/app"].join("");
+}
+
 describe("send attachment and reply compatibility (e2e)", () => {
   afterAll(() => {
     rmSync(TEST_ROOT, { recursive: true, force: true });
@@ -76,9 +81,9 @@ describe("send attachment and reply compatibility (e2e)", () => {
     const channel = "send-attach-reply";
     const root = seedRoot(channel);
     const textFile = join(SOURCE_DIR, "evidence.txt");
-    const bundleFile = join(SOURCE_DIR, "handoff.bundle");
+    const pdfFile = join(SOURCE_DIR, "handoff.pdf");
     writeFileSync(textFile, "synthetic attachment evidence\n");
-    writeFileSync(bundleFile, "synthetic git bundle placeholder\n");
+    writeFileSync(pdfFile, "synthetic PDF placeholder\n");
 
     const sent = runCli([
       "send",
@@ -90,7 +95,7 @@ describe("send attachment and reply compatibility (e2e)", () => {
       "high",
       "--attach",
       textFile,
-      bundleFile,
+      pdfFile,
       "--reply-to",
       String(root.id),
       "--json",
@@ -117,13 +122,13 @@ describe("send attachment and reply compatibility (e2e)", () => {
         mime_type: "text/plain",
       },
       {
-        name: "handoff.bundle",
-        size: Buffer.byteLength("synthetic git bundle placeholder\n"),
-        mime_type: "application/x-git-bundle",
+        name: "handoff.pdf",
+        size: Buffer.byteLength("synthetic PDF placeholder\n"),
+        mime_type: "application/pdf",
       },
     ]);
     expect(readFileSync(message.attachments[0].path, "utf8")).toBe("synthetic attachment evidence\n");
-    expect(readFileSync(message.attachments[1].path, "utf8")).toBe("synthetic git bundle placeholder\n");
+    expect(readFileSync(message.attachments[1].path, "utf8")).toBe("synthetic PDF placeholder\n");
 
     const shown = runCli(["show", String(message.id), "--json"], "alice");
     expect(shown.exitCode, shown.stderr).toBe(0);
@@ -223,5 +228,34 @@ describe("send attachment and reply compatibility (e2e)", () => {
     expect(`${unsupportedResult.stdout}${unsupportedResult.stderr}`).toContain("Unsupported attachment type");
 
     expect(messagesIn(channel)).toEqual(before);
+  });
+
+  test("archive and compressed attachment extensions fail closed before a local message is stored", () => {
+    const channel = "send-attachment-opaque";
+    seedChannel(channel);
+    const compressedFinding = gzipSync(Buffer.from(`attachment ${syntheticDatabaseUrl()}`));
+    const before = messagesIn(channel);
+
+    for (const extension of ["bundle", "zip", "gz", "tgz", "tar"]) {
+      const source = join(SOURCE_DIR, `opaque.${extension}`);
+      writeFileSync(source, compressedFinding);
+      const sent = runCli([
+        "send",
+        "--channel",
+        channel,
+        "--from",
+        "alice",
+        "--attach",
+        source,
+        "--json",
+        `must not persist ${extension}`,
+      ], "alice");
+
+      expect(sent.exitCode).toBe(1);
+      expect(`${sent.stdout}${sent.stderr}`).toContain(
+        "Archive and compressed attachment types are not supported securely",
+      );
+      expect(messagesIn(channel)).toEqual(before);
+    }
   });
 });

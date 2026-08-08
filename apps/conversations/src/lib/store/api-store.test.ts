@@ -175,8 +175,8 @@ describe("ApiStore channel notification cursor", () => {
 describe("ApiStore.sendMessage wire body", () => {
   test("uploads validated attachment bytes and parses returned metadata", async () => {
     const root = mkdtempSync(join(tmpdir(), "conversations-api-attachment-"));
-    const source = join(root, "handoff.bundle");
-    writeFileSync(source, "synthetic remote bundle\n");
+    const source = join(root, "handoff.pdf");
+    writeFileSync(source, "synthetic remote PDF\n");
     const sent: Array<Record<string, unknown>> = [];
     const client = {
       name: "conversations",
@@ -194,10 +194,10 @@ describe("ApiStore.sendMessage wire body", () => {
             channel: "handoffs",
             content: body.content,
             attachments: [{
-              name: "handoff.bundle",
-              path: "/v1/messages/701/attachments/handoff.bundle",
-              size: Buffer.byteLength("synthetic remote bundle\n"),
-              mime_type: "application/x-git-bundle",
+              name: "handoff.pdf",
+              path: "/v1/messages/701/attachments/handoff.pdf",
+              size: Buffer.byteLength("synthetic remote PDF\n"),
+              mime_type: "application/pdf",
             }],
           },
         };
@@ -210,20 +210,48 @@ describe("ApiStore.sendMessage wire body", () => {
         to: "alice",
         channel: "handoffs",
         content: "remote attachment",
-        attachments: [{ name: "handoff.bundle", source_path: source }],
+        attachments: [{ name: "handoff.pdf", source_path: source }],
       });
 
       expect(sent).toHaveLength(1);
       expect(sent[0].attachments).toEqual([{
-        name: "handoff.bundle",
-        content_base64: Buffer.from("synthetic remote bundle\n").toString("base64"),
+        name: "handoff.pdf",
+        content_base64: Buffer.from("synthetic remote PDF\n").toString("base64"),
       }]);
       expect(message.attachments).toEqual([{
-        name: "handoff.bundle",
-        path: "/v1/messages/701/attachments/handoff.bundle",
-        size: Buffer.byteLength("synthetic remote bundle\n"),
-        mime_type: "application/x-git-bundle",
+        name: "handoff.pdf",
+        path: "/v1/messages/701/attachments/handoff.pdf",
+        size: Buffer.byteLength("synthetic remote PDF\n"),
+        mime_type: "application/pdf",
       }]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects archive and compressed attachments before starting an HTTP write", async () => {
+    const root = mkdtempSync(join(tmpdir(), "conversations-api-attachment-opaque-"));
+    const source = join(root, "handoff.bundle");
+    writeFileSync(source, "synthetic opaque payload\n");
+    let creates = 0;
+    const client = {
+      name: "conversations",
+      baseUrl: "https://conversations.hasna.xyz/v1",
+      transport: {} as unknown as HasnaStorageClient["transport"],
+      create: async () => {
+        creates++;
+        throw new Error("must not write");
+      },
+    } as unknown as HasnaStorageClient;
+
+    try {
+      await expect(new ApiStore(client).sendMessage({
+        from: "alice",
+        to: "bob",
+        content: "must not send",
+        attachments: [{ name: "handoff.bundle", source_path: source }],
+      })).rejects.toThrow("Archive and compressed attachment types are not supported securely");
+      expect(creates).toBe(0);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -2,6 +2,7 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { startApiServer, type ApiServerDeps } from "./api.js";
 import { mintApiKey } from "@hasna/contracts/auth";
 import { verifyApiKey, ApiKeyStore } from "@hasna/contracts/auth";
+import { gzipSync } from "node:zlib";
 
 // In-memory query shim standing in for the vendored kit's TypedQueryClient.
 // Exercises the router + auth without a live Postgres.
@@ -1366,7 +1367,7 @@ describe("conversations-serve", () => {
 
   test("POST /v1/messages stores attachment bytes atomically and GET reads them back exactly", async () => {
     const text = Buffer.from("synthetic API attachment\n");
-    const bundle = Buffer.from("synthetic API bundle\n");
+    const pdf = Buffer.from("synthetic API PDF\n");
     const sent = await fetch(`${base}/v1/messages`, {
       method: "POST",
       headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
@@ -1377,7 +1378,7 @@ describe("conversations-serve", () => {
         content: "remote files",
         attachments: [
           { name: "evidence.txt", content_base64: text.toString("base64") },
-          { name: "handoff.bundle", content_base64: bundle.toString("base64") },
+          { name: "handoff.pdf", content_base64: pdf.toString("base64") },
         ],
       }),
     });
@@ -1392,10 +1393,10 @@ describe("conversations-serve", () => {
         mime_type: "text/plain",
       },
       {
-        name: "handoff.bundle",
-        path: `/v1/messages/${message.id}/attachments/handoff.bundle`,
-        size: bundle.length,
-        mime_type: "application/x-git-bundle",
+        name: "handoff.pdf",
+        path: `/v1/messages/${message.id}/attachments/handoff.pdf`,
+        size: pdf.length,
+        mime_type: "application/pdf",
       },
     ]);
     expect(JSON.stringify(message)).not.toContain("content_base64");
@@ -1409,13 +1410,13 @@ describe("conversations-serve", () => {
     expect(downloadedText.headers.get("content-type")).toBe("text/plain");
     expect(Buffer.from(await downloadedText.arrayBuffer())).toEqual(text);
 
-    const downloadedBundle = await fetch(
-      `${base}/v1/messages/${message.id}/attachments/handoff.bundle`,
+    const downloadedPdf = await fetch(
+      `${base}/v1/messages/${message.id}/attachments/handoff.pdf`,
       { headers: { "x-api-key": rwKey } },
     );
-    expect(downloadedBundle.status).toBe(200);
-    expect(downloadedBundle.headers.get("content-type")).toBe("application/x-git-bundle");
-    expect(Buffer.from(await downloadedBundle.arrayBuffer())).toEqual(bundle);
+    expect(downloadedPdf.status).toBe(200);
+    expect(downloadedPdf.headers.get("content-type")).toBe("application/pdf");
+    expect(Buffer.from(await downloadedPdf.arrayBuffer())).toEqual(pdf);
   });
 
   test("POST /v1/messages rejects invalid or unsupported attachments before inserting a message", async () => {
@@ -1450,6 +1451,36 @@ describe("conversations-serve", () => {
     expect(unsupported.status).toBe(400);
     expect(activeFakeClient!.__debug.messages).toHaveLength(before);
     expect(activeFakeClient!.__debug.messageAttachments).toHaveLength(2);
+  });
+
+  test("POST /v1/messages rejects archive and compressed attachment extensions before inserting a message", async () => {
+    const beforeMessages = activeFakeClient!.__debug.messages.length;
+    const beforeAttachments = activeFakeClient!.__debug.messageAttachments.length;
+    const compressedFinding = gzipSync(Buffer.from(`attachment ${syntheticDatabaseUrl()}`));
+
+    for (const extension of ["bundle", "zip", "gz", "tgz", "tar"]) {
+      const response = await fetch(`${base}/v1/messages`, {
+        method: "POST",
+        headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          from: "alice",
+          to: "threads",
+          channel: "threads",
+          content: `must not persist ${extension}`,
+          attachments: [{
+            name: `opaque.${extension}`,
+            content_base64: compressedFinding.toString("base64"),
+          }],
+        }),
+      });
+
+      expect(response.status).toBe(400);
+      expect((await response.json()).error).toContain(
+        "Archive and compressed attachment types are not supported securely",
+      );
+      expect(activeFakeClient!.__debug.messages).toHaveLength(beforeMessages);
+      expect(activeFakeClient!.__debug.messageAttachments).toHaveLength(beforeAttachments);
+    }
   });
 
   test("POST /v1/channels links a valid project id", async () => {

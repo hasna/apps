@@ -17,6 +17,14 @@ export const MAX_TOTAL_ATTACHMENT_BYTES = 128 * 1024 * 1024;
 const ATTACHMENT_SCAN_CHUNK_BYTES = 64 * 1024;
 const ATTACHMENT_SCAN_CARRY_CHARS = 8192;
 
+const BLOCKED_OPAQUE_ATTACHMENT_EXTENSIONS = new Set([
+  "bundle",
+  "zip",
+  "gz",
+  "tgz",
+  "tar",
+]);
+
 const MIME_TYPES: Record<string, string> = {
   txt: "text/plain",
   md: "text/markdown",
@@ -34,14 +42,9 @@ const MIME_TYPES: Record<string, string> = {
   svg: "image/svg+xml",
   webp: "image/webp",
   pdf: "application/pdf",
-  zip: "application/zip",
-  gz: "application/gzip",
-  tgz: "application/gzip",
-  tar: "application/x-tar",
   csv: "text/csv",
   yaml: "text/yaml",
   yml: "text/yaml",
-  bundle: "application/x-git-bundle",
 };
 
 export interface AttachmentSource {
@@ -70,6 +73,11 @@ export interface DecodedAttachmentUpload {
 
 export function attachmentMimeType(name: string): string {
   const extension = name.split(".").pop()?.toLowerCase() ?? "";
+  if (BLOCKED_OPAQUE_ATTACHMENT_EXTENSIONS.has(extension)) {
+    throw new Error(
+      `Archive and compressed attachment types are not supported securely: ${name}. Extract and attach safe files instead.`,
+    );
+  }
   const mimeType = MIME_TYPES[extension];
   if (!mimeType) {
     throw new Error(
