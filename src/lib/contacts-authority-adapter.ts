@@ -5,6 +5,7 @@ import type {
   ContactProjectMembershipMutationResult,
   ContactProjectMembershipSnapshot,
 } from "./project-contact-links.js";
+import { canonicalProjectResourceLinkUri } from "./project-resource-links.js";
 
 export interface ContactsHttpProjectMembershipAuthorityOptions {
   baseUrl: string;
@@ -59,7 +60,10 @@ function defaultServiceInstance(value: string): string {
   url.pathname = "";
   url.search = "";
   url.hash = "";
-  return url.toString().replace(/\/+$/, "");
+  return canonicalProjectResourceLinkUri(
+    url.toString(),
+    "projects contacts adapter service instance",
+  );
 }
 
 async function responseJson<T>(response: Response, method: string, path: string): Promise<T> {
@@ -95,7 +99,12 @@ export class ContactsHttpProjectMembershipAuthority implements ContactProjectMem
   constructor(options: ContactsHttpProjectMembershipAuthorityOptions) {
     this.baseUrl = v1BaseUrl(required(options.baseUrl, "HASNA_CONTACTS_API_URL"));
     this.apiKey = required(options.apiKey, "HASNA_CONTACTS_API_KEY");
-    this.service_instance = options.serviceInstance?.trim() || defaultServiceInstance(this.baseUrl);
+    this.service_instance = options.serviceInstance
+      ? canonicalProjectResourceLinkUri(
+        options.serviceInstance.trim(),
+        "projects contacts adapter service instance",
+      )
+      : defaultServiceInstance(this.baseUrl);
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
   }
 

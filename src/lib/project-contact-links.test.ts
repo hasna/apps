@@ -46,12 +46,12 @@ const project: Workspace = {
   updated_at: "2026-08-08 12:00:00",
 };
 
-function resourceLink(id = contactId): ProjectResourceLink {
+function resourceLink(id = contactId, resourceServiceInstance = serviceInstance): ProjectResourceLink {
   return {
     id: `prl_${id.replaceAll("-", "").slice(0, 36)}`,
     project_id: projectId,
     authority: "contacts",
-    service_instance: serviceInstance,
+    service_instance: resourceServiceInstance,
     source_package: "@hasna/contacts",
     target_kind: "contact",
     locator: { kind: "external_uuid", value: id },
@@ -218,12 +218,13 @@ function membership(linked: boolean, version: string): ContactProjectMembershipS
 }
 
 class FakeMembershipAuthority implements ContactProjectMembershipAuthority {
-  readonly service_instance = serviceInstance;
   readonly mutations: Array<{ kind: "attach" | "detach"; expected_version: string; operation_id: string; step_id: string }> = [];
   readonly receipts = new Map<string, ContactProjectMembershipMutationResult>();
   snapshot = membership(false, "contacts-v1");
   projectContactIds = [contactId];
   failCompensation = false;
+
+  constructor(readonly service_instance = serviceInstance) {}
 
   async readMembership(): Promise<ContactProjectMembershipSnapshot> {
     return this.snapshot;
@@ -308,6 +309,75 @@ function dependencies(projects: FakeProjectStore, contacts: FakeMembershipAuthor
 }
 
 describe("project contact-link coordination", () => {
+  test("canonicalizes URL service identities across attach, exact retry, list, detach, and reattach", async () => {
+    const projects = new FakeProjectStore();
+    const contacts = new FakeMembershipAuthority("https://contacts.example.test");
+    const attachInput = {
+      project_id: projectId,
+      contact_id: contactId,
+      operation_id: "attach-url-service-instance",
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+      max_items: 1000,
+    };
+
+    const attached = await attachProjectContact(dependencies(projects, contacts), attachInput);
+    expect(attached.outcome).toBe("accepted");
+    expect(attached.project_link?.service_instance).toBe("https://contacts.example.test/");
+    expect(projects.read.link_count).toBe(1);
+
+    const retried = await attachProjectContact(dependencies(projects, contacts), attachInput);
+    expect(retried.outcome).toBe("duplicate_of_accepted");
+    expect(retried.project_link?.service_instance).toBe("https://contacts.example.test/");
+    expect(contacts.mutations).toHaveLength(1);
+    expect(projects.mutations).toHaveLength(1);
+
+    const listed = await listProjectContacts(dependencies(projects, contacts), {
+      project_id: projectId,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+      max_items: 1000,
+    });
+    expect(listed.synchronized_contact_ids).toEqual([contactId]);
+    expect(listed.missing_project_link_contact_ids).toEqual([]);
+    expect(listed.project_links).toHaveLength(1);
+
+    const detached = await detachProjectContact(dependencies(projects, contacts), {
+      ...attachInput,
+      operation_id: "detach-url-service-instance",
+    });
+    expect(detached.outcome).toBe("accepted");
+    expect(detached.project_link).toBeNull();
+    expect(projects.read.link_count).toBe(0);
+    expect(projects.read.links).toEqual([]);
+
+    const reattached = await attachProjectContact(dependencies(projects, contacts), {
+      ...attachInput,
+      operation_id: "reattach-url-service-instance",
+    });
+    expect(reattached.outcome).toBe("accepted");
+    expect(reattached.project_link?.service_instance).toBe("https://contacts.example.test/");
+    expect(projects.read.link_count).toBe(1);
+  });
+
+  test("recognizes a reachable legacy root URL form as the same Contacts service instance", async () => {
+    const projects = new FakeProjectStore();
+    projects.read = projectRead([resourceLink(contactId, "https://contacts.example.test")]);
+    const contacts = new FakeMembershipAuthority("https://contacts.example.test/");
+    contacts.snapshot = membership(true, "contacts-v2");
+
+    const listed = await listProjectContacts(dependencies(projects, contacts), {
+      project_id: projectId,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+      max_items: 1000,
+    });
+
+    expect(listed.synchronized_contact_ids).toEqual([contactId]);
+    expect(listed.missing_project_link_contact_ids).toEqual([]);
+    expect(listed.project_links).toHaveLength(1);
+  });
+
   test("lists Contacts membership as authority and reports missing or stale Projects evidence", async () => {
     const projects = new FakeProjectStore();
     projects.read = projectRead([resourceLink(contactId), resourceLink("d9a3bd8a-14b4-4e58-9fe8-6b0274f36f1f")]);

@@ -6,7 +6,10 @@ import type {
   ProjectResourceLinkMutationResult,
 } from "../types/workspace.js";
 import { sha256 } from "./guarded-project-mutation.js";
-import { normalizeProjectResourceLink } from "./project-resource-links.js";
+import {
+  canonicalProjectResourceLinkUri,
+  normalizeProjectResourceLink,
+} from "./project-resource-links.js";
 
 export const PROJECT_CONTACT_RESOURCE_LINK_TYPE = {
   authority: "contacts",
@@ -197,10 +200,24 @@ function isProjectContactLink(
   serviceInstance: string,
   contactId?: string,
 ): boolean {
+  let sameServiceInstance = false;
+  try {
+    sameServiceInstance = canonicalProjectResourceLinkUri(
+      link.service_instance,
+      "project contact link service_instance",
+    ) === canonicalProjectResourceLinkUri(
+      serviceInstance,
+      "Contacts authority service_instance",
+    );
+  } catch {
+    // Preserve the prior filter behavior for malformed legacy rows: they are
+    // not Contacts evidence, but they do not make the whole collection unreadable.
+    return false;
+  }
   return link.authority === PROJECT_CONTACT_RESOURCE_LINK_TYPE.authority
     && link.source_package === PROJECT_CONTACT_RESOURCE_LINK_TYPE.source_package
     && link.target_kind === PROJECT_CONTACT_RESOURCE_LINK_TYPE.target_kind
-    && link.service_instance === serviceInstance
+    && sameServiceInstance
     && link.locator.kind === PROJECT_CONTACT_RESOURCE_LINK_TYPE.locator_kind
     && (contactId === undefined || link.locator.value === contactId);
 }
