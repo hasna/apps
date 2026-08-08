@@ -655,4 +655,10 @@ export const PG_MIGRATIONS: string[] = [
     ON file_search_documents(content_hash)`,
   `CREATE INDEX IF NOT EXISTS idx_file_search_documents_search_vector
     ON file_search_documents USING GIN(search_vector)`,
+
+  // Migration 30: signing/upload headers are ephemeral transport material.
+  // Scrub legacy rows; adapters write only the empty compatibility object.
+  `UPDATE file_upload_intents
+    SET required_headers = '{}'
+    WHERE required_headers <> '{}'`,
 ];
