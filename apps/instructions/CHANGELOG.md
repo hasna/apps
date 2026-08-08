@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.26
+
+Publishes `ff7ac72` (#78), the project-context compatibility bridge.
+
+It accepts external v1 bundles only when their schema and supplied hash are
+valid, normalizes accepted legacy bundles to the canonical hash, fails closed
+on malformed managed END markers unless forced, preserves adjacent same-line
+user bytes, and creates a restorable before-image snapshot for target
+mutations.
+
 ## 0.4.25
 
 Publishes the two commits currently on `main` after the 0.4.24 npm gitHead:
