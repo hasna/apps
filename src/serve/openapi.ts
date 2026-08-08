@@ -617,8 +617,8 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
         },
         Health: {
           type: "object",
-          properties: { status: { type: "string" }, version: { type: "string" }, mode: { type: "string" } },
-          required: ["status", "version", "mode"],
+          properties: { status: { type: "string" }, version: { type: "string" } },
+          required: ["status", "version"],
         },
         Error: {
           type: "object",

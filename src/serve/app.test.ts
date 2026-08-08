@@ -76,8 +76,8 @@ function fakeStore(): ProjectsPgStore {
   } as unknown as ProjectsPgStore;
 }
 
-function handler() {
-  return createFetchHandler({ store: fakeStore(), version: "9.9.9", app: "projects", signingSecret: SIGNING_SECRET });
+function handler(store = fakeStore()) {
+  return createFetchHandler({ store, version: "9.9.9", app: "projects", signingSecret: SIGNING_SECRET });
 }
 
 function keyWith(scopes: string[]): string {
@@ -85,11 +85,11 @@ function keyWith(scopes: string[]): string {
 }
 
 describe("projects-serve probes", () => {
-  test("GET /health returns status/version/mode", async () => {
+  test("GET /health returns status/version without retired deployment mode", async () => {
     const res = await handler()(new Request("http://x/health"));
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toEqual({ status: "ok", version: "9.9.9", mode: "cloud" });
+    expect(body).toEqual({ status: "ok", version: "9.9.9" });
   });
 
   test("GET /version returns version", async () => {
@@ -101,7 +101,23 @@ describe("projects-serve probes", () => {
   test("GET /ready returns ready when db pings", async () => {
     const res = await handler()(new Request("http://x/ready"));
     expect(res.status).toBe(200);
-    expect((await res.json()).status).toBe("ready");
+    expect(await res.json()).toEqual({ status: "ready", version: "9.9.9" });
+  });
+
+  test("GET /ready preserves degraded status without retired deployment mode", async () => {
+    const store = fakeStore();
+    store.ping = async () => false;
+    const res = await handler(store)(new Request("http://x/ready"));
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ status: "degraded", version: "9.9.9" });
+  });
+
+  test("GET /ready preserves unavailable status without retired deployment mode", async () => {
+    const store = fakeStore();
+    store.ping = async () => { throw new Error("database unavailable"); };
+    const res = await handler(store)(new Request("http://x/ready"));
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ status: "unavailable", version: "9.9.9" });
   });
 
   test("GET /openapi.json serves the spec", async () => {
@@ -109,6 +125,11 @@ describe("projects-serve probes", () => {
     expect(res.status).toBe(200);
     const spec = await res.json();
     expect(spec.openapi).toBe("3.1.0");
+    expect(spec.components.schemas.Health).toEqual({
+      type: "object",
+      properties: { status: { type: "string" }, version: { type: "string" } },
+      required: ["status", "version"],
+    });
     expect(spec.paths["/v1/projects"]).toBeDefined();
     expect(spec.paths["/v1/projects/{id}/guarded-metadata"].get.operationId).toBe("guardedReadProject");
     expect(spec.paths["/v1/projects/{id}/guarded-metadata"].post.operationId).toBe("guardedUpdateProject");
