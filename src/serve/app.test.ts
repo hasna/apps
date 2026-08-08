@@ -132,6 +132,10 @@ describe("projects-serve probes", () => {
       "last_opened_at",
       "synced_at",
     ]));
+    expect(spec.components.schemas.UpdateWorkspace.properties.last_opened_at).toEqual({
+      type: "string",
+      nullable: true,
+    });
     expect(spec.components.schemas.GuardedProjectMutationResult.properties.after.anyOf).toEqual([
       { $ref: "#/components/schemas/Workspace" },
       { type: "null" },

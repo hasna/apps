@@ -230,6 +230,9 @@ function resourceLinkMutationClient() {
       }
     },
     async get<T>(sql: string, params: readonly unknown[] = []): Promise<T | null> {
+      if (sql === "SELECT id FROM workspaces WHERE slug = $1") {
+        return (workspace.slug === params[0] ? { id: workspace.id } : null) as T | null;
+      }
       if (sql === "SELECT * FROM workspaces WHERE id = $1 OR slug = $1") {
         return (workspace.id === params[0] || workspace.slug === params[0] ? workspace : null) as T | null;
       }
@@ -255,17 +258,20 @@ function resourceLinkMutationClient() {
           && receipt.outcome === "accepted"
         ) ?? null) as T | null;
       }
-      if (sql.startsWith("UPDATE workspaces SET integrations")) {
-        if (failNextWorkspaceRevisionUpdate) {
+      if (sql.startsWith("UPDATE workspaces SET ")) {
+        if (failNextWorkspaceRevisionUpdate && sql.startsWith("UPDATE workspaces SET integrations")) {
           failNextWorkspaceRevisionUpdate = false;
           throw new Error("injected postgres revision update failure");
         }
-        if (workspace.id !== params[2] || workspace.updated_at !== params[3]) return null;
-        workspace = {
-          ...workspace,
-          integrations: String(params[0]),
-          updated_at: String(params[1]),
-        };
+        const id = params.at(-2);
+        const expectedRevision = params.at(-1);
+        if (workspace.id !== id || workspace.updated_at !== expectedRevision) return null;
+        const setClause = sql.match(/UPDATE workspaces SET ([\s\S]+?)\s+WHERE/)?.[1] ?? "";
+        const updated = { ...workspace } as Record<string, unknown>;
+        for (const match of setClause.matchAll(/([a-z_]+) = \$(\d+)/g)) {
+          updated[match[1]!] = params[Number(match[2]) - 1];
+        }
+        workspace = updated as unknown as WorkspaceRow;
         return workspace as T;
       }
       if (sql.startsWith("SELECT * FROM workspace_events WHERE id")) {
@@ -521,6 +527,43 @@ describe("pg-store typed resource-link transaction model", () => {
       receipts: harness.receipts(),
       events: harness.events(),
     }).toEqual(stateBeforeFault);
+  });
+});
+
+describe("pg-store guarded workspace mutation", () => {
+  test("previews, writes, and rolls back last_opened_at", async () => {
+    const harness = resourceLinkMutationClient();
+    const store = new ProjectsPgStore(harness.client);
+    const openedAt = "2026-08-08T11:00:00.000Z";
+    const request = {
+      project_id: harness.workspace().id,
+      operation_id: "pg-open-timestamp",
+      step_id: "record-open",
+      expected_revision: harness.workspace().updated_at,
+      patch: { last_opened_at: openedAt },
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    };
+
+    const dryRun = await store.guardedUpdateWorkspace({ ...request, dry_run: true });
+    expect(dryRun.after?.last_opened_at).toBe(openedAt);
+    expect(harness.workspace().last_opened_at).toBeNull();
+
+    const accepted = await store.guardedUpdateWorkspace(request);
+    expect(accepted.after?.last_opened_at).toBe(openedAt);
+    expect(harness.workspace().last_opened_at).toBe(openedAt);
+
+    const rolledBack = await store.rollbackGuardedWorkspaceMutation({
+      project_id: request.project_id,
+      operation_id: "pg-open-timestamp-rollback",
+      step_id: "restore-open-timestamp",
+      accepted_receipt_id: accepted.receipt!.receipt_id,
+      expected_current_revision: accepted.receipt!.post_revision!,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    });
+    expect(rolledBack.after?.last_opened_at).toBeNull();
+    expect(harness.workspace().last_opened_at).toBeNull();
   });
 });
 

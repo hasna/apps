@@ -730,6 +730,7 @@ export class ProjectsPgStore {
     if (input.tags !== undefined) set("tags", json(normalizeList(input.tags)));
     if (input.integrations !== undefined) set("integrations", json(input.integrations));
     if (metadata !== undefined) set("metadata", json(metadata));
+    if (input.last_opened_at !== undefined) set("last_opened_at", input.last_opened_at);
 
     if (updates.length > 0) {
       set("updated_at", nowIso());
@@ -899,6 +900,7 @@ export class ProjectsPgStore {
     if (patch.tags !== undefined) set("tags", json(normalizeList(patch.tags)));
     if (patch.integrations !== undefined) set("integrations", json(patch.integrations));
     if (patch.metadata !== undefined) set("metadata", json(patch.metadata));
+    if (patch.last_opened_at !== undefined) set("last_opened_at", patch.last_opened_at);
     if (!updates.length) return before;
     set("updated_at", nowIso());
     params.push(id);
@@ -1418,6 +1420,7 @@ export class ProjectsPgStore {
         tags: before.tags,
         integrations: before.integrations,
         metadata: before.metadata,
+        last_opened_at: before.last_opened_at,
       },
       response_byte_limit: input.response_byte_limit,
       time_budget_ms: input.time_budget_ms,

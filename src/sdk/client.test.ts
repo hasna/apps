@@ -3,6 +3,7 @@ import {
   ProjectsClient,
   type GuardedProjectMutationResult,
   type ProjectResourceLinkInput,
+  type UpdateWorkspace,
   type Workspace,
 } from "./client.js";
 
@@ -16,6 +17,10 @@ const workspaceFixture: Workspace = {
   s3_prefix: null,
   last_opened_at: null,
   synced_at: null,
+};
+
+const openTimestampPatch: UpdateWorkspace = {
+  last_opened_at: "2026-08-08T11:00:00.000Z",
 };
 
 const terminalFixture: GuardedProjectMutationResult = {
@@ -50,6 +55,7 @@ describe("generated Projects SDK server parity", () => {
       synced_at: null,
     });
     expect(terminalFixture).toMatchObject({ after: null, receipt: null });
+    expect(openTimestampPatch.last_opened_at).toBe("2026-08-08T11:00:00.000Z");
   });
 
   test("routes typed resource-link read, add, reconcile, and rollback with exact payloads", async () => {

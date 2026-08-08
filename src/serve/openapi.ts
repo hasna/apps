@@ -215,6 +215,7 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
             tags: { type: "array", items: { type: "string" } },
             integrations: { type: "object", additionalProperties: true },
             metadata: { type: "object", additionalProperties: true },
+            last_opened_at: { type: "string", nullable: true },
             agent_id: { type: "string" },
           },
         },

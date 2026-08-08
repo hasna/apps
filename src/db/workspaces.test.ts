@@ -265,7 +265,11 @@ describe("workspace domain services", () => {
         operation_id: "op-dry-run",
         step_id: "rename",
         expected_revision: originalRevision,
-        patch: { name: "Dry Run Only", metadata: { owner: "dry" } },
+        patch: {
+          name: "Dry Run Only",
+          metadata: { owner: "dry" },
+          last_opened_at: "2026-08-08T10:00:00.000Z",
+        },
         response_byte_limit: 40_000,
         time_budget_ms: 2_000,
         dry_run: true,
@@ -275,14 +279,20 @@ describe("workspace domain services", () => {
       expect(dryRun.response_control.complete).toBe(true);
       expect(dryRun.response_control.truncated).toBe(false);
       expect(dryRun.response_control.response_bytes).toBeGreaterThan(0);
+      expect(dryRun.after?.last_opened_at).toBe("2026-08-08T10:00:00.000Z");
       expect(getWorkspace(workspace.id, db)?.name).toBe("Guarded Demo");
+      expect(getWorkspace(workspace.id, db)?.last_opened_at).toBeNull();
 
       const accepted = guardedUpdateWorkspace({
         project_id: workspace.id,
         operation_id: "op-forward",
         step_id: "rename",
         expected_revision: originalRevision,
-        patch: { name: "Guarded Renamed", metadata: { owner: "new" } },
+        patch: {
+          name: "Guarded Renamed",
+          metadata: { owner: "new" },
+          last_opened_at: "2026-08-08T11:00:00.000Z",
+        },
         response_byte_limit: 80_000,
         time_budget_ms: 2_000,
         agent_id: undefined,
@@ -297,13 +307,18 @@ describe("workspace domain services", () => {
       expect(accepted.response_control.complete).toBe(true);
       expect(accepted.response_control.truncated).toBe(false);
       expect(getWorkspace(workspace.id, db)?.name).toBe("Guarded Renamed");
+      expect(getWorkspace(workspace.id, db)?.last_opened_at).toBe("2026-08-08T11:00:00.000Z");
 
       const duplicate = guardedUpdateWorkspace({
         project_id: workspace.id,
         operation_id: "op-forward",
         step_id: "rename",
         expected_revision: originalRevision,
-        patch: { name: "Guarded Renamed", metadata: { owner: "new" } },
+        patch: {
+          name: "Guarded Renamed",
+          metadata: { owner: "new" },
+          last_opened_at: "2026-08-08T11:00:00.000Z",
+        },
         response_byte_limit: 80_000,
         time_budget_ms: 2_000,
       }, db);
@@ -379,7 +394,9 @@ describe("workspace domain services", () => {
       expect(rolledBack.receipt?.direction).toBe("inverse");
       expect(rolledBack.after?.name).toBe("Guarded Demo");
       expect(rolledBack.after?.metadata).toEqual({ owner: "old" });
+      expect(rolledBack.after?.last_opened_at).toBeNull();
       expect(getWorkspace(workspace.id, db)?.name).toBe("Guarded Demo");
+      expect(getWorkspace(workspace.id, db)?.last_opened_at).toBeNull();
     } finally {
       db.close();
     }
