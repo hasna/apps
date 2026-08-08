@@ -85,6 +85,12 @@ function normalizeDomains(values?: string[]): string[] {
   return [...new Set(normalizeStringArray(values).map(normalizeDomain).filter(Boolean))];
 }
 
+function requireTenantId(tenantId: string): string {
+  const normalized = tenantId?.trim();
+  if (!normalized) throw new Error("Tenant context is required");
+  return normalized;
+}
+
 function secretMeta(row: SecretRow): SecretMetadata {
   return {
     key: row.key,
@@ -121,10 +127,16 @@ export interface CloudUser {
 export class CloudSecretsStore {
   constructor(private readonly db: TypedQueryClient) {}
 
-  private async audit(action: "get" | "set" | "delete", key: string, actor: string): Promise<void> {
+  private async audit(
+    action: "get" | "set" | "delete",
+    key: string,
+    actor: string,
+    tenantId: string,
+  ): Promise<void> {
+    const tenant = requireTenantId(tenantId);
     await this.db.execute(
-      "INSERT INTO audit_log (action, key, agent, timestamp) VALUES ($1, $2, $3, $4)",
-      [action, key, actor, new Date().toISOString()],
+      "INSERT INTO audit_log (action, key, agent, timestamp, tenant_id) VALUES ($1, $2, $3, $4, $5)",
+      [action, key, actor, new Date().toISOString(), tenant],
     );
   }
 
@@ -136,7 +148,9 @@ export class CloudSecretsStore {
     label: string | undefined,
     expiresAt: string | undefined,
     actor: string,
+    tenantId: string,
   ): Promise<SecretEntry> {
+    const tenant = requireTenantId(tenantId);
     assertValidSecretPath(key);
     const now = new Date().toISOString();
     const existing = await this.db.get<{ created_at: string }>(
@@ -144,21 +158,23 @@ export class CloudSecretsStore {
       [key],
     );
     await this.db.execute(
-      `INSERT INTO secrets (key, value, type, label, expires_at, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO secrets (key, value, type, label, expires_at, created_at, updated_at, tenant_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT(key) DO UPDATE SET
          value = excluded.value, type = excluded.type, label = excluded.label,
-         expires_at = excluded.expires_at, updated_at = excluded.updated_at`,
-      [key, encryptValue(value), type, label ?? null, expiresAt ?? null, existing?.created_at ?? now, now],
+         expires_at = excluded.expires_at, updated_at = excluded.updated_at,
+         tenant_id = excluded.tenant_id`,
+      [key, encryptValue(value), type, label ?? null, expiresAt ?? null, existing?.created_at ?? now, now, tenant],
     );
-    await this.audit("set", key, actor);
-    return (await this.getSecret(key, actor))!;
+    await this.audit("set", key, actor, tenant);
+    return (await this.getSecret(key, actor, tenant))!;
   }
 
-  async getSecret(key: string, actor: string): Promise<SecretEntry | undefined> {
+  async getSecret(key: string, actor: string, tenantId: string): Promise<SecretEntry | undefined> {
+    const tenant = requireTenantId(tenantId);
     const row = await this.db.get<SecretRow>("SELECT * FROM secrets WHERE key = $1", [key]);
     if (!row) return undefined;
-    await this.audit("get", key, actor);
+    await this.audit("get", key, actor, tenant);
     const decrypted = decryptValueWithMetadata(row.value);
     if (decrypted.needsReencryption) {
       // Compare-and-swap avoids overwriting a concurrent set. Do not change
@@ -179,13 +195,14 @@ export class CloudSecretsStore {
     };
   }
 
-  async deleteSecret(key: string, actor: string): Promise<boolean> {
+  async deleteSecret(key: string, actor: string, tenantId: string): Promise<boolean> {
+    const tenant = requireTenantId(tenantId);
     const rows = await this.db.many<{ key: string }>(
       "DELETE FROM secrets WHERE key = $1 RETURNING key",
       [key],
     );
     if (rows.length === 0) return false;
-    await this.audit("delete", key, actor);
+    await this.audit("delete", key, actor, tenant);
     return true;
   }
 
@@ -214,7 +231,8 @@ export class CloudSecretsStore {
   }
 
   // ---- vault items ----
-  async setVaultItem(input: VaultItemInput, actor: string): Promise<VaultItem> {
+  async setVaultItem(input: VaultItemInput, actor: string, tenantId: string): Promise<VaultItem> {
+    const tenant = requireTenantId(tenantId);
     if (!VAULT_ITEM_KINDS.includes(input.kind)) {
       throw new Error(`Invalid vault item kind "${input.kind}"`);
     }
@@ -228,12 +246,13 @@ export class CloudSecretsStore {
     );
     const data = encryptValue(JSON.stringify(input.data ?? {}));
     await this.db.execute(
-      `INSERT INTO vault_items (id, kind, title, subtitle, domains, tags, favorite, data, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      `INSERT INTO vault_items (id, kind, title, subtitle, domains, tags, favorite, data, created_at, updated_at, tenant_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        ON CONFLICT(id) DO UPDATE SET
          kind = excluded.kind, title = excluded.title, subtitle = excluded.subtitle,
          domains = excluded.domains, tags = excluded.tags, favorite = excluded.favorite,
-         data = excluded.data, updated_at = excluded.updated_at`,
+         data = excluded.data, updated_at = excluded.updated_at,
+         tenant_id = excluded.tenant_id`,
       [
         id,
         input.kind,
@@ -245,16 +264,18 @@ export class CloudSecretsStore {
         data,
         existing?.created_at ?? now,
         now,
+        tenant,
       ],
     );
-    await this.audit("set", `vault-item/${id}`, actor);
-    return (await this.getVaultItem(id, actor))!;
+    await this.audit("set", `vault-item/${id}`, actor, tenant);
+    return (await this.getVaultItem(id, actor, tenant))!;
   }
 
-  async getVaultItem(id: string, actor: string): Promise<VaultItem | undefined> {
+  async getVaultItem(id: string, actor: string, tenantId: string): Promise<VaultItem | undefined> {
+    const tenant = requireTenantId(tenantId);
     const row = await this.db.get<VaultRow>("SELECT * FROM vault_items WHERE id = $1", [id]);
     if (!row || !row.data) return undefined;
-    await this.audit("get", `vault-item/${id}`, actor);
+    await this.audit("get", `vault-item/${id}`, actor, tenant);
     const decrypted = decryptValueWithMetadata(row.data);
     if (decrypted.needsReencryption) {
       await this.db.execute(
@@ -266,13 +287,14 @@ export class CloudSecretsStore {
     return { ...vaultMeta(row), data: payload };
   }
 
-  async deleteVaultItem(id: string, actor: string): Promise<boolean> {
+  async deleteVaultItem(id: string, actor: string, tenantId: string): Promise<boolean> {
+    const tenant = requireTenantId(tenantId);
     const rows = await this.db.many<{ id: string }>(
       "DELETE FROM vault_items WHERE id = $1 RETURNING id",
       [id],
     );
     if (rows.length === 0) return false;
-    await this.audit("delete", `vault-item/${id}`, actor);
+    await this.audit("delete", `vault-item/${id}`, actor, tenant);
     return true;
   }
 
@@ -302,13 +324,21 @@ export class CloudSecretsStore {
   }
 
   // ---- users ----
-  async registerUser(id: string, name: string, type: "human" | "agent" = "human"): Promise<CloudUser> {
+  async registerUser(
+    id: string,
+    name: string,
+    type: "human" | "agent" = "human",
+    tenantId: string,
+  ): Promise<CloudUser> {
+    const tenant = requireTenantId(tenantId);
     const now = new Date().toISOString();
     await this.db.execute(
-      `INSERT INTO users (id, name, type, registered_at, last_seen)
-       VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT(id) DO UPDATE SET name = excluded.name, type = excluded.type, last_seen = excluded.last_seen`,
-      [id, name, type, now, now],
+      `INSERT INTO users (id, name, type, registered_at, last_seen, tenant_id)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT(id) DO UPDATE SET
+         name = excluded.name, type = excluded.type, last_seen = excluded.last_seen,
+         tenant_id = excluded.tenant_id`,
+      [id, name, type, now, now, tenant],
     );
     return (await this.db.get<CloudUser>("SELECT * FROM users WHERE id = $1", [id]))!;
   }
@@ -334,10 +364,17 @@ export class CloudSecretsStore {
   }
 
   // ---- feedback ----
-  async addFeedback(message: string, email: string | undefined, category: string, version: string): Promise<void> {
+  async addFeedback(
+    message: string,
+    email: string | undefined,
+    category: string,
+    version: string,
+    tenantId: string,
+  ): Promise<void> {
+    const tenant = requireTenantId(tenantId);
     await this.db.execute(
-      "INSERT INTO feedback (id, message, email, category, version, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
-      [randomUUID(), message, email ?? null, category, version, new Date().toISOString()],
+      "INSERT INTO feedback (id, message, email, category, version, created_at, tenant_id) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+      [randomUUID(), message, email ?? null, category, version, new Date().toISOString(), tenant],
     );
   }
 }

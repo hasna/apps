@@ -2,6 +2,8 @@ import { describe, expect, it } from "bun:test";
 import { createHandler, type ServeDeps } from "../src/server/serve.js";
 import { SECRETS_MIGRATIONS } from "../src/server/cloud-migrations.js";
 
+const TEST_TENANT = "11111111-2222-4333-8444-555555555555";
+
 function verifier(principal: { agent?: string; kid: string } = { kid: "kid-only" }) {
   return {
     async authenticate() {
@@ -12,7 +14,10 @@ function verifier(principal: { agent?: string; kid: string } = { kid: "kid-only"
 
 function client(overrides: Record<string, unknown> = {}) {
   return {
-    async get() { return { ok: 1 }; },
+    async get(sql: string) {
+      if (sql.includes("SELECT tenant_id FROM api_keys")) return { tenant_id: TEST_TENANT };
+      return { ok: 1 };
+    },
     async many() { return []; },
     async query() { return { rows: [], rowCount: 0 }; },
     async one() { return { ok: 1 }; },
@@ -154,6 +159,42 @@ describe("cloud server route matrix", () => {
     expect(store.calls.at(-1)?.args[2]).toBe("general");
     expect((await handle(request("/does-not-exist"))).status).toBe(404);
     expect((await handle(request("/v1/items/item-1", "PATCH"))).status).toBe(404);
+  });
+
+  it("passes the authenticated API-key tenant into every active tenant-bearing write", async () => {
+    const { handle, store } = makeHandler();
+
+    expect((await handle(request("/v1/secrets", "POST", { key: "demo/key", value: "value" }))).status).toBe(200);
+    expect(store.calls.at(-1)).toMatchObject({ method: "setSecret" });
+    expect(store.calls.at(-1)?.args.at(-1)).toBe(TEST_TENANT);
+
+    expect((await handle(request("/v1/items", "POST", { kind: "secure_note", title: "Example" }))).status).toBe(200);
+    expect(store.calls.at(-1)).toMatchObject({ method: "setVaultItem" });
+    expect(store.calls.at(-1)?.args.at(-1)).toBe(TEST_TENANT);
+
+    expect((await handle(request("/v1/users", "POST", { id: "u1", name: "User" }))).status).toBe(200);
+    expect(store.calls.at(-1)).toMatchObject({ method: "registerUser" });
+    expect(store.calls.at(-1)?.args.at(-1)).toBe(TEST_TENANT);
+
+    expect((await handle(request("/v1/feedback", "POST", { message: "hello" }))).status).toBe(200);
+    expect(store.calls.at(-1)).toMatchObject({ method: "addFeedback" });
+    expect(store.calls.at(-1)?.args.at(-1)).toBe(TEST_TENANT);
+  });
+
+  it("fails closed before writes when the authenticated key has no tenant assignment", async () => {
+    const store = completeStore();
+    const noTenant = client({
+      async get(sql: string) {
+        if (sql.includes("SELECT tenant_id FROM api_keys")) return null;
+        return { ok: 1 };
+      },
+    });
+    const handle = createHandler({ client: noTenant, store: store as any, verifier: verifier() });
+
+    const response = await handle(request("/v1/feedback", "POST", { message: "hello" }));
+
+    expect(response.status).toBe(403);
+    expect(store.calls).toHaveLength(0);
   });
 
   it("reports degraded probes and catches Error and non-Error failures", async () => {
