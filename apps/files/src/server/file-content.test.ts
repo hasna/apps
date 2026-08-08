@@ -123,6 +123,68 @@ describe("authenticated hosted file content", () => {
     expect(JSON.stringify(result)).not.toContain("private/object-key-never-returned");
   });
 
+  test("keeps the shared request loop responsive while applying caller redactions", async () => {
+    const bytes = Buffer.from(`${"a".repeat(36)}!`, "utf8");
+    let timerFiredAt = 0;
+    let resolveTimer!: () => void;
+    const timerDone = new Promise<void>((resolve) => {
+      resolveTimer = resolve;
+    });
+    const h = handler(async () => ({
+      async arrayBuffer() {
+        setTimeout(() => {
+          timerFiredAt = performance.now();
+          resolveTimer();
+        }, 10);
+        return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+      },
+    }) as Response);
+    const req = request("/v1/files/f_remote/extract-text", token("kid-a"), {
+      method: "POST",
+      body: JSON.stringify({ redact_patterns: ["(a+)+$", "!"] }),
+      headers: { "content-type": "application/json" },
+    });
+
+    const startedAt = performance.now();
+    const response = await h.handle(req, new URL(req.url));
+    const extractionDoneAt = performance.now();
+    const timerFiredBeforeRouteCompleted = timerFiredAt > 0;
+    await timerDone;
+    const result = await response!.json() as {
+      redacted: boolean;
+      segments: Array<{ text: string }>;
+    };
+
+    console.log(`event_loop_route_status=${response?.status}`);
+    console.log(`event_loop_extract_elapsed_ms=${Math.round(extractionDoneAt - startedAt)}`);
+    console.log(`event_loop_timer_delay_ms=${Math.round(timerFiredAt - startedAt)}`);
+
+    expect(response?.status).toBe(200);
+    expect(timerFiredBeforeRouteCompleted).toBe(true);
+    expect(result.redacted).toBe(true);
+    expect(result.segments[0]?.text).toBe(`${"a".repeat(36)}[REDACTED]`);
+    expect(JSON.stringify(result)).not.toContain("private-bucket-never-returned");
+    expect(JSON.stringify(result)).not.toContain("private/object-key-never-returned");
+  });
+
+  test("preserves generic invalid-redaction errors across worker isolation", async () => {
+    const h = handler(async () => new Response(PRIVATE_BYTES));
+    const req = request("/v1/files/f_remote/extract-text", token("kid-a"), {
+      method: "POST",
+      body: JSON.stringify({ redact_patterns: ["["] }),
+      headers: { "content-type": "application/json" },
+    });
+
+    const response = await h.handle(req, new URL(req.url));
+    const body = await response!.text();
+
+    expect(response?.status).toBe(400);
+    expect(body).toContain("Invalid extraction options");
+    expect(body).not.toContain(PRIVATE_BYTES.toString("utf8").trim());
+    expect(body).not.toContain("private-bucket-never-returned");
+    expect(body).not.toContain("private/object-key-never-returned");
+  });
+
   test("rejects unauthenticated, wrong-tenant, and missing files before object access", async () => {
     let reads = 0;
     const h = handler(async () => {
