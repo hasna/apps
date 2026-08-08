@@ -6,6 +6,7 @@ import {
 } from "../src/generated/storage-kit/migrations.js";
 import { type TypedQueryClient } from "../src/generated/storage-kit/query.js";
 import { SECRETS_MIGRATIONS } from "../src/server/cloud-migrations.js";
+import { createSecretsMigrationLedger } from "../src/server/migration-compat.js";
 
 const APPLIED_TENANTS_SQL = `CREATE TABLE IF NOT EXISTS tenants (
       id UUID PRIMARY KEY,
@@ -21,8 +22,19 @@ const APPLIED_TENANTS_SQL = `CREATE TABLE IF NOT EXISTS tenants (
       VALUES ('adfd95c7-ee8b-52cb-ae47-4ae65dae3313', 'hasna', 'Hasna Root', 'root')
       ON CONFLICT (id) DO NOTHING;`;
 
+const EXACT_TENANT_COLUMN_SCHEMA = [
+  { table_name: "secrets", column_name: "tenant_id", udt_name: "uuid" },
+  { table_name: "vault_items", column_name: "tenant_id", udt_name: "uuid" },
+  { table_name: "users", column_name: "tenant_id", udt_name: "uuid" },
+  { table_name: "feedback", column_name: "tenant_id", udt_name: "uuid" },
+  { table_name: "audit_log", column_name: "tenant_id", udt_name: "uuid" },
+  { table_name: "audit_log", column_name: "user_id", udt_name: "text" },
+] as const;
+
 class MemoryMigrationClient implements TypedQueryClient {
   rows: Array<{ id: string; checksum: string; applied_at: string | Date }> = [];
+  schemaRows: Array<{ table_name: string; column_name: string; udt_name: string }> = [];
+  schemaError: Error | undefined;
 
   async query<T>(): Promise<{ rows: T[]; rowCount: number }> {
     return { rows: [], rowCount: 0 };
@@ -36,7 +48,17 @@ class MemoryMigrationClient implements TypedQueryClient {
     throw new Error("unused");
   }
 
-  async many<T>(): Promise<T[]> {
+  async many<T>(sql: string, params?: readonly unknown[]): Promise<T[]> {
+    if (sql.includes("information_schema.columns")) {
+      if (this.schemaError) throw this.schemaError;
+      if (sql.includes("JOIN unnest")) {
+        const tables = params?.[0] as readonly string[];
+        const columns = params?.[1] as readonly string[];
+        const expected = new Set(tables.map((table, index) => `${table}.${columns[index]}`));
+        return this.schemaRows.filter((row) => expected.has(`${row.table_name}.${row.column_name}`)) as T[];
+      }
+      return this.schemaRows as T[];
+    }
     return this.rows as T[];
   }
 
@@ -78,5 +100,136 @@ describe("cloud migration lineage", () => {
       id: appliedTenants.id,
       checksum: appliedTenants.checksum,
     });
+  });
+
+  it("keeps the exact ECS db migrate contract compatible with the applied tenant-column lineage", async () => {
+    const migration = SECRETS_MIGRATIONS.find((item) => item.id === "secrets_0010_tenant_columns")!;
+    const client = new MemoryMigrationClient();
+    client.rows.push({
+      id: migration.id,
+      checksum: "sha256:legacy-production-lineage",
+      applied_at: "2026-08-08T00:00:00.000Z",
+    });
+    client.schemaRows = [...EXACT_TENANT_COLUMN_SCHEMA];
+
+    const ledger = await createSecretsMigrationLedger(client);
+    const result = await ledger.migrate({ dryRun: true });
+
+    expect(result.plan.find((item) => item.migration.id === migration.id)).toMatchObject({
+      migration: { id: migration.id },
+      state: "already_applied",
+    });
+  });
+
+  it("accepts the tenant-column schema amid unrelated existing table columns", async () => {
+    const migration = SECRETS_MIGRATIONS.find((item) => item.id === "secrets_0010_tenant_columns")!;
+    const client = new MemoryMigrationClient();
+    client.rows.push({
+      id: migration.id,
+      checksum: "sha256:legacy-production-lineage",
+      applied_at: "2026-08-08T00:00:00.000Z",
+    });
+    client.schemaRows = [
+      ...EXACT_TENANT_COLUMN_SCHEMA,
+      { table_name: "secrets", column_name: "key", udt_name: "text" },
+      { table_name: "audit_log", column_name: "action", udt_name: "text" },
+    ];
+
+    const ledger = await createSecretsMigrationLedger(client);
+    const result = await ledger.migrate({ dryRun: true });
+    expect(result.plan.find((item) => item.migration.id === migration.id)).toMatchObject({
+      state: "already_applied",
+    });
+  });
+
+  it("rejects a partial tenant-column schema", async () => {
+    const migration = SECRETS_MIGRATIONS.find((item) => item.id === "secrets_0010_tenant_columns")!;
+    const client = new MemoryMigrationClient();
+    client.rows.push({
+      id: migration.id,
+      checksum: "sha256:legacy-production-lineage",
+      applied_at: "2026-08-08T00:00:00.000Z",
+    });
+    client.schemaRows = [...EXACT_TENANT_COLUMN_SCHEMA.slice(0, -1)];
+
+    const ledger = await createSecretsMigrationLedger(client);
+    await expect(ledger.migrate({ dryRun: true })).rejects.toThrow("checksum mismatch");
+  });
+
+  it("rejects a wrong tenant-column type", async () => {
+    const migration = SECRETS_MIGRATIONS.find((item) => item.id === "secrets_0010_tenant_columns")!;
+    const client = new MemoryMigrationClient();
+    client.rows.push({
+      id: migration.id,
+      checksum: "sha256:legacy-production-lineage",
+      applied_at: "2026-08-08T00:00:00.000Z",
+    });
+    client.schemaRows = EXACT_TENANT_COLUMN_SCHEMA.map((row) =>
+      row.column_name === "user_id" ? { ...row, udt_name: "uuid" } : row,
+    );
+
+    const ledger = await createSecretsMigrationLedger(client);
+    await expect(ledger.migrate({ dryRun: true })).rejects.toThrow("checksum mismatch");
+  });
+
+  it("keeps other migration checksum mismatches fatal", async () => {
+    const client = new MemoryMigrationClient();
+    client.rows.push({
+      id: "secrets_0009_memberships",
+      checksum: "sha256:legacy-production-lineage",
+      applied_at: "2026-08-08T00:00:00.000Z",
+    });
+
+    const ledger = await createSecretsMigrationLedger(client);
+    await expect(ledger.migrate({ dryRun: true })).rejects.toThrow("checksum mismatch");
+  });
+
+  it("fails closed when the tenant-column schema query errors", async () => {
+    const migration = SECRETS_MIGRATIONS.find((item) => item.id === "secrets_0010_tenant_columns")!;
+    const client = new MemoryMigrationClient();
+    client.rows.push({
+      id: migration.id,
+      checksum: "sha256:legacy-production-lineage",
+      applied_at: "2026-08-08T00:00:00.000Z",
+    });
+    client.schemaError = new Error("schema unavailable");
+
+    await expect(createSecretsMigrationLedger(client)).rejects.toThrow("schema unavailable");
+  });
+
+  it("leaves fresh installs and matching-checksum upgrades on the normal ledger path", async () => {
+    const freshClient = new MemoryMigrationClient();
+    const freshLedger = await createSecretsMigrationLedger(freshClient);
+    const freshResult = await freshLedger.migrate({ dryRun: true });
+    expect(freshResult.plan.find((item) => item.migration.id === "secrets_0010_tenant_columns")).toMatchObject({
+      state: "pending",
+    });
+
+    const migration = SECRETS_MIGRATIONS.find((item) => item.id === "secrets_0010_tenant_columns")!;
+    const upgradedClient = new MemoryMigrationClient();
+    upgradedClient.rows.push({
+      id: migration.id,
+      checksum: migration.checksum,
+      applied_at: "2026-08-08T00:00:00.000Z",
+    });
+    const upgradedLedger = await createSecretsMigrationLedger(upgradedClient);
+    const upgradedResult = await upgradedLedger.migrate({ dryRun: true });
+    expect(upgradedResult.plan.find((item) => item.migration.id === migration.id)).toMatchObject({
+      state: "already_applied",
+      migration: { checksum: migration.checksum },
+    });
+  });
+
+  it("keeps an unproven tenant-column checksum mismatch fatal", async () => {
+    const migration = SECRETS_MIGRATIONS.find((item) => item.id === "secrets_0010_tenant_columns")!;
+    const client = new MemoryMigrationClient();
+    client.rows.push({
+      id: migration.id,
+      checksum: "sha256:legacy-production-lineage",
+      applied_at: "2026-08-08T00:00:00.000Z",
+    });
+
+    const ledger = await createSecretsMigrationLedger(client);
+    await expect(ledger.migrate({ dryRun: true })).rejects.toThrow("checksum mismatch");
   });
 });

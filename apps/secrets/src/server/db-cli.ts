@@ -7,15 +7,15 @@
  * Lives in the server bundle only — the client `secrets` binary never ships it.
  */
 
-import { createCloudPoolFromEnv, MigrationLedger } from "../generated/storage-kit/index.js";
+import { createCloudPoolFromEnv } from "../generated/storage-kit/index.js";
 import { APP_NAME, bootstrapCloudEnv } from "./cloud-env.js";
-import { SECRETS_MIGRATIONS } from "./cloud-migrations.js";
+import { createSecretsMigrationLedger } from "./migration-compat.js";
 
 export async function runDbCommand(sub: string | undefined): Promise<void> {
   bootstrapCloudEnv();
   const { client, connectionSource } = createCloudPoolFromEnv(APP_NAME, { applicationName: "secrets-migrate" });
-  const ledger = new MigrationLedger(client, SECRETS_MIGRATIONS);
   try {
+    const ledger = await createSecretsMigrationLedger(client);
     if (sub === "status") {
       const result = await ledger.migrate({ dryRun: true });
       const pending = result.plan.filter((p) => p.state === "pending").map((p) => p.migration.id);
