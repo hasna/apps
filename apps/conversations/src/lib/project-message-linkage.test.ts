@@ -11,11 +11,12 @@ import {
   planChannelProjectMessageLinkage,
   rollbackChannelProjectMessageLinkage,
 } from "./project-message-linkage.js";
+import { pinStoreToDb, restoreStoreEnv } from "./store/isolated-test-env.js";
 
 const TEST_DB = join(tmpdir(), `conversations-project-linkage-${Date.now()}.db`);
 
 beforeEach(() => {
-  process.env.CONVERSATIONS_DB_PATH = TEST_DB;
+  pinStoreToDb(TEST_DB);
   closeDb();
 });
 
@@ -24,6 +25,7 @@ afterEach(() => {
   for (const suffix of ["", "-wal", "-shm"]) {
     try { unlinkSync(TEST_DB + suffix); } catch {}
   }
+  restoreStoreEnv();
 });
 
 function seedLinkedChannel() {

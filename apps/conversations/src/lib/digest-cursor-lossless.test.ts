@@ -5,6 +5,7 @@ import { closeDb } from "./db";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { pinStoreToDb, restoreStoreEnv } from "./store/isolated-test-env.js";
 
 const TEST_DB = join(tmpdir(), `conversations-test-digest-cursor-${Date.now()}.db`);
 
@@ -20,7 +21,7 @@ const FIXTURE_CHANNELS = [
 ];
 
 beforeEach(() => {
-  process.env.CONVERSATIONS_DB_PATH = TEST_DB;
+  pinStoreToDb(TEST_DB);
   closeDb();
   for (const name of FIXTURE_CHANNELS) createChannel(name, "fixture");
 });
@@ -30,6 +31,7 @@ afterEach(() => {
   try { unlinkSync(TEST_DB); } catch {}
   try { unlinkSync(TEST_DB + "-wal"); } catch {}
   try { unlinkSync(TEST_DB + "-shm"); } catch {}
+  restoreStoreEnv();
 });
 
 /**

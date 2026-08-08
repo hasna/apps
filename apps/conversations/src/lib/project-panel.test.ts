@@ -7,6 +7,7 @@ import { closeDb } from "./db.js";
 import { sendMessage } from "./messages.js";
 import { createConversationsProjectPanel } from "./project-panel.js";
 import { createProject } from "./projects.js";
+import { pinStoreToDb, restoreStoreEnv } from "./store/isolated-test-env.js";
 
 const TEST_DB = join(tmpdir(), `conversations-test-project-panel-${Date.now()}.db`);
 
@@ -18,13 +19,13 @@ function cleanupDb(): void {
 }
 
 beforeEach(() => {
-  process.env.CONVERSATIONS_DB_PATH = TEST_DB;
+  pinStoreToDb(TEST_DB);
   cleanupDb();
 });
 
 afterEach(() => {
   cleanupDb();
-  delete process.env.CONVERSATIONS_DB_PATH;
+  restoreStoreEnv();
 });
 
 describe("createConversationsProjectPanel", () => {

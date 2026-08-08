@@ -81,6 +81,15 @@ const STORE_SELECTING_KEYS: readonly string[] = [
  * Every case below is synchronous and issues no request, so the window in which
  * these names are set cannot be observed by another test file — which is the
  * hazard the poll/channel suites in this repo already document.
+ *
+ * THAT CAVEAT IS A CORRECTNESS BOUND, NOT A STYLE NOTE, so this stays file-local
+ * and unexported. Hand this shape an ASYNC `fn` and it returns a PROMISE; the
+ * `finally` fires the moment that promise is returned, which is BEFORE the awaited
+ * body runs — the environment is restored underneath the test that asked to be
+ * isolated. Suites needing the same clearing across an `await` use the hook-shaped
+ * `pinStoreToDb` / `restoreStoreEnv` in `./isolated-test-env.ts`, which holds the
+ * window for the whole test because bun awaits `beforeEach` and `afterEach` around
+ * it. Both derive their key list from the same exports, so the two cannot drift.
  */
 function withOnlyStoreEnv<T>(fn: () => T, only: Record<string, string> = {}): T {
   const names = [...new Set([...STORE_SELECTING_KEYS, ...Object.keys(only)])];

@@ -6,11 +6,12 @@ import type { AgentConflictError, RegisterAgentResult } from "../types";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { pinStoreToDb, restoreStoreEnv } from "./store/isolated-test-env.js";
 
 const TEST_DB = join(tmpdir(), `conversations-test-presence-${Date.now()}.db`);
 
 beforeEach(() => {
-  process.env.CONVERSATIONS_DB_PATH = TEST_DB;
+  pinStoreToDb(TEST_DB);
   closeDb();
 });
 
@@ -19,6 +20,7 @@ afterEach(() => {
   try { unlinkSync(TEST_DB); } catch {}
   try { unlinkSync(TEST_DB + "-wal"); } catch {}
   try { unlinkSync(TEST_DB + "-shm"); } catch {}
+  restoreStoreEnv();
 });
 
 function seedLegacyPresenceDb(): void {

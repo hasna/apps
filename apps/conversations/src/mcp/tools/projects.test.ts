@@ -7,6 +7,7 @@ import { closeDb } from "../../lib/db";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { pinStoreToDb, restoreStoreEnv } from "../../lib/store/isolated-test-env.js";
 
 const TEST_DB = join(tmpdir(), `conversations-test-projects-mcp-${Date.now()}.db`);
 
@@ -14,7 +15,7 @@ describe("projects MCP tools", () => {
   let client: Client;
 
   beforeAll(async () => {
-    process.env.CONVERSATIONS_DB_PATH = TEST_DB;
+    pinStoreToDb(TEST_DB);
     process.env.CONVERSATIONS_AGENT_ID = "projects-test-agent";
     closeDb();
 
@@ -28,7 +29,7 @@ describe("projects MCP tools", () => {
   });
 
   afterAll(async () => {
-    delete process.env.CONVERSATIONS_DB_PATH;
+    restoreStoreEnv();
     delete process.env.CONVERSATIONS_AGENT_ID;
     closeDb();
     try { unlinkSync(TEST_DB); } catch {}

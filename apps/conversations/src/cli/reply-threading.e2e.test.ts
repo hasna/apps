@@ -2,6 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { isolatedStoreChildEnv } from "../lib/store/isolated-test-env.js";
 
 // Regression cover for HC-00148: `conversations reply --to <id>` accepted the
 // flag, printed "Reply sent", exited 0 — and stored the row with reply_to NULL,
@@ -16,12 +17,10 @@ function runCli(args: string[], agent: string) {
   const result = Bun.spawnSync({
     cmd: [...CLI, ...args],
     cwd: process.cwd(),
-    env: {
-      ...process.env,
-      CONVERSATIONS_DB_PATH: TEST_DB,
+    env: isolatedStoreChildEnv(TEST_DB, {
       CONVERSATIONS_AGENT_ID: agent,
       FORCE_COLOR: "0",
-    },
+    }),
     stdout: "pipe",
     stderr: "pipe",
   });

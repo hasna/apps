@@ -6,6 +6,7 @@ import { closeDb, getDb } from "../lib/db.js";
 import { DEFAULT_READ_LIMIT } from "../lib/message-window.js";
 import { SINCE_JSON_LIMIT } from "./compact.js";
 import { backfilledChannelIdForName } from "../lib/channel-id.js";
+import { isolatedStoreChildEnv, pinStoreToDb, restoreStoreEnv } from "../lib/store/isolated-test-env.js";
 
 // Regression for todos 2c25973b: every recency-shaped read returned the OLDEST
 // rows. A watcher built on any of them polled ancient history forever and
@@ -49,12 +50,10 @@ function runCli(args: string[], agent: string) {
   const result = Bun.spawnSync({
     cmd: [...CLI, ...args],
     cwd: process.cwd(),
-    env: {
-      ...process.env,
-      CONVERSATIONS_DB_PATH: TEST_DB,
+    env: isolatedStoreChildEnv(TEST_DB, {
       CONVERSATIONS_AGENT_ID: agent,
       FORCE_COLOR: "0",
-    },
+    }),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -89,7 +88,7 @@ function bodiesOf(stdout: string): string[] {
 
 describe("CLI recency reads return the newest messages", () => {
   beforeAll(() => {
-    process.env.CONVERSATIONS_DB_PATH = TEST_DB;
+    pinStoreToDb(TEST_DB);
     closeDb();
     const db = getDb();
     // The channel row is required: `channel read` refuses an unknown channel.
@@ -108,6 +107,9 @@ describe("CLI recency reads return the newest messages", () => {
     try { unlinkSync(TEST_DB); } catch {}
     try { unlinkSync(`${TEST_DB}-wal`); } catch {}
     try { unlinkSync(`${TEST_DB}-shm`); } catch {}
+    // `beforeAll` pins process-wide and never restored it, so without this the
+    // suite's db path outlived the file and leaked into every later one.
+    restoreStoreEnv();
   });
 
   // The seeded window must exceed every client-side cap, or the tests below sit

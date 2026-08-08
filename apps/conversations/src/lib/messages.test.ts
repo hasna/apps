@@ -8,6 +8,7 @@ import { redactSensitiveText } from "./content-safety";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { pinStoreToDb, restoreStoreEnv } from "./store/isolated-test-env.js";
 
 const TEST_DB = join(tmpdir(), `conversations-test-msg-${Date.now()}.db`);
 
@@ -79,7 +80,7 @@ function insertLegacyMessage(content: string, metadata?: Record<string, unknown>
 const FIXTURE_CHANNELS = ["general", "mychannel", "watch", "tiny", "skip-mark", "lossless", "imported"];
 
 beforeEach(() => {
-  process.env.CONVERSATIONS_DB_PATH = TEST_DB;
+  pinStoreToDb(TEST_DB);
   closeDb();
   for (const name of FIXTURE_CHANNELS) createChannel(name, "fixture");
 });
@@ -89,6 +90,7 @@ afterEach(() => {
   try { unlinkSync(TEST_DB); } catch {}
   try { unlinkSync(TEST_DB + "-wal"); } catch {}
   try { unlinkSync(TEST_DB + "-shm"); } catch {}
+  restoreStoreEnv();
 });
 
 describe("sendMessage", () => {

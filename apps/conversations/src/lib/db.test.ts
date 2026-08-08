@@ -6,12 +6,13 @@ import { unlinkSync } from "fs";
 import { Database } from "bun:sqlite";
 import { tmpdir } from "os";
 import { join } from "path";
+import { clearStoreEnv, pinStoreToDb, restoreStoreEnv } from "./store/isolated-test-env.js";
 
 const TEST_DB = join(tmpdir(), `convchanid-db-${process.pid}-${Date.now()}.db`);
 const PEER_TEST_DB = `${TEST_DB}-peer`;
 
 beforeEach(() => {
-  process.env.CONVERSATIONS_DB_PATH = TEST_DB;
+  pinStoreToDb(TEST_DB);
   closeDb();
 });
 
@@ -23,7 +24,7 @@ afterEach(() => {
   try { unlinkSync(PEER_TEST_DB); } catch {}
   try { unlinkSync(PEER_TEST_DB + "-wal"); } catch {}
   try { unlinkSync(PEER_TEST_DB + "-shm"); } catch {}
-  delete process.env.CONVERSATIONS_DB_PATH;
+  restoreStoreEnv();
 });
 
 describe("db", () => {
@@ -32,7 +33,10 @@ describe("db", () => {
   });
 
   test("getDbPath returns default when no env", () => {
-    delete process.env.CONVERSATIONS_DB_PATH;
+    // BOTH db-path names, not just the lower-precedence one. Deleting only
+    // CONVERSATIONS_DB_PATH left an ambient HASNA_CONVERSATIONS_DB_PATH in charge
+    // and this case asserted the default path against a value that was still set.
+    clearStoreEnv();
     const path = getDbPath();
     expect(path).toContain("conversations");
     expect(path).toEndWith("messages.db");
@@ -124,7 +128,7 @@ describe("db", () => {
       `);
       legacyDb.close();
 
-      process.env.CONVERSATIONS_DB_PATH = path;
+      pinStoreToDb(path);
       const migrated = getDb();
       const columns = migrated.prepare("PRAGMA table_info(channels)").all() as { name: string }[];
       expect(columns.map((column) => column.name)).toContain("id");

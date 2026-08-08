@@ -7,6 +7,7 @@ import { sendMessage } from "./messages";
 import { createChannel } from "./channels";
 import { registerAgent } from "./presence";
 import { buildMessagePreview, listChannelNotificationSubscriptions, markAllChannelNotificationsRead, markChannelNotificationsRead, readChannelNotifications, subscribeToChannelNotifications, unsubscribeFromChannelNotifications } from "./channel-notifications";
+import { pinStoreToDb, restoreStoreEnv } from "./store/isolated-test-env.js";
 
 const TEST_DB = join(tmpdir(), `conversations-test-channel-notifications-${Date.now()}.db`);
 
@@ -23,7 +24,7 @@ function insertLegacyChannelMessage(channel: string, content: string): number {
 }
 
 beforeEach(() => {
-  process.env.CONVERSATIONS_DB_PATH = TEST_DB;
+  pinStoreToDb(TEST_DB);
   closeDb();
 });
 
@@ -32,7 +33,7 @@ afterEach(() => {
   try { unlinkSync(TEST_DB); } catch {}
   try { unlinkSync(TEST_DB + "-wal"); } catch {}
   try { unlinkSync(TEST_DB + "-shm"); } catch {}
-  delete process.env.CONVERSATIONS_DB_PATH;
+  restoreStoreEnv();
 });
 
 describe("channel notification subscriptions", () => {

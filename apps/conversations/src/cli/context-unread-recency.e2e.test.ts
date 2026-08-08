@@ -3,6 +3,7 @@ import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { closeDb, getDb } from "../lib/db.js";
+import { isolatedStoreChildEnv, pinStoreToDb, restoreStoreEnv } from "../lib/store/isolated-test-env.js";
 
 // Regression for the `conversations context --json` review finding on PR #39
 // (todos 2c25973b). That PR fixed three recency-shaped read call sites but left
@@ -32,12 +33,10 @@ function runCli(args: string[]) {
   const result = Bun.spawnSync({
     cmd: [...CLI, ...args],
     cwd: process.cwd(),
-    env: {
-      ...process.env,
-      CONVERSATIONS_DB_PATH: TEST_DB,
+    env: isolatedStoreChildEnv(TEST_DB, {
       CONVERSATIONS_AGENT_ID: AGENT,
       FORCE_COLOR: "0",
-    },
+    }),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -58,7 +57,7 @@ function body(n: number): string {
 
 describe("conversations context --json: unread_dms and recent_dms recency", () => {
   beforeAll(() => {
-    process.env.CONVERSATIONS_DB_PATH = TEST_DB;
+    pinStoreToDb(TEST_DB);
     closeDb();
     const db = getDb();
     const insert = db.prepare(
@@ -86,13 +85,18 @@ describe("conversations context --json: unread_dms and recent_dms recency", () =
     try { unlinkSync(TEST_DB); } catch {}
     try { unlinkSync(`${TEST_DB}-wal`); } catch {}
     try { unlinkSync(`${TEST_DB}-shm`); } catch {}
+    // The pin is process-wide and `beforeAll` never restored it, so without this
+    // the suite's db path outlived the file and every later file in the same bun
+    // process inherited it — the defect this change exists to remove, pointed the
+    // other way.
+    restoreStoreEnv();
   });
 
   test("the fixture actually has more unread DMs than the unread_dms limit", () => {
     // 6 unread (DM-3..DM-8) > the command's limit of 5, or this test cannot
     // distinguish "oldest 5" from "newest 5" and proves nothing.
     closeDb();
-    process.env.CONVERSATIONS_DB_PATH = TEST_DB;
+    pinStoreToDb(TEST_DB);
     const db = getDb();
     const unreadCount = (db.prepare(`SELECT COUNT(*) as c FROM messages WHERE to_agent = ? AND read_at IS NULL`).get(AGENT) as { c: number }).c;
     expect(unreadCount).toBe(6);
