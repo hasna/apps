@@ -611,6 +611,53 @@ export const MIGRATIONS: string[] = [
 
   INSERT OR IGNORE INTO _migrations (id) VALUES (13);
   `,
+
+  // Migration 14: Add exact @hasna/todos task resource links.
+  `
+  DROP TRIGGER IF EXISTS project_resource_links_identity_immutable;
+  DROP INDEX IF EXISTS idx_project_resource_links_project;
+
+  ALTER TABLE project_resource_links RENAME TO project_resource_links_v13;
+
+  CREATE TABLE project_resource_links (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    authority TEXT NOT NULL CHECK(authority IN ('todos', 'conversations', 'knowledge', 'mementos', 'orgs', 'contacts')),
+    service_instance TEXT NOT NULL,
+    source_package TEXT NOT NULL CHECK(source_package IN ('@hasna/todos', '@hasna/conversations', '@hasna/knowledge', '@hasna/mementos', '@hasna/orgs', '@hasna/contacts')),
+    target_kind TEXT NOT NULL CHECK(target_kind IN ('contact', 'org', 'project', 'task', 'task_list', 'plan', 'channel', 'collection', 'item')),
+    locator_kind TEXT NOT NULL CHECK(locator_kind IN ('external_uuid', 'canonical_uri', 'conversations_channel_id')),
+    locator_value TEXT NOT NULL,
+    scope TEXT NOT NULL CHECK(scope IN ('resource', 'collection')),
+    labels_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(project_id, authority, service_instance, source_package, target_kind, locator_kind, locator_value)
+  );
+
+  INSERT INTO project_resource_links (
+    id, project_id, authority, service_instance, source_package, target_kind,
+    locator_kind, locator_value, scope, labels_json, created_at, updated_at
+  )
+  SELECT
+    id, project_id, authority, service_instance, source_package, target_kind,
+    locator_kind, locator_value, scope, labels_json, created_at, updated_at
+  FROM project_resource_links_v13;
+
+  DROP TABLE project_resource_links_v13;
+
+  CREATE INDEX idx_project_resource_links_project
+    ON project_resource_links(project_id, authority, target_kind, id);
+
+  CREATE TRIGGER project_resource_links_identity_immutable
+  BEFORE UPDATE OF project_id, authority, service_instance, source_package, target_kind, locator_kind, locator_value, scope
+  ON project_resource_links
+  BEGIN
+    SELECT RAISE(ABORT, 'project resource link identity is immutable');
+  END;
+
+  INSERT OR IGNORE INTO _migrations (id) VALUES (14);
+  `,
 ];
 
 export function runMigrations(db: Database): void {

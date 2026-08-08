@@ -120,18 +120,41 @@ describe("projects-serve probes", () => {
     expect(spec.paths["/v1/projects/{id}/resource-links/rollback"].post.operationId).toBe("rollbackProjectResourceLinks");
     expect(spec.components.schemas.GuardedProjectRead.required).toContain("project");
     expect(spec.components.schemas.GuardedProjectRead.required).toContain("resource_links");
-    expect(spec.components.schemas.ProjectResourceLinkInput.additionalProperties).toBe(false);
-    expect(spec.components.schemas.ProjectResourceLinkInput.properties.authority.enum).toContain("orgs");
-    expect(spec.components.schemas.ProjectResourceLinkInput.properties.authority.enum).toContain("contacts");
-    expect(spec.components.schemas.ProjectResourceLinkInput.properties.source_package.enum).toContain("@hasna/orgs");
-    expect(spec.components.schemas.ProjectResourceLinkInput.properties.source_package.enum).toContain("@hasna/contacts");
-    expect(spec.components.schemas.ProjectResourceLinkInput.properties.target_kind.enum).toContain("org");
-    expect(spec.components.schemas.ProjectResourceLinkInput.properties.target_kind.enum).toContain("contact");
-    expect(spec.components.schemas.ProjectResourceLinkLocator.properties.kind.enum).toEqual([
-      "external_uuid",
-      "canonical_uri",
-      "conversations_channel_id",
+    const resourceLinkBranches = spec.components.schemas.ProjectResourceLinkInput.oneOf;
+    expect(resourceLinkBranches).toHaveLength(7);
+    const todosTaskBranch = resourceLinkBranches.find((branch: any) => (
+      branch.properties.authority.enum[0] === "todos" && branch.properties.target_kind.enum.includes("task")
+    ));
+    const knowledgeBranch = resourceLinkBranches.find((branch: any) => branch.properties.authority.enum[0] === "knowledge");
+    const contactsBranch = resourceLinkBranches.find((branch: any) => branch.properties.authority.enum[0] === "contacts");
+    expect(todosTaskBranch.properties.source_package.enum).toEqual(["@hasna/todos"]);
+    expect(todosTaskBranch.properties.target_kind.enum).toEqual(["task"]);
+    expect(todosTaskBranch.properties.locator).toEqual({
+      $ref: "#/components/schemas/ProjectResourceExternalUuidLocator",
+    });
+    expect(knowledgeBranch.properties.source_package.enum).toEqual(["@hasna/knowledge"]);
+    expect(knowledgeBranch.properties.target_kind.enum).toEqual(["collection", "item"]);
+    expect(contactsBranch.properties.source_package.enum).toEqual(["@hasna/contacts"]);
+    expect(contactsBranch.properties.target_kind.enum).toEqual(["contact"]);
+    expect(contactsBranch.properties.locator).toEqual({
+      $ref: "#/components/schemas/ProjectResourceExternalUuidLocator",
+    });
+    expect(resourceLinkBranches.filter((branch: any) => branch.properties.target_kind.enum.includes("task")))
+      .toEqual([todosTaskBranch]);
+
+    const locatorBranches = spec.components.schemas.ProjectResourceLinkLocator.oneOf;
+    expect(locatorBranches).toEqual([
+      { $ref: "#/components/schemas/ProjectResourceExternalUuidLocator" },
+      { $ref: "#/components/schemas/ProjectResourceCanonicalUriLocator" },
+      { $ref: "#/components/schemas/ProjectResourceConversationsChannelLocator" },
     ]);
+    const externalUuidLocator = spec.components.schemas.ProjectResourceExternalUuidLocator;
+    expect(externalUuidLocator.properties.value.pattern).toBe(
+      "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+    );
+    const externalUuidPattern = new RegExp(externalUuidLocator.properties.value.pattern);
+    expect(externalUuidPattern.test("e2f791bd-f26b-4fac-a762-2cba96202aa5")).toBe(true);
+    expect(externalUuidPattern.test("e2f791bd")).toBe(false);
     expect(spec.components.schemas.Workspace.required).toEqual(expect.arrayContaining([
       "s3_bucket",
       "s3_prefix",

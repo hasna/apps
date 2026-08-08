@@ -469,6 +469,7 @@ export type ProjectResourceTargetKind =
   | "contact"
   | "org"
   | "project"
+  | "task"
   | "task_list"
   | "plan"
   | "channel"
@@ -482,28 +483,70 @@ export interface ProjectResourceLinkLabels {
   tags?: string[];
 }
 
-export interface ProjectResourceLinkLocator {
-  kind: ProjectResourceLocatorKind;
+export interface ProjectResourceExternalUuidLocator {
+  kind: "external_uuid";
   value: string;
 }
 
-export interface ProjectResourceLinkInput {
-  authority: ProjectResourceAuthority;
+export type ProjectResourceLinkLocator =
+  | ProjectResourceExternalUuidLocator
+  | { kind: "canonical_uri"; value: string }
+  | { kind: "conversations_channel_id"; value: string };
+
+interface ProjectResourceLinkInputBase {
   service_instance: string;
-  source_package: string;
-  target_kind: ProjectResourceTargetKind;
   locator: ProjectResourceLinkLocator;
   scope: ProjectResourceLinkScope;
   labels?: ProjectResourceLinkLabels;
 }
 
-export interface ProjectResourceLink extends Omit<ProjectResourceLinkInput, "labels"> {
+export type ProjectResourceLinkInput = ProjectResourceLinkInputBase & (
+  | {
+      authority: "todos";
+      source_package: "@hasna/todos";
+      target_kind: "project" | "task_list" | "plan";
+    }
+  | {
+      authority: "todos";
+      source_package: "@hasna/todos";
+      target_kind: "task";
+      locator: ProjectResourceExternalUuidLocator;
+    }
+  | {
+      authority: "conversations";
+      source_package: "@hasna/conversations";
+      target_kind: "project" | "channel";
+    }
+  | {
+      authority: "knowledge";
+      source_package: "@hasna/knowledge";
+      target_kind: "collection" | "item";
+    }
+  | {
+      authority: "mementos";
+      source_package: "@hasna/mementos";
+      target_kind: "project" | "item";
+    }
+  | {
+      authority: "orgs";
+      source_package: "@hasna/orgs";
+      target_kind: "org" | "project";
+    }
+  | {
+      authority: "contacts";
+      source_package: "@hasna/contacts";
+      target_kind: "contact";
+      locator: ProjectResourceExternalUuidLocator;
+    }
+);
+
+export type ProjectResourceLink = ProjectResourceLinkInput & {
   id: string;
   project_id: string;
   labels: ProjectResourceLinkLabels;
   created_at: string;
   updated_at: string;
-}
+};
 
 export interface ProjectResourceLinkRow {
   id: string;

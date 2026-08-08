@@ -1,7 +1,7 @@
 // @generated from the projects-serve OpenAPI document by scripts/generate-sdk.ts.
 // DO NOT EDIT BY HAND. Regenerate: bun run sdk:generate
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Projects API 0.1.108
+// Source: Projects API 0.1.109
 
 export interface Root { "id": string; "slug": string; "name": string; "base_path": string; "tags"?: Array<string>; "default_kind"?: string | null; "repo_visibility"?: string | null; "allowed_recipes"?: Array<string>; "allowed_agents"?: Array<string>; "metadata"?: Record<string, unknown>; "created_at"?: string; "updated_at"?: string }
 
@@ -33,9 +33,15 @@ export interface GuardedProjectRead { "ok": boolean; "project_id": string; "proj
 
 export interface ProjectResourceLinkLabels { "name"?: string; "channel_name"?: string; "path"?: string; "tags"?: Array<string> }
 
-export interface ProjectResourceLinkLocator { "kind": "external_uuid" | "canonical_uri" | "conversations_channel_id"; "value": string }
+export interface ProjectResourceExternalUuidLocator { "kind": "external_uuid"; "value": string }
 
-export interface ProjectResourceLinkInput { "authority": "todos" | "conversations" | "knowledge" | "mementos" | "orgs" | "contacts"; "service_instance": string; "source_package": "@hasna/todos" | "@hasna/conversations" | "@hasna/knowledge" | "@hasna/mementos" | "@hasna/orgs" | "@hasna/contacts"; "target_kind": "contact" | "org" | "project" | "task_list" | "plan" | "channel" | "collection" | "item"; "locator": ProjectResourceLinkLocator; "scope": "resource" | "collection"; "labels"?: ProjectResourceLinkLabels }
+export interface ProjectResourceCanonicalUriLocator { "kind": "canonical_uri"; "value": string }
+
+export interface ProjectResourceConversationsChannelLocator { "kind": "conversations_channel_id"; "value": string }
+
+export type ProjectResourceLinkLocator = ProjectResourceExternalUuidLocator | ProjectResourceCanonicalUriLocator | ProjectResourceConversationsChannelLocator;
+
+export type ProjectResourceLinkInput = { "authority": "todos"; "service_instance": string; "source_package": "@hasna/todos"; "target_kind": "project" | "task_list" | "plan"; "locator": ProjectResourceLinkLocator; "scope": "resource" | "collection"; "labels"?: ProjectResourceLinkLabels } | { "authority": "todos"; "service_instance": string; "source_package": "@hasna/todos"; "target_kind": "task"; "locator": ProjectResourceExternalUuidLocator; "scope": "resource" | "collection"; "labels"?: ProjectResourceLinkLabels } | { "authority": "conversations"; "service_instance": string; "source_package": "@hasna/conversations"; "target_kind": "project" | "channel"; "locator": ProjectResourceLinkLocator; "scope": "resource" | "collection"; "labels"?: ProjectResourceLinkLabels } | { "authority": "knowledge"; "service_instance": string; "source_package": "@hasna/knowledge"; "target_kind": "collection" | "item"; "locator": ProjectResourceLinkLocator; "scope": "resource" | "collection"; "labels"?: ProjectResourceLinkLabels } | { "authority": "mementos"; "service_instance": string; "source_package": "@hasna/mementos"; "target_kind": "project" | "item"; "locator": ProjectResourceLinkLocator; "scope": "resource" | "collection"; "labels"?: ProjectResourceLinkLabels } | { "authority": "orgs"; "service_instance": string; "source_package": "@hasna/orgs"; "target_kind": "org" | "project"; "locator": ProjectResourceLinkLocator; "scope": "resource" | "collection"; "labels"?: ProjectResourceLinkLabels } | { "authority": "contacts"; "service_instance": string; "source_package": "@hasna/contacts"; "target_kind": "contact"; "locator": ProjectResourceExternalUuidLocator; "scope": "resource" | "collection"; "labels"?: ProjectResourceLinkLabels };
 
 export type ProjectResourceLink = ProjectResourceLinkInput & { "id": string; "project_id": string; "labels": ProjectResourceLinkLabels; "created_at": string; "updated_at": string };
 

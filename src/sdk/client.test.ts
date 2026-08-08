@@ -6,6 +6,51 @@ import {
   type UpdateWorkspace,
   type Workspace,
 } from "./client.js";
+import type { ProjectResourceLinkInput as WorkspaceProjectResourceLinkInput } from "../types/workspace.js";
+
+type AssertTrue<T extends true> = T;
+type AssertFalse<T extends false> = T;
+
+type TodosTaskLinkShape = {
+  authority: "todos";
+  service_instance: "urn:hasna:todos:test";
+  source_package: "@hasna/todos";
+  target_kind: "task";
+  locator: { kind: "external_uuid"; value: "e2f791bd-f26b-4fac-a762-2cba96202aa5" };
+  scope: "resource";
+};
+
+type KnowledgeTaskLinkShape = {
+  authority: "knowledge";
+  service_instance: "urn:hasna:knowledge:test";
+  source_package: "@hasna/knowledge";
+  target_kind: "task";
+  locator: { kind: "external_uuid"; value: "e2f791bd" };
+  scope: "resource";
+};
+
+type TodosTaskCanonicalUriShape = Omit<TodosTaskLinkShape, "locator"> & {
+  locator: { kind: "canonical_uri"; value: "urn:hasna:todos:task:e2f791bd" };
+};
+
+type WorkspaceContractAcceptsTodosTask = AssertTrue<
+  TodosTaskLinkShape extends WorkspaceProjectResourceLinkInput ? true : false
+>;
+type WorkspaceContractRejectsKnowledgeTask = AssertFalse<
+  KnowledgeTaskLinkShape extends WorkspaceProjectResourceLinkInput ? true : false
+>;
+type WorkspaceContractRejectsTaskCanonicalUri = AssertFalse<
+  TodosTaskCanonicalUriShape extends WorkspaceProjectResourceLinkInput ? true : false
+>;
+type GeneratedSdkAcceptsTodosTask = AssertTrue<
+  TodosTaskLinkShape extends ProjectResourceLinkInput ? true : false
+>;
+type GeneratedSdkRejectsKnowledgeTask = AssertFalse<
+  KnowledgeTaskLinkShape extends ProjectResourceLinkInput ? true : false
+>;
+type GeneratedSdkRejectsTaskCanonicalUri = AssertFalse<
+  TodosTaskCanonicalUriShape extends ProjectResourceLinkInput ? true : false
+>;
 
 const workspaceFixture: Workspace = {
   id: "wks_sdkparity0001",
