@@ -27,6 +27,10 @@ import {
   resolveStorageClient,
   type HasnaStorageClient,
 } from '@hasna/contracts/client/storage';
+import {
+  CREDENTIAL_PROFILE_ENV_KEY,
+  credentialOverrideEnvKey,
+} from '@hasna/contracts/client';
 import type { KnowledgeItem, KnowledgeItemVersion, KnowledgeItemVersionList } from './store';
 import {
   KNOWLEDGE_APP_SLUG,
@@ -293,15 +297,28 @@ export function resolveKnowledgeCloudStore(env: NodeJS.ProcessEnv = process.env)
 export function resolveKnowledgeGuardedTransport(
   env: NodeJS.ProcessEnv = process.env,
 ): HasnaStorageClient['transport'] | null {
-  return resolveKnowledgeCloudClient(env)?.transport ?? null;
+  return resolveKnowledgeCloudClient(env, { guarded: true })?.transport ?? null;
 }
 
-function resolveKnowledgeCloudClient(env: NodeJS.ProcessEnv): HasnaStorageClient | null {
+function guardedTransportEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const guardedEnv = { ...env };
+  // FCAME-1 producers are handed an explicit transport env for one authority.
+  // Do not let broader process credential tiers (profile, override, or HOME
+  // disk lookup) outrank that supplied env and authenticate as another tenant.
+  delete guardedEnv.HOME;
+  delete guardedEnv.USERPROFILE;
+  delete guardedEnv[CREDENTIAL_PROFILE_ENV_KEY];
+  delete guardedEnv[credentialOverrideEnvKey(KNOWLEDGE_APP_SLUG)];
+  return guardedEnv;
+}
+
+function resolveKnowledgeCloudClient(env: NodeJS.ProcessEnv, options: { guarded?: boolean } = {}): HasnaStorageClient | null {
   if (resolveKnowledgeModeSelection(env).mode !== 'postgres') return null;
+  const transportEnv = options.guarded ? guardedTransportEnv(env) : env;
   const resolved = resolveStorageClient(
     KNOWLEDGE_APP_SLUG,
-    pinnedTransportEnv(env, 'postgres'),
-    transportOverrides(env),
+    pinnedTransportEnv(transportEnv, 'postgres'),
+    transportOverrides(transportEnv),
   );
   if (resolved.transport !== 'http') return null;
   return resolved.client;
