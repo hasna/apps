@@ -19,11 +19,30 @@ const { code, operations, warnings } = generateSdkFromOpenApi(spec as never, {
   apiKeyHeader: "x-api-key",
 });
 
+// The shared generator currently makes every query object optional even when
+// every query parameter in OpenAPI is required. Keep complete bounded reads
+// impossible to call without their bounds until the generator owns this
+// distinction directly.
+const requiredBoundedReadMethods = [
+  "guardedReadProject",
+  "lookupGuardedProjectMutationReceipt",
+  "readProjectResourceLinks",
+  "readProjectResourceLinkMigration",
+] as const;
+let generatedCode = code;
+for (const method of requiredBoundedReadMethods) {
+  const signature = new RegExp(`(async ${method}\\([^)]*?), query\\?:`);
+  if (!signature.test(generatedCode)) {
+    throw new Error(`generated SDK is missing the expected bounded-read signature for ${method}`);
+  }
+  generatedCode = generatedCode.replace(signature, "$1, query:");
+}
+
 const banner = `// @generated from the projects-serve OpenAPI document by scripts/generate-sdk.ts.
 // DO NOT EDIT BY HAND. Regenerate: bun run sdk:generate
 `;
 const outPath = join(repoRoot, "src", "sdk", "client.ts");
-writeFileSync(outPath, banner + code);
+writeFileSync(outPath, banner + generatedCode);
 
 console.error(`Generated ${operations.length} operations -> src/sdk/client.ts`);
 if (warnings.length) console.error("Warnings:\n" + warnings.map((w) => `  - ${w}`).join("\n"));

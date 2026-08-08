@@ -658,6 +658,73 @@ export const MIGRATIONS: string[] = [
 
   INSERT OR IGNORE INTO _migrations (id) VALUES (14);
   `,
+
+  // Migration 15: Mutable resource-link scope and durable migration saga state.
+  `
+  DROP TRIGGER IF EXISTS project_resource_links_identity_immutable;
+
+  CREATE TRIGGER project_resource_links_identity_immutable
+  BEFORE UPDATE OF project_id, authority, service_instance, source_package, target_kind, locator_kind, locator_value
+  ON project_resource_links
+  BEGIN
+    SELECT RAISE(ABORT, 'project resource link identity is immutable');
+  END;
+
+  CREATE TABLE IF NOT EXISTS project_resource_link_migration_manifests (
+    manifest_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    operation_id TEXT NOT NULL,
+    step_id TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN (
+      'planned', 'producer_applied', 'projects_applied', 'verified',
+      'rollback_in_progress', 'rolled_back', 'retained_target', 'failed_reconcilable'
+    )),
+    expected_project_revision TEXT NOT NULL,
+    desired_collection_digest TEXT NOT NULL,
+    links_json TEXT NOT NULL,
+    projects_forward_receipt_id TEXT,
+    projects_inverse_receipt_id TEXT,
+    projects_reference_proof_json TEXT,
+    last_verified_projects_revision TEXT,
+    last_verified_projects_digest TEXT,
+    transition_version INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(project_id, operation_id, step_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS project_resource_link_migration_events (
+    event_id TEXT PRIMARY KEY,
+    manifest_id TEXT NOT NULL REFERENCES project_resource_link_migration_manifests(manifest_id) ON DELETE CASCADE,
+    transition_version INTEGER NOT NULL,
+    from_state TEXT,
+    to_state TEXT NOT NULL,
+    request_digest TEXT NOT NULL,
+    precondition_digest TEXT NOT NULL,
+    evidence_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(manifest_id, transition_version)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_project_resource_link_migrations_project
+    ON project_resource_link_migration_manifests(project_id, state, updated_at);
+  CREATE INDEX IF NOT EXISTS idx_project_resource_link_migration_events_manifest
+    ON project_resource_link_migration_events(manifest_id, transition_version);
+
+  CREATE TRIGGER IF NOT EXISTS project_resource_link_migration_events_no_update
+  BEFORE UPDATE ON project_resource_link_migration_events
+  BEGIN
+    SELECT RAISE(ABORT, 'project resource link migration events are append-only');
+  END;
+
+  CREATE TRIGGER IF NOT EXISTS project_resource_link_migration_events_no_delete
+  BEFORE DELETE ON project_resource_link_migration_events
+  BEGIN
+    SELECT RAISE(ABORT, 'project resource link migration events are append-only');
+  END;
+
+  INSERT OR IGNORE INTO _migrations (id) VALUES (15);
+  `,
 ];
 
 export function runMigrations(db: Database): void {

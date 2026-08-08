@@ -110,7 +110,7 @@ async function main(): Promise<void> {
     version,
     app: APP,
     signingSecret,
-    isRevoked: keyStore.isRevoked,
+    keyStatus: keyStore.keyStatus,
     audit: (e) => {
       if (e.outcome === "deny") {
         console.error(`api_auth deny kid=${e.kid ?? "-"} reason=${e.reason ?? "-"} ${e.method} ${e.path}`);

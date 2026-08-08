@@ -5,6 +5,8 @@ import {
   type LegacyVersionResponse,
   type ProjectContactLinkMutationRequest,
   type ProjectResourceLinkInput,
+  type ProjectResourceLinkMigrationManifestV1,
+  type ProjectResourceLinkProducerBinding,
   type UpdateWorkspace,
   type Workspace,
 } from "./client.js";
@@ -70,6 +72,16 @@ const openTimestampPatch: UpdateWorkspace = {
   last_opened_at: "2026-08-08T11:00:00.000Z",
 };
 
+const nullableProducerBinding: ProjectResourceLinkProducerBinding = {
+  authority_id: "contacts",
+  tenant_id: "tenant-primary",
+  corpus_id: null,
+  capability_digest: "sha256:contacts-capability",
+};
+
+const migrationSchemaDiscriminator: ProjectResourceLinkMigrationManifestV1["schema"] =
+  "projects.project_resource_link_migration_manifest.v1";
+
 const terminalFixture: GuardedProjectMutationResult = {
   ok: false,
   dry_run: false,
@@ -117,6 +129,8 @@ describe("generated Projects SDK server parity", () => {
     });
     expect(terminalFixture).toMatchObject({ after: null, receipt: null });
     expect(openTimestampPatch.last_opened_at).toBe("2026-08-08T11:00:00.000Z");
+    expect(nullableProducerBinding.corpus_id).toBeNull();
+    expect(migrationSchemaDiscriminator).toBe("projects.project_resource_link_migration_manifest.v1");
   });
 
   test("routes typed resource-link read, add, reconcile, and rollback with exact payloads", async () => {
@@ -196,6 +210,92 @@ describe("generated Projects SDK server parity", () => {
       accepted_receipt_id: "gpmr_sdk_resource_links",
     }));
     expect(calls.every((call) => call.apiKey === "sdk-test-key")).toBe(true);
+  });
+
+  test("routes durable resource-link migration plan, read, advance, and rollback", async () => {
+    const calls: Array<{ method: string; path: string; query: string; body: unknown }> = [];
+    const client = new ProjectsClient({
+      baseUrl: "https://projects.example.test",
+      fetch: (async (input: string | URL | Request, init?: RequestInit) => {
+        const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+        calls.push({
+          method: init?.method ?? "GET",
+          path: url.pathname,
+          query: url.search,
+          body: init?.body ? JSON.parse(String(init.body)) : undefined,
+        });
+        return Response.json({});
+      }) as typeof fetch,
+    });
+    const projectId = workspaceFixture.id;
+    const manifestId = "prlm_sdk_parity";
+    const plan = {
+      operation_id: "sdk-resource-link-migration",
+      step_id: "plan",
+      expected_project_revision: "2026-08-08 00:00:00.000",
+      links: [{
+        link: {
+          authority: "contacts" as const,
+          service_instance: "urn:hasna:contacts:test",
+          source_package: "@hasna/contacts" as const,
+          target_kind: "contact" as const,
+          locator: {
+            kind: "external_uuid" as const,
+            value: "6b68e131-abe5-43b7-92cd-9930b04611df",
+          },
+          scope: "resource" as const,
+        },
+        producer_resource_kind: "contact",
+        producer_binding: nullableProducerBinding,
+      }],
+      max_items: 10,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    };
+    const advance = {
+      expected_transition_version: 1,
+      next_state: "producer_applied" as const,
+      producer_evidence: [{
+        created_by_operation: true,
+        forward_receipt_id: "contacts-receipt-1",
+        child_link_receipt_ids: [],
+        target_revision: "contacts-revision-1",
+        target_digest: "contacts-digest-1",
+        inverse_verified: false,
+        inverse_outcome: "pending",
+      }],
+      evidence: { phase: "producer" },
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    };
+    const rollback = {
+      expected_transition_version: 2,
+      max_items: 10,
+      producer_outcome: "pending" as const,
+      evidence: { reason: "test" },
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    };
+
+    await client.planProjectResourceLinkMigration(projectId, plan);
+    await client.readProjectResourceLinkMigration(projectId, manifestId, {
+      max_items: 10,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    });
+    await client.advanceProjectResourceLinkMigration(projectId, manifestId, advance);
+    await client.rollbackProjectResourceLinkMigration(projectId, manifestId, rollback);
+
+    expect(calls.map((call) => [call.method, call.path])).toEqual([
+      ["POST", `/v1/projects/${projectId}/resource-link-migrations/plan`],
+      ["GET", `/v1/projects/${projectId}/resource-link-migrations/${manifestId}`],
+      ["POST", `/v1/projects/${projectId}/resource-link-migrations/${manifestId}/advance`],
+      ["POST", `/v1/projects/${projectId}/resource-link-migrations/${manifestId}/rollback`],
+    ]);
+    expect(calls[0]?.body).toEqual(plan);
+    expect(calls[1]?.query).toBe("?max_items=10&response_byte_limit=100000&time_budget_ms=5000");
+    expect(calls[2]?.body).toEqual(advance);
+    expect(calls[3]?.body).toEqual(rollback);
   });
 
   test("routes contact list, attach, and detach through the generated Projects client", async () => {

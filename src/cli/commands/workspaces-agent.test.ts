@@ -595,14 +595,20 @@ describe("project agent CLI", () => {
       project.slug,
       "--github-url",
       "https://github.com/hasna/github-app",
-      "--todos-project-id",
-      "todo_123",
       "--json",
     ], env);
     expect(link.exitCode).toBe(0);
     const linked = JSON.parse(text(link.stdout)) as { integrations: Record<string, string> };
     expect(linked.integrations.github_url).toBe("https://github.com/hasna/github-app");
-    expect(linked.integrations.todos_project_id).toBe("todo_123");
+    const rejectedLegacyLink = runProjects([
+      "link",
+      project.slug,
+      "--todos-project-id",
+      "todo_123",
+      "--json",
+    ], env);
+    expect(rejectedLegacyLink.exitCode).toBe(1);
+    expect(text(rejectedLegacyLink.stderr)).toContain("must be changed through resource-links");
   });
 
   test("projects agent-eval scores prompt cases in mock mode", () => {

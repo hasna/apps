@@ -21,14 +21,23 @@ import {
   workspaceSnapshot,
 } from "../lib/guarded-project-mutation.js";
 import {
+  assertProjectResourceLinkIntegrationMutation,
+  assertProjectResourceLinkReadContractEquality,
   normalizeProjectResourceLinks,
   PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS,
+  projectResourceLinkCollection,
   projectResourceLinkId,
   projectResourceLinkIntegrationProjection,
   projectResourceLinksDigest,
   projectResourceLinkSnapshot,
   rowToProjectResourceLink,
 } from "../lib/project-resource-links.js";
+import {
+  applyProjectResourceLinkMigrationTransition,
+  buildProjectResourceLinkMigrationPlan,
+  migrationEvent,
+  rowToProjectResourceLinkMigrationManifest,
+} from "../lib/project-resource-link-migrations.js";
 import type {
   Agent,
   AgentRow,
@@ -54,6 +63,14 @@ import type {
   ProjectResourceLinkInput,
   ProjectResourceLinkMutationRequest,
   ProjectResourceLinkMutationResult,
+  ProjectResourceLinkMigrationAdvanceRequest,
+  ProjectResourceLinkMigrationEvent,
+  ProjectResourceLinkMigrationManifestRow,
+  ProjectResourceLinkMigrationManifestV1,
+  ProjectResourceLinkMigrationPlanRequest,
+  ProjectResourceLinkMigrationReadRequest,
+  ProjectResourceLinkMigrationResult,
+  ProjectResourceLinkMigrationRollbackRequest,
   ProjectResourceLinkReadRequest,
   ProjectResourceLinkReadResult,
   ProjectResourceLinkRollbackRequest,
@@ -961,6 +978,13 @@ export function updateWorkspace(id: string, input: UpdateWorkspaceInput, db?: Da
   } else if (metadata === undefined && existingMetadataMachine !== undefined) {
     metadata = withoutCanonicalMachineMetadata(before.metadata);
   }
+  if (input.integrations !== undefined) {
+    assertProjectResourceLinkIntegrationMutation(
+      before.integrations,
+      input.integrations,
+      listProjectResourceLinks(id, PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS, d),
+    );
+  }
 
   const updates: string[] = [];
   const params: SQLQueryBindings[] = [];
@@ -1194,7 +1218,7 @@ export function readProjectResourceLinks(
   const project = getWorkspace(input.project_id, d);
   if (!project) throw new Error(`Workspace not found: ${input.project_id}`);
   const links = listProjectResourceLinks(input.project_id, input.max_items, d);
-  return withResponseControl({
+  const read = {
     ok: true as const,
     project_id: project.id,
     project,
@@ -1205,7 +1229,15 @@ export function readProjectResourceLinks(
     collection_digest: projectResourceLinksDigest(links),
     complete: true as const,
     truncated: false as const,
-  }, input, startedAt, "project resource link read");
+    contract: projectResourceLinkCollection(
+      project.id,
+      workspaceRevision(project),
+      links,
+      input.max_items,
+    ),
+  };
+  assertProjectResourceLinkReadContractEquality(read);
+  return withResponseControl(read, input, startedAt, "project resource link read");
 }
 
 function nextProjectResourceLinkRevision(current: string): string {
@@ -1242,7 +1274,9 @@ function desiredProjectResourceLinks(
       ...input,
       labels: input.labels ?? {},
       created_at: timestamp,
-      updated_at: restored?.updated_at ?? (existing && canonicalJson(existing.labels) === canonicalJson(input.labels ?? {})
+      updated_at: restored?.updated_at ?? (existing
+        && existing.scope === input.scope
+        && canonicalJson(existing.labels) === canonicalJson(input.labels ?? {})
         ? existing.updated_at
         : now()),
     };
@@ -1282,10 +1316,13 @@ function replaceProjectResourceLinks(
     const existing = db.query("SELECT * FROM project_resource_links WHERE id = ?").get(link.id) as ProjectResourceLinkRow | null;
     if (existing) {
       const current = rowToProjectResourceLink(existing);
-      if (canonicalJson(current.labels) !== canonicalJson(link.labels)) {
+      if (
+        current.scope !== link.scope
+        || canonicalJson(current.labels) !== canonicalJson(link.labels)
+      ) {
         db.run(
-          "UPDATE project_resource_links SET labels_json = ?, updated_at = ? WHERE id = ?",
-          [canonicalJson(link.labels), link.updated_at, link.id],
+          "UPDATE project_resource_links SET scope = ?, labels_json = ?, updated_at = ? WHERE id = ?",
+          [link.scope, canonicalJson(link.labels), link.updated_at, link.id],
         );
       }
       continue;
@@ -1623,6 +1660,406 @@ export function rollbackProjectResourceLinks(
   });
 }
 
+function getProjectResourceLinkMigrationManifest(
+  projectId: string,
+  manifestId: string,
+  db: Database,
+): ProjectResourceLinkMigrationManifestV1 {
+  const row = db.query(
+    `SELECT * FROM project_resource_link_migration_manifests
+     WHERE manifest_id = ? AND project_id = ?`,
+  ).get(manifestId, projectId) as ProjectResourceLinkMigrationManifestRow | null;
+  if (!row) throw new Error(`project resource link migration manifest not found: ${manifestId}`);
+  return rowToProjectResourceLinkMigrationManifest(row);
+}
+
+function listProjectResourceLinkMigrationEvents(
+  manifestId: string,
+  db: Database,
+): ProjectResourceLinkMigrationEvent[] {
+  return (db.query(
+    `SELECT event_id, manifest_id, transition_version, from_state, to_state,
+            request_digest, precondition_digest, evidence_json, created_at
+     FROM project_resource_link_migration_events
+     WHERE manifest_id = ?
+     ORDER BY transition_version ASC`,
+  ).all(manifestId) as Array<Record<string, unknown>>).map((row) => ({
+    event_id: String(row["event_id"]),
+    manifest_id: String(row["manifest_id"]),
+    transition_version: Number(row["transition_version"]),
+    from_state: row["from_state"] === null ? null : row["from_state"] as ProjectResourceLinkMigrationEvent["from_state"],
+    to_state: row["to_state"] as ProjectResourceLinkMigrationEvent["to_state"],
+    request_digest: String(row["request_digest"]),
+    precondition_digest: String(row["precondition_digest"]),
+    evidence: JSON.parse(String(row["evidence_json"])) as JsonObject,
+    created_at: String(row["created_at"]),
+  }));
+}
+
+function insertProjectResourceLinkMigrationEvent(
+  event: ProjectResourceLinkMigrationEvent,
+  db: Database,
+): void {
+  db.run(
+    `INSERT INTO project_resource_link_migration_events (
+      event_id, manifest_id, transition_version, from_state, to_state,
+      request_digest, precondition_digest, evidence_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      event.event_id,
+      event.manifest_id,
+      event.transition_version,
+      event.from_state,
+      event.to_state,
+      event.request_digest,
+      event.precondition_digest,
+      canonicalJson(event.evidence),
+      event.created_at,
+    ],
+  );
+}
+
+function persistProjectResourceLinkMigrationTransition(
+  before: ProjectResourceLinkMigrationManifestV1,
+  after: ProjectResourceLinkMigrationManifestV1,
+  evidence: JsonObject,
+  db: Database,
+): void {
+  const update = db.run(
+    `UPDATE project_resource_link_migration_manifests
+     SET state = ?, links_json = ?, projects_forward_receipt_id = ?,
+         projects_inverse_receipt_id = ?, projects_reference_proof_json = ?,
+         last_verified_projects_revision = ?, last_verified_projects_digest = ?,
+         transition_version = ?, updated_at = ?
+     WHERE manifest_id = ? AND project_id = ? AND transition_version = ?`,
+    [
+      after.state,
+      canonicalJson(after.links),
+      after.projects_forward_receipt_id,
+      after.projects_inverse_receipt_id,
+      after.projects_reference_proof === null ? null : canonicalJson(after.projects_reference_proof),
+      after.last_verified_projects_revision,
+      after.last_verified_projects_digest,
+      after.transition_version,
+      after.updated_at,
+      after.manifest_id,
+      after.project_id,
+      before.transition_version,
+    ],
+  );
+  if (update.changes !== 1) throw new Error("project resource link migration transition CAS lost");
+  insertProjectResourceLinkMigrationEvent(migrationEvent(
+    after.manifest_id,
+    after.transition_version,
+    before.state,
+    after.state,
+    sha256(canonicalJson(evidence)),
+    sha256(canonicalJson({
+      manifest_id: before.manifest_id,
+      transition_version: before.transition_version,
+      state: before.state,
+    })),
+    evidence,
+    after.updated_at,
+  ), db);
+}
+
+export function planProjectResourceLinkMigration(
+  input: ProjectResourceLinkMigrationPlanRequest,
+  db?: Database,
+): ProjectResourceLinkMigrationResult {
+  const d = db || getDatabase();
+  const started = Date.now();
+  assertCompleteStableProjectId(input.project_id);
+  const project = getWorkspace(input.project_id, d);
+  if (!project) throw new Error(`Workspace not found: ${input.project_id}`);
+  if (workspaceRevision(project) !== input.expected_project_revision) {
+    throw new Error("project resource link migration plan refuses a stale project revision");
+  }
+  const maxItems = input.max_items ?? PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS;
+  if (input.links.length > maxItems) throw new Error("project resource link migration plan exceeds max_items");
+  const ts = now();
+  const candidate = buildProjectResourceLinkMigrationPlan(input, ts);
+  const existingRow = d.query(
+    `SELECT * FROM project_resource_link_migration_manifests
+     WHERE project_id = ? AND operation_id = ? AND step_id = ?`,
+  ).get(input.project_id, input.operation_id, input.step_id) as ProjectResourceLinkMigrationManifestRow | null;
+  if (existingRow) {
+    const existing = rowToProjectResourceLinkMigrationManifest(existingRow);
+    if (existing.manifest_id !== candidate.manifest_id) {
+      throw new Error("project resource link migration step already has a different accepted manifest");
+    }
+    return withResponseControl({
+      ok: true,
+      outcome: "duplicate_of_accepted" as const,
+      manifest: existing,
+      events: listProjectResourceLinkMigrationEvents(existing.manifest_id, d),
+    }, input, started, "project resource link migration plan");
+  }
+  d.transaction(() => {
+    d.run(
+      `INSERT INTO project_resource_link_migration_manifests (
+        manifest_id, project_id, operation_id, step_id, state,
+        expected_project_revision, desired_collection_digest, links_json,
+        projects_forward_receipt_id, projects_inverse_receipt_id,
+        projects_reference_proof_json, last_verified_projects_revision,
+        last_verified_projects_digest, transition_version, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?, ?)`,
+      [
+        candidate.manifest_id,
+        candidate.project_id,
+        candidate.operation_id,
+        candidate.step_id,
+        candidate.state,
+        candidate.expected_project_revision,
+        candidate.desired_collection_digest,
+        canonicalJson(candidate.links),
+        candidate.transition_version,
+        candidate.created_at,
+        candidate.updated_at,
+      ],
+    );
+    insertProjectResourceLinkMigrationEvent(migrationEvent(
+      candidate.manifest_id,
+      candidate.transition_version,
+      null,
+      "planned",
+      sha256(canonicalJson(input.links)),
+      sha256(canonicalJson({
+        project_id: input.project_id,
+        expected_project_revision: input.expected_project_revision,
+      })),
+      { link_ids: candidate.links.map((item) => item.link_id) },
+      ts,
+    ), d);
+  })();
+  return withResponseControl({
+    ok: true,
+    outcome: "accepted" as const,
+    manifest: candidate,
+    events: listProjectResourceLinkMigrationEvents(candidate.manifest_id, d),
+  }, input, started, "project resource link migration plan");
+}
+
+export function readProjectResourceLinkMigration(
+  input: ProjectResourceLinkMigrationReadRequest,
+  db?: Database,
+): ProjectResourceLinkMigrationResult {
+  const d = db || getDatabase();
+  const started = Date.now();
+  const manifest = getProjectResourceLinkMigrationManifest(input.project_id, input.manifest_id, d);
+  return withResponseControl({
+    ok: true,
+    outcome: "accepted" as const,
+    manifest,
+    events: listProjectResourceLinkMigrationEvents(manifest.manifest_id, d),
+  }, input, started, "project resource link migration read");
+}
+
+export function advanceProjectResourceLinkMigration(
+  input: ProjectResourceLinkMigrationAdvanceRequest,
+  db?: Database,
+): ProjectResourceLinkMigrationResult {
+  const d = db || getDatabase();
+  const started = Date.now();
+  const before = getProjectResourceLinkMigrationManifest(input.project_id, input.manifest_id, d);
+  if (before.transition_version !== input.expected_transition_version) {
+    throw new Error("project resource link migration advance transition_version is stale");
+  }
+  if (before.state === input.next_state) {
+    return withResponseControl({
+      ok: true,
+      outcome: "duplicate_of_accepted" as const,
+      manifest: before,
+      events: listProjectResourceLinkMigrationEvents(before.manifest_id, d),
+    }, input, started, "project resource link migration advance");
+  }
+  if (input.next_state === "producer_applied" && !input.producer_evidence) {
+    throw new Error("producer_applied requires exact producer evidence for every link");
+  }
+  if (input.next_state === "projects_applied") {
+    if (!input.projects_forward_receipt_id) throw new Error("projects_applied requires a Projects forward receipt");
+    const row = d.query("SELECT * FROM guarded_project_mutation_receipts WHERE receipt_id = ?")
+      .get(input.projects_forward_receipt_id) as GuardedProjectMutationReceiptRow | null;
+    if (!row) throw new Error("Projects forward receipt not found");
+    const receipt = rowToGuardedReceipt(row);
+    const snapshot = parseResourceLinkSnapshot(receipt.after, "Projects forward");
+    const snapshotIds = new Set(snapshot.links.map((link) => link.id));
+    if (
+      receipt.outcome !== "accepted"
+      || receipt.direction !== "forward"
+      || receipt.target_id !== input.project_id
+      || snapshot.collection_digest !== before.desired_collection_digest
+      || before.links.some((item) => !snapshotIds.has(item.link_id))
+    ) {
+      throw new Error("Projects forward receipt does not prove the manifest collection");
+    }
+  }
+  if (input.next_state === "verified") {
+    const read = readProjectResourceLinks({
+      project_id: input.project_id,
+      max_items: Math.max(PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS, before.links.length),
+      response_byte_limit: input.response_byte_limit,
+      time_budget_ms: input.time_budget_ms,
+    }, d);
+    if (
+      read.collection_digest !== before.desired_collection_digest
+      || input.last_verified_projects_revision !== read.current_revision
+      || input.last_verified_projects_digest !== read.collection_digest
+    ) {
+      throw new Error("verified transition requires a current complete Projects readback");
+    }
+  }
+  const after = applyProjectResourceLinkMigrationTransition(before, input.next_state, now(), {
+    producer_evidence: input.producer_evidence,
+    projects_forward_receipt_id: input.projects_forward_receipt_id,
+    last_verified_projects_revision: input.last_verified_projects_revision,
+    last_verified_projects_digest: input.last_verified_projects_digest,
+  });
+  d.transaction(() => persistProjectResourceLinkMigrationTransition(before, after, input.evidence, d))();
+  return withResponseControl({
+    ok: true,
+    outcome: "accepted" as const,
+    manifest: after,
+    events: listProjectResourceLinkMigrationEvents(after.manifest_id, d),
+  }, input, started, "project resource link migration advance");
+}
+
+export function rollbackProjectResourceLinkMigration(
+  input: ProjectResourceLinkMigrationRollbackRequest,
+  db?: Database,
+): ProjectResourceLinkMigrationResult {
+  const d = db || getDatabase();
+  const started = Date.now();
+  let before = getProjectResourceLinkMigrationManifest(input.project_id, input.manifest_id, d);
+  if (["rolled_back", "retained_target"].includes(before.state)) {
+    return withResponseControl({
+      ok: true,
+      outcome: "duplicate_of_accepted" as const,
+      manifest: before,
+      events: listProjectResourceLinkMigrationEvents(before.manifest_id, d),
+    }, input, started, "project resource link migration rollback");
+  }
+  if (before.transition_version !== input.expected_transition_version) {
+    throw new Error("project resource link migration rollback transition_version is stale");
+  }
+  let proof = before.projects_reference_proof;
+  let inverseReceiptId = before.projects_inverse_receipt_id;
+  const establishingProjectsReferenceProof = proof === null;
+  if (establishingProjectsReferenceProof && input.producer_outcome !== "pending") {
+    throw new Error(
+      "first migration rollback call must use producer_outcome=pending so Projects reference proof is persisted before producer compensation",
+    );
+  }
+  if (!proof) {
+    const linkIds = before.links.map((item) => item.link_id);
+    if (before.projects_forward_receipt_id) {
+      const current = readProjectResourceLinks({
+        project_id: input.project_id,
+        max_items: input.max_items ?? PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS,
+        response_byte_limit: input.response_byte_limit,
+        time_budget_ms: input.time_budget_ms,
+      }, d);
+      const inverse = rollbackProjectResourceLinks({
+        project_id: input.project_id,
+        operation_id: `${before.operation_id}:migration-rollback`,
+        step_id: `${before.step_id}:projects-reference`,
+        accepted_receipt_id: before.projects_forward_receipt_id,
+        expected_current_revision: current.current_revision,
+        max_items: input.max_items,
+        response_byte_limit: input.response_byte_limit,
+        time_budget_ms: input.time_budget_ms,
+        agent_id: input.agent_id,
+        source: input.source,
+        command: input.command,
+      }, d);
+      const verified = readProjectResourceLinks({
+        project_id: input.project_id,
+        max_items: input.max_items ?? PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS,
+        response_byte_limit: input.response_byte_limit,
+        time_budget_ms: input.time_budget_ms,
+      }, d);
+      if (verified.links.some((link) => linkIds.includes(link.id))) {
+        throw new Error("Projects inverse did not remove every manifest reference");
+      }
+      inverseReceiptId = inverse.receipt?.receipt_id ?? null;
+      if (!inverseReceiptId) throw new Error("Projects inverse did not return an accepted receipt");
+      proof = {
+        kind: "accepted_inverse",
+        forward_receipt_id: before.projects_forward_receipt_id,
+        inverse_receipt_id: inverseReceiptId,
+        verified_revision: verified.current_revision,
+        collection_digest: verified.collection_digest,
+        link_ids_checked: linkIds,
+        complete: true,
+        truncated: false,
+        request_digest: inverse.request_digest,
+        precondition_digest: inverse.precondition_digest,
+      };
+    } else {
+      const current = readProjectResourceLinks({
+        project_id: input.project_id,
+        max_items: input.max_items ?? PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS,
+        response_byte_limit: input.response_byte_limit,
+        time_budget_ms: input.time_budget_ms,
+      }, d);
+      if (current.links.some((link) => linkIds.includes(link.id))) {
+        throw new Error("ambiguous Projects state: manifest links exist without a matching accepted forward receipt");
+      }
+      proof = {
+        kind: "no_projects_write",
+        verified_revision: current.current_revision,
+        collection_digest: current.collection_digest,
+        link_ids_checked: linkIds,
+        complete: true,
+        truncated: false,
+        request_digest: sha256(canonicalJson({ manifest_id: before.manifest_id, link_ids: linkIds })),
+        precondition_digest: sha256(canonicalJson({
+          revision: current.current_revision,
+          collection_digest: current.collection_digest,
+        })),
+      };
+    }
+  }
+  if (before.state !== "rollback_in_progress") {
+    const inProgress = applyProjectResourceLinkMigrationTransition(before, "rollback_in_progress", now(), {
+      projects_inverse_receipt_id: inverseReceiptId,
+      projects_reference_proof: proof,
+      last_verified_projects_revision: proof.verified_revision,
+      last_verified_projects_digest: proof.collection_digest,
+    });
+    d.transaction(() => persistProjectResourceLinkMigrationTransition(before, inProgress, input.evidence, d))();
+    before = inProgress;
+  }
+  if (input.producer_outcome === "pending") {
+    return withResponseControl({
+      ok: true,
+      outcome: "accepted" as const,
+      manifest: before,
+      events: listProjectResourceLinkMigrationEvents(before.manifest_id, d),
+    }, input, started, "project resource link migration rollback");
+  }
+  const nextState = input.producer_outcome === "complete"
+    ? "rolled_back"
+    : input.producer_outcome === "retained_target"
+      ? "retained_target"
+      : "failed_reconcilable";
+  const after = applyProjectResourceLinkMigrationTransition(before, nextState, now(), {
+    projects_inverse_receipt_id: inverseReceiptId,
+    projects_reference_proof: proof,
+    last_verified_projects_revision: proof.verified_revision,
+    last_verified_projects_digest: proof.collection_digest,
+  });
+  d.transaction(() => persistProjectResourceLinkMigrationTransition(before, after, input.evidence, d))();
+  before = after;
+  return withResponseControl({
+    ok: true,
+    outcome: "accepted" as const,
+    manifest: before,
+    events: listProjectResourceLinkMigrationEvents(before.manifest_id, d),
+  }, input, started, "project resource link migration rollback");
+}
+
 function previewWorkspacePatch(before: Workspace, patch: UpdateWorkspaceInput): Workspace {
   return {
     ...before,
@@ -1664,6 +2101,13 @@ export function guardedUpdateWorkspace(input: GuardedProjectMutationRequest, db?
   return d.transaction(() => {
     const before = getWorkspace(input.project_id, d);
     if (!before) throw new Error(`Workspace not found: ${input.project_id}`);
+    if (input.patch.integrations !== undefined) {
+      assertProjectResourceLinkIntegrationMutation(
+        before.integrations,
+        input.patch.integrations,
+        listProjectResourceLinks(input.project_id, PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS, d),
+      );
+    }
     const currentRevision = workspaceRevision(before);
     const duplicate = findGuardedAcceptedReceipt({
       operation_id: input.operation_id,

@@ -1,15 +1,26 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { createWorkspace, mutateProjectResourceLinks, readProjectResourceLinks, rollbackProjectResourceLinks } from "../db/workspaces.js";
+import { validateEmbeddedContract } from "@hasna/contracts/validators";
+import {
+  createWorkspace,
+  mutateProjectResourceLinks,
+  readProjectResourceLinks,
+  rollbackProjectResourceLinks,
+  updateWorkspace,
+} from "../db/workspaces.js";
 import { runMigrations } from "../db/schema.js";
 import {
+  assertProjectResourceLinkReadContractEquality,
   normalizeProjectResourceLink,
   normalizeProjectResourceLinks,
   projectResourceLinkId,
   type ProjectResourceLinkInput,
 } from "./project-resource-links.js";
 
-type ConversationsChannelLink = Extract<ProjectResourceLinkInput, { authority: "conversations" }>;
+type ConversationsChannelLink = Extract<
+  ProjectResourceLinkInput,
+  { authority: "conversations"; target_kind: "channel" }
+>;
 type TodosProjectLink = Extract<ProjectResourceLinkInput, { authority: "todos" }> & { target_kind: "project" };
 type TodosTaskLink = Extract<ProjectResourceLinkInput, { authority: "todos" }> & { target_kind: "task" };
 type OrgsOrgLink = Extract<ProjectResourceLinkInput, { authority: "orgs" }> & { target_kind: "org" };
@@ -356,12 +367,29 @@ describe("project resource-link guarded lifecycle", () => {
     const duplicate = mutateProjectResourceLinks(input, db);
     expect(duplicate.outcome).toBe("duplicate_of_accepted");
     expect(duplicate.receipt?.duplicate_of_receipt_id).toBe(added.receipt?.receipt_id);
-    expect(readProjectResourceLinks({
+    const read = readProjectResourceLinks({
       project_id: project.id,
       max_items: 2,
       response_byte_limit: 64_000,
       time_budget_ms: 5_000,
-    }, db).links).toHaveLength(2);
+    }, db);
+    expect(read.links).toHaveLength(2);
+    expect(read.contract).toEqual({
+      schema: "hasna.project_resource_link_collection.v1",
+      project_id: read.project_id,
+      current_revision: read.current_revision,
+      links: read.links,
+      link_count: read.link_count,
+      max_items: read.max_items,
+      collection_digest: read.collection_digest,
+      complete: read.complete,
+      truncated: read.truncated,
+    });
+    expect(validateEmbeddedContract(read.contract).success).toBe(true);
+    expect(() => assertProjectResourceLinkReadContractEquality({
+      ...read,
+      contract: { ...read.contract, collection_digest: "a".repeat(64) },
+    })).toThrow(/not byte-equivalent/);
     db.close();
   });
 
@@ -430,20 +458,28 @@ describe("project resource-link guarded lifecycle", () => {
       response_byte_limit: 64_000,
       time_budget_ms: 5_000,
     }, db);
+    const originalConversationLink = added.after!.links.find((link) => link.authority === "conversations")!;
     const reconciled = mutateProjectResourceLinks({
       project_id: project.id,
       operation_id: "op-reconcile-links",
       step_id: "links",
       mode: "reconcile",
       expected_revision: added.after!.project.updated_at,
-      links: [conversationsChannel("renamed-channel")],
+      links: [{ ...conversationsChannel("renamed-channel"), scope: "resource" }],
       response_byte_limit: 64_000,
       time_budget_ms: 5_000,
     }, db);
     expect(reconciled.outcome).toBe("accepted");
     expect(reconciled.after?.links).toHaveLength(1);
     expect(reconciled.after?.links[0]?.labels.channel_name).toBe("renamed-channel");
+    expect(reconciled.after?.links[0]?.scope).toBe("resource");
+    expect(reconciled.after?.links[0]?.id).toBe(originalConversationLink.id);
+    expect(reconciled.after?.links[0]?.created_at).toBe(originalConversationLink.created_at);
+    expect(reconciled.after?.collection_digest).not.toBe(added.after?.collection_digest);
     expect(reconciled.after?.project.integrations).toEqual({ conversations_channel: "renamed-channel" });
+    expect(() => updateWorkspace(project.id, {
+      integrations: { conversations_channel: "legacy-writer-drift" },
+    }, db)).toThrow(/must be changed through resource-links/);
 
     const rolledBack = rollbackProjectResourceLinks({
       project_id: project.id,

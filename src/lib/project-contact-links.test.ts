@@ -63,6 +63,8 @@ function resourceLink(id = contactId, resourceServiceInstance = serviceInstance)
 }
 
 function projectRead(links: ProjectResourceLink[] = [], revision = project.updated_at): ProjectResourceLinkReadResult {
+  const maxItems = 1000;
+  const collectionDigest = `digest-${links.length}-${revision}`;
   return {
     ok: true,
     project_id: projectId,
@@ -70,10 +72,21 @@ function projectRead(links: ProjectResourceLink[] = [], revision = project.updat
     current_revision: revision,
     links,
     link_count: links.length,
-    max_items: 1000,
-    collection_digest: `digest-${links.length}-${revision}`,
+    max_items: maxItems,
+    collection_digest: collectionDigest,
     complete: true,
     truncated: false,
+    contract: {
+      schema: "hasna.project_resource_link_collection.v1",
+      project_id: projectId,
+      current_revision: revision,
+      links,
+      link_count: links.length,
+      max_items: maxItems,
+      collection_digest: collectionDigest,
+      complete: true,
+      truncated: false,
+    },
     response_control: {
       response_byte_limit: 100_000,
       time_budget_ms: 5_000,

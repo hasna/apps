@@ -1209,7 +1209,7 @@ describe("project-first CLI surface", () => {
     }
   }, 30000);
 
-  test("guarded-update exposes exact integrations through the guarded contract", () => {
+  test("guarded-update rejects independent writes to typed resource-link compatibility scalars", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-guarded-integrations-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
     try {
@@ -1245,18 +1245,15 @@ describe("project-first CLI surface", () => {
         "5000",
         "--json",
       ], env);
-      expect(update.exitCode).toBe(0);
-      const payload = JSON.parse(text(update.stdout)) as {
-        outcome: string;
-        after: { integrations: Record<string, string> };
-        receipt: { receipt_id: string };
-      };
-      expect(payload.outcome).toBe("accepted");
-      expect(payload.after.integrations).toEqual({
-        todos_project_id: "todo_after",
-        conversations_channel: "package-arrivals",
-      });
-      expect(payload.receipt.receipt_id).toMatch(/^gpmr_/);
+      expect(update.exitCode).toBe(1);
+      expect(text(update.stderr)).toContain("must be changed through resource-links");
+      const shown = runProjects(["show", created.project.id, "--json"], env);
+      expect(shown.exitCode).toBe(0);
+      expect((JSON.parse(text(shown.stdout)) as { project: { integrations: Record<string, string> } })
+        .project.integrations).toEqual({
+          conversations_channel: "guarded-integrations",
+          todos_project_id: "todo_before",
+        });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1595,17 +1592,24 @@ describe("project-first CLI surface", () => {
     const linked = runProjects([
       "link",
       "managed-app",
-      "--todos-task-list-id",
-      "list_789",
       "--brief-id",
       "brief_456",
       "--json",
     ], env);
     expect(linked.exitCode).toBe(0);
-    expect((JSON.parse(text(linked.stdout)) as { integrations: Record<string, string> }).integrations.todos_task_list_id).toBe("list_789");
     expect((JSON.parse(text(linked.stdout)) as { integrations: Record<string, string> }).integrations.brief_id).toBe("brief_456");
 
-    const unlinked = runProjects(["unlink", "managed-app", "--todos", "--brief", "--json"], env);
+    const rejectedTodoLink = runProjects([
+      "link",
+      "managed-app",
+      "--todos-task-list-id",
+      "list_789",
+      "--json",
+    ], env);
+    expect(rejectedTodoLink.exitCode).toBe(1);
+    expect(text(rejectedTodoLink.stderr)).toContain("must be changed through resource-links");
+
+    const unlinked = runProjects(["unlink", "managed-app", "--brief", "--json"], env);
     expect(unlinked.exitCode).toBe(0);
     const unlinkedPayload = JSON.parse(text(unlinked.stdout)) as {
       project: {
@@ -1617,12 +1621,15 @@ describe("project-first CLI surface", () => {
       };
       unlinked: string[];
     };
-    expect(unlinkedPayload.unlinked).toEqual(["todos_project_id", "todos_task_list_id", "brief_id", "brief_path"]);
-    expect(unlinkedPayload.project.integrations.todos_project_id).toBeUndefined();
-    expect(unlinkedPayload.project.integrations.todos_task_list_id).toBeUndefined();
+    expect(unlinkedPayload.unlinked).toEqual(["brief_id", "brief_path"]);
+    expect(unlinkedPayload.project.integrations.todos_project_id).toBe("todo_123");
+    expect(unlinkedPayload.project.integrations.todos_task_list_id).toBe("list_456");
+    const rejectedTodoUnlink = runProjects(["unlink", "managed-app", "--todos", "--json"], env);
+    expect(rejectedTodoUnlink.exitCode).toBe(1);
+    expect(text(rejectedTodoUnlink.stderr)).toContain("must be changed through resource-links");
     expect(unlinkedPayload.project.integrations.brief_id).toBeUndefined();
     expect(unlinkedPayload.project.integrations.brief_path).toBeUndefined();
-    expect(unlinkedPayload.project.external_links.todos.linked).toBe(false);
+    expect(unlinkedPayload.project.external_links.todos.linked).toBe(true);
     expect(unlinkedPayload.project.external_links.brief.linked).toBe(false);
   });
 

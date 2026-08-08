@@ -54,6 +54,9 @@ import {
   listProjectResourceLinks as dbListProjectResourceLinks,
   lookupGuardedWorkspaceMutationReceipt as dbLookupGuardedWorkspaceMutationReceipt,
   mutateProjectResourceLinks as dbMutateProjectResourceLinks,
+  advanceProjectResourceLinkMigration as dbAdvanceProjectResourceLinkMigration,
+  planProjectResourceLinkMigration as dbPlanProjectResourceLinkMigration,
+  readProjectResourceLinkMigration as dbReadProjectResourceLinkMigration,
   readProjectResourceLinks as dbReadProjectResourceLinks,
   countWorkspaces as dbCountWorkspaces,
   listWorkspaces as dbListWorkspaces,
@@ -62,6 +65,7 @@ import {
   releaseWorkspaceLock,
   rollbackGuardedWorkspaceMutation as dbRollbackGuardedWorkspaceMutation,
   rollbackProjectResourceLinks as dbRollbackProjectResourceLinks,
+  rollbackProjectResourceLinkMigration as dbRollbackProjectResourceLinkMigration,
   resolveWorkspace as dbResolveWorkspace,
   scoreRoots as dbScoreRoots,
   unarchiveWorkspace as dbUnarchiveWorkspace,
@@ -126,7 +130,10 @@ import {
   sha256,
   withResponseControl,
 } from "../lib/guarded-project-mutation.js";
-import { normalizeProjectResourceLinks } from "../lib/project-resource-links.js";
+import {
+  assertProjectResourceLinkReadContractEquality,
+  normalizeProjectResourceLinks,
+} from "../lib/project-resource-links.js";
 import type {
   Agent,
   AgentRun,
@@ -145,6 +152,11 @@ import type {
   JsonObject,
   ProjectResourceLinkMutationRequest,
   ProjectResourceLinkMutationResult,
+  ProjectResourceLinkMigrationAdvanceRequest,
+  ProjectResourceLinkMigrationPlanRequest,
+  ProjectResourceLinkMigrationReadRequest,
+  ProjectResourceLinkMigrationResult,
+  ProjectResourceLinkMigrationRollbackRequest,
   ProjectResourceLinkReadRequest,
   ProjectResourceLinkReadResult,
   ProjectResourceLinkRollbackRequest,
@@ -315,6 +327,10 @@ export interface ProjectStore {
   readProjectResourceLinks(input: ProjectResourceLinkReadRequest): Promise<ProjectResourceLinkReadResult>;
   mutateProjectResourceLinks(input: ProjectResourceLinkMutationRequest): Promise<ProjectResourceLinkMutationResult>;
   rollbackProjectResourceLinks(input: ProjectResourceLinkRollbackRequest): Promise<ProjectResourceLinkMutationResult>;
+  planProjectResourceLinkMigration(input: ProjectResourceLinkMigrationPlanRequest): Promise<ProjectResourceLinkMigrationResult>;
+  readProjectResourceLinkMigration(input: ProjectResourceLinkMigrationReadRequest): Promise<ProjectResourceLinkMigrationResult>;
+  advanceProjectResourceLinkMigration(input: ProjectResourceLinkMigrationAdvanceRequest): Promise<ProjectResourceLinkMigrationResult>;
+  rollbackProjectResourceLinkMigration(input: ProjectResourceLinkMigrationRollbackRequest): Promise<ProjectResourceLinkMigrationResult>;
   guardedUpdateProject(input: GuardedProjectMutationRequest): Promise<GuardedProjectMutationResult>;
   lookupGuardedProjectMutationReceipt(input: GuardedProjectMutationReceiptLookupInput): Promise<GuardedProjectMutationReceiptLookupResult>;
   rollbackGuardedProjectMutation(input: GuardedProjectMutationRollbackRequest): Promise<GuardedProjectMutationResult>;
@@ -595,6 +611,28 @@ class LocalProjectStore implements ProjectStore {
   async rollbackProjectResourceLinks(input: ProjectResourceLinkRollbackRequest): Promise<ProjectResourceLinkMutationResult> {
     return withLock(input.project_id, { agentId: input.agent_id, source: input.source, command: input.command }, "project resource links rollback", () =>
       dbRollbackProjectResourceLinks(input),
+    );
+  }
+
+  async planProjectResourceLinkMigration(input: ProjectResourceLinkMigrationPlanRequest): Promise<ProjectResourceLinkMigrationResult> {
+    return withLock(input.project_id, undefined, "project resource link migration plan", () =>
+      dbPlanProjectResourceLinkMigration(input),
+    );
+  }
+
+  async readProjectResourceLinkMigration(input: ProjectResourceLinkMigrationReadRequest): Promise<ProjectResourceLinkMigrationResult> {
+    return dbReadProjectResourceLinkMigration(input);
+  }
+
+  async advanceProjectResourceLinkMigration(input: ProjectResourceLinkMigrationAdvanceRequest): Promise<ProjectResourceLinkMigrationResult> {
+    return withLock(input.project_id, undefined, "project resource link migration advance", () =>
+      dbAdvanceProjectResourceLinkMigration(input),
+    );
+  }
+
+  async rollbackProjectResourceLinkMigration(input: ProjectResourceLinkMigrationRollbackRequest): Promise<ProjectResourceLinkMigrationResult> {
+    return withLock(input.project_id, undefined, "project resource link migration rollback", () =>
+      dbRollbackProjectResourceLinkMigration(input),
     );
   }
 
@@ -1070,7 +1108,7 @@ class ApiProjectStore implements ProjectStore {
   }
 
   async readProjectResourceLinks(input: ProjectResourceLinkReadRequest): Promise<ProjectResourceLinkReadResult> {
-    return this.client.transport.get<ProjectResourceLinkReadResult>(
+    const result = await this.client.transport.get<ProjectResourceLinkReadResult>(
       `/projects/${encodeURIComponent(input.project_id)}/resource-links`,
       {
         query: {
@@ -1081,6 +1119,8 @@ class ApiProjectStore implements ProjectStore {
         timeoutMs: input.time_budget_ms,
       },
     );
+    assertProjectResourceLinkReadContractEquality(result);
+    return result;
   }
 
   async mutateProjectResourceLinks(input: ProjectResourceLinkMutationRequest): Promise<ProjectResourceLinkMutationResult> {
@@ -1111,6 +1151,44 @@ class ApiProjectStore implements ProjectStore {
   async rollbackProjectResourceLinks(input: ProjectResourceLinkRollbackRequest): Promise<ProjectResourceLinkMutationResult> {
     return this.client.transport.post<ProjectResourceLinkMutationResult>(
       `/projects/${encodeURIComponent(input.project_id)}/resource-links/rollback`,
+      input,
+      { timeoutMs: input.time_budget_ms },
+    );
+  }
+
+  async planProjectResourceLinkMigration(input: ProjectResourceLinkMigrationPlanRequest): Promise<ProjectResourceLinkMigrationResult> {
+    return this.client.transport.post<ProjectResourceLinkMigrationResult>(
+      `/projects/${encodeURIComponent(input.project_id)}/resource-link-migrations/plan`,
+      input,
+      { timeoutMs: input.time_budget_ms },
+    );
+  }
+
+  async readProjectResourceLinkMigration(input: ProjectResourceLinkMigrationReadRequest): Promise<ProjectResourceLinkMigrationResult> {
+    return this.client.transport.get<ProjectResourceLinkMigrationResult>(
+      `/projects/${encodeURIComponent(input.project_id)}/resource-link-migrations/${encodeURIComponent(input.manifest_id)}`,
+      {
+        query: {
+          max_items: input.max_items,
+          response_byte_limit: input.response_byte_limit,
+          time_budget_ms: input.time_budget_ms,
+        },
+        timeoutMs: input.time_budget_ms,
+      },
+    );
+  }
+
+  async advanceProjectResourceLinkMigration(input: ProjectResourceLinkMigrationAdvanceRequest): Promise<ProjectResourceLinkMigrationResult> {
+    return this.client.transport.post<ProjectResourceLinkMigrationResult>(
+      `/projects/${encodeURIComponent(input.project_id)}/resource-link-migrations/${encodeURIComponent(input.manifest_id)}/advance`,
+      input,
+      { timeoutMs: input.time_budget_ms },
+    );
+  }
+
+  async rollbackProjectResourceLinkMigration(input: ProjectResourceLinkMigrationRollbackRequest): Promise<ProjectResourceLinkMigrationResult> {
+    return this.client.transport.post<ProjectResourceLinkMigrationResult>(
+      `/projects/${encodeURIComponent(input.project_id)}/resource-link-migrations/${encodeURIComponent(input.manifest_id)}/rollback`,
       input,
       { timeoutMs: input.time_budget_ms },
     );

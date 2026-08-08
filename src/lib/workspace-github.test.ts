@@ -98,7 +98,7 @@ describe("workspace GitHub services", () => {
     rmSync(rootPath, { recursive: true, force: true });
   });
 
-  test("links integrations by merging instead of replacing existing keys", async () => {
+  test("links non-resource integrations by merging instead of replacing existing keys", async () => {
     const { db, store } = setup();
     const rootPath = mkdtempSync(join(tmpdir(), "workspace-github-link-"));
     const workspace = createWorkspace({
@@ -108,12 +108,12 @@ describe("workspace GitHub services", () => {
     }, db);
 
     const updated = await linkWorkspaceExternalIntegrations(store, workspace, {
-      todos_project_id: "todo_123",
+      files_index_id: "files_123",
       github_url: "https://github.com/hasna/link-me",
     }, { source: "cli", command: "test" });
     expect(updated.integrations.github_repo).toBe("hasna/link-me");
     expect(updated.integrations.github_url).toBe("https://github.com/hasna/link-me");
-    expect(updated.integrations.todos_project_id).toBe("todo_123");
+    expect(updated.integrations.files_index_id).toBe("files_123");
     expect(listWorkspaceEvents(workspace.id, db).some((event) => event.event_type === "updated")).toBe(true);
     rmSync(rootPath, { recursive: true, force: true });
   });

@@ -345,7 +345,18 @@ function resourceLinkMutationClient() {
     },
     async execute(sql: string, params: readonly unknown[] = []): Promise<void> {
       if (sql.startsWith("DELETE FROM project_resource_links")) {
-        links = links.filter((link) => link.project_id !== params[0]);
+        links = links.filter((link) => link.id !== params[0]);
+        return;
+      }
+      if (sql.includes("UPDATE project_resource_links")) {
+        const index = links.findIndex((link) => link.id === params[3]);
+        if (index < 0) throw new Error(`Project resource link not found: ${String(params[3])}`);
+        links[index] = {
+          ...links[index]!,
+          scope: String(params[0]),
+          labels_json: String(params[1]),
+          updated_at: String(params[2]),
+        };
         return;
       }
       if (sql.includes("INSERT INTO project_resource_links")) {
@@ -577,6 +588,27 @@ describe("pg-store typed resource-link transaction model", () => {
     expect(accepted.outcome).toBe("accepted");
     expect(harness.links()).toHaveLength(1);
     expect(harness.events()).toHaveLength(1);
+    const acceptedLink = accepted.after!.links[0]!;
+    const acceptedDigest = accepted.after!.collection_digest;
+
+    const scopeChanged = await store.mutateProjectResourceLinks({
+      project_id: harness.workspace().id,
+      operation_id: "pg-model-scope",
+      step_id: "change-scope",
+      mode: "reconcile",
+      expected_revision: accepted.after!.project.updated_at,
+      links: [{ ...channelLink, scope: "collection" }],
+      max_items: 10,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    });
+    expect(scopeChanged.outcome).toBe("accepted");
+    expect(scopeChanged.after!.links[0]).toMatchObject({
+      id: acceptedLink.id,
+      created_at: acceptedLink.created_at,
+      scope: "collection",
+    });
+    expect(scopeChanged.after!.collection_digest).not.toBe(acceptedDigest);
 
     const stale = await store.mutateProjectResourceLinks({
       project_id: harness.workspace().id,

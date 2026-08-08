@@ -4,11 +4,27 @@
   "name": "projects",
   "class": "service",
   "contractVersion": "v2",
-  "kitVersion": "0.4.1",
-  "description": "High-level project/workspace management: CLI, MCP server, HTTP API (projects-serve), and typed SDK. Amendment A1 pure-remote: the serve reads/writes cloud Postgres directly.",
+  "kitVersion": "0.8.4",
+  "description": "High-level project/workspace management: CLI, MCP server, HTTP API (projects-serve), and typed SDK.",
   "bins": ["projects", "projects-mcp", "projects-serve"],
+  "hosting": ["user-hosted"],
+  "serviceSurfaces": [
+    {
+      "name": "http-api",
+      "kind": "api",
+      "status": "supported",
+      "bin": "projects-serve",
+      "authMode": "api-key",
+      "health": { "method": "GET", "path": "/health", "public": true },
+      "readiness": { "method": "GET", "path": "/ready", "public": false },
+      "version": { "method": "GET", "path": "/version", "public": true },
+      "apiBasePath": "/v1",
+      "openApiPath": "/openapi.json"
+    }
+  ],
   "storage": {
-    "mode": "cloud",
+    "backend": "postgresql",
+    "engines": ["sqlite", "postgresql"],
     "envPrefix": "HASNA_PROJECTS_",
     "aliasEnvPrefix": "PROJECTS_",
     "databaseUrlSecretRef": "hasna/oss/projects/database-url",
