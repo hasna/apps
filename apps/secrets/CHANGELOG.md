@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.18 — 2026-08-08
+
+- Require a left boundary before OpenAI secret-key matches so task-first slugs
+  like `OPE45-00025-openai-key-boundary` are not reported as credential leaks.
+
 ## 0.2.17 — 2026-08-08
 
 - Reject unsupported `secrets scan` flags instead of silently scanning the
