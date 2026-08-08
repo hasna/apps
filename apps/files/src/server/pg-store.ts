@@ -317,6 +317,11 @@ export interface ListFilesQuery {
   offset?: number;
 }
 
+function normalizeExtensionFilter(ext: string): string {
+  const lower = ext.toLowerCase();
+  return lower.startsWith(".") ? lower : `.${lower}`;
+}
+
 export async function listFiles(client: TypedQueryClient, opts: ListFilesQuery): Promise<FileWithTags[]> {
   const where: string[] = [];
   const params: unknown[] = [];
@@ -325,7 +330,7 @@ export async function listFiles(client: TypedQueryClient, opts: ListFilesQuery):
   add(`${filePrefix}status = $?`, opts.status ?? "active");
   if (opts.source_id) add(`${filePrefix}source_id = $?`, opts.source_id);
   if (opts.machine_id) add(`${filePrefix}machine_id = $?`, opts.machine_id);
-  if (opts.ext) add(`${filePrefix}ext = $?`, opts.ext);
+  if (opts.ext) add(`${filePrefix}ext = $?`, normalizeExtensionFilter(opts.ext));
   if (opts.q) add(`(${filePrefix}name ILIKE $? OR ${filePrefix}path ILIKE $?)`.replace("$?", `$${params.length + 1}`).replace("$?", `$${params.length + 1}`), `%${opts.q}%`);
   let join = "";
   if (opts.project_id) {
