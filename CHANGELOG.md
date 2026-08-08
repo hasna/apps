@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.108]
+
 ### Added
 
 - Typed project resource links now accept `@hasna/orgs` organization and
