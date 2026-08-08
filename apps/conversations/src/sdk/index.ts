@@ -278,7 +278,7 @@ export class ConversationsClient {
     }
 
     /** Bounded exact terminal receipt lookup */
-    async lookupProjectChannelRegistrationReceipt(query?: { "operation_id": string; "step_id": string; "resource_kind": "channel"; "direction": "forward" | "inverse"; "authority": "conversations"; "authority_route": string; "package_version": string; "authority_id": string; "tenant_id": string; "corpus_id": string; "target_selector": string; "idempotency_key": string; "target_id"?: string; "max_items": number; "response_byte_limit": number; "time_budget_ms": number; "call_limit": number }, init?: RequestInit): Promise<Record<string, unknown>> {
+    async lookupProjectChannelRegistrationReceipt(query?: { "operation_id": string; "step_id": string; "resource_kind": "channel"; "direction": "forward" | "inverse"; "authority": "conversations"; "authority_route": string; "package_version": string; "authority_id": string; "tenant_id": string; "corpus_id": string; "target_selector": string; "idempotency_key": string; "request_digest": string; "precondition_digest": string; "target_id"?: string; "max_items": number; "response_byte_limit": number; "time_budget_ms": number; "call_limit": number }, init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("GET", `/v1/project-registration/channels/receipts/terminal`, {
         body: undefined,
         query,

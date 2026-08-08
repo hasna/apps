@@ -359,6 +359,8 @@ export const openapiSpec = {
           { name: "corpus_id", in: "query", required: true, schema: { type: "string" } },
           { name: "target_selector", in: "query", required: true, schema: { type: "string" } },
           { name: "idempotency_key", in: "query", required: true, schema: { type: "string" } },
+          { name: "request_digest", in: "query", required: true, schema: { type: "string" } },
+          { name: "precondition_digest", in: "query", required: true, schema: { type: "string" } },
           { name: "target_id", in: "query", schema: { type: "string" } },
           { name: "max_items", in: "query", required: true, schema: { type: "integer", const: 1 } },
           { name: "response_byte_limit", in: "query", required: true, schema: { type: "integer", minimum: 1 } },

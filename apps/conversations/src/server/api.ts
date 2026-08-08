@@ -847,6 +847,8 @@ async function handleV1(
       corpus_id: str(url.searchParams.get("corpus_id")),
       target_selector: str(url.searchParams.get("target_selector")),
       idempotency_key: str(url.searchParams.get("idempotency_key")),
+      request_digest: str(url.searchParams.get("request_digest")),
+      precondition_digest: str(url.searchParams.get("precondition_digest")),
       target_id: str(url.searchParams.get("target_id")),
       max_items: maxItems,
       response_byte_limit: responseByteLimit,

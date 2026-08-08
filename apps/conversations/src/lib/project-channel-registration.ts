@@ -141,6 +141,8 @@ export interface ProjectChannelRegistrationLookupRequest extends ProjectChannelR
   corpus_id: string;
   target_selector: string;
   idempotency_key: string;
+  request_digest: string;
+  precondition_digest: string;
   target_id?: string;
   max_items: 1;
 }
@@ -790,13 +792,8 @@ export function lookupProjectChannelRegistrationReceipt(
   db: ConversationsDatabase = getDb(),
 ): ProjectChannelRegistrationLookupResult {
   const startedAt = performance.now();
-  assertBounds(request);
-  if (request.max_items !== 1) throw new Error("max_items must be exactly 1.");
   const capability = getProjectChannelRegistrationCapability(db);
-  if (request.authority !== "conversations") {
-    throw new Error("project channel registration lookup authority mismatch.");
-  }
-  assertProjectChannelRegistrationIdentity(request, capability);
+  const exactTargetId = validateProjectChannelRegistrationLookup(request, capability);
   const params: unknown[] = [
     request.authority,
     request.authority_route,
@@ -808,15 +805,18 @@ export function lookupProjectChannelRegistrationReceipt(
     request.step_id,
     request.direction,
     request.idempotency_key,
+    request.request_digest,
+    request.precondition_digest,
   ];
-  const targetClause = request.target_id === undefined ? "" : " AND target_id = ?";
-  if (request.target_id !== undefined) params.push(request.target_id);
+  const targetClause = exactTargetId === undefined ? "" : " AND target_id = ?";
+  if (exactTargetId !== undefined) params.push(exactTargetId);
   const rows = db.prepare(`
     SELECT * FROM project_channel_registration_receipts
     WHERE authority = ? AND route = ? AND package_version = ?
       AND authority_id = ? AND tenant_id = ? AND corpus_id = ?
       AND operation_id = ? AND step_id = ? AND resource_kind = 'channel'
       AND direction = ? AND idempotency_key = ?
+      AND request_digest = ? AND precondition_digest = ?
       ${targetClause}
     ORDER BY
       CASE outcome
@@ -852,6 +852,50 @@ export function lookupProjectChannelRegistrationReceipt(
   };
 }
 
+export function validateProjectChannelRegistrationLookup(
+  request: ProjectChannelRegistrationLookupRequest,
+  capability: ProjectChannelRegistrationCapability,
+): string | undefined {
+  assertBounds(request);
+  if (request.max_items !== 1) throw new Error("max_items must be exactly 1.");
+  if (request.authority !== "conversations") {
+    throw new Error("project channel registration lookup authority mismatch.");
+  }
+  assertProjectChannelRegistrationIdentity(request, capability);
+  if (request.resource_kind !== "channel") throw new Error("resource_kind must be channel.");
+  if (request.direction !== "forward" && request.direction !== "inverse") {
+    throw new Error("direction must be forward or inverse.");
+  }
+  for (const [name, value] of [
+    ["operation_id", request.operation_id],
+    ["step_id", request.step_id],
+    ["target_selector", request.target_selector],
+    ["idempotency_key", request.idempotency_key],
+    ["request_digest", request.request_digest],
+    ["precondition_digest", request.precondition_digest],
+  ] as const) {
+    assertRequiredText(name, value);
+  }
+  if (
+    request.direction === "forward"
+    && request.precondition_digest !== projectChannelRegistrationDigest({
+      target_selector: request.target_selector,
+      expected: "absent",
+    })
+  ) {
+    throw new Error("lookup precondition_digest does not bind target_selector.");
+  }
+  if (
+    request.direction === "inverse"
+    && request.target_id !== undefined
+    && request.target_id !== request.target_selector
+  ) {
+    throw new Error("inverse lookup target_id must equal target_selector.");
+  }
+  return request.target_id
+    ?? (request.direction === "inverse" ? request.target_selector : undefined);
+}
+
 function sourceAcceptedReceipt(
   db: ConversationsDatabase,
   request: ProjectChannelRegistrationRequest,
@@ -881,10 +925,7 @@ export function validateProjectChannelRegistrationInverse(
   capability: ProjectChannelRegistrationCapability,
   accepted: ProjectChannelRegistrationReceipt,
 ): void {
-  assertBounds(request);
-  assertProjectChannelRegistrationIdentity(request, capability);
-  if (request.resource_kind !== "channel") throw new Error("resource_kind must be channel.");
-  if (request.direction !== "inverse") throw new Error("direction must be inverse.");
+  validateProjectChannelRegistrationInverseEnvelope(request, capability);
   if (request.target_selector !== accepted.target_id) {
     throw new Error("inverse target_selector must equal the accepted target id.");
   }
@@ -902,6 +943,26 @@ export function validateProjectChannelRegistrationInverse(
   };
   if (request.precondition_digest !== projectChannelRegistrationDigest(precondition)) {
     throw new Error("inverse precondition_digest does not match the accepted result.");
+  }
+}
+
+export function validateProjectChannelRegistrationInverseEnvelope(
+  request: ProjectChannelRegistrationRequest,
+  capability: ProjectChannelRegistrationCapability,
+): void {
+  assertBounds(request);
+  assertProjectChannelRegistrationIdentity(request, capability);
+  if (request.resource_kind !== "channel") throw new Error("resource_kind must be channel.");
+  if (request.direction !== "inverse") throw new Error("direction must be inverse.");
+  for (const [name, value] of [
+    ["operation_id", request.operation_id],
+    ["step_id", request.step_id],
+    ["target_selector", request.target_selector],
+    ["idempotency_key", request.idempotency_key],
+    ["request_digest", request.request_digest],
+    ["precondition_digest", request.precondition_digest],
+  ] as const) {
+    assertRequiredText(name, value);
   }
 }
 
@@ -972,6 +1033,7 @@ export function compensateProjectChannelRegistration(
   assertBounds(request);
   const capability = getProjectChannelRegistrationCapability(db);
   assertProjectChannelRegistrationIdentity(request, capability);
+  validateProjectChannelRegistrationInverseEnvelope(request, capability);
 
   return db.transaction(() => {
     db.prepare(

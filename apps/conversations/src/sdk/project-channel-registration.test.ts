@@ -41,6 +41,8 @@ describe("generated SDK project-channel registration contract", () => {
       corpus_id: "cor_11111111111111111111111111111111",
       target_selector: "fleet-resources",
       idempotency_key: "operation-one:conversations-channel:forward",
+      request_digest: "request-digest",
+      precondition_digest: "precondition-digest",
       target_id: "chn_11111111111111111111111111111111",
       max_items: 1,
       response_byte_limit: 32_768,
@@ -83,6 +85,8 @@ describe("generated SDK project-channel registration contract", () => {
     expect(lookupUrl.searchParams.get("max_items")).toBe("1");
     expect(lookupUrl.searchParams.get("call_limit")).toBe("1");
     expect(lookupUrl.searchParams.get("target_id")).toBe("chn_11111111111111111111111111111111");
+    expect(lookupUrl.searchParams.get("request_digest")).toBe("request-digest");
+    expect(lookupUrl.searchParams.get("precondition_digest")).toBe("precondition-digest");
     const readUrl = new URL(calls[3].url);
     expect(readUrl.searchParams.get("target_selector")).toBe("fleet-resources");
     expect(readUrl.searchParams.get("target_digest")).toBe("path-digest");

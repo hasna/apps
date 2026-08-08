@@ -202,6 +202,8 @@ describe("project channel registration authority", () => {
       corpus_id: request.corpus_id,
       target_selector: request.target_selector,
       idempotency_key: request.idempotency_key,
+      request_digest: request.request_digest,
+      precondition_digest: request.precondition_digest,
       target_id: accepted.target_id!,
       max_items: 1 as const,
       response_byte_limit: 32_768,
@@ -241,6 +243,11 @@ describe("project channel registration authority", () => {
     });
     expect(changed.outcome).toBe("terminal_nonacceptance");
     expect(changed.reason).toBe("changed_request_or_precondition_for_step");
+    expect((await authority.lookupReceipt(lookupRequest)).receipt.receipt_id).toBe(duplicate.receipt_id);
+    await expect(authority.lookupReceipt({
+      ...lookupRequest,
+      target_selector: "wrong-selector",
+    })).rejects.toThrow("does not bind target_selector");
     expect(getDb().prepare("SELECT count(*) AS n FROM channels").get()).toEqual({ n: 1 });
   });
 
@@ -358,6 +365,19 @@ describe("project channel registration authority", () => {
     expect(duplicate.receipt_id).toBe((await authority.compensate(inverse)).receipt_id);
   });
 
+  test("validates the inverse envelope before persisting missing-receipt evidence", async () => {
+    const authority = createProjectChannelRegistrationAuthority();
+    const forward = await forwardRequest();
+
+    await expect(authority.compensate({
+      ...forward,
+      accepted_receipt: undefined,
+    })).rejects.toThrow("direction must be inverse");
+    expect(getDb().prepare(
+      "SELECT count(*) AS n FROM project_channel_registration_receipts",
+    ).get()).toEqual({ n: 0 });
+  });
+
   test("refuses inverse for drifted, referenced, or preexisting channels", async () => {
     const authority = createProjectChannelRegistrationAuthority();
     const drifted = await authority.create(await forwardRequest());
@@ -442,6 +462,8 @@ describe("project channel registration authority", () => {
       corpus_id: request.corpus_id,
       target_selector: request.target_selector,
       idempotency_key: request.idempotency_key,
+      request_digest: request.request_digest,
+      precondition_digest: request.precondition_digest,
       target_id: accepted.target_id!,
       max_items: 1,
       response_byte_limit: 32_768,

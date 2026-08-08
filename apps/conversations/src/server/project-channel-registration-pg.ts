@@ -12,6 +12,8 @@ import {
   sameProjectChannelRegistrationReceipt,
   validateProjectChannelRegistrationForward,
   validateProjectChannelRegistrationInverse,
+  validateProjectChannelRegistrationInverseEnvelope,
+  validateProjectChannelRegistrationLookup,
   type ProjectChannelRegistrationCapability,
   type ProjectChannelRegistrationFaultOptions,
   type ProjectChannelRegistrationInverseVerification,
@@ -391,13 +393,8 @@ export async function lookupProjectChannelRegistrationReceiptPg(
   request: ProjectChannelRegistrationLookupRequest,
 ): Promise<ProjectChannelRegistrationLookupResult> {
   const startedAt = performance.now();
-  assertBounds(request);
-  if (request.max_items !== 1) throw new Error("max_items must be exactly 1.");
   const cap = await capability(client);
-  if (request.authority !== "conversations") {
-    throw new Error("project channel registration lookup authority mismatch.");
-  }
-  assertProjectChannelRegistrationIdentity(request, cap);
+  const exactTargetId = validateProjectChannelRegistrationLookup(request, cap);
   const params: unknown[] = [
     request.authority,
     request.authority_route,
@@ -409,15 +406,18 @@ export async function lookupProjectChannelRegistrationReceiptPg(
     request.step_id,
     request.direction,
     request.idempotency_key,
+    request.request_digest,
+    request.precondition_digest,
   ];
-  const targetClause = request.target_id === undefined ? "" : " AND target_id = $11";
-  if (request.target_id !== undefined) params.push(request.target_id);
+  const targetClause = exactTargetId === undefined ? "" : " AND target_id = $13";
+  if (exactTargetId !== undefined) params.push(exactTargetId);
   const rows = await client.many<PgReceiptRow>(`
     SELECT * FROM project_channel_registration_receipts
     WHERE authority = $1 AND route = $2 AND package_version = $3
       AND authority_id = $4 AND tenant_id = $5 AND corpus_id = $6
       AND operation_id = $7 AND step_id = $8 AND resource_kind = 'channel'
       AND direction = $9 AND idempotency_key = $10
+      AND request_digest = $11 AND precondition_digest = $12
       ${targetClause}
     ORDER BY
       CASE outcome
@@ -542,6 +542,7 @@ export async function compensateProjectChannelRegistrationPg(
   assertBounds(request);
   const initialCapability = await capability(client);
   assertProjectChannelRegistrationIdentity(request, initialCapability);
+  validateProjectChannelRegistrationInverseEnvelope(request, initialCapability);
 
   return client.transaction(async (tx) => {
     const cap = await capability(tx, true);
