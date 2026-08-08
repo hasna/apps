@@ -49,8 +49,10 @@ export interface TaskManifestBindingLookupRow {
   apply_receipt_id: unknown;
   state: unknown;
   binding_version: unknown;
+  binding_tenant_id: unknown;
   binding_operation_id: unknown;
   binding_plan_id: unknown;
+  receipt_tenant_id: unknown;
   receipt_authority: unknown;
   receipt_route: unknown;
   receipt_schema_version: unknown;
@@ -61,6 +63,7 @@ export interface TaskManifestBindingLookupRow {
 
 export function validateTaskManifestBindingLookupRows(
   rows: TaskManifestBindingLookupRow[],
+  tenantId: string,
   planId: string,
 ): Omit<
   TodosTaskManifestBindingLookupResult,
@@ -84,7 +87,9 @@ export function validateTaskManifestBindingLookupRows(
   const bindingVersion = Number(row.binding_version);
   const state = row.state;
   if (
-    row.binding_plan_id !== planId
+    row.binding_tenant_id !== tenantId
+    || row.receipt_tenant_id !== tenantId
+    || row.binding_plan_id !== planId
     || row.receipt_plan_id !== planId
     || row.receipt_authority !== "todos"
     || row.receipt_route !== "todos.task-manifest.v1"

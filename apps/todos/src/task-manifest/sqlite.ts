@@ -8,7 +8,7 @@ import {
   type TodosTaskManifestBackend,
 } from "./backend.js";
 import { findSqliteTaskManifestForeignReference } from "./reference-guard.js";
-import { sqliteTodosTaskManifestSchemaSql } from "./schema-sql.js";
+import { ensureSqliteTodosTaskManifestSchema } from "./schema-sql.js";
 import {
   TodosTaskManifestError,
   type TodosTaskManifest,
@@ -32,8 +32,11 @@ function parseApplyResult(value: string, duplicate: boolean): TodosTaskManifestA
 export class SqliteTodosTaskManifestBackend implements TodosTaskManifestBackend {
   readonly kind = "sqlite" as const;
 
-  constructor(private readonly db: Database) {
-    db.exec(sqliteTodosTaskManifestSchemaSql());
+  constructor(
+    private readonly db: Database,
+    private readonly tenantId = "default",
+  ) {
+    ensureSqliteTodosTaskManifestSchema(db, tenantId);
   }
 
   private async serialized<T>(run: () => T): Promise<T> {
@@ -62,7 +65,9 @@ export class SqliteTodosTaskManifestBackend implements TodosTaskManifestBackend 
   async apply(input: NormalizedTaskManifest, faults: PreparedTaskManifestFaults): Promise<TodosTaskManifestApplyResult> {
     return this.serialized(() => {
       const { manifest } = input;
-      const binding = this.db.query("SELECT * FROM todos_task_manifest_bindings WHERE operation_id = ? LIMIT 1").get(manifest.operation_id) as Record<string, unknown> | null;
+      const binding = this.db.query(
+        "SELECT * FROM todos_task_manifest_bindings WHERE tenant_id = ? AND operation_id = ? LIMIT 1",
+      ).get(this.tenantId, manifest.operation_id) as Record<string, unknown> | null;
       if (binding) {
         if (binding["idempotency_key"] !== manifest.idempotency_key || binding["request_digest"] !== input.request_digest) {
           throw new TodosTaskManifestError("TODOS_TASK_MANIFEST_IDEMPOTENCY_CONFLICT", "Operation is already bound to a different request");
@@ -72,7 +77,9 @@ export class SqliteTodosTaskManifestBackend implements TodosTaskManifestBackend 
         }
         return parseApplyResult(String(binding["result_json"]), true);
       }
-      const idempotency = this.db.query("SELECT operation_id, request_digest FROM todos_task_manifest_bindings WHERE idempotency_key = ? LIMIT 1").get(manifest.idempotency_key) as Record<string, unknown> | null;
+      const idempotency = this.db.query(
+        "SELECT operation_id, request_digest FROM todos_task_manifest_bindings WHERE tenant_id = ? AND idempotency_key = ? LIMIT 1",
+      ).get(this.tenantId, manifest.idempotency_key) as Record<string, unknown> | null;
       if (idempotency) throw new TodosTaskManifestError("TODOS_TASK_MANIFEST_IDEMPOTENCY_CONFLICT", "Idempotency key is already used by another operation");
       if (manifest.if_binding_version !== undefined && manifest.if_binding_version !== 0) {
         throw new TodosTaskManifestError("TODOS_TASK_MANIFEST_CAS_CONFLICT", "New manifest binding version must be 0");
@@ -166,10 +173,10 @@ export class SqliteTodosTaskManifestBackend implements TodosTaskManifestBackend 
       const resultJson = canonicalJson(result);
       const manifestJson = canonicalJson(manifest);
       this.db.query(`INSERT INTO todos_task_manifest_receipts (
-        receipt_id, authority, route, schema_version, kind, operation_id, idempotency_key,
+        receipt_id, tenant_id, authority, route, schema_version, kind, operation_id, idempotency_key,
         request_digest, result_digest, binding_version, apply_receipt_id, manifest_json, result_json, created_at
-      ) VALUES (?, 'todos', 'todos.task-manifest.v1', 1, 'apply', ?, ?, ?, ?, 1, NULL, ?, ?, ?)`).run(
-        input.receipt_id, manifest.operation_id, manifest.idempotency_key, input.request_digest,
+      ) VALUES (?, ?, 'todos', 'todos.task-manifest.v1', 1, 'apply', ?, ?, ?, ?, 1, NULL, ?, ?, ?)`).run(
+        input.receipt_id, this.tenantId, manifest.operation_id, manifest.idempotency_key, input.request_digest,
         input.result_digest, manifestJson, resultJson, input.now,
       );
       for (const entry of input.outbox) {
@@ -181,10 +188,10 @@ export class SqliteTodosTaskManifestBackend implements TodosTaskManifestBackend 
       }
       fault(faults, "after_outbox_write");
       this.db.query(`INSERT INTO todos_task_manifest_bindings (
-        operation_id, idempotency_key, request_digest, result_digest, apply_receipt_id,
+        operation_id, tenant_id, idempotency_key, request_digest, result_digest, apply_receipt_id,
         manifest_json, result_json, state, version, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'applied', 1, ?, ?)`).run(
-        manifest.operation_id, manifest.idempotency_key, input.request_digest, input.result_digest,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'applied', 1, ?, ?)`).run(
+        manifest.operation_id, this.tenantId, manifest.idempotency_key, input.request_digest, input.result_digest,
         input.receipt_id, manifestJson, resultJson, input.now, input.now,
       );
       fault(faults, "after_receipt_write");
@@ -193,7 +200,9 @@ export class SqliteTodosTaskManifestBackend implements TodosTaskManifestBackend 
   }
 
   async readExact(receiptId: string): Promise<TodosTaskManifestApplyResult> {
-    const row = this.db.query("SELECT result_json FROM todos_task_manifest_receipts WHERE receipt_id = ? AND kind = 'apply' LIMIT 1").get(receiptId) as { result_json: string } | null;
+    const row = this.db.query(
+      "SELECT result_json FROM todos_task_manifest_receipts WHERE tenant_id = ? AND receipt_id = ? AND kind = 'apply' LIMIT 1",
+    ).get(this.tenantId, receiptId) as { result_json: string } | null;
     if (!row) throw new TodosTaskManifestError("TODOS_TASK_MANIFEST_RECEIPT_NOT_FOUND", `Apply receipt not found: ${receiptId}`);
     return parseApplyResult(row.result_json, false);
   }
@@ -204,8 +213,10 @@ export class SqliteTodosTaskManifestBackend implements TodosTaskManifestBackend 
         b.apply_receipt_id AS apply_receipt_id,
         b.state AS state,
         b.version AS binding_version,
+        b.tenant_id AS binding_tenant_id,
         b.operation_id AS binding_operation_id,
         json_extract(b.result_json, '$.graph.plan_id') AS binding_plan_id,
+        r.tenant_id AS receipt_tenant_id,
         r.authority AS receipt_authority,
         r.route AS receipt_route,
         r.schema_version AS receipt_schema_version,
@@ -215,17 +226,24 @@ export class SqliteTodosTaskManifestBackend implements TodosTaskManifestBackend 
       FROM todos_task_manifest_bindings b
       LEFT JOIN todos_task_manifest_receipts r
         ON r.receipt_id = b.apply_receipt_id
-      WHERE json_extract(b.result_json, '$.graph.plan_id') = ?
+        AND r.tenant_id = b.tenant_id
+      WHERE b.tenant_id = ?
+        AND json_extract(b.result_json, '$.graph.plan_id') = ?
       LIMIT 2
-    `).all(planId) as TaskManifestBindingLookupRow[];
-    return validateTaskManifestBindingLookupRows(rows, planId);
+    `).all(this.tenantId, planId) as TaskManifestBindingLookupRow[];
+    return validateTaskManifestBindingLookupRows(rows, this.tenantId, planId);
   }
 
   async markOutboxDelivered(outboxId: string, deliveredAt: string): Promise<void> {
     await this.serialized(() => {
       const result = this.db.query(`UPDATE todos_task_manifest_outbox
         SET status = 'delivered', delivered_at = ?, attempts = attempts + 1
-        WHERE id = ? AND status = 'pending'`).run(deliveredAt, outboxId);
+        WHERE id = ? AND status = 'pending'
+          AND EXISTS (
+            SELECT 1 FROM todos_task_manifest_receipts r
+            WHERE r.receipt_id = todos_task_manifest_outbox.apply_receipt_id
+              AND r.tenant_id = ?
+          )`).run(deliveredAt, outboxId, this.tenantId);
       if (result.changes !== 1) {
         throw new TodosTaskManifestError("TODOS_TASK_MANIFEST_GRAPH_CONFLICT", `Pending outbox row not found: ${outboxId}`);
       }
@@ -241,7 +259,9 @@ export class SqliteTodosTaskManifestBackend implements TodosTaskManifestBackend 
   ): Promise<TodosTaskManifestCompensationResult> {
     return this.serialized(() => {
       const existing = this.db.query(`SELECT apply_receipt_id, request_digest, result_json
-        FROM todos_task_manifest_receipts WHERE kind = 'compensate' AND idempotency_key = ? LIMIT 1`).get(input.idempotency_key) as {
+        FROM todos_task_manifest_receipts
+        WHERE tenant_id = ? AND kind = 'compensate' AND idempotency_key = ?
+        LIMIT 1`).get(this.tenantId, input.idempotency_key) as {
         apply_receipt_id: string; request_digest: string; result_json: string;
       } | null;
       if (existing) {
@@ -250,14 +270,21 @@ export class SqliteTodosTaskManifestBackend implements TodosTaskManifestBackend 
         }
         return { ...(JSON.parse(existing.result_json) as TodosTaskManifestCompensationResult), duplicate: true };
       }
-      const row = this.db.query("SELECT * FROM todos_task_manifest_receipts WHERE receipt_id = ? AND kind = 'apply' LIMIT 1").get(input.receipt_id) as Record<string, unknown> | null;
+      const row = this.db.query(
+        "SELECT * FROM todos_task_manifest_receipts WHERE tenant_id = ? AND receipt_id = ? AND kind = 'apply' LIMIT 1",
+      ).get(this.tenantId, input.receipt_id) as Record<string, unknown> | null;
       if (!row) throw new TodosTaskManifestError("TODOS_TASK_MANIFEST_RECEIPT_NOT_FOUND", "Apply receipt not found");
-      const binding = this.db.query("SELECT * FROM todos_task_manifest_bindings WHERE operation_id = ? LIMIT 1").get(String(row["operation_id"])) as Record<string, unknown> | null;
+      const binding = this.db.query(
+        "SELECT * FROM todos_task_manifest_bindings WHERE tenant_id = ? AND operation_id = ? LIMIT 1",
+      ).get(this.tenantId, String(row["operation_id"])) as Record<string, unknown> | null;
       if (!binding || Number(binding["version"]) !== input.if_binding_version) {
         throw new TodosTaskManifestError("TODOS_TASK_MANIFEST_CAS_CONFLICT", "Binding version changed before compensation");
       }
       if (binding["state"] !== "applied") throw new TodosTaskManifestError("TODOS_TASK_MANIFEST_COMPENSATION_REFUSED", "Graph is not in applied state");
-      const delivered = this.db.query("SELECT id FROM todos_task_manifest_outbox WHERE apply_receipt_id = ? AND status = 'delivered' LIMIT 1").get(input.receipt_id);
+      const delivered = this.db.query(`SELECT o.id FROM todos_task_manifest_outbox o
+        JOIN todos_task_manifest_receipts r ON r.receipt_id = o.apply_receipt_id
+        WHERE r.tenant_id = ? AND o.apply_receipt_id = ? AND o.status = 'delivered'
+        LIMIT 1`).get(this.tenantId, input.receipt_id);
       if (delivered) throw new TodosTaskManifestError("TODOS_TASK_MANIFEST_COMPENSATION_REFUSED", "Compensation refused: delivered outbox row exists");
       const applyResult = parseApplyResult(String(row["result_json"]), false);
       const manifest = JSON.parse(String(row["manifest_json"])) as TodosTaskManifest;
@@ -269,7 +296,14 @@ export class SqliteTodosTaskManifestBackend implements TodosTaskManifestBackend 
         ...(manifest.effects ?? []).map((effect) => ({ topic: effect.topic, payload: effect.payload as Record<string, unknown> })),
       ];
       const storedOutbox = this.db.query(`SELECT id, topic, payload, payload_digest, status, attempts, delivered_at
-        FROM todos_task_manifest_outbox WHERE apply_receipt_id = ? ORDER BY id`).all(input.receipt_id) as Array<Record<string, unknown>>;
+        FROM todos_task_manifest_outbox
+        WHERE apply_receipt_id = ?
+          AND EXISTS (
+            SELECT 1 FROM todos_task_manifest_receipts r
+            WHERE r.receipt_id = todos_task_manifest_outbox.apply_receipt_id
+              AND r.tenant_id = ?
+          )
+        ORDER BY id`).all(input.receipt_id, this.tenantId) as Array<Record<string, unknown>>;
       if (storedOutbox.length !== expectedEffects.length) {
         throw new TodosTaskManifestError("TODOS_TASK_MANIFEST_COMPENSATION_REFUSED", "Compensation refused: outbox changed since apply");
       }
@@ -362,7 +396,14 @@ export class SqliteTodosTaskManifestBackend implements TodosTaskManifestBackend 
         }
         expectedVerificationIndex += 1;
       }
-      this.db.query("UPDATE todos_task_manifest_outbox SET status = 'cancelled' WHERE apply_receipt_id = ? AND status = 'pending'").run(input.receipt_id);
+      this.db.query(`UPDATE todos_task_manifest_outbox
+        SET status = 'cancelled'
+        WHERE apply_receipt_id = ? AND status = 'pending'
+          AND EXISTS (
+            SELECT 1 FROM todos_task_manifest_receipts r
+            WHERE r.receipt_id = todos_task_manifest_outbox.apply_receipt_id
+              AND r.tenant_id = ?
+          )`).run(input.receipt_id, this.tenantId);
       for (const table of ["task_tags", "task_dependencies", "task_comments", "task_verifications"] as const) {
         const column = table === "task_dependencies" ? "task_id" : "task_id";
         this.db.query(`DELETE FROM ${table} WHERE ${column} IN (${placeholders})`).run(...taskIds);
@@ -373,15 +414,15 @@ export class SqliteTodosTaskManifestBackend implements TodosTaskManifestBackend 
       const result: TodosTaskManifestCompensationResult = { duplicate: false, receipt, absent: true, readback };
       const resultJson = canonicalJson(result);
       this.db.query(`INSERT INTO todos_task_manifest_receipts (
-        receipt_id, authority, route, schema_version, kind, operation_id, idempotency_key,
+        receipt_id, tenant_id, authority, route, schema_version, kind, operation_id, idempotency_key,
         request_digest, result_digest, binding_version, apply_receipt_id, manifest_json, result_json, created_at
-      ) VALUES (?, 'todos', 'todos.task-manifest.v1', 1, 'compensate', ?, ?, ?, ?, ?, ?, NULL, ?, ?)`).run(
-        compensationReceiptId, receipt.operation_id, input.idempotency_key, requestDigest,
+      ) VALUES (?, ?, 'todos', 'todos.task-manifest.v1', 1, 'compensate', ?, ?, ?, ?, ?, ?, NULL, ?, ?)`).run(
+        compensationReceiptId, this.tenantId, receipt.operation_id, input.idempotency_key, requestDigest,
         receipt.result_digest, receipt.binding_version, input.receipt_id, resultJson, now,
       );
       const updated = this.db.query(`UPDATE todos_task_manifest_bindings SET state = 'compensated', version = ?, compensation_receipt_id = ?, updated_at = ?
-        WHERE operation_id = ? AND state = 'applied' AND version = ?`).run(
-        receipt.binding_version, compensationReceiptId, now, receipt.operation_id, input.if_binding_version,
+        WHERE tenant_id = ? AND operation_id = ? AND state = 'applied' AND version = ?`).run(
+        receipt.binding_version, compensationReceiptId, now, this.tenantId, receipt.operation_id, input.if_binding_version,
       );
       if (updated.changes !== 1) {
         throw new TodosTaskManifestError("TODOS_TASK_MANIFEST_CAS_CONFLICT", "Binding changed during compensation");

@@ -34,6 +34,17 @@ const FAULT_POINTS: readonly TodosTaskManifestFaultPoint[] = [
   "after_receipt_write",
 ];
 
+function resolveTenantId(value: string | undefined): string {
+  const tenantId = value ?? "default";
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(tenantId)) {
+    throw new TodosTaskManifestError(
+      "TODOS_TASK_MANIFEST_INVALID_INPUT",
+      "tenantId must be a bounded exact authority identifier",
+    );
+  }
+  return tenantId;
+}
+
 function normalize(input: unknown, now: string): NormalizedTaskManifest {
   const parsed = parseTodosTaskManifest(input);
   const requestBytes = Buffer.byteLength(canonicalJson(parsed), "utf8");
@@ -157,13 +168,7 @@ export class PackageOwnedTodosTaskManifestAuthority implements TodosTaskManifest
     private readonly backend: TodosTaskManifestBackend,
     private readonly options: TodosTaskManifestAuthorityOptions = {},
   ) {
-    this.tenantId = options.tenantId ?? "default";
-    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(this.tenantId)) {
-      throw new TodosTaskManifestError(
-        "TODOS_TASK_MANIFEST_INVALID_INPUT",
-        "tenantId must be a bounded exact authority identifier",
-      );
-    }
+    this.tenantId = resolveTenantId(options.tenantId);
   }
 
   async capability(): Promise<TodosTaskManifestCapability> {
@@ -305,9 +310,10 @@ export function createSqliteTodosTaskManifestAuthority(
   if (!options?.database) {
     throw new TodosTaskManifestError("TODOS_TASK_MANIFEST_ATOMICITY_UNAVAILABLE", "An explicit SQLite Database is required");
   }
+  const tenantId = resolveTenantId(options.tenantId);
   return new PackageOwnedTodosTaskManifestAuthority(
-    new SqliteTodosTaskManifestBackend(options.database),
-    options,
+    new SqliteTodosTaskManifestBackend(options.database, tenantId),
+    { ...options, tenantId },
   );
 }
 
@@ -321,9 +327,10 @@ export function createPostgresTodosTaskManifestAuthority(
       "An authoritative PostgreSQL transaction(callback) client is required",
     );
   }
+  const tenantId = resolveTenantId(options.tenantId);
   return new PackageOwnedTodosTaskManifestAuthority(
-    new PostgresTodosTaskManifestBackend(client, options),
-    options,
+    new PostgresTodosTaskManifestBackend(client, { ...options, tenantId }),
+    { ...options, tenantId },
   );
 }
 

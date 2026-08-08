@@ -206,6 +206,129 @@ describe("task-manifest SQLite authority", () => {
     });
   });
 
+  test("does not recover another tenant's binding from the same SQLite store", async () => {
+    const tenantA = createSqliteTodosTaskManifestAuthority({
+      database: db,
+      tenantId: "tenant-a",
+    });
+    const applied = await tenantA.apply(manifest("tenant-isolated-lookup"));
+    const tenantB = createSqliteTodosTaskManifestAuthority({
+      database: db,
+      tenantId: "tenant-b",
+    });
+
+    await expect(tenantB.lookupBinding({
+      authority: "todos",
+      route: TODOS_TASK_MANIFEST_ROUTE,
+      schema_version: 1,
+      tenant_id: "tenant-b",
+      plan_id: applied.graph.plan_id,
+      max_items: 1,
+    })).rejects.toEqual(expect.objectContaining<TodosTaskManifestError>({
+      code: "TODOS_TASK_MANIFEST_BINDING_NOT_FOUND",
+    }));
+  });
+
+  test("backfills legacy SQLite receipt and binding rows to the configured tenant", async () => {
+    const legacy = new Database(":memory:");
+    const planId = "a0000000-0000-4000-8000-000000000071";
+    const receiptId = "b0000000-0000-4000-8000-000000000071";
+    const resultJson = JSON.stringify({ graph: { plan_id: planId } });
+    try {
+      legacy.exec(`
+        CREATE TABLE todos_task_manifest_receipts (
+          receipt_id TEXT PRIMARY KEY,
+          authority TEXT NOT NULL,
+          route TEXT NOT NULL,
+          schema_version INTEGER NOT NULL,
+          kind TEXT NOT NULL,
+          operation_id TEXT NOT NULL,
+          idempotency_key TEXT NOT NULL,
+          request_digest TEXT NOT NULL,
+          result_digest TEXT NOT NULL,
+          binding_version INTEGER NOT NULL,
+          apply_receipt_id TEXT,
+          manifest_json TEXT,
+          result_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          UNIQUE(kind, idempotency_key)
+        );
+        CREATE TABLE todos_task_manifest_bindings (
+          operation_id TEXT PRIMARY KEY,
+          idempotency_key TEXT NOT NULL UNIQUE,
+          request_digest TEXT NOT NULL,
+          result_digest TEXT NOT NULL,
+          apply_receipt_id TEXT NOT NULL UNIQUE REFERENCES todos_task_manifest_receipts(receipt_id),
+          manifest_json TEXT NOT NULL,
+          result_json TEXT NOT NULL,
+          state TEXT NOT NULL,
+          version INTEGER NOT NULL,
+          compensation_receipt_id TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE TRIGGER todos_task_manifest_receipts_immutable_update
+          BEFORE UPDATE ON todos_task_manifest_receipts BEGIN
+            SELECT RAISE(ABORT, 'todos task manifest receipts are immutable');
+          END;
+      `);
+      legacy.query(`INSERT INTO todos_task_manifest_receipts (
+        receipt_id, authority, route, schema_version, kind, operation_id, idempotency_key,
+        request_digest, result_digest, binding_version, apply_receipt_id, manifest_json,
+        result_json, created_at
+      ) VALUES (?, 'todos', ?, 1, 'apply', ?, ?, ?, ?, 1, NULL, '{}', ?, ?)`).run(
+        receiptId,
+        TODOS_TASK_MANIFEST_ROUTE,
+        "legacy-tenant-upgrade",
+        "legacy-tenant-upgrade:apply",
+        "request-digest",
+        "result-digest",
+        resultJson,
+        "2026-08-08T00:00:00.000Z",
+      );
+      legacy.query(`INSERT INTO todos_task_manifest_bindings (
+        operation_id, idempotency_key, request_digest, result_digest, apply_receipt_id,
+        manifest_json, result_json, state, version, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, '{}', ?, 'applied', 1, ?, ?)`).run(
+        "legacy-tenant-upgrade",
+        "legacy-tenant-upgrade:apply",
+        "request-digest",
+        "result-digest",
+        receiptId,
+        resultJson,
+        "2026-08-08T00:00:00.000Z",
+        "2026-08-08T00:00:00.000Z",
+      );
+
+      const authority = createSqliteTodosTaskManifestAuthority({
+        database: legacy,
+        tenantId: "tenant-upgrade",
+      });
+      expect(await authority.lookupBinding({
+        authority: "todos",
+        route: TODOS_TASK_MANIFEST_ROUTE,
+        schema_version: 1,
+        tenant_id: "tenant-upgrade",
+        plan_id: planId,
+        max_items: 1,
+      })).toMatchObject({
+        apply_receipt_id: receiptId,
+        tenant_id: "tenant-upgrade",
+      });
+      expect(legacy.query(
+        "SELECT tenant_id FROM todos_task_manifest_receipts WHERE receipt_id = ?",
+      ).get(receiptId)).toEqual({ tenant_id: "tenant-upgrade" });
+      expect(legacy.query(
+        "SELECT tenant_id FROM todos_task_manifest_bindings WHERE operation_id = ?",
+      ).get("legacy-tenant-upgrade")).toEqual({ tenant_id: "tenant-upgrade" });
+      expect(() => legacy.run(
+        "UPDATE todos_task_manifest_receipts SET result_digest = 'changed'",
+      )).toThrow(/immutable/);
+    } finally {
+      legacy.close();
+    }
+  });
+
   test("fails closed for missing, non-managed, ambiguous, conflicting, or foreign lookup identity", async () => {
     const authority = createSqliteTodosTaskManifestAuthority({ database: db, tenantId: TENANT_ID });
     const applied = await authority.apply(manifest("lookup-fail-closed"));
