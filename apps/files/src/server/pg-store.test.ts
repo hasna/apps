@@ -28,6 +28,7 @@ import {
 /** A `TypedQueryClient` shim that records SQL and answers with synthetic rows. */
 function recordingClient(rowCount = 0) {
   const sql: string[] = [];
+  const params: readonly unknown[][] = [];
   const rows = Array.from({ length: rowCount }, (_, i) => ({
     id: `f_${i}`,
     source_id: "src_1",
@@ -42,8 +43,9 @@ function recordingClient(rowCount = 0) {
     created_at: "2026-01-01T00:00:00.000Z",
   }));
   const executor: PgExecutor = {
-    async query(text: string) {
+    async query(text: string, values: readonly unknown[] = []) {
       sql.push(text);
+      params.push(values);
       // Tag lookups and every non-row-returning statement answer empty; only the
       // primary SELECT hands back the synthetic page.
       if (/^SELECT \* FROM (files|agent_activity)/i.test(text.trim())) {
@@ -52,7 +54,7 @@ function recordingClient(rowCount = 0) {
       return { rows: [] as never[], rowCount: 0 };
     },
   };
-  return { client: wrapExecutor(executor), sql };
+  return { client: wrapExecutor(executor), sql, params };
 }
 
 /** The LIMIT clause that actually reached SQL, or null when none did. */
@@ -160,5 +162,40 @@ describe("pg-store page cap — a bounded read must never masquerade as a comple
 
   test("the cap is one named constant, not three magic numbers", () => {
     expect(MAX_PAGE_SIZE).toBe(500);
+  });
+});
+
+describe("pg-store extension filters", () => {
+  test("list accepts an extension without a leading dot", async () => {
+    const { client, params } = recordingClient();
+
+    await listFiles(client, { ext: "pdf" });
+
+    expect(params[0]).toContain(".pdf");
+  });
+
+  test("list preserves an already dotted extension", async () => {
+    const { client, params } = recordingClient();
+
+    await listFiles(client, { ext: ".pdf" });
+
+    expect(params[0]).toContain(".pdf");
+  });
+
+  test("metadata search shares the same extension normalization", async () => {
+    const { client, params } = recordingClient();
+
+    await listFiles(client, { q: "entrepreneur", ext: "PDF" });
+
+    expect(params[0]).toContain(".pdf");
+    expect(params[0]).toContain("%entrepreneur%");
+  });
+
+  test("omitting the extension does not add an extension parameter", async () => {
+    const { client, params } = recordingClient();
+
+    await listFiles(client, { q: "entrepreneur" });
+
+    expect(params[0]).not.toContain(".pdf");
   });
 });
