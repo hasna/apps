@@ -6,13 +6,29 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.107]
+
+### Added
+
+- `projects context-bundle <exact-project-id> --json` now emits a strict,
+  bounded Projects v1 context bundle with authoritative project, integration,
+  station, freshness, command, and deterministic hash fields for managed
+  Instructions rendering.
+
+### Fixed
+
+- Successful, non-dry-run `projects start` operations now record
+  `last_opened_at` through both SQLite and API-backed project stores, including
+  guarded mutation and rollback support.
+
 ## [0.1.106]
 
 ### Fixed
 
-- `projects register-full` now accepts real immutable Conversations channel
-  IDs in `chn_<32hex>` form, while preserving legacy UUID channel IDs and
-  continuing to fail closed on malformed identifiers.
+- `projects register-full` now accepts canonical lowercase immutable
+  Conversations channel IDs in `chn_<32hex>` form, while preserving legacy
+  UUID channel IDs and continuing to fail closed on uppercase or malformed
+  identifiers.
 
 ## [0.1.105]
 
