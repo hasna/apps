@@ -50,6 +50,75 @@ export function contactListFilterFromUrl(url: URL): ContactListFilter {
   };
 }
 
+type ContactProjectsStore = {
+  getContact(id: string): Promise<unknown | null>;
+  linkContactToProject(contactId: string, projectId: string): Promise<void>;
+  unlinkContactFromProject(contactId: string, projectId: string): Promise<boolean>;
+  getContactProjectIds(contactId: string): Promise<string[]>;
+  setContactProjects(contactId: string, projectIds: string[]): Promise<string[]>;
+  listContactIdsByProject(projectId: string): Promise<string[]>;
+};
+
+/**
+ * Handle the authenticated contact-project membership routes. Authentication
+ * remains at the outer `/v1` boundary; this helper is exported only so the
+ * route contract can be tested without a live signing key or PostgreSQL pool.
+ */
+export async function handleContactProjectsRoute(
+  req: Request,
+  method: string,
+  segments: string[],
+  store: ContactProjectsStore,
+): Promise<Response | null> {
+  const resource = segments[1];
+  const id = segments[2];
+  const sub = segments[3];
+
+  if (resource === "contacts" && id && sub === "projects") {
+    const contact = await store.getContact(id);
+    if (!contact) return error(404, "contact not found");
+
+    const projectId = segments[4];
+    if (projectId) {
+      if (method === "PUT") {
+        await store.linkContactToProject(id, projectId);
+        return json({ attached: true, contact_id: id, project_id: projectId });
+      }
+      if (method === "DELETE") {
+        const removed = await store.unlinkContactFromProject(id, projectId);
+        return json({ removed, contact_id: id, project_id: projectId });
+      }
+      return error(405, `method ${method} not allowed on /v1/contacts/:contact_id/projects/:project_id`);
+    }
+
+    if (method === "GET") {
+      return json({ contact_id: id, project_ids: await store.getContactProjectIds(id) });
+    }
+    if (method === "PUT") {
+      const body = await readJson<{ project_ids?: unknown }>(req);
+      if (
+        !body ||
+        !Array.isArray(body.project_ids) ||
+        !body.project_ids.every((value) => typeof value === "string" && value.trim().length > 0)
+      ) {
+        return error(400, "project_ids must be an array of non-empty strings");
+      }
+      const projectIds = await store.setContactProjects(id, body.project_ids as string[]);
+      return json({ contact_id: id, project_ids: projectIds });
+    }
+    return error(405, `method ${method} not allowed on /v1/contacts/:contact_id/projects`);
+  }
+
+  if (resource === "projects" && id && sub === "contacts") {
+    if (method === "GET") {
+      return json({ project_id: id, contact_ids: await store.listContactIdsByProject(id) });
+    }
+    return error(405, `method ${method} not allowed on /v1/projects/:project_id/contacts`);
+  }
+
+  return null;
+}
+
 /**
  * Handle a `/v1/*` request. Returns `null` when the path is not a `/v1` route so
  * the caller can fall through to other handlers.
@@ -96,6 +165,9 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
   };
 
   try {
+    const projectLinks = await handleContactProjectsRoute(req, method, segments, store);
+    if (projectLinks) return projectLinks;
+
     // ── /v1/contacts/:id/<sub> — per-contact derived reads ──
     if (resource === "contacts" && id && sub) {
       if (sub === "tags") {

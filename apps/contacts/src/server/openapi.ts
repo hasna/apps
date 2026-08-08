@@ -148,6 +148,17 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             description: { type: "string" },
           },
         },
+        ProjectIdsInput: {
+          type: "object",
+          required: ["project_ids"],
+          properties: {
+            project_ids: {
+              type: "array",
+              items: { type: "string", minLength: 1 },
+              uniqueItems: true,
+            },
+          },
+        },
       },
     },
     security: [{ apiKey: [] }],
@@ -344,6 +355,75 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             removed: { type: "boolean" },
             contact_id: { type: "string" },
             tag_id: { type: "string" },
+          }),
+        },
+      },
+      "/v1/contacts/{contact_id}/projects": {
+        get: {
+          operationId: "getContactProjectIds",
+          summary: "List project ids attached to a contact",
+          parameters: [
+            { name: "contact_id", in: "path", required: true, schema: { type: "string" } },
+          ],
+          responses: objResponse({
+            contact_id: { type: "string" },
+            project_ids: { type: "array", items: { type: "string" } },
+          }),
+        },
+        put: {
+          operationId: "setContactProjects",
+          summary: "Atomically replace a contact's project memberships",
+          parameters: [
+            { name: "contact_id", in: "path", required: true, schema: { type: "string" } },
+          ],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/ProjectIdsInput" } } },
+          },
+          responses: objResponse({
+            contact_id: { type: "string" },
+            project_ids: { type: "array", items: { type: "string" } },
+          }),
+        },
+      },
+      "/v1/contacts/{contact_id}/projects/{project_id}": {
+        put: {
+          operationId: "linkContactToProject",
+          summary: "Attach a contact to a project idempotently",
+          parameters: [
+            { name: "contact_id", in: "path", required: true, schema: { type: "string" } },
+            { name: "project_id", in: "path", required: true, schema: { type: "string" } },
+          ],
+          responses: objResponse({
+            attached: { type: "boolean" },
+            contact_id: { type: "string" },
+            project_id: { type: "string" },
+          }),
+        },
+        delete: {
+          operationId: "unlinkContactFromProject",
+          summary: "Detach a contact from a project",
+          parameters: [
+            { name: "contact_id", in: "path", required: true, schema: { type: "string" } },
+            { name: "project_id", in: "path", required: true, schema: { type: "string" } },
+          ],
+          responses: objResponse({
+            removed: { type: "boolean" },
+            contact_id: { type: "string" },
+            project_id: { type: "string" },
+          }),
+        },
+      },
+      "/v1/projects/{project_id}/contacts": {
+        get: {
+          operationId: "listContactIdsByProject",
+          summary: "List contact ids attached to a project",
+          parameters: [
+            { name: "project_id", in: "path", required: true, schema: { type: "string" } },
+          ],
+          responses: objResponse({
+            project_id: { type: "string" },
+            contact_ids: { type: "array", items: { type: "string" } },
           }),
         },
       },

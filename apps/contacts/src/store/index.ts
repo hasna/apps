@@ -841,11 +841,21 @@ class ApiStore implements Store {
   async autoLinkContactToCompany(): Promise<never> { return unavailable("autoLinkContactToCompany"); }
   async findContactByEmailAddress(address: string) { return this.getContactByEmail(address); }
 
-  async linkContactToProject(): Promise<never> { return unavailable("linkContactToProject"); }
-  async unlinkContactFromProject(): Promise<never> { return unavailable("unlinkContactFromProject"); }
-  async getContactProjectIds(): Promise<never> { return unavailable("getContactProjectIds"); }
-  async setContactProjects(): Promise<never> { return unavailable("setContactProjects"); }
-  async listContactIdsByProject(): Promise<never> { return unavailable("listContactIdsByProject"); }
+  async linkContactToProject(contactId: string, projectId: string) {
+    await this.client.transport.put(`/contacts/${this.enc(contactId)}/projects/${this.enc(projectId)}`);
+  }
+  async unlinkContactFromProject(contactId: string, projectId: string) {
+    await this.del(`/contacts/${this.enc(contactId)}/projects/${this.enc(projectId)}`);
+  }
+  async getContactProjectIds(contactId: string) {
+    return pick<string[]>(await this.g(`/contacts/${this.enc(contactId)}/projects`), "project_ids") ?? [];
+  }
+  async setContactProjects(contactId: string, projectIds: string[]) {
+    await this.client.transport.put(`/contacts/${this.enc(contactId)}/projects`, { project_ids: projectIds });
+  }
+  async listContactIdsByProject(projectId: string) {
+    return pick<string[]>(await this.g(`/projects/${this.enc(projectId)}/contacts`), "contact_ids") ?? [];
+  }
 
   // Companies
   async createCompany(input: CreateCompanyInput) {

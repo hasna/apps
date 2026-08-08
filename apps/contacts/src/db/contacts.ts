@@ -654,20 +654,23 @@ export function unlinkContactFromProject(contactId: string, projectId: string, d
 
 export function getContactProjectIds(contactId: string, db?: ContactsDatabase): string[] {
   const d = db || getDatabase();
-  const rows = d.query(`SELECT project_id FROM contact_projects WHERE contact_id = ?`).all(contactId) as { project_id: string }[];
+  const rows = d.query(`SELECT project_id FROM contact_projects WHERE contact_id = ? ORDER BY project_id ASC`).all(contactId) as { project_id: string }[];
   return rows.map(r => r.project_id);
 }
 
 export function listContactIdsByProject(projectId: string, db?: ContactsDatabase): string[] {
   const d = db || getDatabase();
-  const rows = d.query(`SELECT contact_id FROM contact_projects WHERE project_id = ?`).all(projectId) as { contact_id: string }[];
+  const rows = d.query(`SELECT contact_id FROM contact_projects WHERE project_id = ? ORDER BY contact_id ASC`).all(projectId) as { contact_id: string }[];
   return rows.map(r => r.contact_id);
 }
 
 export function setContactProjects(contactId: string, projectIds: string[], db?: ContactsDatabase): void {
   const d = db || getDatabase();
-  d.run(`DELETE FROM contact_projects WHERE contact_id = ?`, [contactId]);
-  for (const pid of projectIds) {
-    d.run(`INSERT OR IGNORE INTO contact_projects (contact_id, project_id) VALUES (?, ?)`, [contactId, pid]);
-  }
+  const uniqueProjectIds = [...new Set(projectIds)];
+  d.transaction(() => {
+    d.run(`DELETE FROM contact_projects WHERE contact_id = ?`, [contactId]);
+    for (const pid of uniqueProjectIds) {
+      d.run(`INSERT OR IGNORE INTO contact_projects (contact_id, project_id) VALUES (?, ?)`, [contactId, pid]);
+    }
+  });
 }

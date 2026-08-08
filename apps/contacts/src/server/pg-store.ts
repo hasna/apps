@@ -465,6 +465,61 @@ export class ContactsPgStore {
     return result.rowCount > 0;
   }
 
+  // ---- contact ↔ project links ----
+  async linkContactToProject(contactId: string, projectId: string): Promise<void> {
+    await this.client.execute(
+      `INSERT INTO contact_projects (contact_id, project_id) VALUES ($1, $2)
+       ON CONFLICT (contact_id, project_id) DO NOTHING`,
+      [contactId, projectId],
+    );
+  }
+
+  async unlinkContactFromProject(contactId: string, projectId: string): Promise<boolean> {
+    const result = await this.client.query(
+      `DELETE FROM contact_projects WHERE contact_id = $1 AND project_id = $2`,
+      [contactId, projectId],
+    );
+    return result.rowCount > 0;
+  }
+
+  async getContactProjectIds(contactId: string): Promise<string[]> {
+    const rows = await this.client.many<{ project_id: string }>(
+      `SELECT project_id
+       FROM contact_projects
+       WHERE contact_id = $1
+       ORDER BY project_id ASC`,
+      [contactId],
+    );
+    return rows.map((row) => row.project_id);
+  }
+
+  async setContactProjects(contactId: string, projectIds: string[]): Promise<string[]> {
+    const uniqueProjectIds = [...new Set(projectIds)];
+    await this.client.transaction(async (client) => {
+      await client.execute(`DELETE FROM contact_projects WHERE contact_id = $1`, [contactId]);
+      if (uniqueProjectIds.length === 0) return;
+      await client.execute(
+        `INSERT INTO contact_projects (contact_id, project_id)
+         SELECT $1, project_id
+         FROM UNNEST($2::text[]) AS project(project_id)
+         ON CONFLICT (contact_id, project_id) DO NOTHING`,
+        [contactId, uniqueProjectIds],
+      );
+    });
+    return uniqueProjectIds;
+  }
+
+  async listContactIdsByProject(projectId: string): Promise<string[]> {
+    const rows = await this.client.many<{ contact_id: string }>(
+      `SELECT contact_id
+       FROM contact_projects
+       WHERE project_id = $1
+       ORDER BY contact_id ASC`,
+      [projectId],
+    );
+    return rows.map((row) => row.contact_id);
+  }
+
   // ---- companies ----
   async listCompanies(filter: CompanyListFilter = {}): Promise<{ companies: Company[]; count: number }> {
     const limit = Math.min(Math.max(filter.limit ?? 50, 1), 500);

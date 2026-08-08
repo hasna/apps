@@ -838,6 +838,50 @@ groupsCmd
     console.log(chalk.green(`\n✓ Removed ${contact?.display_name ?? contactId} from group ${group.name}\n`));
   });
 
+// ─── contacts projects ────────────────────────────────────────────────────────
+
+const projectsCmd = program
+  .command("projects")
+  .description("Manage contact project links");
+
+projectsCmd
+  .command("attach <contact-id> <project-id>")
+  .description("Attach a contact to a project idempotently")
+  .action(async (contactId: string, projectId: string) => {
+    const store = getStore();
+    await store.linkContactToProject(contactId, projectId);
+    console.log(chalk.green(`\n✓ Attached ${contactId} to project ${projectId}\n`));
+  });
+
+projectsCmd
+  .command("list <contact-id>")
+  .description("List project ids attached to a contact")
+  .option("-j, --json", "Output JSON")
+  .action(async (contactId: string, opts: { json?: boolean }) => {
+    const store = getStore();
+    const projectIds = await store.getContactProjectIds(contactId);
+    if (opts.json) {
+      console.log(JSON.stringify({ contact_id: contactId, project_ids: projectIds }, null, 2));
+      return;
+    }
+    if (projectIds.length === 0) {
+      console.log(chalk.gray(`\nNo project links found for ${contactId}.\n`));
+      return;
+    }
+    console.log();
+    for (const projectId of projectIds) console.log(`  ${projectId}`);
+    console.log(chalk.gray(`\n${projectIds.length} project link(s) for ${contactId}\n`));
+  });
+
+projectsCmd
+  .command("detach <contact-id> <project-id>")
+  .description("Detach a contact from a project")
+  .action(async (contactId: string, projectId: string) => {
+    const store = getStore();
+    await store.unlinkContactFromProject(contactId, projectId);
+    console.log(chalk.green(`\n✓ Detached ${contactId} from project ${projectId}\n`));
+  });
+
 // ─── contacts init ────────────────────────────────────────────────────────────
 
 program

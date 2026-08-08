@@ -6,7 +6,9 @@ import { resetDatabase } from "./database.js";
 import {
   createContact, getContact, getContactByEmail, updateContact, deleteContact,
   listContacts, searchContacts, mergeContacts, addEmailToContact, addPhoneToContact,
-  archiveContact, unarchiveContact, autoLinkContactToCompany,
+  archiveContact, unarchiveContact, autoLinkContactToCompany, linkContactToProject,
+  unlinkContactFromProject, getContactProjectIds, listContactIdsByProject,
+  setContactProjects,
 } from "./contacts.js";
 import { createCompany } from "./companies.js";
 import { createTag, addTagToContact } from "./tags.js";
@@ -329,6 +331,30 @@ describe("contact project_id", () => {
     const result = listContacts({ project_id: "proj-abc" });
     expect(result.total).toBe(1);
     expect(result.contacts[0]!.display_name).toBe("In Project");
+  });
+});
+
+describe("contact project memberships", () => {
+  it("links, replaces, deduplicates, sorts, and unlinks memberships", () => {
+    const first = createContact({ display_name: "First Project Contact" });
+    const second = createContact({ display_name: "Second Project Contact" });
+
+    linkContactToProject(first.id, "project-b");
+    linkContactToProject(first.id, "project-b");
+    linkContactToProject(first.id, "project-a");
+    linkContactToProject(second.id, "project-a");
+
+    expect(getContactProjectIds(first.id)).toEqual(["project-a", "project-b"]);
+    expect(listContactIdsByProject("project-a")).toEqual(
+      [first.id, second.id].sort(),
+    );
+
+    setContactProjects(first.id, ["project-c", "project-c", "project-a"]);
+    expect(getContactProjectIds(first.id)).toEqual(["project-a", "project-c"]);
+
+    unlinkContactFromProject(first.id, "project-a");
+    unlinkContactFromProject(first.id, "project-a");
+    expect(getContactProjectIds(first.id)).toEqual(["project-c"]);
   });
 });
 
