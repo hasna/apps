@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "bun:test";
+import { describe, it, expect, beforeAll, afterAll, setDefaultTimeout } from "bun:test";
 import { mkdtemp, rm, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +11,10 @@ const CWD = join(import.meta.dir, "../..");
 let tmpDir: string;
 let dbPath: string;
 let fakeHome: string;
+
+// This file exercises the real CLI through subprocesses. The child helper
+// allows 15s, so its parent tests must not inherit Bun's shorter 5s default.
+setDefaultTimeout(30_000);
 
 function run(args: string): string {
   return execSync(

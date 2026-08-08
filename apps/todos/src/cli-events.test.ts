@@ -1,9 +1,14 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 let tempDir = "";
+
+// Every test in this file boots the CLI in one or more subprocesses. Keep the
+// parent test deadline above the webhook's own 5s execution budget so a slow
+// runner does not terminate otherwise-valid child work first.
+setDefaultTimeout(15_000);
 
 async function runTodos(args: string[]) {
   const child = Bun.spawn({
