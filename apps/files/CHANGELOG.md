@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.13 — 2026-08-09
+
+Release of the complete PostgreSQL migration-lineage compatibility repair
+merged in #37.
+
+- Restore the exact historical `files-0113` through `files-0154` migration
+  lineage, including the four tenancy-bridge migrations.
+- Append the `required_headers` scrub as `files-0155` without renumbering or
+  rewriting historical migrations.
+- Preserve downgrade and checksum-drift guards while restoring compatibility
+  with the complete production migration ledger.
+
 ## 0.3.12 — 2026-08-09
 
 - Preserve the `files list` JSON-array contract while fulfilling logical
