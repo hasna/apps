@@ -84,8 +84,71 @@ export const SECRETS_AUTH_MIGRATIONS: Migration[] = apiKeyMigrations().map((m) =
   defineMigration(m.id, m.sql),
 );
 
+const ROOT_TENANT = "adfd95c7-ee8b-52cb-ae47-4ae65dae3313";
+
+/** Tenant lineage already present in the production database. */
+export const SECRETS_TENANCY_MIGRATIONS: Migration[] = [
+  defineMigration(
+    "secrets_0008_tenants",
+    `CREATE TABLE IF NOT EXISTS tenants (
+      id UUID PRIMARY KEY,
+      slug TEXT UNIQUE NOT NULL,
+      name TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'org',
+      status TEXT NOT NULL DEFAULT 'active',
+      metadata JSONB NOT NULL DEFAULT '{}',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    INSERT INTO tenants (id, slug, name, kind)
+      VALUES ('${ROOT_TENANT}', 'hasna', 'Hasna Root', 'root')
+      ON CONFLICT (id) DO NOTHING;`,
+  ),
+  defineMigration(
+    "secrets_0009_memberships",
+    `CREATE TABLE IF NOT EXISTS memberships (
+      id BIGSERIAL PRIMARY KEY,
+      tenant_id UUID NOT NULL,
+      principal_id TEXT NOT NULL,
+      principal_type TEXT NOT NULL DEFAULT 'user',
+      role TEXT NOT NULL DEFAULT 'member',
+      scopes JSONB NOT NULL DEFAULT '[]',
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (tenant_id, principal_id, principal_type)
+    );
+    CREATE INDEX IF NOT EXISTS memberships_tenant_idx ON memberships (tenant_id);`,
+  ),
+  defineMigration(
+    "secrets_0010_tenant_columns",
+    `ALTER TABLE secrets      ADD COLUMN IF NOT EXISTS tenant_id UUID;
+     ALTER TABLE vault_items  ADD COLUMN IF NOT EXISTS tenant_id UUID;
+     ALTER TABLE users         ADD COLUMN IF NOT EXISTS tenant_id UUID;
+     ALTER TABLE feedback      ADD COLUMN IF NOT EXISTS tenant_id UUID;
+     ALTER TABLE audit_log     ADD COLUMN IF NOT EXISTS tenant_id UUID;
+     ALTER TABLE audit_log     ADD COLUMN IF NOT EXISTS user_id   TEXT;`,
+  ),
+  defineMigration(
+    "secrets_0011_api_key_tenant",
+    `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS tenant_id      UUID;
+     ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS user_id        TEXT;
+     ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS principal_type TEXT;
+     CREATE INDEX IF NOT EXISTS api_keys_kid_idx ON api_keys (kid);`,
+  ),
+  defineMigration(
+    "secrets_0012_backfill",
+    `UPDATE secrets      SET tenant_id = '${ROOT_TENANT}' WHERE tenant_id IS NULL;
+     UPDATE vault_items  SET tenant_id = '${ROOT_TENANT}' WHERE tenant_id IS NULL;
+     UPDATE users         SET tenant_id = '${ROOT_TENANT}' WHERE tenant_id IS NULL;
+     UPDATE feedback      SET tenant_id = '${ROOT_TENANT}' WHERE tenant_id IS NULL;
+     UPDATE audit_log     SET tenant_id = '${ROOT_TENANT}' WHERE tenant_id IS NULL;
+     UPDATE api_keys      SET tenant_id = '${ROOT_TENANT}' WHERE tenant_id IS NULL;`,
+  ),
+];
+
 /** Full ordered migration set for the secrets cloud database. */
 export const SECRETS_MIGRATIONS: Migration[] = [
   ...SECRETS_APP_MIGRATIONS,
   ...SECRETS_AUTH_MIGRATIONS,
+  ...SECRETS_TENANCY_MIGRATIONS,
 ];
