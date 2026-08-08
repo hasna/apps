@@ -318,6 +318,8 @@ export class ApiStore implements ConversationsStore {
       corpus_id: request.corpus_id,
       target_selector: request.target_selector,
       idempotency_key: request.idempotency_key,
+      request_digest: request.request_digest,
+      precondition_digest: request.precondition_digest,
       target_id: request.target_id,
       max_items: request.max_items,
       response_byte_limit: request.response_byte_limit,

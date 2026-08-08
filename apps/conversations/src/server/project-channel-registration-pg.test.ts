@@ -163,9 +163,10 @@ class FakeProjectRegistrationClient implements PoolQueryClient {
     ) {
       const [
         authority, route, packageVersion, authorityId, tenantId, corpusId,
-        operationId, stepId, direction, idempotencyKey,
+        operationId, stepId, direction, idempotencyKey, requestDigest,
+        preconditionDigest,
       ] = params.map(String);
-      const targetId = params[10] == null ? null : String(params[10]);
+      const targetId = params[12] == null ? null : String(params[12]);
       const priority = (outcome: string) =>
         outcome === "terminal_nonacceptance" ? 3
           : outcome === "duplicate_of_accepted" ? 2 : 1;
@@ -181,6 +182,8 @@ class FakeProjectRegistrationClient implements PoolQueryClient {
           && row.step_id === stepId
           && row.direction === direction
           && row.idempotency_key === idempotencyKey
+          && row.request_digest === requestDigest
+          && row.precondition_digest === preconditionDigest
           && (targetId === null || row.target_id === targetId))
         .sort((left, right) =>
           priority(right.outcome) - priority(left.outcome)
@@ -443,6 +446,8 @@ describe("PostgreSQL project channel registration authority", () => {
       corpus_id: request.corpus_id,
       target_selector: request.target_selector,
       idempotency_key: request.idempotency_key,
+      request_digest: request.request_digest,
+      precondition_digest: request.precondition_digest,
       target_id: accepted.target_id!,
       max_items: 1 as const,
       response_byte_limit: 32_768,
@@ -479,6 +484,20 @@ describe("PostgreSQL project channel registration authority", () => {
       truncated: false,
     });
 
+    const changedDesired = { ...request.desired, project_name: "Changed" };
+    const changed = await registerProjectChannelPg(client, {
+      ...request,
+      desired: changedDesired,
+      request_digest: projectChannelRegistrationDigest(changedDesired),
+    });
+    expect(changed.reason).toBe("changed_request_or_precondition_for_step");
+    expect((await lookupProjectChannelRegistrationReceiptPg(client, lookupRequest)).receipt.receipt_id)
+      .toBe(duplicate.receipt_id);
+    await expect(lookupProjectChannelRegistrationReceiptPg(client, {
+      ...lookupRequest,
+      target_selector: "wrong-selector",
+    })).rejects.toThrow("does not bind target_selector");
+
     const inverse = inverseRequest(accepted);
     const removed = await compensateProjectChannelRegistrationPg(client, inverse);
     expect(removed).toMatchObject({
@@ -491,6 +510,17 @@ describe("PostgreSQL project channel registration authority", () => {
       accepted_receipt_id: accepted.receipt_id,
       absent: true,
     });
+  });
+
+  test("validates the inverse envelope before PostgreSQL persistence", async () => {
+    const client = new FakeProjectRegistrationClient();
+    const forward = await forwardRequest(client);
+
+    await expect(compensateProjectChannelRegistrationPg(client, {
+      ...forward,
+      accepted_receipt: undefined,
+    })).rejects.toThrow("direction must be inverse");
+    expect(client.state.receipts.size).toBe(0);
   });
 
   test("rolls back an injected PostgreSQL failure and preserves no partial evidence", async () => {
@@ -599,5 +629,35 @@ describe("PostgreSQL project channel registration authority", () => {
     });
     expect(receipt.target_id).toMatch(/^chn_[0-9a-f]{32}$/);
     expect(client.state.channels.get("iapp-sms")?.id).toBe(receipt.target_id!);
+    const lookupRequest = {
+      operation_id: "api-operation",
+      step_id: "conversations-channel",
+      resource_kind: "channel",
+      direction: "forward",
+      authority: "conversations",
+      authority_route: cap.route,
+      package_version: cap.package_version,
+      authority_id: cap.authority_id,
+      tenant_id: cap.tenant_id,
+      corpus_id: cap.corpus_id,
+      target_selector: "iapp-sms",
+      idempotency_key: "api-operation:conversations-channel:forward",
+      request_digest: projectChannelRegistrationDigest(desired),
+      precondition_digest: projectChannelRegistrationDigest({
+        target_selector: "iapp-sms",
+        expected: "absent",
+      }),
+      target_id: receipt.target_id!,
+      max_items: 1,
+      response_byte_limit: 32_768,
+      time_budget_ms: 5_000,
+      call_limit: 1,
+    } as const;
+    const lookup = await authority.lookupReceipt(lookupRequest);
+    expect(lookup.receipt.receipt_id).toBe(receipt.receipt_id);
+    await expect(authority.lookupReceipt({
+      ...lookupRequest,
+      target_selector: "wrong-selector",
+    })).rejects.toThrow("does not bind target_selector");
   });
 });
