@@ -8,6 +8,7 @@ import type {
   GuardedProjectMutationReceipt,
   GuardedProjectMutationReceiptRow,
   JsonObject,
+  ProjectResourceLink,
   UpdateWorkspaceInput,
   Workspace,
 } from "../types/workspace.js";
@@ -201,6 +202,11 @@ export function buildGuardedProjectReadResult(
   project: Workspace,
   input: GuardedProjectReadRequest,
   startedAtMs: number,
+  resourceLinks: {
+    links: ProjectResourceLink[];
+    max_items: number;
+    collection_digest: string;
+  } = { links: [], max_items: 1_000, collection_digest: sha256("[]") },
 ): GuardedProjectReadResult {
   assertCompleteStableProjectId(input.project_id);
   assertPositiveBounds(input);
@@ -212,6 +218,10 @@ export function buildGuardedProjectReadResult(
     project_id: project.id,
     project,
     current_revision: workspaceRevision(project),
+    resource_links: resourceLinks.links,
+    resource_link_count: resourceLinks.links.length,
+    resource_link_max_items: resourceLinks.max_items,
+    resource_link_collection_digest: resourceLinks.collection_digest,
   }, input, startedAtMs, "guarded project read");
 }
 

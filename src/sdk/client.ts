@@ -29,7 +29,25 @@ export interface WorkspaceList { "workspaces": Array<Workspace>; "count": number
 
 export interface GuardedResponseControl { "response_byte_limit": number; "time_budget_ms": number; "response_bytes": number; "elapsed_ms": number; "complete": boolean; "truncated": boolean }
 
-export interface GuardedProjectRead { "ok": boolean; "project_id": string; "project": Workspace; "current_revision": string; "response_control": GuardedResponseControl }
+export interface GuardedProjectRead { "ok": boolean; "project_id": string; "project": Workspace; "current_revision": string; "resource_links": Array<ProjectResourceLink>; "resource_link_count": number; "resource_link_max_items": number; "resource_link_collection_digest": string; "response_control": GuardedResponseControl }
+
+export interface ProjectResourceLinkLabels { "name"?: string; "channel_name"?: string; "path"?: string; "tags"?: Array<string> }
+
+export interface ProjectResourceLinkLocator { "kind": "external_uuid" | "canonical_uri"; "value": string }
+
+export interface ProjectResourceLinkInput { "authority": "todos" | "conversations" | "knowledge" | "mementos"; "service_instance": string; "source_package": "@hasna/todos" | "@hasna/conversations" | "@hasna/knowledge" | "@hasna/mementos"; "target_kind": "project" | "task_list" | "plan" | "channel" | "collection" | "item"; "locator": ProjectResourceLinkLocator; "scope": "resource" | "collection"; "labels"?: ProjectResourceLinkLabels }
+
+export type ProjectResourceLink = ProjectResourceLinkInput & { "id": string; "project_id": string; "labels": ProjectResourceLinkLabels; "created_at": string; "updated_at": string };
+
+export interface ProjectResourceLinkSnapshot { "project": Workspace; "links": Array<ProjectResourceLink>; "collection_digest": string }
+
+export interface ProjectResourceLinkRead { "ok": boolean; "project_id": string; "project": Workspace; "current_revision": string; "links": Array<ProjectResourceLink>; "link_count": number; "max_items": number; "collection_digest": string; "complete": boolean; "truncated": boolean; "response_control": GuardedResponseControl }
+
+export interface ProjectResourceLinkMutationRequest { "operation_id": string; "step_id": string; "mode"?: "add" | "reconcile"; "expected_revision": string; "links": Array<ProjectResourceLinkInput>; "max_items"?: number; "dry_run"?: boolean; "agent_id"?: string; "source"?: string; "command"?: string; "response_byte_limit": number; "time_budget_ms": number }
+
+export interface ProjectResourceLinkMutationResult { "ok": boolean; "dry_run": boolean; "outcome": "accepted" | "duplicate_of_accepted" | "terminal_nonacceptance" | "planned"; "mode": "add" | "reconcile"; "idempotency_key": string; "request_digest": string; "precondition_digest": string; "project_id": string; "expected_revision": string; "current_revision": string; "before": ProjectResourceLinkSnapshot; "after": ProjectResourceLinkSnapshot | null; "receipt": GuardedProjectMutationReceipt | null; "response_control": GuardedResponseControl }
+
+export interface ProjectResourceLinkRollbackRequest { "operation_id": string; "step_id": string; "accepted_receipt_id": string; "expected_current_revision": string; "max_items"?: number; "agent_id"?: string; "source"?: string; "command"?: string; "response_byte_limit": number; "time_budget_ms": number }
 
 export interface GuardedProjectMutationReceipt { "receipt_id": string; "operation_id": string; "step_id": string; "direction": "forward" | "inverse"; "idempotency_key": string; "target_id": string; "request_digest": string; "precondition_digest": string; "expected_revision": string; "outcome": "accepted" | "duplicate_of_accepted" | "terminal_nonacceptance"; "reason": string | null; "result_project_id": string | null; "duplicate_of_receipt_id": string | null; "before": Record<string, unknown> | null; "after": Record<string, unknown> | null; "post_revision": string | null; "created_at": string }
 
@@ -232,7 +250,7 @@ export class ProjectsClient {
     }
 
     /** Read one project by exact stable id with bounded complete JSON and its current mutation revision */
-    async guardedReadProject(id: string, query?: { "response_byte_limit": number; "time_budget_ms": number }, init?: RequestInit): Promise<GuardedProjectRead> {
+    async guardedReadProject(id: string, query?: { "response_byte_limit": number; "time_budget_ms": number; "resource_link_max_items"?: number }, init?: RequestInit): Promise<GuardedProjectRead> {
       return this.request("GET", `/v1/projects/${encodeURIComponent(String(id))}/guarded-metadata`, {
         body: undefined,
         query,
@@ -261,6 +279,42 @@ export class ProjectsClient {
     /** Conditionally roll back one accepted guarded mutation receipt */
     async rollbackGuardedProjectMutation(id: string, body: GuardedProjectMutationRollbackRequest, init?: RequestInit): Promise<GuardedProjectMutationResult> {
       return this.request("POST", `/v1/projects/${encodeURIComponent(String(id))}/guarded-metadata/rollback`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Read the complete typed project resource-link collection under explicit bounds */
+    async readProjectResourceLinks(id: string, query?: { "max_items": number; "response_byte_limit": number; "time_budget_ms": number }, init?: RequestInit): Promise<ProjectResourceLinkRead> {
+      return this.request("GET", `/v1/projects/${encodeURIComponent(String(id))}/resource-links`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Idempotently add typed resource links under a project revision CAS */
+    async addProjectResourceLinks(id: string, body: ProjectResourceLinkMutationRequest, init?: RequestInit): Promise<ProjectResourceLinkMutationResult> {
+      return this.request("POST", `/v1/projects/${encodeURIComponent(String(id))}/resource-links/add`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Reconcile the complete typed resource-link collection under a project revision CAS */
+    async reconcileProjectResourceLinks(id: string, body: ProjectResourceLinkMutationRequest, init?: RequestInit): Promise<ProjectResourceLinkMutationResult> {
+      return this.request("POST", `/v1/projects/${encodeURIComponent(String(id))}/resource-links/reconcile`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Restore the exact pre-mutation typed resource-link collection from an accepted receipt */
+    async rollbackProjectResourceLinks(id: string, body: ProjectResourceLinkRollbackRequest, init?: RequestInit): Promise<ProjectResourceLinkMutationResult> {
+      return this.request("POST", `/v1/projects/${encodeURIComponent(String(id))}/resource-links/rollback`, {
         body,
         query: undefined,
         init,

@@ -14,15 +14,26 @@ import {
   assertPositiveBounds,
   buildGuardedProjectReadResult,
   buildReceiptId,
+  canonicalJson,
   deriveGuardedIdempotencyKey,
   preconditionDigest,
   requestDigest,
   rowToGuardedReceipt,
+  sha256,
   timedOut,
   withResponseControl,
   workspaceRevision,
   workspaceSnapshot,
 } from "../lib/guarded-project-mutation.js";
+import {
+  normalizeProjectResourceLinks,
+  PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS,
+  projectResourceLinkId,
+  projectResourceLinkIntegrationProjection,
+  projectResourceLinksDigest,
+  projectResourceLinkSnapshot,
+  rowToProjectResourceLink,
+} from "../lib/project-resource-links.js";
 import { deriveWorkspaceRegistryFields } from "../lib/workspace-plan.js";
 import type {
   Agent,
@@ -42,6 +53,15 @@ import type {
   GuardedProjectMutationResult,
   GuardedProjectMutationRollbackRequest,
   JsonObject,
+  ProjectResourceLink,
+  ProjectResourceLinkInput,
+  ProjectResourceLinkMutationRequest,
+  ProjectResourceLinkMutationResult,
+  ProjectResourceLinkReadRequest,
+  ProjectResourceLinkReadResult,
+  ProjectResourceLinkRollbackRequest,
+  ProjectResourceLinkRow,
+  ProjectResourceLinkSnapshot,
   Recipe,
   RecipeRow,
   RecordWorkspaceEventInput,
@@ -175,6 +195,39 @@ function rowToWorkspace(row: WorkspaceRow): Workspace {
     integrations: parseJson<WorkspaceIntegrations>(row.integrations, {}),
     metadata: parseJson<JsonObject>(row.metadata, {}),
   };
+}
+
+function resourceLinkSnapshotJson(snapshot: ProjectResourceLinkSnapshot): JsonObject {
+  return snapshot as unknown as JsonObject;
+}
+
+function parseResourceLinkSnapshot(value: JsonObject | null, label: string): ProjectResourceLinkSnapshot {
+  const snapshot = value as unknown as ProjectResourceLinkSnapshot | null;
+  if (!snapshot?.project?.id || !Array.isArray(snapshot.links) || typeof snapshot.collection_digest !== "string") {
+    throw new ValidationError(`${label} receipt snapshot is incomplete`);
+  }
+  return snapshot;
+}
+
+function resourceLinkInputFromStored(link: ProjectResourceLink): ProjectResourceLinkInput {
+  return {
+    authority: link.authority,
+    service_instance: link.service_instance,
+    source_package: link.source_package,
+    target_kind: link.target_kind,
+    locator: link.locator,
+    scope: link.scope,
+    labels: link.labels,
+  };
+}
+
+function nextResourceLinkRevision(current: string): string {
+  const currentMs = Date.parse(current.replace(" ", "T") + "Z");
+  const nowValue = nowIso();
+  if (nowValue !== current) return nowValue;
+  return Number.isFinite(currentMs)
+    ? new Date(currentMs + 1).toISOString().replace("T", " ").replace("Z", "")
+    : `${current}.1`;
 }
 
 function rowToEvent(row: WorkspaceEventRow): WorkspaceEvent {
@@ -495,10 +548,58 @@ export class ProjectsPgStore {
     const row = await this.db.get<WorkspaceRow>("SELECT * FROM workspaces WHERE id = $1", [input.project_id]);
     if (!row) throw new NotFoundError(`Workspace not found: ${input.project_id}`);
     try {
-      return buildGuardedProjectReadResult(rowToWorkspace(row), input, startedAtMs);
+      const maxItems = input.resource_link_max_items ?? PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS;
+      const links = await this.listProjectResourceLinks(input.project_id, maxItems);
+      return buildGuardedProjectReadResult(rowToWorkspace(row), input, startedAtMs, {
+        links,
+        max_items: maxItems,
+        collection_digest: projectResourceLinksDigest(links),
+      });
     } catch (err) {
       throw new ValidationError(err instanceof Error ? err.message : String(err));
     }
+  }
+
+  async listProjectResourceLinks(
+    projectId: string,
+    maxItems = PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS,
+  ): Promise<ProjectResourceLink[]> {
+    assertCompleteStableProjectId(projectId);
+    if (!Number.isInteger(maxItems) || maxItems <= 0) {
+      throw new ValidationError("project resource link max_items must be a positive integer");
+    }
+    const rows = await this.db.many<ProjectResourceLinkRow>(
+      `SELECT * FROM project_resource_links
+       WHERE project_id = $1
+       ORDER BY authority, service_instance, source_package, target_kind, locator_kind, locator_value, id
+       LIMIT $2`,
+      [projectId, maxItems + 1],
+    );
+    if (rows.length > maxItems) {
+      throw new ValidationError(`project resource link collection exceeds max_items: more than ${maxItems}`);
+    }
+    return rows.map(rowToProjectResourceLink);
+  }
+
+  async readProjectResourceLinks(
+    input: ProjectResourceLinkReadRequest,
+    startedAtMs = Date.now(),
+  ): Promise<ProjectResourceLinkReadResult> {
+    assertCompleteStableProjectId(input.project_id);
+    const project = await this.requireWorkspace(input.project_id);
+    const links = await this.listProjectResourceLinks(input.project_id, input.max_items);
+    return withResponseControl({
+      ok: true as const,
+      project_id: project.id,
+      project,
+      current_revision: workspaceRevision(project),
+      links,
+      link_count: links.length,
+      max_items: input.max_items,
+      collection_digest: projectResourceLinksDigest(links),
+      complete: true as const,
+      truncated: false as const,
+    }, input, startedAtMs, "project resource link read");
   }
 
   async requireWorkspace(idOrSlug: string): Promise<Workspace> {
@@ -712,6 +813,7 @@ export class ProjectsPgStore {
     expected_revision: string;
     reason: string;
     before?: Workspace | null;
+    before_snapshot?: JsonObject | null;
   }): Promise<GuardedProjectMutationReceipt> {
     return this.insertGuardedReceipt({
       receipt_id: buildReceiptId({ ...input, outcome: "terminal_nonacceptance", suffix: input.reason }),
@@ -727,7 +829,7 @@ export class ProjectsPgStore {
       reason: input.reason,
       result_project_id: null,
       duplicate_of_receipt_id: null,
-      before: input.before ? workspaceSnapshot(input.before) : null,
+      before: input.before_snapshot ?? (input.before ? workspaceSnapshot(input.before) : null),
       after: null,
       post_revision: null,
     });
@@ -736,6 +838,7 @@ export class ProjectsPgStore {
   private async duplicateGuardedReceipt(
     accepted: GuardedProjectMutationReceipt,
     before: Workspace,
+    beforeSnapshot?: JsonObject,
   ): Promise<GuardedProjectMutationReceipt> {
     const receiptId = buildReceiptId({
       operation_id: accepted.operation_id,
@@ -762,7 +865,7 @@ export class ProjectsPgStore {
       reason: null,
       result_project_id: accepted.result_project_id,
       duplicate_of_receipt_id: accepted.receipt_id,
-      before: workspaceSnapshot(before),
+      before: beforeSnapshot ?? workspaceSnapshot(before),
       after: accepted.after,
       post_revision: accepted.post_revision,
     });
@@ -809,6 +912,361 @@ export class ProjectsPgStore {
       params,
     );
     return row ? rowToWorkspace(row) : null;
+  }
+
+  async mutateProjectResourceLinks(input: ProjectResourceLinkMutationRequest): Promise<ProjectResourceLinkMutationResult> {
+    return this.inTransaction("project resource link mutation", (store) =>
+      store.mutateProjectResourceLinksInCurrentTransaction(input));
+  }
+
+  private async mutateProjectResourceLinksInCurrentTransaction(
+    input: ProjectResourceLinkMutationRequest,
+    options: {
+      direction?: "forward" | "inverse";
+      forced_integrations?: WorkspaceIntegrations;
+      preserve_links?: readonly ProjectResourceLink[];
+    } = {},
+  ): Promise<ProjectResourceLinkMutationResult> {
+    const started = Date.now();
+    try {
+      assertCompleteStableProjectId(input.project_id);
+      assertPositiveBounds(input);
+    } catch (err) {
+      throw new ValidationError(err instanceof Error ? err.message : String(err));
+    }
+    const maxItems = input.max_items ?? PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS;
+    if (!Number.isInteger(maxItems) || maxItems <= 0) {
+      throw new ValidationError("project resource link max_items must be a positive integer");
+    }
+    let normalized: ProjectResourceLinkInput[];
+    try {
+      normalized = normalizeProjectResourceLinks(input.links);
+    } catch (err) {
+      throw new ValidationError(err instanceof Error ? err.message : String(err));
+    }
+    if (normalized.length > maxItems) {
+      throw new ValidationError(`project resource link request exceeds max_items: ${normalized.length} > ${maxItems}`);
+    }
+    const direction = options.direction ?? "forward";
+    const reqDigest = sha256(canonicalJson({ mode: input.mode, links: normalized }));
+    const preDigest = preconditionDigest({ project_id: input.project_id, expected_revision: input.expected_revision });
+    const idempotencyKey = deriveGuardedIdempotencyKey({
+      operation_id: input.operation_id,
+      step_id: input.step_id,
+      direction,
+      target_id: input.project_id,
+      request_digest: reqDigest,
+      precondition_digest: preDigest,
+    });
+    const beforeProject = await this.requireWorkspace(input.project_id);
+    const beforeLinks = await this.listProjectResourceLinks(input.project_id, maxItems);
+    const before = projectResourceLinkSnapshot(beforeProject, beforeLinks);
+    const currentRevision = workspaceRevision(beforeProject);
+
+    const duplicate = await this.guardedAcceptedReceipt({
+      operation_id: input.operation_id,
+      step_id: input.step_id,
+      direction,
+      idempotency_key: idempotencyKey,
+      target_id: input.project_id,
+    });
+    if (duplicate) {
+      const receipt = await this.duplicateGuardedReceipt(
+        duplicate,
+        beforeProject,
+        resourceLinkSnapshotJson(before),
+      );
+      return withResponseControl({
+        ok: true,
+        dry_run: false,
+        outcome: "duplicate_of_accepted" as const,
+        mode: input.mode,
+        idempotency_key: idempotencyKey,
+        request_digest: reqDigest,
+        precondition_digest: preDigest,
+        project_id: input.project_id,
+        expected_revision: input.expected_revision,
+        current_revision: currentRevision,
+        before,
+        after: parseResourceLinkSnapshot(duplicate.after, "accepted"),
+        receipt,
+      }, input, started, "project resource link mutation");
+    }
+    const priorAccepted = await this.guardedAcceptedByStep({
+      operation_id: input.operation_id,
+      step_id: input.step_id,
+      direction,
+      target_id: input.project_id,
+    });
+    if (priorAccepted) {
+      const receipt = await this.guardedTerminalNonacceptance({
+        operation_id: input.operation_id,
+        step_id: input.step_id,
+        direction,
+        idempotency_key: idempotencyKey,
+        target_id: input.project_id,
+        request_digest: reqDigest,
+        precondition_digest: preDigest,
+        expected_revision: input.expected_revision,
+        reason: "changed_request_or_precondition_for_step",
+        before_snapshot: resourceLinkSnapshotJson(before),
+      });
+      return withResponseControl({
+        ok: false,
+        dry_run: false,
+        outcome: "terminal_nonacceptance" as const,
+        mode: input.mode,
+        idempotency_key: idempotencyKey,
+        request_digest: reqDigest,
+        precondition_digest: preDigest,
+        project_id: input.project_id,
+        expected_revision: input.expected_revision,
+        current_revision: currentRevision,
+        before,
+        after: null,
+        receipt,
+      }, input, started, "project resource link mutation");
+    }
+    if (currentRevision !== input.expected_revision) {
+      const receipt = await this.guardedTerminalNonacceptance({
+        operation_id: input.operation_id,
+        step_id: input.step_id,
+        direction,
+        idempotency_key: idempotencyKey,
+        target_id: input.project_id,
+        request_digest: reqDigest,
+        precondition_digest: preDigest,
+        expected_revision: input.expected_revision,
+        reason: "stale_revision",
+        before_snapshot: resourceLinkSnapshotJson(before),
+      });
+      return withResponseControl({
+        ok: false,
+        dry_run: false,
+        outcome: "terminal_nonacceptance" as const,
+        mode: input.mode,
+        idempotency_key: idempotencyKey,
+        request_digest: reqDigest,
+        precondition_digest: preDigest,
+        project_id: input.project_id,
+        expected_revision: input.expected_revision,
+        current_revision: currentRevision,
+        before,
+        after: null,
+        receipt,
+      }, input, started, "project resource link mutation");
+    }
+
+    const beforeById = new Map(beforeLinks.map((link) => [link.id, link]));
+    const preserveById = new Map((options.preserve_links ?? []).map((link) => [link.id, link]));
+    const requested = normalized.map((link) => {
+      const id = projectResourceLinkId(input.project_id, link);
+      const existing = beforeById.get(id);
+      const restored = preserveById.get(id);
+      const labels = link.labels ?? {};
+      return {
+        id,
+        project_id: input.project_id,
+        ...link,
+        labels,
+        created_at: restored?.created_at ?? existing?.created_at ?? nowIso(),
+        updated_at: restored?.updated_at ?? (
+          existing && canonicalJson(existing.labels) === canonicalJson(labels)
+            ? existing.updated_at
+            : nowIso()
+        ),
+      } satisfies ProjectResourceLink;
+    });
+    const desired = (input.mode === "add"
+      ? [...beforeLinks, ...requested.filter((link) => !beforeById.has(link.id))]
+      : requested
+    ).sort((a, b) => canonicalJson({
+      authority: a.authority,
+      service_instance: a.service_instance,
+      source_package: a.source_package,
+      target_kind: a.target_kind,
+      locator_kind: a.locator.kind,
+      locator_value: a.locator.value,
+    }).localeCompare(canonicalJson({
+      authority: b.authority,
+      service_instance: b.service_instance,
+      source_package: b.source_package,
+      target_kind: b.target_kind,
+      locator_kind: b.locator.kind,
+      locator_value: b.locator.value,
+    })));
+    if (desired.length > maxItems) {
+      throw new ValidationError(`project resource link collection exceeds max_items: ${desired.length} > ${maxItems}`);
+    }
+    const integrations = options.forced_integrations
+      ?? projectResourceLinkIntegrationProjection(beforeProject.integrations, beforeLinks, desired);
+    const preview = projectResourceLinkSnapshot({ ...beforeProject, integrations }, desired);
+    if (input.dry_run) {
+      return withResponseControl({
+        ok: true,
+        dry_run: true,
+        outcome: "planned" as const,
+        mode: input.mode,
+        idempotency_key: idempotencyKey,
+        request_digest: reqDigest,
+        precondition_digest: preDigest,
+        project_id: input.project_id,
+        expected_revision: input.expected_revision,
+        current_revision: currentRevision,
+        before,
+        after: preview,
+        receipt: null,
+      }, input, started, "project resource link mutation");
+    }
+    if (timedOut(started, input.time_budget_ms)) {
+      throw new ValidationError("project resource link mutation time budget exceeded before write");
+    }
+
+    const changed = canonicalJson(beforeLinks) !== canonicalJson(desired)
+      || canonicalJson(beforeProject.integrations) !== canonicalJson(integrations);
+    let afterProject = beforeProject;
+    if (changed) {
+      await this.db.execute("DELETE FROM project_resource_links WHERE project_id = $1", [input.project_id]);
+      for (const link of desired) {
+        await this.db.execute(
+          `INSERT INTO project_resource_links (
+            id, project_id, authority, service_instance, source_package, target_kind,
+            locator_kind, locator_value, scope, labels_json, created_at, updated_at
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+          [
+            link.id,
+            link.project_id,
+            link.authority,
+            link.service_instance,
+            link.source_package,
+            link.target_kind,
+            link.locator.kind,
+            link.locator.value,
+            link.scope,
+            canonicalJson(link.labels),
+            link.created_at,
+            link.updated_at,
+          ],
+        );
+      }
+      const nextRevision = nextResourceLinkRevision(currentRevision);
+      const row = await this.db.get<WorkspaceRow>(
+        `UPDATE workspaces SET integrations = $1, updated_at = $2
+         WHERE id = $3 AND updated_at = $4
+         RETURNING *`,
+        [canonicalJson(integrations), nextRevision, input.project_id, currentRevision],
+      );
+      if (!row) throw new ValidationError("project resource link conditional update lost");
+      afterProject = rowToWorkspace(row);
+    }
+    const afterLinks = await this.listProjectResourceLinks(input.project_id, maxItems);
+    const after = projectResourceLinkSnapshot(afterProject, afterLinks);
+    if (after.collection_digest !== projectResourceLinksDigest(desired)) {
+      throw new ValidationError("project resource link exact readback mismatch");
+    }
+    const receipt = await this.insertGuardedReceipt({
+      receipt_id: buildReceiptId({
+        operation_id: input.operation_id,
+        step_id: input.step_id,
+        direction,
+        idempotency_key: idempotencyKey,
+        outcome: "accepted",
+        target_id: input.project_id,
+      }),
+      operation_id: input.operation_id,
+      step_id: input.step_id,
+      direction,
+      idempotency_key: idempotencyKey,
+      target_id: input.project_id,
+      request_digest: reqDigest,
+      precondition_digest: preDigest,
+      expected_revision: input.expected_revision,
+      outcome: "accepted",
+      reason: null,
+      result_project_id: afterProject.id,
+      duplicate_of_receipt_id: null,
+      before: resourceLinkSnapshotJson(before),
+      after: resourceLinkSnapshotJson(after),
+      post_revision: workspaceRevision(afterProject),
+    });
+    await this.recordEvent({
+      workspace_id: afterProject.id,
+      agent_id: input.agent_id,
+      event_type: direction === "inverse" ? "project_resource_links_rollback" : `project_resource_links_${input.mode}`,
+      source: input.source ?? "mcp",
+      command: input.command,
+      before: resourceLinkSnapshotJson(before),
+      after: resourceLinkSnapshotJson(after),
+      metadata: {
+        receipt_id: receipt.receipt_id,
+        operation_id: input.operation_id,
+        step_id: input.step_id,
+        idempotency_key: idempotencyKey,
+        collection_digest: after.collection_digest,
+      },
+    });
+    return withResponseControl({
+      ok: true,
+      dry_run: false,
+      outcome: "accepted" as const,
+      mode: input.mode,
+      idempotency_key: idempotencyKey,
+      request_digest: reqDigest,
+      precondition_digest: preDigest,
+      project_id: input.project_id,
+      expected_revision: input.expected_revision,
+      current_revision: currentRevision,
+      before,
+      after,
+      receipt,
+    }, input, started, "project resource link mutation");
+  }
+
+  async rollbackProjectResourceLinks(input: ProjectResourceLinkRollbackRequest): Promise<ProjectResourceLinkMutationResult> {
+    return this.inTransaction("project resource link rollback", async (store) => {
+      assertCompleteStableProjectId(input.project_id);
+      const row = await store.db.get<GuardedProjectMutationReceiptRow>(
+        "SELECT * FROM guarded_project_mutation_receipts WHERE receipt_id = $1",
+        [input.accepted_receipt_id],
+      );
+      if (!row) throw new NotFoundError(`accepted receipt not found: ${input.accepted_receipt_id}`);
+      const accepted = rowToGuardedReceipt(row);
+      if (accepted.outcome !== "accepted" || accepted.direction !== "forward" || accepted.target_id !== input.project_id) {
+        throw new ValidationError("resource link rollback requires a forward accepted receipt for the same project id");
+      }
+      if (accepted.post_revision !== input.expected_current_revision) {
+        throw new ValidationError("resource link rollback expected_current_revision must equal the accepted receipt post_revision");
+      }
+      const before = parseResourceLinkSnapshot(accepted.before, "accepted before");
+      const after = parseResourceLinkSnapshot(accepted.after, "accepted after");
+      const current = await store.readProjectResourceLinks({
+        project_id: input.project_id,
+        max_items: input.max_items ?? PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS,
+        response_byte_limit: input.response_byte_limit,
+        time_budget_ms: input.time_budget_ms,
+      });
+      if (current.current_revision !== input.expected_current_revision || current.collection_digest !== after.collection_digest) {
+        throw new ValidationError("resource link rollback refuses current revision or collection digest drift");
+      }
+      return store.mutateProjectResourceLinksInCurrentTransaction({
+        project_id: input.project_id,
+        operation_id: input.operation_id,
+        step_id: input.step_id,
+        mode: "reconcile",
+        expected_revision: input.expected_current_revision,
+        links: before.links.map(resourceLinkInputFromStored),
+        max_items: input.max_items,
+        response_byte_limit: input.response_byte_limit,
+        time_budget_ms: input.time_budget_ms,
+        agent_id: input.agent_id,
+        source: input.source,
+        command: input.command,
+      }, {
+        direction: "inverse",
+        forced_integrations: before.project.integrations,
+        preserve_links: before.links,
+      });
+    });
   }
 
   async guardedUpdateWorkspace(input: GuardedProjectMutationRequest): Promise<GuardedProjectMutationResult> {

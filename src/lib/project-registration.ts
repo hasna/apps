@@ -15,6 +15,9 @@ import { join, resolve } from "node:path";
 import {
   createWorkspace,
   getWorkspace,
+  mutateProjectResourceLinksForRegistration,
+  readProjectResourceLinks,
+  rollbackProjectResourceLinks,
   workspaceSlugify,
 } from "../db/workspaces.js";
 import { getDatabase, now } from "../db/database.js";
@@ -22,6 +25,7 @@ import type {
   CreateWorkspaceInput,
   EventSource,
   JsonObject,
+  ProjectResourceLinkInput,
   Workspace,
   WorkspaceIntegrations,
   WorkspaceKind,
@@ -1736,13 +1740,73 @@ function appendLocalAbsenceReceipt(input: {
   }, input.db);
 }
 
+function registrationResourceLink(input: {
+  capability: ProjectRegistrationAuthorityCapability;
+  receipt: ProjectRegistrationAuthorityReceipt;
+  target_kind: ProjectResourceLinkInput["target_kind"];
+  scope: ProjectResourceLinkInput["scope"];
+  labels?: ProjectResourceLinkInput["labels"];
+}): ProjectResourceLinkInput {
+  const targetId = input.receipt.target_id;
+  if (!targetId) {
+    throw new ProjectRegistrationStepError(input.receipt.step_id, "authority_receipt_missing_target");
+  }
+  const authority = input.capability.authority;
+  const sourcePackage = {
+    todos: "@hasna/todos",
+    conversations: "@hasna/conversations",
+    mementos: "@hasna/mementos",
+  }[authority];
+  const serviceInstance = [
+    "urn:hasna",
+    authority,
+    "service",
+    encodeURIComponent(input.capability.authority_id),
+    "tenant",
+    encodeURIComponent(input.capability.tenant_id),
+    "corpus",
+    encodeURIComponent(input.capability.corpus_id),
+  ].join(":");
+  if (authority === "conversations" && input.target_kind === "channel") {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(targetId)) {
+      throw new ProjectRegistrationStepError(input.receipt.step_id, "channel_immutable_uuid_missing");
+    }
+    return {
+      authority,
+      service_instance: serviceInstance,
+      source_package: sourcePackage,
+      target_kind: input.target_kind,
+      locator: { kind: "external_uuid", value: targetId },
+      scope: input.scope,
+      labels: input.labels,
+    };
+  }
+  return {
+    authority,
+    service_instance: serviceInstance,
+    source_package: sourcePackage,
+    target_kind: input.target_kind,
+    locator: {
+      kind: "canonical_uri",
+      value: `urn:hasna:${authority}:${input.target_kind}:${encodeURIComponent(targetId)}`,
+    },
+    scope: input.scope,
+    labels: input.labels,
+  };
+}
+
 function updateProjectIntegrations(input: {
   operation_id: string;
   project: Workspace;
   integrations: WorkspaceIntegrations;
+  resource_links: ProjectResourceLinkInput[];
+  bounds: ProjectRegistrationBounds;
   db: Database;
 }): { project: Workspace; receipt: ProjectRegistrationReceipt } {
-  const requestDigest = sha256(canonicalJson(input.integrations));
+  const requestDigest = sha256(canonicalJson({
+    integrations: input.integrations,
+    resource_links: input.resource_links,
+  }));
   const preconditionDigest = sha256(canonicalJson({
     project_id: input.project.id,
     expected_revision: input.project.updated_at,
@@ -1757,19 +1821,26 @@ function updateProjectIntegrations(input: {
     precondition_digest: preconditionDigest,
   });
   return input.db.transaction(() => {
-    const current = getWorkspace(input.project.id, input.db);
-    if (!current || current.updated_at !== input.project.updated_at) {
-      throw new ProjectRegistrationStepError("projects_integrations", "stale_project_revision");
+    const linked = mutateProjectResourceLinksForRegistration({
+      project_id: input.project.id,
+      operation_id: input.operation_id,
+      step_id: "projects_resource_links",
+      mode: "reconcile",
+      expected_revision: input.project.updated_at,
+      links: input.resource_links,
+      max_items: PROJECT_REGISTRATION_MAX_RECEIPTS,
+      response_byte_limit: input.bounds.response_byte_limit,
+      time_budget_ms: input.bounds.time_budget_ms,
+      source: "system",
+      command: PROJECT_REGISTRATION_ROUTE,
+    }, input.integrations, input.db);
+    if (!linked.ok || !linked.after || !linked.receipt || linked.receipt.outcome === "terminal_nonacceptance") {
+      throw new ProjectRegistrationStepError(
+        "projects_integrations",
+        linked.receipt?.reason ?? "resource_link_reconcile_refused",
+      );
     }
-    const nextRevision = nextRevisionAfter(current.updated_at);
-    const changed = input.db.run(
-      "UPDATE workspaces SET integrations = ?, updated_at = ? WHERE id = ? AND updated_at = ?",
-      [canonicalJson(input.integrations), nextRevision, current.id, current.updated_at],
-    );
-    if (changed.changes !== 1) {
-      throw new ProjectRegistrationStepError("projects_integrations", "conditional_update_lost");
-    }
-    const after = getWorkspace(current.id, input.db)!;
+    const after = linked.after.project;
     if (canonicalJson(after.integrations) !== canonicalJson(input.integrations)) {
       throw new ProjectRegistrationStepError("projects_integrations", "integration_exact_readback_mismatch");
     }
@@ -1777,6 +1848,7 @@ function updateProjectIntegrations(input: {
       project_id: after.id,
       revision: after.updated_at,
       integrations: after.integrations,
+      resource_link_collection_digest: linked.after.collection_digest,
     }));
     const receipt = appendRegistrationReceipt({
       operation_id: input.operation_id,
@@ -1791,22 +1863,33 @@ function updateProjectIntegrations(input: {
       outcome: "accepted",
       result_revision: after.updated_at,
       result_digest: resultDigest,
-      artifacts: Object.entries(after.integrations).map(([key, targetId]) => ({
-        authority: "projects",
-        integration_key: key,
-        target_id: targetId,
-      })),
+      artifacts: [
+        ...Object.entries(after.integrations).map(([key, targetId]) => ({
+          authority: "projects",
+          integration_key: key,
+          target_id: targetId,
+        })),
+        ...linked.after.links.map((link) => ({
+          authority: link.authority,
+          source_package: link.source_package,
+          target_kind: link.target_kind,
+          target_id: link.locator.value,
+          resource_link_id: link.id,
+          scope: link.scope,
+        })),
+      ],
       preconditions: [{
         predicate: "exact_project_revision",
-        project_id: current.id,
-        expected_revision: current.updated_at,
+        project_id: input.project.id,
+        expected_revision: input.project.updated_at,
       }],
       rollback: [{
-        action: "restore_integrations_if_revision_matches",
-        project_id: current.id,
+        action: "restore_resource_links_and_integrations_from_guarded_receipt",
+        project_id: input.project.id,
         accepted_revision: after.updated_at,
         accepted_digest: resultDigest,
-        before_integrations: current.integrations,
+        guarded_receipt_id: linked.receipt.receipt_id,
+        resource_link_collection_digest: linked.after.collection_digest,
       }],
     }, input.db);
     return { project: after, receipt };
@@ -1816,30 +1899,49 @@ function updateProjectIntegrations(input: {
 function rollbackProjectIntegrations(input: {
   operation_id: string;
   accepted: ProjectRegistrationReceipt;
+  bounds: ProjectRegistrationBounds;
   db: Database;
 }): { project: Workspace; receipt: ProjectRegistrationReceipt } {
   const rollback = input.accepted.rollback[0] as {
-    before_integrations?: WorkspaceIntegrations;
     accepted_revision?: string;
     accepted_digest?: string;
     project_id?: string;
+    guarded_receipt_id?: string;
+    resource_link_collection_digest?: string;
   } | undefined;
-  if (!rollback?.project_id || !rollback.accepted_revision || !rollback.accepted_digest || !rollback.before_integrations) {
+  if (
+    !rollback?.project_id
+    || !rollback.accepted_revision
+    || !rollback.accepted_digest
+    || !rollback.guarded_receipt_id
+    || !rollback.resource_link_collection_digest
+  ) {
     throw new ProjectRegistrationStepError("projects_integrations", "integration_rollback_contract_missing");
   }
+  const guardedReceiptId = rollback.guarded_receipt_id;
   const current = getWorkspace(rollback.project_id, input.db);
   if (!current || current.updated_at !== rollback.accepted_revision) {
     throw new ProjectRegistrationStepError("projects_integrations", "integration_drift_refuses_inverse");
   }
+  const currentLinks = readProjectResourceLinks({
+    project_id: current.id,
+    max_items: PROJECT_REGISTRATION_MAX_RECEIPTS,
+    response_byte_limit: input.bounds.response_byte_limit,
+    time_budget_ms: input.bounds.time_budget_ms,
+  }, input.db);
   const currentDigest = sha256(canonicalJson({
     project_id: current.id,
     revision: current.updated_at,
     integrations: current.integrations,
+    resource_link_collection_digest: currentLinks.collection_digest,
   }));
   if (currentDigest !== rollback.accepted_digest) {
     throw new ProjectRegistrationStepError("projects_integrations", "integration_digest_refuses_inverse");
   }
-  const requestDigest = sha256(canonicalJson(rollback.before_integrations));
+  const requestDigest = sha256(canonicalJson({
+    guarded_receipt_id: rollback.guarded_receipt_id,
+    desired: "restore_before_snapshot",
+  }));
   const preconditionDigest = sha256(canonicalJson({
     expected_revision: current.updated_at,
     expected_digest: rollback.accepted_digest,
@@ -1853,18 +1955,22 @@ function rollbackProjectIntegrations(input: {
     precondition_digest: preconditionDigest,
   });
   return input.db.transaction(() => {
-    const nextRevision = nextRevisionAfter(current.updated_at);
-    const changed = input.db.run(
-      "UPDATE workspaces SET integrations = ?, updated_at = ? WHERE id = ? AND updated_at = ?",
-      [canonicalJson(rollback.before_integrations), nextRevision, current.id, current.updated_at],
-    );
-    if (changed.changes !== 1) {
+    const restored = rollbackProjectResourceLinks({
+      project_id: current.id,
+      operation_id: input.operation_id,
+      step_id: "projects_resource_links:inverse",
+      accepted_receipt_id: guardedReceiptId,
+      expected_current_revision: current.updated_at,
+      max_items: PROJECT_REGISTRATION_MAX_RECEIPTS,
+      response_byte_limit: input.bounds.response_byte_limit,
+      time_budget_ms: input.bounds.time_budget_ms,
+      source: "system",
+      command: PROJECT_REGISTRATION_ROUTE,
+    }, input.db);
+    if (!restored.ok || !restored.after || !restored.receipt || restored.receipt.outcome === "terminal_nonacceptance") {
       throw new ProjectRegistrationStepError("projects_integrations", "integration_inverse_lost");
     }
-    const after = getWorkspace(current.id, input.db)!;
-    if (canonicalJson(after.integrations) !== canonicalJson(rollback.before_integrations)) {
-      throw new ProjectRegistrationStepError("projects_integrations", "integration_inverse_readback_mismatch");
-    }
+    const after = restored.after.project;
     const receipt = appendRegistrationReceipt({
       operation_id: input.operation_id,
       step_id: "projects_integrations",
@@ -1881,8 +1987,15 @@ function rollbackProjectIntegrations(input: {
         project_id: after.id,
         revision: after.updated_at,
         integrations: after.integrations,
+        resource_link_collection_digest: restored.after.collection_digest,
       })),
-      artifacts: [{ authority: "projects", target_id: current.id, integrations_restored: true }],
+      artifacts: [{
+        authority: "projects",
+        target_id: current.id,
+        integrations_restored: true,
+        resource_links_restored: true,
+        guarded_receipt_id: restored.receipt.receipt_id,
+      }],
       preconditions: [{
         accepted_receipt_id: input.accepted.receipt_id,
         expected_revision: current.updated_at,
@@ -2479,6 +2592,37 @@ export async function registerFullProject(
       operation_id: input.operation_id,
       project,
       integrations,
+      resource_links: [
+        registrationResourceLink({
+          capability: capabilities.conversations,
+          receipt: conversations.receipt,
+          target_kind: "channel",
+          scope: "collection",
+          labels: { channel_name: channel },
+        }),
+        registrationResourceLink({
+          capability: capabilities.todos,
+          receipt: todosProject.receipt,
+          target_kind: "project",
+          scope: "collection",
+          labels: { name: project.name },
+        }),
+        registrationResourceLink({
+          capability: capabilities.todos,
+          receipt: todosTaskList.receipt,
+          target_kind: "task_list",
+          scope: "collection",
+          labels: { name: project.name },
+        }),
+        registrationResourceLink({
+          capability: capabilities.mementos,
+          receipt: mementosProject.receipt,
+          target_kind: "project",
+          scope: "collection",
+          labels: { name: project.name },
+        }),
+      ],
+      bounds,
       db,
     });
     project = integrated.project;
@@ -2579,6 +2723,7 @@ export async function registerFullProject(
         const restored = rollbackProjectIntegrations({
           operation_id: input.operation_id,
           accepted: integrationReceipt,
+          bounds,
           db,
         });
         if (!createdProject) {

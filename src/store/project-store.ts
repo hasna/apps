@@ -51,13 +51,17 @@ import {
   listWorkspaceEvents as dbListWorkspaceEvents,
   listWorkspaceLocations as dbListWorkspaceLocations,
   listWorkspaceLocks as dbListWorkspaceLocks,
+  listProjectResourceLinks as dbListProjectResourceLinks,
   lookupGuardedWorkspaceMutationReceipt as dbLookupGuardedWorkspaceMutationReceipt,
+  mutateProjectResourceLinks as dbMutateProjectResourceLinks,
+  readProjectResourceLinks as dbReadProjectResourceLinks,
   countWorkspaces as dbCountWorkspaces,
   listWorkspaces as dbListWorkspaces,
   rankRoots,
   recordWorkspaceEvent as dbRecordWorkspaceEvent,
   releaseWorkspaceLock,
   rollbackGuardedWorkspaceMutation as dbRollbackGuardedWorkspaceMutation,
+  rollbackProjectResourceLinks as dbRollbackProjectResourceLinks,
   resolveWorkspace as dbResolveWorkspace,
   scoreRoots as dbScoreRoots,
   unarchiveWorkspace as dbUnarchiveWorkspace,
@@ -134,6 +138,11 @@ import type {
   GuardedProjectMutationResult,
   GuardedProjectMutationRollbackRequest,
   JsonObject,
+  ProjectResourceLinkMutationRequest,
+  ProjectResourceLinkMutationResult,
+  ProjectResourceLinkReadRequest,
+  ProjectResourceLinkReadResult,
+  ProjectResourceLinkRollbackRequest,
   CreateTmuxProfileInput,
   CreateTmuxProfileWindowInput,
   Recipe,
@@ -298,6 +307,9 @@ export interface ProjectStore {
   createProject(input: CreateWorkspaceInput): Promise<Workspace>;
   updateProject(id: string, patch: UpdateWorkspaceInput): Promise<Workspace>;
   guardedReadProject(input: GuardedProjectReadRequest): Promise<GuardedProjectReadResult>;
+  readProjectResourceLinks(input: ProjectResourceLinkReadRequest): Promise<ProjectResourceLinkReadResult>;
+  mutateProjectResourceLinks(input: ProjectResourceLinkMutationRequest): Promise<ProjectResourceLinkMutationResult>;
+  rollbackProjectResourceLinks(input: ProjectResourceLinkRollbackRequest): Promise<ProjectResourceLinkMutationResult>;
   guardedUpdateProject(input: GuardedProjectMutationRequest): Promise<GuardedProjectMutationResult>;
   lookupGuardedProjectMutationReceipt(input: GuardedProjectMutationReceiptLookupInput): Promise<GuardedProjectMutationReceiptLookupResult>;
   rollbackGuardedProjectMutation(input: GuardedProjectMutationRollbackRequest): Promise<GuardedProjectMutationResult>;
@@ -551,7 +563,34 @@ class LocalProjectStore implements ProjectStore {
     assertPositiveBounds(input);
     const project = dbGetWorkspace(input.project_id);
     if (!project) throw new Error(`Project not found: ${input.project_id}`);
-    return buildGuardedProjectReadResult(project, input, started);
+    const maxItems = input.resource_link_max_items ?? 1_000;
+    const links = dbListProjectResourceLinks(input.project_id, maxItems);
+    return buildGuardedProjectReadResult(project, input, started, {
+      links,
+      max_items: maxItems,
+      collection_digest: dbReadProjectResourceLinks({
+        project_id: input.project_id,
+        max_items: maxItems,
+        response_byte_limit: input.response_byte_limit,
+        time_budget_ms: input.time_budget_ms,
+      }).collection_digest,
+    });
+  }
+
+  async readProjectResourceLinks(input: ProjectResourceLinkReadRequest): Promise<ProjectResourceLinkReadResult> {
+    return dbReadProjectResourceLinks(input);
+  }
+
+  async mutateProjectResourceLinks(input: ProjectResourceLinkMutationRequest): Promise<ProjectResourceLinkMutationResult> {
+    return withLock(input.project_id, { agentId: input.agent_id, source: input.source, command: input.command }, "project resource links mutation", () =>
+      dbMutateProjectResourceLinks(input),
+    );
+  }
+
+  async rollbackProjectResourceLinks(input: ProjectResourceLinkRollbackRequest): Promise<ProjectResourceLinkMutationResult> {
+    return withLock(input.project_id, { agentId: input.agent_id, source: input.source, command: input.command }, "project resource links rollback", () =>
+      dbRollbackProjectResourceLinks(input),
+    );
   }
 
   async guardedUpdateProject(input: GuardedProjectMutationRequest): Promise<GuardedProjectMutationResult> {
@@ -1018,9 +1057,40 @@ class ApiProjectStore implements ProjectStore {
         query: {
           response_byte_limit: input.response_byte_limit,
           time_budget_ms: input.time_budget_ms,
+          resource_link_max_items: input.resource_link_max_items,
         },
         timeoutMs: input.time_budget_ms,
       },
+    );
+  }
+
+  async readProjectResourceLinks(input: ProjectResourceLinkReadRequest): Promise<ProjectResourceLinkReadResult> {
+    return this.client.transport.get<ProjectResourceLinkReadResult>(
+      `/projects/${encodeURIComponent(input.project_id)}/resource-links`,
+      {
+        query: {
+          max_items: input.max_items,
+          response_byte_limit: input.response_byte_limit,
+          time_budget_ms: input.time_budget_ms,
+        },
+        timeoutMs: input.time_budget_ms,
+      },
+    );
+  }
+
+  async mutateProjectResourceLinks(input: ProjectResourceLinkMutationRequest): Promise<ProjectResourceLinkMutationResult> {
+    return this.client.transport.post<ProjectResourceLinkMutationResult>(
+      `/projects/${encodeURIComponent(input.project_id)}/resource-links/${input.mode}`,
+      input,
+      { timeoutMs: input.time_budget_ms },
+    );
+  }
+
+  async rollbackProjectResourceLinks(input: ProjectResourceLinkRollbackRequest): Promise<ProjectResourceLinkMutationResult> {
+    return this.client.transport.post<ProjectResourceLinkMutationResult>(
+      `/projects/${encodeURIComponent(input.project_id)}/resource-links/rollback`,
+      input,
+      { timeoutMs: input.time_budget_ms },
     );
   }
 

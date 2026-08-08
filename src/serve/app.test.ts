@@ -114,7 +114,13 @@ describe("projects-serve probes", () => {
     expect(spec.paths["/v1/projects/{id}/guarded-metadata"].post.operationId).toBe("guardedUpdateProject");
     expect(spec.paths["/v1/projects/{id}/guarded-metadata/receipts"].get.operationId).toBe("lookupGuardedProjectMutationReceipt");
     expect(spec.paths["/v1/projects/{id}/guarded-metadata/rollback"].post.operationId).toBe("rollbackGuardedProjectMutation");
+    expect(spec.paths["/v1/projects/{id}/resource-links"].get.operationId).toBe("readProjectResourceLinks");
+    expect(spec.paths["/v1/projects/{id}/resource-links/add"].post.operationId).toBe("addProjectResourceLinks");
+    expect(spec.paths["/v1/projects/{id}/resource-links/reconcile"].post.operationId).toBe("reconcileProjectResourceLinks");
+    expect(spec.paths["/v1/projects/{id}/resource-links/rollback"].post.operationId).toBe("rollbackProjectResourceLinks");
     expect(spec.components.schemas.GuardedProjectRead.required).toContain("project");
+    expect(spec.components.schemas.GuardedProjectRead.required).toContain("resource_links");
+    expect(spec.components.schemas.ProjectResourceLinkInput.additionalProperties).toBe(false);
     expect(spec.components.schemas.Workspace.required).toEqual(expect.arrayContaining([
       "s3_bucket",
       "s3_prefix",
@@ -435,18 +441,32 @@ describe("projects-serve auth", () => {
 
   test("GET guarded metadata reads one exact id with producer bounds and revision envelope", async () => {
     const projectId = "wks_httpguarded0001";
-    const calls: Array<{ project_id: string; response_byte_limit: number; time_budget_ms: number }> = [];
+    const calls: Array<{
+      project_id: string;
+      response_byte_limit: number;
+      time_budget_ms: number;
+      resource_link_max_items: number;
+    }> = [];
     const store = {
       async ping() {
         return true;
       },
-      async guardedReadWorkspace(input: { project_id: string; response_byte_limit: number; time_budget_ms: number }) {
+      async guardedReadWorkspace(input: {
+        project_id: string;
+        response_byte_limit: number;
+        time_budget_ms: number;
+        resource_link_max_items: number;
+      }) {
         calls.push(input);
         return {
           ok: true,
           project_id: input.project_id,
           project: fakeWorkspace({ id: input.project_id, slug: "guarded-read", name: "Guarded Read" }),
           current_revision: "2026-08-07 00:00:01",
+          resource_links: [],
+          resource_link_count: 0,
+          resource_link_max_items: input.resource_link_max_items,
+          resource_link_collection_digest: "empty",
           response_control: {
             response_byte_limit: input.response_byte_limit,
             time_budget_ms: input.time_budget_ms,
@@ -466,7 +486,12 @@ describe("projects-serve auth", () => {
     ));
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(calls).toEqual([{ project_id: projectId, response_byte_limit: 16_384, time_budget_ms: 5_000 }]);
+    expect(calls).toEqual([{
+      project_id: projectId,
+      response_byte_limit: 16_384,
+      time_budget_ms: 5_000,
+      resource_link_max_items: 1000,
+    }]);
     expect(body.project_id).toBe(projectId);
     expect(body.project).toMatchObject({ id: projectId, slug: "guarded-read", name: "Guarded Read" });
     expect(body.current_revision).toBe("2026-08-07 00:00:01");
@@ -553,6 +578,172 @@ describe("projects-serve auth", () => {
     expect(guardedUpdateCalls).toBe(0);
     expect(rollbackCalls).toEqual([{ ...body, project_id: projectId }]);
     expect((await res.json()).outcome).toBe("accepted");
+  });
+
+  test("typed resource-link routes preserve exact bounds, modes, and rollback identity", async () => {
+    const projectId = "wks_httpresource0001";
+    const calls: Array<{ operation: string; input: Record<string, unknown> }> = [];
+    const project = fakeWorkspace({
+      id: projectId,
+      slug: "http-resource",
+      name: "HTTP Resource",
+      updated_at: "2026-08-08 00:00:00.000",
+    });
+    const link = {
+      id: "prl_http_resource",
+      project_id: projectId,
+      authority: "conversations",
+      service_instance: "urn:hasna:conversations:test",
+      source_package: "@hasna/conversations",
+      target_kind: "channel",
+      locator: { kind: "external_uuid", value: "515fbb15-4661-4cdc-b1df-f719797b8cad" },
+      scope: "resource",
+      labels: { channel_name: "http-resource" },
+      created_at: "2026-08-08 00:00:00.000",
+      updated_at: "2026-08-08 00:00:00.000",
+    };
+    const responseControl = {
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+      response_bytes: 1,
+      elapsed_ms: 0,
+      complete: true,
+      truncated: false,
+    };
+    const store = {
+      async ping() {
+        return true;
+      },
+      async readProjectResourceLinks(input: Record<string, unknown>) {
+        calls.push({ operation: "read", input });
+        return {
+          ok: true,
+          project_id: projectId,
+          project,
+          current_revision: project.updated_at,
+          links: [link],
+          link_count: 1,
+          max_items: input.max_items,
+          collection_digest: "digest",
+          complete: true,
+          truncated: false,
+          response_control: responseControl,
+        };
+      },
+      async mutateProjectResourceLinks(input: Record<string, unknown>) {
+        calls.push({ operation: String(input.mode), input });
+        return {
+          ok: true,
+          dry_run: false,
+          outcome: "accepted",
+          mode: input.mode,
+          idempotency_key: "gpm_http_resource",
+          request_digest: "request",
+          precondition_digest: "precondition",
+          project_id: projectId,
+          expected_revision: input.expected_revision,
+          current_revision: project.updated_at,
+          before: { project, links: [], collection_digest: "before" },
+          after: { project, links: [link], collection_digest: "after" },
+          receipt: { receipt_id: "gpmr_http_resource" },
+          response_control: responseControl,
+        };
+      },
+      async rollbackProjectResourceLinks(input: Record<string, unknown>) {
+        calls.push({ operation: "rollback", input });
+        return {
+          ok: true,
+          dry_run: false,
+          outcome: "accepted",
+          mode: "reconcile",
+          idempotency_key: "gpm_http_resource_rollback",
+          request_digest: "request",
+          precondition_digest: "precondition",
+          project_id: projectId,
+          expected_revision: input.expected_current_revision,
+          current_revision: input.expected_current_revision,
+          before: { project, links: [link], collection_digest: "after" },
+          after: { project, links: [], collection_digest: "before" },
+          receipt: { receipt_id: "gpmr_http_resource_rollback" },
+          response_control: responseControl,
+        };
+      },
+    } as unknown as ProjectsPgStore;
+    const h = createFetchHandler({ store, version: "9.9.9", app: "projects", signingSecret: SIGNING_SECRET });
+    const readToken = keyWith(["projects:read"]);
+    const writeToken = keyWith(["projects:*"]);
+
+    const read = await h(new Request(
+      `http://x/v1/projects/${projectId}/resource-links?max_items=10&response_byte_limit=100000&time_budget_ms=5000`,
+      { headers: { "x-api-key": readToken } },
+    ));
+    expect(read.status).toBe(200);
+    expect((await read.json()).link_count).toBe(1);
+
+    const forwardBody = {
+      operation_id: "http-resource-links",
+      step_id: "links",
+      expected_revision: project.updated_at,
+      links: [link],
+      max_items: 10,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    };
+    for (const mode of ["add", "reconcile"]) {
+      const response = await h(new Request(
+        `http://x/v1/projects/${projectId}/resource-links/${mode}`,
+        {
+          method: "POST",
+          headers: { "x-api-key": writeToken, "content-type": "application/json" },
+          body: JSON.stringify(forwardBody),
+        },
+      ));
+      expect(response.status).toBe(200);
+      expect((await response.json()).mode).toBe(mode);
+    }
+
+    const rollbackBody = {
+      operation_id: "http-resource-links-rollback",
+      step_id: "rollback-links",
+      accepted_receipt_id: "gpmr_http_resource",
+      expected_current_revision: "2026-08-08 00:00:01.000",
+      max_items: 10,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    };
+    const rollback = await h(new Request(
+      `http://x/v1/projects/${projectId}/resource-links/rollback`,
+      {
+        method: "POST",
+        headers: { "x-api-key": writeToken, "content-type": "application/json" },
+        body: JSON.stringify(rollbackBody),
+      },
+    ));
+    expect(rollback.status).toBe(200);
+
+    expect(calls).toEqual([
+      {
+        operation: "read",
+        input: {
+          project_id: projectId,
+          max_items: 10,
+          response_byte_limit: 100_000,
+          time_budget_ms: 5_000,
+        },
+      },
+      {
+        operation: "add",
+        input: { ...forwardBody, project_id: projectId, mode: "add" },
+      },
+      {
+        operation: "reconcile",
+        input: { ...forwardBody, project_id: projectId, mode: "reconcile" },
+      },
+      {
+        operation: "rollback",
+        input: { ...rollbackBody, project_id: projectId },
+      },
+    ]);
   });
 
   test("Authorization: Bearer scheme is accepted", async () => {

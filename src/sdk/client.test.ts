@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import type { GuardedProjectMutationResult, Workspace } from "./client.js";
+import {
+  ProjectsClient,
+  type GuardedProjectMutationResult,
+  type ProjectResourceLinkInput,
+  type Workspace,
+} from "./client.js";
 
 const workspaceFixture: Workspace = {
   id: "wks_sdkparity0001",
@@ -45,5 +50,81 @@ describe("generated Projects SDK server parity", () => {
       synced_at: null,
     });
     expect(terminalFixture).toMatchObject({ after: null, receipt: null });
+  });
+
+  test("routes typed resource-link read, add, reconcile, and rollback with exact payloads", async () => {
+    const calls: Array<{
+      method: string;
+      path: string;
+      query: string;
+      body: unknown;
+      apiKey: string | null;
+    }> = [];
+    const client = new ProjectsClient({
+      baseUrl: "https://projects.example.test",
+      apiKey: "sdk-test-key",
+      fetch: (async (input: string | URL | Request, init?: RequestInit) => {
+        const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+        const headers = new Headers(init?.headers);
+        calls.push({
+          method: init?.method ?? "GET",
+          path: url.pathname,
+          query: url.search,
+          body: init?.body ? JSON.parse(String(init.body)) : undefined,
+          apiKey: headers.get("x-api-key"),
+        });
+        return Response.json({});
+      }) as typeof fetch,
+    });
+    const projectId = "wks_sdkparity0001";
+    const link: ProjectResourceLinkInput = {
+      authority: "conversations",
+      service_instance: "urn:hasna:conversations:test",
+      source_package: "@hasna/conversations",
+      target_kind: "channel",
+      locator: { kind: "external_uuid", value: "515fbb15-4661-4cdc-b1df-f719797b8cad" },
+      scope: "resource",
+      labels: { channel_name: "sdk-parity" },
+    };
+    const mutation = {
+      operation_id: "sdk-resource-links",
+      step_id: "links",
+      expected_revision: "2026-08-08 00:00:00.000",
+      links: [link],
+      max_items: 10,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    };
+
+    await client.readProjectResourceLinks(projectId, {
+      max_items: 10,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    });
+    await client.addProjectResourceLinks(projectId, mutation);
+    await client.reconcileProjectResourceLinks(projectId, mutation);
+    await client.rollbackProjectResourceLinks(projectId, {
+      operation_id: "sdk-resource-links-rollback",
+      step_id: "rollback-links",
+      accepted_receipt_id: "gpmr_sdk_resource_links",
+      expected_current_revision: "2026-08-08 00:00:01.000",
+      max_items: 10,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    });
+
+    expect(calls.map((call) => [call.method, call.path])).toEqual([
+      ["GET", `/v1/projects/${projectId}/resource-links`],
+      ["POST", `/v1/projects/${projectId}/resource-links/add`],
+      ["POST", `/v1/projects/${projectId}/resource-links/reconcile`],
+      ["POST", `/v1/projects/${projectId}/resource-links/rollback`],
+    ]);
+    expect(calls[0]?.query).toBe("?max_items=10&response_byte_limit=100000&time_budget_ms=5000");
+    expect(calls[1]?.body).toEqual(mutation);
+    expect(calls[2]?.body).toEqual(mutation);
+    expect(calls[3]?.body).toEqual(expect.objectContaining({
+      accepted_receipt_id: "gpmr_sdk_resource_links",
+    }));
+    expect(calls.every((call) => call.apiKey === "sdk-test-key")).toBe(true);
   });
 });
