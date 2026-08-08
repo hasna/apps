@@ -984,6 +984,7 @@ export function updateWorkspace(id: string, input: UpdateWorkspaceInput, db?: Da
   if (input.tags !== undefined) set("tags", json(normalizeList(input.tags)));
   if (input.integrations !== undefined) set("integrations", json(input.integrations));
   if (metadata !== undefined) set("metadata", json(metadata));
+  if (input.last_opened_at !== undefined) set("last_opened_at", input.last_opened_at);
 
   if (updates.length > 0) {
     updates.push("updated_at = ?");
@@ -1647,6 +1648,7 @@ function previewWorkspacePatch(before: Workspace, patch: UpdateWorkspaceInput): 
     ...(patch.tags !== undefined ? { tags: patch.tags } : {}),
     ...(patch.integrations !== undefined ? { integrations: patch.integrations } : {}),
     ...(patch.metadata !== undefined ? { metadata: patch.metadata } : {}),
+    ...(patch.last_opened_at !== undefined ? { last_opened_at: patch.last_opened_at } : {}),
   } as Workspace;
 }
 
@@ -1880,6 +1882,7 @@ function restorePatchFromReceipt(receipt: GuardedProjectMutationReceipt): Update
     tags: before.tags,
     integrations: before.integrations,
     metadata: before.metadata,
+    last_opened_at: before.last_opened_at,
   };
 }
 

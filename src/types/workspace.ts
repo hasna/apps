@@ -314,6 +314,7 @@ export interface UpdateWorkspaceInput {
   tags?: string[];
   integrations?: WorkspaceIntegrations;
   metadata?: JsonObject;
+  last_opened_at?: string | null;
   agent_id?: string;
   source?: EventSource;
   prompt?: string;

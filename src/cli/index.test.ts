@@ -4,7 +4,7 @@ import { Command } from "commander";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { acquireWorkspaceLock, completeAgentRun, createRoot, createWorkspace, startAgentRun } from "../db/workspaces.js";
 import { runMigrations } from "../db/schema.js";
 import { closeDatabase } from "../db/database.js";
@@ -1890,6 +1890,45 @@ describe("project-first CLI surface", () => {
     expect(statusPayload.launch_defaults.used_tmux_profile).toBe(true);
     expect(statusPayload.launch_defaults.used_session_policy).toBe(true);
     expect(statusPayload.launch_defaults.session_policy).toBe("error-if-running");
+  });
+
+  test("top-level start records when the project was last opened", () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-start-last-opened-"));
+    const binDir = join(root, "bin");
+    const projectPath = join(root, "opened-project");
+    const fakeTmux = join(binDir, "tmux");
+    mkdirSync(binDir, { recursive: true });
+    mkdirSync(projectPath, { recursive: true });
+    writeFileSync(fakeTmux, "#!/usr/bin/env bun\n", "utf-8");
+    chmodSync(fakeTmux, 0o755);
+    const env = {
+      HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
+      PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
+    };
+
+    try {
+      expect(runProjects([
+        "create",
+        "--name",
+        "Opened Project",
+        "--slug",
+        "opened-project",
+        "--path",
+        projectPath,
+        "--json",
+      ], env).exitCode).toBe(0);
+
+      const started = runProjects(["start", "opened-project", "--agent", "none", "--json"], env);
+      expect(started.exitCode).toBe(0);
+
+      const shown = runProjects(["show", "opened-project", "--json"], env);
+      expect(shown.exitCode).toBe(0);
+      const payload = JSON.parse(text(shown.stdout)) as { project: { last_opened_at: string | null } };
+      expect(payload.project.last_opened_at).not.toBeNull();
+      expect(Number.isNaN(Date.parse(payload.project.last_opened_at!))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("top-level start accepts exact requested tmux windows as JSON", () => {

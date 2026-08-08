@@ -98,6 +98,7 @@ export function normalizePatch(patch: UpdateWorkspaceInput): UpdateWorkspaceInpu
     "tags",
     "integrations",
     "metadata",
+    "last_opened_at",
     "agent_id",
     "source",
     "prompt",

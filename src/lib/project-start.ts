@@ -3,6 +3,7 @@ import {
   listTmuxProfileWindows,
   recordWorkspaceEvent,
   resolveTmuxProfile,
+  updateWorkspace,
 } from "../db/workspaces.js";
 import type { EventSource, JsonObject, TmuxProfile, Workspace } from "../types/workspace.js";
 import {
@@ -476,7 +477,18 @@ export async function startProject(
     });
   }
   // Ensure never rewrites the record, so its read-back is the freshest copy.
-  const startedProject = channel?.project ?? project;
+  let startedProject = channel?.project ?? project;
+  if (!options.dryRun && tmux.success) {
+    const patch = {
+      last_opened_at: new Date().toISOString(),
+      agent_id: options.agentId,
+      source: options.source ?? "cli" as const,
+      command: options.auditCommand,
+    };
+    startedProject = options.db
+      ? updateWorkspace(project.id, patch, options.db)
+      : await resolveProjectStore().updateProject(project.id, patch);
+  }
 
   let attached = false;
   if (options.attach && !options.dryRun && tmux.success) {

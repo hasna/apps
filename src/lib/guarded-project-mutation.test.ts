@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { buildGuardedProjectReadResult } from "./guarded-project-mutation.js";
+import {
+  buildGuardedProjectReadResult,
+  normalizePatch,
+  requestDigest,
+} from "./guarded-project-mutation.js";
 import type { Workspace } from "../types/workspace.js";
 
 function project(id = "wks_guardedread0001"): Workspace {
@@ -28,6 +32,14 @@ function project(id = "wks_guardedread0001"): Workspace {
 }
 
 describe("guarded project read response control", () => {
+  test("includes last_opened_at in normalized request identity", () => {
+    const first = "2026-08-08T10:00:00.000Z";
+    const second = "2026-08-08T11:00:00.000Z";
+
+    expect(normalizePatch({ last_opened_at: first })).toEqual({ last_opened_at: first });
+    expect(requestDigest({ last_opened_at: first })).not.toBe(requestDigest({ last_opened_at: second }));
+  });
+
   test("returns the complete exact project record inside the bounded envelope", () => {
     const workspace = project();
     const result = buildGuardedProjectReadResult(workspace, {
