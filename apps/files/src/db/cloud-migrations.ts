@@ -18,10 +18,41 @@ const dataMigrations: Migration[] = PG_MIGRATIONS.map((sql, index) =>
   defineMigration(`files-${String(index + 1).padStart(4, "0")}`, sql),
 );
 
+/**
+ * The legacy production ledger ended its numeric lineage at files-0154, then
+ * applied the contracts auth migrations and the tenancy bridge below. Keep
+ * later numeric migrations after that immutable historical prefix.
+ */
+const LEGACY_NUMERIC_MIGRATION_COUNT = 154;
+
 /** Shared api_keys table + indexes from @hasna/contracts. */
 const authMigrations: Migration[] = apiKeyMigrations().map((m) =>
   defineMigration(m.id, m.sql),
 );
+
+/**
+ * Immutable transitional kid→tenant bridge from the authoritative iapp-files
+ * R1 lineage (7c92523, retained unchanged through 64782ab). These ids and SQL
+ * may already exist in production schema_migrations and must remain recognized.
+ */
+const bridgeMigrations: Migration[] = [
+  defineMigration(
+    "files-tenancy-bridge-0001-api-keys-tenant-id",
+    `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS tenant_id UUID DEFAULT 'adfd95c7-ee8b-52cb-ae47-4ae65dae3313'::uuid`,
+  ),
+  defineMigration(
+    "files-tenancy-bridge-0002-api-keys-user-id",
+    `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS user_id UUID`,
+  ),
+  defineMigration(
+    "files-tenancy-bridge-0003-api-keys-principal-type",
+    `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS principal_type TEXT`,
+  ),
+  defineMigration(
+    "files-tenancy-bridge-0004-api-keys-kid-idx",
+    `CREATE INDEX IF NOT EXISTS api_keys_kid_tenant_idx ON api_keys (kid, tenant_id)`,
+  ),
+];
 
 /**
  * Content-tenancy migrations must run after the contracts-owned api_keys
@@ -101,7 +132,9 @@ export const FILE_CONTENT_TENANCY_MIGRATIONS: readonly Migration[] = [
 
 /** Full ordered migration set applied by the runner and checked by /ready. */
 export const CLOUD_MIGRATIONS: readonly Migration[] = [
-  ...dataMigrations,
+  ...dataMigrations.slice(0, LEGACY_NUMERIC_MIGRATION_COUNT),
   ...authMigrations,
+  ...bridgeMigrations,
+  ...dataMigrations.slice(LEGACY_NUMERIC_MIGRATION_COUNT),
   ...FILE_CONTENT_TENANCY_MIGRATIONS,
 ];
