@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.96
+
+- Align the public declaration surface with the runtime export contract by
+  keeping `materializeKnowledgePrivateInput` internal while preserving the
+  supported `createKnowledgePrivateInputDescriptor` and guarded-writer API.
+
 ## 0.2.95
 
 - Explain recovery from the obsolete `HASNA_KNOWLEDGE_STORAGE_MODE=cloud`
