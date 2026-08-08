@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
 
 const roots: string[] = [];
@@ -123,5 +123,81 @@ describe("Cursor MCP registration", () => {
       },
     });
     expect(existsSync(projectConfigPath)).toBe(false);
+  }, 30_000);
+});
+
+// Takumi manages MCP config through its own `takumi mcp add/remove` CLI (like
+// Claude Code), so registration shells out to it. The fake binary records its
+// argv so the exact invocation is asserted, not just the exit code.
+function installFakeTakumi(fixtureRoot: { mcpBinary: string }): string {
+  const binDir = dirname(fixtureRoot.mcpBinary);
+  const callLog = join(binDir, "takumi-calls.log");
+  const takumiBin = join(binDir, "takumi");
+  writeFileSync(takumiBin, `#!/bin/sh\necho "$@" >> "${callLog}"\n`);
+  chmodSync(takumiBin, 0o755);
+  return callLog;
+}
+
+function readCalls(callLog: string): string[] {
+  return readFileSync(callLog, "utf8").trim().split("\n");
+}
+
+describe("Takumi MCP registration", () => {
+  // Regression for the shipped adapter-doc metadata instructing agents to run
+  // `todos mcp --register takumi`: on 0.15.12 that returned
+  // "Unknown agent: takumi. Use: claude, codex, gemini, cursor, all".
+  test("registers and unregisters todos via the takumi CLI at project scope", async () => {
+    const fixtureRoot = fixture();
+    const callLog = installFakeTakumi(fixtureRoot);
+
+    const registered = await runCli(["mcp", "--register", "takumi"], fixtureRoot);
+
+    expect(registered.exitCode).toBe(0);
+    expect(registered.stderr).toBe("");
+    expect(registered.stdout).not.toContain("Unknown agent");
+    expect(registered.stdout).toContain("Takumi (project): registered");
+    expect(readCalls(callLog)).toEqual([
+      `mcp add --scope project todos -- ${fixtureRoot.mcpBinary} --stdio`,
+    ]);
+
+    const unregistered = await runCli(["mcp", "--unregister", "takumi"], fixtureRoot);
+
+    expect(unregistered.exitCode).toBe(0);
+    expect(unregistered.stderr).toBe("");
+    expect(unregistered.stdout).toContain("Takumi (project): removed todos MCP server");
+    expect(readCalls(callLog)).toEqual([
+      `mcp add --scope project todos -- ${fixtureRoot.mcpBinary} --stdio`,
+      "mcp remove --scope project todos",
+    ]);
+  }, 30_000);
+
+  test("registers and unregisters at user scope with --global", async () => {
+    const fixtureRoot = fixture();
+    const callLog = installFakeTakumi(fixtureRoot);
+
+    const registered = await runCli(
+      ["mcp", "--register", "takumi", "--global"],
+      fixtureRoot,
+    );
+
+    expect(registered.exitCode).toBe(0);
+    expect(registered.stderr).toBe("");
+    expect(registered.stdout).toContain("Takumi (user): registered");
+    expect(readCalls(callLog)).toEqual([
+      `mcp add --scope user todos -- ${fixtureRoot.mcpBinary} --stdio`,
+    ]);
+
+    const unregistered = await runCli(
+      ["mcp", "--unregister", "takumi", "--global"],
+      fixtureRoot,
+    );
+
+    expect(unregistered.exitCode).toBe(0);
+    expect(unregistered.stderr).toBe("");
+    expect(unregistered.stdout).toContain("Takumi (user): removed todos MCP server");
+    expect(readCalls(callLog)).toEqual([
+      `mcp add --scope user todos -- ${fixtureRoot.mcpBinary} --stdio`,
+      "mcp remove --scope user todos",
+    ]);
   }, 30_000);
 });

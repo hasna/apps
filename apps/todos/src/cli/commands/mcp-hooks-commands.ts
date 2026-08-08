@@ -7,6 +7,7 @@ import { createTask } from "../../db/tasks.js";
 import { autoProject, output, resolveTaskId, resolveTaskIdForCommand, handleError } from "../helpers.js";
 import { getTodosCloudClient, cloudRecordVerification, cloudLinkCommit, cloudFindCommit, cloudLinkRef, cloudFindRefs } from "../cloud-router.js";
 import { getHomeDir } from "../../lib/sync-utils.js";
+import { MCP_REGISTRABLE_CLI_AGENTS } from "../../lib/agent-adapter-docs.js";
 
 const HOME = getHomeDir();
 
@@ -174,6 +175,34 @@ function unregisterGemini(): void {
   console.log(chalk.green(`Gemini CLI: unregistered from ${configPath}`));
 }
 
+// --- Takumi: use `takumi mcp add` (scopes: local, user, project) ---
+
+function registerTakumi(binPath: string, global?: boolean): void {
+  const scope = global ? "user" : "project";
+  // Pass --stdio for the same reason as the Claude Code path: without it the
+  // bare binary could fall back to another transport and the client would hang.
+  const cmd = `takumi mcp add --scope ${scope} todos -- ${binPath} --stdio`;
+  try {
+    execSync(cmd, { stdio: "pipe" });
+    console.log(chalk.green(`Takumi (${scope}): registered via 'takumi mcp add'`));
+  } catch {
+    console.log(chalk.yellow(`Takumi: could not auto-register. Run this command manually:`));
+    console.log(chalk.cyan(`  ${cmd}`));
+  }
+}
+
+function unregisterTakumi(global?: boolean): void {
+  const scope = global ? "user" : "project";
+  const cmd = `takumi mcp remove --scope ${scope} todos`;
+  try {
+    execSync(cmd, { stdio: "pipe" });
+    console.log(chalk.green(`Takumi (${scope}): removed todos MCP server`));
+  } catch {
+    console.log(chalk.yellow(`Takumi: could not auto-remove. Run manually:`));
+    console.log(chalk.cyan(`  ${cmd}`));
+  }
+}
+
 // --- Cursor: .cursor/mcp.json (project or user scope) ---
 
 function cursorConfigPath(global?: boolean): string {
@@ -212,8 +241,10 @@ function unregisterCursor(global?: boolean): void {
 
 // --- Main register/unregister ---
 
+const MCP_AGENT_CHOICES = `${MCP_REGISTRABLE_CLI_AGENTS.join(", ")}, all`;
+
 function registerMcp(agent: string, global?: boolean): void {
-  const agents = agent === "all" ? ["claude", "codex", "gemini", "cursor"] : [agent];
+  const agents = agent === "all" ? [...MCP_REGISTRABLE_CLI_AGENTS] : [agent];
   const binPath = getMcpBinaryPath();
   for (const a of agents) {
     switch (a) {
@@ -221,20 +252,22 @@ function registerMcp(agent: string, global?: boolean): void {
       case "codex": registerCodex(binPath); break;
       case "gemini": registerGemini(binPath); break;
       case "cursor": registerCursor(binPath, global); break;
-      default: console.error(chalk.red(`Unknown agent: ${a}. Use: claude, codex, gemini, cursor, all`));
+      case "takumi": registerTakumi(binPath, global); break;
+      default: console.error(chalk.red(`Unknown agent: ${a}. Use: ${MCP_AGENT_CHOICES}`));
     }
   }
 }
 
 function unregisterMcp(agent: string, global?: boolean): void {
-  const agents = agent === "all" ? ["claude", "codex", "gemini", "cursor"] : [agent];
+  const agents = agent === "all" ? [...MCP_REGISTRABLE_CLI_AGENTS] : [agent];
   for (const a of agents) {
     switch (a) {
       case "claude": unregisterClaude(global); break;
       case "codex": unregisterCodex(); break;
       case "gemini": unregisterGemini(); break;
       case "cursor": unregisterCursor(global); break;
-      default: console.error(chalk.red(`Unknown agent: ${a}. Use: claude, codex, gemini, cursor, all`));
+      case "takumi": unregisterTakumi(global); break;
+      default: console.error(chalk.red(`Unknown agent: ${a}. Use: ${MCP_AGENT_CHOICES}`));
     }
   }
 }
@@ -324,8 +357,8 @@ exit 0
   program
     .command("mcp")
     .description("Start MCP server (stdio)")
-    .option("--register <agent>", "Register MCP server with an agent (claude, codex, gemini, cursor, all)")
-    .option("--unregister <agent>", "Unregister MCP server from an agent (claude, codex, gemini, cursor, all)")
+    .option("--register <agent>", `Register MCP server with an agent (${MCP_AGENT_CHOICES})`)
+    .option("--unregister <agent>", `Unregister MCP server from an agent (${MCP_AGENT_CHOICES})`)
     .option("-g, --global", "Register/unregister globally (user-level) instead of project-level")
     .action(async (opts) => {
       if (opts.register) {

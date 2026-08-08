@@ -10,6 +10,17 @@ export const ADAPTER_DOCS_SCHEMA_VERSION = "todos.agent_adapter_docs.v1";
 export const AGENT_ADAPTER_HOSTS = ["codex", "claude-code", "takumi"] as const;
 export type AgentAdapterHost = (typeof AGENT_ADAPTER_HOSTS)[number];
 
+/**
+ * Agents accepted by `todos mcp --register` / `--unregister`. Kept beside the
+ * adapter docs so the docs can never advertise a host the CLI rejects — the
+ * reader of a recovery field is an agent, and a recovery command that exits 1
+ * strands it. `todos mcp --register takumi` shipped in doc metadata while the
+ * CLI rejected it; the consistency test in agent-adapter-docs.test.ts pins
+ * every advertised `--register <agent>` to this list.
+ */
+export const MCP_REGISTRABLE_CLI_AGENTS = ["claude", "codex", "gemini", "cursor", "takumi"] as const;
+export type McpRegistrableCliAgent = (typeof MCP_REGISTRABLE_CLI_AGENTS)[number];
+
 export interface AdapterWorkflowStep {
   step: number;
   title: string;
