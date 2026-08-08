@@ -187,6 +187,17 @@ export const MACHINES_CONSUMER_SCHEMA_BUNDLE: MachinesConsumerSchemaBundle = {
         private_shell_command: { type: ["string", "null"] },
       },
     },
+    command_execution_probe: {
+      type: "object",
+      required: ["checked", "ready", "status", "source", "exit_code"],
+      properties: {
+        checked: { type: "boolean" },
+        ready: { type: "boolean" },
+        status: { enum: ["ready", "route_unavailable", "authentication_denied", "timed_out", "failed"] },
+        source: { enum: ["local", "lan", "tailscale", "ssh", "unknown"] },
+        exit_code: { type: ["number", "null"] },
+      },
+    },
     machine_health_row: {
       type: "object",
       required: ["machine_id", "display_name", "status", "ok", "route", "confidence", "local", "heartbeat", "checks", "issues", "warnings", "detail_refs"],
@@ -236,6 +247,7 @@ export const MACHINES_CONSUMER_SCHEMA_BUNDLE: MachinesConsumerSchemaBundle = {
         source: { enum: ["local", "lan", "tailscale", "ssh", "unknown"] },
         confidence: { enum: ["exact", "high", "medium", "low", "none"] },
         local: { type: "boolean" },
+        execution: { "$ref": "#/$defs/command_execution_probe" },
         command: { "$ref": "#/$defs/command_matrix_plan" },
         blocked_by: { type: "array", items: { type: "string" } },
         warnings: { type: "array", items: { type: "string" } },
@@ -1089,6 +1101,24 @@ function validateAgentMachineRows(value: unknown, path: string, errors: string[]
     if (commandRows) {
       if (typeof row.can_run !== "boolean") errors.push(`${rowPath}.can_run`);
       validateReadiness(row.readiness, `${rowPath}.readiness`, errors);
+      if (row.execution !== undefined) {
+        if (!isRecord(row.execution)) {
+          errors.push(`${rowPath}.execution`);
+        } else {
+          requireFields(row.execution, ["checked", "ready", "status", "source", "exit_code"], errors);
+          if (typeof row.execution.checked !== "boolean") errors.push(`${rowPath}.execution.checked`);
+          if (typeof row.execution.ready !== "boolean") errors.push(`${rowPath}.execution.ready`);
+          if (!["ready", "route_unavailable", "authentication_denied", "timed_out", "failed"].includes(String(row.execution.status))) {
+            errors.push(`${rowPath}.execution.status`);
+          }
+          if (!["local", "lan", "tailscale", "ssh", "unknown"].includes(String(row.execution.source))) {
+            errors.push(`${rowPath}.execution.source`);
+          }
+          if (row.execution.exit_code !== null && typeof row.execution.exit_code !== "number") {
+            errors.push(`${rowPath}.execution.exit_code`);
+          }
+        }
+      }
       validateCommandMatrixPlan(row.command, `${rowPath}.command`, errors);
       if (!hasArray(row, "blocked_by")) errors.push(`${rowPath}.blocked_by`);
     } else {

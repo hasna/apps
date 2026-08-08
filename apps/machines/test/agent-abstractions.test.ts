@@ -11,6 +11,7 @@ import {
   getFleetRouting,
 } from "../src/agent-abstractions.js";
 import { validateMachinesConsumerEnvelope } from "../src/consumer-schema.js";
+import type { MachineCommandRunner } from "../src/remote.js";
 import { discoverMachineTopology } from "../src/topology.js";
 import type { CompatibilityCommandRunner } from "../src/compatibility.js";
 
@@ -65,7 +66,155 @@ const missingBunRunner: CompatibilityCommandRunner = (machineId, command) => {
   };
 };
 
+const sshAuthDeniedRunner: MachineCommandRunner = (machineId, command) => {
+  if (command !== "true") throw new Error(`unexpected execution probe: ${command}`);
+  return {
+    machineId,
+    source: "tailscale",
+    stdout: "",
+    stderr: "Permission denied (publickey,password,keyboard-interactive).",
+    exitCode: 255,
+  };
+};
+
+const sshAuthenticatedRunner: MachineCommandRunner = (machineId, command) => {
+  if (command !== "true") throw new Error(`unexpected execution probe: ${command}`);
+  return {
+    machineId,
+    source: machineId === "control" ? "local" : "ssh",
+    stdout: "",
+    stderr: "",
+    exitCode: 0,
+  };
+};
+
+const tailscaleAuthenticatedRunner: MachineCommandRunner = (machineId, command) => {
+  if (command !== "true") throw new Error(`unexpected execution probe: ${command}`);
+  return {
+    machineId,
+    source: "tailscale",
+    stdout: "",
+    stderr: "",
+    exitCode: 0,
+  };
+};
+
 describe("agent abstraction APIs", () => {
+  test("does not claim a live Tailscale route is runnable until SSH authentication succeeds", () => {
+    const dir = setupFleet();
+    try {
+      const now = new Date("2026-08-08T10:00:00.000Z");
+      const topology = discoverMachineTopology({ includeTailscale: false, limit: null, now });
+      const worker = topology.machines.find((machine) => machine.machine_id === "worker");
+      if (!worker) throw new Error("worker fixture missing");
+      worker.tailscale = {
+        dns_name: "worker.tailnet.example",
+        ips: ["203.0.113.44"],
+        online: true,
+        active: true,
+        last_seen: now.toISOString(),
+      };
+      worker.ssh = {
+        address: "operator@worker",
+        route: "tailscale",
+        command_target: "operator@worker.tailnet.example",
+      };
+      worker.route_hints = [{
+        kind: "tailscale",
+        target: "worker.tailnet.example",
+        reachable: true,
+      }];
+
+      const deniedOptions = {
+        topology,
+        machineIds: ["worker"],
+        command: "true",
+        now,
+        executionRunner: sshAuthDeniedRunner,
+      };
+      const denied = getCommandMatrix(deniedOptions);
+      expect(denied.commands[0]).toMatchObject({
+        machine_id: "worker",
+        route: "tailscale",
+        confidence: "high",
+        can_run: false,
+        readiness: "blocked",
+        execution: {
+          checked: true,
+          ready: false,
+          status: "authentication_denied",
+        },
+        blocked_by: ["ssh_authentication_denied"],
+      });
+      expect(JSON.stringify(denied)).not.toContain("worker.tailnet.example");
+      expect(JSON.stringify(denied)).not.toContain("Permission denied");
+
+      const wrongRoute = getCommandMatrix({
+        topology,
+        machineIds: ["worker"],
+        command: "true",
+        now,
+        executionRunner: (machineId) => ({
+          machineId,
+          source: "ssh",
+          stdout: "",
+          stderr: "",
+          exitCode: 0,
+        }),
+      });
+      expect(wrongRoute.commands[0]).toMatchObject({
+        can_run: false,
+        readiness: "blocked",
+        execution: {
+          checked: true,
+          ready: false,
+          status: "failed",
+          source: "ssh",
+        },
+        blocked_by: ["execution_probe_failed"],
+      });
+
+      const authenticatedOptions = {
+        topology,
+        machineIds: ["worker"],
+        command: "true",
+        now,
+        executionRunner: tailscaleAuthenticatedRunner,
+      };
+      const authenticated = getCommandMatrix(authenticatedOptions);
+      expect(authenticated.commands[0]).toMatchObject({
+        machine_id: "worker",
+        route: "tailscale",
+        confidence: "high",
+        can_run: true,
+        readiness: "ready",
+        execution: {
+          checked: true,
+          ready: true,
+          status: "ready",
+        },
+        blocked_by: [],
+      });
+
+      const deniedPreflight = getFleetLoopPreflight({
+        topology,
+        machineIds: ["worker"],
+        command: "true",
+        now,
+        executionRunner: sshAuthDeniedRunner,
+      });
+      expect(deniedPreflight.machines[0]).toMatchObject({
+        ready: false,
+        status: "blocked",
+        can_run: false,
+        route: "tailscale",
+      });
+      expect(deniedPreflight.machines[0]?.blocked_by).toContain("ssh_authentication_denied");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("returns compact health, routing, command matrix, and loop preflight envelopes", () => {
     const dir = setupFleet();
     try {
@@ -105,7 +254,7 @@ describe("agent abstraction APIs", () => {
       const privateRouting = getFleetRouting({ topology, machineIds: ["worker"], now, privateMetadata: true });
       expect(privateRouting.routes[0]?.target).toBe("operator@worker");
 
-      const matrix = getCommandMatrix({ topology, machineIds, command: "echo loop", now });
+      const matrix = getCommandMatrix({ topology, machineIds, command: "echo loop", now, executionRunner: sshAuthenticatedRunner });
       expect(matrix.kind).toBe("command_matrix");
       expect(matrix.mode).toBe("plan");
       expect(matrix.commands.find((row) => row.machine_id === "worker")).toMatchObject({
@@ -125,23 +274,33 @@ describe("agent abstraction APIs", () => {
       });
       expect(JSON.stringify(matrix)).not.toContain("echo loop");
       expect(validateMachinesConsumerEnvelope("command_matrix", matrix)).toMatchObject({ ok: true, errors: [] });
+      const legacyMatrix = structuredClone(matrix) as unknown as { commands: Array<Record<string, unknown>> };
+      for (const row of legacyMatrix.commands) delete row.execution;
+      expect(validateMachinesConsumerEnvelope("command_matrix", legacyMatrix)).toMatchObject({ ok: true, errors: [] });
 
       const unsafeMachineId = "bad;touch /tmp/pwned";
       const unsafeHealth = getFleetMachineHealth({ topology, machineIds: [unsafeMachineId], now });
       expect(unsafeHealth.machines[0]?.detail_refs.cli).toBe("machines details --machine 'bad;touch /tmp/pwned' --json");
       const unsafeRouting = getFleetRouting({ topology, machineIds: [unsafeMachineId], now });
       expect(unsafeRouting.routes[0]?.detail_refs.cli).toBe("machines route --machine 'bad;touch /tmp/pwned' --json");
-      const unsafeMatrix = getCommandMatrix({ topology, machineIds: [unsafeMachineId], now });
+      const unsafeMatrix = getCommandMatrix({ topology, machineIds: [unsafeMachineId], now, executionRunner: sshAuthenticatedRunner });
       expect(unsafeMatrix.commands[0]?.command.cli).toBe("machines ssh --machine 'bad;touch /tmp/pwned' --cmd '<loop-command>'");
 
-      const privateMatrix = getCommandMatrix({ topology, machineIds: ["worker"], command: "echo loop", now, privateMetadata: true });
+      const privateMatrix = getCommandMatrix({
+        topology,
+        machineIds: ["worker"],
+        command: "echo loop",
+        now,
+        privateMetadata: true,
+        executionRunner: sshAuthenticatedRunner,
+      });
       expect(privateMatrix.commands[0]?.command).toMatchObject({
         command_ref: { preview: "echo loop", redacted: false },
         mcp: { args: { remote_command: "echo loop", private_metadata: false } },
       });
       expect(privateMatrix.commands[0]?.command.cli).toContain("--private-metadata");
 
-      const preflight = getFleetLoopPreflight({ topology, machineIds, command: "echo loop", now });
+      const preflight = getFleetLoopPreflight({ topology, machineIds, command: "echo loop", now, executionRunner: sshAuthenticatedRunner });
       expect(preflight.kind).toBe("loop_preflight");
       expect(preflight.mode).toBe("plan");
       expect(preflight.selection_mode).toBe("explicit");

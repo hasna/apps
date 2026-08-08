@@ -73,6 +73,14 @@ export function resolveMachineCommand(machineId: string, command: string, localM
 
 export function runMachineCommand(machineId: string, command: string, options: MachineCommandOptions = {}): MachineCommandResult {
   const resolved = resolveMachineCommand(machineId, command);
+  return runResolvedMachineCommand(machineId, resolved, options);
+}
+
+export function runResolvedMachineCommand(
+  machineId: string,
+  resolved: ResolvedMachineCommand,
+  options: MachineCommandOptions = {},
+): MachineCommandResult {
   if (options.timeoutMs && options.timeoutMs > 0 && process.platform !== "win32") {
     return runMachineCommandWithProcessGroupTimeout(machineId, resolved, options);
   }

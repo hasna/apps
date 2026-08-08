@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
@@ -986,8 +986,13 @@ describe("cli command handling", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-cli-agent-apis-"));
     try {
       const manifestPath = join(dir, "machines.json");
+      const binDir = join(dir, "bin");
+      mkdirSync(binDir, { recursive: true });
+      const fakeSsh = join(binDir, "ssh");
+      writeFileSync(fakeSsh, "#!/bin/sh\n[ \"$2\" = true ] || exit 97\nexit 0\n", { mode: 0o700 });
       const env = {
         ...process.env,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
         HASNA_MACHINES_MANIFEST_PATH: manifestPath,
         HASNA_MACHINES_DB_PATH: join(dir, "machines.db"),
         HASNA_MACHINES_MACHINE_ID: "control",
@@ -1029,6 +1034,12 @@ describe("cli command handling", () => {
       expect(matrix.status).toBe(0);
       expect(JSON.parse(matrix.stdout).commands[0]).toMatchObject({
         machine_id: "worker",
+        can_run: true,
+        execution: {
+          checked: true,
+          ready: true,
+          status: "ready",
+        },
         command: {
           command_ref: {
             preview: "[redacted]",
@@ -1041,6 +1052,25 @@ describe("cli command handling", () => {
       });
       expect(matrix.stdout).not.toContain("echo loop");
       expect(matrix.stdout).not.toContain("--private-metadata");
+
+      writeFileSync(fakeSsh, "#!/bin/sh\n[ \"$2\" = true ] || exit 97\nprintf '%s\\n' 'Permission denied (publickey,password).' >&2\nexit 255\n", { mode: 0o700 });
+      const deniedMatrix = runCli(["command-matrix", "--machine", "worker", "--cmd", "true", "--no-tailscale"], env);
+      expect(deniedMatrix.stderr).toBe("");
+      expect(deniedMatrix.status).toBe(0);
+      expect(JSON.parse(deniedMatrix.stdout).commands[0]).toMatchObject({
+        machine_id: "worker",
+        can_run: false,
+        readiness: "blocked",
+        execution: {
+          checked: true,
+          ready: false,
+          status: "authentication_denied",
+          exit_code: 255,
+        },
+        blocked_by: ["ssh_authentication_denied"],
+      });
+      expect(deniedMatrix.stdout).not.toContain("Permission denied");
+      expect(deniedMatrix.stdout).not.toContain("operator@worker");
 
       const routing = runCli(["routing", "--machine", "worker", "--no-tailscale"], env);
       expect(routing.stderr).toBe("");
