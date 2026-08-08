@@ -157,6 +157,10 @@ export function responseControl(
   bounds: GuardedProjectMutationBounds,
   startedAtMs: number,
   operation = "guarded mutation",
+  completeness: Pick<GuardedProjectMutationControl, "complete" | "truncated"> = {
+    complete: true,
+    truncated: false,
+  },
 ): GuardedProjectMutationControl {
   assertPositiveBounds(bounds);
   const bytes = Buffer.byteLength(JSON.stringify(payload), "utf8");
@@ -172,8 +176,7 @@ export function responseControl(
     time_budget_ms: bounds.time_budget_ms,
     response_bytes: bytes,
     elapsed_ms: elapsed,
-    complete: true,
-    truncated: false,
+    ...completeness,
   };
 }
 
@@ -182,6 +185,10 @@ export function withResponseControl<T extends Record<string, unknown>>(
   bounds: GuardedProjectMutationBounds,
   startedAtMs: number,
   operation = "guarded mutation",
+  completeness: Pick<GuardedProjectMutationControl, "complete" | "truncated"> = {
+    complete: true,
+    truncated: false,
+  },
 ): T & { response_control: GuardedProjectMutationControl } {
   const envelope = {
     ...payload,
@@ -190,12 +197,11 @@ export function withResponseControl<T extends Record<string, unknown>>(
       time_budget_ms: bounds.time_budget_ms,
       response_bytes: 0,
       elapsed_ms: 0,
-      complete: true,
-      truncated: false,
+      ...completeness,
     },
   };
-  envelope.response_control = responseControl(envelope, bounds, startedAtMs, operation);
-  envelope.response_control = responseControl(envelope, bounds, startedAtMs, operation);
+  envelope.response_control = responseControl(envelope, bounds, startedAtMs, operation, completeness);
+  envelope.response_control = responseControl(envelope, bounds, startedAtMs, operation, completeness);
   return envelope;
 }
 

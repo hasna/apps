@@ -51,6 +51,33 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
     },
     required: ["authority", "service_instance", "source_package", "target_kind", "locator", "scope"],
   });
+  const projectResourceLinkBranch = (
+    authority: string,
+    sourcePackage: string,
+    targetKinds: readonly string[],
+    locator: Record<string, unknown> = ref("ProjectResourcePortableLocator"),
+    labels: Record<string, unknown> = ref("ProjectResourceLinkLabels"),
+  ) => {
+    const input = projectResourceLinkInputBranch(
+      authority,
+      sourcePackage,
+      targetKinds,
+      locator,
+      labels,
+    );
+    return {
+      ...input,
+      properties: {
+        ...input.properties,
+        id: { type: "string" },
+        project_id: { type: "string" },
+        labels,
+        created_at: { type: "string" },
+        updated_at: { type: "string" },
+      },
+      required: [...input.required, "id", "project_id", "labels", "created_at", "updated_at"],
+    };
+  };
 
   return {
     openapi: "3.1.0",
@@ -402,19 +429,31 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
           ],
         },
         ProjectResourceLink: {
-          allOf: [
-            ref("ProjectResourceLinkInput"),
-            {
-              type: "object",
-              properties: {
-                id: { type: "string" },
-                project_id: { type: "string" },
-                labels: ref("ProjectResourceLinkLabels"),
-                created_at: { type: "string" },
-                updated_at: { type: "string" },
-              },
-              required: ["id", "project_id", "labels", "created_at", "updated_at"],
-            },
+          oneOf: [
+            projectResourceLinkBranch("todos", "@hasna/todos", ["project", "task_list", "plan"]),
+            projectResourceLinkBranch(
+              "todos",
+              "@hasna/todos",
+              ["task"],
+              ref("ProjectResourceExternalUuidLocator"),
+            ),
+            projectResourceLinkBranch("conversations", "@hasna/conversations", ["project"]),
+            projectResourceLinkBranch(
+              "conversations",
+              "@hasna/conversations",
+              ["channel"],
+              ref("ProjectResourceConversationsChannelLinkLocator"),
+              ref("ProjectResourceConversationsChannelLabels"),
+            ),
+            projectResourceLinkBranch("knowledge", "@hasna/knowledge", ["collection", "item"]),
+            projectResourceLinkBranch("mementos", "@hasna/mementos", ["project", "item"]),
+            projectResourceLinkBranch("orgs", "@hasna/orgs", ["org", "project"]),
+            projectResourceLinkBranch(
+              "contacts",
+              "@hasna/contacts",
+              ["contact"],
+              ref("ProjectResourceExternalUuidLocator"),
+            ),
           ],
         },
         ProjectResourceLinkCollectionV1: {
@@ -787,6 +826,7 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
               type: "string",
               enum: ["producer_applied", "projects_applied", "verified", "failed_reconcilable"],
             },
+            max_items: { type: "integer", minimum: 1 },
             producer_evidence: {
               type: "array",
               items: ref("ProjectResourceLinkProducerEvidence"),
@@ -812,6 +852,10 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
             producer_outcome: {
               type: "string",
               enum: ["pending", "complete", "retained_target", "failed_reconcilable"],
+            },
+            producer_evidence: {
+              type: "array",
+              items: ref("ProjectResourceLinkProducerEvidence"),
             },
             evidence: { type: "object", additionalProperties: true },
             agent_id: { type: "string" },

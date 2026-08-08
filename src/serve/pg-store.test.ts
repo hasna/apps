@@ -4,6 +4,8 @@ import type { TypedQueryClient } from "../generated/storage-kit/query.js";
 import type {
   AgentRow,
   GuardedProjectMutationReceiptRow,
+  ProjectResourceLinkMigrationEvent,
+  ProjectResourceLinkMigrationManifestRow,
   ProjectResourceLinkRow,
   RootRow,
   WorkspaceEventRow,
@@ -270,11 +272,20 @@ function resourceLinkMutationClient() {
   let links: ProjectResourceLinkRow[] = [];
   let receipts: GuardedProjectMutationReceiptRow[] = [];
   let events: WorkspaceEventRow[] = [];
+  let migrationManifests: ProjectResourceLinkMigrationManifestRow[] = [];
+  let migrationEvents: ProjectResourceLinkMigrationEvent[] = [];
   let failNextWorkspaceRevisionUpdate = false;
 
   const client = {
     async transaction<T>(fn: (transactionClient: TypedQueryClient) => Promise<T>): Promise<T> {
-      const snapshot = structuredClone({ workspace, links, receipts, events });
+      const snapshot = structuredClone({
+        workspace,
+        links,
+        receipts,
+        events,
+        migrationManifests,
+        migrationEvents,
+      });
       try {
         return await fn(client as TypedQueryClient);
       } catch (error) {
@@ -282,6 +293,8 @@ function resourceLinkMutationClient() {
         links = snapshot.links;
         receipts = snapshot.receipts;
         events = snapshot.events;
+        migrationManifests = snapshot.migrationManifests;
+        migrationEvents = snapshot.migrationEvents;
         throw error;
       }
     },
@@ -333,6 +346,46 @@ function resourceLinkMutationClient() {
       if (sql.startsWith("SELECT * FROM workspace_events WHERE id")) {
         return (events.find((event) => event.id === params[0]) ?? null) as T | null;
       }
+      if (
+        sql.includes("FROM project_resource_link_migration_manifests")
+        && sql.includes("operation_id = $2")
+      ) {
+        return (migrationManifests.find((manifest) =>
+          manifest.project_id === params[0]
+          && manifest.operation_id === params[1]
+          && manifest.step_id === params[2]
+        ) ?? null) as T | null;
+      }
+      if (
+        sql.includes("FROM project_resource_link_migration_manifests")
+        && sql.includes("manifest_id = $1")
+      ) {
+        return (migrationManifests.find((manifest) =>
+          manifest.manifest_id === params[0] && manifest.project_id === params[1]
+        ) ?? null) as T | null;
+      }
+      if (sql.startsWith("UPDATE project_resource_link_migration_manifests")) {
+        const index = migrationManifests.findIndex((manifest) =>
+          manifest.manifest_id === params[9]
+          && manifest.project_id === params[10]
+          && manifest.transition_version === params[11]
+        );
+        if (index < 0) return null;
+        const current = migrationManifests[index]!;
+        migrationManifests[index] = {
+          ...current,
+          state: String(params[0]),
+          links_json: String(params[1]),
+          projects_forward_receipt_id: params[2] === null ? null : String(params[2]),
+          projects_inverse_receipt_id: params[3] === null ? null : String(params[3]),
+          projects_reference_proof_json: params[4] === null ? null : String(params[4]),
+          last_verified_projects_revision: params[5] === null ? null : String(params[5]),
+          last_verified_projects_digest: params[6] === null ? null : String(params[6]),
+          transition_version: Number(params[7]),
+          updated_at: String(params[8]),
+        };
+        return { manifest_id: current.manifest_id } as T;
+      }
       throw new Error(`Unexpected get query: ${sql}`);
     },
     async many<T>(sql: string, params: readonly unknown[] = []): Promise<T[]> {
@@ -341,9 +394,54 @@ function resourceLinkMutationClient() {
           .filter((link) => link.project_id === params[0])
           .slice(0, Number(params[1])) as T[];
       }
+      if (sql.includes("FROM project_resource_link_migration_events")) {
+        return migrationEvents
+          .filter((event) => event.manifest_id === params[0])
+          .sort((a, b) => a.transition_version - b.transition_version)
+          .slice(0, Number(params[1]))
+          .map((event) => ({
+            ...event,
+            evidence_json: JSON.stringify(event.evidence),
+          })) as T[];
+      }
       throw new Error(`Unexpected many query: ${sql}`);
     },
     async execute(sql: string, params: readonly unknown[] = []): Promise<void> {
+      if (sql.includes("INSERT INTO project_resource_link_migration_manifests")) {
+        migrationManifests.push({
+          manifest_id: String(params[0]),
+          project_id: String(params[1]),
+          operation_id: String(params[2]),
+          step_id: String(params[3]),
+          state: String(params[4]),
+          expected_project_revision: String(params[5]),
+          desired_collection_digest: String(params[6]),
+          links_json: String(params[7]),
+          projects_forward_receipt_id: null,
+          projects_inverse_receipt_id: null,
+          projects_reference_proof_json: null,
+          last_verified_projects_revision: null,
+          last_verified_projects_digest: null,
+          transition_version: Number(params[8]),
+          created_at: String(params[9]),
+          updated_at: String(params[10]),
+        });
+        return;
+      }
+      if (sql.includes("INSERT INTO project_resource_link_migration_events")) {
+        migrationEvents.push({
+          event_id: String(params[0]),
+          manifest_id: String(params[1]),
+          transition_version: Number(params[2]),
+          from_state: params[3] === null ? null : params[3] as ProjectResourceLinkMigrationEvent["from_state"],
+          to_state: params[4] as ProjectResourceLinkMigrationEvent["to_state"],
+          request_digest: String(params[5]),
+          precondition_digest: String(params[6]),
+          evidence: JSON.parse(String(params[7])),
+          created_at: String(params[8]),
+        });
+        return;
+      }
       if (sql.startsWith("DELETE FROM project_resource_links")) {
         links = links.filter((link) => link.id !== params[0]);
         return;
@@ -432,6 +530,8 @@ function resourceLinkMutationClient() {
     links: () => structuredClone(links),
     receipts: () => structuredClone(receipts),
     events: () => structuredClone(events),
+    migrationManifests: () => structuredClone(migrationManifests),
+    migrationEvents: () => structuredClone(migrationEvents),
     failNextRevisionUpdate() {
       failNextWorkspaceRevisionUpdate = true;
     },
@@ -745,6 +845,161 @@ describe("pg-store typed resource-link transaction model", () => {
       receipts: harness.receipts(),
       events: harness.events(),
     }).toEqual(stateBeforeFault);
+  });
+
+  test("requires exact producer proof for terminal migration states and bounds event reads", async () => {
+    const harness = resourceLinkMutationClient();
+    const store = new ProjectsPgStore(harness.client);
+    const bounds = {
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    };
+    const producerEvidence = [{
+      created_by_operation: true,
+      forward_receipt_id: "conversations-forward-receipt",
+      child_link_receipt_ids: [],
+      target_revision: "conversations-revision-1",
+      target_digest: "sha256:conversations-target-1",
+      inverse_verified: null,
+      inverse_outcome: null,
+    }];
+    const planned = await store.planProjectResourceLinkMigration({
+      project_id: harness.workspace().id,
+      operation_id: "pg-migration-proof",
+      step_id: "channel-link",
+      expected_project_revision: harness.workspace().updated_at,
+      links: [{
+        link: channelLink,
+        producer_resource_kind: "conversations_channel",
+        producer_binding: {
+          authority_id: "conversations",
+          tenant_id: "tenant-primary",
+          corpus_id: null,
+          capability_digest: "sha256:conversations-capability",
+        },
+      }],
+      max_items: 10,
+      ...bounds,
+    });
+    const producerApplied = await store.advanceProjectResourceLinkMigration({
+      project_id: harness.workspace().id,
+      manifest_id: planned.manifest.manifest_id,
+      expected_transition_version: planned.manifest.transition_version,
+      next_state: "producer_applied",
+      producer_evidence: producerEvidence,
+      evidence: { producer: "accepted" },
+      ...bounds,
+    });
+    const projectsWrite = await store.mutateProjectResourceLinks({
+      project_id: harness.workspace().id,
+      operation_id: "pg-migration-projects-write",
+      step_id: "channel-link",
+      mode: "add",
+      expected_revision: harness.workspace().updated_at,
+      links: [channelLink],
+      max_items: 10,
+      ...bounds,
+    });
+    const projectsApplied = await store.advanceProjectResourceLinkMigration({
+      project_id: harness.workspace().id,
+      manifest_id: planned.manifest.manifest_id,
+      expected_transition_version: producerApplied.manifest.transition_version,
+      next_state: "projects_applied",
+      projects_forward_receipt_id: projectsWrite.receipt!.receipt_id,
+      evidence: { projects: "accepted" },
+      ...bounds,
+    });
+
+    const verifiedInput = {
+      project_id: harness.workspace().id,
+      manifest_id: planned.manifest.manifest_id,
+      expected_transition_version: projectsApplied.manifest.transition_version,
+      next_state: "verified" as const,
+      last_verified_projects_revision: harness.workspace().updated_at,
+      last_verified_projects_digest: projectsWrite.after!.collection_digest,
+      evidence: { verification: "exact-readback" },
+      ...bounds,
+    };
+    await expect(store.advanceProjectResourceLinkMigration(verifiedInput))
+      .rejects.toThrow(/producer readback proof/i);
+    await expect(store.advanceProjectResourceLinkMigration({
+      ...verifiedInput,
+      producer_evidence: [{
+        ...producerEvidence[0]!,
+        forward_receipt_id: "forged-receipt",
+        target_revision: "conversations-revision-2",
+        target_digest: "sha256:conversations-target-2",
+      }],
+    })).rejects.toThrow(/persisted producer receipt/i);
+    const verified = await store.advanceProjectResourceLinkMigration({
+      ...verifiedInput,
+      producer_evidence: [{
+        ...producerEvidence[0]!,
+        target_revision: "conversations-revision-2",
+        target_digest: "sha256:conversations-target-2",
+      }],
+    });
+    expect(verified.manifest.state).toBe("verified");
+    expect(verified.manifest.links[0]?.producer_evidence).toMatchObject({
+      forward_receipt_id: "conversations-forward-receipt",
+      target_revision: "conversations-revision-2",
+    });
+
+    const bounded = await store.readProjectResourceLinkMigration({
+      project_id: harness.workspace().id,
+      manifest_id: planned.manifest.manifest_id,
+      max_items: 1,
+      ...bounds,
+    });
+    expect(bounded.events).toHaveLength(1);
+    expect(bounded.response_control.complete).toBe(false);
+    expect(bounded.response_control.truncated).toBe(true);
+
+    const rollbackProof = await store.rollbackProjectResourceLinkMigration({
+      project_id: harness.workspace().id,
+      manifest_id: planned.manifest.manifest_id,
+      expected_transition_version: verified.manifest.transition_version,
+      producer_outcome: "pending",
+      evidence: { projects_reference_proof: "persisted" },
+      max_items: 10,
+      ...bounds,
+    });
+    const rollbackInput = {
+      project_id: harness.workspace().id,
+      manifest_id: planned.manifest.manifest_id,
+      expected_transition_version: rollbackProof.manifest.transition_version,
+      producer_outcome: "complete" as const,
+      evidence: { producer_inverse: "verified" },
+      max_items: 10,
+      ...bounds,
+    };
+    await expect(store.rollbackProjectResourceLinkMigration(rollbackInput))
+      .rejects.toThrow(/producer inverse proof/i);
+    await expect(store.rollbackProjectResourceLinkMigration({
+      ...rollbackInput,
+      producer_evidence: [{
+        ...producerEvidence[0]!,
+        target_revision: "conversations-revision-3",
+        target_digest: "sha256:conversations-target-3",
+        inverse_verified: false,
+        inverse_outcome: "complete",
+      }],
+    })).rejects.toThrow(/inverse_verified=true/i);
+    const rolledBack = await store.rollbackProjectResourceLinkMigration({
+      ...rollbackInput,
+      producer_evidence: [{
+        ...producerEvidence[0]!,
+        target_revision: "conversations-revision-3",
+        target_digest: "sha256:conversations-target-3",
+        inverse_verified: true,
+        inverse_outcome: "complete",
+      }],
+    });
+    expect(rolledBack.manifest.state).toBe("rolled_back");
+    expect(rolledBack.manifest.links[0]?.producer_evidence).toMatchObject({
+      inverse_verified: true,
+      inverse_outcome: "complete",
+    });
   });
 });
 
