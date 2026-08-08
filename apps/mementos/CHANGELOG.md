@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.14.79 — Accept npm's verified publish Sigstore bundle
+
+**Immutable release recovery.** Version 0.14.78 was published only under
+`release-candidate-0.14.78`, then failed registry verification before promotion:
+npm 11.16.0 returned the npm publish attestation as a verified Sigstore v0.2
+public-key bundle while the SLSA provenance attestation remained a Sigstore
+v0.3 certificate bundle. Version 0.14.78 remains quarantined and must never be
+promoted to `latest`; this release prepares the repaired candidate as 0.14.79.
+
+- Accept only the exact predicate-specific npm-verified shapes: Sigstore v0.2
+  with a registry public-key hint for the npm publish predicate, and Sigstore
+  v0.3 with certificate material for SLSA provenance.
+- Preserve the existing fail-closed DSSE signature, in-toto payload type,
+  single positive transparency-log entry, exact statement and predicate,
+  single sha512 subject, GitHub Actions identity, workflow, tag, commit, and
+  one-publish/one-provenance cardinality checks.
+- Add a red-first regression for the observed mixed bundle versions plus
+  negative controls for unsigned, malformed, and unsupported bundle shapes.
+
 ## 0.14.78 — Validate the release Node executable
 
 **Immutable release recovery.** Version 0.14.77 was tagged from protected main

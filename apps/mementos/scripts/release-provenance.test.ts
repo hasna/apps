@@ -122,12 +122,19 @@ function attestation(
   predicateType: string,
   statement: Record<string, unknown>,
 ): Record<string, unknown> {
+  const isPublish = predicateType === PUBLISH_PREDICATE;
   return {
     predicateType,
     bundle: {
-      mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json",
+      mediaType: isPublish
+        ? "application/vnd.dev.sigstore.bundle+json;version=0.2"
+        : "application/vnd.dev.sigstore.bundle.v0.3+json",
       verificationMaterial: {
+        ...(isPublish
+          ? { publicKey: { hint: "SHA256:registry-key" } }
+          : { certificate: { rawBytes: "AQ==" } }),
         tlogEntries: [{ logIndex: "1", integratedTime: "2" }],
+        timestampVerificationData: { rfc3161Timestamps: [] },
       },
       dsseEnvelope: {
         payloadType: "application/vnd.in-toto+json",
@@ -202,6 +209,17 @@ function attestations(options: {
       },
     }),
   ];
+}
+
+function currentNpmVerifiedAttestations(): unknown[] {
+  return attestations();
+}
+
+function bundleAt(values: unknown[], index: number): Record<string, unknown> {
+  return (values[index] as Record<string, unknown>).bundle as Record<
+    string,
+    unknown
+  >;
 }
 
 function auditResult(bundles = attestations()): Record<string, unknown> {
@@ -702,6 +720,43 @@ describe("cryptographic audit and provenance semantics", () => {
     await expect(
       verifyAttestations(candidate, attestations(), wrongIssuer.verify),
     ).rejects.toThrow("certificate issuer mismatch");
+  });
+
+  test("accepts the exact npm-verified publish v0.2 and provenance v0.3 bundle shapes", async () => {
+    await expect(
+      verifyAttestations(
+        candidate,
+        currentNpmVerifiedAttestations(),
+        certificateVerifier().verify,
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  test("rejects unsigned, malformed, and unsupported Sigstore bundle shapes", async () => {
+    const unsigned = currentNpmVerifiedAttestations();
+    const unsignedEnvelope = bundleAt(unsigned, 0).dsseEnvelope as Record<
+      string,
+      unknown
+    >;
+    unsignedEnvelope.signatures = [];
+    await expect(
+      verifyAttestations(candidate, unsigned, certificateVerifier().verify),
+    ).rejects.toThrow("unsigned DSSE");
+
+    const malformed = currentNpmVerifiedAttestations();
+    const malformedMaterial = bundleAt(malformed, 0)
+      .verificationMaterial as Record<string, unknown>;
+    delete malformedMaterial.publicKey;
+    await expect(
+      verifyAttestations(candidate, malformed, certificateVerifier().verify),
+    ).rejects.toThrow("publicKey");
+
+    const unsupported = currentNpmVerifiedAttestations();
+    bundleAt(unsupported, 0).mediaType =
+      "application/vnd.dev.sigstore.bundle+json;version=0.1";
+    await expect(
+      verifyAttestations(candidate, unsupported, certificateVerifier().verify),
+    ).rejects.toThrow("unsupported Sigstore bundle");
   });
 
   test("actual Sigstore verification accepts the exact signer and rejects a foreign identity", async () => {
