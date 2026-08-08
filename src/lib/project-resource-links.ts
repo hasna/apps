@@ -41,7 +41,7 @@ const LINK_FIELDS = new Set([
 const LOCATOR_FIELDS = new Set(["kind", "value"]);
 const LABEL_FIELDS = new Set(["name", "channel_name", "path", "tags"]);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const CONVERSATIONS_CHANNEL_ID_RE = /^chn_[0-9a-f]{32}$/i;
+const CONVERSATIONS_CHANNEL_ID_RE = /^chn_[0-9a-f]{32}$/;
 const URN_RE = /^urn:[a-z0-9][a-z0-9-]{0,31}:[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+$/;
 
 export function projectResourceLinkConversationsChannelLocatorKind(
