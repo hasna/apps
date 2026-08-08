@@ -103,7 +103,10 @@ async function buildCloudProjectDependencyGraph(
   cloud: CloudClient,
   projectId: string | null,
 ): Promise<ProjectDependencyGraph> {
-  const tasks = await cloudListTasks(cloud, projectId ? { project_id: projectId } : {});
+  const tasks = await cloudListTasks(cloud, {
+    ...(projectId ? { project_id: projectId } : {}),
+    include_subtasks: true,
+  });
   const edges: DependencyEdge[] = [];
   const seen = new Set<string>();
   let cursor = 0;
@@ -624,11 +627,13 @@ export function registerProjectCommands(program: Command) {
       // auto-detected project). Emits a versioned adjacency list + cycles so a
       // scheduler can order a batch without one `deps <id>` call per task.
       if (!id) {
-        // A mutating or edge-scoped flag with no id is a forgotten argument, not
-        // a whole-project request. Fail loudly (commander used to reject this as
-        // a missing required argument) rather than silently ignoring the write.
-        if (opts.needs || opts.remove || opts.graph || opts.direction !== "both") {
-          handleError(new Error("A task id is required with --needs, --remove, --graph, or --direction."));
+        // A mutating or direction-scoped flag with no id is a forgotten
+        // argument, not a whole-project request. `--graph` is deliberately
+        // allowed here because the whole-project read already returns a graph.
+        // Fail loudly (commander used to reject this as a missing required
+        // argument) rather than silently ignoring a write or scoped traversal.
+        if (opts.needs || opts.remove || opts.direction !== "both") {
+          handleError(new Error("A task id is required with --needs, --remove, or --direction."));
         }
         const projectRef = opts.project ?? globalOpts.project;
         if (cloud) {
