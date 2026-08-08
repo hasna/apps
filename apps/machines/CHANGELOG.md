@@ -67,6 +67,15 @@ reported success about things it had not actually established.
   than reached by deleting a check. Physical classes are untouched: `dgx-spark`
   keeps `tailscale:join` and gets no absence item.
 
+## [0.2.13] - 2026-08-08
+
+### Fixed
+
+- Preserve `unavailable` compatibility results when remote execution fails before authenticated inspection, while keeping genuine authenticated empty-path results classified as missing.
+- Preserve BrowserPlan unavailable state during reconciliation and route validation.
+
+Fixes OPE69-00017 via PR #70.
+
 ## [0.2.9] - 2026-07-30
 
 ### Added
