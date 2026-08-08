@@ -594,6 +594,48 @@ describe("full project registration transaction", () => {
     }
   });
 
+  for (const malformedChannelId of [
+    {
+      label: "uppercase prefix",
+      path: "uppercase-channel-id-prefix",
+      operationId: "op-full-uppercase-channel-id-prefix",
+      value: "CHN_79fa9c68937a1d020d6031dcaa3dd8d7",
+    },
+    {
+      label: "uppercase hex",
+      path: "uppercase-channel-id-hex",
+      operationId: "op-full-uppercase-channel-id-hex",
+      value: "chn_79FA9C68937A1D020D6031DCAA3DD8D7",
+    },
+  ]) {
+    test(`fails closed when a Conversations channel receipt uses ${malformedChannelId.label}`, async () => {
+      const db = makeDb();
+      const target = tempTarget(malformedChannelId.path);
+      const fakes = fakeAuthorities();
+      fakes.conversations.channelTargetIdFactory = () => malformedChannelId.value;
+      try {
+        const result = await registerFullProject(
+          input(malformedChannelId.operationId, target.target),
+          { db, authorities: fakes.authorities },
+        );
+
+        expect(result.outcome).toBe("rolled_back");
+        expect(result.failed_step).toBe("conversations_channel");
+        expect(result.reason_code).toBe("channel_immutable_uuid_missing");
+        expect(fakes.todos.records.size).toBe(0);
+        expect(fakes.mementos.records.size).toBe(0);
+        expect(fakes.conversations.records.size).toBe(0);
+        expect(getWorkspace(result.project_id, db)).toBeNull();
+        expect(db.query("SELECT COUNT(*) AS n FROM workspaces").get()).toEqual({ n: 0 });
+        expect(db.query("SELECT COUNT(*) AS n FROM project_resource_links").get()).toEqual({ n: 0 });
+        expect(existsSync(join(target.path, PROJECT_MARKER_FILENAME))).toBe(false);
+        expect(existsSync(target.path)).toBe(false);
+      } finally {
+        db.close();
+      }
+    });
+  }
+
   test("fails closed when a Conversations channel receipt uses a malformed immutable ID", async () => {
     const db = makeDb();
     const target = tempTarget("malformed-channel-id");
