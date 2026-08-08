@@ -30,6 +30,14 @@ COPY src ./src
 COPY scripts ./scripts
 COPY hasna.contract.json ./
 
+# Bind the runtime response and OCI metadata to the source used for this image.
+# This is generated into executable source now; no deploy-time environment
+# variable can change it without building and shipping a different artifact.
+ARG BUILD_SHA=""
+ARG REQUIRE_BUILD_SHA=0
+LABEL org.opencontainers.image.revision="${BUILD_SHA}"
+RUN bun run scripts/ci/render-build-sha.ts "$BUILD_SHA" src/server/build-sha.generated.ts "$REQUIRE_BUILD_SHA"
+
 ENV NODE_ENV=production \
     PORT=8080 \
     HOST=0.0.0.0 \

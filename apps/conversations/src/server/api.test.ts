@@ -737,6 +737,7 @@ describe("conversations-serve", () => {
     const b = await (await fetch(`${base}/version`)).json();
     expect(b.mode).toBe("cloud");
     expect(b.version).toBeTruthy();
+    expect(b.build_sha).toBeNull();
   });
 
   test("/v1 requires an API key (401 without one)", async () => {

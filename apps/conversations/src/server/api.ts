@@ -9,7 +9,7 @@
  * Surfaces:
  *   GET  /health   liveness (unauthenticated, trivial)
  *   GET  /ready    readiness — pings Postgres; {status,version,mode}
- *   GET  /version  {status,version,mode}
+ *   GET  /version  {status,version,mode,build_sha}
  *   /v1/*          versioned API, guarded by @hasna/contracts API-key auth
  *
  * The /v1 surface covers the app's core operations: messages, channels,
@@ -32,6 +32,7 @@ import { normalizeMessageUuid, parseMessageReference } from "../lib/message-refe
 import { normalizeExactIsoTimestamp } from "../lib/since.js";
 import { PROJECT_LIST_ORDER, simpleOrderByClause } from "../lib/list-order.js";
 import { decodeAttachmentUploads } from "../lib/attachments.js";
+import { BAKED_BUILD_SHA } from "./build-sha.generated.js";
 import {
   PROJECT_MESSAGE_LINKAGE_RECEIPTS_TABLE,
   buildProjectMessageLinkagePlan,
@@ -756,7 +757,13 @@ export function startApiServer(options: StartApiServerOptions = {}) {
         }
 
         if (path === "/version" && method === "GET") {
-          return json({ status: "ok", version: pkgVersion, mode: "cloud", app: APP });
+          return json({
+            status: "ok",
+            version: pkgVersion,
+            mode: "cloud",
+            app: APP,
+            build_sha: BAKED_BUILD_SHA,
+          });
         }
 
         if (path === "/v1/openapi.json" && method === "GET") {
