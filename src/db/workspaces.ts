@@ -249,6 +249,26 @@ function rowToWorkspaceLock(row: WorkspaceLockRow): WorkspaceLock {
   return row;
 }
 
+function parseWorkspaceRevision(revision: string): number {
+  return Date.parse(revision.replace(" ", "T") + "Z");
+}
+
+function workspaceRevisionFromMs(ms: number): string {
+  return new Date(ms).toISOString().replace("T", " ").replace("Z", "");
+}
+
+function nextWorkspaceRevision(current: string): string {
+  const nowRevision = now();
+  const currentMs = parseWorkspaceRevision(current);
+  const nowMs = parseWorkspaceRevision(nowRevision);
+  if (Number.isFinite(currentMs) && Number.isFinite(nowMs) && nowMs <= currentMs) {
+    return workspaceRevisionFromMs(currentMs + 1);
+  }
+  if (nowRevision !== current) return nowRevision;
+  if (Number.isFinite(currentMs)) return workspaceRevisionFromMs(currentMs + 1);
+  return `${current}.1`;
+}
+
 export function renderTemplate(template: string, values: Record<string, string | null | undefined>): string {
   return template.replace(/\{([a-zA-Z0-9_]+)\}/g, (_match, key: string) => values[key] ?? "");
 }
@@ -988,7 +1008,7 @@ export function updateWorkspace(id: string, input: UpdateWorkspaceInput, db?: Da
 
   if (updates.length > 0) {
     updates.push("updated_at = ?");
-    params.push(now());
+    params.push(nextWorkspaceRevision(before.updated_at));
     params.push(id);
     d.run(`UPDATE workspaces SET ${updates.join(", ")} WHERE id = ?`, params);
   }
@@ -1206,14 +1226,6 @@ export function readProjectResourceLinks(
     complete: true as const,
     truncated: false as const,
   }, input, startedAt, "project resource link read");
-}
-
-function nextProjectResourceLinkRevision(current: string): string {
-  const nowRevision = now();
-  if (nowRevision !== current) return nowRevision;
-  const parsed = Date.parse(current.replace(" ", "T") + "Z");
-  if (Number.isFinite(parsed)) return new Date(parsed + 1).toISOString().replace("T", " ").replace("Z", "");
-  return `${current}.1`;
 }
 
 function projectResourceLinkInputFromStored(link: ProjectResourceLink): ProjectResourceLinkInput {
@@ -1488,7 +1500,7 @@ function mutateProjectResourceLinksInternal(
     let afterProject = beforeProject;
     if (changed) {
       replaceProjectResourceLinks(input.project_id, desired, db);
-      const nextRevision = nextProjectResourceLinkRevision(currentRevision);
+      const nextRevision = nextWorkspaceRevision(currentRevision);
       const update = db.run(
         "UPDATE workspaces SET integrations = ?, updated_at = ? WHERE id = ? AND updated_at = ?",
         [canonicalJson(integrations), nextRevision, input.project_id, currentRevision],
