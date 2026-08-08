@@ -1538,21 +1538,21 @@ class PostgresJsonRecordStore {
        ), existing AS (
          SELECT payload FROM ${this.tableName}
          WHERE service = $1 AND object_type = 'plan_project_link_rollback_receipts'
-           AND object_id = $5 AND deleted_at IS NULL
+           AND object_id = $4 AND deleted_at IS NULL
          FOR UPDATE
        ), checks AS (
          SELECT
            EXISTS (SELECT 1 FROM target_plan) AS plan_found,
            COALESCE((SELECT payload->>'updated_at' = $3 FROM target_plan), false) AS plan_revision_ok,
-           COALESCE((SELECT jsonb_object_agg(object_id, COALESCE(payload->'project_id', 'null'::jsonb) ORDER BY object_id) FROM member_tasks), '{}'::jsonb) = $7::jsonb
-             AND COALESCE((SELECT jsonb_agg(object_id ORDER BY object_id) FROM member_tasks), '[]'::jsonb) = $8::jsonb AS membership_ok,
+           COALESCE((SELECT jsonb_object_agg(object_id, COALESCE(payload->'project_id', 'null'::jsonb) ORDER BY object_id) FROM member_tasks), '{}'::jsonb) = $6::jsonb
+             AND COALESCE((SELECT jsonb_agg(object_id ORDER BY object_id) FROM member_tasks), '[]'::jsonb) = $7::jsonb AS membership_ok,
            EXISTS (SELECT 1 FROM existing) AS has_existing
        ), updated_plan AS (
          UPDATE ${this.tableName} r SET
-           payload = r.payload || jsonb_build_object('project_id', $9::jsonb, 'updated_at', $10::text),
-           updated_at = $10::timestamptz,
+           payload = r.payload || jsonb_build_object('project_id', $8::jsonb, 'updated_at', $9::text),
+           updated_at = $9::timestamptz,
            version = COALESCE(r.version, 0) + 1,
-           source_machine_id = COALESCE($11, r.source_machine_id)
+           source_machine_id = COALESCE($10, r.source_machine_id)
          FROM checks
          WHERE r.service = $1 AND r.object_type = 'plans' AND r.object_id = $2 AND r.deleted_at IS NULL
            AND checks.plan_found AND checks.plan_revision_ok AND checks.membership_ok AND NOT checks.has_existing
@@ -1560,20 +1560,20 @@ class PostgresJsonRecordStore {
        ), updated_tasks AS (
          UPDATE ${this.tableName} r SET
            payload = r.payload || jsonb_build_object(
-             'project_id', COALESCE($12::jsonb -> r.object_id, 'null'::jsonb),
-             'updated_at', $10::text,
+             'project_id', COALESCE($11::jsonb -> r.object_id, 'null'::jsonb),
+             'updated_at', $9::text,
              'version', COALESCE((r.payload->>'version')::int, 0) + 1
            ),
-           updated_at = $10::timestamptz,
+           updated_at = $9::timestamptz,
            version = COALESCE(r.version, 0) + 1,
-           source_machine_id = COALESCE($11, r.source_machine_id)
+           source_machine_id = COALESCE($10, r.source_machine_id)
          WHERE r.service = $1 AND r.object_type = 'tasks' AND r.deleted_at IS NULL
            AND r.payload->>'plan_id' = $2 AND EXISTS (SELECT 1 FROM updated_plan)
          RETURNING 1
        ), task_gate AS (SELECT count(*) AS count FROM updated_tasks), inserted AS (
          INSERT INTO ${this.tableName}
            (service, object_type, object_id, payload, updated_at, deleted_at, source_machine_id, version)
-         SELECT $1, 'plan_project_link_rollback_receipts', $5, $6::jsonb, $10::timestamptz, NULL, $11, 1
+         SELECT $1, 'plan_project_link_rollback_receipts', $4, $5::jsonb, $9::timestamptz, NULL, $10, 1
          FROM checks, task_gate
          WHERE NOT checks.has_existing AND EXISTS (SELECT 1 FROM updated_plan)
          RETURNING payload
@@ -1588,7 +1588,6 @@ class PostgresJsonRecordStore {
         this.service,
         input.plan_id,
         input.expected_plan_revision,
-        input.receipt_id,
         input.rollback_receipt_id,
         jsonbParam(rollback),
         jsonbParam(currentTaskProjects),

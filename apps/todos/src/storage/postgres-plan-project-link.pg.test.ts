@@ -6,7 +6,11 @@
  *     bun test src/storage/postgres-plan-project-link.pg.test.ts
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { applyPlanProjectLink, planPlanProjectLink } from "../lib/plan-project-link.js";
+import {
+  applyPlanProjectLink,
+  planPlanProjectLink,
+  rollbackPlanProjectLink,
+} from "../lib/plan-project-link.js";
 import { createTodosCloudQueryClient, type TodosCloudQueryClient } from "./cloud-client.js";
 import { createPostgresTodosStorageAdapter } from "./postgres-adapter.js";
 import { postgresTodosSyncSchemaSql } from "./postgres-sync.js";
@@ -80,5 +84,53 @@ describe.skipIf(!PG_URL)("postgres guarded plan/project linkage", () => {
     expect(readBack?.project_id).toBe(project.id);
     expect(applied.receipt?.task_count).toBe(applied.receipt?.task_ids.length);
     expect(applied.tasks.every((task) => task.project_id === project.id)).toBe(true);
+  });
+
+  test("rolls back the exact accepted receipt and restores all 30 task project ids", async () => {
+    const priorProject = await store.projects.create({
+      name: "Rollback prior project",
+      path: `/rollback-prior-${Date.now()}`,
+    });
+    const targetProject = await store.projects.create({
+      name: "Rollback target project",
+      path: `/rollback-target-${Date.now()}`,
+    });
+    const plan = await store.plans.create({ name: "Rollback existing plan" });
+    const members = await Promise.all(Array.from({ length: 30 }, (_, index) =>
+      store.tasks.create({
+        title: `Rollback member ${index + 1}`,
+        plan_id: plan.id,
+        project_id: priorProject.id,
+      })
+    ));
+    const planned = await planPlanProjectLink(store, plan.id, targetProject.id);
+    const applied = await applyPlanProjectLink(store, plan.id, targetProject.id, {
+      expected_plan_revision: planned.plan.updated_at,
+      expected_project_revision: planned.project.updated_at,
+      idempotency_key: `postgres-plan-project-rollback-${Date.now()}`,
+    });
+    if (!applied.receipt) throw new Error("expected an accepted plan-project-link receipt");
+
+    const restored = await rollbackPlanProjectLink(store, plan.id, targetProject.id, {
+      receipt_id: applied.receipt.receipt_id,
+      expected_plan_revision: applied.plan.updated_at,
+    });
+
+    expect(restored.plan.project_id).toBeNull();
+    expect(restored.tasks).toHaveLength(30);
+    expect(restored.tasks.map((task) => ({ id: task.id, project_id: task.project_id })))
+      .toEqual(members
+        .map((task) => ({ id: task.id, project_id: priorProject.id }))
+        .sort((left, right) => left.id.localeCompare(right.id)));
+    await expect(rollbackPlanProjectLink(store, plan.id, targetProject.id, {
+      receipt_id: applied.receipt.receipt_id,
+      expected_plan_revision: applied.plan.updated_at,
+    })).resolves.toEqual(restored);
+
+    const persistedPlan = await store.plans.get(plan.id);
+    const persistedTasks = await store.tasks.list({ plan_id: plan.id, include_subtasks: true });
+    expect(persistedPlan?.project_id).toBeNull();
+    expect(persistedTasks).toHaveLength(30);
+    expect(persistedTasks.every((task) => task.project_id === priorProject.id)).toBe(true);
   });
 });
