@@ -39,20 +39,38 @@ afterEach(() => {
 });
 
 describe("sessions content sync CLI", () => {
-  it("exposes content sync and daemon help", () => {
+  it("describes storage without removed deployment-mode vocabulary in current help", () => {
+    const rootHelp = runCli(["--help"]);
+    expect(rootHelp.exitCode).toBe(0);
+    const rootHelpText = Buffer.from(rootHelp.stdout).toString("utf-8");
+    expect(rootHelpText).not.toContain("self_hosted");
+    const normalizedRootHelp = rootHelpText.replace(/\s+/g, " ");
+    expect(normalizedRootHelp).toContain("local SQLite store");
+    expect(normalizedRootHelp).toContain("configured server HTTP API");
+
     const syncHelp = runCli(["sync", "--help"]);
     expect(syncHelp.exitCode).toBe(0);
-    expect(Buffer.from(syncHelp.stdout).toString("utf-8")).toContain("--dry-run");
-    expect(Buffer.from(syncHelp.stdout).toString("utf-8")).toContain("--watch");
-    expect(Buffer.from(syncHelp.stdout).toString("utf-8")).toContain("Required for live self_hosted pushes");
+    const syncHelpText = Buffer.from(syncHelp.stdout).toString("utf-8");
+    expect(syncHelpText).not.toContain("self_hosted");
+    expect(syncHelpText.replace(/\s+/g, " ")).toContain("configured server HTTP API");
+    expect(syncHelpText).toContain("--dry-run");
+    expect(syncHelpText).toContain("--watch");
+    expect(syncHelpText).toContain("Required for live server HTTP API pushes");
 
     const daemonHelp = runCli(["daemon", "--help"]);
     expect(daemonHelp.exitCode).toBe(0);
-    expect(Buffer.from(daemonHelp.stdout).toString("utf-8")).toContain("self_hosted");
-    expect(Buffer.from(daemonHelp.stdout).toString("utf-8")).toContain("/v1 API");
-    expect(Buffer.from(daemonHelp.stdout).toString("utf-8")).toContain("--max-iterations");
-    expect(Buffer.from(daemonHelp.stdout).toString("utf-8")).toContain("--status");
-    expect(Buffer.from(daemonHelp.stdout).toString("utf-8")).toContain('default: "60"');
+    const daemonHelpText = Buffer.from(daemonHelp.stdout).toString("utf-8");
+    expect(daemonHelpText).not.toContain("self_hosted");
+    expect(daemonHelpText.replace(/\s+/g, " ")).toContain("configured server HTTP API");
+    expect(daemonHelpText).toContain("--max-iterations");
+    expect(daemonHelpText).toContain("--status");
+    expect(daemonHelpText).toContain('default: "60"');
+
+    const backfillHelp = runCli(["backfill", "--help"]);
+    expect(backfillHelp.exitCode).toBe(0);
+    const backfillHelpText = Buffer.from(backfillHelp.stdout).toString("utf-8");
+    expect(backfillHelpText).not.toContain("self_hosted");
+    expect(backfillHelpText.replace(/\s+/g, " ")).toContain("configured server HTTP API");
   });
 
   it("exposes provider roots and ingest observability through daemon status", () => {

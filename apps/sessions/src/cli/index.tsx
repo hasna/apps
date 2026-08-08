@@ -805,7 +805,7 @@ program
 
 program
   .command("list")
-  .description("List known sessions from the active store (local index, or the self_hosted /v1 API when HASNA_SESSIONS_API_URL + HASNA_SESSIONS_API_KEY are set)")
+  .description("List known sessions from the active store (local SQLite store, or the configured server HTTP API when HASNA_SESSIONS_API_URL + HASNA_SESSIONS_API_KEY are set)")
   .option("-p, --project <value>", "Filter by project name or path")
   .option("-l, --limit <n>", "Maximum results", "50")
   .option("--json", "Output as JSON")
@@ -825,7 +825,7 @@ program
 
 program
   .command("rename <id-or-prefix> <title>")
-  .description("Set a session's title in the active store (local index, or the self_hosted /v1 API when HASNA_SESSIONS_API_URL + HASNA_SESSIONS_API_KEY are set)")
+  .description("Set a session's title in the active store (local SQLite store, or the configured server HTTP API when HASNA_SESSIONS_API_URL + HASNA_SESSIONS_API_KEY are set)")
   .option("-s, --source <source>", "Resolve the identifier as a native source id for this source")
   .option("--json", "Output as JSON")
   .action(async (identifier: string, title: string, opts: any) => {
@@ -950,7 +950,7 @@ program
 program
   .command("transcript-search <query>")
   .alias("registry-search")
-  .description("Full-text search across indexed session transcripts via the active store (local index, or the self_hosted /v1 API)")
+  .description("Full-text search across indexed session transcripts via the active store (local SQLite store, or the configured server HTTP API)")
   .option("-p, --project <value>", "Filter by project name or path")
   .option("--limit <count>", "Maximum matches to return", "20")
   .option("--json", "Output as JSON")
@@ -1258,8 +1258,8 @@ function printBackfillSummary(result: Awaited<ReturnType<typeof import("../lib/b
 
 program
   .command("backfill")
-  .description("Inventory or explicitly apply a bounded, checkpointed self_hosted session-content backfill")
-  .option("--apply", "Apply the selected backfill to the self_hosted /v1 API (default is inventory/dry-run)")
+  .description("Inventory or explicitly apply a bounded, checkpointed session-content backfill to the configured server HTTP API")
+  .option("--apply", "Apply the selected backfill to the configured server HTTP API (default is inventory/dry-run)")
   .option("--confirm-apply <token>", "Required with --apply; pass BACKFILL_APPLY")
   .option("--allow-production", "Permit production-like API URLs after separate out-of-band user approval")
   .option("-s, --source <source>", "Only backfill one provider: claude, codex, codewith, gemini")
@@ -1586,7 +1586,7 @@ async function runContentSyncCli(opts: ApiSyncCliOptions, commandName = "sync"):
 
 program
   .command("sync")
-  .description("Ingest local sessions; in self_hosted (api) mode, push sessions/messages/tool calls to the shared cloud registry")
+  .description("Ingest local sessions and push sessions/messages/tool calls to the configured server HTTP API")
   .option("--no-ingest", "Skip the local ingest before pushing")
   .option("-n, --dry-run", "Plan content sync without creating backups or pushing to the API")
   .option("--watch", "Run content sync repeatedly as a bounded-poll daemon")
@@ -1596,7 +1596,7 @@ program
   .option("-l, --limit <n>", "Maximum local sessions to scan per cycle", String(DEFAULT_SYNC_LIMIT))
   .option("--interval <seconds>", "Watch interval in seconds (minimum 5)")
   .option("--max-iterations <n>", "Stop watch mode after n cycles", "60")
-  .option("--backup-command <command>", "Required for live self_hosted pushes; output is suppressed")
+  .option("--backup-command <command>", "Required for live server HTTP API pushes; output is suppressed")
   .option("--json", "Output as JSON")
   .action(async (opts: ApiSyncCliOptions) => {
     await runContentSyncCli(opts);
@@ -1604,7 +1604,7 @@ program
 
 program
   .command("daemon")
-  .description("Watch local session changes and periodically push session content to the self_hosted /v1 API")
+  .description("Watch local session changes and periodically push session content to the configured server HTTP API")
   .option("--no-ingest", "Skip the local ingest before each sync cycle")
   .option("-n, --dry-run", "Plan each sync cycle without creating backups or pushing to the API")
   .option("-s, --source <source>", "Only sync one provider: claude, codex, codewith, gemini")
@@ -1613,7 +1613,7 @@ program
   .option("-l, --limit <n>", "Maximum local sessions to scan per cycle", String(DEFAULT_SYNC_LIMIT))
   .option("--interval <seconds>", "Watch interval in seconds (minimum 5)", "60")
   .option("--max-iterations <n>", "Stop after n cycles; pass a larger value for longer supervised runs", "60")
-  .option("--backup-command <command>", "Required for live self_hosted pushes; output is suppressed")
+  .option("--backup-command <command>", "Required for live server HTTP API pushes; output is suppressed")
   .option("--status", "Print provider ingest-watch roots and persisted metrics, then exit")
   .option("--json", "Emit one JSON object per cycle")
   .action(async (opts: ApiSyncCliOptions) => {
@@ -1795,7 +1795,7 @@ program
 
 program
   .command("create")
-  .description("Create a session record in the active store (local index, or the self_hosted /v1 API when HASNA_SESSIONS_API_URL + HASNA_SESSIONS_API_KEY are set)")
+  .description("Create a session record in the active store (local SQLite store, or the configured server HTTP API when HASNA_SESSIONS_API_URL + HASNA_SESSIONS_API_KEY are set)")
   .requiredOption("--source <source>", "Session source: claude, codex, codewith, or gemini")
   .requiredOption("--source-id <id>", "Provider-native session id")
   .option("--title <title>", "Session title")
@@ -1830,7 +1830,7 @@ program
 
 program
   .command("delete <id>")
-  .description("Delete a session record from the active store (local index, or the self_hosted /v1 API when HASNA_SESSIONS_API_URL + HASNA_SESSIONS_API_KEY are set)")
+  .description("Delete a session record from the active store (local SQLite store, or the configured server HTTP API when HASNA_SESSIONS_API_URL + HASNA_SESSIONS_API_KEY are set)")
   .option("--json", "Output as JSON")
   .action(async (id: string, opts: { json?: boolean }) => {
     const { resolveSessionStore } = await import("../db/session-store.js");
