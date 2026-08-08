@@ -82,7 +82,10 @@ describe("generated Projects SDK server parity", () => {
       service_instance: "urn:hasna:conversations:test",
       source_package: "@hasna/conversations",
       target_kind: "channel",
-      locator: { kind: "external_uuid", value: "515fbb15-4661-4cdc-b1df-f719797b8cad" },
+      locator: {
+        kind: "conversations_channel_id",
+        value: "chn_79fa9c68937a1d020d6031dcaa3dd8d7",
+      },
       scope: "resource",
       labels: { channel_name: "sdk-parity" },
     };

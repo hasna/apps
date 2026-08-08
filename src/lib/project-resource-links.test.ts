@@ -21,8 +21,8 @@ function conversationsChannel(name = "email-triage"): ProjectResourceLinkInput {
     source_package: "@hasna/conversations",
     target_kind: "channel",
     locator: {
-      kind: "external_uuid",
-      value: "515fbb15-4661-4cdc-b1df-f719797b8cad",
+      kind: "conversations_channel_id",
+      value: "chn_79fa9c68937a1d020d6031dcaa3dd8d7",
     },
     scope: "collection",
     labels: { channel_name: name },
@@ -45,11 +45,42 @@ function todosProject(): ProjectResourceLinkInput {
 }
 
 describe("project resource-link schema", () => {
-  test("is closed and refuses mutable channel names or foreign packages as identity", () => {
+  test("accepts immutable Conversations channel IDs without relabeling them as UUIDs", () => {
+    const normalized = normalizeProjectResourceLink({
+      ...conversationsChannel(),
+      locator: {
+        kind: "conversations_channel_id",
+        value: "chn_79fa9c68937a1d020d6031dcaa3dd8d7",
+      },
+    });
+    expect(normalized.locator).toEqual({
+      kind: "conversations_channel_id",
+      value: "chn_79fa9c68937a1d020d6031dcaa3dd8d7",
+    });
     expect(() => normalizeProjectResourceLink({
       ...conversationsChannel(),
-      locator: { kind: "external_uuid", value: "email-triage" },
-    })).toThrow(/external_uuid/);
+      locator: {
+        kind: "conversations_channel_id",
+        value: "email-triage",
+      },
+    })).toThrow(/conversations channel ID/);
+  });
+
+  test("preserves external UUID locators and refuses mutable channel names or foreign packages as identity", () => {
+    expect(normalizeProjectResourceLink({
+      ...conversationsChannel(),
+      locator: {
+        kind: "external_uuid",
+        value: "515FBB15-4661-4CDC-B1DF-F719797B8CAD",
+      },
+    }).locator).toEqual({
+      kind: "external_uuid",
+      value: "515fbb15-4661-4cdc-b1df-f719797b8cad",
+    });
+    expect(() => normalizeProjectResourceLink({
+      ...conversationsChannel(),
+      locator: { kind: "conversations_channel_id", value: "email-triage" },
+    })).toThrow(/conversations channel ID/);
     expect(() => normalizeProjectResourceLink({
       ...conversationsChannel(),
       source_package: "@hasna/todos",
@@ -62,6 +93,13 @@ describe("project resource-link schema", () => {
       ...conversationsChannel(),
       unexpected: true,
     } as ProjectResourceLinkInput)).toThrow(/unknown field/);
+    expect(() => normalizeProjectResourceLink({
+      ...todosProject(),
+      locator: {
+        kind: "conversations_channel_id",
+        value: "chn_79fa9c68937a1d020d6031dcaa3dd8d7",
+      },
+    })).toThrow(/only valid for Conversations channel links/);
   });
 
   test("stores immutable locator columns and rejects direct identity mutation", () => {

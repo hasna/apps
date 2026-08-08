@@ -298,7 +298,10 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
           type: "object",
           additionalProperties: false,
           properties: {
-            kind: { type: "string", enum: ["external_uuid", "canonical_uri"] },
+            kind: {
+              type: "string",
+              enum: ["external_uuid", "canonical_uri", "conversations_channel_id"],
+            },
             value: { type: "string" },
           },
           required: ["kind", "value"],

@@ -84,6 +84,7 @@ describe("projects-serve migrations", () => {
     expect(migrations.some((m) => /CREATE TABLE IF NOT EXISTS workspaces/i.test(m.sql))).toBe(true);
     expect(ids).toContain("projects:0004_guarded_project_mutation_runtime_grants");
     expect(ids).toContain("projects:0006_project_resource_links");
+    expect(ids).toContain("projects:0007_conversations_channel_locator");
   });
 
   test("guarded receipt grant migration derives existing DML roles and grants only receipt reads and inserts", () => {
@@ -110,6 +111,21 @@ describe("projects-serve migrations", () => {
     expect(migration!.sql).toContain("COUNT(DISTINCT privilege.privilege_type) = 4");
     expect(migration!.sql).toContain("GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE");
     expect(migration!.sql).not.toContain("projects_app");
+  });
+
+  test("channel locator migration widens only the closed locator-kind constraint", () => {
+    const migration = loadMigrations().find(
+      (item) => item.id === "projects:0007_conversations_channel_locator",
+    );
+    expect(migration).toBeDefined();
+    expect(migration!.sql).toContain(
+      "DROP CONSTRAINT IF EXISTS project_resource_links_locator_kind_check",
+    );
+    expect(migration!.sql).toContain(
+      "CHECK(locator_kind IN ('external_uuid', 'canonical_uri', 'conversations_channel_id'))",
+    );
+    expect(migration!.sql).not.toContain("DROP TABLE");
+    expect(migration!.sql).not.toContain("DELETE FROM");
   });
 
   test("every migration has a sha256 checksum", () => {

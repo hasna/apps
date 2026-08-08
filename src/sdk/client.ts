@@ -33,7 +33,7 @@ export interface GuardedProjectRead { "ok": boolean; "project_id": string; "proj
 
 export interface ProjectResourceLinkLabels { "name"?: string; "channel_name"?: string; "path"?: string; "tags"?: Array<string> }
 
-export interface ProjectResourceLinkLocator { "kind": "external_uuid" | "canonical_uri"; "value": string }
+export interface ProjectResourceLinkLocator { "kind": "external_uuid" | "canonical_uri" | "conversations_channel_id"; "value": string }
 
 export interface ProjectResourceLinkInput { "authority": "todos" | "conversations" | "knowledge" | "mementos"; "service_instance": string; "source_package": "@hasna/todos" | "@hasna/conversations" | "@hasna/knowledge" | "@hasna/mementos"; "target_kind": "project" | "task_list" | "plan" | "channel" | "collection" | "item"; "locator": ProjectResourceLinkLocator; "scope": "resource" | "collection"; "labels"?: ProjectResourceLinkLabels }
 

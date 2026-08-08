@@ -121,6 +121,11 @@ describe("projects-serve probes", () => {
     expect(spec.components.schemas.GuardedProjectRead.required).toContain("project");
     expect(spec.components.schemas.GuardedProjectRead.required).toContain("resource_links");
     expect(spec.components.schemas.ProjectResourceLinkInput.additionalProperties).toBe(false);
+    expect(spec.components.schemas.ProjectResourceLinkLocator.properties.kind.enum).toEqual([
+      "external_uuid",
+      "canonical_uri",
+      "conversations_channel_id",
+    ]);
     expect(spec.components.schemas.Workspace.required).toEqual(expect.arrayContaining([
       "s3_bucket",
       "s3_prefix",
@@ -596,7 +601,10 @@ describe("projects-serve auth", () => {
       service_instance: "urn:hasna:conversations:test",
       source_package: "@hasna/conversations",
       target_kind: "channel",
-      locator: { kind: "external_uuid", value: "515fbb15-4661-4cdc-b1df-f719797b8cad" },
+      locator: {
+        kind: "conversations_channel_id",
+        value: "chn_79fa9c68937a1d020d6031dcaa3dd8d7",
+      },
       scope: "resource",
       labels: { channel_name: "http-resource" },
       created_at: "2026-08-08 00:00:00.000",
