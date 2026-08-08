@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.10 — 2026-08-08
+
+Release of the PostgreSQL migration compatibility fix merged in #32.
+
+- Restore the exact historical `files-0113` migration so databases that
+  already applied it are recognized by the migration ledger.
+- Preserve checksum-drift and unknown-migration downgrade guards without
+  renumbering any existing migration.
+
 ## 0.3.9 — 2026-08-08
 
 Release of the hosted content retrieval and event-loop isolation fixes merged
