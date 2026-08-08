@@ -9,7 +9,10 @@ import type {
   Workspace,
   WorkspaceIntegrations,
 } from "../types/workspace.js";
-import { PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS } from "../types/workspace.js";
+import {
+  PROJECT_RESOURCE_AUTHORITIES,
+  PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS,
+} from "../types/workspace.js";
 import { canonicalJson, sha256 } from "./guarded-project-mutation.js";
 
 export type { ProjectResourceLinkInput } from "../types/workspace.js";
@@ -20,6 +23,7 @@ const SOURCE_PACKAGE_BY_AUTHORITY: Record<ProjectResourceAuthority, string> = {
   conversations: "@hasna/conversations",
   knowledge: "@hasna/knowledge",
   mementos: "@hasna/mementos",
+  orgs: "@hasna/orgs",
 };
 
 const TARGET_KINDS_BY_AUTHORITY: Record<ProjectResourceAuthority, readonly ProjectResourceTargetKind[]> = {
@@ -27,6 +31,7 @@ const TARGET_KINDS_BY_AUTHORITY: Record<ProjectResourceAuthority, readonly Proje
   conversations: ["project", "channel"],
   knowledge: ["collection", "item"],
   mementos: ["project", "item"],
+  orgs: ["org", "project"],
 };
 
 const LINK_FIELDS = new Set([
@@ -101,7 +106,7 @@ function normalizeLabels(value: unknown): ProjectResourceLinkLabels {
 export function normalizeProjectResourceLink(input: ProjectResourceLinkInput): ProjectResourceLinkInput {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("resource link must be an object");
   assertClosedObject(input, LINK_FIELDS, "resource link");
-  if (!["todos", "conversations", "knowledge", "mementos"].includes(input.authority)) {
+  if (!PROJECT_RESOURCE_AUTHORITIES.includes(input.authority)) {
     throw new Error("resource link authority is unsupported");
   }
   const authority = input.authority;
@@ -257,6 +262,8 @@ const PROJECTIONS = [
   { key: "todos_project_id", match: (link: ProjectResourceLink) => link.authority === "todos" && link.target_kind === "project" },
   { key: "todos_task_list_id", match: (link: ProjectResourceLink) => link.authority === "todos" && link.target_kind === "task_list" },
   { key: "mementos_project_id", match: (link: ProjectResourceLink) => link.authority === "mementos" && link.target_kind === "project" },
+  { key: "orgs_org_id", match: (link: ProjectResourceLink) => link.authority === "orgs" && link.target_kind === "org" },
+  { key: "orgs_project_id", match: (link: ProjectResourceLink) => link.authority === "orgs" && link.target_kind === "project" },
   { key: "conversations_channel", match: (link: ProjectResourceLink) => link.authority === "conversations" && link.target_kind === "channel" },
 ] as const;
 

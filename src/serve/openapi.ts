@@ -311,15 +311,15 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
           type: "object",
           additionalProperties: false,
           properties: {
-            authority: { type: "string", enum: ["todos", "conversations", "knowledge", "mementos"] },
+            authority: { type: "string", enum: ["todos", "conversations", "knowledge", "mementos", "orgs"] },
             service_instance: { type: "string" },
             source_package: {
               type: "string",
-              enum: ["@hasna/todos", "@hasna/conversations", "@hasna/knowledge", "@hasna/mementos"],
+              enum: ["@hasna/todos", "@hasna/conversations", "@hasna/knowledge", "@hasna/mementos", "@hasna/orgs"],
             },
             target_kind: {
               type: "string",
-              enum: ["project", "task_list", "plan", "channel", "collection", "item"],
+              enum: ["org", "project", "task_list", "plan", "channel", "collection", "item"],
             },
             locator: ref("ProjectResourceLinkLocator"),
             scope: { type: "string", enum: ["resource", "collection"] },

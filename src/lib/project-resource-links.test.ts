@@ -44,6 +44,36 @@ function todosProject(): ProjectResourceLinkInput {
   };
 }
 
+function orgsOrg(): ProjectResourceLinkInput {
+  return {
+    authority: "orgs",
+    service_instance: "urn:hasna:orgs:service:primary",
+    source_package: "@hasna/orgs",
+    target_kind: "org",
+    locator: {
+      kind: "canonical_uri",
+      value: "urn:hasna:orgs:org:hasna-family",
+    },
+    scope: "collection",
+    labels: { name: "Hasna Family" },
+  };
+}
+
+function orgsProject(): ProjectResourceLinkInput {
+  return {
+    authority: "orgs",
+    service_instance: "urn:hasna:orgs:service:primary",
+    source_package: "@hasna/orgs",
+    target_kind: "project",
+    locator: {
+      kind: "canonical_uri",
+      value: "urn:hasna:orgs:project:nanny-onboarding",
+    },
+    scope: "resource",
+    labels: { name: "Nanny Onboarding" },
+  };
+}
+
 describe("project resource-link schema", () => {
   test("accepts immutable Conversations channel IDs without relabeling them as UUIDs", () => {
     const normalized = normalizeProjectResourceLink({
@@ -102,6 +132,27 @@ describe("project resource-link schema", () => {
     })).toThrow(/only valid for Conversations channel links/);
   });
 
+  test("accepts only organization and project nodes owned by @hasna/orgs", () => {
+    expect(normalizeProjectResourceLink(orgsOrg())).toMatchObject({
+      authority: "orgs",
+      source_package: "@hasna/orgs",
+      target_kind: "org",
+    });
+    expect(normalizeProjectResourceLink(orgsProject())).toMatchObject({
+      authority: "orgs",
+      source_package: "@hasna/orgs",
+      target_kind: "project",
+    });
+    expect(() => normalizeProjectResourceLink({
+      ...orgsOrg(),
+      source_package: "@hasna/projects",
+    })).toThrow(/source_package/);
+    expect(() => normalizeProjectResourceLink({
+      ...orgsOrg(),
+      target_kind: "team" as never,
+    })).toThrow(/target_kind/);
+  });
+
   test("stores immutable locator columns and rejects direct identity mutation", () => {
     const db = makeDb();
     const project = createWorkspace({ name: "Immutable Links", slug: "immutable-links" }, db);
@@ -156,6 +207,29 @@ describe("project resource-link guarded lifecycle", () => {
       response_byte_limit: 64_000,
       time_budget_ms: 5_000,
     }, db).links).toHaveLength(2);
+    db.close();
+  });
+
+  test("projects Orgs organization and project links into compatibility integrations", () => {
+    const db = makeDb();
+    const project = createWorkspace({ name: "Nanny Onboarding", slug: "nanny-onboarding" }, db);
+    const added = mutateProjectResourceLinks({
+      project_id: project.id,
+      operation_id: "op-add-orgs-links",
+      step_id: "orgs-links",
+      mode: "add",
+      expected_revision: project.updated_at,
+      links: [orgsOrg(), orgsProject()],
+      response_byte_limit: 64_000,
+      time_budget_ms: 5_000,
+    }, db);
+
+    expect(added.outcome).toBe("accepted");
+    expect(added.after?.links).toHaveLength(2);
+    expect(added.after?.project.integrations).toEqual({
+      orgs_org_id: "urn:hasna:orgs:org:hasna-family",
+      orgs_project_id: "urn:hasna:orgs:project:nanny-onboarding",
+    });
     db.close();
   });
 

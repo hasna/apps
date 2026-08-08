@@ -6,6 +6,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Typed project resource links now accept `@hasna/orgs` organization and
+  project nodes, preserve them through SQLite and PostgreSQL migrations, and
+  project single links to `orgs_org_id` and `orgs_project_id` compatibility
+  integrations.
+
 ## [0.1.107]
 
 ### Added

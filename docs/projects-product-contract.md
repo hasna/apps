@@ -19,7 +19,12 @@ The public object is a project. A project is a high-level managed unit of work:
 - remote-intended repository
 - any local folder that should be tracked, launched, audited, or handed to an agent
 
-Projects is not a task manager. Task execution, checklists, status boards, and sprint-level work belong in `todos`. Briefs, specs, and decision documents belong in `brief`. Projects can link to those systems through integrations, but it should not duplicate their domain.
+Projects is not a task manager or organization graph. Task execution,
+checklists, status boards, and sprint-level work belong in `todos`. Briefs,
+specs, and decision documents belong in `brief`. Organization, team, member,
+ownership, and stewardship graphs belong in `orgs`. Projects links to those
+systems through typed references, but it does not duplicate their domains;
+Orgs project nodes point back to the authoritative Projects record.
 
 ## Public Language
 
@@ -78,7 +83,7 @@ Projects owns:
 - paths and locations across machines
 - roots and path templates for explicit checkout/import locations
 - labels, tags, and metadata for discovery
-- integrations: GitHub, todos, brief, mementos, conversations, files
+- integrations: GitHub, todos, brief, mementos, conversations, files, orgs
 - launch defaults: preferred agent, tmux profile, primary start command, session policy, start windows
 - runtime events: created, imported, updated, started, archived, deleted
 - agent attribution for all mutations and launch actions

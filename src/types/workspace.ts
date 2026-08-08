@@ -217,6 +217,10 @@ export interface WorkspaceIntegrations {
   /** Opaque default canvas id owned by the external Canvases product. */
   canvases_default_canvas_id?: string;
   mementos_project_id?: string;
+  /** Canonical ref for the owning organization node in @hasna/orgs. */
+  orgs_org_id?: string;
+  /** Canonical ref for the @hasna/orgs project node that points back here. */
+  orgs_project_id?: string;
   conversations_space?: string;
   conversations_channel?: string;
   /** Overrides the channel class implied by the project kind. */
@@ -447,7 +451,7 @@ export interface GuardedProjectMutationRollbackRequest extends GuardedProjectMut
   command?: string;
 }
 
-export const PROJECT_RESOURCE_AUTHORITIES = ["todos", "conversations", "knowledge", "mementos"] as const;
+export const PROJECT_RESOURCE_AUTHORITIES = ["todos", "conversations", "knowledge", "mementos", "orgs"] as const;
 export type ProjectResourceAuthority = (typeof PROJECT_RESOURCE_AUTHORITIES)[number];
 
 export const PROJECT_RESOURCE_LOCATOR_KINDS = [
@@ -462,6 +466,7 @@ export type ProjectResourceLinkScope = (typeof PROJECT_RESOURCE_LINK_SCOPES)[num
 export const PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS = 1_000;
 
 export type ProjectResourceTargetKind =
+  | "org"
   | "project"
   | "task_list"
   | "plan"
