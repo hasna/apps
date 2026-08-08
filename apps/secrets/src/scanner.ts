@@ -226,7 +226,8 @@ const DETECTORS: Detector[] = [
     id: "openai_api_key",
     severity: "high",
     structuralOnly: true,
-    pattern: new RegExp(`${token("sk", "-")}(?:${token("proj", "-")})?[A-Za-z0-9_-]{12,}`, "g"),
+    pattern: new RegExp(`(?:^|[^A-Za-z0-9_])(${token("sk", "-")}(?:${token("proj", "-")})?[A-Za-z0-9_-]{12,})`, "g"),
+    valueGroup: 1,
   },
   {
     id: "stripe_secret_key",
@@ -294,7 +295,7 @@ const DETECTORS: Detector[] = [
 
 const GIT_GREP_PATTERN = [
   `${token("sk", "-", "ant", "-")}[A-Za-z0-9_-]{12,}`,
-  `${token("sk", "-")}(${token("proj", "-")})?[A-Za-z0-9_-]{12,}`,
+  `(^|[^A-Za-z0-9_])${token("sk", "-")}(${token("proj", "-")})?[A-Za-z0-9_-]{12,}`,
   `${token("[sr]", "k", "_")}(live|test)${token("_")}[0-9A-Za-z]{10,}`,
   `${token("---", "--")}BEGIN ([A-Z0-9]+ )*PRIVATE KEY${token("---", "--")}`,
   `${token("gh", "[opusr]", "_")}[A-Za-z0-9_]{12,}`,
