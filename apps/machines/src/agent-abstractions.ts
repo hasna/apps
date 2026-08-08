@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
-import { buildSshCommand } from "./commands/ssh.js";
+import { buildSshCommand, buildSshCommandPlan } from "./commands/ssh.js";
+import {
+  runResolvedMachineCommand,
+  type MachineCommandResult,
+  type MachineCommandRunner,
+  type ResolvedMachineCommand,
+} from "./remote.js";
 import {
   checkMachineCompatibility,
   type CompatibilityCommandRunner,
@@ -81,6 +87,8 @@ export interface MachineHealthOptions extends AgentMachineSelectorOptions, Agent
 export interface CommandMatrixOptions extends AgentMachineSelectorOptions {
   command?: string;
   commandLabel?: string;
+  executionRunner?: MachineCommandRunner;
+  executionProbeTimeoutMs?: number;
 }
 
 export interface FleetRoutingOptions extends AgentMachineSelectorOptions {}
@@ -88,6 +96,8 @@ export interface FleetRoutingOptions extends AgentMachineSelectorOptions {}
 export interface FleetLoopPreflightOptions extends MachineHealthOptions {
   command?: string;
   commandLabel?: string;
+  executionRunner?: MachineCommandRunner;
+  executionProbeTimeoutMs?: number;
 }
 
 export interface MachineHealthCheckSummary {
@@ -194,6 +204,21 @@ export interface CommandMatrixCommandPlan {
   private_shell_command: string | null;
 }
 
+export type CommandExecutionProbeStatus =
+  | "ready"
+  | "route_unavailable"
+  | "authentication_denied"
+  | "timed_out"
+  | "failed";
+
+export interface CommandExecutionProbe {
+  checked: boolean;
+  ready: boolean;
+  status: CommandExecutionProbeStatus;
+  source: MachineRouteKind;
+  exit_code: number | null;
+}
+
 export interface CommandMatrixRow {
   machine_id: string;
   display_name: string;
@@ -203,6 +228,7 @@ export interface CommandMatrixRow {
   source: MachineRouteKind;
   confidence: MachineRouteConfidence;
   local: boolean;
+  execution: CommandExecutionProbe;
   command: CommandMatrixCommandPlan;
   blocked_by: string[];
   warnings: string[];
@@ -585,19 +611,113 @@ function commandSha256(command: string | undefined): string | null {
   return trimmed ? createHash("sha256").update(trimmed).digest("hex") : null;
 }
 
-function readinessForCommand(route: MachineRouteResolution): AgentReadinessStatus {
-  if (!route.ok) return "blocked";
+function readinessForCommand(route: MachineRouteResolution, execution: CommandExecutionProbe): AgentReadinessStatus {
+  if (!route.ok || !execution.ready) return "blocked";
   if (route.confidence === "low") return "degraded";
   if (route.confidence === "none") return "unknown";
   return "ready";
 }
 
-function blockedByForCommand(route: MachineRouteResolution): string[] {
+function blockedByForCommand(route: MachineRouteResolution, execution: CommandExecutionProbe): string[] {
   const blocked: string[] = [];
   if (!route.ok) blocked.push("route_unavailable");
   if (route.confidence === "none") blocked.push("route_confidence_none");
   if (route.confidence === "low") blocked.push("route_confidence_low");
+  if (execution.status === "authentication_denied") blocked.push("ssh_authentication_denied");
+  if (execution.status === "timed_out") blocked.push("execution_probe_timed_out");
+  if (execution.status === "failed") blocked.push("execution_probe_failed");
   return blocked;
+}
+
+function executionProbeStatus(result: MachineCommandResult): CommandExecutionProbeStatus {
+  if (result.exitCode === 0) return "ready";
+  if (result.timedOut || result.exitCode === 124) return "timed_out";
+  const detail = `${result.stderr}\n${result.stdout}`.toLowerCase();
+  if (
+    detail.includes("permission denied")
+    || detail.includes("authentication failed")
+    || detail.includes("no supported authentication methods available")
+    || detail.includes("too many authentication failures")
+  ) {
+    return "authentication_denied";
+  }
+  return "failed";
+}
+
+function probeCommandExecution(input: {
+  machineId: string;
+  route: MachineRouteResolution;
+  topology: MachineTopology;
+  options: CommandMatrixOptions;
+}): CommandExecutionProbe {
+  if (!input.route.ok) {
+    return {
+      checked: false,
+      ready: false,
+      status: "route_unavailable",
+      source: input.route.source,
+      exit_code: null,
+    };
+  }
+
+  try {
+    const timeoutMs = Number.isFinite(input.options.executionProbeTimeoutMs)
+      ? Math.max(1, Math.floor(input.options.executionProbeTimeoutMs ?? 5_000))
+      : 5_000;
+    const commandOptions = {
+      timeoutMs,
+      killGraceMs: 500,
+    };
+    const result = input.options.executionRunner
+      ? input.options.executionRunner(input.machineId, "true", commandOptions)
+      : runResolvedMachineCommand(
+        input.machineId,
+        resolveExecutionProbeCommand(input.machineId, input.route, input.topology),
+        commandOptions,
+      );
+    const status = result.source === input.route.route
+      ? executionProbeStatus(result)
+      : "failed";
+    return {
+      checked: true,
+      ready: status === "ready",
+      status,
+      source: result.source,
+      exit_code: result.exitCode,
+    };
+  } catch {
+    return {
+      checked: true,
+      ready: false,
+      status: "failed",
+      source: input.route.source,
+      exit_code: null,
+    };
+  }
+}
+
+function resolveExecutionProbeCommand(
+  machineId: string,
+  route: MachineRouteResolution,
+  topology: MachineTopology,
+): ResolvedMachineCommand {
+  if (route.local) {
+    return {
+      source: "local",
+      command: "bash",
+      args: ["-c", "true"],
+      shellCommand: "true",
+      usesShell: true,
+    };
+  }
+  const plan = buildSshCommandPlan(machineId, "true", { topology });
+  return {
+    source: plan.route,
+    command: plan.command,
+    args: plan.args,
+    shellCommand: plan.shellCommand,
+    usesShell: false,
+  };
 }
 
 function buildCommandPlan(input: {
@@ -653,24 +773,34 @@ function buildCommandMatrixRow(input: {
   options: CommandMatrixOptions;
 }): CommandMatrixRow {
   const route = resolveMachineRoute(input.selected.machineId, { ...input.options, topology: input.topology });
-  const readiness = readinessForCommand(route);
+  const execution = probeCommandExecution({
+    machineId: input.selected.machineId,
+    route,
+    topology: input.topology,
+    options: input.options,
+  });
+  const readiness = readinessForCommand(route, execution);
   return {
     machine_id: input.selected.machineId,
     display_name: input.selected.entry?.display_name ?? input.selected.machineId,
-    can_run: route.ok,
+    can_run: route.ok && execution.ready,
     readiness,
     route: route.route,
     source: route.source,
     confidence: route.confidence,
     local: route.local,
+    execution,
     command: buildCommandPlan({
       machineId: input.selected.machineId,
       route,
       topology: input.topology,
       options: input.options,
     }),
-    blocked_by: blockedByForCommand(route),
-    warnings: bounded(route.warnings),
+    blocked_by: blockedByForCommand(route, execution),
+    warnings: bounded([
+      ...route.warnings,
+      ...(execution.ready || !execution.checked ? [] : [`execution_probe_${execution.status}`]),
+    ]),
     detail_refs: routingDetailRefs(input.selected.machineId),
   };
 }
@@ -727,7 +857,7 @@ export function getFleetLoopPreflight(options: FleetLoopPreflightOptions = {}): 
       machine_id: health.machine_id,
       display_name: health.display_name,
       ready,
-      status: ready ? health.status : health.status === "ready" ? "blocked" : health.status,
+      status: canRun ? health.status : "blocked",
       can_run: canRun,
       route: command?.route ?? health.route,
       confidence: command?.confidence ?? health.confidence,
@@ -744,6 +874,13 @@ export function getFleetLoopPreflight(options: FleetLoopPreflightOptions = {}): 
         source: health.route,
         confidence: health.confidence,
         local: health.local,
+        execution: {
+          checked: false,
+          ready: false,
+          status: "route_unavailable",
+          source: health.route,
+          exit_code: null,
+        },
         command: buildCommandPlan({
           machineId: health.machine_id,
           route: resolveMachineRoute(health.machine_id, { ...options, topology: selection.topology }),

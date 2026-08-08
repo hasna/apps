@@ -703,7 +703,7 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
 
   server.tool(
     "machines_command_matrix",
-    "Return dry-run local/remote command routing choices for loop commands.",
+    "Return command plans gated by a bounded read-only execution-authentication probe.",
     {
       ...agentSelectorSchema,
       command: z.string().optional().describe("Loop command to plan; omitted keeps <loop-command> placeholder"),

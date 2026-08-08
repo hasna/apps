@@ -516,7 +516,7 @@ function renderFleetRoutingResult(result: FleetRoutingReport): string {
 
 function renderCommandMatrixResult(result: CommandMatrixReport): string {
   const lines = result.commands.map((row) =>
-    `${row.display_name.padEnd(18)} ${row.machine_id.padEnd(18)} ${row.can_run ? "run" : "blocked"} ${row.route}/${row.confidence} ${row.command.cli}`
+    `${row.display_name.padEnd(18)} ${row.machine_id.padEnd(18)} ${row.can_run ? "run" : "blocked"} ${row.route}/${row.confidence} exec:${row.execution.status} ${row.command.cli}`
   );
   return [
     renderKeyValueTable([
@@ -2199,7 +2199,7 @@ program
 
 program
   .command("command-matrix")
-  .description("Return dry-run local/remote command routing choices for loop commands")
+  .description("Return command plans gated by a bounded read-only execution-authentication probe")
   .option("--machine <id...>", "Limit to machine ids; comma-separated values are accepted")
   .option("--cmd <command>", "Loop command to plan; omitted keeps <loop-command> placeholder")
   .option("--command-label <label>", "Short label for the planned command")

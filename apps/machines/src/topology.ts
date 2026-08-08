@@ -207,6 +207,7 @@ export interface MachinesConsumerFieldCapabilities {
     raw_artifact_refs: true;
     private_route_redaction: true;
     dry_run_plans: true;
+    authenticated_execution_probe: true;
     loop_readiness: true;
     command_matrix: true;
     machine_health: true;
@@ -335,6 +336,7 @@ export const MACHINES_CONSUMER_FIELD_CAPABILITIES: MachinesConsumerFieldCapabili
     raw_artifact_refs: true,
     private_route_redaction: true,
     dry_run_plans: true,
+    authenticated_execution_probe: true,
     loop_readiness: true,
     command_matrix: true,
     machine_health: true,

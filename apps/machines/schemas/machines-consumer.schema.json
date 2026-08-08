@@ -337,6 +337,48 @@
         }
       }
     },
+    "command_execution_probe": {
+      "type": "object",
+      "required": [
+        "checked",
+        "ready",
+        "status",
+        "source",
+        "exit_code"
+      ],
+      "properties": {
+        "checked": {
+          "type": "boolean"
+        },
+        "ready": {
+          "type": "boolean"
+        },
+        "status": {
+          "enum": [
+            "ready",
+            "route_unavailable",
+            "authentication_denied",
+            "timed_out",
+            "failed"
+          ]
+        },
+        "source": {
+          "enum": [
+            "local",
+            "lan",
+            "tailscale",
+            "ssh",
+            "unknown"
+          ]
+        },
+        "exit_code": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      }
+    },
     "machine_health_row": {
       "type": "object",
       "required": [
@@ -564,6 +606,9 @@
         },
         "local": {
           "type": "boolean"
+        },
+        "execution": {
+          "$ref": "#/$defs/command_execution_probe"
         },
         "command": {
           "$ref": "#/$defs/command_matrix_plan"

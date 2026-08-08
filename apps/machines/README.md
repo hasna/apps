@@ -228,6 +228,14 @@ The matching MCP tools are `machines_loop_preflight`,
 the dispatch smoke report uses a fixed bounded target set and includes
 per-machine package, route, and daemon-readiness rows.
 
+`machines routing` reports route reachability only. `machines command-matrix`
+and `machines loop-preflight` additionally run a bounded read-only `true` probe
+through the selected command route. `can_run` is true only when that probe
+executes successfully, so an online Tailscale peer that rejects SSH
+authentication remains routable but is blocked for command execution. Probe
+results expose only a bounded status and exit code; route targets, commands,
+and SSH stderr remain redacted on public output.
+
 `machines dispatch-smoke` is a no-mutation diagnostic for open-dispatch
 self-healing. It checks the default affected fleet (`local`, `spark01`,
 `spark02` through a direct SSH alias when applicable, and `apple03`) while
