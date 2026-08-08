@@ -1,5 +1,5 @@
 import { dirname } from "node:path";
-import { buildSecretsExecShell } from "../secrets-exec.js";
+import { buildSecretsExecShell } from "../child-env.js";
 import type { SetupStep } from "../types.js";
 import { buildBashrcSpliceCommand } from "./bashrc-block.js";
 import { SWAP_FILE_PATH, SWAP_HEADROOM_GB, type EffectiveTemplate, type LoadedTemplateFile } from "./schema.js";

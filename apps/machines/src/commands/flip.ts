@@ -37,7 +37,7 @@
  */
 
 import type { FleetManifest, MachinePlatform } from "../types.js";
-import { buildSecretsExecShell } from "../secrets-exec.js";
+import { buildSecretsExecShell } from "../child-env.js";
 
 export type FlipMode = "api" | "local";
 
