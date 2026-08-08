@@ -11,6 +11,7 @@ import {
   deriveTodosProjectRegistrationIdempotencyKey,
   digestProjectRegistrationValue,
 } from "../project-registration/index.js";
+import { createSqliteTodosTaskManifestAuthority } from "../task-manifest/index.js";
 
 let db: Database;
 let store: TodosStorageAdapter;
@@ -51,6 +52,11 @@ beforeEach(() => {
         tenantId: "tenant-v1-test",
         corpusId: "corpus-v1-test",
       }),
+    getTaskManifestAuthority: () =>
+      createSqliteTodosTaskManifestAuthority({
+        database: db,
+        tenantId: "tenant-v1-test",
+      }),
     getVerifier: () => ({
       authenticate: async () => ({ ok: true, principal }),
     }) as ReturnType<NonNullable<V1RequestDependencies["getVerifier"]>>,
@@ -58,6 +64,59 @@ beforeEach(() => {
 });
 
 afterEach(() => resetDatabase());
+
+describe("/v1 task-manifest routing", () => {
+  test("applies and recovers the owning tenant's binding through the production v1 router", async () => {
+    const projectId = "a0000000-0000-4000-8000-000000000051";
+    db.run(
+      `INSERT INTO projects (id, name, path, task_prefix, task_counter, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 0, ?, ?)`,
+      [
+        projectId,
+        "V1 task manifest",
+        "/disposable/v1-task-manifest",
+        "VTM",
+        "2026-08-08T00:00:00.000Z",
+        "2026-08-08T00:00:00.000Z",
+      ],
+    );
+    const appliedResponse = await request("/v1/task-manifest/apply", "POST", {
+      version: 1,
+      operation_id: "v1-task-manifest-receipt-recovery",
+      idempotency_key: "v1-task-manifest-receipt-recovery:apply",
+      project_id: projectId,
+      plan: { key: "receipt-recovery", name: "Receipt recovery" },
+      tasks: [{ key: "verify", title: "Verify v1 route" }],
+    });
+    expect(appliedResponse?.status).toBe(201);
+    const applied = await appliedResponse!.json() as {
+      result: { receipt: { receipt_id: string }; graph: { plan_id: string } };
+    };
+
+    const response = await request("/v1/task-manifest/bindings/lookup", "POST", {
+      authority: "todos",
+      route: "todos.task-manifest.v1",
+      schema_version: 1,
+      tenant_id: "tenant-v1-test",
+      plan_id: applied.result.graph.plan_id,
+      max_items: 1,
+    });
+
+    expect(response?.status).toBe(200);
+    expect(await response!.json()).toEqual({
+      result: {
+        authority: "todos",
+        route: "todos.task-manifest.v1",
+        schema_version: 1,
+        tenant_id: "tenant-v1-test",
+        plan_id: applied.result.graph.plan_id,
+        apply_receipt_id: applied.result.receipt.receipt_id,
+        binding_version: 1,
+        state: "applied",
+      },
+    });
+  });
+});
 
 describe("/v1 task-list cloud parity", () => {
   test("plans and idempotently applies an exact-project task-list repair", async () => {

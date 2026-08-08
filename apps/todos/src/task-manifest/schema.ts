@@ -3,6 +3,7 @@ import { TASK_PRIORITIES, TASK_STATUSES } from "../types/index.js";
 import {
   TodosTaskManifestError,
   type TodosTaskManifest,
+  type TodosTaskManifestBindingLookupRequest,
   type TodosTaskManifestCompensateRequest,
 } from "./types.js";
 
@@ -89,6 +90,15 @@ const compensationSchema = z.object({
   if_binding_version: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
 }).strict();
 
+const bindingLookupSchema = z.object({
+  authority: z.string().min(1).max(64),
+  route: z.string().min(1).max(128),
+  schema_version: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+  tenant_id: identifier,
+  plan_id: uuid,
+  max_items: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+}).strict();
+
 export function parseTodosTaskManifest(input: unknown): TodosTaskManifest {
   const parsed = schema.safeParse(input);
   if (!parsed.success) {
@@ -165,4 +175,16 @@ export function parseTodosTaskManifestCompensation(input: unknown): TodosTaskMan
     );
   }
   return parsed.data;
+}
+
+export function parseTodosTaskManifestBindingLookup(input: unknown): TodosTaskManifestBindingLookupRequest {
+  const parsed = bindingLookupSchema.safeParse(input);
+  if (!parsed.success) {
+    throw new TodosTaskManifestError(
+      "TODOS_TASK_MANIFEST_INVALID_INPUT",
+      `Invalid task-manifest binding lookup: ${parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ")}`,
+      { issues: parsed.error.issues },
+    );
+  }
+  return parsed.data as TodosTaskManifestBindingLookupRequest;
 }

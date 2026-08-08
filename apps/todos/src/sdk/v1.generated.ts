@@ -2,11 +2,17 @@
 // Regenerate: bun run scripts/generate-sdk.ts
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Todos V1 API 0.15.12
+// Source: Todos V1 API 0.15.13
 
 export interface Task { "id"?: string; "title"?: string; "description"?: string; "status"?: string; "priority"?: string; "project_id"?: string | null; "parent_id"?: string | null; "assigned_to"?: string | null; "agent_id"?: string | null; "tags"?: Array<string>; "version"?: number; "created_at"?: string; "updated_at"?: string }
 
 export interface Project { "id"?: string; "name"?: string; "path"?: string; "description"?: string | null; "task_list_id"?: string | null; "task_prefix"?: string | null; "task_counter"?: number; "created_at"?: string; "updated_at"?: string }
+
+export interface TaskManifestBindingLookupRequest { "authority": "todos"; "route": "todos.task-manifest.v1"; "schema_version": 1; "tenant_id": string; "plan_id": string; "max_items": 1 }
+
+export interface TaskManifestBindingLookupResult { "authority": "todos"; "route": "todos.task-manifest.v1"; "schema_version": 1; "tenant_id": string; "plan_id": string; "apply_receipt_id": string; "binding_version": number; "state": "applied" | "compensated" }
+
+export interface TaskManifestBindingLookupResponse { "result": TaskManifestBindingLookupResult }
 
 export interface TaskList { "id"?: string; "project_id"?: string | null; "slug"?: string; "name"?: string; "description"?: string | null; "metadata"?: Record<string, unknown>; "created_at"?: string; "updated_at"?: string }
 
@@ -425,6 +431,15 @@ export class TodosV1Client {
     /** Update a task list */
     async updateTaskList(id: string, body: UpdateTaskListInput, init?: RequestInit): Promise<{ "task_list"?: TaskList }> {
       return this.request("PATCH", `/v1/task-lists/${encodeURIComponent(String(id))}`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Recover one exact task-manifest apply receipt from its managed plan id */
+    async lookupTaskManifestBinding(body: TaskManifestBindingLookupRequest, init?: RequestInit): Promise<TaskManifestBindingLookupResponse> {
+      return this.request("POST", `/v1/task-manifest/bindings/lookup`, {
         body,
         query: undefined,
         init,

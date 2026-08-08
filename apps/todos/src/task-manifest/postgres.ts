@@ -1,5 +1,11 @@
 import { canonicalDigest, canonicalJson } from "./canonical.js";
-import type { NormalizedTaskManifest, PreparedTaskManifestFaults, TodosTaskManifestBackend } from "./backend.js";
+import {
+  validateTaskManifestBindingLookupRows,
+  type NormalizedTaskManifest,
+  type PreparedTaskManifestFaults,
+  type TaskManifestBindingLookupRow,
+  type TodosTaskManifestBackend,
+} from "./backend.js";
 import { postgresTaskManifestForeignReferenceSql } from "./reference-guard.js";
 import { postgresTodosTaskManifestSchemaSql } from "./schema-sql.js";
 import { DEFAULT_TODOS_POSTGRES_SYNC_TABLE, postgresTodosSyncSchemaSql, type TodosPostgresQueryClient } from "../storage/postgres-sync.js";
@@ -94,6 +100,7 @@ export class PostgresTodosTaskManifestBackend implements TodosTaskManifestBacken
   readonly kind = "postgresql" as const;
   private readonly service: string;
   private readonly tableName: string;
+  private readonly tenantId: string;
   private schemaReady: Promise<void> | null = null;
 
   constructor(
@@ -102,12 +109,13 @@ export class PostgresTodosTaskManifestBackend implements TodosTaskManifestBacken
   ) {
     this.service = options.service ?? "todos";
     this.tableName = safeIdentifier(options.tableName ?? DEFAULT_TODOS_POSTGRES_SYNC_TABLE, "tableName");
+    this.tenantId = options.tenantId ?? "default";
   }
 
   private async ensureSchema(): Promise<void> {
     this.schemaReady ??= (async () => {
       for (const sql of postgresTodosSyncSchemaSql(this.tableName)) await this.client.query(sql);
-      for (const sql of postgresTodosTaskManifestSchemaSql()) await this.client.query(sql);
+      for (const sql of postgresTodosTaskManifestSchemaSql(this.tenantId)) await this.client.query(sql);
     })();
     await this.schemaReady;
   }
@@ -133,8 +141,8 @@ export class PostgresTodosTaskManifestBackend implements TodosTaskManifestBacken
       await tx.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`${this.service}\u001f${manifest.operation_id}`]);
       await tx.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`${this.service}\u001fidempotency\u001f${manifest.idempotency_key}`]);
       const existing = await tx.query<JsonRecord>(
-        "SELECT * FROM todos_task_manifest_bindings WHERE operation_id = $1 LIMIT 1 FOR UPDATE",
-        [manifest.operation_id],
+        "SELECT * FROM todos_task_manifest_bindings WHERE tenant_id = $1 AND operation_id = $2 LIMIT 1 FOR UPDATE",
+        [this.tenantId, manifest.operation_id],
       );
       if (existing.rows[0]) {
         const binding = existing.rows[0];
@@ -147,8 +155,8 @@ export class PostgresTodosTaskManifestBackend implements TodosTaskManifestBacken
         return { ...parseJson<TodosTaskManifestApplyResult>(binding["result_json"]), duplicate: true };
       }
       const reused = await tx.query<JsonRecord>(
-        "SELECT operation_id FROM todos_task_manifest_bindings WHERE idempotency_key = $1 LIMIT 1",
-        [manifest.idempotency_key],
+        "SELECT operation_id FROM todos_task_manifest_bindings WHERE tenant_id = $1 AND idempotency_key = $2 LIMIT 1",
+        [this.tenantId, manifest.idempotency_key],
       );
       if (reused.rows[0]) throw new TodosTaskManifestError("TODOS_TASK_MANIFEST_IDEMPOTENCY_CONFLICT", "Idempotency key is already used");
       if (manifest.if_binding_version !== undefined && manifest.if_binding_version !== 0) {
@@ -228,10 +236,10 @@ export class PostgresTodosTaskManifestBackend implements TodosTaskManifestBacken
       const manifestJson = canonicalJson(manifest);
       const resultJson = canonicalJson(result);
       await tx.query(`INSERT INTO todos_task_manifest_receipts (
-        receipt_id, authority, route, schema_version, kind, operation_id, idempotency_key,
+        receipt_id, tenant_id, authority, route, schema_version, kind, operation_id, idempotency_key,
         request_digest, result_digest, binding_version, apply_receipt_id, manifest_json, result_json, created_at
-      ) VALUES ($1, 'todos', 'todos.task-manifest.v1', 1, 'apply', $2, $3, $4, $5, 1, NULL, $6::jsonb, $7::jsonb, $8)`, [
-        input.receipt_id, manifest.operation_id, manifest.idempotency_key, input.request_digest,
+      ) VALUES ($1, $2, 'todos', 'todos.task-manifest.v1', 1, 'apply', $3, $4, $5, $6, 1, NULL, $7::jsonb, $8::jsonb, $9)`, [
+        input.receipt_id, this.tenantId, manifest.operation_id, manifest.idempotency_key, input.request_digest,
         input.result_digest, manifestJson, resultJson, input.now,
       ]);
       for (const entry of input.outbox) {
@@ -243,10 +251,10 @@ export class PostgresTodosTaskManifestBackend implements TodosTaskManifestBacken
       }
       fault(faults, "after_outbox_write");
       await tx.query(`INSERT INTO todos_task_manifest_bindings (
-        operation_id, idempotency_key, request_digest, result_digest, apply_receipt_id,
+        operation_id, tenant_id, idempotency_key, request_digest, result_digest, apply_receipt_id,
         manifest_json, result_json, state, version, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, 'applied', 1, $8, $8)`, [
-        manifest.operation_id, manifest.idempotency_key, input.request_digest, input.result_digest,
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, 'applied', 1, $9, $9)`, [
+        manifest.operation_id, this.tenantId, manifest.idempotency_key, input.request_digest, input.result_digest,
         input.receipt_id, manifestJson, resultJson, input.now,
       ]);
       fault(faults, "after_receipt_write");
@@ -257,11 +265,39 @@ export class PostgresTodosTaskManifestBackend implements TodosTaskManifestBacken
   async readExact(receiptId: string): Promise<TodosTaskManifestApplyResult> {
     await this.ensureSchema();
     const result = await this.client.query<JsonRecord>(
-      "SELECT result_json FROM todos_task_manifest_receipts WHERE receipt_id = $1 AND kind = 'apply' LIMIT 1",
-      [receiptId],
+      "SELECT result_json FROM todos_task_manifest_receipts WHERE tenant_id = $1 AND receipt_id = $2 AND kind = 'apply' LIMIT 1",
+      [this.tenantId, receiptId],
     );
     if (!result.rows[0]) throw new TodosTaskManifestError("TODOS_TASK_MANIFEST_RECEIPT_NOT_FOUND", `Apply receipt not found: ${receiptId}`);
     return { ...parseJson<TodosTaskManifestApplyResult>(result.rows[0]["result_json"]), duplicate: false };
+  }
+
+  async lookupBindingByPlanId(planId: string) {
+    await this.ensureSchema();
+    const result = await this.client.query<TaskManifestBindingLookupRow>(`
+      SELECT
+        b.apply_receipt_id AS apply_receipt_id,
+        b.state AS state,
+        b.version AS binding_version,
+        b.tenant_id AS binding_tenant_id,
+        b.operation_id AS binding_operation_id,
+        b.result_json #>> '{graph,plan_id}' AS binding_plan_id,
+        r.tenant_id AS receipt_tenant_id,
+        r.authority AS receipt_authority,
+        r.route AS receipt_route,
+        r.schema_version AS receipt_schema_version,
+        r.kind AS receipt_kind,
+        r.operation_id AS receipt_operation_id,
+        r.result_json #>> '{graph,plan_id}' AS receipt_plan_id
+      FROM todos_task_manifest_bindings b
+      LEFT JOIN todos_task_manifest_receipts r
+        ON r.receipt_id = b.apply_receipt_id
+        AND r.tenant_id = b.tenant_id
+      WHERE b.tenant_id = $1
+        AND b.result_json #>> '{graph,plan_id}' = $2
+      LIMIT 2
+    `, [this.tenantId, planId]);
+    return validateTaskManifestBindingLookupRows(result.rows, this.tenantId, planId);
   }
 
   async markOutboxDelivered(outboxId: string, deliveredAt: string): Promise<void> {
@@ -269,7 +305,13 @@ export class PostgresTodosTaskManifestBackend implements TodosTaskManifestBacken
     await this.client.transaction(async (tx) => {
       const result = await tx.query(`UPDATE todos_task_manifest_outbox
         SET status = 'delivered', delivered_at = $1, attempts = attempts + 1
-        WHERE id = $2 AND status = 'pending' RETURNING id`, [deliveredAt, outboxId]);
+        WHERE id = $2 AND status = 'pending'
+          AND EXISTS (
+            SELECT 1 FROM todos_task_manifest_receipts r
+            WHERE r.receipt_id = todos_task_manifest_outbox.apply_receipt_id
+              AND r.tenant_id = $3
+          )
+        RETURNING id`, [deliveredAt, outboxId, this.tenantId]);
       if (!result.rows[0]) throw new TodosTaskManifestError("TODOS_TASK_MANIFEST_GRAPH_CONFLICT", `Pending outbox row not found: ${outboxId}`);
     });
   }
@@ -286,8 +328,11 @@ export class PostgresTodosTaskManifestBackend implements TodosTaskManifestBacken
       await tx.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`${this.service}\u001f${receipt.operation_id}`]);
       await tx.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`${this.service}\u001fcompensation-idempotency\u001f${input.idempotency_key}`]);
       const previous = await tx.query<JsonRecord>(
-        "SELECT apply_receipt_id, request_digest, result_json FROM todos_task_manifest_receipts WHERE kind = 'compensate' AND idempotency_key = $1 LIMIT 1",
-        [input.idempotency_key],
+        `SELECT apply_receipt_id, request_digest, result_json
+         FROM todos_task_manifest_receipts
+         WHERE tenant_id = $1 AND kind = 'compensate' AND idempotency_key = $2
+         LIMIT 1`,
+        [this.tenantId, input.idempotency_key],
       );
       if (previous.rows[0]) {
         const row = previous.rows[0];
@@ -297,14 +342,14 @@ export class PostgresTodosTaskManifestBackend implements TodosTaskManifestBacken
         return { ...parseJson<TodosTaskManifestCompensationResult>(row["result_json"]), duplicate: true };
       }
       const applyRows = await tx.query<JsonRecord>(
-        "SELECT * FROM todos_task_manifest_receipts WHERE receipt_id = $1 AND kind = 'apply' LIMIT 1",
-        [input.receipt_id],
+        "SELECT * FROM todos_task_manifest_receipts WHERE tenant_id = $1 AND receipt_id = $2 AND kind = 'apply' LIMIT 1",
+        [this.tenantId, input.receipt_id],
       );
       const applyRow = applyRows.rows[0];
       if (!applyRow) throw new TodosTaskManifestError("TODOS_TASK_MANIFEST_RECEIPT_NOT_FOUND", "Apply receipt not found");
       const bindingRows = await tx.query<JsonRecord>(
-        "SELECT * FROM todos_task_manifest_bindings WHERE operation_id = $1 LIMIT 1 FOR UPDATE",
-        [receipt.operation_id],
+        "SELECT * FROM todos_task_manifest_bindings WHERE tenant_id = $1 AND operation_id = $2 LIMIT 1 FOR UPDATE",
+        [this.tenantId, receipt.operation_id],
       );
       const binding = bindingRows.rows[0];
       if (!binding || Number(binding["version"]) !== input.if_binding_version) {
@@ -312,8 +357,11 @@ export class PostgresTodosTaskManifestBackend implements TodosTaskManifestBacken
       }
       if (binding["state"] !== "applied") throw new TodosTaskManifestError("TODOS_TASK_MANIFEST_COMPENSATION_REFUSED", "Graph is not applied");
       const delivered = await tx.query(
-        "SELECT id FROM todos_task_manifest_outbox WHERE apply_receipt_id = $1 AND status = 'delivered' LIMIT 1",
-        [input.receipt_id],
+        `SELECT o.id FROM todos_task_manifest_outbox o
+         JOIN todos_task_manifest_receipts r ON r.receipt_id = o.apply_receipt_id
+         WHERE r.tenant_id = $1 AND o.apply_receipt_id = $2 AND o.status = 'delivered'
+         LIMIT 1`,
+        [this.tenantId, input.receipt_id],
       );
       if (delivered.rows[0]) throw new TodosTaskManifestError("TODOS_TASK_MANIFEST_COMPENSATION_REFUSED", "Compensation refused: delivered outbox row exists");
       const applyResult = parseJson<TodosTaskManifestApplyResult>(applyRow["result_json"]);
@@ -326,7 +374,14 @@ export class PostgresTodosTaskManifestBackend implements TodosTaskManifestBacken
         ...(manifest.effects ?? []).map((effect) => ({ topic: effect.topic, payload: effect.payload as Record<string, unknown> })),
       ];
       const outboxRows = await tx.query<JsonRecord>(`SELECT id, topic, payload, payload_digest, status, attempts, delivered_at
-        FROM todos_task_manifest_outbox WHERE apply_receipt_id = $1 ORDER BY id`, [input.receipt_id]);
+        FROM todos_task_manifest_outbox
+        WHERE apply_receipt_id = $1
+          AND EXISTS (
+            SELECT 1 FROM todos_task_manifest_receipts r
+            WHERE r.receipt_id = todos_task_manifest_outbox.apply_receipt_id
+              AND r.tenant_id = $2
+          )
+        ORDER BY id`, [input.receipt_id, this.tenantId]);
       if (outboxRows.rows.length !== expectedEffects.length) {
         throw new TodosTaskManifestError("TODOS_TASK_MANIFEST_COMPENSATION_REFUSED", "Compensation refused: outbox changed since apply");
       }
@@ -421,7 +476,14 @@ export class PostgresTodosTaskManifestBackend implements TodosTaskManifestBacken
       }
       if (stored.rows.length !== managedIds.length) throw new TodosTaskManifestError("TODOS_TASK_MANIFEST_COMPENSATION_REFUSED", "Compensation refused: managed graph is incomplete");
 
-      await tx.query("UPDATE todos_task_manifest_outbox SET status = 'cancelled' WHERE apply_receipt_id = $1 AND status = 'pending'", [input.receipt_id]);
+      await tx.query(`UPDATE todos_task_manifest_outbox
+        SET status = 'cancelled'
+        WHERE apply_receipt_id = $1 AND status = 'pending'
+          AND EXISTS (
+            SELECT 1 FROM todos_task_manifest_receipts r
+            WHERE r.receipt_id = todos_task_manifest_outbox.apply_receipt_id
+              AND r.tenant_id = $2
+          )`, [input.receipt_id, this.tenantId]);
       const typedIds: Array<[string, string[]]> = [
         ["dependencies", applyResult.graph.dependency_ids], ["comments", applyResult.graph.comment_ids],
         ["verifications", applyResult.graph.verification_ids], ["tasks", taskIds], ["plans", [applyResult.graph.plan_id]],
@@ -434,16 +496,16 @@ export class PostgresTodosTaskManifestBackend implements TodosTaskManifestBacken
       const readback = await this.readback(tx, applyResult.graph);
       const result: TodosTaskManifestCompensationResult = { duplicate: false, receipt, absent: true, readback };
       await tx.query(`INSERT INTO todos_task_manifest_receipts (
-        receipt_id, authority, route, schema_version, kind, operation_id, idempotency_key,
+        receipt_id, tenant_id, authority, route, schema_version, kind, operation_id, idempotency_key,
         request_digest, result_digest, binding_version, apply_receipt_id, manifest_json, result_json, created_at
-      ) VALUES ($1, 'todos', 'todos.task-manifest.v1', 1, 'compensate', $2, $3, $4, $5, $6, $7, NULL, $8::jsonb, $9)`, [
-        compensationReceiptId, receipt.operation_id, input.idempotency_key, requestDigest,
+      ) VALUES ($1, $2, 'todos', 'todos.task-manifest.v1', 1, 'compensate', $3, $4, $5, $6, $7, $8, NULL, $9::jsonb, $10)`, [
+        compensationReceiptId, this.tenantId, receipt.operation_id, input.idempotency_key, requestDigest,
         receipt.result_digest, receipt.binding_version, input.receipt_id, canonicalJson(result), now,
       ]);
       const updated = await tx.query(`UPDATE todos_task_manifest_bindings
         SET state = 'compensated', version = $1, compensation_receipt_id = $2, updated_at = $3
-        WHERE operation_id = $4 AND state = 'applied' AND version = $5 RETURNING operation_id`, [
-        receipt.binding_version, compensationReceiptId, now, receipt.operation_id, input.if_binding_version,
+        WHERE tenant_id = $4 AND operation_id = $5 AND state = 'applied' AND version = $6 RETURNING operation_id`, [
+        receipt.binding_version, compensationReceiptId, now, this.tenantId, receipt.operation_id, input.if_binding_version,
       ]);
       if (!updated.rows[0]) throw new TodosTaskManifestError("TODOS_TASK_MANIFEST_CAS_CONFLICT", "Binding changed during compensation");
       return result;

@@ -3,6 +3,7 @@ import type { TodosTaskManifestBackend, NormalizedTaskManifest, PreparedTaskMani
 import {
   TODOS_TASK_MANIFEST_BOUNDS,
   parseTodosTaskManifest,
+  parseTodosTaskManifestBindingLookup,
   parseTodosTaskManifestCompensation,
 } from "./schema.js";
 import { SqliteTodosTaskManifestBackend } from "./sqlite.js";
@@ -17,6 +18,8 @@ import {
   type TodosTaskManifestApplyResult,
   type TodosTaskManifestAuthority,
   type TodosTaskManifestAuthorityOptions,
+  type TodosTaskManifestBindingLookupRequest,
+  type TodosTaskManifestBindingLookupResult,
   type TodosTaskManifestCapability,
   type TodosTaskManifestCompensateRequest,
   type TodosTaskManifestCompensationResult,
@@ -30,6 +33,17 @@ const FAULT_POINTS: readonly TodosTaskManifestFaultPoint[] = [
   "after_comment_write", "after_verification_write", "after_outbox_write",
   "after_receipt_write",
 ];
+
+function resolveTenantId(value: string | undefined): string {
+  const tenantId = value ?? "default";
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(tenantId)) {
+    throw new TodosTaskManifestError(
+      "TODOS_TASK_MANIFEST_INVALID_INPUT",
+      "tenantId must be a bounded exact authority identifier",
+    );
+  }
+  return tenantId;
+}
 
 function normalize(input: unknown, now: string): NormalizedTaskManifest {
   const parsed = parseTodosTaskManifest(input);
@@ -148,16 +162,21 @@ function sanitizeManifest(manifest: ReturnType<typeof parseTodosTaskManifest>): 
 }
 
 export class PackageOwnedTodosTaskManifestAuthority implements TodosTaskManifestAuthority {
+  private readonly tenantId: string;
+
   constructor(
     private readonly backend: TodosTaskManifestBackend,
     private readonly options: TodosTaskManifestAuthorityOptions = {},
-  ) {}
+  ) {
+    this.tenantId = resolveTenantId(options.tenantId);
+  }
 
   async capability(): Promise<TodosTaskManifestCapability> {
     return {
       authority: "todos",
       route: TODOS_TASK_MANIFEST_ROUTE,
       schema_version: TODOS_TASK_MANIFEST_SCHEMA_VERSION,
+      tenant_id: this.tenantId,
       backend: this.backend.kind,
       deterministic_ids: true,
       immutable_receipts: true,
@@ -198,6 +217,37 @@ export class PackageOwnedTodosTaskManifestAuthority implements TodosTaskManifest
       throw new TodosTaskManifestError("TODOS_TASK_MANIFEST_INVALID_INPUT", "receiptId must be a bounded exact identifier");
     }
     return this.backend.readExact(receiptId).then((result) => this.bounded(result));
+  }
+
+  async lookupBinding(
+    input: TodosTaskManifestBindingLookupRequest,
+  ): Promise<TodosTaskManifestBindingLookupResult> {
+    const request = parseTodosTaskManifestBindingLookup(input);
+    if (request.max_items !== 1) {
+      throw new TodosTaskManifestError(
+        "TODOS_TASK_MANIFEST_BOUNDS_EXCEEDED",
+        "max_items must be exactly 1 for task-manifest binding lookup",
+        { max_items: request.max_items, max_items_limit: 1 },
+      );
+    }
+    if (
+      request.authority !== "todos"
+      || request.route !== TODOS_TASK_MANIFEST_ROUTE
+      || request.schema_version !== TODOS_TASK_MANIFEST_SCHEMA_VERSION
+      || request.tenant_id !== this.tenantId
+    ) {
+      throw new TodosTaskManifestError(
+        "TODOS_TASK_MANIFEST_CAPABILITY_MISMATCH",
+        "Task-manifest binding lookup does not match this authority identity",
+      );
+    }
+    return this.bounded({
+      authority: "todos",
+      route: TODOS_TASK_MANIFEST_ROUTE,
+      schema_version: TODOS_TASK_MANIFEST_SCHEMA_VERSION,
+      tenant_id: this.tenantId,
+      ...await this.backend.lookupBindingByPlanId(request.plan_id),
+    });
   }
 
   markOutboxDelivered(outboxId: string): Promise<void> {
@@ -260,9 +310,10 @@ export function createSqliteTodosTaskManifestAuthority(
   if (!options?.database) {
     throw new TodosTaskManifestError("TODOS_TASK_MANIFEST_ATOMICITY_UNAVAILABLE", "An explicit SQLite Database is required");
   }
+  const tenantId = resolveTenantId(options.tenantId);
   return new PackageOwnedTodosTaskManifestAuthority(
-    new SqliteTodosTaskManifestBackend(options.database),
-    options,
+    new SqliteTodosTaskManifestBackend(options.database, tenantId),
+    { ...options, tenantId },
   );
 }
 
@@ -276,9 +327,10 @@ export function createPostgresTodosTaskManifestAuthority(
       "An authoritative PostgreSQL transaction(callback) client is required",
     );
   }
+  const tenantId = resolveTenantId(options.tenantId);
   return new PackageOwnedTodosTaskManifestAuthority(
-    new PostgresTodosTaskManifestBackend(client, options),
-    options,
+    new PostgresTodosTaskManifestBackend(client, { ...options, tenantId }),
+    { ...options, tenantId },
   );
 }
 

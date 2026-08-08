@@ -24,6 +24,11 @@ import {
   type TodosProjectRegistrationAuthority,
 } from "../project-registration/index.js";
 import {
+  createPostgresTodosTaskManifestAuthority,
+  postgresTodosTaskManifestSchemaSql,
+  type TodosTaskManifestAuthority,
+} from "../task-manifest/index.js";
+import {
   ensurePostgresScopedSlugUniqueIndexes,
   postgresTodosCommentCursorIndexSql,
   postgresTodosTaskShortIdIndexSql,
@@ -79,7 +84,12 @@ let cachedStore: ApiKeyStore | null = null;
 let cachedVerifier: ApiKeyVerifier | null = null;
 let cachedPrGroupLedger: PrGroupLedger | null = null;
 let cachedProjectRegistrationAuthority: TodosProjectRegistrationAuthority | null = null;
+let cachedTaskManifestAuthority: TodosTaskManifestAuthority | null = null;
 let schemaEnsured: Promise<void> | null = null;
+
+function getCloudTenantId(): string {
+  return process.env.HASNA_TODOS_TENANT_ID ?? "default";
+}
 
 function getClient(): TodosCloudQueryClient {
   if (cachedClient) return cachedClient;
@@ -116,11 +126,21 @@ export function getCloudProjectRegistrationAuthority(): TodosProjectRegistration
     {
       service: TODOS_APP_SLUG,
       authorityId: TODOS_APP_SLUG,
-      tenantId: process.env.HASNA_TODOS_TENANT_ID ?? "default",
+      tenantId: getCloudTenantId(),
       corpusId: process.env.HASNA_TODOS_CORPUS_ID ?? `${TODOS_APP_SLUG}:postgresql`,
     },
   );
   return cachedProjectRegistrationAuthority;
+}
+
+/** Package-owned task-manifest authority backed by the shared Postgres pool. */
+export function getCloudTaskManifestAuthority(): TodosTaskManifestAuthority {
+  if (cachedTaskManifestAuthority) return cachedTaskManifestAuthority;
+  cachedTaskManifestAuthority = createPostgresTodosTaskManifestAuthority(getClient(), {
+    service: TODOS_APP_SLUG,
+    tenantId: getCloudTenantId(),
+  });
+  return cachedTaskManifestAuthority;
 }
 
 /**
@@ -188,6 +208,9 @@ export async function ensureCloudSchema(): Promise<void> {
       await client.query(sql);
     }
     for (const sql of postgresTodosProjectRegistrationSchemaSql()) {
+      await client.query(sql);
+    }
+    for (const sql of postgresTodosTaskManifestSchemaSql(getCloudTenantId())) {
       await client.query(sql);
     }
     await getApiKeyStore().ensureSchema();
@@ -272,5 +295,6 @@ export async function closeCloud(): Promise<void> {
   cachedVerifier = null;
   cachedPrGroupLedger = null;
   cachedProjectRegistrationAuthority = null;
+  cachedTaskManifestAuthority = null;
   schemaEnsured = null;
 }
