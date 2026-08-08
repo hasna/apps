@@ -75,3 +75,39 @@ agent identity, task reference, evidence, and next action. Never record secrets.
   passed, and unrelated local plus hosted Dubai controls remained present.
 - Next: stage the exact candidate, run `shield review`, commit once with the
   required `Agent: Theophrastus` trailer, push, and open the draft pull request.
+
+## 2026-08-08
+
+### 2026-08-08T11:24:48+03:00 — vitruvius implementation sub-agent
+
+- Task: `93cfec1f-063c-44dd-a0e8-f50ad00836f8`; reproduced the hosted
+  `link-ref` false success where POST exited 0 with a complete-looking row but
+  immediate reverse and task readback exposed no ref.
+- The CLI now requires the advertised task-read, task-write, and reverse-read
+  contract before mutation, strictly validates response envelopes, and emits
+  success only after both authoritative read paths return the exact row.
+  OpenAPI and the generated SDK now advertise the existing server routes.
+- Verification so far: focused two-sided regression `5 pass, 0 fail`,
+  TypeScript `rc=0`, production build `rc=0`, package dry-run `rc=0`.
+  Against the current hosted authority, the fixed source command exits 1 with
+  `REMOTE_GIT_REF_UNSUPPORTED` before mutation instead of printing success.
+- Next: finish the affected and full Bun suites, stage and scan the exact
+  candidate, commit with `Agent: vitruvius`, push, and open the unmerged pull
+  request for independent review.
+
+### 2026-08-08T11:46:45+03:00 — vitruvius implementation sub-agent
+
+- Task: `93cfec1f-063c-44dd-a0e8-f50ad00836f8`; current base remains
+  `origin/main` at `a73c219`.
+- Affected CLI/server/OpenAPI validation passed `153 pass, 0 fail`; no-cloud
+  passed `36 pass, 1 skip, 0 fail`; typecheck, production build, and package
+  dry-run returned `rc=0`.
+- The repository-wide suite reached `3556 pass, 63 skip, 10 fail`; all ten
+  failures were current-authority detail fixtures missing the newly advertised
+  ref-read routes. After fixture-only remediation, the five affected files and
+  direct regression passed `33 pass, 0 fail`.
+- Real hosted controls now fail `link-ref` and `find-ref` before mutation with
+  `REMOTE_GIT_REF_UNSUPPORTED`; task detail remains available and reports
+  `git_refs: null` with an explicit warning instead of a false empty set.
+- Next: stage the exact candidate, run the staged security scan, commit once,
+  push, and open the unmerged pull request for the fixed fabricius review.

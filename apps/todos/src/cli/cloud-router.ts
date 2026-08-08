@@ -69,6 +69,9 @@ export interface CloudTaskCompletionInput {
 }
 
 const completionCapabilityCache = new Map<string, Promise<ReadonlySet<string>>>();
+const gitRefCapabilityCache = new Map<string, Promise<ReadonlySet<RemoteGitRefCapability>>>();
+
+type RemoteGitRefCapability = "task-read" | "task-write" | "reverse-read";
 
 export interface TodosRemoteAuthorityConfigStatus {
   selected: boolean;
@@ -507,6 +510,7 @@ export function resetTodosCloudClient(): void {
   // Only protocol capabilities are cached, keyed by authority rather than credentials.
   completionCapabilityCache.clear();
   listTagsCapabilityCache.clear();
+  gitRefCapabilityCache.clear();
 }
 
 function assertRemotePrGroupView(value: unknown, route: string): PrGroupStateView {
@@ -1680,24 +1684,175 @@ export interface CloudTaskGitRef {
   updated_at: string;
 }
 
-/** Link a git branch or pull request to a cloud task (`POST /v1/tasks/:id/refs`). */
+function parseCloudTaskGitRef(value: unknown, route: string): CloudTaskGitRef {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned a non-object git ref; local SQLite fallback is disabled`,
+    );
+  }
+  const ref = value as Record<string, unknown>;
+  const requiredStrings = ["id", "task_id", "name", "created_at", "updated_at"] as const;
+  if (requiredStrings.some((field) => typeof ref[field] !== "string" || !(ref[field] as string).trim())) {
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned an incomplete git ref identity; local SQLite fallback is disabled`,
+    );
+  }
+  if (ref["ref_type"] !== "branch" && ref["ref_type"] !== "pull_request") {
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned an invalid git ref type; local SQLite fallback is disabled`,
+    );
+  }
+  for (const field of ["url", "provider"] as const) {
+    if (ref[field] !== null && typeof ref[field] !== "string") {
+      throw new Error(
+        `REMOTE_API_INCOMPATIBLE: ${route} returned an invalid git ref ${field}; local SQLite fallback is disabled`,
+      );
+    }
+  }
+  if (!ref["metadata"] || typeof ref["metadata"] !== "object" || Array.isArray(ref["metadata"])) {
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned invalid git ref metadata; local SQLite fallback is disabled`,
+    );
+  }
+  return ref as unknown as CloudTaskGitRef;
+}
+
+function parseCloudTaskGitRefEnvelope(raw: unknown, route: string): CloudTaskGitRef[] {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned a non-object git ref envelope; local SQLite fallback is disabled`,
+    );
+  }
+  const envelope = raw as Record<string, unknown>;
+  if (!Array.isArray(envelope["refs"]) ||
+      !Number.isSafeInteger(envelope["count"]) ||
+      envelope["count"] !== envelope["refs"].length) {
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned an incomplete git ref envelope; local SQLite fallback is disabled`,
+    );
+  }
+  return envelope["refs"].map((ref) => parseCloudTaskGitRef(ref, route));
+}
+
+function openApiHasOperation(
+  document: unknown,
+  path: string,
+  method: "get" | "post",
+): boolean {
+  if (!document || typeof document !== "object" || Array.isArray(document)) return false;
+  const paths = (document as Record<string, unknown>)["paths"];
+  if (!paths || typeof paths !== "object" || Array.isArray(paths)) return false;
+  const route = (paths as Record<string, unknown>)[path];
+  return Boolean(route && typeof route === "object" && !Array.isArray(route) &&
+    (route as Record<string, unknown>)[method] &&
+    typeof (route as Record<string, unknown>)[method] === "object");
+}
+
+async function fetchGitRefCapabilities(client: HasnaStorageClient): Promise<ReadonlySet<RemoteGitRefCapability>> {
+  const document = await requiredRemoteRoute(client, "/v1/openapi.json", () =>
+    client.transport.get<unknown>("/openapi.json"));
+  const supported = new Set<RemoteGitRefCapability>();
+  if (openApiHasOperation(document, "/v1/tasks/{id}/refs", "get")) supported.add("task-read");
+  if (openApiHasOperation(document, "/v1/tasks/{id}/refs", "post")) supported.add("task-write");
+  if (openApiHasOperation(document, "/v1/refs/{ref}", "get")) supported.add("reverse-read");
+  return supported;
+}
+
+async function requireGitRefCapabilities(
+  client: HasnaStorageClient,
+  required: readonly RemoteGitRefCapability[],
+): Promise<void> {
+  const authority = remoteAuthorityBase(client);
+  let capabilities = gitRefCapabilityCache.get(authority);
+  if (!capabilities) {
+    capabilities = fetchGitRefCapabilities(client);
+    gitRefCapabilityCache.set(authority, capabilities);
+  }
+  const supported = await capabilities;
+  const missing = required.filter((capability) => !supported.has(capability));
+  if (missing.length > 0) {
+    throw new Error(
+      `REMOTE_GIT_REF_UNSUPPORTED: configured Todos authority ${authority} does not advertise the complete git-ref ` +
+        `contract (${missing.join(", ")} missing); deploy the current @hasna/todos /v1 server before retrying; ` +
+        "no ref mutation or local SQLite fallback was attempted",
+    );
+  }
+}
+
+function sameCloudTaskGitRef(
+  ref: CloudTaskGitRef,
+  expected: Pick<CloudTaskGitRef, "id" | "task_id" | "ref_type" | "name">,
+): boolean {
+  return ref.id === expected.id &&
+    ref.task_id === expected.task_id &&
+    ref.ref_type === expected.ref_type &&
+    ref.name === expected.name;
+}
+
+/** List git refs linked to one cloud task (`GET /v1/tasks/:id/refs`). */
+export async function cloudListTaskRefs(
+  client: HasnaStorageClient,
+  taskId: string,
+): Promise<CloudTaskGitRef[]> {
+  await requireGitRefCapabilities(client, ["task-read"]);
+  const route = `/v1/tasks/${encodeURIComponent(taskId)}/refs`;
+  const raw = await requiredRemoteRoute(client, route, () =>
+    client.transport.get<unknown>(`/tasks/${encodeURIComponent(taskId)}/refs`));
+  return parseCloudTaskGitRefEnvelope(raw, route);
+}
+
+/**
+ * Link a git branch or pull request to a cloud task (`POST /v1/tasks/:id/refs`).
+ *
+ * A successful POST body is not authoritative proof: the command only returns
+ * after both the task-scoped and reverse-lookup reads return the exact created
+ * row. This prevents a mixed-version or non-persisting authority from producing
+ * a green `Linked ...` line for data no caller can read back.
+ */
 export async function cloudLinkRef(
   client: HasnaStorageClient,
   taskId: string,
   input: { ref_type: "branch" | "pull_request"; name: string; url?: string; provider?: string; metadata?: Record<string, unknown> },
 ): Promise<CloudTaskGitRef> {
-  const raw = await client.transport.post<unknown>(`/tasks/${encodeURIComponent(taskId)}/refs`, input);
-  if (raw && typeof raw === "object" && "ref" in (raw as Record<string, unknown>)) {
-    return (raw as { ref: CloudTaskGitRef }).ref;
+  await requireGitRefCapabilities(client, ["task-read", "task-write", "reverse-read"]);
+  const route = `/v1/tasks/${encodeURIComponent(taskId)}/refs`;
+  const raw = await requiredRemoteRoute(client, route, () =>
+    client.transport.post<unknown>(`/tasks/${encodeURIComponent(taskId)}/refs`, input));
+  if (!raw || typeof raw !== "object" || Array.isArray(raw) ||
+      Object.keys(raw).length !== 1 || !("ref" in raw)) {
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned a non-authoritative git ref response envelope; ` +
+        "local SQLite fallback is disabled",
+    );
   }
-  return raw as CloudTaskGitRef;
+  const linked = parseCloudTaskGitRef((raw as { ref: unknown }).ref, route);
+  if (linked.task_id !== taskId || linked.ref_type !== input.ref_type || linked.name !== input.name) {
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned a different git ref identity; local SQLite fallback is disabled`,
+    );
+  }
+  const [taskRefs, reverseRefs] = await Promise.all([
+    cloudListTaskRefs(client, taskId),
+    cloudFindRefs(client, input.name),
+  ]);
+  if (!taskRefs.some((ref) => sameCloudTaskGitRef(ref, linked)) ||
+      !reverseRefs.some((ref) => sameCloudTaskGitRef(ref, linked))) {
+    throw new Error(
+      `REMOTE_REF_PERSISTENCE_UNVERIFIED: configured Todos authority ${remoteAuthorityBase(client)} accepted ${route} ` +
+        "but authoritative task and reverse readback did not return the linked ref; no success line or local SQLite " +
+        "fallback is permitted",
+    );
+  }
+  return linked;
 }
 
 /** Find every task linked to a branch/PR ref by name (`GET /v1/refs/:ref`). */
 export async function cloudFindRefs(client: HasnaStorageClient, ref: string): Promise<CloudTaskGitRef[]> {
-  const raw = await client.transport.get<unknown>(`/refs/${encodeURIComponent(ref)}`);
-  const env = (raw ?? {}) as { refs?: CloudTaskGitRef[] };
-  return Array.isArray(env.refs) ? env.refs : [];
+  await requireGitRefCapabilities(client, ["reverse-read"]);
+  const route = `/v1/refs/${encodeURIComponent(ref)}`;
+  const raw = await requiredRemoteRoute(client, route, () =>
+    client.transport.get<unknown>(`/refs/${encodeURIComponent(ref)}`));
+  return parseCloudTaskGitRefEnvelope(raw, route);
 }
 
 /**

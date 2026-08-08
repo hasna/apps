@@ -37,8 +37,9 @@ import {
   cloudResolveTaskListRef,
   cloudResolvePlan,
   cloudListAgents,
+  cloudListTaskRefs,
 } from "../cloud-router.js";
-import type { CloudTaskRelations } from "../cloud-router.js";
+import type { CloudTaskGitRef, CloudTaskRelations } from "../cloud-router.js";
 import type { TaskPriority, TaskStatus } from "../../types/index.js";
 import { canonicalAgentRef, resolveCreatorIdentity, resolveWritableIdentity } from "../../lib/creator-identity.js";
 import { formatExpiredLock, lockDisplayState } from "../../lib/lock-display.js";
@@ -102,6 +103,27 @@ async function cloudDetailRelations(
       console.error(chalk.dim(`Warning: could not load task dependencies: ${e instanceof Error ? e.message : String(e)}`));
     }
     return { dependencies: [], blocked_by: [], blocks: [] };
+  }
+}
+
+/**
+ * Git refs for a remote task's detail view.
+ *
+ * Ref-specific commands fail closed when the authority cannot prove the
+ * contract. Task detail is broader than that optional projection, so preserve
+ * the task and mark the ref population unverified with `null` instead of
+ * misreporting an empty list or sinking `show`/`inspect` during a mixed-version
+ * server rollout.
+ */
+async function cloudDetailGitRefs(
+  cloud: Parameters<typeof cloudListTaskRefs>[0],
+  id: string,
+): Promise<CloudTaskGitRef[] | null> {
+  try {
+    return await cloudListTaskRefs(cloud, id);
+  } catch (e) {
+    console.error(chalk.dim(`Warning: could not verify task git refs: ${e instanceof Error ? e.message : String(e)}`));
+    return null;
   }
 }
 
@@ -1417,18 +1439,20 @@ export function registerTaskCommands(program: Command) {
       let task: any;
       if (cloud) {
         const remote = await cloudGetTask(cloud, await resolveTaskIdForCommand(id, cloud));
-        const commentPage = remote ? await cloudListComments(cloud, remote.id, page.request) : null;
-        // The /v1 API returns the task row without relation graphs, so the
-        // dependency edges are read separately and hydrated into task rows —
-        // otherwise remote detail views claim a task has no dependencies while
-        // `deps <id>` lists them (issue #58).
-        const relations = remote ? await cloudDetailRelations(cloud, remote.id) : null;
+        const [commentPage, relations, gitRefs] = remote
+          ? await Promise.all([
+              cloudListComments(cloud, remote.id, page.request),
+              cloudDetailRelations(cloud, remote.id),
+              cloudDetailGitRefs(cloud, remote.id),
+            ])
+          : [null, null, null];
         task = remote
           ? {
               subtasks: [], ...remote, tags: remote.tags ?? [],
               dependencies: relations!.dependencies,
               blocked_by: relations!.blocked_by,
               blocks: relations!.blocks,
+              git_refs: gitRefs!,
               comments: commentPage!.comments,
               comments_page: {
                 count: commentPage!.count,
@@ -1442,6 +1466,8 @@ export function registerTaskCommands(program: Command) {
       } else {
         const resolvedId = resolveTaskId(id);
         task = applyLocalCommentPage(getTaskWithRelations(resolvedId), page);
+        const { getTaskGitRefs } = await import("../../db/task-commits.js");
+        task.git_refs = getTaskGitRefs(resolvedId);
       }
 
       if (!task) {
@@ -1551,18 +1577,20 @@ export function registerTaskCommands(program: Command) {
       let task: any;
       if (cloud) {
         const remote = await cloudGetTask(cloud, resolvedId);
-        const commentPage = remote ? await cloudListComments(cloud, remote.id, page.request) : null;
-        // The /v1 API returns the task row without relation graphs, so the
-        // dependency edges are read separately and hydrated into task rows —
-        // otherwise `inspect` never prints the BLOCKED warning for a remote
-        // task whose upstream work is unfinished (issue #58).
-        const relations = remote ? await cloudDetailRelations(cloud, remote.id) : null;
+        const [commentPage, relations, gitRefs] = remote
+          ? await Promise.all([
+              cloudListComments(cloud, remote.id, page.request),
+              cloudDetailRelations(cloud, remote.id),
+              cloudDetailGitRefs(cloud, remote.id),
+            ])
+          : [null, null, null];
         task = remote
           ? {
               subtasks: [], checklist: [], ...remote, tags: remote.tags ?? [],
               dependencies: relations!.dependencies,
               blocked_by: relations!.blocked_by,
               blocks: relations!.blocks,
+              git_refs: gitRefs!,
               comments: commentPage!.comments,
               comments_page: {
                 count: commentPage!.count,
@@ -1580,9 +1608,10 @@ export function registerTaskCommands(program: Command) {
 
       if (globalOpts.json && !cloud) {
         const { listTaskFiles } = await import("../../db/task-files.js");
-        const { getTaskCommits } = await import("../../db/task-commits.js");
+        const { getTaskCommits, getTaskGitRefs } = await import("../../db/task-commits.js");
         try { (task as any).files = listTaskFiles(task.id); } catch (e) { console.error(chalk.dim(`Warning: could not load task files: ${e instanceof Error ? e.message : String(e)}`)); }
         try { (task as any).commits = getTaskCommits(task.id); } catch (e) { console.error(chalk.dim(`Warning: could not load task commits: ${e instanceof Error ? e.message : String(e)}`)); }
+        try { (task as any).git_refs = getTaskGitRefs(task.id); } catch (e) { console.error(chalk.dim(`Warning: could not load task git refs: ${e instanceof Error ? e.message : String(e)}`)); }
         output(task, true);
         return;
       }

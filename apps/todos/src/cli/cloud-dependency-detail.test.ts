@@ -59,6 +59,23 @@ function taskFixture(id: string, overrides: Record<string, unknown> = {}) {
   };
 }
 
+function currentGitRefDetailResponse(request: Request): Response | null {
+  const url = new URL(request.url);
+  if (url.pathname === "/v1/openapi.json" && request.method === "GET") {
+    return Response.json({
+      openapi: "3.1.0",
+      paths: {
+        "/v1/tasks/{id}/refs": { get: {}, post: {} },
+        "/v1/refs/{ref}": { get: {} },
+      },
+    });
+  }
+  if (/^\/v1\/tasks\/[^/]+\/refs$/.test(url.pathname) && request.method === "GET") {
+    return Response.json({ refs: [], count: 0 });
+  }
+  return null;
+}
+
 /**
  * Mock /v1 server that mirrors the hosted contract described in issue #58: the
  * task row endpoint returns NO relation graphs, and the dependency edges live
@@ -78,6 +95,8 @@ function startServer(options: {
     fetch(request) {
       const url = new URL(request.url);
       requests.push(`${request.method} ${url.pathname}`);
+      const gitRefResponse = currentGitRefDetailResponse(request);
+      if (gitRefResponse) return gitRefResponse;
       const depsMatch = url.pathname.match(/^\/v1\/tasks\/([^/]+)\/dependencies$/);
       if (depsMatch && request.method === "GET") {
         if (options.depsStatus && options.depsStatus >= 400) {
@@ -200,6 +219,8 @@ describe("cloud task detail dependencies (issue #58)", () => {
         `GET /v1/tasks/${TASK_ID}`,
         `GET /v1/tasks/${TASK_ID}/comments`,
         `GET /v1/tasks/${TASK_ID}/dependencies`,
+        "GET /v1/openapi.json",
+        `GET /v1/tasks/${TASK_ID}/refs`,
       ]);
     } finally {
       server.stop(true);

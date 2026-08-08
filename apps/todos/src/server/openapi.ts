@@ -145,6 +145,26 @@ const taskCommentSchema = {
   },
 } as const;
 
+const taskGitRefSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "id", "task_id", "ref_type", "name", "url", "provider", "metadata",
+    "created_at", "updated_at",
+  ],
+  properties: {
+    id: { type: "string", minLength: 1 },
+    task_id: { type: "string", minLength: 1 },
+    ref_type: { type: "string", enum: ["branch", "pull_request"] },
+    name: { type: "string", minLength: 1 },
+    url: { type: "string", nullable: true },
+    provider: { type: "string", nullable: true },
+    metadata: { type: "object", additionalProperties: true },
+    created_at: { type: "string", format: "date-time" },
+    updated_at: { type: "string", format: "date-time" },
+  },
+} as const;
+
 const planSchema = {
   type: "object",
   required: ["id", "slug", "name", "status", "created_at", "updated_at"],
@@ -318,6 +338,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
         ProjectTaskListEnsureResult: projectTaskListEnsureResultSchema,
         ProjectTaskListRollbackResult: projectTaskListRollbackResultSchema,
         TaskComment: taskCommentSchema,
+        TaskGitRef: taskGitRefSchema,
         Plan: planSchema,
         PlanProjectLinkReceipt: planProjectLinkReceiptSchema,
         PlanProjectLinkResult: planProjectLinkResultSchema,
@@ -1263,6 +1284,92 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
                     type: "object",
                     required: ["comment"],
                     properties: { comment: { $ref: "#/components/schemas/TaskComment" } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      "/v1/tasks/{id}/refs": {
+        get: {
+          operationId: "listTaskGitRefs",
+          summary: "List git branch and pull-request refs linked to a task",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["refs", "count"],
+                    properties: {
+                      refs: { type: "array", items: { $ref: "#/components/schemas/TaskGitRef" } },
+                      count: { type: "integer", minimum: 0 },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        post: {
+          operationId: "linkTaskGitRef",
+          summary: "Link a git branch or pull-request ref to a task",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["ref_type", "name"],
+                  properties: {
+                    ref_type: { type: "string", enum: ["branch", "pull_request"] },
+                    name: { type: "string", minLength: 1 },
+                    url: { type: "string" },
+                    provider: { type: "string" },
+                    metadata: { type: "object", additionalProperties: true },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "201": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["ref"],
+                    properties: { ref: { $ref: "#/components/schemas/TaskGitRef" } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      "/v1/refs/{ref}": {
+        get: {
+          operationId: "findTaskGitRefs",
+          summary: "Find task links by git branch or pull-request ref",
+          parameters: [{ name: "ref", in: "path", required: true, schema: { type: "string" } }],
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["refs", "count"],
+                    properties: {
+                      refs: { type: "array", items: { $ref: "#/components/schemas/TaskGitRef" } },
+                      count: { type: "integer", minimum: 0 },
+                    },
                   },
                 },
               },
