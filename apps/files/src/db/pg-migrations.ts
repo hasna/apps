@@ -656,6 +656,110 @@ export const PG_MIGRATIONS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_file_search_documents_search_vector
     ON file_search_documents USING GIN(search_vector)`,
 
+  // ────────────────────────────────────────────────────────────────────────
+  // Migration 30 (R1 iapp): ADDITIVE multi-tenancy scaffold.
+  //
+  // Fleet Auth & Tenancy Standard v2. This block is ADDITIVE and ONLINE-SAFE:
+  //   * new tables are IF NOT EXISTS;
+  //   * every tenant_id column is NULLABLE with a constant DEFAULT of the fixed
+  //     root tenant UUID — in Postgres 11+ a constant default is a metadata-only
+  //     change (no table rewrite), and pre-existing rows read back the default
+  //     without a backfill UPDATE, so this "backfills to the default tenant"
+  //     with zero row locks.
+  //   * NO `NOT NULL`, NO FK validation, NO RLS, NO unique-constraint swap — those
+  //     fail-closed steps are deliberately deferred to R2 (see MIGRATION.md §8).
+  //
+  // Fixed root tenant: HASNA_ROOT_TENANT_ID = adfd95c7-ee8b-52cb-ae47-4ae65dae3313
+  // (slug 'hasna', kind 'root'). Every app backfills pre-existing rows to this id.
+  // ────────────────────────────────────────────────────────────────────────
+
+  // Local mirror of the identities tenant directory (flat; no parent_id — tree
+  // semantics live only in identities per standard §3.2).
+  `CREATE TABLE IF NOT EXISTS tenants (
+    id UUID PRIMARY KEY,
+    slug TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'org',
+    status TEXT NOT NULL DEFAULT 'active',
+    identity_id TEXT,
+    metadata TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT NOW()::text,
+    updated_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+  // Local mirror of the global users directory (id == identities user_id; NO creds).
+  `CREATE TABLE IF NOT EXISTS users (
+    id UUID PRIMARY KEY,
+    kind TEXT NOT NULL DEFAULT 'human' CHECK(kind IN ('human','agent','service')),
+    email TEXT,
+    display_name TEXT,
+    idp_subject TEXT UNIQUE,
+    home_tenant_id UUID,
+    status TEXT NOT NULL DEFAULT 'active',
+    metadata TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT NOW()::text,
+    updated_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+  // M:N principal x tenant with role (users OR service principals).
+  `CREATE TABLE IF NOT EXISTS memberships (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id UUID NOT NULL,
+    principal_id UUID NOT NULL,
+    principal_type TEXT NOT NULL DEFAULT 'user' CHECK(principal_type IN ('user','service')),
+    role TEXT NOT NULL DEFAULT 'member',
+    scopes TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL DEFAULT NOW()::text,
+    UNIQUE(tenant_id, principal_id, principal_type)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_memberships_principal ON memberships(principal_id, principal_type)`,
+
+  // Seed the fixed root tenant (idempotent).
+  `INSERT INTO tenants (id, slug, name, kind)
+   VALUES ('adfd95c7-ee8b-52cb-ae47-4ae65dae3313', 'hasna', 'Hasna', 'root')
+   ON CONFLICT (id) DO NOTHING`,
+
+  // Nullable tenant_id (UUID) with a constant root default on every owned table.
+  // PG 11+ makes these metadata-only (no rewrite); existing rows read the default.
+  `ALTER TABLE machines ADD COLUMN IF NOT EXISTS tenant_id UUID DEFAULT 'adfd95c7-ee8b-52cb-ae47-4ae65dae3313'::uuid`,
+  `ALTER TABLE sources ADD COLUMN IF NOT EXISTS tenant_id UUID DEFAULT 'adfd95c7-ee8b-52cb-ae47-4ae65dae3313'::uuid`,
+  `ALTER TABLE files ADD COLUMN IF NOT EXISTS tenant_id UUID DEFAULT 'adfd95c7-ee8b-52cb-ae47-4ae65dae3313'::uuid`,
+  `ALTER TABLE tags ADD COLUMN IF NOT EXISTS tenant_id UUID DEFAULT 'adfd95c7-ee8b-52cb-ae47-4ae65dae3313'::uuid`,
+  `ALTER TABLE file_tags ADD COLUMN IF NOT EXISTS tenant_id UUID DEFAULT 'adfd95c7-ee8b-52cb-ae47-4ae65dae3313'::uuid`,
+  `ALTER TABLE collections ADD COLUMN IF NOT EXISTS tenant_id UUID DEFAULT 'adfd95c7-ee8b-52cb-ae47-4ae65dae3313'::uuid`,
+  `ALTER TABLE collection_files ADD COLUMN IF NOT EXISTS tenant_id UUID DEFAULT 'adfd95c7-ee8b-52cb-ae47-4ae65dae3313'::uuid`,
+  `ALTER TABLE projects ADD COLUMN IF NOT EXISTS tenant_id UUID DEFAULT 'adfd95c7-ee8b-52cb-ae47-4ae65dae3313'::uuid`,
+  `ALTER TABLE project_files ADD COLUMN IF NOT EXISTS tenant_id UUID DEFAULT 'adfd95c7-ee8b-52cb-ae47-4ae65dae3313'::uuid`,
+  `ALTER TABLE peers ADD COLUMN IF NOT EXISTS tenant_id UUID DEFAULT 'adfd95c7-ee8b-52cb-ae47-4ae65dae3313'::uuid`,
+  `ALTER TABLE feedback ADD COLUMN IF NOT EXISTS tenant_id UUID DEFAULT 'adfd95c7-ee8b-52cb-ae47-4ae65dae3313'::uuid`,
+  `ALTER TABLE agents ADD COLUMN IF NOT EXISTS tenant_id UUID DEFAULT 'adfd95c7-ee8b-52cb-ae47-4ae65dae3313'::uuid`,
+  `ALTER TABLE agent_activity ADD COLUMN IF NOT EXISTS tenant_id UUID DEFAULT 'adfd95c7-ee8b-52cb-ae47-4ae65dae3313'::uuid`,
+  `ALTER TABLE google_drive_sync_state ADD COLUMN IF NOT EXISTS tenant_id UUID DEFAULT 'adfd95c7-ee8b-52cb-ae47-4ae65dae3313'::uuid`,
+  `ALTER TABLE google_drive_imported_objects ADD COLUMN IF NOT EXISTS tenant_id UUID DEFAULT 'adfd95c7-ee8b-52cb-ae47-4ae65dae3313'::uuid`,
+  `ALTER TABLE file_assets ADD COLUMN IF NOT EXISTS tenant_id UUID DEFAULT 'adfd95c7-ee8b-52cb-ae47-4ae65dae3313'::uuid`,
+  `ALTER TABLE file_upload_intents ADD COLUMN IF NOT EXISTS tenant_id UUID DEFAULT 'adfd95c7-ee8b-52cb-ae47-4ae65dae3313'::uuid`,
+  `ALTER TABLE file_links ADD COLUMN IF NOT EXISTS tenant_id UUID DEFAULT 'adfd95c7-ee8b-52cb-ae47-4ae65dae3313'::uuid`,
+  `ALTER TABLE file_access_events ADD COLUMN IF NOT EXISTS tenant_id UUID DEFAULT 'adfd95c7-ee8b-52cb-ae47-4ae65dae3313'::uuid`,
+  `ALTER TABLE file_organization_reviews ADD COLUMN IF NOT EXISTS tenant_id UUID DEFAULT 'adfd95c7-ee8b-52cb-ae47-4ae65dae3313'::uuid`,
+  `ALTER TABLE file_organization_events ADD COLUMN IF NOT EXISTS tenant_id UUID DEFAULT 'adfd95c7-ee8b-52cb-ae47-4ae65dae3313'::uuid`,
+  `ALTER TABLE file_versions ADD COLUMN IF NOT EXISTS tenant_id UUID DEFAULT 'adfd95c7-ee8b-52cb-ae47-4ae65dae3313'::uuid`,
+  `ALTER TABLE s3_objects ADD COLUMN IF NOT EXISTS tenant_id UUID DEFAULT 'adfd95c7-ee8b-52cb-ae47-4ae65dae3313'::uuid`,
+  `ALTER TABLE file_search_documents ADD COLUMN IF NOT EXISTS tenant_id UUID DEFAULT 'adfd95c7-ee8b-52cb-ae47-4ae65dae3313'::uuid`,
+  `ALTER TABLE knowledge_source_outbox_events ADD COLUMN IF NOT EXISTS tenant_id UUID DEFAULT 'adfd95c7-ee8b-52cb-ae47-4ae65dae3313'::uuid`,
+  `ALTER TABLE knowledge_source_outbox_checkpoints ADD COLUMN IF NOT EXISTS tenant_id UUID DEFAULT 'adfd95c7-ee8b-52cb-ae47-4ae65dae3313'::uuid`,
+
+  // Tenant-leading indexes (scoped scans stay index-served in R2).
+  `CREATE INDEX IF NOT EXISTS idx_machines_tenant ON machines(tenant_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_sources_tenant ON sources(tenant_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_files_tenant ON files(tenant_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_tags_tenant ON tags(tenant_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_collections_tenant ON collections(tenant_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_projects_tenant ON projects(tenant_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_file_assets_tenant ON file_assets(tenant_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_file_upload_intents_tenant ON file_upload_intents(tenant_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_s3_objects_tenant ON s3_objects(tenant_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_file_versions_tenant ON file_versions(tenant_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_file_search_documents_tenant ON file_search_documents(tenant_id)`,
+
   // Migration 30: signing/upload headers are ephemeral transport material.
   // Scrub legacy rows; adapters write only the empty compatibility object.
   `UPDATE file_upload_intents
