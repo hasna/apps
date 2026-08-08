@@ -26,6 +26,89 @@ const TRANSITIONS: Record<ProjectResourceLinkMigrationState, readonly ProjectRes
   failed_reconcilable: ["rollback_in_progress"],
 };
 
+function requireNonemptyProofValue(value: string | null, label: string): string {
+  if (!value?.trim()) throw new Error(`${label} must be a nonempty producer proof value`);
+  return value;
+}
+
+function assertProducerBinding(
+  item: ProjectResourceLinkMigrationManifestV1["links"][number],
+): void {
+  if (item.producer_binding.authority_id !== item.link.authority) {
+    throw new Error("producer binding authority_id must match the resource-link authority");
+  }
+  requireNonemptyProofValue(item.producer_resource_kind, "producer resource_kind");
+  requireNonemptyProofValue(item.producer_binding.tenant_id, "producer binding tenant_id");
+  requireNonemptyProofValue(item.producer_binding.capability_digest, "producer binding capability_digest");
+}
+
+function assertUniqueReceiptIds(receiptIds: string[], label: string): void {
+  for (const receiptId of receiptIds) requireNonemptyProofValue(receiptId, label);
+  if (new Set(receiptIds).size !== receiptIds.length) {
+    throw new Error(`${label} must not contain duplicate producer receipts`);
+  }
+}
+
+export function reconcileProjectResourceLinkProducerProof(
+  manifest: ProjectResourceLinkMigrationManifestV1,
+  evidence: ProjectResourceLinkProducerEvidence[] | undefined,
+  phase: "forward" | "readback" | "inverse",
+  terminalOutcome?: "complete" | "retained_target",
+): ProjectResourceLinkProducerEvidence[] {
+  if (!evidence || evidence.length !== manifest.links.length) {
+    const label = phase === "inverse" ? "producer inverse proof" : `producer ${phase} proof`;
+    throw new Error(`${label} requires exact evidence for every manifest link`);
+  }
+  let retainedTargetCount = 0;
+  const reconciled = evidence.map((candidate, index) => {
+    const item = manifest.links[index]!;
+    const persisted = item.producer_evidence;
+    assertProducerBinding(item);
+    requireNonemptyProofValue(candidate.forward_receipt_id, "producer forward receipt");
+    requireNonemptyProofValue(candidate.target_revision, "producer target revision");
+    requireNonemptyProofValue(candidate.target_digest, "producer target digest");
+    assertUniqueReceiptIds(candidate.child_link_receipt_ids, "producer child-link receipt");
+    if (phase !== "forward") {
+      if (!persisted) throw new Error(`producer ${phase} proof has no persisted forward proof`);
+      if (
+        candidate.created_by_operation !== persisted.created_by_operation
+        || candidate.forward_receipt_id !== persisted.forward_receipt_id
+        || canonicalJson(candidate.child_link_receipt_ids) !== canonicalJson(persisted.child_link_receipt_ids)
+      ) {
+        throw new Error(`producer ${phase} proof does not match the persisted producer receipt identity`);
+      }
+    }
+    if (phase === "forward" || phase === "readback") {
+      if (candidate.inverse_verified !== null || candidate.inverse_outcome !== null) {
+        throw new Error(`producer ${phase} proof must not claim an inverse outcome`);
+      }
+    } else {
+      if (candidate.inverse_verified !== true) {
+        throw new Error("producer inverse proof requires inverse_verified=true for every manifest link");
+      }
+      const inverseOutcome = requireNonemptyProofValue(
+        candidate.inverse_outcome,
+        "producer inverse outcome",
+      );
+      if (terminalOutcome === "complete" && candidate.created_by_operation && inverseOutcome !== "complete") {
+        throw new Error("producer inverse proof for a created target must record inverse_outcome=complete");
+      }
+      if (terminalOutcome === "retained_target" && inverseOutcome === "retained_target") {
+        retainedTargetCount += 1;
+      }
+    }
+    return { ...candidate };
+  });
+  if (
+    phase === "inverse"
+    && terminalOutcome === "retained_target"
+    && retainedTargetCount === 0
+  ) {
+    throw new Error("producer inverse proof for retained_target must record a retained_target outcome");
+  }
+  return reconciled;
+}
+
 export function projectResourceLinkMigrationManifestId(
   projectId: string,
   operationId: string,
@@ -71,6 +154,7 @@ export function buildProjectResourceLinkMigrationPlan(
       producer_evidence: null,
     };
   });
+  for (const item of items) assertProducerBinding(item);
   const desiredCollectionDigest = projectResourceLinksDigest(items.map((item) => ({
     ...item.link,
     id: item.link_id,

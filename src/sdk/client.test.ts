@@ -255,6 +255,7 @@ describe("generated Projects SDK server parity", () => {
     const advance = {
       expected_transition_version: 1,
       next_state: "producer_applied" as const,
+      max_items: 10,
       producer_evidence: [{
         created_by_operation: true,
         forward_receipt_id: "contacts-receipt-1",
@@ -272,6 +273,13 @@ describe("generated Projects SDK server parity", () => {
       expected_transition_version: 2,
       max_items: 10,
       producer_outcome: "pending" as const,
+      producer_evidence: [{
+        ...advance.producer_evidence[0]!,
+        target_revision: "contacts-revision-2",
+        target_digest: "contacts-digest-2",
+        inverse_verified: true,
+        inverse_outcome: "complete",
+      }],
       evidence: { reason: "test" },
       response_byte_limit: 100_000,
       time_budget_ms: 5_000,

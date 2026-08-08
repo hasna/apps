@@ -351,6 +351,156 @@ describe("project-first CLI surface", () => {
     }
   });
 
+  test("resource-link migration CLI preserves producer proof and event bounds in api mode", async () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-resource-link-migration-"));
+    const port = reserveFreePort();
+    const projectId = "wks_climigrationproof01";
+    const manifestId = `prlm_${"c".repeat(36)}`;
+    const requests: Array<{
+      method: string;
+      path: string;
+      query: string;
+      body: Record<string, unknown> | null;
+    }> = [];
+    let state = "planned";
+    let transitionVersion = 1;
+    const response = () => ({
+      ok: true,
+      outcome: "accepted",
+      manifest: {
+        schema: "projects.project_resource_link_migration_manifest.v1",
+        manifest_id: manifestId,
+        project_id: projectId,
+        operation_id: "cli-migration",
+        step_id: "links",
+        state,
+        expected_project_revision: "revision-1",
+        desired_collection_digest: "d".repeat(64),
+        links: [],
+        projects_forward_receipt_id: null,
+        projects_inverse_receipt_id: null,
+        projects_reference_proof: null,
+        last_verified_projects_revision: null,
+        last_verified_projects_digest: null,
+        transition_version: transitionVersion,
+        created_at: "2026-08-08T00:00:00.000Z",
+        updated_at: "2026-08-08T00:00:00.000Z",
+      },
+      events: [],
+      response_control: {
+        response_byte_limit: 100_000,
+        time_budget_ms: 5_000,
+        response_bytes: 1,
+        elapsed_ms: 0,
+        complete: true,
+        truncated: false,
+      },
+    });
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port,
+      async fetch(req) {
+        const url = new URL(req.url);
+        let body: Record<string, unknown> | null = null;
+        try { body = (await req.json()) as Record<string, unknown>; } catch { body = null; }
+        requests.push({
+          method: req.method,
+          path: url.pathname,
+          query: url.search,
+          body,
+        });
+        if (req.method === "POST" && url.pathname.endsWith("/advance")) {
+          state = String(body?.next_state);
+          transitionVersion = Number(body?.expected_transition_version) + 1;
+          return Response.json(response());
+        }
+        if (req.method === "POST" && url.pathname.endsWith("/rollback")) {
+          state = body?.producer_outcome === "complete" ? "rolled_back" : "rollback_in_progress";
+          transitionVersion = Number(body?.expected_transition_version) + 1;
+          return Response.json(response());
+        }
+        if (req.method === "GET") return Response.json(response());
+        return Response.json({ error: "Not found" }, { status: 404 });
+      },
+    });
+    const env = {
+      HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
+      HASNA_PROJECTS_HOME: join(root, "home"),
+      HASNA_PROJECTS_API_URL: `http://127.0.0.1:${port}`,
+      HASNA_PROJECTS_API_KEY: "test-key",
+    };
+    const forwardProof = [{
+      created_by_operation: true,
+      forward_receipt_id: "producer-forward-receipt",
+      child_link_receipt_ids: [],
+      target_revision: "producer-revision-2",
+      target_digest: "producer-digest-2",
+      inverse_verified: null,
+      inverse_outcome: null,
+    }];
+    const inverseProof = [{
+      ...forwardProof[0]!,
+      target_revision: "producer-revision-3",
+      target_digest: "producer-digest-3",
+      inverse_verified: true,
+      inverse_outcome: "complete",
+    }];
+    try {
+      const advance = await runProjectsAsync([
+        "resource-link-migration-advance",
+        projectId,
+        "--manifest-id", manifestId,
+        "--expected-transition-version", "1",
+        "--next-state", "producer_applied",
+        "--producer-evidence-json", JSON.stringify(forwardProof),
+        "--evidence-json", JSON.stringify({ producer: "readback" }),
+        "--max-items", "7",
+        "--response-byte-limit", "100000",
+        "--time-budget-ms", "5000",
+        "--json",
+      ], env);
+      expect(advance.exitCode).toBe(0);
+
+      const rollback = await runProjectsAsync([
+        "resource-link-migration-rollback",
+        projectId,
+        "--manifest-id", manifestId,
+        "--expected-transition-version", "2",
+        "--producer-outcome", "complete",
+        "--producer-evidence-json", JSON.stringify(inverseProof),
+        "--evidence-json", JSON.stringify({ producer_inverse: "verified" }),
+        "--max-items", "5",
+        "--response-byte-limit", "100000",
+        "--time-budget-ms", "5000",
+        "--json",
+      ], env);
+      expect(rollback.exitCode).toBe(0);
+
+      const writes = requests.filter((request) => request.method === "POST");
+      expect(writes).toHaveLength(2);
+      expect(writes[0]?.body).toMatchObject({
+        project_id: projectId,
+        manifest_id: manifestId,
+        max_items: 7,
+        producer_evidence: forwardProof,
+      });
+      expect(writes[1]?.body).toMatchObject({
+        project_id: projectId,
+        manifest_id: manifestId,
+        max_items: 5,
+        producer_evidence: inverseProof,
+      });
+      const reads = requests.filter((request) => request.method === "GET");
+      expect(reads.map((request) => request.query)).toEqual([
+        "?max_items=7&response_byte_limit=100000&time_budget_ms=5000",
+        "?max_items=5&response_byte_limit=100000&time_budget_ms=5000",
+      ]);
+    } finally {
+      server.stop(true);
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30000);
+
   test("prompt flags cannot hijack delete dispatch and delete requires a target", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-delete-dispatch-"));
     const env = {

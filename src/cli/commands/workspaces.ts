@@ -2792,6 +2792,7 @@ function registerProjectCommands(program: Command): void {
             "--expected-transition-version",
           )!,
           next_state: opts.nextState,
+          max_items: bounds.max_items,
           producer_evidence: parseJsonArray<ProjectResourceLinkProducerEvidence>(
             opts.producerEvidenceJson,
             "--producer-evidence-json",
@@ -2832,6 +2833,7 @@ function registerProjectCommands(program: Command): void {
       "--producer-outcome <outcome>",
       "pending, complete, retained_target, or failed_reconcilable",
     )
+    .option("--producer-evidence-json <json>", "Closed JSON array of exact producer inverse/readback evidence")
     .requiredOption("--evidence-json <json>", "Immutable rollback evidence JSON object")
     .option("--max-items <n>", "Maximum complete link and event population size", "1000")
     .requiredOption("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes")
@@ -2858,6 +2860,10 @@ function registerProjectCommands(program: Command): void {
             "--expected-transition-version",
           )!,
           producer_outcome: opts.producerOutcome,
+          producer_evidence: parseJsonArray<ProjectResourceLinkProducerEvidence>(
+            opts.producerEvidenceJson,
+            "--producer-evidence-json",
+          ),
           evidence: parseJsonObject(opts.evidenceJson, "--evidence-json") ?? {},
           ...bounds,
           agent_id: mutationAgentId(store, opts.agent),

@@ -42,6 +42,7 @@ import {
   applyProjectResourceLinkMigrationTransition,
   buildProjectResourceLinkMigrationPlan,
   migrationEvent,
+  reconcileProjectResourceLinkProducerProof,
   rowToProjectResourceLinkMigrationManifest,
 } from "../lib/project-resource-link-migrations.js";
 import { deriveWorkspaceRegistryFields } from "../lib/workspace-plan.js";
@@ -1335,25 +1336,48 @@ export class ProjectsPgStore {
   private async resourceLinkMigrationEvents(
     manifestId: string,
   ): Promise<ProjectResourceLinkMigrationEvent[]> {
+    return (await this.boundedResourceLinkMigrationEvents(
+      manifestId,
+      PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS,
+    )).events;
+  }
+
+  private async boundedResourceLinkMigrationEvents(
+    manifestId: string,
+    maxItems: number,
+  ): Promise<{
+    events: ProjectResourceLinkMigrationEvent[];
+    complete: boolean;
+    truncated: boolean;
+  }> {
+    if (!Number.isInteger(maxItems) || maxItems <= 0) {
+      throw new ValidationError("project resource link migration event max_items must be a positive integer");
+    }
     const rows = await this.db.many<Record<string, unknown> & QueryResultRow>(
       `SELECT event_id, manifest_id, transition_version, from_state, to_state,
               request_digest, precondition_digest, evidence_json, created_at
        FROM project_resource_link_migration_events
        WHERE manifest_id = $1
-       ORDER BY transition_version ASC`,
-      [manifestId],
+       ORDER BY transition_version ASC
+       LIMIT $2`,
+      [manifestId, maxItems + 1],
     );
-    return rows.map((row) => ({
-      event_id: String(row["event_id"]),
-      manifest_id: String(row["manifest_id"]),
-      transition_version: Number(row["transition_version"]),
-      from_state: row["from_state"] === null ? null : row["from_state"] as ProjectResourceLinkMigrationEvent["from_state"],
-      to_state: row["to_state"] as ProjectResourceLinkMigrationEvent["to_state"],
-      request_digest: String(row["request_digest"]),
-      precondition_digest: String(row["precondition_digest"]),
-      evidence: parseJson(String(row["evidence_json"]), {}),
-      created_at: String(row["created_at"]),
-    }));
+    const truncated = rows.length > maxItems;
+    return {
+      events: rows.slice(0, maxItems).map((row) => ({
+        event_id: String(row["event_id"]),
+        manifest_id: String(row["manifest_id"]),
+        transition_version: Number(row["transition_version"]),
+        from_state: row["from_state"] === null ? null : row["from_state"] as ProjectResourceLinkMigrationEvent["from_state"],
+        to_state: row["to_state"] as ProjectResourceLinkMigrationEvent["to_state"],
+        request_digest: String(row["request_digest"]),
+        precondition_digest: String(row["precondition_digest"]),
+        evidence: parseJson(String(row["evidence_json"]), {}),
+        created_at: String(row["created_at"]),
+      })),
+      complete: !truncated,
+      truncated,
+    };
   }
 
   private async insertResourceLinkMigrationEvent(event: ProjectResourceLinkMigrationEvent): Promise<void> {
@@ -1501,12 +1525,16 @@ export class ProjectsPgStore {
   ): Promise<ProjectResourceLinkMigrationResult> {
     const started = Date.now();
     const manifest = await this.resourceLinkMigrationManifest(input.project_id, input.manifest_id);
+    const boundedEvents = await this.boundedResourceLinkMigrationEvents(
+      manifest.manifest_id,
+      input.max_items ?? PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS,
+    );
     return withResponseControl({
       ok: true,
       outcome: "accepted" as const,
       manifest,
-      events: await this.resourceLinkMigrationEvents(manifest.manifest_id),
-    }, input, started, "project resource link migration read");
+      events: boundedEvents.events,
+    }, input, started, "project resource link migration read", boundedEvents);
   }
 
   async advanceProjectResourceLinkMigration(
@@ -1525,8 +1553,13 @@ export class ProjectsPgStore {
         events: await this.resourceLinkMigrationEvents(before.manifest_id),
       }, input, started, "project resource link migration advance");
     }
-    if (input.next_state === "producer_applied" && !input.producer_evidence) {
-      throw new ValidationError("producer_applied requires exact producer evidence for every link");
+    let producerEvidence = input.producer_evidence;
+    if (input.next_state === "producer_applied") {
+      try {
+        producerEvidence = reconcileProjectResourceLinkProducerProof(before, input.producer_evidence, "forward");
+      } catch (error) {
+        throw new ValidationError(error instanceof Error ? error.message : String(error));
+      }
     }
     if (input.next_state === "projects_applied") {
       if (!input.projects_forward_receipt_id) {
@@ -1551,6 +1584,11 @@ export class ProjectsPgStore {
       }
     }
     if (input.next_state === "verified") {
+      try {
+        producerEvidence = reconcileProjectResourceLinkProducerProof(before, input.producer_evidence, "readback");
+      } catch (error) {
+        throw new ValidationError(error instanceof Error ? error.message : String(error));
+      }
       const read = await this.readProjectResourceLinks({
         project_id: input.project_id,
         max_items: Math.max(PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS, before.links.length),
@@ -1566,7 +1604,7 @@ export class ProjectsPgStore {
       }
     }
     const after = applyProjectResourceLinkMigrationTransition(before, input.next_state, nowIso(), {
-      producer_evidence: input.producer_evidence,
+      producer_evidence: producerEvidence,
       projects_forward_receipt_id: input.projects_forward_receipt_id,
       last_verified_projects_revision: input.last_verified_projects_revision,
       last_verified_projects_digest: input.last_verified_projects_digest,
@@ -1699,7 +1737,21 @@ export class ProjectsPgStore {
       : input.producer_outcome === "retained_target"
         ? "retained_target"
         : "failed_reconcilable";
+    let terminalProducerEvidence = input.producer_evidence;
+    if (nextState === "rolled_back" || nextState === "retained_target") {
+      try {
+        terminalProducerEvidence = reconcileProjectResourceLinkProducerProof(
+          before,
+          input.producer_evidence,
+          "inverse",
+          nextState === "rolled_back" ? "complete" : "retained_target",
+        );
+      } catch (error) {
+        throw new ValidationError(error instanceof Error ? error.message : String(error));
+      }
+    }
     const after = applyProjectResourceLinkMigrationTransition(before, nextState, nowIso(), {
+      producer_evidence: terminalProducerEvidence,
       projects_inverse_receipt_id: inverseReceiptId,
       projects_reference_proof: proof,
       last_verified_projects_revision: proof.verified_revision,

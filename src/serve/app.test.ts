@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { mintApiKey } from "@hasna/contracts/auth";
+import Ajv2020 from "ajv/dist/2020.js";
 import { createFetchHandler } from "./app.js";
 import { NotFoundError, ProjectsPgStore, ValidationError } from "./pg-store.js";
 import type {
@@ -408,6 +409,39 @@ describe("projects-serve probes", () => {
     expect(spec.components.schemas.ProjectResourceLinkRead.required).toContain("contract");
     expect(spec.components.schemas.ProjectResourceLinkCollectionV1.properties.schema.enum)
       .toEqual(["hasna.project_resource_link_collection.v1"]);
+
+    const validatePersistedResourceLink = new Ajv2020({
+      strict: false,
+      allErrors: true,
+    }).compile({
+      $ref: "#/components/schemas/ProjectResourceLink",
+      components: spec.components,
+    });
+    const persistedResourceLink = {
+      id: "prl_http_resource",
+      project_id: "wks_httpresource0001",
+      authority: "conversations",
+      service_instance: "urn:hasna:conversations:test",
+      source_package: "@hasna/conversations",
+      target_kind: "channel",
+      locator: {
+        kind: "conversations_channel_id",
+        value: "chn_79fa9c68937a1d020d6031dcaa3dd8d7",
+      },
+      scope: "resource",
+      labels: { channel_name: "http-resource" },
+      created_at: "2026-08-08 00:00:00.000",
+      updated_at: "2026-08-08 00:00:00.000",
+    };
+    expect(validatePersistedResourceLink(persistedResourceLink)).toBe(true);
+    expect(validatePersistedResourceLink({
+      ...persistedResourceLink,
+      caller_forged_field: true,
+    })).toBe(false);
+    expect(validatePersistedResourceLink({
+      ...persistedResourceLink,
+      locator: { kind: "conversations_channel_id", value: "chn_partial" },
+    })).toBe(false);
 
     const locatorBranches = spec.components.schemas.ProjectResourceLinkLocator.oneOf;
     expect(locatorBranches).toEqual([
@@ -1170,7 +1204,14 @@ describe("projects-serve auth", () => {
       },
       async readProjectResourceLinkMigration(input: Record<string, unknown>) {
         calls.push({ operation: "read", input });
-        return result();
+        return {
+          ...result(),
+          response_control: {
+            ...responseControl,
+            complete: false,
+            truncated: true,
+          },
+        };
       },
       async advanceProjectResourceLinkMigration(input: Record<string, unknown>) {
         calls.push({ operation: "advance", input });
@@ -1215,12 +1256,19 @@ describe("projects-serve auth", () => {
       { headers: { "x-api-key": readToken } },
     ));
     expect(read.status).toBe(200);
+    expect(await read.json()).toMatchObject({
+      response_control: {
+        complete: false,
+        truncated: true,
+      },
+    });
 
     const advanceBody = {
       project_id: "must-be-overridden",
       manifest_id: "must-be-overridden",
       expected_transition_version: 1,
       next_state: "producer_applied",
+      max_items: 10,
       producer_evidence: [],
       evidence: { producer: "readback" },
       response_byte_limit: 100_000,
@@ -1242,6 +1290,15 @@ describe("projects-serve auth", () => {
       expected_transition_version: 2,
       max_items: 10,
       producer_outcome: "pending",
+      producer_evidence: [{
+        created_by_operation: true,
+        forward_receipt_id: "producer-forward-receipt",
+        child_link_receipt_ids: [],
+        target_revision: "producer-revision-2",
+        target_digest: "producer-digest-2",
+        inverse_verified: true,
+        inverse_outcome: "complete",
+      }],
       evidence: { projects_references: "checked" },
       response_byte_limit: 100_000,
       time_budget_ms: 5_000,

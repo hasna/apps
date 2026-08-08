@@ -36,6 +36,7 @@ import {
   applyProjectResourceLinkMigrationTransition,
   buildProjectResourceLinkMigrationPlan,
   migrationEvent,
+  reconcileProjectResourceLinkProducerProof,
   rowToProjectResourceLinkMigrationManifest,
 } from "../lib/project-resource-link-migrations.js";
 import type {
@@ -1677,23 +1678,49 @@ function listProjectResourceLinkMigrationEvents(
   manifestId: string,
   db: Database,
 ): ProjectResourceLinkMigrationEvent[] {
-  return (db.query(
+  return readBoundedProjectResourceLinkMigrationEvents(
+    manifestId,
+    PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS,
+    db,
+  ).events;
+}
+
+function readBoundedProjectResourceLinkMigrationEvents(
+  manifestId: string,
+  maxItems: number,
+  db: Database,
+): {
+  events: ProjectResourceLinkMigrationEvent[];
+  complete: boolean;
+  truncated: boolean;
+} {
+  if (!Number.isInteger(maxItems) || maxItems <= 0) {
+    throw new Error("project resource link migration event max_items must be a positive integer");
+  }
+  const rows = db.query(
     `SELECT event_id, manifest_id, transition_version, from_state, to_state,
             request_digest, precondition_digest, evidence_json, created_at
      FROM project_resource_link_migration_events
      WHERE manifest_id = ?
-     ORDER BY transition_version ASC`,
-  ).all(manifestId) as Array<Record<string, unknown>>).map((row) => ({
-    event_id: String(row["event_id"]),
-    manifest_id: String(row["manifest_id"]),
-    transition_version: Number(row["transition_version"]),
-    from_state: row["from_state"] === null ? null : row["from_state"] as ProjectResourceLinkMigrationEvent["from_state"],
-    to_state: row["to_state"] as ProjectResourceLinkMigrationEvent["to_state"],
-    request_digest: String(row["request_digest"]),
-    precondition_digest: String(row["precondition_digest"]),
-    evidence: JSON.parse(String(row["evidence_json"])) as JsonObject,
-    created_at: String(row["created_at"]),
-  }));
+     ORDER BY transition_version ASC
+     LIMIT ?`,
+  ).all(manifestId, maxItems + 1) as Array<Record<string, unknown>>;
+  const truncated = rows.length > maxItems;
+  return {
+    events: rows.slice(0, maxItems).map((row) => ({
+      event_id: String(row["event_id"]),
+      manifest_id: String(row["manifest_id"]),
+      transition_version: Number(row["transition_version"]),
+      from_state: row["from_state"] === null ? null : row["from_state"] as ProjectResourceLinkMigrationEvent["from_state"],
+      to_state: row["to_state"] as ProjectResourceLinkMigrationEvent["to_state"],
+      request_digest: String(row["request_digest"]),
+      precondition_digest: String(row["precondition_digest"]),
+      evidence: JSON.parse(String(row["evidence_json"])) as JsonObject,
+      created_at: String(row["created_at"]),
+    })),
+    complete: !truncated,
+    truncated,
+  };
 }
 
 function insertProjectResourceLinkMigrationEvent(
@@ -1848,12 +1875,17 @@ export function readProjectResourceLinkMigration(
   const d = db || getDatabase();
   const started = Date.now();
   const manifest = getProjectResourceLinkMigrationManifest(input.project_id, input.manifest_id, d);
+  const boundedEvents = readBoundedProjectResourceLinkMigrationEvents(
+    manifest.manifest_id,
+    input.max_items ?? PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS,
+    d,
+  );
   return withResponseControl({
     ok: true,
     outcome: "accepted" as const,
     manifest,
-    events: listProjectResourceLinkMigrationEvents(manifest.manifest_id, d),
-  }, input, started, "project resource link migration read");
+    events: boundedEvents.events,
+  }, input, started, "project resource link migration read", boundedEvents);
 }
 
 export function advanceProjectResourceLinkMigration(
@@ -1874,8 +1906,9 @@ export function advanceProjectResourceLinkMigration(
       events: listProjectResourceLinkMigrationEvents(before.manifest_id, d),
     }, input, started, "project resource link migration advance");
   }
-  if (input.next_state === "producer_applied" && !input.producer_evidence) {
-    throw new Error("producer_applied requires exact producer evidence for every link");
+  let producerEvidence = input.producer_evidence;
+  if (input.next_state === "producer_applied") {
+    producerEvidence = reconcileProjectResourceLinkProducerProof(before, input.producer_evidence, "forward");
   }
   if (input.next_state === "projects_applied") {
     if (!input.projects_forward_receipt_id) throw new Error("projects_applied requires a Projects forward receipt");
@@ -1896,6 +1929,7 @@ export function advanceProjectResourceLinkMigration(
     }
   }
   if (input.next_state === "verified") {
+    producerEvidence = reconcileProjectResourceLinkProducerProof(before, input.producer_evidence, "readback");
     const read = readProjectResourceLinks({
       project_id: input.project_id,
       max_items: Math.max(PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS, before.links.length),
@@ -1911,7 +1945,7 @@ export function advanceProjectResourceLinkMigration(
     }
   }
   const after = applyProjectResourceLinkMigrationTransition(before, input.next_state, now(), {
-    producer_evidence: input.producer_evidence,
+    producer_evidence: producerEvidence,
     projects_forward_receipt_id: input.projects_forward_receipt_id,
     last_verified_projects_revision: input.last_verified_projects_revision,
     last_verified_projects_digest: input.last_verified_projects_digest,
@@ -2044,7 +2078,16 @@ export function rollbackProjectResourceLinkMigration(
     : input.producer_outcome === "retained_target"
       ? "retained_target"
       : "failed_reconcilable";
+  const terminalProducerEvidence = nextState === "rolled_back" || nextState === "retained_target"
+    ? reconcileProjectResourceLinkProducerProof(
+      before,
+      input.producer_evidence,
+      "inverse",
+      nextState === "rolled_back" ? "complete" : "retained_target",
+    )
+    : undefined;
   const after = applyProjectResourceLinkMigrationTransition(before, nextState, now(), {
+    producer_evidence: terminalProducerEvidence,
     projects_inverse_receipt_id: inverseReceiptId,
     projects_reference_proof: proof,
     last_verified_projects_revision: proof.verified_revision,

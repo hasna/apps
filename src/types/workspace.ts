@@ -701,6 +701,7 @@ export interface ProjectResourceLinkMigrationAdvanceRequest extends GuardedProje
   manifest_id: string;
   expected_transition_version: number;
   next_state: "producer_applied" | "projects_applied" | "verified" | "failed_reconcilable";
+  max_items?: number;
   producer_evidence?: ProjectResourceLinkProducerEvidence[];
   projects_forward_receipt_id?: string;
   last_verified_projects_revision?: string;
@@ -714,6 +715,7 @@ export interface ProjectResourceLinkMigrationRollbackRequest extends GuardedProj
   expected_transition_version: number;
   max_items?: number;
   producer_outcome: "pending" | "complete" | "retained_target" | "failed_reconcilable";
+  producer_evidence?: ProjectResourceLinkProducerEvidence[];
   evidence: JsonObject;
   agent_id?: string;
   source?: EventSource;
