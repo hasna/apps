@@ -2,6 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { createPgPool, createQueryClient } from "../generated/storage-kit/index.js";
 import type { TypedQueryClient } from "../generated/storage-kit/query.js";
 import type {
+  AgentRow,
   GuardedProjectMutationReceiptRow,
   ProjectResourceLinkRow,
   RootRow,
@@ -10,6 +11,61 @@ import type {
 } from "../types/workspace.js";
 import { runProjectsMigrations } from "./migrations.js";
 import { ProjectsPgStore, generateWorkspaceId, generateRootId, slugify } from "./pg-store.js";
+
+function eventAgentFkClient() {
+  const createdAt = "2026-08-08 00:00:00";
+  const agents: AgentRow[] = [{
+    id: "agt_hosted",
+    slug: "hosted-agent",
+    name: "Hosted Agent",
+    kind: "ai",
+    provider: null,
+    model: null,
+    role: null,
+    permissions: "[]",
+    metadata: "{}",
+    created_at: createdAt,
+    updated_at: createdAt,
+  }];
+  const events: WorkspaceEventRow[] = [];
+
+  const client = {
+    async get<T>(sql: string, params: readonly unknown[] = []): Promise<T | null> {
+      if (sql.startsWith("SELECT * FROM agents WHERE")) {
+        return (agents.find((agent) => agent.id === params[0] || agent.slug === params[0]) ?? null) as T | null;
+      }
+      if (sql.startsWith("SELECT * FROM workspace_events WHERE id")) {
+        return (events.find((event) => event.id === params[0]) ?? null) as T | null;
+      }
+      throw new Error(`Unexpected get query: ${sql}`);
+    },
+    async execute(sql: string, params: readonly unknown[] = []): Promise<void> {
+      if (!sql.includes("INSERT INTO workspace_events")) throw new Error(`Unexpected execute query: ${sql}`);
+      const agentId = params[2] === null ? null : String(params[2]);
+      if (agentId && !agents.some((agent) => agent.id === agentId)) {
+        throw new Error('insert or update on table "workspace_events" violates foreign key constraint "workspace_events_agent_id_fkey"');
+      }
+      events.push({
+        id: String(params[0]),
+        workspace_id: params[1] === null ? null : String(params[1]),
+        agent_id: agentId,
+        event_type: String(params[3]),
+        source: String(params[4]),
+        prompt: params[5] === null ? null : String(params[5]),
+        command: params[6] === null ? null : String(params[6]),
+        before_json: params[7] === null ? null : String(params[7]),
+        after_json: params[8] === null ? null : String(params[8]),
+        metadata: String(params[9]),
+        created_at: String(params[10]),
+      });
+    },
+    async many() { throw new Error("Unexpected many query"); },
+    async one() { throw new Error("Unexpected one query"); },
+    async query() { throw new Error("Unexpected query"); },
+  } as TypedQueryClient;
+
+  return { client, events };
+}
 
 function duplicateSlugClient(): TypedQueryClient {
   const createdAt = "2026-08-03 00:00:00";
@@ -380,6 +436,39 @@ describe("pg-store pure helpers", () => {
   test("id generators carry stable prefixes", () => {
     expect(generateWorkspaceId()).toMatch(/^wks_/);
     expect(generateRootId()).toMatch(/^root_/);
+  });
+});
+
+describe("pg-store event attribution", () => {
+  test("drops a machine-local agent id that does not exist in the hosted agents table", async () => {
+    const { client, events } = eventAgentFkClient();
+    const store = new ProjectsPgStore(client);
+
+    const event = await store.recordEvent({
+      workspace_id: "wks_hosted",
+      agent_id: "agt_machine_local",
+      event_type: "started",
+      source: "cli",
+    });
+
+    expect(event.agent_id).toBeNull();
+    expect(events).toHaveLength(1);
+    expect(events[0]?.agent_id).toBeNull();
+  });
+
+  test("preserves an agent id that exists in the hosted agents table", async () => {
+    const { client, events } = eventAgentFkClient();
+    const store = new ProjectsPgStore(client);
+
+    const event = await store.recordEvent({
+      workspace_id: "wks_hosted",
+      agent_id: "agt_hosted",
+      event_type: "started",
+      source: "cli",
+    });
+
+    expect(event.agent_id).toBe("agt_hosted");
+    expect(events[0]?.agent_id).toBe("agt_hosted");
   });
 });
 
