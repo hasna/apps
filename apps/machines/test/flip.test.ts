@@ -34,6 +34,17 @@ function writeExecutable(dir: string, name: string, body: string): void {
   writeFileSync(join(dir, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
 }
 
+function runWithFixturePath(script: string, binDir: string, env: NodeJS.ProcessEnv) {
+  // Bun prepends its own install paths to PATH for node:child_process spawns.
+  // Start with a clean environment and pass only the fixture inputs so no
+  // installed Hasna CLI can win command lookup in the child.
+  return spawnSync(
+    "/usr/bin/env",
+    ["-i", `CALL_LOG=${env.CALL_LOG ?? ""}`, `PATH=${binDir}:/usr/bin:/bin`, "bash", "-c", script],
+    { encoding: "utf8" },
+  );
+}
+
 describe("flip registry", () => {
   test("registers all 25 @hasna OSS apps", () => {
     expect(Object.keys(FLIP_APPS).length).toBe(25);
@@ -165,18 +176,18 @@ describe("script generation", () => {
 
       const env = { ...process.env, CALL_LOG: callLog, PATH: `${binDir}:/usr/bin:/bin` };
       const rejectedCapture = spawnSync(
-        "sh",
-        ["-c", 'secrets get fixture/key > "$1"', "fixture", captured],
-        { encoding: "utf8", env },
+        "/usr/bin/env",
+        ["-i", `CALL_LOG=${callLog}`, `PATH=${binDir}:/usr/bin:/bin`, "sh", "-c", 'secrets get fixture/key > "$1"', "fixture", captured],
+        { encoding: "utf8" },
       );
       expect(rejectedCapture.status).toBe(9);
       expect(statSync(captured).size).toBe(0);
 
       const script = buildFlipScript(spec, "api", { envDir, skipRestart: true });
-      const result = spawnSync("bash", ["-c", script], { encoding: "utf8", env });
+      const result = runWithFixturePath(script, binDir, env);
       expect(result.status).toBe(0);
       expect(result.stderr).toBe("");
-      expect(readFileSync(callLog, "utf8")).toContain("exec\n");
+      expect(readFileSync(callLog, "utf8")).toBe("get\nexec\n");
       expect(script).toContain("secrets exec 'hasna/oss/todos/api-key' --as API_KEY -- sh -c");
       expect(script).not.toContain("secrets get");
 
@@ -189,7 +200,7 @@ describe("script generation", () => {
       mkdirSync(failingEnvDir);
       writeExecutable(binDir, "mv", "exit 71");
       const failingScript = buildFlipScript(spec, "api", { envDir: failingEnvDir, skipRestart: true });
-      const failedMove = spawnSync("bash", ["-c", failingScript], { encoding: "utf8", env });
+      const failedMove = runWithFixturePath(failingScript, binDir, env);
       expect(failedMove.status).toBe(71);
       expect(readdirSync(failingEnvDir).filter((name) => name.startsWith(".todos.env."))).toEqual([]);
     } finally {
