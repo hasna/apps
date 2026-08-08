@@ -159,8 +159,8 @@ function guardedReadClient() {
     service_instance: "urn:hasna:conversations:test",
     source_package: "@hasna/conversations",
     target_kind: "channel",
-    locator_kind: "external_uuid",
-    locator_value: "515fbb15-4661-4cdc-b1df-f719797b8cad",
+    locator_kind: "conversations_channel_id",
+    locator_value: "chn_79fa9c68937a1d020d6031dcaa3dd8d7",
     scope: "resource",
     labels_json: JSON.stringify({ channel_name: "guarded-read" }),
     created_at: "2026-08-07 00:00:01",
@@ -392,7 +392,10 @@ describe("pg-store guarded exact project read", () => {
     expect(result.resource_links).toEqual([
       expect.objectContaining({
         id: "prl_guardedread",
-        locator: { kind: "external_uuid", value: "515fbb15-4661-4cdc-b1df-f719797b8cad" },
+        locator: {
+          kind: "conversations_channel_id",
+          value: "chn_79fa9c68937a1d020d6031dcaa3dd8d7",
+        },
         labels: { channel_name: "guarded-read" },
       }),
     ]);
@@ -454,8 +457,8 @@ describe("pg-store typed resource-link transaction model", () => {
     source_package: "@hasna/conversations" as const,
     target_kind: "channel" as const,
     locator: {
-      kind: "external_uuid" as const,
-      value: "515fbb15-4661-4cdc-b1df-f719797b8cad",
+      kind: "conversations_channel_id" as const,
+      value: "chn_79fa9c68937a1d020d6031dcaa3dd8d7",
     },
     scope: "resource" as const,
     labels: { channel_name: "pg-resource" },
@@ -623,8 +626,8 @@ if (LIVE_URL) describe("pg-store live CRUD", () => {
       source_package: "@hasna/conversations" as const,
       target_kind: "channel" as const,
       locator: {
-        kind: "external_uuid" as const,
-        value: "515fbb15-4661-4cdc-b1df-f719797b8cad",
+        kind: "conversations_channel_id" as const,
+        value: "chn_79fa9c68937a1d020d6031dcaa3dd8d7",
       },
       scope: "resource" as const,
       labels: { channel_name: `resource-links-${stamp}` },

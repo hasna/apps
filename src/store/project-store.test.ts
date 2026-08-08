@@ -489,8 +489,8 @@ describe("projects store api transport (roots/agents/recipes)", () => {
       source_package: "@hasna/conversations" as const,
       target_kind: "channel" as const,
       locator: {
-        kind: "external_uuid" as const,
-        value: "515fbb15-4661-4cdc-b1df-f719797b8cad",
+        kind: "conversations_channel_id" as const,
+        value: "chn_79fa9c68937a1d020d6031dcaa3dd8d7",
       },
       scope: "resource" as const,
       labels: { channel_name: "resource-api" },

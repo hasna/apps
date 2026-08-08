@@ -449,7 +449,11 @@ export interface GuardedProjectMutationRollbackRequest extends GuardedProjectMut
 export const PROJECT_RESOURCE_AUTHORITIES = ["todos", "conversations", "knowledge", "mementos"] as const;
 export type ProjectResourceAuthority = (typeof PROJECT_RESOURCE_AUTHORITIES)[number];
 
-export const PROJECT_RESOURCE_LOCATOR_KINDS = ["external_uuid", "canonical_uri"] as const;
+export const PROJECT_RESOURCE_LOCATOR_KINDS = [
+  "external_uuid",
+  "canonical_uri",
+  "conversations_channel_id",
+] as const;
 export type ProjectResourceLocatorKind = (typeof PROJECT_RESOURCE_LOCATOR_KINDS)[number];
 
 export const PROJECT_RESOURCE_LINK_SCOPES = ["resource", "collection"] as const;

@@ -41,6 +41,7 @@ const LINK_FIELDS = new Set([
 const LOCATOR_FIELDS = new Set(["kind", "value"]);
 const LABEL_FIELDS = new Set(["name", "channel_name", "path", "tags"]);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const CONVERSATIONS_CHANNEL_ID_RE = /^chn_[0-9a-f]{32}$/i;
 const URN_RE = /^urn:[a-z0-9][a-z0-9-]{0,31}:[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+$/;
 
 function assertClosedObject(value: object, allowed: ReadonlySet<string>, label: string): void {
@@ -109,24 +110,43 @@ export function normalizeProjectResourceLink(input: ProjectResourceLinkInput): P
   }
   assertClosedObject(input.locator, LOCATOR_FIELDS, "resource link locator");
   const locatorValue = requiredString(input.locator.value, "resource link locator.value");
+  let normalizedLocatorValue: string;
   if (input.locator.kind === "external_uuid") {
     if (!UUID_RE.test(locatorValue)) throw new Error("resource link external_uuid must be a complete UUID");
-  } else if (input.locator.kind !== "canonical_uri") {
-    throw new Error("resource link locator.kind must be external_uuid or canonical_uri");
+    normalizedLocatorValue = locatorValue.toLowerCase();
+  } else if (input.locator.kind === "canonical_uri") {
+    normalizedLocatorValue = canonicalUri(locatorValue, "resource link canonical_uri");
+  } else if (input.locator.kind === "conversations_channel_id") {
+    if (!CONVERSATIONS_CHANNEL_ID_RE.test(locatorValue)) {
+      throw new Error("resource link conversations channel ID must match chn_<32hex>");
+    }
+    normalizedLocatorValue = locatorValue.toLowerCase();
+  } else {
+    throw new Error(
+      "resource link locator.kind must be external_uuid, canonical_uri, or conversations_channel_id",
+    );
   }
   const locator = {
     kind: input.locator.kind,
-    value: input.locator.kind === "external_uuid"
-      ? locatorValue.toLowerCase()
-      : canonicalUri(locatorValue, "resource link canonical_uri"),
+    value: normalizedLocatorValue,
   };
   if (input.scope !== "resource" && input.scope !== "collection") {
     throw new Error("resource link scope must be resource or collection");
   }
   const labels = normalizeLabels(input.labels);
+  if (
+    locator.kind === "conversations_channel_id" &&
+    !(authority === "conversations" && input.target_kind === "channel")
+  ) {
+    throw new Error(
+      "resource link conversations_channel_id is only valid for Conversations channel links",
+    );
+  }
   if (authority === "conversations" && input.target_kind === "channel") {
-    if (locator.kind !== "external_uuid") {
-      throw new Error("conversations channel links require the immutable external_uuid");
+    if (locator.kind !== "external_uuid" && locator.kind !== "conversations_channel_id") {
+      throw new Error(
+        "conversations channel links require an immutable external_uuid or conversations_channel_id",
+      );
     }
     if (!labels.channel_name) {
       throw new Error("conversations channel links require labels.channel_name as mutable compatibility data");

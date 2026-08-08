@@ -143,6 +143,93 @@ describe("workspace schema", () => {
     expect(workspace?.metadata).toEqual({ retained: true });
     db.close();
   });
+
+  test("widens resource-link locator kinds without losing legacy UUID links", () => {
+    const db = new Database(":memory:");
+    db.run("PRAGMA foreign_keys=ON");
+    db.run(`
+      CREATE TABLE _migrations (
+        id INTEGER PRIMARY KEY,
+        applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+    for (const migration of MIGRATIONS.slice(0, 10)) db.run(migration);
+    db.run(
+      "INSERT INTO workspaces (id, slug, name) VALUES (?, ?, ?)",
+      ["wks_locator_upgrade", "locator-upgrade", "Locator Upgrade"],
+    );
+    db.run(`
+      INSERT INTO project_resource_links (
+        id, project_id, authority, service_instance, source_package, target_kind,
+        locator_kind, locator_value, scope, labels_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      "prl_legacy_uuid",
+      "wks_locator_upgrade",
+      "conversations",
+      "urn:hasna:conversations:test",
+      "@hasna/conversations",
+      "channel",
+      "external_uuid",
+      "515fbb15-4661-4cdc-b1df-f719797b8cad",
+      "resource",
+      JSON.stringify({ channel_name: "locator-upgrade" }),
+    ]);
+    expect(() => db.run(`
+      INSERT INTO project_resource_links (
+        id, project_id, authority, service_instance, source_package, target_kind,
+        locator_kind, locator_value, scope, labels_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      "prl_channel_before_upgrade",
+      "wks_locator_upgrade",
+      "conversations",
+      "urn:hasna:conversations:test",
+      "@hasna/conversations",
+      "channel",
+      "conversations_channel_id",
+      "chn_79fa9c68937a1d020d6031dcaa3dd8d7",
+      "resource",
+      JSON.stringify({ channel_name: "locator-upgrade" }),
+    ])).toThrow();
+
+    runMigrations(db);
+
+    expect(db.query(
+      "SELECT locator_kind, locator_value FROM project_resource_links ORDER BY id",
+    ).all()).toEqual([{
+      locator_kind: "external_uuid",
+      locator_value: "515fbb15-4661-4cdc-b1df-f719797b8cad",
+    }]);
+    db.run(`
+      INSERT INTO project_resource_links (
+        id, project_id, authority, service_instance, source_package, target_kind,
+        locator_kind, locator_value, scope, labels_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      "prl_channel_after_upgrade",
+      "wks_locator_upgrade",
+      "conversations",
+      "urn:hasna:conversations:test",
+      "@hasna/conversations",
+      "channel",
+      "conversations_channel_id",
+      "chn_79fa9c68937a1d020d6031dcaa3dd8d7",
+      "resource",
+      JSON.stringify({ channel_name: "locator-upgrade" }),
+    ]);
+    expect(db.query(
+      "SELECT locator_kind FROM project_resource_links ORDER BY id",
+    ).all()).toEqual([
+      { locator_kind: "conversations_channel_id" },
+      { locator_kind: "external_uuid" },
+    ]);
+    expect(() => db.run(
+      "UPDATE project_resource_links SET locator_value = ? WHERE id = ?",
+      ["chn_00000000000000000000000000000000", "prl_channel_after_upgrade"],
+    )).toThrow(/immutable/);
+    db.close();
+  });
 });
 
 describe("workspace domain services", () => {
