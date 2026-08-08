@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { execFileSync } from "node:child_process";
+import { basename } from "node:path";
 import { getStore } from "../../lib/store/index.js";
 import chalk from "chalk";
 import { normalizeExactIsoTimestamp, normalizeSince } from "../../lib/since.js";
@@ -93,20 +94,85 @@ export function registerMessagingCommands(program: Command): void {
     .option("--branch <branch>", "Branch context")
     .option("--metadata <json>", "JSON metadata string")
     .option("--channel <name>", "Send to a channel instead of a specific agent")
+    .option("--attach <file...>", "Attach one or more files")
+    .option("--attachment <file...>", "Alias for --attach")
+    .option("--reply-to <message-reference>", "Reply to a parent UUID, or numeric ID with --channel/--session")
     .option("--blocking", "Send as a blocking message (recipient must acknowledge)")
     .option("-j, --json", "Output as JSON")
     .action(async (message, opts) => {
       const from = resolveIdentity(opts.from).trim();
-      const to = typeof opts.to === "string" ? opts.to.trim() : "";
-      const channel = typeof opts.channel === "string" ? opts.channel.trim() : "";
+      let to = typeof opts.to === "string" ? opts.to.trim() : "";
+      let channel = typeof opts.channel === "string" ? opts.channel.trim() : "";
       const content = typeof message === "string" ? message : "";
-      const session = typeof opts.session === "string" && opts.session.trim()
+      let session = typeof opts.session === "string" && opts.session.trim()
         ? opts.session.trim()
         : undefined;
+      let replyTo: number | undefined;
+      let replyToUuid: string | undefined;
 
       if (!from) {
         emitCliError("Sender identity is required.", opts);
       }
+
+      if (opts.replyTo !== undefined) {
+        const ref = parseMessageReference(opts.replyTo);
+        if (!ref) {
+          emitCliError(
+            `--reply-to must be a positive message id or UUID (got: ${String(opts.replyTo)}).`,
+            opts,
+          );
+        }
+        if (ref.kind === "id" && !channel && !session) {
+          emitCliError(
+            "Numeric --reply-to values require independent scope before a reply can be written. " +
+              "Pass --channel <name> or --session <id>, or use the parent UUID from send/show output.",
+            opts,
+          );
+        }
+
+        const parent = ref.kind === "id"
+          ? await getStore().getMessageById(ref.id)
+          : await getStore().getMessageByUuid(ref.uuid);
+        if (!parent) {
+          emitCliError(`Message ${String(opts.replyTo)} not found.`, opts);
+        }
+        if (!parent.uuid) {
+          emitCliError("Parent message has no immutable UUID; refusing to write a numeric-only reply.", opts);
+        }
+
+        const parentChannel =
+          parent.channel ||
+          (parent.session_id?.startsWith("channel:") ? parent.session_id.slice(8) : undefined);
+        const expectedChannel = channel ? normalizeChannelName(channel) : undefined;
+        if (expectedChannel && expectedChannel !== parentChannel) {
+          emitCliError(
+            `Expected parent channel ${expectedChannel} does not match resolved channel ${parentChannel ?? "(direct message)"}.`,
+            opts,
+          );
+        }
+        if (session && session !== parent.session_id) {
+          emitCliError(
+            `Expected parent session ${session} does not match resolved session ${parent.session_id}.`,
+            opts,
+          );
+        }
+
+        const resolvedTo = parentChannel
+          ? parentChannel
+          : (parent.from_agent === from ? parent.to_agent : parent.from_agent);
+        if (to && to.toLowerCase() !== resolvedTo.toLowerCase()) {
+          emitCliError(
+            `Recipient ${to} does not match the reply target ${resolvedTo} resolved from the parent.`,
+            opts,
+          );
+        }
+        to = resolvedTo;
+        channel = parentChannel ?? "";
+        session = parent.session_id;
+        replyTo = parent.id;
+        replyToUuid = parent.uuid;
+      }
+
       if (!to && !channel) {
         emitCliError("Recipient is required: use --to <agent> or --channel <name>.", opts);
       }
@@ -123,6 +189,15 @@ export function registerMessagingCommands(program: Command): void {
         }
       }
 
+      const attachmentPaths = [
+        ...(Array.isArray(opts.attach) ? opts.attach : []),
+        ...(Array.isArray(opts.attachment) ? opts.attachment : []),
+      ].filter((path): path is string => typeof path === "string" && path.length > 0);
+      const attachments = attachmentPaths.map((sourcePath) => ({
+        name: basename(sourcePath),
+        source_path: sourcePath,
+      }));
+
       let msg;
       try {
         msg = await getStore().sendMessage({
@@ -137,6 +212,9 @@ export function registerMessagingCommands(program: Command): void {
           branch: opts.branch,
           metadata,
           blocking: opts.blocking,
+          attachments,
+          reply_to: replyTo,
+          reply_to_uuid: replyToUuid,
         });
       } catch (error) {
         return failCommand(error, "Failed to send message.");

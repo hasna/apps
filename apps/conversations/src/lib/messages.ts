@@ -2,14 +2,18 @@ import { getDb, getDataDir } from "./db.js";
 import type { Message, Attachment, SendMessageOptions, ReadMessagesOptions, SearchMessagesOptions, SearchResult, SearchMessagesPage } from "../types.js";
 import { normalizeExactIsoTimestamp } from "./since.js";
 import { createHash, randomUUID } from "crypto";
-import { mkdirSync, copyFileSync, closeSync, openSync, readSync, statSync, existsSync, realpathSync } from "fs";
-import { join, basename, resolve } from "path";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, statSync } from "fs";
+import { join } from "path";
 import { fireWebhooks } from "./webhooks.js";
 import { normalizeChannelName, unknownChannelMessage } from "./channel-names.js";
 import { markChannelNotificationsRead } from "./channel-notifications.js";
 import { assertNoSensitiveContent, assertNoSensitiveValue, redactSensitiveText, redactSensitiveValue } from "./content-safety.js";
 import { resolveReadLimit, resolveReadWindow } from "./message-window.js";
 import { normalizeMessageUuid } from "./message-reference.js";
+import {
+  prepareAttachmentSources,
+  type PreparedAttachmentSource,
+} from "./attachments.js";
 import {
   BLOCKERS_LIST_ORDER,
   PINNED_LIST_ORDER,
@@ -43,10 +47,14 @@ export function parseMessage(row: Record<string, unknown>): Message {
 
   let attachments: Attachment[] | null = null;
   if (row.attachments) {
-    try {
-      attachments = JSON.parse(row.attachments as string);
-    } catch {
-      attachments = null;
+    if (Array.isArray(row.attachments)) {
+      attachments = row.attachments as Attachment[];
+    } else {
+      try {
+        attachments = JSON.parse(row.attachments as string);
+      } catch {
+        attachments = null;
+      }
     }
   }
 
@@ -87,60 +95,35 @@ function getAttachmentsDir(): string {
   return join(getDataDir(), "attachments");
 }
 
-const ATTACHMENT_SCAN_CHUNK_BYTES = 64 * 1024;
-const ATTACHMENT_SCAN_CARRY_CHARS = 8192;
-
-function assertAttachmentContentSafe(path: string): void {
-  const fd = openSync(path, "r");
-  const buffer = Buffer.allocUnsafe(ATTACHMENT_SCAN_CHUNK_BYTES);
-  let carry = "";
-
+function stageAttachments(prepared: PreparedAttachmentSource[]): string | null {
+  if (prepared.length === 0) return null;
+  const root = getAttachmentsDir();
+  mkdirSync(root, { recursive: true });
+  const stagingDir = mkdtempSync(join(root, ".staging-"));
   try {
-    while (true) {
-      const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
-      if (bytesRead <= 0) break;
-      const text = carry + buffer.subarray(0, bytesRead).toString("utf8");
-      assertNoSensitiveContent(text, "Message attachment content");
-      carry = text.slice(-ATTACHMENT_SCAN_CARRY_CHARS);
+    const stagedSources: Array<{ name: string; source_path: string }> = [];
+    for (const attachment of prepared) {
+      const stagedPath = join(stagingDir, attachment.safeName);
+      copyFileSync(attachment.safeSource, stagedPath);
+      if (statSync(stagedPath).size !== attachment.size) {
+        throw new Error(`Attachment changed while being copied: ${attachment.safeName}`);
+      }
+      stagedSources.push({ name: attachment.safeName, source_path: stagedPath });
     }
-  } finally {
-    closeSync(fd);
+    // Re-run validation against the staged copies, which are the exact bytes
+    // committed with the message. This closes a same-size source-file race
+    // between the initial preflight and copy.
+    const staged = prepareAttachmentSources(stagedSources);
+    for (let index = 0; index < staged.length; index++) {
+      if (staged[index].size !== prepared[index].size) {
+        throw new Error(`Attachment changed while being copied: ${prepared[index].safeName}`);
+      }
+    }
+    return stagingDir;
+  } catch (error) {
+    rmSync(stagingDir, { recursive: true, force: true });
+    throw error;
   }
-}
-
-/** Validate attachment source path and name to prevent arbitrary file read and path traversal. */
-function validateAttachment(sourcePath: string, name: string): { safeSource: string; safeName: string } {
-  // Resolve to absolute and verify the file exists and is a regular file
-  const absolute = resolve(sourcePath);
-  if (!existsSync(absolute)) {
-    throw new Error(`Attachment source not found: ${sourcePath}`);
-  }
-  const real = realpathSync(absolute);
-  const stat = statSync(real);
-  if (!stat.isFile()) {
-    throw new Error(`Attachment source must be a regular file: ${sourcePath}`);
-  }
-  // Sanitize the attachment name — strip any path components
-  const safeName = basename(name.replace(/\0/g, ""));
-  if (!safeName || safeName.startsWith(".")) {
-    throw new Error(`Invalid attachment name: ${name}`);
-  }
-  assertAttachmentContentSafe(real);
-  return { safeSource: real, safeName };
-}
-
-function guessMimeType(name: string): string {
-  const ext = name.split(".").pop()?.toLowerCase();
-  const mimeMap: Record<string, string> = {
-    txt: "text/plain", md: "text/markdown", json: "application/json",
-    js: "text/javascript", ts: "text/typescript", py: "text/x-python",
-    html: "text/html", css: "text/css", xml: "application/xml",
-    png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif",
-    svg: "image/svg+xml", webp: "image/webp",
-    pdf: "application/pdf", zip: "application/zip", gz: "application/gzip",
-    csv: "text/csv", yaml: "text/yaml", yml: "text/yaml",
-  };
-  return mimeMap[ext || ""] || "application/octet-stream";
 }
 
 /** Maximum allowed message content size in bytes (64 KB). */
@@ -212,11 +195,11 @@ export function sendMessage(opts: SendMessageOptions): Message {
 
   checkRateLimit(opts.from);
 
-  const validatedAttachments = opts.attachments && opts.attachments.length > 0
-    ? opts.attachments.map((att) => validateAttachment(att.source_path, att.name))
-    : [];
-
+  const preparedAttachments = prepareAttachmentSources(opts.attachments);
   const db = getDb();
+  let stagingDir = stageAttachments(preparedAttachments);
+  let committedAttachmentDir: string | null = null;
+
   const requestedChannel = opts.channel ? normalizeChannelName(opts.channel) : null;
   // `messages.channel` is free text with no foreign key to `channels`, so before
   // this check a typo'd name wrote an ORPHAN: readable by `digest`, invisible to
@@ -258,105 +241,109 @@ export function sendMessage(opts: SendMessageOptions): Message {
     throw new Error("Message uuid must be a valid UUID.");
   }
 
-  const message = db.transaction(() => {
-    let replyTo: number | null = null;
-    let channelName = requestedChannel;
-    let sessionId: string;
-    if (requestedReplyUuid) {
-      const parent = db.prepare(
-        "SELECT id, uuid, session_id, channel FROM messages WHERE uuid = ?"
-      ).get(requestedReplyUuid) as { id: number; uuid: string; session_id: string; channel: string | null } | null;
-      if (!parent) {
-        throw new Error(`reply_to_uuid message ${requestedReplyUuid} not found.`);
-      }
-      if (requestedReplyId !== null && requestedReplyId !== parent.id) {
-        throw new Error(
-          `reply_to identity mismatch: id ${requestedReplyId} belongs to a different message than UUID ${requestedReplyUuid}.`
-        );
-      }
-      const parentChannel = parent.channel ? normalizeChannelName(parent.channel) : null;
-      if (requestedChannel !== null && requestedChannel !== parentChannel) {
-        throw new Error(
-          `reply channel ${requestedChannel} does not match parent channel ${parentChannel ?? "(direct message)"}.`
-        );
-      }
-      if (explicitSession && explicitSession !== parent.session_id) {
-        throw new Error(
-          `reply session ${explicitSession} does not match parent session ${parent.session_id}.`
-        );
-      }
-      replyTo = parent.id;
-      channelName = parentChannel;
-      sessionId = parent.session_id;
-    } else {
-      sessionId = channelName
-        ? `channel:${channelName}`
-        : explicitSession ?? `${[opts.from, opts.to].sort().join("-")}-${randomUUID().slice(0, 8)}`;
-    }
-
-    let projectId = opts.project_id || null;
-    if (channelName) {
-      const channel = db.prepare("SELECT name, project_id FROM channels WHERE name = ?").get(channelName) as {
-        name: string;
-        project_id: string | null;
-      } | null;
-      if (!channel) {
-        // Preserve the documented legacy-orphan reply exception, but keep new
-        // non-reply channel sends fail-closed.
-        if (!requestedReplyUuid) throw new Error(unknownChannelMessage(channelName));
-      } else {
-        if (projectId !== null && projectId !== channel.project_id) {
-          throw new Error(`Message project ${projectId} conflicts with channel project ${channel.project_id ?? "(unlinked)"}.`);
+  let message: Message;
+  try {
+    message = db.transaction(() => {
+      let replyTo: number | null = null;
+      let channelName = requestedChannel;
+      let sessionId: string;
+      if (requestedReplyUuid) {
+        const parent = db.prepare(
+          "SELECT id, uuid, session_id, channel FROM messages WHERE uuid = ?"
+        ).get(requestedReplyUuid) as { id: number; uuid: string; session_id: string; channel: string | null } | null;
+        if (!parent) {
+          throw new Error(`reply_to_uuid message ${requestedReplyUuid} not found.`);
         }
-        projectId = channel.project_id;
+        if (requestedReplyId !== null && requestedReplyId !== parent.id) {
+          throw new Error(
+            `reply_to identity mismatch: id ${requestedReplyId} belongs to a different message than UUID ${requestedReplyUuid}.`
+          );
+        }
+        const parentChannel = parent.channel ? normalizeChannelName(parent.channel) : null;
+        if (requestedChannel !== null && requestedChannel !== parentChannel) {
+          throw new Error(
+            `reply channel ${requestedChannel} does not match parent channel ${parentChannel ?? "(direct message)"}.`
+          );
+        }
+        if (explicitSession && explicitSession !== parent.session_id) {
+          throw new Error(
+            `reply session ${explicitSession} does not match parent session ${parent.session_id}.`
+          );
+        }
+        replyTo = parent.id;
+        channelName = parentChannel;
+        sessionId = parent.session_id;
+      } else {
+        sessionId = channelName
+          ? `channel:${channelName}`
+          : explicitSession ?? `${[opts.from, opts.to].sort().join("-")}-${randomUUID().slice(0, 8)}`;
       }
-    }
 
-    const toAgent = channelName ?? opts.to;
-    const row = db.prepare(`
-      INSERT INTO messages (uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, working_dir, repository, branch, metadata, blocking, reply_to)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      RETURNING *
-    `).get(
-      msgUuid,
-      sessionId,
-      opts.from,
-      toAgent,
-      channelName,
-      projectId,
-      opts.content,
-      normalizedPriority,
-      opts.working_dir || null,
-      opts.repository || null,
-      opts.branch || null,
-      metadata,
-      blocking,
-      replyTo,
-    ) as Record<string, unknown>;
-    return parseMessage(row);
-  });
+      let projectId = opts.project_id || null;
+      if (channelName) {
+        const channel = db.prepare("SELECT name, project_id FROM channels WHERE name = ?").get(channelName) as {
+          name: string;
+          project_id: string | null;
+        } | null;
+        if (!channel) {
+          if (!requestedReplyUuid) throw new Error(unknownChannelMessage(channelName));
+        } else {
+          if (projectId !== null && projectId !== channel.project_id) {
+            throw new Error(`Message project ${projectId} conflicts with channel project ${channel.project_id ?? "(unlinked)"}.`);
+          }
+          projectId = channel.project_id;
+        }
+      }
 
-  // Handle file attachments
-  if (validatedAttachments.length > 0) {
-    const attachmentsDir = join(getAttachmentsDir(), String(message.id));
-    mkdirSync(attachmentsDir, { recursive: true });
+      const toAgent = channelName ?? opts.to;
+      const row = db.prepare(`
+        INSERT INTO messages (uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, working_dir, repository, branch, metadata, blocking, reply_to)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        RETURNING *
+      `).get(
+        msgUuid,
+        sessionId,
+        opts.from,
+        toAgent,
+        channelName,
+        projectId,
+        opts.content,
+        normalizedPriority,
+        opts.working_dir || null,
+        opts.repository || null,
+        opts.branch || null,
+        metadata,
+        blocking,
+        replyTo,
+      ) as Record<string, unknown>;
+      const stored = parseMessage(row);
 
-    const attachmentInfos: Attachment[] = [];
-    for (const { safeSource, safeName } of validatedAttachments) {
-      const destPath = join(attachmentsDir, safeName);
-      copyFileSync(safeSource, destPath);
-      const stat = statSync(destPath);
-      attachmentInfos.push({
-        name: safeName,
-        path: destPath,
-        size: stat.size,
-        mime_type: guessMimeType(safeName),
-      });
-    }
+      if (stagingDir) {
+        const attachmentsDir = join(getAttachmentsDir(), String(stored.id));
+        if (existsSync(attachmentsDir)) {
+          throw new Error(`Attachment destination already exists for message ${stored.id}.`);
+        }
+        renameSync(stagingDir, attachmentsDir);
+        stagingDir = null;
+        committedAttachmentDir = attachmentsDir;
 
-    const attachmentsJson = JSON.stringify(attachmentInfos);
-    db.prepare("UPDATE messages SET attachments = ? WHERE id = ?").run(attachmentsJson, message.id);
-    message.attachments = attachmentInfos;
+        const attachmentInfos: Attachment[] = preparedAttachments.map((attachment) => ({
+          name: attachment.safeName,
+          path: join(attachmentsDir, attachment.safeName),
+          size: attachment.size,
+          mime_type: attachment.mimeType,
+        }));
+        db.prepare("UPDATE messages SET attachments = ? WHERE id = ?")
+          .run(JSON.stringify(attachmentInfos), stored.id);
+        stored.attachments = attachmentInfos;
+      }
+
+      return stored;
+    });
+  } catch (error) {
+    if (stagingDir) rmSync(stagingDir, { recursive: true, force: true });
+    if (committedAttachmentDir) rmSync(committedAttachmentDir, { recursive: true, force: true });
+    throw error;
   }
 
   // Parse @mentions and create notification DMs (non-blocking)

@@ -1,4 +1,7 @@
 import { describe, test, expect } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ApiStore } from "./api-store.js";
 import { DEFAULT_READ_LIMIT } from "../message-window.js";
 import type { HasnaStorageClient } from "../contracts-client/storage.js";
@@ -170,6 +173,90 @@ describe("ApiStore channel notification cursor", () => {
 // left the machine, while the local SQLite path (and its tests) stayed correct.
 // This asserts on the body that actually goes over the wire.
 describe("ApiStore.sendMessage wire body", () => {
+  test("uploads validated attachment bytes and parses returned metadata", async () => {
+    const root = mkdtempSync(join(tmpdir(), "conversations-api-attachment-"));
+    const source = join(root, "handoff.bundle");
+    writeFileSync(source, "synthetic remote bundle\n");
+    const sent: Array<Record<string, unknown>> = [];
+    const client = {
+      name: "conversations",
+      baseUrl: "https://conversations.hasna.xyz/v1",
+      transport: {} as unknown as HasnaStorageClient["transport"],
+      create: async (_resource: string, body: Record<string, unknown>) => {
+        sent.push(body);
+        return {
+          message: {
+            id: 701,
+            uuid: body.uuid,
+            session_id: "channel:handoffs",
+            from_agent: body.from,
+            to_agent: "handoffs",
+            channel: "handoffs",
+            content: body.content,
+            attachments: [{
+              name: "handoff.bundle",
+              path: "/v1/messages/701/attachments/handoff.bundle",
+              size: Buffer.byteLength("synthetic remote bundle\n"),
+              mime_type: "application/x-git-bundle",
+            }],
+          },
+        };
+      },
+    } as unknown as HasnaStorageClient;
+
+    try {
+      const message = await new ApiStore(client).sendMessage({
+        from: "alice",
+        to: "alice",
+        channel: "handoffs",
+        content: "remote attachment",
+        attachments: [{ name: "handoff.bundle", source_path: source }],
+      });
+
+      expect(sent).toHaveLength(1);
+      expect(sent[0].attachments).toEqual([{
+        name: "handoff.bundle",
+        content_base64: Buffer.from("synthetic remote bundle\n").toString("base64"),
+      }]);
+      expect(message.attachments).toEqual([{
+        name: "handoff.bundle",
+        path: "/v1/messages/701/attachments/handoff.bundle",
+        size: Buffer.byteLength("synthetic remote bundle\n"),
+        mime_type: "application/x-git-bundle",
+      }]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects an unsupported attachment before starting an HTTP write", async () => {
+    const root = mkdtempSync(join(tmpdir(), "conversations-api-attachment-invalid-"));
+    const source = join(root, "payload.exe");
+    writeFileSync(source, "synthetic unsupported payload\n");
+    let creates = 0;
+    const client = {
+      name: "conversations",
+      baseUrl: "https://conversations.hasna.xyz/v1",
+      transport: {} as unknown as HasnaStorageClient["transport"],
+      create: async () => {
+        creates++;
+        throw new Error("must not write");
+      },
+    } as unknown as HasnaStorageClient;
+
+    try {
+      await expect(new ApiStore(client).sendMessage({
+        from: "alice",
+        to: "bob",
+        content: "must not send",
+        attachments: [{ name: "payload.exe", source_path: source }],
+      })).rejects.toThrow("Unsupported attachment type");
+      expect(creates).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   /** A client that records every `create` body and echoes it back as the row. */
   function capturingClient(): { client: HasnaStorageClient; sent: Array<Record<string, unknown>> } {
     const sent: Array<Record<string, unknown>> = [];

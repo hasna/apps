@@ -56,6 +56,21 @@ describe("registerMessagingCommands", () => {
     expect(send).toBeDefined();
     expect(send?.options.some((o) => o.long === "--to")).toBe(true);
     expect(send?.options.some((o) => o.long === "--channel")).toBe(true);
+    expect(send?.options.some((o) => o.long === "--attach")).toBe(true);
+    expect(send?.options.some((o) => o.long === "--attachment")).toBe(true);
+    expect(send?.options.some((o) => o.long === "--reply-to")).toBe(true);
+
+    const parsed = send?.parseOptions([
+      "--attach", "evidence.txt", "handoff.bundle",
+      "--attachment", "alias.json",
+      "--reply-to", "42",
+    ]);
+    expect(parsed?.unknown).toEqual([]);
+    expect(send?.opts()).toMatchObject({
+      attach: ["evidence.txt", "handoff.bundle"],
+      attachment: ["alias.json"],
+      replyTo: "42",
+    });
   });
 
   test("registers read command", () => {
