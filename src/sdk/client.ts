@@ -1,7 +1,7 @@
 // @generated from the projects-serve OpenAPI document by scripts/generate-sdk.ts.
 // DO NOT EDIT BY HAND. Regenerate: bun run sdk:generate
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Projects API 0.1.109
+// Source: Projects API 0.1.110
 
 export interface Root { "id": string; "slug": string; "name": string; "base_path": string; "tags"?: Array<string>; "default_kind"?: string | null; "repo_visibility"?: string | null; "allowed_recipes"?: Array<string>; "allowed_agents"?: Array<string>; "metadata"?: Record<string, unknown>; "created_at"?: string; "updated_at"?: string }
 
@@ -79,7 +79,9 @@ export interface EventRecorded { "event": WorkspaceEvent }
 
 export interface DeleteResult { "deleted": boolean; "hard"?: boolean; "id"?: string }
 
-export interface Health { "status": string; "version": string; "mode": string }
+export interface Health { "status": string; "version": string }
+
+export interface LegacyVersionResponse { "status": string; "version": string; "mode": string }
 
 export interface Error { "error": string; "reason"?: string }
 
@@ -409,7 +411,7 @@ export class ProjectsClient {
     }
 
     /** Service version */
-    async getVersion(init?: RequestInit): Promise<Health> {
+    async getVersion(init?: RequestInit): Promise<LegacyVersionResponse> {
       return this.request("GET", `/version`, {
         body: undefined,
         query: undefined,

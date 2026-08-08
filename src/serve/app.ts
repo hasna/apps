@@ -22,7 +22,7 @@ export interface ServeAppOptions {
   signingSecret: string | Buffer;
   isRevoked?: (kid: string) => boolean | Promise<boolean>;
   audit?: AuthAuditHook;
-  /** Reported in /health,/ready,/version. Defaults to "cloud". */
+  /** Reported by the legacy /version and root responses. Defaults to "cloud". */
   mode?: string;
 }
 
@@ -97,7 +97,7 @@ export function createFetchHandler(options: ServeAppOptions): (req: Request) => 
 
     // --- unauthenticated probes ---
     if (path === "/health" && method === "GET") {
-      return jsonResponse({ status: "ok", version, mode });
+      return jsonResponse({ status: "ok", version });
     }
     if (path === "/version" && method === "GET") {
       return jsonResponse({ status: "ok", version, mode });
@@ -106,10 +106,10 @@ export function createFetchHandler(options: ServeAppOptions): (req: Request) => 
       try {
         const ok = await store.ping();
         return ok
-          ? jsonResponse({ status: "ready", version, mode })
-          : jsonResponse({ status: "degraded", version, mode }, 503);
+          ? jsonResponse({ status: "ready", version })
+          : jsonResponse({ status: "degraded", version }, 503);
       } catch {
-        return jsonResponse({ status: "unavailable", version, mode }, 503);
+        return jsonResponse({ status: "unavailable", version }, 503);
       }
     }
     if (path === "/openapi.json" && method === "GET") {
