@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { customAlphabet } from "nanoid";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import {
   PROJECTS_HOME_ENV,
@@ -138,6 +138,35 @@ export interface CreateProjectDataRecordInput {
   metadata?: JsonObject;
 }
 
+export interface ProjectDataRecordDeleteTarget {
+  id: string;
+  model_id: string;
+}
+
+export interface ProjectDataModelDeleteTarget {
+  id: string;
+  slug: string;
+}
+
+export interface DeleteProjectDataRecordsExactInput {
+  targets: readonly ProjectDataRecordDeleteTarget[];
+  expected_count: number;
+}
+
+export interface DeleteProjectDataModelsExactInput {
+  targets: readonly ProjectDataModelDeleteTarget[];
+  expected_count: number;
+}
+
+export interface ProjectDataDeleteResult extends JsonObject {
+  deleted_ids: string[];
+  deleted_count: number;
+}
+
+export interface ProjectDataTransactionOptions {
+  mode?: "immediate";
+}
+
 export interface ProjectLoopLink extends JsonObject {
   id: string;
   loop_id: string;
@@ -234,6 +263,12 @@ interface ProjectDataRecordRow {
   metadata_json: string;
   created_at: string;
   updated_at: string;
+}
+
+interface ProjectDatabaseListRow {
+  seq: number;
+  name: string;
+  file: string;
 }
 
 interface ProjectLoopLinkRow {
@@ -357,6 +392,103 @@ function closeIfOwned(db: Database, owned: boolean): void {
 function openDbForProject(project: string | Pick<Workspace, "id">, db?: Database): { db: Database; owned: boolean } {
   if (db) return { db, owned: false };
   return { db: getProjectDatabase(project), owned: true };
+}
+
+function assertCallerProjectDatabase(
+  project: string | Pick<Workspace, "id">,
+  db: Database,
+  options: { configure: boolean },
+): string {
+  const projectId = projectIdOf(project);
+  const expectedPath = getProjectStorePaths(projectId).db_path;
+  const main = db
+    .query<ProjectDatabaseListRow, []>("PRAGMA database_list")
+    .all()
+    .find((row) => row.name === "main");
+
+  if (!main?.file) {
+    throw new Error(`Caller database is not the canonical project.db for project ${projectId}`);
+  }
+
+  let actualPath: string;
+  let canonicalPath: string;
+  try {
+    actualPath = realpathSync(main.file);
+    canonicalPath = realpathSync(expectedPath);
+  } catch {
+    throw new Error(`Caller database is not the canonical project.db for project ${projectId}`);
+  }
+  if (actualPath !== canonicalPath) {
+    throw new Error(
+      `Caller database is not the canonical project.db for project ${projectId}: ${actualPath}`,
+    );
+  }
+
+  if (options.configure) {
+    db.run("PRAGMA busy_timeout=5000");
+    db.run("PRAGMA foreign_keys=ON");
+  }
+
+  const timeout = db.query<{ timeout: number }, []>("PRAGMA busy_timeout").get()?.timeout;
+  if (typeof timeout !== "number" || timeout < 5_000) {
+    throw new Error(`Caller database busy_timeout must be at least 5000ms for project ${projectId}`);
+  }
+  const foreignKeys = db.query<{ foreign_keys: number }, []>("PRAGMA foreign_keys").get()?.foreign_keys;
+  if (foreignKeys !== 1) {
+    throw new Error(`Caller database must enforce foreign_keys=ON for project ${projectId}`);
+  }
+
+  const owner = projectStoreOwner(db);
+  if (owner !== projectId) {
+    throw new Error(
+      owner
+        ? `Caller database belongs to project ${owner}, not ${projectId}`
+        : `Caller database is not bound to project ${projectId}`,
+    );
+  }
+  return projectId;
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (
+    (typeof value === "object" && value !== null) || typeof value === "function"
+  ) && typeof (value as { then?: unknown }).then === "function";
+}
+
+function rollbackOpenProjectDataTransaction(db: Database): void {
+  if (!db.inTransaction) return;
+  try {
+    db.exec("ROLLBACK");
+  } catch {
+    // Preserve the operation's original error; the caller still owns the connection.
+  }
+}
+
+function validateExactDeleteInput<T extends { id: string }>(
+  kind: "record" | "model",
+  targets: readonly T[],
+  expectedCount: number,
+): void {
+  if (!Number.isSafeInteger(expectedCount) || expectedCount < 1) {
+    throw new Error(`${kind} delete expected_count must be a positive safe integer`);
+  }
+  if (targets.length !== expectedCount) {
+    throw new Error(
+      `${kind} delete expected_count ${expectedCount} does not match ${targets.length} target(s)`,
+    );
+  }
+  const seen = new Set<string>();
+  for (const target of targets) {
+    if (!target.id) throw new Error(`${kind} delete target id is required`);
+    if (seen.has(target.id)) throw new Error(`Duplicate ${kind} delete target id: ${target.id}`);
+    seen.add(target.id);
+  }
+}
+
+function requireProjectDataTransaction(db: Database): void {
+  if (!db.inTransaction) {
+    throw new Error("Exact project-data deletes must run inside withProjectDataTransaction");
+  }
 }
 
 export function getProjectsHome(): string {
@@ -501,6 +633,34 @@ export function getProjectDatabase(project: string | Pick<Workspace, "id">): Dat
   return db;
 }
 
+export function withProjectDataTransaction<T>(
+  project: string | Pick<Workspace, "id">,
+  db: Database,
+  callback: (db: Database) => T,
+  options: ProjectDataTransactionOptions = {},
+): T {
+  if ((options.mode ?? "immediate") !== "immediate") {
+    throw new Error(`Unsupported project-data transaction mode: ${String(options.mode)}`);
+  }
+  if (db.inTransaction) {
+    throw new Error("Caller database already has an active transaction");
+  }
+
+  assertCallerProjectDatabase(project, db, { configure: true });
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const result = callback(db);
+    if (isPromiseLike(result)) {
+      throw new Error("withProjectDataTransaction requires a synchronous callback");
+    }
+    db.exec("COMMIT");
+    return result;
+  } catch (error) {
+    rollbackOpenProjectDataTransaction(db);
+    throw error;
+  }
+}
+
 export function ensureProjectStore(project: string | Pick<Workspace, "id">): ProjectStoreSummary {
   const db = getProjectDatabase(project);
   try {
@@ -616,6 +776,112 @@ export function getProjectDataRecord(project: string | Pick<Workspace, "id">, mo
     return row ? rowToDataRecord(row) : null;
   } finally {
     closeIfOwned(opened.db, opened.owned);
+  }
+}
+
+export function deleteProjectDataRecordsExact(
+  project: string | Pick<Workspace, "id">,
+  db: Database,
+  input: DeleteProjectDataRecordsExactInput,
+): ProjectDataDeleteResult {
+  requireProjectDataTransaction(db);
+  try {
+    assertCallerProjectDatabase(project, db, { configure: false });
+    validateExactDeleteInput("record", input.targets, input.expected_count);
+
+    for (const target of input.targets) {
+      if (!target.model_id) throw new Error(`Record delete target ${target.id} requires model_id`);
+      const row = db
+        .query<{ id: string; model_id: string }, [string]>(
+          "SELECT id, model_id FROM project_data_records WHERE id = ? LIMIT 1",
+        )
+        .get(target.id);
+      if (!row) throw new Error(`Project data record not found: ${target.id}`);
+      if (row.model_id !== target.model_id) {
+        throw new Error(
+          `Project data record ${target.id} belongs to model ${row.model_id}, not ${target.model_id}`,
+        );
+      }
+    }
+
+    let deletedCount = 0;
+    for (const target of input.targets) {
+      deletedCount += db.run(
+        "DELETE FROM project_data_records WHERE id = ? AND model_id = ?",
+        [target.id, target.model_id],
+      ).changes;
+    }
+    if (deletedCount !== input.expected_count) {
+      throw new Error(
+        `Project data record affected-count mismatch: expected ${input.expected_count}, deleted ${deletedCount}`,
+      );
+    }
+    return {
+      deleted_ids: input.targets.map((target) => target.id),
+      deleted_count: deletedCount,
+    };
+  } catch (error) {
+    rollbackOpenProjectDataTransaction(db);
+    throw error;
+  }
+}
+
+export function deleteProjectDataModelsExact(
+  project: string | Pick<Workspace, "id">,
+  db: Database,
+  input: DeleteProjectDataModelsExactInput,
+): ProjectDataDeleteResult {
+  requireProjectDataTransaction(db);
+  try {
+    assertCallerProjectDatabase(project, db, { configure: false });
+    validateExactDeleteInput("model", input.targets, input.expected_count);
+
+    for (const target of input.targets) {
+      if (!target.slug) throw new Error(`Model delete target ${target.id} requires slug`);
+      const row = db
+        .query<{ id: string; slug: string }, [string]>(
+          "SELECT id, slug FROM project_data_models WHERE id = ? LIMIT 1",
+        )
+        .get(target.id);
+      if (!row) throw new Error(`Project data model not found: ${target.id}`);
+      if (row.slug !== target.slug) {
+        throw new Error(
+          `Project data model ${target.id} has slug ${row.slug}, not ${target.slug}`,
+        );
+      }
+      const records = db
+        .query<{ count: number }, [string]>(
+          "SELECT COUNT(*) AS count FROM project_data_records WHERE model_id = ?",
+        )
+        .get(target.id)?.count ?? 0;
+      if (records !== 0) {
+        throw new Error(`Project data model ${target.id} is not empty (${records} record(s))`);
+      }
+    }
+
+    let deletedCount = 0;
+    for (const target of input.targets) {
+      deletedCount += db.run(
+        `DELETE FROM project_data_models
+         WHERE id = ? AND slug = ?
+           AND NOT EXISTS (
+             SELECT 1 FROM project_data_records WHERE model_id = project_data_models.id
+           )`,
+        [target.id, target.slug],
+      ).changes;
+    }
+    if (deletedCount !== input.expected_count) {
+      throw new Error(
+        `Project data model affected-count mismatch: expected ${input.expected_count}, deleted ${deletedCount}`,
+      );
+    }
+    return {
+      deleted_ids: input.targets.map((target) => target.id),
+      deleted_count: deletedCount,
+    };
+  } catch (error) {
+    rollbackOpenProjectDataTransaction(db);
+    throw error;
   }
 }
 

@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.113]
+
+### Added
+
+- SQLite project-data consumers can now run exact-state checks, guarded bulk
+  record deletion, empty-model deletion, and post-delete verification on one
+  caller-owned `BEGIN IMMEDIATE` connection, with exact project ownership,
+  affected-count, and rollback enforcement.
+
 ## [0.1.112]
 
 ### Fixed
