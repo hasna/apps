@@ -1472,6 +1472,7 @@ export class ProjectsPgStore {
 
   async recordEvent(input: RecordWorkspaceEventInput): Promise<WorkspaceEvent> {
     const id = generateEventId();
+    const agent = input.agent_id ? await this.getAgent(input.agent_id) : null;
     await this.db.execute(
       `INSERT INTO workspace_events (
         id, workspace_id, agent_id, event_type, source, prompt, command,
@@ -1480,7 +1481,7 @@ export class ProjectsPgStore {
       [
         id,
         input.workspace_id ?? null,
-        input.agent_id ?? null,
+        agent?.id ?? null,
         input.event_type,
         input.source,
         input.prompt ?? null,
