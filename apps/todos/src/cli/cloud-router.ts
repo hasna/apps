@@ -755,7 +755,32 @@ export async function cloudResolveTaskRef(client: HasnaStorageClient, ref: strin
   ) {
     return task.id;
   }
-  throw new Error(`Task not found: ${ref}`);
+
+  // The authority DID answer with a task, it just carries neither the requested
+  // short_id nor the requested id prefix. That is a response mismatch, not an
+  // unresolved reference, so it must not borrow the diagnosis below.
+  if (task) {
+    throw new Error(
+      `Task not found: ${ref} — the authority returned a task carrying neither this short id ` +
+        "nor this id prefix, so the reference was not resolved.",
+    );
+  }
+
+  // Nothing came back. A 404 on a short reference is returned BOTH by an authority
+  // that has no such task AND by an authority that does not implement server-side
+  // short-reference resolution at all — the latter answers every short id and id
+  // prefix identically. The response cannot distinguish them, so this message must
+  // not assert absence. Reading a bare "Task not found" as absence is how a live row
+  // gets recorded as deleted, which is the defect this text fixes (task 0deeffb7):
+  // `todos show A9-00143` said not-found while the same row returned rc=0 by UUID.
+  // A full task UUID short-circuits at the top of this function and never lands here.
+  throw new Error(
+    `Task not found: ${ref} — the authority resolved no task for this short reference. ` +
+      "That is not proof the task is absent: an authority predating server-side " +
+      "short-reference resolution answers EVERY short id and id prefix with the same 404. " +
+      "Retry with the full task UUID to tell the two apart, or deploy the current " +
+      "@hasna/todos /v1 server.",
+  );
 }
 
 /** Fetch one task by id (`GET /v1/tasks/:id`); `null` on 404. */
