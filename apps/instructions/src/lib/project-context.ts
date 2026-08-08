@@ -21,7 +21,12 @@ import { basename, dirname, isAbsolute, join, parse, relative, resolve } from "n
 import { z } from "zod";
 import { scanSecrets } from "./redact.js";
 import type { SessionRenderFile, SessionRenderManifest, SessionRenderMode, SessionRenderTool } from "./session-render.js";
-import { CODEWITH_NATIVE_IMPORTS_ENV, SESSION_INSTRUCTION_LAYERS, SESSION_RENDER_SCHEMA } from "./session-render-contract.js";
+import {
+  CODEWITH_NATIVE_IMPORTS_ENV,
+  SESSION_INSTRUCTION_LAYERS,
+  SESSION_RENDER_SCHEMA,
+  SESSION_RENDER_SNAPSHOT_RELATIVE_DIR,
+} from "./session-render-contract.js";
 
 export const PROJECT_CONTEXT_SCHEMA = "hasna.projects.project_context_bundle.v1" as const;
 export const PROJECT_CONTEXT_MAX_INPUT_BYTES = 8 * 1024;
@@ -234,6 +239,26 @@ const storedManifestObservationSchema = z.object({
     });
   }
 });
+
+const projectContextMetadataSnapshotSchema = z.object({
+  schema: z.literal("hasna.configs.session-render-snapshot/v1"),
+  kind: z.literal("project-context-metadata"),
+  createdAt: isoTimestamp,
+  projectId: safeId,
+  revision: revisionSchema,
+  hash: hashSchema,
+  status: z.enum(["fresh", "stale-source", "stale-cache"]),
+  files: z.array(z.object({
+    relativePath: z.enum([
+      PROJECT_CONTEXT_FRAGMENT_PATH,
+      "CLAUDE.md",
+      ".codewith/CODEWITH.md",
+      "AGENTS.md",
+    ]),
+    role: z.enum(["fragment", "index"]),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  }).strict()).min(1).max(2),
+}).strict();
 
 const projectContextCacheSchema = z.object({
   schema: z.literal(PROJECT_CONTEXT_CACHE_SCHEMA),
@@ -490,6 +515,14 @@ export function computeProjectContextSourceHash(value: unknown): string {
 }
 
 export function parseProjectContextBundle(input: string | unknown): ProjectContextBundleV1 {
+  return parseProjectContextBundleInternal(input, true, true);
+}
+
+function parseProjectContextBundleInternal(
+  input: string | unknown,
+  allowLegacyHash: boolean,
+  normalizeLegacyHash = false,
+): ProjectContextBundleV1 {
   let encoded: string;
   try {
     const serialized = typeof input === "string" ? input : JSON.stringify(input);
@@ -527,10 +560,15 @@ export function parseProjectContextBundle(input: string | unknown): ProjectConte
   validateIdentityConsistency(bundle);
   rejectCredentialLikeBundle(bundle);
   const expected = computeProjectContextSourceHash(bundle);
-  if (bundle.hash !== expected) {
+  const matchesLegacyHash = bundle.hash !== expected
+    && allowLegacyHash
+    && bundle.hash === computeLegacyProjectContextSourceHash(bundle);
+  if (bundle.hash !== expected && !matchesLegacyHash) {
     throw new ProjectContextError("PROJECT_CONTEXT_HASH_MISMATCH", "bundle hash does not match its canonical allowlisted payload");
   }
-  return bundle;
+  return matchesLegacyHash && normalizeLegacyHash
+    ? { ...bundle, hash: expected }
+    : bundle;
 }
 
 export function planProjectContext(input: ProjectContextPlanInput): ProjectContextPlan {
@@ -841,6 +879,7 @@ export function applyProjectContext(options: ProjectContextApplyOptions): Projec
         path: runtimePaths(workspaceRoot, plan.runtime).sessionManifest,
         content: `${JSON.stringify(sessionManifest, null, 2)}\n`,
       };
+      const manifestContent = `${JSON.stringify(buildManifest(plan, now), null, 2)}\n`;
       options.test_hooks?.before_compare?.({ attempt, plan });
       if (!hashesStillMatch(plan.expected_hashes, workspaceRoot)) {
         if (attempt === 0) {
@@ -853,7 +892,15 @@ export function applyProjectContext(options: ProjectContextApplyOptions): Projec
 
       assertWorkspaceLockHeld(lockPath, lock!, workspaceRoot);
       try {
-        snapshotPath = writeMetadataSnapshot(plan, now);
+        const metadataSnapshotPath = writeMetadataSnapshot(plan, now);
+        const rollbackSnapshotPath = writeProjectContextRollbackSnapshot(plan, now, [
+          { path: plan.fragment_path, content: plan.fragment, role: "fragment" },
+          { path: plan.target_path, content: plan.target_content, role: "index" },
+          { path: plan.cache_path, content: cacheContent, role: "config" },
+          { path: sessionOutput.path, content: sessionOutput.content, role: "manifest" },
+          { path: plan.manifest_path, content: manifestContent, role: "manifest" },
+        ]);
+        snapshotPath = rollbackSnapshotPath ?? metadataSnapshotPath;
         atomicWriteFile(
           plan.fragment_path,
           plan.fragment,
@@ -910,10 +957,9 @@ export function applyProjectContext(options: ProjectContextApplyOptions): Projec
         options.test_hooks?.before_manifest?.({ attempt, plan });
         assertWorkspaceLockHeld(lockPath, lock!, workspaceRoot);
         assertRenderedOutputsStable(plan, cacheContent, sessionOutput);
-        const manifest = buildManifest(plan, now);
         atomicWriteFile(
           plan.manifest_path,
-          `${JSON.stringify(manifest, null, 2)}\n`,
+          manifestContent,
           workspaceRoot,
           0o600,
           expectedPlanHash(plan, plan.manifest_path),
@@ -1028,10 +1074,14 @@ function resolveBundleForApply(
   if (cache.project_id !== options.expected_project_id || cache.bundle.project.id !== options.expected_project_id) {
     throw new ProjectContextError("PROJECT_CONTEXT_CACHE_ID_MISMATCH", "cached project context belongs to a different project");
   }
-  const bundle = parseProjectContextBundle(cache.bundle);
-  if (bundle.revision !== cache.revision || bundle.hash !== cache.hash) {
+  const cachedBundle = cache.bundle;
+  if (cachedBundle.revision !== cache.revision || cachedBundle.hash !== cache.hash) {
     throw new ProjectContextError("PROJECT_CONTEXT_CACHE_INVALID", "cached revision or hash metadata is inconsistent");
   }
+  const canonicalHash = computeProjectContextSourceHash(cachedBundle);
+  const bundle = cachedBundle.hash === canonicalHash
+    ? cachedBundle
+    : { ...cachedBundle, hash: canonicalHash };
   const ageSeconds = Math.max(
     staleCacheAgeInSeconds(bundle.generated_at, now, "bundle generated_at"),
     staleCacheAgeInSeconds(cache.cached_at, now, "cache cached_at"),
@@ -1145,11 +1195,13 @@ function parseManagedBlock(content: string, force: boolean): { block: ManagedBlo
   const structurallyInvalid = malformed || starts.length !== 1 || ends.length !== 1 || starts[0]!.start >= ends[0]!.start;
   if (structurallyInvalid) {
     if (!force) throw new ProjectContextError("MANAGED_BLOCK_INVALID", "managed project-context markers are duplicate, nested, malformed, or unbalanced");
+    const firstMarkerRange = markerCommentRange(markerLines[0]!);
+    const lastMarkerRange = markerCommentRange(markerLines[markerLines.length - 1]!);
     return {
       block: null,
       forceRange: {
-        start: markerLines[0]!.start,
-        end: lineContentEnd(markerLines[markerLines.length - 1]!),
+        start: firstMarkerRange?.start ?? markerLines[0]!.start,
+        end: lastMarkerRange?.end ?? lineContentEnd(markerLines[markerLines.length - 1]!),
       },
     };
   }
@@ -1180,6 +1232,20 @@ function parseManagedBlock(content: string, force: boolean): { block: ManagedBlo
   };
 }
 
+function markerCommentRange(line: { text: string; start: number }): { start: number; end: number } | null {
+  const canonicalMarker = line.text.indexOf(PROJECT_CONTEXT_MANAGED_COMMENT);
+  const legacyMarker = /@hasna\/configs project context/i.exec(line.text)?.index ?? -1;
+  const marker = canonicalMarker >= 0 ? canonicalMarker : legacyMarker;
+  if (marker < 0) return null;
+  const commentStart = line.text.lastIndexOf("<!--", marker);
+  const commentEnd = line.text.indexOf("-->", marker);
+  if (commentStart < 0 || commentEnd < 0) return null;
+  return {
+    start: line.start + commentStart,
+    end: line.start + commentEnd + "-->".length,
+  };
+}
+
 function parseMarkerLine(text: string): { kind: "BEGIN" | "END"; id: string; revision: string; hash: string; legacy: boolean } | null {
   const line = text.replace(/[\r\n]+$/, "");
   const canonical = line.match(/^<!-- Managed by @hasna\/configs project context (BEGIN|END) id=([A-Za-z0-9][A-Za-z0-9._:@+-]*) revision=([A-Za-z0-9%._~+-]+) hash=(sha256:[a-f0-9]{64}) -->$/);
@@ -1206,7 +1272,14 @@ function replaceOrAppendManagedBlock(
   legacy: { start: number; end: number } | null,
 ): string {
   const range = parsed.block ?? parsed.forceRange ?? legacy;
-  if (range) return `${content.slice(0, range.start)}${block}${content.slice(range.end)}`;
+  if (range) {
+    const before = content.slice(0, range.start);
+    const after = content.slice(range.end);
+    const eol = preferredEol(content);
+    const beforeSeparator = before && !/[\r\n]$/.test(before) ? eol : "";
+    const afterSeparator = after && !/^[\r\n]/.test(after) ? eol : "";
+    return `${before}${beforeSeparator}${block}${afterSeparator}${after}`;
+  }
   if (!content) return `${block}\n`;
   const eol = preferredEol(content);
   const separator = content.endsWith("\n") || content.endsWith("\r") ? eol : `${eol}${eol}`;
@@ -1250,13 +1323,40 @@ function findLegacyCodewithWorkspaceSection(
 
 function assertRevisionOrdering(plan: ProjectContextPlan, force: boolean): void {
   const observations: Array<{ source: string; id: string; revision: string; hash: string }> = [];
+  const cache = readProjectContextCache(plan.cache_path, plan.workspace_root);
+  const canonicalCacheHash = cache === null ? null : computeProjectContextSourceHash(cache.bundle);
+  const normalizePersistedHash = (revision: string, hash: string): string => (
+    cache !== null &&
+    canonicalCacheHash !== null &&
+    revision === cache.revision &&
+    hash === cache.hash
+  ) ? canonicalCacheHash : hash;
   const manifest = readProjectContextManifest(plan.manifest_path, plan.workspace_root);
   if (manifest) {
+    const manifestHashHasRecoveryProof = manifest.projectContext.hash === plan.bundle.hash
+      || metadataSnapshotMatchesManifest(plan, manifest);
+    const canonicalStateAlreadyInstalled = (
+      cache !== null &&
+      canonicalCacheHash === plan.bundle.hash &&
+      cache.project_id === plan.bundle.project.id &&
+      cache.revision === plan.bundle.revision &&
+      plan.marker !== null &&
+      plan.marker.id === plan.bundle.project.id &&
+      plan.marker.revision === plan.bundle.revision &&
+      plan.marker.hash === plan.bundle.hash &&
+      existsSync(plan.fragment_path) &&
+      fragmentMatchesBundle(plan.fragment_path, plan.bundle, plan.workspace_root) &&
+      manifestHashHasRecoveryProof
+    );
     observations.push({
       source: "manifest",
       id: manifest.projectContext.projectId,
       revision: manifest.projectContext.revision,
-      hash: manifest.projectContext.hash,
+      hash: canonicalStateAlreadyInstalled &&
+        manifest.projectContext.projectId === plan.bundle.project.id &&
+        manifest.projectContext.revision === plan.bundle.revision
+        ? plan.bundle.hash
+        : normalizePersistedHash(manifest.projectContext.revision, manifest.projectContext.hash),
     });
     const fragmentEntry = manifest.files.find((file) => file.relativePath === PROJECT_CONTEXT_FRAGMENT_PATH);
     if (fragmentEntry && existsSync(plan.fragment_path)) {
@@ -1266,9 +1366,15 @@ function assertRevisionOrdering(plan: ProjectContextPlan, force: boolean): void 
       }
     }
   }
-  const cache = readProjectContextCache(plan.cache_path, plan.workspace_root);
-  if (cache) observations.push({ source: "cache", id: cache.project_id, revision: cache.revision, hash: cache.hash });
-  if (plan.marker) observations.push({ source: "marker", id: plan.marker.id, revision: plan.marker.revision, hash: plan.marker.hash });
+  if (cache) observations.push({ source: "cache", id: cache.project_id, revision: cache.revision, hash: canonicalCacheHash! });
+  if (plan.marker) {
+    observations.push({
+      source: "marker",
+      id: plan.marker.id,
+      revision: plan.marker.revision,
+      hash: normalizePersistedHash(plan.marker.revision, plan.marker.hash),
+    });
+  }
 
   for (const observation of observations) {
     if (observation.id !== plan.bundle.project.id) {
@@ -1395,6 +1501,14 @@ function buildSessionCompatibilityManifest(plan: ProjectContextPlan, now: Date):
   };
   const targetOwner = isRecord(existing["targetOwner"]) ? existing["targetOwner"] : {};
   const adapterMode = plan.native_imports ? "native-imports" : "flattened-markdown";
+  const existingProjectContext = isRecord(existing["projectContext"]) ? existing["projectContext"] : null;
+  const existingProjectContextHash = existingProjectContext === null
+    ? null
+    : safeLegacyMetadataString(existingProjectContext["hash"], null);
+  const existingSourceHash = typeof existing["sourceHash"] === "string" ? existing["sourceHash"] : null;
+  const sourceHash = existingProjectContextHash === plan.bundle.hash && existingSourceHash !== null
+    ? existingSourceHash
+    : sha256(stableStringify({ previous: existingSourceHash, projectContext: plan.bundle.hash }));
   return credentialSafeSessionManifest({
     schema: SESSION_RENDER_SCHEMA,
     tool,
@@ -1418,7 +1532,7 @@ function buildSessionCompatibilityManifest(plan: ProjectContextPlan, now: Date):
     blockers: [],
     generatedAt: now.toISOString(),
     env: sanitizeLegacyEnvironment(existing["env"]),
-    sourceHash: sha256(stableStringify({ previous: typeof existing["sourceHash"] === "string" ? existing["sourceHash"] : null, projectContext: plan.bundle.hash })),
+    sourceHash,
     sources,
     skippedSources: sanitizeLegacySkippedSources(existing["skippedSources"]),
     files: [...files.filter((file) => file["relativePath"] !== targetRelativePath), updatedTarget],
@@ -1702,6 +1816,102 @@ function writeMetadataSnapshot(plan: ProjectContextPlan, now: Date): string | nu
   return snapshotPath;
 }
 
+function metadataSnapshotMatchesManifest(
+  plan: ProjectContextPlan,
+  manifest: ProjectContextManifestObservation,
+): boolean {
+  const snapshotDir = resolve(plan.workspace_root, ...PROJECT_CONTEXT_SNAPSHOT_DIR.split("/"));
+  const snapshotPath = resolve(
+    snapshotDir,
+    `${safeFilename(manifest.projectContext.revision)}-${manifest.projectContext.hash.slice(-12)}.json`,
+  );
+  if (!existsSync(snapshotPath)) return false;
+  const record = readJsonRecord(snapshotPath, plan.workspace_root);
+  const result = projectContextMetadataSnapshotSchema.safeParse(record);
+  if (!result.success) return false;
+  if (
+    result.data.projectId !== manifest.projectContext.projectId
+    || result.data.revision !== manifest.projectContext.revision
+    || result.data.hash !== manifest.projectContext.hash
+    || result.data.status !== manifest.projectContext.status
+  ) return false;
+  const sortFiles = <T extends { relativePath: string }>(files: T[]): T[] =>
+    [...files].sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+  const snapshotFiles = sortFiles(result.data.files);
+  const manifestFiles = sortFiles(manifest.files.map((file) => ({
+    relativePath: file.relativePath,
+    role: file.role,
+    sha256: file.sha256,
+  })));
+  return JSON.stringify(snapshotFiles) === JSON.stringify(manifestFiles);
+}
+
+function writeProjectContextRollbackSnapshot(
+  plan: ProjectContextPlan,
+  now: Date,
+  outputs: Array<{ path: string; content: string; role: SessionRenderFile["role"] }>,
+): string | null {
+  const targetExpectedHash = expectedPlanHash(plan, plan.target_path);
+  if (targetExpectedHash === sha256(plan.target_content)) return null;
+
+  const files = outputs.flatMap((output) => {
+    const expectedHash = expectedPlanHash(plan, output.path);
+    if (expectedHash === null) return [];
+    const content = readUtf8RegularFile(
+      output.path,
+      plan.workspace_root,
+      managedObservationMaxBytes(relativePosix(plan.workspace_root, output.path)),
+    );
+    if (sha256(content) !== expectedHash) {
+      throw new ProjectContextHashRace(
+        `managed path changed while creating rollback evidence: ${relativePosix(plan.workspace_root, output.path)}`,
+      );
+    }
+    return [{
+      path: output.path,
+      relativePath: relativePosix(plan.workspace_root, output.path),
+      role: output.role,
+      sha256: expectedHash,
+      content,
+    }];
+  });
+  const afterFiles = outputs.map((output) => {
+    const previousHash = expectedPlanHash(plan, output.path);
+    const nextHash = sha256(output.content);
+    return {
+      path: output.path,
+      relativePath: relativePosix(plan.workspace_root, output.path),
+      role: output.role,
+      action: previousHash === null ? "create" : previousHash === nextHash ? "unchanged" : "update",
+      sha256: nextHash,
+    };
+  });
+  const snapshotDir = resolve(plan.workspace_root, ...SESSION_RENDER_SNAPSHOT_RELATIVE_DIR.split("/"));
+  ensureSafeDirectory(snapshotDir, plan.workspace_root, 0o700);
+  const timestamp = now.toISOString().replace(/[:.]/g, "-");
+  const snapshotPath = resolve(snapshotDir, `${timestamp}-${randomUUID()}.json`);
+  const snapshot = {
+    schema: "hasna.configs.session-render-snapshot/v2",
+    createdAt: now.toISOString(),
+    tool: manifestTool(plan.runtime),
+    profile: "project-context",
+    targetHome: plan.workspace_root,
+    targetKind: "project-root",
+    manifestPath: plan.manifest_path,
+    previousManifest: null,
+    files,
+    afterFiles,
+  };
+  atomicWriteFile(
+    snapshotPath,
+    `${JSON.stringify(snapshot, null, 2)}\n`,
+    plan.workspace_root,
+    0o600,
+    null,
+  );
+  return snapshotPath;
+}
+
 function readProjectContextManifest(path: string, workspaceRoot: string): ProjectContextManifestObservation | null {
   if (!existsSync(path)) return null;
   const record = readJsonRecord(path, workspaceRoot);
@@ -1724,7 +1934,7 @@ function readProjectContextCache(path: string, workspaceRoot: string): ProjectCo
   if (!result.success) {
     throw new ProjectContextError("PROJECT_CONTEXT_CACHE_INVALID", "cache is malformed or incompatible");
   }
-  const bundle = parseProjectContextBundle(result.data.bundle);
+  const bundle = parseProjectContextBundleInternal(result.data.bundle, true);
   if (
     result.data.project_id !== bundle.project.id ||
     result.data.revision !== bundle.revision ||
@@ -3553,10 +3763,20 @@ function removeHashForFingerprint(value: unknown): unknown {
   if (!isRecord(value)) return value;
   const copy: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value)) {
-    if (key === "hash") continue;
+    if (key === "generated_at" || key === "hash") continue;
     copy[key] = item;
   }
   return copy;
+}
+
+function computeLegacyProjectContextSourceHash(value: unknown): string {
+  if (!isRecord(value)) return `sha256:${sha256(stableStringify(value))}`;
+  const copy: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (key === "hash") continue;
+    copy[key] = item;
+  }
+  return `sha256:${sha256(stableStringify(copy))}`;
 }
 
 function sha256(content: string): string {
