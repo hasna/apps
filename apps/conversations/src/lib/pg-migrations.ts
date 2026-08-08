@@ -785,4 +785,73 @@ export const PG_MIGRATIONS: string[] = [
 
   INSERT INTO _migrations (id) VALUES (6) ON CONFLICT DO NOTHING;
   `,
+  // Migration 7: package-owned conditional project-channel registration
+  // authority. Project ids are owned by @hasna/projects, so channels may bind
+  // the external immutable workspace id without requiring a duplicate local
+  // projects row. Ordinary channel creation still enforces its existing
+  // package-level project existence check.
+  `
+  ALTER TABLE channels DROP CONSTRAINT IF EXISTS channels_project_id_fkey;
+
+  CREATE TABLE IF NOT EXISTS project_channel_registration_identity (
+    singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+    corpus_id TEXT NOT NULL UNIQUE
+  );
+  INSERT INTO project_channel_registration_identity (singleton, corpus_id)
+  VALUES (TRUE, 'cor_' || encode(gen_random_bytes(16), 'hex'))
+  ON CONFLICT (singleton) DO NOTHING;
+
+  CREATE TABLE IF NOT EXISTS project_channel_registration_receipts (
+    receipt_id TEXT PRIMARY KEY,
+    authority TEXT NOT NULL,
+    route TEXT NOT NULL,
+    package_version TEXT NOT NULL,
+    authority_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    corpus_id TEXT NOT NULL,
+    operation_id TEXT NOT NULL,
+    step_id TEXT NOT NULL,
+    resource_kind TEXT NOT NULL CHECK (resource_kind = 'channel'),
+    direction TEXT NOT NULL CHECK (direction IN ('forward', 'inverse')),
+    idempotency_key TEXT NOT NULL,
+    request_digest TEXT NOT NULL,
+    precondition_digest TEXT NOT NULL,
+    outcome TEXT NOT NULL CHECK (
+      outcome IN ('accepted', 'duplicate_of_accepted', 'terminal_nonacceptance')
+    ),
+    reason TEXT,
+    target_id TEXT,
+    result_revision TEXT,
+    result_digest TEXT,
+    duplicate_of_receipt_id TEXT,
+    accepted_receipt_id TEXT,
+    created_by_operation BOOLEAN NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS idx_project_channel_registration_receipt_lookup
+    ON project_channel_registration_receipts (
+      authority, route, package_version, authority_id, tenant_id, corpus_id,
+      operation_id, step_id, resource_kind, direction, idempotency_key,
+      target_id, created_at
+    );
+  CREATE INDEX IF NOT EXISTS idx_project_channel_registration_receipt_step
+    ON project_channel_registration_receipts (
+      authority_id, tenant_id, corpus_id, operation_id, step_id, direction,
+      outcome, created_at
+    );
+
+  CREATE OR REPLACE FUNCTION conversations_reject_project_channel_receipt_mutation()
+  RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    RAISE EXCEPTION 'project channel registration receipts are immutable';
+  END;
+  $$;
+  DROP TRIGGER IF EXISTS project_channel_registration_receipts_no_mutation
+    ON project_channel_registration_receipts;
+  CREATE TRIGGER project_channel_registration_receipts_no_mutation
+    BEFORE UPDATE OR DELETE ON project_channel_registration_receipts
+    FOR EACH ROW EXECUTE FUNCTION conversations_reject_project_channel_receipt_mutation();
+
+  INSERT INTO _migrations (id) VALUES (7) ON CONFLICT DO NOTHING;
+  `,
 ];

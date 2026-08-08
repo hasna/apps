@@ -36,6 +36,35 @@ export {
   type ConversationsProjectPanelOptions,
 } from "./lib/project-panel.js";
 
+// Package-owned conditional project-channel registration authority. The
+// factory follows the active Store, so API-selected consumers never fall back
+// to local SQLite.
+export {
+  PROJECT_CHANNEL_REGISTRATION_ROUTE,
+  createProjectChannelRegistrationAuthority,
+  projectChannelRegistrationDigest,
+} from "./lib/project-channel-registration.js";
+export type {
+  ProjectChannelRegistrationAuthority,
+  ProjectChannelRegistrationAuthorityName,
+  ProjectChannelRegistrationAuthorityStore,
+  ProjectChannelRegistrationBounds,
+  ProjectChannelRegistrationCapability,
+  ProjectChannelRegistrationDirection,
+  ProjectChannelRegistrationInverseVerification,
+  ProjectChannelRegistrationJson,
+  ProjectChannelRegistrationLookupRequest,
+  ProjectChannelRegistrationLookupResult,
+  ProjectChannelRegistrationOutcome,
+  ProjectChannelRegistrationPathHandle,
+  ProjectChannelRegistrationReadRequest,
+  ProjectChannelRegistrationReceipt,
+  ProjectChannelRegistrationRecord,
+  ProjectChannelRegistrationRequest,
+  ProjectChannelRegistrationResourceKind,
+  ProjectChannelRegistrationResponseControl,
+} from "./lib/project-channel-registration.js";
+
 // Audited admin redaction tooling (local SQLite maintenance; CLI: `conversations admin redact-messages`).
 export { redactMessagesById } from "./lib/admin-redaction.js";
 export type {

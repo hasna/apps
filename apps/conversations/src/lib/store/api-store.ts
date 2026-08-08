@@ -176,6 +176,18 @@ export class ApiStore implements ConversationsStore {
   private async del(path: string, query?: Q): Promise<void> {
     await this.t.del(path, undefined, query ? { query: prune(query) } : undefined);
   }
+  private projectChannelRegistrationBody(
+    request: Parameters<ConversationsStore["registerProjectChannel"]>[0],
+  ): Record<string, unknown> {
+    const { target, ...serializable } = request;
+    return {
+      ...serializable,
+      // The owned path never crosses the HTTP boundary. Its digest is enough
+      // to bind the caller's request context without exposing a filesystem
+      // location to the service or receipt.
+      target_digest: target.digest,
+    };
+  }
 
   // ── health ──────────────────────────────────────────────────────────────────
   // Cloud-mode probe for `doctor`: an authenticated, cheap count round-trips the
@@ -267,6 +279,63 @@ export class ApiStore implements ConversationsStore {
   isChannelMember: ConversationsStore["isChannelMember"] = async (channelName, agent) => {
     const body = await this.get<{ member?: boolean }>(`/channels/${encodeURIComponent(normalizeChannelName(channelName))}/members/${encodeURIComponent(agent)}`);
     return Boolean(body?.member) as never;
+  };
+
+  // ── package-owned project channel registration authority ───────────────────
+  projectChannelRegistrationCapability: ConversationsStore["projectChannelRegistrationCapability"] = async () => {
+    return this.get("/project-registration/channels/capability") as never;
+  };
+  registerProjectChannel: ConversationsStore["registerProjectChannel"] = async (request) => {
+    return this.post(
+      "/project-registration/channels",
+      this.projectChannelRegistrationBody(request),
+    ) as never;
+  };
+  readProjectChannelRegistrationExact: ConversationsStore["readProjectChannelRegistrationExact"] = async (request) => {
+    return this.get(
+      `/project-registration/channels/${encodeURIComponent(request.target_id)}`,
+      {
+        resource_kind: request.resource_kind,
+        target_selector: request.target_selector,
+        target_digest: request.target.digest,
+        response_byte_limit: request.response_byte_limit,
+        time_budget_ms: request.time_budget_ms,
+        call_limit: request.call_limit ?? 1,
+      },
+    ) as never;
+  };
+  lookupProjectChannelRegistrationReceipt: ConversationsStore["lookupProjectChannelRegistrationReceipt"] = async (request) => {
+    return this.get("/project-registration/channels/receipts/terminal", {
+      operation_id: request.operation_id,
+      step_id: request.step_id,
+      resource_kind: request.resource_kind,
+      direction: request.direction,
+      authority: request.authority,
+      authority_route: request.authority_route,
+      package_version: request.package_version,
+      authority_id: request.authority_id,
+      tenant_id: request.tenant_id,
+      corpus_id: request.corpus_id,
+      target_selector: request.target_selector,
+      idempotency_key: request.idempotency_key,
+      target_id: request.target_id,
+      max_items: request.max_items,
+      response_byte_limit: request.response_byte_limit,
+      time_budget_ms: request.time_budget_ms,
+      call_limit: request.call_limit ?? 1,
+    }) as never;
+  };
+  compensateProjectChannelRegistration: ConversationsStore["compensateProjectChannelRegistration"] = async (request) => {
+    return this.post(
+      "/project-registration/channels/inverse",
+      this.projectChannelRegistrationBody(request),
+    ) as never;
+  };
+  verifyProjectChannelRegistrationInverse: ConversationsStore["verifyProjectChannelRegistrationInverse"] = async (request) => {
+    return this.post(
+      "/project-registration/channels/inverse/verify",
+      this.projectChannelRegistrationBody(request),
+    ) as never;
   };
 
   // ── channel notifications ─────────────────────────────────────────────────────

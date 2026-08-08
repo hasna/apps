@@ -759,6 +759,73 @@ export function getDb(): Database {
     BEGIN SELECT RAISE(ABORT, 'channel project linkage receipts are immutable'); END
   `);
 
+  // Package-owned project-channel registration authority. The singleton
+  // identity makes the corpus stable across process restarts, while receipts
+  // remain append-only evidence for accepted, duplicate, and nonacceptance
+  // outcomes.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS project_channel_registration_identity (
+      singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+      corpus_id TEXT NOT NULL UNIQUE
+    )
+  `);
+  db.exec(`
+    INSERT OR IGNORE INTO project_channel_registration_identity (singleton, corpus_id)
+    VALUES (1, 'cor_' || lower(hex(randomblob(16))))
+  `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS project_channel_registration_receipts (
+      receipt_id TEXT PRIMARY KEY,
+      authority TEXT NOT NULL,
+      route TEXT NOT NULL,
+      package_version TEXT NOT NULL,
+      authority_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      corpus_id TEXT NOT NULL,
+      operation_id TEXT NOT NULL,
+      step_id TEXT NOT NULL,
+      resource_kind TEXT NOT NULL CHECK (resource_kind = 'channel'),
+      direction TEXT NOT NULL CHECK (direction IN ('forward', 'inverse')),
+      idempotency_key TEXT NOT NULL,
+      request_digest TEXT NOT NULL,
+      precondition_digest TEXT NOT NULL,
+      outcome TEXT NOT NULL CHECK (outcome IN ('accepted', 'duplicate_of_accepted', 'terminal_nonacceptance')),
+      reason TEXT,
+      target_id TEXT,
+      result_revision TEXT,
+      result_digest TEXT,
+      duplicate_of_receipt_id TEXT,
+      accepted_receipt_id TEXT,
+      created_by_operation INTEGER NOT NULL CHECK (created_by_operation IN (0, 1)),
+      created_at TEXT NOT NULL
+    )
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_project_channel_registration_receipt_lookup
+    ON project_channel_registration_receipts (
+      authority, route, package_version, authority_id, tenant_id, corpus_id,
+      operation_id, step_id, resource_kind, direction, idempotency_key,
+      target_id, created_at
+    )
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_project_channel_registration_receipt_step
+    ON project_channel_registration_receipts (
+      authority_id, tenant_id, corpus_id, operation_id, step_id, direction,
+      outcome, created_at
+    )
+  `);
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS project_channel_registration_receipts_no_update
+    BEFORE UPDATE ON project_channel_registration_receipts
+    BEGIN SELECT RAISE(ABORT, 'project channel registration receipts are immutable'); END
+  `);
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS project_channel_registration_receipts_no_delete
+    BEFORE DELETE ON project_channel_registration_receipts
+    BEGIN SELECT RAISE(ABORT, 'project channel registration receipts are immutable'); END
+  `);
+
   // Channel members table
   db.exec(`
     CREATE TABLE IF NOT EXISTS channel_members (

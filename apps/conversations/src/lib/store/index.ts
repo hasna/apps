@@ -53,6 +53,7 @@ import * as summaryLib from "../summary.js";
 import * as hotLib from "../hot.js";
 import * as messagesLib from "../messages.js";
 import * as projectMessageLinkageLib from "../project-message-linkage.js";
+import * as projectChannelRegistrationLib from "../project-channel-registration.js";
 import { attachSendRedaction } from "../content-safety.js";
 
 /**
@@ -414,6 +415,14 @@ export interface ConversationsStore {
   unarchiveChannel: Async<typeof channelsLib.unarchiveChannel>;
   isChannelMember: Async<typeof channelsLib.isChannelMember>;
 
+  // package-owned project channel registration authority
+  projectChannelRegistrationCapability: Async<typeof projectChannelRegistrationLib.getProjectChannelRegistrationCapability>;
+  registerProjectChannel: Async<typeof projectChannelRegistrationLib.registerProjectChannel>;
+  readProjectChannelRegistrationExact: Async<typeof projectChannelRegistrationLib.readProjectChannelRegistrationExact>;
+  lookupProjectChannelRegistrationReceipt: Async<typeof projectChannelRegistrationLib.lookupProjectChannelRegistrationReceipt>;
+  compensateProjectChannelRegistration: Async<typeof projectChannelRegistrationLib.compensateProjectChannelRegistration>;
+  verifyProjectChannelRegistrationInverse: Async<typeof projectChannelRegistrationLib.verifyProjectChannelRegistrationInverse>;
+
   // channel notifications
   subscribeToChannelNotifications: Async<typeof notificationsLib.subscribeToChannelNotifications>;
   unsubscribeFromChannelNotifications: Async<typeof notificationsLib.unsubscribeFromChannelNotifications>;
@@ -579,6 +588,14 @@ export class LocalStore implements ConversationsStore {
   archiveChannel: ConversationsStore["archiveChannel"] = async (...a) => channelsLib.archiveChannel(...a);
   unarchiveChannel: ConversationsStore["unarchiveChannel"] = async (...a) => channelsLib.unarchiveChannel(...a);
   isChannelMember: ConversationsStore["isChannelMember"] = async (...a) => channelsLib.isChannelMember(...a);
+
+  // package-owned project channel registration authority
+  projectChannelRegistrationCapability: ConversationsStore["projectChannelRegistrationCapability"] = async () => projectChannelRegistrationLib.getProjectChannelRegistrationCapability();
+  registerProjectChannel: ConversationsStore["registerProjectChannel"] = async (request) => projectChannelRegistrationLib.registerProjectChannel(request);
+  readProjectChannelRegistrationExact: ConversationsStore["readProjectChannelRegistrationExact"] = async (request) => projectChannelRegistrationLib.readProjectChannelRegistrationExact(request);
+  lookupProjectChannelRegistrationReceipt: ConversationsStore["lookupProjectChannelRegistrationReceipt"] = async (request) => projectChannelRegistrationLib.lookupProjectChannelRegistrationReceipt(request);
+  compensateProjectChannelRegistration: ConversationsStore["compensateProjectChannelRegistration"] = async (request) => projectChannelRegistrationLib.compensateProjectChannelRegistration(request);
+  verifyProjectChannelRegistrationInverse: ConversationsStore["verifyProjectChannelRegistrationInverse"] = async (request) => projectChannelRegistrationLib.verifyProjectChannelRegistrationInverse(request);
 
   // channel notifications
   subscribeToChannelNotifications: ConversationsStore["subscribeToChannelNotifications"] = async (...a) => notificationsLib.subscribeToChannelNotifications(...a);
@@ -770,4 +787,3 @@ export {
   type TestRuntimeProbeInputs,
   type TestRuntimeSignal,
 } from "./test-runtime.js";
-

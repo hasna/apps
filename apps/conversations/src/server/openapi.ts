@@ -310,6 +310,127 @@ export const openapiSpec = {
         },
       },
     },
+    "/v1/project-registration/channels/capability": {
+      get: {
+        operationId: "getProjectChannelRegistrationCapability",
+        summary: "Read the package-owned conditional channel registration capability",
+        responses: {
+          "200": {
+            description: "stable authority and corpus identity",
+            content: { "application/json": { schema: okObject } },
+          },
+        },
+      },
+    },
+    "/v1/project-registration/channels": {
+      post: {
+        operationId: "registerProjectChannel",
+        summary: "Conditionally register one absent canonical project channel",
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: okObject } },
+        },
+        responses: {
+          "200": {
+            description: "deterministic duplicate or terminal nonacceptance receipt",
+            content: { "application/json": { schema: okObject } },
+          },
+          "201": {
+            description: "immutable accepted receipt",
+            content: { "application/json": { schema: okObject } },
+          },
+        },
+      },
+    },
+    "/v1/project-registration/channels/receipts/terminal": {
+      get: {
+        operationId: "lookupProjectChannelRegistrationReceipt",
+        summary: "Bounded exact terminal receipt lookup",
+        parameters: [
+          { name: "operation_id", in: "query", required: true, schema: { type: "string" } },
+          { name: "step_id", in: "query", required: true, schema: { type: "string" } },
+          { name: "resource_kind", in: "query", required: true, schema: { type: "string", enum: ["channel"] } },
+          { name: "direction", in: "query", required: true, schema: { type: "string", enum: ["forward", "inverse"] } },
+          { name: "authority", in: "query", required: true, schema: { type: "string", enum: ["conversations"] } },
+          { name: "authority_route", in: "query", required: true, schema: { type: "string" } },
+          { name: "package_version", in: "query", required: true, schema: { type: "string" } },
+          { name: "authority_id", in: "query", required: true, schema: { type: "string" } },
+          { name: "tenant_id", in: "query", required: true, schema: { type: "string" } },
+          { name: "corpus_id", in: "query", required: true, schema: { type: "string" } },
+          { name: "target_selector", in: "query", required: true, schema: { type: "string" } },
+          { name: "idempotency_key", in: "query", required: true, schema: { type: "string" } },
+          { name: "target_id", in: "query", schema: { type: "string" } },
+          { name: "max_items", in: "query", required: true, schema: { type: "integer", const: 1 } },
+          { name: "response_byte_limit", in: "query", required: true, schema: { type: "integer", minimum: 1 } },
+          { name: "time_budget_ms", in: "query", required: true, schema: { type: "integer", minimum: 1 } },
+          { name: "call_limit", in: "query", required: true, schema: { type: "integer", const: 1 } },
+        ],
+        responses: {
+          "200": {
+            description: "one complete receipt plus explicit response controls",
+            content: { "application/json": { schema: okObject } },
+          },
+        },
+      },
+    },
+    "/v1/project-registration/channels/{id}": {
+      get: {
+        operationId: "readProjectChannelRegistrationExact",
+        summary: "Read one exact immutable channel id and canonical name",
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string", pattern: "^chn_[0-9a-f]{32}$" } },
+          { name: "resource_kind", in: "query", required: true, schema: { type: "string", enum: ["channel"] } },
+          { name: "target_selector", in: "query", schema: { type: "string" } },
+          { name: "target_digest", in: "query", required: true, schema: { type: "string" } },
+          { name: "response_byte_limit", in: "query", required: true, schema: { type: "integer", minimum: 1 } },
+          { name: "time_budget_ms", in: "query", required: true, schema: { type: "integer", minimum: 1 } },
+          { name: "call_limit", in: "query", required: true, schema: { type: "integer", const: 1 } },
+        ],
+        responses: {
+          "200": {
+            description: "exact id/revision/digest readback",
+            content: { "application/json": { schema: okObject } },
+          },
+          "404": { description: "target not found" },
+        },
+      },
+    },
+    "/v1/project-registration/channels/inverse": {
+      post: {
+        operationId: "compensateProjectChannelRegistration",
+        summary: "Conditionally remove only the channel created by one accepted receipt",
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: okObject } },
+        },
+        responses: {
+          "200": {
+            description: "deterministic duplicate or terminal nonacceptance receipt",
+            content: { "application/json": { schema: okObject } },
+          },
+          "201": {
+            description: "immutable accepted inverse receipt",
+            content: { "application/json": { schema: okObject } },
+          },
+        },
+      },
+    },
+    "/v1/project-registration/channels/inverse/verify": {
+      post: {
+        operationId: "verifyProjectChannelRegistrationInverse",
+        summary: "Verify exact target absence against the accepted forward receipt",
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: okObject } },
+        },
+        responses: {
+          "200": {
+            description: "receipt-bound exact absence verification",
+            content: { "application/json": { schema: okObject } },
+          },
+        },
+      },
+    },
     "/v1/channels/mine": {
       get: {
         operationId: "listMemberChannels",

@@ -241,6 +241,60 @@ export class ConversationsClient {
       });
     }
 
+    /** Conditionally register one absent canonical project channel */
+    async registerProjectChannel(body: Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/project-registration/channels`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Read the package-owned conditional channel registration capability */
+    async getProjectChannelRegistrationCapability(init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("GET", `/v1/project-registration/channels/capability`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Conditionally remove only the channel created by one accepted receipt */
+    async compensateProjectChannelRegistration(body: Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/project-registration/channels/inverse`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Verify exact target absence against the accepted forward receipt */
+    async verifyProjectChannelRegistrationInverse(body: Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/project-registration/channels/inverse/verify`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Bounded exact terminal receipt lookup */
+    async lookupProjectChannelRegistrationReceipt(query?: { "operation_id": string; "step_id": string; "resource_kind": "channel"; "direction": "forward" | "inverse"; "authority": "conversations"; "authority_route": string; "package_version": string; "authority_id": string; "tenant_id": string; "corpus_id": string; "target_selector": string; "idempotency_key": string; "target_id"?: string; "max_items": number; "response_byte_limit": number; "time_budget_ms": number; "call_limit": number }, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("GET", `/v1/project-registration/channels/receipts/terminal`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Read one exact immutable channel id and canonical name */
+    async readProjectChannelRegistrationExact(id: string, query?: { "resource_kind": "channel"; "target_selector"?: string; "target_digest": string; "response_byte_limit": number; "time_budget_ms": number; "call_limit": number }, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("GET", `/v1/project-registration/channels/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
     async listProjects(query?: { "status"?: string; "limit"?: number; "cursor"?: number; "offset"?: number }, init?: RequestInit): Promise<ProjectPage> {
       return this.request("GET", `/v1/projects`, {
         body: undefined,

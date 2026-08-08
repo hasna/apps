@@ -46,6 +46,19 @@ import type {
   ProjectMessageLinkageReceipt,
   ProjectMessageLinkageRollbackResult,
 } from "../types.js";
+import type {
+  ProjectChannelRegistrationLookupRequest,
+  ProjectChannelRegistrationReadRequest,
+  ProjectChannelRegistrationRequest,
+} from "../lib/project-channel-registration.js";
+import {
+  compensateProjectChannelRegistrationPg,
+  lookupProjectChannelRegistrationReceiptPg,
+  projectChannelRegistrationPgCapability,
+  readProjectChannelRegistrationExactPg,
+  registerProjectChannelPg,
+  verifyProjectChannelRegistrationInversePg,
+} from "./project-channel-registration-pg.js";
 
 export const APP = "conversations";
 const SCOPE_READ = `${APP}:read`;
@@ -137,6 +150,34 @@ async function readJson(req: Request): Promise<Record<string, unknown>> {
 
 function str(v: unknown): string | undefined {
   return typeof v === "string" && v.trim() ? v.trim() : undefined;
+}
+
+function positiveInteger(v: unknown): number | undefined {
+  if (typeof v === "number" && Number.isInteger(v) && v > 0) return v;
+  if (typeof v !== "string" || !v.trim()) return undefined;
+  const parsed = Number(v);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function remoteProjectRegistrationTarget(digest: string) {
+  return {
+    digest,
+    withOwnedPath<T>(_consumer: (absolutePath: string) => T): T {
+      throw new Error("project registration target paths are not available to the Conversations service.");
+    },
+  };
+}
+
+function projectChannelRegistrationRequest(
+  body: Record<string, unknown>,
+): ProjectChannelRegistrationRequest {
+  const targetDigest = str(body.target_digest);
+  if (!targetDigest) throw new Error("target_digest is required.");
+  const { target_digest: _targetDigest, target: _target, ...request } = body;
+  return {
+    ...request,
+    target: remoteProjectRegistrationTarget(targetDigest),
+  } as unknown as ProjectChannelRegistrationRequest;
 }
 
 function jsonObject(v: unknown): Record<string, unknown> | null {
@@ -774,6 +815,77 @@ async function handleV1(
 ): Promise<Response> {
   const { client } = deps;
   const sub = path.slice("/v1/".length);
+
+  // ---- package-owned project channel registration authority ----------------
+  if (sub === "project-registration/channels/capability" && method === "GET") {
+    return json(await projectChannelRegistrationPgCapability(client));
+  }
+
+  if (sub === "project-registration/channels" && method === "POST") {
+    const receipt = await registerProjectChannelPg(
+      client,
+      projectChannelRegistrationRequest(await readJson(req)),
+    );
+    return json(receipt, receipt.outcome === "accepted" ? 201 : 200);
+  }
+
+  if (sub === "project-registration/channels/receipts/terminal" && method === "GET") {
+    const maxItems = positiveInteger(url.searchParams.get("max_items"));
+    const responseByteLimit = positiveInteger(url.searchParams.get("response_byte_limit"));
+    const timeBudgetMs = positiveInteger(url.searchParams.get("time_budget_ms"));
+    const callLimit = positiveInteger(url.searchParams.get("call_limit"));
+    const request = {
+      operation_id: str(url.searchParams.get("operation_id")),
+      step_id: str(url.searchParams.get("step_id")),
+      resource_kind: str(url.searchParams.get("resource_kind")),
+      direction: str(url.searchParams.get("direction")),
+      authority: str(url.searchParams.get("authority")),
+      authority_route: str(url.searchParams.get("authority_route")),
+      package_version: str(url.searchParams.get("package_version")),
+      authority_id: str(url.searchParams.get("authority_id")),
+      tenant_id: str(url.searchParams.get("tenant_id")),
+      corpus_id: str(url.searchParams.get("corpus_id")),
+      target_selector: str(url.searchParams.get("target_selector")),
+      idempotency_key: str(url.searchParams.get("idempotency_key")),
+      target_id: str(url.searchParams.get("target_id")),
+      max_items: maxItems,
+      response_byte_limit: responseByteLimit,
+      time_budget_ms: timeBudgetMs,
+      call_limit: callLimit,
+    } as unknown as ProjectChannelRegistrationLookupRequest;
+    return json(await lookupProjectChannelRegistrationReceiptPg(client, request));
+  }
+
+  const projectRegistrationReadMatch = sub.match(/^project-registration\/channels\/(chn_[0-9a-f]{32})$/);
+  if (projectRegistrationReadMatch && method === "GET") {
+    const targetDigest = str(url.searchParams.get("target_digest"));
+    if (!targetDigest) return json({ error: "target_digest is required" }, 400);
+    const request = {
+      resource_kind: str(url.searchParams.get("resource_kind")),
+      target_id: projectRegistrationReadMatch[1],
+      target_selector: str(url.searchParams.get("target_selector")),
+      target: remoteProjectRegistrationTarget(targetDigest),
+      response_byte_limit: positiveInteger(url.searchParams.get("response_byte_limit")),
+      time_budget_ms: positiveInteger(url.searchParams.get("time_budget_ms")),
+      call_limit: positiveInteger(url.searchParams.get("call_limit")),
+    } as unknown as ProjectChannelRegistrationReadRequest;
+    return json(await readProjectChannelRegistrationExactPg(client, request));
+  }
+
+  if (sub === "project-registration/channels/inverse" && method === "POST") {
+    const receipt = await compensateProjectChannelRegistrationPg(
+      client,
+      projectChannelRegistrationRequest(await readJson(req)),
+    );
+    return json(receipt, receipt.outcome === "accepted" ? 201 : 200);
+  }
+
+  if (sub === "project-registration/channels/inverse/verify" && method === "POST") {
+    return json(await verifyProjectChannelRegistrationInversePg(
+      client,
+      projectChannelRegistrationRequest(await readJson(req)),
+    ));
+  }
 
   // ---- messages ----
   if (sub === "messages" && method === "GET") {
