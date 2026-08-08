@@ -70,6 +70,7 @@ import {
 import { parseWorkspaceAgentEvalCaseIds, runWorkspaceAgentEval } from "../../lib/workspace-agent-eval.js";
 import { cleanupProjectEvalArtifacts, filterProjectEvalArtifacts } from "../../lib/project-eval-artifacts.js";
 import { projectChannelSummary, resolveProjectChannelForProject } from "../../lib/project-channel.js";
+import { buildProjectContextBundle } from "../../lib/project-context-bundle.js";
 import {
   parseProjectStartAgent,
   parseProjectStartSessionPolicy,
@@ -763,6 +764,7 @@ export function registerWorkspaceCommands(program: Command): void {
   registerProjectStatusCommand(program);
   registerProjectSessionsCommand(program);
   registerProjectCommands(program);
+  registerProjectContextBundleCommand(program);
   registerBudgetCommands(program);
   registerAgentAssistCommands(program);
   registerOssCommands(program);
@@ -775,6 +777,23 @@ export function registerWorkspaceCommands(program: Command): void {
   registerRecipesCommand(program);
   registerAgentsCommand(program);
   registerTmuxProfilesCommand(program);
+}
+
+function registerProjectContextBundleCommand(program: Command): void {
+  program
+    .command("context-bundle <exact-project-id>")
+    .description("Emit a strict Instructions project-context bundle for an exact project id")
+    .option("-j, --json", "Output the strict JSON bundle")
+    .action(async (exactProjectId, opts) => {
+      try {
+        if (!wantsJson(opts)) throw new Error("context-bundle requires --json");
+        const bundle = await buildProjectContextBundle(resolveProjectStore(), exactProjectId);
+        process.stdout.write(`${JSON.stringify(bundle, null, 2)}\n`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
 }
 
 function registerAgentAssistCommands(program: Command): void {
