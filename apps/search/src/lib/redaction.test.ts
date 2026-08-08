@@ -50,6 +50,20 @@ describe("redactCredentialBearingText", () => {
     );
   });
 
+  test("redacts DB_PASS assignments and Basic authorization credentials", () => {
+    const value = ["synthetic", "review", "value", "731"].join("-");
+
+    expect(redactCredentialBearingText(`DB_PASS=${value}`)).toBe(
+      `DB_PASS=${REDACTION_PLACEHOLDER}`,
+    );
+    expect(redactCredentialBearingText(`Authorization: Basic ${value}`)).toBe(
+      `Authorization: Basic ${REDACTION_PLACEHOLDER}`,
+    );
+    expect(redactCredentialBearingText(`authorization: basic ${value}`)).toBe(
+      `authorization: basic ${REDACTION_PLACEHOLDER}`,
+    );
+  });
+
   test("redacts common standalone credential token shapes", () => {
     const values = [
       ["sk-", "synthetic_token_123456789"].join(""),

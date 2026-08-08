@@ -410,4 +410,20 @@ describe("searchFileContent", () => {
     expect(searchFileContent("needlecomparison", {}, db)[0]!.lineText).toBe(comparisonLine);
     expect(searchFileContent("needletype", {}, db)[0]!.lineText).toBe(typeLine);
   });
+
+  test("redacts DB_PASS assignments and Basic authorization credentials from emitted matches", () => {
+    const value = ["synthetic", "review", "value", "731"].join("-");
+    setup({
+      "db-config.txt": `needledb DB_PASS=${value}`,
+      "request.txt": `needlebasic Authorization: Basic ${value}`,
+    });
+
+    const dbPassHit = searchFileContent("needledb", {}, db)[0]!;
+    expect(dbPassHit.lineText.includes(value)).toBe(false);
+    expect(dbPassHit.lineText).toBe("needledb DB_PASS=[REDACTED]");
+
+    const basicHit = searchFileContent("needlebasic", {}, db)[0]!;
+    expect(basicHit.lineText.includes(value)).toBe(false);
+    expect(basicHit.lineText).toBe("needlebasic Authorization: Basic [REDACTED]");
+  });
 });

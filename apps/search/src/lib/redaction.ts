@@ -3,7 +3,7 @@ import type { SearchResult } from "../types/index.js";
 export const REDACTION_PLACEHOLDER = "[REDACTED]";
 
 const SENSITIVE_KEY_SOURCE =
-  String.raw`\b[a-z0-9_-]*(?:api[_-]?key|access[_-]?key|secret(?:[_-]?key)?|client[_-]?secret|(?:auth|access|refresh)[_-]?token|token|password|passwd|pwd|passphrase|private[_-]?key)\b`;
+  String.raw`\b[a-z0-9_-]*(?:api[_-]?key|access[_-]?key|secret(?:[_-]?key)?|client[_-]?secret|(?:auth|access|refresh)[_-]?token|token|password|passwd|pwd|pass|passphrase|private[_-]?key)\b`;
 
 const SENSITIVE_EQUALS_ASSIGNMENT_PATTERN = new RegExp(
   `(${SENSITIVE_KEY_SOURCE}["'\\x60]?[\\s]*=[\\s]*)(?![=>])(["'\\x60]?).*$`,
@@ -25,7 +25,7 @@ const SENSITIVE_ASSIGNMENT_PATTERNS = [
 ] as const;
 
 const CREDENTIAL_URL_PATTERN = /([a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:)([^@\s/]+)(@)/gi;
-const BEARER_TOKEN_PATTERN = /(\bBearer\s+)[a-z0-9._~+/-]{8,}=*/gi;
+const AUTHORIZATION_CREDENTIAL_PATTERN = /(\b(?:Bearer|Basic)\s+)[a-z0-9._~+/-]{8,}=*/gi;
 
 const INLINE_CREDENTIAL_PATTERNS: readonly RegExp[] = [
   /\bsk-[a-z0-9_-]{10,}\b/gi,
@@ -57,7 +57,7 @@ export function redactCredentialBearingText(text: string): string {
       `${prefix}${REDACTION_PLACEHOLDER}${suffix}`,
   );
   redacted = redacted.replace(
-    BEARER_TOKEN_PATTERN,
+    AUTHORIZATION_CREDENTIAL_PATTERN,
     (_match: string, prefix: string) => `${prefix}${REDACTION_PLACEHOLDER}`,
   );
 
