@@ -1256,6 +1256,24 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
       .toEqual(["in_progress", "pending"]);
   });
 
+  test("an empty status array preserves the unfiltered remote list contract", async () => {
+    const remoteTask = {
+      id: "44444444-4444-4444-8444-444444444444",
+      title: "unfiltered remote task",
+      status: "pending",
+      priority: "medium",
+      created_at: "2026-08-08T10:00:00.000Z",
+    };
+    const calls = installFetch(() => ({ body: { tasks: [remoteTask] } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    const tasks = await cloudListTasks(client, { status: [] });
+
+    expect(tasks).toEqual([remoteTask]);
+    expect(calls).toHaveLength(1);
+    expect(new URL(calls[0]!.url).searchParams.has("status")).toBe(false);
+  });
+
   test("task-list create/delete and slug/prefix resolution use /v1/task-lists", async () => {
     const calls = installFetch((call) => {
       if (call.method === "POST") {

@@ -678,7 +678,10 @@ export async function cloudListTasks(client: HasnaStorageClient, filter: TaskFil
 
   const statuses = Array.isArray(filter.status) ? filter.status : undefined;
   if (!statuses) return requestCloudTaskPage(client, filter);
-  if (statuses.length === 0) return [];
+  if (statuses.length === 0) {
+    const { status: _status, ...unfiltered } = filter;
+    return requestCloudTaskPage(client, unfiltered);
+  }
   if (statuses.length === 1) {
     return requestCloudTaskPage(client, { ...filter, status: statuses[0] });
   }
