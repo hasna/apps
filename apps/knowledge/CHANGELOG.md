@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.95
+
+- Explain recovery from the obsolete `HASNA_KNOWLEDGE_STORAGE_MODE=cloud`
+  setting: unset it to preserve the default SQLite backend, or set the mode
+  explicitly to `sqlite` or `postgres` when that backend is intended; removed
+  placement modes remain invalid.
+
 ## 0.2.94
 
 - Add the package-owned FCAME-1 production writer. Private Knowledge payloads
