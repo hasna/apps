@@ -169,6 +169,7 @@ export function createV1Handler(): V1Handler {
             return json(await store.listFiles(client, {
               source_id: q("source_id"),
               machine_id: q("machine_id"),
+              project_id: q("project_id"),
               ext: q("ext"),
               status: q("status"),
               q: q("q"),

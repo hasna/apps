@@ -130,12 +130,13 @@ export class ApiStore implements FilesStore {
   // ── files ────────────────────────────────────────────────────────────────
   async listFiles(opts: ListFilesOptions = {}): Promise<FileWithTags[]> {
     // The cloud /v1/files endpoint filters on this subset; richer local-only
-    // filters (tag/collection/project/date/size/sort) are not part of the API
+    // filters (tag/collection/date/size/sort) are not part of the API
     // contract and are intentionally omitted rather than silently ignored.
     return (await this.client.list<FileWithTags>("files", {
       query: {
         source_id: opts.source_id,
         machine_id: opts.machine_id,
+        project_id: opts.project_id,
         ext: opts.ext,
         status: opts.status,
         limit: opts.limit,

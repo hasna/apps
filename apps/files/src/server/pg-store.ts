@@ -308,6 +308,7 @@ function toFile(r: Record<string, unknown>, tags: string[]): FileWithTags {
 export interface ListFilesQuery {
   source_id?: string;
   machine_id?: string;
+  project_id?: string;
   ext?: string;
   status?: string;
   q?: string;
@@ -318,15 +319,23 @@ export interface ListFilesQuery {
 export async function listFiles(client: TypedQueryClient, opts: ListFilesQuery): Promise<FileWithTags[]> {
   const where: string[] = [];
   const params: unknown[] = [];
+  const filePrefix = opts.project_id ? "f." : "";
   const add = (clause: string, value: unknown) => { params.push(value); where.push(clause.replace("$?", `$${params.length}`)); };
-  add("status = $?", opts.status ?? "active");
-  if (opts.source_id) add("source_id = $?", opts.source_id);
-  if (opts.machine_id) add("machine_id = $?", opts.machine_id);
-  if (opts.ext) add("ext = $?", opts.ext);
-  if (opts.q) add("(name ILIKE $? OR path ILIKE $?)".replace("$?", `$${params.length + 1}`).replace("$?", `$${params.length + 1}`), `%${opts.q}%`);
+  add(`${filePrefix}status = $?`, opts.status ?? "active");
+  if (opts.source_id) add(`${filePrefix}source_id = $?`, opts.source_id);
+  if (opts.machine_id) add(`${filePrefix}machine_id = $?`, opts.machine_id);
+  if (opts.ext) add(`${filePrefix}ext = $?`, opts.ext);
+  if (opts.q) add(`(${filePrefix}name ILIKE $? OR ${filePrefix}path ILIKE $?)`.replace("$?", `$${params.length + 1}`).replace("$?", `$${params.length + 1}`), `%${opts.q}%`);
+  let join = "";
+  if (opts.project_id) {
+    params.push(opts.project_id);
+    join = ` JOIN project_files pf ON pf.file_id = f.id AND pf.project_id = $${params.length}`;
+  }
   const limit = pageLimit(opts.limit, 50, MAX_PAGE_SIZE);
   const offset = pageOffset(opts.offset);
-  const sql = `SELECT * FROM files WHERE ${where.join(" AND ")} ORDER BY indexed_at DESC LIMIT ${limit} OFFSET ${offset}`;
+  const from = opts.project_id ? `files f${join}` : "files";
+  const selected = opts.project_id ? "f.*" : "*";
+  const sql = `SELECT ${selected} FROM ${from} WHERE ${where.join(" AND ")} ORDER BY ${filePrefix}indexed_at DESC LIMIT ${limit} OFFSET ${offset}`;
   const rows = await client.many<Record<string, unknown>>(sql, params);
   const out: FileWithTags[] = [];
   for (const r of rows) out.push(toFile(r, await fileTags(client, String(r.id))));
