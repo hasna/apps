@@ -86,6 +86,7 @@ describe("projects-serve migrations", () => {
     expect(ids).toContain("projects:0006_project_resource_links");
     expect(ids).toContain("projects:0007_conversations_channel_locator");
     expect(ids).toContain("projects:0008_orgs_resource_links");
+    expect(ids).toContain("projects:0009_contacts_resource_links");
   });
 
   test("guarded receipt grant migration derives existing DML roles and grants only receipt reads and inserts", () => {
@@ -137,6 +138,18 @@ describe("projects-serve migrations", () => {
     expect(migration!.sql).toContain("'orgs'");
     expect(migration!.sql).toContain("'@hasna/orgs'");
     expect(migration!.sql).toContain("'org'");
+    expect(migration!.sql).not.toContain("DROP TABLE");
+    expect(migration!.sql).not.toContain("DELETE FROM");
+  });
+
+  test("Contacts resource-link migration widens only the closed authority, package, and target constraints", () => {
+    const migration = loadMigrations().find(
+      (item) => item.id === "projects:0009_contacts_resource_links",
+    );
+    expect(migration).toBeDefined();
+    expect(migration!.sql).toContain("'contacts'");
+    expect(migration!.sql).toContain("'@hasna/contacts'");
+    expect(migration!.sql).toContain("'contact'");
     expect(migration!.sql).not.toContain("DROP TABLE");
     expect(migration!.sql).not.toContain("DELETE FROM");
   });
