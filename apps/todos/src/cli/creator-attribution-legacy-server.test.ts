@@ -185,7 +185,12 @@ describe("--inbox against a server that ignores the creator filter", () => {
       const limitsSent = seen
         .map((search) => new URLSearchParams(search).get("limit"))
         .filter((value): value is string => value !== null);
-      expect(limitsSent).toEqual(["1000"]);
+      expect(limitsSent).toEqual(["1000", "1000"]);
+      const statusesSent = seen
+        .map((search) => new URLSearchParams(search).get("status"))
+        .filter((value): value is string => value !== null)
+        .sort();
+      expect(statusesSent).toEqual(["in_progress", "pending"]);
     } finally {
       server.stop(true);
     }
@@ -210,17 +215,21 @@ describe("--inbox against a server that ignores the creator filter", () => {
     }
   }, 30000);
 
-  test("a plain --limit list with no creator filter still lets the server truncate", async () => {
+  test("a scalar-status --limit list with no creator filter still lets the server truncate", async () => {
     const rows = Array.from({ length: 9 }, (_, i) => legacyTask(i + 1, "brutus"));
     const { server, seen } = startLegacyServer(rows);
     const root = mkdtempSync(join(tmpdir(), "todos-legacy-plain-limit-"));
     tempRoots.push(root);
     try {
-      const result = await runCli(["--json", "list", "--limit", "3"], root, `http://127.0.0.1:${server.port}`);
+      const result = await runCli(
+        ["--json", "list", "--status", "pending", "--limit", "3"],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
       expect(result.exitCode).toBe(0);
       expect(JSON.parse(result.stdout)).toHaveLength(3);
-      // Withholding the limit is scoped to the creator-filter case — an ordinary
-      // list must not start pulling the whole table.
+      // Withholding the limit is scoped to client-side filtering and reordering.
+      // One scalar status needs neither, so it must not pull the whole table.
       expect(seen.some((q) => q.includes("limit=3"))).toBe(true);
     } finally {
       server.stop(true);

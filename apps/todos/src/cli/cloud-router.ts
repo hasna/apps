@@ -607,6 +607,18 @@ function toListQuery(filter: TaskFilter = {}): Record<string, string | number> {
   return query;
 }
 
+const PRIORITY_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+function priorityRank(priority?: string | null): number {
+  return PRIORITY_RANK[priority ?? ""] ?? 4;
+}
+
+/** The authoritative remote task order before limit/offset are applied. */
+function compareCloudTaskOrder(a: Task, b: Task): number {
+  return priorityRank(a.priority) - priorityRank(b.priority)
+    || b.created_at.localeCompare(a.created_at)
+    || a.id.localeCompare(b.id);
+}
+
 const listTagsCapabilityCache = new Map<string, Promise<boolean>>();
 
 /** Whether this authority's `GET /v1/tasks` advertises the `tags` query param. */
@@ -653,13 +665,47 @@ async function requireTagsFilterCapability(client: HasnaStorageClient): Promise<
   }
 }
 
-/** List tasks from the cloud (`GET /v1/tasks`). Returns the `tasks` array. */
-export async function cloudListTasks(client: HasnaStorageClient, filter: TaskFilter = {}): Promise<Task[]> {
-  if (filter.tags?.length) await requireTagsFilterCapability(client);
+async function requestCloudTaskPage(client: HasnaStorageClient, filter: TaskFilter): Promise<Task[]> {
   const res = await requiredRemoteRoute(client, "/v1/tasks", () =>
     client.list<Task>("tasks", { query: toListQuery(filter) }));
   const envelope = res.raw as { tasks?: Task[] } | undefined;
   return Array.isArray(envelope?.tasks) ? envelope!.tasks : res.items;
+}
+
+/** List tasks from the cloud (`GET /v1/tasks`). Returns the `tasks` array. */
+export async function cloudListTasks(client: HasnaStorageClient, filter: TaskFilter = {}): Promise<Task[]> {
+  if (filter.tags?.length) await requireTagsFilterCapability(client);
+
+  const statuses = Array.isArray(filter.status) ? filter.status : undefined;
+  if (!statuses) return requestCloudTaskPage(client, filter);
+  if (statuses.length === 0) return [];
+  if (statuses.length === 1) {
+    return requestCloudTaskPage(client, { ...filter, status: statuses[0] });
+  }
+
+  // The deployed authority can return HTTP 200, valid JSON, and an empty task
+  // array for `status=pending,in_progress` while each scalar status returns real
+  // rows. Never let that silent contract mismatch turn an active queue into an
+  // authoritative-looking empty one. Scalar enum filters are the shared contract,
+  // so compose the array as bounded scalar reads and take the global window last.
+  const { status: _status, limit, offset, ...baseFilter } = filter;
+  const start = offset ?? 0;
+  const windowEnd = typeof limit === "number" ? start + limit : undefined;
+  const pages = await Promise.all(statuses.map((status) =>
+    requestCloudTaskPage(client, {
+      ...baseFilter,
+      status,
+      ...(windowEnd === undefined ? {} : { limit: windowEnd }),
+    })));
+
+  const seen = new Set<string>();
+  const union = pages.flat().filter((task) => {
+    if (seen.has(task.id)) return false;
+    seen.add(task.id);
+    return true;
+  });
+  union.sort(compareCloudTaskOrder);
+  return union.slice(start, windowEnd);
 }
 
 /**
@@ -2156,11 +2202,6 @@ export async function cloudRecordVerification(
 // history, task lists, dependency edges, the priority-ranked "next" pick) route
 // to dedicated `/v1` endpoints.
 // ───────────────────────────────────────────────────────────────────────────
-
-const PRIORITY_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
-function priorityRank(priority?: string | null): number {
-  return PRIORITY_RANK[priority ?? ""] ?? 4;
-}
 
 /** All non-terminal tasks (pending + in_progress) — the "active" working set. */
 export async function cloudActiveTasks(client: HasnaStorageClient, filter: TaskFilter = {}): Promise<Task[]> {
