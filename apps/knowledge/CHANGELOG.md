@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.98
+
+- Ship the hosted guarded-write authority fix from #78: the authority trigger now
+  casts hosted tenant IDs to UUID before comparing them, preserving guarded
+  write enforcement on hosted Postgres tenants whose signed authority identifier
+  reaches the trigger as text.
+
 ## 0.2.97
 
 - Fix the FCAME-1 guarded writer so `createKnowledgeGuardedWriter({ env })`
