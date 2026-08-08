@@ -406,6 +406,102 @@ describe("workspace schema", () => {
     )).toThrow(/immutable/);
     db.close();
   });
+
+  test("widens resource-link target kinds for Todos tasks without losing existing links", () => {
+    const db = new Database(":memory:");
+    db.run("PRAGMA foreign_keys=ON");
+    db.run(`
+      CREATE TABLE _migrations (
+        id INTEGER PRIMARY KEY,
+        applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+    for (const migration of MIGRATIONS.slice(0, 13)) db.run(migration);
+    db.run(
+      "INSERT INTO workspaces (id, slug, name) VALUES (?, ?, ?)",
+      ["wks_todos_task_upgrade", "todos-task-upgrade", "Todos Task Upgrade"],
+    );
+    db.run(`
+      INSERT INTO project_resource_links (
+        id, project_id, authority, service_instance, source_package, target_kind,
+        locator_kind, locator_value, scope, labels_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      "prl_existing_plan",
+      "wks_todos_task_upgrade",
+      "todos",
+      "urn:hasna:todos:test",
+      "@hasna/todos",
+      "plan",
+      "external_uuid",
+      "27fcfeec-3740-4a89-a0ea-4c7c2c60aeeb",
+      "collection",
+      JSON.stringify({ name: "Existing Plan" }),
+    ]);
+    expect(() => db.run(`
+      INSERT INTO project_resource_links (
+        id, project_id, authority, service_instance, source_package, target_kind,
+        locator_kind, locator_value, scope, labels_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      "prl_task_before_upgrade",
+      "wks_todos_task_upgrade",
+      "todos",
+      "urn:hasna:todos:test",
+      "@hasna/todos",
+      "task",
+      "external_uuid",
+      "e2f791bd-f26b-4fac-a762-2cba96202aa5",
+      "resource",
+      JSON.stringify({ name: "Root Task" }),
+    ])).toThrow();
+
+    runMigrations(db);
+
+    expect(db.query(
+      "SELECT authority, target_kind, locator_value FROM project_resource_links ORDER BY id",
+    ).all()).toEqual([{
+      authority: "todos",
+      target_kind: "plan",
+      locator_value: "27fcfeec-3740-4a89-a0ea-4c7c2c60aeeb",
+    }]);
+    db.run(`
+      INSERT INTO project_resource_links (
+        id, project_id, authority, service_instance, source_package, target_kind,
+        locator_kind, locator_value, scope, labels_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      "prl_task_after_upgrade",
+      "wks_todos_task_upgrade",
+      "todos",
+      "urn:hasna:todos:test",
+      "@hasna/todos",
+      "task",
+      "external_uuid",
+      "e2f791bd-f26b-4fac-a762-2cba96202aa5",
+      "resource",
+      JSON.stringify({ name: "Root Task" }),
+    ]);
+    expect(db.query(
+      "SELECT authority, target_kind, locator_value FROM project_resource_links ORDER BY id",
+    ).all()).toEqual([
+      {
+        authority: "todos",
+        target_kind: "plan",
+        locator_value: "27fcfeec-3740-4a89-a0ea-4c7c2c60aeeb",
+      },
+      {
+        authority: "todos",
+        target_kind: "task",
+        locator_value: "e2f791bd-f26b-4fac-a762-2cba96202aa5",
+      },
+    ]);
+    expect(() => db.run(
+      "UPDATE project_resource_links SET locator_value = ? WHERE id = ?",
+      ["00000000-0000-4000-8000-000000000000", "prl_task_after_upgrade"],
+    )).toThrow(/immutable/);
+    db.close();
+  });
 });
 
 describe("workspace domain services", () => {

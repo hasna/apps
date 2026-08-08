@@ -4,6 +4,7 @@
 
 import { WORKSPACE_LIST_DEFAULT_LIMIT, WORKSPACE_LIST_MAX_LIMIT } from "./pg-store.js";
 import { COMPLETE_STABLE_PROJECT_ID_PATTERN } from "../lib/guarded-project-mutation.js";
+import { COMPLETE_EXTERNAL_UUID_PATTERN } from "../lib/project-resource-links.js";
 
 export function buildOpenApiSpec(version: string): Record<string, unknown> {
   const ID_PARAM = {
@@ -29,6 +30,25 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
   const jsonResp = (schemaName: string, description = "OK") => ({
     description,
     content: { "application/json": { schema: ref(schemaName) } },
+  });
+  const projectResourceLinkInputBranch = (
+    authority: string,
+    sourcePackage: string,
+    targetKinds: readonly string[],
+    locator: Record<string, unknown> = ref("ProjectResourceLinkLocator"),
+  ) => ({
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      authority: { type: "string", enum: [authority] },
+      service_instance: { type: "string" },
+      source_package: { type: "string", enum: [sourcePackage] },
+      target_kind: { type: "string", enum: targetKinds },
+      locator,
+      scope: { type: "string", enum: ["resource", "collection"] },
+      labels: ref("ProjectResourceLinkLabels"),
+    },
+    required: ["authority", "service_instance", "source_package", "target_kind", "locator", "scope"],
   });
 
   return {
@@ -295,37 +315,60 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
             tags: { type: "array", items: { type: "string" } },
           },
         },
-        ProjectResourceLinkLocator: {
+        ProjectResourceExternalUuidLocator: {
           type: "object",
           additionalProperties: false,
           properties: {
-            kind: {
-              type: "string",
-              enum: ["external_uuid", "canonical_uri", "conversations_channel_id"],
-            },
+            kind: { type: "string", enum: ["external_uuid"] },
+            value: { type: "string", pattern: COMPLETE_EXTERNAL_UUID_PATTERN },
+          },
+          required: ["kind", "value"],
+        },
+        ProjectResourceCanonicalUriLocator: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            kind: { type: "string", enum: ["canonical_uri"] },
             value: { type: "string" },
           },
           required: ["kind", "value"],
         },
-        ProjectResourceLinkInput: {
+        ProjectResourceConversationsChannelLocator: {
           type: "object",
           additionalProperties: false,
           properties: {
-            authority: { type: "string", enum: ["todos", "conversations", "knowledge", "mementos", "orgs", "contacts"] },
-            service_instance: { type: "string" },
-            source_package: {
-              type: "string",
-              enum: ["@hasna/todos", "@hasna/conversations", "@hasna/knowledge", "@hasna/mementos", "@hasna/orgs", "@hasna/contacts"],
-            },
-            target_kind: {
-              type: "string",
-              enum: ["contact", "org", "project", "task_list", "plan", "channel", "collection", "item"],
-            },
-            locator: ref("ProjectResourceLinkLocator"),
-            scope: { type: "string", enum: ["resource", "collection"] },
-            labels: ref("ProjectResourceLinkLabels"),
+            kind: { type: "string", enum: ["conversations_channel_id"] },
+            value: { type: "string", pattern: "^chn_[0-9a-f]{32}$" },
           },
-          required: ["authority", "service_instance", "source_package", "target_kind", "locator", "scope"],
+          required: ["kind", "value"],
+        },
+        ProjectResourceLinkLocator: {
+          oneOf: [
+            ref("ProjectResourceExternalUuidLocator"),
+            ref("ProjectResourceCanonicalUriLocator"),
+            ref("ProjectResourceConversationsChannelLocator"),
+          ],
+        },
+        ProjectResourceLinkInput: {
+          oneOf: [
+            projectResourceLinkInputBranch("todos", "@hasna/todos", ["project", "task_list", "plan"]),
+            projectResourceLinkInputBranch(
+              "todos",
+              "@hasna/todos",
+              ["task"],
+              ref("ProjectResourceExternalUuidLocator"),
+            ),
+            projectResourceLinkInputBranch("conversations", "@hasna/conversations", ["project", "channel"]),
+            projectResourceLinkInputBranch("knowledge", "@hasna/knowledge", ["collection", "item"]),
+            projectResourceLinkInputBranch("mementos", "@hasna/mementos", ["project", "item"]),
+            projectResourceLinkInputBranch("orgs", "@hasna/orgs", ["org", "project"]),
+            projectResourceLinkInputBranch(
+              "contacts",
+              "@hasna/contacts",
+              ["contact"],
+              ref("ProjectResourceExternalUuidLocator"),
+            ),
+          ],
         },
         ProjectResourceLink: {
           allOf: [

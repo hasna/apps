@@ -1753,11 +1753,6 @@ function registrationResourceLink(input: {
     throw new ProjectRegistrationStepError(input.receipt.step_id, "authority_receipt_missing_target");
   }
   const authority = input.capability.authority;
-  const sourcePackage = {
-    todos: "@hasna/todos",
-    conversations: "@hasna/conversations",
-    mementos: "@hasna/mementos",
-  }[authority];
   const serviceInstance = [
     "urn:hasna",
     authority,
@@ -1768,7 +1763,10 @@ function registrationResourceLink(input: {
     "corpus",
     encodeURIComponent(input.capability.corpus_id),
   ].join(":");
-  if (authority === "conversations" && input.target_kind === "channel") {
+  if (authority === "conversations") {
+    if (input.target_kind !== "channel") {
+      throw new ProjectRegistrationStepError(input.receipt.step_id, "authority_target_kind_mismatch");
+    }
     const locatorKind = projectResourceLinkConversationsChannelLocatorKind(targetId);
     if (!locatorKind) {
       throw new ProjectRegistrationStepError(input.receipt.step_id, "channel_immutable_uuid_missing");
@@ -1776,21 +1774,41 @@ function registrationResourceLink(input: {
     return {
       authority,
       service_instance: serviceInstance,
-      source_package: sourcePackage,
-      target_kind: input.target_kind,
+      source_package: "@hasna/conversations",
+      target_kind: "channel",
       locator: { kind: locatorKind, value: targetId },
       scope: input.scope,
       labels: input.labels,
     };
   }
+  if (authority === "todos") {
+    if (input.target_kind !== "project" && input.target_kind !== "task_list") {
+      throw new ProjectRegistrationStepError(input.receipt.step_id, "authority_target_kind_mismatch");
+    }
+    return {
+      authority,
+      service_instance: serviceInstance,
+      source_package: "@hasna/todos",
+      target_kind: input.target_kind,
+      locator: {
+        kind: "canonical_uri",
+        value: `urn:hasna:${authority}:${input.target_kind}:${encodeURIComponent(targetId)}`,
+      },
+      scope: input.scope,
+      labels: input.labels,
+    };
+  }
+  if (input.target_kind !== "project") {
+    throw new ProjectRegistrationStepError(input.receipt.step_id, "authority_target_kind_mismatch");
+  }
   return {
-    authority,
+    authority: "mementos",
     service_instance: serviceInstance,
-    source_package: sourcePackage,
-    target_kind: input.target_kind,
+    source_package: "@hasna/mementos",
+    target_kind: "project",
     locator: {
       kind: "canonical_uri",
-      value: `urn:hasna:${authority}:${input.target_kind}:${encodeURIComponent(targetId)}`,
+      value: `urn:hasna:mementos:project:${encodeURIComponent(targetId)}`,
     },
     scope: input.scope,
     labels: input.labels,

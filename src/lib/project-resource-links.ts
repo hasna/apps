@@ -28,7 +28,7 @@ const SOURCE_PACKAGE_BY_AUTHORITY: Record<ProjectResourceAuthority, string> = {
 };
 
 const TARGET_KINDS_BY_AUTHORITY: Record<ProjectResourceAuthority, readonly ProjectResourceTargetKind[]> = {
-  todos: ["project", "task_list", "plan"],
+  todos: ["project", "task", "task_list", "plan"],
   conversations: ["project", "channel"],
   knowledge: ["collection", "item"],
   mementos: ["project", "item"],
@@ -47,7 +47,8 @@ const LINK_FIELDS = new Set([
 ]);
 const LOCATOR_FIELDS = new Set(["kind", "value"]);
 const LABEL_FIELDS = new Set(["name", "channel_name", "path", "tags"]);
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+export const COMPLETE_EXTERNAL_UUID_PATTERN = "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$";
+const UUID_RE = new RegExp(COMPLETE_EXTERNAL_UUID_PATTERN);
 const CONVERSATIONS_CHANNEL_ID_RE = /^chn_[0-9a-f]{32}$/;
 const URN_RE = /^urn:[a-z0-9][a-z0-9-]{0,31}:[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+$/;
 
@@ -162,6 +163,18 @@ export function normalizeProjectResourceLink(input: ProjectResourceLinkInput): P
       "resource link conversations_channel_id is only valid for Conversations channel links",
     );
   }
+  if (input.authority === "todos" && input.target_kind === "task") {
+    if (locator.kind !== "external_uuid") {
+      throw new Error("Todos task links require a complete external_uuid task ID");
+    }
+    const taskLocator = { kind: "external_uuid" as const, value: locator.value };
+    return {
+      ...input,
+      service_instance: serviceInstance,
+      locator: taskLocator,
+      labels,
+    };
+  }
   if (authority === "conversations" && input.target_kind === "channel") {
     if (locator.kind !== "external_uuid" && locator.kind !== "conversations_channel_id") {
       throw new Error(
@@ -172,16 +185,22 @@ export function normalizeProjectResourceLink(input: ProjectResourceLinkInput): P
       throw new Error("conversations channel links require labels.channel_name as mutable compatibility data");
     }
   }
-  if (authority === "contacts" && input.target_kind === "contact" && locator.kind !== "external_uuid") {
-    throw new Error("contacts contact links require an immutable external_uuid");
+  if (authority === "contacts" && input.target_kind === "contact") {
+    if (locator.kind !== "external_uuid") {
+      throw new Error("contacts contact links require an immutable external_uuid");
+    }
+    const contactLocator = { kind: "external_uuid" as const, value: locator.value };
+    return {
+      ...input,
+      service_instance: serviceInstance,
+      locator: contactLocator,
+      labels,
+    };
   }
   return {
-    authority,
+    ...input,
     service_instance: serviceInstance,
-    source_package: expectedPackage,
-    target_kind: input.target_kind,
     locator,
-    scope: input.scope,
     labels,
   };
 }
@@ -195,7 +214,7 @@ export function projectResourceLinkIdentity(input: ProjectResourceLinkInput): Re
     locator: input.locator,
     scope: input.scope,
     labels: input.labels,
-  });
+  } as unknown as ProjectResourceLinkInput);
   return {
     authority: link.authority,
     service_instance: link.service_instance,
@@ -225,19 +244,23 @@ export function normalizeProjectResourceLinks(inputs: readonly ProjectResourceLi
 }
 
 export function rowToProjectResourceLink(row: ProjectResourceLinkRow): ProjectResourceLink {
-  return {
-    id: row.id,
-    project_id: row.project_id,
-    authority: row.authority as ProjectResourceLink["authority"],
+  const input = normalizeProjectResourceLink({
+    authority: row.authority,
     service_instance: row.service_instance,
     source_package: row.source_package,
-    target_kind: row.target_kind as ProjectResourceLink["target_kind"],
+    target_kind: row.target_kind,
     locator: {
-      kind: row.locator_kind as ProjectResourceLink["locator"]["kind"],
+      kind: row.locator_kind,
       value: row.locator_value,
     },
-    scope: row.scope as ProjectResourceLink["scope"],
+    scope: row.scope,
     labels: JSON.parse(row.labels_json) as ProjectResourceLinkLabels,
+  } as unknown as ProjectResourceLinkInput);
+  return {
+    ...input,
+    id: row.id,
+    project_id: row.project_id,
+    labels: input.labels ?? {},
     created_at: row.created_at,
     updated_at: row.updated_at,
   };

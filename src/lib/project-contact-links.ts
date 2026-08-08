@@ -206,15 +206,8 @@ function isProjectContactLink(
 }
 
 function resourceLinkInput(link: ProjectResourceLink): ProjectResourceLinkInput {
-  return {
-    authority: link.authority,
-    service_instance: link.service_instance,
-    source_package: link.source_package,
-    target_kind: link.target_kind,
-    locator: link.locator,
-    scope: link.scope,
-    labels: link.labels,
-  };
+  const { id: _id, project_id: _projectId, created_at: _createdAt, updated_at: _updatedAt, ...input } = link;
+  return input;
 }
 
 function acceptedProjectMutation(result: ProjectResourceLinkMutationResult): ProjectResourceLinkMutationResult {
