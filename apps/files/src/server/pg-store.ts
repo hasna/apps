@@ -35,6 +35,7 @@ import type {
   Tag,
 } from "../types/index.js";
 import type { CreateUploadIntentInput, UpdateFileAssetStatusInput } from "../lib/evidence.js";
+import { FILES_API_MAX_PAGE_SIZE } from "../lib/api-pagination.js";
 import type { RemoteFileLocator } from "./file-content.js";
 
 const APP = "files";
@@ -219,7 +220,7 @@ export async function deleteSource(client: TypedQueryClient, id: string): Promis
  * unservable page is now refused, never truncated: a caller either gets the
  * page it asked for or an error telling it how to page.
  */
-export const MAX_PAGE_SIZE = 500;
+export const MAX_PAGE_SIZE = FILES_API_MAX_PAGE_SIZE;
 
 /** Largest `recent` page; the recency feed is a peek, not a bulk export. */
 export const MAX_RECENT_PAGE_SIZE = 200;
@@ -341,7 +342,7 @@ export async function listFiles(client: TypedQueryClient, opts: ListFilesQuery):
   const offset = pageOffset(opts.offset);
   const from = opts.project_id ? `files f${join}` : "files";
   const selected = opts.project_id ? "f.*" : "*";
-  const sql = `SELECT ${selected} FROM ${from} WHERE ${where.join(" AND ")} ORDER BY ${filePrefix}indexed_at DESC LIMIT ${limit} OFFSET ${offset}`;
+  const sql = `SELECT ${selected} FROM ${from} WHERE ${where.join(" AND ")} ORDER BY ${filePrefix}indexed_at DESC, ${filePrefix}id DESC LIMIT ${limit} OFFSET ${offset}`;
   const rows = await client.many<Record<string, unknown>>(sql, params);
   const out: FileWithTags[] = [];
   for (const r of rows) out.push(toFile(r, await fileTags(client, String(r.id))));

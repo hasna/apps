@@ -16,6 +16,7 @@ import { lookup as mimeLookup } from "mime-types";
 import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
 import { HasnaHttpError } from "@hasna/contracts/client";
 import { sha256File } from "../lib/hasher.js";
+import { FILES_API_MAX_PAGE_SIZE } from "../lib/api-pagination.js";
 import type {
   Agent,
   AgentActivity,
@@ -137,17 +138,45 @@ export class ApiStore implements FilesStore {
     // The cloud /v1/files endpoint filters on this subset; richer local-only
     // filters (tag/collection/date/size/sort) are not part of the API
     // contract and are intentionally omitted rather than silently ignored.
-    return (await this.client.list<FileWithTags>("files", {
-      query: {
-        source_id: opts.source_id,
-        machine_id: opts.machine_id,
-        project_id: opts.project_id,
-        ext: opts.ext,
-        status: opts.status,
-        limit: opts.limit,
-        offset: opts.offset,
-      },
-    })).items;
+    const listPage = async (limit: number | undefined, offset: number | undefined) => (
+      await this.client.list<FileWithTags>("files", {
+        query: {
+          source_id: opts.source_id,
+          machine_id: opts.machine_id,
+          project_id: opts.project_id,
+          ext: opts.ext,
+          status: opts.status,
+          limit,
+          offset,
+        },
+      })
+    ).items;
+
+    const requestedLimit = opts.limit;
+    if (
+      requestedLimit === undefined
+      || !Number.isInteger(requestedLimit)
+      || requestedLimit <= FILES_API_MAX_PAGE_SIZE
+    ) {
+      return listPage(requestedLimit, opts.offset);
+    }
+
+    // `/v1/files` is intentionally bounded per request. Older deployed
+    // servers silently clamped an oversized page to 500; current servers
+    // reject it. In both cases, asking once made a requested 1000-row logical
+    // read either look complete at 500 or fail. Walk bounded pages here and
+    // preserve the public result contract: callers still receive one array
+    // containing at most the count they requested.
+    const files: FileWithTags[] = [];
+    let offset = opts.offset ?? 0;
+    while (files.length < requestedLimit) {
+      const pageLimit = Math.min(FILES_API_MAX_PAGE_SIZE, requestedLimit - files.length);
+      const page = await listPage(pageLimit, offset);
+      files.push(...page.slice(0, requestedLimit - files.length));
+      if (page.length < pageLimit) break;
+      offset += page.length;
+    }
+    return files;
   }
   async getFile(id: string): Promise<FileWithTags | null> {
     return this.client.get<FileWithTags>("files", id);

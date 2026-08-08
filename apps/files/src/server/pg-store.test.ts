@@ -160,6 +160,14 @@ describe("pg-store page cap — a bounded read must never masquerade as a comple
     expect(sql.some((s) => /LIMIT 500 OFFSET 17500/.test(s))).toBe(true);
   });
 
+  test("pages have a total order when more than 500 rows share one indexed_at", async () => {
+    // The synthetic rows intentionally all share indexed_at. Offset pagination
+    // is data-safe only if the query adds a unique tie-breaker after it.
+    const { client, sql } = recordingClient(MAX_PAGE_SIZE + 1);
+    await listFiles(client, { limit: MAX_PAGE_SIZE });
+    expect(sql.some((s) => /ORDER BY indexed_at DESC, id DESC LIMIT 500 OFFSET 0/.test(s))).toBe(true);
+  });
+
   test("the cap is one named constant, not three magic numbers", () => {
     expect(MAX_PAGE_SIZE).toBe(500);
   });
