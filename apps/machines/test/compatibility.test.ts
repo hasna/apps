@@ -15,6 +15,46 @@ function fakeRunner(overrides: Record<string, string>): CompatibilityCommandRunn
 }
 
 describe("machine compatibility checks", () => {
+  test("does not classify remote authentication failure as missing subjects", () => {
+    const report = checkMachineCompatibility({
+      machineId: "station01",
+      runner: (machineId): ReturnType<CompatibilityCommandRunner> => ({
+        machineId,
+        source: "ssh",
+        stdout: "",
+        stderr: "Permission denied (publickey,password).",
+        exitCode: 255,
+      }),
+      commands: [{ command: "bun", required: true }, { command: "machines", required: true }],
+      packages: [{ name: "@hasnaxyz/factory", command: "factory", expectedVersion: "0.6.7", required: true }],
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.checks).toHaveLength(4);
+    expect(report.checks.every((check) => check.actual === "unavailable")).toBe(true);
+    expect(report.checks.every((check) => check.detail.includes("Permission denied"))).toBe(true);
+    expect(report.checks.map((check) => check.actual)).not.toContain("missing");
+  });
+
+  test("still classifies an authenticated missing command and package command as missing", () => {
+    const report = checkMachineCompatibility({
+      machineId: "station01",
+      runner: (machineId): ReturnType<CompatibilityCommandRunner> => ({
+        machineId,
+        source: "ssh",
+        stdout: "path=\n",
+        stderr: "",
+        exitCode: 0,
+      }),
+      commands: [{ command: "bun", required: true }, { command: "machines", required: true }],
+      packages: [{ name: "@hasnaxyz/factory", command: "factory", expectedVersion: "0.6.7", required: true }],
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.checks.filter((check) => check.actual === "missing")).toHaveLength(4);
+    expect(report.checks.every((check) => check.detail !== "Permission denied (publickey,password).")).toBe(true);
+  });
+
   test("checks command, package, and workspace compatibility", () => {
     const report = checkMachineCompatibility({
       machineId: "demo-node-01",

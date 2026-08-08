@@ -79,6 +79,7 @@ interface WorkspaceInspection {
   packageJson: boolean;
   packageName: string | null;
   version: string | null;
+  exitCode: number;
   source: CompatibilitySource;
   stderr: string;
 }
@@ -113,6 +114,17 @@ function firstLine(value: string): string {
 function extractVersion(value: string): string | null {
   const match = value.match(/\b\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?\b/);
   return match?.[0] ?? null;
+}
+
+function executionUnavailable(inspection: CommandInspection | WorkspaceInspection): boolean {
+  return inspection.exitCode !== 0;
+}
+
+function executionDetail(inspection: CommandInspection | WorkspaceInspection): string {
+  const detail = firstLine(inspection.stderr || "");
+  return detail
+    ? `execution unavailable (exit ${inspection.exitCode}): ${detail}`
+    : `execution unavailable (exit ${inspection.exitCode})`;
 }
 
 function statusFor(required: boolean | undefined, ok: boolean): CompatibilityStatus {
@@ -211,6 +223,7 @@ function inspectWorkspace(
     packageJson: parsed.package_json === "yes",
     packageName: parsed.package_name || null,
     version: parsed.version || null,
+    exitCode: result.exitCode,
     source: result.source,
     stderr: result.stderr,
   };
@@ -218,16 +231,17 @@ function inspectWorkspace(
 
 function commandCheck(machineId: string, spec: CompatibilityCommandSpec, runner: CompatibilityCommandRunner): CompatibilityCheck[] {
   const inspection = inspectCommand(machineId, spec, runner);
+  const unavailable = executionUnavailable(inspection);
   const found = Boolean(inspection.path);
   const checks = [
     makeCheck({
       id: `command:${commandId(spec.command)}:path`,
       kind: "command",
-      status: statusFor(spec.required, found),
+      status: statusFor(spec.required, !unavailable && found),
       target: spec.command,
       expected: "available",
-      actual: inspection.path ?? "missing",
-      detail: found ? `found at ${inspection.path}` : inspection.stderr || "command missing",
+      actual: unavailable ? "unavailable" : inspection.path ?? "missing",
+      detail: unavailable ? executionDetail(inspection) : found ? `found at ${inspection.path}` : inspection.stderr || "command missing",
       source: inspection.source,
     }),
   ];
@@ -236,11 +250,11 @@ function commandCheck(machineId: string, spec: CompatibilityCommandSpec, runner:
     checks.push(makeCheck({
       id: `command:${commandId(spec.command)}:version`,
       kind: "command",
-      status: actualVersion === spec.expectedVersion ? "ok" : statusFor(spec.required, false),
+      status: unavailable ? statusFor(spec.required, false) : actualVersion === spec.expectedVersion ? "ok" : statusFor(spec.required, false),
       target: spec.command,
       expected: spec.expectedVersion,
-      actual: actualVersion ?? inspection.version ?? "missing",
-      detail: actualVersion ? `version output: ${inspection.version}` : "version unavailable",
+      actual: unavailable ? "unavailable" : actualVersion ?? inspection.version ?? "missing",
+      detail: unavailable ? executionDetail(inspection) : actualVersion ? `version output: ${inspection.version}` : "version unavailable",
       source: inspection.source,
     }));
   }
@@ -250,16 +264,17 @@ function commandCheck(machineId: string, spec: CompatibilityCommandSpec, runner:
 function packageCheck(machineId: string, spec: CompatibilityPackageSpec, runner: CompatibilityCommandRunner): CompatibilityCheck[] {
   const command = spec.command ?? packageCommand(spec.name);
   const inspection = inspectCommand(machineId, { command, expectedVersion: spec.expectedVersion, required: spec.required }, runner);
+  const unavailable = executionUnavailable(inspection);
   const found = Boolean(inspection.path);
   const checks = [
     makeCheck({
       id: `package:${commandId(spec.name)}:command`,
       kind: "package",
-      status: statusFor(spec.required, found),
+      status: statusFor(spec.required, !unavailable && found),
       target: spec.name,
       expected: command,
-      actual: inspection.path ?? "missing",
-      detail: found ? `${command} found at ${inspection.path}` : `${command} command missing`,
+      actual: unavailable ? "unavailable" : inspection.path ?? "missing",
+      detail: unavailable ? executionDetail(inspection) : found ? `${command} found at ${inspection.path}` : `${command} command missing`,
       source: inspection.source,
     }),
   ];
@@ -268,11 +283,11 @@ function packageCheck(machineId: string, spec: CompatibilityPackageSpec, runner:
     checks.push(makeCheck({
       id: `package:${commandId(spec.name)}:version`,
       kind: "package",
-      status: actualVersion === spec.expectedVersion ? "ok" : statusFor(spec.required, false),
+      status: unavailable ? statusFor(spec.required, false) : actualVersion === spec.expectedVersion ? "ok" : statusFor(spec.required, false),
       target: spec.name,
       expected: spec.expectedVersion,
-      actual: actualVersion ?? inspection.version ?? "missing",
-      detail: actualVersion ? `version output: ${inspection.version}` : "version unavailable",
+      actual: unavailable ? "unavailable" : actualVersion ?? inspection.version ?? "missing",
+      detail: unavailable ? executionDetail(inspection) : actualVersion ? `version output: ${inspection.version}` : "version unavailable",
       source: inspection.source,
     }));
   }
@@ -281,16 +296,17 @@ function packageCheck(machineId: string, spec: CompatibilityPackageSpec, runner:
 
 function workspaceCheck(machineId: string, spec: CompatibilityWorkspaceSpec, runner: CompatibilityCommandRunner): CompatibilityCheck[] {
   const inspection = inspectWorkspace(machineId, spec, runner);
+  const unavailable = executionUnavailable(inspection);
   const target = spec.label ?? spec.path;
   const checks = [
     makeCheck({
       id: `workspace:${commandId(target)}:path`,
       kind: "workspace",
-      status: statusFor(spec.required, inspection.exists),
+      status: statusFor(spec.required, !unavailable && inspection.exists),
       target,
       expected: spec.path,
-      actual: inspection.exists ? "exists" : "missing",
-      detail: inspection.exists ? `workspace exists at ${spec.path}` : inspection.stderr || `workspace missing at ${spec.path}`,
+      actual: unavailable ? "unavailable" : inspection.exists ? "exists" : "missing",
+      detail: unavailable ? executionDetail(inspection) : inspection.exists ? `workspace exists at ${spec.path}` : inspection.stderr || `workspace missing at ${spec.path}`,
       source: inspection.source,
     }),
   ];
@@ -298,11 +314,11 @@ function workspaceCheck(machineId: string, spec: CompatibilityWorkspaceSpec, run
     checks.push(makeCheck({
       id: `workspace:${commandId(target)}:package-name`,
       kind: "workspace",
-      status: inspection.packageName === spec.expectedPackageName ? "ok" : statusFor(spec.required, false),
+      status: unavailable ? statusFor(spec.required, false) : inspection.packageName === spec.expectedPackageName ? "ok" : statusFor(spec.required, false),
       target,
       expected: spec.expectedPackageName,
-      actual: inspection.packageName ?? (inspection.packageJson ? "missing-name" : "missing-package-json"),
-      detail: inspection.packageJson ? "package.json inspected" : "package.json missing",
+      actual: unavailable ? "unavailable" : inspection.packageName ?? (inspection.packageJson ? "missing-name" : "missing-package-json"),
+      detail: unavailable ? executionDetail(inspection) : inspection.packageJson ? "package.json inspected" : "package.json missing",
       source: inspection.source,
     }));
   }
@@ -310,11 +326,11 @@ function workspaceCheck(machineId: string, spec: CompatibilityWorkspaceSpec, run
     checks.push(makeCheck({
       id: `workspace:${commandId(target)}:version`,
       kind: "workspace",
-      status: inspection.version === spec.expectedVersion ? "ok" : statusFor(spec.required, false),
+      status: unavailable ? statusFor(spec.required, false) : inspection.version === spec.expectedVersion ? "ok" : statusFor(spec.required, false),
       target,
       expected: spec.expectedVersion,
-      actual: inspection.version ?? (inspection.packageJson ? "missing-version" : "missing-package-json"),
-      detail: inspection.packageJson ? "package.json inspected" : "package.json missing",
+      actual: unavailable ? "unavailable" : inspection.version ?? (inspection.packageJson ? "missing-version" : "missing-package-json"),
+      detail: unavailable ? executionDetail(inspection) : inspection.packageJson ? "package.json inspected" : "package.json missing",
       source: inspection.source,
     }));
   }
