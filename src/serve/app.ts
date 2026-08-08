@@ -14,9 +14,18 @@ import {
 } from "./pg-store.js";
 import { buildOpenApiSpec } from "./openapi.js";
 import { responseControl } from "../lib/guarded-project-mutation.js";
+import {
+  attachProjectContact,
+  detachProjectContact,
+  listProjectContacts,
+  type ContactProjectMembershipAuthority,
+  ProjectContactLinkOperationError,
+} from "../lib/project-contact-links.js";
+import { ContactsAuthorityHttpError } from "../lib/contacts-authority-adapter.js";
 
 export interface ServeAppOptions {
   store: ProjectsPgStore;
+  contacts?: ContactProjectMembershipAuthority;
   version: string;
   app?: string;
   signingSecret: string | Buffer;
@@ -58,6 +67,18 @@ function errorResponse(message: string, status: number, reason?: string): Respon
 function statusForError(err: unknown): number {
   if (err instanceof NotFoundError) return 404;
   if (err instanceof ValidationError) return 400;
+  if (err instanceof ContactsAuthorityHttpError) return err.status;
+  if (err instanceof ProjectContactLinkOperationError) {
+    const causeStatus = statusForError(err.cause);
+    if (causeStatus !== 500) return causeStatus;
+    if (
+      err.cause instanceof Error
+      && /(not accepted|revision|precondition|conflict|expected[_ ]version)/i.test(err.cause.message)
+    ) {
+      return 409;
+    }
+    return 502;
+  }
   return 500;
 }
 
@@ -80,7 +101,7 @@ async function readJsonBody(req: Request): Promise<Record<string, unknown>> {
 
 /** Build the fetch handler used by Bun.serve (and directly testable). */
 export function createFetchHandler(options: ServeAppOptions): (req: Request) => Promise<Response> {
-  const { store, version } = options;
+  const { store, version, contacts } = options;
   const appName = options.app ?? "projects";
   const mode = options.mode ?? "cloud";
   const verifier: ApiKeyVerifier = verifyApiKey({
@@ -131,7 +152,7 @@ export function createFetchHandler(options: ServeAppOptions): (req: Request) => 
     }
 
     try {
-      return await route(req, url, path, method, store);
+      return await route(req, url, path, method, store, contacts);
     } catch (err) {
       const status = statusForError(err);
       const message = err instanceof Error ? err.message : "internal error";
@@ -147,9 +168,10 @@ async function route(
   path: string,
   method: string,
   store: ProjectsPgStore,
+  contacts?: ContactProjectMembershipAuthority,
 ): Promise<Response> {
   const segments = path.split("/").filter(Boolean); // e.g. ["v1","projects","abc","events"]
-  const [, resource, id, sub, extra] = segments;
+  const [, resource, id, sub, extra, action] = segments;
 
   // ---------------- projects ----------------
   if (resource === "projects") {
@@ -291,6 +313,43 @@ async function route(
       };
       const result = await store.rollbackProjectResourceLinks({ ...body, project_id: id } as never);
       return guardedJsonResponse(result, bounds, started);
+    }
+    if (sub === "contacts") {
+      if (!contacts) return errorResponse("Contacts authority is not configured", 503);
+      if (extra === undefined && method === "GET") {
+        const started = Date.now();
+        const bounds = {
+          max_items: Number(url.searchParams.get("max_items")),
+          response_byte_limit: Number(url.searchParams.get("response_byte_limit")),
+          time_budget_ms: Number(url.searchParams.get("time_budget_ms")),
+        };
+        const result = await listProjectContacts({ projects: store, contacts }, {
+          project_id: id,
+          ...bounds,
+        });
+        return boundedJsonResponse(result, bounds, started);
+      }
+      if (extra && (action === "attach" || action === "detach") && method === "POST") {
+        const started = Date.now();
+        const body = await readJsonBody(req);
+        const bounds = {
+          max_items: Number(body.max_items),
+          response_byte_limit: Number(body.response_byte_limit),
+          time_budget_ms: Number(body.time_budget_ms),
+        };
+        const mutation = action === "attach" ? attachProjectContact : detachProjectContact;
+        const result = await mutation({ projects: store, contacts }, {
+          project_id: id,
+          contact_id: extra,
+          operation_id: String(body.operation_id ?? ""),
+          ...(body.labels && typeof body.labels === "object" ? { labels: body.labels as never } : {}),
+          ...bounds,
+          source: "system",
+          command: `${method} ${path}`,
+        });
+        return boundedJsonResponse(result, bounds, started);
+      }
+      return errorResponse("Method not allowed", 405);
     }
 
     if (sub === "archive" && method === "POST") return jsonResponse(await store.archiveWorkspace(id));

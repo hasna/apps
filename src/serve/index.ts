@@ -14,6 +14,10 @@ import { createPgPool, createQueryClient } from "../generated/storage-kit/index.
 import { ProjectsPgStore } from "./pg-store.js";
 import { createFetchHandler } from "./app.js";
 import { runProjectsMigrations } from "./migrations.js";
+import {
+  createContactsProjectMembershipAuthorityFromEnv,
+  type ContactsHttpProjectMembershipAuthority,
+} from "../lib/contacts-authority-adapter.js";
 
 const APP = "projects";
 
@@ -63,6 +67,15 @@ export function resolvePort(argv: string[], env: NodeJS.ProcessEnv = process.env
   return 8080;
 }
 
+export function resolveContactsAuthority(
+  env: NodeJS.ProcessEnv = process.env,
+): ContactsHttpProjectMembershipAuthority | undefined {
+  const hasUrl = Boolean(env.HASNA_CONTACTS_API_URL?.trim() || env.CONTACTS_API_URL?.trim());
+  const hasKey = Boolean(env.HASNA_CONTACTS_API_KEY?.trim() || env.CONTACTS_API_KEY?.trim());
+  if (!hasUrl && !hasKey) return undefined;
+  return createContactsProjectMembershipAuthorityFromEnv(env);
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const version = getPackageVersion();
@@ -87,11 +100,13 @@ async function main(): Promise<void> {
   const signingSecret = resolveSigningSecret();
   const keyStore = new ApiKeyStore(client);
   const store = new ProjectsPgStore(client);
+  const contacts = resolveContactsAuthority();
   const port = resolvePort(argv);
   const hostname = process.env.HOST || "0.0.0.0";
 
   const handler = createFetchHandler({
     store,
+    contacts,
     version,
     app: APP,
     signingSecret,

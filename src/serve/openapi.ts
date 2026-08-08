@@ -460,6 +460,82 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
             "before", "after", "receipt", "response_control",
           ],
         },
+        ContactProjectMembershipSnapshot: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            contact_id: { type: "string" },
+            project_id: { type: "string" },
+            linked: { type: "boolean" },
+            version: { type: "string" },
+          },
+          required: ["contact_id", "project_id", "linked", "version"],
+        },
+        ProjectContactLinkEvidence: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            system: { type: "string", enum: ["contacts", "projects"] },
+            step_id: { type: "string" },
+            outcome: { type: "string" },
+            receipt_id: { type: ["string", "null"] },
+            compensated: { type: "boolean" },
+          },
+          required: ["system", "step_id", "outcome", "receipt_id", "compensated"],
+        },
+        ProjectContactLinkMutationRequest: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            operation_id: { type: "string" },
+            labels: ref("ProjectResourceLinkLabels"),
+            max_items: { type: "integer", minimum: 1 },
+            response_byte_limit: { type: "integer", minimum: 1 },
+            time_budget_ms: { type: "integer", minimum: 1 },
+          },
+          required: ["operation_id", "max_items", "response_byte_limit", "time_budget_ms"],
+        },
+        ProjectContactLinkMutationResult: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ok: { type: "boolean", const: true },
+            outcome: { type: "string", enum: ["accepted", "duplicate_of_accepted"] },
+            authority: { type: "string", const: "contacts" },
+            project_id: { type: "string" },
+            contact_id: { type: "string" },
+            membership: ref("ContactProjectMembershipSnapshot"),
+            project_link: { anyOf: [ref("ProjectResourceLink"), { type: "null" }] },
+            evidence: { type: "array", items: ref("ProjectContactLinkEvidence") },
+            response_control: ref("GuardedResponseControl"),
+          },
+          required: [
+            "ok", "outcome", "authority", "project_id", "contact_id",
+            "membership", "project_link", "evidence", "response_control",
+          ],
+        },
+        ProjectContactLinkListResult: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ok: { type: "boolean", const: true },
+            authority: { type: "string", const: "contacts" },
+            project_id: { type: "string" },
+            membership_revision: { type: "string" },
+            project_revision: { type: "string" },
+            contact_ids: { type: "array", items: { type: "string" } },
+            synchronized_contact_ids: { type: "array", items: { type: "string" } },
+            missing_project_link_contact_ids: { type: "array", items: { type: "string" } },
+            stale_project_link_contact_ids: { type: "array", items: { type: "string" } },
+            project_links: { type: "array", items: ref("ProjectResourceLink") },
+            response_control: ref("GuardedResponseControl"),
+          },
+          required: [
+            "ok", "authority", "project_id", "membership_revision", "project_revision",
+            "contact_ids", "synchronized_contact_ids", "missing_project_link_contact_ids",
+            "stale_project_link_contact_ids", "project_links", "response_control",
+          ],
+        },
         ProjectResourceLinkRollbackRequest: {
           type: "object",
           properties: {
@@ -849,6 +925,60 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
             "200": jsonResp("ProjectResourceLinkMutationResult"),
             "400": jsonResp("Error", "Invalid receipt, revision, digest, or bound"),
             "404": jsonResp("Error", "Not found"),
+          },
+        },
+      },
+      "/v1/projects/{id}/contacts": {
+        get: {
+          operationId: "listProjectContacts",
+          summary: "List Contacts-authoritative project memberships and compare synchronized Project resource links",
+          parameters: [
+            EXACT_PROJECT_ID_PARAM,
+            { name: "max_items", in: "query", required: true, schema: { type: "integer", minimum: 1 } },
+            { name: "response_byte_limit", in: "query", required: true, schema: { type: "integer", minimum: 1 } },
+            { name: "time_budget_ms", in: "query", required: true, schema: { type: "integer", minimum: 1 } },
+          ],
+          responses: {
+            "200": jsonResp("ProjectContactLinkListResult"),
+            "400": jsonResp("Error", "Invalid target or collection bound"),
+            "404": jsonResp("Error", "Not found"),
+            "503": jsonResp("Error", "Contacts authority is not configured"),
+          },
+        },
+      },
+      "/v1/projects/{id}/contacts/{contact_id}/attach": {
+        post: {
+          operationId: "attachProjectContact",
+          summary: "Attach a Contact through Contacts-authoritative compensation-safe coordination",
+          parameters: [
+            EXACT_PROJECT_ID_PARAM,
+            { name: "contact_id", in: "path", required: true, schema: { type: "string", pattern: COMPLETE_EXTERNAL_UUID_PATTERN } },
+          ],
+          requestBody: jsonBody("ProjectContactLinkMutationRequest"),
+          responses: {
+            "200": jsonResp("ProjectContactLinkMutationResult"),
+            "400": jsonResp("Error", "Invalid target, operation, or bound"),
+            "404": jsonResp("Error", "Not found"),
+            "409": jsonResp("Error", "Contacts or Projects compare-and-swap conflict"),
+            "503": jsonResp("Error", "Contacts authority is not configured"),
+          },
+        },
+      },
+      "/v1/projects/{id}/contacts/{contact_id}/detach": {
+        post: {
+          operationId: "detachProjectContact",
+          summary: "Detach a Contact through Contacts-authoritative compensation-safe coordination",
+          parameters: [
+            EXACT_PROJECT_ID_PARAM,
+            { name: "contact_id", in: "path", required: true, schema: { type: "string", pattern: COMPLETE_EXTERNAL_UUID_PATTERN } },
+          ],
+          requestBody: jsonBody("ProjectContactLinkMutationRequest"),
+          responses: {
+            "200": jsonResp("ProjectContactLinkMutationResult"),
+            "400": jsonResp("Error", "Invalid target, operation, or bound"),
+            "404": jsonResp("Error", "Not found"),
+            "409": jsonResp("Error", "Contacts or Projects compare-and-swap conflict"),
+            "503": jsonResp("Error", "Contacts authority is not configured"),
           },
         },
       },

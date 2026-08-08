@@ -53,6 +53,16 @@ export interface ProjectResourceLinkMutationRequest { "operation_id": string; "s
 
 export interface ProjectResourceLinkMutationResult { "ok": boolean; "dry_run": boolean; "outcome": "accepted" | "duplicate_of_accepted" | "terminal_nonacceptance" | "planned"; "mode": "add" | "reconcile"; "idempotency_key": string; "request_digest": string; "precondition_digest": string; "project_id": string; "expected_revision": string; "current_revision": string; "before": ProjectResourceLinkSnapshot; "after": ProjectResourceLinkSnapshot | null; "receipt": GuardedProjectMutationReceipt | null; "response_control": GuardedResponseControl }
 
+export interface ContactProjectMembershipSnapshot { "contact_id": string; "project_id": string; "linked": boolean; "version": string }
+
+export interface ProjectContactLinkEvidence { "system": "contacts" | "projects"; "step_id": string; "outcome": string; "receipt_id": string; "compensated": boolean }
+
+export interface ProjectContactLinkMutationRequest { "operation_id": string; "labels"?: ProjectResourceLinkLabels; "max_items": number; "response_byte_limit": number; "time_budget_ms": number }
+
+export interface ProjectContactLinkMutationResult { "ok": boolean; "outcome": "accepted" | "duplicate_of_accepted"; "authority": string; "project_id": string; "contact_id": string; "membership": ContactProjectMembershipSnapshot; "project_link": ProjectResourceLink | null; "evidence": Array<ProjectContactLinkEvidence>; "response_control": GuardedResponseControl }
+
+export interface ProjectContactLinkListResult { "ok": boolean; "authority": string; "project_id": string; "membership_revision": string; "project_revision": string; "contact_ids": Array<string>; "synchronized_contact_ids": Array<string>; "missing_project_link_contact_ids": Array<string>; "stale_project_link_contact_ids": Array<string>; "project_links": Array<ProjectResourceLink>; "response_control": GuardedResponseControl }
+
 export interface ProjectResourceLinkRollbackRequest { "operation_id": string; "step_id": string; "accepted_receipt_id": string; "expected_current_revision": string; "max_items"?: number; "agent_id"?: string; "source"?: string; "command"?: string; "response_byte_limit": number; "time_budget_ms": number }
 
 export interface GuardedProjectMutationReceipt { "receipt_id": string; "operation_id": string; "step_id": string; "direction": "forward" | "inverse"; "idempotency_key": string; "target_id": string; "request_digest": string; "precondition_digest": string; "expected_revision": string; "outcome": "accepted" | "duplicate_of_accepted" | "terminal_nonacceptance"; "reason": string | null; "result_project_id": string | null; "duplicate_of_receipt_id": string | null; "before": Record<string, unknown> | null; "after": Record<string, unknown> | null; "post_revision": string | null; "created_at": string }
@@ -234,6 +244,33 @@ export class ProjectsClient {
     async archiveProject(id: string, init?: RequestInit): Promise<Workspace> {
       return this.request("POST", `/v1/projects/${encodeURIComponent(String(id))}/archive`, {
         body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** List Contacts-authoritative project memberships and compare synchronized Project resource links */
+    async listProjectContacts(id: string, query?: { "max_items": number; "response_byte_limit": number; "time_budget_ms": number }, init?: RequestInit): Promise<ProjectContactLinkListResult> {
+      return this.request("GET", `/v1/projects/${encodeURIComponent(String(id))}/contacts`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Attach a Contact through Contacts-authoritative compensation-safe coordination */
+    async attachProjectContact(id: string, contactId: string, body: ProjectContactLinkMutationRequest, init?: RequestInit): Promise<ProjectContactLinkMutationResult> {
+      return this.request("POST", `/v1/projects/${encodeURIComponent(String(id))}/contacts/${encodeURIComponent(String(contactId))}/attach`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Detach a Contact through Contacts-authoritative compensation-safe coordination */
+    async detachProjectContact(id: string, contactId: string, body: ProjectContactLinkMutationRequest, init?: RequestInit): Promise<ProjectContactLinkMutationResult> {
+      return this.request("POST", `/v1/projects/${encodeURIComponent(String(id))}/contacts/${encodeURIComponent(String(contactId))}/detach`, {
+        body,
         query: undefined,
         init,
       });

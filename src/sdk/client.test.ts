@@ -3,6 +3,7 @@ import {
   ProjectsClient,
   type GuardedProjectMutationResult,
   type LegacyVersionResponse,
+  type ProjectContactLinkMutationRequest,
   type ProjectResourceLinkInput,
   type UpdateWorkspace,
   type Workspace,
@@ -195,5 +196,62 @@ describe("generated Projects SDK server parity", () => {
       accepted_receipt_id: "gpmr_sdk_resource_links",
     }));
     expect(calls.every((call) => call.apiKey === "sdk-test-key")).toBe(true);
+  });
+
+  test("routes contact list, attach, and detach through the generated Projects client", async () => {
+    const calls: Array<{ method: string; path: string; query: string; body: unknown }> = [];
+    const client = new ProjectsClient({
+      baseUrl: "https://projects.example.test",
+      apiKey: "sdk-test-key",
+      fetch: (async (input: string | URL | Request, init?: RequestInit) => {
+        const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+        calls.push({
+          method: init?.method ?? "GET",
+          path: url.pathname,
+          query: url.search,
+          body: init?.body ? JSON.parse(String(init.body)) : undefined,
+        });
+        return Response.json({});
+      }) as typeof fetch,
+    });
+    const projectId = "wks_eHb1kcLUzgQVJQt6L0CCB";
+    const contactId = "6b68e131-abe5-43b7-92cd-9930b04611df";
+    const bounds = {
+      max_items: 1000,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    };
+    const mutation: ProjectContactLinkMutationRequest = {
+      operation_id: "sdk-project-contact",
+      ...bounds,
+    };
+
+    await client.listProjectContacts(projectId, bounds);
+    await client.attachProjectContact(projectId, contactId, mutation);
+    await client.detachProjectContact(projectId, contactId, {
+      ...mutation,
+      operation_id: "sdk-project-contact-detach",
+    });
+
+    expect(calls).toEqual([
+      {
+        method: "GET",
+        path: `/v1/projects/${projectId}/contacts`,
+        query: "?max_items=1000&response_byte_limit=100000&time_budget_ms=5000",
+        body: undefined,
+      },
+      {
+        method: "POST",
+        path: `/v1/projects/${projectId}/contacts/${contactId}/attach`,
+        query: "",
+        body: mutation,
+      },
+      {
+        method: "POST",
+        path: `/v1/projects/${projectId}/contacts/${contactId}/detach`,
+        query: "",
+        body: { ...mutation, operation_id: "sdk-project-contact-detach" },
+      },
+    ]);
   });
 });

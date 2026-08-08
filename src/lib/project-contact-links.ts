@@ -362,9 +362,9 @@ export async function attachProjectContact(
     }
   }
 
-  let projectMutation: ProjectResourceLinkMutationResult;
+  let rawProjectMutation: ProjectResourceLinkMutationResult;
   try {
-    projectMutation = acceptedProjectMutation(await dependencies.projects.mutateProjectResourceLinks({
+    rawProjectMutation = await dependencies.projects.mutateProjectResourceLinks({
       project_id: input.project_id,
       operation_id: input.operation_id,
       step_id: PROJECT_CONTACT_LINK_STEPS.projectsResourceLink,
@@ -377,7 +377,19 @@ export async function attachProjectContact(
       agent_id: input.agent_id,
       source: input.source,
       command: input.command,
-    }));
+    });
+  } catch (cause) {
+    throw new ProjectContactLinkOperationError({
+      code: "PROJECT_CONTACT_LINK_PARTIAL_FAILURE",
+      stage: PROJECT_CONTACT_LINK_STEPS.projectsResourceLink,
+      compensated: false,
+      cause,
+    });
+  }
+
+  let projectMutation: ProjectResourceLinkMutationResult;
+  try {
+    projectMutation = acceptedProjectMutation(rawProjectMutation);
   } catch (cause) {
     if (!membershipMutation || membershipBefore.linked) {
       throw new ProjectContactLinkOperationError({
@@ -500,8 +512,9 @@ export async function detachProjectContact(
     const desired = projectRead.links
       .filter((link) => link.id !== existingLink.id)
       .map(resourceLinkInput);
+    let rawProjectMutation: ProjectResourceLinkMutationResult;
     try {
-      projectMutation = acceptedProjectMutation(await dependencies.projects.mutateProjectResourceLinks({
+      rawProjectMutation = await dependencies.projects.mutateProjectResourceLinks({
         project_id: input.project_id,
         operation_id: input.operation_id,
         step_id: PROJECT_CONTACT_LINK_STEPS.projectsResourceLink,
@@ -514,7 +527,18 @@ export async function detachProjectContact(
         agent_id: input.agent_id,
         source: input.source,
         command: input.command,
-      }));
+      });
+    } catch (cause) {
+      throw new ProjectContactLinkOperationError({
+        code: "PROJECT_CONTACT_LINK_PARTIAL_FAILURE",
+        stage: PROJECT_CONTACT_LINK_STEPS.projectsResourceLink,
+        compensated: false,
+        cause,
+      });
+    }
+
+    try {
+      projectMutation = acceptedProjectMutation(rawProjectMutation);
     } catch (cause) {
       if (!membershipMutation || !membershipBefore.linked) {
         throw new ProjectContactLinkOperationError({

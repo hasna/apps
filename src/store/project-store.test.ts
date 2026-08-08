@@ -538,6 +538,61 @@ describe("projects store api transport (roots/agents/recipes)", () => {
       accepted_receipt_id: "gpmr_resource_api",
     }));
   });
+
+  test("resource-link POST retries an ambiguous transport outcome with one stable idempotency key", async () => {
+    const projectId = "wks_resourceapiretry01";
+    const requests: Array<{ path: string; idempotencyKey: string | null }> = [];
+    let attempt = 0;
+    const fetchImpl = async (input: string, init?: RequestInit): Promise<Response> => {
+      const url = new URL(input);
+      const headers = new Headers(init?.headers);
+      requests.push({
+        path: url.pathname,
+        idempotencyKey: headers.get("idempotency-key"),
+      });
+      attempt += 1;
+      if (attempt === 1) {
+        throw new Error("connection closed after server commit");
+      }
+      return Response.json({
+        ok: true,
+        outcome: "duplicate_of_accepted",
+      });
+    };
+    __resetProjectStore();
+    const store = resolveProjectStore(CLOUD_ENV, fetchImpl);
+
+    const result = await store.mutateProjectResourceLinks({
+      project_id: projectId,
+      operation_id: "resource-api-retry",
+      step_id: "projects-resource-link",
+      mode: "add",
+      expected_revision: "revision-1",
+      links: [{
+        authority: "contacts",
+        service_instance: "urn:hasna:contacts:service:primary",
+        source_package: "@hasna/contacts",
+        target_kind: "contact",
+        locator: {
+          kind: "external_uuid",
+          value: "6b68e131-abe5-43b7-92cd-9930b04611df",
+        },
+        scope: "resource",
+      }],
+      max_items: 10,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    });
+
+    expect(result.outcome).toBe("duplicate_of_accepted");
+    expect(requests).toHaveLength(2);
+    expect(requests.map((request) => request.path)).toEqual([
+      `/v1/projects/${projectId}/resource-links/add`,
+      `/v1/projects/${projectId}/resource-links/add`,
+    ]);
+    expect(requests[0]!.idempotencyKey).toMatch(/^gpm_[0-9a-f]{48}$/);
+    expect(requests[1]!.idempotencyKey).toBe(requests[0]!.idempotencyKey);
+  });
 });
 
 // Regression for dc3ba294: the projects API hard-caps every list response at
