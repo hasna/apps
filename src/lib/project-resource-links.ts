@@ -24,6 +24,7 @@ const SOURCE_PACKAGE_BY_AUTHORITY: Record<ProjectResourceAuthority, string> = {
   knowledge: "@hasna/knowledge",
   mementos: "@hasna/mementos",
   orgs: "@hasna/orgs",
+  contacts: "@hasna/contacts",
 };
 
 const TARGET_KINDS_BY_AUTHORITY: Record<ProjectResourceAuthority, readonly ProjectResourceTargetKind[]> = {
@@ -32,6 +33,7 @@ const TARGET_KINDS_BY_AUTHORITY: Record<ProjectResourceAuthority, readonly Proje
   knowledge: ["collection", "item"],
   mementos: ["project", "item"],
   orgs: ["org", "project"],
+  contacts: ["contact"],
 };
 
 const LINK_FIELDS = new Set([
@@ -169,6 +171,9 @@ export function normalizeProjectResourceLink(input: ProjectResourceLinkInput): P
     if (!labels.channel_name) {
       throw new Error("conversations channel links require labels.channel_name as mutable compatibility data");
     }
+  }
+  if (authority === "contacts" && input.target_kind === "contact" && locator.kind !== "external_uuid") {
+    throw new Error("contacts contact links require an immutable external_uuid");
   }
   return {
     authority,

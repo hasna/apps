@@ -84,16 +84,16 @@ describe("generated Projects SDK server parity", () => {
     });
     const projectId = "wks_sdkparity0001";
     const link: ProjectResourceLinkInput = {
-      authority: "conversations",
-      service_instance: "urn:hasna:conversations:test",
-      source_package: "@hasna/conversations",
-      target_kind: "channel",
+      authority: "contacts",
+      service_instance: "urn:hasna:contacts:test",
+      source_package: "@hasna/contacts",
+      target_kind: "contact",
       locator: {
-        kind: "conversations_channel_id",
-        value: "chn_79fa9c68937a1d020d6031dcaa3dd8d7",
+        kind: "external_uuid",
+        value: "6b68e131-abe5-43b7-92cd-9930b04611df",
       },
       scope: "resource",
-      labels: { channel_name: "sdk-parity" },
+      labels: { name: "Bianca" },
     };
     const mutation = {
       operation_id: "sdk-resource-links",

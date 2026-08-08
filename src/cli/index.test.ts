@@ -788,6 +788,18 @@ describe("project-first CLI surface", () => {
       scope: "collection",
       labels: { name: "Typed Links Tasks", tags: ["project"] },
     };
+    const contactLink = {
+      authority: "contacts",
+      service_instance: "urn:hasna:contacts:test",
+      source_package: "@hasna/contacts",
+      target_kind: "contact",
+      locator: {
+        kind: "external_uuid",
+        value: "6b68e131-abe5-43b7-92cd-9930b04611df",
+      },
+      scope: "resource",
+      labels: { name: "Bianca" },
+    };
 
     try {
       const create = runProjects([
@@ -807,7 +819,7 @@ describe("project-first CLI surface", () => {
         "resource-links-add",
         created.project.id,
         "--links-json",
-        JSON.stringify([channelLink, todosCollectionLink]),
+        JSON.stringify([channelLink, todosCollectionLink, contactLink]),
         "--expected-revision",
         created.project.updated_at,
         "--operation-id",
@@ -831,7 +843,7 @@ describe("project-first CLI surface", () => {
         receipt: { receipt_id: string };
       };
       expect(added.outcome).toBe("accepted");
-      expect(added.after.links).toHaveLength(2);
+      expect(added.after.links).toHaveLength(3);
       expect(added.after.links.some((link) => link.scope === "collection")).toBe(true);
       expect(added.after.project.integrations).toEqual({
         conversations_channel: "typed-links",
@@ -858,7 +870,7 @@ describe("project-first CLI surface", () => {
         link_count: number;
         complete: boolean;
         truncated: boolean;
-      }).toMatchObject({ link_count: 2, complete: true, truncated: false });
+      }).toMatchObject({ link_count: 3, complete: true, truncated: false });
 
       const reconciledChannel = {
         ...channelLink,
@@ -924,7 +936,7 @@ describe("project-first CLI surface", () => {
         };
       };
       expect(rolledBack.outcome).toBe("accepted");
-      expect(rolledBack.after.links).toHaveLength(2);
+      expect(rolledBack.after.links).toHaveLength(3);
       expect(rolledBack.after.project.integrations).toEqual({
         conversations_channel: "typed-links",
         todos_task_list_id: "urn:hasna:todos:task-list:typed-links",
@@ -945,7 +957,7 @@ describe("project-first CLI surface", () => {
       expect(JSON.parse(text(guarded.stdout)) as {
         resource_link_count: number;
         resource_links: unknown[];
-      }).toMatchObject({ resource_link_count: 2 });
+      }).toMatchObject({ resource_link_count: 3 });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

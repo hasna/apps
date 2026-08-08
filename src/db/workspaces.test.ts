@@ -318,6 +318,94 @@ describe("workspace schema", () => {
     )).toThrow(/immutable/);
     db.close();
   });
+
+  test("widens resource-link authorities for Contacts without losing existing links", () => {
+    const db = new Database(":memory:");
+    db.run("PRAGMA foreign_keys=ON");
+    db.run(`
+      CREATE TABLE _migrations (
+        id INTEGER PRIMARY KEY,
+        applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+    for (const migration of MIGRATIONS.slice(0, 12)) db.run(migration);
+    db.run(
+      "INSERT INTO workspaces (id, slug, name) VALUES (?, ?, ?)",
+      ["wks_contacts_upgrade", "contacts-upgrade", "Contacts Upgrade"],
+    );
+    db.run(`
+      INSERT INTO project_resource_links (
+        id, project_id, authority, service_instance, source_package, target_kind,
+        locator_kind, locator_value, scope, labels_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      "prl_existing_orgs",
+      "wks_contacts_upgrade",
+      "orgs",
+      "urn:hasna:orgs:test",
+      "@hasna/orgs",
+      "org",
+      "canonical_uri",
+      "urn:hasna:orgs:org:hasna-family",
+      "collection",
+      JSON.stringify({ name: "Hasna Family" }),
+    ]);
+    expect(() => db.run(`
+      INSERT INTO project_resource_links (
+        id, project_id, authority, service_instance, source_package, target_kind,
+        locator_kind, locator_value, scope, labels_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      "prl_contacts_before_upgrade",
+      "wks_contacts_upgrade",
+      "contacts",
+      "urn:hasna:contacts:test",
+      "@hasna/contacts",
+      "contact",
+      "external_uuid",
+      "6b68e131-abe5-43b7-92cd-9930b04611df",
+      "resource",
+      JSON.stringify({ name: "Bianca" }),
+    ])).toThrow();
+
+    runMigrations(db);
+
+    expect(db.query(
+      "SELECT authority, source_package, target_kind FROM project_resource_links ORDER BY id",
+    ).all()).toEqual([{
+      authority: "orgs",
+      source_package: "@hasna/orgs",
+      target_kind: "org",
+    }]);
+    db.run(`
+      INSERT INTO project_resource_links (
+        id, project_id, authority, service_instance, source_package, target_kind,
+        locator_kind, locator_value, scope, labels_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      "prl_contacts_after_upgrade",
+      "wks_contacts_upgrade",
+      "contacts",
+      "urn:hasna:contacts:test",
+      "@hasna/contacts",
+      "contact",
+      "external_uuid",
+      "6b68e131-abe5-43b7-92cd-9930b04611df",
+      "resource",
+      JSON.stringify({ name: "Bianca" }),
+    ]);
+    expect(db.query(
+      "SELECT authority, source_package, target_kind FROM project_resource_links ORDER BY id",
+    ).all()).toEqual([
+      { authority: "contacts", source_package: "@hasna/contacts", target_kind: "contact" },
+      { authority: "orgs", source_package: "@hasna/orgs", target_kind: "org" },
+    ]);
+    expect(() => db.run(
+      "UPDATE project_resource_links SET locator_value = ? WHERE id = ?",
+      ["515fbb15-4661-4cdc-b1df-f719797b8cad", "prl_contacts_after_upgrade"],
+    )).toThrow(/immutable/);
+    db.close();
+  });
 });
 
 describe("workspace domain services", () => {

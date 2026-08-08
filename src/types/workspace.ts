@@ -451,7 +451,7 @@ export interface GuardedProjectMutationRollbackRequest extends GuardedProjectMut
   command?: string;
 }
 
-export const PROJECT_RESOURCE_AUTHORITIES = ["todos", "conversations", "knowledge", "mementos", "orgs"] as const;
+export const PROJECT_RESOURCE_AUTHORITIES = ["todos", "conversations", "knowledge", "mementos", "orgs", "contacts"] as const;
 export type ProjectResourceAuthority = (typeof PROJECT_RESOURCE_AUTHORITIES)[number];
 
 export const PROJECT_RESOURCE_LOCATOR_KINDS = [
@@ -466,6 +466,7 @@ export type ProjectResourceLinkScope = (typeof PROJECT_RESOURCE_LINK_SCOPES)[num
 export const PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS = 1_000;
 
 export type ProjectResourceTargetKind =
+  | "contact"
   | "org"
   | "project"
   | "task_list"

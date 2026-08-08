@@ -70,6 +70,29 @@ export {
   projectResourceLinkSnapshot,
 } from "./lib/project-resource-links.js";
 export {
+  PROJECT_CONTACT_LINK_STEPS,
+  PROJECT_CONTACT_RESOURCE_LINK_TYPE,
+  ProjectContactLinkOperationError,
+  attachProjectContact,
+  detachProjectContact,
+  listProjectContacts,
+  projectContactResourceLink,
+} from "./lib/project-contact-links.js";
+export type {
+  ContactProjectMembershipAuthority,
+  ContactProjectMembershipListResult,
+  ContactProjectMembershipMutationInput,
+  ContactProjectMembershipMutationResult,
+  ContactProjectMembershipSnapshot,
+  ProjectContactLinkBounds,
+  ProjectContactLinkDependencies,
+  ProjectContactLinkErrorCode,
+  ProjectContactLinkEvidence,
+  ProjectContactLinkListOutput,
+  ProjectContactLinkMutationInput,
+  ProjectContactLinkMutationOutput,
+} from "./lib/project-contact-links.js";
+export {
   listProjectResourceLinks,
   mutateProjectResourceLinks,
   readProjectResourceLinks,

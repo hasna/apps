@@ -74,6 +74,21 @@ function orgsProject(): ProjectResourceLinkInput {
   };
 }
 
+function contactsContact(): ProjectResourceLinkInput {
+  return {
+    authority: "contacts",
+    service_instance: "urn:hasna:contacts:service:primary",
+    source_package: "@hasna/contacts",
+    target_kind: "contact",
+    locator: {
+      kind: "external_uuid",
+      value: "6B68E131-ABE5-43B7-92CD-9930B04611DF",
+    },
+    scope: "resource",
+    labels: { name: "Bianca" },
+  };
+}
+
 describe("project resource-link schema", () => {
   test("accepts immutable Conversations channel IDs without relabeling them as UUIDs", () => {
     const normalized = normalizeProjectResourceLink({
@@ -153,6 +168,34 @@ describe("project resource-link schema", () => {
     })).toThrow(/target_kind/);
   });
 
+  test("accepts only immutable contact IDs owned by @hasna/contacts", () => {
+    expect(normalizeProjectResourceLink(contactsContact())).toMatchObject({
+      authority: "contacts",
+      source_package: "@hasna/contacts",
+      target_kind: "contact",
+      locator: {
+        kind: "external_uuid",
+        value: "6b68e131-abe5-43b7-92cd-9930b04611df",
+      },
+      scope: "resource",
+    });
+    expect(() => normalizeProjectResourceLink({
+      ...contactsContact(),
+      source_package: "@hasna/projects",
+    })).toThrow(/source_package/);
+    expect(() => normalizeProjectResourceLink({
+      ...contactsContact(),
+      target_kind: "project" as never,
+    })).toThrow(/target_kind/);
+    expect(() => normalizeProjectResourceLink({
+      ...contactsContact(),
+      locator: {
+        kind: "canonical_uri",
+        value: "urn:hasna:contacts:contact:bianca",
+      },
+    })).toThrow(/external_uuid/);
+  });
+
   test("stores immutable locator columns and rejects direct identity mutation", () => {
     const db = makeDb();
     const project = createWorkspace({ name: "Immutable Links", slug: "immutable-links" }, db);
@@ -230,6 +273,35 @@ describe("project resource-link guarded lifecycle", () => {
       orgs_org_id: "urn:hasna:orgs:org:hasna-family",
       orgs_project_id: "urn:hasna:orgs:project:nanny-onboarding",
     });
+    db.close();
+  });
+
+  test("keeps Contacts membership authoritative without projecting contact IDs into scalar integrations", () => {
+    const db = makeDb();
+    const project = createWorkspace({ name: "REGES / KPMG", slug: "reges-kpmg" }, db);
+    const added = mutateProjectResourceLinks({
+      project_id: project.id,
+      operation_id: "op-add-contact-link",
+      step_id: "contact-link",
+      mode: "add",
+      expected_revision: project.updated_at,
+      links: [contactsContact()],
+      response_byte_limit: 64_000,
+      time_budget_ms: 5_000,
+    }, db);
+    expect(added.outcome).toBe("accepted");
+    expect(added.after?.links).toEqual([
+      expect.objectContaining({
+        authority: "contacts",
+        source_package: "@hasna/contacts",
+        target_kind: "contact",
+        locator: {
+          kind: "external_uuid",
+          value: "6b68e131-abe5-43b7-92cd-9930b04611df",
+        },
+      }),
+    ]);
+    expect(added.after?.project.integrations).toEqual({});
     db.close();
   });
 
