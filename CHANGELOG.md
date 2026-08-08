@@ -6,6 +6,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.107]
+
+### Added
+
+- `projects context-bundle` now emits the strict, credential-safe Projects v1
+  context bundle for an exact project ID, including linked authority metadata,
+  canonical commands, freshness, and an integrity hash.
+
+### Fixed
+
+- Successful non-dry-run project starts now persist `last_opened_at` through
+  local SQLite and API/PostgreSQL stores, including guarded rollback and
+  SDK/OpenAPI support. Existing projects are stamped when next opened; no
+  historical timestamp is invented.
+
 ## [0.1.106]
 
 ### Fixed
