@@ -156,7 +156,16 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
     }
 
     const selector = canonicalJson(request.desired);
-    const targetId = `${authorityPrefix(this.authority)}_${request.resource_kind}_${sha256(selector).slice(0, 12)}`;
+    const selectorDigest = sha256(selector);
+    const targetId = this.authority === "conversations" && request.resource_kind === "channel"
+      ? [
+        selectorDigest.slice(0, 8),
+        selectorDigest.slice(8, 12),
+        `4${selectorDigest.slice(13, 16)}`,
+        `8${selectorDigest.slice(17, 20)}`,
+        selectorDigest.slice(20, 32),
+      ].join("-")
+      : `${authorityPrefix(this.authority)}_${request.resource_kind}_${selectorDigest.slice(0, 12)}`;
     if (this.records.has(targetId)) {
       return this.makeReceipt(request, {
         outcome: "terminal_nonacceptance",

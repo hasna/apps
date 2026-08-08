@@ -108,7 +108,7 @@ import {
   removeProjectTags,
   unlinkProjectIntegrationFields,
 } from "../../lib/project-management.js";
-import { PROJECT_AGENT_ROLES, WORKSPACE_KINDS, WORKSPACE_STATUSES, type AgentKind, type JsonObject, type Recipe, type Root, type Workspace, type WorkspaceEvent, type WorkspaceIntegrations, type WorkspaceKind, type WorkspaceLock, type WorkspaceStatus } from "../../types/workspace.js";
+import { PROJECT_AGENT_ROLES, WORKSPACE_KINDS, WORKSPACE_STATUSES, type AgentKind, type JsonObject, type ProjectResourceLinkInput, type Recipe, type Root, type Workspace, type WorkspaceEvent, type WorkspaceIntegrations, type WorkspaceKind, type WorkspaceLock, type WorkspaceStatus } from "../../types/workspace.js";
 
 const DEFAULT_LIST_LIMIT = 25;
 const DEFAULT_EVENT_LIMIT = 20;
@@ -267,6 +267,10 @@ function parseJsonArray<T>(value: string | undefined, label: string): T[] | unde
   const parsed = JSON.parse(value) as unknown;
   if (!Array.isArray(parsed)) throw new Error(`${label} must be a JSON array`);
   return parsed as T[];
+}
+
+function parseProjectResourceLinksJson(value: string | undefined): ProjectResourceLinkInput[] {
+  return parseJsonArray<ProjectResourceLinkInput>(value, "--links-json") ?? [];
 }
 
 function parseIntegrationsJson(value: string | undefined): WorkspaceIntegrations | undefined {
@@ -2404,6 +2408,7 @@ function registerProjectCommands(program: Command): void {
     .description("Read one project by exact stable id with bounded complete JSON and its current mutation revision")
     .requiredOption("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes")
     .requiredOption("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds")
+    .option("--resource-link-max-items <n>", "Maximum complete typed resource-link collection size", "1000")
     .option("-j, --json", "Output JSON")
     .action(async (projectId, opts) => {
       try {
@@ -2411,6 +2416,7 @@ function registerProjectCommands(program: Command): void {
           project_id: projectId,
           response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
           time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+          resource_link_max_items: parsePositiveInteger(opts.resourceLinkMaxItems, "--resource-link-max-items")!,
         });
         if (wantsJson(opts)) {
           process.stdout.write(JSON.stringify(result));
@@ -2420,6 +2426,112 @@ function registerProjectCommands(program: Command): void {
         console.log(`  ${chalk.dim("revision:")} ${result.current_revision}`);
         console.log(`  ${chalk.dim("complete:")} ${result.response_control.complete}`);
         console.log(`  ${chalk.dim("truncated:")} ${result.response_control.truncated}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("resource-links-read <project-id>")
+    .description("Read the complete typed resource-link collection for one exact stable project id")
+    .requiredOption("--max-items <n>", "Positive maximum collection size")
+    .requiredOption("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes")
+    .requiredOption("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectId, opts) => {
+      try {
+        const result = await resolveProjectStore().readProjectResourceLinks({
+          project_id: projectId,
+          max_items: parsePositiveInteger(opts.maxItems, "--max-items")!,
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+        });
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+        console.log(chalk.green(`✓ Typed resource links: ${result.project_id}`));
+        console.log(`  ${chalk.dim("links:")} ${result.link_count}`);
+        console.log(`  ${chalk.dim("digest:")} ${result.collection_digest}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  for (const mode of ["add", "reconcile"] as const) {
+    program
+      .command(`resource-links-${mode} <project-id>`)
+      .description(mode === "add"
+        ? "Idempotently add typed resource links under an exact project revision CAS"
+        : "Reconcile the complete typed resource-link collection under an exact project revision CAS")
+      .requiredOption("--links-json <json>", "Closed JSON array of typed resource links")
+      .requiredOption("--expected-revision <revision>", "Fresh project revision from guarded-read or resource-links-read")
+      .requiredOption("--operation-id <id>", "Caller-stable operation id")
+      .requiredOption("--step-id <id>", "Caller-stable step id")
+      .option("--max-items <n>", "Maximum complete collection size", "1000")
+      .requiredOption("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes")
+      .requiredOption("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds")
+      .option("--dry-run", "Preview without writing or persisting a receipt")
+      .option("--agent <id-or-slug>", "Attributing agent")
+      .option("-j, --json", "Output JSON")
+      .action(async (projectId, opts) => {
+        try {
+          const store = resolveProjectStore();
+          const result = await store.mutateProjectResourceLinks({
+            project_id: projectId,
+            operation_id: opts.operationId,
+            step_id: opts.stepId,
+            mode,
+            expected_revision: opts.expectedRevision,
+            links: parseProjectResourceLinksJson(opts.linksJson),
+            max_items: parsePositiveInteger(opts.maxItems, "--max-items")!,
+            dry_run: Boolean(opts.dryRun),
+            response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+            time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+            agent_id: mutationAgentId(store, opts.agent),
+            source: "cli",
+            command: process.argv.join(" "),
+          });
+          if (wantsJson(opts)) { printObject(result, opts); return; }
+          console.log(chalk.green(`✓ Typed resource links ${mode} ${result.outcome}: ${result.project_id}`));
+          if (result.receipt) console.log(`  ${chalk.dim("receipt:")} ${result.receipt.receipt_id}`);
+        } catch (err) {
+          console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+          process.exit(1);
+        }
+      });
+  }
+
+  program
+    .command("resource-links-rollback <project-id>")
+    .description("Restore the exact typed resource-link collection from an accepted forward receipt")
+    .requiredOption("--accepted-receipt-id <id>", "Forward accepted resource-link receipt id")
+    .requiredOption("--expected-current-revision <revision>", "Current revision matching the accepted receipt")
+    .requiredOption("--operation-id <id>", "Caller-stable rollback operation id")
+    .requiredOption("--step-id <id>", "Caller-stable rollback step id")
+    .option("--max-items <n>", "Maximum complete collection size", "1000")
+    .requiredOption("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes")
+    .requiredOption("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectId, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const result = await store.rollbackProjectResourceLinks({
+          project_id: projectId,
+          operation_id: opts.operationId,
+          step_id: opts.stepId,
+          accepted_receipt_id: opts.acceptedReceiptId,
+          expected_current_revision: opts.expectedCurrentRevision,
+          max_items: parsePositiveInteger(opts.maxItems, "--max-items")!,
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+          agent_id: mutationAgentId(store, opts.agent),
+          source: "cli",
+          command: process.argv.join(" "),
+        });
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+        console.log(chalk.green(`✓ Typed resource links rollback ${result.outcome}: ${result.project_id}`));
+        if (result.receipt) console.log(`  ${chalk.dim("receipt:")} ${result.receipt.receipt_id}`);
       } catch (err) {
         console.error(chalk.red(err instanceof Error ? err.message : String(err)));
         process.exit(1);

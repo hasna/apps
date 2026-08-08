@@ -439,6 +439,37 @@ export const MIGRATIONS: string[] = [
 
   INSERT OR IGNORE INTO _migrations (id) VALUES (9);
   `,
+
+  // Migration 10: Closed typed one-to-many project resource links
+  `
+  CREATE TABLE IF NOT EXISTS project_resource_links (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    authority TEXT NOT NULL CHECK(authority IN ('todos', 'conversations', 'knowledge', 'mementos')),
+    service_instance TEXT NOT NULL,
+    source_package TEXT NOT NULL CHECK(source_package IN ('@hasna/todos', '@hasna/conversations', '@hasna/knowledge', '@hasna/mementos')),
+    target_kind TEXT NOT NULL CHECK(target_kind IN ('project', 'task_list', 'plan', 'channel', 'collection', 'item')),
+    locator_kind TEXT NOT NULL CHECK(locator_kind IN ('external_uuid', 'canonical_uri')),
+    locator_value TEXT NOT NULL,
+    scope TEXT NOT NULL CHECK(scope IN ('resource', 'collection')),
+    labels_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(project_id, authority, service_instance, source_package, target_kind, locator_kind, locator_value)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_project_resource_links_project
+    ON project_resource_links(project_id, authority, target_kind, id);
+
+  CREATE TRIGGER IF NOT EXISTS project_resource_links_identity_immutable
+  BEFORE UPDATE OF project_id, authority, service_instance, source_package, target_kind, locator_kind, locator_value, scope
+  ON project_resource_links
+  BEGIN
+    SELECT RAISE(ABORT, 'project resource link identity is immutable');
+  END;
+
+  INSERT OR IGNORE INTO _migrations (id) VALUES (10);
+  `,
 ];
 
 export function runMigrations(db: Database): void {

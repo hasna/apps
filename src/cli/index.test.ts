@@ -761,6 +761,196 @@ describe("project-first CLI surface", () => {
     }
   });
 
+  test("typed resource links add, retry, reconcile, read back, and roll back through the CLI", () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-resource-links-"));
+    const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
+    const channelLink = {
+      authority: "conversations",
+      service_instance: "urn:hasna:conversations:test",
+      source_package: "@hasna/conversations",
+      target_kind: "channel",
+      locator: {
+        kind: "external_uuid",
+        value: "515fbb15-4661-4cdc-b1df-f719797b8cad",
+      },
+      scope: "resource",
+      labels: { channel_name: "typed-links" },
+    };
+    const todosCollectionLink = {
+      authority: "todos",
+      service_instance: "urn:hasna:todos:test",
+      source_package: "@hasna/todos",
+      target_kind: "task_list",
+      locator: {
+        kind: "canonical_uri",
+        value: "urn:hasna:todos:task-list:typed-links",
+      },
+      scope: "collection",
+      labels: { name: "Typed Links Tasks", tags: ["project"] },
+    };
+
+    try {
+      const create = runProjects([
+        "create",
+        "--name",
+        "Typed Links",
+        "--slug",
+        "typed-links",
+        "--json",
+      ], env);
+      expect(create.exitCode).toBe(0);
+      const created = JSON.parse(text(create.stdout)) as {
+        project: { id: string; updated_at: string };
+      };
+
+      const addArgs = [
+        "resource-links-add",
+        created.project.id,
+        "--links-json",
+        JSON.stringify([channelLink, todosCollectionLink]),
+        "--expected-revision",
+        created.project.updated_at,
+        "--operation-id",
+        "cli-resource-links-add",
+        "--step-id",
+        "add-links",
+        "--response-byte-limit",
+        "100000",
+        "--time-budget-ms",
+        "5000",
+        "--json",
+      ];
+      const add = runProjects(addArgs, env);
+      expect(add.exitCode).toBe(0);
+      const added = JSON.parse(text(add.stdout)) as {
+        outcome: string;
+        after: {
+          project: { updated_at: string; integrations: Record<string, string> };
+          links: Array<{ scope: string; labels: Record<string, unknown> }>;
+        };
+        receipt: { receipt_id: string };
+      };
+      expect(added.outcome).toBe("accepted");
+      expect(added.after.links).toHaveLength(2);
+      expect(added.after.links.some((link) => link.scope === "collection")).toBe(true);
+      expect(added.after.project.integrations).toEqual({
+        conversations_channel: "typed-links",
+        todos_task_list_id: "urn:hasna:todos:task-list:typed-links",
+      });
+
+      const duplicate = runProjects(addArgs, env);
+      expect(duplicate.exitCode).toBe(0);
+      expect((JSON.parse(text(duplicate.stdout)) as { outcome: string }).outcome).toBe("duplicate_of_accepted");
+
+      const read = runProjects([
+        "resource-links-read",
+        created.project.id,
+        "--max-items",
+        "10",
+        "--response-byte-limit",
+        "100000",
+        "--time-budget-ms",
+        "5000",
+        "--json",
+      ], env);
+      expect(read.exitCode).toBe(0);
+      expect(JSON.parse(text(read.stdout)) as {
+        link_count: number;
+        complete: boolean;
+        truncated: boolean;
+      }).toMatchObject({ link_count: 2, complete: true, truncated: false });
+
+      const reconciledChannel = {
+        ...channelLink,
+        labels: { channel_name: "typed-links-renamed" },
+      };
+      const reconcile = runProjects([
+        "resource-links-reconcile",
+        created.project.id,
+        "--links-json",
+        JSON.stringify([reconciledChannel]),
+        "--expected-revision",
+        added.after.project.updated_at,
+        "--operation-id",
+        "cli-resource-links-reconcile",
+        "--step-id",
+        "reconcile-links",
+        "--response-byte-limit",
+        "100000",
+        "--time-budget-ms",
+        "5000",
+        "--json",
+      ], env);
+      expect(reconcile.exitCode).toBe(0);
+      const reconciled = JSON.parse(text(reconcile.stdout)) as {
+        outcome: string;
+        after: {
+          project: { updated_at: string; integrations: Record<string, string> };
+          links: Array<{ labels: { channel_name?: string } }>;
+        };
+        receipt: { receipt_id: string };
+      };
+      expect(reconciled.outcome).toBe("accepted");
+      expect(reconciled.after.links).toEqual([
+        expect.objectContaining({ labels: { channel_name: "typed-links-renamed" } }),
+      ]);
+      expect(reconciled.after.project.integrations).toEqual({
+        conversations_channel: "typed-links-renamed",
+      });
+
+      const rollback = runProjects([
+        "resource-links-rollback",
+        created.project.id,
+        "--accepted-receipt-id",
+        reconciled.receipt.receipt_id,
+        "--expected-current-revision",
+        reconciled.after.project.updated_at,
+        "--operation-id",
+        "cli-resource-links-rollback",
+        "--step-id",
+        "rollback-reconcile",
+        "--response-byte-limit",
+        "100000",
+        "--time-budget-ms",
+        "5000",
+        "--json",
+      ], env);
+      expect(rollback.exitCode).toBe(0);
+      const rolledBack = JSON.parse(text(rollback.stdout)) as {
+        outcome: string;
+        after: {
+          project: { integrations: Record<string, string> };
+          links: unknown[];
+        };
+      };
+      expect(rolledBack.outcome).toBe("accepted");
+      expect(rolledBack.after.links).toHaveLength(2);
+      expect(rolledBack.after.project.integrations).toEqual({
+        conversations_channel: "typed-links",
+        todos_task_list_id: "urn:hasna:todos:task-list:typed-links",
+      });
+
+      const guarded = runProjects([
+        "guarded-read",
+        created.project.id,
+        "--resource-link-max-items",
+        "10",
+        "--response-byte-limit",
+        "100000",
+        "--time-budget-ms",
+        "5000",
+        "--json",
+      ], env);
+      expect(guarded.exitCode).toBe(0);
+      expect(JSON.parse(text(guarded.stdout)) as {
+        resource_link_count: number;
+        resource_links: unknown[];
+      }).toMatchObject({ resource_link_count: 2 });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("guarded-update exposes exact integrations through the guarded contract", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-guarded-integrations-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };

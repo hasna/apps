@@ -425,6 +425,10 @@ describe("projects store api transport (roots/agents/recipes)", () => {
       project_id: projectId,
       project,
       current_revision: "2026-08-07 00:00:01",
+      resource_links: [],
+      resource_link_count: 0,
+      resource_link_max_items: 1000,
+      resource_link_collection_digest: "empty",
       response_control: {
         response_byte_limit: 16_384,
         time_budget_ms: 5_000,
@@ -465,6 +469,74 @@ describe("projects store api transport (roots/agents/recipes)", () => {
     expect(calls[0]!.path).toBe(
       `/v1/projects/${projectId}/guarded-metadata?response_byte_limit=16384&time_budget_ms=5000`,
     );
+  });
+
+  test("typed resource-link methods preserve API routes, bounds, modes, and rollback identity", async () => {
+    const projectId = "wks_resourceapi0001";
+    const calls: Array<{ method: string; path: string; body: unknown }> = [];
+    const fetchImpl = async (input: string, init?: RequestInit): Promise<Response> => {
+      const method = (init?.method ?? "GET").toUpperCase();
+      const url = new URL(input);
+      const body = init?.body ? JSON.parse(init.body as string) : undefined;
+      calls.push({ method, path: `${url.pathname}${url.search}`, body });
+      return Response.json({});
+    };
+    __resetProjectStore();
+    const store = resolveProjectStore(CLOUD_ENV, fetchImpl);
+    const link = {
+      authority: "conversations" as const,
+      service_instance: "urn:hasna:conversations:test",
+      source_package: "@hasna/conversations" as const,
+      target_kind: "channel" as const,
+      locator: {
+        kind: "external_uuid" as const,
+        value: "515fbb15-4661-4cdc-b1df-f719797b8cad",
+      },
+      scope: "resource" as const,
+      labels: { channel_name: "resource-api" },
+    };
+    const mutation = {
+      project_id: projectId,
+      operation_id: "resource-api",
+      step_id: "links",
+      mode: "add" as const,
+      expected_revision: "revision",
+      links: [link],
+      max_items: 10,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    };
+
+    await store.readProjectResourceLinks({
+      project_id: projectId,
+      max_items: 10,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    });
+    await store.mutateProjectResourceLinks(mutation);
+    await store.rollbackProjectResourceLinks({
+      project_id: projectId,
+      operation_id: "resource-api-rollback",
+      step_id: "rollback-links",
+      accepted_receipt_id: "gpmr_resource_api",
+      expected_current_revision: "revision-2",
+      max_items: 10,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    });
+
+    expect(calls.map((call) => [call.method, call.path])).toEqual([
+      [
+        "GET",
+        `/v1/projects/${projectId}/resource-links?max_items=10&response_byte_limit=100000&time_budget_ms=5000`,
+      ],
+      ["POST", `/v1/projects/${projectId}/resource-links/add`],
+      ["POST", `/v1/projects/${projectId}/resource-links/rollback`],
+    ]);
+    expect(calls[1]?.body).toEqual(mutation);
+    expect(calls[2]?.body).toEqual(expect.objectContaining({
+      accepted_receipt_id: "gpmr_resource_api",
+    }));
   });
 });
 

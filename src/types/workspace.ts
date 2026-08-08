@@ -337,6 +337,7 @@ export interface GuardedProjectMutationControl extends GuardedProjectMutationBou
 
 export interface GuardedProjectReadRequest extends GuardedProjectMutationBounds {
   project_id: string;
+  resource_link_max_items?: number;
 }
 
 export interface GuardedProjectReadResult {
@@ -344,6 +345,10 @@ export interface GuardedProjectReadResult {
   project_id: string;
   project: Workspace;
   current_revision: string;
+  resource_links: ProjectResourceLink[];
+  resource_link_count: number;
+  resource_link_max_items: number;
+  resource_link_collection_digest: string;
   response_control: GuardedProjectMutationControl;
 }
 
@@ -436,6 +441,139 @@ export interface GuardedProjectMutationRollbackRequest extends GuardedProjectMut
   step_id: string;
   accepted_receipt_id: string;
   expected_current_revision: string;
+  agent_id?: string;
+  source?: EventSource;
+  command?: string;
+}
+
+export const PROJECT_RESOURCE_AUTHORITIES = ["todos", "conversations", "knowledge", "mementos"] as const;
+export type ProjectResourceAuthority = (typeof PROJECT_RESOURCE_AUTHORITIES)[number];
+
+export const PROJECT_RESOURCE_LOCATOR_KINDS = ["external_uuid", "canonical_uri"] as const;
+export type ProjectResourceLocatorKind = (typeof PROJECT_RESOURCE_LOCATOR_KINDS)[number];
+
+export const PROJECT_RESOURCE_LINK_SCOPES = ["resource", "collection"] as const;
+export type ProjectResourceLinkScope = (typeof PROJECT_RESOURCE_LINK_SCOPES)[number];
+export const PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS = 1_000;
+
+export type ProjectResourceTargetKind =
+  | "project"
+  | "task_list"
+  | "plan"
+  | "channel"
+  | "collection"
+  | "item";
+
+export interface ProjectResourceLinkLabels {
+  name?: string;
+  channel_name?: string;
+  path?: string;
+  tags?: string[];
+}
+
+export interface ProjectResourceLinkLocator {
+  kind: ProjectResourceLocatorKind;
+  value: string;
+}
+
+export interface ProjectResourceLinkInput {
+  authority: ProjectResourceAuthority;
+  service_instance: string;
+  source_package: string;
+  target_kind: ProjectResourceTargetKind;
+  locator: ProjectResourceLinkLocator;
+  scope: ProjectResourceLinkScope;
+  labels?: ProjectResourceLinkLabels;
+}
+
+export interface ProjectResourceLink extends Omit<ProjectResourceLinkInput, "labels"> {
+  id: string;
+  project_id: string;
+  labels: ProjectResourceLinkLabels;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectResourceLinkRow {
+  id: string;
+  project_id: string;
+  authority: string;
+  service_instance: string;
+  source_package: string;
+  target_kind: string;
+  locator_kind: string;
+  locator_value: string;
+  scope: string;
+  labels_json: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectResourceLinkSnapshot {
+  project: Workspace;
+  links: ProjectResourceLink[];
+  collection_digest: string;
+}
+
+export interface ProjectResourceLinkReadRequest extends GuardedProjectMutationBounds {
+  project_id: string;
+  max_items: number;
+}
+
+export interface ProjectResourceLinkReadResult {
+  ok: true;
+  project_id: string;
+  project: Workspace;
+  current_revision: string;
+  links: ProjectResourceLink[];
+  link_count: number;
+  max_items: number;
+  collection_digest: string;
+  complete: true;
+  truncated: false;
+  response_control: GuardedProjectMutationControl;
+}
+
+export type ProjectResourceLinkMutationMode = "add" | "reconcile";
+
+export interface ProjectResourceLinkMutationRequest extends GuardedProjectMutationBounds {
+  project_id: string;
+  operation_id: string;
+  step_id: string;
+  mode: ProjectResourceLinkMutationMode;
+  expected_revision: string;
+  links: ProjectResourceLinkInput[];
+  max_items?: number;
+  dry_run?: boolean;
+  agent_id?: string;
+  source?: EventSource;
+  command?: string;
+}
+
+export interface ProjectResourceLinkMutationResult {
+  ok: boolean;
+  dry_run: boolean;
+  outcome: GuardedProjectMutationOutcome | "planned";
+  mode: ProjectResourceLinkMutationMode;
+  idempotency_key: string;
+  request_digest: string;
+  precondition_digest: string;
+  project_id: string;
+  expected_revision: string;
+  current_revision: string;
+  before: ProjectResourceLinkSnapshot;
+  after: ProjectResourceLinkSnapshot | null;
+  receipt: GuardedProjectMutationReceipt | null;
+  response_control: GuardedProjectMutationControl;
+}
+
+export interface ProjectResourceLinkRollbackRequest extends GuardedProjectMutationBounds {
+  project_id: string;
+  operation_id: string;
+  step_id: string;
+  accepted_receipt_id: string;
+  expected_current_revision: string;
+  max_items?: number;
   agent_id?: string;
   source?: EventSource;
   command?: string;

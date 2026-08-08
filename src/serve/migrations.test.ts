@@ -83,6 +83,7 @@ describe("projects-serve migrations", () => {
     // Baseline creates the core workspaces table.
     expect(migrations.some((m) => /CREATE TABLE IF NOT EXISTS workspaces/i.test(m.sql))).toBe(true);
     expect(ids).toContain("projects:0004_guarded_project_mutation_runtime_grants");
+    expect(ids).toContain("projects:0006_project_resource_links");
   });
 
   test("guarded receipt grant migration derives existing DML roles and grants only receipt reads and inserts", () => {
@@ -95,6 +96,19 @@ describe("projects-serve migrations", () => {
     expect(migration!.sql.match(/'GRANT [^']+'/g)).toEqual([
       "'GRANT SELECT, INSERT ON TABLE %I.%I TO %I'",
     ]);
+    expect(migration!.sql).not.toContain("projects_app");
+  });
+
+  test("typed resource-link migration closes identity, immutability, and runtime grants", () => {
+    const migration = loadMigrations().find(
+      (item) => item.id === "projects:0006_project_resource_links",
+    );
+    expect(migration).toBeDefined();
+    expect(migration!.sql).toContain("CREATE TABLE IF NOT EXISTS project_resource_links");
+    expect(migration!.sql).toContain("UNIQUE(project_id, authority, service_instance, source_package, target_kind, locator_kind, locator_value)");
+    expect(migration!.sql).toContain("project resource link identity is immutable");
+    expect(migration!.sql).toContain("COUNT(DISTINCT privilege.privilege_type) = 4");
+    expect(migration!.sql).toContain("GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE");
     expect(migration!.sql).not.toContain("projects_app");
   });
 

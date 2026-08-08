@@ -6,6 +6,10 @@ export {
   EVENT_SOURCES,
   MACHINE_ROLES,
   PROJECT_AGENT_ROLES,
+  PROJECT_RESOURCE_AUTHORITIES,
+  PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS,
+  PROJECT_RESOURCE_LINK_SCOPES,
+  PROJECT_RESOURCE_LOCATOR_KINDS,
   WORKSPACE_KINDS as PROJECT_KINDS,
   WORKSPACE_STATUSES as PROJECT_STATUSES,
 } from "./types/workspace.js";
@@ -25,6 +29,21 @@ export type {
   Machine,
   MachineRole,
   ProjectAgentRole,
+  ProjectResourceAuthority,
+  ProjectResourceLink,
+  ProjectResourceLinkInput,
+  ProjectResourceLinkLabels,
+  ProjectResourceLinkLocator,
+  ProjectResourceLinkMutationMode,
+  ProjectResourceLinkMutationRequest,
+  ProjectResourceLinkMutationResult,
+  ProjectResourceLinkReadRequest,
+  ProjectResourceLinkReadResult,
+  ProjectResourceLinkRollbackRequest,
+  ProjectResourceLinkScope,
+  ProjectResourceLinkSnapshot,
+  ProjectResourceLocatorKind,
+  ProjectResourceTargetKind,
   Recipe,
   RecordWorkspaceEventInput as RecordProjectEventInput,
   Root,
@@ -41,6 +60,21 @@ export type {
   WorkspaceLock as ProjectLock,
   WorkspaceStatus as ProjectStatus,
 } from "./types/workspace.js";
+export {
+  normalizeProjectResourceLink,
+  normalizeProjectResourceLinks,
+  projectResourceLinkId,
+  projectResourceLinkIdentity,
+  projectResourceLinkIntegrationProjection,
+  projectResourceLinksDigest,
+  projectResourceLinkSnapshot,
+} from "./lib/project-resource-links.js";
+export {
+  listProjectResourceLinks,
+  mutateProjectResourceLinks,
+  readProjectResourceLinks,
+  rollbackProjectResourceLinks,
+} from "./db/workspaces.js";
 export { getDatabase } from "./db/database.js";
 export {
   PROJECT_STORE_SCHEMA_VERSION,

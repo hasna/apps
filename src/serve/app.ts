@@ -211,7 +211,11 @@ async function route(
         response_byte_limit: Number(url.searchParams.get("response_byte_limit")),
         time_budget_ms: Number(url.searchParams.get("time_budget_ms")),
       };
-      const result = await store.guardedReadWorkspace({ project_id: id, ...bounds }, started);
+      const result = await store.guardedReadWorkspace({
+        project_id: id,
+        resource_link_max_items: Number(url.searchParams.get("resource_link_max_items") ?? 1_000),
+        ...bounds,
+      }, started);
       return guardedJsonResponse(result, bounds, started);
     }
     if (sub === "guarded-metadata" && extra === undefined && method === "POST") {
@@ -249,6 +253,43 @@ async function route(
         time_budget_ms: Number(body.time_budget_ms),
       };
       const result = await store.rollbackGuardedWorkspaceMutation({ ...body, project_id: id } as never);
+      return guardedJsonResponse(result, bounds, started);
+    }
+    if (sub === "resource-links" && extra === undefined && method === "GET") {
+      const started = Date.now();
+      const bounds = {
+        response_byte_limit: Number(url.searchParams.get("response_byte_limit")),
+        time_budget_ms: Number(url.searchParams.get("time_budget_ms")),
+      };
+      const result = await store.readProjectResourceLinks({
+        project_id: id,
+        max_items: Number(url.searchParams.get("max_items")),
+        ...bounds,
+      }, started);
+      return guardedJsonResponse(result, bounds, started);
+    }
+    if (sub === "resource-links" && (extra === "add" || extra === "reconcile") && method === "POST") {
+      const started = Date.now();
+      const body = await readJsonBody(req);
+      const bounds = {
+        response_byte_limit: Number(body.response_byte_limit),
+        time_budget_ms: Number(body.time_budget_ms),
+      };
+      const result = await store.mutateProjectResourceLinks({
+        ...body,
+        project_id: id,
+        mode: extra,
+      } as never);
+      return guardedJsonResponse(result, bounds, started);
+    }
+    if (sub === "resource-links" && extra === "rollback" && method === "POST") {
+      const started = Date.now();
+      const body = await readJsonBody(req);
+      const bounds = {
+        response_byte_limit: Number(body.response_byte_limit),
+        time_budget_ms: Number(body.time_budget_ms),
+      };
+      const result = await store.rollbackProjectResourceLinks({ ...body, project_id: id } as never);
       return guardedJsonResponse(result, bounds, started);
     }
 
