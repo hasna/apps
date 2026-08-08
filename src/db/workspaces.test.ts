@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setSystemTime, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -670,6 +670,66 @@ describe("workspace domain services", () => {
       expect(getWorkspace(workspace.id, db)?.name).toBe("Guarded Demo");
       expect(getWorkspace(workspace.id, db)?.last_opened_at).toBeNull();
     } finally {
+      db.close();
+    }
+  });
+
+  test("guarded project metadata mutation rejects stale revisions when accepted updates share or precede clock time", () => {
+    const db = makeDb();
+    const frozen = new Date("2026-08-08T12:00:00.000Z");
+    try {
+      setSystemTime(frozen);
+      const workspace = createWorkspace({ name: "Clock Guarded Demo" }, db);
+      const originalRevision = workspace.updated_at;
+
+      const accepted = guardedUpdateWorkspace({
+        project_id: workspace.id,
+        operation_id: "op-equal-clock",
+        step_id: "rename",
+        expected_revision: originalRevision,
+        patch: { name: "Equal Clock Accepted" },
+        response_byte_limit: 80_000,
+        time_budget_ms: 2_000,
+      }, db);
+      expect(accepted.ok).toBe(true);
+      expect(accepted.outcome).toBe("accepted");
+
+      const stale = guardedUpdateWorkspace({
+        project_id: workspace.id,
+        operation_id: "op-equal-clock-stale",
+        step_id: "rename",
+        expected_revision: originalRevision,
+        patch: { name: "Old Revision Must Fail" },
+        response_byte_limit: 80_000,
+        time_budget_ms: 2_000,
+      }, db);
+      expect(stale.ok).toBe(false);
+      expect(stale.receipt?.outcome).toBe("terminal_nonacceptance");
+      expect(stale.receipt?.reason).toBe("stale_revision");
+      expect(getWorkspace(workspace.id, db)?.name).toBe("Equal Clock Accepted");
+
+      const equalClockRevision = accepted.after!.updated_at;
+      expect(Date.parse(equalClockRevision.replace(" ", "T") + "Z")).toBeGreaterThan(
+        Date.parse(originalRevision.replace(" ", "T") + "Z"),
+      );
+
+      setSystemTime(new Date("2026-08-08T11:59:59.999Z"));
+      const backwardsClock = guardedUpdateWorkspace({
+        project_id: workspace.id,
+        operation_id: "op-backwards-clock",
+        step_id: "rename",
+        expected_revision: equalClockRevision,
+        patch: { name: "Backwards Clock Accepted" },
+        response_byte_limit: 80_000,
+        time_budget_ms: 2_000,
+      }, db);
+      expect(backwardsClock.ok).toBe(true);
+      expect(backwardsClock.outcome).toBe("accepted");
+      expect(Date.parse(backwardsClock.after!.updated_at.replace(" ", "T") + "Z")).toBeGreaterThan(
+        Date.parse(equalClockRevision.replace(" ", "T") + "Z"),
+      );
+    } finally {
+      setSystemTime();
       db.close();
     }
   });

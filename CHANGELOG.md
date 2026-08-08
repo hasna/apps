@@ -17,6 +17,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   rolls back every partial write on mismatch without exposing transaction
   control to the caller.
 
+### Fixed
+
+- Guarded workspace metadata updates now advance their SQLite `updated_at`
+  revision monotonically even when the wall clock is equal or moves backwards,
+  so stale `expected_revision` tokens are rejected deterministically.
+
 ## [0.1.112]
 
 ### Fixed
