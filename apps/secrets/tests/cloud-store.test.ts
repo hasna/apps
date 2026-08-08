@@ -39,6 +39,7 @@ class FakeDb {
 }
 
 const now = "2026-01-02T03:04:05.000Z";
+const TEST_TENANT = "11111111-2222-4333-8444-555555555555";
 
 function secretRow(overrides: Record<string, unknown> = {}) {
   return {
@@ -158,13 +159,17 @@ describe("cloud Postgres store", () => {
     const store = new CloudSecretsStore(db as any);
     const row = secretRow();
     db.getResults.push({ created_at: "2020-01-01" }, row);
-    const saved = await store.setSecret("demo/key", "value", "api_key", "Demo", row.expires_at, "agent-1");
+    const saved = await store.setSecret("demo/key", "value", "api_key", "Demo", row.expires_at, "agent-1", TEST_TENANT);
     expect(saved).toMatchObject({ key: "demo/key", value: "value", label: "Demo", expires_at: row.expires_at });
     expect(db.executed.some((entry) => entry.sql.includes("ON CONFLICT(key)"))).toBe(true);
+    const secretInsert = db.executed.find((entry) => entry.sql.includes("INSERT INTO secrets"))!;
+    expect(secretInsert.sql).toContain("tenant_id");
+    expect(secretInsert.params?.at(-1)).toBe(TEST_TENANT);
     expect(db.executed.filter((entry) => entry.sql.includes("audit_log"))).toHaveLength(2);
+    expect(db.executed.filter((entry) => entry.sql.includes("audit_log")).every((entry) => entry.params?.at(-1) === TEST_TENANT)).toBe(true);
 
     db.getResults.push(null);
-    expect(await store.getSecret("missing", "agent-1")).toBeUndefined();
+    expect(await store.getSecret("missing", "agent-1", TEST_TENANT)).toBeUndefined();
 
     db.manyResults.push([row, secretRow({ key: "plain", label: null, expires_at: null })]);
     expect(await store.listSecretMetadata()).toEqual([
@@ -179,9 +184,9 @@ describe("cloud Postgres store", () => {
     expect(db.manyCalls.at(-1)?.params).toEqual(["%key%"]);
 
     db.manyResults.push([]);
-    expect(await store.deleteSecret("missing", "agent-1")).toBe(false);
+    expect(await store.deleteSecret("missing", "agent-1", TEST_TENANT)).toBe(false);
     db.manyResults.push([{ key: "demo/key" }]);
-    expect(await store.deleteSecret("demo/key", "agent-1")).toBe(true);
+    expect(await store.deleteSecret("demo/key", "agent-1", TEST_TENANT)).toBe(true);
   });
 
   it("reads an x_-prefixed legacy-key row beside an active-key sibling", async () => {
@@ -224,9 +229,9 @@ describe("cloud Postgres store", () => {
     );
     const store = new CloudSecretsStore(db as any);
 
-    expect(await store.getSecret("synthetic/x/live/bare_name", "synthetic-agent"))
+    expect(await store.getSecret("synthetic/x/live/bare_name", "synthetic-agent", TEST_TENANT))
       .toMatchObject({ key: "synthetic/x/live/bare_name", value: "synthetic-bare-value" });
-    expect(await store.getSecret("synthetic/x/live/x_prefixed_name", "synthetic-agent"))
+    expect(await store.getSecret("synthetic/x/live/x_prefixed_name", "synthetic-agent", TEST_TENANT))
       .toMatchObject({ key: "synthetic/x/live/x_prefixed_name", value: "synthetic-prefixed-value" });
     expect(db.getCalls.map((call) => call.params)).toEqual([
       ["synthetic/x/live/bare_name"],
@@ -262,7 +267,11 @@ describe("cloud Postgres store", () => {
       created_at: now,
       updated_at: now,
     });
-    const entry = await new CloudSecretsStore(db as any).getSecret("synthetic/rotation/live/value", "synthetic-agent");
+    const entry = await new CloudSecretsStore(db as any).getSecret(
+      "synthetic/rotation/live/value",
+      "synthetic-agent",
+      TEST_TENANT,
+    );
 
     expect(entry).toMatchObject({
       key: "synthetic/rotation/live/value",
@@ -281,10 +290,10 @@ describe("cloud Postgres store", () => {
   it("validates, normalizes, stores, reads, lists, searches, and deletes vault items", async () => {
     const db = new FakeDb();
     const store = new CloudSecretsStore(db as any);
-    await expect(store.setVaultItem({ kind: "wrong" as any, title: "x", data: {} }, "actor")).rejects.toThrow(
+    await expect(store.setVaultItem({ kind: "wrong" as any, title: "x", data: {} }, "actor", TEST_TENANT)).rejects.toThrow(
       "Invalid vault item kind",
     );
-    await expect(store.setVaultItem({ kind: "login", title: "  ", data: {} }, "actor")).rejects.toThrow(
+    await expect(store.setVaultItem({ kind: "login", title: "  ", data: {} }, "actor", TEST_TENANT)).rejects.toThrow(
       "title is required",
     );
 
@@ -299,15 +308,17 @@ describe("cloud Postgres store", () => {
       tags: [" work ", "work", ""],
       favorite: true,
       data: { username: "person", password: "secret" },
-    }, "actor");
+    }, "actor", TEST_TENANT);
     expect(saved.data.password).toBe("secret");
     const insert = db.executed.find((entry) => entry.sql.includes("INSERT INTO vault_items"))!;
     expect(insert.params?.[4]).toBe(JSON.stringify(["example.test", "%"]));
     expect(insert.params?.[5]).toBe(JSON.stringify(["work"]));
+    expect(insert.sql).toContain("tenant_id");
+    expect(insert.params?.at(-1)).toBe(TEST_TENANT);
 
     db.getResults.push(null, vaultRow({ data: undefined }));
-    expect(await store.getVaultItem("missing", "actor")).toBeUndefined();
-    expect(await store.getVaultItem("missing-data", "actor")).toBeUndefined();
+    expect(await store.getVaultItem("missing", "actor", TEST_TENANT)).toBeUndefined();
+    expect(await store.getVaultItem("missing-data", "actor", TEST_TENANT)).toBeUndefined();
 
     db.manyResults.push([
       row,
@@ -322,12 +333,12 @@ describe("cloud Postgres store", () => {
     expect(await store.searchVaultItemMetadata("example")).toHaveLength(1);
 
     db.manyResults.push([]);
-    expect(await store.deleteVaultItem("missing", "actor")).toBe(false);
+    expect(await store.deleteVaultItem("missing", "actor", TEST_TENANT)).toBe(false);
     db.manyResults.push([{ id: "item-1" }]);
-    expect(await store.deleteVaultItem("item-1", "actor")).toBe(true);
+    expect(await store.deleteVaultItem("item-1", "actor", TEST_TENANT)).toBe(true);
 
     db.getResults.push(null, vaultRow({ id: "generated" }));
-    const generated = await store.setVaultItem({ kind: "custom", title: "Generated" }, "actor");
+    const generated = await store.setVaultItem({ kind: "custom", title: "Generated" }, "actor", TEST_TENANT);
     expect(generated.id).toBe("generated");
   });
 
@@ -336,7 +347,10 @@ describe("cloud Postgres store", () => {
     const store = new CloudSecretsStore(db as any);
     const user = { id: "u1", name: "User", type: "agent", registered_at: now, last_seen: now };
     db.getResults.push(user);
-    expect(await store.registerUser("u1", "User", "agent")).toEqual(user);
+    expect(await store.registerUser("u1", "User", "agent", TEST_TENANT)).toEqual(user);
+    const userInsert = db.executed.find((entry) => entry.sql.includes("INSERT INTO users"))!;
+    expect(userInsert.sql).toContain("tenant_id");
+    expect(userInsert.params?.at(-1)).toBe(TEST_TENANT);
 
     db.manyResults.push([user], [user], [], [{ id: "u1" }]);
     expect(await store.listUsers("agent")).toEqual([user]);
@@ -349,7 +363,19 @@ describe("cloud Postgres store", () => {
     expect(await store.getAuditLog("demo/key", 2)).toEqual([audit]);
     expect(await store.getAuditLog(undefined)).toEqual([audit]);
 
-    await store.addFeedback("message", undefined, "general", "1.0.0");
+    await store.addFeedback("message", undefined, "general", "1.0.0", TEST_TENANT);
+    expect(db.executed.at(-1)?.sql).toContain("tenant_id");
+    expect(db.executed.at(-1)?.params?.at(-1)).toBe(TEST_TENANT);
     expect(db.executed.at(-1)?.params?.[2]).toBeNull();
+  });
+
+  it("rejects tenant-bearing writes before database mutation when tenant context is absent", async () => {
+    const db = new FakeDb();
+    const store = new CloudSecretsStore(db as any);
+
+    await expect((store.addFeedback as any)("message", undefined, "general", "1.0.0", ""))
+      .rejects.toThrow("Tenant context is required");
+
+    expect(db.executed).toHaveLength(0);
   });
 });

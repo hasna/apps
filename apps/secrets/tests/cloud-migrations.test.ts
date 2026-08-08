@@ -5,7 +5,9 @@ import {
   type Migration,
 } from "../src/generated/storage-kit/migrations.js";
 import { type TypedQueryClient } from "../src/generated/storage-kit/query.js";
+import { _resetCloudMasterKey } from "../src/server/cloud-crypto.js";
 import { SECRETS_MIGRATIONS } from "../src/server/cloud-migrations.js";
+import { CloudSecretsStore } from "../src/server/cloud-store.js";
 import { createSecretsMigrationLedger } from "../src/server/migration-compat.js";
 
 const APPLIED_TENANTS_SQL = `CREATE TABLE IF NOT EXISTS tenants (
@@ -82,6 +84,57 @@ class MemoryMigrationClient implements TypedQueryClient {
       return;
     }
     this.executedSql.push(sql);
+  }
+}
+
+class ConcurrentTenantMigrationClient extends MemoryMigrationClient {
+  readonly tenantNullCounts = new Map(
+    ["secrets", "vault_items", "users", "feedback", "audit_log", "api_keys"].map((table) => [table, 1]),
+  );
+  onReconcile: (() => Promise<void>) | undefined;
+  private reconciled = false;
+  private secretRow: Record<string, unknown> | null = null;
+  private vaultRow: Record<string, unknown> | null = null;
+  private userRow: Record<string, unknown> | null = null;
+
+  override async get<T>(sql: string): Promise<T | null> {
+    if (sql.includes("SELECT created_at FROM secrets")) return null;
+    if (sql.includes("SELECT created_at FROM vault_items")) return null;
+    if (sql.includes("SELECT * FROM secrets")) return this.secretRow as T | null;
+    if (sql.includes("SELECT * FROM vault_items")) return this.vaultRow as T | null;
+    if (sql.includes("SELECT * FROM users")) return this.userRow as T | null;
+    return null;
+  }
+
+  override async execute(sql: string, params?: readonly unknown[]): Promise<void> {
+    if (sql.startsWith("INSERT INTO schema_migrations")) {
+      this.rows.push({
+        id: String(params![0]),
+        checksum: String(params![1]),
+        applied_at: new Date("2026-08-08T02:00:00.000Z"),
+      });
+      return;
+    }
+    if (sql.includes("UPDATE secrets") && sql.includes("UPDATE api_keys")) {
+      for (const table of this.tenantNullCounts.keys()) this.tenantNullCounts.set(table, 0);
+      if (!this.reconciled) {
+        this.reconciled = true;
+        await this.onReconcile?.();
+      }
+      return;
+    }
+
+    const insert = sql.match(/INSERT INTO\s+([a-z_]+)\s*\(([^)]+)\)/i);
+    if (!insert) return;
+    const table = insert[1]!;
+    const columns = insert[2]!.split(",").map((column) => column.trim());
+    const values = Object.fromEntries(columns.map((column, index) => [column, params?.[index]]));
+    if (this.tenantNullCounts.has(table) && values.tenant_id == null) {
+      this.tenantNullCounts.set(table, this.tenantNullCounts.get(table)! + 1);
+    }
+    if (table === "secrets") this.secretRow = values;
+    if (table === "vault_items") this.vaultRow = values;
+    if (table === "users") this.userRow = values;
   }
 }
 
@@ -330,5 +383,60 @@ describe("cloud migration lineage", () => {
 
     const ledger = await createSecretsMigrationLedger(client);
     await expect(ledger.migrate({ dryRun: true })).rejects.toThrow("checksum mismatch");
+  });
+
+  it("leaves zero null tenant ids when active writes race with and follow reconciliation", async () => {
+    const tenantId = "11111111-2222-4333-8444-555555555555";
+    process.env.HASNA_SECRETS_MASTER_KEY = "migration-concurrency-test-key";
+    _resetCloudMasterKey();
+    const client = new ConcurrentTenantMigrationClient();
+    client.schemaRows = [...EXACT_BACKFILL_TENANT_SCHEMA];
+    client.rows.push(
+      ...SECRETS_MIGRATIONS.map((migration) => ({
+        id: migration.id,
+        checksum:
+          migration.id === "secrets_0012_backfill"
+            ? "sha256:e1d6a79fba95064f6060f28a751a016eb0194c865486ba39656df581419c6231"
+            : migration.checksum,
+        applied_at: "2026-08-08T01:59:02.030Z",
+      })),
+    );
+    const store = new CloudSecretsStore(client);
+    client.onReconcile = async () => {
+      await (store.setSecret as any)(
+        "concurrent/secret",
+        "value",
+        "other",
+        undefined,
+        undefined,
+        "concurrent-agent",
+        tenantId,
+      );
+      await (store.setVaultItem as any)(
+        { id: "concurrent-item", kind: "secure_note", title: "Concurrent", data: {} },
+        "concurrent-agent",
+        tenantId,
+      );
+      await (store.registerUser as any)("concurrent-user", "Concurrent User", "agent", tenantId);
+      await (store.addFeedback as any)("concurrent feedback", undefined, "general", "0.2.15", tenantId);
+    };
+
+    try {
+      const ledger = await createSecretsMigrationLedger(client);
+      await ledger.migrate();
+      await (store.getSecret as any)("concurrent/secret", "after-agent", tenantId);
+
+      expect(Object.fromEntries(client.tenantNullCounts)).toEqual({
+        secrets: 0,
+        vault_items: 0,
+        users: 0,
+        feedback: 0,
+        audit_log: 0,
+        api_keys: 0,
+      });
+    } finally {
+      delete process.env.HASNA_SECRETS_MASTER_KEY;
+      _resetCloudMasterKey();
+    }
   });
 });

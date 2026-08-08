@@ -5,7 +5,14 @@ import { createHandler, type ServeDeps } from "./serve.js";
 // absolute ISO `expires_at` (what Store-contract clients send) AND stay
 // backward-compatible with a `ttl` duration like "30d" (raw API callers).
 
-function makeDeps(capture: { expiresAt?: string | undefined }): ServeDeps {
+const TEST_TENANT = "11111111-2222-4333-8444-555555555555";
+
+interface Capture {
+  expiresAt?: string;
+  tenantId?: string;
+}
+
+function makeDeps(capture: Capture): ServeDeps {
   const store = {
     async setSecret(
       key: string,
@@ -14,8 +21,10 @@ function makeDeps(capture: { expiresAt?: string | undefined }): ServeDeps {
       label: string | undefined,
       expiresAt: string | undefined,
       _actor: string,
+      tenantId: string,
     ) {
       capture.expiresAt = expiresAt;
+      capture.tenantId = tenantId;
       return { key, value: "v", type, label, expires_at: expiresAt, created_at: "", updated_at: "" };
     },
   };
@@ -25,7 +34,9 @@ function makeDeps(capture: { expiresAt?: string | undefined }): ServeDeps {
     },
   };
   return {
-    client: {} as ServeDeps["client"],
+    client: {
+      async get() { return { tenant_id: TEST_TENANT }; },
+    } as unknown as ServeDeps["client"],
     store: store as unknown as ServeDeps["store"],
     verifier: verifier as unknown as ServeDeps["verifier"],
   };
@@ -42,14 +53,15 @@ function post(body: unknown): Request {
 describe("POST /v1/secrets expiry parsing", () => {
   it("accepts an absolute ISO expires_at and forwards it verbatim", async () => {
     const iso = new Date(Date.now() + 30 * 86_400_000).toISOString();
-    const capture: { expiresAt?: string } = {};
+    const capture: Capture = {};
     const res = await createHandler(makeDeps(capture))(post({ key: "a/b", value: "v", type: "api_key", expires_at: iso }));
     expect(res.status).toBe(200);
     expect(capture.expiresAt).toBe(iso);
+    expect(capture.tenantId).toBe(TEST_TENANT);
   });
 
   it("still accepts a ttl duration (backward compat) and resolves it to a future ISO", async () => {
-    const capture: { expiresAt?: string } = {};
+    const capture: Capture = {};
     const res = await createHandler(makeDeps(capture))(post({ key: "a/b", value: "v", ttl: "30d" }));
     expect(res.status).toBe(200);
     expect(capture.expiresAt).toBeString();
@@ -57,7 +69,7 @@ describe("POST /v1/secrets expiry parsing", () => {
   });
 
   it("rejects a malformed expires_at with 400 instead of 500", async () => {
-    const capture: { expiresAt?: string } = {};
+    const capture: Capture = {};
     const res = await createHandler(makeDeps(capture))(post({ key: "a/b", value: "v", expires_at: "not-a-date" }));
     expect(res.status).toBe(400);
     expect(capture.expiresAt).toBeUndefined();

@@ -57,7 +57,7 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
   const { client, store, verifier } = deps;
 
   async function auth(req: Request, requiredScopes: string[]): Promise<
-    { ok: true; actor: string } | { ok: false; res: Response }
+    { ok: true; actor: string; tenantId: string } | { ok: false; res: Response }
   > {
     const url = new URL(req.url);
     const decision = await verifier.authenticate((name: string) => req.headers.get(name), {
@@ -69,7 +69,14 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
       return { ok: false, res: json({ error: decision.message, reason: decision.reason }, decision.status) };
     }
     const actor = decision.principal.agent ?? decision.principal.kid;
-    return { ok: true, actor };
+    const assignment = await client.get<{ tenant_id: string | null }>(
+      "SELECT tenant_id FROM api_keys WHERE kid = $1",
+      [decision.principal.kid],
+    );
+    if (!assignment?.tenant_id) {
+      return { ok: false, res: json({ error: "API key has no tenant assignment" }, 403) };
+    }
+    return { ok: true, actor, tenantId: assignment.tenant_id };
   }
 
   return async function handle(req: Request): Promise<Response> {
@@ -128,7 +135,7 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
             return json({ error: err instanceof Error ? err.message : "Invalid ttl" }, 400);
           }
         }
-        const entry = await store.setSecret(body.key, body.value, type, body.label, expiresAt, a.actor);
+        const entry = await store.setSecret(body.key, body.value, type, body.label, expiresAt, a.actor, a.tenantId);
         const { value, ...meta } = entry;
         return json(meta, 200);
       }
@@ -137,7 +144,7 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
         if (!a.ok) return a.res;
         const key = url.searchParams.get("key");
         if (!key) return json({ error: "Missing key" }, 400);
-        const ok = await store.deleteSecret(key, a.actor);
+        const ok = await store.deleteSecret(key, a.actor, a.tenantId);
         return json({ deleted: ok }, ok ? 200 : 404);
       }
       if (path === "/v1/secrets/get" && method === "GET") {
@@ -145,7 +152,7 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
         if (!a.ok) return a.res;
         const key = url.searchParams.get("key");
         if (!key) return json({ error: "Missing key" }, 400);
-        const entry = await store.getSecret(key, a.actor);
+        const entry = await store.getSecret(key, a.actor, a.tenantId);
         if (!entry) return json({ error: "Not found" }, 404);
         return json(entry);
       }
@@ -174,6 +181,7 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
         const item = await store.setVaultItem(
           { kind: body.kind, title: body.title, data: body.data ?? {}, id: body.id, subtitle: body.subtitle, domains: body.domains, tags: body.tags, favorite: body.favorite },
           a.actor,
+          a.tenantId,
         );
         return json(item);
       }
@@ -190,14 +198,14 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
         if (method === "GET") {
           const a = await auth(req, READ);
           if (!a.ok) return a.res;
-          const item = await store.getVaultItem(id, a.actor);
+          const item = await store.getVaultItem(id, a.actor, a.tenantId);
           if (!item) return json({ error: "Not found" }, 404);
           return json(item);
         }
         if (method === "DELETE") {
           const a = await auth(req, WRITE);
           if (!a.ok) return a.res;
-          const ok = await store.deleteVaultItem(id, a.actor);
+          const ok = await store.deleteVaultItem(id, a.actor, a.tenantId);
           return json({ deleted: ok }, ok ? 200 : 404);
         }
       }
@@ -221,7 +229,7 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
         if (!a.ok) return a.res;
         const body = (await req.json().catch(() => null)) as { id?: string; name?: string; type?: "human" | "agent" } | null;
         if (!body?.id || !body.name) return json({ error: "id and name are required" }, 400);
-        return json(await store.registerUser(body.id, body.name, body.type ?? "human"));
+        return json(await store.registerUser(body.id, body.name, body.type ?? "human", a.tenantId));
       }
       const userMatch = path.match(/^\/v1\/users\/([^/]+)$/);
       if (userMatch && method === "DELETE") {
@@ -238,7 +246,7 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
         if (!a.ok) return a.res;
         const body = (await req.json().catch(() => null)) as { message?: string; email?: string; category?: string } | null;
         if (!body?.message) return json({ error: "message is required" }, 400);
-        await store.addFeedback(body.message, body.email, body.category ?? "general", VERSION);
+        await store.addFeedback(body.message, body.email, body.category ?? "general", VERSION, a.tenantId);
         return json({ ok: true });
       }
 
