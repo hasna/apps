@@ -281,6 +281,17 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
             }
           : null;
       }
+      if (/UPDATE channels SET/i.test(sql)) {
+        const setMatch = sql.match(/UPDATE channels SET (.+) WHERE name = \$(\d+) RETURNING \*/i);
+        if (!setMatch) return null;
+        const name = String(p[Number(setMatch[2]) - 1]);
+        const row = channels[name];
+        if (!row) return null;
+        for (const assignment of setMatch[1].matchAll(/(\w+)\s*=\s*\$(\d+)/g)) {
+          row[assignment[1]] = p[Number(assignment[2]) - 1];
+        }
+        return row;
+      }
       if (/INSERT INTO messages/i.test(sql)) {
         // Destructured positionally, so this must track the column list in the
         // INSERT. reply_to is last; a column missing from the statement is
@@ -1035,6 +1046,25 @@ describe("conversations-serve", () => {
   test("PATCH renames the reachable iproj channel and preserves its member and message population", async () => {
     const source = "iproj-aws-consolidation";
     const target = "aws-consolidation";
+    const archivedAt = "2026-08-07T23:59:00.000Z";
+    const staleMetadata = {
+      channel_schema: {
+        class: "work-project",
+        canonical_slug: source,
+        github: { full_name: `hasnastudio/${source}` },
+        repo_labels: [source, `hasnastudio/${source}`],
+      },
+    };
+    const staleTags = [source, "hasnastudio", `repo:hasnastudio/${source}`];
+    const currentMetadata = {
+      channel_schema: {
+        class: "work-project",
+        canonical_slug: target,
+        github: { full_name: `hasna/${target}` },
+        repo_labels: [target, `hasna/${target}`],
+      },
+    };
+    const currentTags = [target, "hasna", `repo:hasna/${target}`];
     const renameClient = makeFakeClient([]);
     renameClient.__debug.seedChannel(
       {
@@ -1045,9 +1075,9 @@ describe("conversations-serve", () => {
         project_id: null,
         created_by: "belisarius",
         created_at: "2026-07-23T08:15:39.778Z",
-        archived_at: null,
-        metadata: JSON.stringify({ channel_schema: { class: "work-project" } }),
-        tags: null,
+        archived_at: archivedAt,
+        metadata: JSON.stringify(staleMetadata),
+        tags: JSON.stringify(staleTags),
       },
       ["belisarius"],
       Array.from({ length: 28 }, (_, index) => ({
@@ -1085,13 +1115,34 @@ describe("conversations-serve", () => {
       const patch = await fetch(`${renameBase}/v1/channels/${source}`, {
         method: "PATCH",
         headers,
-        body: JSON.stringify({ name: target }),
+        body: JSON.stringify({
+          name: target,
+          description: "Current canonical AWS consolidation channel",
+          metadata: currentMetadata,
+          tags: currentTags,
+        }),
       });
       expect(patch.status).toBe(200);
       expect((await patch.json()).channel).toMatchObject({
         id: "chn_0123456789abcdef0123456789abcdef",
         name: target,
+        description: "Current canonical AWS consolidation channel",
         project_id: null,
+        archived_at: archivedAt,
+        metadata: currentMetadata,
+        tags: currentTags,
+      });
+
+      const got = await fetch(`${renameBase}/v1/channels/${target}`, {
+        headers: { "x-api-key": rwKey },
+      });
+      expect(got.status).toBe(200);
+      expect((await got.json()).channel).toMatchObject({
+        id: "chn_0123456789abcdef0123456789abcdef",
+        name: target,
+        archived_at: archivedAt,
+        metadata: currentMetadata,
+        tags: currentTags,
         member_count: 1,
         message_count: 28,
       });

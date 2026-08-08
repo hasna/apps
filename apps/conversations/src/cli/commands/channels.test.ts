@@ -81,7 +81,7 @@ describe("registerChannelCommands", () => {
     expect(members).toBeDefined();
   });
 
-  test("channel create and update accept --class", () => {
+  test("channel update accepts guarded metadata and tag replacement options", () => {
     const program = new Command();
     registerChannelCommands(program);
 
@@ -90,6 +90,8 @@ describe("registerChannelCommands", () => {
     const update = channel?.commands.find((c) => c.name() === "update");
     expect(create?.options.some((o) => o.long === "--class")).toBe(true);
     expect(update?.options.some((o) => o.long === "--class")).toBe(true);
+    expect(update?.options.some((o) => o.long === "--metadata")).toBe(true);
+    expect(update?.options.some((o) => o.long === "--tags")).toBe(true);
   });
 
   test("registers guarded project-message linkage commands", () => {

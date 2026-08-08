@@ -51,6 +51,33 @@ export function channelClassOf(metadata: Record<string, unknown> | null | undefi
   return typeof channelClass === "string" && channelClass.trim() ? channelClass : null;
 }
 
+function parseChannelMetadataOption(raw: string): Record<string, unknown> | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("Invalid --metadata JSON. Expected an object or null.");
+  }
+  if (parsed === null) return null;
+  if (typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Invalid --metadata JSON. Expected an object or null.");
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function parseChannelTagsOption(raw: string): string[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("Invalid --tags JSON. Expected an array of strings.");
+  }
+  if (!Array.isArray(parsed) || !parsed.every((tag): tag is string => typeof tag === "string")) {
+    throw new Error("Invalid --tags JSON. Expected an array of strings.");
+  }
+  return parsed;
+}
+
 function failCommand(error: unknown, fallback: string): never {
   printErrorLine(chalk.red(error instanceof Error ? error.message : fallback));
   closeDb();
@@ -180,6 +207,8 @@ export function registerChannelCommands(program: Command): void {
     .option("--topic <text>", "New topic")
     .option("--project <id>", "New project ID")
     .option("--class <class>", "Set channel class at metadata.channel_schema.class (empty value clears it); other metadata keys are preserved")
+    .option("--metadata <json>", "Replace channel metadata with a JSON object (use null to clear)")
+    .option("--tags <json>", "Replace channel tags with a JSON array of strings (use [] to clear)")
     .option("-j, --json", "Output as JSON")
     .action(async (name, opts) => {
       const channelName = typeof name === "string" ? name.trim() : "";
@@ -188,7 +217,14 @@ export function registerChannelCommands(program: Command): void {
         process.exit(1);
       }
 
-      const updates: { name?: string; description?: string; topic?: string | null; project_id?: string | null; metadata?: Record<string, unknown> | null } = {};
+      const updates: {
+        name?: string;
+        description?: string;
+        topic?: string | null;
+        project_id?: string | null;
+        metadata?: Record<string, unknown> | null;
+        tags?: string[];
+      } = {};
       if (opts.name !== undefined) {
         const newName = typeof opts.name === "string" ? opts.name.trim() : "";
         if (!newName) {
@@ -200,16 +236,26 @@ export function registerChannelCommands(program: Command): void {
       if (opts.description !== undefined) updates.description = opts.description;
       if (opts.topic !== undefined) updates.topic = opts.topic || null;
       if (opts.project !== undefined) updates.project_id = opts.project || null;
-      if (opts.class !== undefined) {
-        const existing = await getStore().getChannel(channelName);
-        if (!existing) {
-          printErrorLine(chalk.red(`Channel not found: ${channelName}`));
-          process.exit(1);
-        }
-        updates.metadata = mergeChannelClassMetadata(existing.metadata, String(opts.class));
-      }
-
       try {
+        if (opts.metadata !== undefined) {
+          updates.metadata = parseChannelMetadataOption(String(opts.metadata));
+        }
+        if (opts.tags !== undefined) {
+          updates.tags = parseChannelTagsOption(String(opts.tags));
+        }
+        if (opts.class !== undefined) {
+          let metadata = updates.metadata;
+          if (opts.metadata === undefined) {
+            const existing = await getStore().getChannel(channelName);
+            if (!existing) {
+              printErrorLine(chalk.red(`Channel not found: ${channelName}`));
+              process.exit(1);
+            }
+            metadata = existing.metadata;
+          }
+          updates.metadata = mergeChannelClassMetadata(metadata, String(opts.class));
+        }
+
         const sp = await getStore().updateChannel(channelName, updates);
         if (opts.json) {
           printJson(sp);

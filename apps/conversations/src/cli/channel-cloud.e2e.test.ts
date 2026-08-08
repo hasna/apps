@@ -39,6 +39,17 @@ function makeFakeClient() {
         channels[name] = row;
         return row;
       }
+      if (/UPDATE channels SET/i.test(sql)) {
+        const setMatch = sql.match(/UPDATE channels SET (.+) WHERE name = \$(\d+) RETURNING \*/i);
+        if (!setMatch) return null;
+        const name = String(p[Number(setMatch[2]) - 1]);
+        const row = channels[name];
+        if (!row) return null;
+        for (const assignment of setMatch[1].matchAll(/(\w+)\s*=\s*\$(\d+)/g)) {
+          row[assignment[1]] = p[Number(assignment[2]) - 1];
+        }
+        return row;
+      }
       return null;
     },
     async query(_sql: string, _p: readonly unknown[] = []): Promise<{ rows: any[]; rowCount: number }> {
@@ -151,5 +162,59 @@ describe("cloud CLI channel create (e2e)", () => {
     expect(result.stderr).toContain("Request failed: POST /channels -> 400");
     expect(result.stderr).toContain("No conversations project exists with that id.");
     expect(result.stderr).toContain("Hint: Create or resolve the conversations project first");
+  });
+
+  test("channel update metadata/tags uses the cloud API on JSON and human surfaces", async () => {
+    const created = await runCli([
+      "channel",
+      "create",
+      "cloud-identity",
+      "--class",
+      "product",
+      "--from",
+      "alice",
+      "--json",
+    ], env);
+    expect(created.exitCode, created.stderr).toBe(0);
+    const stableId = JSON.parse(created.stdout).id;
+
+    const metadata = {
+      channel_schema: {
+        class: "product",
+        canonical_slug: "cloud-identity",
+        github: { full_name: "hasna/cloud-identity" },
+        repo_labels: ["cloud-identity", "hasna/cloud-identity"],
+      },
+    };
+    const tags = ["cloud-identity", "hasna", "repo:hasna/cloud-identity"];
+    const updated = await runCli([
+      "channel",
+      "update",
+      "cloud-identity",
+      "--metadata",
+      JSON.stringify(metadata),
+      "--tags",
+      JSON.stringify(tags),
+      "--json",
+    ], env);
+    expect(updated.exitCode, updated.stderr).toBe(0);
+    expect(JSON.parse(updated.stdout)).toMatchObject({
+      id: stableId,
+      name: "cloud-identity",
+      metadata,
+      tags,
+    });
+
+    const human = await runCli([
+      "channel",
+      "update",
+      "cloud-identity",
+      "--metadata",
+      JSON.stringify(metadata),
+      "--tags",
+      JSON.stringify(tags),
+    ], env);
+    expect(human.exitCode, human.stderr).toBe(0);
+    expect(human.stdout).toContain("Channel #cloud-identity updated.");
   });
 });
