@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
-import type { Plan, PlanProjectLinkReceipt, Task } from "../types/index.js";
+import type {
+  Plan,
+  PlanProjectLinkReceipt,
+  PlanProjectLinkResult,
+  PlanProjectLinkRollbackResult,
+  Task,
+} from "../types/index.js";
 
 export const PLAN_PROJECT_LINK_SCHEMA_VERSION = "todos.plan-project-link.v1" as const;
 
@@ -96,4 +102,233 @@ export function assertPlanProjectLinkReceipt(value: unknown): PlanProjectLinkRec
     );
   }
   return receipt;
+}
+
+type PlanProjectLinkResponseExpectation = {
+  mode: "plan" | "apply";
+  plan_id: string;
+  project_id: string;
+  idempotency_key?: string;
+};
+
+type PlanProjectLinkRollbackResponseExpectation = {
+  plan_id: string;
+  receipt_id: string;
+};
+
+function responseRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function exactResponseKeys(
+  value: Record<string, unknown>,
+  expected: readonly string[],
+  label: string,
+): void {
+  const actual = Object.keys(value).sort();
+  const wanted = [...expected].sort();
+  if (actual.length !== wanted.length || actual.some((key, index) => key !== wanted[index])) {
+    throw new Error(`${label} fields must be exactly: ${wanted.join(", ")}`);
+  }
+}
+
+function responseString(value: unknown, label: string): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`${label} must be a non-empty string`);
+  }
+  return value;
+}
+
+function responseNullableString(value: unknown, label: string): string | null {
+  if (value !== null && typeof value !== "string") {
+    throw new Error(`${label} must be a string or null`);
+  }
+  return value;
+}
+
+function responsePlan(value: unknown, expectedPlanId: string): Record<string, unknown> {
+  const plan = responseRecord(value, "plan");
+  if (responseString(plan.id, "plan.id") !== expectedPlanId) {
+    throw new Error(`plan.id must match requested plan ${expectedPlanId}`);
+  }
+  responseString(plan.updated_at, "plan.updated_at");
+  responseNullableString(plan.project_id, "plan.project_id");
+  return plan;
+}
+
+function responseProject(value: unknown, expectedProjectId: string): Record<string, unknown> {
+  const project = responseRecord(value, "project");
+  if (responseString(project.id, "project.id") !== expectedProjectId) {
+    throw new Error(`project.id must match requested project ${expectedProjectId}`);
+  }
+  responseString(project.updated_at, "project.updated_at");
+  return project;
+}
+
+function responseTasks(value: unknown, expectedPlanId: string): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) throw new Error("tasks must be an array");
+  const seen = new Set<string>();
+  return value.map((item, index) => {
+    const task = responseRecord(item, `tasks[${index}]`);
+    const taskId = responseString(task.id, `tasks[${index}].id`);
+    if (seen.has(taskId)) throw new Error(`tasks contains duplicate id ${taskId}`);
+    seen.add(taskId);
+    if (task.plan_id !== expectedPlanId) {
+      throw new Error(`tasks[${index}].plan_id must match requested plan ${expectedPlanId}`);
+    }
+    responseNullableString(task.project_id, `tasks[${index}].project_id`);
+    return task;
+  });
+}
+
+function responseReceipt(
+  value: unknown,
+  expectation: Required<PlanProjectLinkResponseExpectation>,
+  planRevision: string,
+  taskIds: string[],
+): PlanProjectLinkReceipt {
+  const receipt = responseRecord(value, "receipt");
+  exactResponseKeys(receipt, [
+    "schema_version",
+    "receipt_id",
+    "idempotency_key",
+    "plan_id",
+    "project_id",
+    "prior_plan_project_id",
+    "prior_task_project_ids",
+    "task_ids",
+    "task_count",
+    "result_plan_revision",
+    "result_digest",
+    "rollback_supported",
+    "created_at",
+  ], "receipt");
+  if (receipt.schema_version !== PLAN_PROJECT_LINK_SCHEMA_VERSION) {
+    throw new Error(`receipt.schema_version must be ${PLAN_PROJECT_LINK_SCHEMA_VERSION}`);
+  }
+  responseString(receipt.receipt_id, "receipt.receipt_id");
+  if (responseString(receipt.idempotency_key, "receipt.idempotency_key") !== expectation.idempotency_key) {
+    throw new Error("receipt.idempotency_key must match the apply request");
+  }
+  if (responseString(receipt.plan_id, "receipt.plan_id") !== expectation.plan_id) {
+    throw new Error("receipt.plan_id must match the requested plan");
+  }
+  if (responseString(receipt.project_id, "receipt.project_id") !== expectation.project_id) {
+    throw new Error("receipt.project_id must match the requested project");
+  }
+  responseNullableString(receipt.prior_plan_project_id, "receipt.prior_plan_project_id");
+  const priorTaskProjectIds = responseRecord(
+    receipt.prior_task_project_ids,
+    "receipt.prior_task_project_ids",
+  );
+  for (const [taskId, projectId] of Object.entries(priorTaskProjectIds)) {
+    responseString(taskId, "receipt.prior_task_project_ids key");
+    responseNullableString(projectId, `receipt.prior_task_project_ids.${taskId}`);
+  }
+  if (!Array.isArray(receipt.task_ids) || receipt.task_ids.some((id) => typeof id !== "string" || id.length === 0)) {
+    throw new Error("receipt.task_ids must be an array of non-empty strings");
+  }
+  const receiptTaskIds = receipt.task_ids as string[];
+  if (new Set(receiptTaskIds).size !== receiptTaskIds.length) {
+    throw new Error("receipt.task_ids must not contain duplicates");
+  }
+  if (
+    receiptTaskIds.length !== taskIds.length
+    || receiptTaskIds.some((taskId, index) => taskId !== taskIds[index])
+  ) {
+    throw new Error("receipt.task_ids must exactly match the response task identities");
+  }
+  const priorTaskIds = Object.keys(priorTaskProjectIds).sort();
+  if (priorTaskIds.length !== taskIds.length || priorTaskIds.some((taskId, index) => taskId !== [...taskIds].sort()[index])) {
+    throw new Error("receipt.prior_task_project_ids must exactly cover the response task identities");
+  }
+  if (!Number.isInteger(receipt.task_count) || receipt.task_count !== taskIds.length) {
+    throw new Error("receipt.task_count must equal the response task count");
+  }
+  if (responseString(receipt.result_plan_revision, "receipt.result_plan_revision") !== planRevision) {
+    throw new Error("receipt.result_plan_revision must equal plan.updated_at");
+  }
+  responseString(receipt.result_digest, "receipt.result_digest");
+  if (receipt.rollback_supported !== true) {
+    throw new Error("receipt.rollback_supported must be true");
+  }
+  responseString(receipt.created_at, "receipt.created_at");
+  return receipt as unknown as PlanProjectLinkReceipt;
+}
+
+/** Validate an untrusted HTTP plan/apply response before the CLI can report success. */
+export function assertPlanProjectLinkResponse(
+  value: unknown,
+  expectation: PlanProjectLinkResponseExpectation,
+): PlanProjectLinkResult {
+  const response = responseRecord(value, `${expectation.mode} response`);
+  exactResponseKeys(response, ["mode", "action", "plan", "project", "tasks", "receipt"], `${expectation.mode} response`);
+  if (response.mode !== expectation.mode) {
+    throw new Error(`mode must be ${expectation.mode}`);
+  }
+  const allowedActions = expectation.mode === "plan"
+    ? ["would_link", "already_linked"]
+    : ["linked", "already_linked"];
+  if (typeof response.action !== "string" || !allowedActions.includes(response.action)) {
+    throw new Error(`action must be one of: ${allowedActions.join(", ")}`);
+  }
+  const plan = responsePlan(response.plan, expectation.plan_id);
+  responseProject(response.project, expectation.project_id);
+  const tasks = responseTasks(response.tasks, expectation.plan_id);
+  const linkedResult = expectation.mode === "apply" || response.action === "already_linked";
+  if (linkedResult) {
+    if (plan.project_id !== expectation.project_id) {
+      throw new Error("plan.project_id must match the requested project after linkage");
+    }
+    if (tasks.some((task) => task.project_id !== expectation.project_id)) {
+      throw new Error("every task.project_id must match the requested project after linkage");
+    }
+  }
+  if (expectation.mode === "plan") {
+    if (response.receipt !== null) throw new Error("receipt must be null for a plan response");
+  } else {
+    if (!expectation.idempotency_key) throw new Error("apply validation requires the request idempotency key");
+    responseReceipt(
+      response.receipt,
+      expectation as Required<PlanProjectLinkResponseExpectation>,
+      plan.updated_at as string,
+      tasks.map((task) => task.id as string),
+    );
+  }
+  return value as PlanProjectLinkResult;
+}
+
+/** Validate an untrusted HTTP rollback response before the CLI can report success. */
+export function assertPlanProjectLinkRollbackResponse(
+  value: unknown,
+  expectation: PlanProjectLinkRollbackResponseExpectation,
+): PlanProjectLinkRollbackResult {
+  const response = responseRecord(value, "rollback response");
+  exactResponseKeys(response, [
+    "schema_version",
+    "action",
+    "plan",
+    "tasks",
+    "accepted_receipt_id",
+    "rollback_receipt_id",
+    "restored_at",
+  ], "rollback response");
+  if (response.schema_version !== PLAN_PROJECT_LINK_SCHEMA_VERSION) {
+    throw new Error(`schema_version must be ${PLAN_PROJECT_LINK_SCHEMA_VERSION}`);
+  }
+  if (response.action !== "restored") throw new Error("action must be restored");
+  const plan = responsePlan(response.plan, expectation.plan_id);
+  responseTasks(response.tasks, expectation.plan_id);
+  if (responseString(response.accepted_receipt_id, "accepted_receipt_id") !== expectation.receipt_id) {
+    throw new Error("accepted_receipt_id must match the rollback request");
+  }
+  responseString(response.rollback_receipt_id, "rollback_receipt_id");
+  const restoredAt = responseString(response.restored_at, "restored_at");
+  if (plan.updated_at !== restoredAt) {
+    throw new Error("restored_at must equal plan.updated_at");
+  }
+  return value as PlanProjectLinkRollbackResult;
 }

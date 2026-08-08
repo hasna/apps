@@ -16,6 +16,11 @@ import { isBlockingDependencyStatus } from "../types/index.js";
 import type { UpdateTemplateInput } from "../storage/interfaces.js";
 import { redactEvidenceText } from "../lib/redaction.js";
 import type { IntegrityReport, IntegrityTaskRow } from "../lib/integrity.js";
+import {
+  PLAN_PROJECT_LINK_SCHEMA_VERSION,
+  assertPlanProjectLinkResponse,
+  assertPlanProjectLinkRollbackResponse,
+} from "../lib/plan-project-link-contract.js";
 import type { PrGroupEventListOptions, PrGroupEventPage, PrGroupStateView } from "../pr-groups/types.js";
 import { parsePrGroupEventPage, parsePrGroupStateView } from "../pr-groups/http-client.js";
 
@@ -1199,15 +1204,26 @@ export async function cloudPlanPlanProjectLink(
   planId: string,
   projectId: string,
 ): Promise<PlanProjectLinkResult> {
-  return requiredRemoteRoute(
+  const route = `/v1/plans/${encodeURIComponent(planId)}/project-link`;
+  const response = await requiredRemoteRoute(
     client,
     "/v1/plans/:id/project-link",
-    () => client.transport.get<PlanProjectLinkResult>(
+    () => client.transport.get<unknown>(
       `/plans/${encodeURIComponent(planId)}/project-link`,
       { query: { project_id: projectId } },
     ),
     ["PLAN_PROJECT_LINK_PLAN_NOT_FOUND", "PLAN_PROJECT_LINK_PROJECT_NOT_FOUND"],
   );
+  try {
+    return assertPlanProjectLinkResponse(response, { mode: "plan", plan_id: planId, project_id: projectId });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned an invalid ${PLAN_PROJECT_LINK_SCHEMA_VERSION} plan response: ` +
+        `${reason}; local SQLite fallback is disabled`,
+      { cause: error },
+    );
+  }
 }
 
 /** Atomically link one existing plan and all its tasks to a project. */
@@ -1221,15 +1237,31 @@ export async function cloudApplyPlanProjectLink(
     idempotency_key: string;
   },
 ): Promise<PlanProjectLinkResult> {
-  return requiredRemoteRoute(
+  const route = `/v1/plans/${encodeURIComponent(planId)}/project-link`;
+  const response = await requiredRemoteRoute(
     client,
     "/v1/plans/:id/project-link",
-    () => client.transport.post<PlanProjectLinkResult>(
+    () => client.transport.post<unknown>(
       `/plans/${encodeURIComponent(planId)}/project-link`,
       { project_id: projectId, ...input },
     ),
     ["PLAN_PROJECT_LINK_PLAN_NOT_FOUND", "PLAN_PROJECT_LINK_PROJECT_NOT_FOUND"],
   );
+  try {
+    return assertPlanProjectLinkResponse(response, {
+      mode: "apply",
+      plan_id: planId,
+      project_id: projectId,
+      idempotency_key: input.idempotency_key,
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned an invalid ${PLAN_PROJECT_LINK_SCHEMA_VERSION} apply response: ` +
+        `${reason}; local SQLite fallback is disabled`,
+      { cause: error },
+    );
+  }
 }
 
 /** Roll back an accepted plan/project link receipt at the exact current revision. */
@@ -1239,10 +1271,11 @@ export async function cloudRollbackPlanProjectLink(
   projectId: string,
   input: { receipt_id: string; expected_plan_revision: string },
 ): Promise<PlanProjectLinkRollbackResult> {
-  return requiredRemoteRoute(
+  const route = `/v1/plans/${encodeURIComponent(planId)}/project-link/rollback`;
+  const response = await requiredRemoteRoute(
     client,
     "/v1/plans/:id/project-link/rollback",
-    () => client.transport.post<PlanProjectLinkRollbackResult>(
+    () => client.transport.post<unknown>(
       `/plans/${encodeURIComponent(planId)}/project-link/rollback`,
       { project_id: projectId, ...input },
     ),
@@ -1252,6 +1285,19 @@ export async function cloudRollbackPlanProjectLink(
       "PLAN_PROJECT_LINK_RECEIPT_NOT_FOUND",
     ],
   );
+  try {
+    return assertPlanProjectLinkRollbackResponse(response, {
+      plan_id: planId,
+      receipt_id: input.receipt_id,
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned an invalid ${PLAN_PROJECT_LINK_SCHEMA_VERSION} rollback response: ` +
+        `${reason}; local SQLite fallback is disabled`,
+      { cause: error },
+    );
+  }
 }
 
 /** List plans from the cloud (`GET /v1/plans`), optionally scoped to a project. */

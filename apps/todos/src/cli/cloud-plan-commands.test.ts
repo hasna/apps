@@ -249,8 +249,19 @@ describe("cloud CLI plan commands", () => {
             project,
             tasks: [],
             receipt: {
+              schema_version: "todos.plan-project-link.v1",
               receipt_id: "ppl_cli_fixture",
+              idempotency_key: "cli-link-fixture",
+              plan_id: plan.id,
+              project_id: project.id,
+              prior_plan_project_id: null,
+              prior_task_project_ids: {},
+              task_ids: [],
               task_count: 0,
+              result_plan_revision: plan.updated_at,
+              result_digest: "fixture-digest",
+              rollback_supported: true,
+              created_at: plan.updated_at,
             },
           }, { status: 201 });
         }
@@ -328,6 +339,75 @@ describe("cloud CLI plan commands", () => {
             expected_plan_revision: "2026-08-07T00:03:00.000Z",
           },
         },
+      ]);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("fails closed when a stale authority returns an ordinary plan for the project-link route", async () => {
+    const projectId = "88888888-8888-4888-8888-888888888888";
+    const plan = {
+      id: PLAN_ID,
+      slug: "link-existing-plan",
+      name: "Link existing plan",
+      description: null,
+      status: "active" as const,
+      project_id: null,
+      task_list_id: null,
+      agent_id: null,
+      created_at: "2026-08-07T00:00:00.000Z",
+      updated_at: "2026-08-07T00:01:00.000Z",
+    };
+    const project = {
+      id: projectId,
+      name: "Target project",
+      path: "/workspace/target-project",
+      description: null,
+      task_list_id: null,
+      task_prefix: null,
+      task_counter: 0,
+      created_at: "2026-08-07T00:00:00.000Z",
+      updated_at: "2026-08-07T00:02:00.000Z",
+    };
+    const requests: Array<{ method: string; path: string }> = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        requests.push({ method: request.method, path: url.pathname });
+        if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "GET") {
+          return Response.json({ plan });
+        }
+        if (url.pathname === "/v1/projects" && request.method === "GET") {
+          return Response.json({ projects: [project], count: 1 });
+        }
+        if (url.pathname === `/v1/plans/${PLAN_ID}/project-link` && request.method === "GET") {
+          return Response.json(plan);
+        }
+        return Response.json({ error: "mutation must not run" }, { status: 500 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-plan-project-link-stale-route-"));
+    tempRoots.push(root);
+    try {
+      const result = await runCli(
+        ["--json", "plans", "--link-project", PLAN_ID, "--to-project", projectId],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain("REMOTE_API_INCOMPATIBLE");
+      expect(result.stderr).toContain("todos.plan-project-link.v1 plan response");
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        error: expect.stringContaining("REMOTE_API_INCOMPATIBLE"),
+      });
+      expect(JSON.parse(result.stdout).error).toContain("todos.plan-project-link.v1 plan response");
+      expect(requests).toEqual([
+        { method: "GET", path: `/v1/plans/${PLAN_ID}` },
+        { method: "GET", path: "/v1/projects" },
+        { method: "GET", path: `/v1/plans/${PLAN_ID}/project-link` },
       ]);
     } finally {
       server.stop(true);
