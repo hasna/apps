@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.9 — 2026-08-08
+
+Release of the hosted content retrieval and event-loop isolation fixes merged
+in #29 and #30.
+
+- Add authenticated, tenant-scoped hosted routes for raw file bytes and derived
+  text extraction.
+- Make hosted CLI downloads and extraction write create-only, owner-mode output
+  files while refusing stdout, symlinks, collisions, and tenant mismatches.
+- Run hosted extraction and caller-supplied redaction patterns in a bounded
+  worker so pathological regular expressions cannot monopolize the shared
+  server request loop, while preserving existing redaction and private-output
+  behavior.
+
 ## 0.3.8 — 2026-08-07
 
 Release of the page-limit fix merged in #26.
