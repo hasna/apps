@@ -116,6 +116,32 @@ describe("deps --json (local store)", () => {
     expect(graph.cycles).toEqual([]);
   });
 
+  test("whole-project graph accepts the documented --graph flag without a task id", async () => {
+    const root = mkdtempSync(join(tmpdir(), "todos-deps-local-project-graph-flag-"));
+    tempRoots.push(root);
+    const project = JSON.parse(
+      (await runLocal(["projects", "--add", join(root, "proj"), "--name", "LocalProjectGraphFlag", "-j"], root)).stdout,
+    );
+    const a = JSON.parse((await runLocal(["add", "A", "--project", project.id, "-j"], root)).stdout);
+    const b = JSON.parse((await runLocal(["add", "B", "--project", project.id, "-j"], root)).stdout);
+    const c = JSON.parse(
+      (await runLocal(["add", "C", "--project", project.id, "--parent", b.id, "-j"], root)).stdout,
+    );
+    await runLocal(["deps", b.id, "--needs", a.id], root);
+    await runLocal(["deps", c.id, "--needs", b.id], root);
+
+    const res = await runLocal(["deps", "--project", project.id, "--graph", "--json"], root);
+    expect(res.stderr).toBe("");
+    expect(res.exitCode).toBe(0);
+    const graph = JSON.parse(res.stdout);
+    expect(graph.schema_version).toBe("todos.project_dependency_graph.v1");
+    expect(graph.project_id).toBe(project.id);
+    expect(graph.nodes.map((n: { id: string }) => n.id).sort()).toEqual([a.id, b.id, c.id].sort());
+    const pairs = graph.edges.map((e: { task_id: string; depends_on: string }) => `${e.task_id}->${e.depends_on}`).sort();
+    expect(pairs).toEqual([`${b.id}->${a.id}`, `${c.id}->${b.id}`].sort());
+    expect(graph.cycles).toEqual([]);
+  });
+
   test("--graph --json still emits the recursive graph shape (regression guard)", async () => {
     const root = mkdtempSync(join(tmpdir(), "todos-deps-local-legacy-"));
     tempRoots.push(root);
@@ -222,8 +248,9 @@ function startServer(options: {
       }
       if (path === "/v1/tasks" && request.method === "GET") {
         const wanted = url.searchParams.get("project_id");
+        const includeSubtasks = url.searchParams.get("include_subtasks") === "true";
         const rows = Object.values(options.tasks).filter(
-          (t) => !wanted || t["project_id"] === wanted,
+          (t) => (!wanted || t["project_id"] === wanted) && (includeSubtasks || !t["parent_id"]),
         );
         return Response.json({ tasks: rows });
       }
@@ -336,7 +363,7 @@ describe("deps --json (self-hosted store)", () => {
       tasks: {
         [GA_ID]: taskFixture(GA_ID, { title: "GA", project_id: PROJECT_ID }),
         [GB_ID]: taskFixture(GB_ID, { title: "GB", project_id: PROJECT_ID }),
-        [GC_ID]: taskFixture(GC_ID, { title: "GC", project_id: PROJECT_ID }),
+        [GC_ID]: taskFixture(GC_ID, { title: "GC", project_id: PROJECT_ID, parent_id: GB_ID }),
       },
       edges: {
         [GB_ID]: { dependencies: [{ task_id: GB_ID, depends_on: GA_ID }], blocked_by: [] },
@@ -346,16 +373,21 @@ describe("deps --json (self-hosted store)", () => {
     const root = mkdtempSync(join(tmpdir(), "todos-deps-cloud-graph-"));
     tempRoots.push(root);
     try {
-      const res = await runCloud(["deps", "--project", PROJECT_ID, "--json"], root, `http://127.0.0.1:${server.port}`);
-      expect(res.stderr).toBe("");
-      expect(res.exitCode).toBe(0);
-      const graph = JSON.parse(res.stdout);
-      expect(graph.schema_version).toBe("todos.project_dependency_graph.v1");
-      expect(graph.project_id).toBe(PROJECT_ID);
-      expect(graph.nodes.map((n: { id: string }) => n.id).sort()).toEqual([GA_ID, GB_ID, GC_ID].sort());
-      const pairs = graph.edges.map((e: { task_id: string; depends_on: string }) => `${e.task_id}->${e.depends_on}`).sort();
-      expect(pairs).toEqual([`${GB_ID}->${GA_ID}`, `${GC_ID}->${GB_ID}`].sort());
-      expect(graph.cycles).toEqual([]);
+      for (const args of [
+        ["deps", "--project", PROJECT_ID, "--json"],
+        ["deps", "--project", PROJECT_ID, "--graph", "--json"],
+      ]) {
+        const res = await runCloud(args, root, `http://127.0.0.1:${server.port}`);
+        expect(res.stderr).toBe("");
+        expect(res.exitCode).toBe(0);
+        const graph = JSON.parse(res.stdout);
+        expect(graph.schema_version).toBe("todos.project_dependency_graph.v1");
+        expect(graph.project_id).toBe(PROJECT_ID);
+        expect(graph.nodes.map((n: { id: string }) => n.id).sort()).toEqual([GA_ID, GB_ID, GC_ID].sort());
+        const pairs = graph.edges.map((e: { task_id: string; depends_on: string }) => `${e.task_id}->${e.depends_on}`).sort();
+        expect(pairs).toEqual([`${GB_ID}->${GA_ID}`, `${GC_ID}->${GB_ID}`].sort());
+        expect(graph.cycles).toEqual([]);
+      }
     } finally {
       server.stop(true);
     }

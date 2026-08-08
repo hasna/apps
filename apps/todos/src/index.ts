@@ -48,6 +48,7 @@ export {
   postgresTodosProjectRegistrationSchemaSql,
   sqliteTodosProjectRegistrationSchemaSql,
 } from "./project-registration/index.js";
+export * from "./task-manifest/index.js";
 export type {
   PostgresTodosProjectRegistrationBackendOptions,
   TodosProjectRegistrationAuthority,
@@ -130,6 +131,15 @@ export type {
   OnboardingFixtureSummary,
   WriteOnboardingFixtureResult,
 } from "./lib/onboarding-fixtures.js";
+
+// Guarded plan/project linkage
+export {
+  PLAN_PROJECT_LINK_SCHEMA_VERSION,
+  PlanProjectLinkError,
+  applyPlanProjectLink,
+  planPlanProjectLink,
+  rollbackPlanProjectLink,
+} from "./lib/plan-project-link.js";
 
 // Local snapshot resources
 export {

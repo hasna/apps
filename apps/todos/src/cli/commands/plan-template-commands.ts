@@ -19,7 +19,13 @@ import {
   substituteTemplateVariables,
 } from "../../lib/template-semantics.js";
 import { inspectPlanArtifact, readPlanArtifact, writePlanArtifact } from "../../lib/plan-artifacts.js";
-import { formatTaskLine, autoProject, handleError, output } from "../helpers.js";
+import {
+  applyPlanProjectLink,
+  planPlanProjectLink,
+  rollbackPlanProjectLink,
+} from "../../lib/plan-project-link.js";
+import { createLocalSqliteTodosStorageAdapter } from "../../storage/local-sqlite.js";
+import { formatTaskLine, autoProject, handleError, output, resolveExplicitProject } from "../helpers.js";
 import {
   getTodosCloudClient,
   cloudCreatePlan,
@@ -32,8 +38,11 @@ import {
   cloudListPlans,
   cloudListTemplates,
   cloudListTasks,
+  cloudApplyPlanProjectLink,
+  cloudPlanPlanProjectLink,
   cloudResolvePlan,
   cloudResolveProjectRef,
+  cloudRollbackPlanProjectLink,
   cloudUpdateTemplate,
   cloudUpdatePlan,
 } from "../cloud-router.js";
@@ -254,12 +263,96 @@ export function registerPlanTemplateCommands(program: Command) {
     .option("--write-artifacts", "Write local Markdown artifacts for all project-scoped plans in scope")
     .option("--delete <id>", "Delete a plan")
     .option("--complete <id>", "Mark a plan as completed")
+    .option("--link-project <id-or-slug>", "Plan or apply a guarded plan/project link")
+    .option("--rollback-project-link <id-or-slug>", "Roll back an accepted plan/project link receipt")
+    .option("--to-project <id-or-slug>", "Destination project for --link-project or --rollback-project-link")
+    .option("--apply", "Apply --link-project after its exact-revision plan")
+    .option("--idempotency-key <key>", "Stable idempotency key required with --link-project --apply")
+    .option("--receipt <id>", "Accepted receipt required with --rollback-project-link")
     .action(async (opts) => {
       const globalOpts = program.opts();
       const cloud = getTodosCloudClient();
       const projectId = cloud
         ? (globalOpts.project ? await cloudResolveProjectRef(cloud, globalOpts.project) : undefined)
         : autoProject(globalOpts);
+
+      if (opts.linkProject && opts.rollbackProjectLink) {
+        handleError(new Error("Choose either --link-project or --rollback-project-link, not both."));
+      }
+
+      if (opts.linkProject || opts.rollbackProjectLink) {
+        if (!opts.toProject) {
+          handleError(new Error("--to-project is required for plan/project link operations."));
+        }
+        if (opts.apply && !opts.linkProject) {
+          handleError(new Error("--apply is valid only with --link-project."));
+        }
+        const planRef = opts.linkProject ?? opts.rollbackProjectLink;
+        const plan = cloud
+          ? await cloudResolvePlan(cloud, planRef)
+          : getPlan(resolvePlanCliRef(planRef, undefined));
+        if (!plan) {
+          handleError(new Error(`Plan not found: ${planRef}`));
+        }
+        const targetProjectId = cloud
+          ? await cloudResolveProjectRef(cloud, opts.toProject)
+          : resolveExplicitProject(opts.toProject).id;
+
+        if (opts.linkProject) {
+          const planned = cloud
+            ? await cloudPlanPlanProjectLink(cloud, plan.id, targetProjectId)
+            : await planPlanProjectLink(
+                createLocalSqliteTodosStorageAdapter({ db: getDatabase() }),
+                plan.id,
+                targetProjectId,
+              );
+          if (!opts.apply) {
+            if (globalOpts.json) output(planned, true);
+            else console.log(chalk.cyan(`${planned.action}: ${planned.tasks.length} task(s) → ${planned.project.name}`));
+            return;
+          }
+          if (!opts.idempotencyKey) {
+            handleError(new Error("--idempotency-key is required with --link-project --apply."));
+          }
+          const result = cloud
+            ? await cloudApplyPlanProjectLink(cloud, plan.id, targetProjectId, {
+                expected_plan_revision: planned.plan.updated_at,
+                expected_project_revision: planned.project.updated_at,
+                idempotency_key: opts.idempotencyKey,
+              })
+            : await applyPlanProjectLink(
+                createLocalSqliteTodosStorageAdapter({ db: getDatabase() }),
+                plan.id,
+                targetProjectId,
+                {
+                  expected_plan_revision: planned.plan.updated_at,
+                  expected_project_revision: planned.project.updated_at,
+                  idempotency_key: opts.idempotencyKey,
+                },
+              );
+          if (globalOpts.json) output(result, true);
+          else console.log(chalk.green(`${result.action}: ${result.tasks.length} task(s) → ${result.project.name}; receipt ${result.receipt?.receipt_id}`));
+          return;
+        }
+
+        if (!opts.receipt) {
+          handleError(new Error("--receipt is required with --rollback-project-link."));
+        }
+        const result = cloud
+          ? await cloudRollbackPlanProjectLink(cloud, plan.id, targetProjectId, {
+              receipt_id: opts.receipt,
+              expected_plan_revision: plan.updated_at,
+            })
+          : await rollbackPlanProjectLink(
+              createLocalSqliteTodosStorageAdapter({ db: getDatabase() }),
+              plan.id,
+              targetProjectId,
+              { receipt_id: opts.receipt, expected_plan_revision: plan.updated_at },
+            );
+        if (globalOpts.json) output(result, true);
+        else console.log(chalk.green(`rolled_back: ${result.tasks.length} task(s); receipt ${result.rollback_receipt_id}`));
+        return;
+      }
 
       if (opts.add) {
         let plan: Plan;

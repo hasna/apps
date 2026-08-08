@@ -11,11 +11,17 @@
 import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
 import { normalizeStorageMode } from "@hasna/contracts/mode";
 import { resolve as resolvePath } from "node:path";
-import type { Agent, CreatePlanInput, CreateTaskListInput, CreateTemplateInput, Plan, Project, RegisterAgentInput, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList, TaskTemplate, TemplateWithTasks, UpdatePlanInput, UpdateTaskListInput } from "../types/index.js";
+import type { Agent, CreatePlanInput, CreateTaskListInput, CreateTemplateInput, Plan, PlanProjectLinkResult, PlanProjectLinkRollbackResult, Project, ProjectTaskListEnsureResult, ProjectTaskListRollbackResult, RegisterAgentInput, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList, TaskTemplate, TemplateWithTasks, UpdatePlanInput, UpdateTaskListInput } from "../types/index.js";
 import { isBlockingDependencyStatus } from "../types/index.js";
 import type { UpdateTemplateInput } from "../storage/interfaces.js";
 import { redactEvidenceText } from "../lib/redaction.js";
 import type { IntegrityReport, IntegrityTaskRow } from "../lib/integrity.js";
+import {
+  PLAN_PROJECT_LINK_SCHEMA_VERSION,
+  assertPlanProjectLinkResponse,
+  assertPlanProjectLinkRollbackResponse,
+  normalizePlanProjectLinkIdempotencyKey,
+} from "../lib/plan-project-link-contract.js";
 import type { PrGroupEventListOptions, PrGroupEventPage, PrGroupStateView } from "../pr-groups/types.js";
 import { parsePrGroupEventPage, parsePrGroupStateView } from "../pr-groups/http-client.js";
 
@@ -63,6 +69,9 @@ export interface CloudTaskCompletionInput {
 }
 
 const completionCapabilityCache = new Map<string, Promise<ReadonlySet<string>>>();
+const gitRefCapabilityCache = new Map<string, Promise<ReadonlySet<RemoteGitRefCapability>>>();
+
+type RemoteGitRefCapability = "task-read" | "task-write" | "reverse-read";
 
 export interface TodosRemoteAuthorityConfigStatus {
   selected: boolean;
@@ -454,12 +463,18 @@ async function requiredRemoteRoute<T>(
   client: HasnaStorageClient,
   route: string,
   request: () => Promise<T>,
+  recognized404Codes: readonly string[] = [],
 ): Promise<T> {
   try {
     return await request();
   } catch (error) {
     const status = error && typeof error === "object" ? (error as { status?: unknown }).status : undefined;
     if (status === 404) {
+      const body = error && typeof error === "object" ? (error as { body?: unknown }).body : undefined;
+      const code = body && typeof body === "object" && !Array.isArray(body)
+        ? (body as { code?: unknown }).code
+        : undefined;
+      if (typeof code === "string" && recognized404Codes.includes(code)) throw error;
       throw new Error(
         `REMOTE_API_INCOMPATIBLE: configured Todos authority ${remoteAuthorityBase(client)} does not expose ${route}; ` +
           "deploy the @hasna/todos /v1 server contract before retrying; local SQLite fallback is disabled",
@@ -495,6 +510,7 @@ export function resetTodosCloudClient(): void {
   // Only protocol capabilities are cached, keyed by authority rather than credentials.
   completionCapabilityCache.clear();
   listTagsCapabilityCache.clear();
+  gitRefCapabilityCache.clear();
 }
 
 function assertRemotePrGroupView(value: unknown, route: string): PrGroupStateView {
@@ -591,6 +607,18 @@ function toListQuery(filter: TaskFilter = {}): Record<string, string | number> {
   return query;
 }
 
+const PRIORITY_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+function priorityRank(priority?: string | null): number {
+  return PRIORITY_RANK[priority ?? ""] ?? 4;
+}
+
+/** The authoritative remote task order before limit/offset are applied. */
+function compareCloudTaskOrder(a: Task, b: Task): number {
+  return priorityRank(a.priority) - priorityRank(b.priority)
+    || b.created_at.localeCompare(a.created_at)
+    || a.id.localeCompare(b.id);
+}
+
 const listTagsCapabilityCache = new Map<string, Promise<boolean>>();
 
 /** Whether this authority's `GET /v1/tasks` advertises the `tags` query param. */
@@ -637,13 +665,50 @@ async function requireTagsFilterCapability(client: HasnaStorageClient): Promise<
   }
 }
 
-/** List tasks from the cloud (`GET /v1/tasks`). Returns the `tasks` array. */
-export async function cloudListTasks(client: HasnaStorageClient, filter: TaskFilter = {}): Promise<Task[]> {
-  if (filter.tags?.length) await requireTagsFilterCapability(client);
+async function requestCloudTaskPage(client: HasnaStorageClient, filter: TaskFilter): Promise<Task[]> {
   const res = await requiredRemoteRoute(client, "/v1/tasks", () =>
     client.list<Task>("tasks", { query: toListQuery(filter) }));
   const envelope = res.raw as { tasks?: Task[] } | undefined;
   return Array.isArray(envelope?.tasks) ? envelope!.tasks : res.items;
+}
+
+/** List tasks from the cloud (`GET /v1/tasks`). Returns the `tasks` array. */
+export async function cloudListTasks(client: HasnaStorageClient, filter: TaskFilter = {}): Promise<Task[]> {
+  if (filter.tags?.length) await requireTagsFilterCapability(client);
+
+  const statuses = Array.isArray(filter.status) ? filter.status : undefined;
+  if (!statuses) return requestCloudTaskPage(client, filter);
+  if (statuses.length === 0) {
+    const { status: _status, ...unfiltered } = filter;
+    return requestCloudTaskPage(client, unfiltered);
+  }
+  if (statuses.length === 1) {
+    return requestCloudTaskPage(client, { ...filter, status: statuses[0] });
+  }
+
+  // The deployed authority can return HTTP 200, valid JSON, and an empty task
+  // array for `status=pending,in_progress` while each scalar status returns real
+  // rows. Never let that silent contract mismatch turn an active queue into an
+  // authoritative-looking empty one. Scalar enum filters are the shared contract,
+  // so compose the array as bounded scalar reads and take the global window last.
+  const { status: _status, limit, offset, ...baseFilter } = filter;
+  const start = offset ?? 0;
+  const windowEnd = typeof limit === "number" ? start + limit : undefined;
+  const pages = await Promise.all(statuses.map((status) =>
+    requestCloudTaskPage(client, {
+      ...baseFilter,
+      status,
+      ...(windowEnd === undefined ? {} : { limit: windowEnd }),
+    })));
+
+  const seen = new Set<string>();
+  const union = pages.flat().filter((task) => {
+    if (seen.has(task.id)) return false;
+    seen.add(task.id);
+    return true;
+  });
+  union.sort(compareCloudTaskOrder);
+  return union.slice(start, windowEnd);
 }
 
 /**
@@ -699,9 +764,52 @@ export async function cloudGetTask(client: HasnaStorageClient, id: string): Prom
   return raw == null ? null : unwrapTask(raw);
 }
 
-/** Create a task (`POST /v1/tasks`, retry-safe idempotency key). */
+/** Create a task (`POST /v1/tasks`). */
 export async function cloudCreateTask(client: HasnaStorageClient, input: Record<string, unknown>): Promise<Task> {
-  return unwrapTask(await requiredRemoteRoute(client, "/v1/tasks", () => client.create<unknown>("tasks", input)));
+  const expectedParentId = typeof input["parent_id"] === "string" ? input["parent_id"] : null;
+  const created = unwrapTask(await requiredRemoteRoute(
+    client,
+    "/v1/tasks",
+    // The /v1 task route does not yet implement Idempotency-Key replay
+    // deduplication. A transient/error response after a parented store write can
+    // therefore replay the exact failure under investigation into multiple
+    // subtasks. Keep parented creates single-attempt; leave the established
+    // parentless transport behavior unchanged.
+    () => expectedParentId === null
+      ? client.create<unknown>("tasks", input)
+      : client.create<unknown>("tasks", input, { retry: false }),
+    ["PARENT_TASK_NOT_FOUND"],
+  ));
+  if (!created || typeof created.id !== "string" || !created.id.trim()) {
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: configured Todos authority ${remoteAuthorityBase(client)} returned a task create ` +
+        "response without a stored task id; no success row or local SQLite fallback is permitted",
+    );
+  }
+
+  // Preserve the existing parentless CLI path. Current source still performs an
+  // authoritative server-side readback for every create, while this additional
+  // client guard is specifically for stale authorities exhibiting PLA-03362.
+  if (expectedParentId === null) return created;
+
+  // A parented POST response is an acknowledgement, not proof that the authority
+  // made the subtask readable. The hosted PLA-03362 failure returned two
+  // complete-looking task objects here, then GET-by-id returned 404 for both.
+  // Read the exact id back before any CLI/MCP caller is allowed to print success,
+  // and return that stored row rather than the optimistic POST body.
+  const persisted = await cloudGetTask(client, created.id);
+  if (
+    !persisted
+    || persisted.id !== created.id
+    || (persisted.parent_id ?? null) !== expectedParentId
+  ) {
+    throw new Error(
+      `TASK_CREATE_PERSISTENCE_UNVERIFIED: configured Todos authority ${remoteAuthorityBase(client)} accepted ` +
+        `POST /v1/tasks but authoritative GET /v1/tasks/${encodeURIComponent(created.id)} did not return the same ` +
+        "stored task id and parent_id; no success row or local SQLite fallback is permitted",
+    );
+  }
+  return persisted;
 }
 
 /** Update a task (`PATCH /v1/tasks/:id`). */
@@ -1138,6 +1246,161 @@ export async function cloudDeleteProject(client: HasnaStorageClient, id: string)
   return true;
 }
 
+/** Plan a non-mutating repair of an existing project's declared task list. */
+export async function cloudPlanProjectTaskListEnsure(
+  client: HasnaStorageClient,
+  projectId: string,
+): Promise<ProjectTaskListEnsureResult> {
+  return requiredRemoteRoute(
+    client,
+    "/v1/projects/:id/task-list/ensure",
+    () => client.transport.get<ProjectTaskListEnsureResult>(
+      `/projects/${encodeURIComponent(projectId)}/task-list/ensure`,
+    ),
+    ["PROJECT_NOT_FOUND"],
+  );
+}
+
+/** Apply an exact-revision, idempotent repair of a project's declared task list. */
+export async function cloudApplyProjectTaskListEnsure(
+  client: HasnaStorageClient,
+  projectId: string,
+  input: { expected_project_revision: string; idempotency_key?: string },
+): Promise<ProjectTaskListEnsureResult> {
+  return requiredRemoteRoute(
+    client,
+    "/v1/projects/:id/task-list/ensure",
+    () => client.transport.post<ProjectTaskListEnsureResult>(
+      `/projects/${encodeURIComponent(projectId)}/task-list/ensure`,
+      input,
+    ),
+    ["PROJECT_NOT_FOUND"],
+  );
+}
+
+/** Conditionally remove an unchanged list owned by an accepted ensure receipt. */
+export async function cloudRollbackProjectTaskListEnsure(
+  client: HasnaStorageClient,
+  projectId: string,
+  input: { receipt_id: string; expected_task_list_revision: string },
+): Promise<ProjectTaskListRollbackResult> {
+  return requiredRemoteRoute(
+    client,
+    "/v1/projects/:id/task-list/rollback",
+    () => client.transport.post<ProjectTaskListRollbackResult>(
+      `/projects/${encodeURIComponent(projectId)}/task-list/rollback`,
+      input,
+    ),
+    ["PROJECT_NOT_FOUND", "PROJECT_TASK_LIST_RECEIPT_NOT_FOUND"],
+  );
+}
+
+/** Plan a non-mutating link of one existing plan and all its tasks to a project. */
+export async function cloudPlanPlanProjectLink(
+  client: HasnaStorageClient,
+  planId: string,
+  projectId: string,
+): Promise<PlanProjectLinkResult> {
+  const route = `/v1/plans/${encodeURIComponent(planId)}/project-link`;
+  const response = await requiredRemoteRoute(
+    client,
+    "/v1/plans/:id/project-link",
+    () => client.transport.get<unknown>(
+      `/plans/${encodeURIComponent(planId)}/project-link`,
+      { query: { project_id: projectId } },
+    ),
+    ["PLAN_PROJECT_LINK_PLAN_NOT_FOUND", "PLAN_PROJECT_LINK_PROJECT_NOT_FOUND"],
+  );
+  try {
+    return assertPlanProjectLinkResponse(response, { mode: "plan", plan_id: planId, project_id: projectId });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned an invalid ${PLAN_PROJECT_LINK_SCHEMA_VERSION} plan response: ` +
+        `${reason}; local SQLite fallback is disabled`,
+      { cause: error },
+    );
+  }
+}
+
+/** Atomically link one existing plan and all its tasks to a project. */
+export async function cloudApplyPlanProjectLink(
+  client: HasnaStorageClient,
+  planId: string,
+  projectId: string,
+  input: {
+    expected_plan_revision: string;
+    expected_project_revision: string;
+    idempotency_key: string;
+  },
+): Promise<PlanProjectLinkResult> {
+  const route = `/v1/plans/${encodeURIComponent(planId)}/project-link`;
+  const normalizedInput = {
+    ...input,
+    idempotency_key: normalizePlanProjectLinkIdempotencyKey(input.idempotency_key),
+  };
+  const response = await requiredRemoteRoute(
+    client,
+    "/v1/plans/:id/project-link",
+    () => client.transport.post<unknown>(
+      `/plans/${encodeURIComponent(planId)}/project-link`,
+      { project_id: projectId, ...normalizedInput },
+    ),
+    ["PLAN_PROJECT_LINK_PLAN_NOT_FOUND", "PLAN_PROJECT_LINK_PROJECT_NOT_FOUND"],
+  );
+  try {
+    return assertPlanProjectLinkResponse(response, {
+      mode: "apply",
+      plan_id: planId,
+      project_id: projectId,
+      idempotency_key: normalizedInput.idempotency_key,
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned an invalid ${PLAN_PROJECT_LINK_SCHEMA_VERSION} apply response: ` +
+        `${reason}; local SQLite fallback is disabled`,
+      { cause: error },
+    );
+  }
+}
+
+/** Roll back an accepted plan/project link receipt at the exact current revision. */
+export async function cloudRollbackPlanProjectLink(
+  client: HasnaStorageClient,
+  planId: string,
+  projectId: string,
+  input: { receipt_id: string; expected_plan_revision: string },
+): Promise<PlanProjectLinkRollbackResult> {
+  const route = `/v1/plans/${encodeURIComponent(planId)}/project-link/rollback`;
+  const response = await requiredRemoteRoute(
+    client,
+    "/v1/plans/:id/project-link/rollback",
+    () => client.transport.post<unknown>(
+      `/plans/${encodeURIComponent(planId)}/project-link/rollback`,
+      { project_id: projectId, ...input },
+    ),
+    [
+      "PLAN_PROJECT_LINK_PLAN_NOT_FOUND",
+      "PLAN_PROJECT_LINK_PROJECT_NOT_FOUND",
+      "PLAN_PROJECT_LINK_RECEIPT_NOT_FOUND",
+    ],
+  );
+  try {
+    return assertPlanProjectLinkRollbackResponse(response, {
+      plan_id: planId,
+      receipt_id: input.receipt_id,
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned an invalid ${PLAN_PROJECT_LINK_SCHEMA_VERSION} rollback response: ` +
+        `${reason}; local SQLite fallback is disabled`,
+      { cause: error },
+    );
+  }
+}
+
 /** List plans from the cloud (`GET /v1/plans`), optionally scoped to a project. */
 export async function cloudListPlans(client: HasnaStorageClient, projectId?: string): Promise<Plan[]> {
   const query = projectId ? { project_id: projectId } : {};
@@ -1513,24 +1776,175 @@ export interface CloudTaskGitRef {
   updated_at: string;
 }
 
-/** Link a git branch or pull request to a cloud task (`POST /v1/tasks/:id/refs`). */
+function parseCloudTaskGitRef(value: unknown, route: string): CloudTaskGitRef {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned a non-object git ref; local SQLite fallback is disabled`,
+    );
+  }
+  const ref = value as Record<string, unknown>;
+  const requiredStrings = ["id", "task_id", "name", "created_at", "updated_at"] as const;
+  if (requiredStrings.some((field) => typeof ref[field] !== "string" || !(ref[field] as string).trim())) {
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned an incomplete git ref identity; local SQLite fallback is disabled`,
+    );
+  }
+  if (ref["ref_type"] !== "branch" && ref["ref_type"] !== "pull_request") {
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned an invalid git ref type; local SQLite fallback is disabled`,
+    );
+  }
+  for (const field of ["url", "provider"] as const) {
+    if (ref[field] !== null && typeof ref[field] !== "string") {
+      throw new Error(
+        `REMOTE_API_INCOMPATIBLE: ${route} returned an invalid git ref ${field}; local SQLite fallback is disabled`,
+      );
+    }
+  }
+  if (!ref["metadata"] || typeof ref["metadata"] !== "object" || Array.isArray(ref["metadata"])) {
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned invalid git ref metadata; local SQLite fallback is disabled`,
+    );
+  }
+  return ref as unknown as CloudTaskGitRef;
+}
+
+function parseCloudTaskGitRefEnvelope(raw: unknown, route: string): CloudTaskGitRef[] {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned a non-object git ref envelope; local SQLite fallback is disabled`,
+    );
+  }
+  const envelope = raw as Record<string, unknown>;
+  if (!Array.isArray(envelope["refs"]) ||
+      !Number.isSafeInteger(envelope["count"]) ||
+      envelope["count"] !== envelope["refs"].length) {
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned an incomplete git ref envelope; local SQLite fallback is disabled`,
+    );
+  }
+  return envelope["refs"].map((ref) => parseCloudTaskGitRef(ref, route));
+}
+
+function openApiHasOperation(
+  document: unknown,
+  path: string,
+  method: "get" | "post",
+): boolean {
+  if (!document || typeof document !== "object" || Array.isArray(document)) return false;
+  const paths = (document as Record<string, unknown>)["paths"];
+  if (!paths || typeof paths !== "object" || Array.isArray(paths)) return false;
+  const route = (paths as Record<string, unknown>)[path];
+  return Boolean(route && typeof route === "object" && !Array.isArray(route) &&
+    (route as Record<string, unknown>)[method] &&
+    typeof (route as Record<string, unknown>)[method] === "object");
+}
+
+async function fetchGitRefCapabilities(client: HasnaStorageClient): Promise<ReadonlySet<RemoteGitRefCapability>> {
+  const document = await requiredRemoteRoute(client, "/v1/openapi.json", () =>
+    client.transport.get<unknown>("/openapi.json"));
+  const supported = new Set<RemoteGitRefCapability>();
+  if (openApiHasOperation(document, "/v1/tasks/{id}/refs", "get")) supported.add("task-read");
+  if (openApiHasOperation(document, "/v1/tasks/{id}/refs", "post")) supported.add("task-write");
+  if (openApiHasOperation(document, "/v1/refs/{ref}", "get")) supported.add("reverse-read");
+  return supported;
+}
+
+async function requireGitRefCapabilities(
+  client: HasnaStorageClient,
+  required: readonly RemoteGitRefCapability[],
+): Promise<void> {
+  const authority = remoteAuthorityBase(client);
+  let capabilities = gitRefCapabilityCache.get(authority);
+  if (!capabilities) {
+    capabilities = fetchGitRefCapabilities(client);
+    gitRefCapabilityCache.set(authority, capabilities);
+  }
+  const supported = await capabilities;
+  const missing = required.filter((capability) => !supported.has(capability));
+  if (missing.length > 0) {
+    throw new Error(
+      `REMOTE_GIT_REF_UNSUPPORTED: configured Todos authority ${authority} does not advertise the complete git-ref ` +
+        `contract (${missing.join(", ")} missing); deploy the current @hasna/todos /v1 server before retrying; ` +
+        "no ref mutation or local SQLite fallback was attempted",
+    );
+  }
+}
+
+function sameCloudTaskGitRef(
+  ref: CloudTaskGitRef,
+  expected: Pick<CloudTaskGitRef, "id" | "task_id" | "ref_type" | "name">,
+): boolean {
+  return ref.id === expected.id &&
+    ref.task_id === expected.task_id &&
+    ref.ref_type === expected.ref_type &&
+    ref.name === expected.name;
+}
+
+/** List git refs linked to one cloud task (`GET /v1/tasks/:id/refs`). */
+export async function cloudListTaskRefs(
+  client: HasnaStorageClient,
+  taskId: string,
+): Promise<CloudTaskGitRef[]> {
+  await requireGitRefCapabilities(client, ["task-read"]);
+  const route = `/v1/tasks/${encodeURIComponent(taskId)}/refs`;
+  const raw = await requiredRemoteRoute(client, route, () =>
+    client.transport.get<unknown>(`/tasks/${encodeURIComponent(taskId)}/refs`));
+  return parseCloudTaskGitRefEnvelope(raw, route);
+}
+
+/**
+ * Link a git branch or pull request to a cloud task (`POST /v1/tasks/:id/refs`).
+ *
+ * A successful POST body is not authoritative proof: the command only returns
+ * after both the task-scoped and reverse-lookup reads return the exact created
+ * row. This prevents a mixed-version or non-persisting authority from producing
+ * a green `Linked ...` line for data no caller can read back.
+ */
 export async function cloudLinkRef(
   client: HasnaStorageClient,
   taskId: string,
   input: { ref_type: "branch" | "pull_request"; name: string; url?: string; provider?: string; metadata?: Record<string, unknown> },
 ): Promise<CloudTaskGitRef> {
-  const raw = await client.transport.post<unknown>(`/tasks/${encodeURIComponent(taskId)}/refs`, input);
-  if (raw && typeof raw === "object" && "ref" in (raw as Record<string, unknown>)) {
-    return (raw as { ref: CloudTaskGitRef }).ref;
+  await requireGitRefCapabilities(client, ["task-read", "task-write", "reverse-read"]);
+  const route = `/v1/tasks/${encodeURIComponent(taskId)}/refs`;
+  const raw = await requiredRemoteRoute(client, route, () =>
+    client.transport.post<unknown>(`/tasks/${encodeURIComponent(taskId)}/refs`, input));
+  if (!raw || typeof raw !== "object" || Array.isArray(raw) ||
+      Object.keys(raw).length !== 1 || !("ref" in raw)) {
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned a non-authoritative git ref response envelope; ` +
+        "local SQLite fallback is disabled",
+    );
   }
-  return raw as CloudTaskGitRef;
+  const linked = parseCloudTaskGitRef((raw as { ref: unknown }).ref, route);
+  if (linked.task_id !== taskId || linked.ref_type !== input.ref_type || linked.name !== input.name) {
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned a different git ref identity; local SQLite fallback is disabled`,
+    );
+  }
+  const [taskRefs, reverseRefs] = await Promise.all([
+    cloudListTaskRefs(client, taskId),
+    cloudFindRefs(client, input.name),
+  ]);
+  if (!taskRefs.some((ref) => sameCloudTaskGitRef(ref, linked)) ||
+      !reverseRefs.some((ref) => sameCloudTaskGitRef(ref, linked))) {
+    throw new Error(
+      `REMOTE_REF_PERSISTENCE_UNVERIFIED: configured Todos authority ${remoteAuthorityBase(client)} accepted ${route} ` +
+        "but authoritative task and reverse readback did not return the linked ref; no success line or local SQLite " +
+        "fallback is permitted",
+    );
+  }
+  return linked;
 }
 
 /** Find every task linked to a branch/PR ref by name (`GET /v1/refs/:ref`). */
 export async function cloudFindRefs(client: HasnaStorageClient, ref: string): Promise<CloudTaskGitRef[]> {
-  const raw = await client.transport.get<unknown>(`/refs/${encodeURIComponent(ref)}`);
-  const env = (raw ?? {}) as { refs?: CloudTaskGitRef[] };
-  return Array.isArray(env.refs) ? env.refs : [];
+  await requireGitRefCapabilities(client, ["reverse-read"]);
+  const route = `/v1/refs/${encodeURIComponent(ref)}`;
+  const raw = await requiredRemoteRoute(client, route, () =>
+    client.transport.get<unknown>(`/refs/${encodeURIComponent(ref)}`));
+  return parseCloudTaskGitRefEnvelope(raw, route);
 }
 
 /**
@@ -1834,11 +2248,6 @@ export async function cloudRecordVerification(
 // history, task lists, dependency edges, the priority-ranked "next" pick) route
 // to dedicated `/v1` endpoints.
 // ───────────────────────────────────────────────────────────────────────────
-
-const PRIORITY_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
-function priorityRank(priority?: string | null): number {
-  return PRIORITY_RANK[priority ?? ""] ?? 4;
-}
 
 /** All non-terminal tasks (pending + in_progress) — the "active" working set. */
 export async function cloudActiveTasks(client: HasnaStorageClient, filter: TaskFilter = {}): Promise<Task[]> {

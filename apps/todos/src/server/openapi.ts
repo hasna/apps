@@ -15,6 +15,7 @@ const taskSchema = {
     status: { type: "string" },
     priority: { type: "string" },
     project_id: { type: "string", nullable: true },
+    parent_id: { type: "string", nullable: true },
     assigned_to: { type: "string", nullable: true },
     agent_id: { type: "string", nullable: true },
     tags: { type: "array", items: { type: "string" } },
@@ -53,6 +54,83 @@ const taskListSchema = {
   },
 } as const;
 
+const projectTaskListEnsureReceiptSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "schema_version",
+    "receipt_id",
+    "idempotency_key",
+    "project_id",
+    "task_list_id",
+    "slug",
+    "created_by_operation",
+    "result_revision",
+    "result_digest",
+    "rollback_supported",
+    "created_at",
+  ],
+  properties: {
+    schema_version: { type: "string", enum: ["todos.project-task-list-ensure.v1"] },
+    receipt_id: { type: "string" },
+    idempotency_key: { type: "string" },
+    project_id: { type: "string" },
+    task_list_id: { type: "string" },
+    slug: { type: "string" },
+    created_by_operation: { type: "boolean" },
+    result_revision: { type: "string" },
+    result_digest: { type: "string" },
+    rollback_supported: { type: "boolean" },
+    created_at: { type: "string", format: "date-time" },
+  },
+} as const;
+
+const projectTaskListEnsureResultSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["mode", "action", "project", "task_list", "receipt"],
+  properties: {
+    mode: { type: "string", enum: ["plan", "apply"] },
+    action: { type: "string", enum: ["would_create", "created", "already_present"] },
+    project: { $ref: "#/components/schemas/Project" },
+    task_list: {
+      oneOf: [
+        { $ref: "#/components/schemas/TaskList" },
+        { type: "null" },
+      ],
+    },
+    receipt: {
+      oneOf: [
+        { $ref: "#/components/schemas/ProjectTaskListEnsureReceipt" },
+        { type: "null" },
+      ],
+    },
+  },
+} as const;
+
+const projectTaskListRollbackResultSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "schema_version",
+    "action",
+    "project_id",
+    "task_list_id",
+    "accepted_receipt_id",
+    "rollback_receipt_id",
+    "removed_at",
+  ],
+  properties: {
+    schema_version: { type: "string", enum: ["todos.project-task-list-ensure.v1"] },
+    action: { type: "string", enum: ["removed"] },
+    project_id: { type: "string" },
+    task_list_id: { type: "string" },
+    accepted_receipt_id: { type: "string" },
+    rollback_receipt_id: { type: "string" },
+    removed_at: { type: "string", format: "date-time" },
+  },
+} as const;
+
 const taskCommentSchema = {
   type: "object",
   required: ["id", "task_id", "agent_id", "session_id", "content", "type", "progress_pct", "created_at"],
@@ -65,6 +143,26 @@ const taskCommentSchema = {
     type: { type: "string", enum: ["comment", "progress", "note"] },
     progress_pct: { type: "number", nullable: true },
     created_at: { type: "string", format: "date-time" },
+  },
+} as const;
+
+const taskGitRefSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "id", "task_id", "ref_type", "name", "url", "provider", "metadata",
+    "created_at", "updated_at",
+  ],
+  properties: {
+    id: { type: "string", minLength: 1 },
+    task_id: { type: "string", minLength: 1 },
+    ref_type: { type: "string", enum: ["branch", "pull_request"] },
+    name: { type: "string", minLength: 1 },
+    url: { type: "string", nullable: true },
+    provider: { type: "string", nullable: true },
+    metadata: { type: "object", additionalProperties: true },
+    created_at: { type: "string", format: "date-time" },
+    updated_at: { type: "string", format: "date-time" },
   },
 } as const;
 
@@ -82,6 +180,68 @@ const planSchema = {
     status: { type: "string", enum: ["active", "completed", "archived"] },
     created_at: { type: "string", format: "date-time" },
     updated_at: { type: "string", format: "date-time" },
+  },
+} as const;
+
+const planProjectLinkReceiptSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "schema_version", "receipt_id", "idempotency_key", "plan_id", "project_id",
+    "prior_plan_project_id", "prior_task_project_ids", "task_ids", "task_count",
+    "result_plan_revision", "result_digest", "rollback_supported", "created_at",
+  ],
+  properties: {
+    schema_version: { type: "string", enum: ["todos.plan-project-link.v1"] },
+    receipt_id: { type: "string" },
+    idempotency_key: { type: "string" },
+    plan_id: { type: "string" },
+    project_id: { type: "string" },
+    prior_plan_project_id: { type: "string", nullable: true },
+    prior_task_project_ids: {
+      type: "object",
+      additionalProperties: { type: "string", nullable: true },
+    },
+    task_ids: { type: "array", items: { type: "string" } },
+    task_count: { type: "integer", minimum: 0 },
+    result_plan_revision: { type: "string" },
+    result_digest: { type: "string" },
+    rollback_supported: { type: "boolean", enum: [true] },
+    created_at: { type: "string", format: "date-time" },
+  },
+} as const;
+
+const planProjectLinkResultSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["mode", "action", "plan", "project", "tasks", "receipt"],
+  properties: {
+    mode: { type: "string", enum: ["plan", "apply"] },
+    action: { type: "string", enum: ["would_link", "linked", "already_linked"] },
+    plan: { $ref: "#/components/schemas/Plan" },
+    project: { $ref: "#/components/schemas/Project" },
+    tasks: { type: "array", items: { $ref: "#/components/schemas/Task" } },
+    receipt: {
+      oneOf: [
+        { $ref: "#/components/schemas/PlanProjectLinkReceipt" },
+        { type: "null" },
+      ],
+    },
+  },
+} as const;
+
+const planProjectLinkRollbackResultSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["schema_version", "action", "plan", "tasks", "accepted_receipt_id", "rollback_receipt_id", "restored_at"],
+  properties: {
+    schema_version: { type: "string", enum: ["todos.plan-project-link.v1"] },
+    action: { type: "string", enum: ["restored"] },
+    plan: { $ref: "#/components/schemas/Plan" },
+    tasks: { type: "array", items: { $ref: "#/components/schemas/Task" } },
+    accepted_receipt_id: { type: "string" },
+    rollback_receipt_id: { type: "string" },
+    restored_at: { type: "string", format: "date-time" },
   },
 } as const;
 
@@ -175,8 +335,15 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
         Task: taskSchema,
         Project: projectSchema,
         TaskList: taskListSchema,
+        ProjectTaskListEnsureReceipt: projectTaskListEnsureReceiptSchema,
+        ProjectTaskListEnsureResult: projectTaskListEnsureResultSchema,
+        ProjectTaskListRollbackResult: projectTaskListRollbackResultSchema,
         TaskComment: taskCommentSchema,
+        TaskGitRef: taskGitRefSchema,
         Plan: planSchema,
+        PlanProjectLinkReceipt: planProjectLinkReceiptSchema,
+        PlanProjectLinkResult: planProjectLinkResultSchema,
+        PlanProjectLinkRollbackResult: planProjectLinkRollbackResultSchema,
         Template: templateSchema,
         TemplateTask: templateTaskSchema,
         TemplateVariable: templateVariableSchema,
@@ -190,6 +357,8 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             status: { type: "string" },
             priority: { type: "string" },
             project_id: { type: "string" },
+            parent_id: { type: "string" },
+            plan_id: { type: "string" },
             assigned_to: { type: "string" },
             agent_id: { type: "string" },
             tags: { type: "array", items: { type: "string" } },
@@ -204,6 +373,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             priority: { type: "string" },
             assigned_to: { type: "string" },
             project_id: { type: "string", nullable: true },
+            plan_id: { type: "string", nullable: true },
             task_list_id: { type: "string", nullable: true },
             version: { type: "number" },
           },
@@ -250,6 +420,55 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           properties: {
             new_slug: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
             name: { type: "string", minLength: 1 },
+          },
+        },
+        ProjectTaskListEnsureApplyInput: {
+          type: "object",
+          additionalProperties: false,
+          required: ["expected_project_revision"],
+          properties: {
+            expected_project_revision: { type: "string", minLength: 1 },
+            idempotency_key: {
+              type: "string",
+              minLength: 8,
+              maxLength: 128,
+              pattern: "^[A-Za-z0-9._:-]+$",
+            },
+          },
+        },
+        ProjectTaskListRollbackInput: {
+          type: "object",
+          additionalProperties: false,
+          required: ["receipt_id", "expected_task_list_revision"],
+          properties: {
+            receipt_id: { type: "string", minLength: 1 },
+            expected_task_list_revision: { type: "string", minLength: 1 },
+          },
+        },
+        PlanProjectLinkApplyInput: {
+          type: "object",
+          additionalProperties: false,
+          required: ["project_id", "expected_plan_revision", "expected_project_revision", "idempotency_key"],
+          properties: {
+            project_id: { type: "string", minLength: 1 },
+            expected_plan_revision: { type: "string", minLength: 1 },
+            expected_project_revision: { type: "string", minLength: 1 },
+            idempotency_key: {
+              type: "string",
+              minLength: 8,
+              maxLength: 128,
+              pattern: "^[A-Za-z0-9._:-]+$",
+            },
+          },
+        },
+        PlanProjectLinkRollbackInput: {
+          type: "object",
+          additionalProperties: false,
+          required: ["project_id", "receipt_id", "expected_plan_revision"],
+          properties: {
+            project_id: { type: "string", minLength: 1 },
+            receipt_id: { type: "string", minLength: 1 },
+            expected_plan_revision: { type: "string", minLength: 1 },
           },
         },
         ErrorResponse: {
@@ -919,6 +1138,17 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             { name: "assigned_to", in: "query", schema: { type: "string" } },
             { name: "agent_id", in: "query", schema: { type: "string" } },
             { name: "tags", in: "query", schema: { type: "string" }, description: "Comma-separated tags; matches tasks carrying any of them" },
+            {
+              name: "updated_after",
+              in: "query",
+              schema: { type: "string", format: "date-time" },
+              description:
+                "Since-cursor. Returns only tasks whose updated_at is strictly after this instant, and `total` respects it too. "
+                + "Intended for pollers: re-read what changed instead of the whole table. Must be a full RFC 3339 date-time with "
+                + "an explicit offset (e.g. 2026-08-07T12:00:00Z or 2026-08-07T12:00:00+03:00); a reduced-precision value such as "
+                + "`2026` or `2026-08`, or any other malformed value, is rejected with 400 rather than ignored. Timestamps stored "
+                + "without an offset are read as UTC on every backend.",
+            },
             { name: "limit", in: "query", schema: { type: "integer", minimum: 1 } },
             { name: "offset", in: "query", schema: { type: "integer", minimum: 0 } },
           ],
@@ -1063,6 +1293,92 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           },
         },
       },
+      "/v1/tasks/{id}/refs": {
+        get: {
+          operationId: "listTaskGitRefs",
+          summary: "List git branch and pull-request refs linked to a task",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["refs", "count"],
+                    properties: {
+                      refs: { type: "array", items: { $ref: "#/components/schemas/TaskGitRef" } },
+                      count: { type: "integer", minimum: 0 },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        post: {
+          operationId: "linkTaskGitRef",
+          summary: "Link a git branch or pull-request ref to a task",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["ref_type", "name"],
+                  properties: {
+                    ref_type: { type: "string", enum: ["branch", "pull_request"] },
+                    name: { type: "string", minLength: 1 },
+                    url: { type: "string" },
+                    provider: { type: "string" },
+                    metadata: { type: "object", additionalProperties: true },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "201": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["ref"],
+                    properties: { ref: { $ref: "#/components/schemas/TaskGitRef" } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      "/v1/refs/{ref}": {
+        get: {
+          operationId: "findTaskGitRefs",
+          summary: "Find task links by git branch or pull-request ref",
+          parameters: [{ name: "ref", in: "path", required: true, schema: { type: "string" } }],
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["refs", "count"],
+                    properties: {
+                      refs: { type: "array", items: { $ref: "#/components/schemas/TaskGitRef" } },
+                      count: { type: "integer", minimum: 0 },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
       "/v1/tasks/{id}/start": {
         post: {
           operationId: "startTask",
@@ -1140,6 +1456,51 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { deleted: { type: "boolean" }, id: { type: "string" } } } } } } },
         },
       },
+      "/v1/projects/{id}/task-list/ensure": {
+        get: {
+          operationId: "planProjectTaskListEnsure",
+          summary: "Plan a non-mutating repair of a project's declared task list",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: {
+            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/ProjectTaskListEnsureResult" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+        post: {
+          operationId: "ensureProjectTaskList",
+          summary: "Idempotently create an existing project's declared task list",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/ProjectTaskListEnsureApplyInput" } } },
+          },
+          responses: {
+            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/ProjectTaskListEnsureResult" } } } },
+            "201": { content: { "application/json": { schema: { $ref: "#/components/schemas/ProjectTaskListEnsureResult" } } } },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/projects/{id}/task-list/rollback": {
+        post: {
+          operationId: "rollbackProjectTaskListEnsure",
+          summary: "Conditionally remove an unchanged task list created by an accepted ensure receipt",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/ProjectTaskListRollbackInput" } } },
+          },
+          responses: {
+            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/ProjectTaskListRollbackResult" } } } },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
       "/v1/projects/{id}/rename": {
         post: {
           operationId: "renameProject",
@@ -1202,6 +1563,54 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           summary: "Delete a plan and detach its tasks",
           parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
           responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { deleted: { type: "boolean" }, id: { type: "string" } } } } } } },
+        },
+      },
+      "/v1/plans/{id}/project-link": {
+        get: {
+          operationId: "planPlanProjectLink",
+          summary: "Plan atomic linkage of an existing plan and every current member task to a project",
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } },
+            { name: "project_id", in: "query", required: true, schema: { type: "string" } },
+          ],
+          responses: {
+            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/PlanProjectLinkResult" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+        post: {
+          operationId: "applyPlanProjectLink",
+          summary: "Atomically and idempotently link an existing plan and every current member task to a project",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/PlanProjectLinkApplyInput" } } },
+          },
+          responses: {
+            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/PlanProjectLinkResult" } } } },
+            "201": { content: { "application/json": { schema: { $ref: "#/components/schemas/PlanProjectLinkResult" } } } },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/plans/{id}/project-link/rollback": {
+        post: {
+          operationId: "rollbackPlanProjectLink",
+          summary: "Conditionally restore every exact prior project link from an accepted receipt",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/PlanProjectLinkRollbackInput" } } },
+          },
+          responses: {
+            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/PlanProjectLinkRollbackResult" } } } },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
         },
       },
       "/v1/templates": {

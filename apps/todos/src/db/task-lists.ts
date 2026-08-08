@@ -126,6 +126,62 @@ export function deleteTaskList(id: string, db?: Database): boolean {
   })();
 }
 
+export function deleteTaskListIfUnchangedAndUnused(
+  id: string,
+  expected: Pick<TaskList, "project_id" | "slug" | "name" | "description" | "metadata" | "updated_at">,
+  db?: Database,
+): {
+  status: "deleted" | "not_found" | "changed" | "has_dependents";
+  task_dependents: number;
+  plan_dependents: number;
+} {
+  const d = db || getDatabase();
+  return d.transaction((): {
+    status: "deleted" | "not_found" | "changed" | "has_dependents";
+    task_dependents: number;
+    plan_dependents: number;
+  } => {
+    const current = getTaskList(id, d);
+    if (!current) {
+      return { status: "not_found", task_dependents: 0, plan_dependents: 0 };
+    }
+    const changed = current.project_id !== expected.project_id
+      || current.slug !== expected.slug
+      || current.name !== expected.name
+      || current.description !== expected.description
+      || current.updated_at !== expected.updated_at
+      || JSON.stringify(current.metadata) !== JSON.stringify(expected.metadata);
+    if (changed) {
+      return { status: "changed", task_dependents: 0, plan_dependents: 0 };
+    }
+    const taskDependents = Number((d.query(
+      "SELECT COUNT(*) AS count FROM tasks WHERE task_list_id = ?",
+    ).get(id) as { count: number }).count);
+    const planDependents = Number((d.query(
+      "SELECT COUNT(*) AS count FROM plans WHERE task_list_id = ?",
+    ).get(id) as { count: number }).count);
+    if (taskDependents > 0 || planDependents > 0) {
+      return {
+        status: "has_dependents",
+        task_dependents: taskDependents,
+        plan_dependents: planDependents,
+      };
+    }
+    recordStorageTombstone({
+      object_type: "task_lists",
+      object_id: id,
+      payload: current as unknown as Record<string, unknown>,
+    }, d);
+    releaseCanonicalSlugClaims("task_list", id, d);
+    const deleted = d.run("DELETE FROM task_lists WHERE id = ?", [id]).changes > 0;
+    return {
+      status: deleted ? "deleted" : "not_found",
+      task_dependents: 0,
+      plan_dependents: 0,
+    };
+  })();
+}
+
 export function ensureTaskList(name: string, slug: string, projectId?: string, db?: Database): TaskList {
   const d = db || getDatabase();
   const existing = getTaskListBySlug(slug, projectId, d);

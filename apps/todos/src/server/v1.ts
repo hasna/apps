@@ -7,7 +7,7 @@
  * require `todos:write` (a `todos:*` key satisfies both). This is a real wrapper
  * over the core storage lib — there are NO stubs; unimplemented routes 404.
  */
-import { LockError, ProjectNotFoundError, ResourceConflictError, TaskNotStartableError, TaskReferenceAmbiguousError, TASK_PRIORITIES, TASK_STATUSES } from "../types/index.js";
+import { LockError, ProjectNotFoundError, ResourceConflictError, TaskNotFoundError, TaskNotStartableError, TaskReferenceAmbiguousError, TASK_PRIORITIES, TASK_STATUSES } from "../types/index.js";
 import { collapseEnumValues, resolveEnumVocabulary } from "../lib/enum-vocabulary.js";
 import type { CreatePlanInput, CreateProjectInput, CreateTaskInput, CreateTaskListInput, CreateTemplateInput, RenameProjectInput, TaskComment, TemplateTaskInput, UpdateTaskInput, UpdateTaskListInput } from "../types/index.js";
 import type { TodosStorageContext, TodosStorageSnapshot, TodosTaskCompletionOptions, UpdateTemplateInput } from "../storage/interfaces.js";
@@ -23,6 +23,18 @@ import { handleTodosProjectRegistrationHttpRequest } from "../project-registrati
 import { redactEvidenceText } from "../lib/redaction.js";
 import { isCanonicalSlug, normalizeSlug } from "../lib/slugs.js";
 import { decodeCommentCursor, encodeCommentCursor } from "../lib/comment-cursor.js";
+import {
+  ProjectTaskListEnsureError,
+  applyProjectTaskListEnsure,
+  planProjectTaskListEnsure,
+  rollbackProjectTaskListEnsure,
+} from "../lib/project-task-list-ensure.js";
+import {
+  PlanProjectLinkError,
+  applyPlanProjectLink,
+  planPlanProjectLink,
+  rollbackPlanProjectLink,
+} from "../lib/plan-project-link.js";
 
 export interface V1RequestDependencies {
   getVerifier?: typeof getCloudVerifier;
@@ -69,6 +81,55 @@ function enumQueryParam<T extends string>(
   const result = resolveEnumVocabulary(raw, { name, vocabulary });
   if (!result.ok) return { ok: false, response: error(400, result.message) };
   return { ok: true, value: collapseEnumValues(result.values) };
+}
+
+/**
+ * Strict RFC 3339 date-time, normalised to one canonical spelling.
+ *
+ * THE VALIDATOR AND THE COMPARATOR MUST ACCEPT THE SAME LANGUAGE. They did not.
+ * `Date.parse` guarded the door while SQLite `julianday()` did the comparing,
+ * and the two disagree about what a string means — measured 2026-08-07:
+ *
+ *     st=200 rows=3 total=3   ?updated_after=2026            <- THE WHOLE TABLE
+ *     st=200 rows=0 total=0   ?updated_after=2026-08
+ *     st=200 rows=0 total=0   ?updated_after=March 5, 2026
+ *
+ * `Date.parse("2026")` is a valid year, so the request passed validation; SQLite
+ * reads a bare number as a raw Julian Day, so the predicate matched everything
+ * and the caller got the entire table back under a 200 — the precise defect this
+ * parameter was added to end, reintroduced through the front door. `2026-08` and
+ * `March 5, 2026` fail the other way, silently returning nothing.
+ *
+ * So: accept exactly RFC 3339 (date, `T`, time, and a MANDATORY `Z` or numeric
+ * offset), then hand every backend one grammar by normalising to
+ * `YYYY-MM-DDTHH:MM:SS.sssZ`. A reduced-precision value is refused rather than
+ * guessed at, because guessing is what produced the two rows above.
+ */
+const RFC3339_DATE_TIME = /^(\d{4})-(\d{2})-(\d{2})[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$/;
+
+function parseSinceCursor(raw: string):
+  | { ok: true; value: string }
+  | { ok: false; message: string } {
+  const shape = `updated_after must be an RFC 3339 date-time with an explicit offset, `
+    + `e.g. 2026-08-07T12:00:00Z or 2026-08-07T12:00:00+03:00; got ${JSON.stringify(raw)}`;
+  const match = RFC3339_DATE_TIME.exec(raw);
+  if (!match) return { ok: false, message: shape };
+  const parsed = Date.parse(raw);
+  if (Number.isNaN(parsed)) return { ok: false, message: shape };
+  // The regex proves the SHAPE; it cannot prove the date EXISTS. `2026-02-30`
+  // satisfies it and `Date.parse` silently rolls it forward to 2026-03-02, so a
+  // caller asking for a day that is not on the calendar would be answered from a
+  // different instant than the one they named, with no way to tell.
+  const [, year, month, day] = match as unknown as [string, string, string, string];
+  const probe = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+  if (
+    probe.getUTCFullYear() !== Number(year)
+    || probe.getUTCMonth() !== Number(month) - 1
+    || probe.getUTCDate() !== Number(day)
+  ) {
+    return { ok: false, message: `updated_after names a date that does not exist: ${JSON.stringify(raw)}` };
+  }
+  return { ok: true, value: new Date(parsed).toISOString() };
 }
 
 function validateTaskCompletion(value: unknown):
@@ -523,7 +584,17 @@ export async function handleV1Request(
           if (!statusParam.ok) return statusParam.response;
           const priorityParam = enumQueryParam(url, "priority", TASK_PRIORITIES);
           if (!priorityParam.ok) return priorityParam.response;
+          // Since-cursor. Reject a malformed value with 400 rather than dropping
+          // it: an ignored cursor answers 200 with the ENTIRE table while the
+          // caller believes the read was bounded, which is the exact failure this
+          // parameter exists to end.
+          const updatedAfterRaw = url.searchParams.get("updated_after");
+          const updatedAfter = updatedAfterRaw === null ? null : parseSinceCursor(updatedAfterRaw);
+          if (updatedAfter !== null && !updatedAfter.ok) {
+            return error(400, updatedAfter.message);
+          }
           const filter = {
+            ...(updatedAfter !== null && updatedAfter.ok ? { updated_after: updatedAfter.value } : {}),
             ...(url.searchParams.get("q") ? { query: url.searchParams.get("q")! } : {}),
             ...(statusParam.value !== undefined ? { status: statusParam.value } : {}),
             ...(priorityParam.value !== undefined ? { priority: priorityParam.value } : {}),
@@ -560,8 +631,36 @@ export async function handleV1Request(
           if (!body || typeof body.title !== "string" || !body.title.trim()) {
             return error(400, "title is required");
           }
-          const task = await store.tasks.create(body, contextFromPrincipal(principal, body));
-          return json({ task }, 201);
+          const storageContext = contextFromPrincipal(principal, body);
+          if (body.parent_id !== undefined) {
+            if (typeof body.parent_id !== "string" || !body.parent_id.trim()) {
+              return error(400, "parent_id must be a non-empty task id", {
+                code: "PARENT_TASK_ID_INVALID",
+              });
+            }
+            if (!(await store.tasks.get(body.parent_id, storageContext))) {
+              return error(404, `parent task not found: ${body.parent_id}`, {
+                code: "PARENT_TASK_NOT_FOUND",
+              });
+            }
+          }
+
+          const created = await store.tasks.create(body, storageContext);
+          const persisted = created?.id
+            ? await store.tasks.get(created.id, storageContext)
+            : null;
+          if (
+            !persisted
+            || persisted.id !== created.id
+            || (persisted.parent_id ?? null) !== (body.parent_id ?? null)
+          ) {
+            return error(
+              500,
+              "TASK_CREATE_PERSISTENCE_UNVERIFIED: task create was acknowledged but authoritative readback did not return the same stored task id and parent_id",
+              { code: "TASK_CREATE_PERSISTENCE_UNVERIFIED" },
+            );
+          }
+          return json({ task: persisted }, 201);
         }
         return error(405, `method ${method} not allowed on /v1/tasks`);
       }
@@ -949,6 +1048,52 @@ export async function handleV1Request(
         }
         return error(405, `method ${method} not allowed on /v1/projects`);
       }
+      if (action === "task-list" && subId === "ensure") {
+        if (method === "GET") {
+          return json(await planProjectTaskListEnsure(store, id));
+        }
+        if (method !== "POST") {
+          return error(405, `method ${method} not allowed on /v1/projects/:id/task-list/ensure`);
+        }
+        const body = await readJson<Record<string, unknown>>(req);
+        if (!body) return error(400, "invalid JSON body");
+        const unknown = Object.keys(body).find((key) =>
+          !["expected_project_revision", "idempotency_key"].includes(key)
+        );
+        if (unknown) return error(400, `unknown task-list ensure field: ${unknown}`);
+        if (typeof body.expected_project_revision !== "string" || !body.expected_project_revision.trim()) {
+          return error(400, "expected_project_revision must be a non-empty string from a fresh ensure plan");
+        }
+        if (body.idempotency_key !== undefined && typeof body.idempotency_key !== "string") {
+          return error(400, "idempotency_key must be a string");
+        }
+        const result = await applyProjectTaskListEnsure(store, id, {
+          expected_project_revision: body.expected_project_revision,
+          ...(typeof body.idempotency_key === "string" ? { idempotency_key: body.idempotency_key } : {}),
+        });
+        return json(result, result.action === "created" ? 201 : 200);
+      }
+      if (action === "task-list" && subId === "rollback") {
+        if (method !== "POST") {
+          return error(405, `method ${method} not allowed on /v1/projects/:id/task-list/rollback`);
+        }
+        const body = await readJson<Record<string, unknown>>(req);
+        if (!body) return error(400, "invalid JSON body");
+        const unknown = Object.keys(body).find((key) =>
+          !["receipt_id", "expected_task_list_revision"].includes(key)
+        );
+        if (unknown) return error(400, `unknown task-list rollback field: ${unknown}`);
+        if (typeof body.receipt_id !== "string" || !body.receipt_id.trim()) {
+          return error(400, "receipt_id must be a non-empty string");
+        }
+        if (typeof body.expected_task_list_revision !== "string" || !body.expected_task_list_revision.trim()) {
+          return error(400, "expected_task_list_revision must be a non-empty string from the accepted receipt");
+        }
+        return json(await rollbackProjectTaskListEnsure(store, id, {
+          receipt_id: body.receipt_id,
+          expected_task_list_revision: body.expected_task_list_revision,
+        }));
+      }
       if (action === "rename") {
         if (method !== "POST") return error(405, `method ${method} not allowed on /v1/projects/:id/rename`);
         const body = await readJson<RenameProjectInput>(req);
@@ -1005,6 +1150,47 @@ export async function handleV1Request(
         }
         const plan = await store.plans.create(validated.input, contextFromPrincipal(principal, validated.input));
         return json({ plan }, 201);
+      }
+      if (id && action === "project-link" && !subId) {
+        if (method === "GET") {
+          const projectId = url.searchParams.get("project_id");
+          if (!projectId?.trim()) return error(400, "project_id query parameter is required");
+          return json(await planPlanProjectLink(store, id, projectId));
+        }
+        if (method !== "POST") return error(405, `method ${method} not allowed on /v1/plans/:id/project-link`);
+        const body = await readJson<Record<string, unknown>>(req);
+        if (!body) return error(400, "invalid JSON body");
+        const allowed = new Set(["project_id", "expected_plan_revision", "expected_project_revision", "idempotency_key"]);
+        const unknown = Object.keys(body).find((key) => !allowed.has(key));
+        if (unknown) return error(400, `unknown plan-project-link field: ${unknown}`);
+        for (const field of ["project_id", "expected_plan_revision", "expected_project_revision", "idempotency_key"] as const) {
+          if (typeof body[field] !== "string" || !body[field].trim()) {
+            return error(400, `${field} must be a non-empty string`);
+          }
+        }
+        const result = await applyPlanProjectLink(store, id, body.project_id as string, {
+          expected_plan_revision: body.expected_plan_revision as string,
+          expected_project_revision: body.expected_project_revision as string,
+          idempotency_key: body.idempotency_key as string,
+        });
+        return json(result, result.action === "linked" ? 201 : 200);
+      }
+      if (id && action === "project-link" && subId === "rollback") {
+        if (method !== "POST") return error(405, `method ${method} not allowed on /v1/plans/:id/project-link/rollback`);
+        const body = await readJson<Record<string, unknown>>(req);
+        if (!body) return error(400, "invalid JSON body");
+        const allowed = new Set(["project_id", "receipt_id", "expected_plan_revision"]);
+        const unknown = Object.keys(body).find((key) => !allowed.has(key));
+        if (unknown) return error(400, `unknown plan-project-link rollback field: ${unknown}`);
+        for (const field of ["project_id", "receipt_id", "expected_plan_revision"] as const) {
+          if (typeof body[field] !== "string" || !body[field].trim()) {
+            return error(400, `${field} must be a non-empty string`);
+          }
+        }
+        return json(await rollbackPlanProjectLink(store, id, body.project_id as string, {
+          receipt_id: body.receipt_id as string,
+          expected_plan_revision: body.expected_plan_revision as string,
+        }));
       }
       if (id && method === "GET") {
         const plan = await store.plans.get(id);
@@ -1308,12 +1494,36 @@ export async function handleV1Request(
 
     return error(404, `unknown /v1 resource: ${resource ?? "(root)"}`);
   } catch (e) {
+    if (e instanceof PlanProjectLinkError) {
+      const status = e.code === "PLAN_PROJECT_LINK_PLAN_NOT_FOUND"
+        || e.code === "PLAN_PROJECT_LINK_PROJECT_NOT_FOUND"
+        || e.code === "PLAN_PROJECT_LINK_RECEIPT_NOT_FOUND"
+        ? 404
+        : e.code === "PLAN_PROJECT_LINK_IDEMPOTENCY_KEY_INVALID"
+          ? 400
+          : e.code === "PLAN_PROJECT_LINK_UNSUPPORTED"
+            ? 501
+            : 409;
+      return error(status, e.message, { code: e.code, conflict: status === 409, ...e.details });
+    }
+    if (e instanceof ProjectTaskListEnsureError) {
+      const status = e.code === "PROJECT_NOT_FOUND"
+        || e.code === "PROJECT_TASK_LIST_RECEIPT_NOT_FOUND"
+        ? 404
+        : e.code === "PROJECT_TASK_LIST_IDEMPOTENCY_KEY_INVALID"
+          ? 400
+          : 409;
+      return error(status, e.message, { code: e.code, conflict: status === 409, ...e.details });
+    }
     if (e instanceof TaskReferenceAmbiguousError) {
       return error(409, e.message, {
         code: TaskReferenceAmbiguousError.code,
         candidate_project_ids: e.candidateProjectIds,
         candidate_task_ids: e.candidateTaskIds,
       });
+    }
+    if (e instanceof TaskNotFoundError) {
+      return error(404, e.message, { code: TaskNotFoundError.code });
     }
     if (e instanceof LockError) return error(409, e.message, { code: LockError.code });
     if (e instanceof TaskNotStartableError) {

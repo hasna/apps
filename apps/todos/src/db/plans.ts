@@ -6,6 +6,7 @@ import { emitLocalEventHooksQuiet } from "../lib/event-hooks.js";
 import { getDatabase, now, uuid } from "./database.js";
 import { slugify } from "./projects.js";
 import { currentStorageMachineId, recordStorageTombstone } from "./storage-tombstones.js";
+import { guardPlanRowsSqlite } from "./plan-row-serialization.js";
 
 export interface ResolvePlanRefResult {
   id: string | null;
@@ -125,7 +126,7 @@ export function listPlans(projectId?: string, db?: Database): Plan[] {
     .all() as Plan[];
 }
 
-export function updatePlan(
+function updatePlanStored(
   id: string,
   input: UpdatePlanInput,
   db?: Database,
@@ -176,6 +177,18 @@ export function updatePlan(
     databasePath: databasePathFromDatabase(d),
   });
   return updated;
+}
+
+export function updatePlan(
+  id: string,
+  input: UpdatePlanInput,
+  db?: Database,
+): Plan {
+  const d = db || getDatabase();
+  return d.transaction(() => {
+    guardPlanRowsSqlite([id], d);
+    return updatePlanStored(id, input, d);
+  })();
 }
 
 export function deletePlan(id: string, db?: Database): boolean {

@@ -112,6 +112,23 @@ function taskFixture(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function currentGitRefDetailResponse(request: Request): Response | null {
+  const url = new URL(request.url);
+  if (url.pathname === "/v1/openapi.json" && request.method === "GET") {
+    return Response.json({
+      openapi: "3.1.0",
+      paths: {
+        "/v1/tasks/{id}/refs": { get: {}, post: {} },
+        "/v1/refs/{ref}": { get: {} },
+      },
+    });
+  }
+  if (url.pathname === `/v1/tasks/${TASK_ID}/refs` && request.method === "GET") {
+    return Response.json({ refs: [], count: 0 });
+  }
+  return null;
+}
+
 describe("cloud task detail comments", () => {
   test("cloud add resolves its printed short prefix over HTTP without seeding a local id index", async () => {
     const requests: Array<{ method: string; path: string; body?: Record<string, unknown> }> = [];
@@ -222,6 +239,21 @@ describe("cloud task detail comments", () => {
             },
           }, { status: 201 });
         }
+        if (url.pathname === `/v1/tasks/${TASK_ID}` && request.method === "GET") {
+          return Response.json({
+            task: {
+              id: TASK_ID,
+              title: createBody?.["title"],
+              parent_id: createBody?.["parent_id"] ?? null,
+              status: "pending",
+              priority: "medium",
+              tags: [],
+              version: 1,
+              created_at: "2026-07-10T00:00:00.000Z",
+              updated_at: "2026-07-10T00:00:00.000Z",
+            },
+          });
+        }
         return Response.json({ error: "not found" }, { status: 404 });
       },
     });
@@ -255,6 +287,8 @@ describe("cloud task detail comments", () => {
           path: url.pathname,
           authorized: request.headers.get("authorization") === `Bearer ${TEST_API_KEY}`,
         });
+        const gitRefResponse = currentGitRefDetailResponse(request);
+        if (gitRefResponse) return gitRefResponse;
         if (url.pathname === `/v1/tasks/${TASK_ID}` && request.method === "GET") {
           return Response.json({
             task: {
@@ -323,6 +357,8 @@ describe("cloud task detail comments", () => {
         `GET /v1/tasks/${TASK_ID}`,
         `GET /v1/tasks/${TASK_ID}/comments`,
         `GET /v1/tasks/${TASK_ID}/dependencies`,
+        "GET /v1/openapi.json",
+        `GET /v1/tasks/${TASK_ID}/refs`,
       ]);
       expect(existsSync(join(root, "todos.db"))).toBe(false);
 
@@ -384,6 +420,8 @@ describe("cloud task detail comments", () => {
       fetch(request) {
         const url = new URL(request.url);
         requests.push(`${request.method} ${url.pathname}${url.search}`);
+        const gitRefResponse = currentGitRefDetailResponse(request);
+        if (gitRefResponse) return gitRefResponse;
         if (url.pathname === "/v1/tasks" && request.method === "GET") {
           // Agent-resolution path: current in-progress task for --agent.
           return Response.json({ tasks: [taskFixture({ status: "in_progress", assigned_to: "fleet" })], count: 1, total: 1 });
@@ -440,6 +478,8 @@ describe("cloud task detail comments", () => {
         `GET /v1/tasks/${TASK_ID}`,
         `GET /v1/tasks/${TASK_ID}/comments?limit=100`,
         `GET /v1/tasks/${TASK_ID}/dependencies`,
+        "GET /v1/openapi.json",
+        `GET /v1/tasks/${TASK_ID}/refs`,
       ]);
     } finally {
       server.stop(true);

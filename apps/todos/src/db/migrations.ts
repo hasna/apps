@@ -1682,4 +1682,28 @@ export const MIGRATIONS = [
   INSERT OR IGNORE INTO _migrations (id) VALUES (69);
   COMMIT;
   `,
+  // Migration 70: Immutable guarded existing-plan project-link receipts.
+  `BEGIN;
+  CREATE TABLE IF NOT EXISTS plan_project_link_receipts (
+    receipt_id TEXT PRIMARY KEY,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    plan_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    payload_hash TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_plan_project_link_receipts_plan
+    ON plan_project_link_receipts(plan_id, created_at);
+
+  CREATE TABLE IF NOT EXISTS plan_project_link_rollback_receipts (
+    rollback_receipt_id TEXT PRIMARY KEY,
+    accepted_receipt_id TEXT NOT NULL UNIQUE
+      REFERENCES plan_project_link_receipts(receipt_id) ON DELETE RESTRICT,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  INSERT OR IGNORE INTO _migrations (id) VALUES (70);
+  COMMIT;
+  `,
 ];

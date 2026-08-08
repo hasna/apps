@@ -83,6 +83,23 @@ function decodeCursor(value: string): { created_at: string; id: string } {
   return JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
 }
 
+function currentGitRefDetailResponse(request: Request): Response | null {
+  const url = new URL(request.url);
+  if (url.pathname === "/v1/openapi.json" && request.method === "GET") {
+    return Response.json({
+      openapi: "3.1.0",
+      paths: {
+        "/v1/tasks/{id}/refs": { get: {}, post: {} },
+        "/v1/refs/{ref}": { get: {} },
+      },
+    });
+  }
+  if (url.pathname === `/v1/tasks/${TASK_ID}/refs` && request.method === "GET") {
+    return Response.json({ refs: [], count: 0 });
+  }
+  return null;
+}
+
 function startServer(seen: string[]) {
   return Bun.serve({
     hostname: "127.0.0.1",
@@ -90,6 +107,8 @@ function startServer(seen: string[]) {
     fetch(request) {
       const url = new URL(request.url);
       seen.push(`${request.method} ${url.pathname}${url.search}`);
+      const gitRefResponse = currentGitRefDetailResponse(request);
+      if (gitRefResponse) return gitRefResponse;
       if (url.pathname === `/v1/tasks/${TASK_ID}` && request.method === "GET") {
         return Response.json({
           task: {

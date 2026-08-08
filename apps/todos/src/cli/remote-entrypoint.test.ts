@@ -1071,6 +1071,15 @@ describe("remote CLI entrypoint authority boundary", () => {
           return true;
         };
 
+        if (url.pathname === "/v1/openapi.json" && request.method === "GET") {
+          return Response.json({
+            openapi: "3.1.0",
+            paths: {
+              "/v1/tasks/{id}/refs": { get: {}, post: {} },
+              "/v1/refs/{ref}": { get: {} },
+            },
+          });
+        }
         if (url.pathname === "/v1/stats" && request.method === "GET") {
           return Response.json({ tasks: tasks.length, tasks_all: tasks.length, projects: projects.length });
         }
@@ -1205,6 +1214,11 @@ describe("remote CLI entrypoint authority boundary", () => {
         }
         if (commentMatch && request.method === "GET") {
           return Response.json({ comments: [], count: 0, has_more: false, next_cursor: null });
+        }
+        const refMatch = url.pathname.match(/^\/v1\/tasks\/([^/]+)\/refs$/);
+        if (refMatch && request.method === "GET") {
+          if (!find(tasks, refMatch[1]!)) return Response.json({ error: "task not found" }, { status: 404 });
+          return Response.json({ refs: [], count: 0 });
         }
         const actionMatch = url.pathname.match(/^\/v1\/tasks\/([^/]+)\/(start|complete)$/);
         if (actionMatch && request.method === "POST") {

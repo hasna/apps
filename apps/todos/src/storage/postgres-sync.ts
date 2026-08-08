@@ -105,6 +105,70 @@ export function postgresTodosSyncSchemaSql(
       RETURNS text
       LANGUAGE sql IMMUTABLE PARALLEL SAFE STRICT
       AS $$ SELECT unaccent('unaccent', $1) $$`,
+    // Timestamp coercion for the `updated_after` since-cursor. A plain
+    // `::timestamptz` cast raises on a malformed stamp and takes the whole query
+    // with it, and the stored dataset genuinely mixes formats
+    // ("2026-08-05T18:54:55.814Z" alongside "2026-06-10 11:24:47", measured
+    // 2026-08-07). This returns NULL instead of raising, so one bad row cannot
+    // fail a list call.
+    //
+    // A NO-OFFSET STAMP IS PINNED TO UTC, and that is the whole point of the
+    // CASE — it is what makes the IMMUTABLE declaration true rather than merely
+    // asserted. A bare `$1::timestamptz` resolves a no-offset stamp against the
+    // SESSION `TimeZone`, so the same text yields different instants in
+    // different sessions. Postgres knows this and refuses to index the cast
+    // directly:
+    //
+    //     CREATE INDEX ctl_idx ON ctl ((t::timestamptz));
+    //     ERROR:  functions in index expression must be marked IMMUTABLE
+    //
+    // Wrapping it in a function declared IMMUTABLE bypasses that guard rather
+    // than satisfying it, and produces exactly the corruption the guard exists
+    // to prevent: entries written under one zone, probed under another. Measured
+    // on PostgreSQL 16.13, index built under `TimeZone=UTC` and read under
+    // `TimeZone=Asia/Tokyo`, same query, same session, plan the only difference:
+    //
+    //       plan    | ids
+    //     ----------+-------
+    //      seqscan  | c
+    //      indexscan| b,c
+    //
+    // Row `b` is `2026-06-10 11:24:47` — the legacy no-timezone stamp this
+    // cursor exists to serve. Pinning to UTC also matches the SQLite path, whose
+    // `julianday()` reads a no-offset stamp as UTC; without it the two backends
+    // answer the same cursor differently by the server's UTC offset.
+    //
+    // `SET DateStyle` pins the second session GUC that reaches text-to-timestamp
+    // parsing, so neither knob a session can turn changes what this function
+    // returns for a given input.
+    `CREATE OR REPLACE FUNCTION todos_try_timestamptz(text)
+      RETURNS timestamptz
+      LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE
+      SET DateStyle TO 'ISO, YMD'
+      AS $$
+      BEGIN
+        RETURN CASE
+          WHEN $1 ~ '(Z|[+-][0-9]{2}:?[0-9]{2})$' THEN $1::timestamptz
+          ELSE ($1::timestamp AT TIME ZONE 'UTC')
+        END;
+      EXCEPTION WHEN others THEN RETURN NULL; END $$`,
+    // REBUILD, not create-if-absent. `CREATE OR REPLACE FUNCTION` does NOT
+    // rebuild dependent expression indexes, and `CREATE INDEX IF NOT EXISTS`
+    // will NOT recreate an index that already exists — so on any cluster that
+    // already ran the previous schema, replacing the function above would leave
+    // the old index in place, still holding entries computed by the old body,
+    // and the fix would silently do nothing. A migration that works on a fresh
+    // database and no-ops on a deployed one is worse than no migration.
+    //
+    // Dropping the superseded name and building under a new one is idempotent in
+    // both directions: on a fresh cluster the DROP is a no-op, and on a re-run
+    // the CREATE is.
+    `DROP INDEX IF EXISTS ${tableName}_task_updated_at_idx`,
+    // Backs the since-cursor predicate so a poller's incremental read is an
+    // index scan rather than a sequential scan over every task row.
+    `CREATE INDEX IF NOT EXISTS ${tableName}_task_updated_at_utc_idx
+      ON ${tableName} (todos_try_timestamptz(payload->>'updated_at'))
+      WHERE object_type = 'tasks' AND deleted_at IS NULL`,
     `ALTER TABLE ${tableName}
       ADD COLUMN IF NOT EXISTS task_search_tsv tsvector
       GENERATED ALWAYS AS (

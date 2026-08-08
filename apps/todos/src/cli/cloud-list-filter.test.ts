@@ -297,7 +297,7 @@ describe("cloud CLI task-list filtering", () => {
     ["exact UUID", LIST_ID, false],
     ["unique UUID prefix", "12345678", false],
   ])("resolves %s before sending the task filter", async (_label, ref, projectRef) => {
-    const seenTaskListFilters: Array<string | null> = [];
+    const seenTaskRequests: Array<{ status: string | null; taskListId: string | null }> = [];
     let taskListRequests = 0;
     const server = Bun.serve({
       hostname: "127.0.0.1",
@@ -314,7 +314,10 @@ describe("cloud CLI task-list filtering", () => {
         }
         if (url.pathname === "/v1/tasks") {
           const taskListId = url.searchParams.get("task_list_id");
-          seenTaskListFilters.push(taskListId);
+          seenTaskRequests.push({
+            status: url.searchParams.get("status"),
+            taskListId,
+          });
           return Response.json({
             tasks: taskListId === LIST_ID
               ? [{ id: TASK_ID, task_list_id: LIST_ID, title: "Cloud list task", status: "pending", priority: "medium" }]
@@ -336,7 +339,9 @@ describe("cloud CLI task-list filtering", () => {
       expect(JSON.parse(result.stdout)).toEqual([
         expect.objectContaining({ id: TASK_ID, task_list_id: LIST_ID }),
       ]);
-      expect(seenTaskListFilters).toEqual([LIST_ID]);
+      expect(seenTaskRequests).toHaveLength(2);
+      expect(seenTaskRequests.map(({ status }) => status).sort()).toEqual(["in_progress", "pending"]);
+      expect(seenTaskRequests.every(({ taskListId }) => taskListId === LIST_ID)).toBe(true);
       expect(taskListRequests).toBe(ref === LIST_ID ? 0 : 1);
     } finally {
       server.stop(true);
@@ -376,11 +381,19 @@ describe("cloud CLI task-list filtering", () => {
         `http://127.0.0.1:${server.port}`,
       );
       expect(result).toMatchObject({ exitCode: 0, stderr: "" });
-      expect(requests).toEqual([
+      expect(requests.slice(0, 2)).toEqual([
         "/v1/projects?",
         `/v1/task-lists?project_id=${PROJECT_ID}`,
-        `/v1/tasks?status=pending%2Cin_progress&project_id=${PROJECT_ID}&task_list_id=${LIST_ID}&limit=${SCAN_LIMIT}`,
       ]);
+      const taskRequests = requests.slice(2).map((request) => new URL(request, "http://127.0.0.1"));
+      expect(taskRequests).toHaveLength(2);
+      expect(taskRequests.map((url) => url.searchParams.get("status")).sort()).toEqual(["in_progress", "pending"]);
+      for (const url of taskRequests) {
+        expect(url.pathname).toBe("/v1/tasks");
+        expect(url.searchParams.get("project_id")).toBe(PROJECT_ID);
+        expect(url.searchParams.get("task_list_id")).toBe(LIST_ID);
+        expect(url.searchParams.get("limit")).toBe(SCAN_LIMIT);
+      }
     } finally {
       server.stop(true);
     }

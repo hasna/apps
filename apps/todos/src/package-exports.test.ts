@@ -51,6 +51,10 @@ const expectedExports = {
     types: "./dist/project-registration.d.ts",
     import: "./dist/project-registration.js",
   },
+  "./task-manifest": {
+    types: "./dist/task-manifest.d.ts",
+    import: "./dist/task-manifest.js",
+  },
 };
 
 describe("package subpath exports", () => {

@@ -96,6 +96,73 @@ export interface RenameProjectResult {
   task_lists_updated: number;
 }
 
+export interface ProjectTaskListEnsureReceipt {
+  schema_version: "todos.project-task-list-ensure.v1";
+  receipt_id: string;
+  idempotency_key: string;
+  project_id: string;
+  task_list_id: string;
+  slug: string;
+  created_by_operation: boolean;
+  result_revision: string;
+  result_digest: string;
+  rollback_supported: boolean;
+  created_at: string;
+}
+
+export interface ProjectTaskListEnsureResult {
+  mode: "plan" | "apply";
+  action: "would_create" | "created" | "already_present";
+  project: Project;
+  task_list: TaskList | null;
+  receipt: ProjectTaskListEnsureReceipt | null;
+}
+
+export interface ProjectTaskListRollbackResult {
+  schema_version: "todos.project-task-list-ensure.v1";
+  action: "removed";
+  project_id: string;
+  task_list_id: string;
+  accepted_receipt_id: string;
+  rollback_receipt_id: string;
+  removed_at: string;
+}
+
+export interface PlanProjectLinkReceipt {
+  schema_version: "todos.plan-project-link.v1";
+  receipt_id: string;
+  idempotency_key: string;
+  plan_id: string;
+  project_id: string;
+  prior_plan_project_id: string | null;
+  prior_task_project_ids: Record<string, string | null>;
+  task_ids: string[];
+  task_count: number;
+  result_plan_revision: string;
+  result_digest: string;
+  rollback_supported: true;
+  created_at: string;
+}
+
+export interface PlanProjectLinkResult {
+  mode: "plan" | "apply";
+  action: "would_link" | "linked" | "already_linked";
+  plan: Plan;
+  project: Project;
+  tasks: Task[];
+  receipt: PlanProjectLinkReceipt | null;
+}
+
+export interface PlanProjectLinkRollbackResult {
+  schema_version: "todos.plan-project-link.v1";
+  action: "restored";
+  plan: Plan;
+  tasks: Task[];
+  accepted_receipt_id: string;
+  rollback_receipt_id: string;
+  restored_at: string;
+}
+
 // Org
 export interface Org {
   id: string;
@@ -692,6 +759,32 @@ export interface TaskFilter {
    *  inbox query operating rule 29 requires: work assigned to me that someone ELSE created.
    *  Rows with a null `created_by` are unattributable and are NOT excluded. */
   not_created_by?: string;
+  /**
+   * Since-cursor: return only tasks whose `updated_at` is STRICTLY AFTER this
+   * instant (ISO-8601). Lets a poller re-read only what changed instead of the
+   * whole table.
+   *
+   * Measured 2026-08-07 on the deployed API: `/v1/tasks?limit=200` returns
+   * 420,696 bytes for 200 of 59,547 rows, and every cursor spelling was inert —
+   * a cursor dated after every row still returned the full page. `conversations`
+   * already honours the equivalent parameter and answers 15 bytes.
+   *
+   * Compared as an INSTANT, not as a string: production rows carry both
+   * "2026-08-05T18:54:55.814Z" and "2026-06-10 11:24:47", which sort
+   * differently as text ("T" > " ") than they do as time.
+   *
+   * A STORED STAMP CARRYING NO OFFSET IS READ AS UTC ON BOTH BACKENDS. SQLite's
+   * `julianday()` already does this; Postgres is pinned to match by
+   * `todos_try_timestamptz` (src/storage/postgres-sync.ts), because a bare
+   * `::timestamptz` cast resolves such a stamp against the session `TimeZone` and
+   * the two backends then answer the same cursor differently by the server's UTC
+   * offset — measured 2 rows against 3 on an identical fixture.
+   *
+   * The HTTP layer normalises to `YYYY-MM-DDTHH:MM:SS.sssZ` before this is set,
+   * so both backends receive one grammar rather than each interpreting whatever
+   * the caller typed.
+   */
+  updated_after?: string;
   session_id?: string;
   tags?: string[];
   has_recurrence?: boolean;
@@ -1241,7 +1334,7 @@ export class ProjectNotFoundError extends Error {
 
 export class ResourceConflictError extends Error {
   constructor(
-    public readonly code: "PROJECT_SLUG_CONFLICT" | "TASK_LIST_SLUG_CONFLICT" | "PLAN_SLUG_CONFLICT",
+    public readonly code: "PROJECT_SLUG_CONFLICT" | "TASK_LIST_SLUG_CONFLICT" | "PLAN_SLUG_CONFLICT" | "PLAN_PROJECT_LINK_CONFLICT",
     message: string,
   ) {
     super(message);
