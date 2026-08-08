@@ -163,6 +163,38 @@ describe("cleanExpiredLocks", () => {
 });
 
 describe("releaseStaleAgentLocks", () => {
+  test("keeps a freshly acquired lock visible when the holder has stale prior presence", () => {
+    const db = getDb();
+    db.prepare(`
+      INSERT OR REPLACE INTO agent_presence (id, agent, session_id, role, status, last_seen_at, created_at)
+      VALUES ('fresh-lock-stale-presence', 'stale-present-agent', 'old-session', 'agent', 'online',
+              strftime('%Y-%m-%dT%H:%M:%f', 'now', '-1900 seconds'),
+              strftime('%Y-%m-%dT%H:%M:%f', 'now', '-1900 seconds'))
+    `).run();
+
+    expect(checkLock("pull_request", "known-free")).toBeNull();
+
+    const acquired = acquireLock(
+      "pull_request",
+      "github/hasnaxyz/iapp-infra/pull/115",
+      "stale-present-agent",
+      "exclusive",
+      20 * 60 * 1000,
+    );
+    expect(acquired.acquired).toBe(true);
+
+    const checked = checkLock("pull_request", "github/hasnaxyz/iapp-infra/pull/115");
+    const listed = listLocks({ agent_id: "stale-present-agent" });
+    expect({
+      checked: checked?.resource_id ?? null,
+      listed: listed.map((lock) => lock.resource_id),
+    }).toEqual({
+      checked: "github/hasnaxyz/iapp-infra/pull/115",
+      listed: ["github/hasnaxyz/iapp-infra/pull/115"],
+    });
+    expect(listLocks({ agent_id: "another-agent" })).toEqual([]);
+  });
+
   test("releases locks for agents with stale heartbeat (>30 min)", () => {
     const db = getDb();
     // Insert a stale agent presence (>30 min ago)

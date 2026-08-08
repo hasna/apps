@@ -3,6 +3,9 @@ import { startApiServer, type ApiServerDeps } from "./api.js";
 import { mintApiKey } from "@hasna/contracts/auth";
 import { verifyApiKey, ApiKeyStore } from "@hasna/contracts/auth";
 import { gzipSync } from "node:zlib";
+import { createHasnaHttpTransport } from "../lib/contracts-client/transport.js";
+import { createHasnaStorageClient } from "../lib/contracts-client/storage.js";
+import { ApiStore } from "../lib/store/api-store.js";
 
 // In-memory query shim standing in for the vendored kit's TypedQueryClient.
 // Exercises the router + auth without a live Postgres.
@@ -42,6 +45,34 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
   const client = {
     async many(sql: string, _p: readonly unknown[] = []): Promise<any[]> {
       manyCalls.push({ sql, params: [..._p] });
+      if (/FROM resource_locks(?:\s+l)?/i.test(sql)) {
+        let rows = resourceLocks.slice();
+        const resourceTypeParam = sql.match(/(?:l\.)?resource_type = \$(\d+)/i);
+        const resourceIdParam = sql.match(/(?:l\.)?resource_id = \$(\d+)/i);
+        const agentIdParam = sql.match(/(?:l\.)?agent_id = \$(\d+)/i);
+        if (resourceTypeParam) rows = rows.filter((row) => row.resource_type === _p[Number(resourceTypeParam[1]) - 1]);
+        if (resourceIdParam) rows = rows.filter((row) => row.resource_id === _p[Number(resourceIdParam[1]) - 1]);
+        if (agentIdParam) rows = rows.filter((row) => row.agent_id === _p[Number(agentIdParam[1]) - 1]);
+        rows.sort((a, b) => String(a.locked_at).localeCompare(String(b.locked_at)));
+        if (/LEFT JOIN agent_presence/i.test(sql)) {
+          const now = Date.now();
+          return rows.map((row) => {
+            const presence = agentPresence.get(String(row.agent_id).toLowerCase());
+            const lastSeen = presence?.last_seen_at ? Date.parse(String(presence.last_seen_at)) : Number.NaN;
+            return {
+              ...row,
+              locked_seconds_ago: Math.round((now - Date.parse(String(row.locked_at))) / 1000),
+              expires_in_seconds: Math.round((Date.parse(String(row.expires_at)) - now) / 1000),
+              p_role: presence?.role ?? null,
+              p_status: presence?.status ?? null,
+              p_last_seen: presence?.last_seen_at ?? null,
+              p_project: presence?.project_id ?? null,
+              p_online: Number.isFinite(lastSeen) && now - lastSeen < 60_000,
+            };
+          });
+        }
+        return rows;
+      }
       // Project list SQL contains a channel-count subquery, so identify the
       // outer projects query before the broader channel matcher below.
       if (/FROM projects/i.test(sql)) {
@@ -88,6 +119,63 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
       return [];
     },
     async query(sql: string, p: readonly unknown[] = []): Promise<{ rows: any[]; rowCount: number }> {
+      if (/DELETE FROM resource_locks WHERE expires_at < NOW\(\)/i.test(sql)) {
+        const before = resourceLocks.length;
+        const now = Date.now();
+        for (let index = resourceLocks.length - 1; index >= 0; index--) {
+          if (Date.parse(String(resourceLocks[index].expires_at)) < now) resourceLocks.splice(index, 1);
+        }
+        return { rows: [], rowCount: before - resourceLocks.length };
+      }
+      if (/DELETE FROM resource_locks[\s\S]*LOWER\(agent_id\) IN/i.test(sql)) {
+        const before = resourceLocks.length;
+        const now = Date.now();
+        const cutoff = now - 30 * 60 * 1000;
+        const requiresStaleLock = /locked_at\s*<\s*NOW\(\)/i.test(sql);
+        for (let index = resourceLocks.length - 1; index >= 0; index--) {
+          const lock = resourceLocks[index];
+          const presence = agentPresence.get(String(lock.agent_id).toLowerCase());
+          const stalePresence = presence?.last_seen_at && Date.parse(String(presence.last_seen_at)) < cutoff;
+          const staleLock = Date.parse(String(lock.locked_at)) < cutoff;
+          if (stalePresence && (!requiresStaleLock || staleLock)) resourceLocks.splice(index, 1);
+        }
+        return { rows: [], rowCount: before - resourceLocks.length };
+      }
+      if (/DELETE FROM resource_locks WHERE resource_type = \$1 AND resource_id = \$2 AND agent_id = \$3/i.test(sql)) {
+        const [resourceType, resourceId, agentId] = p as any[];
+        const before = resourceLocks.length;
+        for (let index = resourceLocks.length - 1; index >= 0; index--) {
+          const row = resourceLocks[index];
+          if (row.resource_type === resourceType && row.resource_id === resourceId && row.agent_id === agentId) {
+            resourceLocks.splice(index, 1);
+          }
+        }
+        return { rows: [], rowCount: before - resourceLocks.length };
+      }
+      if (/UPDATE resource_locks SET expires_at = \$4, locked_at = NOW\(\)/i.test(sql)) {
+        const [resourceType, resourceId, lockType, expiresAt] = p as any[];
+        const row = resourceLocks.find((lock) =>
+          lock.resource_type === resourceType &&
+          lock.resource_id === resourceId &&
+          lock.lock_type === lockType
+        );
+        if (!row) return { rows: [], rowCount: 0 };
+        row.expires_at = expiresAt;
+        row.locked_at = new Date().toISOString();
+        return { rows: [], rowCount: 1 };
+      }
+      if (/INSERT INTO resource_locks/i.test(sql)) {
+        const [resourceType, resourceId, agentId, lockType, expiresAt] = p as any[];
+        resourceLocks.push({
+          resource_type: resourceType,
+          resource_id: resourceId,
+          agent_id: agentId,
+          lock_type: lockType,
+          locked_at: new Date().toISOString(),
+          expires_at: expiresAt,
+        });
+        return { rows: [], rowCount: 1 };
+      }
       if (/INSERT INTO messages/i.test(sql) && /ON CONFLICT/i.test(sql)) {
         // One COALESCE(...) is emitted per row (for created_at) → row count.
         const numRows = (sql.match(/COALESCE\(/g) || []).length || 1;
@@ -142,6 +230,16 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
     },
     async get(sql: string, p: readonly unknown[] = []): Promise<any> {
       if (/SELECT 1 AS ok/i.test(sql)) return { ok: 1 };
+      if (/SELECT \* FROM resource_locks/i.test(sql)) {
+        const [resourceType, resourceId, lockType] = p as any[];
+        return resourceLocks
+          .filter((row) =>
+            row.resource_type === resourceType &&
+            row.resource_id === resourceId &&
+            (lockType === undefined || row.lock_type === lockType)
+          )
+          .sort((a, b) => String(a.locked_at).localeCompare(String(b.locked_at)))[0] ?? null;
+      }
       if (/FROM channel_project_linkage_receipts WHERE idempotency_key/i.test(sql)) {
         return linkageReceipts.find((receipt) => receipt.idempotency_key === p[0]) ?? null;
       }
@@ -426,6 +524,14 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
               if (task.channel === second) task.channel = first;
             }
             return { rows: [], rowCount: 1 };
+          }
+          if (
+            /DELETE FROM resource_locks WHERE expires_at < NOW\(\)/i.test(sql) ||
+            /DELETE FROM resource_locks[\s\S]*LOWER\(agent_id\) IN/i.test(sql) ||
+            /UPDATE resource_locks SET expires_at = \$4, locked_at = NOW\(\)/i.test(sql) ||
+            /INSERT INTO resource_locks/i.test(sql)
+          ) {
+            return client.query(sql, p);
           }
           if (/DELETE FROM graph_edges AS source/i.test(sql)) {
             const fromDirection = /source\.from_id = \$2/i.test(sql);
@@ -822,6 +928,83 @@ describe("conversations-serve", () => {
       project_id: projectId,
       status: "busy",
     });
+  });
+
+  test("fresh same-context acquire stays visible to check and list despite stale prior presence", async () => {
+    const lockClient = makeFakeClient();
+    const lockKeys = new ApiKeyStore(lockClient as any);
+    const lockVerifier = verifyApiKey({
+      app: "conversations",
+      signingSecret: SIGNING,
+      isRevoked: async () => false,
+    });
+    const lockServer = startApiServer({
+      port: 0,
+      host: "127.0.0.1",
+      deps: { client: lockClient as any, keys: lockKeys, verifier: lockVerifier },
+    });
+    const lockBase = `http://127.0.0.1:${lockServer.port}`;
+    const lockKey = mintApiKey({
+      app: "conversations",
+      agent: "severianus",
+      scopes: ["conversations:read", "conversations:write"],
+      signingSecret: SIGNING,
+    }).token;
+    const store = new ApiStore(createHasnaStorageClient("conversations", createHasnaHttpTransport({
+      name: "conversations",
+      baseUrl: `${lockBase}/v1`,
+      apiKey: lockKey,
+      retry: false,
+    })));
+    const agent = "severianus";
+    const resourceType = "pull_request";
+    const resourceId = "github/hasnaxyz/iapp-infra/pull/115";
+    const oldResourceId = "github/hasnaxyz/iapp-infra/pull/old-stale";
+    const staleAt = new Date(Date.now() - 31 * 60 * 1000).toISOString();
+
+    lockClient.__debug.agentPresence.set(agent, {
+      id: "stale-session",
+      agent,
+      session_id: "old-session",
+      role: "agent",
+      project_id: "",
+      status: "online",
+      last_seen_at: staleAt,
+      created_at: staleAt,
+    });
+    lockClient.__debug.resourceLocks.push({
+      resource_type: resourceType,
+      resource_id: oldResourceId,
+      agent_id: agent,
+      lock_type: "exclusive",
+      locked_at: staleAt,
+      expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    });
+
+    try {
+      expect(await store.checkLock(resourceType, "known-free")).toBeNull();
+
+      const acquired = await store.acquireLock(resourceType, resourceId, agent, "exclusive", 20 * 60 * 1000);
+      expect(acquired).toMatchObject({
+        acquired: true,
+        lock: { resource_type: resourceType, resource_id: resourceId, agent_id: agent, lock_type: "exclusive" },
+      });
+
+      const checked = await store.checkLock(resourceType, resourceId);
+      const listed = await store.listLocksEnriched({ agent_id: agent });
+      expect({
+        checked: checked?.resource_id ?? null,
+        listed: listed.map((lock) => lock.resource_id),
+      }).toEqual({
+        checked: resourceId,
+        listed: [resourceId],
+      });
+
+      expect(await store.checkLock(resourceType, oldResourceId)).toBeNull();
+      expect(await store.listLocksEnriched({ agent_id: "another-agent" })).toEqual([]);
+    } finally {
+      lockServer.stop(true);
+    }
   });
 
   test("read-write key completes a channel + message roundtrip", async () => {

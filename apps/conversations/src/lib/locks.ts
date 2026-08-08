@@ -190,7 +190,8 @@ export function releaseStaleAgentLocks(): number {
   const db = getDb();
   const result = db.prepare(`
     DELETE FROM resource_locks
-    WHERE LOWER(agent_id) IN (
+    WHERE locked_at < strftime('%Y-%m-%dT%H:%M:%f', 'now', '-${STALE_HEARTBEAT_SECONDS} seconds')
+      AND LOWER(agent_id) IN (
       SELECT LOWER(agent) FROM agent_presence
       WHERE last_seen_at < strftime('%Y-%m-%dT%H:%M:%f', 'now', '-${STALE_HEARTBEAT_SECONDS} seconds')
     )

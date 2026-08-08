@@ -2937,7 +2937,9 @@ async function cleanExpiredLocks(client: TypedQueryClient): Promise<number> {
 }
 async function releaseStaleLocks(client: TypedQueryClient): Promise<number> {
   const res = await client.query(
-    `DELETE FROM resource_locks WHERE LOWER(agent_id) IN (
+    `DELETE FROM resource_locks
+     WHERE locked_at < NOW() - interval '${STALE_LOCK_SECONDS} seconds'
+       AND LOWER(agent_id) IN (
        SELECT LOWER(agent) FROM agent_presence WHERE last_seen_at < NOW() - interval '${STALE_LOCK_SECONDS} seconds')`,
   );
   return res.rowCount;
