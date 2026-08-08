@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, cpSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, cpSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { hostname, tmpdir } from "node:os";
 import {
@@ -27,6 +27,26 @@ const packageVersion = (JSON.parse(readFileSync(join(repoRoot, "package.json"), 
 
 function runCli(args: string[], env: NodeJS.ProcessEnv) {
   return spawnSync(process.execPath, [cliPath, ...args], { cwd: repoRoot, env, encoding: "utf8" });
+}
+
+function writeFixtureExecutable(dir: string, name: string, body: string): void {
+  writeFileSync(join(dir, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+}
+
+function secretsExecStubBody(): string {
+  return [
+    'printf "%s\\n" "${1:-}" >> "$CALL_LOG"',
+    '[ "${1:-}" = "exec" ] || exit 64',
+    "shift",
+    "shift",
+    '[ "${1:-}" = "--as" ] || exit 65',
+    'env_name="${2:-}"',
+    "shift 2",
+    '[ "${1:-}" = "--" ] || exit 66',
+    "shift",
+    'export "$env_name=x"',
+    'exec "$@"',
+  ].join("\n");
 }
 
 function effectiveFor(overlays: string[] = []) {
@@ -238,19 +258,70 @@ describe("physical render", () => {
     expect(commands).toContain("bun install -g");
     expect(commands).toContain("systemctl --user enable --now 'machines-roster.service'");
     // secret NAMES are allowed; secret VALUES have no path into a render
-    expect(commands).toContain("secrets get 'stations/prod/tailscale/authkey' --show");
-    expect(commands).toContain("secrets get 'stations/prod/station-env' --show");
+    expect(commands).toContain("secrets exec 'stations/prod/tailscale/authkey' --as TAILSCALE_AUTH_KEY -- sh -c");
+    expect(commands).toContain("secrets exec 'stations/prod/station-env' --as STATION_ENV -- sh -c");
+    expect(commands).not.toContain("secrets get");
+    expect(commands).not.toContain("--show");
+    expect(commands).not.toContain("--plaintext");
     expect(commands).not.toContain("tskey-");
   });
 
   test("stages the Tailscale auth key in a securely created temporary file", () => {
     const steps = buildStationTemplateSteps(effectiveFor(["dgx-spark"]));
     const join = steps.find((step) => step.id === "template-tailscale-join");
-    expect(join?.command).toContain("auth_key_file=$(mktemp)");
-    expect(join?.command).toContain("secrets get 'stations/prod/tailscale/authkey' --show");
-    expect(join?.command).toContain('trap \'rm -f "$auth_key_file"\' EXIT');
+    expect(join?.command).toContain('auth_key_file="$(mktemp)"');
+    expect(join?.command).toContain("secrets exec 'stations/prod/tailscale/authkey' --as TAILSCALE_AUTH_KEY -- sh -c");
+    expect(join?.command).toContain("trap");
+    expect(join?.command).toContain('rm -f "$auth_key_file"');
+    expect(join?.command).toContain("EXIT");
     expect(join?.command).toContain('--auth-key "file:$auth_key_file"');
     expect(join?.command).not.toContain("/tmp/ts-authkey");
+  });
+
+  test("physical secret consumers receive child environment values without stdout capture", () => {
+    const root = mkdtempSync(join(tmpdir(), "station-secrets-exec-"));
+    try {
+      const stubs = join(root, "bin");
+      const home = join(root, "home");
+      const callLog = join(root, "calls.log");
+      mkdirSync(stubs);
+      mkdirSync(home);
+      writeFixtureExecutable(stubs, "secrets", secretsExecStubBody());
+      writeFixtureExecutable(stubs, "sudo", 'exec "$@"');
+      writeFixtureExecutable(
+        stubs,
+        "tailscale",
+        [
+          '[ "${1:-}" = "status" ] && exit 1',
+          '[ "${1:-}" = "up" ] || exit 67',
+          'auth_file=""',
+          'for arg in "$@"; do case "$arg" in file:*) auth_file="${arg#file:}" ;; esac; done',
+          '[ -n "$auth_file" ] && [ -s "$auth_file" ] || exit 68',
+          'printf "%s\\n" "tailscale-file-nonempty" >> "$CALL_LOG"',
+        ].join("\n"),
+      );
+
+      const steps = buildStationTemplateSteps(effectiveFor(["dgx-spark"]), { station: "station01" });
+      const joinStep = steps.find((step) => step.id === "template-tailscale-join");
+      const bootstrapStep = steps.find((step) => step.id === "template-secrets-bootstrap");
+      expect(joinStep).toBeDefined();
+      expect(bootstrapStep).toBeDefined();
+      const env = { ...process.env, CALL_LOG: callLog, HOME: home, PATH: `${stubs}:/usr/bin:/bin` };
+
+      const joinResult = spawnSync("sh", ["-e", "-c", joinStep!.command], { encoding: "utf8", env });
+      expect(joinResult.status).toBe(0);
+      expect(joinResult.stderr).toBe("");
+
+      const bootstrapResult = spawnSync("sh", ["-e", "-c", bootstrapStep!.command], { encoding: "utf8", env });
+      expect(bootstrapResult.status).toBe(0);
+      expect(bootstrapResult.stderr).toBe("");
+      const stationEnv = join(home, ".hasna", "station.env");
+      expect(statSync(stationEnv).size).toBeGreaterThan(0);
+      expect(statSync(stationEnv).mode & 0o777).toBe(0o600);
+      expect(readFileSync(callLog, "utf8")).toBe("exec\ntailscale-file-nonempty\nexec\n");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

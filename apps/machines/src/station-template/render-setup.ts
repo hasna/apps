@@ -1,4 +1,5 @@
 import { dirname } from "node:path";
+import { buildSecretsExecShell } from "../secrets-exec.js";
 import type { SetupStep } from "../types.js";
 import { buildBashrcSpliceCommand } from "./bashrc-block.js";
 import { SWAP_FILE_PATH, SWAP_HEADROOM_GB, type EffectiveTemplate, type LoadedTemplateFile } from "./schema.js";
@@ -207,17 +208,28 @@ export function buildStationTemplateSteps(effective: EffectiveTemplate, options:
     });
     const hostnameFlag = station && effective.tailscale.hostnameFromStation ? ` --hostname ${quote(station)}` : "";
     const sshFlag = effective.tailscale.ssh ? " --ssh" : "";
+    const tailscaleJoinCommand = buildSecretsExecShell(
+      effective.tailscale.authKeySecretName,
+      "TAILSCALE_AUTH_KEY",
+      [
+        "set -eu",
+        "umask 077",
+        '[ -n "${TAILSCALE_AUTH_KEY:-}" ] || exit 3',
+        'auth_key_file="$(mktemp)"',
+        'trap \'rm -f "$auth_key_file"\' EXIT',
+        'printf \'%s\' "$TAILSCALE_AUTH_KEY" > "$auth_key_file"',
+        `sudo tailscale up --auth-key "file:$auth_key_file"${hostnameFlag}${sshFlag}`,
+      ].join("\n"),
+    );
     // Secret NAME only; the value is pulled at runtime into a securely created
-    // 0600 temporary file (mktemp, never a predictable /tmp path) and
-    // referenced via file: so it never appears in argv or logs. The subshell's
+    // child environment, written to a securely created 0600 temporary file,
+    // and referenced via file: so it never appears in argv or logs. The child
     // EXIT trap removes the key file on both the success and the failure arm.
     steps.push({
       id: "template-tailscale-join",
       title: "Join tailnet if not already joined (auth key via secrets vault, name only; never boot-critical)",
       command:
-        `tailscale status >/dev/null 2>&1 || ( umask 077 && auth_key_file=$(mktemp) && ` +
-        `trap 'rm -f "$auth_key_file"' EXIT && secrets get ${quote(effective.tailscale.authKeySecretName)} --show | tr -d '\\r\\n' > "$auth_key_file" && ` +
-        `sudo tailscale up --auth-key "file:$auth_key_file"${hostnameFlag}${sshFlag} ) || ` +
+        `tailscale status >/dev/null 2>&1 || ( ${tailscaleJoinCommand} ) || ` +
         `echo 'hasna-station: tailscale join failed (NON-FATAL) — the box stays reachable by its floor path; drift check reports tailscale:join' >&2`,
       manager: "custom",
       privileged: true,
@@ -250,12 +262,26 @@ export function buildStationTemplateSteps(effective: EffectiveTemplate, options:
   }
 
   if (effective.secretsBootstrap) {
+    const bootstrapCommand = buildSecretsExecShell(
+      effective.secretsBootstrap.envSecretName,
+      "STATION_ENV",
+      [
+        "set -eu",
+        '[ -n "${STATION_ENV:-}" ] || exit 3',
+        'mkdir -p "$HOME/.hasna"',
+        "umask 077",
+        'station_env_file="$HOME/.hasna/station.env"',
+        'tmp_env="$(mktemp "$HOME/.hasna/.station.env.XXXXXX")"',
+        'trap \'rm -f "$tmp_env"\' EXIT',
+        'printf \'%s\' "$STATION_ENV" > "$tmp_env"',
+        'chmod 600 "$tmp_env"',
+        'mv -f "$tmp_env" "$station_env_file"',
+      ].join("\n"),
+    );
     steps.push({
       id: "template-secrets-bootstrap",
       title: `Bootstrap station env from vault secret ${effective.secretsBootstrap.envSecretName} (name only${effective.secretsBootstrap.optional ? ", optional" : ""})`,
-      command:
-        `secrets get ${quote(effective.secretsBootstrap.envSecretName)} --show > "$HOME/.hasna/station.env" 2>/dev/null && chmod 600 "$HOME/.hasna/station.env"` +
-        (effective.secretsBootstrap.optional ? " || true" : ""),
+      command: bootstrapCommand + (effective.secretsBootstrap.optional ? " || true" : ""),
       manager: "custom",
     });
   }

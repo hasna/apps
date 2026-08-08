@@ -26,9 +26,9 @@
  * non-resolving placeholder domain.
  *
  * SECRETS: the API key is NEVER transported in cleartext by the orchestrator.
- * The remote script fetches it on the target machine via `secrets get <path>`;
- * the orchestrator only ever handles the secret *path*. Nothing here logs a
- * value.
+ * The remote script fetches it on the target machine via `secrets exec`; the
+ * orchestrator only ever handles the secret *path*. Nothing here logs a value
+ * or captures it from stdout.
  *
  * Rollout shape: canary (1 machine) -> batch -> all, OR a single atomic wave via
  * `--all-machines` (used by the coordination-store cutover so machines flip
@@ -37,6 +37,7 @@
  */
 
 import type { FleetManifest, MachinePlatform } from "../types.js";
+import { buildSecretsExecShell } from "../secrets-exec.js";
 
 export type FlipMode = "api" | "local";
 
@@ -68,7 +69,7 @@ export interface FlipAppSpec {
   apiKeyEnv: string;
   /** App API base URL, e.g. https://todos.<fleet-domain> (client appends /v1). */
   apiUrl: string;
-  /** Secret PATH (never the value) resolved on-target via `secrets get`. */
+  /** Secret PATH (never the value) resolved on-target via `secrets exec`. */
   apiKeySecretPath: string;
   /** systemd/launchd service unit/label base name, e.g. hasna-todos-mcp. */
   serviceUnit: string;
@@ -310,23 +311,24 @@ export function buildFlipScript(spec: FlipAppSpec, mode: FlipMode, options: Buil
   ];
 
   if (mode === "api") {
-    // Fetch the API key on-target; abort if the secret is missing (never write
-    // a half-configured API env file). The --raw probe silences its own stderr
-    // (older secrets CLIs lack the flag and would double-report), but the
-    // fallback attempt keeps stderr: this script runs on a remote machine, and
-    // discarding both streams turned every provisioning failure into a silent
-    // empty key with no cause attached.
-    lines.push(
-      `API_KEY="$(secrets get ${sq(spec.apiKeySecretPath)} --raw --show 2>/dev/null || secrets get ${sq(spec.apiKeySecretPath)} --show)"`,
+    // Fetch the API key on-target into the child environment; abort if the
+    // secret is missing or empty before writing any fleet env file.
+    const writeEnvLines = [
+      "set -eu",
       'if [ -z "${API_KEY:-}" ]; then echo "FLIP_ERROR: could not resolve API key secret" >&2; exit 3; fi',
       'TMP_ENV="$(mktemp "${ENV_DIR}/.${APP}.env.XXXXXX")"',
+      'trap \'rm -f "$TMP_ENV"\' EXIT',
       `printf '%s\\n' ${sq(`${spec.apiUrlEnv}=${spec.apiUrl}`)} >> "$TMP_ENV"`,
       `printf '%s=%s\\n' ${sq(spec.apiKeyEnv)} "$API_KEY" >> "$TMP_ENV"`,
-    );
+    ];
     for (const [key, value] of Object.entries(spec.extraApiEnv ?? {})) {
-      lines.push(`printf '%s\\n' ${sq(`${key}=${value}`)} >> "$TMP_ENV"`);
+      writeEnvLines.push(`printf '%s\\n' ${sq(`${key}=${value}`)} >> "$TMP_ENV"`);
     }
-    lines.push('chmod 600 "$TMP_ENV"', 'mv -f "$TMP_ENV" "$ENV_FILE"', 'unset API_KEY');
+    writeEnvLines.push('chmod 600 "$TMP_ENV"', 'mv -f "$TMP_ENV" "$ENV_FILE"');
+    lines.push(
+      "export APP ENV_DIR ENV_FILE",
+      buildSecretsExecShell(spec.apiKeySecretPath, "API_KEY", writeEnvLines.join("\n")),
+    );
   } else {
     // Revert: remove the fleet env file entirely so HASNA_<APP>_API_URL and
     // HASNA_<APP>_API_KEY are unset and the app returns to its local original.

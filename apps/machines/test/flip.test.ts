@@ -1,4 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { FleetManifest } from "../src/types.js";
 import {
   FLIP_APPS,
@@ -25,6 +29,10 @@ const manifest: FleetManifest = {
     { id: "station02", platform: "linux", workspacePath: "/x", tags: ["linux", "lan"] },
   ],
 };
+
+function writeExecutable(dir: string, name: string, body: string): void {
+  writeFileSync(join(dir, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+}
 
 describe("flip registry", () => {
   test("registers all 25 @hasna OSS apps", () => {
@@ -122,9 +130,79 @@ describe("wave planning", () => {
 describe("script generation", () => {
   const spec = getFlipApp("todos");
 
+  test("captured default get is empty, while the generated script consumes the key through exec", () => {
+    const root = mkdtempSync(join(tmpdir(), "machines-flip-secrets-"));
+    try {
+      const binDir = join(root, "bin");
+      const envDir = join(root, "cloud");
+      const callLog = join(root, "calls.log");
+      const captured = join(root, "captured-default-get");
+      mkdirSync(binDir);
+
+      writeExecutable(
+        binDir,
+        "secrets",
+        [
+          'printf "%s\\n" "${1:-}" >> "$CALL_LOG"',
+          'if [ "${1:-}" = "get" ]; then',
+          '  for arg in "$@"; do [ "$arg" = "--show" ] && { printf x; exit 0; }; done',
+          '  printf "%s\\n" "captured get refused" >&2',
+          "  exit 9",
+          "fi",
+          '[ "${1:-}" = "exec" ] || exit 64',
+          "shift",
+          "shift",
+          '[ "${1:-}" = "--as" ] || exit 65',
+          'env_name="${2:-}"',
+          "shift 2",
+          '[ "${1:-}" = "--" ] || exit 66',
+          "shift",
+          'export "$env_name=x"',
+          'exec "$@"',
+        ].join("\n"),
+      );
+      writeExecutable(binDir, "todos", "printf '%s\\n' '{\"mode\":\"cloud\",\"api_enabled\":true}'");
+
+      const env = { ...process.env, CALL_LOG: callLog, PATH: `${binDir}:/usr/bin:/bin` };
+      const rejectedCapture = spawnSync(
+        "sh",
+        ["-c", 'secrets get fixture/key > "$1"', "fixture", captured],
+        { encoding: "utf8", env },
+      );
+      expect(rejectedCapture.status).toBe(9);
+      expect(statSync(captured).size).toBe(0);
+
+      const script = buildFlipScript(spec, "api", { envDir, skipRestart: true });
+      const result = spawnSync("bash", ["-c", script], { encoding: "utf8", env });
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(readFileSync(callLog, "utf8")).toContain("exec\n");
+      expect(script).toContain("secrets exec 'hasna/oss/todos/api-key' --as API_KEY -- sh -c");
+      expect(script).not.toContain("secrets get");
+
+      const rendered = readFileSync(join(envDir, "todos.env"), "utf8");
+      const keyLine = rendered.match(/^HASNA_TODOS_API_KEY=(.+)$/m);
+      expect(keyLine).not.toBeNull();
+      expect(keyLine?.[1]?.length).toBeGreaterThan(0);
+
+      const failingEnvDir = join(root, "failing-cloud");
+      mkdirSync(failingEnvDir);
+      writeExecutable(binDir, "mv", "exit 71");
+      const failingScript = buildFlipScript(spec, "api", { envDir: failingEnvDir, skipRestart: true });
+      const failedMove = spawnSync("bash", ["-c", failingScript], { encoding: "utf8", env });
+      expect(failedMove.status).toBe(71);
+      expect(readdirSync(failingEnvDir).filter((name) => name.startsWith(".todos.env."))).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("api script writes API_URL + API_KEY, fetches the key from the secret store, never a DSN", () => {
     const script = buildFlipScript(spec, "api");
-    expect(script).toContain("secrets get 'hasna/oss/todos/api-key' --raw --show");
+    expect(script).toContain("secrets exec 'hasna/oss/todos/api-key' --as API_KEY -- sh -c");
+    expect(script).not.toContain("secrets get");
+    expect(script).not.toContain("--show");
+    expect(script).not.toContain("--plaintext");
     expect(script).toContain("HASNA_TODOS_API_URL=https://todos.your-deployment.example");
     expect(script).toContain("HASNA_TODOS_API_KEY");
     // Forbidden legacy surfaces must never appear.
@@ -144,19 +222,18 @@ describe("script generation", () => {
     expect(script).toContain("exit 3");
   });
 
-  test("the fallback secret fetch keeps its stderr — the loud signal when provisioning fails", () => {
+  test("the secret handoff does not capture stdout or discard its failure signal", () => {
     const script = buildFlipScript(spec, "api");
-    // The --raw probe may silence its own stderr (older secrets CLIs lack the
-    // flag), but the fallback attempt must NOT: this script runs on a remote
-    // machine, and a swallowed error there reads as an empty key with no cause.
-    expect(script).toMatch(/\|\| secrets get 'hasna\/oss\/todos\/api-key' --show\)"/);
-    expect(script).not.toMatch(/\|\| secrets get [^\n]*2>\/dev\/null/);
+    expect(script).toContain("secrets exec 'hasna/oss/todos/api-key' --as API_KEY -- sh -c");
+    expect(script).not.toMatch(/API_KEY=.*secrets get/);
+    expect(script).not.toMatch(/secrets exec[^\n]*2>\/dev\/null/);
   });
 
   test("local (revert) script removes the env file and never touches the secret", () => {
     const script = buildFlipScript(spec, "local");
     expect(script).toContain('rm -f "$ENV_FILE"');
     expect(script).not.toContain("secrets get");
+    expect(script).not.toContain("secrets exec");
     expect(script).not.toContain("HASNA_TODOS_API_KEY=");
     // Revert removes the systemd drop-in so both vars are fully unset.
     expect(script).toContain("rm -f");
