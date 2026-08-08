@@ -2,7 +2,7 @@
 // Regenerate: bun run sdk:generate
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: ConversationsClient 0.5.33
+// Source: ConversationsClient 0.5.34
 
 export interface Message { "id"?: number; "uuid"?: string; "session_id"?: string; "from_agent"?: string; "to_agent"?: string; "channel"?: string | null; "project_id"?: string | null; "content"?: string; "priority"?: string; "blocking"?: boolean; "reply_to"?: number | null; "created_at"?: string }
 
@@ -335,8 +335,8 @@ export class ConversationsClient {
       });
     }
 
-    /** Version and mode */
-    async getVersion(init?: RequestInit): Promise<Record<string, unknown>> {
+    /** Package version and artifact-baked source SHA */
+    async getVersion(init?: RequestInit): Promise<{ "status": string; "version": string; "app": string; "build_sha": string | null }> {
       return this.request("GET", `/version`, {
         body: undefined,
         query: undefined,

@@ -719,25 +719,37 @@ describe("conversations-serve", () => {
     }
   });
 
-  test("GET /health is unauthenticated and returns status+version+mode", async () => {
+  test("GET /health is unauthenticated and omits retired deployment mode", async () => {
     const r = await fetch(`${base}/health`);
     expect(r.status).toBe(200);
     const b = await r.json();
     expect(b.status).toBe("ok");
-    expect(b.mode).toBe("cloud");
+    expect("mode" in b).toBe(false);
     expect(typeof b.version).toBe("string");
   });
 
-  test("GET /ready pings the store", async () => {
+  test("GET /ready pings the store and omits retired deployment mode", async () => {
     const b = await (await fetch(`${base}/ready`)).json();
     expect(b.status).toBe("ok");
+    expect("mode" in b).toBe(false);
   });
 
-  test("GET /version returns mode+version", async () => {
+  test("GET /version returns version metadata without retired deployment mode", async () => {
     const b = await (await fetch(`${base}/version`)).json();
-    expect(b.mode).toBe("cloud");
+    expect("mode" in b).toBe(false);
     expect(b.version).toBeTruthy();
     expect(b.build_sha).toBeNull();
+  });
+
+  test("OpenAPI version contract omits retired deployment mode", async () => {
+    const spec = await (await fetch(`${base}/v1/openapi.json`)).json() as any;
+    const schema = spec.paths["/version"].get.responses["200"].content["application/json"].schema;
+    expect(schema.required).not.toContain("mode");
+    expect(schema.properties.mode).toBeUndefined();
+    expect(schema.properties.build_sha.oneOf).toEqual([
+      { type: "string", pattern: "^[0-9a-f]{40}$" },
+      { type: "null" },
+    ]);
   });
 
   test("/v1 requires an API key (401 without one)", async () => {
