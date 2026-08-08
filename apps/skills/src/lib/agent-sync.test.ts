@@ -54,8 +54,8 @@ describe("adaptSkillMdForAgent", () => {
     expect(out).toContain("user_invocable: true");
   });
 
-  test("Codex / OpenCode / Cursor strip user_invocable", () => {
-    for (const agent of ["codex", "opencode", "cursor"] as const) {
+  test("Codewith / Codex / OpenCode / Cursor strip user_invocable", () => {
+    for (const agent of ["codewith", "codex", "opencode", "cursor"] as const) {
       const out = adaptSkillMdForAgent(INSTRUCTION_MD, agent);
       expect(out).not.toContain("user_invocable");
       // Body is preserved verbatim.
@@ -69,6 +69,7 @@ describe("agentGlobalSkillsDir", () => {
   test("resolves per-tool global paths under a given home", () => {
     const home = "/home/somebody";
     expect(agentGlobalSkillsDir("claude", home)).toBe(join(home, ".claude", "skills"));
+    expect(agentGlobalSkillsDir("codewith", home)).toBe(join(home, ".codewith", "skills"));
     expect(agentGlobalSkillsDir("codex", home)).toBe(join(home, ".codex", "skills"));
     expect(agentGlobalSkillsDir("cursor", home)).toBe(join(home, ".cursor", "skills"));
     expect(agentGlobalSkillsDir("opencode", home)).toBe(join(home, ".config", "opencode", "skills"));
@@ -81,7 +82,7 @@ describe("resolveSyncAgents", () => {
     expect(resolveSyncAgents(undefined)).toEqual([...SYNC_AGENTS]);
   });
   test("a single named agent", () => {
-    expect(resolveSyncAgents("codex")).toEqual(["codex"]);
+    expect(resolveSyncAgents("codewith")).toEqual(["codewith"]);
   });
   test("rejects an unknown agent", () => {
     expect(() => resolveSyncAgents("gemini")).toThrow("Unknown agent");
@@ -125,6 +126,9 @@ describe("syncSkillsToAgents", () => {
 
       const codexMd = readFileSync(join(home, ".codex", "skills", "deploy-runbook", "SKILL.md"), "utf-8");
       expect(codexMd).not.toContain("user_invocable");
+
+      const codewithMd = readFileSync(join(home, ".codewith", "skills", "deploy-runbook", "SKILL.md"), "utf-8");
+      expect(codewithMd).not.toContain("user_invocable");
 
       const openCodeMd = readFileSync(join(home, ".config", "opencode", "skills", "deploy-runbook", "SKILL.md"), "utf-8");
       expect(openCodeMd).not.toContain("user_invocable");
