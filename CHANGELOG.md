@@ -6,6 +6,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.105]
+
+### Added
+
+- `projects resource-links-read`, `resource-links-add`,
+  `resource-links-reconcile`, and `resource-links-rollback` now manage a
+  closed, typed one-to-many collection of Todos, Conversations, Knowledge, and
+  Mementos resources by exact stable project id and compare-and-swap revision.
+- SQLite, PostgreSQL, the HTTP API, CLI, OpenAPI schema, and generated SDK now
+  share immutable link identity, mutable labels, deterministic idempotent
+  receipts, bounded complete readback, duplicate prevention, project
+  registration projections, and rollback to the exact accepted forward state.
+
 ## [0.1.104]
 
 ### Added
