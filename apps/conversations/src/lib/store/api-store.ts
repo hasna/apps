@@ -744,6 +744,7 @@ export class ApiStore implements ConversationsStore {
       uuid: messageUuid,
       from: opts.from, to: opts.to, content: opts.content, channel: opts.channel,
       project_id: opts.project_id, session_id: opts.session_id, priority: opts.priority,
+      metadata: opts.metadata,
       blocking: opts.blocking === true,
       // This is an explicit field whitelist, so anything missing here is
       // silently dropped on the cloud path. reply_to was missing, which

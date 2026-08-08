@@ -294,10 +294,10 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
       }
       if (/INSERT INTO messages/i.test(sql)) {
         // Destructured positionally, so this must track the column list in the
-        // INSERT. reply_to is last; a column missing from the statement is
-        // exactly how thread linkage got dropped on the cloud path.
-        const [uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, blocking, reply_to] = p as any[];
-        const row = { id: nextId++, uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, blocking, reply_to: reply_to ?? null, created_at: new Date().toISOString() };
+        // INSERT. metadata and reply_to are positional; a column missing from
+        // the statement is exactly how cloud-only fields were dropped.
+        const [uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, metadata, blocking, reply_to] = p as any[];
+        const row = { id: nextId++, uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, metadata, blocking, reply_to: reply_to ?? null, created_at: new Date().toISOString() };
         messages.push(row);
         return row;
       }
@@ -852,6 +852,41 @@ describe("conversations-serve", () => {
 
     const list = await (await fetch(`${base}/v1/messages?channel=deploys`, { headers: { "x-api-key": rwKey } })).json();
     expect(list.messages.length).toBeGreaterThan(0);
+  });
+
+  test("POST /v1/messages persists metadata for direct and channel UUID readback", async () => {
+    const channelName = "message-metadata-roundtrip";
+    const created = await fetch(`${base}/v1/channels`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ name: channelName, created_by: "alice" }),
+    });
+    expect(created.status).toBe(201);
+
+    const cases = [
+      { from: "alice", to: "bob", content: "direct metadata" },
+      { from: "alice", to: channelName, channel: channelName, content: "channel metadata" },
+    ];
+    for (const [index, message] of cases.entries()) {
+      const metadata = {
+        goal_id: `goal-metadata-${index}`,
+        receipt: { kind: index === 0 ? "direct" : "channel" },
+      };
+      const sent = await fetch(`${base}/v1/messages`, {
+        method: "POST",
+        headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+        body: JSON.stringify({ ...message, metadata }),
+      });
+      expect(sent.status).toBe(201);
+      const sentBody = await sent.json();
+
+      const readback = await fetch(`${base}/v1/messages/by-uuid/${sentBody.message.uuid}`, {
+        headers: { "x-api-key": rwKey },
+      });
+      expect(readback.status).toBe(200);
+      const stored = (await readback.json()).message;
+      expect(JSON.parse(stored.metadata)).toEqual(metadata);
+    }
   });
 
   test("project-linked channel sends inherit the channel project and reject explicit conflicts", async () => {
@@ -1937,6 +1972,27 @@ describe("conversations-serve", () => {
     expect(r.status).toBe(400);
     expect(text).toContain("sensitive content detected");
     expect(text).not.toContain(blocked);
+  });
+
+  test("POST /v1/messages blocks sensitive metadata without echoing or inserting it", async () => {
+    const blocked = syntheticDatabaseUrl();
+    const before = activeFakeClient!.__debug.messages.length;
+    const r = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        from: "a",
+        to: "b",
+        content: "safe body",
+        metadata: { nested: { dsn: blocked } },
+      }),
+    });
+    const text = await r.text();
+
+    expect(r.status).toBe(400);
+    expect(text).toContain("sensitive content detected");
+    expect(text).not.toContain(blocked);
+    expect(activeFakeClient!.__debug.messages).toHaveLength(before);
   });
 
   test("GET /v1/messages redacts sensitive legacy content", async () => {

@@ -26,7 +26,7 @@ import { openapiSpec } from "./openapi.js";
 import { normalizeChannelName, unknownChannelMessage } from "../lib/channel-names.js";
 import { newChannelId } from "../lib/channel-id.js";
 import { extractTopics } from "../lib/topic-extract.js";
-import { assertNoSensitiveContent, redactSensitiveText, redactSensitiveValue } from "../lib/content-safety.js";
+import { assertNoSensitiveContent, assertNoSensitiveValue, redactSensitiveText, redactSensitiveValue } from "../lib/content-safety.js";
 import { resolveSelfSenderId } from "../lib/sender-identity.js";
 import { normalizeMessageUuid, parseMessageReference } from "../lib/message-reference.js";
 import { normalizeExactIsoTimestamp } from "../lib/since.js";
@@ -1433,6 +1433,16 @@ async function handleV1(
     const content = str(body.content);
     const requestedChannel = body.channel ? normalizeChannelName(String(body.channel)) : null;
     const requestedSession = str(body.session_id);
+    const metadataObject = jsonObject(body.metadata);
+    if ("metadata" in body && body.metadata != null && !metadataObject) {
+      return fieldError(
+        "metadata",
+        Array.isArray(body.metadata) ? "[array]" : `[${typeof body.metadata}]`,
+        "metadata must be a JSON object.",
+        "Pass an object such as {\"goal_id\":\"goal-123\"}.",
+      );
+    }
+    const metadata = metadataObject ? JSON.stringify(metadataObject) : null;
     const messageUuid = body.uuid === undefined ? randomUUID() : normalizeMessageUuid(body.uuid);
     if (!messageUuid) return json({ error: "uuid must be a valid message UUID" }, 400);
     let attachmentUploads;
@@ -1525,6 +1535,8 @@ async function handleV1(
     assertNoSensitiveOptionalText(channelName ?? undefined, "Message channel");
     assertNoSensitiveOptionalText(requestedProjectId ?? undefined, "Message project");
     assertNoSensitiveContent(sessionId, "Message session");
+    if (metadataObject) assertNoSensitiveValue(metadataObject, "Message metadata");
+    if (metadata) assertNoSensitiveContent(metadata, "Message metadata");
     const blocking = body.blocking === true;
     // Persist the local numeric FK only after an immutable UUID lookup resolved
     // it in this authenticated tenant/store. Numeric-only reply identities are
@@ -1551,10 +1563,10 @@ async function handleV1(
         }
       }
       const inserted = await tx.get<Record<string, unknown>>(
-        `INSERT INTO messages (uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, blocking, reply_to)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-         RETURNING id, uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, blocking, reply_to, created_at`,
-        [messageUuid, sessionId, from, toAgent, channelName ?? null, projectId, content, priority, blocking, replyTo],
+        `INSERT INTO messages (uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, metadata, blocking, reply_to)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         RETURNING id, uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, metadata, blocking, reply_to, created_at`,
+        [messageUuid, sessionId, from, toAgent, channelName ?? null, projectId, content, priority, metadata, blocking, replyTo],
       );
       if (!inserted) return null;
 
