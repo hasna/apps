@@ -33,6 +33,7 @@ import type {
   TypedQueryClient,
 } from '../src/generated/storage-kit/index.js';
 import { createMigratedPglite } from './fixtures/pglite-client';
+import { budget } from './support/budget';
 
 const SIGNING = 'test-signing-secret-not-a-real-key';
 const TENANT = 'tenant-fcame-test';
@@ -343,6 +344,91 @@ function manifestStep(
 }
 
 describe('FCAME-1 guarded Knowledge writer', () => {
+  test('REGRESSION: guarded item authority trigger matches TEXT claims to TEXT and UUID tenant ids', async () => {
+    for (const variant of [
+      {
+        tenantIdType: 'text' as const,
+        migrationMode: 'direct' as const,
+        tenantId: TENANT,
+        targetId: 'k_fcame_text_tenant_guarded_create',
+      },
+      {
+        tenantIdType: 'uuid' as const,
+        migrationMode: 'direct' as const,
+        tenantId: '22222222-2222-4222-8222-222222222222',
+        targetId: 'k_fcame_uuid_tenant_guarded_create_fresh',
+      },
+      {
+        tenantIdType: 'uuid' as const,
+        migrationMode: 'existing-ledger-upgrade' as const,
+        tenantId: '33333333-3333-4333-8333-333333333333',
+        targetId: 'k_fcame_uuid_tenant_guarded_create_upgrade',
+      },
+    ]) {
+      const created = await createMigratedPglite({
+        knowledgeItemsTenantIdType: variant.tenantIdType,
+        migrationMode: variant.migrationMode,
+      });
+      const client = created.client;
+      const store = new ApiKeyStore(client);
+      const verifier = verifyApiKey({
+        app: 'knowledge',
+        signingSecret: SIGNING,
+        isRevoked: store.isRevoked,
+      });
+      const binding: KnowledgeGuardedBinding = {
+        ...BINDING,
+        tenant_id: variant.tenantId,
+      };
+      const variantServer = Bun.serve({
+        port: 0,
+        hostname: '127.0.0.1',
+        fetch: createServeHandler({
+          client,
+          verifier,
+          store,
+          version: '9.9.9',
+          guardedAuthority: AUTHORITY,
+        }),
+      });
+      try {
+        const variantWriter = createKnowledgeGuardedWriter({
+          binding,
+          env: {
+            NODE_ENV: 'test',
+            HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
+            HASNA_KNOWLEDGE_API_URL: `http://127.0.0.1:${variantServer.port}`,
+            HASNA_KNOWLEDGE_API_KEY: mintApiKey({
+              app: 'knowledge',
+              scopes: ['knowledge:read', 'knowledge:write'],
+              tid: variant.tenantId,
+              signingSecret: SIGNING,
+            }).token,
+          },
+        });
+        const result = await variantWriter.execute(descriptor({
+          operation: `op-${variant.tenantIdType}-${variant.migrationMode}-tenant-guarded-create`,
+          step: 'step-create',
+          target: variant.targetId,
+          binding,
+          payload: {
+            title: `${variant.tenantIdType.toUpperCase()} tenant guarded create`,
+            content: `${variant.tenantIdType} tenant guarded trigger accepts its live claim`,
+          },
+        }));
+
+        expect(result.receipt.status).toBe('accepted');
+        expect(result.receipt.effect_count).toBe(1);
+        expect(result.readback.item.id).toBe(variant.targetId);
+        expect(result.readback.item.content)
+          .toBe(`${variant.tenantIdType} tenant guarded trigger accepts its live claim`);
+      } finally {
+        variantServer.stop(true);
+        await created.db.close();
+      }
+    }
+  }, budget(10_000));
+
   test('accepted create uses a protected descriptor and exact full-ID readback', async () => {
     const privateBody = 'private doctrine body accepted create';
     const input = descriptor({

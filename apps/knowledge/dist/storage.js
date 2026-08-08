@@ -3400,7 +3400,90 @@ var PG_MIGRATIONS = [
   `CREATE TRIGGER trg_knowledge_items_00_guarded_authority
      BEFORE INSERT OR UPDATE OR DELETE ON knowledge_items
      FOR EACH ROW EXECUTE FUNCTION knowledge_guarded_item_authority()`,
-  `ALTER TABLE knowledge_items ENABLE ALWAYS TRIGGER trg_knowledge_items_00_guarded_authority`
+  `ALTER TABLE knowledge_items ENABLE ALWAYS TRIGGER trg_knowledge_items_00_guarded_authority`,
+  `CREATE OR REPLACE FUNCTION knowledge_guarded_item_authority()
+   RETURNS TRIGGER AS $knowledge_guarded_item_authority$
+   DECLARE
+     claim_key TEXT;
+     claim_matches BOOLEAN;
+   BEGIN
+     IF TG_OP = 'DELETE' THEN
+       IF OLD.authority_classification IS NULL THEN
+         RETURN OLD;
+       END IF;
+       RAISE EXCEPTION 'guarded knowledge items cannot be deleted outside a declared FCAME-1 action'
+         USING ERRCODE = 'restrict_violation';
+     END IF;
+
+     IF TG_OP = 'INSERT' AND NEW.authority_classification IS NULL THEN
+       RETURN NEW;
+     END IF;
+
+     IF TG_OP = 'UPDATE'
+        AND OLD.authority_classification IS NULL
+        AND NEW.authority_classification IS NULL THEN
+       RETURN NEW;
+     END IF;
+
+     IF NEW.authority_classification IS NULL OR NEW.authority_id IS NULL
+        OR NEW.tenant_id IS NULL OR NEW.scope IS NULL OR NEW.parent_id IS NULL THEN
+       RAISE EXCEPTION 'guarded knowledge item binding must be complete'
+         USING ERRCODE = 'check_violation';
+     END IF;
+
+     IF TG_OP = 'UPDATE' AND (
+       OLD.id IS DISTINCT FROM NEW.id
+       OR OLD.authority_classification IS DISTINCT FROM NEW.authority_classification
+       OR OLD.authority_id IS DISTINCT FROM NEW.authority_id
+       OR OLD.tenant_id IS DISTINCT FROM NEW.tenant_id
+       OR OLD.scope IS DISTINCT FROM NEW.scope
+       OR OLD.parent_id IS DISTINCT FROM NEW.parent_id
+     ) THEN
+       RAISE EXCEPTION 'guarded knowledge item identity and binding are immutable'
+         USING ERRCODE = 'restrict_violation';
+     END IF;
+
+     claim_key := NULLIF(
+       current_setting('hasna.knowledge_guarded_deterministic_key', true),
+       ''
+     );
+     IF claim_key IS NULL THEN
+       RAISE EXCEPTION 'guarded knowledge item mutation requires an FCAME-1 operation claim'
+         USING ERRCODE = 'insufficient_privilege';
+     END IF;
+
+     SELECT EXISTS (
+       SELECT 1
+         FROM knowledge_guarded_write_claims AS claim
+        WHERE claim.deterministic_key = claim_key
+          AND claim.receipt_id IS NULL
+          AND claim.target_id = NEW.id
+          AND claim.authority_classification = NEW.authority_classification
+          AND claim.authority_id = NEW.authority_id
+          AND claim.tenant_id = NEW.tenant_id::text
+          AND claim.scope = NEW.scope
+          AND claim.parent_id = NEW.parent_id
+          AND (
+            (
+              TG_OP = 'INSERT'
+              AND claim.verb = 'create'
+              AND claim.precondition_kind = 'absent'
+            )
+            OR (
+              TG_OP = 'UPDATE'
+              AND claim.verb = 'update'
+              AND claim.precondition_kind = 'version'
+              AND claim.expected_version = OLD.version
+            )
+          )
+     ) INTO claim_matches;
+     IF NOT claim_matches THEN
+       RAISE EXCEPTION 'guarded knowledge item mutation does not match its live FCAME-1 operation claim'
+         USING ERRCODE = 'insufficient_privilege';
+     END IF;
+     RETURN NEW;
+   END
+   $knowledge_guarded_item_authority$ LANGUAGE plpgsql`
 ];
 export {
   wrapExecutor,
