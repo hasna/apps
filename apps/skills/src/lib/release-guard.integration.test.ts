@@ -35,16 +35,6 @@ function addSkill(dir: string, slug: string, files: Record<string, string>): voi
   }
 }
 
-function addAgentSkill(dir: string, slug: string, files: Record<string, string>): void {
-  const skillDir = join(dir, "agent-skills", slug);
-  mkdirSync(skillDir, { recursive: true });
-  for (const [name, content] of Object.entries(files)) {
-    const target = join(skillDir, name);
-    mkdirSync(join(target, ".."), { recursive: true });
-    writeFileSync(target, content);
-  }
-}
-
 function runGuard(cwd: string): GuardResult {
   const result = Bun.spawnSync(["bun", GUARD], { cwd, stdout: "pipe", stderr: "pipe" });
   return {
@@ -65,34 +55,6 @@ describe("release-guard end-to-end (S1 + S2 + S3)", () => {
       const result = runGuard(dir);
       expect(result.exitCode, result.stderr).toBe(0);
       expect(result.stdout).toContain("Release guard passed");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("blocks repository-managed agent skill files omitted from the package", () => {
-    const dir = makePkg(["README.md"]);
-    try {
-      addAgentSkill(dir, "fleet-package-rollout", {
-        "SKILL.md": "---\nname: fleet-package-rollout\n---\n\n# Fleet Package Rollout\n",
-      });
-      const result = runGuard(dir);
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("repository-managed agent skill files are missing");
-      expect(result.stderr).toContain("agent-skills/fleet-package-rollout/SKILL.md");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("passes when repository-managed agent skill files are packaged", () => {
-    const dir = makePkg(["agent-skills/", "README.md"]);
-    try {
-      addAgentSkill(dir, "fleet-package-rollout", {
-        "SKILL.md": "---\nname: fleet-package-rollout\n---\n\n# Fleet Package Rollout\n",
-      });
-      const result = runGuard(dir);
-      expect(result.exitCode, result.stderr).toBe(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

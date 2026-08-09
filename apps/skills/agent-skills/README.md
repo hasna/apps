@@ -10,8 +10,8 @@ These are deliberately **not** part of the public `skills/` corpus:
   validated by `src/lib/validation.test.ts` and guarded by
   `scripts/check_skill_corpus_drift.sh`. Agent workflow skills have no
   `package.json`/`src` and must not trip the corpus guard.
-- This directory is shipped in the npm package so named `skills sync` calls can
-  install repository-managed workflow skills and their required resources.
+- This directory is not shipped in the npm package (`package.json#files`
+  excludes it).
 
 ## Layout
 
@@ -31,11 +31,10 @@ copy is canonical.
 ## Distribution
 
 Live copies run from each tool's skill directory (`~/.claude/skills`,
-`~/.codewith/skills`, `~/.codex/skills`, `~/.config/opencode/skills`,
-`~/.cursor/skills`) on every fleet machine. After a change merges here,
-distribution happens via named `skills sync` calls: the complete skill
-directory is installed, with Claude's `user_invocable` field kept and the field
-stripped from non-Claude copies.
+`~/.codex/skills`, `~/.config/opencode/skills`, `~/.cursor/skills`) on every
+fleet machine. After a change merges here, distribution happens via
+**skill-sync** (see `skill-sync` in the live skill set): Claude copy verbatim,
+non-Claude copies with `user_invocable` stripped, all five machines.
 
 Do not edit the live `~/.claude/skills` copies directly for these skills —
 change them here, merge, then sync.

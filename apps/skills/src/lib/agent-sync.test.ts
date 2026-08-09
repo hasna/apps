@@ -220,40 +220,6 @@ describe("syncSkillsToAgents", () => {
     }
   });
 
-  test("a named repository-managed agent skill syncs its complete bundled directory", () => {
-    const corpus = tempDir("sync-corpus-");
-    const home = tempDir("sync-home-");
-    try {
-      const { actions } = syncSkillsToAgents({
-        rootDir: corpus,
-        homeDir: home,
-        names: ["inbox"],
-        agents: ["codewith"],
-      });
-      const skillDir = join(home, ".codewith", "skills", "inbox");
-      const skillPath = join(skillDir, "SKILL.md");
-      const helperPath = join(skillDir, "scripts", "inbox");
-
-      expect(actions).toEqual([{
-        skill: "inbox",
-        agent: "codewith",
-        path: skillPath,
-        action: "create",
-      }]);
-      expect(existsSync(skillPath)).toBe(true);
-      const synced = existsSync(skillPath) ? readFileSync(skillPath, "utf-8") : "";
-      expect(synced).toContain("# inbox — Interactive Session Inbox");
-      expect(synced).not.toContain("user_invocable");
-      expect(existsSync(helperPath)).toBe(true);
-      expect(readFileSync(helperPath, "utf-8")).toBe(
-        readFileSync(join(process.cwd(), "agent-skills", "inbox", "scripts", "inbox"), "utf-8"),
-      );
-    } finally {
-      rmSync(corpus, { recursive: true, force: true });
-      rmSync(home, { recursive: true, force: true });
-    }
-  });
-
   test("a named skill absent from the corpus is reported as skipped, not written", () => {
     const corpus = tempDir("sync-corpus-");
     const home = tempDir("sync-home-");
@@ -281,11 +247,6 @@ describe("syncSkillsToAgents", () => {
       expect(() => syncSkillsToAgents({
         homeDir: home,
         names: ["../../skills/todos-plan"],
-        agents: ["codewith"],
-      })).toThrow("Invalid skill name");
-      expect(() => syncSkillsToAgents({
-        homeDir: home,
-        names: ["../agent-skills/fleet-package-rollout"],
         agents: ["codewith"],
       })).toThrow("Invalid skill name");
 
