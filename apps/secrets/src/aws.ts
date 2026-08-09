@@ -9,6 +9,7 @@ import {
   ResourceNotFoundException,
 } from "@aws-sdk/client-secrets-manager";
 import { fromIni, fromTemporaryCredentials } from "@aws-sdk/credential-providers";
+import { parseKnownFiles, type Profile } from "@smithy/core/config";
 import { randomUUID } from "node:crypto";
 import { chmodSync, readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from "fs";
 import { dirname, join } from "path";
@@ -107,6 +108,13 @@ export interface AwsConfigSummary {
   sourceProfile?: string;
   sessionName?: string;
 }
+
+export interface AwsAccountProfile {
+  profile: string;
+  region?: string;
+}
+
+export type AwsProfileMap = Record<string, Profile>;
 
 let clientFactory: AwsClientFactory = (config) => makeDefaultClient(config);
 
@@ -320,6 +328,75 @@ export function summarizeAwsConfig(config: ResolvedAwsConfig): AwsConfigSummary 
     ...(config.sourceProfile ? { sourceProfile: config.sourceProfile } : {}),
     ...(config.sessionName ? { sessionName: config.sessionName } : {}),
   };
+}
+
+/**
+ * Load standard AWS config and credentials through the same normalized parser
+ * used by the AWS credential provider. AWS_CONFIG_FILE and
+ * AWS_SHARED_CREDENTIALS_FILE remain the source of truth.
+ */
+export async function loadAwsProfiles(): Promise<AwsProfileMap> {
+  return parseKnownFiles({ ignoreCache: true });
+}
+
+/** Resolve a provider source profile plus account to one configured profile. */
+export function resolveAwsAccountProfile(
+  provider: string,
+  account: string,
+  profiles: AwsProfileMap,
+): AwsAccountProfile {
+  const normalizedProvider = provider.trim();
+  const normalizedAccount = account.trim();
+  if (!normalizedProvider) throw new Error("AWS provider profile must not be empty");
+  if (!/^\d{12}$/.test(normalizedAccount)) {
+    throw new Error(`Invalid AWS account "${normalizedAccount}"; expected a 12-digit account ID`);
+  }
+
+  const matches = Object.entries(profiles).filter(([profileName, profile]) => {
+    const roleAccount = profile.role_arn?.match(/^arn:[^:]+:iam::(\d{12}):role\/.+$/)?.[1];
+    const profileAccount = roleAccount ?? profile.sso_account_id ?? profile.account_id;
+    if (profileAccount !== normalizedAccount) return false;
+    return profileName === normalizedProvider ||
+      profile.source_profile === normalizedProvider ||
+      profile.sso_session === normalizedProvider;
+  });
+
+  if (matches.length === 0) {
+    throw new Error(
+      `No AWS profile configured for provider "${normalizedProvider}" and account "${normalizedAccount}"`,
+    );
+  }
+  if (matches.length > 1) {
+    throw new Error(
+      `Multiple AWS profiles match provider "${normalizedProvider}" and account "${normalizedAccount}": ` +
+      matches.map(([profileName]) => profileName).sort().join(", "),
+    );
+  }
+
+  const [profileName, profile] = matches[0];
+  return {
+    profile: profileName,
+    ...(profile.region ? { region: profile.region } : {}),
+  };
+}
+
+/** Read one exact AWSCURRENT string value without mutating the local vault. */
+export async function getAwsSecretValue(
+  secretId: string,
+  options: AwsCommandOptions = {},
+): Promise<string> {
+  const normalizedSecretId = secretId.trim();
+  if (!normalizedSecretId) throw new Error("AWS secret ID must not be empty");
+  const config = resolveAwsConfig(options);
+  const client = clientFactory(config);
+  const result = await client.send(new GetSecretValueCommand({
+    SecretId: normalizedSecretId,
+    VersionStage: "AWSCURRENT",
+  }));
+  if (!result.SecretString) {
+    throw new Error(`No string value for AWS secret: ${normalizedSecretId}`);
+  }
+  return result.SecretString;
 }
 
 function isResourceNotFound(error: unknown): boolean {

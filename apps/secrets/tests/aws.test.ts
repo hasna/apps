@@ -4,7 +4,9 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { getDb, resetDb } from "../src/db.js";
 import {
+  getAwsSecretValue,
   pushSecret,
+  resolveAwsAccountProfile,
   resolveAwsConfig,
   setAwsClientFactoryForTests,
   syncAll,
@@ -111,6 +113,59 @@ describe("AWS credential resolution", () => {
     expect(resolved.sourceProfile).toBe("source");
     expect(resolved.externalId).toBe("external");
     expect(resolved.staticCredentials).toBeUndefined();
+  });
+});
+
+describe("AWS account-scoped exec selection", () => {
+  const profiles = {
+    hasna: { region: "us-east-1" },
+    "hasna-example-infra": {
+      role_arn: "arn:aws:iam::123456789012:role/ExampleAccessRole",
+      source_profile: "hasna",
+      region: "eu-west-1",
+    },
+    unrelated: {
+      role_arn: "arn:aws:iam::210987654321:role/ExampleAccessRole",
+      source_profile: "other-provider",
+    },
+  };
+
+  it("selects the unique configured role profile for provider and account", () => {
+    expect(resolveAwsAccountProfile("hasna", "123456789012", profiles)).toEqual({
+      profile: "hasna-example-infra",
+      region: "eu-west-1",
+    });
+  });
+
+  it("refuses an account that the provider has not configured", () => {
+    expect(() => resolveAwsAccountProfile("hasna", "999999999999", profiles)).toThrow(
+      "No AWS profile",
+    );
+  });
+
+  it("reads the exact remote env secret without writing it into the local vault", async () => {
+    const sent: Array<{ name: string; input: Record<string, unknown> }> = [];
+    setAwsClientFactoryForTests(() => ({
+      send: async (command: any) => {
+        sent.push({ name: command.constructor.name, input: command.input });
+        return { SecretString: "synthetic-account-secret", VersionId: "synthetic-version" };
+      },
+    }));
+
+    const value = await getAwsSecretValue("EXAMPLE_NPM_TOKEN", {
+      credentialMode: "profile",
+      profile: "hasna-example-infra",
+      region: "eu-west-1",
+    });
+
+    expect(value).toBe("synthetic-account-secret");
+    expect(sent).toEqual([
+      {
+        name: "GetSecretValueCommand",
+        input: { SecretId: "EXAMPLE_NPM_TOKEN", VersionStage: "AWSCURRENT" },
+      },
+    ]);
+    expect(await _store.getSecret("EXAMPLE_NPM_TOKEN")).toBeUndefined();
   });
 });
 
