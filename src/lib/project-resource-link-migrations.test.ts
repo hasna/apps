@@ -7,6 +7,7 @@ import {
   planProjectResourceLinkMigration,
   readProjectResourceLinkMigration,
   readProjectResourceLinks,
+  rollbackProjectResourceLinks,
   rollbackProjectResourceLinkMigration,
 } from "../db/workspaces.js";
 import { runMigrations } from "../db/schema.js";
@@ -159,7 +160,7 @@ function prepareProjectsAppliedMigration(db: Database, suffix: string) {
     max_items: 10,
     ...BOUNDS,
   }, db);
-  return { project, planned, projectsApplied, current };
+  return { project, planned, projectsApplied, projectsWrite, current };
 }
 
 describe("project resource-link migration manifest", () => {
@@ -371,6 +372,67 @@ describe("project resource-link migration manifest", () => {
       "rollback_in_progress",
       "retained_target",
     ]);
+    db.close();
+  });
+
+  test("recovers an accepted Projects inverse after process loss before proof persistence", () => {
+    const db = makeDb();
+    const {
+      project,
+      planned,
+      projectsApplied,
+      projectsWrite,
+      current,
+    } = prepareProjectsAppliedMigration(db, "inverse-crash");
+    const inverseInput = {
+      project_id: project.id,
+      operation_id: `${planned.manifest.operation_id}:migration-rollback`,
+      step_id: `${planned.manifest.step_id}:projects-reference`,
+      accepted_receipt_id: projectsWrite.receipt!.receipt_id,
+      expected_current_revision: current.current_revision,
+      max_items: 10,
+      ...BOUNDS,
+    };
+
+    const acceptedInverse = rollbackProjectResourceLinks(inverseInput, db);
+    expect(acceptedInverse.outcome).toBe("accepted");
+    expect(readProjectResourceLinkMigration({
+      project_id: project.id,
+      manifest_id: planned.manifest.manifest_id,
+      max_items: 10,
+      ...BOUNDS,
+    }, db).manifest).toMatchObject({
+      state: "projects_applied",
+      projects_inverse_receipt_id: null,
+      projects_reference_proof: null,
+    });
+
+    const directRetry = rollbackProjectResourceLinks(inverseInput, db);
+    expect(directRetry.outcome).toBe("duplicate_of_accepted");
+    expect(directRetry.receipt?.duplicate_of_receipt_id).toBe(acceptedInverse.receipt!.receipt_id);
+
+    const recovered = rollbackProjectResourceLinkMigration({
+      project_id: project.id,
+      manifest_id: planned.manifest.manifest_id,
+      expected_transition_version: projectsApplied.manifest.transition_version,
+      max_items: 10,
+      producer_outcome: "pending",
+      evidence: { recovered_after_inverse_process_loss: true },
+      ...BOUNDS,
+    }, db);
+    expect(recovered.manifest.state).toBe("rollback_in_progress");
+    expect(recovered.manifest.projects_inverse_receipt_id).toBe(acceptedInverse.receipt!.receipt_id);
+    expect(recovered.manifest.projects_reference_proof).toEqual(expect.objectContaining({
+      kind: "accepted_inverse",
+      inverse_receipt_id: acceptedInverse.receipt!.receipt_id,
+      complete: true,
+      truncated: false,
+    }));
+    expect(readProjectResourceLinks({
+      project_id: project.id,
+      max_items: 10,
+      ...BOUNDS,
+    }, db).links).toEqual([]);
     db.close();
   });
 

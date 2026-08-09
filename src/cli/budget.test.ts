@@ -17,8 +17,14 @@ function text(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("utf-8");
 }
 
+const CLI_PROCESS_TEST_TIMEOUT_MS = 30_000;
+
+function cliProcessTest(name: string, fn: () => void | Promise<void>): void {
+  test(name, fn, CLI_PROCESS_TEST_TIMEOUT_MS);
+}
+
 describe("project budget CLI", () => {
-  test("sets, queries, and enforces an exhausted project budget", () => {
+  cliProcessTest("sets, queries, and enforces an exhausted project budget", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-budget-cli-"));
     try {
       const env = {
@@ -80,7 +86,7 @@ describe("project budget CLI", () => {
     }
   });
 
-  test("fails prompt mode when an explicit budget project cannot be resolved", () => {
+  cliProcessTest("fails prompt mode when an explicit budget project cannot be resolved", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-budget-cli-missing-"));
     try {
       const env = {

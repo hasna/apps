@@ -1138,6 +1138,29 @@ function findGuardedAcceptedByStep(input: {
   return row ? rowToGuardedReceipt(row) : null;
 }
 
+function requireForwardProjectResourceLinkReceipt(
+  receiptId: string,
+  projectId: string,
+  db: Database,
+): GuardedProjectMutationReceipt {
+  const row = db.query(
+    "SELECT * FROM guarded_project_mutation_receipts WHERE receipt_id = ?",
+  ).get(receiptId) as GuardedProjectMutationReceiptRow | null;
+  if (!row) throw new Error(`accepted receipt not found: ${receiptId}`);
+  const accepted = rowToGuardedReceipt(row);
+  if (
+    accepted.outcome !== "accepted"
+    || accepted.direction !== "forward"
+    || accepted.target_id !== projectId
+  ) {
+    throw new Error("resource link rollback requires a forward accepted receipt for the same project id");
+  }
+  if (!accepted.post_revision) {
+    throw new Error("resource link rollback accepted receipt has no post_revision");
+  }
+  return accepted;
+}
+
 function terminalNonacceptanceReceipt(input: {
   operation_id: string;
   step_id: string;
@@ -1650,12 +1673,11 @@ export function rollbackProjectResourceLinks(
 ): ProjectResourceLinkMutationResult {
   const d = db || getDatabase();
   assertCompleteStableProjectId(input.project_id);
-  const row = d.query("SELECT * FROM guarded_project_mutation_receipts WHERE receipt_id = ?").get(input.accepted_receipt_id) as GuardedProjectMutationReceiptRow | null;
-  if (!row) throw new Error(`accepted receipt not found: ${input.accepted_receipt_id}`);
-  const accepted = rowToGuardedReceipt(row);
-  if (accepted.outcome !== "accepted" || accepted.direction !== "forward" || accepted.target_id !== input.project_id) {
-    throw new Error("resource link rollback requires a forward accepted receipt for the same project id");
-  }
+  const accepted = requireForwardProjectResourceLinkReceipt(
+    input.accepted_receipt_id,
+    input.project_id,
+    d,
+  );
   if (accepted.post_revision !== input.expected_current_revision) {
     throw new Error("resource link rollback expected_current_revision must equal the accepted receipt post_revision");
   }
@@ -1667,7 +1689,36 @@ export function rollbackProjectResourceLinks(
     response_byte_limit: input.response_byte_limit,
     time_budget_ms: input.time_budget_ms,
   }, d);
-  if (current.current_revision !== input.expected_current_revision || current.collection_digest !== after.collection_digest) {
+  const priorInverse = findGuardedAcceptedByStep({
+    operation_id: input.operation_id,
+    step_id: input.step_id,
+    direction: "inverse",
+    target_id: input.project_id,
+  }, d);
+  if (priorInverse) {
+    const inverseBefore = parseResourceLinkSnapshot(priorInverse.before, "accepted inverse before");
+    const inverseAfter = parseResourceLinkSnapshot(priorInverse.after, "accepted inverse after");
+    if (
+      priorInverse.expected_revision !== input.expected_current_revision
+      || inverseBefore.collection_digest !== after.collection_digest
+      || canonicalJson(inverseBefore.project.integrations) !== canonicalJson(after.project.integrations)
+      || inverseAfter.collection_digest !== before.collection_digest
+      || canonicalJson(inverseAfter.project.integrations) !== canonicalJson(before.project.integrations)
+    ) {
+      throw new Error("accepted resource link inverse receipt does not match the forward receipt");
+    }
+    if (
+      !priorInverse.post_revision
+      || current.current_revision !== priorInverse.post_revision
+      || current.collection_digest !== inverseAfter.collection_digest
+      || canonicalJson(current.project.integrations) !== canonicalJson(inverseAfter.project.integrations)
+    ) {
+      throw new Error("resource link rollback retry refuses drift after the accepted inverse");
+    }
+  } else if (
+    current.current_revision !== input.expected_current_revision
+    || current.collection_digest !== after.collection_digest
+  ) {
     throw new Error("resource link rollback refuses current revision or collection digest drift");
   }
   return mutateProjectResourceLinksInternal({
@@ -2033,18 +2084,17 @@ export function rollbackProjectResourceLinkMigration(
   if (!proof) {
     const linkIds = before.links.map((item) => item.link_id);
     if (before.projects_forward_receipt_id) {
-      const current = readProjectResourceLinks({
-        project_id: input.project_id,
-        max_items: input.max_items ?? PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS,
-        response_byte_limit: input.response_byte_limit,
-        time_budget_ms: input.time_budget_ms,
-      }, d);
+      const forwardReceipt = requireForwardProjectResourceLinkReceipt(
+        before.projects_forward_receipt_id,
+        input.project_id,
+        d,
+      );
       const inverse = rollbackProjectResourceLinks({
         project_id: input.project_id,
         operation_id: `${before.operation_id}:migration-rollback`,
         step_id: `${before.step_id}:projects-reference`,
         accepted_receipt_id: before.projects_forward_receipt_id,
-        expected_current_revision: current.current_revision,
+        expected_current_revision: forwardReceipt.post_revision!,
         max_items: input.max_items,
         response_byte_limit: input.response_byte_limit,
         time_budget_ms: input.time_budget_ms,
@@ -2061,7 +2111,12 @@ export function rollbackProjectResourceLinkMigration(
       if (verified.links.some((link) => linkIds.includes(link.id))) {
         throw new Error("Projects inverse did not remove every manifest reference");
       }
-      inverseReceiptId = inverse.receipt?.receipt_id ?? null;
+      if (!["accepted", "duplicate_of_accepted"].includes(inverse.outcome)) {
+        throw new Error("Projects inverse was not accepted");
+      }
+      inverseReceiptId = inverse.receipt?.duplicate_of_receipt_id
+        ?? inverse.receipt?.receipt_id
+        ?? null;
       if (!inverseReceiptId) throw new Error("Projects inverse did not return an accepted receipt");
       proof = {
         kind: "accepted_inverse",

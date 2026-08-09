@@ -872,6 +872,109 @@ describe("pg-store typed resource-link transaction model", () => {
     }).toEqual(stateBeforeFault);
   });
 
+  test("recovers an accepted Projects inverse after process loss before proof persistence", async () => {
+    const harness = resourceLinkMutationClient();
+    const store = new ProjectsPgStore(harness.client);
+    const bounds = {
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    };
+    const planned = await store.planProjectResourceLinkMigration({
+      project_id: harness.workspace().id,
+      operation_id: "pg-migration-inverse-crash",
+      step_id: "channel-link",
+      expected_project_revision: harness.workspace().updated_at,
+      links: [{
+        link: channelLink,
+        producer_resource_kind: "conversations_channel",
+        producer_binding: {
+          authority_id: "conversations",
+          tenant_id: "tenant-primary",
+          corpus_id: null,
+          capability_digest: "sha256:conversations-capability",
+        },
+      }],
+      max_items: 10,
+      ...bounds,
+    });
+    const producerApplied = await store.advanceProjectResourceLinkMigration({
+      project_id: harness.workspace().id,
+      manifest_id: planned.manifest.manifest_id,
+      expected_transition_version: planned.manifest.transition_version,
+      next_state: "producer_applied",
+      producer_evidence: [{
+        created_by_operation: true,
+        forward_receipt_id: "conversations-forward-receipt",
+        child_link_receipt_ids: [],
+        target_revision: "conversations-revision-1",
+        target_digest: "sha256:conversations-target-1",
+        inverse_verified: null,
+        inverse_outcome: null,
+      }],
+      evidence: { producer: "accepted" },
+      ...bounds,
+    });
+    const projectsWrite = await store.mutateProjectResourceLinks({
+      project_id: harness.workspace().id,
+      operation_id: planned.manifest.operation_id,
+      step_id: planned.manifest.step_id,
+      mode: "add",
+      expected_revision: harness.workspace().updated_at,
+      links: [channelLink],
+      max_items: 10,
+      ...bounds,
+    });
+    const projectsApplied = await store.advanceProjectResourceLinkMigration({
+      project_id: harness.workspace().id,
+      manifest_id: planned.manifest.manifest_id,
+      expected_transition_version: producerApplied.manifest.transition_version,
+      next_state: "projects_applied",
+      projects_forward_receipt_id: projectsWrite.receipt!.receipt_id,
+      evidence: { projects: "accepted" },
+      ...bounds,
+    });
+    const inverseInput = {
+      project_id: harness.workspace().id,
+      operation_id: `${planned.manifest.operation_id}:migration-rollback`,
+      step_id: `${planned.manifest.step_id}:projects-reference`,
+      accepted_receipt_id: projectsWrite.receipt!.receipt_id,
+      expected_current_revision: harness.workspace().updated_at,
+      max_items: 10,
+      ...bounds,
+    };
+
+    const acceptedInverse = await store.rollbackProjectResourceLinks(inverseInput);
+    expect(acceptedInverse.outcome).toBe("accepted");
+    expect(harness.migrationManifests()[0]).toMatchObject({
+      state: "projects_applied",
+      projects_inverse_receipt_id: null,
+      projects_reference_proof_json: null,
+    });
+
+    const directRetry = await store.rollbackProjectResourceLinks(inverseInput);
+    expect(directRetry.outcome).toBe("duplicate_of_accepted");
+    expect(directRetry.receipt?.duplicate_of_receipt_id).toBe(acceptedInverse.receipt!.receipt_id);
+
+    const recovered = await store.rollbackProjectResourceLinkMigration({
+      project_id: harness.workspace().id,
+      manifest_id: planned.manifest.manifest_id,
+      expected_transition_version: projectsApplied.manifest.transition_version,
+      producer_outcome: "pending",
+      evidence: { recovered_after_inverse_process_loss: true },
+      max_items: 10,
+      ...bounds,
+    });
+    expect(recovered.manifest.state).toBe("rollback_in_progress");
+    expect(recovered.manifest.projects_inverse_receipt_id).toBe(acceptedInverse.receipt!.receipt_id);
+    expect(recovered.manifest.projects_reference_proof).toEqual(expect.objectContaining({
+      kind: "accepted_inverse",
+      inverse_receipt_id: acceptedInverse.receipt!.receipt_id,
+      complete: true,
+      truncated: false,
+    }));
+    expect(harness.links()).toEqual([]);
+  });
+
   test("requires exact producer proof for terminal migration states and bounds event reads", async () => {
     const harness = resourceLinkMutationClient();
     const store = new ProjectsPgStore(harness.client);

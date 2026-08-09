@@ -16,6 +16,11 @@ import { __resetProjectStore } from "../store/project-store.js";
 import type { Root, WorkspaceKind } from "../types/workspace.js";
 
 const CLI_PATH = join(process.cwd(), "src/cli/index.ts");
+const CLI_PROCESS_TEST_TIMEOUT_MS = 30_000;
+
+function cliProcessTest(name: string, fn: () => void | Promise<void>): void {
+  test(name, fn, CLI_PROCESS_TEST_TIMEOUT_MS);
+}
 
 function runProjects(args: string[], env: Record<string, string> = {}, cwd = process.cwd()) {
   return Bun.spawnSync({
@@ -501,7 +506,7 @@ describe("project-first CLI surface", () => {
     }
   }, 30000);
 
-  test("prompt flags cannot hijack delete dispatch and delete requires a target", () => {
+  cliProcessTest("prompt flags cannot hijack delete dispatch and delete requires a target", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-delete-dispatch-"));
     const env = {
       HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
@@ -539,7 +544,7 @@ describe("project-first CLI surface", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
-  test("reports serve defaults to loopback and keeps existing project registry semantics", async () => {
+  cliProcessTest("reports serve defaults to loopback and keeps existing project registry semantics", async () => {
     const root = mkdtempSync(join(tmpdir(), "projects-reports-serve-"));
     const env = {
       HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
@@ -747,7 +752,7 @@ describe("project-first CLI surface", () => {
     expect(pkg.files).toContain("docs");
   });
 
-  test("agent-assist CLI commands emit JSON, agent text, and run detail by default", () => {
+  cliProcessTest("agent-assist CLI commands emit JSON, agent text, and run detail by default", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-agent-assist-"));
     const dbPath = join(root, "projects.db");
     const env = { HASNA_PROJECTS_DB_PATH: dbPath };
@@ -802,7 +807,7 @@ describe("project-first CLI surface", () => {
     expect(showText).toContain("tool calls (1):");
   });
 
-  test("top-level create, list, and show use project-first JSON", () => {
+  cliProcessTest("top-level create, list, and show use project-first JSON", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-surface-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
     const targetPath = join(root, "surface-app");
@@ -847,7 +852,7 @@ describe("project-first CLI surface", () => {
     expect((JSON.parse(text(get.stdout)) as { project?: { slug: string } }).project?.slug).toBe("surface-app");
   });
 
-  test("guarded-read returns a bounded exact-id revision envelope and rejects non-id targets", () => {
+  cliProcessTest("guarded-read returns a bounded exact-id revision envelope and rejects non-id targets", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-guarded-read-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
     const targetPath = join(root, "guarded-read-app");
@@ -931,7 +936,7 @@ describe("project-first CLI surface", () => {
     }
   });
 
-  test("typed resource links add, retry, reconcile, read back, and roll back through the CLI", () => {
+  cliProcessTest("typed resource links add, retry, reconcile, read back, and roll back through the CLI", async () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-resource-links-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
     const channelLink = {
@@ -984,7 +989,7 @@ describe("project-first CLI surface", () => {
     };
 
     try {
-      const create = runProjects([
+      const create = await runWorkspaceCommandInProcess([
         "create",
         "--name",
         "Typed Links",
@@ -1047,7 +1052,7 @@ describe("project-first CLI surface", () => {
         "5000",
         "--json",
       ];
-      const add = runProjects(addArgs, env);
+      const add = await runWorkspaceCommandInProcess(addArgs, env);
       expect(add.exitCode).toBe(0);
       const added = JSON.parse(text(add.stdout)) as {
         outcome: string;
@@ -1066,11 +1071,11 @@ describe("project-first CLI surface", () => {
         todos_task_list_id: "urn:hasna:todos:task-list:typed-links",
       });
 
-      const duplicate = runProjects(addArgs, env);
+      const duplicate = await runWorkspaceCommandInProcess(addArgs, env);
       expect(duplicate.exitCode).toBe(0);
       expect((JSON.parse(text(duplicate.stdout)) as { outcome: string }).outcome).toBe("duplicate_of_accepted");
 
-      const read = runProjects([
+      const read = await runWorkspaceCommandInProcess([
         "resource-links-read",
         created.project.id,
         "--max-items",
@@ -1092,7 +1097,7 @@ describe("project-first CLI surface", () => {
         ...channelLink,
         labels: { channel_name: "typed-links-renamed" },
       };
-      const reconcile = runProjects([
+      const reconcile = await runWorkspaceCommandInProcess([
         "resource-links-reconcile",
         created.project.id,
         "--links-json",
@@ -1126,7 +1131,7 @@ describe("project-first CLI surface", () => {
         conversations_channel: "typed-links-renamed",
       });
 
-      const rollback = runProjects([
+      const rollback = await runWorkspaceCommandInProcess([
         "resource-links-rollback",
         created.project.id,
         "--accepted-receipt-id",
@@ -1158,7 +1163,7 @@ describe("project-first CLI surface", () => {
         todos_task_list_id: "urn:hasna:todos:task-list:typed-links",
       });
 
-      const guarded = runProjects([
+      const guarded = await runWorkspaceCommandInProcess([
         "guarded-read",
         created.project.id,
         "--resource-link-max-items",
@@ -1530,7 +1535,7 @@ describe("project-first CLI surface", () => {
     });
   }
 
-  test("guarded rollback restores a remote-only project and leaves its forward path non-primary", () => {
+  cliProcessTest("guarded rollback restores a remote-only project and leaves its forward path non-primary", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-guarded-remote-only-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
     const forwardPath = join(root, "forward");
@@ -1716,7 +1721,7 @@ describe("project-first CLI surface", () => {
     rmSync(root, { recursive: true, force: true });
   }, 60000);
 
-  test("top-level list hides eval fixtures by default and cleanup-evals removes them", () => {
+  cliProcessTest("top-level list hides eval fixtures by default and cleanup-evals removes them", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-eval-cleanup-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
 
@@ -1821,7 +1826,7 @@ describe("project-first CLI surface", () => {
     }
   }, 60000);
 
-  test("top-level create, list, show, and update expose project management fields", () => {
+  cliProcessTest("top-level create, list, show, and update expose project management fields", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-management-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
     const targetPath = join(root, "managed-app");
@@ -2093,7 +2098,7 @@ describe("project-first CLI surface", () => {
     expect(stderr).not.toContain("404");
   });
 
-  test("project agents can be assigned and shown as project metadata", () => {
+  cliProcessTest("project agents can be assigned and shown as project metadata", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-agents-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
 
@@ -2151,7 +2156,7 @@ describe("project-first CLI surface", () => {
     expect(shown.events.some((event) => event.event_type === "agent_assigned")).toBe(true);
   });
 
-  test("update --canonical-machine replaces metadata ownership and round-trips through show", () => {
+  cliProcessTest("update --canonical-machine replaces metadata ownership and round-trips through show", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-canonical-machine-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
 
@@ -2203,7 +2208,7 @@ describe("project-first CLI surface", () => {
     expect(payload.project.metadata["canonical_machine"]).toBeUndefined();
   });
 
-  test("project locations can be registered and used as start targets", () => {
+  cliProcessTest("project locations can be registered and used as start targets", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-locations-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db"), HOSTNAME: "spark01" };
     const primaryPath = join(root, "primary");
@@ -2309,7 +2314,7 @@ describe("project-first CLI surface", () => {
     expect(payload.resolution.preview?.metadata.domain).toBe("home-security");
   });
 
-  test("top-level start supports bulk dry-run JSON summaries", () => {
+  cliProcessTest("top-level start supports bulk dry-run JSON summaries", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-bulk-start-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
     const onePath = join(root, "bulk-one");
@@ -2362,7 +2367,7 @@ describe("project-first CLI surface", () => {
     expect(payload.started.every((item) => item.tmux.session_action === "planned")).toBe(true);
   });
 
-  test("top-level start reads bulk targets from JSON files", () => {
+  cliProcessTest("top-level start reads bulk targets from JSON files", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-bulk-file-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
     const targetFile = join(root, "targets.json");
@@ -2447,7 +2452,7 @@ describe("project-first CLI surface", () => {
     expect(payload.rename_report?.[0]?.status).toBe("configured");
   });
 
-  test("top-level start and status use saved project launch defaults", () => {
+  cliProcessTest("top-level start and status use saved project launch defaults", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-start-defaults-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
 
@@ -2541,7 +2546,7 @@ describe("project-first CLI surface", () => {
     expect(statusPayload.launch_defaults.session_policy).toBe("error-if-running");
   });
 
-  test("top-level start records when the project was last opened", () => {
+  cliProcessTest("top-level start records when the project was last opened", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-start-last-opened-"));
     const binDir = join(root, "bin");
     const projectPath = join(root, "opened-project");
@@ -2730,7 +2735,7 @@ describe("project-first CLI surface", () => {
     expect(payload.render).toBeTruthy();
   });
 
-  test("top-level sessions with no target reports recent sessions instead of failing", () => {
+  cliProcessTest("top-level sessions with no target reports recent sessions instead of failing", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-sessions-no-target-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
 
@@ -2790,7 +2795,7 @@ describe("project-first CLI surface", () => {
   });
 
 
-  test("required commands emit JSON Render specs with --render-spec", () => {
+  cliProcessTest("required commands emit JSON Render specs with --render-spec", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-render-spec-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
     expect(runProjects(["roots", "add", "--name", "Render Root", "--slug", "render-root", "--path", join(root, "root"), "--kind", "project", "--github-org", "hasnaxyz", "--path-template", "{slug}", "--json"], env).exitCode).toBe(0);

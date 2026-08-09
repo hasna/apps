@@ -841,6 +841,29 @@ export class ProjectsPgStore {
     return row ? rowToGuardedReceipt(row) : null;
   }
 
+  private async requireForwardProjectResourceLinkReceipt(
+    receiptId: string,
+    projectId: string,
+  ): Promise<GuardedProjectMutationReceipt> {
+    const row = await this.db.get<GuardedProjectMutationReceiptRow>(
+      "SELECT * FROM guarded_project_mutation_receipts WHERE receipt_id = $1",
+      [receiptId],
+    );
+    if (!row) throw new NotFoundError(`accepted receipt not found: ${receiptId}`);
+    const accepted = rowToGuardedReceipt(row);
+    if (
+      accepted.outcome !== "accepted"
+      || accepted.direction !== "forward"
+      || accepted.target_id !== projectId
+    ) {
+      throw new ValidationError("resource link rollback requires a forward accepted receipt for the same project id");
+    }
+    if (!accepted.post_revision) {
+      throw new ValidationError("resource link rollback accepted receipt has no post_revision");
+    }
+    return accepted;
+  }
+
   private async guardedTerminalNonacceptance(input: {
     operation_id: string;
     step_id: string;
@@ -1297,15 +1320,10 @@ export class ProjectsPgStore {
   async rollbackProjectResourceLinks(input: ProjectResourceLinkRollbackRequest): Promise<ProjectResourceLinkMutationResult> {
     return this.inTransaction("project resource link rollback", async (store) => {
       assertCompleteStableProjectId(input.project_id);
-      const row = await store.db.get<GuardedProjectMutationReceiptRow>(
-        "SELECT * FROM guarded_project_mutation_receipts WHERE receipt_id = $1",
-        [input.accepted_receipt_id],
+      const accepted = await store.requireForwardProjectResourceLinkReceipt(
+        input.accepted_receipt_id,
+        input.project_id,
       );
-      if (!row) throw new NotFoundError(`accepted receipt not found: ${input.accepted_receipt_id}`);
-      const accepted = rowToGuardedReceipt(row);
-      if (accepted.outcome !== "accepted" || accepted.direction !== "forward" || accepted.target_id !== input.project_id) {
-        throw new ValidationError("resource link rollback requires a forward accepted receipt for the same project id");
-      }
       if (accepted.post_revision !== input.expected_current_revision) {
         throw new ValidationError("resource link rollback expected_current_revision must equal the accepted receipt post_revision");
       }
@@ -1317,7 +1335,36 @@ export class ProjectsPgStore {
         response_byte_limit: input.response_byte_limit,
         time_budget_ms: input.time_budget_ms,
       });
-      if (current.current_revision !== input.expected_current_revision || current.collection_digest !== after.collection_digest) {
+      const priorInverse = await store.guardedAcceptedByStep({
+        operation_id: input.operation_id,
+        step_id: input.step_id,
+        direction: "inverse",
+        target_id: input.project_id,
+      });
+      if (priorInverse) {
+        const inverseBefore = parseResourceLinkSnapshot(priorInverse.before, "accepted inverse before");
+        const inverseAfter = parseResourceLinkSnapshot(priorInverse.after, "accepted inverse after");
+        if (
+          priorInverse.expected_revision !== input.expected_current_revision
+          || inverseBefore.collection_digest !== after.collection_digest
+          || canonicalJson(inverseBefore.project.integrations) !== canonicalJson(after.project.integrations)
+          || inverseAfter.collection_digest !== before.collection_digest
+          || canonicalJson(inverseAfter.project.integrations) !== canonicalJson(before.project.integrations)
+        ) {
+          throw new ValidationError("accepted resource link inverse receipt does not match the forward receipt");
+        }
+        if (
+          !priorInverse.post_revision
+          || current.current_revision !== priorInverse.post_revision
+          || current.collection_digest !== inverseAfter.collection_digest
+          || canonicalJson(current.project.integrations) !== canonicalJson(inverseAfter.project.integrations)
+        ) {
+          throw new ValidationError("resource link rollback retry refuses drift after the accepted inverse");
+        }
+      } else if (
+        current.current_revision !== input.expected_current_revision
+        || current.collection_digest !== after.collection_digest
+      ) {
         throw new ValidationError("resource link rollback refuses current revision or collection digest drift");
       }
       return store.mutateProjectResourceLinksInCurrentTransaction({
@@ -1681,18 +1728,16 @@ export class ProjectsPgStore {
     const linkIds = before.links.map((item) => item.link_id);
     if (!proof) {
       if (before.projects_forward_receipt_id) {
-        const current = await this.readProjectResourceLinks({
-          project_id: input.project_id,
-          max_items: input.max_items ?? PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS,
-          response_byte_limit: input.response_byte_limit,
-          time_budget_ms: input.time_budget_ms,
-        });
+        const forwardReceipt = await this.requireForwardProjectResourceLinkReceipt(
+          before.projects_forward_receipt_id,
+          input.project_id,
+        );
         const inverse = await this.rollbackProjectResourceLinks({
           project_id: input.project_id,
           operation_id: `${before.operation_id}:migration-rollback`,
           step_id: `${before.step_id}:projects-reference`,
           accepted_receipt_id: before.projects_forward_receipt_id,
-          expected_current_revision: current.current_revision,
+          expected_current_revision: forwardReceipt.post_revision!,
           max_items: input.max_items,
           response_byte_limit: input.response_byte_limit,
           time_budget_ms: input.time_budget_ms,
@@ -1709,7 +1754,12 @@ export class ProjectsPgStore {
         if (verified.links.some((link) => linkIds.includes(link.id))) {
           throw new ValidationError("Projects inverse did not remove every manifest reference");
         }
-        inverseReceiptId = inverse.receipt?.receipt_id ?? null;
+        if (!["accepted", "duplicate_of_accepted"].includes(inverse.outcome)) {
+          throw new ValidationError("Projects inverse was not accepted");
+        }
+        inverseReceiptId = inverse.receipt?.duplicate_of_receipt_id
+          ?? inverse.receipt?.receipt_id
+          ?? null;
         if (!inverseReceiptId) throw new ValidationError("Projects inverse did not return an accepted receipt");
         proof = {
           kind: "accepted_inverse",
