@@ -160,4 +160,80 @@ describe("address CLI — self-hosted (/v1) routing", () => {
     expect(out).toContain("ops-bot");
     expect(data).toMatchObject([{ email: "owned@example.com", owner: { id: ownerId, name: "ops-bot" } }]);
   });
+
+  it("persists the requested provider through create and exact filtered readback", async () => {
+    const providerId = "a6ac055d-df08-4577-acba-b5de1addc732";
+    await stub.seed({
+      addresses: [{
+        id: crypto.randomUUID(),
+        email: "provider-control@example.com",
+        provider_id: providerId,
+        status: "active",
+        verified: false,
+        created_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      }],
+    });
+
+    // Positive control: the same provider-filtered probe can find a row that
+    // already carries provider_id in the server response.
+    const control = await runAddressCommand(["address", "list", "--provider", providerId]);
+    expect(control.data).toEqual([
+      expect.objectContaining({ email: "provider-control@example.com", provider_id: providerId }),
+    ]);
+
+    const created = await runAddressCommand([
+      "address",
+      "add",
+      "packages@example.test",
+      "--provider",
+      providerId,
+    ]);
+    // Before the fix, the immediate create response overlaid the request field
+    // locally; this assertion preserves the regression's positive control.
+    expect(created.data).toMatchObject({
+      email: "packages@example.test",
+      provider_id: providerId,
+    });
+
+    const duplicate = await runAddressCommand([
+      "address",
+      "add",
+      "packages@example.test",
+      "--provider",
+      providerId,
+    ]);
+    expect(duplicate.data).toMatchObject({
+      email: "packages@example.test",
+      provider_id: providerId,
+      id: created.data.id,
+    });
+
+    const alternateProviderId = "0df88cb6-a671-48d6-a01d-04516e2af958";
+    const alternate = await runAddressCommand([
+      "address",
+      "add",
+      "packages@example.test",
+      "--provider",
+      alternateProviderId,
+    ]);
+    expect(alternate.data).toMatchObject({
+      email: "packages@example.test",
+      provider_id: alternateProviderId,
+    });
+
+    const readback = await runAddressCommand(["address", "list", "--provider", providerId]);
+    expect(readback.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ email: "packages@example.test", provider_id: providerId }),
+    ]));
+    const alternateReadback = await runAddressCommand(["address", "list", "--provider", alternateProviderId]);
+    expect(alternateReadback.data).toEqual([
+      expect.objectContaining({ email: "packages@example.test", provider_id: alternateProviderId }),
+    ]);
+    const stored = (await stub.list("addresses")).filter((address) => address.email === "packages@example.test");
+    expect(stored).toHaveLength(2);
+    expect(stored.map((address) => address.provider_id).sort()).toEqual(
+      [providerId, alternateProviderId].sort(),
+    );
+  });
 });

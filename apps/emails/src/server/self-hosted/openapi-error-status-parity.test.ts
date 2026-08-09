@@ -82,7 +82,7 @@ const SERVICE_STATUS_MATRIX: ReadonlyArray<readonly [string, string, readonly nu
   ["/v1/domains/{id}", "put", [200, 400, 401, 403, 404, 409, 413, 500]],
   ["/v1/domains/{id}", "delete", [200, 401, 403, 404, 500]],
   ["/v1/addresses", "get", [200, 401, 403, 500]],
-  ["/v1/addresses", "post", [201, 400, 401, 403, 413, 500]],
+  ["/v1/addresses", "post", [201, 400, 401, 403, 404, 413, 500]],
   ["/v1/addresses/{id}", "get", [200, 401, 403, 404, 500]],
   ["/v1/addresses/{id}", "patch", [200, 400, 401, 403, 404, 413, 500]],
   ["/v1/addresses/{id}", "put", [200, 400, 401, 403, 404, 413, 500]],

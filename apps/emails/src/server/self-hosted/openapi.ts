@@ -534,6 +534,7 @@ const addressSchema = {
     display_name: { type: "string", nullable: true },
     status: { type: "string" },
     verified: { type: "boolean" },
+    provider_id: { type: "string", nullable: true },
     daily_quota: { type: "integer", nullable: true },
     owner_id: { type: "string", nullable: true },
     administrator_id: { type: "string", nullable: true },
@@ -3249,7 +3250,16 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
           required: true,
           content: {
             "application/json": {
-              schema: { type: "object", properties: { email: { type: "string" }, display_name: { type: "string", nullable: true }, status: { type: "string" } }, required: ["email"] },
+              schema: {
+                type: "object",
+                properties: {
+                  email: { type: "string" },
+                  display_name: { type: "string", nullable: true },
+                  status: { type: "string" },
+                  provider_id: { type: "string", nullable: true },
+                },
+                required: ["email"],
+              },
             },
           },
         },
@@ -3265,6 +3275,10 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
               },
             },
           },
+          "404": routineErrorResponse(
+            "Provider not found in the authenticated tenant",
+            closedExactErrorSchema("provider not found", "provider_not_found"),
+          ),
         },
       },
     },

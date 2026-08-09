@@ -234,6 +234,48 @@ describe("self-hosted Postgres integration", () => {
     expect((await store.completeSendIntent(first.record.id, "provider-ci")).send_state).toBe("sent");
   });
 
+  it.skipIf(!client)("0025 preserves provider-scoped address identity with tenant isolation", async () => {
+    await resetPublicSchema();
+    await new MigrationLedger(client!, emailsSelfHostedMigrations()).migrate();
+
+    const tenantB = "20202020-2020-4020-8020-202020202020";
+    await client!.execute(
+      `INSERT INTO tenants (id, slug, name) VALUES ($1, 'address-provider-b', 'Address Provider B')`,
+      [tenantB],
+    );
+    await client!.execute(
+      `INSERT INTO self_hosted_providers (id, tenant_id, name, type, active) VALUES
+         ('provider-a-one', $1, 'Provider A One', 'smtp', true),
+         ('provider-a-two', $1, 'Provider A Two', 'smtp', true),
+         ('provider-b-one', $2, 'Provider B One', 'smtp', true)`,
+      [DEFAULT_TENANT_ID, tenantB],
+    );
+
+    const root = new EmailsSelfHostedStore(client!);
+    const tenantAStore = root.forTenant(DEFAULT_TENANT_ID);
+    const tenantBStore = root.forTenant(tenantB);
+    const email = "shared-provider@example.test";
+
+    const aOne = await tenantAStore.createAddress({ email, provider_id: "provider-a-one" });
+    const aTwo = await tenantAStore.createAddress({ email, provider_id: "provider-a-two" });
+    const bOne = await tenantBStore.createAddress({ email, provider_id: "provider-b-one" });
+
+    expect(aOne.provider_id).toBe("provider-a-one");
+    expect(aTwo.provider_id).toBe("provider-a-two");
+    expect(bOne.provider_id).toBe("provider-b-one");
+    expect(aOne.id).not.toBe(aTwo.id);
+    expect((await tenantAStore.getAddress(aTwo.id))?.provider_id).toBe("provider-a-two");
+    expect(await tenantAStore.getAddress(bOne.id)).toBeNull();
+    expect(await tenantBStore.getAddress(aOne.id)).toBeNull();
+    await expect(
+      tenantAStore.createAddress({ email, provider_id: "provider-a-two" }),
+    ).rejects.toThrow();
+
+    expect(await indexExists("addresses_tenant_email_uidx")).toBe(false);
+    expect(await indexExists("addresses_tenant_provider_email_uidx")).toBe(true);
+    expect(await indexExists("addresses_tenant_unbound_email_uidx")).toBe(true);
+  });
+
   it.skipIf(!client)("0022 rejects new non-enum event types without deleting legacy poison", async () => {
     await resetPublicSchema();
     const migrations = emailsSelfHostedMigrations();

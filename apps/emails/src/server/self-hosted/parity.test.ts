@@ -10,10 +10,10 @@
 import { describe, expect, test } from "bun:test";
 import { mintApiKey, verifyApiKey } from "@hasna/contracts/auth";
 import type { TypedQueryClient } from "../../storage-kit/index.js";
-import { EmailsSelfHostedStore } from "./store.js";
+import { AddressProviderNotFoundError, CrossTenantReferenceError, EmailsSelfHostedStore } from "./store.js";
 import { handleSelfHostedRequest, type SelfHostedServiceDeps } from "./service.js";
 import { testAuthDeps, selfScopedStore } from "./auth/test-support.js";
-import { emailsSelfHostedMigrations } from "./migrations.js";
+import { DEFAULT_TENANT_ID, emailsSelfHostedMigrations } from "./migrations.js";
 
 const SIGNING_SECRET = "test-signing-secret-do-not-use-in-prod";
 
@@ -146,6 +146,24 @@ describe("self-hosted parity: new migrations", () => {
     expect(released["0005_mailery_selfhosted_resources"]).toBe(
       "sha256:04d715446f80b8f0f1926097c3837bbd83fe76ad7400f10eef70189d97651bbc",
     );
+  });
+
+  test("0025 appends provider-aware address uniqueness after 0024", () => {
+    const list = emailsSelfHostedMigrations();
+    const ids = list.map((migration) => migration.id);
+    expect(ids.at(-1)).toBe("0025_address_provider_binding");
+    expect(ids.indexOf("0025_address_provider_binding")).toBeGreaterThan(
+      ids.indexOf("0024_idp_principal_tenants_multi_grant"),
+    );
+
+    const sql = list.find((migration) => migration.id === "0025_address_provider_binding")!.sql;
+    expect(sql).toContain("DROP INDEX IF EXISTS addresses_tenant_email_uidx");
+    expect(sql).toContain("addresses_tenant_provider_email_uidx");
+    expect(sql).toContain("ON addresses (tenant_id, provider_id, email)");
+    expect(sql).toContain("WHERE provider_id IS NOT NULL");
+    expect(sql).toContain("addresses_tenant_unbound_email_uidx");
+    expect(sql).toContain("ON addresses (tenant_id, email)");
+    expect(sql).toContain("WHERE provider_id IS NULL");
   });
 
   test("0009 seeds the three email agent settings rows and 0010 adds provisioning columns", () => {
@@ -639,6 +657,77 @@ describe("self-hosted parity: address ownership over /v1/addresses", () => {
     expect(assigned?.administrator_id).toBe("ag1");
     const cleared = await d.store.applyAddressOwnership(created.id, { owner_id: null });
     expect(cleared?.owner_id).toBeNull();
+  });
+});
+
+describe("self-hosted parity: address provider binding over /v1/addresses", () => {
+  test("create persists provider_id, supports omitted providers, and rejects unknown providers", async () => {
+    const d = deps();
+    const providerId = "provider-a";
+    await d.client.one(
+      "INSERT INTO self_hosted_providers (id, tenant_id, name, type, active) VALUES ($1, $2, $3, $4, $5)",
+      [providerId, DEFAULT_TENANT_ID, "Provider A", "smtp", true],
+    );
+
+    const response = await handleSelfHostedRequest(d, req("POST", "/v1/addresses", {
+      token: writeToken(),
+      body: { email: "http-bound@example.com", provider_id: providerId },
+    }));
+    expect(response?.status).toBe(201);
+    const responseBody = await response?.json() as { address?: { id?: string; provider_id?: string | null } };
+    expect(responseBody.address?.provider_id).toBe(providerId);
+
+    const exact = await handleSelfHostedRequest(
+      d,
+      req("GET", `/v1/addresses/${responseBody.address?.id}`, { token: writeToken() }),
+    );
+    expect(exact?.status).toBe(200);
+    expect((await exact?.json()).address.provider_id).toBe(providerId);
+
+    const created = await d.store.createAddress({
+      email: "bound@example.com",
+      provider_id: providerId,
+    });
+    expect(created.provider_id).toBe(providerId);
+    expect((await d.store.getAddress(created.id))?.provider_id).toBe(providerId);
+
+    const legacy = await d.store.createAddress({ email: "legacy@example.com" });
+    expect(legacy.provider_id).toBeNull();
+
+    await expect(
+      d.store.createAddress({ email: "unknown@example.com", provider_id: "provider-missing" }),
+    ).rejects.toBeInstanceOf(AddressProviderNotFoundError);
+  });
+
+  test("POST maps an unknown provider to a scoped 404 without changing address policy", async () => {
+    const d = deps();
+    d.store.createAddress = async () => {
+      throw new AddressProviderNotFoundError();
+    };
+
+    const res = await handleSelfHostedRequest(d, req("POST", "/v1/addresses", {
+      token: writeToken(),
+      body: { email: "unknown@example.com", provider_id: "provider-missing" },
+    }));
+    expect(res?.status).toBe(404);
+    expect(await res?.json()).toEqual({ error: "provider not found", reason: "provider_not_found" });
+  });
+
+  test("POST maps a cross-tenant provider reference to a scoped 404", async () => {
+    const d = deps();
+    d.store.createAddress = async () => {
+      throw new CrossTenantReferenceError("self_hosted_providers", "provider_id");
+    };
+
+    const res = await handleSelfHostedRequest(d, req("POST", "/v1/addresses", {
+      token: writeToken(),
+      body: { email: "wrong-tenant@example.com", provider_id: "provider-other-tenant" },
+    }));
+    expect(res?.status).toBe(404);
+    expect(await res?.json()).toEqual({
+      error: "referenced self_hosted_providers not found",
+      reason: "cross_tenant_reference",
+    });
   });
 });
 

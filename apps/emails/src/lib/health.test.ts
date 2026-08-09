@@ -102,7 +102,7 @@ describe("checkProviderHealth", () => {
     expect(health.status).toBe("error");
   });
 
-  it("counts provider domains from /v1 (addresses have no provider association)", async () => {
+  it("counts provider domains and addresses from /v1", async () => {
     // Providers created via /v1 do not persist api keys (secrets are server-side),
     // so a sandbox provider is used — it is always locally configured.
     const provider = createProvider({ name: "Sandbox", type: "sandbox" });
@@ -116,8 +116,7 @@ describe("checkProviderHealth", () => {
 
     expect(health.domainCount).toBe(2);
     expect(health.verifiedDomains).toBe(1);
-    // Addresses are not provider-scoped server-side, so provider health reports 0.
-    expect(health.addressCount).toBe(0);
+    expect(health.addressCount).toBe(2);
     expect(health.verifiedAddresses).toBe(0);
     // Delivery events are server-side, so the client always reports a 0 bounce rate.
     expect(health.bounceRate).toBe(0);
@@ -157,7 +156,7 @@ describe("checkAllProviders", () => {
     expect(byName.get("First")).toMatchObject({
       domainCount: 1,
       verifiedDomains: 1,
-      addressCount: 0,
+      addressCount: 1,
       bounceRate: 0,
       status: "healthy",
     });

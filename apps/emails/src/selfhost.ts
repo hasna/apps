@@ -36,7 +36,7 @@ export interface ApiKeyMetadata { "kid": string; "app": string; "agent": string 
 
 export interface Domain { "id": string; "domain": string; "status": string; "provider"?: string | null; "verified": boolean; "notes"?: string | null; "provisioning_status"?: string; "purchase_provider"?: string | null; "dns_provider"?: string; "send_provider"?: string | null; "cf_zone_id"?: string | null; "registrar"?: string | null; "nameservers_json"?: Array<string>; "mail_from_domain"?: string | null; "last_error"?: string | null; "next_check_at"?: string | null; "created_at": string; "updated_at": string }
 
-export interface Address { "id": string; "email": string; "domain"?: string | null; "display_name"?: string | null; "status": string; "verified"?: boolean; "daily_quota"?: number | null; "owner_id"?: string | null; "administrator_id"?: string | null; "domain_id"?: string | null; "receive_strategy"?: string | null; "forward_to"?: string | null; "routing_rule_id"?: string | null; "provisioning_status"?: string; "last_validated_at"?: string | null; "last_error"?: string | null; "next_check_at"?: string | null; "created_at": string; "updated_at": string }
+export interface Address { "id": string; "email": string; "domain"?: string | null; "display_name"?: string | null; "status": string; "verified"?: boolean; "provider_id"?: string | null; "daily_quota"?: number | null; "owner_id"?: string | null; "administrator_id"?: string | null; "domain_id"?: string | null; "receive_strategy"?: string | null; "forward_to"?: string | null; "routing_rule_id"?: string | null; "provisioning_status"?: string; "last_validated_at"?: string | null; "last_error"?: string | null; "next_check_at"?: string | null; "created_at": string; "updated_at": string }
 
 export interface SendKey { "id": string; "owner_id": string | null; "prefix": string | null; "label": string | null; "last_used_at": string | null; "revoked_at": string | null; "created_at": string; "updated_at": string }
 
@@ -308,7 +308,7 @@ export class EmailsSelfHostClient {
     }
 
     /** Register an email address (scope emails:write) */
-    async createAddress(body: { "email": string; "display_name"?: string | null; "status"?: string }, init?: RequestInit): Promise<{ "address": Address }> {
+    async createAddress(body: { "email": string; "display_name"?: string | null; "status"?: string; "provider_id"?: string | null }, init?: RequestInit): Promise<{ "address": Address }> {
       return this.request("POST", `/v1/addresses`, {
         body,
         query: undefined,

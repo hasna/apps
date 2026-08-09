@@ -146,6 +146,23 @@ describe("address lookups that must see the whole table", () => {
     expect(found!.id).toBe("addr-000519");
   });
 
+  it("getAddressByEmail preserves the explicitly requested provider binding", async () => {
+    await stub.seed({
+      addresses: addressRows(2, (i) => ({
+        email: "shared@example.com",
+        provider_id: i === 0 ? "provider-one" : "provider-two",
+      })),
+    });
+
+    const found = getAddressByEmail("provider-two", "shared@example.com");
+    expect(found).not.toBeNull();
+    expect(found).toMatchObject({
+      id: "addr-000001",
+      email: "shared@example.com",
+      provider_id: "provider-two",
+    });
+  });
+
   it("findAddressesByEmail returns matches on both sides of the page cap", async () => {
     await stub.seed({
       addresses: addressRows(520, (i) => (i === 10 || i === 519 ? { email: "dup@example.com" } : {})),

@@ -119,6 +119,8 @@ export interface AddressRecord {
   status: string;
   verified: boolean;
   daily_quota: number | null;
+  /** Provider binding. Nullable for legacy/direct API clients that omit it. */
+  provider_id?: string | null;
   // Ownership (migration 0011). An address is owned by a human OR agent owner and
   // administered by an agent. Optional so older/fake rows still satisfy the type.
   owner_id?: string | null;
@@ -1524,6 +1526,14 @@ export class CrossTenantReferenceError extends Error {
   }
 }
 
+/** Raised when an address create names no provider in the caller's tenant. */
+export class AddressProviderNotFoundError extends Error {
+  constructor() {
+    super("address provider not found");
+    this.name = "AddressProviderNotFoundError";
+  }
+}
+
 /** A receive-ready physical domain may be claimed by exactly one tenant. */
 export class InboundDomainRouteConflictError extends Error {
   constructor(public readonly domain: string) {
@@ -2236,15 +2246,35 @@ export class TenantScopedStore {
     status?: string;
     verified?: boolean;
     daily_quota?: number | null;
+    provider_id?: string | null;
   }): Promise<AddressRecord> {
     const id = randomUUID();
     const email = input.email.trim().toLowerCase();
     const domain = email.includes("@") ? email.slice(email.indexOf("@") + 1) : null;
+    const providerId = input.provider_id?.trim() || null;
+    if (providerId) {
+      await this.assertNotOtherTenant("self_hosted_providers", providerId, "provider_id");
+      const provider = await this.client.get<{ id: string }>(
+        `SELECT id FROM self_hosted_providers WHERE id = $1 AND tenant_id = $2`,
+        [providerId, this.tenantId],
+      );
+      if (!provider) throw new AddressProviderNotFoundError();
+    }
     return this.client.one<AddressRecord>(
-      `INSERT INTO addresses (id, email, domain, display_name, status, verified, daily_quota, tenant_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO addresses (id, email, domain, display_name, status, verified, daily_quota, provider_id, tenant_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
-      [id, email, domain, input.display_name ?? null, input.status ?? "active", input.verified ?? false, input.daily_quota ?? null, this.tenantId],
+      [
+        id,
+        email,
+        domain,
+        input.display_name ?? null,
+        input.status ?? "active",
+        input.verified ?? false,
+        input.daily_quota ?? null,
+        providerId,
+        this.tenantId,
+      ],
     );
   }
 

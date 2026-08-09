@@ -11,9 +11,9 @@ import type { SelfHostedResourceStore } from "./self-hosted-store.js";
 //
 // Every address read/write routes to the operator's `/v1/addresses` API. There
 // is no local SQLite island. The `/v1` address entity carries
-// {id, email, display_name, status, verified, owner_id, administrator_id,
-// daily_quota, created_at, updated_at}; provider/quota fields not modelled over
-// /v1 default to null and enrich to "-" in the CLI.
+// {id, email, display_name, status, verified, provider_id, owner_id,
+// administrator_id, daily_quota, created_at, updated_at}; omitted provider_id
+// remains empty for legacy rows and enriches to "-" in the CLI.
 export const ADDRESS_RESOURCE = "addresses";
 
 export function selfHostedAddresses(): SelfHostedResourceStore {
@@ -43,12 +43,13 @@ export function apiToAddress(e: Record<string, unknown>): EmailAddress {
 }
 
 export function createAddress(input: CreateAddressInput): EmailAddress {
-  const created = apiToAddress(
-    selfHostedAddresses().create({ email: input.email, display_name: input.display_name || null }),
+  return apiToAddress(
+    selfHostedAddresses().create({
+      email: input.email,
+      display_name: input.display_name || null,
+      provider_id: input.provider_id,
+    }),
   );
-  // The self-hosted address model does not persist provider_id; carry the
-  // caller's provider through on the returned entity so command output is right.
-  return { ...created, provider_id: input.provider_id };
 }
 
 export function getAddress(id: string): EmailAddress | null {
@@ -90,15 +91,20 @@ function readAddresses(bound: number | null, keep?: (address: EmailAddress) => b
 const byNewestFirst = (a: EmailAddress, b: EmailAddress): number =>
   (b.created_at ?? "").localeCompare(a.created_at ?? "");
 
-export function getAddressByEmail(_provider_id: string, email: string): EmailAddress | null {
-  // The self-hosted model keys addresses by email (no provider dimension). Match
-  // on email so `address add` dedup, get, and remove all resolve the same record.
+export function getAddressByEmail(provider_id: string, email: string): EmailAddress | null {
+  // Address identity includes the explicit provider binding, matching the local
+  // store's `(provider_id, email)` lookup. Returning a same-email row from another
+  // provider would make `address add --provider` silently substitute its binding.
   //
   // Bounded to ONE row: existence is the question. On a table the pager cannot
   // finish, this REFUSES rather than returning null — this null is what
   // `address add` dedupes against, and a false null mints a duplicate address.
+  const provider = provider_id.trim();
   const target = email.trim().toLowerCase();
-  const rows = readAddresses(1, (a) => a.email.trim().toLowerCase() === target);
+  const rows = readAddresses(
+    1,
+    (a) => a.provider_id === provider && a.email.trim().toLowerCase() === target,
+  );
   return rows[0] ?? null;
 }
 

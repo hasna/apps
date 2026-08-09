@@ -2844,6 +2844,31 @@ const IDP_PRINCIPAL_TENANTS_MULTI_GRANT = defineMigration(
   `,
 );
 
+/**
+ * 0025 — persist the provider binding carried by address creation.
+ *
+ * Before provider_id became part of the /v1 address contract, 0012 deliberately
+ * keyed addresses by (tenant_id, email). The client has always keyed creation by
+ * (provider_id, email), though, so retaining that index would reject the second
+ * explicit provider binding after the lookup correctly stops substituting the
+ * first one. Bound rows therefore use the provider-aware tenant key; legacy
+ * unbound rows retain one email per tenant.
+ */
+const ADDRESS_PROVIDER_BINDING = defineMigration(
+  "0025_address_provider_binding",
+  `
+  ALTER TABLE addresses ADD COLUMN IF NOT EXISTS provider_id TEXT;
+  DROP INDEX IF EXISTS addresses_tenant_email_uidx;
+  CREATE UNIQUE INDEX IF NOT EXISTS addresses_tenant_provider_email_uidx
+    ON addresses (tenant_id, provider_id, email)
+    WHERE provider_id IS NOT NULL;
+  CREATE UNIQUE INDEX IF NOT EXISTS addresses_tenant_unbound_email_uidx
+    ON addresses (tenant_id, email)
+    WHERE provider_id IS NULL;
+  CREATE INDEX IF NOT EXISTS addresses_provider_idx ON addresses (provider_id);
+  `,
+);
+
 /** All migrations, in order: api-keys table (auth), the core schema, inbound. */
 export function emailsSelfHostedMigrations(): Migration[] {
   const authMigrations = apiKeyMigrations().map((m) => defineMigration(m.id, m.sql));
@@ -2875,5 +2900,6 @@ export function emailsSelfHostedMigrations(): Migration[] {
     EVENTS_TYPE_ENUM_CHECK,
     WEBHOOK_EVENT_IDEMPOTENCY,
     IDP_PRINCIPAL_TENANTS_MULTI_GRANT,
+    ADDRESS_PROVIDER_BINDING,
   ];
 }

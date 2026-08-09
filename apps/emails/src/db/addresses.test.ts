@@ -5,11 +5,9 @@
 //
 // Migrated from the deleted local-SQLite pattern. Notes on behavior that changed
 // with the self-hosted model:
-//   - The /v1 address entity does NOT persist provider_id (the operator model
-//     keys addresses by email, not by a local provider row). createAddress carries
-//     the caller's provider through on the RETURNED entity, but stored rows have no
-//     provider dimension. Every test that exercises provider filtering therefore
-//     SEEDS rows with an explicit provider_id instead of relying on createAddress.
+//   - The /v1 address entity persists provider_id and keys address creation by
+//     provider plus email. Tests that exercise larger provider-filtered datasets
+//     still seed rows directly so their ordering and population remain explicit.
 //   - Ordering-sensitive tests seed explicit created_at (create sets created_at≈now
 //     so freshly-created rows tie).
 //   - Readiness keys off verified + not-suspended (the rich local DKIM/SPF/domain
@@ -86,7 +84,6 @@ describe("createAddress", () => {
     const a = createAddress({ provider_id: PROVIDER, email: "test@example.com" });
     expect(a.id).toHaveLength(36);
     expect(a.email).toBe("test@example.com");
-    // provider_id is carried through on the returned entity (not persisted over /v1).
     expect(a.provider_id).toBe(PROVIDER);
     expect(a.verified).toBe(false);
     expect(a.display_name).toBeNull();
@@ -111,7 +108,7 @@ describe("getAddress", () => {
 });
 
 describe("getAddressByEmail", () => {
-  it("finds address by email (provider is not part of the self-hosted identity)", () => {
+  it("finds an address by provider and email", () => {
     const a = createAddress({ provider_id: PROVIDER, email: "test@example.com" });
     const found = getAddressByEmail(PROVIDER, "test@example.com");
     expect(found?.id).toBe(a.id);

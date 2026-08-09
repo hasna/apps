@@ -46,9 +46,9 @@ function notImplementedAnywhere(command: string): never {
 const MAX_OWNER_HISTORY_LIMIT = 100;
 
 /**
- * Provider label for display. The /v1 address entity carries no provider
- * association, so an empty provider_id is reported as `self_hosted` — the
- * DomainType value it corresponds to, not a claim about where it is served.
+ * Provider label for display. Legacy /v1 address rows may omit provider_id,
+ * so an empty value is reported as `self_hosted` — the DomainType value it
+ * corresponds to, not a claim about where it is served.
  */
 function providerLabel(address: { provider_name: string | null; provider_id: string }): string {
   return address.provider_name ?? (address.provider_id || "self_hosted");

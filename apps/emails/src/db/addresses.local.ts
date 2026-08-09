@@ -25,8 +25,8 @@ export function selfHostedAddresses(db?: Database): SelfHostedResourceStore | nu
 
 /** Map a selfHosted API address entity to the local EmailAddress shape (defaults filled).
  *  The self-hosted /v1/addresses record carries {id, email, domain, display_name,
- *  status, created_at, updated_at}; provider/owner/quota are not modelled in the
- *  selfHosted, so they default to null (enrichment then resolves to "-" in the CLI). */
+ *  status, provider_id, created_at, updated_at}; omitted provider/owner/quota
+ *  fields default to null (enrichment then resolves to "-" in the CLI). */
 export function apiToAddress(e: Record<string, unknown>): EmailAddress {
   const str = (v: unknown): string | null => (v == null ? null : String(v));
   const updatedAt = str(e["updated_at"]) ?? new Date().toISOString();
@@ -60,10 +60,13 @@ function rowToAddress(row: AddressRow): EmailAddress {
 export function createAddress(input: CreateAddressInput, db?: Database): EmailAddress {
   const selfHosted = selfHostedAddresses(db);
   if (selfHosted) {
-    const created = apiToAddress(selfHosted.create({ email: input.email, display_name: input.display_name || null }));
-    // The selfHosted address model does not persist provider_id; carry the caller's
-    // provider through on the returned entity so the command output is correct.
-    return { ...created, provider_id: input.provider_id };
+    return apiToAddress(
+      selfHosted.create({
+        email: input.email,
+        display_name: input.display_name || null,
+        provider_id: input.provider_id,
+      }),
+    );
   }
 
   const d = db || getDatabase();
@@ -94,10 +97,14 @@ export function getAddress(id: string, db?: Database): EmailAddress | null {
 export function getAddressByEmail(provider_id: string, email: string, db?: Database): EmailAddress | null {
   const selfHosted = selfHostedAddresses(db);
   if (selfHosted) {
-    // The selfHosted model keys addresses by email (no provider dimension). Match on
-    // email so `address add` dedup, get, and remove all resolve the same record.
+    // Preserve the explicit provider binding when this compatibility route uses
+    // the self-hosted API; a same-email row from another provider is not a match.
+    const provider = provider_id.trim();
     const target = email.trim().toLowerCase();
-    const found = selfHosted.list().map(apiToAddress).find((a) => a.email.trim().toLowerCase() === target);
+    const found = selfHosted
+      .list()
+      .map(apiToAddress)
+      .find((a) => a.provider_id === provider && a.email.trim().toLowerCase() === target);
     return found ?? null;
   }
   const d = db || getDatabase();

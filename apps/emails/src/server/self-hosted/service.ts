@@ -13,6 +13,7 @@ import { migrationAcceptsChecksum, type TypedQueryClient, type Migration } from 
 import { checkHealth } from "../../storage-kit/index.js";
 import {
   EmailsSelfHostedStore,
+  AddressProviderNotFoundError,
   IdempotencyKeyConflictError,
   SendIntentDeletionForbiddenError,
   SendIntentTombstonedError,
@@ -998,6 +999,12 @@ export async function handleSelfHostedRequest(
           status: body.status ? String(body.status) : undefined,
           verified: typeof body.verified === "boolean" ? body.verified : undefined,
           daily_quota: quota.provided ? quota.value : undefined,
+          provider_id:
+            body.provider_id === undefined
+              ? undefined
+              : body.provider_id === null
+                ? null
+                : String(body.provider_id),
         });
         return json(201, { address: created });
       }
@@ -2231,6 +2238,9 @@ export async function handleSelfHostedRequest(
       // A body-supplied FK id pointing at another tenant's row: treat as "not
       // found" for this tenant (no cross-tenant existence is revealed).
       return json(404, { error: `referenced ${err.column} not found`, reason: "cross_tenant_reference" });
+    }
+    if (err instanceof AddressProviderNotFoundError) {
+      return json(404, { error: "provider not found", reason: "provider_not_found" });
     }
     if (err instanceof InboundDomainRouteConflictError) {
       return json(409, { error: "inbound domain route is already claimed", reason: "inbound_route_conflict" });

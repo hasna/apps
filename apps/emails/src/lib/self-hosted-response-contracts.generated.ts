@@ -1521,6 +1521,34 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
     "method": "POST",
     "operationId": "createAddress",
     "path": "/v1/addresses",
+    "status": 404,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "provider not found"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "provider_not_found"
+          ]
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "createAddress",
+    "path": "/v1/addresses",
     "status": 413,
     "schema": {
       "type": "object",
@@ -36327,6 +36355,10 @@ export const SELF_HOSTED_RESPONSE_COMPONENTS: Readonly<Record<string, unknown>> 
       },
       "verified": {
         "type": "boolean"
+      },
+      "provider_id": {
+        "type": "string",
+        "nullable": true
       },
       "daily_quota": {
         "type": "integer",
