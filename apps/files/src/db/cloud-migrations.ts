@@ -346,6 +346,183 @@ export const FILE_CONTENT_TENANCY_MIGRATIONS: readonly Migration[] = [
        AND (keys.expires_at IS NULL OR keys.expires_at > now())
      ON CONFLICT (kid) DO NOTHING;`,
   ),
+  defineMigration(
+    "files-content-tenant-0006-quarantine-ambiguous-lineage",
+    `LOCK TABLE tenants IN SHARE MODE;
+     LOCK TABLE api_keys IN SHARE ROW EXCLUSIVE MODE;
+     LOCK TABLE api_key_tenants IN SHARE ROW EXCLUSIVE MODE;
+     LOCK TABLE file_versions IN SHARE ROW EXCLUSIVE MODE;
+
+     CREATE TABLE IF NOT EXISTS api_key_tenant_quarantine (
+       kid TEXT PRIMARY KEY,
+       tenant_id TEXT NOT NULL,
+       original_created_at TIMESTAMPTZ NOT NULL,
+       repair_migration TEXT NOT NULL,
+       quarantined_at TIMESTAMPTZ NOT NULL DEFAULT now()
+     );
+
+     CREATE TABLE IF NOT EXISTS file_version_lineage_quarantine (
+       revision_id TEXT PRIMARY KEY,
+       s3_object_id TEXT,
+       storage_provider TEXT NOT NULL,
+       bucket TEXT,
+       region TEXT,
+       object_key TEXT,
+       repair_migration TEXT NOT NULL,
+       quarantined_at TIMESTAMPTZ NOT NULL DEFAULT now()
+     );
+
+     CREATE OR REPLACE FUNCTION files_bind_single_tenant_api_key()
+     RETURNS trigger
+     LANGUAGE plpgsql
+     AS $$
+     BEGIN
+       IF NEW.app = 'files' THEN
+         INSERT INTO api_key_tenants (kid, tenant_id)
+         SELECT NEW.kid, singleton.tenant_id
+         FROM (
+           SELECT MIN(id::text) AS tenant_id
+           FROM tenants
+           HAVING COUNT(*) = 1
+         ) singleton
+         ON CONFLICT (kid) DO NOTHING;
+       END IF;
+       RETURN NEW;
+     END;
+     $$;
+
+     WITH multi_tenant AS (
+       SELECT TRUE AS present
+       FROM tenants
+       HAVING COUNT(*) > 1
+     )
+     INSERT INTO api_key_tenant_quarantine (
+       kid, tenant_id, original_created_at, repair_migration
+     )
+     SELECT
+       bindings.kid,
+       bindings.tenant_id,
+       bindings.created_at,
+       'files-content-tenant-0006-quarantine-ambiguous-lineage'
+     FROM api_key_tenants bindings
+     JOIN api_keys keys ON keys.kid = bindings.kid
+     CROSS JOIN multi_tenant
+     WHERE keys.app = 'files'
+     ON CONFLICT (kid) DO NOTHING;
+
+     DELETE FROM api_key_tenants bindings
+     USING api_key_tenant_quarantine quarantine
+     WHERE bindings.kid = quarantine.kid
+       AND quarantine.repair_migration =
+         'files-content-tenant-0006-quarantine-ambiguous-lineage'
+       AND EXISTS (SELECT 1 FROM tenants HAVING COUNT(*) > 1);
+
+     WITH ranked AS (
+       SELECT
+         fv.id AS revision_id,
+         fv.file_id,
+         fv.s3_object_id,
+         fv.storage_provider,
+         fv.bucket,
+         fv.region,
+         fv.object_key,
+         fv.content_hash_algorithm,
+         fv.content_hash,
+         ROW_NUMBER() OVER (
+           PARTITION BY fv.file_id
+           ORDER BY fv.created_at DESC, fv.id DESC
+         ) AS revision_rank
+       FROM file_versions fv
+       WHERE fv.state = 'active'
+     ),
+     ambiguous_history AS (
+       SELECT older.*
+       FROM ranked older
+       JOIN ranked current
+         ON current.file_id = older.file_id
+        AND current.revision_rank = 1
+       WHERE older.revision_rank > 1
+         AND older.s3_object_id IS NOT NULL
+         AND older.s3_object_id = current.s3_object_id
+         AND NOT (
+           COALESCE(
+             lower(older.content_hash_algorithm) = 'sha256'
+             AND lower(current.content_hash_algorithm) = 'sha256'
+             AND lower(older.content_hash) = lower(current.content_hash),
+             FALSE
+           )
+           OR COALESCE(
+             lower(older.content_hash_algorithm) = 'etag'
+             AND lower(current.content_hash_algorithm) = 'etag'
+             AND lower(btrim(older.content_hash, '"')) =
+               lower(btrim(current.content_hash, '"')),
+             FALSE
+           )
+         )
+     )
+     INSERT INTO file_version_lineage_quarantine (
+       revision_id, s3_object_id, storage_provider, bucket, region,
+       object_key, repair_migration
+     )
+     SELECT
+       revision_id,
+       s3_object_id,
+       storage_provider,
+       bucket,
+       region,
+       object_key,
+       'files-content-tenant-0006-quarantine-ambiguous-lineage'
+     FROM ambiguous_history
+     ON CONFLICT (revision_id) DO NOTHING;
+
+     UPDATE file_versions versions
+     SET s3_object_id = NULL,
+         storage_provider = 'unknown',
+         bucket = NULL,
+         region = NULL,
+         object_key = NULL
+     FROM file_version_lineage_quarantine quarantine
+     WHERE versions.id = quarantine.revision_id
+       AND versions.s3_object_id = quarantine.s3_object_id
+       AND quarantine.repair_migration =
+         'files-content-tenant-0006-quarantine-ambiguous-lineage';
+
+     WITH ranked AS (
+       SELECT
+         fv.id AS revision_id,
+         fv.file_id,
+         fv.s3_object_id,
+         fv.content_hash_algorithm,
+         fv.content_hash,
+         fv.size,
+         fv.mime,
+         ROW_NUMBER() OVER (
+           PARTITION BY fv.file_id
+           ORDER BY fv.created_at DESC, fv.id DESC
+         ) AS revision_rank
+       FROM file_versions fv
+       WHERE fv.state = 'active'
+     )
+     UPDATE s3_objects objects
+     SET checksum_sha256 = CASE
+           WHEN lower(current.content_hash_algorithm) = 'sha256'
+             THEN current.content_hash
+           ELSE NULL
+         END,
+         size = current.size,
+         content_type = current.mime,
+         metadata = json_build_object(
+           'migration', 'files-content-tenant-0005-materialize-legacy-s3-lineage',
+           'file_id', current.file_id,
+           'revision_id', current.revision_id
+         )::text,
+         updated_at = now()::text
+     FROM ranked current
+     WHERE current.revision_rank = 1
+       AND objects.id = current.s3_object_id
+       AND objects.app = 'files'
+       AND objects.identity LIKE 'files-content-lineage-v1:%';`,
+  ),
 ];
 
 /** Full ordered migration set applied by the runner and checked by /ready. */

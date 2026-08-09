@@ -403,7 +403,7 @@ export async function getRemoteFileLocator(
        SELECT id, source_ref, storage_provider, bucket, region, object_key, s3_object_id
        FROM file_versions
        WHERE file_id = f.id AND state = 'active'
-       ORDER BY created_at DESC
+       ORDER BY created_at DESC, id DESC
        LIMIT 1
      ) fv ON TRUE
      JOIN s3_objects o

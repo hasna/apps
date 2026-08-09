@@ -11,6 +11,7 @@ const TENANT_A = "11111111-1111-4111-8111-111111111111";
 const TENANT_B = "22222222-2222-4222-8222-222222222222";
 const PRIVATE_BYTES = Buffer.from("PG_LINEAGE_PRIVATE_BYTES\n", "utf8");
 const pool = DATABASE_URL ? new Pool({ connectionString: DATABASE_URL, max: 4 }) : null;
+let fixtureSequence = 0;
 
 afterAll(async () => {
   await pool?.end();
@@ -30,7 +31,9 @@ async function withPgFixture(run: (client: PoolClient) => Promise<void>): Promis
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    await client.query("SET LOCAL search_path = pg_temp");
+    const schema = `files_pr39_${process.pid}_${++fixtureSequence}`;
+    await client.query(`CREATE SCHEMA ${schema}`);
+    await client.query(`SET LOCAL search_path = ${schema}`);
     await createFixtureSchema(client);
     await run(client);
   } finally {
@@ -41,7 +44,10 @@ async function withPgFixture(run: (client: PoolClient) => Promise<void>): Promis
 
 async function createFixtureSchema(client: PoolClient): Promise<void> {
   await client.query(`
-    CREATE TEMP TABLE sources (
+    CREATE TABLE tenants (
+      id UUID PRIMARY KEY
+    );
+    CREATE TABLE sources (
       id TEXT PRIMARY KEY,
       type TEXT NOT NULL,
       bucket TEXT,
@@ -49,7 +55,7 @@ async function createFixtureSchema(client: PoolClient): Promise<void> {
       region TEXT,
       tenant_id UUID
     );
-    CREATE TEMP TABLE files (
+    CREATE TABLE files (
       id TEXT PRIMARY KEY,
       source_id TEXT NOT NULL,
       path TEXT NOT NULL,
@@ -59,7 +65,7 @@ async function createFixtureSchema(client: PoolClient): Promise<void> {
       indexed_at TEXT NOT NULL,
       tenant_id UUID
     );
-    CREATE TEMP TABLE google_drive_imported_objects (
+    CREATE TABLE google_drive_imported_objects (
       source_id TEXT NOT NULL,
       drive_id TEXT NOT NULL,
       file_id TEXT NOT NULL,
@@ -74,7 +80,7 @@ async function createFixtureSchema(client: PoolClient): Promise<void> {
       tenant_id UUID,
       PRIMARY KEY (source_id, drive_id, file_id)
     );
-    CREATE TEMP TABLE file_versions (
+    CREATE TABLE file_versions (
       id TEXT PRIMARY KEY,
       file_id TEXT NOT NULL,
       source_ref TEXT NOT NULL,
@@ -92,7 +98,7 @@ async function createFixtureSchema(client: PoolClient): Promise<void> {
       s3_object_id TEXT,
       tenant_id UUID
     );
-    CREATE TEMP TABLE s3_objects (
+    CREATE TABLE s3_objects (
       id TEXT PRIMARY KEY,
       source_id TEXT,
       identity TEXT NOT NULL UNIQUE,
@@ -117,19 +123,24 @@ async function createFixtureSchema(client: PoolClient): Promise<void> {
       updated_at TEXT NOT NULL DEFAULT NOW()::text,
       tenant_id UUID
     );
-    CREATE TEMP TABLE api_keys (
+    CREATE TABLE api_keys (
       kid TEXT PRIMARY KEY,
       app TEXT NOT NULL,
       revoked_at TIMESTAMPTZ,
       expires_at TIMESTAMPTZ,
       last_used_at TIMESTAMPTZ
     );
-    CREATE TEMP TABLE api_key_tenants (
+    CREATE TABLE api_key_tenants (
       kid TEXT PRIMARY KEY,
       tenant_id TEXT NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
+  const triggerMigration = FILE_CONTENT_TENANCY_MIGRATIONS.find(
+    ({ id }) => id === "files-content-tenant-0004-bind-future-single-tenant-keys",
+  );
+  expect(triggerMigration, "legacy key-binding trigger must be registered").toBeDefined();
+  await client.query(triggerMigration!.sql);
 }
 
 async function seedLegacyDrive(
@@ -150,6 +161,12 @@ async function seedLegacyDrive(
   const fileTenant = options.fileTenant ?? TENANT_A;
   const importTenant = options.importTenant ?? TENANT_A;
   const versionTenant = options.versionTenant ?? TENANT_A;
+  await client.query(
+    `INSERT INTO tenants (id)
+     VALUES ($1), ($2), ($3), ($4)
+     ON CONFLICT (id) DO NOTHING`,
+    [sourceTenant, fileTenant, importTenant, versionTenant],
+  );
   await client.query(
     `INSERT INTO sources (id, type, bucket, prefix, region, tenant_id)
      VALUES ($1, 's3', 'private-files-bucket', 'imports/google-drive/live', 'eu-west-1', $2)`,
@@ -182,29 +199,43 @@ async function seedLegacyDrive(
 }
 
 async function applyLegacyLineageMigration(client: PoolClient): Promise<void> {
-  const migration = FILE_CONTENT_TENANCY_MIGRATIONS.find(
+  const lineageMigration = FILE_CONTENT_TENANCY_MIGRATIONS.find(
     ({ id }) => id === "files-content-tenant-0005-materialize-legacy-s3-lineage",
   );
-  expect(migration, "legacy S3 lineage migration must be registered").toBeDefined();
-  await client.query(migration!.sql);
+  const repairMigration = FILE_CONTENT_TENANCY_MIGRATIONS.find(
+    ({ id }) => id === "files-content-tenant-0006-quarantine-ambiguous-lineage",
+  );
+  expect(lineageMigration, "legacy S3 lineage migration must be registered").toBeDefined();
+  expect(repairMigration, "append-only lineage repair must be registered").toBeDefined();
+  await client.query(lineageMigration!.sql);
+  await client.query(repairMigration!.sql);
 }
 
-test("registers a bounded append-only lineage repair with no handler fallback", () => {
-  const migration = FILE_CONTENT_TENANCY_MIGRATIONS.find(
+test("preserves the landed migration and appends a bounded repair with no handler fallback", () => {
+  const lineageMigration = FILE_CONTENT_TENANCY_MIGRATIONS.find(
     ({ id }) => id === "files-content-tenant-0005-materialize-legacy-s3-lineage",
   );
-  expect(migration).toBeDefined();
-  expect(migration!.sql).toContain("fv.s3_object_id IS NULL");
-  expect(migration!.sql).toContain("fv.state = 'active'");
-  expect(migration!.sql).toContain("f.status = 'active'");
-  expect(migration!.sql).toContain("fv.tenant_id = f.tenant_id");
-  expect(migration!.sql).toContain("s.tenant_id = f.tenant_id");
-  expect(migration!.sql).toContain("HAVING COUNT(*) = 1");
-  expect(migration!.sql).toContain("COUNT(DISTINCT tenant_id) = 1");
-  expect(migration!.sql).toContain("left(relative_key, length(object_prefix) + 1)");
-  expect(migration!.sql).toContain("ON CONFLICT (kid) DO NOTHING");
-  expect(migration!.sql).not.toContain("SET org_id =");
-  expect(migration!.sql).not.toContain("UPDATE files ");
+  const repairMigration = FILE_CONTENT_TENANCY_MIGRATIONS.find(
+    ({ id }) => id === "files-content-tenant-0006-quarantine-ambiguous-lineage",
+  );
+  expect(lineageMigration).toBeDefined();
+  expect(repairMigration).toBeDefined();
+  expect(lineageMigration!.sql).toContain("fv.s3_object_id IS NULL");
+  expect(lineageMigration!.sql).toContain("fv.state = 'active'");
+  expect(lineageMigration!.sql).toContain("f.status = 'active'");
+  expect(lineageMigration!.sql).toContain("fv.tenant_id = f.tenant_id");
+  expect(lineageMigration!.sql).toContain("s.tenant_id = f.tenant_id");
+  expect(lineageMigration!.sql).toContain("COUNT(DISTINCT tenant_id) = 1");
+  expect(lineageMigration!.sql).toContain("left(relative_key, length(object_prefix) + 1)");
+  expect(lineageMigration!.sql).toContain("ON CONFLICT (kid) DO NOTHING");
+  expect(lineageMigration!.sql).not.toContain("SET org_id =");
+  expect(lineageMigration!.sql).not.toContain("UPDATE files ");
+  expect(repairMigration!.sql).toContain("ROW_NUMBER() OVER");
+  expect(repairMigration!.sql).toContain("ORDER BY fv.created_at DESC, fv.id DESC");
+  expect(repairMigration!.sql).toContain("FROM tenants");
+  expect(repairMigration!.sql).toContain("CREATE OR REPLACE FUNCTION files_bind_single_tenant_api_key()");
+  expect(repairMigration!.sql).toContain("api_key_tenant_quarantine");
+  expect(repairMigration!.sql).toContain("file_version_lineage_quarantine");
 });
 
 describe.skipIf(!DATABASE_URL)("PostgreSQL legacy file-content lineage", () => {
@@ -244,6 +275,12 @@ describe.skipIf(!DATABASE_URL)("PostgreSQL legacy file-content lineage", () => {
       expect(response?.status).toBe(200);
       expect(Buffer.from(await response!.arrayBuffer())).toEqual(PRIVATE_BYTES);
       expect(reads).toBe(1);
+
+      await client.query(`INSERT INTO api_keys (kid, app) VALUES ('kid-future', 'files')`);
+      const futureBinding = (await client.query<{ tenant_id: string }>(
+        `SELECT tenant_id FROM api_key_tenants WHERE kid = 'kid-future'`,
+      )).rows[0];
+      expect(futureBinding).toEqual({ tenant_id: TENANT_A });
     });
   });
 
@@ -296,7 +333,7 @@ describe.skipIf(!DATABASE_URL)("PostgreSQL legacy file-content lineage", () => {
       )).rows[0];
 
       expect(second).toEqual(first);
-      expect(first).toEqual({ objects: 1, linked: 1, key_bindings: 3 });
+      expect(first).toEqual({ objects: 1, linked: 1, key_bindings: 0 });
       const untouched = await client.query<{ id: string }>(
         `SELECT id FROM file_versions
          WHERE id IN ('rev-f_mismatch', 'rev-f_inactive', 'rev-unsupported')
@@ -393,6 +430,156 @@ describe.skipIf(!DATABASE_URL)("PostgreSQL legacy file-content lineage", () => {
       expect(response?.status).toBe(404);
       expect(await response!.text()).toContain("File not found");
       expect(reads).toBe(0);
+    });
+  });
+
+  test("does not bind another registered tenant's key when only one tenant has reconstructed objects", async () => {
+    await withPgFixture(async (client) => {
+      await seedLegacyDrive(client);
+      await client.query(`INSERT INTO tenants (id) VALUES ($1)`, [TENANT_B]);
+      await client.query(`INSERT INTO api_keys (kid, app) VALUES ('kid-b', 'files')`);
+      await applyLegacyLineageMigration(client);
+      await client.query(`INSERT INTO api_keys (kid, app) VALUES ('kid-future', 'files')`);
+
+      const bindings = await client.query<{ kid: string; tenant_id: string }>(
+        `SELECT kid, tenant_id FROM api_key_tenants ORDER BY kid`,
+      );
+      expect(bindings.rows).toEqual([]);
+      const quarantined = await client.query<{ kid: string; tenant_id: string }>(
+        `SELECT kid, tenant_id FROM api_key_tenant_quarantine ORDER BY kid`,
+      );
+      expect(quarantined.rows).toEqual([
+        { kid: "kid-a", tenant_id: TENANT_A },
+        { kid: "kid-b", tenant_id: TENANT_A },
+      ]);
+
+      const store = wrapExecutor(client);
+      let reads = 0;
+      const handler = createV1Handler({
+        getClient: () => store,
+        verifier: verifyApiKey({ app: "files", signingSecret: TEST_SIGNING_MATERIAL }),
+        readObject: async () => {
+          reads++;
+          return new Response(PRIVATE_BYTES);
+        },
+      });
+      const request = new Request("https://files.example.test/v1/files/f_legacy/content", {
+        headers: { "x-api-key": apiToken("kid-b") },
+      });
+      const response = await handler.handle(request, new URL(request.url));
+      expect(response?.status).toBe(404);
+      expect(await response!.text()).toContain("File not found");
+      expect(reads).toBe(0);
+    });
+  });
+
+  test("links only the latest active revision to the current object lineage", async () => {
+    await withPgFixture(async (client) => {
+      await seedLegacyDrive(client);
+      await client.query(
+        `UPDATE file_versions
+         SET content_hash_algorithm = 'sha256', content_hash = $1
+         WHERE id = 'rev-f_legacy'`,
+        ["b".repeat(64)],
+      );
+      await client.query(
+        `INSERT INTO file_versions (
+           id, file_id, source_ref, content_hash_algorithm, content_hash,
+           size, mime, storage_provider, bucket, region, object_key, state,
+           indexed_at, created_at, s3_object_id, tenant_id
+         ) VALUES ('rev-f_legacy-old', 'f_legacy',
+           'open-files://file/f_legacy/revision/rev-f_legacy-old', 'sha256', $1,
+           $2, 'text/plain', 's3', 'private-files-bucket', 'eu-west-1',
+           'google-drive/work/old-book.txt', 'active', '2026-08-07T20:00:00Z',
+           '2026-08-07T20:00:00Z', NULL, $3)`,
+        ["a".repeat(64), PRIVATE_BYTES.byteLength, TENANT_A],
+      );
+      await applyLegacyLineageMigration(client);
+
+      const revisions = await client.query<{
+        id: string;
+        s3_object_id: string | null;
+        storage_provider: string;
+        object_key: string | null;
+      }>(
+        `SELECT id, s3_object_id, storage_provider, object_key FROM file_versions
+         WHERE file_id = 'f_legacy'
+         ORDER BY created_at DESC, id DESC`,
+      );
+      expect(revisions.rows).toEqual([
+        {
+          id: "rev-f_legacy",
+          s3_object_id: expect.any(String),
+          storage_provider: "s3",
+          object_key: "imports/google-drive/live/google-drive/work/book.txt",
+        },
+        {
+          id: "rev-f_legacy-old",
+          s3_object_id: null,
+          storage_provider: "unknown",
+          object_key: null,
+        },
+      ]);
+      const quarantined = (await client.query<{
+        revision_id: string;
+        s3_object_id: string;
+        storage_provider: string;
+        object_key: string;
+      }>(
+        `SELECT revision_id, s3_object_id, storage_provider, object_key
+         FROM file_version_lineage_quarantine`,
+      )).rows[0];
+      expect(quarantined).toEqual({
+        revision_id: "rev-f_legacy-old",
+        s3_object_id: expect.any(String),
+        storage_provider: "s3",
+        object_key: "imports/google-drive/live/google-drive/work/book.txt",
+      });
+      const object = (await client.query<{ checksum_sha256: string; metadata: string }>(
+        `SELECT checksum_sha256, metadata FROM s3_objects`,
+      )).rows[0];
+      expect(object.checksum_sha256).toBe("b".repeat(64));
+      expect(JSON.parse(object.metadata).revision_id).toBe("rev-f_legacy");
+    });
+  });
+
+  test("keeps shared lineage when two revisions prove the same content identity", async () => {
+    await withPgFixture(async (client) => {
+      await seedLegacyDrive(client);
+      await client.query(
+        `UPDATE file_versions
+         SET content_hash_algorithm = 'sha256', content_hash = $1
+         WHERE id = 'rev-f_legacy'`,
+        ["c".repeat(64)],
+      );
+      await client.query(
+        `INSERT INTO file_versions (
+           id, file_id, source_ref, content_hash_algorithm, content_hash,
+           size, mime, storage_provider, bucket, region, object_key, state,
+           indexed_at, created_at, s3_object_id, tenant_id
+         ) VALUES ('rev-f_legacy-same', 'f_legacy',
+           'open-files://file/f_legacy/revision/rev-f_legacy-same', 'sha256', $1,
+           $2, 'text/plain', 's3', 'private-files-bucket', 'eu-west-1',
+           'google-drive/work/book.txt', 'active', '2026-08-07T20:00:00Z',
+           '2026-08-07T20:00:00Z', NULL, $3)`,
+        ["c".repeat(64), PRIVATE_BYTES.byteLength, TENANT_A],
+      );
+      await applyLegacyLineageMigration(client);
+
+      const revisions = await client.query<{ id: string; s3_object_id: string | null }>(
+        `SELECT id, s3_object_id FROM file_versions
+         WHERE file_id = 'f_legacy'
+         ORDER BY created_at DESC, id DESC`,
+      );
+      expect(revisions.rows).toEqual([
+        { id: "rev-f_legacy", s3_object_id: expect.any(String) },
+        { id: "rev-f_legacy-same", s3_object_id: expect.any(String) },
+      ]);
+      expect(revisions.rows[0]!.s3_object_id).toBe(revisions.rows[1]!.s3_object_id);
+      const quarantineCount = (await client.query<{ count: number }>(
+        `SELECT COUNT(*)::int AS count FROM file_version_lineage_quarantine`,
+      )).rows[0]?.count;
+      expect(quarantineCount).toBe(0);
     });
   });
 });

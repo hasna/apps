@@ -31,6 +31,18 @@ const FILES_0155_CHECKSUM = [
   "1481b85c",
 ].join("");
 
+const FILES_CONTENT_TENANT_0005_CHECKSUM = [
+  "sha256:",
+  "d704dabc",
+  "d3da52b9",
+  "c323c5ea",
+  "97ebe310",
+  "51c3b2a1",
+  "9c5ddbf7",
+  "993226ac",
+  "7dc3ae01",
+].join("");
+
 const LEGACY_FILES_TENANCY_BRIDGE = [
   {
     id: "files-tenancy-bridge-0001-api-keys-tenant-id",
@@ -111,6 +123,29 @@ describe("cloud migration compatibility", () => {
     expect(ids.indexOf("files-tenancy-bridge-0004-api-keys-kid-idx")).toBeLessThan(
       ids.indexOf("files-content-tenant-0001-key-map"),
     );
+  });
+
+  test("preserves the landed lineage migration and appends its repair", async () => {
+    const lineage = CLOUD_MIGRATIONS.find(
+      ({ id }) => id === "files-content-tenant-0005-materialize-legacy-s3-lineage",
+    );
+    const repair = CLOUD_MIGRATIONS.find(
+      ({ id }) => id === "files-content-tenant-0006-quarantine-ambiguous-lineage",
+    );
+    expect(lineage?.checksum).toBe(FILES_CONTENT_TENANT_0005_CHECKSUM);
+    expect(repair).toBeDefined();
+
+    const result = await ledgerWith([
+      {
+        id: lineage!.id,
+        checksum: FILES_CONTENT_TENANT_0005_CHECKSUM,
+        applied_at: "2026-08-08T23:40:16.000Z",
+      },
+    ]).migrate({ dryRun: true });
+    expect(result.plan.find(({ migration }) => migration.id === lineage!.id)?.state).toBe(
+      "already_applied",
+    );
+    expect(result.plan.find(({ migration }) => migration.id === repair!.id)?.state).toBe("pending");
   });
 
   test("accepts the complete historical numeric and tenancy-bridge production ledger", async () => {
