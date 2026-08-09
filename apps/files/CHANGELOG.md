@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.3.15 — 2026-08-09
+
+Release of the immutable evidence authority and hosted lineage hardening merged
+in #40 and #41.
+
+- Make Files the immutable bytes-and-SHA-256 authority for evidence assets,
+  including versioned provenance, retention and classification metadata,
+  private download grants, and auditable access events across local and hosted
+  stores.
+- Bind hosted evidence ownership to the authenticated API-key tenant so
+  cross-organization list, read, link, sign, verify, and upload-completion
+  requests fail without exposing another tenant's assets.
+- Publish all nine evidence-authority operations in OpenAPI and the generated
+  `FilesClient`, covering upload intents, completion, asset reads and listing,
+  links, private download grants, verification, and access events.
+- Make concurrent requests with the same evidence idempotency key converge on
+  the same asset and upload intent instead of surfacing a unique-index error.
+- Quarantine ambiguous legacy hosted file lineage rather than binding an API
+  key when tenant reconstruction is not unique.
+
 ## 0.3.13 — 2026-08-09
 
 Release of the complete PostgreSQL migration-lineage compatibility repair
