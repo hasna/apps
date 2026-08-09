@@ -293,7 +293,7 @@ beforeAll(async () => {
   requireSuccess(bunIgnored, "ignore-scripts Bun pack");
   const bunIgnoredArchive = new BunArchive(
     Bun.gunzipSync(
-      await Bun.file(join(BUN_IGNORED_PACK_ROOT, "hasna-capacity-0.1.1.tgz")).bytes(),
+      await Bun.file(join(BUN_IGNORED_PACK_ROOT, "hasna-capacity-0.1.2.tgz")).bytes(),
     ),
   );
   bunIgnoredArchivePaths = [...(await bunIgnoredArchive.files()).keys()]
@@ -333,7 +333,7 @@ beforeAll(async () => {
   ) as Record<string, unknown>;
   expect(manifest).toMatchObject({
     name: "@hasna/capacity",
-    version: "0.1.1",
+    version: "0.1.2",
     repository: {
       type: "git",
       url: "git+https://github.com/hasna/capacity.git",
@@ -353,14 +353,14 @@ beforeAll(async () => {
   ]);
   requireSuccess(bunPacked, "clean-dist Bun pack");
   const bunArchiveBytes = Bun.gunzipSync(
-    await Bun.file(join(BUN_PACK_ROOT, "hasna-capacity-0.1.1.tgz")).bytes(),
+    await Bun.file(join(BUN_PACK_ROOT, "hasna-capacity-0.1.2.tgz")).bytes(),
   );
   const tar = Bun.which("tar");
   if (tar === null) throw new Error("tar is required for the package artifact test");
   const bunCliHeader = await run([
     tar,
     "-tvzf",
-    join(BUN_PACK_ROOT, "hasna-capacity-0.1.1.tgz"),
+    join(BUN_PACK_ROOT, "hasna-capacity-0.1.2.tgz"),
     "package/dist/cli.js",
   ]);
   requireSuccess(bunCliHeader, "Bun-packed CLI tar header");
@@ -375,7 +375,7 @@ beforeAll(async () => {
   const bunManifestFile = bunArchiveFiles.get("package/package.json");
   if (bunManifestFile === undefined) throw new Error("Bun-packed package.json is missing");
   const bunManifest = (await bunManifestFile.json()) as Record<string, unknown>;
-  expect(bunManifest).toMatchObject({ name: "@hasna/capacity", version: "0.1.1" });
+  expect(bunManifest).toMatchObject({ name: "@hasna/capacity", version: "0.1.2" });
   expect(bunManifest.bin).toEqual({ capacity: "scripts/capacity-launcher.mjs" });
   expect(await bunArchive.extract(BUN_EXTRACT_ROOT)).toBe(bunArchiveFiles.size);
   bunPackedCliPath = join(BUN_EXTRACT_ROOT, "package", "dist", "cli.js");
@@ -383,7 +383,7 @@ beforeAll(async () => {
   chmodSync(bunPackedCliPath, 0o755);
 
   const npmArchivePath = join(NPM_PACK_ROOT, pack.filename);
-  const bunArchivePath = join(BUN_PACK_ROOT, "hasna-capacity-0.1.1.tgz");
+  const bunArchivePath = join(BUN_PACK_ROOT, "hasna-capacity-0.1.2.tgz");
   const installManifest = `${JSON.stringify(
     { name: "capacity-package-install-regression", private: true },
     null,
@@ -496,9 +496,9 @@ describe("packed capacity CLI", () => {
 
   test("contains the exact package identity and file contract", () => {
     expect(pack).toMatchObject({
-      id: "@hasna/capacity@0.1.1",
+      id: "@hasna/capacity@0.1.2",
       name: "@hasna/capacity",
-      version: "0.1.1",
+      version: "0.1.2",
     });
 
     const paths = pack.files.map(({ path }) => path);
@@ -545,7 +545,7 @@ describe("packed capacity CLI", () => {
     }
 
     const expected = {
-      stdout: '{"package":"@hasna/capacity","version":"0.1.1"}\n',
+      stdout: '{"package":"@hasna/capacity","version":"0.1.2"}\n',
       stderr: "",
       exitCode: 0,
     };
@@ -624,9 +624,9 @@ describe("packed capacity CLI", () => {
   });
 
   test("reports the version from the extracted package binary", async () => {
-    const humanOutput = '{"package":"@hasna/capacity","version":"0.1.1"}\n';
+    const humanOutput = '{"package":"@hasna/capacity","version":"0.1.2"}\n';
     const jsonOutput =
-      '{"command":"version","data":{"package":"@hasna/capacity","version":"0.1.1"},"schemaVersion":"accounts.cli.v1"}\n';
+      '{"command":"version","data":{"package":"@hasna/capacity","version":"0.1.2"},"schemaVersion":"accounts.cli.v1"}\n';
 
     for (const args of [["--version"], ["version"]]) {
       expect(await run([process.execPath, packedCliPath, ...args])).toEqual({
@@ -723,7 +723,7 @@ describe("packed capacity CLI", () => {
       adapter: "http",
       health: "ok",
       readiness: "ready",
-      version: "0.1.1",
+      version: "0.1.2",
       contractSha256: CONTRACT_SHA256,
     });
 
