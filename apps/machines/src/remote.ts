@@ -13,11 +13,16 @@ export interface MachineCommandResult {
   exitCode: number;
   timedOut?: boolean;
   signal?: NodeJS.Signals | null;
+  stdoutTruncated?: boolean;
+  stderrTruncated?: boolean;
+  stdoutChars?: number;
+  stderrChars?: number;
 }
 
 export interface MachineCommandOptions {
   timeoutMs?: number;
   killGraceMs?: number;
+  maxOutputChars?: number;
 }
 
 export interface ResolvedMachineCommand {
@@ -112,6 +117,9 @@ function runMachineCommandWithProcessGroupTimeout(
 ): MachineCommandResult {
   const timeoutMs = Math.max(1, options.timeoutMs ?? 1);
   const killGraceMs = Math.max(1, options.killGraceMs ?? 1_000);
+  const maxOutputChars = Number.isFinite(options.maxOutputChars) && (options.maxOutputChars ?? 0) > 0
+    ? Math.floor(options.maxOutputChars!)
+    : null;
   const helperDir = mkdtempSync(join(tmpdir(), "machines-timeout-helper-"));
   const pgidFile = join(helperDir, "pgid");
   const helper = spawnSync(process.execPath, ["--eval", PROCESS_GROUP_TIMEOUT_HELPER], {
@@ -122,10 +130,13 @@ function runMachineCommandWithProcessGroupTimeout(
       HASNA_MACHINES_COMMAND_TIMEOUT_MS: String(timeoutMs),
       HASNA_MACHINES_COMMAND_KILL_GRACE_MS: String(killGraceMs),
       HASNA_MACHINES_COMMAND_PGID_FILE: pgidFile,
+      HASNA_MACHINES_COMMAND_MAX_OUTPUT_CHARS: maxOutputChars === null ? "" : String(maxOutputChars),
     },
     timeout: timeoutMs + killGraceMs + 2_000,
     killSignal: "SIGKILL",
-    maxBuffer: 64 * 1024 * 1024,
+    maxBuffer: maxOutputChars === null
+      ? 64 * 1024 * 1024
+      : Math.max(1024 * 1024, (maxOutputChars * 16) + (64 * 1024)),
   });
 
   try {
@@ -139,6 +150,10 @@ function runMachineCommandWithProcessGroupTimeout(
         exitCode: parsed.exitCode,
         timedOut: parsed.timedOut,
         signal: parsed.signal,
+        stdoutTruncated: parsed.stdoutTruncated,
+        stderrTruncated: parsed.stderrTruncated,
+        stdoutChars: parsed.stdoutChars,
+        stderrChars: parsed.stderrChars,
       };
     }
 
@@ -154,6 +169,10 @@ function runMachineCommandWithProcessGroupTimeout(
       exitCode: helperTimedOut ? 124 : helper.status ?? 1,
       timedOut: helperTimedOut,
       signal: helper.signal,
+      stdoutTruncated: false,
+      stderrTruncated: false,
+      stdoutChars: 0,
+      stderrChars: stderr.length,
     };
   } finally {
     rmSync(helperDir, { recursive: true, force: true });
@@ -182,6 +201,10 @@ function parseHelperResult(stdout: string | null | undefined): MachineCommandRes
       exitCode: parsed.exitCode,
       timedOut: parsed.timedOut === true,
       signal: typeof parsed.signal === "string" ? parsed.signal as NodeJS.Signals : null,
+      stdoutTruncated: parsed.stdoutTruncated === true,
+      stderrTruncated: parsed.stderrTruncated === true,
+      stdoutChars: typeof parsed.stdoutChars === "number" ? parsed.stdoutChars : parsed.stdout.length,
+      stderrChars: typeof parsed.stderrChars === "number" ? parsed.stderrChars : parsed.stderr.length,
     };
   } catch {
     return null;
@@ -197,9 +220,15 @@ const PROCESS_GROUP_TIMEOUT_HELPER = `
 	const args = Array.isArray(plan.args) ? plan.args.map(String) : [];
 	const timeoutMs = Math.max(1, Number.parseInt(process.env.HASNA_MACHINES_COMMAND_TIMEOUT_MS || "1", 10));
 	const killGraceMs = Math.max(1, Number.parseInt(process.env.HASNA_MACHINES_COMMAND_KILL_GRACE_MS || "1000", 10));
+	const parsedMaxOutputChars = Number.parseInt(process.env.HASNA_MACHINES_COMMAND_MAX_OUTPUT_CHARS || "", 10);
+	const maxOutputChars = Number.isFinite(parsedMaxOutputChars) && parsedMaxOutputChars > 0 ? parsedMaxOutputChars : null;
 	const pgidFile = process.env.HASNA_MACHINES_COMMAND_PGID_FILE || "";
 	let stdout = "";
 	let stderr = "";
+	let stdoutChars = 0;
+	let stderrChars = 0;
+	let stdoutTruncated = false;
+	let stderrTruncated = false;
 	let timedOut = false;
 	let finished = false;
 let timeoutTimer;
@@ -219,8 +248,18 @@ const child = spawn(command, args, {
 	  } catch {}
 	}
 
-function appendText(target, chunk) {
-  return target + String(chunk);
+function appendText(target, chunk, stream) {
+  const text = String(chunk);
+  if (stream === "stdout") stdoutChars += text.length;
+  else stderrChars += text.length;
+  if (maxOutputChars === null) return target + text;
+
+  const keep = Math.max(0, maxOutputChars - target.length);
+  if (text.length > keep) {
+    if (stream === "stdout") stdoutTruncated = true;
+    else stderrTruncated = true;
+  }
+  return target + text.slice(0, keep);
 }
 
 	function killTarget(signal) {
@@ -246,7 +285,8 @@ function appendText(target, chunk) {
   if (timeoutTimer) clearTimeout(timeoutTimer);
   if (killTimer) clearTimeout(killTimer);
 	  if (timedOut) {
-	    stderr = [stderr, "Command timed out after " + timeoutMs + "ms."].filter(Boolean).join(stderr ? "\\n" : "");
+	    if (stderr) stderr = appendText(stderr, "\\n", "stderr");
+	    stderr = appendText(stderr, "Command timed out after " + timeoutMs + "ms.", "stderr");
 	  }
 	  const exitCode = timedOut ? 124 : code ?? 1;
 	  process.stdout.write(JSON.stringify({
@@ -255,16 +295,21 @@ function appendText(target, chunk) {
 	    exitCode,
 	    timedOut,
 	    signal: signal ?? null,
+	    stdoutTruncated,
+	    stderrTruncated,
+	    stdoutChars,
+	    stderrChars,
 	  }), () => process.exit(exitCode));
 	}
 
 	child.stdout.setEncoding("utf8");
 	child.stderr.setEncoding("utf8");
-	child.stdout.on("data", (chunk) => { stdout = appendText(stdout, chunk); });
-	child.stderr.on("data", (chunk) => { stderr = appendText(stderr, chunk); });
+	child.stdout.on("data", (chunk) => { stdout = appendText(stdout, chunk, "stdout"); });
+	child.stderr.on("data", (chunk) => { stderr = appendText(stderr, chunk, "stderr"); });
 	let childExit = { code: null, signal: null };
 	child.on("error", (error) => {
-	    stderr = [stderr, error instanceof Error ? error.message : String(error)].filter(Boolean).join(stderr ? "\\n" : "");
+	    if (stderr) stderr = appendText(stderr, "\\n", "stderr");
+	    stderr = appendText(stderr, error instanceof Error ? error.message : String(error), "stderr");
 	    finish(1, null);
 	});
 	child.on("exit", (code, signal) => {

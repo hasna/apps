@@ -1,3 +1,5 @@
+import { readSync } from "node:fs";
+import { StringDecoder } from "node:string_decoder";
 import { redactErrorMessage, redactPath } from "../redaction.js";
 import {
   runMachineCommand,
@@ -9,6 +11,7 @@ import {
 export const DEFAULT_MACHINE_EXEC_MAX_OUTPUT_CHARS = 131_072;
 export const DEFAULT_MACHINE_EXEC_MAX_SCRIPT_CHARS = 65_536;
 export const MACHINE_EXEC_MUTATION_OPERATION = "machines_exec";
+const MACHINE_EXEC_REDACTION_LOOKAHEAD_CHARS = 512;
 
 export interface MachineExecInput {
   machineId: string;
@@ -59,24 +62,61 @@ function argvToShellCommand(argv: string[]): string {
   return argv.map(shellQuote).join(" ");
 }
 
-function boundAndRedact(value: string, maxChars: number): BoundedStream {
+export type MachineExecScriptChunkReader = (buffer: Buffer) => number;
+
+export function readBoundedMachineExecScript(
+  readChunk: MachineExecScriptChunkReader = (buffer) => readSync(0, buffer, 0, buffer.length, null),
+  maxChars = DEFAULT_MACHINE_EXEC_MAX_SCRIPT_CHARS,
+): string {
+  const decoder = new StringDecoder("utf8");
+  const buffer = Buffer.allocUnsafe(Math.min(8_192, maxChars + 1));
+  const parts: string[] = [];
+  let chars = 0;
+
+  const append = (value: string): void => {
+    chars += value.length;
+    if (chars > maxChars) {
+      throw new Error(`Script exceeds ${maxChars} characters`);
+    }
+    parts.push(value);
+  };
+
+  while (true) {
+    const bytesRead = readChunk(buffer);
+    if (!Number.isInteger(bytesRead) || bytesRead < 0 || bytesRead > buffer.length) {
+      throw new Error("Script stdin reader returned an invalid byte count");
+    }
+    if (bytesRead === 0) break;
+    append(decoder.write(buffer.subarray(0, bytesRead)));
+  }
+  append(decoder.end());
+
+  return parts.join("");
+}
+
+function boundAndRedact(
+  value: string,
+  maxChars: number,
+  sourceTruncated = false,
+  sourceChars = value.length,
+): BoundedStream {
   const redacted = redactErrorMessage(redactPath(value));
-  if (redacted.length <= maxChars) {
+  if (!sourceTruncated && redacted.length <= maxChars) {
     return { text: redacted, truncated: false };
   }
 
-  let keep = maxChars;
-  let text = "";
+  const totalChars = Math.max(sourceChars, redacted.length);
+  let keep = Math.min(redacted.length, maxChars);
   while (keep >= 0) {
-    const suffix = `...[truncated ${redacted.length - keep} chars]`;
-    text = `${redacted.slice(0, keep)}${suffix}`;
+    const suffix = `...[truncated ${Math.max(1, totalChars - keep)} chars]`;
+    const text = `${redacted.slice(0, keep)}${suffix}`;
     if (text.length <= maxChars) {
       return { text, truncated: true };
     }
     keep -= 1;
   }
 
-  return { text: redacted.slice(0, maxChars), truncated: true };
+  return { text: "[truncated]".slice(0, maxChars), truncated: true };
 }
 
 export function resolveMachineExecCommand(input: MachineExecInput): string {
@@ -98,12 +138,12 @@ export function resolveMachineExecCommand(input: MachineExecInput): string {
   }
 
   if (hasScript) {
+    if (input.script!.length > DEFAULT_MACHINE_EXEC_MAX_SCRIPT_CHARS) {
+      throw new Error(`Script exceeds ${DEFAULT_MACHINE_EXEC_MAX_SCRIPT_CHARS} characters`);
+    }
     const script = input.script!.trim();
     if (!script) {
       throw new Error("Script stdin is empty");
-    }
-    if (script.length > DEFAULT_MACHINE_EXEC_MAX_SCRIPT_CHARS) {
-      throw new Error(`Script exceeds ${DEFAULT_MACHINE_EXEC_MAX_SCRIPT_CHARS} characters`);
     }
     return `bash -c ${shellQuote(script)}`;
   }
@@ -117,10 +157,26 @@ export function runMachineExec(
 ): MachineExecResult {
   const command = resolveMachineExecCommand(input);
   const maxOutputChars = input.maxOutputChars ?? DEFAULT_MACHINE_EXEC_MAX_OUTPUT_CHARS;
-  const options: MachineCommandOptions = { timeoutMs: input.timeoutMs };
+  const options: MachineCommandOptions = {
+    timeoutMs: input.timeoutMs,
+    // Retain a bounded lookahead so a credential crossing the visible output
+    // boundary is complete enough for the redactor to recognize before the
+    // final stream cap is applied.
+    maxOutputChars: maxOutputChars + MACHINE_EXEC_REDACTION_LOOKAHEAD_CHARS,
+  };
   const result = runner(input.machineId.trim(), command, options);
-  const stdout = boundAndRedact(result.stdout, maxOutputChars);
-  const stderr = boundAndRedact(result.stderr, maxOutputChars);
+  const stdout = boundAndRedact(
+    result.stdout,
+    maxOutputChars,
+    result.stdoutTruncated === true,
+    result.stdoutChars ?? result.stdout.length,
+  );
+  const stderr = boundAndRedact(
+    result.stderr,
+    maxOutputChars,
+    result.stderrTruncated === true,
+    result.stderrChars ?? result.stderr.length,
+  );
 
   return {
     machine_id: result.machineId,

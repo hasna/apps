@@ -85,6 +85,7 @@ import {
   MACHINE_EXEC_MUTATION_OPERATION,
   machineExecMutationArgs,
   machineExecResourceId,
+  readBoundedMachineExecScript,
   runMachineExec,
   type MachineExecInput,
 } from "../commands/exec.js";
@@ -3239,7 +3240,7 @@ program
       const maxOutputChars = options.maxOutputChars
         ? parseIntegerOption(options.maxOutputChars, "max-output-chars", { min: 1 })
         : undefined;
-      const script = options.script ? readFileSync(0, "utf8") : undefined;
+      const script = options.script ? readBoundedMachineExecScript() : undefined;
       const input: MachineExecInput = {
         machineId: options.machine,
         timeoutMs,

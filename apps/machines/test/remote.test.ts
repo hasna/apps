@@ -68,6 +68,22 @@ describe("machine command routing", () => {
     expect(result.stdout.endsWith("x")).toBe(true);
   });
 
+  test("bounds each stream while the timeout helper collects output", () => {
+    const result = runMachineCommand(
+      "local",
+      "head -c 200000 /dev/zero | tr '\\0' x; head -c 200000 /dev/zero | tr '\\0' y >&2",
+      { timeoutMs: 2_000, killGraceMs: 20, maxOutputChars: 64 },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.length).toBe(64);
+    expect(result.stderr.length).toBe(64);
+    expect(result.stdoutTruncated).toBe(true);
+    expect(result.stderrTruncated).toBe(true);
+    expect(result.stdoutChars).toBe(200_000);
+    expect(result.stderrChars).toBe(200_000);
+  });
+
   test("kills TERM-ignoring descendant processes on timeout", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-timeout-"));
     const marker = join(dir, "alive.log");

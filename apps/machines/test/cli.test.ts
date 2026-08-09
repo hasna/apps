@@ -9,6 +9,7 @@ import {
   heartbeatCollectResourceId,
 } from "../src/commands/heartbeat.js";
 import {
+  DEFAULT_MACHINE_EXEC_MAX_SCRIPT_CHARS,
   MACHINE_EXEC_MUTATION_OPERATION,
   machineExecMutationArgs,
   machineExecResourceId,
@@ -1156,6 +1157,21 @@ describe("cli command handling", () => {
     ], env, scriptText);
     expect(script.status).toBe(0);
     expect(script.stdout.trim()).toBe("script-ok");
+  });
+
+  test("machines exec rejects oversized script stdin before approval", () => {
+    const env = {
+      ...process.env,
+      HASNA_MACHINES_MACHINE_ID: "local-node",
+      [MUTATION_APPROVAL_FLAG_ENV]: "",
+      [MUTATION_APPROVAL_TOKEN_ENV]: "secret",
+    };
+    const oversizedScript = `${"x".repeat(DEFAULT_MACHINE_EXEC_MAX_SCRIPT_CHARS)}\n`;
+    const oversized = runCli([
+      "exec", "--machine", "local", "--timeout-ms", "5000", "--script",
+    ], env, oversizedScript);
+    expect(oversized.status).not.toBe(0);
+    expect(oversized.stderr).toContain(`Script exceeds ${DEFAULT_MACHINE_EXEC_MAX_SCRIPT_CHARS} characters`);
   });
 
   test("agent abstraction CLIs print compact JSON by default", () => {

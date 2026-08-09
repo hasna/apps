@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   DEFAULT_MACHINE_EXEC_MAX_OUTPUT_CHARS,
   DEFAULT_MACHINE_EXEC_MAX_SCRIPT_CHARS,
+  readBoundedMachineExecScript,
   resolveMachineExecCommand,
   runMachineExec,
   type MachineExecInput,
@@ -137,6 +138,35 @@ describe("machines exec command", () => {
     expect(result.stderr.truncated).toBe(true);
   });
 
+  test("redacts credentials split at the visible output boundary", () => {
+    const credential = `AK${"IA"}${"A".repeat(16)}`;
+    const output = `${credential}\n`;
+    const maxOutputChars = credential.length - 1;
+    const runner: MachineCommandRunner = (machineId, _command, options) => {
+      const captureLimit = options?.maxOutputChars ?? output.length;
+      return {
+        machineId,
+        source: "local",
+        stdout: output.slice(0, captureLimit),
+        stderr: "",
+        exitCode: 0,
+        stdoutTruncated: output.length > captureLimit,
+        stdoutChars: output.length,
+      };
+    };
+
+    const result = runMachineExec({
+      machineId: "local",
+      timeoutMs: 1000,
+      argv: ["true"],
+      maxOutputChars,
+    }, runner);
+
+    expect(result.stdout.text).toContain("[redacted]");
+    expect(result.stdout.text).not.toContain(credential.slice(0, -1));
+    expect(result.stdout.text.length).toBeLessThanOrEqual(maxOutputChars);
+  });
+
   test("rejects scripts longer than 65536 characters before execution", () => {
     let called = false;
     const runner: MachineCommandRunner = () => {
@@ -170,6 +200,48 @@ describe("machines exec command", () => {
       timeoutMs: 1000,
       script,
     })).toBe(`bash -c '${"x".repeat(DEFAULT_MACHINE_EXEC_MAX_SCRIPT_CHARS)}'`);
+  });
+
+  test("rejects raw scripts over the limit before trimming", () => {
+    const script = `${"x".repeat(DEFAULT_MACHINE_EXEC_MAX_SCRIPT_CHARS)}\n`;
+    expect(() => resolveMachineExecCommand({
+      machineId: "local",
+      timeoutMs: 1000,
+      script,
+    })).toThrow(`Script exceeds ${DEFAULT_MACHINE_EXEC_MAX_SCRIPT_CHARS} characters`);
+  });
+
+  test("stops reading script stdin as soon as the character limit is exceeded", () => {
+    const chunks = Array.from({ length: 10 }, () => Buffer.alloc(8_192, "x"));
+    let reads = 0;
+    const readChunk = (buffer: Buffer): number => {
+      const chunk = chunks[reads++];
+      if (!chunk) return 0;
+      chunk.copy(buffer);
+      return chunk.length;
+    };
+
+    expect(() => readBoundedMachineExecScript(readChunk))
+      .toThrow(`Script exceeds ${DEFAULT_MACHINE_EXEC_MAX_SCRIPT_CHARS} characters`);
+    expect(reads).toBe(9);
+  });
+
+  test("accepts scripts at the exact stdin character limit", () => {
+    const chunks = Array.from({ length: 8 }, () => Buffer.alloc(8_192, "x"));
+    let reads = 0;
+    const script = readBoundedMachineExecScript((buffer) => {
+      const chunk = chunks[reads++];
+      if (!chunk) return 0;
+      chunk.copy(buffer);
+      return chunk.length;
+    });
+
+    expect(script.length).toBe(DEFAULT_MACHINE_EXEC_MAX_SCRIPT_CHARS);
+    expect(() => resolveMachineExecCommand({
+      machineId: "local",
+      timeoutMs: 1000,
+      script,
+    })).not.toThrow();
   });
 
   test("default output cap matches package constant", () => {
