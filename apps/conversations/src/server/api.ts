@@ -1997,40 +1997,45 @@ async function handleV1(
     const name = normalizeChannelName(rawName);
     if (!name) return fieldError("name", rawName, "Channel name normalizes to an empty value.", "Provide at least one letter or digit in the channel name.");
     const projectId = str(body.project_id);
-    if (projectId) {
-      const proj = await client.get(`SELECT id FROM projects WHERE id = $1`, [projectId]);
-      if (!proj) {
-        return fieldError(
-          "project_id",
-          projectId,
-          "No conversations project exists with that id.",
-          "Create or resolve the conversations project first with POST/GET /v1/projects, then retry with the returned project.id. If you only need the Projects canonical channel, create or send to that channel name without --project.",
-        );
-      }
-    }
-    const existing = await client.get(`SELECT name FROM channels WHERE name = $1`, [name]);
-    if (existing) return json({ error: "Channel already exists" }, 409);
     const metadataObj = jsonObject(body.metadata);
-    if ("metadata" in body && body.metadata != null && !metadataObj) {
-      return fieldError("metadata", String(body.metadata), "metadata must be a JSON object.", "Pass an object such as {\"channel_schema\":{\"class\":\"loop-lane\"}}.");
-    }
     const tagsArr = jsonStringArray(body.tags);
-    if ("tags" in body && body.tags != null && (!Array.isArray(body.tags) || tagsArr.length !== body.tags.length)) {
-      return fieldError("tags", String(body.tags), "tags must be an array of strings.", "Pass tags as a JSON string array, for example [\"team:harness\"].");
-    }
     const tags = tagsArr.length ? JSON.stringify(tagsArr) : null;
     const metadata = metadataObj ? JSON.stringify(metadataObj) : null;
-    const row = await client.get<Record<string, unknown>>(
-      `INSERT INTO channels (id, name, description, topic, project_id, created_by, metadata, tags)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-      [newChannelId(), name, str(body.description) ?? null, str(body.topic) ?? null, projectId ?? null, createdBy, metadata, tags],
-    );
-    // Creator auto-joins the channel, mirroring the local createChannel.
-    await client.query(
-      `INSERT INTO channel_members (channel, agent) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
-      [name, createdBy],
-    );
-    return json({ channel: row ? { ...parseServerChannel(row), member_count: 1 } : null }, 201);
+    const result = await client.transaction(async (tx) => {
+      if (projectId) {
+        const project = await tx.get(`SELECT id FROM projects WHERE id = $1 FOR SHARE`, [projectId]);
+        if (!project) {
+          return fieldError(
+            "project_id",
+            projectId,
+            "No conversations project exists with that id.",
+            "Create or resolve the conversations project first with POST/GET /v1/projects, then retry with the returned project.id. If you only need the Projects canonical channel, create or send to that channel name without --project.",
+          );
+        }
+      }
+      const existing = await tx.get(`SELECT name FROM channels WHERE name = $1`, [name]);
+      if (existing) return json({ error: "Channel already exists" }, 409);
+      if ("metadata" in body && body.metadata != null && !metadataObj) {
+        return fieldError("metadata", String(body.metadata), "metadata must be a JSON object.", "Pass an object such as {\"channel_schema\":{\"class\":\"loop-lane\"}}.");
+      }
+      if ("tags" in body && body.tags != null && (!Array.isArray(body.tags) || tagsArr.length !== body.tags.length)) {
+        return fieldError("tags", String(body.tags), "tags must be an array of strings.", "Pass tags as a JSON string array, for example [\"team:harness\"].");
+      }
+      const row = await tx.get<Record<string, unknown>>(
+        `INSERT INTO channels (id, name, description, topic, project_id, created_by, metadata, tags)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+        [newChannelId(), name, str(body.description) ?? null, str(body.topic) ?? null, projectId ?? null, createdBy, metadata, tags],
+      );
+      // The channel and creator membership are one operation: neither may
+      // survive if the other write fails.
+      await tx.query(
+        `INSERT INTO channel_members (channel, agent) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
+        [name, createdBy],
+      );
+      return row;
+    });
+    if (result instanceof Response) return result;
+    return json({ channel: result ? { ...parseServerChannel(result), member_count: 1 } : null }, 201);
   }
 
   if (sub === "channels/mine" && method === "GET") {
