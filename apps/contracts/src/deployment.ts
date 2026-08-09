@@ -1573,13 +1573,19 @@ export function validateDeploymentContractSet(
   attempts.forEach((attempt) => {
     requireLinkedRecord(attempt.plan, planMap, `deploymentAttempts.${attempt.id}.plan`, issues);
     const plan = planMap.get(attempt.plan.id) as
-      | (LinkedRecord & { request: DeploymentRecordReference })
+      | (LinkedRecord & {
+        request: DeploymentRecordReference;
+        actions: Array<{ id: string }>;
+      })
       | undefined;
     const request = plan
       ? requestMap.get(plan.request.id) as
         | (LinkedRecord & { environment: DeploymentRecordReference })
         | undefined
       : undefined;
+    const linkedApprovalActorKeys = new Set<string>();
+    let linkedApprovalCount = 0;
+    let linkedApprovalActorCount = 0;
     attempt.approvals.forEach((
       approval: {
         decision: LinkedRecord;
@@ -1594,7 +1600,7 @@ export function validateDeploymentContractSet(
       requireLinkedRecord(approval.decision, approvalMap, approvalPath, issues);
       const linkedApproval = approvalMap.get(approval.decision.id) as
         | (LinkedRecord & {
-          decision: { status: string };
+          decision: { status: string; actor?: ActorPointer };
           scope: string;
           actionId: string | null;
           phaseId: string | null;
@@ -1606,6 +1612,17 @@ export function validateDeploymentContractSet(
         | undefined;
       if (!linkedApproval) {
         return;
+      }
+      linkedApprovalCount += 1;
+      if (linkedApproval.decision.actor) {
+        linkedApprovalActorCount += 1;
+        linkedApprovalActorKeys.add(
+          `${linkedApproval.decision.actor.kind}:${linkedApproval.decision.actor.id}`,
+        );
+      } else {
+        issues.push(
+          `${approvalPath}.decision: linked approval decision is missing an actor`,
+        );
       }
       if (linkedApproval.decision.status !== "allowed") {
         issues.push(
@@ -1650,6 +1667,41 @@ export function validateDeploymentContractSet(
         );
       }
     });
+    if (
+      linkedApprovalCount === attempt.approvals.length
+      && linkedApprovalActorCount === attempt.approvals.length
+    ) {
+      const attemptDecisionActorKeys = new Set<string>(
+        attempt.decisionActors.map(
+          (actor: ActorPointer) => `${actor.kind}:${actor.id}`,
+        ),
+      );
+      if (
+        attemptDecisionActorKeys.size !== linkedApprovalActorKeys.size
+        || [...attemptDecisionActorKeys].some(
+          (actorKey) => !linkedApprovalActorKeys.has(actorKey),
+        )
+      ) {
+        issues.push(
+          `deploymentAttempts.${attempt.id}.decisionActors: decision actors do not match linked approval actors`,
+        );
+      }
+    }
+    if (plan) {
+      const planActionIds = new Set(
+        plan.actions.map((action) => action.id),
+      );
+      attempt.actionSteps.forEach((
+        step: { actionId: string },
+        index: number,
+      ) => {
+        if (!planActionIds.has(step.actionId)) {
+          issues.push(
+            `deploymentAttempts.${attempt.id}.actionSteps.${index}.actionId: action is not present in linked deployment plan ${plan.id}`,
+          );
+        }
+      });
+    }
     if (
       attempt.state === "succeeded"
       && attempt.actionSteps.some(
