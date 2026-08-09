@@ -174,20 +174,6 @@ function statusForMachine(machine: MachineTopologyEntry | null): MachineDetailsS
   };
 }
 
-function statusForRegistry(record: MachineRecord): MachineDetailsStatus {
-  const normalized = record.status.trim().toLowerCase();
-  const state: MachineDetailsStatusState = normalized === "online"
-    ? "online"
-    : normalized === "offline"
-      ? "offline"
-      : "unknown";
-  return {
-    state,
-    label: state === "online" ? "Online" : state === "offline" ? "Offline" : "Unknown",
-    online: state === "unknown" ? null : state === "online",
-  };
-}
-
 function latestSyncRun(machineId: string): SyncRunSummary | null {
   try {
     return getDb()
@@ -370,11 +356,7 @@ function buildMachineDetails(
   const syncRun = latestSyncRun(resolvedMachineId);
   const friendlyName = machine?.friendly_name ?? stringValue(registryMachine?.friendlyName);
   const displayName = machine?.display_name ?? friendlyName ?? resolvedMachineId;
-  const status = machine
-    ? statusForMachine(machine)
-    : registryMachine
-      ? statusForRegistry(registryMachine)
-      : statusForMachine(null);
+  const status = statusForMachine(machine);
   const timestamps = machine
     ? timestampsForMachine(machine, syncRun)
     : registryMachine

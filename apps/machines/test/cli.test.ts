@@ -578,9 +578,9 @@ describe("cli command handling", () => {
         role: "worker",
         machine_capabilities: ["notes", "sync"],
         status: {
-          state: "online",
-          label: "Online",
-          online: true,
+          state: "unknown",
+          label: "Unknown",
+          online: null,
         },
         source: {
           metadata_source: "registry",

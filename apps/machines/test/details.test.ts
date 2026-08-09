@@ -2,9 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { closeDb, recordSyncRun, upsertHeartbeat } from "../src/db.js";
+import { closeDb, recordSyncRun, upsertHeartbeat, upsertHeartbeatSnapshot } from "../src/db.js";
 import { manifestAdd, manifestInit } from "../src/commands/manifest.js";
-import { getMachineDetails } from "../src/details.js";
+import { getMachineDetails, resolveMachineDetails } from "../src/details.js";
 import { discoverMachineTopology } from "../src/topology.js";
 import { validateMachinesConsumerEnvelope } from "../src/consumer-schema.js";
 
@@ -154,6 +154,84 @@ describe("machine details consumer contract", () => {
         online: true,
       });
       expect(validateMachinesConsumerEnvelope("machine_details", online)).toMatchObject({ ok: true, errors: [] });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps registry lifecycle status separate from heartbeat-backed liveness", async () => {
+    const dir = setupTemp("machines-details-registry-liveness-");
+    try {
+      const now = new Date("2026-08-09T04:01:00.000Z");
+      const registryOnly = await resolveMachineDetails("registry-only-node", {
+        topology: discoverMachineTopology({ includeTailscale: false, now }),
+        now,
+        registryStore: {
+          get: async () => ({
+            id: "registry-only-node",
+            friendlyName: "Registry Only Node",
+            platform: "linux",
+            arch: "x64",
+            status: "online",
+            labels: {},
+            metadata: { role: "worker" },
+            createdAt: "2025-01-01T00:00:00.000Z",
+            updatedAt: "2025-01-01T00:00:00.000Z",
+          }),
+        },
+      });
+
+      expect(registryOnly).toMatchObject({
+        machine_id: "registry-only-node",
+        known: true,
+        status: {
+          state: "unknown",
+          label: "Unknown",
+          online: null,
+        },
+        source: {
+          metadata_source: "registry",
+          heartbeat_present: false,
+          topology_entry: false,
+        },
+      });
+
+      upsertHeartbeatSnapshot({
+        machineId: "heartbeat-only-node",
+        pid: 101,
+        status: "online",
+        updatedAt: "2026-08-09T04:00:00.000Z",
+        observedAt: "2026-08-09T04:00:00.000Z",
+        platform: "linux",
+      });
+      let registryLookups = 0;
+      const heartbeatBacked = await resolveMachineDetails("heartbeat-only-node", {
+        topology: discoverMachineTopology({ includeTailscale: false, now }),
+        now,
+        registryStore: {
+          get: async () => {
+            registryLookups += 1;
+            return null;
+          },
+        },
+      });
+
+      expect(registryLookups).toBe(0);
+      expect(heartbeatBacked).toMatchObject({
+        machine_id: "heartbeat-only-node",
+        known: true,
+        status: {
+          state: "online",
+          label: "Online",
+          online: true,
+          last_heartbeat_at: "2026-08-09T04:00:00.000Z",
+        },
+        source: {
+          metadata_source: "heartbeat",
+          heartbeat_present: true,
+          topology_entry: true,
+        },
+      });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
