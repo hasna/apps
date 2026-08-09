@@ -313,6 +313,38 @@ describe("heartbeat", () => {
     expect(p!.metadata).toBeNull();
   });
 
+  test("preserves omitted project and metadata while explicit values replace them", () => {
+    heartbeat(
+      "partial-update-agent",
+      "online",
+      { phase: "baseline", nonce: "64bd-local" },
+      "session-baseline",
+      "project-baseline",
+    );
+    expect(getPresence("partial-update-agent")).toMatchObject({
+      session_id: "session-baseline",
+      project_id: "project-baseline",
+      status: "online",
+      metadata: { phase: "baseline", nonce: "64bd-local" },
+    });
+
+    heartbeat("partial-update-agent", "busy");
+    expect(getPresence("partial-update-agent")).toMatchObject({
+      session_id: "session-baseline",
+      project_id: "project-baseline",
+      status: "busy",
+      metadata: { phase: "baseline", nonce: "64bd-local" },
+    });
+
+    heartbeat("partial-update-agent", "idle", {}, undefined, null);
+    expect(getPresence("partial-update-agent")).toMatchObject({
+      session_id: "session-baseline",
+      project_id: null,
+      status: "idle",
+      metadata: {},
+    });
+  });
+
   test("updates an existing composite-key presence row without relying on ON CONFLICT(agent)", () => {
     const db = getDb();
     db.exec("DROP TABLE agent_presence");

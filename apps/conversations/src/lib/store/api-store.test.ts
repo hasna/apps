@@ -97,6 +97,52 @@ describe("ApiStore project normalization", () => {
   });
 });
 
+describe("ApiStore heartbeat partial updates", () => {
+  test("omits undefined fields and preserves explicit empty replacements", async () => {
+    const posts: Array<{ path: string; body: unknown }> = [];
+    const client = {
+      name: "conversations",
+      baseUrl: "https://conversations.hasna.xyz/v1",
+      transport: {
+        post: async (path: string, body: unknown) => {
+          posts.push({ path, body });
+          return {};
+        },
+      },
+    } as unknown as HasnaStorageClient;
+    const store = new ApiStore(client);
+
+    await store.heartbeat("partial-agent", "busy");
+    await store.heartbeat("partial-agent", "idle", {}, undefined, null);
+
+    expect(Object.keys(posts[0].body as Record<string, unknown>).sort()).toEqual([
+      "agent",
+      "status",
+    ]);
+    expect(Object.keys(posts[1].body as Record<string, unknown>).sort()).toEqual([
+      "agent",
+      "metadata",
+      "project_id",
+      "status",
+    ]);
+    expect(posts).toEqual([
+      {
+        path: "/agents/heartbeat",
+        body: { agent: "partial-agent", status: "busy" },
+      },
+      {
+        path: "/agents/heartbeat",
+        body: {
+          agent: "partial-agent",
+          status: "idle",
+          metadata: {},
+          project_id: null,
+        },
+      },
+    ]);
+  });
+});
+
 describe("ApiStore channel notification cursor", () => {
   test("arm-time baseline uses the atomic remote endpoint for one identity", async () => {
     const posts: Array<{ path: string; body: unknown }> = [];

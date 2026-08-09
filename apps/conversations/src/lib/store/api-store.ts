@@ -537,7 +537,12 @@ export class ApiStore implements ConversationsStore {
     return body.result as never;
   };
   heartbeat: ConversationsStore["heartbeat"] = async (agent, status, metadata, sessionId, projectId) => {
-    await this.post("/agents/heartbeat", { agent, status, metadata, session_id: sessionId, project_id: projectId });
+    const body: Record<string, unknown> = { agent };
+    if (status !== undefined) body.status = status;
+    if (metadata !== undefined) body.metadata = metadata;
+    if (sessionId !== undefined) body.session_id = sessionId;
+    if (projectId !== undefined) body.project_id = projectId;
+    await this.post("/agents/heartbeat", body);
     return undefined as never;
   };
   getPresence: ConversationsStore["getPresence"] = async (agent) => {

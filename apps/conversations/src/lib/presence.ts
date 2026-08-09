@@ -174,13 +174,15 @@ export function heartbeat(
   projectId?: string | null,
 ): void {
   const db = getDb();
-  const metadataJson = metadata ? JSON.stringify(metadata) : null;
+  const metadataJson = metadata === undefined ? null : JSON.stringify(metadata);
   const resolvedStatus = status || "online";
   const normalizedAgent = normalizeAgentName(agent);
 
   db.transaction(() => {
     const existing = getPresenceByAgent(db, normalizedAgent);
-    const storedProjectId = toStoredProjectId(projectId ?? (existing?.project_id as string | null | undefined));
+    const storedProjectId = toStoredProjectId(
+      projectId !== undefined ? projectId : existing?.project_id as string | null | undefined,
+    );
     const id = (existing?.id as string | undefined) || crypto.randomUUID().slice(0, 8);
 
     if (existing) {
@@ -193,7 +195,7 @@ export function heartbeat(
           SET status = ?,
               last_seen_at = strftime('%Y-%m-%dT%H:%M:%f', 'now'),
               session_id = COALESCE(?, session_id),
-              metadata = ?
+              metadata = COALESCE(?, metadata)
           WHERE id = ?
         `).run(resolvedStatus, sessionId ?? null, metadataJson, target.id as string);
         db.prepare("DELETE FROM agent_presence WHERE id = ?").run(existingId);
@@ -205,7 +207,7 @@ export function heartbeat(
         SET status = ?,
             last_seen_at = strftime('%Y-%m-%dT%H:%M:%f', 'now'),
             session_id = COALESCE(?, session_id),
-            metadata = ?,
+            metadata = COALESCE(?, metadata),
             project_id = ?
         WHERE id = ?
       `).run(resolvedStatus, sessionId ?? null, metadataJson, storedProjectId, existingId);

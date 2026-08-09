@@ -276,9 +276,22 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
         return { ...row };
       }
       if (/INSERT INTO agent_presence/i.test(sql) && /ON CONFLICT/i.test(sql)) {
-        const [id, rawAgent, session_id, project_id, status, metadata] = p as any[];
+        const [
+          id,
+          rawAgent,
+          session_id,
+          project_id,
+          status,
+          metadata,
+          replaceProjectId = true,
+          replaceMetadata = true,
+        ] = p as any[];
         const agent = String(rawAgent).toLowerCase();
         const existing = agentPresence.get(agent);
+        const conditionallyReplacesProjectId =
+          /project_id\s*=\s*CASE WHEN \$7 THEN EXCLUDED\.project_id ELSE agent_presence\.project_id END/i.test(sql);
+        const conditionallyReplacesMetadata =
+          /metadata\s*=\s*CASE WHEN \$8 THEN EXCLUDED\.metadata ELSE agent_presence\.metadata END/i.test(sql);
 
         // Production also has idx_agent_presence_agent_unique. An upsert whose
         // arbiter is only the composite primary key does not handle that
@@ -295,12 +308,12 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
         };
         Object.assign(row, {
           session_id: session_id ?? row.session_id ?? null,
-          project_id,
           status,
-          metadata,
           last_seen_at: new Date().toISOString(),
           online: true,
         });
+        if (!existing || !conditionallyReplacesProjectId || replaceProjectId) row.project_id = project_id;
+        if (!existing || !conditionallyReplacesMetadata || replaceMetadata) row.metadata = metadata;
         agentPresence.set(agent, row);
         return { ...row };
       }
@@ -987,6 +1000,52 @@ describe("conversations-serve", () => {
       session_id: "session-new",
       project_id: projectId,
       status: "busy",
+    });
+  });
+
+  test("heartbeat preserves omitted project and metadata while explicit values replace them", async () => {
+    const name = "presence-partial-update";
+    const store = new ApiStore(createHasnaStorageClient(
+      "conversations",
+      createHasnaHttpTransport({
+        name: "conversations",
+        baseUrl: `${base}/v1`,
+        apiKey: rwKey,
+        retry: false,
+      }),
+    ));
+
+    await store.heartbeat(
+      name,
+      "online",
+      { phase: "baseline", nonce: "64bd-pre" },
+      "session-baseline",
+      "proj-valid",
+    );
+    expect(await store.getPresence(name)).toMatchObject({
+      agent: name,
+      session_id: "session-baseline",
+      project_id: "proj-valid",
+      status: "online",
+      metadata: { phase: "baseline", nonce: "64bd-pre" },
+    });
+
+    await store.heartbeat(name, "busy");
+    expect(await store.getPresence(name)).toMatchObject({
+      agent: name,
+      session_id: "session-baseline",
+      project_id: "proj-valid",
+      status: "busy",
+      metadata: { phase: "baseline", nonce: "64bd-pre" },
+    });
+
+    await store.heartbeat(name, "idle", {}, undefined, null);
+    expect(await store.getPresence(name)).toMatchObject({
+      agent: name,
+      session_id: "session-baseline",
+      project_id: null,
+      status: "idle",
+      metadata: {},
     });
   });
 

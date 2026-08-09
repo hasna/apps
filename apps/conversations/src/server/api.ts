@@ -2330,15 +2330,30 @@ async function handleV1(
     const body = await readJson(req);
     const name = str(body.agent) ?? agent ?? undefined;
     if (!name) return json({ error: "agent is required" }, 400);
+    const replaceProjectId = "project_id" in body;
+    const replaceMetadata = "metadata" in body;
     const projectId = str(body.project_id) ?? "";
     const metadata = body.metadata && typeof body.metadata === "object" ? JSON.stringify(body.metadata) : null;
     const row = await client.get(
       `INSERT INTO agent_presence (id, agent, session_id, role, project_id, status, last_seen_at, metadata)
        VALUES ($1,$2,$3,'agent',$4,$5,NOW(),$6)
-       ON CONFLICT (agent) DO UPDATE SET project_id=EXCLUDED.project_id, status=EXCLUDED.status, last_seen_at=NOW(),
-         session_id=COALESCE(EXCLUDED.session_id, agent_presence.session_id), metadata=EXCLUDED.metadata
+       ON CONFLICT (agent) DO UPDATE SET
+         project_id=CASE WHEN $7 THEN EXCLUDED.project_id ELSE agent_presence.project_id END,
+         status=EXCLUDED.status,
+         last_seen_at=NOW(),
+         session_id=COALESCE(EXCLUDED.session_id, agent_presence.session_id),
+         metadata=CASE WHEN $8 THEN EXCLUDED.metadata ELSE agent_presence.metadata END
        RETURNING agent, project_id, status, last_seen_at`,
-      [randomUUID().slice(0, 8), name.toLowerCase(), str(body.session_id) ?? null, projectId, str(body.status) ?? "online", metadata],
+      [
+        randomUUID().slice(0, 8),
+        name.toLowerCase(),
+        str(body.session_id) ?? null,
+        projectId,
+        str(body.status) ?? "online",
+        metadata,
+        replaceProjectId,
+        replaceMetadata,
+      ],
     );
     return json({ agent: row });
   }
