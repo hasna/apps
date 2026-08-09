@@ -292,8 +292,7 @@ export async function whoisLookup(domainName: string): Promise<WhoisResult> {
 
   // Try RDAP first (structured, reliable, free)
   try {
-    const rdap = await rdapLookupSync(domain);
-    if (rdap) return rdap;
+    return await rdapWhoisLookup(domain);
   } catch {
     // Fall through to CLI
   }
@@ -303,47 +302,13 @@ export async function whoisLookup(domainName: string): Promise<WhoisResult> {
 }
 
 /**
- * RDAP lookup via curl (sync subprocess). Persists the fetched fields to the
- * domain record through the resolved store when the domain is tracked.
- * Returns null if RDAP is unavailable (not an error).
+ * Adapt the standards-based RDAP response to the existing WHOIS result shape.
+ * Persists the fetched fields to the domain record through the resolved store
+ * when the domain is tracked.
  */
-async function rdapLookupSync(domainName: string): Promise<WhoisResult | null> {
+async function rdapWhoisLookup(domainName: string): Promise<WhoisResult> {
   const domain = normalizeDomainName(domainName);
-
-  // Use sync HTTP via child process with curl (since fetch is async)
-  let stdout: string;
-  try {
-    stdout = execFileSync(
-      "curl",
-      [
-        "-s",
-        "-m",
-        "15",
-        "-H",
-        "Accept: application/rdap+json, application/json",
-        "-A",
-        USER_AGENT,
-        `https://rdap.org/domain/${encodeURIComponent(domain)}`,
-      ],
-      { encoding: "utf-8", timeout: 16000 },
-    );
-  } catch {
-    return null;
-  }
-
-  if (!stdout || !stdout.startsWith("{")) return null;
-
-  let rdap: RdapResponse;
-  try {
-    rdap = JSON.parse(stdout) as RdapResponse;
-  } catch {
-    return null;
-  }
-
-  // Check for error response
-  if ((rdap as { errorCode?: number }).errorCode) {
-    return null;
-  }
+  const rdap = await rdapLookup(domain);
 
   const registrar = extractRegistrarFromRdap(rdap);
   const expires_at = extractExpiryFromRdap(rdap);
@@ -366,7 +331,7 @@ async function rdapLookupSync(domainName: string): Promise<WhoisResult | null> {
     registrar,
     expires_at,
     nameservers,
-    raw: stdout,
+    raw: JSON.stringify(rdap),
     source: "rdap",
     registrant,
   };

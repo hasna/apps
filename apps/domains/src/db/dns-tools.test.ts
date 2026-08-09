@@ -228,6 +228,37 @@ describe("RDAP Data Extraction", () => {
 // ============================================================
 
 describe("DNS tool input validation", () => {
+  test("whoisLookup uses RDAP when host WHOIS tools are unavailable", async () => {
+    const originalPath = process.env.PATH;
+    const originalFetch = globalThis.fetch;
+    const rdapFixture: RdapResponse = {
+      handle: "FIXTURE-1",
+      entities: [{ roles: ["registrar"], handle: "Fixture Registrar" }],
+      events: [{ eventAction: "expiration", eventDate: "2030-01-01T00:00:00Z" }],
+      nameservers: [{ ldhName: "NS1.FIXTURE.EXAMPLE" }],
+    };
+
+    process.env.PATH = join(tempDir, "empty-bin");
+    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+      expect(String(input)).toBe("https://rdap.org/domain/fixture.example");
+      return new Response(JSON.stringify(rdapFixture), {
+        status: 200,
+        headers: { "content-type": "application/rdap+json" },
+      });
+    }) as typeof fetch;
+
+    try {
+      const result = await whoisLookup("fixture.example");
+      expect(result.source).toBe("rdap");
+      expect(result.registrar).toBe("Fixture Registrar");
+      expect(result.expires_at).toBe("2030-01-01T00:00:00Z");
+      expect(result.nameservers).toEqual(["ns1.fixture.example"]);
+    } finally {
+      process.env.PATH = originalPath;
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("whoisLookup rejects shell metacharacters before subprocess execution", async () => {
     const marker = join(tempDir, "whois-injected");
 
