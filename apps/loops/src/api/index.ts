@@ -450,6 +450,7 @@ async function handleV1Request(ctx: V1RequestContext): Promise<Response> {
         scanLimit: 1,
         expectedLeaseExpiresAt: current.leaseExpiresAt,
         expectedUpdatedAt: current.updatedAt,
+        refuseAdmittedPrivateOperations: true,
       });
       if (recovered.abandoned.length !== 1) {
         outcomes.push({ runId: candidate.runId, outcome: "conflict", reason: "candidate_changed_during_recovery" });
@@ -468,7 +469,9 @@ async function handleV1Request(ctx: V1RequestContext): Promise<Response> {
       return fail("maintenance_principal_required", 403);
     }
     const storage = requireStorage(ctx.storage);
-    const recovered = await storage.recoverExpiredRunLeasesDetailed(ctx.now());
+    const recovered = await storage.recoverExpiredRunLeasesDetailed(ctx.now(), {
+      refuseAdmittedPrivateOperations: true,
+    });
     const advancementDeferred = await advanceRecoveredLeaseRunPages(storage, {
       random: ctx.random,
       circuitBreakerThreshold: ctx.circuitBreakerThreshold,
@@ -920,7 +923,12 @@ async function handleRunsRequest(ctx: V1RequestContext, segments: string[]): Pro
     if ((ctx.auth.tokenKind === "machine" || ctx.auth.roles.includes("worker")) && target.claimedBy !== ctx.auth.principalId) {
       return fail("run_claim_owner_mismatch", 403);
     }
-    const recovered = await storage.recoverExpiredRunLeasesDetailed(now, { runId: id, limit: 1, scanLimit: 1 });
+    const recovered = await storage.recoverExpiredRunLeasesDetailed(now, {
+      runId: id,
+      limit: 1,
+      scanLimit: 1,
+      refuseAdmittedPrivateOperations: true,
+    });
     const abandoned = recovered.abandoned.length > 0
       ? recovered.abandoned
       : isRecoveredLeaseRun(target)
@@ -1666,6 +1674,7 @@ async function claimRuns(
   // costs one query per unexamined loop on the scheduler's hottest path and
   // silently truncates at one `listRuns` page.
   const recovered = await storage.recoverExpiredRunLeasesDetailed(opts.now, {
+    refuseAdmittedPrivateOperations: true,
     protectClaimedByInLoops: {
       claimedBy: runner.id,
       loopIds: unexaminedLoops.map((loop) => loop.id),

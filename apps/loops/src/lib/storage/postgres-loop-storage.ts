@@ -1638,7 +1638,17 @@ export class PostgresLoopStorage implements LoopStorageContract {
          AND ($4::timestamptz IS NULL OR updated_at = $4::timestamptz)
          AND ($5::text IS NULL OR claimed_by IS DISTINCT FROM $5)
          AND ($6::text IS NULL OR claimed_by IS NULL OR claimed_by <> $6 OR NOT (loop_id = ANY($7::text[])))
-       ORDER BY lease_expires_at ASC LIMIT $8`,
+         AND ($8::boolean = FALSE OR NOT EXISTS (
+           SELECT 1
+           FROM workflow_runs AS operation_workflow
+           JOIN workflow_events AS operation_event
+             ON operation_event.workflow_run_id = operation_workflow.id
+            AND operation_event.tenant_id = open_loops_current_tenant_id()
+           WHERE operation_workflow.tenant_id = open_loops_current_tenant_id()
+             AND operation_workflow.loop_run_id = loop_runs.id
+             AND operation_event.event_type = 'private_operation_admitted'
+         ))
+       ORDER BY lease_expires_at ASC LIMIT $9`,
       [
         finished,
         opts.runId ?? null,
@@ -1647,6 +1657,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
         opts.excludeClaimedBy ?? null,
         protectClaimedBy,
         protectLoopIds,
+        opts.refuseAdmittedPrivateOperations ?? false,
         scanLimit,
       ],
     );
@@ -1660,7 +1671,17 @@ export class PostgresLoopStorage implements LoopStorageContract {
            WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 AND status='running' AND lease_expires_at <= $3
              AND ($4::timestamptz IS NULL OR lease_expires_at=$4::timestamptz)
              AND ($5::timestamptz IS NULL OR updated_at=$5::timestamptz)
-             AND ($6::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$6 AND expires_at > $3))`,
+             AND ($6::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$6 AND expires_at > $3))
+             AND ($7::boolean = FALSE OR NOT EXISTS (
+               SELECT 1
+               FROM workflow_runs AS operation_workflow
+               JOIN workflow_events AS operation_event
+                 ON operation_event.workflow_run_id = operation_workflow.id
+                AND operation_event.tenant_id = open_loops_current_tenant_id()
+               WHERE operation_workflow.tenant_id = open_loops_current_tenant_id()
+                 AND operation_workflow.loop_run_id = loop_runs.id
+                 AND operation_event.event_type = 'private_operation_admitted'
+             ))`,
           [
             row.id,
             finished,
@@ -1668,6 +1689,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
             opts.expectedLeaseExpiresAt ?? null,
             opts.expectedUpdatedAt ?? null,
             opts.daemonLeaseId ?? null,
+            opts.refuseAdmittedPrivateOperations ?? false,
           ],
         );
         if (res.rowCount !== 1) return undefined;

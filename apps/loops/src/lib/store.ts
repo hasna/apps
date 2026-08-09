@@ -5085,6 +5085,7 @@ export class Store {
       runId?: string;
       expectedLeaseExpiresAt?: string;
       expectedUpdatedAt?: string;
+      refuseAdmittedPrivateOperations?: boolean;
       excludeClaimedBy?: string;
       /**
        * Leave one runner's runs untouched, but only within an explicit set of
@@ -5128,7 +5129,15 @@ export class Store {
            AND (? IS NULL OR id = ?)
            AND (? IS NULL OR lease_expires_at = ?)
            AND (? IS NULL OR updated_at = ?)
-           AND (? IS NULL OR claimed_by IS NULL OR claimed_by <> ?)${protectClause}
+           AND (? IS NULL OR claimed_by IS NULL OR claimed_by <> ?)
+           AND (? = 0 OR NOT EXISTS (
+             SELECT 1
+             FROM workflow_runs AS operation_workflow
+             JOIN workflow_events AS operation_event
+               ON operation_event.workflow_run_id = operation_workflow.id
+             WHERE operation_workflow.loop_run_id = loop_runs.id
+               AND operation_event.event_type = 'private_operation_admitted'
+           ))${protectClause}
          ORDER BY lease_expires_at ASC
          LIMIT ?`,
       )
@@ -5142,6 +5151,7 @@ export class Store {
         opts.expectedUpdatedAt ?? null,
         opts.excludeClaimedBy ?? null,
         opts.excludeClaimedBy ?? null,
+        opts.refuseAdmittedPrivateOperations ? 1 : 0,
         ...(protectLoopIds.length > 0 ? [protect!.claimedBy, ...protectLoopIds] : []),
         scanLimit,
       );
@@ -5182,6 +5192,14 @@ export class Store {
                AND ($expectedUpdatedAt IS NULL OR updated_at=$expectedUpdatedAt)
                AND ($daemonLeaseId IS NULL OR EXISTS (
                  SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
+               ))
+               AND ($refuseAdmittedPrivateOperations = 0 OR NOT EXISTS (
+                 SELECT 1
+                 FROM workflow_runs AS operation_workflow
+                 JOIN workflow_events AS operation_event
+                   ON operation_event.workflow_run_id = operation_workflow.id
+                 WHERE operation_workflow.loop_run_id = loop_runs.id
+                   AND operation_event.event_type = 'private_operation_admitted'
                ))`,
           )
           .run({
@@ -5193,6 +5211,7 @@ export class Store {
             $expectedLeaseExpiresAt: opts.expectedLeaseExpiresAt ?? null,
             $expectedUpdatedAt: opts.expectedUpdatedAt ?? null,
             $daemonLeaseId: opts.daemonLeaseId ?? null,
+            $refuseAdmittedPrivateOperations: opts.refuseAdmittedPrivateOperations ? 1 : 0,
           });
         if (res.changes !== 1) {
           this.db.exec("COMMIT");

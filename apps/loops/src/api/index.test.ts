@@ -2670,6 +2670,14 @@ describe("loops-api foundation", () => {
         },
       });
       expect(await storage.getRun(claim!.run.id)).toMatchObject({ status: "running" });
+
+      const legacyRecovery = await fetch(apiUrl(server, "/v1/leases/recover"), {
+        method: "POST",
+        headers: jsonHeaders,
+      });
+      expect(legacyRecovery.status).toBe(200);
+      expect(await legacyRecovery.json()).toMatchObject({ abandoned: [] });
+      expect(await storage.getRun(claim!.run.id)).toMatchObject({ status: "running" });
     } finally {
       server.stop(true);
       await storage.close();

@@ -407,6 +407,7 @@ export class LocalStore implements LoopStore {
         scanLimit: 1,
         expectedLeaseExpiresAt: current.leaseExpiresAt,
         expectedUpdatedAt: current.updatedAt,
+        refuseAdmittedPrivateOperations: true,
       });
       outcomes.push({
         runId: candidate.runId,
