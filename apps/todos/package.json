@@ -1,6 +1,6 @@
 {
   "name": "@hasna/todos",
-  "version": "0.15.19",
+  "version": "0.15.20",
   "description": "Universal task management for AI coding agents - CLI + MCP server + interactive TUI",
   "type": "module",
   "main": "dist/index.js",
@@ -71,6 +71,8 @@
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
     "verify:release": "bun run scripts/verify-public-release.ts --mode=review",
+    "verify:release-review": "bun run scripts/verify-npm-release-agent-review.ts",
+    "issue:release-review": "bun run scripts/issue-npm-release-agent-review.ts",
     "prepublishOnly": "bun run scripts/verify-public-release.ts --mode=publish",
     "postinstall": "mkdir -p $HOME/.hasna/todos $HOME/.hasna/todos/training 2>/dev/null || true"
   },

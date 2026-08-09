@@ -120,6 +120,21 @@ jobs:
           fi
           echo "release commit ${GITHUB_SHA} is contained in protected main"
 
+      # This is an agent gate, not an environment approval. The npm-release
+      # environment has no required reviewers or wait timer; it only carries
+      # the non-secret machine-readable receipt issued by the fixed independent
+      # coding-agent reviewer. The verifier binds that GO to this repository,
+      # commit, package/version, annotated tag, workflow blob/path, registry,
+      # and a publisher agent distinct from the reviewer.
+      - name: Require independent agent release review
+        if: github.event_name == 'push'
+        env:
+          NPM_RELEASE_AGENT_REVIEW_RECEIPT: ${{ vars.NPM_RELEASE_AGENT_REVIEW_RECEIPT }}
+          RELEASE_REVIEWER_AGENT: ${{ vars.RELEASE_REVIEWER_AGENT }}
+          RELEASE_REVIEW_KEY_ID: ${{ vars.RELEASE_REVIEW_KEY_ID }}
+          RELEASE_REVIEW_PUBLIC_KEY: ${{ vars.RELEASE_REVIEW_PUBLIC_KEY }}
+        run: bun run verify:release-review
+
       # npm versions are immutable, so a version that already exists can never
       # be replaced by this run. Failing here names that plainly instead of
       # letting the publish step report it after the whole suite has run.
@@ -171,6 +186,12 @@ jobs:
         if: github.event_name == 'push'
         env:
           HASNA_TODOS_EXPECTED_COMMIT: ${{ github.sha }}
+          # prepublishOnly re-runs the package-owned receipt verifier against
+          # the same tag and commit immediately before npm receives the pack.
+          NPM_RELEASE_AGENT_REVIEW_RECEIPT: ${{ vars.NPM_RELEASE_AGENT_REVIEW_RECEIPT }}
+          RELEASE_REVIEWER_AGENT: ${{ vars.RELEASE_REVIEWER_AGENT }}
+          RELEASE_REVIEW_KEY_ID: ${{ vars.RELEASE_REVIEW_KEY_ID }}
+          RELEASE_REVIEW_PUBLIC_KEY: ${{ vars.RELEASE_REVIEW_PUBLIC_KEY }}
         run: npm publish --provenance --access public
 
       - name: Verify the published version from the registry
