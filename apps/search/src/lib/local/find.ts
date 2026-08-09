@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import {
-  hasReadyRoot,
   autoRefreshStaleRoots,
+  getRoot,
   scheduleAutoRefreshStaleRoots,
   listRoots,
   rootHealth,
@@ -71,6 +71,26 @@ export interface FindResponse {
   rootHealth?: Array<{ name: string; path: string; health: RootHealth }>;
 }
 
+/**
+ * Resolve the population a query is allowed to search.
+ *
+ * With no configured roots, keep the ordinary `indexed:false` response even
+ * when a caller supplied a path. Once roots exist, a scoped query must name a
+ * real root and must report only that root in its population metadata.
+ */
+function queryRoots(rootRef: string | undefined, db?: Database): IndexRoot[] {
+  const roots = listRoots(db);
+  if (!rootRef || roots.length === 0) return roots;
+
+  const root = getRoot(rootRef, db);
+  if (!root) throw new Error(`Index root not found: ${rootRef}`);
+  return [root];
+}
+
+function hasReadyQueryRoot(roots: IndexRoot[]): boolean {
+  return roots.some((root) => root.status === "ready");
+}
+
 /** Human-readable reason a set of roots cannot answer a query. */
 function describeUnusableRoots(roots: IndexRoot[]): string {
   if (roots.length === 0) {
@@ -119,9 +139,9 @@ export function findLocal(query: string, opts: FindOptions = {}, db?: Database):
     throw new Error(`Invalid kind "${kind}" — use file, content, or both.`);
   }
   const limit = clampLimit(opts.limit);
-  const roots = listRoots(db);
+  let roots = queryRoots(opts.root, db);
 
-  if (!hasReadyRoot(db)) {
+  if (!hasReadyQueryRoot(roots)) {
     // Kick recovery before giving up: a wedged root is exactly the case the
     // refresh path can repair, and the old early return meant a wedged sole
     // root never reached the scheduler at all — the query gate and the recovery
@@ -130,23 +150,24 @@ export function findLocal(query: string, opts: FindOptions = {}, db?: Database):
     if (opts.refresh === true) autoRefreshStaleRoots(db);
     else if (opts.refresh !== false) scheduleAutoRefreshStaleRoots(db);
 
-    if (hasReadyRoot(db)) return findLocal(query, { ...opts, refresh: false }, db);
+    roots = queryRoots(opts.root, db);
+    if (hasReadyQueryRoot(roots)) return findLocal(query, { ...opts, refresh: false }, db);
 
-    const current = listRoots(db);
     return {
       query,
       kind,
       indexed: false,
-      roots: current.length,
+      roots: roots.length,
       total: 0,
       results: [],
-      error: describeUnusableRoots(current),
-      rootHealth: current.map((r) => ({ name: r.name, path: r.path, health: rootHealth(r) })),
+      error: describeUnusableRoots(roots),
+      rootHealth: roots.map((r) => ({ name: r.name, path: r.path, health: rootHealth(r) })),
     };
   }
 
   if (opts.refresh === true) autoRefreshStaleRoots(db);
   else if (opts.refresh !== false) scheduleAutoRefreshStaleRoots(db);
+  roots = queryRoots(opts.root, db);
 
   const queryOpts: LocalQueryOptions = {
     root: opts.root,

@@ -109,6 +109,7 @@ export function registerLocalCommands(program: Command): void {
     .argument("<query...>", "What to look for")
     .option("-k, --kind <kind>", "Match kind: file, content, both", "both")
     .option("-r, --root <root>", "Limit to one index root (name, path, or id)")
+    .option("-p, --path <path>", "Limit to one index root by filesystem path")
     .option("-e, --ext <ext>", "Filter by file extension")
     .option("-d, --dir <dir>", "Filter by directory substring")
     .option("-l, --limit <n>", "Max results", "20")
@@ -120,11 +121,16 @@ export function registerLocalCommands(program: Command): void {
     .option("--verbose", "Show full paths, snippets, and match lines")
     .action((queryParts: string[], opts) => {
       const query = queryParts.join(" ");
+      if (opts.root && opts.path && opts.root !== opts.path) {
+        console.error(chalk.red("Error: use either --root or --path, not both"));
+        process.exitCode = 1;
+        return;
+      }
       let response;
       try {
         response = findLocal(query, {
           kind: opts.kind as FindKind,
-          root: opts.root,
+          root: opts.path ?? opts.root,
           ext: opts.ext,
           dir: opts.dir,
           limit: parsePositiveInt(opts.limit, "--limit"),
