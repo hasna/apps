@@ -177,9 +177,9 @@ function inspectCommand(
   const versionArgs = spec.versionArgs ?? "--version";
   const script = [
     `cmd=${command}`,
-    'path="$(command -v "$cmd" 2>/dev/null || true)"',
-    'printf "path=%s\\n" "$path"',
-    'if [ -n "$path" ]; then version="$("$cmd" ' + versionArgs + ' 2>/dev/null || true)"; printf "version=%s\\n" "$version"; fi',
+    'resolved_path="$(command -v "$cmd" 2>/dev/null || true)"',
+    'printf "path=%s\\n" "$resolved_path"',
+    'if [ -n "$resolved_path" ]; then version="$("$resolved_path" ' + versionArgs + ' 2>/dev/null || true)"; printf "version=%s\\n" "$version"; fi',
   ].join("; ");
   const result = runner(machineId, script);
   const parsed = parseKeyValue(result.stdout);
@@ -210,9 +210,9 @@ function inspectWorkspace(
   runner: CompatibilityCommandRunner,
 ): WorkspaceInspection {
   const script = [
-    `path=${shellQuote(spec.path)}`,
-    'printf "exists=%s\\n" "$(test -d "$path" && printf yes || printf no)"',
-    'pkg="$path/package.json"',
+    `workspace_path=${shellQuote(spec.path)}`,
+    'printf "exists=%s\\n" "$(test -d "$workspace_path" && printf yes || printf no)"',
+    'pkg="$workspace_path/package.json"',
     'printf "package_json=%s\\n" "$(test -f "$pkg" && printf yes || printf no)"',
     `if [ -f "$pkg" ]; then printf "package_name=%s\\n" "$(${fieldCommand("name")})"; printf "version=%s\\n" "$(${fieldCommand("version")})"; fi`,
   ].join("; ");
