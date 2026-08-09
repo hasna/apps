@@ -137,7 +137,7 @@ async function createHostedUuidTenantKnowledgeItemsSchema(db: PGlite): Promise<v
 /** A migrated, empty in-process Postgres plus its `PoolQueryClient`. */
 export async function createMigratedPglite(options: {
   knowledgeItemsTenantIdType?: 'text' | 'uuid';
-  migrationMode?: 'direct' | 'existing-ledger-upgrade';
+  migrationMode?: 'direct' | 'existing-ledger-upgrade' | 'pre-adoption-ledger-upgrade';
 } = {}): Promise<{ db: PGlite; client: PoolQueryClient }> {
   const db = new PGlite();
   if (options.knowledgeItemsTenantIdType === 'uuid') {
@@ -146,6 +146,20 @@ export async function createMigratedPglite(options: {
   const client = pgliteClient(db);
   if (options.migrationMode === 'existing-ledger-upgrade') {
     await applyKnowledgePgMigrationsThroughLedger(client, PG_MIGRATIONS.slice(0, -1));
+    await applyKnowledgePgMigrationsThroughLedger(client);
+    for (const migration of apiKeyMigrations()) {
+      await db.exec(migration.sql);
+    }
+  } else if (options.migrationMode === 'pre-adoption-ledger-upgrade') {
+    const adoptionBoundary = PG_MIGRATIONS.findIndex((sql) =>
+      sql.includes('ADD COLUMN IF NOT EXISTS guarded_adoption_receipt_id'));
+    if (adoptionBoundary < 1) {
+      throw new Error('test fixture could not locate the guarded-adoption migration boundary.');
+    }
+    await applyKnowledgePgMigrationsThroughLedger(
+      client,
+      PG_MIGRATIONS.slice(0, adoptionBoundary),
+    );
     await applyKnowledgePgMigrationsThroughLedger(client);
     for (const migration of apiKeyMigrations()) {
       await db.exec(migration.sql);

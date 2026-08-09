@@ -231,7 +231,13 @@ describe('knowledge-serve', () => {
   });
 
   test('openapi document version is threaded through', () => {
-    const spec = knowledgeOpenApi('1.2.3') as { info: { version: string } };
+    const spec = knowledgeOpenApi('1.2.3') as {
+      info: { version: string };
+      paths: Record<string, unknown>;
+    };
     expect(spec.info.version).toBe('1.2.3');
+    expect(spec.paths['/v1/guarded-adoptions']).toBeDefined();
+    expect(spec.paths['/v1/guarded-adoptions/receipts/{deterministicKey}']).toBeDefined();
+    expect(spec.paths['/v1/guarded-adoptions/items/{id}/binding-state']).toBeDefined();
   });
 });

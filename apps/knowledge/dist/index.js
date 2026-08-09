@@ -18353,7 +18353,319 @@ var PG_MIGRATIONS = [
      END IF;
      RETURN NEW;
    END
-   $knowledge_guarded_item_authority$ LANGUAGE plpgsql`
+   $knowledge_guarded_item_authority$ LANGUAGE plpgsql`,
+  `ALTER TABLE knowledge_items
+     ADD COLUMN IF NOT EXISTS guarded_adoption_receipt_id TEXT`,
+  `CREATE TABLE IF NOT EXISTS knowledge_guarded_adoption_claims (
+    deterministic_key TEXT PRIMARY KEY,
+    planned_receipt_id TEXT NOT NULL UNIQUE,
+    operation_id TEXT NOT NULL,
+    step_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    authority_classification TEXT NOT NULL,
+    authority_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    parent_id TEXT NOT NULL,
+    expected_version INTEGER NOT NULL,
+    expected_content_sha256 TEXT NOT NULL,
+    adoption_receipt_id TEXT,
+    receipt_id TEXT,
+    created_at TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    CHECK (action IN ('adopt', 'rollback')),
+    CHECK (authority_classification IN ('user_hosted', 'hasna_saas')),
+    CHECK (expected_version >= 1),
+    CHECK (expected_content_sha256 ~ '^[0-9a-f]{64}$'),
+    CHECK (
+      (action = 'adopt' AND adoption_receipt_id IS NULL)
+      OR (action = 'rollback' AND adoption_receipt_id IS NOT NULL)
+    ),
+    UNIQUE(authority_classification, authority_id, tenant_id, scope, parent_id, operation_id, step_id)
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_guarded_adoption_claim_receipt
+     ON knowledge_guarded_adoption_claims(receipt_id) WHERE receipt_id IS NOT NULL`,
+  `CREATE TABLE IF NOT EXISTS knowledge_guarded_adoption_receipts (
+    receipt_id TEXT PRIMARY KEY,
+    deterministic_key TEXT NOT NULL UNIQUE,
+    operation_id TEXT NOT NULL,
+    step_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    authority_classification TEXT NOT NULL,
+    authority_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    parent_id TEXT NOT NULL,
+    expected_version INTEGER NOT NULL,
+    expected_content_sha256 TEXT NOT NULL,
+    adoption_receipt_id TEXT,
+    prior_tenant_id TEXT,
+    status TEXT NOT NULL,
+    code TEXT NOT NULL,
+    effect_count INTEGER NOT NULL,
+    result_version INTEGER,
+    result_content_sha256 TEXT,
+    created_at TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    CHECK (action IN ('adopt', 'rollback')),
+    CHECK (authority_classification IN ('user_hosted', 'hasna_saas')),
+    CHECK (expected_version >= 1),
+    CHECK (expected_content_sha256 ~ '^[0-9a-f]{64}$'),
+    CHECK (
+      (action = 'adopt' AND adoption_receipt_id IS NULL)
+      OR (action = 'rollback' AND adoption_receipt_id IS NOT NULL)
+    ),
+    CHECK (status IN ('accepted', 'rejected')),
+    CHECK (effect_count IN (0, 1)),
+    CHECK (
+      (
+        status = 'accepted' AND effect_count = 1
+        AND result_version IS NOT NULL AND result_content_sha256 IS NOT NULL
+      )
+      OR (
+        status = 'rejected' AND effect_count = 0
+        AND result_version IS NULL AND result_content_sha256 IS NULL
+      )
+    )
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_guarded_adoption_receipt_operation
+     ON knowledge_guarded_adoption_receipts(
+       authority_classification, authority_id, tenant_id, scope, parent_id, operation_id, step_id
+     )`,
+  `CREATE OR REPLACE FUNCTION knowledge_guarded_adoption_claim_once()
+   RETURNS TRIGGER AS $knowledge_guarded_adoption_claim_once$
+   BEGIN
+     IF TG_OP = 'DELETE' THEN
+       RAISE EXCEPTION 'knowledge guarded adoption claims are immutable'
+         USING ERRCODE = 'restrict_violation';
+     END IF;
+    IF (OLD.deterministic_key, OLD.planned_receipt_id,
+         OLD.operation_id, OLD.step_id, OLD.action,
+         OLD.target_id, OLD.authority_classification, OLD.authority_id,
+         OLD.tenant_id, OLD.scope, OLD.parent_id, OLD.expected_version,
+         OLD.expected_content_sha256, OLD.adoption_receipt_id, OLD.created_at)
+        IS DISTINCT FROM
+        (NEW.deterministic_key, NEW.planned_receipt_id,
+         NEW.operation_id, NEW.step_id, NEW.action,
+         NEW.target_id, NEW.authority_classification, NEW.authority_id,
+         NEW.tenant_id, NEW.scope, NEW.parent_id, NEW.expected_version,
+         NEW.expected_content_sha256, NEW.adoption_receipt_id, NEW.created_at)
+        OR OLD.receipt_id IS NOT NULL
+        OR NEW.receipt_id IS NULL THEN
+       RAISE EXCEPTION 'knowledge guarded adoption claim may only bind one terminal receipt'
+         USING ERRCODE = 'restrict_violation';
+     END IF;
+     RETURN NEW;
+   END
+   $knowledge_guarded_adoption_claim_once$ LANGUAGE plpgsql`,
+  `DROP TRIGGER IF EXISTS trg_knowledge_guarded_adoption_claim_once
+     ON knowledge_guarded_adoption_claims`,
+  `CREATE TRIGGER trg_knowledge_guarded_adoption_claim_once
+     BEFORE UPDATE OR DELETE ON knowledge_guarded_adoption_claims
+     FOR EACH ROW EXECUTE FUNCTION knowledge_guarded_adoption_claim_once()`,
+  `ALTER TABLE knowledge_guarded_adoption_claims
+     ENABLE ALWAYS TRIGGER trg_knowledge_guarded_adoption_claim_once`,
+  `CREATE OR REPLACE FUNCTION knowledge_guarded_adoption_receipts_immutable()
+   RETURNS TRIGGER AS $knowledge_guarded_adoption_receipts_immutable$
+   BEGIN
+     RAISE EXCEPTION 'knowledge guarded adoption receipts are immutable'
+       USING ERRCODE = 'restrict_violation';
+   END
+   $knowledge_guarded_adoption_receipts_immutable$ LANGUAGE plpgsql`,
+  `DROP TRIGGER IF EXISTS trg_knowledge_guarded_adoption_receipts_immutable
+     ON knowledge_guarded_adoption_receipts`,
+  `CREATE TRIGGER trg_knowledge_guarded_adoption_receipts_immutable
+     BEFORE UPDATE OR DELETE ON knowledge_guarded_adoption_receipts
+     FOR EACH ROW EXECUTE FUNCTION knowledge_guarded_adoption_receipts_immutable()`,
+  `ALTER TABLE knowledge_guarded_adoption_receipts
+     ENABLE ALWAYS TRIGGER trg_knowledge_guarded_adoption_receipts_immutable`,
+  `CREATE OR REPLACE FUNCTION knowledge_guarded_item_authority()
+   RETURNS TRIGGER AS $knowledge_guarded_item_authority$
+   DECLARE
+     claim_key TEXT;
+     adoption_key TEXT;
+     claim_matches BOOLEAN;
+     binding_changed BOOLEAN;
+   BEGIN
+     IF TG_OP = 'DELETE' THEN
+       IF OLD.authority_classification IS NULL THEN
+         RETURN OLD;
+       END IF;
+       RAISE EXCEPTION 'guarded knowledge items cannot be deleted outside a declared FCAME-1 action'
+         USING ERRCODE = 'restrict_violation';
+     END IF;
+
+     IF TG_OP = 'INSERT' AND NEW.authority_classification IS NULL THEN
+       RETURN NEW;
+     END IF;
+
+     IF TG_OP = 'UPDATE'
+        AND OLD.authority_classification IS NULL
+        AND NEW.authority_classification IS NULL THEN
+       RETURN NEW;
+     END IF;
+
+     binding_changed := TG_OP = 'UPDATE' AND (
+       OLD.id IS DISTINCT FROM NEW.id
+       OR OLD.authority_classification IS DISTINCT FROM NEW.authority_classification
+       OR OLD.authority_id IS DISTINCT FROM NEW.authority_id
+       OR OLD.tenant_id IS DISTINCT FROM NEW.tenant_id
+       OR OLD.scope IS DISTINCT FROM NEW.scope
+       OR OLD.parent_id IS DISTINCT FROM NEW.parent_id
+     );
+
+     IF binding_changed THEN
+       adoption_key := NULLIF(
+         current_setting('hasna.knowledge_guarded_adoption_key', true),
+         ''
+       );
+       IF adoption_key IS NULL THEN
+         RAISE EXCEPTION 'guarded knowledge item identity and binding are immutable'
+           USING ERRCODE = 'restrict_violation';
+       END IF;
+       SELECT EXISTS (
+         SELECT 1
+           FROM knowledge_guarded_adoption_claims AS claim
+          WHERE claim.deterministic_key = adoption_key
+            AND claim.receipt_id IS NULL
+            AND claim.target_id = OLD.id
+            AND claim.expected_version = OLD.version
+            AND claim.expected_content_sha256 =
+              encode(sha256(convert_to(coalesce(OLD.content, ''), 'UTF8')), 'hex')
+            AND (
+              OLD.short_id, OLD.title, OLD.content, OLD.url, OLD.tags,
+              OLD.metadata, OLD.archived, OLD.created_at, OLD.updated_at, OLD.version
+            ) IS NOT DISTINCT FROM (
+              NEW.short_id, NEW.title, NEW.content, NEW.url, NEW.tags,
+              NEW.metadata, NEW.archived, NEW.created_at, NEW.updated_at, NEW.version
+            )
+            AND (
+              (
+                claim.action = 'adopt'
+                AND OLD.authority_classification IS NULL
+                AND OLD.authority_id IS NULL
+                AND OLD.scope IS NULL
+                AND OLD.parent_id IS NULL
+                AND (
+                  OLD.tenant_id IS NULL
+                  OR OLD.tenant_id::text = claim.tenant_id
+                )
+                AND NEW.authority_classification = claim.authority_classification
+                AND NEW.authority_id = claim.authority_id
+                AND NEW.tenant_id::text = claim.tenant_id
+                AND NEW.scope = claim.scope
+                AND NEW.parent_id = claim.parent_id
+                AND NEW.guarded_adoption_receipt_id = claim.planned_receipt_id
+              )
+              OR (
+                claim.action = 'rollback'
+                AND claim.adoption_receipt_id IS NOT NULL
+                AND OLD.authority_classification = claim.authority_classification
+                AND OLD.authority_id = claim.authority_id
+                AND OLD.tenant_id::text = claim.tenant_id
+                AND OLD.scope = claim.scope
+                AND OLD.parent_id = claim.parent_id
+                AND OLD.guarded_adoption_receipt_id = claim.adoption_receipt_id
+                AND NEW.authority_classification IS NULL
+                AND NEW.authority_id IS NULL
+                AND NEW.scope IS NULL
+                AND NEW.parent_id IS NULL
+                AND NEW.guarded_adoption_receipt_id IS NULL
+                AND NEW.tenant_id::text IS NOT DISTINCT FROM (
+                  SELECT receipt.prior_tenant_id
+                    FROM knowledge_guarded_adoption_receipts AS receipt
+                   WHERE receipt.receipt_id = claim.adoption_receipt_id
+                     AND receipt.action = 'adopt'
+                     AND receipt.status = 'accepted'
+                     AND receipt.effect_count = 1
+                )
+              )
+            )
+       ) INTO claim_matches;
+       IF NOT claim_matches THEN
+         RAISE EXCEPTION 'guarded knowledge item binding transition does not match its live adoption claim'
+           USING ERRCODE = 'insufficient_privilege';
+       END IF;
+       RETURN NEW;
+     END IF;
+
+     IF NEW.authority_classification IS NULL OR NEW.authority_id IS NULL
+        OR NEW.tenant_id IS NULL OR NEW.scope IS NULL OR NEW.parent_id IS NULL THEN
+       RAISE EXCEPTION 'guarded knowledge item binding must be complete'
+         USING ERRCODE = 'check_violation';
+     END IF;
+
+     claim_key := NULLIF(
+       current_setting('hasna.knowledge_guarded_deterministic_key', true),
+       ''
+     );
+     IF claim_key IS NULL THEN
+       RAISE EXCEPTION 'guarded knowledge item mutation requires an FCAME-1 operation claim'
+         USING ERRCODE = 'insufficient_privilege';
+     END IF;
+
+     SELECT EXISTS (
+       SELECT 1
+         FROM knowledge_guarded_write_claims AS claim
+        WHERE claim.deterministic_key = claim_key
+          AND claim.receipt_id IS NULL
+          AND claim.target_id = NEW.id
+          AND claim.authority_classification = NEW.authority_classification
+          AND claim.authority_id = NEW.authority_id
+          AND claim.tenant_id = NEW.tenant_id::text
+          AND claim.scope = NEW.scope
+          AND claim.parent_id = NEW.parent_id
+          AND (
+            (
+              TG_OP = 'INSERT'
+              AND claim.verb = 'create'
+              AND claim.precondition_kind = 'absent'
+            )
+            OR (
+              TG_OP = 'UPDATE'
+              AND claim.verb = 'update'
+              AND claim.precondition_kind = 'version'
+              AND claim.expected_version = OLD.version
+            )
+          )
+     ) INTO claim_matches;
+     IF NOT claim_matches THEN
+       RAISE EXCEPTION 'guarded knowledge item mutation does not match its live FCAME-1 operation claim'
+         USING ERRCODE = 'insufficient_privilege';
+     END IF;
+     RETURN NEW;
+   END
+   $knowledge_guarded_item_authority$ LANGUAGE plpgsql`,
+  `CREATE OR REPLACE FUNCTION knowledge_guarded_adoption_claim_once()
+   RETURNS TRIGGER AS $knowledge_guarded_adoption_claim_once$
+   BEGIN
+     IF TG_OP = 'DELETE' THEN
+       RAISE EXCEPTION 'knowledge guarded adoption claims are immutable'
+         USING ERRCODE = 'restrict_violation';
+     END IF;
+     IF (OLD.deterministic_key, OLD.planned_receipt_id,
+         OLD.operation_id, OLD.step_id, OLD.action,
+         OLD.target_id, OLD.authority_classification, OLD.authority_id,
+         OLD.tenant_id, OLD.scope, OLD.parent_id, OLD.expected_version,
+         OLD.expected_content_sha256, OLD.adoption_receipt_id, OLD.created_at)
+        IS DISTINCT FROM
+        (NEW.deterministic_key, NEW.planned_receipt_id,
+         NEW.operation_id, NEW.step_id, NEW.action,
+         NEW.target_id, NEW.authority_classification, NEW.authority_id,
+         NEW.tenant_id, NEW.scope, NEW.parent_id, NEW.expected_version,
+         NEW.expected_content_sha256, NEW.adoption_receipt_id, NEW.created_at)
+        OR OLD.receipt_id IS NOT NULL
+        OR NEW.receipt_id IS NULL THEN
+       RAISE EXCEPTION 'knowledge guarded adoption claim may only bind one terminal receipt'
+         USING ERRCODE = 'restrict_violation';
+     END IF;
+     IF NEW.receipt_id IS DISTINCT FROM OLD.planned_receipt_id THEN
+       RAISE EXCEPTION 'knowledge guarded adoption claim receipt must match its planned terminal receipt'
+         USING ERRCODE = 'restrict_violation';
+     END IF;
+     RETURN NEW;
+   END
+   $knowledge_guarded_adoption_claim_once$ LANGUAGE plpgsql`
 ];
 // src/serve.ts
 import { readFileSync as readFileSync5 } from "fs";
@@ -19385,6 +19697,50 @@ function canonicalKnowledgeGuardedJson(value) {
 function knowledgeGuardedDigest(value) {
   return createHash3("sha256").update(canonicalKnowledgeGuardedJson(value), "utf8").digest("hex");
 }
+function knowledgeGuardedContentSha256(content) {
+  if (typeof content !== "string")
+    throw new Error("content must be a string.");
+  return createHash3("sha256").update(content, "utf8").digest("hex");
+}
+function computeKnowledgeGuardedAdoptionDeterministicKey(input) {
+  if (!["adopt", "rollback"].includes(input.action)) {
+    throw new Error("adoption action must be adopt or rollback.");
+  }
+  assertBoundText(input.operation_id, "operation_id");
+  assertBoundText(input.step_id, "step_id");
+  assertBoundText(input.target_id, "target_id");
+  assertKnowledgeGuardedBinding(input.binding);
+  if (!Number.isInteger(input.expected_version) || input.expected_version < 1) {
+    throw new Error("expected_version must be a positive integer.");
+  }
+  if (!/^[0-9a-f]{64}$/.test(input.expected_content_sha256)) {
+    throw new Error("expected_content_sha256 must be a lowercase sha256 hex digest.");
+  }
+  const adoptionReceiptId = input.adoption_receipt_id ?? null;
+  if (input.action === "adopt" && adoptionReceiptId !== null) {
+    throw new Error("adopt must not reference an adoption receipt.");
+  }
+  if (input.action === "rollback" && (typeof adoptionReceiptId !== "string" || !/^kar_[0-9a-f]{64}$/.test(adoptionReceiptId))) {
+    throw new Error("rollback requires an immutable adoption receipt id.");
+  }
+  return `fcame1_adoption_${knowledgeGuardedDigest({
+    contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+    action: input.action,
+    operation_id: input.operation_id,
+    step_id: input.step_id,
+    target_id: input.target_id,
+    binding: input.binding,
+    expected_version: input.expected_version,
+    expected_content_sha256: input.expected_content_sha256,
+    adoption_receipt_id: adoptionReceiptId
+  })}`;
+}
+function computeKnowledgeGuardedAdoptionReceiptId(deterministicKey) {
+  if (!/^fcame1_adoption_[0-9a-f]{64}$/.test(deterministicKey)) {
+    throw new Error("deterministicKey must be an FCAME-1 adoption key.");
+  }
+  return `kar_${deterministicKey.slice("fcame1_adoption_".length)}`;
+}
 function computeKnowledgeGuardedDeterministicKey(input) {
   assertKnowledgeGuardedBinding(input.binding);
   assertBoundText(input.operation_id, "operation_id");
@@ -20062,6 +20418,15 @@ class OperationBindingConflictError extends Error {
   }
 }
 
+class AdoptionOperationBindingConflictError extends Error {
+  receipt;
+  constructor(receipt) {
+    super("adoption operation and step are already bound to a different deterministic key");
+    this.receipt = receipt;
+    this.name = "AdoptionOperationBindingConflictError";
+  }
+}
+
 class ManifestBindingConflictError extends Error {
   manifest;
   constructor(manifest) {
@@ -20069,6 +20434,36 @@ class ManifestBindingConflictError extends Error {
     this.manifest = manifest;
     this.name = "ManifestBindingConflictError";
   }
+}
+function rowToAdoptionReceipt(row) {
+  return {
+    contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+    receipt_id: String(row.receipt_id),
+    deterministic_key: String(row.deterministic_key),
+    action: String(row.action),
+    operation_id: String(row.operation_id),
+    step_id: String(row.step_id),
+    target_id: String(row.target_id),
+    binding: {
+      authority: {
+        classification: String(row.authority_classification),
+        authority_id: String(row.authority_id)
+      },
+      tenant_id: String(row.tenant_id),
+      scope: String(row.scope),
+      parent_id: String(row.parent_id)
+    },
+    expected_version: Number(row.expected_version),
+    expected_content_sha256: String(row.expected_content_sha256),
+    adoption_receipt_id: row.adoption_receipt_id == null ? null : String(row.adoption_receipt_id),
+    prior_tenant_id: row.prior_tenant_id == null ? null : String(row.prior_tenant_id),
+    status: String(row.status),
+    code: String(row.code),
+    effect_count: Number(row.effect_count),
+    result_version: row.result_version == null ? null : Number(row.result_version),
+    result_content_sha256: row.result_content_sha256 == null ? null : String(row.result_content_sha256),
+    created_at: String(row.created_at)
+  };
 }
 function guardedPreconditionFromRow(row) {
   return row.precondition_kind === "absent" ? { kind: "absent" } : { kind: "version", expected_version: Number(row.expected_version) };
@@ -20189,6 +20584,323 @@ class GuardedWriteRepo {
   async receiptById(client, receiptId) {
     const row = await client.get(`SELECT * FROM knowledge_guarded_write_receipts WHERE receipt_id = $1`, [receiptId]);
     return row ? rowToGuardedReceipt(row) : null;
+  }
+  async adoptionReceiptById(client, receiptId) {
+    const row = await client.get(`SELECT * FROM knowledge_guarded_adoption_receipts WHERE receipt_id = $1`, [receiptId]);
+    return row ? rowToAdoptionReceipt(row) : null;
+  }
+  async finishAdoption(client, envelope, status, code, result, priorTenantId) {
+    const binding = envelope.binding;
+    const receiptId = computeKnowledgeGuardedAdoptionReceiptId(envelope.deterministic_key);
+    const row = await client.get(`INSERT INTO knowledge_guarded_adoption_receipts (
+         receipt_id, deterministic_key, operation_id, step_id, action, target_id,
+         authority_classification, authority_id, tenant_id, scope, parent_id,
+         expected_version, expected_content_sha256, adoption_receipt_id, prior_tenant_id,
+         status, code, effect_count, result_version, result_content_sha256
+       ) VALUES (
+         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20
+       )
+       RETURNING *`, [
+      receiptId,
+      envelope.deterministic_key,
+      envelope.operation_id,
+      envelope.step_id,
+      envelope.action,
+      envelope.target_id,
+      binding.authority.classification,
+      binding.authority.authority_id,
+      binding.tenant_id,
+      binding.scope,
+      binding.parent_id,
+      envelope.expected_version,
+      envelope.expected_content_sha256,
+      envelope.adoption_receipt_id,
+      priorTenantId,
+      status,
+      code,
+      status === "accepted" ? 1 : 0,
+      result?.version ?? null,
+      result?.content_sha256 ?? null
+    ]);
+    const boundClaim = await client.get(`UPDATE knowledge_guarded_adoption_claims
+          SET receipt_id = $1
+        WHERE deterministic_key = $2 AND receipt_id IS NULL
+        RETURNING deterministic_key`, [receiptId, envelope.deterministic_key]);
+    if (!row)
+      throw new Error("guarded adoption receipt insertion returned no row.");
+    if (boundClaim?.deterministic_key !== envelope.deterministic_key) {
+      throw new Error("guarded adoption receipt was not bound to exactly one live claim.");
+    }
+    return rowToAdoptionReceipt(row);
+  }
+  async bindingState(fullId, binding, limits) {
+    const row = await this.client.get(`SELECT * FROM knowledge_items
+        WHERE id = $1
+          AND (
+            (
+              authority_classification IS NULL
+              AND (tenant_id IS NULL OR tenant_id::text = $2)
+            )
+            OR tenant_id::text = $2
+          )
+        LIMIT 1`, [fullId, binding.tenant_id]);
+    if (!row)
+      return null;
+    const legacyForRequestedTenant = row.authority_classification == null && row.authority_id == null && row.scope == null && row.parent_id == null && (row.tenant_id == null || String(row.tenant_id) === binding.tenant_id);
+    const requested = rowMatchesGuardedBinding(row, binding);
+    return {
+      contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+      exact: true,
+      bounded: true,
+      item_count: 1,
+      target_id: fullId,
+      state: legacyForRequestedTenant ? "legacy_unbound" : requested ? "bound_to_requested" : "bound_elsewhere",
+      item_version: legacyForRequestedTenant || requested ? Number(row.version ?? 1) : null,
+      content_sha256: legacyForRequestedTenant || requested ? knowledgeGuardedContentSha256(String(row.content ?? "")) : null,
+      limits
+    };
+  }
+  async executeAdoption(envelope, actor) {
+    const binding = envelope.binding;
+    return this.client.transaction(async (tx) => {
+      await tx.execute(`SELECT
+           set_config('hasna.actor', $1, true),
+           set_config('hasna.reason', $2, true),
+           set_config('hasna.knowledge_guarded_adoption_key', $3, true)`, [
+        actor,
+        `FCAME-1 ${envelope.action} ${envelope.operation_id}/${envelope.step_id}`,
+        envelope.deterministic_key
+      ]);
+      await tx.execute(`INSERT INTO knowledge_guarded_adoption_claims (
+           deterministic_key, planned_receipt_id, operation_id, step_id, action, target_id,
+           authority_classification, authority_id, tenant_id, scope, parent_id,
+           expected_version, expected_content_sha256, adoption_receipt_id
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+         ON CONFLICT DO NOTHING`, [
+        envelope.deterministic_key,
+        computeKnowledgeGuardedAdoptionReceiptId(envelope.deterministic_key),
+        envelope.operation_id,
+        envelope.step_id,
+        envelope.action,
+        envelope.target_id,
+        binding.authority.classification,
+        binding.authority.authority_id,
+        binding.tenant_id,
+        binding.scope,
+        binding.parent_id,
+        envelope.expected_version,
+        envelope.expected_content_sha256,
+        envelope.adoption_receipt_id
+      ]);
+      const claim = await tx.get(`SELECT * FROM knowledge_guarded_adoption_claims
+          WHERE authority_classification = $1
+            AND authority_id = $2
+            AND tenant_id = $3
+            AND scope = $4
+            AND parent_id = $5
+            AND operation_id = $6
+            AND step_id = $7
+          FOR UPDATE`, [
+        binding.authority.classification,
+        binding.authority.authority_id,
+        binding.tenant_id,
+        binding.scope,
+        binding.parent_id,
+        envelope.operation_id,
+        envelope.step_id
+      ]);
+      if (!claim)
+        throw new Error("guarded adoption claim was not created.");
+      if (claim.deterministic_key !== envelope.deterministic_key) {
+        const receipt2 = claim.receipt_id ? await this.adoptionReceiptById(tx, String(claim.receipt_id)) : null;
+        throw new AdoptionOperationBindingConflictError(receipt2);
+      }
+      if (claim.receipt_id) {
+        const receipt2 = await this.adoptionReceiptById(tx, String(claim.receipt_id));
+        if (!receipt2)
+          throw new Error("guarded adoption claim references a missing receipt.");
+        return {
+          contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+          deterministic_key: envelope.deterministic_key,
+          receipt: receipt2,
+          duplicate: true
+        };
+      }
+      if (envelope.action === "rollback") {
+        const source = envelope.adoption_receipt_id ? await this.adoptionReceiptById(tx, envelope.adoption_receipt_id) : null;
+        if (!source || source.action !== "adopt" || source.status !== "accepted" || source.effect_count !== 1 || source.target_id !== envelope.target_id || source.result_version !== envelope.expected_version || source.result_content_sha256 !== envelope.expected_content_sha256 || canonicalKnowledgeGuardedJson(source.binding) !== canonicalKnowledgeGuardedJson(binding)) {
+          const receipt2 = await this.finishAdoption(tx, envelope, "rejected", "adoption_receipt_mismatch", null, null);
+          return {
+            contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+            deterministic_key: envelope.deterministic_key,
+            receipt: receipt2,
+            duplicate: false
+          };
+        }
+      }
+      const existing = await tx.get(`SELECT * FROM knowledge_items
+          WHERE id = $1
+            AND (tenant_id IS NULL OR tenant_id::text = $2)
+          FOR UPDATE`, [envelope.target_id, binding.tenant_id]);
+      if (!existing) {
+        const receipt2 = await this.finishAdoption(tx, envelope, "rejected", "not_found", null, null);
+        return {
+          contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+          deterministic_key: envelope.deterministic_key,
+          receipt: receipt2,
+          duplicate: false
+        };
+      }
+      const legacyForRequestedTenant = existing.authority_classification == null && existing.authority_id == null && existing.scope == null && existing.parent_id == null && (existing.tenant_id == null || String(existing.tenant_id) === binding.tenant_id);
+      const requested = rowMatchesGuardedBinding(existing, binding);
+      if (envelope.action === "adopt" && !legacyForRequestedTenant || envelope.action === "rollback" && (!requested || existing.guarded_adoption_receipt_id !== envelope.adoption_receipt_id)) {
+        const code = envelope.action === "adopt" ? requested ? "already_bound" : "binding_mismatch" : requested ? "adoption_receipt_not_current" : "binding_mismatch";
+        const receipt2 = await this.finishAdoption(tx, envelope, "rejected", code, null, null);
+        return {
+          contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+          deterministic_key: envelope.deterministic_key,
+          receipt: receipt2,
+          duplicate: false
+        };
+      }
+      const currentVersion = Number(existing.version ?? 1);
+      if (currentVersion !== envelope.expected_version) {
+        const receipt2 = await this.finishAdoption(tx, envelope, "rejected", "version_conflict", null, null);
+        return {
+          contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+          deterministic_key: envelope.deterministic_key,
+          receipt: receipt2,
+          duplicate: false
+        };
+      }
+      const currentContentSha256 = knowledgeGuardedContentSha256(String(existing.content ?? ""));
+      if (currentContentSha256 !== envelope.expected_content_sha256) {
+        const receipt2 = await this.finishAdoption(tx, envelope, "rejected", "content_digest_conflict", null, null);
+        return {
+          contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+          deterministic_key: envelope.deterministic_key,
+          receipt: receipt2,
+          duplicate: false
+        };
+      }
+      const updated = envelope.action === "adopt" ? await tx.get(`UPDATE knowledge_items SET
+             authority_classification = $1,
+             authority_id = $2,
+             tenant_id = (
+               jsonb_populate_record(
+                 NULL::knowledge_items,
+                 jsonb_build_object('tenant_id', $3::text)
+               )
+             ).tenant_id,
+             scope = $4,
+             parent_id = $5,
+             guarded_adoption_receipt_id = $6
+           WHERE id = $7
+             AND version = $8
+             AND authority_classification IS NULL
+             AND authority_id IS NULL
+             AND scope IS NULL
+             AND parent_id IS NULL
+             AND guarded_adoption_receipt_id IS NULL
+             AND (tenant_id IS NULL OR tenant_id::text = $3)
+             AND encode(sha256(convert_to(coalesce(content, ''), 'UTF8')), 'hex') = $9
+           RETURNING *`, [
+        binding.authority.classification,
+        binding.authority.authority_id,
+        binding.tenant_id,
+        binding.scope,
+        binding.parent_id,
+        computeKnowledgeGuardedAdoptionReceiptId(envelope.deterministic_key),
+        envelope.target_id,
+        envelope.expected_version,
+        envelope.expected_content_sha256
+      ]) : await tx.get(`UPDATE knowledge_items SET
+             authority_classification = NULL,
+             authority_id = NULL,
+             tenant_id = (
+               jsonb_populate_record(
+                 NULL::knowledge_items,
+                 jsonb_build_object('tenant_id', $1::text)
+               )
+             ).tenant_id,
+             scope = NULL,
+             parent_id = NULL,
+             guarded_adoption_receipt_id = NULL
+           WHERE id = $2
+             AND version = $3
+             AND authority_classification = $4
+             AND authority_id = $5
+             AND tenant_id::text = $6
+             AND scope = $7
+             AND parent_id = $8
+             AND guarded_adoption_receipt_id = $9
+             AND encode(sha256(convert_to(coalesce(content, ''), 'UTF8')), 'hex') = $10
+           RETURNING *`, [
+        (await this.adoptionReceiptById(tx, envelope.adoption_receipt_id)).prior_tenant_id,
+        envelope.target_id,
+        envelope.expected_version,
+        binding.authority.classification,
+        binding.authority.authority_id,
+        binding.tenant_id,
+        binding.scope,
+        binding.parent_id,
+        envelope.adoption_receipt_id,
+        envelope.expected_content_sha256
+      ]);
+      if (!updated) {
+        const receipt2 = await this.finishAdoption(tx, envelope, "rejected", "compare_and_swap_conflict", null, null);
+        return {
+          contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+          deterministic_key: envelope.deterministic_key,
+          receipt: receipt2,
+          duplicate: false
+        };
+      }
+      const result = {
+        version: Number(updated.version ?? 1),
+        content_sha256: knowledgeGuardedContentSha256(String(updated.content ?? ""))
+      };
+      const receipt = await this.finishAdoption(tx, envelope, "accepted", envelope.action === "adopt" ? "adopted" : "rolled_back", result, envelope.action === "adopt" ? existing.tenant_id == null ? null : String(existing.tenant_id) : (await this.adoptionReceiptById(tx, envelope.adoption_receipt_id)).prior_tenant_id);
+      return {
+        contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+        deterministic_key: envelope.deterministic_key,
+        receipt,
+        duplicate: false
+      };
+    });
+  }
+  async reconcileAdoption(deterministicKey, binding, operationId, stepId, limits) {
+    const row = await this.client.get(`SELECT * FROM knowledge_guarded_adoption_receipts
+        WHERE deterministic_key = $1
+          AND authority_classification = $2
+          AND authority_id = $3
+          AND tenant_id = $4
+          AND scope = $5
+          AND parent_id = $6
+          AND operation_id = $7
+          AND step_id = $8
+        LIMIT 1`, [
+      deterministicKey,
+      binding.authority.classification,
+      binding.authority.authority_id,
+      binding.tenant_id,
+      binding.scope,
+      binding.parent_id,
+      operationId,
+      stepId
+    ]);
+    return {
+      contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+      deterministic_key: deterministicKey,
+      operation_id: operationId,
+      step_id: stepId,
+      exact: true,
+      bounded: true,
+      receipt_count: row ? 1 : 0,
+      terminal_complete: Boolean(row),
+      receipt: row ? rowToAdoptionReceipt(row) : null,
+      limits
+    };
   }
   async manifestById(client, manifestId) {
     const row = await client.get(`SELECT * FROM knowledge_guarded_write_manifests WHERE manifest_id = $1`, [manifestId]);
@@ -20896,6 +21608,44 @@ function knowledgeOpenApi(version) {
       "created_at"
     ]
   };
+  const guardedAdoptionReceipt = {
+    type: "object",
+    description: "Immutable FCAME-1 receipt for an exact legacy binding adoption or its receipt-scoped rollback.",
+    properties: {
+      contract: { type: "string", enum: [KNOWLEDGE_GUARDED_WRITE_CONTRACT] },
+      receipt_id: { type: "string" },
+      deterministic_key: { type: "string" },
+      action: { type: "string", enum: ["adopt", "rollback"] },
+      operation_id: { type: "string" },
+      step_id: { type: "string" },
+      target_id: { type: "string" },
+      expected_version: { type: "integer" },
+      expected_content_sha256: { type: "string" },
+      adoption_receipt_id: { type: "string", nullable: true },
+      prior_tenant_id: { type: "string", nullable: true },
+      status: { type: "string", enum: ["accepted", "rejected"] },
+      code: { type: "string" },
+      effect_count: { type: "integer", enum: [0, 1] },
+      result_version: { type: "integer", nullable: true },
+      result_content_sha256: { type: "string", nullable: true },
+      created_at: { type: "string" }
+    },
+    required: [
+      "contract",
+      "receipt_id",
+      "deterministic_key",
+      "action",
+      "operation_id",
+      "step_id",
+      "target_id",
+      "expected_version",
+      "expected_content_sha256",
+      "status",
+      "code",
+      "effect_count",
+      "created_at"
+    ]
+  };
   const guardedLimitParameters = [
     "max_calls",
     "max_items",
@@ -20931,6 +21681,25 @@ function knowledgeOpenApi(version) {
         NoteVersion: noteVersionSchema,
         VersionConflict: versionConflict,
         GuardedReceipt: guardedReceipt,
+        GuardedAdoptionReceipt: guardedAdoptionReceipt,
+        GuardedAdoptionEnvelope: {
+          type: "object",
+          description: "Exact full-ID, version, and raw UTF-8 content-sha256 compare-and-swap for legacy binding adoption " + "or immutable-receipt-scoped rollback.",
+          required: [
+            "contract",
+            "action",
+            "deterministic_key",
+            "operation_id",
+            "step_id",
+            "target_id",
+            "binding",
+            "expected_version",
+            "expected_content_sha256",
+            "adoption_receipt_id",
+            "limits"
+          ],
+          additionalProperties: false
+        },
         GuardedWriteEnvelope: {
           type: "object",
           description: "FCAME-1 frozen descriptor metadata, deterministic key, explicit finite limits, and private payload. " + "The payload is accepted only in this authenticated request body.",
@@ -21087,6 +21856,63 @@ function knowledgeOpenApi(version) {
             "201": { description: "Accepted with one immutable receipt." },
             "200": { description: "Same deterministic operation already accepted; duplicate proof returned." },
             "409": { description: "Terminal rejection or operation/step binding conflict." }
+          }
+        }
+      },
+      "/v1/guarded-adoptions": {
+        post: {
+          operationId: "executeGuardedKnowledgeAdoption",
+          summary: "Adopt one exact legacy row or roll it back through its immutable adoption receipt",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/GuardedAdoptionEnvelope" }
+              }
+            }
+          },
+          responses: {
+            "201": { description: "Accepted with one immutable adoption receipt." },
+            "200": { description: "Exact deterministic replay; no second effect." },
+            "409": { description: "Terminal CAS/binding rejection or operation binding conflict." }
+          }
+        }
+      },
+      "/v1/guarded-adoptions/receipts/{deterministicKey}": {
+        get: {
+          operationId: "reconcileGuardedKnowledgeAdoption",
+          summary: "Bounded exact adoption-receipt reconciliation",
+          parameters: [
+            {
+              name: "deterministicKey",
+              in: "path",
+              required: true,
+              schema: { type: "string" }
+            },
+            ...guardedBindingParameters,
+            { name: "operation_id", in: "query", required: true, schema: { type: "string" } },
+            { name: "step_id", in: "query", required: true, schema: { type: "string" } },
+            ...guardedLimitParameters
+          ],
+          responses: {
+            "200": { description: "Exact bounded result containing zero or one immutable receipt." }
+          }
+        }
+      },
+      "/v1/guarded-adoptions/items/{id}/binding-state": {
+        get: {
+          operationId: "readGuardedKnowledgeBindingState",
+          summary: "Exact bounded stored-binding-state readback for a full Knowledge id",
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } },
+            ...guardedBindingParameters,
+            ...guardedLimitParameters
+          ],
+          responses: {
+            "200": {
+              description: "legacy_unbound, bound_to_requested, or bound_elsewhere; elsewhere does not disclose version/hash."
+            },
+            "404": { description: "No exact full-ID row." }
           }
         }
       },
@@ -21388,6 +22214,60 @@ function validateGuardedEnvelope(value, headerBounds, authority, idempotencyKey)
     throw new HttpError(400, error instanceof Error ? error.message : "invalid guarded write envelope.");
   }
 }
+function validateGuardedAdoptionEnvelope(value, headerBounds, authority, idempotencyKey) {
+  try {
+    if (!value || typeof value !== "object") {
+      throw new Error("guarded adoption envelope is required.");
+    }
+    const envelope = value;
+    assertExactRequestKeys(value, "guarded adoption envelope", [
+      "contract",
+      "action",
+      "deterministic_key",
+      "operation_id",
+      "step_id",
+      "target_id",
+      "binding",
+      "expected_version",
+      "expected_content_sha256",
+      "adoption_receipt_id",
+      "limits"
+    ]);
+    if (envelope.contract !== KNOWLEDGE_GUARDED_WRITE_CONTRACT) {
+      throw new Error("unsupported guarded adoption contract.");
+    }
+    assertKnowledgeGuardedBinding(envelope.binding);
+    assertConfiguredAuthority(envelope.binding, authority);
+    const limits = normalizeKnowledgeGuardedLimits(envelope.limits);
+    if (canonicalKnowledgeGuardedJson(limits) !== canonicalKnowledgeGuardedJson(envelope.limits)) {
+      throw new Error("guarded-adoption limits must be explicit and complete.");
+    }
+    if (canonicalKnowledgeGuardedJson(limits.submission) !== canonicalKnowledgeGuardedJson(headerBounds)) {
+      throw new Error("adoption submission limits must exactly match the producer bound headers.");
+    }
+    const expectedKey = computeKnowledgeGuardedAdoptionDeterministicKey({
+      action: envelope.action,
+      operation_id: envelope.operation_id,
+      step_id: envelope.step_id,
+      target_id: envelope.target_id,
+      binding: envelope.binding,
+      expected_version: envelope.expected_version,
+      expected_content_sha256: envelope.expected_content_sha256,
+      adoption_receipt_id: envelope.adoption_receipt_id
+    });
+    if (envelope.deterministic_key !== expectedKey || idempotencyKey !== expectedKey) {
+      throw new Error("adoption deterministic key must match both the exact tuple and Idempotency-Key.");
+    }
+    if (knowledgeGuardedUtf8Bytes(envelope) > headerBounds.max_bytes) {
+      throw new Error("guarded adoption envelope exceeds the producer byte cap.");
+    }
+    return envelope;
+  } catch (error) {
+    if (error instanceof HttpError)
+      throw error;
+    throw new HttpError(400, error instanceof Error ? error.message : "invalid guarded adoption envelope.");
+  }
+}
 function validateGuardedManifestEnvelope(value, bounds, authority, idempotencyKey) {
   try {
     if (!value || typeof value !== "object")
@@ -21526,6 +22406,73 @@ function createServeHandler(deps) {
         const bounds = guardedBoundsFromQuery(req, url);
         const reconciliation = await guardedRepo.reconcileManifest(decodeURIComponent(guardedManifestMatch[1]), binding, bounds);
         return reconciliation ? boundedJson(reconciliation, 200, bounds, startedAt) : boundedJson({ error: "not_found" }, 404, bounds, startedAt);
+      }
+      if (path === "/v1/guarded-adoptions" && method === "POST") {
+        if (!guardedRepo) {
+          return json({ error: "guarded_authority_unconfigured" }, 503);
+        }
+        const startedAt = Date.now();
+        const tenantId = req.headers.get("x-knowledge-tenant-id");
+        if (!tenantId)
+          throw new HttpError(400, "x-knowledge-tenant-id is required.");
+        const principal = await authOrThrow(req, ["knowledge:write"], tenantId);
+        const bounds = guardedBoundsFromHeaders(req);
+        const raw = await readBoundedJson(req, bounds, startedAt);
+        const envelope = validateGuardedAdoptionEnvelope(raw, bounds, guardedRepo.authority, req.headers.get("idempotency-key"));
+        if (envelope.binding.tenant_id !== tenantId) {
+          throw new HttpError(403, "adoption tenant does not match the authenticated request tenant.");
+        }
+        try {
+          const submission = await guardedRepo.executeAdoption(envelope, principalActor(principal));
+          if (submission.receipt.status === "rejected") {
+            if (submission.receipt.code === "not_found") {
+              return boundedJson({ error: "not_found" }, 404, bounds, startedAt);
+            }
+            return boundedJson({ error: "guarded_adoption_rejected", ...submission }, 409, bounds, startedAt);
+          }
+          return boundedJson(submission, submission.duplicate ? 200 : 201, bounds, startedAt);
+        } catch (error) {
+          if (error instanceof AdoptionOperationBindingConflictError) {
+            return boundedJson({
+              error: "adoption_operation_conflict",
+              receipt: error.receipt
+            }, 409, bounds, startedAt);
+          }
+          throw error;
+        }
+      }
+      const guardedAdoptionReceiptMatch = path.match(/^\/v1\/guarded-adoptions\/receipts\/([^/]+)$/);
+      if (guardedAdoptionReceiptMatch) {
+        if (method !== "GET")
+          return json({ error: "method_not_allowed" }, 405);
+        if (!guardedRepo)
+          return json({ error: "guarded_authority_unconfigured" }, 503);
+        const startedAt = Date.now();
+        const binding = guardedBindingFromQuery(url);
+        assertConfiguredAuthority(binding, guardedRepo.authority);
+        await authOrThrow(req, ["knowledge:read"], binding.tenant_id);
+        const bounds = guardedBoundsFromQuery(req, url);
+        const operationId = url.searchParams.get("operation_id");
+        const stepId = url.searchParams.get("step_id");
+        if (!operationId || !stepId) {
+          throw new HttpError(400, "operation_id and step_id are required for exact adoption reconciliation.");
+        }
+        const reconciliation = await guardedRepo.reconcileAdoption(decodeURIComponent(guardedAdoptionReceiptMatch[1]), binding, operationId, stepId, bounds);
+        return boundedJson(reconciliation, 200, bounds, startedAt);
+      }
+      const guardedBindingStateMatch = path.match(/^\/v1\/guarded-adoptions\/items\/([^/]+)\/binding-state$/);
+      if (guardedBindingStateMatch) {
+        if (method !== "GET")
+          return json({ error: "method_not_allowed" }, 405);
+        if (!guardedRepo)
+          return json({ error: "guarded_authority_unconfigured" }, 503);
+        const startedAt = Date.now();
+        const binding = guardedBindingFromQuery(url);
+        assertConfiguredAuthority(binding, guardedRepo.authority);
+        await authOrThrow(req, ["knowledge:read"], binding.tenant_id);
+        const bounds = guardedBoundsFromQuery(req, url);
+        const readback = await guardedRepo.bindingState(decodeURIComponent(guardedBindingStateMatch[1]), binding, bounds);
+        return readback ? boundedJson(readback, 200, bounds, startedAt) : boundedJson({ error: "not_found" }, 404, bounds, startedAt);
       }
       if (path === "/v1/guarded-writes" && method === "POST") {
         if (!guardedRepo) {
@@ -36010,6 +36957,38 @@ class KnowledgeGuardedWriteUncertainError extends Error {
     this.name = "KnowledgeGuardedWriteUncertainError";
   }
 }
+
+class KnowledgeGuardedAdoptionRejectedError extends Error {
+  receipt;
+  reconciliation;
+  code = "guarded_adoption_rejected";
+  constructor(receipt, reconciliation) {
+    super(`guarded_adoption_rejected: ${receipt.code}; no unguarded retry was attempted.`);
+    this.receipt = receipt;
+    this.reconciliation = reconciliation;
+    this.name = "KnowledgeGuardedAdoptionRejectedError";
+  }
+}
+
+class KnowledgeGuardedAdoptionOperationConflictError extends Error {
+  receipt;
+  code = "guarded_adoption_operation_conflict";
+  constructor(receipt) {
+    super("guarded_adoption_operation_conflict: this authority/tenant/scope/parent operation " + "and step are already bound to a different deterministic key.");
+    this.receipt = receipt;
+    this.name = "KnowledgeGuardedAdoptionOperationConflictError";
+  }
+}
+
+class KnowledgeGuardedAdoptionUncertainError extends Error {
+  deterministic_key;
+  code = "guarded_adoption_terminal_state_unavailable";
+  constructor(deterministic_key) {
+    super("guarded_adoption_terminal_state_unavailable: submission did not yield one exact " + "terminal receipt; the producer did not attempt an unguarded mutation.");
+    this.deterministic_key = deterministic_key;
+    this.name = "KnowledgeGuardedAdoptionUncertainError";
+  }
+}
 function boundHeaders(bounds) {
   return {
     "x-knowledge-max-calls": String(bounds.max_calls),
@@ -36069,6 +37048,13 @@ function manifestStepRefusal(error51) {
     "external_authority_receipt_verifier_required"
   ];
   return guardedPrefixes.some((prefix) => message.startsWith(prefix)) ? message : null;
+}
+function adoptionConflictReceipt(error51) {
+  const body = parseErrorBody(error51);
+  if (body?.error !== "adoption_operation_conflict")
+    return;
+  const receipt = body.receipt;
+  return receipt && typeof receipt === "object" ? receipt : null;
 }
 
 class GuardedWriter {
@@ -36287,6 +37273,169 @@ class GuardedWriter {
       throw new Error("guarded_reconciliation_response_exceeds_byte_cap.");
     }
     return response;
+  }
+  async reconcileAdoption(deterministicKey, operationId, stepId, bounds = this.limits.reconciliation) {
+    assertKnowledgeGuardedBounds(bounds, "adoption reconciliation bounds");
+    const response = await this.transport.get(`/guarded-adoptions/receipts/${encodeURIComponent(deterministicKey)}`, {
+      query: {
+        ...bindingQuery(this.binding),
+        operation_id: operationId,
+        step_id: stepId,
+        max_calls: bounds.max_calls,
+        max_items: bounds.max_items,
+        max_bytes: bounds.max_bytes,
+        wall_time_ms: bounds.wall_time_ms
+      },
+      headers: boundHeaders(bounds),
+      timeoutMs: bounds.wall_time_ms,
+      retry: false
+    });
+    if (knowledgeGuardedUtf8Bytes(response) > bounds.max_bytes) {
+      throw new Error("guarded_adoption_reconciliation_response_exceeds_byte_cap.");
+    }
+    return response;
+  }
+  async readBindingState(fullId, bounds = this.limits.readback) {
+    assertKnowledgeGuardedBounds(bounds, "binding-state readback bounds");
+    const response = await this.transport.get(`/guarded-adoptions/items/${encodeURIComponent(fullId)}/binding-state`, {
+      query: {
+        ...bindingQuery(this.binding),
+        max_calls: bounds.max_calls,
+        max_items: bounds.max_items,
+        max_bytes: bounds.max_bytes,
+        wall_time_ms: bounds.wall_time_ms
+      },
+      headers: boundHeaders(bounds),
+      timeoutMs: bounds.wall_time_ms,
+      retry: false
+    });
+    if (knowledgeGuardedUtf8Bytes(response) > bounds.max_bytes || response.contract !== KNOWLEDGE_GUARDED_WRITE_CONTRACT || response.exact !== true || response.bounded !== true || response.item_count !== 1 || response.target_id !== fullId) {
+      throw new Error("guarded_binding_state_exact_readback_failed.");
+    }
+    return response;
+  }
+  async submitAdoption(envelope) {
+    if (knowledgeGuardedUtf8Bytes(envelope) > this.limits.submission.max_bytes) {
+      throw new Error("guarded_adoption_request_exceeds_submission_byte_cap.");
+    }
+    let submission = null;
+    let submitError = null;
+    try {
+      submission = await this.transport.post("/guarded-adoptions", envelope, {
+        headers: {
+          ...boundHeaders(this.limits.submission),
+          "x-knowledge-tenant-id": this.binding.tenant_id
+        },
+        idempotencyKey: envelope.deterministic_key,
+        timeoutMs: this.limits.submission.wall_time_ms,
+        retry: false
+      });
+    } catch (error51) {
+      if (parseErrorBody(error51)?.error === "not_found")
+        throw error51;
+      submitError = error51;
+    }
+    let reconciliation;
+    try {
+      reconciliation = await this.reconcileAdoption(envelope.deterministic_key, envelope.operation_id, envelope.step_id);
+    } catch {
+      const conflict = adoptionConflictReceipt(submitError);
+      if (conflict !== undefined) {
+        throw new KnowledgeGuardedAdoptionOperationConflictError(conflict);
+      }
+      throw new KnowledgeGuardedAdoptionUncertainError(envelope.deterministic_key);
+    }
+    if (!reconciliation.terminal_complete || reconciliation.receipt_count !== 1 || !reconciliation.receipt) {
+      const conflict = adoptionConflictReceipt(submitError);
+      if (conflict !== undefined) {
+        throw new KnowledgeGuardedAdoptionOperationConflictError(conflict);
+      }
+      throw new KnowledgeGuardedAdoptionUncertainError(envelope.deterministic_key);
+    }
+    const receipt = reconciliation.receipt;
+    if (receipt.deterministic_key !== envelope.deterministic_key || receipt.operation_id !== envelope.operation_id || receipt.step_id !== envelope.step_id) {
+      throw new KnowledgeGuardedAdoptionUncertainError(envelope.deterministic_key);
+    }
+    if (receipt.status !== "accepted") {
+      throw new KnowledgeGuardedAdoptionRejectedError(receipt, reconciliation);
+    }
+    return { submission, receipt, reconciliation };
+  }
+  async adoptLegacy(options) {
+    const deterministicKey = computeKnowledgeGuardedAdoptionDeterministicKey({
+      action: "adopt",
+      ...options,
+      binding: this.binding,
+      adoption_receipt_id: null
+    });
+    const envelope = {
+      contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+      action: "adopt",
+      deterministic_key: deterministicKey,
+      operation_id: options.operation_id,
+      step_id: options.step_id,
+      target_id: options.target_id,
+      binding: this.binding,
+      expected_version: options.expected_version,
+      expected_content_sha256: options.expected_content_sha256,
+      adoption_receipt_id: null,
+      limits: this.limits
+    };
+    const terminal = await this.submitAdoption(envelope);
+    const bindingState = await this.readBindingState(options.target_id);
+    const readback = await this.readback(options.target_id);
+    if (bindingState.state !== "bound_to_requested" || bindingState.item_version !== terminal.receipt.result_version || bindingState.content_sha256 !== terminal.receipt.result_content_sha256 || readback.item.version !== terminal.receipt.result_version) {
+      throw new KnowledgeGuardedAdoptionUncertainError(deterministicKey);
+    }
+    return {
+      deterministic_key: deterministicKey,
+      duplicate: terminal.submission?.duplicate ?? false,
+      receipt: terminal.receipt,
+      reconciliation: terminal.reconciliation,
+      binding_state: bindingState,
+      readback
+    };
+  }
+  async rollbackLegacyAdoption(options) {
+    const source = options.adoption_receipt;
+    if (source.action !== "adopt" || source.status !== "accepted" || source.effect_count !== 1 || !sameBinding(source.binding, this.binding) || source.result_version === null || source.result_content_sha256 === null) {
+      throw new Error("rollback requires an accepted adoption receipt for this guarded writer binding.");
+    }
+    const deterministicKey = computeKnowledgeGuardedAdoptionDeterministicKey({
+      action: "rollback",
+      operation_id: options.operation_id,
+      step_id: options.step_id,
+      target_id: source.target_id,
+      binding: this.binding,
+      expected_version: source.result_version,
+      expected_content_sha256: source.result_content_sha256,
+      adoption_receipt_id: source.receipt_id
+    });
+    const envelope = {
+      contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+      action: "rollback",
+      deterministic_key: deterministicKey,
+      operation_id: options.operation_id,
+      step_id: options.step_id,
+      target_id: source.target_id,
+      binding: this.binding,
+      expected_version: source.result_version,
+      expected_content_sha256: source.result_content_sha256,
+      adoption_receipt_id: source.receipt_id,
+      limits: this.limits
+    };
+    const terminal = await this.submitAdoption(envelope);
+    const bindingState = await this.readBindingState(source.target_id);
+    if (bindingState.state !== "legacy_unbound" || bindingState.item_version !== terminal.receipt.result_version || bindingState.content_sha256 !== terminal.receipt.result_content_sha256) {
+      throw new KnowledgeGuardedAdoptionUncertainError(deterministicKey);
+    }
+    return {
+      deterministic_key: deterministicKey,
+      duplicate: terminal.submission?.duplicate ?? false,
+      receipt: terminal.receipt,
+      reconciliation: terminal.reconciliation,
+      binding_state: bindingState
+    };
   }
   async readback(fullId, bounds = this.limits.readback) {
     assertKnowledgeGuardedBounds(bounds, "readback bounds");
@@ -45349,6 +46498,7 @@ export {
   knowledgeModeReport,
   knowledgeGuardedUtf8Bytes,
   knowledgeGuardedDigest,
+  knowledgeGuardedContentSha256,
   knowledgeAuthStatus,
   knowledgeAuthPath,
   isSupportedSourceRef,
@@ -45403,6 +46553,8 @@ export {
   computeKnowledgeGuardedManifestDigest,
   computeKnowledgeGuardedManifestDeterministicKey,
   computeKnowledgeGuardedDeterministicKey,
+  computeKnowledgeGuardedAdoptionReceiptId,
+  computeKnowledgeGuardedAdoptionDeterministicKey,
   compileWikiPage,
   clearKnowledgeAuth,
   catalogSourceUriForRef,
@@ -45438,6 +46590,9 @@ export {
   KnowledgeGuardedManifestUncertainError,
   KnowledgeGuardedManifestStepRefusedError,
   KnowledgeGuardedManifestConflictError,
+  KnowledgeGuardedAdoptionUncertainError,
+  KnowledgeGuardedAdoptionRejectedError,
+  KnowledgeGuardedAdoptionOperationConflictError,
   KNOWLEDGE_SYNC_TABLES,
   CURRENT_SCHEMA_VERSION as KNOWLEDGE_SYNC_SCHEMA_VERSION,
   KNOWLEDGE_SYNC_PROTOCOL_VERSION,

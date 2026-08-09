@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { ApiKeyStore, mintApiKey, verifyApiKey } from '@hasna/contracts/auth';
 import type { PGlite } from '@electric-sql/pglite';
+import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,12 +9,15 @@ import * as publicApi from '../src/index';
 import {
   DEFAULT_KNOWLEDGE_GUARDED_LIMITS,
   KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+  KnowledgeGuardedAdoptionRejectedError,
   KnowledgeGuardedManifestConflictError,
   KnowledgeGuardedManifestStepRefusedError,
   KnowledgeGuardedOperationConflictError,
   KnowledgeGuardedWriteRejectedError,
   assertKnowledgeGuardedManifestTerminalCompleteness,
   assertKnowledgeTerminalCompleteness,
+  computeKnowledgeGuardedAdoptionDeterministicKey,
+  computeKnowledgeGuardedAdoptionReceiptId,
   computeKnowledgeGuardedDeterministicKey,
   computeKnowledgeGuardedManifestId,
   computeKnowledgeGuardedReceiptId,
@@ -129,6 +133,44 @@ function writer(binding: KnowledgeGuardedBinding = BINDING, requireManifest = fa
     env,
     require_manifest: requireManifest,
   });
+}
+
+async function createLegacyItem(
+  id: string,
+  content: string,
+  input: Record<string, unknown> = {},
+) {
+  const response = await fetch(`http://127.0.0.1:${server.port}/v1/notes`, {
+    method: 'POST',
+    headers: {
+      'x-api-key': env.HASNA_KNOWLEDGE_API_KEY!,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      id,
+      title: `Legacy ${id}`,
+      content,
+      url: 'https://example.invalid/legacy',
+      tags: ['legacy'],
+      metadata: { source: 'pre-fcame' },
+      ...input,
+    }),
+  });
+  expect(response.status).toBe(201);
+  return response.json();
+}
+
+async function itemSnapshot(id: string) {
+  const result = await db.query<Record<string, unknown>>(
+    `SELECT
+       id, title, content, url, tags, metadata, archived, created_at, updated_at, version,
+       authority_classification, authority_id, tenant_id, scope, parent_id,
+       guarded_adoption_receipt_id
+     FROM knowledge_items WHERE id = $1`,
+    [id],
+  );
+  expect(result.rows).toHaveLength(1);
+  return result.rows[0]!;
 }
 
 test('REGRESSION: guarded writer uses the supplied env endpoint and credential, not ambient credentials', async () => {
@@ -344,6 +386,729 @@ function manifestStep(
 }
 
 describe('FCAME-1 guarded Knowledge writer', () => {
+  test('REGRESSION: legacy rows can be inspected and adopted without changing their content', async () => {
+    const targetId = 'k_fcame_legacy_adoption_regression';
+    const content = 'legacy doctrine body requiring guarded adoption';
+    await createLegacyItem(targetId, content, { title: 'Legacy adoption regression' });
+    const before = await itemSnapshot(targetId);
+
+    const ordinaryRead = await fetch(`http://127.0.0.1:${server.port}/v1/notes/${targetId}`, {
+      headers: { 'x-api-key': env.HASNA_KNOWLEDGE_API_KEY! },
+    });
+    expect(ordinaryRead.status).toBe(200);
+    expect((await ordinaryRead.json() as { content: string }).content).toBe(content);
+
+    // This is the shipped failure: exact ordinary reads work, while the
+    // binding-scoped guarded readback cannot see an existing unbound row.
+    let guardedReadbackError: unknown = null;
+    try {
+      await writer().readback(targetId);
+    } catch (error) {
+      guardedReadbackError = error;
+    }
+    expect(guardedReadbackError).toBeInstanceOf(Error);
+    expect((guardedReadbackError as Error).message).toMatch(/404/);
+    console.log('CONTROL: ordinary_exact_read=200 guarded_binding_readback=404');
+
+    const guarded = writer();
+    const state = await guarded.readBindingState(targetId);
+    expect(state.state).toBe('legacy_unbound');
+    expect(state.item_version).toBe(1);
+    expect(state.content_sha256)
+      .toBe(createHash('sha256').update(content, 'utf8').digest('hex'));
+
+    const adopted = await guarded.adoptLegacy({
+      operation_id: 'op-legacy-adoption-regression',
+      step_id: 'step-adopt',
+      target_id: targetId,
+      expected_version: state.item_version!,
+      expected_content_sha256: state.content_sha256!,
+    });
+    expect(adopted.duplicate).toBe(false);
+    expect(adopted.receipt.status).toBe('accepted');
+    expect(adopted.receipt.code).toBe('adopted');
+    expect(adopted.receipt.effect_count).toBe(1);
+    expect(adopted.readback.item.content).toBe(content);
+    expect(adopted.readback.item.version).toBe(1);
+    expect(adopted.receipt.prior_tenant_id).toBeNull();
+
+    const after = await itemSnapshot(targetId);
+    for (const field of [
+      'title',
+      'content',
+      'url',
+      'tags',
+      'metadata',
+      'archived',
+      'created_at',
+      'updated_at',
+      'version',
+    ]) {
+      expect(after[field]).toEqual(before[field]);
+    }
+    expect(after.authority_classification).toBe(BINDING.authority.classification);
+    expect(after.authority_id).toBe(BINDING.authority.authority_id);
+    expect(String(after.tenant_id)).toBe(BINDING.tenant_id);
+    expect(after.scope).toBe(BINDING.scope);
+    expect(after.parent_id).toBe(BINDING.parent_id);
+    expect(after.guarded_adoption_receipt_id).toBe(adopted.receipt.receipt_id);
+    const history = await db.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM knowledge_item_versions WHERE item_id = $1`,
+      [targetId],
+    );
+    expect(history.rows[0]!.count).toBe('0');
+
+    const replay = await guarded.adoptLegacy({
+      operation_id: 'op-legacy-adoption-regression',
+      step_id: 'step-adopt',
+      target_id: targetId,
+      expected_version: state.item_version!,
+      expected_content_sha256: state.content_sha256!,
+    });
+    expect(replay.duplicate).toBe(true);
+    expect(replay.receipt.receipt_id).toBe(adopted.receipt.receipt_id);
+    const receiptCount = await db.query<{ count: string }>(
+      `SELECT count(*)::text AS count
+         FROM knowledge_guarded_adoption_receipts
+        WHERE deterministic_key = $1`,
+      [adopted.deterministic_key],
+    );
+    expect(receiptCount.rows[0]!.count).toBe('1');
+    await expect(
+      db.query(
+        `UPDATE knowledge_guarded_adoption_receipts
+            SET code = 'rewritten'
+          WHERE receipt_id = $1`,
+        [adopted.receipt.receipt_id],
+      ),
+    ).rejects.toThrow(/immutable/i);
+    await expect(
+      db.query(
+        `DELETE FROM knowledge_guarded_adoption_receipts WHERE receipt_id = $1`,
+        [adopted.receipt.receipt_id],
+      ),
+    ).rejects.toThrow(/immutable/i);
+
+    const legacyPatch = await fetch(`http://127.0.0.1:${server.port}/v1/notes/${targetId}`, {
+      method: 'PATCH',
+      headers: {
+        'x-api-key': env.HASNA_KNOWLEDGE_API_KEY!,
+        'content-type': 'application/json',
+        'if-match': '1',
+      },
+      body: JSON.stringify({ content: 'ordinary-cas-must-not-adopt-or-overwrite' }),
+    });
+    expect(legacyPatch.status).toBe(404);
+    expect((await guarded.readback(targetId)).item.content).toBe(content);
+  });
+
+  test('binding-state readback distinguishes legacy, requested, and elsewhere without leaking elsewhere', async () => {
+    const legacyId = 'k_fcame_binding_state_legacy';
+    const legacy = await createLegacyItem(legacyId, 'legacy binding state') as {
+      short_id: string;
+    };
+    const requestedId = 'k_fcame_binding_state_requested';
+    await writer().execute(descriptor({
+      operation: 'op-binding-state-requested',
+      step: 'step-create',
+      target: requestedId,
+      payload: { title: 'Requested binding', content: 'requested binding body' },
+    }));
+    const otherBinding: KnowledgeGuardedBinding = {
+      ...BINDING,
+      scope: 'project:elsewhere',
+      parent_id: 'project:elsewhere',
+    };
+    const elsewhereId = 'k_fcame_binding_state_elsewhere';
+    await writer(otherBinding).execute(descriptor({
+      operation: 'op-binding-state-elsewhere',
+      step: 'step-create',
+      target: elsewhereId,
+      binding: otherBinding,
+      payload: { title: 'Elsewhere binding', content: 'must not disclose its hash' },
+    }));
+
+    const legacyState = await writer().readBindingState(legacyId);
+    expect(legacyState.state).toBe('legacy_unbound');
+    expect(legacyState.item_version).toBe(1);
+    expect(legacyState.content_sha256)
+      .toBe(createHash('sha256').update('legacy binding state').digest('hex'));
+
+    const requestedState = await writer().readBindingState(requestedId);
+    expect(requestedState.state).toBe('bound_to_requested');
+    expect(requestedState.item_version).toBe(1);
+    expect(requestedState.content_sha256)
+      .toBe(createHash('sha256').update('requested binding body').digest('hex'));
+
+    const elsewhereState = await writer().readBindingState(elsewhereId);
+    expect(elsewhereState.state).toBe('bound_elsewhere');
+    expect(elsewhereState.item_version).toBeNull();
+    expect(elsewhereState.content_sha256).toBeNull();
+
+    const otherTenant = 'tenant-fcame-other';
+    const otherTenantWriter = createKnowledgeGuardedWriter({
+      binding: { ...BINDING, tenant_id: otherTenant },
+      env: {
+        ...env,
+        HASNA_KNOWLEDGE_API_KEY: mintApiKey({
+          app: 'knowledge',
+          scopes: ['knowledge:read', 'knowledge:write'],
+          tid: otherTenant,
+          signingSecret: SIGNING,
+        }).token,
+      },
+    });
+    await expect(otherTenantWriter.readBindingState(requestedId)).rejects.toThrow(/404/);
+    await expect(writer().readBindingState(legacy.short_id)).rejects.toThrow(/404/);
+    await expect(writer().readBindingState('k_fcame_binding_state_absent')).rejects.toThrow(/404/);
+  });
+
+  test('cross-tenant and absent adoption targets share one detail-free not-found surface', async () => {
+    const otherTenant = 'tenant-fcame-adoption-private';
+    const otherBinding: KnowledgeGuardedBinding = {
+      ...BINDING,
+      tenant_id: otherTenant,
+      scope: 'project:adoption-private',
+      parent_id: 'project:adoption-private',
+    };
+    const otherEnv = {
+      ...env,
+      HASNA_KNOWLEDGE_API_KEY: mintApiKey({
+        app: 'knowledge',
+        scopes: ['knowledge:read', 'knowledge:write'],
+        tid: otherTenant,
+        signingSecret: SIGNING,
+      }).token,
+    };
+    const otherWriter = createKnowledgeGuardedWriter({ binding: otherBinding, env: otherEnv });
+    const crossTenantId = 'k_fcame_adoption_cross_tenant_private';
+    const crossTenantContent = 'cross-tenant adoption content must remain private';
+    await otherWriter.execute(descriptor({
+      operation: 'op-adoption-cross-tenant-create',
+      step: 'step-create',
+      target: crossTenantId,
+      binding: otherBinding,
+      payload: { title: 'Cross-tenant private adoption target', content: crossTenantContent },
+    }));
+    const before = await itemSnapshot(crossTenantId);
+    const missingId = 'k_fcame_adoption_absent_private';
+    const expectedContentSha256 = createHash('sha256').update(crossTenantContent).digest('hex');
+
+    const directPost = async (targetId: string, operationId: string) => {
+      const deterministicKey = computeKnowledgeGuardedAdoptionDeterministicKey({
+        action: 'adopt',
+        operation_id: operationId,
+        step_id: 'step-adopt',
+        target_id: targetId,
+        binding: BINDING,
+        expected_version: 1,
+        expected_content_sha256: expectedContentSha256,
+        adoption_receipt_id: null,
+      });
+      const submission = DEFAULT_KNOWLEDGE_GUARDED_LIMITS.submission;
+      return fetch(`http://127.0.0.1:${server.port}/v1/guarded-adoptions`, {
+        method: 'POST',
+        headers: {
+          'x-api-key': env.HASNA_KNOWLEDGE_API_KEY!,
+          'x-knowledge-tenant-id': TENANT,
+          'content-type': 'application/json',
+          'idempotency-key': deterministicKey,
+          'x-knowledge-max-calls': String(submission.max_calls),
+          'x-knowledge-max-items': String(submission.max_items),
+          'x-knowledge-max-bytes': String(submission.max_bytes),
+          'x-knowledge-wall-time-ms': String(submission.wall_time_ms),
+        },
+        body: JSON.stringify({
+          contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+          action: 'adopt',
+          deterministic_key: deterministicKey,
+          operation_id: operationId,
+          step_id: 'step-adopt',
+          target_id: targetId,
+          binding: BINDING,
+          expected_version: 1,
+          expected_content_sha256: expectedContentSha256,
+          adoption_receipt_id: null,
+          limits: DEFAULT_KNOWLEDGE_GUARDED_LIMITS,
+        }),
+      });
+    };
+
+    const crossTenantResponse = await directPost(
+      crossTenantId,
+      'op-adoption-cross-tenant-direct-private',
+    );
+    const absentResponse = await directPost(missingId, 'op-adoption-absent-direct-private');
+    expect(crossTenantResponse.status).toBe(404);
+    expect(absentResponse.status).toBe(404);
+    expect(await crossTenantResponse.json()).toEqual({ error: 'not_found' });
+    expect(await absentResponse.json()).toEqual({ error: 'not_found' });
+
+    const sdkErrors: unknown[] = [];
+    for (const [targetId, operationId] of [
+      [crossTenantId, 'op-adoption-cross-tenant-sdk-private'],
+      [missingId, 'op-adoption-absent-sdk-private'],
+    ] as const) {
+      try {
+        await writer().adoptLegacy({
+          operation_id: operationId,
+          step_id: 'step-adopt',
+          target_id: targetId,
+          expected_version: 1,
+          expected_content_sha256: expectedContentSha256,
+        });
+      } catch (error) {
+        sdkErrors.push(error);
+      }
+    }
+    expect(sdkErrors).toHaveLength(2);
+    for (const error of sdkErrors) {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(/404/);
+      expect('receipt' in (error as object)).toBe(false);
+    }
+    expect(await itemSnapshot(crossTenantId)).toEqual(before);
+    expect((await db.query(`SELECT 1 FROM knowledge_items WHERE id = $1`, [missingId])).rows)
+      .toHaveLength(0);
+  });
+
+  test('legacy adoption rejects binding, version, and content-SHA conflicts without effects', async () => {
+    const otherBinding: KnowledgeGuardedBinding = {
+      ...BINDING,
+      scope: 'project:adoption-conflict',
+      parent_id: 'project:adoption-conflict',
+    };
+    const boundId = 'k_fcame_adoption_conflict_binding';
+    await writer(otherBinding).execute(descriptor({
+      operation: 'op-adoption-conflict-binding-create',
+      step: 'step-create',
+      target: boundId,
+      binding: otherBinding,
+      payload: { title: 'Bound elsewhere', content: 'bound elsewhere body' },
+    }));
+    const versionId = 'k_fcame_adoption_conflict_version';
+    await createLegacyItem(versionId, 'version conflict body');
+    const hashId = 'k_fcame_adoption_conflict_hash';
+    await createLegacyItem(hashId, 'hash conflict body');
+
+    const cases = [
+      {
+        name: 'binding',
+        target: boundId,
+        version: 1,
+        sha: createHash('sha256').update('bound elsewhere body').digest('hex'),
+        code: 'binding_mismatch',
+      },
+      {
+        name: 'version',
+        target: versionId,
+        version: 2,
+        sha: createHash('sha256').update('version conflict body').digest('hex'),
+        code: 'version_conflict',
+      },
+      {
+        name: 'hash',
+        target: hashId,
+        version: 1,
+        sha: '0'.repeat(64),
+        code: 'content_digest_conflict',
+      },
+    ] as const;
+
+    for (const item of cases) {
+      const before = await itemSnapshot(item.target);
+      let caught: unknown = null;
+      try {
+        await writer().adoptLegacy({
+          operation_id: `op-adoption-conflict-${item.name}`,
+          step_id: 'step-adopt',
+          target_id: item.target,
+          expected_version: item.version,
+          expected_content_sha256: item.sha,
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(KnowledgeGuardedAdoptionRejectedError);
+      expect((caught as KnowledgeGuardedAdoptionRejectedError).receipt.code).toBe(item.code);
+      expect((caught as KnowledgeGuardedAdoptionRejectedError).receipt.effect_count).toBe(0);
+      expect(await itemSnapshot(item.target)).toEqual(before);
+    }
+  });
+
+  test('database trigger refuses stale or content-mutating live-looking adoption claims', async () => {
+    const insertClaim = async (options: {
+      target: string;
+      operation: string;
+      version: number;
+      contentSha: string;
+    }) => {
+      const deterministicKey = computeKnowledgeGuardedAdoptionDeterministicKey({
+        action: 'adopt',
+        operation_id: options.operation,
+        step_id: 'step-adopt',
+        target_id: options.target,
+        binding: BINDING,
+        expected_version: options.version,
+        expected_content_sha256: options.contentSha,
+        adoption_receipt_id: null,
+      });
+      await db.query(
+        `INSERT INTO knowledge_guarded_adoption_claims (
+           deterministic_key, planned_receipt_id, operation_id, step_id, action, target_id,
+           authority_classification, authority_id, tenant_id, scope, parent_id,
+           expected_version, expected_content_sha256, adoption_receipt_id
+         ) VALUES ($1,$2,$3,'step-adopt','adopt',$4,$5,$6,$7,$8,$9,$10,$11,NULL)`,
+        [
+          deterministicKey,
+          computeKnowledgeGuardedAdoptionReceiptId(deterministicKey),
+          options.operation,
+          options.target,
+          BINDING.authority.classification,
+          BINDING.authority.authority_id,
+          BINDING.tenant_id,
+          BINDING.scope,
+          BINDING.parent_id,
+          options.version,
+          options.contentSha,
+        ],
+      );
+      return deterministicKey;
+    };
+
+    const contentTarget = 'k_fcame_adoption_trigger_content_change';
+    const content = 'trigger-protected legacy content';
+    await createLegacyItem(contentTarget, content);
+    const contentKey = await insertClaim({
+      target: contentTarget,
+      operation: 'op-adoption-trigger-content-change',
+      version: 1,
+      contentSha: createHash('sha256').update(content).digest('hex'),
+    });
+    await db.query(
+      `SELECT set_config('hasna.knowledge_guarded_adoption_key', $1, false)`,
+      [contentKey],
+    );
+    try {
+      await expect(db.query(
+        `UPDATE knowledge_items SET
+           content = 'must-not-change-during-adoption',
+           authority_classification = $1,
+           authority_id = $2,
+           tenant_id = $3,
+           scope = $4,
+           parent_id = $5,
+           guarded_adoption_receipt_id = $6
+         WHERE id = $7`,
+        [
+          BINDING.authority.classification,
+          BINDING.authority.authority_id,
+          BINDING.tenant_id,
+          BINDING.scope,
+          BINDING.parent_id,
+          computeKnowledgeGuardedAdoptionReceiptId(contentKey),
+          contentTarget,
+        ],
+      )).rejects.toThrow(/does not match its live adoption claim/i);
+    } finally {
+      await db.query(`SELECT set_config('hasna.knowledge_guarded_adoption_key', '', false)`);
+    }
+    expect((await itemSnapshot(contentTarget)).content).toBe(content);
+
+    const staleTarget = 'k_fcame_adoption_trigger_stale_version';
+    const staleContent = 'stale-version legacy content';
+    await createLegacyItem(staleTarget, staleContent);
+    const staleKey = await insertClaim({
+      target: staleTarget,
+      operation: 'op-adoption-trigger-stale-version',
+      version: 2,
+      contentSha: createHash('sha256').update(staleContent).digest('hex'),
+    });
+    await db.query(
+      `SELECT set_config('hasna.knowledge_guarded_adoption_key', $1, false)`,
+      [staleKey],
+    );
+    try {
+      await expect(db.query(
+        `UPDATE knowledge_items SET
+           authority_classification = $1,
+           authority_id = $2,
+           tenant_id = $3,
+           scope = $4,
+           parent_id = $5,
+           guarded_adoption_receipt_id = $6
+         WHERE id = $7`,
+        [
+          BINDING.authority.classification,
+          BINDING.authority.authority_id,
+          BINDING.tenant_id,
+          BINDING.scope,
+          BINDING.parent_id,
+          computeKnowledgeGuardedAdoptionReceiptId(staleKey),
+          staleTarget,
+        ],
+      )).rejects.toThrow(/does not match its live adoption claim/i);
+    } finally {
+      await db.query(`SELECT set_config('hasna.knowledge_guarded_adoption_key', '', false)`);
+    }
+    expect((await writer().readBindingState(staleTarget)).state).toBe('legacy_unbound');
+  });
+
+  test('adoption claim binds only its planned receipt once', async () => {
+    const unrelatedKey = computeKnowledgeGuardedAdoptionDeterministicKey({
+      action: 'adopt',
+      operation_id: 'op-adoption-claim-unrelated-receipt',
+      step_id: 'step-adopt',
+      target_id: 'k_fcame_adoption_claim_unrelated_receipt',
+      binding: BINDING,
+      expected_version: 1,
+      expected_content_sha256: '1'.repeat(64),
+      adoption_receipt_id: null,
+    });
+    const unrelatedReceiptId = computeKnowledgeGuardedAdoptionReceiptId(unrelatedKey);
+    await db.query(
+      `INSERT INTO knowledge_guarded_adoption_receipts (
+         receipt_id, deterministic_key, operation_id, step_id, action, target_id,
+         authority_classification, authority_id, tenant_id, scope, parent_id,
+         expected_version, expected_content_sha256, adoption_receipt_id, prior_tenant_id,
+         status, code, effect_count, result_version, result_content_sha256
+       ) VALUES ($1,$2,$3,'step-adopt','adopt',$4,$5,$6,$7,$8,$9,1,$10,NULL,NULL,
+                 'rejected','not_found',0,NULL,NULL)`,
+      [
+        unrelatedReceiptId,
+        unrelatedKey,
+        'op-adoption-claim-unrelated-receipt',
+        'k_fcame_adoption_claim_unrelated_receipt',
+        BINDING.authority.classification,
+        BINDING.authority.authority_id,
+        BINDING.tenant_id,
+        BINDING.scope,
+        BINDING.parent_id,
+        '1'.repeat(64),
+      ],
+    );
+
+    const claimKey = computeKnowledgeGuardedAdoptionDeterministicKey({
+      action: 'adopt',
+      operation_id: 'op-adoption-claim-planned-receipt',
+      step_id: 'step-adopt',
+      target_id: 'k_fcame_adoption_claim_planned_receipt',
+      binding: BINDING,
+      expected_version: 1,
+      expected_content_sha256: '2'.repeat(64),
+      adoption_receipt_id: null,
+    });
+    const plannedReceiptId = computeKnowledgeGuardedAdoptionReceiptId(claimKey);
+    await db.query(
+      `INSERT INTO knowledge_guarded_adoption_claims (
+         deterministic_key, planned_receipt_id, operation_id, step_id, action, target_id,
+         authority_classification, authority_id, tenant_id, scope, parent_id,
+         expected_version, expected_content_sha256, adoption_receipt_id
+       ) VALUES ($1,$2,$3,'step-adopt','adopt',$4,$5,$6,$7,$8,$9,1,$10,NULL)`,
+      [
+        claimKey,
+        plannedReceiptId,
+        'op-adoption-claim-planned-receipt',
+        'k_fcame_adoption_claim_planned_receipt',
+        BINDING.authority.classification,
+        BINDING.authority.authority_id,
+        BINDING.tenant_id,
+        BINDING.scope,
+        BINDING.parent_id,
+        '2'.repeat(64),
+      ],
+    );
+
+    await expect(db.query(
+      `UPDATE knowledge_guarded_adoption_claims SET receipt_id = $1
+        WHERE deterministic_key = $2`,
+      [unrelatedReceiptId, claimKey],
+    )).rejects.toThrow(/must match its planned terminal receipt/i);
+    await db.query(
+      `UPDATE knowledge_guarded_adoption_claims SET receipt_id = $1
+        WHERE deterministic_key = $2`,
+      [plannedReceiptId, claimKey],
+    );
+    const bound = await db.query<{ receipt_id: string }>(
+      `SELECT receipt_id FROM knowledge_guarded_adoption_claims WHERE deterministic_key = $1`,
+      [claimKey],
+    );
+    expect(bound.rows[0]!.receipt_id).toBe(plannedReceiptId);
+    await expect(db.query(
+      `UPDATE knowledge_guarded_adoption_claims SET receipt_id = $1
+        WHERE deterministic_key = $2`,
+      [unrelatedReceiptId, claimKey],
+    )).rejects.toThrow(/may only bind one terminal receipt/i);
+  });
+
+  test('receipt-scoped rollback is conditional, idempotent, and cannot roll back a later adoption', async () => {
+    const targetId = 'k_fcame_adoption_rollback';
+    const content = 'rollback-stable legacy body';
+    await createLegacyItem(targetId, content);
+    const state = await writer().readBindingState(targetId);
+    const first = await writer().adoptLegacy({
+      operation_id: 'op-adoption-rollback-first',
+      step_id: 'step-adopt',
+      target_id: targetId,
+      expected_version: state.item_version!,
+      expected_content_sha256: state.content_sha256!,
+    });
+    const rolledBack = await writer().rollbackLegacyAdoption({
+      operation_id: 'op-adoption-rollback-first',
+      step_id: 'step-rollback',
+      adoption_receipt: first.receipt,
+    });
+    expect(rolledBack.receipt.code).toBe('rolled_back');
+    expect(rolledBack.binding_state.state).toBe('legacy_unbound');
+    expect(rolledBack.binding_state.item_version).toBe(1);
+    expect(rolledBack.binding_state.content_sha256)
+      .toBe(createHash('sha256').update(content).digest('hex'));
+    const rollbackReplay = await writer().rollbackLegacyAdoption({
+      operation_id: 'op-adoption-rollback-first',
+      step_id: 'step-rollback',
+      adoption_receipt: first.receipt,
+    });
+    expect(rollbackReplay.duplicate).toBe(true);
+    expect(rollbackReplay.receipt.receipt_id).toBe(rolledBack.receipt.receipt_id);
+
+    const second = await writer().adoptLegacy({
+      operation_id: 'op-adoption-rollback-second',
+      step_id: 'step-adopt',
+      target_id: targetId,
+      expected_version: 1,
+      expected_content_sha256: createHash('sha256').update(content).digest('hex'),
+    });
+    expect(second.receipt.receipt_id).not.toBe(first.receipt.receipt_id);
+    let staleReceipt: unknown = null;
+    try {
+      await writer().rollbackLegacyAdoption({
+        operation_id: 'op-adoption-rollback-stale-receipt',
+        step_id: 'step-rollback',
+        adoption_receipt: first.receipt,
+      });
+    } catch (error) {
+      staleReceipt = error;
+    }
+    expect(staleReceipt).toBeInstanceOf(KnowledgeGuardedAdoptionRejectedError);
+    expect((staleReceipt as KnowledgeGuardedAdoptionRejectedError).receipt.code)
+      .toBe('adoption_receipt_not_current');
+    expect((await writer().readback(targetId)).item.content).toBe(content);
+  });
+
+  test('rollback refuses a row changed after adoption', async () => {
+    const targetId = 'k_fcame_adoption_rollback_stale_content';
+    await createLegacyItem(targetId, 'before guarded update');
+    const state = await writer().readBindingState(targetId);
+    const adoption = await writer().adoptLegacy({
+      operation_id: 'op-adoption-stale-content',
+      step_id: 'step-adopt',
+      target_id: targetId,
+      expected_version: state.item_version!,
+      expected_content_sha256: state.content_sha256!,
+    });
+    await writer().execute(descriptor({
+      operation: 'op-adoption-stale-content-update',
+      step: 'step-update',
+      target: targetId,
+      verb: 'update',
+      version: 1,
+      payload: { content: 'after guarded update' },
+    }));
+
+    let caught: unknown = null;
+    try {
+      await writer().rollbackLegacyAdoption({
+        operation_id: 'op-adoption-stale-content',
+        step_id: 'step-rollback',
+        adoption_receipt: adoption.receipt,
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(KnowledgeGuardedAdoptionRejectedError);
+    expect((caught as KnowledgeGuardedAdoptionRejectedError).receipt.code).toBe('version_conflict');
+    expect((await writer().readback(targetId)).item.content).toBe('after guarded update');
+  });
+
+  test('adoption reconciles a committed POST whose response is lost', async () => {
+    const targetId = 'k_fcame_adoption_lost_response';
+    const content = 'committed before response loss';
+    await createLegacyItem(targetId, content);
+    const state = await writer().readBindingState(targetId);
+    const originalFetch = globalThis.fetch;
+    let dropped = false;
+    globalThis.fetch = (async (input, init) => {
+      const response = await originalFetch(input, init);
+      if (!dropped && init?.method === 'POST' && String(input).includes('/v1/guarded-adoptions')) {
+        dropped = true;
+        throw new Error('simulated response loss after committed adoption');
+      }
+      return response;
+    }) as typeof fetch;
+    try {
+      const adopted = await writer().adoptLegacy({
+        operation_id: 'op-adoption-lost-response',
+        step_id: 'step-adopt',
+        target_id: targetId,
+        expected_version: state.item_version!,
+        expected_content_sha256: state.content_sha256!,
+      });
+      expect(dropped).toBe(true);
+      expect(adopted.receipt.code).toBe('adopted');
+      const replay = await writer().adoptLegacy({
+        operation_id: 'op-adoption-lost-response',
+        step_id: 'step-adopt',
+        target_id: targetId,
+        expected_version: state.item_version!,
+        expected_content_sha256: state.content_sha256!,
+      });
+      expect(replay.duplicate).toBe(true);
+      expect(replay.receipt.receipt_id).toBe(adopted.receipt.receipt_id);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('adoption read and reconciliation phases enforce finite limits', async () => {
+    const targetId = 'k_fcame_adoption_bounds';
+    await createLegacyItem(targetId, 'bounded adoption body');
+    await expect(writer().readBindingState(
+      targetId,
+      { max_calls: 2, max_items: 1, max_bytes: 4096, wall_time_ms: 1000 },
+    )).rejects.toThrow(/max_calls/);
+    await expect(writer().readBindingState(
+      targetId,
+      { max_calls: 1, max_items: 1, max_bytes: 1, wall_time_ms: 1000 },
+    )).rejects.toThrow();
+    await expect(writer().reconcileAdoption(
+      `fcame1_adoption_${'0'.repeat(64)}`,
+      'op-bounds',
+      'step-bounds',
+      { max_calls: 2, max_items: 1, max_bytes: 4096, wall_time_ms: 1000 },
+    )).rejects.toThrow(/max_calls/);
+    const state = await writer().readBindingState(targetId);
+    const tiny = createKnowledgeGuardedWriter({
+      binding: BINDING,
+      env,
+      limits: {
+        submission: { max_calls: 1, max_items: 1, max_bytes: 1, wall_time_ms: 1000 },
+      },
+    });
+    await expect(tiny.adoptLegacy({
+      operation_id: 'op-adoption-bounds',
+      step_id: 'step-adopt',
+      target_id: targetId,
+      expected_version: state.item_version!,
+      expected_content_sha256: state.content_sha256!,
+    })).rejects.toThrow(/byte_cap/);
+    const claims = await db.query<{ count: string }>(
+      `SELECT count(*)::text AS count
+         FROM knowledge_guarded_adoption_claims
+        WHERE operation_id = 'op-adoption-bounds'`,
+    );
+    expect(claims.rows[0]!.count).toBe('0');
+  });
+
   test('REGRESSION: guarded item authority trigger matches TEXT claims to TEXT and UUID tenant ids', async () => {
     for (const variant of [
       {
@@ -422,6 +1187,111 @@ describe('FCAME-1 guarded Knowledge writer', () => {
         expect(result.readback.item.id).toBe(variant.targetId);
         expect(result.readback.item.content)
           .toBe(`${variant.tenantIdType} tenant guarded trigger accepts its live claim`);
+      } finally {
+        variantServer.stop(true);
+        await created.db.close();
+      }
+    }
+  }, budget(10_000));
+
+  test('legacy adoption works on fresh TEXT/UUID schemas and a pre-adoption ledger upgrade', async () => {
+    for (const variant of [
+      {
+        tenantIdType: 'text' as const,
+        migrationMode: 'direct' as const,
+        tenantId: TENANT,
+        targetId: 'k_fcame_adoption_text_fresh',
+      },
+      {
+        tenantIdType: 'uuid' as const,
+        migrationMode: 'direct' as const,
+        tenantId: '44444444-4444-4444-8444-444444444444',
+        targetId: 'k_fcame_adoption_uuid_fresh',
+      },
+      {
+        tenantIdType: 'uuid' as const,
+        migrationMode: 'pre-adoption-ledger-upgrade' as const,
+        tenantId: '55555555-5555-4555-8555-555555555555',
+        targetId: 'k_fcame_adoption_uuid_upgrade',
+      },
+    ]) {
+      const created = await createMigratedPglite({
+        knowledgeItemsTenantIdType: variant.tenantIdType,
+        migrationMode: variant.migrationMode,
+      });
+      const client = created.client;
+      const store = new ApiKeyStore(client);
+      const verifier = verifyApiKey({
+        app: 'knowledge',
+        signingSecret: SIGNING,
+        isRevoked: store.isRevoked,
+      });
+      const binding: KnowledgeGuardedBinding = {
+        ...BINDING,
+        tenant_id: variant.tenantId,
+      };
+      const variantServer = Bun.serve({
+        port: 0,
+        hostname: '127.0.0.1',
+        fetch: createServeHandler({
+          client,
+          verifier,
+          store,
+          version: '9.9.9',
+          guardedAuthority: AUTHORITY,
+        }),
+      });
+      try {
+        const content = `${variant.tenantIdType}:${variant.migrationMode}:legacy`;
+        await created.db.query(
+          `INSERT INTO knowledge_items (
+             id, short_id, title, content, url, tags, metadata, archived,
+             created_at, updated_at, tenant_id
+           ) VALUES ($1,$2,$3,$4,NULL,'[]'::jsonb,'{}'::jsonb,FALSE,$5,$5,$6)`,
+          [
+            variant.targetId,
+            `short_${variant.targetId}`,
+            `Legacy ${variant.targetId}`,
+            content,
+            '2026-08-09T00:00:00.000Z',
+            variant.tenantId,
+          ],
+        );
+        const variantWriter = createKnowledgeGuardedWriter({
+          binding,
+          env: {
+            NODE_ENV: 'test',
+            HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
+            HASNA_KNOWLEDGE_API_URL: `http://127.0.0.1:${variantServer.port}`,
+            HASNA_KNOWLEDGE_API_KEY: mintApiKey({
+              app: 'knowledge',
+              scopes: ['knowledge:read', 'knowledge:write'],
+              tid: variant.tenantId,
+              signingSecret: SIGNING,
+            }).token,
+          },
+        });
+        const state = await variantWriter.readBindingState(variant.targetId);
+        expect(state.state).toBe('legacy_unbound');
+        const adopted = await variantWriter.adoptLegacy({
+          operation_id: `op-${variant.targetId}`,
+          step_id: 'step-adopt',
+          target_id: variant.targetId,
+          expected_version: 1,
+          expected_content_sha256: createHash('sha256').update(content).digest('hex'),
+        });
+        expect(adopted.receipt.prior_tenant_id).toBe(variant.tenantId);
+        const rolledBack = await variantWriter.rollbackLegacyAdoption({
+          operation_id: `op-${variant.targetId}`,
+          step_id: 'step-rollback',
+          adoption_receipt: adopted.receipt,
+        });
+        expect(rolledBack.binding_state.state).toBe('legacy_unbound');
+        const restored = await created.db.query<{ tenant_id: string }>(
+          `SELECT tenant_id::text AS tenant_id FROM knowledge_items WHERE id = $1`,
+          [variant.targetId],
+        );
+        expect(restored.rows[0]!.tenant_id).toBe(variant.tenantId);
       } finally {
         variantServer.stop(true);
         await created.db.close();

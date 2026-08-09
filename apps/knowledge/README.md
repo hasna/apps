@@ -192,6 +192,42 @@ zero or one terminal receipt. The producer disables blind transport retry:
 after an ambiguous submission it reconciles the deterministic key first and
 never replays the mutation without terminal evidence.
 
+Rows created before FCAME-1 remain readable through ordinary exact-ID access,
+but the guarded writer will not treat an unbound row as already guarded. Adopt
+one only through the explicit bounded sequence:
+
+```ts
+const state = await guarded.readBindingState(fullId);
+if (state.state !== 'legacy_unbound') throw new Error(state.state);
+
+const adoption = await guarded.adoptLegacy({
+  operation_id: 'legacy-doctrine-adoption',
+  step_id: 'adopt-one',
+  target_id: fullId,
+  expected_version: state.item_version!,
+  expected_content_sha256: state.content_sha256!,
+});
+
+// Optional, conditional rollback. It succeeds only while this exact immutable
+// adoption receipt is still the row's current provenance and version/content
+// still match; a later adoption or content edit makes the receipt stale.
+await guarded.rollbackLegacyAdoption({
+  operation_id: 'legacy-doctrine-adoption',
+  step_id: 'rollback-one',
+  adoption_receipt: adoption.receipt,
+});
+```
+
+Binding-state reads use a full ID and return one of `legacy_unbound`,
+`bound_to_requested`, or `bound_elsewhere`. The last state is limited to the
+authenticated tenant and omits version/content hash. Adoption compares the
+exact stored version and raw UTF-8 content SHA-256, changes only binding and
+provenance columns, and preserves content, timestamps, version, and history.
+The same deterministic operation returns the same immutable receipt with no
+second effect. Ordinary `/v1/notes`, `knowledge update --if-version`, SQLite,
+and raw SQL do not create an adoption claim and cannot substitute for this
+path.
+
 For any workflow touching multiple records or authorities, construct all
 descriptors first. Derive the manifest ID with
 `computeKnowledgeGuardedManifestId(maintainerBinding, workflowOperationId)`;

@@ -14,6 +14,7 @@ import {
   assertKnowledgeGuardedBounds,
   assertKnowledgeTerminalCompleteness,
   canonicalKnowledgeGuardedJson,
+  computeKnowledgeGuardedAdoptionDeterministicKey,
   computeKnowledgeGuardedDeterministicKey,
   computeKnowledgeGuardedManifestDeterministicKey,
   knowledgeGuardedDigest,
@@ -22,7 +23,14 @@ import {
   normalizeKnowledgeGuardedLimits,
   type CreateKnowledgeGuardedManifestOptions,
   type KnowledgeGuardedBinding,
+  type KnowledgeGuardedBindingStateReadback,
   type KnowledgeGuardedBounds,
+  type KnowledgeGuardedAdoptionEnvelope,
+  type KnowledgeGuardedAdoptionReconciliation,
+  type KnowledgeGuardedAdoptionReceipt,
+  type KnowledgeGuardedAdoptionResult,
+  type KnowledgeGuardedLegacyAdoptionOptions,
+  type KnowledgeGuardedLegacyRollbackOptions,
   type KnowledgeGuardedLimits,
   type KnowledgeGuardedManifestEnvelope,
   type KnowledgeGuardedManifestReconciliation,
@@ -30,6 +38,7 @@ import {
   type KnowledgeGuardedReadback,
   type KnowledgeGuardedReceipt,
   type KnowledgeGuardedSubmission,
+  type KnowledgeGuardedRollbackResult,
   type KnowledgeGuardedWriteEnvelope,
   type KnowledgeGuardedWriteResult,
   type KnowledgePrivateInputDescriptor,
@@ -70,6 +79,22 @@ export interface KnowledgeGuardedWriter {
     fullId: string,
     bounds?: KnowledgeGuardedBounds,
   ): Promise<KnowledgeGuardedReadback>;
+  readBindingState(
+    fullId: string,
+    bounds?: KnowledgeGuardedBounds,
+  ): Promise<KnowledgeGuardedBindingStateReadback>;
+  adoptLegacy(
+    options: KnowledgeGuardedLegacyAdoptionOptions,
+  ): Promise<KnowledgeGuardedAdoptionResult>;
+  rollbackLegacyAdoption(
+    options: KnowledgeGuardedLegacyRollbackOptions,
+  ): Promise<KnowledgeGuardedRollbackResult>;
+  reconcileAdoption(
+    deterministicKey: string,
+    operationId: string,
+    stepId: string,
+    bounds?: KnowledgeGuardedBounds,
+  ): Promise<KnowledgeGuardedAdoptionReconciliation>;
 }
 
 export class KnowledgeGuardedWriteRejectedError extends Error {
@@ -138,6 +163,39 @@ export class KnowledgeGuardedWriteUncertainError extends Error {
   }
 }
 
+export class KnowledgeGuardedAdoptionRejectedError extends Error {
+  readonly code = 'guarded_adoption_rejected';
+  constructor(
+    readonly receipt: KnowledgeGuardedAdoptionReceipt,
+    readonly reconciliation: KnowledgeGuardedAdoptionReconciliation,
+  ) {
+    super(`guarded_adoption_rejected: ${receipt.code}; no unguarded retry was attempted.`);
+    this.name = 'KnowledgeGuardedAdoptionRejectedError';
+  }
+}
+
+export class KnowledgeGuardedAdoptionOperationConflictError extends Error {
+  readonly code = 'guarded_adoption_operation_conflict';
+  constructor(readonly receipt: KnowledgeGuardedAdoptionReceipt | null) {
+    super(
+      'guarded_adoption_operation_conflict: this authority/tenant/scope/parent operation '
+      + 'and step are already bound to a different deterministic key.',
+    );
+    this.name = 'KnowledgeGuardedAdoptionOperationConflictError';
+  }
+}
+
+export class KnowledgeGuardedAdoptionUncertainError extends Error {
+  readonly code = 'guarded_adoption_terminal_state_unavailable';
+  constructor(readonly deterministic_key: string) {
+    super(
+      'guarded_adoption_terminal_state_unavailable: submission did not yield one exact '
+      + 'terminal receipt; the producer did not attempt an unguarded mutation.',
+    );
+    this.name = 'KnowledgeGuardedAdoptionUncertainError';
+  }
+}
+
 function boundHeaders(bounds: KnowledgeGuardedBounds): Record<string, string> {
   return {
     'x-knowledge-max-calls': String(bounds.max_calls),
@@ -201,6 +259,15 @@ function manifestStepRefusal(error: unknown): string | null {
     'external_authority_receipt_verifier_required',
   ];
   return guardedPrefixes.some((prefix) => message.startsWith(prefix)) ? message : null;
+}
+
+function adoptionConflictReceipt(error: unknown): KnowledgeGuardedAdoptionReceipt | null | undefined {
+  const body = parseErrorBody(error);
+  if (body?.error !== 'adoption_operation_conflict') return undefined;
+  const receipt = body.receipt;
+  return receipt && typeof receipt === 'object'
+    ? receipt as KnowledgeGuardedAdoptionReceipt
+    : null;
 }
 
 class GuardedWriter implements KnowledgeGuardedWriter {
@@ -482,6 +549,232 @@ class GuardedWriter implements KnowledgeGuardedWriter {
       throw new Error('guarded_reconciliation_response_exceeds_byte_cap.');
     }
     return response;
+  }
+
+  async reconcileAdoption(
+    deterministicKey: string,
+    operationId: string,
+    stepId: string,
+    bounds: KnowledgeGuardedBounds = this.limits.reconciliation,
+  ): Promise<KnowledgeGuardedAdoptionReconciliation> {
+    assertKnowledgeGuardedBounds(bounds, 'adoption reconciliation bounds');
+    const response = await this.transport.get<KnowledgeGuardedAdoptionReconciliation>(
+      `/guarded-adoptions/receipts/${encodeURIComponent(deterministicKey)}`,
+      {
+        query: {
+          ...bindingQuery(this.binding),
+          operation_id: operationId,
+          step_id: stepId,
+          max_calls: bounds.max_calls,
+          max_items: bounds.max_items,
+          max_bytes: bounds.max_bytes,
+          wall_time_ms: bounds.wall_time_ms,
+        },
+        headers: boundHeaders(bounds),
+        timeoutMs: bounds.wall_time_ms,
+        retry: false,
+      },
+    );
+    if (knowledgeGuardedUtf8Bytes(response) > bounds.max_bytes) {
+      throw new Error('guarded_adoption_reconciliation_response_exceeds_byte_cap.');
+    }
+    return response;
+  }
+
+  async readBindingState(
+    fullId: string,
+    bounds: KnowledgeGuardedBounds = this.limits.readback,
+  ): Promise<KnowledgeGuardedBindingStateReadback> {
+    assertKnowledgeGuardedBounds(bounds, 'binding-state readback bounds');
+    const response = await this.transport.get<KnowledgeGuardedBindingStateReadback>(
+      `/guarded-adoptions/items/${encodeURIComponent(fullId)}/binding-state`,
+      {
+        query: {
+          ...bindingQuery(this.binding),
+          max_calls: bounds.max_calls,
+          max_items: bounds.max_items,
+          max_bytes: bounds.max_bytes,
+          wall_time_ms: bounds.wall_time_ms,
+        },
+        headers: boundHeaders(bounds),
+        timeoutMs: bounds.wall_time_ms,
+        retry: false,
+      },
+    );
+    if (
+      knowledgeGuardedUtf8Bytes(response) > bounds.max_bytes
+      || response.contract !== KNOWLEDGE_GUARDED_WRITE_CONTRACT
+      || response.exact !== true
+      || response.bounded !== true
+      || response.item_count !== 1
+      || response.target_id !== fullId
+    ) {
+      throw new Error('guarded_binding_state_exact_readback_failed.');
+    }
+    return response;
+  }
+
+  private async submitAdoption(
+    envelope: KnowledgeGuardedAdoptionEnvelope,
+  ): Promise<{
+    submission: { duplicate: boolean } | null;
+    receipt: KnowledgeGuardedAdoptionReceipt;
+    reconciliation: KnowledgeGuardedAdoptionReconciliation;
+  }> {
+    if (knowledgeGuardedUtf8Bytes(envelope) > this.limits.submission.max_bytes) {
+      throw new Error('guarded_adoption_request_exceeds_submission_byte_cap.');
+    }
+    let submission: { duplicate: boolean } | null = null;
+    let submitError: unknown = null;
+    try {
+      submission = await this.transport.post<{ duplicate: boolean }>(
+        '/guarded-adoptions',
+        envelope,
+        {
+          headers: {
+            ...boundHeaders(this.limits.submission),
+            'x-knowledge-tenant-id': this.binding.tenant_id,
+          },
+          idempotencyKey: envelope.deterministic_key,
+          timeoutMs: this.limits.submission.wall_time_ms,
+          retry: false,
+        },
+      );
+    } catch (error) {
+      if (parseErrorBody(error)?.error === 'not_found') throw error;
+      submitError = error;
+    }
+    let reconciliation: KnowledgeGuardedAdoptionReconciliation;
+    try {
+      reconciliation = await this.reconcileAdoption(
+        envelope.deterministic_key,
+        envelope.operation_id,
+        envelope.step_id,
+      );
+    } catch {
+      const conflict = adoptionConflictReceipt(submitError);
+      if (conflict !== undefined) {
+        throw new KnowledgeGuardedAdoptionOperationConflictError(conflict);
+      }
+      throw new KnowledgeGuardedAdoptionUncertainError(envelope.deterministic_key);
+    }
+    if (!reconciliation.terminal_complete || reconciliation.receipt_count !== 1 || !reconciliation.receipt) {
+      const conflict = adoptionConflictReceipt(submitError);
+      if (conflict !== undefined) {
+        throw new KnowledgeGuardedAdoptionOperationConflictError(conflict);
+      }
+      throw new KnowledgeGuardedAdoptionUncertainError(envelope.deterministic_key);
+    }
+    const receipt = reconciliation.receipt;
+    if (
+      receipt.deterministic_key !== envelope.deterministic_key
+      || receipt.operation_id !== envelope.operation_id
+      || receipt.step_id !== envelope.step_id
+    ) {
+      throw new KnowledgeGuardedAdoptionUncertainError(envelope.deterministic_key);
+    }
+    if (receipt.status !== 'accepted') {
+      throw new KnowledgeGuardedAdoptionRejectedError(receipt, reconciliation);
+    }
+    return { submission, receipt, reconciliation };
+  }
+
+  async adoptLegacy(
+    options: KnowledgeGuardedLegacyAdoptionOptions,
+  ): Promise<KnowledgeGuardedAdoptionResult> {
+    const deterministicKey = computeKnowledgeGuardedAdoptionDeterministicKey({
+      action: 'adopt',
+      ...options,
+      binding: this.binding,
+      adoption_receipt_id: null,
+    });
+    const envelope: KnowledgeGuardedAdoptionEnvelope = {
+      contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+      action: 'adopt',
+      deterministic_key: deterministicKey,
+      operation_id: options.operation_id,
+      step_id: options.step_id,
+      target_id: options.target_id,
+      binding: this.binding,
+      expected_version: options.expected_version,
+      expected_content_sha256: options.expected_content_sha256,
+      adoption_receipt_id: null,
+      limits: this.limits,
+    };
+    const terminal = await this.submitAdoption(envelope);
+    const bindingState = await this.readBindingState(options.target_id);
+    const readback = await this.readback(options.target_id);
+    if (
+      bindingState.state !== 'bound_to_requested'
+      || bindingState.item_version !== terminal.receipt.result_version
+      || bindingState.content_sha256 !== terminal.receipt.result_content_sha256
+      || readback.item.version !== terminal.receipt.result_version
+    ) {
+      throw new KnowledgeGuardedAdoptionUncertainError(deterministicKey);
+    }
+    return {
+      deterministic_key: deterministicKey,
+      duplicate: terminal.submission?.duplicate ?? false,
+      receipt: terminal.receipt,
+      reconciliation: terminal.reconciliation,
+      binding_state: bindingState,
+      readback,
+    };
+  }
+
+  async rollbackLegacyAdoption(
+    options: KnowledgeGuardedLegacyRollbackOptions,
+  ): Promise<KnowledgeGuardedRollbackResult> {
+    const source = options.adoption_receipt;
+    if (
+      source.action !== 'adopt'
+      || source.status !== 'accepted'
+      || source.effect_count !== 1
+      || !sameBinding(source.binding, this.binding)
+      || source.result_version === null
+      || source.result_content_sha256 === null
+    ) {
+      throw new Error('rollback requires an accepted adoption receipt for this guarded writer binding.');
+    }
+    const deterministicKey = computeKnowledgeGuardedAdoptionDeterministicKey({
+      action: 'rollback',
+      operation_id: options.operation_id,
+      step_id: options.step_id,
+      target_id: source.target_id,
+      binding: this.binding,
+      expected_version: source.result_version,
+      expected_content_sha256: source.result_content_sha256,
+      adoption_receipt_id: source.receipt_id,
+    });
+    const envelope: KnowledgeGuardedAdoptionEnvelope = {
+      contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+      action: 'rollback',
+      deterministic_key: deterministicKey,
+      operation_id: options.operation_id,
+      step_id: options.step_id,
+      target_id: source.target_id,
+      binding: this.binding,
+      expected_version: source.result_version,
+      expected_content_sha256: source.result_content_sha256,
+      adoption_receipt_id: source.receipt_id,
+      limits: this.limits,
+    };
+    const terminal = await this.submitAdoption(envelope);
+    const bindingState = await this.readBindingState(source.target_id);
+    if (
+      bindingState.state !== 'legacy_unbound'
+      || bindingState.item_version !== terminal.receipt.result_version
+      || bindingState.content_sha256 !== terminal.receipt.result_content_sha256
+    ) {
+      throw new KnowledgeGuardedAdoptionUncertainError(deterministicKey);
+    }
+    return {
+      deterministic_key: deterministicKey,
+      duplicate: terminal.submission?.duplicate ?? false,
+      receipt: terminal.receipt,
+      reconciliation: terminal.reconciliation,
+      binding_state: bindingState,
+    };
   }
 
   async readback(

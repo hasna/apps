@@ -26,6 +26,116 @@ export interface KnowledgeGuardedBinding {
   parent_id: string;
 }
 
+export type KnowledgeGuardedBindingState =
+  | 'legacy_unbound'
+  | 'bound_to_requested'
+  | 'bound_elsewhere';
+
+export interface KnowledgeGuardedBindingStateReadback {
+  contract: typeof KNOWLEDGE_GUARDED_WRITE_CONTRACT;
+  exact: true;
+  bounded: true;
+  item_count: 1;
+  target_id: string;
+  state: KnowledgeGuardedBindingState;
+  /**
+   * Returned only for legacy-unbound or exact requested-binding rows. A row
+   * bound elsewhere is distinguishable without disclosing its version/hash.
+   */
+  item_version: number | null;
+  content_sha256: string | null;
+  limits: KnowledgeGuardedBounds;
+}
+
+export type KnowledgeGuardedAdoptionAction = 'adopt' | 'rollback';
+
+export interface KnowledgeGuardedLegacyAdoptionOptions {
+  operation_id: string;
+  step_id: string;
+  target_id: string;
+  expected_version: number;
+  expected_content_sha256: string;
+}
+
+export interface KnowledgeGuardedLegacyRollbackOptions {
+  operation_id: string;
+  step_id: string;
+  adoption_receipt: KnowledgeGuardedAdoptionReceipt;
+}
+
+export interface KnowledgeGuardedAdoptionEnvelope {
+  contract: typeof KNOWLEDGE_GUARDED_WRITE_CONTRACT;
+  action: KnowledgeGuardedAdoptionAction;
+  deterministic_key: string;
+  operation_id: string;
+  step_id: string;
+  target_id: string;
+  binding: KnowledgeGuardedBinding;
+  expected_version: number;
+  expected_content_sha256: string;
+  adoption_receipt_id: string | null;
+  limits: KnowledgeGuardedLimits;
+}
+
+export interface KnowledgeGuardedAdoptionReceipt {
+  contract: typeof KNOWLEDGE_GUARDED_WRITE_CONTRACT;
+  receipt_id: string;
+  deterministic_key: string;
+  action: KnowledgeGuardedAdoptionAction;
+  operation_id: string;
+  step_id: string;
+  target_id: string;
+  binding: KnowledgeGuardedBinding;
+  expected_version: number;
+  expected_content_sha256: string;
+  adoption_receipt_id: string | null;
+  /** Tenant value present before adoption; restored by receipt-scoped rollback. */
+  prior_tenant_id: string | null;
+  status: KnowledgeGuardedReceiptStatus;
+  code: string;
+  effect_count: 0 | 1;
+  result_version: number | null;
+  result_content_sha256: string | null;
+  created_at: string;
+}
+
+export interface KnowledgeGuardedAdoptionSubmission {
+  contract: typeof KNOWLEDGE_GUARDED_WRITE_CONTRACT;
+  deterministic_key: string;
+  receipt: KnowledgeGuardedAdoptionReceipt;
+  duplicate: boolean;
+}
+
+export interface KnowledgeGuardedAdoptionReconciliation {
+  contract: typeof KNOWLEDGE_GUARDED_WRITE_CONTRACT;
+  deterministic_key: string;
+  operation_id: string;
+  step_id: string;
+  exact: true;
+  bounded: true;
+  receipt_count: 0 | 1;
+  terminal_complete: boolean;
+  receipt: KnowledgeGuardedAdoptionReceipt | null;
+  limits: KnowledgeGuardedBounds;
+}
+
+export interface KnowledgeGuardedAdoptionResult {
+  deterministic_key: string;
+  duplicate: boolean;
+  receipt: KnowledgeGuardedAdoptionReceipt;
+  reconciliation: KnowledgeGuardedAdoptionReconciliation;
+  binding_state: KnowledgeGuardedBindingStateReadback;
+  readback: KnowledgeGuardedReadback;
+}
+
+export interface KnowledgeGuardedRollbackResult {
+  deterministic_key: string;
+  duplicate: boolean;
+  receipt: KnowledgeGuardedAdoptionReceipt;
+  reconciliation: KnowledgeGuardedAdoptionReconciliation;
+  binding_state: KnowledgeGuardedBindingStateReadback;
+}
+
 export interface KnowledgeGuardedManifestBinding {
   manifest_id: string;
   ordinal: number;
@@ -501,6 +611,70 @@ export function canonicalKnowledgeGuardedJson(value: unknown): string {
 
 export function knowledgeGuardedDigest(value: unknown): string {
   return createHash('sha256').update(canonicalKnowledgeGuardedJson(value), 'utf8').digest('hex');
+}
+
+export function knowledgeGuardedContentSha256(content: string): string {
+  if (typeof content !== 'string') throw new Error('content must be a string.');
+  return createHash('sha256').update(content, 'utf8').digest('hex');
+}
+
+export interface KnowledgeGuardedAdoptionKeyInput {
+  action: KnowledgeGuardedAdoptionAction;
+  operation_id: string;
+  step_id: string;
+  target_id: string;
+  binding: KnowledgeGuardedBinding;
+  expected_version: number;
+  expected_content_sha256: string;
+  adoption_receipt_id?: string | null;
+}
+
+export function computeKnowledgeGuardedAdoptionDeterministicKey(
+  input: KnowledgeGuardedAdoptionKeyInput,
+): string {
+  if (!['adopt', 'rollback'].includes(input.action)) {
+    throw new Error('adoption action must be adopt or rollback.');
+  }
+  assertBoundText(input.operation_id, 'operation_id');
+  assertBoundText(input.step_id, 'step_id');
+  assertBoundText(input.target_id, 'target_id');
+  assertKnowledgeGuardedBinding(input.binding);
+  if (!Number.isInteger(input.expected_version) || input.expected_version < 1) {
+    throw new Error('expected_version must be a positive integer.');
+  }
+  if (!/^[0-9a-f]{64}$/.test(input.expected_content_sha256)) {
+    throw new Error('expected_content_sha256 must be a lowercase sha256 hex digest.');
+  }
+  const adoptionReceiptId = input.adoption_receipt_id ?? null;
+  if (input.action === 'adopt' && adoptionReceiptId !== null) {
+    throw new Error('adopt must not reference an adoption receipt.');
+  }
+  if (
+    input.action === 'rollback'
+    && (typeof adoptionReceiptId !== 'string' || !/^kar_[0-9a-f]{64}$/.test(adoptionReceiptId))
+  ) {
+    throw new Error('rollback requires an immutable adoption receipt id.');
+  }
+  return `fcame1_adoption_${knowledgeGuardedDigest({
+    contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+    action: input.action,
+    operation_id: input.operation_id,
+    step_id: input.step_id,
+    target_id: input.target_id,
+    binding: input.binding,
+    expected_version: input.expected_version,
+    expected_content_sha256: input.expected_content_sha256,
+    adoption_receipt_id: adoptionReceiptId,
+  })}`;
+}
+
+export function computeKnowledgeGuardedAdoptionReceiptId(
+  deterministicKey: string,
+): string {
+  if (!/^fcame1_adoption_[0-9a-f]{64}$/.test(deterministicKey)) {
+    throw new Error('deterministicKey must be an FCAME-1 adoption key.');
+  }
+  return `kar_${deterministicKey.slice('fcame1_adoption_'.length)}`;
 }
 
 export interface KnowledgeGuardedDeterministicKeyInput {

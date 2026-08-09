@@ -1,4 +1,4 @@
-import { type CreateKnowledgeGuardedManifestOptions, type KnowledgeGuardedBinding, type KnowledgeGuardedBounds, type KnowledgeGuardedLimits, type KnowledgeGuardedManifestReconciliation, type KnowledgeGuardedManifestSubmission, type KnowledgeGuardedReadback, type KnowledgeGuardedReceipt, type KnowledgeGuardedWriteResult, type KnowledgePrivateInputDescriptor, type KnowledgeTerminalReconciliation } from './guarded-write-contract.js';
+import { type CreateKnowledgeGuardedManifestOptions, type KnowledgeGuardedBinding, type KnowledgeGuardedBindingStateReadback, type KnowledgeGuardedBounds, type KnowledgeGuardedAdoptionReconciliation, type KnowledgeGuardedAdoptionReceipt, type KnowledgeGuardedAdoptionResult, type KnowledgeGuardedLegacyAdoptionOptions, type KnowledgeGuardedLegacyRollbackOptions, type KnowledgeGuardedLimits, type KnowledgeGuardedManifestReconciliation, type KnowledgeGuardedManifestSubmission, type KnowledgeGuardedReadback, type KnowledgeGuardedReceipt, type KnowledgeGuardedRollbackResult, type KnowledgeGuardedWriteResult, type KnowledgePrivateInputDescriptor, type KnowledgeTerminalReconciliation } from './guarded-write-contract.js';
 export interface CreateKnowledgeGuardedWriterOptions {
     binding: KnowledgeGuardedBinding;
     env?: NodeJS.ProcessEnv;
@@ -18,6 +18,10 @@ export interface KnowledgeGuardedWriter {
     execute(descriptor: KnowledgePrivateInputDescriptor): Promise<KnowledgeGuardedWriteResult>;
     reconcile(deterministicKey: string, operationId: string, stepId: string, bounds?: KnowledgeGuardedBounds): Promise<KnowledgeTerminalReconciliation>;
     readback(fullId: string, bounds?: KnowledgeGuardedBounds): Promise<KnowledgeGuardedReadback>;
+    readBindingState(fullId: string, bounds?: KnowledgeGuardedBounds): Promise<KnowledgeGuardedBindingStateReadback>;
+    adoptLegacy(options: KnowledgeGuardedLegacyAdoptionOptions): Promise<KnowledgeGuardedAdoptionResult>;
+    rollbackLegacyAdoption(options: KnowledgeGuardedLegacyRollbackOptions): Promise<KnowledgeGuardedRollbackResult>;
+    reconcileAdoption(deterministicKey: string, operationId: string, stepId: string, bounds?: KnowledgeGuardedBounds): Promise<KnowledgeGuardedAdoptionReconciliation>;
 }
 export declare class KnowledgeGuardedWriteRejectedError extends Error {
     readonly receipt: KnowledgeGuardedReceipt;
@@ -49,6 +53,22 @@ export declare class KnowledgeGuardedManifestUncertainError extends Error {
 export declare class KnowledgeGuardedWriteUncertainError extends Error {
     readonly deterministic_key: string;
     readonly code = "guarded_write_terminal_state_unavailable";
+    constructor(deterministic_key: string);
+}
+export declare class KnowledgeGuardedAdoptionRejectedError extends Error {
+    readonly receipt: KnowledgeGuardedAdoptionReceipt;
+    readonly reconciliation: KnowledgeGuardedAdoptionReconciliation;
+    readonly code = "guarded_adoption_rejected";
+    constructor(receipt: KnowledgeGuardedAdoptionReceipt, reconciliation: KnowledgeGuardedAdoptionReconciliation);
+}
+export declare class KnowledgeGuardedAdoptionOperationConflictError extends Error {
+    readonly receipt: KnowledgeGuardedAdoptionReceipt | null;
+    readonly code = "guarded_adoption_operation_conflict";
+    constructor(receipt: KnowledgeGuardedAdoptionReceipt | null);
+}
+export declare class KnowledgeGuardedAdoptionUncertainError extends Error {
+    readonly deterministic_key: string;
+    readonly code = "guarded_adoption_terminal_state_unavailable";
     constructor(deterministic_key: string);
 }
 export declare function createKnowledgeGuardedWriter(options: CreateKnowledgeGuardedWriterOptions): KnowledgeGuardedWriter;

@@ -3483,7 +3483,319 @@ var PG_MIGRATIONS = [
      END IF;
      RETURN NEW;
    END
-   $knowledge_guarded_item_authority$ LANGUAGE plpgsql`
+   $knowledge_guarded_item_authority$ LANGUAGE plpgsql`,
+  `ALTER TABLE knowledge_items
+     ADD COLUMN IF NOT EXISTS guarded_adoption_receipt_id TEXT`,
+  `CREATE TABLE IF NOT EXISTS knowledge_guarded_adoption_claims (
+    deterministic_key TEXT PRIMARY KEY,
+    planned_receipt_id TEXT NOT NULL UNIQUE,
+    operation_id TEXT NOT NULL,
+    step_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    authority_classification TEXT NOT NULL,
+    authority_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    parent_id TEXT NOT NULL,
+    expected_version INTEGER NOT NULL,
+    expected_content_sha256 TEXT NOT NULL,
+    adoption_receipt_id TEXT,
+    receipt_id TEXT,
+    created_at TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    CHECK (action IN ('adopt', 'rollback')),
+    CHECK (authority_classification IN ('user_hosted', 'hasna_saas')),
+    CHECK (expected_version >= 1),
+    CHECK (expected_content_sha256 ~ '^[0-9a-f]{64}$'),
+    CHECK (
+      (action = 'adopt' AND adoption_receipt_id IS NULL)
+      OR (action = 'rollback' AND adoption_receipt_id IS NOT NULL)
+    ),
+    UNIQUE(authority_classification, authority_id, tenant_id, scope, parent_id, operation_id, step_id)
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_guarded_adoption_claim_receipt
+     ON knowledge_guarded_adoption_claims(receipt_id) WHERE receipt_id IS NOT NULL`,
+  `CREATE TABLE IF NOT EXISTS knowledge_guarded_adoption_receipts (
+    receipt_id TEXT PRIMARY KEY,
+    deterministic_key TEXT NOT NULL UNIQUE,
+    operation_id TEXT NOT NULL,
+    step_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    authority_classification TEXT NOT NULL,
+    authority_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    parent_id TEXT NOT NULL,
+    expected_version INTEGER NOT NULL,
+    expected_content_sha256 TEXT NOT NULL,
+    adoption_receipt_id TEXT,
+    prior_tenant_id TEXT,
+    status TEXT NOT NULL,
+    code TEXT NOT NULL,
+    effect_count INTEGER NOT NULL,
+    result_version INTEGER,
+    result_content_sha256 TEXT,
+    created_at TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    CHECK (action IN ('adopt', 'rollback')),
+    CHECK (authority_classification IN ('user_hosted', 'hasna_saas')),
+    CHECK (expected_version >= 1),
+    CHECK (expected_content_sha256 ~ '^[0-9a-f]{64}$'),
+    CHECK (
+      (action = 'adopt' AND adoption_receipt_id IS NULL)
+      OR (action = 'rollback' AND adoption_receipt_id IS NOT NULL)
+    ),
+    CHECK (status IN ('accepted', 'rejected')),
+    CHECK (effect_count IN (0, 1)),
+    CHECK (
+      (
+        status = 'accepted' AND effect_count = 1
+        AND result_version IS NOT NULL AND result_content_sha256 IS NOT NULL
+      )
+      OR (
+        status = 'rejected' AND effect_count = 0
+        AND result_version IS NULL AND result_content_sha256 IS NULL
+      )
+    )
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_guarded_adoption_receipt_operation
+     ON knowledge_guarded_adoption_receipts(
+       authority_classification, authority_id, tenant_id, scope, parent_id, operation_id, step_id
+     )`,
+  `CREATE OR REPLACE FUNCTION knowledge_guarded_adoption_claim_once()
+   RETURNS TRIGGER AS $knowledge_guarded_adoption_claim_once$
+   BEGIN
+     IF TG_OP = 'DELETE' THEN
+       RAISE EXCEPTION 'knowledge guarded adoption claims are immutable'
+         USING ERRCODE = 'restrict_violation';
+     END IF;
+    IF (OLD.deterministic_key, OLD.planned_receipt_id,
+         OLD.operation_id, OLD.step_id, OLD.action,
+         OLD.target_id, OLD.authority_classification, OLD.authority_id,
+         OLD.tenant_id, OLD.scope, OLD.parent_id, OLD.expected_version,
+         OLD.expected_content_sha256, OLD.adoption_receipt_id, OLD.created_at)
+        IS DISTINCT FROM
+        (NEW.deterministic_key, NEW.planned_receipt_id,
+         NEW.operation_id, NEW.step_id, NEW.action,
+         NEW.target_id, NEW.authority_classification, NEW.authority_id,
+         NEW.tenant_id, NEW.scope, NEW.parent_id, NEW.expected_version,
+         NEW.expected_content_sha256, NEW.adoption_receipt_id, NEW.created_at)
+        OR OLD.receipt_id IS NOT NULL
+        OR NEW.receipt_id IS NULL THEN
+       RAISE EXCEPTION 'knowledge guarded adoption claim may only bind one terminal receipt'
+         USING ERRCODE = 'restrict_violation';
+     END IF;
+     RETURN NEW;
+   END
+   $knowledge_guarded_adoption_claim_once$ LANGUAGE plpgsql`,
+  `DROP TRIGGER IF EXISTS trg_knowledge_guarded_adoption_claim_once
+     ON knowledge_guarded_adoption_claims`,
+  `CREATE TRIGGER trg_knowledge_guarded_adoption_claim_once
+     BEFORE UPDATE OR DELETE ON knowledge_guarded_adoption_claims
+     FOR EACH ROW EXECUTE FUNCTION knowledge_guarded_adoption_claim_once()`,
+  `ALTER TABLE knowledge_guarded_adoption_claims
+     ENABLE ALWAYS TRIGGER trg_knowledge_guarded_adoption_claim_once`,
+  `CREATE OR REPLACE FUNCTION knowledge_guarded_adoption_receipts_immutable()
+   RETURNS TRIGGER AS $knowledge_guarded_adoption_receipts_immutable$
+   BEGIN
+     RAISE EXCEPTION 'knowledge guarded adoption receipts are immutable'
+       USING ERRCODE = 'restrict_violation';
+   END
+   $knowledge_guarded_adoption_receipts_immutable$ LANGUAGE plpgsql`,
+  `DROP TRIGGER IF EXISTS trg_knowledge_guarded_adoption_receipts_immutable
+     ON knowledge_guarded_adoption_receipts`,
+  `CREATE TRIGGER trg_knowledge_guarded_adoption_receipts_immutable
+     BEFORE UPDATE OR DELETE ON knowledge_guarded_adoption_receipts
+     FOR EACH ROW EXECUTE FUNCTION knowledge_guarded_adoption_receipts_immutable()`,
+  `ALTER TABLE knowledge_guarded_adoption_receipts
+     ENABLE ALWAYS TRIGGER trg_knowledge_guarded_adoption_receipts_immutable`,
+  `CREATE OR REPLACE FUNCTION knowledge_guarded_item_authority()
+   RETURNS TRIGGER AS $knowledge_guarded_item_authority$
+   DECLARE
+     claim_key TEXT;
+     adoption_key TEXT;
+     claim_matches BOOLEAN;
+     binding_changed BOOLEAN;
+   BEGIN
+     IF TG_OP = 'DELETE' THEN
+       IF OLD.authority_classification IS NULL THEN
+         RETURN OLD;
+       END IF;
+       RAISE EXCEPTION 'guarded knowledge items cannot be deleted outside a declared FCAME-1 action'
+         USING ERRCODE = 'restrict_violation';
+     END IF;
+
+     IF TG_OP = 'INSERT' AND NEW.authority_classification IS NULL THEN
+       RETURN NEW;
+     END IF;
+
+     IF TG_OP = 'UPDATE'
+        AND OLD.authority_classification IS NULL
+        AND NEW.authority_classification IS NULL THEN
+       RETURN NEW;
+     END IF;
+
+     binding_changed := TG_OP = 'UPDATE' AND (
+       OLD.id IS DISTINCT FROM NEW.id
+       OR OLD.authority_classification IS DISTINCT FROM NEW.authority_classification
+       OR OLD.authority_id IS DISTINCT FROM NEW.authority_id
+       OR OLD.tenant_id IS DISTINCT FROM NEW.tenant_id
+       OR OLD.scope IS DISTINCT FROM NEW.scope
+       OR OLD.parent_id IS DISTINCT FROM NEW.parent_id
+     );
+
+     IF binding_changed THEN
+       adoption_key := NULLIF(
+         current_setting('hasna.knowledge_guarded_adoption_key', true),
+         ''
+       );
+       IF adoption_key IS NULL THEN
+         RAISE EXCEPTION 'guarded knowledge item identity and binding are immutable'
+           USING ERRCODE = 'restrict_violation';
+       END IF;
+       SELECT EXISTS (
+         SELECT 1
+           FROM knowledge_guarded_adoption_claims AS claim
+          WHERE claim.deterministic_key = adoption_key
+            AND claim.receipt_id IS NULL
+            AND claim.target_id = OLD.id
+            AND claim.expected_version = OLD.version
+            AND claim.expected_content_sha256 =
+              encode(sha256(convert_to(coalesce(OLD.content, ''), 'UTF8')), 'hex')
+            AND (
+              OLD.short_id, OLD.title, OLD.content, OLD.url, OLD.tags,
+              OLD.metadata, OLD.archived, OLD.created_at, OLD.updated_at, OLD.version
+            ) IS NOT DISTINCT FROM (
+              NEW.short_id, NEW.title, NEW.content, NEW.url, NEW.tags,
+              NEW.metadata, NEW.archived, NEW.created_at, NEW.updated_at, NEW.version
+            )
+            AND (
+              (
+                claim.action = 'adopt'
+                AND OLD.authority_classification IS NULL
+                AND OLD.authority_id IS NULL
+                AND OLD.scope IS NULL
+                AND OLD.parent_id IS NULL
+                AND (
+                  OLD.tenant_id IS NULL
+                  OR OLD.tenant_id::text = claim.tenant_id
+                )
+                AND NEW.authority_classification = claim.authority_classification
+                AND NEW.authority_id = claim.authority_id
+                AND NEW.tenant_id::text = claim.tenant_id
+                AND NEW.scope = claim.scope
+                AND NEW.parent_id = claim.parent_id
+                AND NEW.guarded_adoption_receipt_id = claim.planned_receipt_id
+              )
+              OR (
+                claim.action = 'rollback'
+                AND claim.adoption_receipt_id IS NOT NULL
+                AND OLD.authority_classification = claim.authority_classification
+                AND OLD.authority_id = claim.authority_id
+                AND OLD.tenant_id::text = claim.tenant_id
+                AND OLD.scope = claim.scope
+                AND OLD.parent_id = claim.parent_id
+                AND OLD.guarded_adoption_receipt_id = claim.adoption_receipt_id
+                AND NEW.authority_classification IS NULL
+                AND NEW.authority_id IS NULL
+                AND NEW.scope IS NULL
+                AND NEW.parent_id IS NULL
+                AND NEW.guarded_adoption_receipt_id IS NULL
+                AND NEW.tenant_id::text IS NOT DISTINCT FROM (
+                  SELECT receipt.prior_tenant_id
+                    FROM knowledge_guarded_adoption_receipts AS receipt
+                   WHERE receipt.receipt_id = claim.adoption_receipt_id
+                     AND receipt.action = 'adopt'
+                     AND receipt.status = 'accepted'
+                     AND receipt.effect_count = 1
+                )
+              )
+            )
+       ) INTO claim_matches;
+       IF NOT claim_matches THEN
+         RAISE EXCEPTION 'guarded knowledge item binding transition does not match its live adoption claim'
+           USING ERRCODE = 'insufficient_privilege';
+       END IF;
+       RETURN NEW;
+     END IF;
+
+     IF NEW.authority_classification IS NULL OR NEW.authority_id IS NULL
+        OR NEW.tenant_id IS NULL OR NEW.scope IS NULL OR NEW.parent_id IS NULL THEN
+       RAISE EXCEPTION 'guarded knowledge item binding must be complete'
+         USING ERRCODE = 'check_violation';
+     END IF;
+
+     claim_key := NULLIF(
+       current_setting('hasna.knowledge_guarded_deterministic_key', true),
+       ''
+     );
+     IF claim_key IS NULL THEN
+       RAISE EXCEPTION 'guarded knowledge item mutation requires an FCAME-1 operation claim'
+         USING ERRCODE = 'insufficient_privilege';
+     END IF;
+
+     SELECT EXISTS (
+       SELECT 1
+         FROM knowledge_guarded_write_claims AS claim
+        WHERE claim.deterministic_key = claim_key
+          AND claim.receipt_id IS NULL
+          AND claim.target_id = NEW.id
+          AND claim.authority_classification = NEW.authority_classification
+          AND claim.authority_id = NEW.authority_id
+          AND claim.tenant_id = NEW.tenant_id::text
+          AND claim.scope = NEW.scope
+          AND claim.parent_id = NEW.parent_id
+          AND (
+            (
+              TG_OP = 'INSERT'
+              AND claim.verb = 'create'
+              AND claim.precondition_kind = 'absent'
+            )
+            OR (
+              TG_OP = 'UPDATE'
+              AND claim.verb = 'update'
+              AND claim.precondition_kind = 'version'
+              AND claim.expected_version = OLD.version
+            )
+          )
+     ) INTO claim_matches;
+     IF NOT claim_matches THEN
+       RAISE EXCEPTION 'guarded knowledge item mutation does not match its live FCAME-1 operation claim'
+         USING ERRCODE = 'insufficient_privilege';
+     END IF;
+     RETURN NEW;
+   END
+   $knowledge_guarded_item_authority$ LANGUAGE plpgsql`,
+  `CREATE OR REPLACE FUNCTION knowledge_guarded_adoption_claim_once()
+   RETURNS TRIGGER AS $knowledge_guarded_adoption_claim_once$
+   BEGIN
+     IF TG_OP = 'DELETE' THEN
+       RAISE EXCEPTION 'knowledge guarded adoption claims are immutable'
+         USING ERRCODE = 'restrict_violation';
+     END IF;
+     IF (OLD.deterministic_key, OLD.planned_receipt_id,
+         OLD.operation_id, OLD.step_id, OLD.action,
+         OLD.target_id, OLD.authority_classification, OLD.authority_id,
+         OLD.tenant_id, OLD.scope, OLD.parent_id, OLD.expected_version,
+         OLD.expected_content_sha256, OLD.adoption_receipt_id, OLD.created_at)
+        IS DISTINCT FROM
+        (NEW.deterministic_key, NEW.planned_receipt_id,
+         NEW.operation_id, NEW.step_id, NEW.action,
+         NEW.target_id, NEW.authority_classification, NEW.authority_id,
+         NEW.tenant_id, NEW.scope, NEW.parent_id, NEW.expected_version,
+         NEW.expected_content_sha256, NEW.adoption_receipt_id, NEW.created_at)
+        OR OLD.receipt_id IS NOT NULL
+        OR NEW.receipt_id IS NULL THEN
+       RAISE EXCEPTION 'knowledge guarded adoption claim may only bind one terminal receipt'
+         USING ERRCODE = 'restrict_violation';
+     END IF;
+     IF NEW.receipt_id IS DISTINCT FROM OLD.planned_receipt_id THEN
+       RAISE EXCEPTION 'knowledge guarded adoption claim receipt must match its planned terminal receipt'
+         USING ERRCODE = 'restrict_violation';
+     END IF;
+     RETURN NEW;
+   END
+   $knowledge_guarded_adoption_claim_once$ LANGUAGE plpgsql`
 ];
 export {
   wrapExecutor,

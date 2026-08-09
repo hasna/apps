@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.99
+
+- Add bounded exact binding-state readback and receipt-backed guarded adoption
+  for legacy Knowledge rows. Adoption requires the full ID, expected version,
+  and raw-content SHA-256; changes only the FCAME-1 binding/provenance fields;
+  replays deterministically; and can be rolled back only from its immutable
+  adoption receipt while the adopted row still matches.
+- Preserve ordinary SQLite, hosted PostgreSQL/API, guarded-write, versioning,
+  and CLI behavior, including hosted deployments whose `tenant_id` column is
+  UUID rather than text.
+
 ## 0.2.98
 
 - Ship the hosted guarded-write authority fix from #78: the authority trigger now
