@@ -389,6 +389,10 @@ export class ApiStore implements ConversationsStore {
     const body = await this.post<{ marked?: number }>("/channel-notifications/read", { agent, message_ids: messageIds });
     return Number(body?.marked ?? 0) as never;
   };
+  baselineChannelNotifications: ConversationsStore["baselineChannelNotifications"] = async (agent) => {
+    const body = await this.post<{ marked?: number }>("/channel-notifications/baseline", { agent });
+    return Number(body?.marked ?? 0) as never;
+  };
   markAllChannelNotificationsRead: ConversationsStore["markAllChannelNotificationsRead"] = async (agent, channel) => {
     const body = await this.post<{ marked?: number }>("/channel-notifications/read-all", { agent, channel: channel ? normalizeChannelName(channel) : undefined });
     return Number(body?.marked ?? 0) as never;

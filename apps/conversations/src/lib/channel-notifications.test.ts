@@ -6,7 +6,7 @@ import { closeDb, getDb } from "./db";
 import { sendMessage } from "./messages";
 import { createChannel } from "./channels";
 import { registerAgent } from "./presence";
-import { buildMessagePreview, listChannelNotificationSubscriptions, markAllChannelNotificationsRead, markChannelNotificationsRead, readChannelNotifications, subscribeToChannelNotifications, unsubscribeFromChannelNotifications } from "./channel-notifications";
+import { baselineChannelNotifications, buildMessagePreview, listChannelNotificationSubscriptions, markAllChannelNotificationsRead, markChannelNotificationsRead, readChannelNotifications, subscribeToChannelNotifications, unsubscribeFromChannelNotifications } from "./channel-notifications";
 import { pinStoreToDb, restoreStoreEnv } from "./store/isolated-test-env.js";
 
 const TEST_DB = join(tmpdir(), `conversations-test-channel-notifications-${Date.now()}.db`);
@@ -181,6 +181,32 @@ describe("channel notifications", () => {
     expect(notifications).toHaveLength(1);
     expect(notifications[0].unread).toBe(false);
     expect(readChannelNotifications({ agent: "agent-a" })).toHaveLength(0);
+  });
+
+  test("atomic arm-time baseline leaves later notifications unread", () => {
+    createChannel("ops", "creator");
+    subscribeToChannelNotifications("ops", "agent-a");
+
+    const prearm = sendMessage({
+      from: "alice",
+      to: "ops",
+      channel: "ops",
+      session_id: "channel:ops",
+      content: "pre-arm",
+    });
+    expect(baselineChannelNotifications("agent-a")).toBe(1);
+
+    const live = sendMessage({
+      from: "bob",
+      to: "ops",
+      channel: "ops",
+      session_id: "channel:ops",
+      content: "post-arm",
+    });
+    const unread = readChannelNotifications({ agent: "agent-a" });
+
+    expect(unread.map((row) => row.message_id)).toEqual([live.id]);
+    expect(unread.map((row) => row.message_id)).not.toContain(prearm.id);
   });
 });
 

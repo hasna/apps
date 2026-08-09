@@ -24,6 +24,7 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
   const linkageReceipts: any[] = [];
   const agentPresence = new Map<string, any>();
   const manyCalls: Array<{ sql: string; params: readonly unknown[] }> = [];
+  const queryCalls: Array<{ sql: string; params: readonly unknown[] }> = [];
   const projects: Record<string, any> = Object.fromEntries(
     initialProjects.map((project) => [project.id, { ...project }]),
   );
@@ -119,6 +120,7 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
       return [];
     },
     async query(sql: string, p: readonly unknown[] = []): Promise<{ rows: any[]; rowCount: number }> {
+      queryCalls.push({ sql, params: [...p] });
       if (/DELETE FROM resource_locks WHERE expires_at < NOW\(\)/i.test(sql)) {
         const before = resourceLocks.length;
         const now = Date.now();
@@ -699,6 +701,7 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
       messageMentions,
       agentPresence,
       manyCalls,
+      queryCalls,
       projects,
       seedChannel(input: Record<string, any>, members: string[], channelMessages: any[]) {
         channels[input.name] = { ...input };
@@ -762,6 +765,25 @@ beforeAll(() => {
 afterAll(() => { server.stop(true); });
 
 describe("conversations-serve", () => {
+  test("POST /v1/channel-notifications/baseline executes one atomic snapshot statement", async () => {
+    const store = new ApiStore(createHasnaStorageClient(
+      "conversations",
+      createHasnaHttpTransport({
+        name: "conversations",
+        baseUrl: `${base}/v1`,
+        apiKey: rwKey,
+        retry: false,
+      }),
+    ));
+
+    expect(await store.baselineChannelNotifications("watcher")).toBe(0);
+    const query = activeFakeClient!.__debug.queryCalls.at(-1)!;
+    expect(query.sql).toContain("INSERT INTO channel_notification_reads");
+    expect(query.sql).toContain("INNER JOIN channel_subscriptions");
+    expect(query.sql).toContain("ON CONFLICT DO NOTHING");
+    expect(query.params).toEqual(["watcher", "watcher"]);
+  });
+
   test("GET /v1/projects pages three stable ids without overlap and reports continuation", async () => {
     const projectClient = makeFakeClient([
       { id: "project-alpha", name: "Alpha", created_at: "2026-08-07T00:00:00.000Z", status: "active" },

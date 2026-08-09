@@ -2520,6 +2520,30 @@ async function handleChannelNotifications(
     return json({ marked: res.rowCount });
   }
 
+  if (sub === "channel-notifications/baseline" && method === "POST") {
+    const body = await readJson(req);
+    const who = str(body.agent) ?? agent ?? undefined;
+    if (!who) return json({ error: "agent is required" }, 400);
+    const presence = await client.get<{ id: string }>(
+      `SELECT id FROM agent_presence WHERE LOWER(agent) = LOWER($1) ORDER BY last_seen_at DESC LIMIT 1`,
+      [who],
+    );
+    const selfSenderId = resolveSelfSenderId(who, presence);
+    const res = await client.query(
+      `INSERT INTO channel_notification_reads (agent, message_id)
+       SELECT $1, m.id
+       FROM messages m
+       INNER JOIN channel_subscriptions s ON s.channel = m.channel
+       WHERE s.agent = $1
+         AND m.channel IS NOT NULL
+         AND m.from_agent <> $2
+         AND m.id > s.since_message_id
+       ON CONFLICT DO NOTHING`,
+      [who, selfSenderId],
+    );
+    return json({ marked: res.rowCount });
+  }
+
   if (sub === "channel-notifications/read-all" && method === "POST") {
     const body = await readJson(req);
     const who = str(body.agent) ?? agent ?? undefined;

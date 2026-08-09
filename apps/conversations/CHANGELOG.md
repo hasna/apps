@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.5.36 - 2026-08-09
+
+### Added
+
+- **Attachments can be retrieved without exposing or corrupting their bytes.** `conversations attachments get <message-id> <name>` writes to an explicit output path or binary stdout, refuses to overwrite an existing file, creates new files with mode `0600`, and distinguishes missing-message, missing-attachment, permission, missing-content, and integrity failures. Hosted retrieval uses an app-owned base64 envelope while preserving the existing raw server route (#128).
+
+### Fixed
+
+- **`conversations watch` now arms without replaying old messages or losing new channel notifications.** A failed message-cursor seed keeps readiness pending and retries instead of polling from `since_id=0`, while subscribed-channel baselines use one atomic per-identity snapshot so a notification arriving during arming remains live.
+
 ## 0.5.33 - 2026-08-07
 
 ### Fixed

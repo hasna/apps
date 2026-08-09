@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { readChannelNotificationsUnion, startNotificationPolling, type NotificationPollStore } from "./poll-notifications";
+import { baselineChannelNotifications, readChannelNotificationsUnion, startNotificationPolling, type NotificationBaselineStore, type NotificationPollStore } from "./poll-notifications";
 import type { ChannelNotification } from "../types";
 
 /**
@@ -314,6 +314,48 @@ describe("readChannelNotificationsUnion", () => {
     const batch = await readChannelNotificationsUnion(store, { agents: ["first", "second"] });
     await batch.markRead();
     expect([...store.read]).toEqual([]);
+  });
+});
+
+describe("baselineChannelNotifications", () => {
+  test("ID 2 arriving during baseline remains live while pre-arm ID 1 is marked", async () => {
+    const unread = new Set([1]);
+    const marked: number[] = [];
+    let insertedDuringBaseline = false;
+    const insertConcurrentArrival = () => {
+      if (insertedDuringBaseline) return;
+      insertedDuringBaseline = true;
+      unread.add(2);
+    };
+    const mark = (ids: number[]) => {
+      for (const id of ids) {
+        if (!unread.delete(id)) continue;
+        marked.push(id);
+      }
+      return ids.length;
+    };
+    const store = {
+      // This models the reviewed moving-set implementation: its first read
+      // snapshots ID 1, then ID 2 arrives before acknowledgement. A repeated
+      // read would see and consume ID 2 as baseline history.
+      readChannelNotifications: async () => {
+        const snapshot = [...unread].map(notification);
+        insertConcurrentArrival();
+        return snapshot;
+      },
+      markChannelNotificationsRead: async (_agent: string, ids: number[]) => mark(ids),
+      // The fixed contract snapshots and acknowledges in one store operation.
+      baselineChannelNotifications: async () => {
+        const snapshot = [...unread];
+        insertConcurrentArrival();
+        return mark(snapshot);
+      },
+    } satisfies NotificationPollStore & NotificationBaselineStore;
+
+    await baselineChannelNotifications(store, ["watcher"]);
+
+    expect(marked).toEqual([1]);
+    expect([...unread]).toEqual([2]);
   });
 });
 
