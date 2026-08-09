@@ -20,7 +20,9 @@ const local = createAccountsCapacity({
 
 Local principals match `principal:(human|service):hasna:<id>`. SQLite and
 recovery paths must be absolute and normalized. SQLite defaults to
-`~/.hasna/accounts/accounts.db`. Omitting recovery prevents positive eligibility
+`~/.hasna/capacity/capacity.db` (a pre-existing store at the pre-rename
+`~/.hasna/accounts/accounts.db` default keeps opening when no canonical store
+exists). Omitting recovery prevents positive eligibility
 and leaves readiness metadata-only or on recovery hold.
 
 ```ts

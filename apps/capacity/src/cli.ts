@@ -40,6 +40,7 @@ import {
   type SlotEligibilityMetadata,
   type NativeSubscriptionBindingSnapshot,
 } from "./index";
+import { defaultDatabasePath } from "./storage/default-path";
 
 const CLI_SCHEMA_VERSION = "accounts.cli.v1" as const;
 /** Largest page the capacity API accepts, and the bound on pages a list may walk. */
@@ -199,16 +200,25 @@ async function createCliCatalog(options: AccountsCliOptions): Promise<CliCatalog
     Bun.env.HASNA_ACCOUNTS_CAPACITY_API_URL !== undefined ||
     Bun.env.HASNA_ACCOUNTS_CAPACITY_AUTH_REF !== undefined ||
     Bun.env[CREDENTIAL_RESOLVER_MODULE_ENVIRONMENT] !== undefined;
-  if (deployment !== "local") {
+  if (deployment !== "local" && deployment !== undefined) {
     throw usageError("HASNA_ACCOUNTS_DEPLOYMENT must be local or self_hosted");
   }
   if (serviceConfigPresent) {
-    throw usageError("Local deployment cannot use self-hosted capacity configuration");
+    // With self-hosted configuration present, an unset selector is ambiguous
+    // and an explicit `local` selector is contradictory; both stay fail-closed.
+    throw usageError(
+      deployment === "local"
+        ? "Local deployment cannot use self-hosted capacity configuration"
+        : "HASNA_ACCOUNTS_DEPLOYMENT=self_hosted is required when self-hosted capacity configuration is present",
+    );
   }
+  // Unset deployment with no self-hosted configuration is the zero-config
+  // on-box case: open the local SQLite store at the default (or explicit)
+  // path instead of refusing every read verb.
   if (localPath !== undefined && !isAbsolute(localPath)) {
     throw usageError("HASNA_ACCOUNTS_DATABASE_PATH must be absolute");
   }
-  const path = localPath === undefined ? join(homedir(), ".hasna", "accounts", "accounts.db") : localPath;
+  const path = localPath === undefined ? defaultDatabasePath() : localPath;
   const catalog = createSQLiteAccounts({ path });
   return Object.freeze({
     doctor: () => catalog.doctor(),

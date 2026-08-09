@@ -78,17 +78,18 @@ capacity --help
 capacity validate ./record.json --json
 capacity probe-native ./request.json ./snapshot.json \
   --owner principal:human:hasna:alice --json
-HASNA_ACCOUNTS_DEPLOYMENT=local capacity doctor --json
-HASNA_ACCOUNTS_DEPLOYMENT=local capacity list access-methods --json
-HASNA_ACCOUNTS_DEPLOYMENT=local capacity eligibility <account-lane-uuidv7> \
+capacity doctor --json
+capacity list access-methods --json
+capacity eligibility <account-lane-uuidv7> \
   --operation responses.create --model model.example \
   --data-classification internal --destination-policy-class default --json
 ```
 
 `validate`, `probe-native`, `help`, and `version` do not open the catalog.
-Catalog commands use the package's current compatibility selector: `local`
-opens on-box SQLite, while `self_hosted` uses an API origin with a configured
-credential resolver. CLI eligibility is diagnostic evidence, never a
+Catalog commands open the on-box SQLite store by default (also selectable
+explicitly with `HASNA_ACCOUNTS_DEPLOYMENT=local`), while `self_hosted` uses an
+API origin with a configured credential resolver; self-hosted configuration
+without that selector stays fail-closed. CLI eligibility is diagnostic evidence, never a
 reservation or production Infinity authority. See [`docs/cli.md`](docs/cli.md).
 
 ## HTTP
