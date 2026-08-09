@@ -2670,14 +2670,134 @@ describe("loops-api foundation", () => {
         },
       });
       expect(await storage.getRun(claim!.run.id)).toMatchObject({ status: "running" });
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
 
-      const legacyRecovery = await fetch(apiUrl(server, "/v1/leases/recover"), {
-        method: "POST",
-        headers: jsonHeaders,
+  test("legacy maintenance recovery cannot mutate or advance an admitted private operation", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const claimedAt = new Date("2026-01-01T00:00:00.000Z");
+    const recoveredAt = new Date("2026-01-01T00:20:00.000Z");
+    const workflow = await storage.createWorkflow({
+      name: "legacy-recovery-operation-fence",
+      steps: [{ id: "effect", target: { type: "command", command: "printf", args: ["effect"] } }],
+    });
+    const loop = await storage.createLoop({
+      name: "legacy-recovery-operation-loop",
+      schedule: { type: "interval", everyMs: 60_000 },
+      target: { type: "workflow", workflowId: workflow.id },
+      maxAttempts: 2,
+      retryDelayMs: 1_000,
+      leaseMs: 1_000,
+    }, claimedAt);
+    await storage.updateLoop(loop.id, { nextRunAt: claimedAt.toISOString() });
+    const claim = await storage.claimRun(loop, claimedAt.toISOString(), "runner-legacy-effect", claimedAt);
+    expect(claim).toBeTruthy();
+    const workflowRun = await storage.createWorkflowRun({
+      workflow,
+      loop,
+      loopRun: claim!.run,
+      operationAuthority: {
+        authorityId: "loops-control-plane",
+        tenantId: testPrincipal.tenantId,
+      },
+    });
+    const descriptorEvent = (await storage.listWorkflowEvents(workflowRun.id)).find((event) =>
+      event.eventType === "private_operation_descriptor" && event.stepId === "effect"
+    )!;
+    const descriptor = descriptorEvent.payload as unknown as PrivateOperationDescriptor;
+    await storage.appendWorkflowEvent(
+      workflowRun.id,
+      "private_operation_admitted",
+      "effect",
+      operationAdmissionReceipt(descriptor) as unknown as Record<string, unknown>,
+    );
+    const beforeRun = await storage.getRun(claim!.run.id);
+    const beforeWorkflowRun = await storage.getWorkflowRun(workflowRun.id);
+    const beforeLoop = await storage.getLoop(loop.id);
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage, now: () => recoveredAt });
+    try {
+      const response = await fetch(apiUrl(server, "/v1/leases/recover"), { method: "POST" });
+      const body = await response.json();
+      const afterRun = await storage.getRun(claim!.run.id);
+      const afterWorkflowRun = await storage.getWorkflowRun(workflowRun.id);
+      const afterLoop = await storage.getLoop(loop.id);
+
+      expect({
+        response: { status: response.status, body },
+        run: {
+          status: afterRun?.status,
+          finishedAt: afterRun?.finishedAt,
+          error: afterRun?.error,
+        },
+        workflowRun: {
+          status: afterWorkflowRun?.status,
+          finishedAt: afterWorkflowRun?.finishedAt,
+          error: afterWorkflowRun?.error,
+        },
+        loop: {
+          nextRunAt: afterLoop?.nextRunAt,
+          retryScheduledFor: afterLoop?.retryScheduledFor,
+        },
+      }).toEqual({
+        response: {
+          status: 200,
+          body: { ok: true, abandoned: [], deferred: [], advancementDeferred: [] },
+        },
+        run: {
+          status: beforeRun?.status,
+          finishedAt: beforeRun?.finishedAt,
+          error: beforeRun?.error,
+        },
+        workflowRun: {
+          status: beforeWorkflowRun?.status,
+          finishedAt: beforeWorkflowRun?.finishedAt,
+          error: beforeWorkflowRun?.error,
+        },
+        loop: {
+          nextRunAt: beforeLoop?.nextRunAt,
+          retryScheduledFor: beforeLoop?.retryScheduledFor,
+        },
       });
-      expect(legacyRecovery.status).toBe(200);
-      expect(await legacyRecovery.json()).toMatchObject({ abandoned: [] });
-      expect(await storage.getRun(claim!.run.id)).toMatchObject({ status: "running" });
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("legacy maintenance recovery preserves safe non-admitted recovery", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const claimedAt = new Date("2026-01-01T00:00:00.000Z");
+    const recoveredAt = new Date("2026-01-01T00:00:02.000Z");
+    const loop = await storage.createLoop({
+      name: "legacy-recovery-safe",
+      schedule: { type: "interval", everyMs: 60_000 },
+      target: { type: "command", command: "false" },
+      maxAttempts: 1,
+      leaseMs: 1_000,
+    }, claimedAt);
+    await storage.updateLoop(loop.id, { nextRunAt: claimedAt.toISOString() });
+    const claim = await storage.claimRun(loop, claimedAt.toISOString(), "runner-legacy-safe", claimedAt);
+    expect(claim).toBeTruthy();
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage, now: () => recoveredAt });
+    try {
+      const response = await fetch(apiUrl(server, "/v1/leases/recover"), { method: "POST" });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        abandoned: [{ id: claim!.run.id, status: "abandoned" }],
+        deferred: [],
+        advancementDeferred: [],
+      });
+      expect(await storage.getRun(claim!.run.id)).toMatchObject({ status: "abandoned" });
+      expect(await storage.getLoop(loop.id)).toMatchObject({
+        status: "active",
+        nextRunAt: "2026-01-01T00:01:00.000Z",
+        retryScheduledFor: undefined,
+      });
     } finally {
       server.stop(true);
       await storage.close();

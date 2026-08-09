@@ -1447,7 +1447,9 @@ suite("PostgresLoopStorage (live)", () => {
       operationAdmissionReceipt(descriptor) as unknown as Record<string, unknown>,
     );
 
-    const result = await storage.recoverExpiredRunLeasesDetailed(new Date());
+    const result = await storage.recoverExpiredRunLeasesDetailed(new Date(), {
+      refuseAdmittedPrivateOperations: true,
+    });
 
     expect(result.abandoned.some((run) => run.id === claim!.run.id)).toBe(false);
     expect((await storage.getRun(claim!.run.id))?.status).toBe("running");
