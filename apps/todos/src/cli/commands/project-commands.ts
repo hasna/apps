@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import chalk from "chalk";
+import { readFileSync, statSync } from "node:fs";
 import { basename, resolve, sep } from "node:path";
 import { getDatabase, resolvePartialId } from "../../db/database.js";
 import {
@@ -322,22 +323,52 @@ export function registerProjectCommands(program: Command) {
 
   // comment (aliased as log-progress so documented progress commands work)
   program
-    .command("comment <id> <text>")
+    .command("comment <id> [text]")
     .alias("log-progress")
     .description("Add a comment to a task (alias: log-progress, for recording intermediate progress)")
+    .option("--file <path>", "Read comment text from a UTF-8 file")
     .option("--pct <percent>", "Progress percentage (0-100) to record alongside the note")
-    .action(async (id: string, text: string, opts: { pct?: string }) => {
+    .action(async (id: string, text: string | undefined, opts: { file?: string; pct?: string }) => {
+      const hasPositionalContent = text !== undefined;
+      const hasFileContent = opts.file !== undefined;
+      if (hasPositionalContent === hasFileContent) {
+        handleError(new Error("Provide exactly one comment content source: positional text or --file <path>, not both."));
+      }
+
+      let content: string;
+      if (opts.file !== undefined) {
+        const commentFilePath = resolve(opts.file);
+        let isRegularFile = false;
+        try {
+          isRegularFile = statSync(commentFilePath).isFile();
+        } catch (error) {
+          handleError(new Error(`Unable to read comment file "${opts.file}".`, { cause: error }));
+        }
+        if (!isRegularFile) {
+          handleError(new Error(`Comment file "${opts.file}" must be a regular file.`));
+        }
+        try {
+          content = readFileSync(commentFilePath, "utf8");
+        } catch (error) {
+          handleError(new Error(`Unable to read comment file "${opts.file}".`, { cause: error }));
+        }
+      } else {
+        content = text!;
+      }
+      if (!content.trim()) {
+        handleError(new Error("Comment content must not be empty."));
+      }
+
       const globalOpts = program.opts();
       const cloud = getTodosCloudClient();
       const resolvedId = await resolveTaskIdForCommand(id, cloud);
-      let content = text;
       let progressPct: number | undefined;
       if (opts.pct !== undefined) {
         const pct = parseInt(opts.pct, 10);
         if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
           handleError(new Error("--pct must be a number between 0 and 100"));
         }
-        content = `[progress ${pct}%] ${text}`;
+        content = `[progress ${pct}%] ${content}`;
         progressPct = pct;
       }
       // Bare `globalOpts.agent` used to be the only source checked here, so
