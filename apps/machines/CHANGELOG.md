@@ -74,17 +74,6 @@ reported success about things it had not actually established.
   than reached by deleting a check. Physical classes are untouched: `dgx-spark`
   keeps `tailscale:join` and gets no absence item.
 
-## [0.2.16] - 2026-08-09
-
-### Fixed
-
-- Custom app manifests can now declare separate exact install and probe
-  commands, with optional expected-version matching. Incomplete or malformed
-  probe contracts fail closed, while existing custom `packageName` entries and
-  apt, brew, cask, and winget behavior remain compatible.
-
-Fixes OPE34-00017 via PR #77.
-
 ## [0.2.15] - 2026-08-09
 
 ### Fixed
