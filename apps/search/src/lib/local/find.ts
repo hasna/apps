@@ -4,6 +4,7 @@ import {
   getRoot,
   scheduleAutoRefreshStaleRoots,
   listRoots,
+  normalizeRootPath,
   rootHealth,
   type IndexRoot,
   type RootHealth,
@@ -34,6 +35,8 @@ export interface FindMatch {
 
 export interface FindOptions extends LocalQueryOptions {
   kind?: FindKind;
+  /** Limit to one configured root by normalized filesystem path only. */
+  rootPath?: string;
   /** true refreshes synchronously, false skips refresh scheduling, undefined schedules async refresh. */
   refresh?: boolean;
   /** Treat the query as a regular expression (grep-style, line-based). */
@@ -78,11 +81,22 @@ export interface FindResponse {
  * when a caller supplied a path. Once roots exist, a scoped query must name a
  * real root and must report only that root in its population metadata.
  */
-function queryRoots(rootRef: string | undefined, db?: Database): IndexRoot[] {
+function queryRoots(
+  rootRef: string | undefined,
+  rootPath: string | undefined,
+  db?: Database,
+): IndexRoot[] {
   const roots = listRoots(db);
-  if (!rootRef || roots.length === 0) return roots;
+  if ((!rootRef && !rootPath) || roots.length === 0) return roots;
 
-  const root = getRoot(rootRef, db);
+  if (rootPath) {
+    const normalizedPath = normalizeRootPath(rootPath);
+    const root = roots.find((candidate) => candidate.path === normalizedPath);
+    if (!root) throw new Error(`Index root not found: ${normalizedPath}`);
+    return [root];
+  }
+
+  const root = getRoot(rootRef!, db);
   if (!root) throw new Error(`Index root not found: ${rootRef}`);
   return [root];
 }
@@ -139,7 +153,7 @@ export function findLocal(query: string, opts: FindOptions = {}, db?: Database):
     throw new Error(`Invalid kind "${kind}" — use file, content, or both.`);
   }
   const limit = clampLimit(opts.limit);
-  let roots = queryRoots(opts.root, db);
+  let roots = queryRoots(opts.root, opts.rootPath, db);
 
   if (!hasReadyQueryRoot(roots)) {
     // Kick recovery before giving up: a wedged root is exactly the case the
@@ -150,7 +164,7 @@ export function findLocal(query: string, opts: FindOptions = {}, db?: Database):
     if (opts.refresh === true) autoRefreshStaleRoots(db);
     else if (opts.refresh !== false) scheduleAutoRefreshStaleRoots(db);
 
-    roots = queryRoots(opts.root, db);
+    roots = queryRoots(opts.root, opts.rootPath, db);
     if (hasReadyQueryRoot(roots)) return findLocal(query, { ...opts, refresh: false }, db);
 
     return {
@@ -167,10 +181,10 @@ export function findLocal(query: string, opts: FindOptions = {}, db?: Database):
 
   if (opts.refresh === true) autoRefreshStaleRoots(db);
   else if (opts.refresh !== false) scheduleAutoRefreshStaleRoots(db);
-  roots = queryRoots(opts.root, db);
+  roots = queryRoots(opts.root, opts.rootPath, db);
 
   const queryOpts: LocalQueryOptions = {
-    root: opts.root,
+    root: opts.rootPath ? roots[0]?.id : opts.root,
     ext: opts.ext,
     dir: opts.dir,
     limit,

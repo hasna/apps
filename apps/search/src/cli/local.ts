@@ -130,7 +130,8 @@ export function registerLocalCommands(program: Command): void {
       try {
         response = findLocal(query, {
           kind: opts.kind as FindKind,
-          root: opts.path ?? opts.root,
+          root: opts.root,
+          rootPath: opts.path,
           ext: opts.ext,
           dir: opts.dir,
           limit: parsePositiveInt(opts.limit, "--limit"),
