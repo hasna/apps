@@ -10,7 +10,7 @@ function makeFakeClient() {
   const projects: Record<string, any> = {
     "proj-valid": { id: "proj-valid", name: "Chief of Harness" },
   };
-  const client = {
+  const client: any = {
     async many(sql: string): Promise<any[]> {
       if (/FROM channels/i.test(sql)) return Object.values(channels);
       if (/FROM projects/i.test(sql)) return Object.values(projects);
@@ -57,6 +57,16 @@ function makeFakeClient() {
       return { rows: [], rowCount: 0 };
     },
     async execute(_sql: string, _p: readonly unknown[] = []): Promise<void> {},
+    async transaction<T>(fn: (tx: any) => Promise<T>): Promise<T> {
+      const snapshot = structuredClone(channels);
+      try {
+        return await fn(client);
+      } catch (error) {
+        for (const key of Object.keys(channels)) delete channels[key];
+        Object.assign(channels, snapshot);
+        throw error;
+      }
+    },
   };
   return client;
 }

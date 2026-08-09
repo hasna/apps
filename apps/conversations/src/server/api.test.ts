@@ -30,6 +30,7 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
   );
   let nextId = 1;
   let failRenameAt: RegExp | null = null;
+  let failChannelMemberInsert = false;
   const deferred = () => {
     let resolve!: () => void;
     const promise = new Promise<void>((done) => { resolve = done; });
@@ -224,6 +225,10 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
         return { rows: [row], rowCount: 1 };
       }
       if (/INSERT INTO channel_members/i.test(sql)) {
+        if (failChannelMemberInsert) {
+          failChannelMemberInsert = false;
+          throw new Error("injected channel member insert failure");
+        }
         const [channel, agent] = p as any[];
         channelMembers.add(`${channel}:${agent}`);
         return { rows: [], rowCount: 1 };
@@ -471,6 +476,9 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
           if (/INSERT INTO messages/i.test(sql) && /ON CONFLICT/i.test(sql)) {
             return client.query(sql, p);
           }
+          if (/INSERT INTO channel_members/i.test(sql)) {
+            return client.query(sql, p);
+          }
           if (failRenameAt?.test(sql)) {
             failRenameAt = null;
             throw new Error("injected channel rename failure");
@@ -710,6 +718,9 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
       },
       failRenameWhen(pattern: RegExp) {
         failRenameAt = pattern;
+      },
+      failNextChannelMemberInsert() {
+        failChannelMemberInsert = true;
       },
       armProjectLinkageBulkRace() {
         const race = {
@@ -1896,6 +1907,41 @@ describe("conversations-serve", () => {
     });
     expect(body.reason).toContain("No conversations project exists");
     expect(body.hint).toContain("/v1/projects");
+
+    const retry = await fetch(`${base}/v1/channels`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "internal-chief-of-harness-rejected",
+        created_by: "test",
+      }),
+    });
+    expect(retry.status).toBe(201);
+  });
+
+  test("POST /v1/channels rolls back the channel when creator auto-join fails", async () => {
+    activeFakeClient!.__debug.failNextChannelMemberInsert();
+    const failed = await fetch(`${base}/v1/channels`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "atomic-channel-create",
+        created_by: "test",
+        project_id: "proj-valid",
+      }),
+    });
+    expect(failed.status).toBe(400);
+
+    const retry = await fetch(`${base}/v1/channels`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "atomic-channel-create",
+        created_by: "test",
+        project_id: "proj-valid",
+      }),
+    });
+    expect(retry.status).toBe(201);
   });
 
   test("POST /v1/messages validates required fields", async () => {
