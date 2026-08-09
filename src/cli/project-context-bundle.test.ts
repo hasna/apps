@@ -6,9 +6,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runMigrations } from "../db/schema.js";
 import { createWorkspace } from "../db/workspaces.js";
+import { computeProjectContextBundleHash } from "../lib/project-context-bundle.js";
 import { testSpawnEnv } from "../testing/spawn-env.js";
 
 const CLI_PATH = join(process.cwd(), "src/cli/index.ts");
+type ContextBundle = Parameters<typeof computeProjectContextBundleHash>[0];
 
 function runProjects(args: string[], env: Record<string, string> = {}) {
   return Bun.spawnSync({
@@ -36,7 +38,7 @@ function stableStringify(value: unknown): string {
 }
 
 function expectedHash(bundle: Record<string, unknown>): string {
-  const { hash: _hash, ...allowlisted } = bundle;
+  const { generated_at: _generatedAt, hash: _hash, ...allowlisted } = bundle;
   return `sha256:${createHash("sha256").update(stableStringify(allowlisted)).digest("hex")}`;
 }
 
@@ -173,6 +175,37 @@ describe("projects context-bundle", () => {
       expect(result.exitCode).toBe(1);
       expect(text(result.stdout)).toBe("");
       expect(text(result.stderr)).toContain("context-bundle requires an exact project id");
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  test("keeps the hash stable across generation times but changes it for durable payload changes", () => {
+    const fx = fixture();
+    try {
+      const result = runProjects(["context-bundle", fx.projectId, "--json"], fx.env);
+      expect(result.exitCode).toBe(0);
+      expect(text(result.stderr)).toBe("");
+
+      const original = JSON.parse(text(result.stdout)) as ContextBundle;
+      const regenerated: ContextBundle = {
+        ...original,
+        generated_at: "2026-08-08T00:00:00.000Z",
+      };
+      const changed: ContextBundle = {
+        ...regenerated,
+        project: {
+          ...regenerated.project,
+          name: "Changed Durable Project Name",
+        },
+      };
+
+      expect(computeProjectContextBundleHash(regenerated)).toBe(
+        computeProjectContextBundleHash(original),
+      );
+      expect(computeProjectContextBundleHash(changed)).not.toBe(
+        computeProjectContextBundleHash(original),
+      );
     } finally {
       fx.cleanup();
     }

@@ -127,7 +127,7 @@ function stableStringify(value: unknown): string {
 }
 
 export function computeProjectContextBundleHash(bundle: ProjectContextBundleV1): string {
-  const { hash: _hash, ...allowlisted } = bundle;
+  const { generated_at: _generatedAt, hash: _hash, ...allowlisted } = bundle;
   return `sha256:${createHash("sha256").update(stableStringify(allowlisted)).digest("hex")}`;
 }
 
