@@ -341,6 +341,50 @@ describe("project-first CLI surface", () => {
     }
   });
 
+  test("register-full rejects malformed orphan-channel reconciliation before authority preflight", async () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-register-full-reconcile-"));
+    const dbPath = join(root, "projects.db");
+    const targetPath = join(root, "fleet-resources");
+    const payload = JSON.stringify({
+      operation_id: "op-cli-register-full-reconcile",
+      project: {
+        id: "wks_005285827590a93b70e5",
+        name: "Fleet Resources",
+        slug: "fleet-resources",
+        kind: "project",
+      },
+      target_path: targetPath,
+      goals_markdown: "# Goals\n\n- Reconcile safely.\n",
+      reconcile_existing: {
+        conversations_channel: {
+          source_operation_id: "op-cli-register-full",
+          target_id: 1012,
+        },
+      },
+      response_byte_limit: 512_000,
+      time_budget_ms: 10_000,
+    });
+    try {
+      const result = await runProjectsWithStdin(
+        ["register-full", "--json"],
+        payload,
+        { HASNA_PROJECTS_DB_PATH: dbPath },
+      );
+      expect(result.exitCode).toBe(1);
+      expect(text(result.stderr)).toBe("");
+      expect(JSON.parse(text(result.stdout))).toMatchObject({
+        ok: false,
+        outcome: "no_go",
+        reason_code: "invalid_bounded_stdin_request",
+        error: "register-full reconcile_existing.conversations_channel.target_id must be a string",
+      });
+      expect(existsSync(dbPath)).toBe(false);
+      expect(existsSync(targetPath)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("subcommand --help/-h print commander usage instead of invoking the prompt agent", () => {
     for (const helpFlag of ["--help", "-h"]) {
       const result = runProjects(["create", helpFlag]);

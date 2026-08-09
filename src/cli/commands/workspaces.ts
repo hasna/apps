@@ -34,6 +34,7 @@ import {
   ProjectRegistrationPathHandle,
   registerFullProject,
   type FullProjectRegistrationProjectInput,
+  type FullProjectRegistrationReconciliationInput,
 } from "../../lib/project-registration.js";
 import { productionProjectRegistrationAuthorities } from "../../lib/production-project-registration-authorities.js";
 import { doctorWorkspace } from "../../lib/workspace-doctor.js";
@@ -263,10 +264,56 @@ async function readBoundedStdinJson(maxBytes = FULL_REGISTRATION_STDIN_LIMIT): P
   return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
 }
 
+function parseFullRegistrationReconciliation(
+  value: unknown,
+): FullProjectRegistrationReconciliationInput | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("register-full reconcile_existing must be an object");
+  }
+  const root = value as Record<string, unknown>;
+  const rootKeys = Object.keys(root);
+  if (rootKeys.length !== 1 || rootKeys[0] !== "conversations_channel") {
+    throw new Error("register-full reconcile_existing supports only conversations_channel");
+  }
+  const channelValue = root.conversations_channel;
+  if (!channelValue || typeof channelValue !== "object" || Array.isArray(channelValue)) {
+    throw new Error("register-full reconcile_existing.conversations_channel must be an object");
+  }
+  const channel = channelValue as Record<string, unknown>;
+  const channelKeys = Object.keys(channel).sort();
+  if (
+    channelKeys.length !== 2
+    || channelKeys[0] !== "source_operation_id"
+    || channelKeys[1] !== "target_id"
+  ) {
+    throw new Error(
+      "register-full reconcile_existing.conversations_channel requires only source_operation_id and target_id",
+    );
+  }
+  if (typeof channel.source_operation_id !== "string") {
+    throw new Error(
+      "register-full reconcile_existing.conversations_channel.source_operation_id must be a string",
+    );
+  }
+  if (typeof channel.target_id !== "string") {
+    throw new Error(
+      "register-full reconcile_existing.conversations_channel.target_id must be a string",
+    );
+  }
+  return {
+    conversations_channel: {
+      source_operation_id: channel.source_operation_id,
+      target_id: channel.target_id,
+    },
+  };
+}
+
 function parseFullRegistrationPayload(value: unknown): {
   operation_id: string;
   mode?: "create" | "retrofit";
   expected_project_revision?: string;
+  reconcile_existing?: FullProjectRegistrationReconciliationInput;
   project: FullProjectRegistrationProjectInput;
   target_path: string;
   goals_markdown: string;
@@ -301,6 +348,7 @@ function parseFullRegistrationPayload(value: unknown): {
     operation_id: payload.operation_id,
     mode: payload.mode as "create" | "retrofit" | undefined,
     expected_project_revision: payload.expected_project_revision as string | undefined,
+    reconcile_existing: parseFullRegistrationReconciliation(payload.reconcile_existing),
     project: payload.project as FullProjectRegistrationProjectInput,
     target_path: payload.target_path,
     goals_markdown: payload.goals_markdown,
@@ -1647,6 +1695,7 @@ function registerProjectCommands(program: Command): void {
           operation_id: payload.operation_id,
           mode: payload.mode,
           expected_project_revision: payload.expected_project_revision,
+          reconcile_existing: payload.reconcile_existing,
           project: payload.project,
           target: ProjectRegistrationPathHandle.fromPath(payload.target_path),
           goals_markdown: payload.goals_markdown,

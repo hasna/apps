@@ -466,7 +466,9 @@ export {
 export type {
   FullProjectRegistrationInput,
   FullProjectRegistrationProjectInput,
+  FullProjectRegistrationReconciliationInput,
   FullProjectRegistrationResult,
+  ProjectRegistrationExistingConversationsChannelReconciliation,
   ProjectRegistrationArtifact,
   ProjectRegistrationAuthorities,
   ProjectRegistrationAuthorityAdapter,

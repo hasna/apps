@@ -6,6 +6,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- `projects register-full` can now explicitly reconcile an equivalent orphaned
+  Conversations channel only when an exact prior registration receipt proves
+  the immutable target, while preserving that adopted channel during rollback
+  and continuing to reject conflicting or unverified channels.
+
 ## [0.1.119]
 
 ### Fixed
