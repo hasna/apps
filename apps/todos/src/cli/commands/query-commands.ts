@@ -742,8 +742,30 @@ export function registerQueryCommands(program: Command) {
     .command("unassign <id>")
     .description("Remove task assignment")
     .option("-j, --json", "Output as JSON")
-    .action((id: string, opts) => {
+    .action(async (id: string, opts) => {
       const globalOpts = program.opts();
+      const cloud = getTodosCloudClient();
+      if (cloud) {
+        try {
+          const resolvedId = await resolveTaskIdForCommand(id, cloud);
+          const task = await cloudGetTask(cloud, resolvedId);
+          if (!task) {
+            throw new Error(`Task not found: ${id}`);
+          }
+          const updated = await cloudUpdateTask(cloud, resolvedId, {
+            assigned_to: null,
+          });
+          if (opts.json || globalOpts.json) {
+            console.log(JSON.stringify(updated));
+            return;
+          }
+          console.log(chalk.green(`Unassigned: ${formatTaskLine(updated)}`));
+        } catch (error) {
+          handleError(error);
+        }
+        return;
+      }
+
       const resolvedId = resolveTaskId(id);
       const db = getDatabase();
       const task = getTask(resolvedId, db);

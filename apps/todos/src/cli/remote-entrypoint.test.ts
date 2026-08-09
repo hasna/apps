@@ -37,7 +37,7 @@ const REPO_ROOT = join(import.meta.dir, "../..");
  * An exact count fails loudly the moment a command is reclassified in either
  * direction, forcing a deliberate update here instead of silent erosion.
  */
-const EXPECTED_LOCAL_ONLY_COMMANDS = 115;
+const EXPECTED_LOCAL_ONLY_COMMANDS = 114;
 
 /**
  * Budget for the Stage-A sweep, derived from the matrix that drives its workload
@@ -1010,6 +1010,213 @@ describe("remote CLI entrypoint authority boundary", () => {
         new_holder: "fixture-agent",
         reason: "remote exact stale lock",
       });
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("full UUID assignment parity keeps unassign on the hosted authority", async () => {
+    const TASK_ID = "66666666-6666-4666-8666-666666666666";
+    const MISSING_TASK_ID = "77777777-7777-4777-8777-777777777777";
+    const requests: Array<{ method: string; path: string; body: Record<string, unknown> }> = [];
+    const comment = {
+      id: "comment-1",
+      task_id: TASK_ID,
+      agent_id: "fixture-agent",
+      session_id: null,
+      content: "hosted parity",
+      type: "comment",
+      progress_pct: null,
+      created_at: "2026-08-09T00:00:01.000Z",
+    };
+    const state = {
+      id: TASK_ID,
+      short_id: "FIX-UNASSIGN-1",
+      project_id: "project-1",
+      parent_id: null,
+      plan_id: null,
+      task_list_id: null,
+      title: "Hosted unassign parity",
+      description: null,
+      status: "pending",
+      priority: "medium",
+      agent_id: null,
+      assigned_to: "fixture-agent",
+      session_id: null,
+      working_dir: null,
+      tags: [],
+      metadata: {},
+      version: 1,
+      locked_by: "fixture-agent",
+      locked_at: "2026-08-09T00:00:00.000Z",
+      created_at: "2026-08-09T00:00:00.000Z",
+      updated_at: "2026-08-09T00:00:00.000Z",
+      started_at: null,
+      completed_at: null,
+      due_at: null,
+      estimated_minutes: null,
+      actual_minutes: null,
+      requires_approval: false,
+      approved_by: null,
+      approved_at: null,
+      recurrence_rule: null,
+      recurrence_parent_id: null,
+      spawns_template_id: null,
+      confidence: null,
+      reason: null,
+      spawned_from_session: null,
+      assigned_by: null,
+      created_by: "fixture-agent",
+      assigned_from_project: null,
+      task_type: null,
+      cost_tokens: 0,
+      cost_usd: 0,
+      delegated_from: null,
+      delegation_depth: 0,
+      retry_count: 0,
+      max_retries: 3,
+      retry_after: null,
+      sla_minutes: null,
+      runner_id: null,
+      runner_started_at: null,
+      runner_completed_at: null,
+      current_step: null,
+      total_steps: null,
+    };
+    let commentWritten = false;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        const body = request.method === "GET"
+          ? {}
+          : await request.json().catch(() => ({})) as Record<string, unknown>;
+        requests.push({ method: request.method, path: `${url.pathname}${url.search}`, body });
+        if (url.pathname === "/v1/openapi.json" && request.method === "GET") {
+          return Response.json({
+            paths: {
+              "/v1/tasks/{id}/refs": { get: {} },
+            },
+          });
+        }
+        if (url.pathname === "/v1/agents" && request.method === "GET") {
+          return Response.json({
+            agents: [
+              { id: "fixture-agent", name: "fixture-agent" },
+              { id: "fixture-assignee", name: "fixture-assignee" },
+            ],
+            count: 2,
+          });
+        }
+        if (url.pathname === `/v1/tasks/${TASK_ID}/refs` && request.method === "GET") {
+          return Response.json({ refs: [], count: 0 });
+        }
+        if (url.pathname === `/v1/tasks/${TASK_ID}/dependencies` && request.method === "GET") {
+          return Response.json({ dependencies: [], blocked_by: [] });
+        }
+        if (url.pathname === `/v1/tasks/${TASK_ID}/comments` && request.method === "GET") {
+          const comments = commentWritten ? [comment] : [];
+          return Response.json({
+            comments,
+            count: comments.length,
+            has_more: false,
+            next_cursor: null,
+          });
+        }
+        if (url.pathname === `/v1/tasks/${TASK_ID}/comments` && request.method === "POST") {
+          expect(body).toMatchObject({ content: "hosted parity", agent_id: "fixture-agent" });
+          commentWritten = true;
+          return Response.json({ comment }, { status: 201 });
+        }
+        if (url.pathname === `/v1/tasks/${TASK_ID}` && request.method === "GET") {
+          return Response.json({ task: state });
+        }
+        if (url.pathname === `/v1/tasks/${MISSING_TASK_ID}` && request.method === "GET") {
+          return Response.json({ error: "task not found" }, { status: 404 });
+        }
+        if (url.pathname === `/v1/tasks/${TASK_ID}` && request.method === "PATCH") {
+          expect(Object.keys(body)).toEqual(["assigned_to"]);
+          if (body.assigned_to === "fixture-assignee") {
+            state.assigned_to = "fixture-assignee";
+          } else if (body.assigned_to === null) {
+            state.assigned_to = null;
+          } else {
+            return Response.json({ error: "unexpected assignment patch" }, { status: 400 });
+          }
+          state.version += 1;
+          state.updated_at = "2026-08-09T00:00:02.000Z";
+          return Response.json({ task: state });
+        }
+        return Response.json({ error: `fixture route missing: ${request.method} ${url.pathname}` }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-unassign-parity-"));
+    tempRoots.push(root);
+    const cwd = join(root, "cwd");
+    const home = join(root, "home");
+    mkdirSync(cwd);
+    mkdirSync(home);
+    const localDbPath = join(root, "must-not-exist", "todos.db");
+    const env = {
+      PATH: process.env.PATH ?? "",
+      BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
+      HOME: home,
+      TMPDIR: root,
+      LANG: "C.UTF-8",
+      TODOS_AUTO_PROJECT: "false",
+      TODOS_DB_PATH: localDbPath,
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
+      HASNA_TODOS_API_KEY: "fixture-remote-key",
+      TODOS_AGENT_ID: "fixture-agent",
+    };
+    try {
+      const shown = await runCli(executable, ["--json", "show", TASK_ID], env, cwd);
+      expect({ exitCode: shown.exitCode, stderr: shown.stderr }).toEqual({ exitCode: 0, stderr: "" });
+      expect(JSON.parse(shown.stdout)).toMatchObject({ id: TASK_ID, assigned_to: "fixture-agent" });
+
+      const commented = await runCli(executable, ["--json", "comment", TASK_ID, "hosted parity"], env, cwd);
+      expect({ exitCode: commented.exitCode, stderr: commented.stderr }).toEqual({ exitCode: 0, stderr: "" });
+      expect(JSON.parse(commented.stdout)).toMatchObject({ task_id: TASK_ID, content: "hosted parity" });
+
+      const assigned = await runCli(executable, ["--json", "assign", TASK_ID, "fixture-assignee", "--assign-seat"], env, cwd);
+      expect({ exitCode: assigned.exitCode, stderr: assigned.stderr }).toEqual({ exitCode: 0, stderr: "" });
+      expect(JSON.parse(assigned.stdout)).toMatchObject({ id: TASK_ID, assigned_to: "fixture-assignee" });
+
+      const unassigned = await runCli(executable, ["--json", "unassign", TASK_ID], env, cwd);
+      expect({ exitCode: unassigned.exitCode, stderr: unassigned.stderr }).toEqual({ exitCode: 0, stderr: "" });
+      expect(JSON.parse(unassigned.stdout)).toMatchObject({
+        id: TASK_ID,
+        assigned_to: null,
+        locked_by: "fixture-agent",
+      });
+
+      const readback = await runCli(executable, ["--json", "show", TASK_ID], env, cwd);
+      expect({ exitCode: readback.exitCode, stderr: readback.stderr }).toEqual({ exitCode: 0, stderr: "" });
+      expect(JSON.parse(readback.stdout)).toMatchObject({
+        id: TASK_ID,
+        assigned_to: null,
+        locked_by: "fixture-agent",
+      });
+
+      const missing = await runCli(executable, ["--json", "unassign", MISSING_TASK_ID], env, cwd);
+      expect(missing.exitCode).toBe(1);
+      expect(missing.stderr).toContain(`Task not found: ${MISSING_TASK_ID}`);
+      expect(missing.stdout).toContain(`"error":"Task not found: ${MISSING_TASK_ID}`);
+
+      expect(requests.map((request) => `${request.method} ${request.path}`)).toContain(
+        `PATCH /v1/tasks/${TASK_ID}`,
+      );
+      const unassignPatch = requests.find(
+        (request) => request.method === "PATCH" && request.body.assigned_to === null,
+      );
+      expect(unassignPatch).toEqual({
+        method: "PATCH",
+        path: `/v1/tasks/${TASK_ID}`,
+        body: { assigned_to: null },
+      });
+      expectNoLocalDatabase(home, localDbPath);
     } finally {
       server.stop(true);
     }
