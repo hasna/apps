@@ -21,9 +21,15 @@ let db: Database;
 let store: TodosStorageAdapter;
 let dependencies: V1RequestDependencies;
 
-function request(path: string): Promise<Response | null> {
+function request(path: string, method = "GET", body?: unknown): Promise<Response | null> {
   const url = new URL(`https://todos.example.test${path}`);
-  return handleV1Request(new Request(url, { method: "GET" }), url, dependencies);
+  return handleV1Request(new Request(url, {
+    method,
+    ...(body === undefined ? {} : {
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  }), url, dependencies);
 }
 
 beforeEach(async () => {
@@ -122,6 +128,28 @@ describe("GET /v1/tasks rejects an out-of-vocabulary priority", () => {
     const response = await request("/v1/tasks?priority=critical,medium");
     expect(response?.status).toBe(200);
     expect((await response!.json() as { count: number }).count).toBe(2);
+  });
+});
+
+describe("PATCH /v1/tasks validates task-state vocabulary", () => {
+  test("persists a canonical failed transition", async () => {
+    const task = await store.tasks.create({ title: "valid failed transition" });
+    const response = await request(`/v1/tasks/${task.id}`, "PATCH", { status: "failed" });
+
+    expect(response?.status).toBe(200);
+    expect(await response!.json()).toMatchObject({ task: { id: task.id, status: "failed" } });
+    expect(await store.tasks.get(task.id)).toMatchObject({ status: "failed" });
+  });
+
+  test("rejects blocked as a task status and names the canonical states", async () => {
+    const task = await store.tasks.create({ title: "invalid blocked transition" });
+    const response = await request(`/v1/tasks/${task.id}`, "PATCH", { status: "blocked" });
+
+    expect(response?.status).toBe(400);
+    const body = await response!.json() as { error: string };
+    expect(body.error).toContain("blocked");
+    for (const status of TASK_STATUSES) expect(body.error).toContain(status);
+    expect(await store.tasks.get(task.id)).toMatchObject({ status: "pending" });
   });
 });
 

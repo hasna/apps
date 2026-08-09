@@ -17,6 +17,7 @@ import {
   cloudUpdateTask,
   cloudDeleteTask,
   cloudTaskAction,
+  cloudFailTask,
   cloudCompleteTask,
   cloudAddComment,
   cloudListComments,
@@ -692,6 +693,31 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     expect(task.status).toBe("in_progress");
     expect(calls[0]!.method).toBe("POST");
     expect(calls[0]!.url).toBe("https://todos.example.com/v1/tasks/t4/start");
+  });
+
+  test("fail -> POST /v1/tasks/:id/fail, preserves reason and retry result", async () => {
+    const calls = installFetch(() => ({
+      body: {
+        result: {
+          task: { id: "t-fail", status: "failed", reason: "remote reason" },
+          retryTask: { id: "t-retry", status: "pending" },
+        },
+      },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const result = await cloudFailTask(client, "t-fail", {
+      agent_id: "nausicaa",
+      reason: "remote reason",
+      retry: true,
+    });
+
+    expect(result.task).toMatchObject({ id: "t-fail", status: "failed", reason: "remote reason" });
+    expect(result.retryTask).toMatchObject({ id: "t-retry", status: "pending" });
+    expect(calls[0]).toMatchObject({
+      method: "POST",
+      url: "https://todos.example.com/v1/tasks/t-fail/fail",
+      body: { agent_id: "nausicaa", reason: "remote reason", retry: true },
+    });
   });
 
   test("failed-task start preserves the remote transition error instead of reporting authority failure", async () => {

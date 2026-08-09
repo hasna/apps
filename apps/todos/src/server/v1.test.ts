@@ -1162,6 +1162,39 @@ describe("/v1 task hierarchy and lock authorization", () => {
     expect(await store.tasks.get(pending.id)).toMatchObject({ status: "in_progress", locked_by: "silvanus" });
   });
 
+  test("fail persists its reason and honors the advertised retry contract", async () => {
+    const task = await store.tasks.create({ title: "remote failure" });
+    const response = await request(`/v1/tasks/${task.id}/fail`, "POST", {
+      agent_id: "nausicaa",
+      reason: "remote reason",
+      retry: true,
+    });
+
+    expect(response?.status).toBe(200);
+    const body = await response!.json() as {
+      result: { task: { id: string; status: string; reason: string | null }; retryTask?: { id: string; status: string } };
+    };
+    expect(body.result.task).toMatchObject({ id: task.id, status: "failed", reason: "remote reason" });
+    expect(body.result.retryTask).toMatchObject({ status: "pending" });
+    expect(await store.tasks.get(task.id)).toMatchObject({ status: "failed", reason: "remote reason" });
+  });
+
+  test("fail rejects malformed helper fields before storage mutation", async () => {
+    for (const body of [
+      null,
+      [],
+      { agent_id: "" },
+      { reason: 42 },
+      { retry: "yes" },
+      { unknown: true },
+    ]) {
+      const task = await store.tasks.create({ title: `invalid failure ${JSON.stringify(body)}` });
+      const response = await request(`/v1/tasks/${task.id}/fail`, "POST", body);
+      expect(response?.status).toBe(400);
+      expect(await store.tasks.get(task.id)).toMatchObject({ status: "pending", reason: null });
+    }
+  });
+
   test("complete persists the full operational evidence body and confidence", async () => {
     const task = await store.tasks.create({ title: "evidence" });
     const response = await request(`/v1/tasks/${task.id}/complete`, "POST", {

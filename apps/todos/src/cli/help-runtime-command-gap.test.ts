@@ -50,9 +50,10 @@ describe("remote help/runtime command gap", () => {
     }
 
     // Remote-executable commands remain advertised.
-    for (const name of ["status", "list", "add", "show", "start", "done"]) {
+    for (const name of ["status", "list", "add", "show", "start", "done", "fail"]) {
       expect(advertised).toContain(name);
     }
+    expect(advertised).not.toContain("block");
     expect(manual.local_only).toBe(false);
   });
 
@@ -107,6 +108,7 @@ describe("remote help/runtime command gap", () => {
   test("visibility predicate keeps diagnostic and remote owners while dropping local-only", () => {
     expect(isTodosCliCommandVisibleForRoute("status", "remote-http")).toBe(true); // remote-http
     expect(isTodosCliCommandVisibleForRoute("manual", "remote-http")).toBe(true); // diagnostic
+    expect(isTodosCliCommandVisibleForRoute("fail", "remote-http")).toBe(true); // remote-http
     expect(isTodosCliCommandVisibleForRoute("burndown", "remote-http")).toBe(false); // local-only
     expect(isTodosCliCommandVisibleForRoute("burndown", "local")).toBe(true); // local route shows all
     // Unknown/optional families self-gate at runtime and stay visible.

@@ -13,7 +13,7 @@ import { normalizeStorageMode } from "@hasna/contracts/mode";
 import { resolve as resolvePath } from "node:path";
 import type { Agent, CreatePlanInput, CreateTaskListInput, CreateTemplateInput, Plan, PlanProjectLinkResult, PlanProjectLinkRollbackResult, Project, ProjectTaskListEnsureResult, ProjectTaskListRollbackResult, RegisterAgentInput, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList, TaskTemplate, TemplateWithTasks, UpdatePlanInput, UpdateTaskListInput } from "../types/index.js";
 import { isBlockingDependencyStatus } from "../types/index.js";
-import type { UpdateTemplateInput } from "../storage/interfaces.js";
+import type { TodosTaskFailureResult, UpdateTemplateInput } from "../storage/interfaces.js";
 import { redactEvidenceText } from "../lib/redaction.js";
 import type { IntegrityReport, IntegrityTaskRow } from "../lib/integrity.js";
 import {
@@ -1032,6 +1032,37 @@ export async function cloudTaskAction(
 ): Promise<Task> {
   const raw = await client.transport.post<unknown>(`/tasks/${encodeURIComponent(id)}/${action}`, body);
   return unwrapTask(raw);
+}
+
+export interface CloudTaskFailureInput {
+  agent_id?: string;
+  reason?: string;
+  retry?: boolean;
+}
+
+/** Fail a task through `/v1` and preserve the lifecycle result, including an optional retry task. */
+export async function cloudFailTask(
+  client: HasnaStorageClient,
+  id: string,
+  body: CloudTaskFailureInput = {},
+): Promise<TodosTaskFailureResult> {
+  const route = `/v1/tasks/${encodeURIComponent(id)}/fail`;
+  const raw = await requiredRemoteRoute(client, route, () =>
+    client.transport.post<unknown>(`/tasks/${encodeURIComponent(id)}/fail`, body as Record<string, unknown>));
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(`REMOTE_API_INCOMPATIBLE: ${route} returned an invalid failure response envelope`);
+  }
+  const result = (raw as Record<string, unknown>)["result"];
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    throw new Error(`REMOTE_API_INCOMPATIBLE: ${route} did not return result.task`);
+  }
+  const task = (result as Record<string, unknown>)["task"];
+  const retryTask = (result as Record<string, unknown>)["retryTask"];
+  if (!task || typeof task !== "object" || Array.isArray(task) ||
+      (retryTask !== undefined && (!retryTask || typeof retryTask !== "object" || Array.isArray(retryTask)))) {
+    throw new Error(`REMOTE_API_INCOMPATIBLE: ${route} returned an invalid failure result`);
+  }
+  return result as unknown as TodosTaskFailureResult;
 }
 
 function resolveOpenApiSchema(document: unknown, schema: unknown): Record<string, unknown> | null {

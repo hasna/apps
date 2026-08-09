@@ -12,12 +12,13 @@ const taskSchema = {
     id: { type: "string" },
     title: { type: "string" },
     description: { type: "string" },
-    status: { type: "string" },
-    priority: { type: "string" },
+    status: { type: "string", enum: [...TASK_STATUSES] },
+    priority: { type: "string", enum: [...TASK_PRIORITIES] },
     project_id: { type: "string", nullable: true },
     parent_id: { type: "string", nullable: true },
     assigned_to: { type: "string", nullable: true },
     agent_id: { type: "string", nullable: true },
+    reason: { type: "string", nullable: true },
     tags: { type: "array", items: { type: "string" } },
     version: { type: "number" },
     created_at: { type: "string" },
@@ -405,8 +406,8 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           properties: {
             title: { type: "string" },
             description: { type: "string", nullable: true },
-            status: { type: "string" },
-            priority: { type: "string" },
+            status: { type: "string", enum: [...TASK_STATUSES] },
+            priority: { type: "string", enum: [...TASK_PRIORITIES] },
             project_id: { type: "string" },
             parent_id: { type: "string" },
             plan_id: { type: "string" },
@@ -420,8 +421,8 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           properties: {
             title: { type: "string" },
             description: { type: "string" },
-            status: { type: "string" },
-            priority: { type: "string" },
+            status: { type: "string", enum: [...TASK_STATUSES] },
+            priority: { type: "string", enum: [...TASK_PRIORITIES] },
             assigned_to: { type: "string" },
             project_id: { type: "string", nullable: true },
             plan_id: { type: "string", nullable: true },
@@ -440,6 +441,24 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             commit_hash: { type: "string" },
             notes: { type: "string" },
             confidence: { type: "number", minimum: 0, maximum: 1 },
+          },
+        },
+        FailTaskInput: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            agent_id: { type: "string", minLength: 1 },
+            reason: { type: "string" },
+            retry: { type: "boolean" },
+          },
+        },
+        TaskFailureResult: {
+          type: "object",
+          additionalProperties: false,
+          required: ["task"],
+          properties: {
+            task: { $ref: "#/components/schemas/Task" },
+            retryTask: { $ref: "#/components/schemas/Task" },
           },
         },
         CreateProjectInput: {
@@ -1474,6 +1493,30 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             content: { "application/json": { schema: { $ref: "#/components/schemas/CompleteTaskInput" } } },
           },
           responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { task: { $ref: "#/components/schemas/Task" } } } } } } },
+        },
+      },
+      "/v1/tasks/{id}/fail": {
+        post: {
+          operationId: "failTask",
+          summary: "Fail a task with an optional reason and retry copy",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: false,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/FailTaskInput" } } },
+          },
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["result"],
+                    properties: { result: { $ref: "#/components/schemas/TaskFailureResult" } },
+                  },
+                },
+              },
+            },
+          },
         },
       },
       "/v1/projects": {

@@ -2,9 +2,9 @@
 // Regenerate: bun run scripts/generate-sdk.ts
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Todos V1 API 0.15.13
+// Source: Todos V1 API 0.15.15
 
-export interface Task { "id"?: string; "title"?: string; "description"?: string; "status"?: string; "priority"?: string; "project_id"?: string | null; "parent_id"?: string | null; "assigned_to"?: string | null; "agent_id"?: string | null; "tags"?: Array<string>; "version"?: number; "created_at"?: string; "updated_at"?: string }
+export interface Task { "id"?: string; "title"?: string; "description"?: string; "status"?: "pending" | "in_progress" | "completed" | "failed" | "cancelled"; "priority"?: "low" | "medium" | "high" | "critical"; "project_id"?: string | null; "parent_id"?: string | null; "assigned_to"?: string | null; "agent_id"?: string | null; "reason"?: string | null; "tags"?: Array<string>; "version"?: number; "created_at"?: string; "updated_at"?: string }
 
 export interface Project { "id"?: string; "name"?: string; "path"?: string; "description"?: string | null; "task_list_id"?: string | null; "task_prefix"?: string | null; "task_counter"?: number; "created_at"?: string; "updated_at"?: string }
 
@@ -42,11 +42,15 @@ export interface TemplateVariable { "name": string; "required": boolean; "defaul
 
 export interface CreateTemplateTaskInput { "position"?: number; "title_pattern": string; "description"?: string | null; "priority"?: "low" | "medium" | "high" | "critical"; "tags"?: Array<string>; "task_type"?: string | null; "condition"?: string | null; "include_template_id"?: string | null; "depends_on"?: Array<number>; "depends_on_positions"?: Array<number>; "metadata"?: Record<string, unknown> }
 
-export interface CreateTaskInput { "title": string; "description"?: string | null; "status"?: string; "priority"?: string; "project_id"?: string; "parent_id"?: string; "plan_id"?: string; "assigned_to"?: string; "agent_id"?: string; "tags"?: Array<string> }
+export interface CreateTaskInput { "title": string; "description"?: string | null; "status"?: "pending" | "in_progress" | "completed" | "failed" | "cancelled"; "priority"?: "low" | "medium" | "high" | "critical"; "project_id"?: string; "parent_id"?: string; "plan_id"?: string; "assigned_to"?: string; "agent_id"?: string; "tags"?: Array<string> }
 
-export interface UpdateTaskInput { "title"?: string; "description"?: string; "status"?: string; "priority"?: string; "assigned_to"?: string; "project_id"?: string | null; "plan_id"?: string | null; "task_list_id"?: string | null; "version"?: number }
+export interface UpdateTaskInput { "title"?: string; "description"?: string; "status"?: "pending" | "in_progress" | "completed" | "failed" | "cancelled"; "priority"?: "low" | "medium" | "high" | "critical"; "assigned_to"?: string; "project_id"?: string | null; "plan_id"?: string | null; "task_list_id"?: string | null; "version"?: number }
 
 export interface CompleteTaskInput { "agent_id"?: string; "attachment_ids"?: Array<string>; "files_changed"?: Array<string>; "test_results"?: string; "commit_hash"?: string; "notes"?: string; "confidence"?: number }
+
+export interface FailTaskInput { "agent_id"?: string; "reason"?: string; "retry"?: boolean }
+
+export interface TaskFailureResult { "task": Task; "retryTask"?: Task }
 
 export interface CreateProjectInput { "name": string; "path": string; "description"?: string; "task_list_id"?: string; "task_prefix"?: string }
 
@@ -512,6 +516,15 @@ export class TodosV1Client {
     /** Complete a task */
     async completeTask(id: string, body?: CompleteTaskInput, init?: RequestInit): Promise<{ "task"?: Task }> {
       return this.request("POST", `/v1/tasks/${encodeURIComponent(String(id))}/complete`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Fail a task with an optional reason and retry copy */
+    async failTask(id: string, body?: FailTaskInput, init?: RequestInit): Promise<{ "result": TaskFailureResult }> {
+      return this.request("POST", `/v1/tasks/${encodeURIComponent(String(id))}/fail`, {
         body,
         query: undefined,
         init,
