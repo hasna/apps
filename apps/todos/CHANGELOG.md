@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.19] - 2026-08-09
+
+### Fixed
+
+- **Hosted plan completion stays on the authenticated authority path.** When
+  the direct completed-status route is unavailable, the CLI uses the supported
+  revision-guarded completion operation and verifies authoritative readback
+  without broad snapshot replacement ([#243](https://github.com/hasna/todos/pull/243)).
+- **Remote task retry requires an advertised capability.** The CLI checks the
+  authority's boolean retry capability before mutation and fails closed for
+  missing or incompatible remote schemas while preserving the local retry path.
+- **Comments accept explicit file input.** Comment creation can read the body
+  from a requested file while preserving inline input and authenticated cloud
+  creator attribution ([#242](https://github.com/hasna/todos/pull/242)).
+
 ## [0.15.18] - 2026-08-09
 
 ### Fixed
