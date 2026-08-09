@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, existsSync, readFileSync, writeFileSync } from "fs";
+import { mkdtempSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import {
@@ -376,14 +376,38 @@ describe("installer", () => {
         mkdirSync(skillDir, { recursive: true });
         const mine = "---\nname: market-research-report\ndescription: MINE\n---\n";
         writeFileSync(join(skillDir, "SKILL.md"), mine);
+        writeFileSync(join(skillDir, "obsolete.txt"), "remove me");
 
         const skipped = installSkillForAgent("market-research-report", { agent: "claude", scope: "project", projectDir: testDir });
         expect(skipped.success).toBe(false);
         expect(readFileSync(join(skillDir, "SKILL.md"), "utf-8")).toBe(mine);
+        expect(readFileSync(join(skillDir, "obsolete.txt"), "utf-8")).toBe("remove me");
 
         const forced = installSkillForAgent("market-research-report", { agent: "claude", scope: "project", projectDir: testDir, overwrite: true });
         expect(forced.success).toBe(true);
         expect(readFileSync(join(skillDir, "SKILL.md"), "utf-8")).not.toBe(mine);
+        expect(existsSync(join(skillDir, "obsolete.txt"))).toBe(false);
+        expect(existsSync(join(skillDir, SYNC_MARKER_FILE))).toBe(true);
+      });
+
+      test("refuses to adopt an unmarked directory without SKILL.md, even with --overwrite", () => {
+        const skillDir = join(testDir, ".claude", "skills", "market-research-report");
+        const helperPath = join(skillDir, "scripts", "helper");
+        mkdirSync(join(skillDir, "scripts"), { recursive: true });
+        writeFileSync(helperPath, "USER_BYTES");
+
+        const result = installSkillForAgent("market-research-report", {
+          agent: "claude",
+          scope: "project",
+          projectDir: testDir,
+          overwrite: true,
+        });
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain("without SKILL.md");
+        expect(readFileSync(helperPath, "utf-8")).toBe("USER_BYTES");
+        expect(existsSync(join(skillDir, "SKILL.md"))).toBe(false);
+        expect(existsSync(join(skillDir, SYNC_MARKER_FILE))).toBe(false);
       });
 
       test("still rejects nonexistent skills", () => {

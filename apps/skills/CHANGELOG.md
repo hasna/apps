@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.1.61] - 2026-08-09
+
 ### Removed
 - **The deployment "mode" concept is gone, in all three unrelated places it had
   grown.** Skills has one deployment story: you run it. Where it runs and who
@@ -33,18 +35,22 @@ All notable changes to this project will be documented in this file.
 ### Added
 - **`skills sync [names...] [--for <agent>] [--dry-run] [--all] [--force]`** — the last
   mile: write skills from this machine's corpus into each coding agent's global skills
-  folder (`~/.claude/skills/<name>/SKILL.md`, `~/.codex/…`, `~/.config/opencode/…`,
-  `~/.cursor/…`), per-tool adapted (Claude keeps `user_invocable`; Codex/OpenCode/Cursor
-  have it stripped). Instruction skills are written as prose the agent auto-loads;
-  executable skills as a pointer to `skills run <name>`. **Non-clobbering**: every synced
-  directory carries a `.hasna-skills.json` ownership marker, and a skill directory without
-  it is treated as hand-authored and skipped unless `--force`. This replaces the disabled
-  legacy `sync` command and reverses the `installSkillForAgent()` stub — that function now
-  writes an agent skill folder (single-skill entry point to the same non-clobbering
-  writer) instead of returning `success: false`. New library exports: `syncSkillsToAgents`,
-  `writeManagedAgentSkill`, `writeManagedSkillDir`, `adaptSkillMdForAgent`,
-  `agentGlobalSkillsDir`, `pointerSkillMd`, `resolveSyncAgents`, `removeManagedAgentSkill`,
-  `SYNC_AGENTS`.
+  folder (`~/.claude/skills/<name>/SKILL.md`, `~/.codewith/…`, `~/.codex/…`,
+  `~/.config/opencode/…`, `~/.cursor/…`), per-tool adapted (Claude keeps
+  `user_invocable`; Codewith/Codex/OpenCode/Cursor have it stripped). Instruction skills
+  are written as prose the agent auto-loads; executable skills as a pointer to
+  `skills run <name>`. Named bundled workflow skills copy their complete resource
+  directory. **Non-clobbering**: every synced directory carries a
+  `.hasna-skills.json` ownership marker. An unmanaged directory with SKILL.md is skipped
+  unless `--force` explicitly adopts it; any other pre-existing unmarked directory is
+  always left untouched. Managed updates and force adoption replace the owned directory
+  from a staged exact mirror, removing stale files while restoring the original if the
+  swap fails. This replaces the disabled legacy `sync` command and reverses the
+  `installSkillForAgent()` stub — that function now writes an agent skill folder
+  (single-skill entry point to the same non-clobbering writer) instead of returning
+  `success: false`. New library exports: `syncSkillsToAgents`, `writeManagedAgentSkill`,
+  `writeManagedSkillDir`, `adaptSkillMdForAgent`, `agentGlobalSkillsDir`,
+  `pointerSkillMd`, `resolveSyncAgents`, `removeManagedAgentSkill`, `SYNC_AGENTS`.
 - **`skills pull [names...] [--all] [--for-machine]`** — fetch skills from the
   configured instance into this machine's corpus (`~/.hasna/skills/installed/<name>/`),
   the read half of the dogfooding loop that `skills push` writes to. Each skill's
@@ -110,6 +116,10 @@ All notable changes to this project will be documented in this file.
   reading `$HOME`. Auth (`auth.json`) still resolves from `$HOME` at startup.
 
 ### Fixed
+- Named `skills sync` now resolves repository-managed instruction skills from
+  the packaged `agent-skills/` tree as well as the public `skills/` catalog.
+  The npm tarball includes those agent skills and the release guard rejects a
+  package that silently omits any of their files.
 - **A skill may now be named `config`, `custom`, `auth`, or `installed`.** Those
   names were previously excluded outright by a denylist that existed only because
   the corpus shared the app root with app data. The denylist is deleted.

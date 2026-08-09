@@ -124,7 +124,11 @@ export function registerCreateSync(parent: Command) {
     .option("--for <agent>", `Target one agent (${SYNC_AGENTS.join(", ")}, or all)`, "all")
     .option("--all", "Sync every corpus skill (the default)", false)
     .option("--dry-run", "Show what would be written without touching any agent folder", false)
-    .option("--force", "Overwrite even a hand-authored (unmanaged) agent skill", false)
+    .option(
+      "--force",
+      "Adopt an unmanaged skill that already has SKILL.md; other unmarked directories are never overwritten",
+      false,
+    )
     .option("--json", "Output as JSON", false)
     .description("Write corpus skills into each coding agent's global skills folder, per-tool adapted")
     .action((names: string[], options) => handleSync(names, options));
