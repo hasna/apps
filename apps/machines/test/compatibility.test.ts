@@ -55,6 +55,33 @@ describe("machine compatibility checks", () => {
     expect(report.checks.every((check) => check.detail !== "Permission denied (publickey,password).")).toBe(true);
   });
 
+  test("preserves zsh PATH while probing command paths", () => {
+    const probeScripts: string[] = [];
+    const report = checkMachineCompatibility({
+      machineId: "station03",
+      runner: (machineId, command) => {
+        probeScripts.push(command);
+        const usesNeutralPathVariable = command.includes('resolved_path="$(command -v "$cmd"')
+          && !command.includes('; path="$(command -v "$cmd"');
+        return {
+          machineId,
+          source: "ssh",
+          stdout: `path=/Users/hasna/.bun/bin/cli\nversion=${usesNeutralPathVariable ? "0.2.42" : ""}\n`,
+          stderr: "",
+          exitCode: 0,
+        };
+      },
+      commands: [{ command: "accounts", expectedVersion: "0.2.42", required: true }],
+      packages: [{ name: "@hasna/machines", command: "machines", expectedVersion: "0.2.42", required: true }],
+    });
+
+    expect(report.ok).toBe(true);
+    expect(probeScripts).toHaveLength(2);
+    expect(probeScripts.every((script) => script.includes('resolved_path="$(command -v "$cmd"'))).toBe(true);
+    expect(report.checks.find((check) => check.id === "command:accounts:version")?.actual).toBe("0.2.42");
+    expect(report.checks.find((check) => check.id === "package:@hasna/machines:version")?.actual).toBe("0.2.42");
+  });
+
   test("checks command, package, and workspace compatibility", () => {
     const report = checkMachineCompatibility({
       machineId: "demo-node-01",
