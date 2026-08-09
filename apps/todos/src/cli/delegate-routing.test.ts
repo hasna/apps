@@ -7,14 +7,14 @@ import { getTodosCliCommandCapabilityMatrix, isTodosCliCommandVisibleForRoute } 
  *
  * Stage A defaults EVERY canonical command to `local-only` and promotes only
  * the members of `REMOTE_COMMANDS` to `remote-http`. Under hosted
- * configuration an explicitly named `local-only` verb now runs against the
- * local store, never the shared `/v1` authority.
+ * configuration a `local-only` verb remains fail-closed unless an invocation
+ * is explicitly admitted as workstation-only.
  *
  * `dispatch` is the worked example: it is registered, absent from
- * REMOTE_COMMANDS, and therefore intentionally stays local. A `delegate`
- * registered in only ONE of the two arrays would silently operate on local
- * state instead of the shared fleet task. Nothing in the command's local tests
- * would reveal that authority error, hence a test against the matrix itself.
+ * REMOTE_COMMANDS, and therefore refused on the hosted route. A `delegate`
+ * registered in only ONE of the two arrays would ship unusable on the shared
+ * fleet authority. Nothing in the command's local tests would reveal that
+ * authority error, hence a test against the matrix itself.
  */
 
 describe("delegate is routable on the remote /v1 authority, not just registered", () => {

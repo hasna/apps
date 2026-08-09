@@ -16,10 +16,10 @@ export type TodosCliCommandOwner = "diagnostic" | "remote-http" | "local-only";
 
 /**
  * Stage A is intentionally pure: it decides the authority route without
- * mutating the caller's environment. The executable applies that decision
- * before importing command modules so any later `getTodosCloudClient()` call
- * observes the same local-only route instead of reconstructing hosted routing
- * from the ambient selector.
+ * mutating the caller's environment. The executable applies an admitted local
+ * redaction decision before importing command modules so any later
+ * `getTodosCloudClient()` call cannot reconstruct hosted routing from the
+ * ambient selector.
  */
 export function applyTodosCliAuthorityEnvironment(
   authority: TodosCliAuthorityInitialization,
@@ -163,9 +163,9 @@ export function getTodosCliCommandCapabilityMatrix(): ReadonlyMap<string, TodosC
 /**
  * Whether a top-level command should be advertised (help/manual/completions) for
  * a resolved authority route. Remote help describes the authority-served
- * surface, while an explicitly named `local-only` command can still select the
- * local route before command modules load. Diagnostic and remote-http owners
- * stay visible. Commands with no capability owner (e.g. optional
+ * surface, while explicitly admitted workstation redaction invocations can
+ * select the local route before command modules load. Diagnostic and
+ * remote-http owners stay visible. Commands with no capability owner (e.g. optional
  * dynamically-registered families) self-gate at runtime and remain visible.
  */
 export function isTodosCliCommandVisibleForRoute(
@@ -180,9 +180,9 @@ export function isTodosCliCommandVisibleForRoute(
 
 /**
  * Filter commander help to the authority-served catalog. Explicitly named
- * local-only commands select their own local route, but are omitted from remote
- * metadata so help/manual/completions continue to describe the shared /v1
- * surface rather than mixing two authorities into one catalog.
+ * admitted local redaction invocations select their own local route, but
+ * local-only commands are omitted from remote metadata so help, manual, and
+ * completions continue to describe the shared /v1 surface.
  */
 export function applyTodosCliHelpVisibility(program: Command, route: TodosCliAuthorityInitialization["route"]): void {
   if (route === "local") return;
@@ -277,6 +277,18 @@ function hasOption(args: readonly string[], option: string): boolean {
 
 function positionalArgs(args: readonly string[]): string[] {
   return args.filter((arg) => !arg.startsWith("-"));
+}
+
+/**
+ * Local redaction configuration and scanning are workstation operations even
+ * when the task authority is hosted. Keep this exception narrower than the
+ * top-level `local-only` owner: `redaction evidence` reads or mutates task rows
+ * and must not silently switch away from the configured authority.
+ */
+function isHostedLocalInvocation(invocation: ParsedInvocation): boolean {
+  if (invocation.command !== "redaction") return false;
+  const subcommand = positionalArgs(invocation.commandArgs)[0];
+  return subcommand === "status" || subcommand === "add" || subcommand === "scan";
 }
 
 /**
@@ -472,9 +484,9 @@ function editDistance(a: string, b: string): number {
  */
 function nearestCommands(command: string, limit = 3): string[] {
   const threshold = command.length <= 4 ? 1 : command.length <= 8 ? 2 : 3;
-  // Keep suggestions on the selected remote authority surface. Local-only
-  // commands remain available when named explicitly, but are deliberately not
-  // advertised by remote help or typo recovery.
+  // Keep suggestions on the selected remote authority surface. Workstation
+  // redaction invocations are admitted explicitly, but local-only commands are
+  // deliberately not advertised by remote help or typo recovery.
   return [...COMMAND_CAPABILITY_MATRIX.entries()]
     .filter(([, owner]) => owner !== "local-only")
     .map(([candidate]) => candidate)
@@ -540,7 +552,8 @@ function assertRemoteCommandSupported(
   const command = invocation.command;
   if (command && owner === "local-only") {
     throw new Error(
-      `LOCAL_COMMAND_ROUTING_INVARIANT: \`${command}\` must select the local command route before remote authority validation`,
+      `REMOTE_COMMAND_UNSUPPORTED: \`${command}\` is a local-only command and the Todos /v1 authority does not ` +
+        "serve it; local SQLite fallback is disabled. Run `todos --help` to see the commands this route supports.",
     );
   }
 
@@ -561,10 +574,10 @@ function assertRemoteCommandSupported(
 
 /**
  * Stage A runs before importing any command module that can reach SQLite or
- * native Postgres adapters. It validates the complete mode state, routes an
- * explicitly named local-only command back to the local transport, gates the
- * remote command surface, then constructs only the authenticated HTTP client
- * for remote-supported commands.
+ * native Postgres adapters. It validates the complete mode state, routes only
+ * admitted workstation redaction invocations to the local transport, gates
+ * the remote command surface, then constructs only the authenticated HTTP
+ * client for remote-supported commands.
  */
 export function initializeTodosCliAuthority(
   args: string[] = process.argv.slice(2),
@@ -580,7 +593,7 @@ export function initializeTodosCliAuthority(
   }
 
   const owner = assertInvocationRoutable(invocation);
-  if (owner === "local-only") {
+  if (owner === "local-only" && isHostedLocalInvocation(invocation)) {
     return { route: "local", v1_base_url: null, selected_by: "local-only-command" };
   }
 

@@ -8,9 +8,9 @@ import {
 } from "./stage-a.js";
 
 // Remote metadata intentionally describes the authority-served surface.
-// Explicitly named local-only commands select a separate local route, so they
-// stay out of `todos --help`, `todos manual`, and completions rendered for the
-// remote authority.
+// Explicitly admitted workstation redaction invocations select a separate
+// local route. Local-only commands stay out of `todos --help`, `todos manual`,
+// and completions rendered for the remote authority.
 
 const NAMED_REPRO_COMMANDS = [
   "ready", "blocked", "overdue", "sla", "priorities", "today", "yesterday",

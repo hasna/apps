@@ -90,8 +90,8 @@ export interface CreateCliManualOptions {
    * Predicate deciding whether a top-level command is advertised in the manual.
    * Defaults to advertising everything (local route). In a remote route the
    * caller passes the authority visibility predicate so the manual describes
-   * the shared authority surface; explicitly named local-only commands select a
-   * separate local route.
+   * the shared authority surface; admitted workstation redaction invocations
+   * select a separate local route.
    */
   isCommandVisible?: (topLevelCommand: string) => boolean;
   /** Whether the resolved route serves entirely from local state. */

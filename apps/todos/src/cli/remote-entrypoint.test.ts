@@ -28,10 +28,9 @@ const REPO_ROOT = join(import.meta.dir, "../..");
 /**
  * Exact number of local-only commands in the Stage-A capability matrix.
  *
- * This is deliberately an exact literal, not a `>=` floor. Every local-only
- * owner now selects the explicit local route under hosted configuration, so a
- * reclassification in either direction must be reviewed deliberately rather
- * than silently changing which authority a command can reach.
+ * This is deliberately an exact literal, not a `>=` floor. A reclassification
+ * in either direction must be reviewed deliberately rather than silently
+ * changing which authority a command can reach.
  */
 const EXPECTED_LOCAL_ONLY_COMMANDS = 114;
 const TASK_FIXTURE_ID = "11111111-1111-4111-8111-111111111111";
@@ -567,6 +566,7 @@ describe("remote CLI entrypoint authority boundary", () => {
         ["bulk", "done", TASK_FIXTURE_ID, "--plan", "fixture-plan"],
         ["projects", "--path-prefix", "/tmp"],
         ["plans", "--write-artifacts"],
+        ["agents-normalize"],
       ]) {
         const requestCount = requests.length;
         const result = await runCli(executable, args, env, cwd);
@@ -683,7 +683,7 @@ describe("remote CLI entrypoint authority boundary", () => {
     }
   });
 
-  test("every local-only command family selects the explicit local transport under hosted configuration", () => {
+  test("only redaction configuration and scans select local transport under hosted configuration", () => {
     const hostedEnv = {
       HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_API_URL: "https://authority.invalid",
@@ -695,22 +695,29 @@ describe("remote CLI entrypoint authority boundary", () => {
       .sort();
     expect(localOnly.length).toBe(EXPECTED_LOCAL_ONLY_COMMANDS);
 
-    for (const command of localOnly) {
+    for (const command of localOnly.filter((candidate) => candidate !== "redaction")) {
       const env = { ...hostedEnv };
-      const authority = initializeTodosCliAuthority([command], env);
-      expect({ command, authority }).toEqual({
-        command,
-        authority: {
-          route: "local",
-          v1_base_url: null,
-          selected_by: "local-only-command",
-        },
+      expect(() => initializeTodosCliAuthority([command], env)).toThrow(/REMOTE_COMMAND_UNSUPPORTED/);
+      expect(env.HASNA_TODOS_STORAGE_MODE).toBe("remote");
+      expect(getTodosCloudClient(env)?.baseUrl).toBe("https://authority.invalid/v1");
+    }
+
+    for (const subcommand of ["status", "add", "scan"]) {
+      const env = { ...hostedEnv };
+      const authority = initializeTodosCliAuthority(["redaction", subcommand], env);
+      expect(authority).toEqual({
+        route: "local",
+        v1_base_url: null,
+        selected_by: "local-only-command",
       });
       applyTodosCliAuthorityEnvironment(authority, env);
       expect(env.HASNA_TODOS_STORAGE_MODE).toBe("sqlite");
       expect(env.TODOS_STORAGE_MODE).toBe("sqlite");
       expect(getTodosCloudClient(env)).toBeNull();
     }
+
+    expect(() => initializeTodosCliAuthority(["redaction", "evidence"], hostedEnv))
+      .toThrow(/REMOTE_COMMAND_UNSUPPORTED/);
   });
 
   test("built help and manual advertise only remote-executable commands", async () => {

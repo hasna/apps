@@ -32,7 +32,7 @@ function initFailure(args: string[]): string {
  *
  * Three distinct conditions previously produced one identical string:
  *   1. the verb is not in the registry at all    (`complete`, `register`)
- *   2. the verb exists but is local-only         (`sprint`, now routed locally)
+ *   2. the verb exists but is local-only         (`sprint`)
  *   3. the verb is remote-capable, the flag is not (`list --recurring`)
  *
  * Only (2) was what the message asserted.
@@ -84,12 +84,25 @@ describe("stage-a routing and rejection diagnosis distinguish invocation ownersh
     expect(initFailure(["lsit"])).toContain("list");
   });
 
-  test("a local-only verb selects the local route instead of being refused by hosted routing", () => {
-    expect(initializeTodosCliAuthority(["sprint"], REMOTE_ENV)).toEqual({
-      route: "local",
-      v1_base_url: null,
-      selected_by: "local-only-command",
-    });
+  test("a local-only verb says it is local-only and names the remedy", () => {
+    const message = initFailure(["sprint"]);
+
+    expect(message).toContain("REMOTE_COMMAND_UNSUPPORTED");
+    expect(message).toContain("sprint");
+    expect(message).toContain("local-only");
+    expect(message).not.toContain("UNKNOWN_COMMAND");
+  });
+
+  test("only workstation redaction configuration and scans select the local route", () => {
+    for (const args of [["redaction", "status"], ["redaction", "add"], ["redaction", "scan"]]) {
+      expect(initializeTodosCliAuthority(args, REMOTE_ENV)).toEqual({
+        route: "local",
+        v1_base_url: null,
+        selected_by: "local-only-command",
+      });
+    }
+
+    expect(initFailure(["redaction", "evidence"])).toContain("REMOTE_COMMAND_UNSUPPORTED");
   });
 
   test("an unsupported option on a supported verb blames the option, not the verb", () => {
@@ -103,8 +116,8 @@ describe("stage-a routing and rejection diagnosis distinguish invocation ownersh
   });
 
   test("a remote-route suggestion stays on the advertised authority surface", () => {
-    // Local-only verbs can be run explicitly, but remote help and typo recovery
-    // remain scoped to the shared authority catalog.
+    // Workstation redaction invocations are admitted explicitly, but remote
+    // help and typo recovery remain scoped to the shared authority catalog.
     const matrix = getTodosCliCommandCapabilityMatrix();
     const localOnly = new Set(
       [...matrix.entries()].filter(([, owner]) => owner === "local-only").map(([command]) => command),
@@ -126,7 +139,7 @@ describe("stage-a routing and rejection diagnosis distinguish invocation ownersh
     expect(message).not.toContain("re-run without it");
   });
 
-  test("every registered local-only verb selects local authority, never unknown-command diagnosis", () => {
+  test("every other registered local-only verb remains fail-closed and is never diagnosed as unknown", () => {
     // Guards the classifier against drift: a verb that is in the canonical
     // registry must never be reported as if it did not exist.
     const matrix = getTodosCliCommandCapabilityMatrix();
@@ -137,12 +150,10 @@ describe("stage-a routing and rejection diagnosis distinguish invocation ownersh
     // Positive control: the set is non-empty, so the loop below can fail.
     expect(localOnly.length).toBeGreaterThan(0);
 
-    for (const command of localOnly) {
-      expect(initializeTodosCliAuthority([command], REMOTE_ENV)).toEqual({
-        route: "local",
-        v1_base_url: null,
-        selected_by: "local-only-command",
-      });
+    for (const command of localOnly.filter((candidate) => candidate !== "redaction")) {
+      const message = initFailure([command]);
+      expect(message).toContain("REMOTE_COMMAND_UNSUPPORTED");
+      expect(message).not.toContain("UNKNOWN_COMMAND");
     }
   });
 });

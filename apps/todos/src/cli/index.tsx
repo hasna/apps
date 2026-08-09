@@ -235,9 +235,9 @@ registerPrGroupCommands(program);
 await registerOptionalEventsCommands(program);
 registerHelpCommands(program, authority.route);
 
-// Remote metadata describes the authority-served catalog. Explicitly naming a
-// local-only command is a separate Stage-A route that pins the process to local
-// storage before the command modules above are imported.
+// Remote metadata describes the authority-served catalog. An admitted local
+// redaction invocation is a separate Stage-A route that pins the process to
+// local storage before the command modules above are imported.
 applyTodosCliHelpVisibility(program, authority.route);
 
 // Single top-level guard: any error thrown from an async action handler (e.g. a
