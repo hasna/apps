@@ -1397,6 +1397,23 @@ suite("PostgresLoopStorage (live)", () => {
     expect(result.deferred.length).toBe(0);
   });
 
+  test("recoverExpiredRunLeasesDetailed applies exact timestamp fences as timestamptz", async () => {
+    const loop = await storage.createLoop(loopInput("recover-exact-timestamp-fences", { leaseMs: 1 }));
+    const past = new Date(Date.now() - 60_000);
+    const claim = await storage.claimRun(loop, "2026-07-06T12:01:00.000Z", "runner-exact-fences", past);
+    expect(claim).toBeTruthy();
+    expect(claim!.run.leaseExpiresAt).toBeDefined();
+
+    const result = await storage.recoverExpiredRunLeasesDetailed(new Date(), {
+      runId: claim!.run.id,
+      expectedLeaseExpiresAt: claim!.run.leaseExpiresAt,
+      expectedUpdatedAt: claim!.run.updatedAt,
+    });
+
+    expect(result.abandoned.map((run) => run.id)).toEqual([claim!.run.id]);
+    expect((await storage.getRun(claim!.run.id))?.status).toBe("abandoned");
+  });
+
   test("recoverExpiredRunLeasesDetailed honours protectClaimedByInLoops", async () => {
     // The hosted control plane is the production path for this sweep, so the
     // option the API relies on to avoid reaping a slot a runner is about to take
@@ -2255,6 +2272,8 @@ suite("PostgresLoopStorage (live)", () => {
     const events = await storage.listWorkflowEvents(workflowRun.id);
     expect(events.map((event) => event.eventType)).toEqual([
       "created",
+      "private_operation_descriptor",
+      "private_operation_descriptor",
       "step_started",
       "step_succeeded",
       "step_started",
@@ -2754,7 +2773,12 @@ suite("PostgresLoopStorage (live)", () => {
       error: "parent loop run lease expired before completion",
     });
     const events = await storage.listWorkflowEvents(workflowRun.id);
-    expect(events.map((event) => event.eventType)).toEqual(["created", "step_started", "failed"]);
+    expect(events.map((event) => event.eventType)).toEqual([
+      "created",
+      "private_operation_descriptor",
+      "step_started",
+      "failed",
+    ]);
     expect(events.at(-1)?.payload).toMatchObject({
       error: "parent loop run lease expired before completion",
       loopRunId: claim!.run.id,

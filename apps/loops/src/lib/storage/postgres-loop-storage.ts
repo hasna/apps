@@ -1634,8 +1634,8 @@ export class PostgresLoopStorage implements LoopStorageContract {
       `SELECT * FROM loop_runs
        WHERE tenant_id = open_loops_current_tenant_id() AND status='running' AND lease_expires_at <= $1
          AND ($2::text IS NULL OR id = $2)
-         AND ($3::text IS NULL OR lease_expires_at = $3)
-         AND ($4::text IS NULL OR updated_at = $4)
+         AND ($3::timestamptz IS NULL OR lease_expires_at = $3::timestamptz)
+         AND ($4::timestamptz IS NULL OR updated_at = $4::timestamptz)
          AND ($5::text IS NULL OR claimed_by IS DISTINCT FROM $5)
          AND ($6::text IS NULL OR claimed_by IS NULL OR claimed_by <> $6 OR NOT (loop_id = ANY($7::text[])))
        ORDER BY lease_expires_at ASC LIMIT $8`,
@@ -1658,8 +1658,8 @@ export class PostgresLoopStorage implements LoopStorageContract {
           `UPDATE loop_runs SET status='abandoned', finished_at=$2, lease_expires_at=NULL,
            error='run lease expired before completion', updated_at=$2
            WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 AND status='running' AND lease_expires_at <= $3
-             AND ($4::text IS NULL OR lease_expires_at=$4)
-             AND ($5::text IS NULL OR updated_at=$5)
+             AND ($4::timestamptz IS NULL OR lease_expires_at=$4::timestamptz)
+             AND ($5::timestamptz IS NULL OR updated_at=$5::timestamptz)
              AND ($6::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$6 AND expires_at > $3))`,
           [
             row.id,
