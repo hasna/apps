@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { manifestAdd, manifestInit } from "../src/commands/manifest.js";
-import { runDoctor, type DoctorAdapter } from "../src/commands/doctor.js";
+import { doctorExitCode, runDoctor, type DoctorAdapter } from "../src/commands/doctor.js";
 
 describe("doctor", () => {
   afterEach(() => {
@@ -73,6 +73,64 @@ describe("doctor", () => {
     expect(declaredReport.machineId).toBe("local");
     expect(payload).not.toContain("private-host-real");
     expect(declaredReport.checks.find((check) => check.id === "manifest-entry")?.status).toBe("ok");
+  });
+
+  test("marks remote checks unverified when an unmanaged machine probe fails", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-doctor-unmanaged-remote-"));
+    process.env["HASNA_MACHINES_MACHINE_ID"] = "local-fixture";
+    process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
+    manifestInit();
+
+    const report = runDoctor("topology-only-fixture", {
+      includeOptionalAdapters: false,
+      commandRunner: (machineId) => ({
+        machineId,
+        source: "tailscale",
+        stdout: "",
+        stderr: "remote probe unavailable",
+        exitCode: 255,
+      }),
+    });
+    expect(report.source).toBe("tailscale");
+    expect(report.probe).toMatchObject({
+      attempted: true,
+      verified: false,
+      exitCode: 255,
+      reason: "command_failed",
+      source: "tailscale",
+    });
+    expect(doctorExitCode(report)).toBe(1);
+    expect(report.checks.find((check) => check.id === "manifest-entry")).toMatchObject({
+      status: "warn",
+      data: { declared: false },
+    });
+    expect(report.checks.find((check) => check.id === "command-probe")).toMatchObject({
+      status: "warn",
+      data: { verified: false, exitCode: 255 },
+    });
+
+    for (const id of [
+      "data-dir",
+      "manifest-path",
+      "db-path",
+      "notifications-path",
+      "bun",
+      "machines-cli",
+      "machines-agent-cli",
+      "machines-mcp-cli",
+      "ssh",
+      "sudo-noninteractive",
+      "ssh-cert-support",
+      "github-app-auth",
+    ]) {
+      const check = report.checks.find((entry) => entry.id === id);
+      expect(check, id).toMatchObject({
+        status: "warn",
+        data: { verified: false },
+      });
+      expect(check?.detail, id).toContain("Unverified");
+      expect(check?.detail.toLowerCase(), id).not.toContain("missing");
+    }
   });
 
   test("redacts manifest and adapter details in JSON output", () => {

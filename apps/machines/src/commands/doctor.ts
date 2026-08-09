@@ -1,8 +1,8 @@
 import { getLocalMachineId } from "../db.js";
 import { readManifestWithSource, type ManifestSourceAdapter } from "../manifests.js";
 import { redactIdentifier, redactManifestForDiagnostics, redactPath, redactSensitiveValue } from "../redaction.js";
-import { runMachineCommand } from "../remote.js";
-import type { DoctorCheck, DoctorReport, FleetManifest, ManifestLoadInfo } from "../types.js";
+import { runMachineCommand, type MachineCommandRunner } from "../remote.js";
+import type { DoctorCheck, DoctorProbe, DoctorReport, FleetManifest, ManifestLoadInfo } from "../types.js";
 
 export const DOCTOR_OPTIONAL_ADAPTER_DOMAINS = ["secrets", "configs", "monitor", "repos", "mcps", "shield"] as const;
 
@@ -28,6 +28,7 @@ export interface DoctorOptions {
   manifestAdapter?: ManifestSourceAdapter | null;
   adapters?: DoctorAdapter[];
   includeOptionalAdapters?: boolean;
+  commandRunner?: MachineCommandRunner;
 }
 
 function makeCheck(
@@ -82,7 +83,50 @@ function buildDoctorCommand(): string {
     "printf 'gh_cli=%s\\n' \"$(command -v gh 2>/dev/null || printf missing)\"",
     "printf 'gh_auth=%s\\n' \"$(gh auth status >/dev/null 2>&1 && printf ok || printf unavailable)\"",
     "printf 'github_app_ref=%s\\n' \"$(test -n \\\"${HASNA_GITHUB_APP_ID:-}\\\" -a -n \\\"${HASNA_GITHUB_APP_PRIVATE_KEY_REF:-}\\\" && printf configured || printf missing)\"",
+    "printf 'probe_complete=yes\\n'",
   ].join("; ");
+}
+
+function unverifiedProbeDetail(probe: DoctorProbe): string {
+  if (probe.reason === "timed_out") {
+    return `Unverified: ${probe.source} machine probe timed out; remote state was not checked.`;
+  }
+  if (probe.reason === "incomplete_output") {
+    return `Unverified: ${probe.source} machine probe returned incomplete output; remote state was not checked.`;
+  }
+  return `Unverified: ${probe.source} machine probe exited ${probe.exitCode}; remote state was not checked.`;
+}
+
+const PROBE_BOUND_CHECK_IDS = new Set([
+  "data-dir",
+  "manifest-path",
+  "db-path",
+  "notifications-path",
+  "bun",
+  "machines-cli",
+  "machines-agent-cli",
+  "machines-mcp-cli",
+  "ssh",
+  "sudo-noninteractive",
+  "ssh-cert-support",
+  "github-app-auth",
+]);
+
+function makeUnverifiedProbeCheck(check: DoctorCheck, probe: DoctorProbe): DoctorCheck {
+  return makeCheck(check.id, "warn", check.summary, unverifiedProbeDetail(probe), {
+    data: {
+      verified: false,
+      attempted: probe.attempted,
+      source: probe.source,
+      exitCode: probe.exitCode,
+      timedOut: probe.timedOut,
+      reason: probe.reason,
+    },
+  });
+}
+
+export function doctorExitCode(report: DoctorReport): number {
+  return report.probe?.verified === false ? 1 : 0;
 }
 
 function fallbackAdapterCheck(domain: DoctorOptionalAdapterDomain): DoctorCheck {
@@ -153,8 +197,23 @@ export function runDoctor(machineId?: string, options: DoctorOptions = {}): Doct
   const reportedMachineId = implicitLocalMachine ? "local" : requestedMachineId;
   const now = options.now ?? new Date();
   const { manifest, info: manifestSource } = readManifestWithSource({ adapter: options.manifestAdapter ?? null });
-  const commandChecks = runMachineCommand(requestedMachineId, buildDoctorCommand());
+  const commandChecks = (options.commandRunner ?? runMachineCommand)(requestedMachineId, buildDoctorCommand());
   const details = parseKeyValueOutput(commandChecks.stdout);
+  const probeReason: DoctorProbe["reason"] = commandChecks.timedOut
+    ? "timed_out"
+    : commandChecks.exitCode !== 0
+      ? "command_failed"
+      : details["probe_complete"] === "yes"
+        ? "completed"
+        : "incomplete_output";
+  const probe: DoctorProbe = {
+    attempted: true,
+    verified: probeReason === "completed",
+    source: commandChecks.source,
+    exitCode: commandChecks.exitCode,
+    timedOut: commandChecks.timedOut === true,
+    reason: probeReason,
+  };
   const machineInManifest = manifest.machines.find((machine) => machine.id === requestedMachineId);
   const diagnosticMachine = machineInManifest ? redactManifestForDiagnostics(machineInManifest) : null;
   if (implicitLocalMachine && diagnosticMachine) diagnosticMachine.id = reportedMachineId;
@@ -168,7 +227,7 @@ export function runDoctor(machineId?: string, options: DoctorOptions = {}): Doct
         now,
       }, options.adapters ?? []);
 
-  const checks: DoctorCheck[] = [
+  const collectedChecks: DoctorCheck[] = [
     makeCheck(
       "manifest-source",
       manifestSource.warnings.length > 0 ? "warn" : "ok",
@@ -197,6 +256,15 @@ export function runDoctor(machineId?: string, options: DoctorOptions = {}): Doct
           machine: diagnosticMachine,
         },
       },
+    ),
+    makeCheck(
+      "command-probe",
+      probe.verified ? "ok" : "warn",
+      "Machine command probe",
+      probe.verified
+        ? `${probe.source} machine probe completed and its output was verified.`
+        : unverifiedProbeDetail(probe),
+      { data: { ...probe } },
     ),
     makeCheck(
       "data-dir",
@@ -324,12 +392,18 @@ export function runDoctor(machineId?: string, options: DoctorOptions = {}): Doct
     ),
     ...optionalAdapterChecks,
   ];
+  const checks = collectedChecks.map((check) =>
+    probe.verified || !PROBE_BOUND_CHECK_IDS.has(check.id)
+      ? check
+      : makeUnverifiedProbeCheck(check, probe)
+  );
 
   return {
     machineId: reportedMachineId,
     source: commandChecks.source,
     schemaVersion: 1,
     generatedAt: now.toISOString(),
+    probe,
     manifestSource,
     manifestPath: details["manifest_path"] ? redactPath(details["manifest_path"]) : undefined,
     dbPath: details["db_path"] ? redactPath(details["db_path"]) : undefined,

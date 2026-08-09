@@ -161,7 +161,7 @@ import {
   type CriticalDbIntegrityReport,
   type OpsStateSnapshotReport,
 } from "../ops-data.js";
-import { runDoctor } from "../commands/doctor.js";
+import { doctorExitCode, runDoctor } from "../commands/doctor.js";
 import { assertMutationApproved, createTrustedSdkMutationApproval, mutationArgsSha256, mutationPlanDigest } from "../commands/mutation-approval.js";
 import {
   buildDaemonServicePlan,
@@ -3421,6 +3421,8 @@ program
   .action((options: { machine?: string; json?: boolean }) => {
     const result = runDoctor(options.machine);
     printJsonOrText(result, renderDoctorResult(result), options.json);
+    const exitCode = doctorExitCode(result);
+    if (exitCode !== 0) process.exitCode = exitCode;
   });
 
 program

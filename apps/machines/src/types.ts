@@ -252,11 +252,21 @@ export interface DoctorCheck {
   remediation?: string[];
 }
 
+export interface DoctorProbe {
+  attempted: boolean;
+  verified: boolean;
+  source: "local" | "lan" | "tailscale" | "ssh";
+  exitCode: number;
+  timedOut: boolean;
+  reason: "completed" | "command_failed" | "timed_out" | "incomplete_output";
+}
+
 export interface DoctorReport {
   machineId: string;
   source: "local" | "lan" | "tailscale" | "ssh";
   schemaVersion?: 1;
   generatedAt?: string;
+  probe?: DoctorProbe;
   manifestSource?: ManifestLoadInfo;
   manifestPath?: string;
   dbPath?: string;

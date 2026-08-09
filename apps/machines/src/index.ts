@@ -199,7 +199,7 @@ export type {
 } from "./commands/daemon.js";
 export { runDaemonServicePlan } from "./sdk-mutations.js";
 
-export { runDoctor, DOCTOR_OPTIONAL_ADAPTER_DOMAINS } from "./commands/doctor.js";
+export { doctorExitCode, runDoctor, DOCTOR_OPTIONAL_ADAPTER_DOMAINS } from "./commands/doctor.js";
 export type { DoctorAdapter, DoctorAdapterContext, DoctorAdapterHook, DoctorOptions, DoctorOptionalAdapterDomain } from "./commands/doctor.js";
 export { diffMachines } from "./commands/diff.js";
 export {
