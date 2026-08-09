@@ -11,6 +11,13 @@ import {
 const REPO_ROOT = join(import.meta.dir, "../..");
 const TEST_API_KEY = "hasna_todos_test_key";
 const PLAN_ID = "77777777-7777-4777-8777-777777777777";
+const PLAN_PATCH_FAILURES = [
+  { status: 401, error: "unauthorized" },
+  { status: 400, error: "invalid plan status" },
+  { status: 405, error: `method PATCH not allowed on /v1/plans/${PLAN_ID}` },
+  { status: 404, error: "plan not found" },
+  { status: 503, error: "temporarily unavailable" },
+] as const;
 const tempRoots: string[] = [];
 
 afterEach(() => {
@@ -271,36 +278,6 @@ describe("cloud CLI plan commands", () => {
         ],
       });
 
-      const importRequestsBeforeMissing = requests.filter((request) => request.path === "/v1/import").length;
-      const missing = await runCli(
-        ["--json", "plans", "--complete", missingPlanId],
-        root,
-        `http://127.0.0.1:${server.port}`,
-      );
-      expect(missing.exitCode).toBe(1);
-      expect(missing.stderr).toContain(`Plan not found: ${missingPlanId}`);
-      expect(requests.filter((request) => request.path === "/v1/import")).toHaveLength(importRequestsBeforeMissing);
-
-      for (const failure of [
-        { status: 401, error: "unauthorized" },
-        { status: 400, error: "invalid plan status" },
-        { status: 405, error: `method PATCH not allowed on /v1/plans/${PLAN_ID}` },
-        { status: 404, error: "plan not found" },
-        { status: 503, error: "temporarily unavailable" },
-      ]) {
-        patchFailure = failure;
-        const importRequestsBeforeFailure = requests.filter((request) => request.path === "/v1/import").length;
-        const rejected = await runCli(
-          ["--json", "plans", "--complete", PLAN_ID],
-          root,
-          `http://127.0.0.1:${server.port}`,
-        );
-        expect(rejected.exitCode).toBe(1);
-        expect(rejected.stderr).toContain(failure.error);
-        expect(requests.filter((request) => request.path === "/v1/import")).toHaveLength(importRequestsBeforeFailure);
-      }
-      patchFailure = null;
-
       expect(requests).toContainEqual(expect.objectContaining({
         method: "PATCH",
         path: `/v1/plans/${PLAN_ID}`,
@@ -329,6 +306,91 @@ describe("cloud CLI plan commands", () => {
       server.stop(true);
     }
   });
+
+  test("does not import when the requested hosted plan is missing", async () => {
+    const missingPlanId = "88888888-8888-4888-8888-888888888888";
+    const requests: Array<{ method: string; path: string }> = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        requests.push({ method: request.method, path: url.pathname });
+        if (url.pathname === `/v1/plans/${missingPlanId}` && request.method === "GET") {
+          return Response.json({ error: "plan not found" }, { status: 404 });
+        }
+        if (url.pathname === "/v1/plans" && request.method === "GET") {
+          return Response.json({ plans: [], count: 0, total: 0 });
+        }
+        return Response.json({ error: "mutation must not run" }, { status: 500 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-plan-complete-missing-"));
+    tempRoots.push(root);
+    try {
+      const missing = await runCli(
+        ["--json", "plans", "--complete", missingPlanId],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(missing.exitCode).toBe(1);
+      expect(missing.stderr).toContain(`Plan not found: ${missingPlanId}`);
+      expect(requests.filter((request) => request.path === "/v1/import")).toHaveLength(0);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test.each(PLAN_PATCH_FAILURES)(
+    "does not import when hosted plan PATCH returns $status: $error",
+    async (failure) => {
+      const requests: Array<{ method: string; path: string }> = [];
+      const plan = {
+        id: PLAN_ID,
+        slug: "hosted-closure",
+        name: "Hosted closure",
+        description: "Existing hosted plan",
+        status: "active",
+        project_id: "project-hosted",
+        task_list_id: null,
+        agent_id: "closure-agent",
+        created_at: "2026-08-08T20:00:00.000Z",
+        updated_at: "2026-08-08T20:00:00.000Z",
+      };
+      const server = Bun.serve({
+        hostname: "127.0.0.1",
+        port: 0,
+        fetch(request) {
+          const url = new URL(request.url);
+          requests.push({ method: request.method, path: url.pathname });
+          if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "GET") {
+            return Response.json({ plan });
+          }
+          if (url.pathname === "/v1/plans" && request.method === "GET") {
+            return Response.json({ plans: [plan], count: 1, total: 1 });
+          }
+          if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "PATCH") {
+            return Response.json({ error: failure.error }, { status: failure.status });
+          }
+          return Response.json({ error: "mutation must not run" }, { status: 500 });
+        },
+      });
+      const root = mkdtempSync(join(tmpdir(), `todos-cloud-plan-complete-patch-${failure.status}-`));
+      tempRoots.push(root);
+      try {
+        const rejected = await runCli(
+          ["--json", "plans", "--complete", PLAN_ID],
+          root,
+          `http://127.0.0.1:${server.port}`,
+        );
+        expect(rejected.exitCode).toBe(1);
+        expect(rejected.stderr).toContain(failure.error);
+        expect(requests.filter((request) => request.path === "/v1/import")).toHaveLength(0);
+      } finally {
+        server.stop(true);
+      }
+    },
+  );
 
   test("fails closed when an equal-clock writer changes protected plan fields before fallback completion", async () => {
     const observedUpdatedAt = "2099-08-08T20:00:00.000Z";
