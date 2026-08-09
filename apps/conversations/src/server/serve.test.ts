@@ -410,6 +410,28 @@ describe("API /api/channels/:name (GET)", () => {
   });
 });
 
+describe("API /api/channels/:name/members (GET)", () => {
+  test("GET returns members for an existing channel", async () => {
+    createChannel("members-dashboard-sp", "alice");
+    joinChannel("members-dashboard-sp", "bob");
+
+    const res = await fetch(`${base()}/api/channels/members-dashboard-sp/members`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    expect(await res.json()).toEqual([
+      expect.objectContaining({ channel: "members-dashboard-sp", agent: "alice" }),
+      expect.objectContaining({ channel: "members-dashboard-sp", agent: "bob" }),
+    ]);
+  });
+
+  test("GET returns a structured JSON 404 for a missing channel", async () => {
+    const res = await fetch(`${base()}/api/channels/missing-members-dashboard/members`);
+    expect(res.status).toBe(404);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    expect(await res.json()).toEqual({ error: "Channel not found: missing-members-dashboard" });
+  });
+});
+
 describe("API /api/channels/:name (PUT)", () => {
   test("PUT updates a channel description", async () => {
     createChannel("update-sp", "tester", { description: "old desc" });
