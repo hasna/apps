@@ -6,6 +6,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.120]
+
+### Fixed
+
+- The two subprocess-heavy CLI integration test files now use a file-local
+  15-second default, covering their sequential command invocations without
+  changing Bun's package-wide timeout policy or production behavior.
+
 ## [0.1.119]
 
 ### Fixed
