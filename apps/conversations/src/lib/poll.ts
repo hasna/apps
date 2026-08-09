@@ -30,12 +30,23 @@ export interface PollOptions {
   store?: ConversationsStore;
 }
 
+export interface PollHandle {
+  /**
+   * Resolves once the arm-time cursor seed has finished.
+   *
+   * A caller that prints a readiness signal must await this first, or a message
+   * sent after the signal can still be absorbed into the seed as history.
+   */
+  ready: Promise<void>;
+  stop: () => Promise<void>;
+}
+
 /**
- * Start polling for new messages. Returns a stop function. Reads flow through
- * the active {@link getStore} transport, so the same loop works in local and
- * cloud modes.
+ * Start polling for new messages. Returns readiness and stop handles. Reads
+ * flow through the active {@link getStore} transport, so the same loop works
+ * in local and cloud modes.
  */
-export function startPolling(opts: PollOptions): { stop: () => Promise<void> } {
+export function startPolling(opts: PollOptions): PollHandle {
   const interval = opts.interval_ms ?? 200;
   const store = opts.store ?? getStore();
   let stopped = false;
@@ -121,6 +132,7 @@ export function startPolling(opts: PollOptions): { stop: () => Promise<void> } {
   const timer = setInterval(tick, interval);
 
   return {
+    ready: seeded,
     /**
      * Stop the loop AND wait until it is quiescent.
      *

@@ -9,7 +9,6 @@ import { closeDb } from "../../lib/db.js";
 import { resolveIdentities, resolveIdentity } from "../../lib/identity.js";
 import { renderContent } from "../../lib/terminal-markdown.js";
 import { buildMessagePreview } from "../../lib/channel-notifications.js";
-import { readChannelNotificationsUnion } from "../../lib/poll-notifications.js";
 import { resolveSelfSenderId } from "../../lib/sender-identity.js";
 import { buildCompactSearchEnvelope, parseNonNegativeInteger, previewText } from "../../lib/compact-output.js";
 import { getCliWindow, pageFromQuery, printCompactFooter, printJsonDisclosure, queryLimitFor, warnIfPageFull, SINCE_JSON_LIMIT } from "../compact.js";
@@ -1083,14 +1082,11 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
         ? `${chalk.cyan(agent)}${chalk.dim(` (+${identities.length - 1}: ${identities.slice(1).join(", ")})`)}`
         : chalk.cyan(agent);
 
-      printLine("");
-      printLine(chalk.bold(`  Conversations`) + chalk.dim(` — watching as ${identityLabel}`));
-      printLine(chalk.dim(`  ${modeLabel} · Poll: ${interval}ms · Ctrl+C to stop`));
-      printLine(chalk.dim("  " + "─".repeat(cols - 4)));
-      printLine("");
-
-      const { startPolling } = require("../../lib/poll.js");
-      const { startNotificationPolling } = require("../../lib/poll-notifications.js");
+      const { startPolling } = require("../../lib/poll.js") as typeof import("../../lib/poll.js");
+      const {
+        baselineChannelNotifications,
+        startNotificationPolling,
+      } = require("../../lib/poll-notifications.js") as typeof import("../../lib/poll-notifications.js");
       const { renderContent: renderContentLocal } = require("../../lib/terminal-markdown.js");
 
       const renderMessage = (msg: import("../../types.js").Message) => {
@@ -1155,65 +1151,6 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
         printLine("");
       };
 
-      // Show recent messages first
-      if (opts.all) {
-        const dmSeen = new Set<number>();
-        const dmRecent: import("../../types.js").Message[] = [];
-        for (const identity of identities) {
-          for (const msg of await store.readMessages({ to: identity, limit: 20, order: "asc" })) {
-            if (isSelf(msg.from_agent) || dmSeen.has(msg.id)) continue;
-            dmSeen.add(msg.id);
-            dmRecent.push(msg);
-          }
-        }
-        dmRecent.sort((left, right) => left.created_at.localeCompare(right.created_at) || left.id - right.id);
-
-        const pendingBatch = await readChannelNotificationsUnion(store, {
-          agents: identities,
-          unread_only: true,
-          limit: 20,
-          mark_read: true,
-          include_content: wantFullContent,
-        });
-        const pendingNotifications = pendingBatch.notifications;
-
-        if (dmRecent.length > 0) {
-          printLine(chalk.dim(`  ── Recent DMs (${dmRecent.length}) ──\n`));
-          for (const msg of dmRecent) { renderMessage(msg); }
-        }
-        if (pendingNotifications.length > 0) {
-          printLine(chalk.dim(`  ── Pending channel notifications (${pendingNotifications.length}) ──\n`));
-          for (const notification of pendingNotifications) { renderNotification(notification); }
-          await pendingBatch.markRead();
-        }
-        if (dmRecent.length > 0 || pendingNotifications.length > 0) {
-          printLine(chalk.dim(`  ── Live ──\n`));
-        }
-      } else {
-        const recentSeen = new Set<number>();
-        const recent: import("../../types.js").Message[] = [];
-        // A channel watch is one stream; only the DM watch is per-identity.
-        const readTargets = opts.channel ? [undefined] : identities;
-        for (const identity of readTargets) {
-          for (const msg of await store.readMessages({
-            to: identity,
-            channel: opts.channel,
-            limit: 20,
-            order: "asc",
-          })) {
-            if (isSelf(msg.from_agent) || recentSeen.has(msg.id)) continue;
-            recentSeen.add(msg.id);
-            recent.push(msg);
-          }
-        }
-        recent.sort((left, right) => left.created_at.localeCompare(right.created_at) || left.id - right.id);
-        if (recent.length > 0) {
-          printLine(chalk.dim(`  ── Recent messages (${recent.length}) ──\n`));
-          for (const msg of recent) { renderMessage(msg); }
-          printLine(chalk.dim(`  ── Live ──\n`));
-        }
-      }
-
       /** Ids already rendered live, so overlapping identity polls print once. */
       const renderedMessages = new Set<number>();
 
@@ -1241,15 +1178,64 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
         }
       };
 
-      const stops: Array<{ stop: () => void }> = [];
+      let ready = false;
+      const queuedMessages: import("../../types.js").Message[] = [];
+      const queueOrRenderMessages = (messages: import("../../types.js").Message[]) => {
+        if (!ready) {
+          queuedMessages.push(...messages);
+          return;
+        }
+        onNewMessages(messages);
+      };
+
+      const stops: Array<{ stop: () => void | Promise<void> }> = [];
+      const pollReady: Promise<void>[] = [];
 
       if (opts.all) {
+        await baselineChannelNotifications(store, identities);
+
         // One DM loop per identity: `to_agent` is a single-value filter, and a
         // seat's two queues are disjoint.
         for (const identity of identities) {
-          stops.push(startPolling({ to_agent: identity, interval_ms: interval, on_messages: onNewMessages }));
+          const poll = startPolling({
+            to_agent: identity,
+            interval_ms: interval,
+            on_messages: queueOrRenderMessages,
+          });
+          stops.push(poll);
+          pollReady.push(poll.ready);
         }
+      } else if (opts.channel) {
+        const poll = startPolling({
+          channel: opts.channel,
+          interval_ms: interval,
+          on_messages: queueOrRenderMessages,
+        });
+        stops.push(poll);
+        pollReady.push(poll.ready);
+      } else {
+        for (const identity of identities) {
+          const poll = startPolling({
+            to_agent: identity,
+            interval_ms: interval,
+            on_messages: queueOrRenderMessages,
+          });
+          stops.push(poll);
+          pollReady.push(poll.ready);
+        }
+      }
 
+      await Promise.all(pollReady);
+
+      printLine("");
+      printLine(chalk.bold(`  Conversations`) + chalk.dim(` — watching as ${identityLabel}`));
+      printLine(chalk.dim(`  ${modeLabel} · Poll: ${interval}ms · Ctrl+C to stop`));
+      printLine(chalk.dim("  " + "─".repeat(cols - 4)));
+      printLine("");
+
+      ready = true;
+      if (queuedMessages.length > 0) onNewMessages(queuedMessages.splice(0));
+      if (opts.all) {
         stops.push(startNotificationPolling({
           store,
           agent,
@@ -1258,24 +1244,10 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
           include_content: wantFullContent,
           on_notifications: onNewNotifications,
         }));
-      } else if (opts.channel) {
-        stops.push(startPolling({
-          channel: opts.channel,
-          interval_ms: interval,
-          on_messages: onNewMessages,
-        }));
-      } else {
-        for (const identity of identities) {
-          stops.push(startPolling({
-            to_agent: identity,
-            interval_ms: interval,
-            on_messages: onNewMessages,
-          }));
-        }
       }
 
       process.on("SIGINT", () => {
-        for (const stop of stops) stop.stop();
+        for (const stop of stops) void stop.stop();
         printLine(chalk.dim("\n  Stopped watching."));
         closeDb();
         process.exit(0);
