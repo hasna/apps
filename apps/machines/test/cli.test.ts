@@ -40,6 +40,32 @@ function runCli(args: string[], env: NodeJS.ProcessEnv, input?: string) {
   });
 }
 
+function machineExecCliEnv(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    HASNA_MACHINES_MACHINE_ID: "local-node",
+    [MUTATION_APPROVAL_FLAG_ENV]: "",
+    [MUTATION_APPROVAL_TOKEN_ENV]: "secret",
+  };
+}
+
+function machineExecCliApprovalToken(
+  env: NodeJS.ProcessEnv,
+  input: MachineExecInput,
+  nonce: string,
+): string {
+  return createMutationApprovalToken({
+    surface: "cli",
+    operation: MACHINE_EXEC_MUTATION_OPERATION,
+    transport: "cli",
+    machineId: input.machineId,
+    callerId: "cli",
+    runId: "cli",
+    resourceId: machineExecResourceId(input),
+    args: machineExecMutationArgs(input),
+  }, { env, now: Date.now(), nonce });
+}
+
 interface SeedMachine {
   id: string;
   platform: string;
@@ -1096,64 +1122,62 @@ describe("cli command handling", () => {
     }
   });
 
-  test("machines exec requires scoped approval before bounded local execution", () => {
-    const env = {
-      ...process.env,
-      HASNA_MACHINES_MACHINE_ID: "local-node",
-      [MUTATION_APPROVAL_FLAG_ENV]: "",
-      [MUTATION_APPROVAL_TOKEN_ENV]: "secret",
-    };
-
-    const tokenFor = (input: MachineExecInput, nonce: string) => createMutationApprovalToken({
-      surface: "cli",
-      operation: MACHINE_EXEC_MUTATION_OPERATION,
-      transport: "cli",
-      machineId: input.machineId,
-      callerId: "cli",
-      runId: "cli",
-      resourceId: machineExecResourceId(input),
-      args: machineExecMutationArgs(input),
-    }, { env, now: Date.now(), nonce });
-
+  // Each runCli call cold-starts Bun, and the timeout case deliberately waits
+  // for process-group cleanup grace. Keep independent contracts in separate
+  // tests so station load cannot consume one shared 5-second per-test budget.
+  test("machines exec requires scoped approval before local execution", () => {
+    const env = machineExecCliEnv();
     const denied = runCli(["exec", "--machine", "local", "--timeout-ms", "5000", "--", "true"], env);
     expect(denied.status).not.toBe(0);
     expect(denied.stderr).toContain("requires operator approval");
+  });
 
+  test("machines exec binds scoped approval to the command argv", () => {
+    const env = machineExecCliEnv();
     const successInput: MachineExecInput = { machineId: "local", timeoutMs: 5000, argv: ["true"] };
     const success = runCli([
       "exec", "--machine", "local", "--timeout-ms", "5000",
-      "--approval-token", tokenFor(successInput, "exec-success"), "--", "true",
+      "--approval-token", machineExecCliApprovalToken(env, successInput, "exec-success"), "--", "true",
     ], env);
     expect(success.status).toBe(0);
     expect(success.stderr).toBe("");
 
     const tampered = runCli([
       "exec", "--machine", "local", "--timeout-ms", "5000",
-      "--approval-token", tokenFor(successInput, "exec-tampered"), "--", "false",
+      "--approval-token", machineExecCliApprovalToken(env, successInput, "exec-tampered"), "--", "false",
     ], env);
     expect(tampered.status).not.toBe(0);
     expect(tampered.stderr).toContain("requires operator approval");
+  });
 
+  test("machines exec returns the executed command failure status", () => {
+    const env = machineExecCliEnv();
     const failureInput: MachineExecInput = { machineId: "local", timeoutMs: 5000, argv: ["false"] };
     const failure = runCli([
       "exec", "--machine", "local", "--timeout-ms", "5000",
-      "--approval-token", tokenFor(failureInput, "exec-failure"), "--", "false",
+      "--approval-token", machineExecCliApprovalToken(env, failureInput, "exec-failure"), "--", "false",
     ], env);
     expect(failure.status).toBe(1);
     expect(failure.stderr).toBe("");
+  });
 
+  test("machines exec returns 124 after bounded timeout cleanup", () => {
+    const env = machineExecCliEnv();
     const timeoutInput: MachineExecInput = { machineId: "local", timeoutMs: 50, argv: ["sleep", "1"] };
     const timeout = runCli([
       "exec", "--machine", "local", "--timeout-ms", "50",
-      "--approval-token", tokenFor(timeoutInput, "exec-timeout"), "--", "sleep", "1",
+      "--approval-token", machineExecCliApprovalToken(env, timeoutInput, "exec-timeout"), "--", "sleep", "1",
     ], env);
     expect(timeout.status).toBe(124);
+  });
 
+  test("machines exec accepts an approved stdin script", () => {
+    const env = machineExecCliEnv();
     const scriptText = "echo script-ok\n";
     const scriptInput: MachineExecInput = { machineId: "local", timeoutMs: 5000, script: scriptText };
     const script = runCli([
       "exec", "--machine", "local", "--timeout-ms", "5000", "--script",
-      "--approval-token", tokenFor(scriptInput, "exec-script"),
+      "--approval-token", machineExecCliApprovalToken(env, scriptInput, "exec-script"),
     ], env, scriptText);
     expect(script.status).toBe(0);
     expect(script.stdout.trim()).toBe("script-ok");
