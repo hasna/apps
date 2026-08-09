@@ -69,6 +69,7 @@ export interface CloudTaskCompletionInput {
 }
 
 const completionCapabilityCache = new Map<string, Promise<ReadonlySet<string>>>();
+const retryCapabilityCache = new Map<string, Promise<boolean>>();
 const gitRefCapabilityCache = new Map<string, Promise<ReadonlySet<RemoteGitRefCapability>>>();
 
 type RemoteGitRefCapability = "task-read" | "task-write" | "reverse-read";
@@ -509,6 +510,7 @@ export function isCloudRouting(env: Env = process.env as Env): boolean {
 export function resetTodosCloudClient(): void {
   // Only protocol capabilities are cached, keyed by authority rather than credentials.
   completionCapabilityCache.clear();
+  retryCapabilityCache.clear();
   listTagsCapabilityCache.clear();
   gitRefCapabilityCache.clear();
 }
@@ -1040,6 +1042,12 @@ export interface CloudTaskFailureInput {
   retry?: boolean;
 }
 
+function isRemoteTaskIdentity(value: unknown): value is { id: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const id = (value as Record<string, unknown>)["id"];
+  return typeof id === "string" && id.length > 0;
+}
+
 /** Fail a task through `/v1` and preserve the lifecycle result, including an optional retry task. */
 export async function cloudFailTask(
   client: HasnaStorageClient,
@@ -1047,6 +1055,7 @@ export async function cloudFailTask(
   body: CloudTaskFailureInput = {},
 ): Promise<TodosTaskFailureResult> {
   const route = `/v1/tasks/${encodeURIComponent(id)}/fail`;
+  if (body.retry === true) await requireRetryCapability(client);
   const raw = await requiredRemoteRoute(client, route, () =>
     client.transport.post<unknown>(`/tasks/${encodeURIComponent(id)}/fail`, body as Record<string, unknown>));
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
@@ -1058,8 +1067,9 @@ export async function cloudFailTask(
   }
   const task = (result as Record<string, unknown>)["task"];
   const retryTask = (result as Record<string, unknown>)["retryTask"];
-  if (!task || typeof task !== "object" || Array.isArray(task) ||
-      (retryTask !== undefined && (!retryTask || typeof retryTask !== "object" || Array.isArray(retryTask)))) {
+  if (!isRemoteTaskIdentity(task) ||
+      (body.retry === true && !isRemoteTaskIdentity(retryTask)) ||
+      (body.retry !== true && retryTask !== undefined && !isRemoteTaskIdentity(retryTask))) {
     throw new Error(`REMOTE_API_INCOMPATIBLE: ${route} returned an invalid failure result`);
   }
   return result as unknown as TodosTaskFailureResult;
@@ -1080,6 +1090,52 @@ function resolveOpenApiSchema(document: unknown, schema: unknown): Record<string
   return current && typeof current === "object" && !Array.isArray(current)
     ? current as Record<string, unknown>
     : null;
+}
+
+async function fetchRetryCapability(client: HasnaStorageClient): Promise<boolean> {
+  const document = await requiredRemoteRoute(client, "/v1/openapi.json", () =>
+    client.transport.get<unknown>("/openapi.json"));
+  if (!document || typeof document !== "object" || Array.isArray(document)) return false;
+  const doc = document as Record<string, unknown>;
+  const paths = doc["paths"];
+  const failPath = paths && typeof paths === "object" && !Array.isArray(paths)
+    ? (paths as Record<string, unknown>)["/v1/tasks/{id}/fail"]
+    : undefined;
+  const post = failPath && typeof failPath === "object" && !Array.isArray(failPath)
+    ? (failPath as Record<string, unknown>)["post"]
+    : undefined;
+  const requestBody = post && typeof post === "object" && !Array.isArray(post)
+    ? (post as Record<string, unknown>)["requestBody"]
+    : undefined;
+  const content = requestBody && typeof requestBody === "object" && !Array.isArray(requestBody)
+    ? (requestBody as Record<string, unknown>)["content"]
+    : undefined;
+  const jsonContent = content && typeof content === "object" && !Array.isArray(content)
+    ? (content as Record<string, unknown>)["application/json"]
+    : undefined;
+  const schema = jsonContent && typeof jsonContent === "object" && !Array.isArray(jsonContent)
+    ? (jsonContent as Record<string, unknown>)["schema"]
+    : undefined;
+  const resolved = resolveOpenApiSchema(document, schema);
+  const properties = resolved?.["properties"];
+  return !!properties && typeof properties === "object" && !Array.isArray(properties) &&
+    Object.prototype.hasOwnProperty.call(properties, "retry");
+}
+
+async function requireRetryCapability(client: HasnaStorageClient): Promise<void> {
+  const authority = remoteAuthorityBase(client);
+  let capability = retryCapabilityCache.get(authority);
+  if (!capability) {
+    capability = fetchRetryCapability(client);
+    retryCapabilityCache.set(authority, capability);
+  }
+  if (!(await capability)) {
+    throw new Error(
+      `REMOTE_RETRY_UNSUPPORTED: configured Todos authority ${authority} does not advertise retry in the ` +
+        "application/json request schema for POST /v1/tasks/{id}/fail; no failure mutation was sent; " +
+        "deploy a compatible @hasna/todos /v1 server before retrying; local SQLite fallback is disabled",
+    );
+  }
 }
 
 async function fetchCompletionCapabilities(client: HasnaStorageClient): Promise<ReadonlySet<string>> {
