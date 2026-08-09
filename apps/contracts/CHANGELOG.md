@@ -2,6 +2,23 @@
 
 All notable changes to `@hasna/contracts` are documented here.
 
+## [0.10.3] - 2026-08-09
+
+- Adds thirteen strict, versioned deployment control-plane contracts covering
+  product projection through launch evidence, with canonical digest helpers,
+  linked-record validation, generated JSON Schemas, deterministic fixtures,
+  checksum manifests, public package exports, and packed-consumer coverage.
+- Registers `hasna-deploy` as the deployment app's canonical operator binary
+  without widening the service-contract allowlist to arbitrary `hasna-*`
+  names.
+- Aligns packed no-cloud scans with the existing 5 MiB source-member policy so
+  oversized built members are skipped instead of crashing the release gate;
+  bounded members remain scanned and covered by a two-sided regression.
+
+PATCH, not minor. The deployment contracts and exports are additive, the
+binary alias is a narrow compatibility addition, and the scanner change makes
+packed behavior match its documented source-tree behavior.
+
 ## [0.10.2] - 2026-08-08
 
 Ships the two commits that merged to `main` after 0.10.1:

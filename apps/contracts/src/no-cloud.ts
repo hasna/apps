@@ -1064,7 +1064,24 @@ function collectTarballFiles(target: string): ScanFile[] {
     // deliberately so — see src/artifact-scan.ts.
     const kind = shouldReadPath(normalized);
     if (!kind) continue;
-    const text = readArchiveMemberText(target, entry);
+    let text: string;
+    try {
+      text = readArchiveMemberText(target, entry);
+    } catch (error) {
+      // Directory scans already decline source-shaped files above
+      // MAX_TEXT_BYTES. Apply the same policy to packed members instead of
+      // turning an otherwise valid package into a scanner crash.
+      if (
+        error instanceof Error
+        && (
+          (error as NodeJS.ErrnoException).code === "ENOBUFS"
+          || error.message.includes("maxBuffer")
+        )
+      ) {
+        continue;
+      }
+      throw error;
+    }
     const artifactKind = kind === "package_manifest" || kind === "lockfile" ? kind : "packed_artifact";
     files.push({ path: normalized, text, kind: artifactKind });
   }

@@ -101,6 +101,13 @@ try {
     "package/generated/todos/v1/invariant-registry.json",
     "package/generated/todos/v1/generator-provenance.json",
     "package/generated/todos/v1/checksums.json",
+    "package/dist/deployment/index.js",
+    "package/dist/deployment/index.d.ts",
+    "package/dist/deployment-artifacts.js",
+    "package/dist/deployment-artifacts.d.ts",
+    "package/generated/deployment/v1/schema-bundle.json",
+    "package/generated/deployment/v1/fixture-bundle.json",
+    "package/generated/deployment/v1/checksums.json",
   ]) {
     if (!entries.has(required)) {
       throw new Error(`packed archive is missing ${required}`);
@@ -175,7 +182,7 @@ try {
       consumerRoot,
       repoRoot: root,
       archiveEntries: entries,
-      runtimeDependencies: ["commander", "zod"],
+      runtimeDependencies: ["commander", "zod", "zod-to-json-schema"],
     });
     installedFromArchive = true;
     refusal = refuseUnavailableInstall(installOutput.trim());
@@ -192,8 +199,14 @@ try {
   const packageJson = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as {
     exports?: Record<string, unknown>;
   };
-  if (!packageJson.exports?.["./todos"] || !packageJson.exports?.["./todos/artifacts/*"]) {
-    throw new Error("packed package is missing Todos export mappings");
+  if (
+    !packageJson.exports?.["./todos"]
+    || !packageJson.exports?.["./todos/artifacts/*"]
+    || !packageJson.exports?.["./deployment"]
+    || !packageJson.exports?.["./deployment/artifacts"]
+    || !packageJson.exports?.["./deployment/artifacts/*"]
+  ) {
+    throw new Error("packed package is missing Todos or deployment export mappings");
   }
   const todosExportKeys = Object.keys(packageJson.exports)
     .filter((key) => key.startsWith("./todos"))
@@ -209,11 +222,35 @@ try {
     join(consumerRoot, "smoke.mjs"),
     `import * as root from "@hasna/contracts";
 import * as todos from "@hasna/contracts/todos";
+import * as deployment from "@hasna/contracts/deployment";
+import * as deploymentArtifacts from "@hasna/contracts/deployment/artifacts";
 import contract from "@hasna/contracts/todos/artifacts/contract.json" with { type: "json" };
 import invariants from "@hasna/contracts/todos/artifacts/invariant-registry.json" with { type: "json" };
+import deploymentSchemaBundle from "@hasna/contracts/deployment/artifacts/schema-bundle.json" with { type: "json" };
+import deploymentFixtureBundle from "@hasna/contracts/deployment/artifacts/fixture-bundle.json" with { type: "json" };
 import { z } from "zod";
 
 if ("TodosModeSchema" in root) throw new Error("Todos leaked through the package root");
+if (Object.keys(deployment.DeploymentSchemaRegistry).length !== 13) {
+  throw new Error("deployment subpath did not expose all registered schemas");
+}
+if (deploymentSchemaBundle.runtimeValidationRequired !== true) {
+  throw new Error("deployment schema bundle lost the runtime-validation gate");
+}
+if (Object.keys(deploymentSchemaBundle.schemas).length !== 13) {
+  throw new Error("deployment schema bundle is incomplete");
+}
+if (deploymentFixtureBundle.fixtures.launchEvidence.length !== 1) {
+  throw new Error("deployment fixture bundle is incomplete");
+}
+const renderedDeployment = deploymentArtifacts.renderDeploymentArtifacts();
+if (Object.keys(renderedDeployment).length !== 16) {
+  throw new Error("deployment artifact renderer is incomplete");
+}
+const packedProduct = deploymentFixtureBundle.fixtures.productProjections[0];
+if (!deployment.ProductProjectionSchema.safeParse(packedProduct).success) {
+  throw new Error("packed deployment fixture did not parse through the public schema");
+}
 if (todos.TodosModeSchema.parse("local") !== "local") throw new Error("Todos subpath did not load");
 if (todos.TodosModeSchema.safeParse("remote").success) throw new Error("Todos mode validation drifted");
 if ("createTodosTransferBundleWithDigests" in todos) throw new Error("structural transfer builder leaked publicly");

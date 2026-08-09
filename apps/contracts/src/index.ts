@@ -1,5 +1,7 @@
 export * from "./schemas";
 export * from "./validators";
+export * from "./deployment";
+export * from "./deployment-artifacts";
 export * from "./no-cloud";
 export * from "./server-backend";
 export * from "./service-contract";
