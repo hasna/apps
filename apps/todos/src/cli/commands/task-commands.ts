@@ -15,6 +15,7 @@ import {
   completeTask,
   lockTask,
   unlockTask,
+  handoffStaleTaskLock,
 } from "../../db/tasks.js";
 import { getTaskList, getTaskListBySlug } from "../../db/task-lists.js";
 import { decodeCommentCursor, pageComments } from "../../lib/comment-cursor.js";
@@ -31,6 +32,7 @@ import {
   cloudCompleteTask,
   cloudLockTask,
   cloudUnlockTask,
+  cloudHandoffStaleTaskLock,
   cloudTaskHistory,
   cloudUpsertTaskByFingerprint,
   cloudResolveProjectRef,
@@ -65,6 +67,7 @@ import {
   TASK_STATUS_FLAG,
 } from "../helpers.js";
 import { redactBroadTasks } from "../output-redaction.js";
+import { normalizeExactTaskId } from "../../lib/stale-lock-handoff.js";
 
 /** Render untrusted text without allowing terminal control sequences to execute. */
 export function escapeTerminalControls(value: string): string {
@@ -2226,6 +2229,72 @@ export function registerTaskCommands(program: Command) {
       } else {
         console.log(chalk.green("Lock released."));
       }
+    });
+
+  // stale-lock-handoff
+  program
+    .command("stale-lock-handoff <id>")
+    .description("Atomically transfer one exact stale lock by holder and locked_at version")
+    .requiredOption("--expected-holder <agent>", "Exact current locked_by value")
+    .requiredOption("--expected-lock-version <timestamp>", "Exact current locked_at value (canonical UTC)")
+    .requiredOption("--stale-after-seconds <seconds>", "Required lock age threshold; no default")
+    .requiredOption("--new-holder <agent>", "New holder; must match the authenticated/--agent identity")
+    .requiredOption("--reason <text>", "Non-empty audit reason")
+    .action(async (
+      id: string,
+      opts: {
+        expectedHolder: string;
+        expectedLockVersion: string;
+        staleAfterSeconds: string;
+        newHolder: string;
+        reason: string;
+      },
+    ) => {
+      const globalOpts = program.opts();
+      const taskId = normalizeExactTaskId(id);
+      const actor = resolveClaimIdentity("handoff a stale lock on", globalOpts.agent);
+      const staleAfterSeconds = Number(opts.staleAfterSeconds);
+      const cloud = getTodosCloudClient();
+      let receipt;
+      try {
+        receipt = cloud
+          ? await cloudHandoffStaleTaskLock(cloud, {
+              task_id: taskId,
+              expected_holder: opts.expectedHolder,
+              expected_lock_version: opts.expectedLockVersion,
+              stale_after_seconds: staleAfterSeconds,
+              new_holder: opts.newHolder,
+              reason: opts.reason,
+            })
+          : handoffStaleTaskLock({
+              task_id: taskId,
+              actor,
+              expected_holder: opts.expectedHolder,
+              expected_lock_version: opts.expectedLockVersion,
+              stale_after_seconds: staleAfterSeconds,
+              new_holder: opts.newHolder,
+              reason: opts.reason,
+            });
+      } catch (e) {
+        handleError(e);
+      }
+
+      if (globalOpts.json) {
+        output({ receipt }, true);
+        return;
+      }
+      console.log(chalk.green(`Stale lock transferred on task ${escapeTerminalControls(receipt.task_id)}.`));
+      console.log(
+        `  ${escapeTerminalControls(receipt.previous_holder)} @ ${escapeTerminalControls(receipt.previous_lock_version)}`,
+      );
+      console.log(
+        `  -> ${escapeTerminalControls(receipt.new_holder)} @ ${escapeTerminalControls(receipt.new_lock_version)}`,
+      );
+      console.log(
+        `  stale after ${receipt.stale_after_seconds}s (cutoff ${escapeTerminalControls(receipt.stale_cutoff)})`,
+      );
+      console.log(`  receipt ${escapeTerminalControls(receipt.receipt_id)}`);
+      console.log(`  reason ${escapeTerminalControls(receipt.reason)}`);
     });
 
   // delete

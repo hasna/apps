@@ -916,6 +916,24 @@ describe("remote CLI entrypoint authority boundary", () => {
         if (url.pathname === "/v1/agents/fixture-agent/release") return Response.json({ agent, released: true });
         if (url.pathname === `/v1/tasks/${TASK_ID}/lock`) return Response.json({ result: { success: true, locked_by: "fixture-agent" } });
         if (url.pathname === `/v1/tasks/${TASK_ID}/unlock`) return Response.json({ success: true });
+        if (url.pathname === `/v1/tasks/${TASK_ID}/stale-lock-handoff`) {
+          return Response.json({
+            receipt: {
+              schema_version: "todos.stale-lock-handoff.v1",
+              receipt_id: "33333333-3333-4333-8333-333333333333",
+              task_id: TASK_ID,
+              actor: "fixture-agent",
+              previous_holder: "previous-agent",
+              previous_lock_version: "2020-01-01T00:00:00.000Z",
+              new_holder: "fixture-agent",
+              new_lock_version: "2026-08-09T10:00:00.000Z",
+              stale_after_seconds: 3600,
+              stale_cutoff: "2026-08-09T09:00:00.000Z",
+              reason: "remote exact stale lock",
+              created_at: "2026-08-09T10:00:00.000Z",
+            },
+          });
+        }
         if (url.pathname === "/v1/tasks" && url.searchParams.get("status") === "in_progress") {
           return Response.json({ tasks: [task], count: 1, total: 1 });
         }
@@ -951,6 +969,14 @@ describe("remote CLI entrypoint authority boundary", () => {
         ["--json", "release", "fixture-agent"],
         ["--agent", "fixture-agent", "--json", "lock", TASK_ID],
         ["--agent", "fixture-agent", "--json", "unlock", TASK_ID],
+        [
+          "--agent", "fixture-agent", "--json", "stale-lock-handoff", TASK_ID,
+          "--expected-holder", "previous-agent",
+          "--expected-lock-version", "2020-01-01T00:00:00.000Z",
+          "--stale-after-seconds", "3600",
+          "--new-holder", "fixture-agent",
+          "--reason", "remote exact stale lock",
+        ],
         ["--json", "active"],
         ["--json", "timeline"],
       ]) {
@@ -971,9 +997,19 @@ describe("remote CLI entrypoint authority boundary", () => {
         "POST /v1/agents/fixture-agent/release",
         `POST /v1/tasks/${TASK_ID}/lock`,
         `POST /v1/tasks/${TASK_ID}/unlock`,
+        `POST /v1/tasks/${TASK_ID}/stale-lock-handoff`,
         "GET /v1/tasks?status=in_progress",
         "GET /v1/activity?limit=5000",
       ]);
+      expect(requests.find(
+        (request) => request.path === `/v1/tasks/${TASK_ID}/stale-lock-handoff`,
+      )?.body).toEqual({
+        expected_holder: "previous-agent",
+        expected_lock_version: "2020-01-01T00:00:00.000Z",
+        stale_after_seconds: 3600,
+        new_holder: "fixture-agent",
+        reason: "remote exact stale lock",
+      });
     } finally {
       server.stop(true);
     }

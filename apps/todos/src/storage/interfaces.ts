@@ -14,6 +14,8 @@ import type {
   RegisterAgentInput,
   RenameProjectInput,
   RenameProjectResult,
+  StaleLockHandoffInput,
+  StaleLockHandoffReceipt,
   Task,
   TaskComment,
   TaskDependency,
@@ -251,6 +253,15 @@ export interface TodosTaskStore {
   /** Release a lock. Optional — cloud adapters only. */
   unlock?(id: string, agentId?: string, context?: TodosStorageContext): MaybePromise<boolean>;
   /**
+   * Atomically transfer one exact stale lock by holder + immutable lock
+   * version. Optional for third-party adapters; the v1 route fails closed with
+   * 501 when the backing store cannot provide the CAS.
+   */
+  handoffStaleLock?(
+    input: StaleLockHandoffInput,
+    context?: TodosStorageContext,
+  ): MaybePromise<StaleLockHandoffReceipt>;
+  /**
    * Resolve the single task carrying `metadata.fingerprint === fingerprint` in the
    * shared dataset, or null. Backs the `/v1/tasks/upsert` idempotent create-or-update
    * so `task upsert` dedupes against the cloud dataset instead of this machine's local
@@ -465,6 +476,11 @@ export interface TodosStorageSnapshot {
 }
 
 export interface TodosStorageTombstone {
+  /**
+   * `audit_history` remains representable for legacy/export readback, but it is
+   * never importable: every snapshot importer must reject that object type
+   * before applying any row or tombstone mutation.
+   */
   object_type: "tasks" | "projects" | "project_machine_paths" | "plans" | "agents" | "task_lists" | "templates" | "template_tasks" | "audit_history";
   object_id: string;
   deleted_at: string;

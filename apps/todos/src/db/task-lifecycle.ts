@@ -1,6 +1,8 @@
 import type { Database, SQLQueryBindings } from "bun:sqlite";
 import type {
   LockResult,
+  StaleLockHandoffInput,
+  StaleLockHandoffReceipt,
   Task,
   TaskRow,
 } from "../types/index.js";
@@ -17,13 +19,19 @@ import { checkCompletionGuard } from "../lib/completion-guard.js";
 import { databasePathFromDatabase } from "../lib/event-emission-safety.js";
 import { emitLocalEventHooksQuiet } from "../lib/event-hooks.js";
 import { emitSharedTaskEventQuiet, taskEventData } from "../lib/shared-events.js";
-import { logTaskChange } from "./audit.js";
+import { insertTaskHistory, logTaskChange } from "./audit.js";
 import { nextOccurrence } from "../lib/recurrence.js";
 import { dispatchWebhook } from "./webhooks.js";
 import { taskFromTemplate } from "./templates.js";
 import { createTask, getTask, rowToTask } from "./task-crud.js";
 import { getTaskDependencies } from "./task-graph.js";
 import { sanitizePreWriteText, sanitizePreWriteValue } from "../lib/prewrite-secrets.js";
+import {
+  buildStaleLockHandoffReceipt,
+  prepareStaleLockHandoff,
+  staleLockHandoffHistory,
+  throwStaleLockHandoffConflict,
+} from "../lib/stale-lock-handoff.js";
 
 // Maximum depth for template-spawned task chains to prevent infinite loops
 const MAX_SPAWN_DEPTH = 10;
@@ -404,6 +412,52 @@ export function unlockTask(
   );
 
   return true;
+}
+
+/**
+ * Atomically transfer exactly one stale lock from its observed holder/version
+ * to the authenticated new holder, and persist the immutable receipt in the
+ * owning task_history table inside the same SQLite transaction.
+ */
+export function handoffStaleTaskLock(
+  input: StaleLockHandoffInput,
+  db?: Database,
+): StaleLockHandoffReceipt {
+  const d = db || getDatabase();
+  const prepared = prepareStaleLockHandoff(input);
+  const receipt = buildStaleLockHandoffReceipt(prepared);
+  const history = staleLockHandoffHistory(receipt, null);
+
+  const transfer = d.transaction(() => {
+    const result = d.run(
+      `UPDATE tasks
+       SET locked_by = ?, locked_at = ?, updated_at = ?, version = version + 1
+       WHERE id = ?
+         AND locked_by = ?
+         AND locked_at = ?
+         AND julianday(locked_at) < julianday(?)
+         AND status NOT IN ('completed', 'failed', 'cancelled')`,
+      [
+        prepared.new_holder,
+        prepared.operation_timestamp,
+        prepared.operation_timestamp,
+        prepared.task_id,
+        prepared.expected_holder,
+        prepared.expected_lock_version,
+        prepared.stale_cutoff,
+      ],
+    );
+
+    if (result.changes === 0) {
+      const current = getTask(prepared.task_id, d);
+      if (!current) throw new TaskNotFoundError(prepared.task_id);
+      throwStaleLockHandoffConflict(current, prepared);
+    }
+
+    insertTaskHistory(history, d);
+  });
+  transfer();
+  return receipt;
 }
 
 export interface TaskLockStatus {

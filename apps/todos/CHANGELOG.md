@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.20] - 2026-08-09
+
+### Added
+
+- **npm publishing requires an Ed25519-signed independent-agent `GO`.** The
+  package-owned workflow and prepublish gates reject missing, unsigned,
+  `NO_GO`, mismatched, tampered, wrong-key, self-review, and replayed receipts
+  unless they bind the exact repository, commit, package version, tag,
+  workflow revision, registry, reviewer, and publisher.
+
+### Fixed
+
+- **Exact stale task locks can be handed off atomically.** `todos
+  stale-lock-handoff <id>` fences on the expected holder and lock version,
+  rejects live or mismatched locks, transfers only the named task across local
+  and authenticated `/v1` authorities, and returns an immutable audit receipt.
+
 ## [0.15.19] - 2026-08-09
 
 ### Fixed

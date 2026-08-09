@@ -764,6 +764,12 @@ export function validatePackLifecycleScripts(packageJson: PackageJson): ReleaseG
   );
   addIf(
     failures,
+    packageJson.scripts?.["verify:release-review"] !== "bun run scripts/verify-npm-release-agent-review.ts",
+    "release-agent-review-script",
+    "verify:release-review must invoke the package-owned independent-agent receipt gate",
+  );
+  addIf(
+    failures,
     packageJson.scripts?.prepublishOnly !== "bun run scripts/verify-public-release.ts --mode=publish",
     "release-publish-script",
     "prepublishOnly must invoke strict publish mode",

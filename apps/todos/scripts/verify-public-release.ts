@@ -88,6 +88,7 @@ function main(): void {
   if (authority.mode === "publish") {
     const expectedCommitFailures = validateExpectedReleaseCommit(authority.expectedCommit!, sourceIdentity.gitCommit);
     if (expectedCommitFailures.length > 0) failReleaseGate(expectedCommitFailures);
+    runOrExit("bun", ["run", "scripts/verify-npm-release-agent-review.ts"]);
   }
   const commitEpochResult = runCapture("git", ["show", "-s", "--format=%ct", "HEAD"]);
   if (commitEpochResult.status !== 0) failReleaseGate([{ check: "release-commit-time", message: commitEpochResult.stderr || "could not read commit timestamp" }]);

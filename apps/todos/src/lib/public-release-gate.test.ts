@@ -77,6 +77,7 @@ const rootPackage: PackageJson = {
   packageManager: "bun@1.3.14",
   scripts: {
     "verify:release": "bun run scripts/verify-public-release.ts --mode=review",
+    "verify:release-review": "bun run scripts/verify-npm-release-agent-review.ts",
     prepublishOnly: "bun run scripts/verify-public-release.ts --mode=publish",
   },
 };
@@ -616,6 +617,10 @@ describe("public release gate", () => {
     expect(validateBunReleaseToolchain("1.3.13").map((failure) => failure.check)).toEqual([
       "release-bun-version",
     ]);
+    expect(validatePackLifecycleScripts({
+      ...rootPackage,
+      scripts: { ...rootPackage.scripts, "verify:release-review": "true" },
+    }).map((failure) => failure.check)).toContain("release-agent-review-script");
   });
 
   test("binds release provenance to the exact commit tree and source hash", () => {

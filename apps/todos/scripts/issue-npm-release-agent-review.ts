@@ -1,0 +1,135 @@
+#!/usr/bin/env bun
+import { resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import {
+  NPM_RELEASE_AGENT_REVIEW_SCHEMA,
+  deriveNpmReleaseAgentReviewKeyId,
+  issueSignedNpmReleaseAgentReviewReceipt,
+  parsePublisherAgentTrailer,
+  type NpmReleaseAgentReviewPayload,
+} from "../src/lib/npm-release-agent-review";
+
+type ReleasePackage = {
+  name?: string;
+  version?: string;
+  publishConfig?: { registry?: string };
+};
+
+type Options = {
+  releaseCommit?: string;
+  publisherAgent?: string;
+  verdict?: "GO" | "NO_GO";
+  openP0: number;
+  openP1: number;
+};
+
+const REPOSITORY = "hasna/todos";
+const WORKFLOW_PATH = ".github/workflows/release.yml";
+const root = resolve(import.meta.dir, "..");
+
+main();
+
+function main(): void {
+  const options = parseOptions(process.argv.slice(2));
+  const reviewerAgent = requiredEnvironment("RELEASE_REVIEWER_AGENT");
+  const reviewerKeyId = requiredEnvironment("RELEASE_REVIEW_KEY_ID");
+  const reviewerPublicKey = requiredEnvironment("RELEASE_REVIEW_PUBLIC_KEY");
+  const reviewerPrivateKey = requiredEnvironment("RELEASE_REVIEW_PRIVATE_KEY");
+
+  if (!options.releaseCommit || !/^[0-9a-f]{40}$/.test(options.releaseCommit)) fail("--release-commit must be an exact 40-hex Git commit");
+  if (!options.publisherAgent) fail("--publisher-agent is required");
+  if (!options.verdict) fail("--verdict GO|NO_GO is required");
+  if (![options.openP0, options.openP1].every((value) => Number.isInteger(value) && value >= 0)) {
+    fail("--open-p0 and --open-p1 must be non-negative integers");
+  }
+  if (options.verdict === "GO" && (options.openP0 !== 0 || options.openP1 !== 0)) {
+    fail("a GO receipt must have --open-p0 0 and --open-p1 0");
+  }
+  if (options.verdict === "NO_GO" && options.openP0 === 0 && options.openP1 === 0) {
+    fail("a NO_GO receipt must name at least one open P0 or P1 blocker");
+  }
+  if (parsePublisherAgentTrailer(`Agent: ${reviewerAgent}`).failures.length > 0) {
+    fail("RELEASE_REVIEWER_AGENT must be a registered agent identifier");
+  }
+  if (parsePublisherAgentTrailer(`Agent: ${options.publisherAgent}`).failures.length > 0) {
+    fail("--publisher-agent must be a registered agent identifier");
+  }
+  if (reviewerAgent.toLowerCase() === options.publisherAgent.toLowerCase()) {
+    fail("reviewer and publisher agents must differ");
+  }
+
+  if (deriveNpmReleaseAgentReviewKeyId(reviewerPublicKey) !== reviewerKeyId) {
+    fail("RELEASE_REVIEW_KEY_ID does not derive from RELEASE_REVIEW_PUBLIC_KEY");
+  }
+
+  const packageJson = JSON.parse(runGit(["show", `${options.releaseCommit}:package.json`])) as ReleasePackage;
+  if (packageJson.name !== "@hasna/todos") fail("the release commit package.json must declare @hasna/todos");
+  if (!packageJson.version) fail("the release commit package.json must declare a version");
+  if (packageJson.publishConfig?.registry !== "https://registry.npmjs.org") fail("the release commit must target the public npm registry");
+  const workflowRevision = runGit(["rev-parse", `${options.releaseCommit}:${WORKFLOW_PATH}`]).trim();
+
+  const payload: NpmReleaseAgentReviewPayload = {
+    schema: NPM_RELEASE_AGENT_REVIEW_SCHEMA,
+    repository: REPOSITORY,
+    commit: options.releaseCommit,
+    package: { name: packageJson.name, version: packageJson.version },
+    tag: `npm/todos/v${packageJson.version}`,
+    workflow: { path: WORKFLOW_PATH, revision: workflowRevision },
+    registry: packageJson.publishConfig.registry,
+    reviewer: { type: "coding-agent", agent: reviewerAgent },
+    publisher: { type: "coding-agent", agent: options.publisherAgent },
+    verdict: options.verdict,
+    openReachableInScopeBlockers: { p0: options.openP0, p1: options.openP1 },
+  };
+  let receipt;
+  try {
+    receipt = issueSignedNpmReleaseAgentReviewReceipt(
+      payload,
+      reviewerPrivateKey,
+      reviewerPublicKey,
+      reviewerKeyId,
+    );
+  } catch (error) {
+    fail(error instanceof Error ? error.message : "could not sign receipt");
+  }
+
+  console.log(JSON.stringify(receipt));
+}
+
+function parseOptions(args: string[]): Options {
+  const options: Options = { openP0: 0, openP1: 0 };
+  for (let index = 0; index < args.length; index += 2) {
+    const flag = args[index];
+    const value = args[index + 1];
+    if (!flag?.startsWith("--") || value === undefined) fail(`missing value for ${flag ?? "argument"}`);
+    switch (flag) {
+      case "--release-commit": options.releaseCommit = value; break;
+      case "--publisher-agent": options.publisherAgent = value; break;
+      case "--verdict":
+        if (value !== "GO" && value !== "NO_GO") fail("--verdict must be GO or NO_GO");
+        options.verdict = value;
+        break;
+      case "--open-p0": options.openP0 = Number(value); break;
+      case "--open-p1": options.openP1 = Number(value); break;
+      default: fail(`unknown option ${flag}`);
+    }
+  }
+  return options;
+}
+
+function requiredEnvironment(name: string): string {
+  const value = process.env[name];
+  if (!value?.trim()) fail(`${name} is required`);
+  return value.trim();
+}
+
+function runGit(args: string[]): string {
+  const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
+  if (result.status !== 0) fail(result.stderr.trim() || `git ${args[0]} failed`);
+  return result.stdout;
+}
+
+function fail(message: string): never {
+  console.error(`Could not issue signed npm release agent review receipt: ${message}`);
+  process.exit(1);
+}

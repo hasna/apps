@@ -7,7 +7,7 @@
  * require `todos:write` (a `todos:*` key satisfies both). This is a real wrapper
  * over the core storage lib — there are NO stubs; unimplemented routes 404.
  */
-import { LockError, PlanNotFoundError, PlanRevisionConflictError, ProjectNotFoundError, ResourceConflictError, TaskNotFoundError, TaskNotStartableError, TaskReferenceAmbiguousError, TASK_PRIORITIES, TASK_STATUSES } from "../types/index.js";
+import { LockError, PlanNotFoundError, PlanRevisionConflictError, ProjectNotFoundError, ResourceConflictError, StaleLockHandoffError, TaskNotFoundError, TaskNotStartableError, TaskReferenceAmbiguousError, TASK_PRIORITIES, TASK_STATUSES } from "../types/index.js";
 import { collapseEnumValues, resolveEnumVocabulary } from "../lib/enum-vocabulary.js";
 import type { CreatePlanInput, CreateProjectInput, CreateTaskInput, CreateTaskListInput, CreateTemplateInput, RenameProjectInput, TaskComment, TemplateTaskInput, UpdateTaskInput, UpdateTaskListInput } from "../types/index.js";
 import type { TodosStorageContext, TodosStorageSnapshot, TodosTaskCompletionOptions, UpdateTemplateInput } from "../storage/interfaces.js";
@@ -37,6 +37,12 @@ import {
   planPlanProjectLink,
   rollbackPlanProjectLink,
 } from "../lib/plan-project-link.js";
+import { normalizeExactTaskId } from "../lib/stale-lock-handoff.js";
+import {
+  AUDIT_HISTORY_TOMBSTONE_FORBIDDEN,
+  forbiddenAuditHistoryTombstoneError,
+  parseAuditHistoryImportFailure,
+} from "../storage/audit-history-import.js";
 
 export interface V1RequestDependencies {
   getVerifier?: typeof getCloudVerifier;
@@ -786,6 +792,51 @@ export async function handleV1Request(
       }
       // /v1/tasks/:id[/action]
       if (action) {
+        // ── POST /v1/tasks/:id/stale-lock-handoff — exact stale-lock CAS ──
+        // This route deliberately does NOT use resolveRef: a short id or UUID
+        // prefix must never select a "best" task for a lock mutation.
+        if (action === "stale-lock-handoff") {
+          if (method !== "POST") {
+            return error(405, "method must be POST on /v1/tasks/:id/stale-lock-handoff");
+          }
+          const exactId = normalizeExactTaskId(id);
+          if (!principal.agent) {
+            return error(403, "stale-lock handoff requires an authenticated agent-bound key", {
+              code: "STALE_LOCK_HANDOFF_ACTOR_MISMATCH",
+            });
+          }
+          if (typeof store.tasks.handoffStaleLock !== "function") {
+            return error(501, "stale-lock handoff is not supported by this storage backend");
+          }
+          const body = (await readJson<Record<string, unknown>>(req)) ?? {};
+          const allowed = new Set([
+            "expected_holder",
+            "expected_lock_version",
+            "stale_after_seconds",
+            "new_holder",
+            "reason",
+          ]);
+          const unknown = Object.keys(body).find((key) => !allowed.has(key));
+          if (unknown) {
+            return error(400, `unknown stale-lock handoff field: ${unknown}`, {
+              code: "STALE_LOCK_HANDOFF_INVALID_INPUT",
+              field: unknown,
+            });
+          }
+          const receipt = await store.tasks.handoffStaleLock(
+            {
+              task_id: exactId,
+              actor: principal.agent,
+              expected_holder: body.expected_holder as string,
+              expected_lock_version: body.expected_lock_version as string,
+              stale_after_seconds: body.stale_after_seconds as number,
+              new_holder: body.new_holder as string,
+              reason: body.reason as string,
+            },
+            contextFromPrincipal(principal),
+          );
+          return json({ receipt });
+        }
         // ── /v1/tasks/:id/comments — task comments (add/list) ──
         // The comment path is the only task sub-resource that carries a richer body
         // (content/type/progress) and must validate the parent task exists so a
@@ -1604,11 +1655,10 @@ export async function handleV1Request(
     }
 
     // ── /v1/import (bulk snapshot ingest / backfill) ──
-    // Accepts a full or partial TodosStorageSnapshot and upserts every record by
-    // primary key via the storage adapter. Idempotent: re-posting the same rows
-    // never duplicates (ON CONFLICT DO UPDATE, guarded by updated_at/version), so
-    // large local→cloud backfills can be chunked and safely retried. Requires the
-    // `todos:write` scope (enforced above for non-GET methods).
+    // Accepts a full or partial TodosStorageSnapshot. Mutable records use the
+    // storage adapter's guarded upsert path; audit history is append-only, so
+    // exact replay skips while divergent same-ID rows and every audit tombstone
+    // reject before mutation. Requires `todos:write` (enforced above).
     if (resource === "import") {
       if (method !== "POST") return error(405, `method ${method} not allowed on /v1/import`);
       if (typeof store.sync.importSnapshot !== "function") {
@@ -1654,7 +1704,29 @@ export async function handleV1Request(
       if (received === 0) {
         return error(400, "empty snapshot: provide at least one record array (tasks/projects/plans/...)");
       }
+      const forbiddenAuditTombstone = (snapshot.tombstones ?? [])
+        .find((tombstone) => (tombstone.object_type as string) === "audit_history");
+      if (forbiddenAuditTombstone) {
+        return error(
+          400,
+          forbiddenAuditHistoryTombstoneError(forbiddenAuditTombstone.object_id),
+          {
+            code: AUDIT_HISTORY_TOMBSTONE_FORBIDDEN,
+            conflict: false,
+            audit_history_id: forbiddenAuditTombstone.object_id,
+          },
+        );
+      }
       const result = await store.sync.importSnapshot(snapshot, contextFromPrincipal(principal));
+      const auditFailureMessage = result.errors.find((message) => parseAuditHistoryImportFailure(message) !== null);
+      if (auditFailureMessage) {
+        const failure = parseAuditHistoryImportFailure(auditFailureMessage)!;
+        return error(failure.status, auditFailureMessage, {
+          code: failure.code,
+          conflict: failure.conflict,
+          audit_history_id: failure.auditHistoryId,
+        });
+      }
       return json({ result, received });
     }
 
@@ -1690,6 +1762,19 @@ export async function handleV1Request(
     }
     if (e instanceof TaskNotFoundError) {
       return error(404, e.message, { code: TaskNotFoundError.code });
+    }
+    if (e instanceof StaleLockHandoffError) {
+      const status = e.code === "STALE_LOCK_HANDOFF_INVALID_TASK_ID"
+        || e.code === "STALE_LOCK_HANDOFF_INVALID_INPUT"
+        ? 400
+        : e.code === "STALE_LOCK_HANDOFF_ACTOR_MISMATCH"
+          ? 403
+          : 409;
+      return error(status, e.message, {
+        code: e.code,
+        conflict: status === 409,
+        ...e.details,
+      });
     }
     if (e instanceof PlanNotFoundError) {
       return error(404, e.message, { code: PlanNotFoundError.code });

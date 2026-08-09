@@ -8,6 +8,57 @@ function sanitizeHistoryValue(value: string | null | undefined, context: string)
   return value === undefined || value === null ? null : sanitizePreWriteText(String(value), context);
 }
 
+/**
+ * Insert one caller-constructed history entry through the owning audit path.
+ *
+ * Operations that must mutate a task and persist their immutable receipt in the
+ * SAME transaction use this form. Ordinary callers should keep using
+ * logTaskChange(), which creates the id and timestamp for them.
+ */
+export function insertTaskHistory(entry: TaskHistory, db?: Database): TaskHistory {
+  const d = db || getDatabase();
+  const safeEntry: TaskHistory = {
+    ...entry,
+    field: entry.field || null,
+    old_value: sanitizeHistoryValue(entry.old_value, "task_history.old_value"),
+    new_value: sanitizeHistoryValue(entry.new_value, "task_history.new_value"),
+    agent_id: entry.agent_id || null,
+    machine_id: entry.machine_id ?? currentStorageMachineId(d),
+  };
+  d.run(
+    `INSERT INTO task_history (id, task_id, action, field, old_value, new_value, agent_id, created_at, machine_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      safeEntry.id,
+      safeEntry.task_id,
+      safeEntry.action,
+      safeEntry.field,
+      safeEntry.old_value,
+      safeEntry.new_value,
+      safeEntry.agent_id,
+      safeEntry.created_at,
+      safeEntry.machine_id ?? null,
+    ],
+  );
+
+  try {
+    const { logActivity } = require("../lib/activity-audit.js") as typeof import("../lib/activity-audit.js");
+    logActivity({
+      entity_type: "task",
+      entity_id: safeEntry.task_id,
+      action: safeEntry.action,
+      field: safeEntry.field ?? undefined,
+      old_value: safeEntry.old_value,
+      new_value: safeEntry.new_value,
+      actor_id: safeEntry.agent_id ?? undefined,
+    }, d);
+  } catch {
+    /* activity_log table may not exist in legacy DBs until migration */
+  }
+
+  return safeEntry;
+}
+
 export function logTaskChange(
   taskId: string,
   action: string,
@@ -18,33 +69,17 @@ export function logTaskChange(
   db?: Database,
 ): TaskHistory {
   const d = db || getDatabase();
-  const id = uuid();
-  const timestamp = now();
-  const machineId = currentStorageMachineId(d);
-  const safeOldValue = sanitizeHistoryValue(oldValue, "task_history.old_value");
-  const safeNewValue = sanitizeHistoryValue(newValue, "task_history.new_value");
-  d.run(
-    `INSERT INTO task_history (id, task_id, action, field, old_value, new_value, agent_id, created_at, machine_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, taskId, action, field || null, safeOldValue, safeNewValue, agentId || null, timestamp, machineId],
-  );
-
-  try {
-    const { logActivity } = require("../lib/activity-audit.js") as typeof import("../lib/activity-audit.js");
-    logActivity({
-      entity_type: "task",
-      entity_id: taskId,
-      action,
-      field,
-      old_value: safeOldValue,
-      new_value: safeNewValue,
-      actor_id: agentId ?? undefined,
-    }, d);
-  } catch {
-    /* activity_log table may not exist in legacy DBs until migration */
-  }
-
-  return { id, task_id: taskId, action, field: field || null, old_value: safeOldValue, new_value: safeNewValue, agent_id: agentId || null, created_at: timestamp, machine_id: machineId };
+  return insertTaskHistory({
+    id: uuid(),
+    task_id: taskId,
+    action,
+    field: field || null,
+    old_value: oldValue ?? null,
+    new_value: newValue ?? null,
+    agent_id: agentId || null,
+    created_at: now(),
+    machine_id: currentStorageMachineId(d),
+  }, d);
 }
 
 export function getTaskHistory(taskId: string, db?: Database): TaskHistory[] {
