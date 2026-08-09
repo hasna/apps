@@ -502,6 +502,12 @@ describe("projects store api transport (roots/agents/recipes)", () => {
       mode: "add" as const,
       expected_revision: "revision",
       links: [link],
+      integrations: {
+        conversations_channel: "resource-api",
+        todos_project_id: "td_project_resource_api",
+        todos_task_list_id: "td_task_list_resource_api",
+        mementos_project_id: "mm_project_resource_api",
+      },
       max_items: 10,
       response_byte_limit: 100_000,
       time_budget_ms: 5_000,

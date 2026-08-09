@@ -15,8 +15,14 @@ import {
   createWorkspace,
   getWorkspace,
   getWorkspaceBySlug,
+  mutateProjectResourceLinks,
 } from "../db/workspaces.js";
 import { canonicalJson, sha256 } from "./guarded-project-mutation.js";
+import {
+  normalizeProjectResourceLinks,
+  projectResourceLinkId,
+  projectResourceLinksDigest,
+} from "./project-resource-links.js";
 import {
   PROJECT_REGISTRATION_DEPENDENCY_TASKS,
   PROJECT_REGISTRATION_GOALS_FILENAME,
@@ -39,6 +45,16 @@ import {
   type ProjectRegistrationResourceKind,
 } from "./project-registration.js";
 import { PROJECT_MARKER_FILENAME } from "./workspace-runtime.js";
+import type { ProjectStore } from "../store/project-store.js";
+import type {
+  CreateWorkspaceInput,
+  ProjectResourceLink,
+  ProjectResourceLinkMutationRequest,
+  ProjectResourceLinkMutationResult,
+  ProjectResourceLinkReadRequest,
+  ProjectResourceLinkReadResult,
+  Workspace,
+} from "../types/workspace.js";
 
 const tempRoots: string[] = [];
 
@@ -92,6 +108,7 @@ function authorityPrefix(authority: ProjectRegistrationAuthorityName): string {
 class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
   readonly records = new Map<string, ProjectRegistrationAuthorityRecord>();
   readonly receiptByKey = new Map<string, ProjectRegistrationAuthorityReceipt>();
+  readonly acceptedReceiptByTarget = new Map<string, ProjectRegistrationAuthorityReceipt>();
   readonly requests: ProjectRegistrationAuthorityRequest[] = [];
   readonly compensated: string[] = [];
   readonly inverseSelectors: string[] = [];
@@ -100,6 +117,7 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
   readonly inverseDuplicateSteps = new Set<string>();
   readonly invalidInverseDuplicateSteps = new Set<string>();
   strictInverseDesired = false;
+  allowExistingAdoption = false;
   beforeCreate: ((request: ProjectRegistrationAuthorityRequest) => void | Promise<void>) | null = null;
   channelTargetIdFactory: ((selectorDigest: string) => string) | null = null;
   packageVersion = "test-1.0.0";
@@ -167,7 +185,23 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
         selectorDigest.slice(20, 32),
       ].join("-")
       : `${authorityPrefix(this.authority)}_${request.resource_kind}_${selectorDigest.slice(0, 12)}`;
-    if (this.records.has(targetId)) {
+    const existingRecord = this.records.get(targetId);
+    if (existingRecord && this.allowExistingAdoption) {
+      const original = this.acceptedReceiptByTarget.get(targetId);
+      if (!original) throw new Error("existing record lacks its accepted receipt");
+      const adopted = this.makeReceipt(request, {
+        outcome: "duplicate_of_accepted",
+        target_id: targetId,
+        result_revision: existingRecord.revision,
+        result_digest: existingRecord.digest,
+        reason: null,
+        created_by_operation: false,
+        duplicate_of_receipt_id: original.receipt_id,
+      });
+      this.receiptByKey.set(request.idempotency_key, adopted);
+      return adopted;
+    }
+    if (existingRecord) {
       return this.makeReceipt(request, {
         outcome: "terminal_nonacceptance",
         target_id: null,
@@ -193,6 +227,7 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
       created_by_operation: true,
     });
     this.receiptByKey.set(request.idempotency_key, receipt);
+    this.acceptedReceiptByTarget.set(targetId, receipt);
     if (this.disconnectAfterCreateSteps.has(request.step_id)) {
       throw new Error("injected disconnect after authority commit");
     }
@@ -424,6 +459,170 @@ function fakeAuthorities(
   };
 }
 
+class FakeCloudProjectAuthority {
+  readonly mode = "api" as const;
+  readonly baseUrl = "https://projects.example.test/v1";
+  project: Workspace | null = null;
+  links: ProjectResourceLink[] = [];
+  readonly resourceLinkMutations: ProjectResourceLinkMutationRequest[] = [];
+  creates = 0;
+  deletes = 0;
+  disconnectAfterCreate = false;
+
+  async getProject(idOrSlug: string): Promise<Workspace | null> {
+    return this.project && (this.project.id === idOrSlug || this.project.slug === idOrSlug)
+      ? this.project
+      : null;
+  }
+
+  async createProject(create: CreateWorkspaceInput): Promise<Workspace> {
+    this.creates += 1;
+    const createdAt = "2026-08-09T00:00:00.000Z";
+    this.project = {
+      id: create.id!,
+      slug: create.slug!,
+      name: create.name,
+      description: create.description ?? null,
+      kind: create.kind ?? "generic",
+      status: "active",
+      root_id: create.root_id ?? null,
+      recipe_id: create.recipe_id ?? null,
+      canonical_machine: null,
+      primary_path: create.primary_path ?? null,
+      git_remote: create.git_remote ?? null,
+      s3_bucket: create.s3_bucket ?? null,
+      s3_prefix: create.s3_prefix ?? null,
+      tags: create.tags ?? [],
+      integrations: create.integrations ?? {},
+      metadata: create.metadata ?? {},
+      last_opened_at: null,
+      created_at: createdAt,
+      updated_at: createdAt,
+      synced_at: null,
+    };
+    if (this.disconnectAfterCreate) {
+      throw new Error("connection closed after hosted project commit");
+    }
+    return this.project;
+  }
+
+  async deleteProject(id: string, opts: { hard?: boolean }) {
+    const project = await this.getProject(id);
+    if (!project) throw new Error(`Project not found: ${id}`);
+    this.deletes += 1;
+    this.project = null;
+    return { workspace: project, hard: Boolean(opts.hard), id: project.id };
+  }
+
+  async readProjectResourceLinks(input: ProjectResourceLinkReadRequest): Promise<ProjectResourceLinkReadResult> {
+    const project = await this.getProject(input.project_id);
+    if (!project) throw new Error(`Project not found: ${input.project_id}`);
+    return {
+      ok: true,
+      project_id: project.id,
+      project,
+      current_revision: project.updated_at,
+      links: this.links,
+      link_count: this.links.length,
+      max_items: input.max_items,
+      collection_digest: projectResourceLinksDigest(this.links),
+      complete: true,
+      truncated: false,
+      response_control: {
+        response_byte_limit: input.response_byte_limit,
+        time_budget_ms: input.time_budget_ms,
+        response_bytes: 1,
+        elapsed_ms: 0,
+        complete: true,
+        truncated: false,
+      },
+    };
+  }
+
+  async mutateProjectResourceLinks(
+    input: ProjectResourceLinkMutationRequest,
+  ): Promise<ProjectResourceLinkMutationResult> {
+    const project = await this.getProject(input.project_id);
+    if (!project) throw new Error(`Project not found: ${input.project_id}`);
+    if (project.updated_at !== input.expected_revision) throw new Error("stale fake hosted revision");
+    this.resourceLinkMutations.push(input);
+    const before = {
+      project,
+      links: this.links,
+      collection_digest: projectResourceLinksDigest(this.links),
+    };
+    const normalized = normalizeProjectResourceLinks(input.links);
+    const nextRevision = `2026-08-09T00:00:00.${String(this.resourceLinkMutations.length).padStart(3, "0")}Z`;
+    this.links = normalized.map((link) => {
+      const id = projectResourceLinkId(project.id, link);
+      const existing = before.links.find((item) => item.id === id);
+      return {
+        ...link,
+        id,
+        project_id: project.id,
+        labels: link.labels ?? {},
+        created_at: existing?.created_at ?? nextRevision,
+        updated_at: nextRevision,
+      } as ProjectResourceLink;
+    });
+    this.project = {
+      ...project,
+      integrations: input.integrations ?? project.integrations,
+      updated_at: nextRevision,
+    };
+    const after = {
+      project: this.project,
+      links: this.links,
+      collection_digest: projectResourceLinksDigest(this.links),
+    };
+    return {
+      ok: true,
+      dry_run: false,
+      outcome: "accepted",
+      mode: input.mode,
+      idempotency_key: `fake-${input.operation_id}-${input.step_id}`,
+      request_digest: sha256(canonicalJson(input.links)),
+      precondition_digest: sha256(input.expected_revision),
+      project_id: project.id,
+      expected_revision: input.expected_revision,
+      current_revision: this.project.updated_at,
+      before,
+      after,
+      receipt: {
+        receipt_id: `grc_fake_${this.resourceLinkMutations.length}`,
+        operation_id: input.operation_id,
+        step_id: input.step_id,
+        direction: "forward",
+        idempotency_key: `fake-${input.operation_id}-${input.step_id}`,
+        target_id: project.id,
+        request_digest: sha256(canonicalJson(input.links)),
+        precondition_digest: sha256(input.expected_revision),
+        expected_revision: input.expected_revision,
+        outcome: "accepted",
+        reason: null,
+        result_project_id: project.id,
+        duplicate_of_receipt_id: null,
+        before: before as unknown as Record<string, unknown>,
+        after: after as unknown as Record<string, unknown>,
+        post_revision: this.project.updated_at,
+        created_at: nextRevision,
+      },
+      response_control: {
+        response_byte_limit: input.response_byte_limit,
+        time_budget_ms: input.time_budget_ms,
+        response_bytes: 1,
+        elapsed_ms: 0,
+        complete: true,
+        truncated: false,
+      },
+    };
+  }
+
+  asStore(): ProjectStore {
+    return this as unknown as ProjectStore;
+  }
+}
+
 describe("full project registration naming policy", () => {
   test("rejects only retired leading project prefixes", () => {
     expect(() => assertCurrentProjectRegistrationSlug("iproj-legacy")).toThrow(/retired leading/);
@@ -463,6 +662,409 @@ describe("full project registration capability gate", () => {
 });
 
 describe("full project registration transaction", () => {
+  test("hosted Projects authority never creates a local shadow row and rolls its exact row back on failure", async () => {
+    const db = makeDb();
+    const target = tempTarget("hosted-no-shadow");
+    const fakes = fakeAuthorities(["conversations_channel"]);
+    const projects = new FakeCloudProjectAuthority();
+    projects.disconnectAfterCreate = true;
+    try {
+      const result = await registerFullProject(
+        input("op-hosted-no-shadow", target.target, { id: "wks_hostednoshadow01" }),
+        { db, authorities: fakes.authorities, projectStore: projects.asStore() },
+      );
+
+      expect(result.ok).toBe(false);
+      expect(result.outcome).toBe("rolled_back");
+      expect(projects.creates).toBe(1);
+      expect(projects.deletes).toBe(1);
+      expect(projects.project).toBeNull();
+      expect(db.query("SELECT COUNT(*) AS n FROM workspaces").get()).toEqual({ n: 0 });
+      expect(existsSync(target.path)).toBe(false);
+      expect(JSON.stringify(result)).not.toContain(target.path);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("removes a hosted project when its local immutable receipt cannot persist", async () => {
+    const db = makeDb();
+    const target = tempTarget("hosted-receipt-failure");
+    const fakes = fakeAuthorities();
+    const projects = new FakeCloudProjectAuthority();
+    db.run(`
+      CREATE TRIGGER fail_hosted_project_receipt
+      BEFORE INSERT ON project_registration_receipts
+      WHEN NEW.step_id = 'projects_project'
+      BEGIN
+        SELECT RAISE(ABORT, 'injected hosted project receipt failure');
+      END
+    `);
+    try {
+      const result = await registerFullProject(
+        input("op-hosted-receipt-failure", target.target, { id: "wks_hostedreceipt0001" }),
+        { db, authorities: fakes.authorities, projectStore: projects.asStore() },
+      );
+
+      expect(result.ok).toBe(false);
+      expect(result.outcome).toBe("rolled_back");
+      expect(result.failed_step).toBe("projects_project");
+      expect(projects.creates).toBe(1);
+      expect(projects.deletes).toBe(1);
+      expect(projects.project).toBeNull();
+      expect(db.query("SELECT COUNT(*) AS n FROM workspaces").get()).toEqual({ n: 0 });
+      expect(existsSync(target.path)).toBe(false);
+      expect(JSON.stringify(result)).not.toContain(target.path);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("retrofits an exact existing project row without recreating it and reruns idempotently", async () => {
+    const db = makeDb();
+    const target = tempTarget("retrofit-existing");
+    const fakes = fakeAuthorities();
+    const projectId = "wks_retrofitexisting01";
+    try {
+      const existing = createWorkspace({
+        id: projectId,
+        name: "Fleet Resources",
+        slug: "fleet-resources",
+        kind: "project",
+        primary_path: target.path,
+        integrations: { github_repo: "hasna/projects" },
+        metadata: { owner: "quintilian" },
+        require_exact_identity: true,
+      }, db);
+      const seeded = mutateProjectResourceLinks({
+        project_id: projectId,
+        operation_id: "op-retrofit-existing-link-seed",
+        step_id: "seed-unrelated-contact",
+        mode: "add",
+        expected_revision: existing.updated_at,
+        links: [{
+          authority: "contacts",
+          service_instance: "https://contacts.example.test/v1",
+          source_package: "@hasna/contacts",
+          target_kind: "contact",
+          locator: {
+            kind: "external_uuid",
+            value: "11111111-1111-4111-8111-111111111111",
+          },
+          scope: "resource",
+          labels: { name: "Existing contact" },
+        }],
+        max_items: 32,
+        response_byte_limit: 1_000_000,
+        time_budget_ms: 10_000,
+        source: "system",
+        command: "seed unrelated resource link",
+      }, db);
+      expect(seeded.ok).toBe(true);
+      const seededProject = getWorkspace(projectId, db)!;
+      const request: FullProjectRegistrationInput = {
+        ...input("op-retrofit-existing", target.target, { id: projectId }),
+        mode: "retrofit",
+        expected_project_revision: seededProject.updated_at,
+      };
+
+      const first = await registerFullProject(request, { db, authorities: fakes.authorities });
+      expect(first.ok).toBe(true);
+      expect(first.outcome).toBe("accepted");
+      expect(getWorkspace(projectId, db)?.integrations).toEqual({
+        conversations_channel: "fleet-resources",
+        github_repo: "hasna/projects",
+        todos_project_id: expect.any(String),
+        todos_task_list_id: expect.any(String),
+        mementos_project_id: expect.any(String),
+      });
+      expect(existsSync(join(target.path, PROJECT_REGISTRATION_GOALS_FILENAME))).toBe(true);
+      expect(existsSync(join(target.path, PROJECT_MARKER_FILENAME))).toBe(true);
+      expect(db.query("SELECT COUNT(*) AS n FROM workspaces WHERE id = ?").get(projectId)).toEqual({ n: 1 });
+      expect(db.query(
+        "SELECT COUNT(*) AS n FROM project_resource_links WHERE project_id = ? AND authority = 'contacts'",
+      ).get(projectId)).toEqual({ n: 1 });
+      expect(JSON.stringify(first)).not.toContain(target.path);
+
+      const requestCounts = {
+        todos: fakes.todos.requests.length,
+        mementos: fakes.mementos.requests.length,
+        conversations: fakes.conversations.requests.length,
+      };
+      const second = await registerFullProject(request, { db, authorities: fakes.authorities });
+      expect(second.ok).toBe(true);
+      expect(second.outcome).toBe("duplicate_of_accepted");
+      expect(fakes.todos.requests.length).toBe(requestCounts.todos);
+      expect(fakes.mementos.requests.length).toBe(requestCounts.mementos);
+      expect(fakes.conversations.requests.length).toBe(requestCounts.conversations);
+      expect(db.query("SELECT COUNT(*) AS n FROM workspaces WHERE id = ?").get(projectId)).toEqual({ n: 1 });
+      expect(db.query(
+        "SELECT COUNT(*) AS n FROM project_resource_links WHERE project_id = ? AND authority = 'contacts'",
+      ).get(projectId)).toEqual({ n: 1 });
+    } finally {
+      db.close();
+    }
+  });
+
+  test("preserves unrelated hosted integrations and typed links during accepted retrofit", async () => {
+    const db = makeDb();
+    const target = tempTarget("retrofit-hosted-preserves-unrelated");
+    const fakes = fakeAuthorities();
+    const projects = new FakeCloudProjectAuthority();
+    const projectId = "wks_retrofithosted001";
+    const revision = "2026-08-09T00:00:00.000Z";
+    projects.project = {
+      id: projectId,
+      slug: "fleet-resources",
+      name: "Fleet Resources",
+      description: null,
+      kind: "project",
+      status: "active",
+      root_id: null,
+      recipe_id: null,
+      canonical_machine: null,
+      primary_path: target.path,
+      git_remote: null,
+      s3_bucket: null,
+      s3_prefix: null,
+      tags: [],
+      integrations: { github_repo: "hasna/projects" },
+      metadata: { owner: "quintilian" },
+      last_opened_at: null,
+      created_at: revision,
+      updated_at: revision,
+      synced_at: null,
+    };
+    const contactInput = {
+      authority: "contacts" as const,
+      service_instance: "https://contacts.example.test/v1",
+      source_package: "@hasna/contacts" as const,
+      target_kind: "contact" as const,
+      locator: {
+        kind: "external_uuid" as const,
+        value: "22222222-2222-4222-8222-222222222222",
+      },
+      scope: "resource" as const,
+      labels: { name: "Hosted contact" },
+    };
+    projects.links = [{
+      ...contactInput,
+      id: projectResourceLinkId(projectId, contactInput),
+      project_id: projectId,
+      created_at: revision,
+      updated_at: revision,
+    }];
+    try {
+      const result = await registerFullProject({
+        ...input("op-retrofit-hosted-preserve", target.target, { id: projectId }),
+        mode: "retrofit",
+        expected_project_revision: revision,
+      }, { db, authorities: fakes.authorities, projectStore: projects.asStore() });
+
+      expect(result).toMatchObject({ ok: true, outcome: "accepted" });
+      expect(projects.project?.integrations).toMatchObject({
+        github_repo: "hasna/projects",
+        conversations_channel: "fleet-resources",
+        todos_project_id: expect.any(String),
+        todos_task_list_id: expect.any(String),
+        mementos_project_id: expect.any(String),
+      });
+      expect(projects.links.filter((link) => link.authority === "contacts")).toHaveLength(1);
+      expect(projects.resourceLinkMutations).toHaveLength(1);
+      expect(projects.resourceLinkMutations[0]?.integrations?.github_repo).toBe("hasna/projects");
+      expect(projects.resourceLinkMutations[0]?.links.some((link) =>
+        link.authority === "contacts" && link.target_kind === "contact"
+      )).toBe(true);
+      expect(db.query("SELECT COUNT(*) AS n FROM workspaces").get()).toEqual({ n: 0 });
+      expect(JSON.stringify(result)).not.toContain(target.path);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("guardedly adopts compatible existing authorities, GOALS, and marker under a new retrofit operation", async () => {
+    const db = makeDb();
+    const target = tempTarget("retrofit-compatible-adoption");
+    const fakes = fakeAuthorities();
+    try {
+      const initial = await registerFullProject(
+        input("op-retrofit-compatible-seed", target.target),
+        { db, authorities: fakes.authorities },
+      );
+      expect(initial.ok).toBe(true);
+      const project = getWorkspace(initial.project_id, db)!;
+      fakes.todos.allowExistingAdoption = true;
+      fakes.mementos.allowExistingAdoption = true;
+      fakes.conversations.allowExistingAdoption = true;
+
+      const adopted = await registerFullProject({
+        ...input("op-retrofit-compatible-adopt", target.target, { id: project.id }),
+        mode: "retrofit",
+        expected_project_revision: project.updated_at,
+      }, { db, authorities: fakes.authorities });
+
+      expect(adopted).toMatchObject({ ok: true, outcome: "accepted" });
+      expect(adopted.receipts.find((receipt) => receipt.step_id === "projects_project")?.rollback).toEqual([]);
+      expect(adopted.receipts.find((receipt) => receipt.step_id === "projects_directory")?.rollback).toEqual([]);
+      expect(adopted.receipts.find((receipt) => receipt.step_id === "projects_goals")?.artifacts).toEqual([
+        expect.objectContaining({ adopted: true }),
+      ]);
+      expect(adopted.receipts.find((receipt) => receipt.step_id === "projects_marker")?.artifacts).toEqual([
+        expect.objectContaining({ adopted: true }),
+      ]);
+      expect(db.query("SELECT COUNT(*) AS n FROM workspaces WHERE id = ?").get(project.id)).toEqual({ n: 1 });
+      expect(JSON.stringify(adopted)).not.toContain(target.path);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("refuses a stale retrofit revision before manifests, external calls, or filesystem mutation", async () => {
+    const db = makeDb();
+    const target = tempTarget("retrofit-stale-revision");
+    const fakes = fakeAuthorities();
+    const projectId = "wks_retrofitstale0001";
+    try {
+      createWorkspace({
+        id: projectId,
+        name: "Fleet Resources",
+        slug: "fleet-resources",
+        kind: "project",
+        primary_path: target.path,
+        metadata: { owner: "quintilian" },
+        require_exact_identity: true,
+      }, db);
+      const result = await registerFullProject({
+        ...input("op-retrofit-stale", target.target, { id: projectId }),
+        mode: "retrofit",
+        expected_project_revision: "stale-revision",
+      }, { db, authorities: fakes.authorities });
+
+      expect(result.ok).toBe(false);
+      expect(result.outcome).toBe("no_go");
+      expect(result.reason_code).toBe("retrofit_project_revision_mismatch");
+      expect(fakes.todos.requests).toHaveLength(0);
+      expect(fakes.mementos.requests).toHaveLength(0);
+      expect(fakes.conversations.requests).toHaveLength(0);
+      expect(db.query("SELECT COUNT(*) AS n FROM project_registration_manifests").get()).toEqual({ n: 0 });
+      expect(db.query("SELECT COUNT(*) AS n FROM project_registration_receipts").get()).toEqual({ n: 0 });
+      expect(existsSync(target.path)).toBe(false);
+      expect(JSON.stringify(result)).not.toContain(target.path);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("rolls back every attempted authority when an existing retrofit file conflicts", async () => {
+    const db = makeDb();
+    const target = tempTarget("retrofit-file-conflict");
+    const fakes = fakeAuthorities();
+    const projectId = "wks_retrofitfile00001";
+    mkdirSync(target.path);
+    writeFileSync(join(target.path, PROJECT_REGISTRATION_GOALS_FILENAME), "# Foreign goals\n");
+    try {
+      const existing = createWorkspace({
+        id: projectId,
+        name: "Fleet Resources",
+        slug: "fleet-resources",
+        kind: "project",
+        primary_path: target.path,
+        integrations: { github_repo: "hasna/projects" },
+        metadata: { owner: "quintilian" },
+        require_exact_identity: true,
+      }, db);
+      const seeded = mutateProjectResourceLinks({
+        project_id: projectId,
+        operation_id: "op-retrofit-conflict-link-seed",
+        step_id: "seed-unrelated-contact",
+        mode: "add",
+        expected_revision: existing.updated_at,
+        links: [{
+          authority: "contacts",
+          service_instance: "https://contacts.example.test/v1",
+          source_package: "@hasna/contacts",
+          target_kind: "contact",
+          locator: {
+            kind: "external_uuid",
+            value: "44444444-4444-4444-8444-444444444444",
+          },
+          scope: "resource",
+          labels: { name: "Rollback contact" },
+        }],
+        max_items: 32,
+        response_byte_limit: 1_000_000,
+        time_budget_ms: 10_000,
+        source: "system",
+        command: "seed unrelated rollback resource link",
+      }, db);
+      expect(seeded.ok).toBe(true);
+      const result = await registerFullProject({
+        ...input("op-retrofit-file-conflict", target.target, { id: projectId }),
+        mode: "retrofit",
+        expected_project_revision: getWorkspace(projectId, db)!.updated_at,
+      }, { db, authorities: fakes.authorities });
+
+      expect(result.ok).toBe(false);
+      expect(result.outcome).toBe("rolled_back");
+      expect(result.failed_step).toBe("projects_goals");
+      expect(result.reason_code).toBe("retrofit_existing_file_conflict");
+      expect(fakes.todos.records.size).toBe(0);
+      expect(fakes.mementos.records.size).toBe(0);
+      expect(fakes.conversations.records.size).toBe(0);
+      expect(getWorkspace(projectId, db)?.integrations).toEqual({ github_repo: "hasna/projects" });
+      expect(db.query(
+        "SELECT COUNT(*) AS n FROM project_resource_links WHERE project_id = ? AND authority = 'contacts'",
+      ).get(projectId)).toEqual({ n: 1 });
+      expect(readFileSync(join(target.path, PROJECT_REGISTRATION_GOALS_FILENAME), "utf8"))
+        .toBe("# Foreign goals\n");
+      expect(existsSync(join(target.path, PROJECT_MARKER_FILENAME))).toBe(false);
+      expect(db.query("SELECT COUNT(*) AS n FROM workspaces WHERE id = ?").get(projectId)).toEqual({ n: 1 });
+      expect(JSON.stringify(result)).not.toContain(target.path);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("refuses an unclaimed existing-row retrofit before external or filesystem mutation", async () => {
+    const db = makeDb();
+    const target = tempTarget("retrofit-unclaimed");
+    const fakes = fakeAuthorities();
+    const projectId = "wks_retrofitunclaimed1";
+    mkdirSync(target.path);
+    writeFileSync(join(target.path, "foreign.txt"), "not owned by the project row\n");
+    try {
+      const existing = createWorkspace({
+        id: projectId,
+        name: "Fleet Resources",
+        slug: "fleet-resources",
+        kind: "project",
+        metadata: { owner: "quintilian" },
+        require_exact_identity: true,
+      }, db);
+      const result = await registerFullProject({
+        ...input("op-retrofit-unclaimed", target.target, { id: projectId }),
+        mode: "retrofit",
+        expected_project_revision: existing.updated_at,
+      }, { db, authorities: fakes.authorities });
+
+      expect(result.ok).toBe(false);
+      expect(result.outcome).toBe("no_go");
+      expect(result.failed_step).toBe("projects_project");
+      expect(result.reason_code).toBe("retrofit_primary_path_unclaimed");
+      expect(fakes.todos.requests).toHaveLength(0);
+      expect(fakes.mementos.requests).toHaveLength(0);
+      expect(fakes.conversations.requests).toHaveLength(0);
+      expect(readFileSync(join(target.path, "foreign.txt"), "utf8")).toBe("not owned by the project row\n");
+      expect(existsSync(join(target.path, PROJECT_REGISTRATION_GOALS_FILENAME))).toBe(false);
+      expect(existsSync(join(target.path, PROJECT_MARKER_FILENAME))).toBe(false);
+      expect(db.query("SELECT COUNT(*) AS n FROM project_registration_manifests").get()).toEqual({ n: 0 });
+      expect(db.query("SELECT COUNT(*) AS n FROM project_registration_receipts").get()).toEqual({ n: 0 });
+      expect(JSON.stringify(result)).not.toContain(target.path);
+    } finally {
+      db.close();
+    }
+  });
+
   test("registers every authority, writes GOALS then the final marker, and returns exact stable IDs", async () => {
     const db = makeDb();
     const target = tempTarget("success");
@@ -678,6 +1280,46 @@ describe("full project registration transaction", () => {
         "accepted",
         "duplicate_of_accepted",
       ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("rejects a changed payload under an existing operation id without new writes", async () => {
+    const db = makeDb();
+    const target = tempTarget("operation-payload-conflict");
+    const fakes = fakeAuthorities();
+    try {
+      const request = input("op-payload-conflict", target.target);
+      const first = await registerFullProject(request, { db, authorities: fakes.authorities });
+      expect(first.ok).toBe(true);
+      const counts = {
+        todos: fakes.todos.requests.length,
+        mementos: fakes.mementos.requests.length,
+        conversations: fakes.conversations.requests.length,
+        receipts: (db.query(
+          "SELECT COUNT(*) AS n FROM project_registration_receipts WHERE operation_id = ?",
+        ).get(request.operation_id) as { n: number }).n,
+      };
+
+      const conflict = await registerFullProject({
+        ...request,
+        goals_markdown: "# Different goals\n\n- This payload must not reuse the operation.\n",
+      }, { db, authorities: fakes.authorities });
+
+      expect(conflict.ok).toBe(false);
+      expect(conflict.outcome).toBe("no_go");
+      expect(conflict.failed_step).toBe("registration_manifest");
+      expect(conflict.reason_code).toBe("operation_semantics_conflict");
+      expect(fakes.todos.requests).toHaveLength(counts.todos);
+      expect(fakes.mementos.requests).toHaveLength(counts.mementos);
+      expect(fakes.conversations.requests).toHaveLength(counts.conversations);
+      expect((db.query(
+        "SELECT COUNT(*) AS n FROM project_registration_receipts WHERE operation_id = ?",
+      ).get(request.operation_id) as { n: number }).n).toBe(counts.receipts);
+      expect(readFileSync(join(target.path, PROJECT_REGISTRATION_GOALS_FILENAME), "utf8"))
+        .toBe(request.goals_markdown);
+      expect(JSON.stringify(conflict)).not.toContain(target.path);
     } finally {
       db.close();
     }

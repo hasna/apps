@@ -6,6 +6,23 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.117]
+
+### Fixed
+
+- `projects register-full` now follows the configured hosted Projects authority
+  instead of creating a machine-local shadow project, reconciles ambiguous
+  creates through immutable operation provenance, and conditionally removes
+  only the exact project and directory created by a failed attempt.
+- Existing Projects rows can now be retrofitted only with an exact revision and
+  claimed canonical path. Compatible directories, goals, and markers are
+  adopted without taking rollback ownership, while revision drift, identity
+  conflicts, changed operation payloads, and incompatible files fail closed
+  with zero new residue.
+- Full registration applies compatibility integrations and typed resource links
+  through one guarded authority mutation, validates integration values at the
+  API boundary, and restores the previous revision on later-step failure.
+
 ## [0.1.116]
 
 ### Fixed

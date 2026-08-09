@@ -558,6 +558,91 @@ describe("pg-store typed resource-link transaction model", () => {
     scope: "resource" as const,
     labels: { channel_name: "pg-resource" },
   };
+  const contactLink = {
+    authority: "contacts" as const,
+    service_instance: "https://contacts.example.test/v1",
+    source_package: "@hasna/contacts" as const,
+    target_kind: "contact" as const,
+    locator: {
+      kind: "external_uuid" as const,
+      value: "33333333-3333-4333-8333-333333333333",
+    },
+    scope: "resource" as const,
+    labels: { name: "Existing contact" },
+  };
+
+  test("rejects non-string integration values before any hosted write", async () => {
+    const harness = resourceLinkMutationClient();
+    const before = {
+      workspace: harness.workspace(),
+      links: harness.links(),
+      receipts: harness.receipts(),
+      events: harness.events(),
+    };
+    await expect(new ProjectsPgStore(harness.client).mutateProjectResourceLinks({
+      project_id: harness.workspace().id,
+      operation_id: "pg-invalid-integrations",
+      step_id: "invalid-integrations",
+      mode: "reconcile",
+      expected_revision: harness.workspace().updated_at,
+      links: [channelLink],
+      integrations: { conversations_channel: { nested: true } } as never,
+      max_items: 10,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    })).rejects.toThrow(/integration keys and values must be non-empty strings/);
+    expect({
+      workspace: harness.workspace(),
+      links: harness.links(),
+      receipts: harness.receipts(),
+      events: harness.events(),
+    }).toEqual(before);
+  });
+
+  test("commits a registration-merged snapshot without dropping unrelated hosted state", async () => {
+    const harness = resourceLinkMutationClient();
+    const store = new ProjectsPgStore(harness.client);
+    const seeded = await store.mutateProjectResourceLinks({
+      project_id: harness.workspace().id,
+      operation_id: "pg-registration-preserve-seed",
+      step_id: "seed-contact",
+      mode: "add",
+      expected_revision: harness.workspace().updated_at,
+      links: [contactLink],
+      integrations: { github_repo: "hasna/projects" },
+      max_items: 10,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    });
+    expect(seeded.outcome).toBe("accepted");
+
+    const registered = await store.mutateProjectResourceLinks({
+      project_id: harness.workspace().id,
+      operation_id: "pg-registration-preserve",
+      step_id: "projects-resource-links",
+      mode: "reconcile",
+      expected_revision: harness.workspace().updated_at,
+      links: [contactLink, channelLink],
+      integrations: {
+        github_repo: "hasna/projects",
+        conversations_channel: "pg-resource",
+        todos_project_id: "td_project_pg_resource",
+        todos_task_list_id: "td_task_list_pg_resource",
+        mementos_project_id: "mm_project_pg_resource",
+      },
+      max_items: 10,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    });
+
+    expect(registered.outcome).toBe("accepted");
+    expect(harness.links()).toHaveLength(2);
+    expect(harness.links().some((link) => link.authority === "contacts")).toBe(true);
+    expect(JSON.parse(harness.workspace().integrations)).toMatchObject({
+      github_repo: "hasna/projects",
+      conversations_channel: "pg-resource",
+    });
+  });
 
   test("serializes concurrent revisions and rolls the full transaction back after an injected write fault", async () => {
     const harness = resourceLinkMutationClient();
@@ -570,12 +655,24 @@ describe("pg-store typed resource-link transaction model", () => {
       mode: "add",
       expected_revision: initialRevision,
       links: [channelLink],
+      integrations: {
+        conversations_channel: "pg-resource",
+        todos_project_id: "td_project_pg_resource",
+        todos_task_list_id: "td_task_list_pg_resource",
+        mementos_project_id: "mm_project_pg_resource",
+      },
       max_items: 10,
       response_byte_limit: 100_000,
       time_budget_ms: 5_000,
     });
     expect(accepted.outcome).toBe("accepted");
     expect(harness.links()).toHaveLength(1);
+    expect(JSON.parse(harness.workspace().integrations)).toEqual({
+      conversations_channel: "pg-resource",
+      todos_project_id: "td_project_pg_resource",
+      todos_task_list_id: "td_task_list_pg_resource",
+      mementos_project_id: "mm_project_pg_resource",
+    });
     expect(harness.events()).toHaveLength(1);
 
     const stale = await store.mutateProjectResourceLinks({

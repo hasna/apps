@@ -54,6 +54,7 @@ import {
   listProjectResourceLinks as dbListProjectResourceLinks,
   lookupGuardedWorkspaceMutationReceipt as dbLookupGuardedWorkspaceMutationReceipt,
   mutateProjectResourceLinks as dbMutateProjectResourceLinks,
+  mutateProjectResourceLinksForRegistration as dbMutateProjectResourceLinksForRegistration,
   readProjectResourceLinks as dbReadProjectResourceLinks,
   countWorkspaces as dbCountWorkspaces,
   listWorkspaces as dbListWorkspaces,
@@ -126,7 +127,10 @@ import {
   sha256,
   withResponseControl,
 } from "../lib/guarded-project-mutation.js";
-import { normalizeProjectResourceLinks } from "../lib/project-resource-links.js";
+import {
+  normalizeProjectResourceLinkIntegrations,
+  normalizeProjectResourceLinks,
+} from "../lib/project-resource-links.js";
 import type {
   Agent,
   AgentRun,
@@ -588,7 +592,9 @@ class LocalProjectStore implements ProjectStore {
 
   async mutateProjectResourceLinks(input: ProjectResourceLinkMutationRequest): Promise<ProjectResourceLinkMutationResult> {
     return withLock(input.project_id, { agentId: input.agent_id, source: input.source, command: input.command }, "project resource links mutation", () =>
-      dbMutateProjectResourceLinks(input),
+      input.integrations
+        ? dbMutateProjectResourceLinksForRegistration(input, input.integrations)
+        : dbMutateProjectResourceLinks(input),
     );
   }
 
@@ -1085,7 +1091,12 @@ class ApiProjectStore implements ProjectStore {
 
   async mutateProjectResourceLinks(input: ProjectResourceLinkMutationRequest): Promise<ProjectResourceLinkMutationResult> {
     const normalized = normalizeProjectResourceLinks(input.links);
-    const requestHash = sha256(canonicalJson({ mode: input.mode, links: normalized }));
+    const integrations = normalizeProjectResourceLinkIntegrations(input.integrations);
+    const requestHash = sha256(canonicalJson({
+      mode: input.mode,
+      links: normalized,
+      integrations: integrations ?? null,
+    }));
     const preconditionHash = preconditionDigest({
       project_id: input.project_id,
       expected_revision: input.expected_revision,

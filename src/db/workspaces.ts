@@ -22,6 +22,7 @@ import {
 } from "../lib/guarded-project-mutation.js";
 import {
   normalizeProjectResourceLinks,
+  normalizeProjectResourceLinkIntegrations,
   PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS,
   projectResourceLinkId,
   projectResourceLinkIntegrationProjection,
@@ -1356,11 +1357,18 @@ function mutateProjectResourceLinksInternal(
   const maxItems = input.max_items ?? PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS;
   assertProjectResourceLinkMaxItems(maxItems);
   const normalized = normalizeProjectResourceLinks(input.links);
+  const forcedIntegrations = normalizeProjectResourceLinkIntegrations(
+    options.forced_integrations ?? input.integrations,
+  );
   if (normalized.length > maxItems) {
     throw new Error(`project resource link request exceeds max_items: ${normalized.length} > ${maxItems}`);
   }
   const direction = options.direction ?? "forward";
-  const reqDigest = sha256(canonicalJson({ mode: input.mode, links: normalized }));
+  const reqDigest = sha256(canonicalJson({
+    mode: input.mode,
+    links: normalized,
+    integrations: forcedIntegrations ?? null,
+  }));
   const preDigest = preconditionDigest({ project_id: input.project_id, expected_revision: input.expected_revision });
   const idempotencyKey = deriveGuardedIdempotencyKey({
     operation_id: input.operation_id,
@@ -1477,7 +1485,7 @@ function mutateProjectResourceLinksInternal(
     if (desired.length > maxItems) {
       throw new Error(`project resource link collection exceeds max_items: ${desired.length} > ${maxItems}`);
     }
-    const integrations = options.forced_integrations
+    const integrations = forcedIntegrations
       ?? projectResourceLinkIntegrationProjection(beforeProject.integrations, beforeLinks, desired);
     const previewProject = { ...beforeProject, integrations };
     const preview = projectResourceLinkSnapshot(previewProject, desired);

@@ -597,6 +597,8 @@ export interface ProjectResourceLinkMutationRequest extends GuardedProjectMutati
   mode: ProjectResourceLinkMutationMode;
   expected_revision: string;
   links: ProjectResourceLinkInput[];
+  /** Registration-only exact integrations snapshot committed atomically with the links. */
+  integrations?: WorkspaceIntegrations;
   max_items?: number;
   dry_run?: boolean;
   agent_id?: string;

@@ -237,6 +237,8 @@ async function readBoundedStdinJson(maxBytes = FULL_REGISTRATION_STDIN_LIMIT): P
 
 function parseFullRegistrationPayload(value: unknown): {
   operation_id: string;
+  mode?: "create" | "retrofit";
+  expected_project_revision?: string;
   project: FullProjectRegistrationProjectInput;
   target_path: string;
   goals_markdown: string;
@@ -248,6 +250,12 @@ function parseFullRegistrationPayload(value: unknown): {
   }
   const payload = value as Record<string, unknown>;
   if (typeof payload.operation_id !== "string") throw new Error("register-full operation_id must be a string");
+  if (payload.mode !== undefined && payload.mode !== "create" && payload.mode !== "retrofit") {
+    throw new Error("register-full mode must be create or retrofit");
+  }
+  if (payload.expected_project_revision !== undefined && typeof payload.expected_project_revision !== "string") {
+    throw new Error("register-full expected_project_revision must be a string");
+  }
   if (typeof payload.target_path !== "string") throw new Error("register-full target_path must be a string");
   if (typeof payload.goals_markdown !== "string") throw new Error("register-full goals_markdown must be a string");
   if (!payload.project || typeof payload.project !== "object" || Array.isArray(payload.project)) {
@@ -263,6 +271,8 @@ function parseFullRegistrationPayload(value: unknown): {
   }
   return {
     operation_id: payload.operation_id,
+    mode: payload.mode as "create" | "retrofit" | undefined,
+    expected_project_revision: payload.expected_project_revision as string | undefined,
     project: payload.project as FullProjectRegistrationProjectInput,
     target_path: payload.target_path,
     goals_markdown: payload.goals_markdown,
@@ -1607,6 +1617,8 @@ function registerProjectCommands(program: Command): void {
         const payload = parseFullRegistrationPayload(await readBoundedStdinJson());
         const result = await registerFullProject({
           operation_id: payload.operation_id,
+          mode: payload.mode,
+          expected_project_revision: payload.expected_project_revision,
           project: payload.project,
           target: ProjectRegistrationPathHandle.fromPath(payload.target_path),
           goals_markdown: payload.goals_markdown,
@@ -1614,6 +1626,7 @@ function registerProjectCommands(program: Command): void {
           time_budget_ms: payload.time_budget_ms,
         }, {
           authorities: productionProjectRegistrationAuthorities(),
+          projectStore: resolveProjectStore(),
         });
         if (wantsJson(opts)) {
           printObject(result, opts);
