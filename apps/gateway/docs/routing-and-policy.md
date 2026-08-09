@@ -138,7 +138,16 @@ Request hints under `gateway` can reduce the eligible set or tune scoring:
 
 - `priority`: `cost`, `quality`, `latency`, or `balanced`.
 - `cost_quality_tradeoff`: `0` favors quality, `10` favors cost.
-- `sticky_session_id` or `session_id`: deterministic tie-breaking for repeated conversations.
+- `sticky_session_id` or `session_id`: session affinity. In every routing mode,
+  candidates the mode itself does not distinguish — equal configured price in
+  `cheapest`, candidates a `provider_order` hint leaves unranked in `fallback`
+  and `explicit`, and materially equal weighted scores (within
+  `SESSION_AFFINITY_SCORE_EPSILON`, 0.01 on the 0..1 score scale) in the scored
+  modes — are ordered by a deterministic per-session hash, so repeated requests
+  from one session keep landing on the same candidate. Affinity never overrides
+  a candidate the mode ranks strictly better, is stateless (no session store),
+  and each decision discloses it under `decision.session_affinity`
+  (`session_id_present`, `applied`).
 - `required_capabilities`: capabilities such as `tools`, `json`, `vision`, or `reasoning`.
 - `min_quality` and `min_context_tokens`.
 - `provider_order`, `provider_only`, and `provider_ignore`.

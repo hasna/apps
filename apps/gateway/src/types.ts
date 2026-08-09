@@ -391,6 +391,18 @@ export type GatewayRouteDecision = {
   reason: string;
   attempts: GatewayRouteAttempt[];
   scores?: GatewayRouteScore[];
+  /**
+   * Disclosure that the session-affinity path ran for this decision.
+   * `session_id_present` reports whether the request carried a
+   * `sticky_session_id` / `session_id`; `applied` reports whether affinity
+   * actually ordered a group of tied (or, in scored modes, materially equal)
+   * candidates. Present on every decision so the path is observable in every
+   * shipped routing mode.
+   */
+  session_affinity?: {
+    session_id_present: boolean;
+    applied: boolean;
+  };
 };
 
 export type GatewayRouteCandidate = {

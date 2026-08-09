@@ -466,10 +466,75 @@ function hashString(value: string): number {
   return hash >>> 0;
 }
 
+function affinitySessionId(request: GatewayRoutableRequest): string | undefined {
+  const sessionId =
+    request.gateway?.sticky_session_id ?? request.gateway?.session_id ?? request.session_id;
+  return typeof sessionId === "string" && sessionId.length > 0 ? sessionId : undefined;
+}
+
 function stickyTieBreaker(candidate: GatewayRouteCandidate, request: GatewayRoutableRequest): number {
-  const sessionId = request.gateway?.sticky_session_id ?? request.gateway?.session_id ?? request.session_id;
-  if (!sessionId) return 0;
+  const sessionId = affinitySessionId(request);
+  if (sessionId === undefined) return 0;
   return hashString(`${sessionId}:${candidate.model.id}`) / 0xffffffff;
+}
+
+/**
+ * Score band within which two scored candidates are materially equal for
+ * session affinity. Weighted scores live on a 0..1 scale; a 0.01 band keeps a
+ * session pinned to one of several near-interchangeable candidates (whose
+ * float scores are never EXACTLY equal, which is why the previous
+ * equal-score-only tie-break never fired in practice) without ever overriding
+ * a clear winner.
+ */
+export const SESSION_AFFINITY_SCORE_EPSILON = 0.01;
+
+interface SessionAffinityDisclosure {
+  session_id_present: boolean;
+  applied: boolean;
+}
+
+function affinityKeysEqual(a: number, b: number, epsilon: number): boolean {
+  // Object.is covers the Infinity ranks of provider_order-unranked candidates
+  // and the NaN prices of unpriced candidates, which plain arithmetic cannot.
+  if (Object.is(a, b)) return true;
+  return Math.abs(a - b) <= epsilon;
+}
+
+/**
+ * Orders every group of tied candidates (equal mode key, or within `epsilon`
+ * for scored modes) by a deterministic per-session hash, so a session keeps
+ * landing on the same candidate among interchangeable ones in EVERY shipped
+ * routing mode. Candidates the mode actually distinguishes are never
+ * reordered, and without a session id the input order is returned untouched.
+ */
+function applySessionAffinity(
+  sorted: GatewayRouteCandidate[],
+  request: GatewayRoutableRequest,
+  keyOf: (candidate: GatewayRouteCandidate) => number,
+  epsilon: number,
+): { sorted: GatewayRouteCandidate[]; affinity: SessionAffinityDisclosure } {
+  const sessionId = affinitySessionId(request);
+  if (sessionId === undefined) {
+    return { sorted, affinity: { session_id_present: false, applied: false } };
+  }
+  const result: GatewayRouteCandidate[] = [];
+  let applied = false;
+  let index = 0;
+  while (index < sorted.length) {
+    const leaderKey = keyOf(sorted[index]!);
+    let end = index + 1;
+    while (end < sorted.length && affinityKeysEqual(keyOf(sorted[end]!), leaderKey, epsilon)) {
+      end += 1;
+    }
+    const group = sorted.slice(index, end);
+    if (group.length > 1) {
+      applied = true;
+      group.sort((a, b) => stickyTieBreaker(b, request) - stickyTieBreaker(a, request));
+    }
+    result.push(...group);
+    index = end;
+  }
+  return { sorted: result, affinity: { session_id_present: true, applied } };
 }
 
 function providerOrderScore(candidate: GatewayRouteCandidate, request: GatewayRoutableRequest): number | undefined {
@@ -570,43 +635,61 @@ function sortCandidates(
   candidates: GatewayRouteCandidate[],
   mode: GatewayRoutePolicy["mode"],
   request: GatewayRoutableRequest,
-): { sorted: GatewayRouteCandidate[]; scores?: GatewayRouteScore[] } {
+): {
+  sorted: GatewayRouteCandidate[];
+  scores?: GatewayRouteScore[];
+  affinity: SessionAffinityDisclosure;
+} {
   const indexes = originalIndexMap(candidates);
+  const originalIndex = (candidate: GatewayRouteCandidate): number =>
+    indexes.get(`${candidate.provider.id}:${candidate.model.id}`) ?? 0;
   const byOriginalOrder = (a: GatewayRouteCandidate, b: GatewayRouteCandidate): number =>
-    (indexes.get(`${a.provider.id}:${a.model.id}`) ?? 0) - (indexes.get(`${b.provider.id}:${b.model.id}`) ?? 0);
+    originalIndex(a) - originalIndex(b);
 
   if (mode === "cheapest") {
-    return {
-      sorted: [...candidates].sort((a, b) => configuredTokenPrice(a) - configuredTokenPrice(b) || byOriginalOrder(a, b)),
-    };
+    const sorted = [...candidates].sort(
+      (a, b) => configuredTokenPrice(a) - configuredTokenPrice(b) || byOriginalOrder(a, b),
+    );
+    // Price ties are session-stable; a strictly cheaper candidate always wins.
+    return applySessionAffinity(sorted, request, configuredTokenPrice, 0);
   }
 
   if (mode === "fallback" || mode === "explicit") {
     const order = request.gateway?.provider_order;
-    if (!order?.length) return { sorted: candidates };
-    return {
-      sorted: [...candidates].sort((a, b) => {
-        const aIndex = order.indexOf(a.provider.id);
-        const bIndex = order.indexOf(b.provider.id);
-        const aRank = aIndex < 0 ? Number.POSITIVE_INFINITY : aIndex;
-        const bRank = bIndex < 0 ? Number.POSITIVE_INFINITY : bIndex;
-        return aRank - bRank || byOriginalOrder(a, b);
-      }),
+    if (!order?.length) {
+      // The configured candidate order (fallbackModelIds, alias declaration)
+      // is a deliberate priority chain: every candidate has a distinct rank,
+      // so the affinity pass runs but has no tie to order.
+      return applySessionAffinity(candidates, request, originalIndex, 0);
+    }
+    const rank = (candidate: GatewayRouteCandidate): number => {
+      const index = order.indexOf(candidate.provider.id);
+      return index < 0 ? Number.POSITIVE_INFINITY : index;
     };
+    const sorted = [...candidates].sort((a, b) => rank(a) - rank(b) || byOriginalOrder(a, b));
+    const affinityRank = (candidate: GatewayRouteCandidate): number =>
+      Number.isFinite(rank(candidate)) ? originalIndex(candidate) : Number.POSITIVE_INFINITY;
+    // Only candidates the hint leaves unranked share an Infinity affinity
+    // rank. Ranked candidates each keep their original position, including
+    // ordered fallback models that belong to the same ranked provider.
+    return applySessionAffinity(sorted, request, affinityRank, 0);
   }
 
   const scores = scoreCandidates(candidates, mode, request);
+  const scoreOf = (candidate: GatewayRouteCandidate): number =>
+    scoreFor(candidate, scores)?.score ?? 0;
+  const sorted = [...candidates].sort((a, b) => {
+    const aScore = scoreFor(a, scores);
+    const bScore = scoreFor(b, scores);
+    return (
+      (bScore?.score ?? 0) - (aScore?.score ?? 0) ||
+      (bScore?.components.sticky ?? 0) - (aScore?.components.sticky ?? 0) ||
+      byOriginalOrder(a, b)
+    );
+  });
   return {
     scores,
-    sorted: [...candidates].sort((a, b) => {
-      const aScore = scoreFor(a, scores);
-      const bScore = scoreFor(b, scores);
-      return (
-        (bScore?.score ?? 0) - (aScore?.score ?? 0) ||
-        (bScore?.components.sticky ?? 0) - (aScore?.components.sticky ?? 0) ||
-        byOriginalOrder(a, b)
-      );
-    }),
+    ...applySessionAffinity(sorted, request, scoreOf, SESSION_AFFINITY_SCORE_EPSILON),
   };
 }
 
@@ -660,7 +743,8 @@ export function resolveRoute(
     }
   }
 
-  const { sorted, scores } = sortCandidates(eligible, mode, request);
+  const { sorted, scores, affinity } = sortCandidates(eligible, mode, request);
+  decision.session_affinity = affinity;
   if (scores) decision.scores = scores.sort((a, b) => b.score - a.score);
   if (mode === "cheapest" && sorted.length > 0 && !sorted.some(candidateHasConfiguredPrice)) {
     decision.reason = "no eligible model has configured token price for cheapest routing";
@@ -683,6 +767,9 @@ export function resolveRoute(
           : request.gateway?.provider_order?.length
             ? "first eligible model after provider_order hint"
             : "first eligible model";
+    if (affinity.applied) {
+      decision.reason += "; session affinity ordered materially-equal candidates";
+    }
     return { candidates: sorted, decision };
   }
 
