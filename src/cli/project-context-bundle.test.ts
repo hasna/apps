@@ -8,6 +8,7 @@ import { runMigrations } from "../db/schema.js";
 import { createWorkspace } from "../db/workspaces.js";
 import { computeProjectContextBundleHash } from "../lib/project-context-bundle.js";
 import { testSpawnEnv } from "../testing/spawn-env.js";
+import type { JsonObject } from "../types/workspace.js";
 
 const CLI_PATH = join(process.cwd(), "src/cli/index.ts");
 type ContextBundle = Parameters<typeof computeProjectContextBundleHash>[0];
@@ -42,7 +43,7 @@ function expectedHash(bundle: Record<string, unknown>): string {
   return `sha256:${createHash("sha256").update(stableStringify(allowlisted)).digest("hex")}`;
 }
 
-function fixture(options: { name?: string } = {}) {
+function fixture(options: { name?: string; slug?: string; metadata?: JsonObject } = {}) {
   const root = mkdtempSync(join(tmpdir(), "projects-context-bundle-"));
   const dbPath = join(root, "projects.db");
   const projectPath = join(root, "canonical-project");
@@ -54,9 +55,10 @@ function fixture(options: { name?: string } = {}) {
   const project = createWorkspace({
     id: "wks_context_bundle_fixture",
     name: options.name ?? "Context Bundle Fixture",
-    slug: "context-bundle-fixture",
+    slug: options.slug ?? "context-bundle-fixture",
     kind: "project",
     primary_path: projectPath,
+    metadata: options.metadata,
     integrations: {
       todos_project_id: "todos-project-123",
       todos_task_list_id: "todos-list-456",
@@ -88,7 +90,7 @@ function fixture(options: { name?: string } = {}) {
 }
 
 describe("projects context-bundle", () => {
-  test("emits the strict Instructions v1 bundle for an exact project id", () => {
+  test("emits the strict Instructions v2 bundle for an exact project id", () => {
     const fx = fixture();
     try {
       const result = runProjects(["context-bundle", fx.projectId, "--json"], fx.env);
@@ -112,7 +114,7 @@ describe("projects context-bundle", () => {
         "schema",
         "station",
       ]);
-      expect(bundle.schema).toBe("hasna.projects.project_context_bundle.v1");
+      expect(bundle.schema).toBe("hasna.projects.project_context_bundle.v2");
       expect(bundle.generated_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
       expect(bundle.revision).toBe("2026-08-08T09:10:11.123Z");
       expect(bundle.freshness).toBe("fresh");
@@ -166,6 +168,129 @@ describe("projects context-bundle", () => {
     } finally {
       fx.cleanup();
     }
+  });
+
+  test("exposes the synthetic Monthly Filing finance authority contract on exact-id readback", () => {
+    const fx = fixture({
+      name: "Monthly Filing",
+      slug: "monthly-filing",
+      metadata: {
+        business_area: "finance",
+        jurisdiction: "RO",
+        legal_entities: ["Example Alpha SRL"],
+        fiscal_cycle: "monthly",
+        data_classification: "restricted",
+        retention_policy: "knowledge:finance-retention-v1",
+        ledger_authority: "@hasna/accounting",
+        evidence_store: "@hasna/files",
+        approver: "role:finance-controller",
+        external_recipient_policy: "@hasna/invoices:approved-recipient-only",
+      },
+    });
+    try {
+      const result = runProjects(["context-bundle", fx.projectId, "--json"], fx.env);
+      expect(result.exitCode).toBe(0);
+      expect(text(result.stderr)).toBe("");
+
+      const bundle = JSON.parse(text(result.stdout)) as {
+        schema: string;
+        project: Record<string, unknown>;
+      };
+      expect(bundle.schema).toBe("hasna.projects.project_context_bundle.v2");
+      expect(bundle.project["id"]).toBe(fx.projectId);
+      expect(bundle.project["slug"]).toBe("monthly-filing");
+      expect(bundle.project["finance"]).toEqual({
+        schema: "hasna.projects.finance_project_metadata.v1",
+        business_area: "finance",
+        jurisdiction: "RO",
+        legal_entities: ["Example Alpha SRL"],
+        fiscal_cycle: "monthly",
+        data_classification: "restricted",
+        retention_policy: "knowledge:finance-retention-v1",
+        ledger_authority: "@hasna/accounting",
+        evidence_store: "@hasna/files",
+        approver: "role:finance-controller",
+        external_recipient_policy: "@hasna/invoices:approved-recipient-only",
+      });
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  test("emits generic authority-like metadata without activating finance validation", () => {
+    const fx = fixture({
+      metadata: {
+        approver: "role:release-manager",
+        evidence_store: "shared-project-files",
+        jurisdiction: "global",
+        retention_policy: "standard-project-retention",
+        data_classification: "internal",
+      },
+    });
+    try {
+      const result = runProjects(["context-bundle", fx.projectId, "--json"], fx.env);
+      expect(result.exitCode).toBe(0);
+      expect(text(result.stderr)).toBe("");
+      const bundle = JSON.parse(text(result.stdout)) as {
+        project: Record<string, unknown>;
+      };
+      expect(bundle.project["finance"]).toBeUndefined();
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  test("keeps every accepted boundary finance profile within the bundle byte limit", () => {
+    const fx = fixture({
+      metadata: {
+        business_area: "finance",
+        jurisdiction: "RO",
+        legal_entities: Array.from(
+          { length: 8 },
+          (_, index) => `${String(index).padStart(3, "0")}-${"e".repeat(252)}`,
+        ),
+        fiscal_cycle: "monthly",
+        data_classification: "restricted",
+        retention_policy: `knowledge:${"r".repeat(288)}`,
+        ledger_authority: `authority:${"l".repeat(288)}`,
+        evidence_store: `store:${"e".repeat(292)}`,
+        approver: `role:${"a".repeat(294)}`,
+        external_recipient_policy: `policy:${"p".repeat(292)}`,
+      },
+    });
+    try {
+      const result = runProjects(["context-bundle", fx.projectId, "--json"], fx.env);
+      expect(result.exitCode).toBe(0);
+      expect(text(result.stderr)).toBe("");
+      const bundle = JSON.parse(text(result.stdout)) as {
+        project: { finance: Record<string, unknown> };
+      };
+      expect(Buffer.byteLength(JSON.stringify(bundle.project.finance), "utf8")).toBeGreaterThan(3_800);
+      expect(Buffer.byteLength(text(result.stdout), "utf8")).toBeLessThanOrEqual(8 * 1024);
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  test("rejects the reviewer maximum-size finance profile before context readback", () => {
+    const legalEntities = Array.from(
+      { length: 100 },
+      (_, index) => `${String(index).padStart(3, "0")}-${"x".repeat(252)}`,
+    );
+    expect(() => fixture({
+      metadata: {
+        business_area: "finance",
+        jurisdiction: "RO",
+        legal_entities: legalEntities,
+        fiscal_cycle: "monthly",
+        data_classification: "restricted",
+        retention_policy: "knowledge:finance-retention-v1",
+        ledger_authority: "@hasna/accounting",
+        evidence_store: "@hasna/files",
+        approver: "role:finance-controller",
+        external_recipient_policy: "@hasna/invoices:approved-recipient-only",
+      },
+    })).toThrow(/exceeds .* context budget/i);
   });
 
   test("rejects a slug even when it resolves to the same project", () => {

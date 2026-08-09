@@ -9,6 +9,7 @@ import {
 } from "../db/workspaces.js";
 import type { ProjectStore } from "../store/project-store.js";
 import type { EventSource, JsonObject, Root, Workspace, WorkspaceIntegrations, WorkspaceKind, WorkspaceLock } from "../types/workspace.js";
+import { normalizeProjectMetadata } from "./project-management.js";
 
 export type GitHubVisibility = "public" | "private";
 export type GitHubRemoteProtocol = "https" | "ssh";
@@ -69,6 +70,7 @@ export interface WorkspaceGitHubImportOptions {
   clone?: boolean;
   remoteOnly?: boolean;
   tags?: string[];
+  metadata?: JsonObject;
   kind?: WorkspaceKind;
   visibility?: GitHubVisibility;
   remoteProtocol?: GitHubRemoteProtocol;
@@ -489,11 +491,34 @@ function existingPathSkipReason(plan: WorkspaceGitHubImportResult): string | nul
   return null;
 }
 
-async function reconciledGitHubWorkspace(store: ProjectStore, workspace: Workspace, plan: WorkspaceGitHubImportResult, options: WorkspaceGitHubImportOptions): Promise<Workspace> {
+function githubImportMetadata(
+  plan: WorkspaceGitHubImportResult,
+  metadata: JsonObject,
+  cloned: boolean,
+): JsonObject {
+  return {
+    ...metadata,
+    github_imported: true,
+    github_full_name: plan.full_name,
+    remote_only: plan.remote_only,
+    cloned,
+  };
+}
+
+async function reconciledGitHubWorkspace(
+  store: ProjectStore,
+  workspace: Workspace,
+  plan: WorkspaceGitHubImportResult,
+  options: WorkspaceGitHubImportOptions,
+  metadata: JsonObject,
+): Promise<Workspace> {
   const integrations = { ...workspace.integrations, ...workspaceGithubIntegrations(plan.full_name, plan.url) };
   return store.updateProject(workspace.id, {
     git_remote: workspace.git_remote ?? plan.remote,
     integrations,
+    ...(options.metadata !== undefined
+      ? { metadata: githubImportMetadata(plan, { ...workspace.metadata, ...metadata }, false) }
+      : {}),
     agent_id: options.agent_id,
     source: options.source ?? "cli",
     prompt: options.prompt,
@@ -503,6 +528,7 @@ async function reconciledGitHubWorkspace(store: ProjectStore, workspace: Workspa
 
 export async function importWorkspaceFromGitHub(store: ProjectStore, repoInput: string, options: WorkspaceGitHubImportOptions = {}): Promise<WorkspaceGitHubImportResult> {
   const plan = await planWorkspaceGitHubImport(store, repoInput, options);
+  const metadata = normalizeProjectMetadata(options.metadata);
   if (options.dryRun) return plan;
 
   const locks = await acquireImportLocks(store, githubImportLocks(plan), options.agent_id);
@@ -512,7 +538,7 @@ export async function importWorkspaceFromGitHub(store: ProjectStore, repoInput: 
     const projects = await store.listProjects({ limit: 10000 });
     const existingByIdentity = findExistingGitHubWorkspace(plan, projects);
     if (existingByIdentity) {
-      const workspace = await reconciledGitHubWorkspace(store, existingByIdentity, plan, options);
+      const workspace = await reconciledGitHubWorkspace(store, existingByIdentity, plan, options, metadata);
       return { ...plan, status: "skipped", dry_run: false, workspace, skipped: "github-already-registered" };
     }
     if (plan.path) {
@@ -547,12 +573,7 @@ export async function importWorkspaceFromGitHub(store: ProjectStore, repoInput: 
       git_remote: plan.remote,
       tags: plan.tags,
       integrations: workspaceGithubIntegrations(plan.full_name, plan.url),
-      metadata: {
-        github_imported: true,
-        github_full_name: plan.full_name,
-        remote_only: plan.remote_only,
-        cloned,
-      },
+      metadata: githubImportMetadata(plan, metadata, cloned),
       agent_id: options.agent_id,
       source: options.source ?? "cli",
       prompt: options.prompt,
@@ -633,6 +654,7 @@ export async function syncWorkspaceGitHubRoots(store: ProjectStore, options: Wor
           root: root.id,
           clone: options.clone ?? !dryRun,
           tags: options.tags,
+          metadata: options.metadata,
           kind: options.kind,
           visibility: options.visibility,
           remoteProtocol: options.remoteProtocol,

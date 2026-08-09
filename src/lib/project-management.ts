@@ -14,6 +14,41 @@ export const PROJECT_START_SESSION_POLICIES = ["reuse", "new", "error-if-running
 export type ProjectStartSessionPolicy = (typeof PROJECT_START_SESSION_POLICIES)[number];
 export type ProjectIntegrationUnlinkGroup = "github" | "todos" | "brief" | "canvases" | "mementos" | "conversations" | "files";
 
+export const FINANCE_PROJECT_METADATA_SCHEMA = "hasna.projects.finance_project_metadata.v1" as const;
+export const FINANCE_PROJECT_METADATA_FIELDS = [
+  "business_area",
+  "jurisdiction",
+  "legal_entities",
+  "fiscal_cycle",
+  "data_classification",
+  "retention_policy",
+  "ledger_authority",
+  "evidence_store",
+  "approver",
+  "external_recipient_policy",
+] as const;
+export type FinanceProjectMetadataField = (typeof FINANCE_PROJECT_METADATA_FIELDS)[number];
+
+export const FINANCE_FISCAL_CYCLES = ["monthly", "quarterly", "annual", "event-driven"] as const;
+export type FinanceFiscalCycle = (typeof FINANCE_FISCAL_CYCLES)[number];
+
+export const FINANCE_DATA_CLASSIFICATIONS = ["public", "internal", "confidential", "restricted"] as const;
+export type FinanceDataClassification = (typeof FINANCE_DATA_CLASSIFICATIONS)[number];
+
+export interface FinanceProjectMetadata {
+  schema: typeof FINANCE_PROJECT_METADATA_SCHEMA;
+  business_area: "finance";
+  jurisdiction: string;
+  legal_entities: string[];
+  fiscal_cycle: FinanceFiscalCycle;
+  data_classification: FinanceDataClassification;
+  retention_policy: string;
+  ledger_authority: string;
+  evidence_store: string;
+  approver: string;
+  external_recipient_policy: string;
+}
+
 export const PROJECT_MANAGEMENT_TAXONOMY = {
   stages: PROJECT_STAGES,
   priorities: PROJECT_PRIORITIES,
@@ -21,6 +56,177 @@ export const PROJECT_MANAGEMENT_TAXONOMY = {
   start_session_policies: PROJECT_START_SESSION_POLICIES,
   integration_keys: ["todos_project_id", "todos_task_list_id", "brief_id", "brief_path", "canvases_project_id", "canvases_default_canvas_id"] as const,
 } as const;
+
+const FINANCE_JURISDICTION_PATTERN = /^[A-Z0-9][A-Z0-9._:-]{1,63}$/;
+const FINANCE_METADATA_TEXT_MAX_LENGTH = 512;
+const FINANCE_LEGAL_ENTITY_MAX_LENGTH = 256;
+const FINANCE_LEGAL_ENTITY_MAX_ITEMS = 100;
+const FINANCE_PROJECT_METADATA_CONTEXT_MAX_BYTES = 4 * 1024;
+
+function metadataHasOwn(metadata: JsonObject, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(metadata, key);
+}
+
+function normalizedLowerToken(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase().replace(/[_\s]+/g, "-");
+  return normalized || null;
+}
+
+function hasFinanceProjectMetadataIntent(metadata: JsonObject): boolean {
+  return normalizedLowerToken(metadata["business_area"]) === "finance";
+}
+
+function requiredFinanceMetadataString(metadata: JsonObject, field: FinanceProjectMetadataField): string {
+  const value = metadata[field];
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`Finance project metadata ${field} must be a non-empty string`);
+  }
+  const normalized = value.trim();
+  if (normalized.length > FINANCE_METADATA_TEXT_MAX_LENGTH) {
+    throw new Error(
+      `Finance project metadata ${field} must be at most ${FINANCE_METADATA_TEXT_MAX_LENGTH} characters`,
+    );
+  }
+  return normalized;
+}
+
+function normalizeFinanceLegalEntities(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error("Finance project metadata legal_entities must be a non-empty array of strings");
+  }
+  if (value.length > FINANCE_LEGAL_ENTITY_MAX_ITEMS) {
+    throw new Error(
+      `Finance project metadata legal_entities must contain at most ${FINANCE_LEGAL_ENTITY_MAX_ITEMS} items`,
+    );
+  }
+  const entities: string[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (typeof item !== "string" || !item.trim()) {
+      throw new Error("Finance project metadata legal_entities must be a non-empty array of strings");
+    }
+    const entity = item.trim();
+    if (entity.length > FINANCE_LEGAL_ENTITY_MAX_LENGTH) {
+      throw new Error(
+        `Finance project metadata legal_entities entries must be at most ${FINANCE_LEGAL_ENTITY_MAX_LENGTH} characters`,
+      );
+    }
+    if (seen.has(entity)) continue;
+    seen.add(entity);
+    entities.push(entity);
+  }
+  if (entities.length === 0) {
+    throw new Error("Finance project metadata legal_entities must be a non-empty array of strings");
+  }
+  return entities;
+}
+
+/**
+ * Normalize the authoritative finance-project metadata contract.
+ *
+ * Finance authority is activated only by `business_area: finance`. Generic
+ * projects may use similarly named metadata keys without opting into this
+ * authoritative contract. Tags are intentionally ignored: they remain
+ * free-form discovery labels and cannot establish authority.
+ *
+ * When `existingMetadata` is already finance-authoritative, replacement
+ * metadata must preserve the complete contract rather than silently stripping
+ * it during an update.
+ */
+export function normalizeProjectMetadata(
+  metadata: JsonObject | undefined,
+  existingMetadata?: JsonObject,
+): JsonObject {
+  const next: JsonObject = { ...(metadata ?? {}) };
+  const explicitlyClearsFinance = metadataHasOwn(next, "business_area")
+    && next["business_area"] === null;
+  const isFinance = hasFinanceProjectMetadataIntent(next)
+    || (!explicitlyClearsFinance
+      && existingMetadata
+      ? hasFinanceProjectMetadataIntent(existingMetadata)
+      : false);
+  if (!isFinance) {
+    if (explicitlyClearsFinance) delete next["business_area"];
+    return next;
+  }
+
+  const missing = FINANCE_PROJECT_METADATA_FIELDS.filter((field) => !metadataHasOwn(next, field));
+  if (missing.length > 0) {
+    throw new Error(`Finance project metadata is missing required fields: ${missing.join(", ")}`);
+  }
+
+  const businessArea = normalizedLowerToken(next["business_area"]);
+  if (businessArea !== "finance") {
+    throw new Error('Finance project metadata business_area must be "finance"');
+  }
+
+  const jurisdiction = requiredFinanceMetadataString(next, "jurisdiction").toUpperCase();
+  if (!FINANCE_JURISDICTION_PATTERN.test(jurisdiction)) {
+    throw new Error("Finance project metadata jurisdiction must be a stable 2-64 character identifier");
+  }
+
+  const fiscalCycle = normalizedLowerToken(next["fiscal_cycle"]);
+  if (!fiscalCycle || !FINANCE_FISCAL_CYCLES.includes(fiscalCycle as FinanceFiscalCycle)) {
+    throw new Error(`Finance project metadata fiscal_cycle must be one of: ${FINANCE_FISCAL_CYCLES.join(", ")}`);
+  }
+
+  const classification = normalizedLowerToken(next["data_classification"]);
+  if (
+    !classification
+    || !FINANCE_DATA_CLASSIFICATIONS.includes(classification as FinanceDataClassification)
+  ) {
+    throw new Error(
+      `Finance project metadata data_classification must be one of: ${FINANCE_DATA_CLASSIFICATIONS.join(", ")}`,
+    );
+  }
+
+  const profile: FinanceProjectMetadata = {
+    schema: FINANCE_PROJECT_METADATA_SCHEMA,
+    business_area: "finance",
+    jurisdiction,
+    legal_entities: normalizeFinanceLegalEntities(next["legal_entities"]),
+    fiscal_cycle: fiscalCycle as FinanceFiscalCycle,
+    data_classification: classification as FinanceDataClassification,
+    retention_policy: requiredFinanceMetadataString(next, "retention_policy"),
+    ledger_authority: requiredFinanceMetadataString(next, "ledger_authority"),
+    evidence_store: requiredFinanceMetadataString(next, "evidence_store"),
+    approver: requiredFinanceMetadataString(next, "approver"),
+    external_recipient_policy: requiredFinanceMetadataString(next, "external_recipient_policy"),
+  };
+  const profileBytes = Buffer.byteLength(JSON.stringify(profile), "utf8");
+  if (profileBytes > FINANCE_PROJECT_METADATA_CONTEXT_MAX_BYTES) {
+    throw new Error(
+      `Finance project metadata exceeds ${FINANCE_PROJECT_METADATA_CONTEXT_MAX_BYTES}-byte context budget`,
+    );
+  }
+
+  const { schema: _schema, ...storedProfile } = profile;
+  return {
+    ...next,
+    ...storedProfile,
+  };
+}
+
+export function financeProjectMetadata(
+  project: { metadata: JsonObject; tags?: string[] },
+): FinanceProjectMetadata | null {
+  if (!hasFinanceProjectMetadataIntent(project.metadata)) return null;
+  const normalized = normalizeProjectMetadata(project.metadata);
+  return {
+    schema: FINANCE_PROJECT_METADATA_SCHEMA,
+    business_area: "finance",
+    jurisdiction: normalized["jurisdiction"] as string,
+    legal_entities: normalized["legal_entities"] as string[],
+    fiscal_cycle: normalized["fiscal_cycle"] as FinanceFiscalCycle,
+    data_classification: normalized["data_classification"] as FinanceDataClassification,
+    retention_policy: normalized["retention_policy"] as string,
+    ledger_authority: normalized["ledger_authority"] as string,
+    evidence_store: normalized["evidence_store"] as string,
+    approver: normalized["approver"] as string,
+    external_recipient_policy: normalized["external_recipient_policy"] as string,
+  };
+}
 
 export interface ProjectManagementMetadataInput {
   stage?: string | null;

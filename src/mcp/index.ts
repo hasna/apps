@@ -1331,15 +1331,17 @@ server.tool(
     bulk: z.boolean().optional(),
     dry_run: z.boolean().optional(),
     tags: z.array(z.string()).optional(),
+    metadata: z.record(z.unknown()).optional(),
     agent: z.string().optional(),
   },
   async (input) => {
     try {
       const store = resolveProjectStore();
       const owner = mcpMutationAgent(store, input.agent);
+      const metadata = input.metadata as JsonObject | undefined;
       return jsonProjectText(input.bulk
-        ? await importWorkspaceBulk(store, input.path, { dryRun: input.dry_run, tags: input.tags, agent_id: owner })
-        : await importWorkspace(store, input.path, { dryRun: input.dry_run, tags: input.tags, agent_id: owner }));
+        ? await importWorkspaceBulk(store, input.path, { dryRun: input.dry_run, tags: input.tags, metadata, agent_id: owner })
+        : await importWorkspace(store, input.path, { dryRun: input.dry_run, tags: input.tags, metadata, agent_id: owner }));
     } catch (err) {
       return errorText(`Error: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -1357,6 +1359,7 @@ server.tool(
     remote_only: z.boolean().optional(),
     kind: z.string().optional(),
     tags: z.array(z.string()).optional(),
+    metadata: z.record(z.unknown()).optional(),
     agent: z.string().optional(),
     remote_protocol: z.enum(["https", "ssh"]).optional(),
     dry_run: z.boolean().optional(),
@@ -1372,6 +1375,7 @@ server.tool(
         remoteOnly: input.remote_only,
         kind: input.kind as WorkspaceKind | undefined,
         tags: input.tags,
+        metadata: input.metadata as JsonObject | undefined,
         remoteProtocol: input.remote_protocol as GitHubRemoteProtocol | undefined,
         dryRun: input.dry_run,
         agent_id: owner,

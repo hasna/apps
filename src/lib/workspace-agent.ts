@@ -1754,15 +1754,17 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
         path: z.string().min(1),
         bulk: z.boolean().optional(),
         tags: z.array(z.string()).optional(),
+        metadata: z.record(z.string(), z.unknown()).optional(),
       }),
       execute: async (input) => {
+        const metadata = input.metadata as JsonObject | undefined;
         if (!approve) {
-          if (input.bulk) return projectPayload({ status: "planned", result: await importWorkspaceBulk(store, input.path, { dryRun: true, tags: input.tags, agent_id: actorAgent.id }) });
-          return { status: "planned", preview: await planWorkspaceImport(store, input.path, { tags: input.tags, agent_id: actorAgent.id }) };
+          if (input.bulk) return projectPayload({ status: "planned", result: await importWorkspaceBulk(store, input.path, { dryRun: true, tags: input.tags, metadata, agent_id: actorAgent.id }) });
+          return { status: "planned", preview: await planWorkspaceImport(store, input.path, { tags: input.tags, metadata, agent_id: actorAgent.id }) };
         }
         return projectPayload(input.bulk
-          ? await importWorkspaceBulk(store, input.path, { tags: input.tags, agent_id: actorAgent.id })
-          : await importWorkspace(store, input.path, { tags: input.tags, agent_id: actorAgent.id }));
+          ? await importWorkspaceBulk(store, input.path, { tags: input.tags, metadata, agent_id: actorAgent.id })
+          : await importWorkspace(store, input.path, { tags: input.tags, metadata, agent_id: actorAgent.id }));
       },
     }),
     projects_scan_roots: tool({
@@ -1881,6 +1883,7 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
         remote_only: z.boolean().optional(),
         kind: z.enum(WORKSPACE_KINDS).optional(),
         tags: z.array(z.string()).optional(),
+        metadata: z.record(z.string(), z.unknown()).optional(),
         remote_protocol: z.enum(["https", "ssh"]).optional(),
       }),
       execute: async (input) => projectPayload(await importWorkspaceFromGitHub(store, input.repo, {
@@ -1890,6 +1893,7 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
         remoteOnly: input.remote_only,
         kind: input.kind,
         tags: input.tags,
+        metadata: input.metadata as JsonObject | undefined,
         remoteProtocol: input.remote_protocol as GitHubRemoteProtocol | undefined,
         dryRun: !approve,
         agent_id: actorAgent.id,
