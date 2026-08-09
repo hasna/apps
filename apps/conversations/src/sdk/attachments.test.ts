@@ -17,4 +17,25 @@ describe("ConversationsClient attachment downloads", () => {
     expect(downloaded).toBeInstanceOf(ArrayBuffer);
     expect(new Uint8Array(downloaded)).toEqual(expected);
   });
+
+  test("returns the typed JSON envelope when base64 encoding is requested", async () => {
+    const envelope = {
+      name: "evidence.txt",
+      mime_type: "text/plain",
+      size: 3,
+      content_base64: "YWJj",
+    };
+    const client = new ConversationsClient({
+      baseUrl: "https://example.invalid",
+      fetch: (async () => Response.json(envelope)) as unknown as typeof fetch,
+    });
+
+    const downloaded = await client.downloadMessageAttachment(
+      42,
+      "evidence.txt",
+      { encoding: "base64" },
+    );
+
+    expect(downloaded).toEqual(envelope);
+  });
 });

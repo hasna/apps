@@ -89,7 +89,7 @@ function withBinaryResponses(
     )
     .replace(
       "    const text = await response.text();",
-      '    if (response.ok && opts.responseType === "arrayBuffer") {\n' +
+      '    if (response.ok && opts.responseType === "arrayBuffer" && !response.headers.get("content-type")?.toLowerCase().includes("application/json")) {\n' +
         "      return await response.arrayBuffer() as T;\n" +
         "    }\n" +
         "    const text = await response.text();",
@@ -107,13 +107,47 @@ function withBinaryResponses(
       throw new Error(`Generated SDK method ${operation.functionName} has no closing boundary.`);
     }
     let method = transformed.slice(start, end + "\n    }".length);
+    const signatureEnd = method.indexOf("\n");
+    const returnStart = method.lastIndexOf("): Promise<", signatureEnd);
+    const returnEnd = method.lastIndexOf("> {", signatureEnd);
+    if (returnStart < 0 || returnEnd < returnStart) {
+      throw new Error(`Generated SDK binary operation ${operation.operationId} has no safe return boundary.`);
+    }
+    const generatedReturn = method.slice(
+      returnStart + "): Promise<".length,
+      returnEnd,
+    );
+    const signaturePrefix = method.slice(0, returnStart);
+    const base64Query = 'query?: { "encoding"?: "base64" }';
+    const hasTypedBase64Response = generatedReturn !== "void" &&
+      signaturePrefix.includes(base64Query);
+    const returnType = generatedReturn === "void"
+      ? "ArrayBuffer"
+      : `ArrayBuffer | ${generatedReturn}`;
     method = method
-      .replace("): Promise<void> {", "): Promise<ArrayBuffer> {")
+      .slice(0, returnStart) +
+      `): Promise<${returnType}` +
+      method.slice(returnEnd);
+    if (hasTypedBase64Response) {
+      const jsonSignature = signaturePrefix.replace(
+        base64Query,
+        'query: { "encoding": "base64" }',
+      );
+      const binarySignature = signaturePrefix.replace(
+        base64Query,
+        'query?: { "encoding"?: undefined }',
+      );
+      method =
+        `${jsonSignature}): Promise<${generatedReturn}>;\n` +
+        `${binarySignature}): Promise<ArrayBuffer>;\n` +
+        method;
+    }
+    method = method
       .replace(
         "        init,\n      });",
         '        init,\n        responseType: "arrayBuffer",\n      });',
       );
-    if (!method.includes("Promise<ArrayBuffer>") || !method.includes('responseType: "arrayBuffer"')) {
+    if (!method.includes(`Promise<${returnType}>`) || !method.includes('responseType: "arrayBuffer"')) {
       throw new Error(`Generated SDK binary operation ${operation.operationId} did not transform safely.`);
     }
     transformed = transformed.slice(0, start) + method + transformed.slice(end + "\n    }".length);

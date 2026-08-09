@@ -2,7 +2,7 @@
 // Regenerate: bun run sdk:generate
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: ConversationsClient 0.5.35
+// Source: ConversationsClient 0.5.39
 
 export interface Message { "id"?: number; "uuid"?: string; "session_id"?: string; "from_agent"?: string; "to_agent"?: string; "channel"?: string | null; "project_id"?: string | null; "content"?: string; "priority"?: string; "blocking"?: boolean; "reply_to"?: number | null; "created_at"?: string }
 
@@ -77,7 +77,7 @@ export class ConversationsClient {
       payload = JSON.stringify(opts.body);
     }
     const response = await this.fetchImpl(url.toString(), { ...opts.init, method, headers, body: payload });
-    if (response.ok && opts.responseType === "arrayBuffer") {
+    if (response.ok && opts.responseType === "arrayBuffer" && !response.headers.get("content-type")?.toLowerCase().includes("application/json")) {
       return await response.arrayBuffer() as T;
     }
     const text = await response.text();
@@ -232,10 +232,12 @@ export class ConversationsClient {
     }
 
     /** Download one message attachment */
-    async downloadMessageAttachment(id: number, name: string, init?: RequestInit): Promise<ArrayBuffer> {
+    async downloadMessageAttachment(id: number, name: string, query: { "encoding": "base64" }, init?: RequestInit): Promise<{ "name": string; "mime_type": string; "size": number; "content_base64": string }>;
+    async downloadMessageAttachment(id: number, name: string, query?: { "encoding"?: undefined }, init?: RequestInit): Promise<ArrayBuffer>;
+    async downloadMessageAttachment(id: number, name: string, query?: { "encoding"?: "base64" }, init?: RequestInit): Promise<ArrayBuffer | { "name": string; "mime_type": string; "size": number; "content_base64": string }> {
       return this.request("GET", `/v1/messages/${encodeURIComponent(String(id))}/attachments/${encodeURIComponent(String(name))}`, {
         body: undefined,
-        query: undefined,
+        query,
         init,
         responseType: "arrayBuffer",
       });
