@@ -6,6 +6,32 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.114]
+
+### Fixed
+
+- Project-context bundle hashes now remain stable across generation times by
+  excluding volatile `generated_at` and self-referential `hash` fields from the
+  digest input while preserving durable payload changes. Stable project-context
+  bundle hash: `sha256:7174664168026ee4f3210d10897b18e3677562f33f5de76e671cc98d86764b87`.
+
+## [0.1.113]
+
+### Added
+
+- SQLite project-data consumers can atomically delete exact record and model
+  targets through one package-owned `BEGIN IMMEDIATE` operation on a
+  caller-owned connection. The operation verifies canonical project ownership,
+  affected counts, record-before-empty-model ordering, post-delete state, and
+  rolls back every partial write on mismatch without exposing transaction
+  control to the caller.
+
+### Fixed
+
+- Guarded workspace metadata updates now advance their SQLite `updated_at`
+  revision monotonically even when the wall clock is equal or moves backwards,
+  so stale `expected_revision` tokens are rejected deterministically.
+
 ## [0.1.112]
 
 ### Fixed
