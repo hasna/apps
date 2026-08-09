@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { mintApiKey } from "@hasna/contracts/auth";
+import Ajv2020 from "ajv/dist/2020.js";
 import { createFetchHandler } from "./app.js";
 import { NotFoundError, ProjectsPgStore, ValidationError } from "./pg-store.js";
 import type {
@@ -86,7 +87,13 @@ function fakeStore(): ProjectsPgStore {
 }
 
 function handler(store = fakeStore()) {
-  return createFetchHandler({ store, version: "9.9.9", app: "projects", signingSecret: SIGNING_SECRET });
+  return createFetchHandler({
+    store,
+    version: "9.9.9",
+    app: "projects",
+    signingSecret: SIGNING_SECRET,
+    allowUnregisteredKeys: true,
+  });
 }
 
 function contactRouteFixture() {
@@ -105,26 +112,41 @@ function contactRouteFixture() {
 
   const readProjectResourceLinks = async (
     input: { project_id: string; max_items?: number },
-  ): Promise<ProjectResourceLinkReadResult> => ({
-    ok: true,
-    project_id: input.project_id,
-    project: { ...project, updated_at: revision },
-    current_revision: revision,
-    links,
-    link_count: links.length,
-    max_items: input.max_items ?? 1000,
-    collection_digest: `digest-${links.length}-${revision}`,
-    complete: true,
-    truncated: false,
-    response_control: {
-      response_byte_limit: 100_000,
-      time_budget_ms: 5_000,
-      response_bytes: 1_000,
-      elapsed_ms: 1,
+  ): Promise<ProjectResourceLinkReadResult> => {
+    const maxItems = input.max_items ?? 1000;
+    const collectionDigest = `digest-${links.length}-${revision}`;
+    return {
+      ok: true,
+      project_id: input.project_id,
+      project: { ...project, updated_at: revision },
+      current_revision: revision,
+      links,
+      link_count: links.length,
+      max_items: maxItems,
+      collection_digest: collectionDigest,
       complete: true,
       truncated: false,
-    },
-  });
+      contract: {
+        schema: "hasna.project_resource_link_collection.v1",
+        project_id: input.project_id,
+        current_revision: revision,
+        links,
+        link_count: links.length,
+        max_items: maxItems,
+        collection_digest: collectionDigest,
+        complete: true,
+        truncated: false,
+      },
+      response_control: {
+        response_byte_limit: 100_000,
+        time_budget_ms: 5_000,
+        response_bytes: 1_000,
+        elapsed_ms: 1,
+        complete: true,
+        truncated: false,
+      },
+    };
+  };
 
   const store = {
     ...fakeStore(),
@@ -233,6 +255,7 @@ function contactRouteFixture() {
       version: "9.9.9",
       app: "projects",
       signingSecret: SIGNING_SECRET,
+      allowUnregisteredKeys: true,
     }),
   };
 }
@@ -324,6 +347,14 @@ describe("projects-serve probes", () => {
     expect(spec.paths["/v1/projects/{id}/resource-links/add"].post.operationId).toBe("addProjectResourceLinks");
     expect(spec.paths["/v1/projects/{id}/resource-links/reconcile"].post.operationId).toBe("reconcileProjectResourceLinks");
     expect(spec.paths["/v1/projects/{id}/resource-links/rollback"].post.operationId).toBe("rollbackProjectResourceLinks");
+    expect(spec.paths["/v1/projects/{id}/resource-link-migrations/plan"].post.operationId)
+      .toBe("planProjectResourceLinkMigration");
+    expect(spec.paths["/v1/projects/{id}/resource-link-migrations/{manifestId}"].get.operationId)
+      .toBe("readProjectResourceLinkMigration");
+    expect(spec.paths["/v1/projects/{id}/resource-link-migrations/{manifestId}/advance"].post.operationId)
+      .toBe("advanceProjectResourceLinkMigration");
+    expect(spec.paths["/v1/projects/{id}/resource-link-migrations/{manifestId}/rollback"].post.operationId)
+      .toBe("rollbackProjectResourceLinkMigration");
     expect(spec.paths["/v1/projects/{id}/contacts"].get.operationId).toBe("listProjectContacts");
     expect(spec.paths["/v1/projects/{id}/contacts/{contact_id}/attach"].post.operationId)
       .toBe("attachProjectContact");
@@ -338,7 +369,7 @@ describe("projects-serve probes", () => {
     expect(spec.components.schemas.GuardedProjectRead.required).toContain("project");
     expect(spec.components.schemas.GuardedProjectRead.required).toContain("resource_links");
     const resourceLinkBranches = spec.components.schemas.ProjectResourceLinkInput.oneOf;
-    expect(resourceLinkBranches).toHaveLength(7);
+    expect(resourceLinkBranches).toHaveLength(8);
     const todosTaskBranch = resourceLinkBranches.find((branch: any) => (
       branch.properties.authority.enum[0] === "todos" && branch.properties.target_kind.enum.includes("task")
     ));
@@ -358,6 +389,59 @@ describe("projects-serve probes", () => {
     });
     expect(resourceLinkBranches.filter((branch: any) => branch.properties.target_kind.enum.includes("task")))
       .toEqual([todosTaskBranch]);
+    const conversationsProjectBranch = resourceLinkBranches.find((branch: any) => (
+      branch.properties.authority.enum[0] === "conversations"
+      && branch.properties.target_kind.enum.includes("project")
+    ));
+    const conversationsChannelBranch = resourceLinkBranches.find((branch: any) => (
+      branch.properties.authority.enum[0] === "conversations"
+      && branch.properties.target_kind.enum.includes("channel")
+    ));
+    expect(conversationsProjectBranch.properties.locator).toEqual({
+      $ref: "#/components/schemas/ProjectResourcePortableLocator",
+    });
+    expect(conversationsChannelBranch.properties.locator).toEqual({
+      $ref: "#/components/schemas/ProjectResourceConversationsChannelLinkLocator",
+    });
+    expect(conversationsChannelBranch.properties.labels).toEqual({
+      $ref: "#/components/schemas/ProjectResourceConversationsChannelLabels",
+    });
+    expect(spec.components.schemas.ProjectResourceLinkRead.required).toContain("contract");
+    expect(spec.components.schemas.ProjectResourceLinkCollectionV1.properties.schema.enum)
+      .toEqual(["hasna.project_resource_link_collection.v1"]);
+
+    const validatePersistedResourceLink = new Ajv2020({
+      strict: false,
+      allErrors: true,
+    }).compile({
+      $ref: "#/components/schemas/ProjectResourceLink",
+      components: spec.components,
+    });
+    const persistedResourceLink = {
+      id: "prl_http_resource",
+      project_id: "wks_httpresource0001",
+      authority: "conversations",
+      service_instance: "urn:hasna:conversations:test",
+      source_package: "@hasna/conversations",
+      target_kind: "channel",
+      locator: {
+        kind: "conversations_channel_id",
+        value: "chn_79fa9c68937a1d020d6031dcaa3dd8d7",
+      },
+      scope: "resource",
+      labels: { channel_name: "http-resource" },
+      created_at: "2026-08-08 00:00:00.000",
+      updated_at: "2026-08-08 00:00:00.000",
+    };
+    expect(validatePersistedResourceLink(persistedResourceLink)).toBe(true);
+    expect(validatePersistedResourceLink({
+      ...persistedResourceLink,
+      caller_forged_field: true,
+    })).toBe(false);
+    expect(validatePersistedResourceLink({
+      ...persistedResourceLink,
+      locator: { kind: "conversations_channel_id", value: "chn_partial" },
+    })).toBe(false);
 
     const locatorBranches = spec.components.schemas.ProjectResourceLinkLocator.oneOf;
     expect(locatorBranches).toEqual([
@@ -598,7 +682,7 @@ describe("projects-serve auth", () => {
         };
       },
     } as unknown as ProjectsPgStore;
-    const h = createFetchHandler({ store, version: "9.9.9", app: "projects", signingSecret: SIGNING_SECRET });
+    const h = createFetchHandler({ store, version: "9.9.9", app: "projects", signingSecret: SIGNING_SECRET, allowUnregisteredKeys: true });
     const token = keyWith(["projects:*"]);
     const res = await h(
       new Request("http://x/v1/projects/wks_httpguarded0001/guarded-metadata", {
@@ -670,7 +754,7 @@ describe("projects-serve auth", () => {
         };
       },
     } as unknown as ProjectsPgStore;
-    const h = createFetchHandler({ store, version: "9.9.9", app: "projects", signingSecret: SIGNING_SECRET });
+    const h = createFetchHandler({ store, version: "9.9.9", app: "projects", signingSecret: SIGNING_SECRET, allowUnregisteredKeys: true });
     const token = keyWith(["projects:read"]);
     const query = new URLSearchParams({
       operation_id: "project-rename-wks_httpguarded0001-20260807",
@@ -730,7 +814,7 @@ describe("projects-serve auth", () => {
           throw new ValidationError(message);
         },
       } as unknown as ProjectsPgStore;
-      const h = createFetchHandler({ store, version: "9.9.9", app: "projects", signingSecret: SIGNING_SECRET });
+      const h = createFetchHandler({ store, version: "9.9.9", app: "projects", signingSecret: SIGNING_SECRET, allowUnregisteredKeys: true });
       const query = new URLSearchParams({
         operation_id: "op-http",
         step_id: "rename",
@@ -790,7 +874,7 @@ describe("projects-serve auth", () => {
         };
       },
     } as unknown as ProjectsPgStore;
-    const h = createFetchHandler({ store, version: "9.9.9", app: "projects", signingSecret: SIGNING_SECRET });
+    const h = createFetchHandler({ store, version: "9.9.9", app: "projects", signingSecret: SIGNING_SECRET, allowUnregisteredKeys: true });
     const token = keyWith(["projects:read"]);
     const res = await h(new Request(
       `http://x/v1/projects/${projectId}/guarded-metadata?response_byte_limit=16384&time_budget_ms=5000`,
@@ -867,7 +951,7 @@ describe("projects-serve auth", () => {
         };
       },
     } as unknown as ProjectsPgStore;
-    const h = createFetchHandler({ store, version: "9.9.9", app: "projects", signingSecret: SIGNING_SECRET });
+    const h = createFetchHandler({ store, version: "9.9.9", app: "projects", signingSecret: SIGNING_SECRET, allowUnregisteredKeys: true });
     const token = keyWith(["projects:*"]);
     const body = {
       operation_id: "project-rollback-wks_httpguarded0001-20260807",
@@ -942,6 +1026,17 @@ describe("projects-serve auth", () => {
           collection_digest: "digest",
           complete: true,
           truncated: false,
+          contract: {
+            schema: "hasna.project_resource_link_collection.v1",
+            project_id: projectId,
+            current_revision: project.updated_at,
+            links: [link],
+            link_count: 1,
+            max_items: input.max_items,
+            collection_digest: "digest",
+            complete: true,
+            truncated: false,
+          },
           response_control: responseControl,
         };
       },
@@ -984,7 +1079,7 @@ describe("projects-serve auth", () => {
         };
       },
     } as unknown as ProjectsPgStore;
-    const h = createFetchHandler({ store, version: "9.9.9", app: "projects", signingSecret: SIGNING_SECRET });
+    const h = createFetchHandler({ store, version: "9.9.9", app: "projects", signingSecret: SIGNING_SECRET, allowUnregisteredKeys: true });
     const readToken = keyWith(["projects:read"]);
     const writeToken = keyWith(["projects:*"]);
 
@@ -1061,6 +1156,186 @@ describe("projects-serve auth", () => {
     ]);
   });
 
+  test("resource-link migration routes preserve exact project, manifest, CAS, and rollback evidence", async () => {
+    const projectId = "wks_eHb1kcLUzgQVJQt6L0CCB";
+    const manifestId = `prlm_${"a".repeat(36)}`;
+    const calls: Array<{ operation: string; input: Record<string, unknown> }> = [];
+    const responseControl = {
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+      response_bytes: 1,
+      elapsed_ms: 0,
+      complete: true,
+      truncated: false,
+    };
+    const manifest = {
+      schema: "projects.project_resource_link_migration_manifest.v1",
+      manifest_id: manifestId,
+      project_id: projectId,
+      operation_id: "http-migration",
+      step_id: "links",
+      state: "planned",
+      expected_project_revision: "revision-1",
+      desired_collection_digest: "b".repeat(64),
+      links: [],
+      projects_forward_receipt_id: null,
+      projects_inverse_receipt_id: null,
+      projects_reference_proof: null,
+      last_verified_projects_revision: null,
+      last_verified_projects_digest: null,
+      transition_version: 1,
+      created_at: "2026-08-08T00:00:00.000Z",
+      updated_at: "2026-08-08T00:00:00.000Z",
+    };
+    const result = () => ({
+      ok: true,
+      outcome: "accepted",
+      manifest,
+      events: [],
+      response_control: responseControl,
+    });
+    const store = {
+      async ping() {
+        return true;
+      },
+      async planProjectResourceLinkMigration(input: Record<string, unknown>) {
+        calls.push({ operation: "plan", input });
+        return result();
+      },
+      async readProjectResourceLinkMigration(input: Record<string, unknown>) {
+        calls.push({ operation: "read", input });
+        return {
+          ...result(),
+          response_control: {
+            ...responseControl,
+            complete: false,
+            truncated: true,
+          },
+        };
+      },
+      async advanceProjectResourceLinkMigration(input: Record<string, unknown>) {
+        calls.push({ operation: "advance", input });
+        return result();
+      },
+      async rollbackProjectResourceLinkMigration(input: Record<string, unknown>) {
+        calls.push({ operation: "rollback", input });
+        return result();
+      },
+    } as unknown as ProjectsPgStore;
+    const h = createFetchHandler({
+      store,
+      version: "9.9.9",
+      app: "projects",
+      signingSecret: SIGNING_SECRET,
+      allowUnregisteredKeys: true,
+    });
+    const readToken = keyWith(["projects:read"]);
+    const writeToken = keyWith(["projects:*"]);
+    const planBody = {
+      project_id: "must-be-overridden",
+      operation_id: "http-migration",
+      step_id: "links",
+      expected_project_revision: "revision-1",
+      links: [],
+      max_items: 10,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    };
+    const plan = await h(new Request(
+      `http://x/v1/projects/${projectId}/resource-link-migrations/plan`,
+      {
+        method: "POST",
+        headers: { "x-api-key": writeToken, "content-type": "application/json" },
+        body: JSON.stringify(planBody),
+      },
+    ));
+    expect(plan.status).toBe(200);
+
+    const read = await h(new Request(
+      `http://x/v1/projects/${projectId}/resource-link-migrations/${manifestId}?max_items=10&response_byte_limit=100000&time_budget_ms=5000`,
+      { headers: { "x-api-key": readToken } },
+    ));
+    expect(read.status).toBe(200);
+    expect(await read.json()).toMatchObject({
+      response_control: {
+        complete: false,
+        truncated: true,
+      },
+    });
+
+    const advanceBody = {
+      project_id: "must-be-overridden",
+      manifest_id: "must-be-overridden",
+      expected_transition_version: 1,
+      next_state: "producer_applied",
+      max_items: 10,
+      producer_evidence: [],
+      evidence: { producer: "readback" },
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    };
+    const advance = await h(new Request(
+      `http://x/v1/projects/${projectId}/resource-link-migrations/${manifestId}/advance`,
+      {
+        method: "POST",
+        headers: { "x-api-key": writeToken, "content-type": "application/json" },
+        body: JSON.stringify(advanceBody),
+      },
+    ));
+    expect(advance.status).toBe(200);
+
+    const rollbackBody = {
+      project_id: "must-be-overridden",
+      manifest_id: "must-be-overridden",
+      expected_transition_version: 2,
+      max_items: 10,
+      producer_outcome: "pending",
+      producer_evidence: [{
+        created_by_operation: true,
+        forward_receipt_id: "producer-forward-receipt",
+        child_link_receipt_ids: [],
+        target_revision: "producer-revision-2",
+        target_digest: "producer-digest-2",
+        inverse_verified: true,
+        inverse_outcome: "complete",
+      }],
+      evidence: { projects_references: "checked" },
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    };
+    const rollback = await h(new Request(
+      `http://x/v1/projects/${projectId}/resource-link-migrations/${manifestId}/rollback`,
+      {
+        method: "POST",
+        headers: { "x-api-key": writeToken, "content-type": "application/json" },
+        body: JSON.stringify(rollbackBody),
+      },
+    ));
+    expect(rollback.status).toBe(200);
+
+    expect(calls).toEqual([
+      { operation: "plan", input: { ...planBody, project_id: projectId } },
+      {
+        operation: "read",
+        input: {
+          project_id: projectId,
+          manifest_id: manifestId,
+          max_items: 10,
+          response_byte_limit: 100_000,
+          time_budget_ms: 5_000,
+        },
+      },
+      {
+        operation: "advance",
+        input: { ...advanceBody, project_id: projectId, manifest_id: manifestId },
+      },
+      {
+        operation: "rollback",
+        input: { ...rollbackBody, project_id: projectId, manifest_id: manifestId },
+      },
+    ]);
+  });
+
   test("Authorization: Bearer scheme is accepted", async () => {
     const token = keyWith(["projects:read"]);
     const res = await handler()(
@@ -1096,7 +1371,7 @@ describe("projects-serve list envelope (truncation must be detectable)", () => {
         return rows.length;
       },
     } as unknown as ProjectsPgStore;
-    return createFetchHandler({ store, version: "9.9.9", app: "projects", signingSecret: SIGNING_SECRET });
+    return createFetchHandler({ store, version: "9.9.9", app: "projects", signingSecret: SIGNING_SECRET, allowUnregisteredKeys: true });
   }
 
   test("a capped page reports total and has_more, not just count", async () => {

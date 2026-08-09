@@ -18,8 +18,14 @@ function text(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("utf-8");
 }
 
+const CLI_PROCESS_TEST_TIMEOUT_MS = 30_000;
+
+function cliProcessTest(name: string, fn: () => void | Promise<void>): void {
+  test(name, fn, CLI_PROCESS_TEST_TIMEOUT_MS);
+}
+
 describe("project agent CLI", () => {
-  test("runs a quoted prompt through the mock agent and creates a project when approved", () => {
+  cliProcessTest("runs a quoted prompt through the mock agent and creates a project when approved", () => {
     const root = mkdtempSync(join(tmpdir(), "workspace-agent-cli-"));
     const dbPath = join(root, "projects.db");
     const targetPath = join(root, "agent-smoke");
@@ -54,7 +60,7 @@ describe("project agent CLI", () => {
     expect(shown.events.some((event) => event.source === "agent" && event.event_type === "created")).toBe(true);
   });
 
-  test("plans a prompt without --yes and does not create the target directory", () => {
+  cliProcessTest("plans a prompt without --yes and does not create the target directory", () => {
     const root = mkdtempSync(join(tmpdir(), "workspace-agent-plan-"));
     const dbPath = join(root, "projects.db");
     const targetPath = join(root, "planned-only");
@@ -72,7 +78,7 @@ describe("project agent CLI", () => {
     expect(existsSync(targetPath)).toBe(false);
   });
 
-  test("prompt mode reports an existing project instead of creating a duplicate", () => {
+  cliProcessTest("prompt mode reports an existing project instead of creating a duplicate", () => {
     const root = mkdtempSync(join(tmpdir(), "workspace-agent-duplicate-"));
     const dbPath = join(root, "projects.db");
     const targetPath = join(root, "existing-security");
@@ -116,7 +122,7 @@ describe("project agent CLI", () => {
     expect(rows.filter((row) => row.slug === "existing-security")).toHaveLength(1);
   });
 
-  test("prompt mode can plan starting an existing project with a selected tool", () => {
+  cliProcessTest("prompt mode can plan starting an existing project with a selected tool", () => {
     const root = mkdtempSync(join(tmpdir(), "project-agent-start-"));
     const dbPath = join(root, "projects.db");
     const targetPath = join(root, "startable-project");
@@ -152,7 +158,7 @@ describe("project agent CLI", () => {
     expect(payload.text).toContain("Planned start");
   });
 
-  test("prompt flags constrain root, recipe, actor agent, and tmux planning", () => {
+  cliProcessTest("prompt flags constrain root, recipe, actor agent, and tmux planning", () => {
     const root = mkdtempSync(join(tmpdir(), "workspace-agent-flags-"));
     const dbPath = join(root, "projects.db");
     const rootPath = join(root, "registered-root");
@@ -250,7 +256,7 @@ describe("project agent CLI", () => {
     expect(shown.events.some((event) => event.agent_id === actor.id && event.command?.includes("--no-tmux"))).toBe(true);
   });
 
-  test("prompt mode validates loop limits and records provider failures", () => {
+  cliProcessTest("prompt mode validates loop limits and records provider failures", () => {
     const root = mkdtempSync(join(tmpdir(), "workspace-agent-policy-"));
     const dbPath = join(root, "projects.db");
     const env = { HASNA_PROJECTS_DB_PATH: dbPath };
@@ -275,7 +281,7 @@ describe("project agent CLI", () => {
     db.close();
   });
 
-  test("projects create exposes runtime dry-run for directories and tmux windows", () => {
+  cliProcessTest("projects create exposes runtime dry-run for directories and tmux windows", () => {
     const root = mkdtempSync(join(tmpdir(), "workspace-runtime-cli-"));
     const dbPath = join(root, "projects.db");
     const targetPath = join(root, "runtime-app");
@@ -315,7 +321,7 @@ describe("project agent CLI", () => {
     expect(existsSync(targetPath)).toBe(false);
   });
 
-  test("projects create --dry-run returns a no-write deterministic plan", () => {
+  cliProcessTest("projects create --dry-run returns a no-write deterministic plan", () => {
     const root = mkdtempSync(join(tmpdir(), "workspace-create-plan-cli-"));
     const dbPath = join(root, "projects.db");
     const targetPath = join(root, "planned-create-app");
@@ -363,7 +369,7 @@ describe("project agent CLI", () => {
     expect(JSON.parse(text(list.stdout))).toHaveLength(0);
   });
 
-  test("projects create can write marker and doctor validates it", () => {
+  cliProcessTest("projects create can write marker and doctor validates it", () => {
     const root = mkdtempSync(join(tmpdir(), "project-marker-cli-"));
     const dbPath = join(root, "projects.db");
     const targetPath = join(root, "marker-app");
@@ -390,7 +396,7 @@ describe("project agent CLI", () => {
     expect(rows[0]!.checks.some((check) => check.code === "WORKSPACE_MARKER_OK")).toBe(true);
   });
 
-  test("projects cleanup-create previews and applies rollback records", () => {
+  cliProcessTest("projects cleanup-create previews and applies rollback records", () => {
     const root = mkdtempSync(join(tmpdir(), "workspace-cleanup-cli-"));
     const dbPath = join(root, "projects.db");
     const targetPath = join(root, "cleanup-app");
@@ -428,7 +434,7 @@ describe("project agent CLI", () => {
     expect(JSON.parse(text(list.stdout))).toHaveLength(0);
   });
 
-  test("projects update, archive, unarchive, delete, and query list replace project metadata flows", () => {
+  cliProcessTest("projects update, archive, unarchive, delete, and query list replace project metadata flows", () => {
     const root = mkdtempSync(join(tmpdir(), "workspace-metadata-cli-"));
     const dbPath = join(root, "projects.db");
     const targetPath = join(root, "metadata-app");
@@ -481,7 +487,7 @@ describe("project agent CLI", () => {
     expect(deleted.project.status).toBe("deleted");
   });
 
-  test("projects import, locks, and tmux profile apply support JSON dry-run flows", () => {
+  cliProcessTest("projects import, locks, and tmux profile apply support JSON dry-run flows", () => {
     const root = mkdtempSync(join(tmpdir(), "workspace-extra-cli-"));
     const dbPath = join(root, "projects.db");
     const importDir = join(root, "existing-app");
@@ -539,7 +545,7 @@ describe("project agent CLI", () => {
     expect(JSON.parse(text(releaseMutation.stdout)).released).toBe(true);
   });
 
-  test("projects GitHub dry-runs and integration links use project metadata", () => {
+  cliProcessTest("projects GitHub dry-runs and integration links use project metadata", () => {
     const root = mkdtempSync(join(tmpdir(), "workspace-github-cli-"));
     const dbPath = join(root, "projects.db");
     const rootPath = join(root, "registered-root");
@@ -595,17 +601,23 @@ describe("project agent CLI", () => {
       project.slug,
       "--github-url",
       "https://github.com/hasna/github-app",
-      "--todos-project-id",
-      "todo_123",
       "--json",
     ], env);
     expect(link.exitCode).toBe(0);
     const linked = JSON.parse(text(link.stdout)) as { integrations: Record<string, string> };
     expect(linked.integrations.github_url).toBe("https://github.com/hasna/github-app");
-    expect(linked.integrations.todos_project_id).toBe("todo_123");
+    const rejectedLegacyLink = runProjects([
+      "link",
+      project.slug,
+      "--todos-project-id",
+      "todo_123",
+      "--json",
+    ], env);
+    expect(rejectedLegacyLink.exitCode).toBe(1);
+    expect(text(rejectedLegacyLink.stderr)).toContain("must be changed through resource-links");
   });
 
-  test("projects agent-eval scores prompt cases in mock mode", () => {
+  cliProcessTest("projects agent-eval scores prompt cases in mock mode", () => {
     const root = mkdtempSync(join(tmpdir(), "workspace-agent-eval-cli-"));
     const dbPath = join(root, "projects.db");
     const env = {

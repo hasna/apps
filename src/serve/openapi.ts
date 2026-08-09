@@ -35,7 +35,8 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
     authority: string,
     sourcePackage: string,
     targetKinds: readonly string[],
-    locator: Record<string, unknown> = ref("ProjectResourceLinkLocator"),
+    locator: Record<string, unknown> = ref("ProjectResourcePortableLocator"),
+    labels: Record<string, unknown> = ref("ProjectResourceLinkLabels"),
   ) => ({
     type: "object",
     additionalProperties: false,
@@ -46,10 +47,37 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
       target_kind: { type: "string", enum: targetKinds },
       locator,
       scope: { type: "string", enum: ["resource", "collection"] },
-      labels: ref("ProjectResourceLinkLabels"),
+      labels,
     },
     required: ["authority", "service_instance", "source_package", "target_kind", "locator", "scope"],
   });
+  const projectResourceLinkBranch = (
+    authority: string,
+    sourcePackage: string,
+    targetKinds: readonly string[],
+    locator: Record<string, unknown> = ref("ProjectResourcePortableLocator"),
+    labels: Record<string, unknown> = ref("ProjectResourceLinkLabels"),
+  ) => {
+    const input = projectResourceLinkInputBranch(
+      authority,
+      sourcePackage,
+      targetKinds,
+      locator,
+      labels,
+    );
+    return {
+      ...input,
+      properties: {
+        ...input.properties,
+        id: { type: "string" },
+        project_id: { type: "string" },
+        labels,
+        created_at: { type: "string" },
+        updated_at: { type: "string" },
+      },
+      required: [...input.required, "id", "project_id", "labels", "created_at", "updated_at"],
+    };
+  };
 
   return {
     openapi: "3.1.0",
@@ -315,6 +343,17 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
             tags: { type: "array", items: { type: "string" } },
           },
         },
+        ProjectResourceConversationsChannelLabels: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            name: { type: "string" },
+            channel_name: { type: "string" },
+            path: { type: "string" },
+            tags: { type: "array", items: { type: "string" } },
+          },
+          required: ["channel_name"],
+        },
         ProjectResourceExternalUuidLocator: {
           type: "object",
           additionalProperties: false,
@@ -349,6 +388,18 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
             ref("ProjectResourceConversationsChannelLocator"),
           ],
         },
+        ProjectResourcePortableLocator: {
+          oneOf: [
+            ref("ProjectResourceExternalUuidLocator"),
+            ref("ProjectResourceCanonicalUriLocator"),
+          ],
+        },
+        ProjectResourceConversationsChannelLinkLocator: {
+          oneOf: [
+            ref("ProjectResourceExternalUuidLocator"),
+            ref("ProjectResourceConversationsChannelLocator"),
+          ],
+        },
         ProjectResourceLinkInput: {
           oneOf: [
             projectResourceLinkInputBranch("todos", "@hasna/todos", ["project", "task_list", "plan"]),
@@ -358,7 +409,14 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
               ["task"],
               ref("ProjectResourceExternalUuidLocator"),
             ),
-            projectResourceLinkInputBranch("conversations", "@hasna/conversations", ["project", "channel"]),
+            projectResourceLinkInputBranch("conversations", "@hasna/conversations", ["project"]),
+            projectResourceLinkInputBranch(
+              "conversations",
+              "@hasna/conversations",
+              ["channel"],
+              ref("ProjectResourceConversationsChannelLinkLocator"),
+              ref("ProjectResourceConversationsChannelLabels"),
+            ),
             projectResourceLinkInputBranch("knowledge", "@hasna/knowledge", ["collection", "item"]),
             projectResourceLinkInputBranch("mementos", "@hasna/mementos", ["project", "item"]),
             projectResourceLinkInputBranch("orgs", "@hasna/orgs", ["org", "project"]),
@@ -371,19 +429,50 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
           ],
         },
         ProjectResourceLink: {
-          allOf: [
-            ref("ProjectResourceLinkInput"),
-            {
-              type: "object",
-              properties: {
-                id: { type: "string" },
-                project_id: { type: "string" },
-                labels: ref("ProjectResourceLinkLabels"),
-                created_at: { type: "string" },
-                updated_at: { type: "string" },
-              },
-              required: ["id", "project_id", "labels", "created_at", "updated_at"],
-            },
+          oneOf: [
+            projectResourceLinkBranch("todos", "@hasna/todos", ["project", "task_list", "plan"]),
+            projectResourceLinkBranch(
+              "todos",
+              "@hasna/todos",
+              ["task"],
+              ref("ProjectResourceExternalUuidLocator"),
+            ),
+            projectResourceLinkBranch("conversations", "@hasna/conversations", ["project"]),
+            projectResourceLinkBranch(
+              "conversations",
+              "@hasna/conversations",
+              ["channel"],
+              ref("ProjectResourceConversationsChannelLinkLocator"),
+              ref("ProjectResourceConversationsChannelLabels"),
+            ),
+            projectResourceLinkBranch("knowledge", "@hasna/knowledge", ["collection", "item"]),
+            projectResourceLinkBranch("mementos", "@hasna/mementos", ["project", "item"]),
+            projectResourceLinkBranch("orgs", "@hasna/orgs", ["org", "project"]),
+            projectResourceLinkBranch(
+              "contacts",
+              "@hasna/contacts",
+              ["contact"],
+              ref("ProjectResourceExternalUuidLocator"),
+            ),
+          ],
+        },
+        ProjectResourceLinkCollectionV1: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            schema: { type: "string", enum: ["hasna.project_resource_link_collection.v1"] },
+            project_id: { type: "string" },
+            current_revision: { type: "string" },
+            links: { type: "array", items: ref("ProjectResourceLink") },
+            link_count: { type: "integer", minimum: 0 },
+            max_items: { type: "integer", minimum: 1 },
+            collection_digest: { type: "string" },
+            complete: { type: "boolean", enum: [true] },
+            truncated: { type: "boolean", enum: [false] },
+          },
+          required: [
+            "schema", "project_id", "current_revision", "links", "link_count",
+            "max_items", "collection_digest", "complete", "truncated",
           ],
         },
         ProjectResourceLinkSnapshot: {
@@ -408,11 +497,12 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
             collection_digest: { type: "string" },
             complete: { type: "boolean", const: true },
             truncated: { type: "boolean", const: false },
+            contract: ref("ProjectResourceLinkCollectionV1"),
             response_control: ref("GuardedResponseControl"),
           },
           required: [
             "ok", "project_id", "project", "current_revision", "links", "link_count",
-            "max_items", "collection_digest", "complete", "truncated", "response_control",
+            "max_items", "collection_digest", "complete", "truncated", "contract", "response_control",
           ],
         },
         ProjectResourceLinkMutationRequest: {
@@ -555,6 +645,244 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
             "operation_id", "step_id", "accepted_receipt_id", "expected_current_revision",
             "response_byte_limit", "time_budget_ms",
           ],
+        },
+        ProjectResourceLinkProducerBinding: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            authority_id: { type: "string" },
+            tenant_id: { type: "string" },
+            corpus_id: { anyOf: [{ type: "string" }, { type: "null" }] },
+            capability_digest: { type: "string" },
+          },
+          required: ["authority_id", "tenant_id", "corpus_id", "capability_digest"],
+        },
+        ProjectResourceLinkProducerEvidence: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            created_by_operation: { type: "boolean" },
+            forward_receipt_id: { anyOf: [{ type: "string" }, { type: "null" }] },
+            child_link_receipt_ids: { type: "array", items: { type: "string" } },
+            target_revision: { type: "string" },
+            target_digest: { type: "string" },
+            inverse_verified: { anyOf: [{ type: "boolean" }, { type: "null" }] },
+            inverse_outcome: { anyOf: [{ type: "string" }, { type: "null" }] },
+          },
+          required: [
+            "created_by_operation", "forward_receipt_id", "child_link_receipt_ids",
+            "target_revision", "target_digest", "inverse_verified", "inverse_outcome",
+          ],
+        },
+        ProjectResourceLinkMigrationItemInput: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            link: ref("ProjectResourceLinkInput"),
+            producer_resource_kind: { type: "string" },
+            producer_binding: ref("ProjectResourceLinkProducerBinding"),
+          },
+          required: ["link", "producer_resource_kind", "producer_binding"],
+        },
+        ProjectResourceLinkMigrationItem: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            link: ref("ProjectResourceLinkInput"),
+            link_id: { type: "string", pattern: "^prl_" },
+            producer_resource_kind: { type: "string" },
+            producer_binding: ref("ProjectResourceLinkProducerBinding"),
+            producer_evidence: {
+              anyOf: [ref("ProjectResourceLinkProducerEvidence"), { type: "null" }],
+            },
+          },
+          required: [
+            "link", "link_id", "producer_resource_kind", "producer_binding", "producer_evidence",
+          ],
+        },
+        ProjectResourceLinkProjectsReferenceProof: {
+          oneOf: [
+            {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                kind: { type: "string", enum: ["accepted_inverse"] },
+                forward_receipt_id: { type: "string" },
+                inverse_receipt_id: { type: "string" },
+                verified_revision: { type: "string" },
+                collection_digest: { type: "string" },
+                link_ids_checked: { type: "array", items: { type: "string" } },
+                complete: { type: "boolean", enum: [true] },
+                truncated: { type: "boolean", enum: [false] },
+                request_digest: { type: "string" },
+                precondition_digest: { type: "string" },
+              },
+              required: [
+                "kind", "forward_receipt_id", "inverse_receipt_id", "verified_revision",
+                "collection_digest", "link_ids_checked", "complete", "truncated",
+                "request_digest", "precondition_digest",
+              ],
+            },
+            {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                kind: { type: "string", enum: ["no_projects_write"] },
+                verified_revision: { type: "string" },
+                collection_digest: { type: "string" },
+                link_ids_checked: { type: "array", items: { type: "string" } },
+                complete: { type: "boolean", enum: [true] },
+                truncated: { type: "boolean", enum: [false] },
+                request_digest: { type: "string" },
+                precondition_digest: { type: "string" },
+              },
+              required: [
+                "kind", "verified_revision", "collection_digest", "link_ids_checked",
+                "complete", "truncated", "request_digest", "precondition_digest",
+              ],
+            },
+          ],
+        },
+        ProjectResourceLinkMigrationManifestV1: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            schema: { type: "string", enum: ["projects.project_resource_link_migration_manifest.v1"] },
+            manifest_id: { type: "string", pattern: "^prlm_" },
+            project_id: { type: "string" },
+            operation_id: { type: "string" },
+            step_id: { type: "string" },
+            state: {
+              type: "string",
+              enum: [
+                "planned", "producer_applied", "projects_applied", "verified",
+                "rollback_in_progress", "rolled_back", "retained_target", "failed_reconcilable",
+              ],
+            },
+            expected_project_revision: { type: "string" },
+            desired_collection_digest: { type: "string" },
+            links: { type: "array", items: ref("ProjectResourceLinkMigrationItem") },
+            projects_forward_receipt_id: { anyOf: [{ type: "string" }, { type: "null" }] },
+            projects_inverse_receipt_id: { anyOf: [{ type: "string" }, { type: "null" }] },
+            projects_reference_proof: {
+              anyOf: [ref("ProjectResourceLinkProjectsReferenceProof"), { type: "null" }],
+            },
+            last_verified_projects_revision: { anyOf: [{ type: "string" }, { type: "null" }] },
+            last_verified_projects_digest: { anyOf: [{ type: "string" }, { type: "null" }] },
+            transition_version: { type: "integer", minimum: 1 },
+            created_at: { type: "string" },
+            updated_at: { type: "string" },
+          },
+          required: [
+            "schema", "manifest_id", "project_id", "operation_id", "step_id", "state",
+            "expected_project_revision", "desired_collection_digest", "links",
+            "projects_forward_receipt_id", "projects_inverse_receipt_id",
+            "projects_reference_proof", "last_verified_projects_revision",
+            "last_verified_projects_digest", "transition_version", "created_at", "updated_at",
+          ],
+        },
+        ProjectResourceLinkMigrationEvent: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            event_id: { type: "string", pattern: "^prlme_" },
+            manifest_id: { type: "string", pattern: "^prlm_" },
+            transition_version: { type: "integer", minimum: 1 },
+            from_state: { anyOf: [{ type: "string" }, { type: "null" }] },
+            to_state: { type: "string" },
+            request_digest: { type: "string" },
+            precondition_digest: { type: "string" },
+            evidence: { type: "object", additionalProperties: true },
+            created_at: { type: "string" },
+          },
+          required: [
+            "event_id", "manifest_id", "transition_version", "from_state", "to_state",
+            "request_digest", "precondition_digest", "evidence", "created_at",
+          ],
+        },
+        ProjectResourceLinkMigrationPlanRequest: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            operation_id: { type: "string" },
+            step_id: { type: "string" },
+            expected_project_revision: { type: "string" },
+            links: { type: "array", items: ref("ProjectResourceLinkMigrationItemInput") },
+            max_items: { type: "integer", minimum: 1 },
+            response_byte_limit: { type: "integer", minimum: 1 },
+            time_budget_ms: { type: "integer", minimum: 1 },
+          },
+          required: [
+            "operation_id", "step_id", "expected_project_revision", "links",
+            "response_byte_limit", "time_budget_ms",
+          ],
+        },
+        ProjectResourceLinkMigrationAdvanceRequest: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            expected_transition_version: { type: "integer", minimum: 1 },
+            next_state: {
+              type: "string",
+              enum: ["producer_applied", "projects_applied", "verified", "failed_reconcilable"],
+            },
+            max_items: { type: "integer", minimum: 1 },
+            producer_evidence: {
+              type: "array",
+              items: ref("ProjectResourceLinkProducerEvidence"),
+            },
+            projects_forward_receipt_id: { type: "string" },
+            last_verified_projects_revision: { type: "string" },
+            last_verified_projects_digest: { type: "string" },
+            evidence: { type: "object", additionalProperties: true },
+            response_byte_limit: { type: "integer", minimum: 1 },
+            time_budget_ms: { type: "integer", minimum: 1 },
+          },
+          required: [
+            "expected_transition_version", "next_state", "evidence",
+            "response_byte_limit", "time_budget_ms",
+          ],
+        },
+        ProjectResourceLinkMigrationRollbackRequest: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            expected_transition_version: { type: "integer", minimum: 1 },
+            max_items: { type: "integer", minimum: 1 },
+            producer_outcome: {
+              type: "string",
+              enum: ["pending", "complete", "retained_target", "failed_reconcilable"],
+            },
+            producer_evidence: {
+              type: "array",
+              items: ref("ProjectResourceLinkProducerEvidence"),
+            },
+            evidence: { type: "object", additionalProperties: true },
+            agent_id: { type: "string" },
+            source: { type: "string" },
+            command: { type: "string" },
+            response_byte_limit: { type: "integer", minimum: 1 },
+            time_budget_ms: { type: "integer", minimum: 1 },
+          },
+          required: [
+            "expected_transition_version", "producer_outcome", "evidence",
+            "response_byte_limit", "time_budget_ms",
+          ],
+        },
+        ProjectResourceLinkMigrationResult: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ok: { type: "boolean" },
+            outcome: {
+              type: "string",
+              enum: ["accepted", "duplicate_of_accepted", "terminal_nonacceptance"],
+            },
+            manifest: ref("ProjectResourceLinkMigrationManifestV1"),
+            events: { type: "array", items: ref("ProjectResourceLinkMigrationEvent") },
+            response_control: ref("GuardedResponseControl"),
+          },
+          required: ["ok", "outcome", "manifest", "events", "response_control"],
         },
         GuardedProjectMutationReceipt: {
           type: "object",
@@ -925,6 +1253,69 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
           responses: {
             "200": jsonResp("ProjectResourceLinkMutationResult"),
             "400": jsonResp("Error", "Invalid receipt, revision, digest, or bound"),
+            "404": jsonResp("Error", "Not found"),
+          },
+        },
+      },
+      "/v1/projects/{id}/resource-link-migrations/plan": {
+        post: {
+          operationId: "planProjectResourceLinkMigration",
+          summary: "Persist a durable resource-link migration manifest before any authority write",
+          parameters: [EXACT_PROJECT_ID_PARAM],
+          requestBody: jsonBody("ProjectResourceLinkMigrationPlanRequest"),
+          responses: {
+            "200": jsonResp("ProjectResourceLinkMigrationResult"),
+            "400": jsonResp("Error", "Invalid link, authority binding, revision, or bound"),
+            "404": jsonResp("Error", "Not found"),
+          },
+        },
+      },
+      "/v1/projects/{id}/resource-link-migrations/{manifestId}": {
+        get: {
+          operationId: "readProjectResourceLinkMigration",
+          summary: "Read one durable migration manifest and its complete immutable event history",
+          parameters: [
+            EXACT_PROJECT_ID_PARAM,
+            { name: "manifestId", in: "path", required: true, schema: { type: "string", pattern: "^prlm_" } },
+            { name: "max_items", in: "query", required: true, schema: { type: "integer", minimum: 1 } },
+            { name: "response_byte_limit", in: "query", required: true, schema: { type: "integer", minimum: 1 } },
+            { name: "time_budget_ms", in: "query", required: true, schema: { type: "integer", minimum: 1 } },
+          ],
+          responses: {
+            "200": jsonResp("ProjectResourceLinkMigrationResult"),
+            "400": jsonResp("Error", "Invalid manifest target or bound"),
+            "404": jsonResp("Error", "Not found"),
+          },
+        },
+      },
+      "/v1/projects/{id}/resource-link-migrations/{manifestId}/advance": {
+        post: {
+          operationId: "advanceProjectResourceLinkMigration",
+          summary: "CAS-advance a manifest after reconciling exact producer or Projects evidence",
+          parameters: [
+            EXACT_PROJECT_ID_PARAM,
+            { name: "manifestId", in: "path", required: true, schema: { type: "string", pattern: "^prlm_" } },
+          ],
+          requestBody: jsonBody("ProjectResourceLinkMigrationAdvanceRequest"),
+          responses: {
+            "200": jsonResp("ProjectResourceLinkMigrationResult"),
+            "400": jsonResp("Error", "Invalid transition, receipt, readback, or bound"),
+            "404": jsonResp("Error", "Not found"),
+          },
+        },
+      },
+      "/v1/projects/{id}/resource-link-migrations/{manifestId}/rollback": {
+        post: {
+          operationId: "rollbackProjectResourceLinkMigration",
+          summary: "Remove Projects references first, persist proof, then record producer rollback outcome",
+          parameters: [
+            EXACT_PROJECT_ID_PARAM,
+            { name: "manifestId", in: "path", required: true, schema: { type: "string", pattern: "^prlm_" } },
+          ],
+          requestBody: jsonBody("ProjectResourceLinkMigrationRollbackRequest"),
+          responses: {
+            "200": jsonResp("ProjectResourceLinkMigrationResult"),
+            "400": jsonResp("Error", "Ambiguous state, failed reference proof, stale transition, or bound"),
             "404": jsonResp("Error", "Not found"),
           },
         },

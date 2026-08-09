@@ -16,6 +16,11 @@ import { __resetProjectStore } from "../store/project-store.js";
 import type { Root, WorkspaceKind } from "../types/workspace.js";
 
 const CLI_PATH = join(process.cwd(), "src/cli/index.ts");
+const CLI_PROCESS_TEST_TIMEOUT_MS = 30_000;
+
+function cliProcessTest(name: string, fn: () => void | Promise<void>): void {
+  test(name, fn, CLI_PROCESS_TEST_TIMEOUT_MS);
+}
 
 function runProjects(args: string[], env: Record<string, string> = {}, cwd = process.cwd()) {
   return Bun.spawnSync({
@@ -351,7 +356,157 @@ describe("project-first CLI surface", () => {
     }
   });
 
-  test("prompt flags cannot hijack delete dispatch and delete requires a target", () => {
+  test("resource-link migration CLI preserves producer proof and event bounds in api mode", async () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-resource-link-migration-"));
+    const port = reserveFreePort();
+    const projectId = "wks_climigrationproof01";
+    const manifestId = `prlm_${"c".repeat(36)}`;
+    const requests: Array<{
+      method: string;
+      path: string;
+      query: string;
+      body: Record<string, unknown> | null;
+    }> = [];
+    let state = "planned";
+    let transitionVersion = 1;
+    const response = () => ({
+      ok: true,
+      outcome: "accepted",
+      manifest: {
+        schema: "projects.project_resource_link_migration_manifest.v1",
+        manifest_id: manifestId,
+        project_id: projectId,
+        operation_id: "cli-migration",
+        step_id: "links",
+        state,
+        expected_project_revision: "revision-1",
+        desired_collection_digest: "d".repeat(64),
+        links: [],
+        projects_forward_receipt_id: null,
+        projects_inverse_receipt_id: null,
+        projects_reference_proof: null,
+        last_verified_projects_revision: null,
+        last_verified_projects_digest: null,
+        transition_version: transitionVersion,
+        created_at: "2026-08-08T00:00:00.000Z",
+        updated_at: "2026-08-08T00:00:00.000Z",
+      },
+      events: [],
+      response_control: {
+        response_byte_limit: 100_000,
+        time_budget_ms: 5_000,
+        response_bytes: 1,
+        elapsed_ms: 0,
+        complete: true,
+        truncated: false,
+      },
+    });
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port,
+      async fetch(req) {
+        const url = new URL(req.url);
+        let body: Record<string, unknown> | null = null;
+        try { body = (await req.json()) as Record<string, unknown>; } catch { body = null; }
+        requests.push({
+          method: req.method,
+          path: url.pathname,
+          query: url.search,
+          body,
+        });
+        if (req.method === "POST" && url.pathname.endsWith("/advance")) {
+          state = String(body?.next_state);
+          transitionVersion = Number(body?.expected_transition_version) + 1;
+          return Response.json(response());
+        }
+        if (req.method === "POST" && url.pathname.endsWith("/rollback")) {
+          state = body?.producer_outcome === "complete" ? "rolled_back" : "rollback_in_progress";
+          transitionVersion = Number(body?.expected_transition_version) + 1;
+          return Response.json(response());
+        }
+        if (req.method === "GET") return Response.json(response());
+        return Response.json({ error: "Not found" }, { status: 404 });
+      },
+    });
+    const env = {
+      HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
+      HASNA_PROJECTS_HOME: join(root, "home"),
+      HASNA_PROJECTS_API_URL: `http://127.0.0.1:${port}`,
+      HASNA_PROJECTS_API_KEY: "test-key",
+    };
+    const forwardProof = [{
+      created_by_operation: true,
+      forward_receipt_id: "producer-forward-receipt",
+      child_link_receipt_ids: [],
+      target_revision: "producer-revision-2",
+      target_digest: "producer-digest-2",
+      inverse_verified: null,
+      inverse_outcome: null,
+    }];
+    const inverseProof = [{
+      ...forwardProof[0]!,
+      target_revision: "producer-revision-3",
+      target_digest: "producer-digest-3",
+      inverse_verified: true,
+      inverse_outcome: "complete",
+    }];
+    try {
+      const advance = await runProjectsAsync([
+        "resource-link-migration-advance",
+        projectId,
+        "--manifest-id", manifestId,
+        "--expected-transition-version", "1",
+        "--next-state", "producer_applied",
+        "--producer-evidence-json", JSON.stringify(forwardProof),
+        "--evidence-json", JSON.stringify({ producer: "readback" }),
+        "--max-items", "7",
+        "--response-byte-limit", "100000",
+        "--time-budget-ms", "5000",
+        "--json",
+      ], env);
+      expect(advance.exitCode).toBe(0);
+
+      const rollback = await runProjectsAsync([
+        "resource-link-migration-rollback",
+        projectId,
+        "--manifest-id", manifestId,
+        "--expected-transition-version", "2",
+        "--producer-outcome", "complete",
+        "--producer-evidence-json", JSON.stringify(inverseProof),
+        "--evidence-json", JSON.stringify({ producer_inverse: "verified" }),
+        "--max-items", "5",
+        "--response-byte-limit", "100000",
+        "--time-budget-ms", "5000",
+        "--json",
+      ], env);
+      expect(rollback.exitCode).toBe(0);
+
+      const writes = requests.filter((request) => request.method === "POST");
+      expect(writes).toHaveLength(2);
+      expect(writes[0]?.body).toMatchObject({
+        project_id: projectId,
+        manifest_id: manifestId,
+        max_items: 7,
+        producer_evidence: forwardProof,
+      });
+      expect(writes[1]?.body).toMatchObject({
+        project_id: projectId,
+        manifest_id: manifestId,
+        max_items: 5,
+        producer_evidence: inverseProof,
+      });
+      const reads = requests.filter((request) => request.method === "GET");
+      expect(reads.map((request) => request.query)).toEqual([
+        "?max_items=7&response_byte_limit=100000&time_budget_ms=5000",
+        "?max_items=5&response_byte_limit=100000&time_budget_ms=5000",
+      ]);
+    } finally {
+      server.stop(true);
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  cliProcessTest("prompt flags cannot hijack delete dispatch and delete requires a target", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-delete-dispatch-"));
     const env = {
       HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
@@ -389,7 +544,7 @@ describe("project-first CLI surface", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
-  test("reports serve defaults to loopback and keeps existing project registry semantics", async () => {
+  cliProcessTest("reports serve defaults to loopback and keeps existing project registry semantics", async () => {
     const root = mkdtempSync(join(tmpdir(), "projects-reports-serve-"));
     const env = {
       HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
@@ -597,7 +752,7 @@ describe("project-first CLI surface", () => {
     expect(pkg.files).toContain("docs");
   });
 
-  test("agent-assist CLI commands emit JSON, agent text, and run detail by default", () => {
+  cliProcessTest("agent-assist CLI commands emit JSON, agent text, and run detail by default", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-agent-assist-"));
     const dbPath = join(root, "projects.db");
     const env = { HASNA_PROJECTS_DB_PATH: dbPath };
@@ -652,7 +807,7 @@ describe("project-first CLI surface", () => {
     expect(showText).toContain("tool calls (1):");
   });
 
-  test("top-level create, list, and show use project-first JSON", () => {
+  cliProcessTest("top-level create, list, and show use project-first JSON", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-surface-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
     const targetPath = join(root, "surface-app");
@@ -697,7 +852,7 @@ describe("project-first CLI surface", () => {
     expect((JSON.parse(text(get.stdout)) as { project?: { slug: string } }).project?.slug).toBe("surface-app");
   });
 
-  test("guarded-read returns a bounded exact-id revision envelope and rejects non-id targets", () => {
+  cliProcessTest("guarded-read returns a bounded exact-id revision envelope and rejects non-id targets", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-guarded-read-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
     const targetPath = join(root, "guarded-read-app");
@@ -781,7 +936,7 @@ describe("project-first CLI surface", () => {
     }
   });
 
-  test("typed resource links add, retry, reconcile, read back, and roll back through the CLI", () => {
+  cliProcessTest("typed resource links add, retry, reconcile, read back, and roll back through the CLI", async () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-resource-links-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
     const channelLink = {
@@ -834,7 +989,7 @@ describe("project-first CLI surface", () => {
     };
 
     try {
-      const create = runProjects([
+      const create = await runWorkspaceCommandInProcess([
         "create",
         "--name",
         "Typed Links",
@@ -897,7 +1052,7 @@ describe("project-first CLI surface", () => {
         "5000",
         "--json",
       ];
-      const add = runProjects(addArgs, env);
+      const add = await runWorkspaceCommandInProcess(addArgs, env);
       expect(add.exitCode).toBe(0);
       const added = JSON.parse(text(add.stdout)) as {
         outcome: string;
@@ -916,11 +1071,11 @@ describe("project-first CLI surface", () => {
         todos_task_list_id: "urn:hasna:todos:task-list:typed-links",
       });
 
-      const duplicate = runProjects(addArgs, env);
+      const duplicate = await runWorkspaceCommandInProcess(addArgs, env);
       expect(duplicate.exitCode).toBe(0);
       expect((JSON.parse(text(duplicate.stdout)) as { outcome: string }).outcome).toBe("duplicate_of_accepted");
 
-      const read = runProjects([
+      const read = await runWorkspaceCommandInProcess([
         "resource-links-read",
         created.project.id,
         "--max-items",
@@ -942,7 +1097,7 @@ describe("project-first CLI surface", () => {
         ...channelLink,
         labels: { channel_name: "typed-links-renamed" },
       };
-      const reconcile = runProjects([
+      const reconcile = await runWorkspaceCommandInProcess([
         "resource-links-reconcile",
         created.project.id,
         "--links-json",
@@ -976,7 +1131,7 @@ describe("project-first CLI surface", () => {
         conversations_channel: "typed-links-renamed",
       });
 
-      const rollback = runProjects([
+      const rollback = await runWorkspaceCommandInProcess([
         "resource-links-rollback",
         created.project.id,
         "--accepted-receipt-id",
@@ -1008,7 +1163,7 @@ describe("project-first CLI surface", () => {
         todos_task_list_id: "urn:hasna:todos:task-list:typed-links",
       });
 
-      const guarded = runProjects([
+      const guarded = await runWorkspaceCommandInProcess([
         "guarded-read",
         created.project.id,
         "--resource-link-max-items",
@@ -1209,7 +1364,7 @@ describe("project-first CLI surface", () => {
     }
   }, 30000);
 
-  test("guarded-update exposes exact integrations through the guarded contract", () => {
+  test("guarded-update rejects independent writes to typed resource-link compatibility scalars", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-guarded-integrations-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
     try {
@@ -1245,18 +1400,15 @@ describe("project-first CLI surface", () => {
         "5000",
         "--json",
       ], env);
-      expect(update.exitCode).toBe(0);
-      const payload = JSON.parse(text(update.stdout)) as {
-        outcome: string;
-        after: { integrations: Record<string, string> };
-        receipt: { receipt_id: string };
-      };
-      expect(payload.outcome).toBe("accepted");
-      expect(payload.after.integrations).toEqual({
-        todos_project_id: "todo_after",
-        conversations_channel: "package-arrivals",
-      });
-      expect(payload.receipt.receipt_id).toMatch(/^gpmr_/);
+      expect(update.exitCode).toBe(1);
+      expect(text(update.stderr)).toContain("must be changed through resource-links");
+      const shown = runProjects(["show", created.project.id, "--json"], env);
+      expect(shown.exitCode).toBe(0);
+      expect((JSON.parse(text(shown.stdout)) as { project: { integrations: Record<string, string> } })
+        .project.integrations).toEqual({
+          conversations_channel: "guarded-integrations",
+          todos_project_id: "todo_before",
+        });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1383,7 +1535,7 @@ describe("project-first CLI surface", () => {
     });
   }
 
-  test("guarded rollback restores a remote-only project and leaves its forward path non-primary", () => {
+  cliProcessTest("guarded rollback restores a remote-only project and leaves its forward path non-primary", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-guarded-remote-only-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
     const forwardPath = join(root, "forward");
@@ -1569,7 +1721,7 @@ describe("project-first CLI surface", () => {
     rmSync(root, { recursive: true, force: true });
   }, 60000);
 
-  test("top-level list hides eval fixtures by default and cleanup-evals removes them", () => {
+  cliProcessTest("top-level list hides eval fixtures by default and cleanup-evals removes them", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-eval-cleanup-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
 
@@ -1674,7 +1826,7 @@ describe("project-first CLI surface", () => {
     }
   }, 60000);
 
-  test("top-level create, list, show, and update expose project management fields", () => {
+  cliProcessTest("top-level create, list, show, and update expose project management fields", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-management-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
     const targetPath = join(root, "managed-app");
@@ -1829,17 +1981,24 @@ describe("project-first CLI surface", () => {
     const linked = runProjects([
       "link",
       "managed-app",
-      "--todos-task-list-id",
-      "list_789",
       "--brief-id",
       "brief_456",
       "--json",
     ], env);
     expect(linked.exitCode).toBe(0);
-    expect((JSON.parse(text(linked.stdout)) as { integrations: Record<string, string> }).integrations.todos_task_list_id).toBe("list_789");
     expect((JSON.parse(text(linked.stdout)) as { integrations: Record<string, string> }).integrations.brief_id).toBe("brief_456");
 
-    const unlinked = runProjects(["unlink", "managed-app", "--todos", "--brief", "--json"], env);
+    const rejectedTodoLink = runProjects([
+      "link",
+      "managed-app",
+      "--todos-task-list-id",
+      "list_789",
+      "--json",
+    ], env);
+    expect(rejectedTodoLink.exitCode).toBe(1);
+    expect(text(rejectedTodoLink.stderr)).toContain("must be changed through resource-links");
+
+    const unlinked = runProjects(["unlink", "managed-app", "--brief", "--json"], env);
     expect(unlinked.exitCode).toBe(0);
     const unlinkedPayload = JSON.parse(text(unlinked.stdout)) as {
       project: {
@@ -1851,16 +2010,19 @@ describe("project-first CLI surface", () => {
       };
       unlinked: string[];
     };
-    expect(unlinkedPayload.unlinked).toEqual(["todos_project_id", "todos_task_list_id", "brief_id", "brief_path"]);
-    expect(unlinkedPayload.project.integrations.todos_project_id).toBeUndefined();
-    expect(unlinkedPayload.project.integrations.todos_task_list_id).toBeUndefined();
+    expect(unlinkedPayload.unlinked).toEqual(["brief_id", "brief_path"]);
+    expect(unlinkedPayload.project.integrations.todos_project_id).toBe("todo_123");
+    expect(unlinkedPayload.project.integrations.todos_task_list_id).toBe("list_456");
+    const rejectedTodoUnlink = runProjects(["unlink", "managed-app", "--todos", "--json"], env);
+    expect(rejectedTodoUnlink.exitCode).toBe(1);
+    expect(text(rejectedTodoUnlink.stderr)).toContain("must be changed through resource-links");
     expect(unlinkedPayload.project.integrations.brief_id).toBeUndefined();
     expect(unlinkedPayload.project.integrations.brief_path).toBeUndefined();
-    expect(unlinkedPayload.project.external_links.todos.linked).toBe(false);
+    expect(unlinkedPayload.project.external_links.todos.linked).toBe(true);
     expect(unlinkedPayload.project.external_links.brief.linked).toBe(false);
   });
 
-  test("top-level events list and record expose project audit events", () => {
+  cliProcessTest("top-level events list and record expose project audit events", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-events-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
     const targetPath = join(root, "evented-app");
@@ -1936,7 +2098,7 @@ describe("project-first CLI surface", () => {
     expect(stderr).not.toContain("404");
   });
 
-  test("project agents can be assigned and shown as project metadata", () => {
+  cliProcessTest("project agents can be assigned and shown as project metadata", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-agents-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
 
@@ -1994,7 +2156,7 @@ describe("project-first CLI surface", () => {
     expect(shown.events.some((event) => event.event_type === "agent_assigned")).toBe(true);
   });
 
-  test("update --canonical-machine replaces metadata ownership and round-trips through show", () => {
+  cliProcessTest("update --canonical-machine replaces metadata ownership and round-trips through show", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-canonical-machine-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
 
@@ -2046,7 +2208,7 @@ describe("project-first CLI surface", () => {
     expect(payload.project.metadata["canonical_machine"]).toBeUndefined();
   });
 
-  test("project locations can be registered and used as start targets", () => {
+  cliProcessTest("project locations can be registered and used as start targets", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-locations-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db"), HOSTNAME: "spark01" };
     const primaryPath = join(root, "primary");
@@ -2152,7 +2314,7 @@ describe("project-first CLI surface", () => {
     expect(payload.resolution.preview?.metadata.domain).toBe("home-security");
   });
 
-  test("top-level start supports bulk dry-run JSON summaries", () => {
+  cliProcessTest("top-level start supports bulk dry-run JSON summaries", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-bulk-start-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
     const onePath = join(root, "bulk-one");
@@ -2205,7 +2367,7 @@ describe("project-first CLI surface", () => {
     expect(payload.started.every((item) => item.tmux.session_action === "planned")).toBe(true);
   });
 
-  test("top-level start reads bulk targets from JSON files", () => {
+  cliProcessTest("top-level start reads bulk targets from JSON files", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-bulk-file-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
     const targetFile = join(root, "targets.json");
@@ -2290,7 +2452,7 @@ describe("project-first CLI surface", () => {
     expect(payload.rename_report?.[0]?.status).toBe("configured");
   });
 
-  test("top-level start and status use saved project launch defaults", () => {
+  cliProcessTest("top-level start and status use saved project launch defaults", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-start-defaults-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
 
@@ -2384,7 +2546,7 @@ describe("project-first CLI surface", () => {
     expect(statusPayload.launch_defaults.session_policy).toBe("error-if-running");
   });
 
-  test("top-level start records when the project was last opened", () => {
+  cliProcessTest("top-level start records when the project was last opened", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-start-last-opened-"));
     const binDir = join(root, "bin");
     const projectPath = join(root, "opened-project");
@@ -2423,7 +2585,7 @@ describe("project-first CLI surface", () => {
     }
   });
 
-  test("top-level start accepts exact requested tmux windows as JSON", () => {
+  cliProcessTest("top-level start accepts exact requested tmux windows as JSON", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-start-windows-json-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
 
@@ -2488,7 +2650,7 @@ describe("project-first CLI surface", () => {
     ]);
   });
 
-  test("top-level status reports expected project tmux session", () => {
+  cliProcessTest("top-level status reports expected project tmux session", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-status-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
 
@@ -2573,7 +2735,7 @@ describe("project-first CLI surface", () => {
     expect(payload.render).toBeTruthy();
   });
 
-  test("top-level sessions with no target reports recent sessions instead of failing", () => {
+  cliProcessTest("top-level sessions with no target reports recent sessions instead of failing", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-sessions-no-target-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
 
@@ -2633,7 +2795,7 @@ describe("project-first CLI surface", () => {
   });
 
 
-  test("required commands emit JSON Render specs with --render-spec", () => {
+  cliProcessTest("required commands emit JSON Render specs with --render-spec", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-render-spec-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
     expect(runProjects(["roots", "add", "--name", "Render Root", "--slug", "render-root", "--path", join(root, "root"), "--kind", "project", "--github-org", "hasnaxyz", "--path-template", "{slug}", "--json"], env).exitCode).toBe(0);

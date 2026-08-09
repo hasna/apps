@@ -8,6 +8,7 @@
 // hits the database.
 
 import { nanoid } from "nanoid";
+import type { QueryResultRow } from "pg";
 import type { TypedQueryClient } from "../generated/storage-kit/query.js";
 import {
   assertCompleteStableProjectId,
@@ -26,15 +27,29 @@ import {
   workspaceSnapshot,
 } from "../lib/guarded-project-mutation.js";
 import {
+  assertProjectResourceLinkIntegrationMutation,
+  assertProjectResourceLinkReadContractEquality,
   normalizeProjectResourceLinks,
   normalizeProjectResourceLinkIntegrations,
   PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS,
+  projectResourceLinkCollection,
   projectResourceLinkId,
   projectResourceLinkIntegrationProjection,
   projectResourceLinksDigest,
   projectResourceLinkSnapshot,
   rowToProjectResourceLink,
 } from "../lib/project-resource-links.js";
+import {
+  applyProjectResourceLinkMigrationTransition,
+  assertProjectResourceLinkProducerAttestation,
+  buildProjectResourceLinkMigrationPlan,
+  migrationEvent,
+  migrationEvidenceWithProducerAttestation,
+  reconcileProjectResourceLinkProducerProof,
+  rowToProjectResourceLinkMigrationManifest,
+  type AsyncProjectResourceLinkProducerEvidenceVerifier,
+  type ProjectResourceLinkProducerAttestation,
+} from "../lib/project-resource-link-migrations.js";
 import { deriveWorkspaceRegistryFields } from "../lib/workspace-plan.js";
 import type {
   Agent,
@@ -58,6 +73,14 @@ import type {
   ProjectResourceLinkInput,
   ProjectResourceLinkMutationRequest,
   ProjectResourceLinkMutationResult,
+  ProjectResourceLinkMigrationAdvanceRequest,
+  ProjectResourceLinkMigrationEvent,
+  ProjectResourceLinkMigrationManifestRow,
+  ProjectResourceLinkMigrationManifestV1,
+  ProjectResourceLinkMigrationPlanRequest,
+  ProjectResourceLinkMigrationReadRequest,
+  ProjectResourceLinkMigrationResult,
+  ProjectResourceLinkMigrationRollbackRequest,
   ProjectResourceLinkReadRequest,
   ProjectResourceLinkReadResult,
   ProjectResourceLinkRollbackRequest,
@@ -273,14 +296,20 @@ export interface WorkspaceFilter {
 }
 
 export class ProjectsPgStore {
-  constructor(private readonly db: TypedQueryClient) {}
+  constructor(
+    private readonly db: TypedQueryClient,
+    private readonly producerEvidenceVerifier?: AsyncProjectResourceLinkProducerEvidenceVerifier,
+  ) {}
 
   private async inTransaction<T>(operation: string, fn: (store: ProjectsPgStore) => Promise<T>): Promise<T> {
     const transaction = (this.db as TransactionCapableClient).transaction;
     if (typeof transaction !== "function") {
       throw new ValidationError(`${operation} requires a transaction-capable Postgres client`);
     }
-    return transaction.call(this.db, async (client) => fn(new ProjectsPgStore(client))) as Promise<T>;
+    return transaction.call(
+      this.db,
+      async (client) => fn(new ProjectsPgStore(client, this.producerEvidenceVerifier)),
+    ) as Promise<T>;
   }
 
   // --- slug uniqueness --------------------------------------------------
@@ -582,7 +611,7 @@ export class ProjectsPgStore {
     assertCompleteStableProjectId(input.project_id);
     const project = await this.requireWorkspace(input.project_id);
     const links = await this.listProjectResourceLinks(input.project_id, input.max_items);
-    return withResponseControl({
+    const read = {
       ok: true as const,
       project_id: project.id,
       project,
@@ -593,7 +622,15 @@ export class ProjectsPgStore {
       collection_digest: projectResourceLinksDigest(links),
       complete: true as const,
       truncated: false as const,
-    }, input, startedAtMs, "project resource link read");
+      contract: projectResourceLinkCollection(
+        project.id,
+        workspaceRevision(project),
+        links,
+        input.max_items,
+      ),
+    };
+    assertProjectResourceLinkReadContractEquality(read);
+    return withResponseControl(read, input, startedAtMs, "project resource link read");
   }
 
   async requireWorkspace(idOrSlug: string): Promise<Workspace> {
@@ -674,6 +711,13 @@ export class ProjectsPgStore {
 
   async updateWorkspace(idOrSlug: string, input: UpdateWorkspaceInput): Promise<Workspace> {
     const before = await this.requireWorkspace(idOrSlug);
+    if (input.integrations !== undefined) {
+      assertProjectResourceLinkIntegrationMutation(
+        before.integrations,
+        input.integrations,
+        await this.listProjectResourceLinks(before.id, PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS),
+      );
+    }
     const root = input.root_id ? await this.getRoot(input.root_id) : null;
     if (input.root_id && !root) throw new ValidationError(`Root not found: ${input.root_id}`);
     const recipe = input.recipe_id ? await this.getRecipe(input.recipe_id) : null;
@@ -795,6 +839,29 @@ export class ProjectsPgStore {
       [input.operation_id, input.step_id, input.direction, input.target_id],
     );
     return row ? rowToGuardedReceipt(row) : null;
+  }
+
+  private async requireForwardProjectResourceLinkReceipt(
+    receiptId: string,
+    projectId: string,
+  ): Promise<GuardedProjectMutationReceipt> {
+    const row = await this.db.get<GuardedProjectMutationReceiptRow>(
+      "SELECT * FROM guarded_project_mutation_receipts WHERE receipt_id = $1",
+      [receiptId],
+    );
+    if (!row) throw new NotFoundError(`accepted receipt not found: ${receiptId}`);
+    const accepted = rowToGuardedReceipt(row);
+    if (
+      accepted.outcome !== "accepted"
+      || accepted.direction !== "forward"
+      || accepted.target_id !== projectId
+    ) {
+      throw new ValidationError("resource link rollback requires a forward accepted receipt for the same project id");
+    }
+    if (!accepted.post_revision) {
+      throw new ValidationError("resource link rollback accepted receipt has no post_revision");
+    }
+    return accepted;
   }
 
   private async guardedTerminalNonacceptance(input: {
@@ -1077,7 +1144,9 @@ export class ProjectsPgStore {
         labels,
         created_at: restored?.created_at ?? existing?.created_at ?? nowIso(),
         updated_at: restored?.updated_at ?? (
-          existing && canonicalJson(existing.labels) === canonicalJson(labels)
+          existing
+          && existing.scope === link.scope
+          && canonicalJson(existing.labels) === canonicalJson(labels)
             ? existing.updated_at
             : nowIso()
         ),
@@ -1132,28 +1201,48 @@ export class ProjectsPgStore {
       || canonicalJson(beforeProject.integrations) !== canonicalJson(integrations);
     let afterProject = beforeProject;
     if (changed) {
-      await this.db.execute("DELETE FROM project_resource_links WHERE project_id = $1", [input.project_id]);
+      const desiredIds = new Set(desired.map((link) => link.id));
+      for (const existing of beforeLinks) {
+        if (!desiredIds.has(existing.id)) {
+          await this.db.execute("DELETE FROM project_resource_links WHERE id = $1", [existing.id]);
+        }
+      }
       for (const link of desired) {
-        await this.db.execute(
-          `INSERT INTO project_resource_links (
-            id, project_id, authority, service_instance, source_package, target_kind,
-            locator_kind, locator_value, scope, labels_json, created_at, updated_at
-          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-          [
-            link.id,
-            link.project_id,
-            link.authority,
-            link.service_instance,
-            link.source_package,
-            link.target_kind,
-            link.locator.kind,
-            link.locator.value,
-            link.scope,
-            canonicalJson(link.labels),
-            link.created_at,
-            link.updated_at,
-          ],
-        );
+        const existing = beforeLinks.find((candidate) => candidate.id === link.id);
+        if (existing) {
+          if (
+            existing.scope !== link.scope
+            || canonicalJson(existing.labels) !== canonicalJson(link.labels)
+          ) {
+            await this.db.execute(
+              `UPDATE project_resource_links
+               SET scope = $1, labels_json = $2, updated_at = $3
+               WHERE id = $4`,
+              [link.scope, canonicalJson(link.labels), link.updated_at, link.id],
+            );
+          }
+        } else {
+          await this.db.execute(
+            `INSERT INTO project_resource_links (
+              id, project_id, authority, service_instance, source_package, target_kind,
+              locator_kind, locator_value, scope, labels_json, created_at, updated_at
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+            [
+              link.id,
+              link.project_id,
+              link.authority,
+              link.service_instance,
+              link.source_package,
+              link.target_kind,
+              link.locator.kind,
+              link.locator.value,
+              link.scope,
+              canonicalJson(link.labels),
+              link.created_at,
+              link.updated_at,
+            ],
+          );
+        }
       }
       const nextRevision = nextResourceLinkRevision(currentRevision);
       const row = await this.db.get<WorkspaceRow>(
@@ -1231,15 +1320,10 @@ export class ProjectsPgStore {
   async rollbackProjectResourceLinks(input: ProjectResourceLinkRollbackRequest): Promise<ProjectResourceLinkMutationResult> {
     return this.inTransaction("project resource link rollback", async (store) => {
       assertCompleteStableProjectId(input.project_id);
-      const row = await store.db.get<GuardedProjectMutationReceiptRow>(
-        "SELECT * FROM guarded_project_mutation_receipts WHERE receipt_id = $1",
-        [input.accepted_receipt_id],
+      const accepted = await store.requireForwardProjectResourceLinkReceipt(
+        input.accepted_receipt_id,
+        input.project_id,
       );
-      if (!row) throw new NotFoundError(`accepted receipt not found: ${input.accepted_receipt_id}`);
-      const accepted = rowToGuardedReceipt(row);
-      if (accepted.outcome !== "accepted" || accepted.direction !== "forward" || accepted.target_id !== input.project_id) {
-        throw new ValidationError("resource link rollback requires a forward accepted receipt for the same project id");
-      }
       if (accepted.post_revision !== input.expected_current_revision) {
         throw new ValidationError("resource link rollback expected_current_revision must equal the accepted receipt post_revision");
       }
@@ -1251,7 +1335,36 @@ export class ProjectsPgStore {
         response_byte_limit: input.response_byte_limit,
         time_budget_ms: input.time_budget_ms,
       });
-      if (current.current_revision !== input.expected_current_revision || current.collection_digest !== after.collection_digest) {
+      const priorInverse = await store.guardedAcceptedByStep({
+        operation_id: input.operation_id,
+        step_id: input.step_id,
+        direction: "inverse",
+        target_id: input.project_id,
+      });
+      if (priorInverse) {
+        const inverseBefore = parseResourceLinkSnapshot(priorInverse.before, "accepted inverse before");
+        const inverseAfter = parseResourceLinkSnapshot(priorInverse.after, "accepted inverse after");
+        if (
+          priorInverse.expected_revision !== input.expected_current_revision
+          || inverseBefore.collection_digest !== after.collection_digest
+          || canonicalJson(inverseBefore.project.integrations) !== canonicalJson(after.project.integrations)
+          || inverseAfter.collection_digest !== before.collection_digest
+          || canonicalJson(inverseAfter.project.integrations) !== canonicalJson(before.project.integrations)
+        ) {
+          throw new ValidationError("accepted resource link inverse receipt does not match the forward receipt");
+        }
+        if (
+          !priorInverse.post_revision
+          || current.current_revision !== priorInverse.post_revision
+          || current.collection_digest !== inverseAfter.collection_digest
+          || canonicalJson(current.project.integrations) !== canonicalJson(inverseAfter.project.integrations)
+        ) {
+          throw new ValidationError("resource link rollback retry refuses drift after the accepted inverse");
+        }
+      } else if (
+        current.current_revision !== input.expected_current_revision
+        || current.collection_digest !== after.collection_digest
+      ) {
         throw new ValidationError("resource link rollback refuses current revision or collection digest drift");
       }
       return store.mutateProjectResourceLinksInCurrentTransaction({
@@ -1275,6 +1388,485 @@ export class ProjectsPgStore {
     });
   }
 
+  private async resourceLinkMigrationManifest(
+    projectId: string,
+    manifestId: string,
+  ): Promise<ProjectResourceLinkMigrationManifestV1> {
+    const row = await this.db.get<ProjectResourceLinkMigrationManifestRow>(
+      `SELECT * FROM project_resource_link_migration_manifests
+       WHERE manifest_id = $1 AND project_id = $2`,
+      [manifestId, projectId],
+    );
+    if (!row) throw new NotFoundError(`project resource link migration manifest not found: ${manifestId}`);
+    return rowToProjectResourceLinkMigrationManifest(row);
+  }
+
+  private async resourceLinkMigrationEvents(
+    manifestId: string,
+  ): Promise<ProjectResourceLinkMigrationEvent[]> {
+    return (await this.boundedResourceLinkMigrationEvents(
+      manifestId,
+      PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS,
+    )).events;
+  }
+
+  private async boundedResourceLinkMigrationEvents(
+    manifestId: string,
+    maxItems: number,
+  ): Promise<{
+    events: ProjectResourceLinkMigrationEvent[];
+    complete: boolean;
+    truncated: boolean;
+  }> {
+    if (!Number.isInteger(maxItems) || maxItems <= 0) {
+      throw new ValidationError("project resource link migration event max_items must be a positive integer");
+    }
+    const rows = await this.db.many<Record<string, unknown> & QueryResultRow>(
+      `SELECT event_id, manifest_id, transition_version, from_state, to_state,
+              request_digest, precondition_digest, evidence_json, created_at
+       FROM project_resource_link_migration_events
+       WHERE manifest_id = $1
+       ORDER BY transition_version ASC
+       LIMIT $2`,
+      [manifestId, maxItems + 1],
+    );
+    const truncated = rows.length > maxItems;
+    return {
+      events: rows.slice(0, maxItems).map((row) => ({
+        event_id: String(row["event_id"]),
+        manifest_id: String(row["manifest_id"]),
+        transition_version: Number(row["transition_version"]),
+        from_state: row["from_state"] === null ? null : row["from_state"] as ProjectResourceLinkMigrationEvent["from_state"],
+        to_state: row["to_state"] as ProjectResourceLinkMigrationEvent["to_state"],
+        request_digest: String(row["request_digest"]),
+        precondition_digest: String(row["precondition_digest"]),
+        evidence: parseJson(String(row["evidence_json"]), {}),
+        created_at: String(row["created_at"]),
+      })),
+      complete: !truncated,
+      truncated,
+    };
+  }
+
+  private async insertResourceLinkMigrationEvent(event: ProjectResourceLinkMigrationEvent): Promise<void> {
+    await this.db.execute(
+      `INSERT INTO project_resource_link_migration_events (
+        event_id, manifest_id, transition_version, from_state, to_state,
+        request_digest, precondition_digest, evidence_json, created_at
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [
+        event.event_id,
+        event.manifest_id,
+        event.transition_version,
+        event.from_state,
+        event.to_state,
+        event.request_digest,
+        event.precondition_digest,
+        json(event.evidence),
+        event.created_at,
+      ],
+    );
+  }
+
+  private async persistResourceLinkMigrationTransition(
+    before: ProjectResourceLinkMigrationManifestV1,
+    after: ProjectResourceLinkMigrationManifestV1,
+    evidence: JsonObject,
+  ): Promise<void> {
+    const row = await this.db.get<{ manifest_id: string }>(
+      `UPDATE project_resource_link_migration_manifests
+       SET state = $1, links_json = $2, projects_forward_receipt_id = $3,
+           projects_inverse_receipt_id = $4, projects_reference_proof_json = $5,
+           last_verified_projects_revision = $6, last_verified_projects_digest = $7,
+           transition_version = $8, updated_at = $9
+       WHERE manifest_id = $10 AND project_id = $11 AND transition_version = $12
+       RETURNING manifest_id`,
+      [
+        after.state,
+        json(after.links),
+        after.projects_forward_receipt_id,
+        after.projects_inverse_receipt_id,
+        after.projects_reference_proof === null ? null : json(after.projects_reference_proof),
+        after.last_verified_projects_revision,
+        after.last_verified_projects_digest,
+        after.transition_version,
+        after.updated_at,
+        after.manifest_id,
+        after.project_id,
+        before.transition_version,
+      ],
+    );
+    if (!row) throw new ValidationError("project resource link migration transition CAS lost");
+    await this.insertResourceLinkMigrationEvent(migrationEvent(
+      after.manifest_id,
+      after.transition_version,
+      before.state,
+      after.state,
+      sha256(canonicalJson(evidence)),
+      sha256(canonicalJson({
+        manifest_id: before.manifest_id,
+        transition_version: before.transition_version,
+        state: before.state,
+      })),
+      evidence,
+      after.updated_at,
+    ));
+  }
+
+  async planProjectResourceLinkMigration(
+    input: ProjectResourceLinkMigrationPlanRequest,
+  ): Promise<ProjectResourceLinkMigrationResult> {
+    const started = Date.now();
+    assertCompleteStableProjectId(input.project_id);
+    const project = await this.requireWorkspace(input.project_id);
+    if (workspaceRevision(project) !== input.expected_project_revision) {
+      throw new ValidationError("project resource link migration plan refuses a stale project revision");
+    }
+    const maxItems = input.max_items ?? PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS;
+    if (input.links.length > maxItems) {
+      throw new ValidationError("project resource link migration plan exceeds max_items");
+    }
+    const ts = nowIso();
+    const candidate = buildProjectResourceLinkMigrationPlan(input, ts);
+    const existing = await this.db.get<ProjectResourceLinkMigrationManifestRow>(
+      `SELECT * FROM project_resource_link_migration_manifests
+       WHERE project_id = $1 AND operation_id = $2 AND step_id = $3`,
+      [input.project_id, input.operation_id, input.step_id],
+    );
+    if (existing) {
+      const manifest = rowToProjectResourceLinkMigrationManifest(existing);
+      if (manifest.manifest_id !== candidate.manifest_id) {
+        throw new ValidationError("project resource link migration step already has a different accepted manifest");
+      }
+      return withResponseControl({
+        ok: true,
+        outcome: "duplicate_of_accepted" as const,
+        manifest,
+        events: await this.resourceLinkMigrationEvents(manifest.manifest_id),
+      }, input, started, "project resource link migration plan");
+    }
+    await this.inTransaction("project resource link migration plan", async (store) => {
+      await store.db.execute(
+        `INSERT INTO project_resource_link_migration_manifests (
+          manifest_id, project_id, operation_id, step_id, state,
+          expected_project_revision, desired_collection_digest, links_json,
+          transition_version, created_at, updated_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        [
+          candidate.manifest_id,
+          candidate.project_id,
+          candidate.operation_id,
+          candidate.step_id,
+          candidate.state,
+          candidate.expected_project_revision,
+          candidate.desired_collection_digest,
+          json(candidate.links),
+          candidate.transition_version,
+          candidate.created_at,
+          candidate.updated_at,
+        ],
+      );
+      await store.insertResourceLinkMigrationEvent(migrationEvent(
+        candidate.manifest_id,
+        candidate.transition_version,
+        null,
+        "planned",
+        sha256(canonicalJson(input.links)),
+        sha256(canonicalJson({
+          project_id: input.project_id,
+          expected_project_revision: input.expected_project_revision,
+        })),
+        { link_ids: candidate.links.map((item) => item.link_id) },
+        ts,
+      ));
+    });
+    return withResponseControl({
+      ok: true,
+      outcome: "accepted" as const,
+      manifest: candidate,
+      events: await this.resourceLinkMigrationEvents(candidate.manifest_id),
+    }, input, started, "project resource link migration plan");
+  }
+
+  async readProjectResourceLinkMigration(
+    input: ProjectResourceLinkMigrationReadRequest,
+  ): Promise<ProjectResourceLinkMigrationResult> {
+    const started = Date.now();
+    const manifest = await this.resourceLinkMigrationManifest(input.project_id, input.manifest_id);
+    const boundedEvents = await this.boundedResourceLinkMigrationEvents(
+      manifest.manifest_id,
+      input.max_items ?? PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS,
+    );
+    return withResponseControl({
+      ok: true,
+      outcome: "accepted" as const,
+      manifest,
+      events: boundedEvents.events,
+    }, input, started, "project resource link migration read", boundedEvents);
+  }
+
+  async advanceProjectResourceLinkMigration(
+    input: ProjectResourceLinkMigrationAdvanceRequest,
+  ): Promise<ProjectResourceLinkMigrationResult> {
+    const started = Date.now();
+    const before = await this.resourceLinkMigrationManifest(input.project_id, input.manifest_id);
+    if (before.transition_version !== input.expected_transition_version) {
+      throw new ValidationError("project resource link migration advance transition_version is stale");
+    }
+    if (before.state === input.next_state) {
+      return withResponseControl({
+        ok: true,
+        outcome: "duplicate_of_accepted" as const,
+        manifest: before,
+        events: await this.resourceLinkMigrationEvents(before.manifest_id),
+      }, input, started, "project resource link migration advance");
+    }
+    let producerEvidence = input.producer_evidence;
+    let producerAttestation: ProjectResourceLinkProducerAttestation | undefined;
+    if (input.next_state === "producer_applied") {
+      try {
+        producerEvidence = reconcileProjectResourceLinkProducerProof(before, input.producer_evidence, "forward");
+      } catch (error) {
+        throw new ValidationError(error instanceof Error ? error.message : String(error));
+      }
+    }
+    if (input.next_state === "projects_applied") {
+      if (!input.projects_forward_receipt_id) {
+        throw new ValidationError("projects_applied requires a Projects forward receipt");
+      }
+      const row = await this.db.get<GuardedProjectMutationReceiptRow>(
+        "SELECT * FROM guarded_project_mutation_receipts WHERE receipt_id = $1",
+        [input.projects_forward_receipt_id],
+      );
+      if (!row) throw new NotFoundError("Projects forward receipt not found");
+      const receipt = rowToGuardedReceipt(row);
+      const snapshot = parseResourceLinkSnapshot(receipt.after, "Projects forward");
+      const ids = new Set(snapshot.links.map((link) => link.id));
+      if (
+        receipt.outcome !== "accepted"
+        || receipt.direction !== "forward"
+        || receipt.target_id !== input.project_id
+        || snapshot.collection_digest !== before.desired_collection_digest
+        || before.links.some((item) => !ids.has(item.link_id))
+      ) {
+        throw new ValidationError("Projects forward receipt does not prove the manifest collection");
+      }
+    }
+    if (input.next_state === "verified") {
+      try {
+        producerEvidence = reconcileProjectResourceLinkProducerProof(before, input.producer_evidence, "readback");
+        producerAttestation = assertProjectResourceLinkProducerAttestation(
+          before,
+          "readback",
+          producerEvidence,
+          await this.producerEvidenceVerifier?.({
+            manifest: before,
+            phase: "readback",
+            producer_evidence: producerEvidence,
+          }),
+        );
+      } catch (error) {
+        throw new ValidationError(error instanceof Error ? error.message : String(error));
+      }
+      const read = await this.readProjectResourceLinks({
+        project_id: input.project_id,
+        max_items: Math.max(PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS, before.links.length),
+        response_byte_limit: input.response_byte_limit,
+        time_budget_ms: input.time_budget_ms,
+      });
+      if (
+        read.collection_digest !== before.desired_collection_digest
+        || input.last_verified_projects_revision !== read.current_revision
+        || input.last_verified_projects_digest !== read.collection_digest
+      ) {
+        throw new ValidationError("verified transition requires a current complete Projects readback");
+      }
+    }
+    const after = applyProjectResourceLinkMigrationTransition(before, input.next_state, nowIso(), {
+      producer_evidence: producerEvidence,
+      projects_forward_receipt_id: input.projects_forward_receipt_id,
+      last_verified_projects_revision: input.last_verified_projects_revision,
+      last_verified_projects_digest: input.last_verified_projects_digest,
+    });
+    const transitionEvidence = producerAttestation
+      ? migrationEvidenceWithProducerAttestation(input.evidence, producerAttestation)
+      : input.evidence;
+    await this.inTransaction("project resource link migration advance", (store) =>
+      store.persistResourceLinkMigrationTransition(before, after, transitionEvidence));
+    return withResponseControl({
+      ok: true,
+      outcome: "accepted" as const,
+      manifest: after,
+      events: await this.resourceLinkMigrationEvents(after.manifest_id),
+    }, input, started, "project resource link migration advance");
+  }
+
+  async rollbackProjectResourceLinkMigration(
+    input: ProjectResourceLinkMigrationRollbackRequest,
+  ): Promise<ProjectResourceLinkMigrationResult> {
+    const started = Date.now();
+    let before = await this.resourceLinkMigrationManifest(input.project_id, input.manifest_id);
+    if (["rolled_back", "retained_target"].includes(before.state)) {
+      return withResponseControl({
+        ok: true,
+        outcome: "duplicate_of_accepted" as const,
+        manifest: before,
+        events: await this.resourceLinkMigrationEvents(before.manifest_id),
+      }, input, started, "project resource link migration rollback");
+    }
+    if (before.transition_version !== input.expected_transition_version) {
+      throw new ValidationError("project resource link migration rollback transition_version is stale");
+    }
+    let proof = before.projects_reference_proof;
+    let inverseReceiptId = before.projects_inverse_receipt_id;
+    const establishingProjectsReferenceProof = proof === null;
+    if (establishingProjectsReferenceProof && input.producer_outcome !== "pending") {
+      throw new ValidationError(
+        "first migration rollback call must use producer_outcome=pending so Projects reference proof is persisted before producer compensation",
+      );
+    }
+    const linkIds = before.links.map((item) => item.link_id);
+    if (!proof) {
+      if (before.projects_forward_receipt_id) {
+        const forwardReceipt = await this.requireForwardProjectResourceLinkReceipt(
+          before.projects_forward_receipt_id,
+          input.project_id,
+        );
+        const inverse = await this.rollbackProjectResourceLinks({
+          project_id: input.project_id,
+          operation_id: `${before.operation_id}:migration-rollback`,
+          step_id: `${before.step_id}:projects-reference`,
+          accepted_receipt_id: before.projects_forward_receipt_id,
+          expected_current_revision: forwardReceipt.post_revision!,
+          max_items: input.max_items,
+          response_byte_limit: input.response_byte_limit,
+          time_budget_ms: input.time_budget_ms,
+          agent_id: input.agent_id,
+          source: input.source,
+          command: input.command,
+        });
+        const verified = await this.readProjectResourceLinks({
+          project_id: input.project_id,
+          max_items: input.max_items ?? PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS,
+          response_byte_limit: input.response_byte_limit,
+          time_budget_ms: input.time_budget_ms,
+        });
+        if (verified.links.some((link) => linkIds.includes(link.id))) {
+          throw new ValidationError("Projects inverse did not remove every manifest reference");
+        }
+        if (!["accepted", "duplicate_of_accepted"].includes(inverse.outcome)) {
+          throw new ValidationError("Projects inverse was not accepted");
+        }
+        inverseReceiptId = inverse.receipt?.duplicate_of_receipt_id
+          ?? inverse.receipt?.receipt_id
+          ?? null;
+        if (!inverseReceiptId) throw new ValidationError("Projects inverse did not return an accepted receipt");
+        proof = {
+          kind: "accepted_inverse",
+          forward_receipt_id: before.projects_forward_receipt_id,
+          inverse_receipt_id: inverseReceiptId,
+          verified_revision: verified.current_revision,
+          collection_digest: verified.collection_digest,
+          link_ids_checked: linkIds,
+          complete: true,
+          truncated: false,
+          request_digest: inverse.request_digest,
+          precondition_digest: inverse.precondition_digest,
+        };
+      } else {
+        const current = await this.readProjectResourceLinks({
+          project_id: input.project_id,
+          max_items: input.max_items ?? PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS,
+          response_byte_limit: input.response_byte_limit,
+          time_budget_ms: input.time_budget_ms,
+        });
+        if (current.links.some((link) => linkIds.includes(link.id))) {
+          throw new ValidationError("ambiguous Projects state: manifest links exist without a matching accepted forward receipt");
+        }
+        proof = {
+          kind: "no_projects_write",
+          verified_revision: current.current_revision,
+          collection_digest: current.collection_digest,
+          link_ids_checked: linkIds,
+          complete: true,
+          truncated: false,
+          request_digest: sha256(canonicalJson({ manifest_id: before.manifest_id, link_ids: linkIds })),
+          precondition_digest: sha256(canonicalJson({
+            revision: current.current_revision,
+            collection_digest: current.collection_digest,
+          })),
+        };
+      }
+    }
+    if (before.state !== "rollback_in_progress") {
+      const inProgress = applyProjectResourceLinkMigrationTransition(before, "rollback_in_progress", nowIso(), {
+        projects_inverse_receipt_id: inverseReceiptId,
+        projects_reference_proof: proof,
+        last_verified_projects_revision: proof.verified_revision,
+        last_verified_projects_digest: proof.collection_digest,
+      });
+      await this.inTransaction("project resource link migration rollback proof", (store) =>
+        store.persistResourceLinkMigrationTransition(before, inProgress, input.evidence));
+      before = inProgress;
+    }
+    if (input.producer_outcome === "pending") {
+      return withResponseControl({
+        ok: true,
+        outcome: "accepted" as const,
+        manifest: before,
+        events: await this.resourceLinkMigrationEvents(before.manifest_id),
+      }, input, started, "project resource link migration rollback");
+    }
+    const nextState = input.producer_outcome === "complete"
+      ? "rolled_back"
+      : input.producer_outcome === "retained_target"
+        ? "retained_target"
+        : "failed_reconcilable";
+    let terminalProducerEvidence = input.producer_evidence;
+    let producerAttestation: ProjectResourceLinkProducerAttestation | undefined;
+    if (nextState === "rolled_back" || nextState === "retained_target") {
+      try {
+        terminalProducerEvidence = reconcileProjectResourceLinkProducerProof(
+          before,
+          input.producer_evidence,
+          "inverse",
+          nextState === "rolled_back" ? "complete" : "retained_target",
+        );
+        const phase = nextState === "rolled_back" ? "inverse_complete" : "inverse_retained_target";
+        producerAttestation = assertProjectResourceLinkProducerAttestation(
+          before,
+          phase,
+          terminalProducerEvidence,
+          await this.producerEvidenceVerifier?.({
+            manifest: before,
+            phase,
+            producer_evidence: terminalProducerEvidence,
+          }),
+        );
+      } catch (error) {
+        throw new ValidationError(error instanceof Error ? error.message : String(error));
+      }
+    }
+    const after = applyProjectResourceLinkMigrationTransition(before, nextState, nowIso(), {
+      producer_evidence: terminalProducerEvidence,
+      projects_inverse_receipt_id: inverseReceiptId,
+      projects_reference_proof: proof,
+      last_verified_projects_revision: proof.verified_revision,
+      last_verified_projects_digest: proof.collection_digest,
+    });
+    const transitionEvidence = producerAttestation
+      ? migrationEvidenceWithProducerAttestation(input.evidence, producerAttestation)
+      : input.evidence;
+    await this.inTransaction("project resource link migration rollback", (store) =>
+      store.persistResourceLinkMigrationTransition(before, after, transitionEvidence));
+    return withResponseControl({
+      ok: true,
+      outcome: "accepted" as const,
+      manifest: after,
+      events: await this.resourceLinkMigrationEvents(after.manifest_id),
+    }, input, started, "project resource link migration rollback");
+  }
+
   async guardedUpdateWorkspace(input: GuardedProjectMutationRequest): Promise<GuardedProjectMutationResult> {
     return this.inTransaction("guarded project metadata mutation", (store) => store.guardedUpdateWorkspaceInCurrentTransaction(input));
   }
@@ -1294,6 +1886,13 @@ export class ProjectsPgStore {
       precondition_digest: preDigest,
     });
     const before = await this.requireWorkspace(input.project_id);
+    if (input.patch.integrations !== undefined) {
+      assertProjectResourceLinkIntegrationMutation(
+        before.integrations,
+        input.patch.integrations,
+        await this.listProjectResourceLinks(input.project_id, PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS),
+      );
+    }
     const currentRevision = workspaceRevision(before);
     const duplicate = await this.guardedAcceptedReceipt({ operation_id: input.operation_id, step_id: input.step_id, direction, idempotency_key: idempotencyKey, target_id: input.project_id });
     if (duplicate) {

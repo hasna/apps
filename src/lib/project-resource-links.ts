@@ -1,3 +1,8 @@
+import {
+  ProjectResourceLinkCollectionV1Schema,
+  ProjectResourceLinkInputSchema,
+  ProjectResourceLinkSchema,
+} from "@hasna/contracts/schemas";
 import type {
   ProjectResourceAuthority,
   ProjectResourceLink,
@@ -5,6 +10,7 @@ import type {
   ProjectResourceLinkLabels,
   ProjectResourceLinkRow,
   ProjectResourceLinkSnapshot,
+  ProjectResourceLinkCollectionV1,
   ProjectResourceTargetKind,
   Workspace,
   WorkspaceIntegrations,
@@ -171,12 +177,12 @@ export function normalizeProjectResourceLink(input: ProjectResourceLinkInput): P
       throw new Error("Todos task links require a complete external_uuid task ID");
     }
     const taskLocator = { kind: "external_uuid" as const, value: locator.value };
-    return {
+    return ProjectResourceLinkInputSchema.parse({
       ...input,
       service_instance: serviceInstance,
       locator: taskLocator,
       labels,
-    };
+    });
   }
   if (authority === "conversations" && input.target_kind === "channel") {
     if (locator.kind !== "external_uuid" && locator.kind !== "conversations_channel_id") {
@@ -193,19 +199,19 @@ export function normalizeProjectResourceLink(input: ProjectResourceLinkInput): P
       throw new Error("contacts contact links require an immutable external_uuid");
     }
     const contactLocator = { kind: "external_uuid" as const, value: locator.value };
-    return {
+    return ProjectResourceLinkInputSchema.parse({
       ...input,
       service_instance: serviceInstance,
       locator: contactLocator,
       labels,
-    };
+    });
   }
-  return {
+  return ProjectResourceLinkInputSchema.parse({
     ...input,
     service_instance: serviceInstance,
     locator,
     labels,
-  };
+  });
 }
 
 export function projectResourceLinkIdentity(input: ProjectResourceLinkInput): Record<string, string> {
@@ -259,14 +265,18 @@ export function rowToProjectResourceLink(row: ProjectResourceLinkRow): ProjectRe
     scope: row.scope,
     labels: JSON.parse(row.labels_json) as ProjectResourceLinkLabels,
   } as unknown as ProjectResourceLinkInput);
-  return {
+  const timestamp = (value: string): string => {
+    if (value.includes("T")) return new Date(value).toISOString();
+    return new Date(`${value.replace(" ", "T")}Z`).toISOString();
+  };
+  return ProjectResourceLinkSchema.parse({
     ...input,
     id: row.id,
     project_id: row.project_id,
     labels: input.labels ?? {},
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-  };
+    created_at: timestamp(row.created_at),
+    updated_at: timestamp(row.updated_at),
+  });
 }
 
 export function projectResourceLinksDigest(links: readonly ProjectResourceLink[]): string {
@@ -333,10 +343,76 @@ export function normalizeProjectResourceLinkIntegrations(value: unknown): Worksp
   return integrations;
 }
 
+export const PROJECT_RESOURCE_LINK_INTEGRATION_KEYS = PROJECTIONS.map((projection) => projection.key);
+
+export function assertProjectResourceLinkIntegrationMutation(
+  beforeIntegrations: WorkspaceIntegrations,
+  proposedIntegrations: WorkspaceIntegrations,
+  links: readonly ProjectResourceLink[],
+): void {
+  const canonical = projectResourceLinkIntegrationProjection({}, [], links);
+  for (const key of PROJECT_RESOURCE_LINK_INTEGRATION_KEYS) {
+    if (beforeIntegrations[key] === proposedIntegrations[key]) continue;
+    if (canonical[key] !== proposedIntegrations[key]) {
+      throw new Error(
+        `integration '${key}' is a typed resource-link compatibility projection and must be changed through resource-links`,
+      );
+    }
+  }
+}
+
 export function projectResourceLinkSnapshot(project: Workspace, links: ProjectResourceLink[]): ProjectResourceLinkSnapshot {
   return {
     project,
     links,
     collection_digest: projectResourceLinksDigest(links),
   };
+}
+
+export function projectResourceLinkCollection(
+  projectId: string,
+  currentRevision: string,
+  links: ProjectResourceLink[],
+  maxItems: number,
+): ProjectResourceLinkCollectionV1 {
+  return ProjectResourceLinkCollectionV1Schema.parse({
+    schema: "hasna.project_resource_link_collection.v1",
+    project_id: projectId,
+    current_revision: currentRevision,
+    links,
+    link_count: links.length,
+    max_items: maxItems,
+    collection_digest: projectResourceLinksDigest(links),
+    complete: true,
+    truncated: false,
+  });
+}
+
+export function assertProjectResourceLinkReadContractEquality(
+  read: {
+    project_id: string;
+    current_revision: string;
+    links: ProjectResourceLink[];
+    link_count: number;
+    max_items: number;
+    collection_digest: string;
+    complete: boolean;
+    truncated: boolean;
+    contract: ProjectResourceLinkCollectionV1;
+  },
+): void {
+  const flat = {
+    project_id: read.project_id,
+    current_revision: read.current_revision,
+    links: read.links,
+    link_count: read.link_count,
+    max_items: read.max_items,
+    collection_digest: read.collection_digest,
+    complete: read.complete,
+    truncated: read.truncated,
+  };
+  const { schema: _schema, ...contract } = ProjectResourceLinkCollectionV1Schema.parse(read.contract);
+  if (canonicalJson(flat) !== canonicalJson(contract)) {
+    throw new Error("project resource link contract and compatibility fields are not byte-equivalent");
+  }
 }

@@ -20,6 +20,7 @@ import {
 import { canonicalJson, sha256 } from "./guarded-project-mutation.js";
 import {
   normalizeProjectResourceLinks,
+  projectResourceLinkCollection,
   projectResourceLinkId,
   projectResourceLinksDigest,
 } from "./project-resource-links.js";
@@ -561,6 +562,12 @@ class FakeCloudProjectAuthority {
       collection_digest: projectResourceLinksDigest(this.links),
       complete: true,
       truncated: false,
+      contract: projectResourceLinkCollection(
+        project.id,
+        project.updated_at,
+        this.links,
+        input.max_items,
+      ),
       response_control: {
         response_byte_limit: input.response_byte_limit,
         time_budget_ms: input.time_budget_ms,
