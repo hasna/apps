@@ -1014,15 +1014,19 @@ export function updateWorkspace(id: string, input: UpdateWorkspaceInput, db?: Da
   }
 
   let after = getWorkspace(id, d)!;
-  if (input.primary_path !== undefined && input.primary_path) {
-    addWorkspaceLocation({
-      workspace_id: id,
-      path: input.primary_path,
-      label: "main",
-      kind: after.git_remote && !existsSync(resolve(input.primary_path)) ? "remote-intended" : "local",
-      is_primary: true,
-      metadata: {},
-    }, d);
+  if (input.primary_path !== undefined) {
+    if (input.primary_path) {
+      addWorkspaceLocation({
+        workspace_id: id,
+        path: input.primary_path,
+        label: "main",
+        kind: after.git_remote && !existsSync(resolve(input.primary_path)) ? "remote-intended" : "local",
+        is_primary: true,
+        metadata: {},
+      }, d);
+    } else {
+      d.run("UPDATE workspace_locations SET is_primary = 0 WHERE workspace_id = ?", [id]);
+    }
     after = getWorkspace(id, d)!;
   }
 

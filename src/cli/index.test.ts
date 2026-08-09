@@ -1383,6 +1383,119 @@ describe("project-first CLI surface", () => {
     });
   }
 
+  test("guarded rollback restores a remote-only project and leaves its forward path non-primary", () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-guarded-remote-only-"));
+    const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
+    const forwardPath = join(root, "forward");
+    try {
+      const create = runProjects([
+        "create",
+        "--name",
+        "Guarded Remote Only",
+        "--kind",
+        "remote-only",
+        "--git-remote",
+        "https://example.invalid/hasna/guarded-remote-only.git",
+        "--json",
+      ], env);
+      expect(create.exitCode).toBe(0);
+      const created = JSON.parse(text(create.stdout)) as {
+        project: { id: string; primary_path: string | null; updated_at: string };
+      };
+      expect(created.project.primary_path).toBeNull();
+
+      const beforeLocations = runProjects(["locations", "list", created.project.id, "--json"], env);
+      expect(beforeLocations.exitCode).toBe(0);
+      expect((JSON.parse(text(beforeLocations.stdout)) as { locations: unknown[] }).locations).toEqual([]);
+
+      const update = runProjects([
+        "guarded-update",
+        created.project.id,
+        "--expected-revision",
+        created.project.updated_at,
+        "--operation-id",
+        "guarded-remote-only-forward",
+        "--step-id",
+        "set-primary-path",
+        "--path",
+        forwardPath,
+        "--response-byte-limit",
+        "40000",
+        "--time-budget-ms",
+        "5000",
+        "--json",
+      ], env);
+      expect(update.exitCode).toBe(0);
+      const accepted = JSON.parse(text(update.stdout)) as {
+        outcome: string;
+        after: { primary_path: string; updated_at: string };
+        receipt: { receipt_id: string; post_revision: string };
+      };
+      expect(accepted.outcome).toBe("accepted");
+      expect(accepted.after.primary_path).toBe(forwardPath);
+      expect(accepted.receipt.post_revision).toBe(accepted.after.updated_at);
+
+      const forwardLocations = runProjects(["locations", "list", created.project.id, "--json"], env);
+      expect(forwardLocations.exitCode).toBe(0);
+      expect((JSON.parse(text(forwardLocations.stdout)) as {
+        locations: Array<{ path: string; is_primary: boolean }>;
+      }).locations).toEqual([expect.objectContaining({ path: forwardPath, is_primary: true })]);
+
+      const rollback = runProjects([
+        "guarded-rollback",
+        created.project.id,
+        "--accepted-receipt-id",
+        accepted.receipt.receipt_id,
+        "--expected-current-revision",
+        accepted.receipt.post_revision,
+        "--operation-id",
+        "guarded-remote-only-rollback",
+        "--step-id",
+        "clear-primary-path",
+        "--response-byte-limit",
+        "40000",
+        "--time-budget-ms",
+        "5000",
+        "--json",
+      ], env);
+      expect(rollback.exitCode).toBe(0);
+      const rolledBack = JSON.parse(text(rollback.stdout)) as {
+        outcome: string;
+        after: { primary_path: string | null; updated_at: string };
+        receipt: { post_revision: string };
+      };
+      expect(rolledBack.outcome).toBe("accepted");
+      expect(rolledBack.after.primary_path).toBeNull();
+      expect(rolledBack.receipt.post_revision).toBe(rolledBack.after.updated_at);
+
+      const read = runProjects([
+        "guarded-read",
+        created.project.id,
+        "--response-byte-limit",
+        "40000",
+        "--time-budget-ms",
+        "5000",
+        "--json",
+      ], env);
+      expect(read.exitCode).toBe(0);
+      const readBack = JSON.parse(text(read.stdout)) as {
+        current_revision: string;
+        project: { primary_path: string | null; updated_at: string };
+      };
+      expect(readBack.project.primary_path).toBeNull();
+      expect(readBack.current_revision).toBe(rolledBack.receipt.post_revision);
+      expect(readBack.project.updated_at).toBe(rolledBack.receipt.post_revision);
+
+      const rollbackLocations = runProjects(["locations", "list", created.project.id, "--json"], env);
+      expect(rollbackLocations.exitCode).toBe(0);
+      expect((JSON.parse(text(rollbackLocations.stdout)) as {
+        locations: Array<{ path: string; is_primary: boolean }>;
+      }).locations).toEqual([expect.objectContaining({ path: forwardPath, is_primary: false })]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("workspace store, app store, loops, and labels use temp home", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-store-"));
     const env = {
