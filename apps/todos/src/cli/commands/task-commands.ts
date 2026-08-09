@@ -1506,8 +1506,10 @@ export function registerTaskCommands(program: Command) {
       } else {
         const resolvedId = resolveTaskId(id);
         task = applyLocalCommentPage(getTaskWithRelations(resolvedId), page);
-        const { getTaskGitRefs } = await import("../../db/task-commits.js");
-        task.git_refs = getTaskGitRefs(resolvedId);
+        if (task) {
+          const { getTaskGitRefs } = await import("../../db/task-commits.js");
+          task.git_refs = getTaskGitRefs(resolvedId);
+        }
       }
 
       if (!task) {
