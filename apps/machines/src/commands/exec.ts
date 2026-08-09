@@ -11,7 +11,6 @@ import {
 export const DEFAULT_MACHINE_EXEC_MAX_OUTPUT_CHARS = 131_072;
 export const DEFAULT_MACHINE_EXEC_MAX_SCRIPT_CHARS = 65_536;
 export const MACHINE_EXEC_MUTATION_OPERATION = "machines_exec";
-const MACHINE_EXEC_REDACTION_LOOKAHEAD_CHARS = 512;
 
 export interface MachineExecInput {
   machineId: string;
@@ -159,20 +158,24 @@ export function runMachineExec(
   const maxOutputChars = input.maxOutputChars ?? DEFAULT_MACHINE_EXEC_MAX_OUTPUT_CHARS;
   const options: MachineCommandOptions = {
     timeoutMs: input.timeoutMs,
-    // Retain a bounded lookahead so a credential crossing the visible output
-    // boundary is complete enough for the redactor to recognize before the
-    // final stream cap is applied.
-    maxOutputChars: maxOutputChars + MACHINE_EXEC_REDACTION_LOOKAHEAD_CHARS,
+    maxOutputChars,
+    redactOutput: true,
   };
   const result = runner(input.machineId.trim(), command, options);
+  const stdoutValue = result.stdoutTruncated === true && result.stdoutRedacted !== true
+    ? ""
+    : result.stdout;
+  const stderrValue = result.stderrTruncated === true && result.stderrRedacted !== true
+    ? ""
+    : result.stderr;
   const stdout = boundAndRedact(
-    result.stdout,
+    stdoutValue,
     maxOutputChars,
     result.stdoutTruncated === true,
     result.stdoutChars ?? result.stdout.length,
   );
   const stderr = boundAndRedact(
-    result.stderr,
+    stderrValue,
     maxOutputChars,
     result.stderrTruncated === true,
     result.stderrChars ?? result.stderr.length,

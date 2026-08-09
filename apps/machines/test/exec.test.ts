@@ -142,18 +142,38 @@ describe("machines exec command", () => {
     const credential = `AK${"IA"}${"A".repeat(16)}`;
     const output = `${credential}\n`;
     const maxOutputChars = credential.length - 1;
-    const runner: MachineCommandRunner = (machineId, _command, options) => {
-      const captureLimit = options?.maxOutputChars ?? output.length;
-      return {
-        machineId,
-        source: "local",
-        stdout: output.slice(0, captureLimit),
-        stderr: "",
-        exitCode: 0,
-        stdoutTruncated: output.length > captureLimit,
-        stdoutChars: output.length,
-      };
-    };
+    const childScript = `process.stdout.write(${JSON.stringify(output)});`;
+
+    const result = runMachineExec({
+      machineId: "local",
+      timeoutMs: 1000,
+      argv: [process.execPath, "--eval", childScript],
+      maxOutputChars,
+    });
+
+    expect(result.stdout.text).toContain("[redacted]");
+    expect(result.stdout.text).not.toContain(credential.slice(0, -1));
+    expect(result.stdout.text.length).toBeLessThanOrEqual(maxOutputChars);
+  });
+
+  test("fails closed when a runner returns raw truncated output before redaction", () => {
+    const assignmentKey = ["AWS", "SECRET", "ACCESS", "KEY"].join("_");
+    const leadingSecret = `${assignmentKey}=${"s".repeat(600)}\n`;
+    const credential = `AK${"IA"}${"A".repeat(16)}`;
+    const maxOutputChars = 200;
+    const collectionLimit = maxOutputChars + 512;
+    const filler = `${"x".repeat(collectionLimit - leadingSecret.length - 9)} `;
+    const output = `${leadingSecret}${filler}${credential}\n`;
+    const runner: MachineCommandRunner = (machineId) => ({
+      machineId,
+      source: "local",
+      stdout: output.slice(0, collectionLimit),
+      stderr: "",
+      exitCode: 0,
+      stdoutTruncated: true,
+      stdoutChars: output.length,
+      stdoutRedacted: false,
+    });
 
     const result = runMachineExec({
       machineId: "local",
@@ -162,9 +182,44 @@ describe("machines exec command", () => {
       maxOutputChars,
     }, runner);
 
-    expect(result.stdout.text).toContain("[redacted]");
-    expect(result.stdout.text).not.toContain(credential.slice(0, -1));
+    expect(result.stdout.text).toContain("...[truncated");
+    expect(result.stdout.text).not.toContain(`${assignmentKey}=`);
+    expect(result.stdout.text).not.toContain(credential.slice(0, 8));
     expect(result.stdout.text.length).toBeLessThanOrEqual(maxOutputChars);
+  });
+
+  test("redacts credentials split across process output chunks before collection truncates", () => {
+    const assignmentKey = ["AWS", "SECRET", "ACCESS", "KEY"].join("_");
+    const credentialPrefix = ["AK", "IA"].join("");
+    const maxOutputChars = 200;
+    const collectionLimit = maxOutputChars + 512;
+    const leadingSecret = `${assignmentKey}=${"s".repeat(600)}\n`;
+    const filler = `${"x".repeat(collectionLimit - leadingSecret.length - 9)} `;
+    const firstChunk = `${leadingSecret}${filler}${credentialPrefix}${"A".repeat(4)}`;
+    const secondChunk = `${"A".repeat(12)}\n`;
+    const childScript = [
+      `process.stdout.write(${JSON.stringify(firstChunk)});`,
+      `process.stderr.write(${JSON.stringify(firstChunk)});`,
+      "setTimeout(() => {",
+      `process.stdout.write(${JSON.stringify(secondChunk)});`,
+      `process.stderr.write(${JSON.stringify(secondChunk)});`,
+      "}, 20);",
+    ].join("");
+
+    const result = runMachineExec({
+      machineId: "local",
+      timeoutMs: 2000,
+      argv: [process.execPath, "--eval", childScript],
+      maxOutputChars,
+    });
+
+    expect(result.exit_code).toBe(0);
+    expect(result.stdout.text).toContain(`${assignmentKey}=[redacted]`);
+    expect(result.stdout.text).not.toContain(`${credentialPrefix}${"A".repeat(4)}`);
+    expect(result.stdout.text.length).toBeLessThanOrEqual(maxOutputChars);
+    expect(result.stderr.text).toContain(`${assignmentKey}=[redacted]`);
+    expect(result.stderr.text).not.toContain(`${credentialPrefix}${"A".repeat(4)}`);
+    expect(result.stderr.text.length).toBeLessThanOrEqual(maxOutputChars);
   });
 
   test("rejects scripts longer than 65536 characters before execution", () => {
