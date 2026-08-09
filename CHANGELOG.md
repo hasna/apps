@@ -6,6 +6,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.115]
+
+### Fixed
+
+- `projects register-full` now uses the shipped Todos, Mementos, and
+  Conversations production authorities through configured HTTP clients or
+  explicit local database paths instead of unavailable stubs, and fails closed
+  before imports when an authority has neither complete API configuration nor
+  an explicit database path.
+- Full registration now carries exact request and precondition digests through
+  receipt lookup, replays accepted external IDs for duplicate requests,
+  reconciles ambiguous committed results from the matching receipt, and limits
+  inverse compensation to receipt-owned targets.
+
 ## [0.1.114]
 
 ### Fixed
