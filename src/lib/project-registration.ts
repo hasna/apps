@@ -41,6 +41,7 @@ import {
 } from "./guarded-project-mutation.js";
 import { deriveProjectChannel } from "./project-channel.js";
 import {
+  COMPLETE_EXTERNAL_UUID_PATTERN,
   PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS,
   normalizeProjectResourceLinks,
   projectResourceLinkConversationsChannelLocatorKind,
@@ -291,10 +292,42 @@ export interface FullProjectRegistrationProjectInput {
   command?: string;
 }
 
+export interface ProjectRegistrationExistingConversationsChannelReconciliation {
+  source_operation_id: string;
+  target_id: string;
+}
+
+export interface ProjectRegistrationExistingAuthorityReconciliation {
+  source_operation_id: string;
+  target_id: string;
+}
+
+export interface ProjectRegistrationExistingMementosProjectReconciliation
+  extends ProjectRegistrationExistingAuthorityReconciliation {
+  source_target: ProjectRegistrationPathHandle;
+}
+
+export interface FullProjectRegistrationReconciliationInput {
+  conversations_channel?: ProjectRegistrationExistingConversationsChannelReconciliation;
+  todos_project?: ProjectRegistrationExistingAuthorityReconciliation;
+  todos_task_list?: ProjectRegistrationExistingAuthorityReconciliation;
+  mementos_project?: ProjectRegistrationExistingMementosProjectReconciliation;
+}
+
+interface ValidatedFullProjectRegistrationReconciliationInput {
+  conversations_channel?: ProjectRegistrationExistingConversationsChannelReconciliation;
+  todos_project?: ProjectRegistrationExistingAuthorityReconciliation;
+  todos_task_list?: ProjectRegistrationExistingAuthorityReconciliation;
+  mementos_project?: ProjectRegistrationExistingAuthorityReconciliation & {
+    source_target_path_digest: string;
+  };
+}
+
 export interface FullProjectRegistrationInput extends ProjectRegistrationBounds {
   operation_id: string;
   mode?: "create" | "retrofit";
   expected_project_revision?: string;
+  reconcile_existing?: FullProjectRegistrationReconciliationInput;
   project: FullProjectRegistrationProjectInput;
   target: ProjectRegistrationPathHandle;
   goals_markdown: string;
@@ -419,15 +452,31 @@ interface AcceptedExternalStep {
   adapter: ProjectRegistrationAuthorityAdapter;
   capability: ProjectRegistrationAuthorityCapability;
   receipt: ProjectRegistrationAuthorityReceipt;
+  record: ProjectRegistrationAuthorityRecord;
   request: ProjectRegistrationAuthorityRequest;
   local_receipt: ProjectRegistrationReceipt | null;
 }
 
-interface ExistingAuthorityAdoption {
-  integration_key: keyof WorkspaceIntegrations;
-  integration_value: string;
-  expected_target_id?: string;
-}
+type ExistingAuthorityAdoption =
+  | {
+      evidence: "project_integration";
+      integration_key: keyof WorkspaceIntegrations;
+      integration_value: string;
+      expected_target_id?: string;
+    }
+  | {
+      evidence: "prior_registration_receipt";
+      source_operation_id: string;
+      expected_target_id: string;
+      allowed_terminal_reasons: readonly string[];
+      source_desired?: JsonObject;
+      readback_target?: ProjectRegistrationPathHandle;
+      path_drift?: {
+        source_target_path_digest: string;
+        requested_target_path_digest: string;
+        required_follow_up: "mementos_projects_update_path";
+      };
+    };
 
 interface AcceptedFileStep {
   filename: string;
@@ -773,6 +822,112 @@ function assertRegistrationOperationId(operationId: string): void {
   }
 }
 
+function validateReconcileExisting(
+  input: FullProjectRegistrationInput,
+  mode: "create" | "retrofit",
+): {
+  value: ValidatedFullProjectRegistrationReconciliationInput;
+  mementos_source_target: ProjectRegistrationPathHandle | null;
+} | null {
+  const raw = input.reconcile_existing as unknown;
+  if (raw === undefined) return null;
+  if (mode !== "create") {
+    throw new Error("project registration reconcile_existing is valid only in create mode");
+  }
+  if (!input.project.id) {
+    throw new Error("project registration reconcile_existing requires an explicit project.id");
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("project registration reconcile_existing must be an object");
+  }
+  const root = raw as Record<string, unknown>;
+  const supportedKeys = [
+    "conversations_channel",
+    "todos_project",
+    "todos_task_list",
+    "mementos_project",
+  ] as const;
+  const rootKeys = Object.keys(root).sort();
+  if (rootKeys.length === 0 || rootKeys.some((key) => !supportedKeys.includes(key as typeof supportedKeys[number]))) {
+    throw new Error(
+      "project registration reconcile_existing supports only conversations_channel, todos_project, todos_task_list, and mementos_project",
+    );
+  }
+  const value: ValidatedFullProjectRegistrationReconciliationInput = {};
+  const sourceOperationIds = new Set<string>();
+  let mementosSourceTarget: ProjectRegistrationPathHandle | null = null;
+  for (const key of supportedKeys) {
+    const entryRaw = root[key];
+    if (entryRaw === undefined) continue;
+    if (!entryRaw || typeof entryRaw !== "object" || Array.isArray(entryRaw)) {
+      throw new Error(`project registration reconcile_existing.${key} must be an object`);
+    }
+    const entry = entryRaw as Record<string, unknown>;
+    const expectedKeys = key === "mementos_project"
+      ? ["source_operation_id", "source_target", "target_id"]
+      : ["source_operation_id", "target_id"];
+    if (canonicalJson(Object.keys(entry).sort()) !== canonicalJson(expectedKeys)) {
+      throw new Error(
+        `project registration reconcile_existing.${key} requires only ${expectedKeys.join(" and ")}`,
+      );
+    }
+    if (typeof entry.source_operation_id !== "string") {
+      throw new Error(
+        `project registration reconcile_existing.${key}.source_operation_id must be a string`,
+      );
+    }
+    assertRegistrationOperationId(entry.source_operation_id);
+    if (entry.source_operation_id === input.operation_id) {
+      throw new Error(
+        "project registration reconcile_existing source_operation_id must differ from operation_id",
+      );
+    }
+    sourceOperationIds.add(entry.source_operation_id);
+    const targetId = entry.target_id;
+    const targetValid = typeof targetId === "string" && (
+      key === "conversations_channel"
+        ? projectResourceLinkConversationsChannelLocatorKind(targetId) !== null
+        : key === "mementos_project"
+          ? /^mm_project_[0-9a-f]{40}$/.test(targetId)
+          : new RegExp(COMPLETE_EXTERNAL_UUID_PATTERN).test(targetId)
+    );
+    if (!targetValid) {
+      throw new Error(
+        `project registration reconcile_existing.${key}.target_id must be a complete immutable ${key === "conversations_channel" ? "channel" : key === "mementos_project" ? "Mementos project" : "Todos object"} ID`,
+      );
+    }
+    if (key === "mementos_project") {
+      if (!(entry.source_target instanceof ProjectRegistrationPathHandle)) {
+        throw new Error(
+          "project registration reconcile_existing.mementos_project.source_target must be a project registration path handle",
+        );
+      }
+      mementosSourceTarget = entry.source_target;
+      value.mementos_project = {
+        source_operation_id: entry.source_operation_id,
+        target_id: targetId as string,
+        source_target_path_digest: entry.source_target.digest,
+      };
+    } else {
+      value[key] = {
+        source_operation_id: entry.source_operation_id,
+        target_id: targetId as string,
+      };
+    }
+  }
+  if (sourceOperationIds.size !== 1) {
+    throw new Error(
+      "project registration reconcile_existing entries must share one source_operation_id",
+    );
+  }
+  if (value.todos_task_list && !value.todos_project) {
+    throw new Error(
+      "project registration reconcile_existing.todos_task_list requires todos_project from the same source operation",
+    );
+  }
+  return { value, mementos_source_target: mementosSourceTarget };
+}
+
 export function assertCurrentProjectRegistrationSlug(slug: string): void {
   for (const prefix of RETIRED_PROJECT_REGISTRATION_PREFIXES) {
     if (slug.startsWith(prefix)) {
@@ -790,6 +945,8 @@ function validateInput(input: FullProjectRegistrationInput): {
   project_slug: string;
   project_metadata: JsonObject;
   request_digest: string;
+  reconcile_existing: ValidatedFullProjectRegistrationReconciliationInput | null;
+  mementos_source_target: ProjectRegistrationPathHandle | null;
 } {
   assertRegistrationOperationId(input.operation_id);
   const mode = input.mode ?? "create";
@@ -816,6 +973,7 @@ function validateInput(input: FullProjectRegistrationInput): {
   if (!Number.isInteger(input.time_budget_ms) || input.time_budget_ms < 1_000) {
     throw new Error("time_budget_ms must be an integer of at least 1000");
   }
+  const reconcileExisting = validateReconcileExisting(input, mode);
   const projectSlug = workspaceSlugify(input.project.slug ?? input.project.name);
   assertCurrentProjectRegistrationSlug(projectSlug);
   const projectId = assertProjectWorkspaceId(
@@ -826,6 +984,7 @@ function validateInput(input: FullProjectRegistrationInput): {
     operation_id: input.operation_id,
     mode,
     expected_project_revision: input.expected_project_revision ?? null,
+    reconcile_existing: reconcileExisting?.value ?? null,
     project: {
       id: projectId,
       slug: projectSlug,
@@ -848,6 +1007,8 @@ function validateInput(input: FullProjectRegistrationInput): {
     project_slug: projectSlug,
     project_metadata: projectMetadata,
     request_digest: requestDigest,
+    reconcile_existing: reconcileExisting?.value ?? null,
+    mementos_source_target: reconcileExisting?.mementos_source_target ?? null,
   };
 }
 
@@ -1033,6 +1194,7 @@ function manifestPlan(input: {
   project_kind: WorkspaceKind;
   target_path_digest: string;
   capabilities: ProjectRegistrationAuthorityCapability[];
+  reconcile_existing: ValidatedFullProjectRegistrationReconciliationInput | null;
 }): JsonObject {
   const channel = deriveProjectChannel({
     slug: input.project_slug,
@@ -1044,6 +1206,7 @@ function manifestPlan(input: {
     project_id: input.project_id,
     project_slug: input.project_slug,
     target_path_digest: input.target_path_digest,
+    reconcile_existing: input.reconcile_existing,
     authorities: input.capabilities
       .slice()
       .sort((a, b) => a.authority.localeCompare(b.authority))
@@ -1346,6 +1509,79 @@ async function resolveAuthorityMutation(input: {
   return lookup.receipt;
 }
 
+async function lookupPriorRegistrationReceipt(input: {
+  adapter: ProjectRegistrationAuthorityAdapter;
+  capability: ProjectRegistrationAuthorityCapability;
+  request: ProjectRegistrationAuthorityRequest;
+  current_record: ProjectRegistrationAuthorityRecord;
+  adoption: Extract<ExistingAuthorityAdoption, { evidence: "prior_registration_receipt" }>;
+}): Promise<ProjectRegistrationAuthorityReceipt> {
+  const sourceDesired = input.adoption.source_desired ?? input.request.desired;
+  const sourceRequestDigest = sha256(canonicalJson(sourceDesired));
+  const sourceIdempotencyKey = deriveProjectRegistrationIdempotencyKey({
+    operation_id: input.adoption.source_operation_id,
+    step_id: input.request.step_id,
+    direction: input.request.direction,
+    target_selector: input.request.target_selector,
+    request_digest: sourceRequestDigest,
+    precondition_digest: input.request.precondition_digest,
+  });
+  const sourceRequest: ProjectRegistrationAuthorityRequest = {
+    ...input.request,
+    operation_id: input.adoption.source_operation_id,
+    idempotency_key: sourceIdempotencyKey,
+    request_digest: sourceRequestDigest,
+    desired: sourceDesired,
+    target: input.adoption.readback_target ?? input.request.target,
+  };
+  const lookupRequest: ProjectRegistrationAuthorityLookupRequest = {
+    operation_id: sourceRequest.operation_id,
+    step_id: sourceRequest.step_id,
+    resource_kind: sourceRequest.resource_kind,
+    direction: sourceRequest.direction,
+    authority: input.capability.authority,
+    authority_route: sourceRequest.authority_route,
+    package_version: sourceRequest.package_version,
+    authority_id: sourceRequest.authority_id,
+    tenant_id: sourceRequest.tenant_id,
+    corpus_id: sourceRequest.corpus_id,
+    target_selector: sourceRequest.target_selector,
+    idempotency_key: sourceRequest.idempotency_key,
+    request_digest: sourceRequest.request_digest,
+    precondition_digest: sourceRequest.precondition_digest,
+    target_id: input.adoption.expected_target_id,
+    max_items: 1,
+    response_byte_limit: sourceRequest.response_byte_limit,
+    time_budget_ms: sourceRequest.time_budget_ms,
+  };
+  try {
+    const lookup = await input.adapter.lookupReceipt(lookupRequest);
+    validateAuthorityLookup(lookup, lookupRequest);
+    validateAuthorityReceipt(lookup.receipt, sourceRequest, input.capability);
+    const sourceReceipt = lookup.receipt;
+    const acceptedProof = sourceReceipt.outcome === "accepted"
+      ? sourceReceipt.created_by_operation === true
+      : sourceReceipt.outcome === "duplicate_of_accepted"
+        ? sourceReceipt.created_by_operation === false && Boolean(sourceReceipt.duplicate_of_receipt_id)
+        : false;
+    if (
+      !acceptedProof
+      || sourceReceipt.target_id !== input.adoption.expected_target_id
+      || sourceReceipt.target_id !== input.current_record.target_id
+      || sourceReceipt.result_revision !== input.current_record.revision
+      || sourceReceipt.result_digest !== input.current_record.digest
+    ) {
+      throw new Error("prior registration receipt does not prove the current exact target");
+    }
+    return sourceReceipt;
+  } catch {
+    throw new ProjectRegistrationStepError(
+      input.request.step_id,
+      "registration_reconciliation_receipt_unverified",
+    );
+  }
+}
+
 function appendAuthorityTerminalReceipt(input: {
   adapter: ProjectRegistrationAuthorityAdapter;
   request: ProjectRegistrationAuthorityRequest;
@@ -1408,9 +1644,46 @@ function appendAdoptedAuthorityReceipt(input: {
   adapter: ProjectRegistrationAuthorityAdapter;
   request: ProjectRegistrationAuthorityRequest;
   authority_receipt: ProjectRegistrationAuthorityReceipt;
+  record: ProjectRegistrationAuthorityRecord;
   adoption: ExistingAuthorityAdoption;
+  source_receipt?: ProjectRegistrationAuthorityReceipt;
   db: Database;
 }): ProjectRegistrationReceipt {
+  const adoptionPreconditions: JsonObject[] = input.adoption.evidence === "project_integration"
+    ? [{
+        predicate: "explicit_project_integration",
+        integration_key: input.adoption.integration_key,
+        integration_value_digest: sha256(input.adoption.integration_value),
+        expected_target_id: input.adoption.expected_target_id ?? null,
+        authority_receipt_id: input.authority_receipt.receipt_id,
+        exact_readback: true,
+      }]
+    : [{
+        predicate: "prior_registration_receipt",
+        source_operation_id: input.adoption.source_operation_id,
+        source_receipt_id: input.source_receipt?.receipt_id ?? null,
+        source_receipt_outcome: input.source_receipt?.outcome ?? null,
+        source_accepted_receipt_id: input.source_receipt?.outcome === "accepted"
+          ? input.source_receipt.receipt_id
+          : input.source_receipt?.duplicate_of_receipt_id ?? null,
+        expected_target_id: input.adoption.expected_target_id,
+        authority_receipt_id: input.authority_receipt.receipt_id,
+        exact_authority_lookup: true,
+        exact_readback: true,
+        ...(input.adoption.path_drift
+          ? { path_drift: {
+              detected: input.adoption.path_drift.source_target_path_digest
+                !== input.adoption.path_drift.requested_target_path_digest,
+              source_target_path_digest: input.adoption.path_drift.source_target_path_digest,
+              requested_target_path_digest: input.adoption.path_drift.requested_target_path_digest,
+              required_follow_up: input.adoption.path_drift.required_follow_up,
+              expected_revision: input.record.revision,
+              expected_digest: input.record.digest,
+              requires_idempotency_key: true,
+              requires_receipt_cas: true,
+            } }
+          : {}),
+      }];
   return appendRegistrationReceipt({
     operation_id: input.request.operation_id,
     step_id: input.request.step_id,
@@ -1418,31 +1691,24 @@ function appendAdoptedAuthorityReceipt(input: {
     resource_kind: input.request.resource_kind,
     direction: input.request.direction,
     idempotency_key: input.request.idempotency_key,
-    target_id: input.authority_receipt.target_id,
+    target_id: input.record.target_id,
     request_digest: input.request.request_digest,
     precondition_digest: input.request.precondition_digest,
     outcome: "accepted",
     reason: "adopted_preexisting",
-    result_revision: input.authority_receipt.result_revision,
-    result_digest: input.authority_receipt.result_digest,
+    result_revision: input.record.revision,
+    result_digest: input.record.digest,
     authority_receipt: input.authority_receipt,
     artifacts: [{
       authority: input.adapter.authority,
       resource_kind: input.request.resource_kind,
-      target_id: input.authority_receipt.target_id,
-      revision: input.authority_receipt.result_revision,
-      digest: input.authority_receipt.result_digest,
+      target_id: input.record.target_id,
+      revision: input.record.revision,
+      digest: input.record.digest,
       adopted: true,
       created_by_operation: false,
     }],
-    preconditions: [{
-      predicate: "explicit_project_integration",
-      integration_key: input.adoption.integration_key,
-      integration_value_digest: sha256(input.adoption.integration_value),
-      expected_target_id: input.adoption.expected_target_id ?? null,
-      authority_receipt_id: input.authority_receipt.receipt_id,
-      exact_readback: true,
-    }],
+    preconditions: adoptionPreconditions,
     rollback: [],
   }, input.db);
 }
@@ -1457,11 +1723,11 @@ function appendAuthorityReadbackReceipt(input: {
   const stepId = `${input.request.step_id}:readback`;
   const requestDigest = sha256(canonicalJson({
     authority_receipt_id: input.authority_receipt.receipt_id,
-    target_id: input.authority_receipt.target_id,
+    target_id: input.record.target_id,
   }));
   const preconditionDigest = sha256(canonicalJson({
-    expected_revision: input.authority_receipt.result_revision,
-    expected_digest: input.authority_receipt.result_digest,
+    expected_revision: "revision" in input.record ? input.record.revision : input.authority_receipt.result_revision,
+    expected_digest: input.record.digest,
   }));
   const idempotencyKey = deriveProjectRegistrationIdempotencyKey({
     operation_id: input.request.operation_id,
@@ -1478,16 +1744,16 @@ function appendAuthorityReadbackReceipt(input: {
     resource_kind: `${input.request.resource_kind}_readback`,
     direction: input.request.direction,
     idempotency_key: idempotencyKey,
-    target_id: input.authority_receipt.target_id,
+    target_id: input.record.target_id,
     request_digest: requestDigest,
     precondition_digest: preconditionDigest,
     outcome: "accepted",
-    result_revision: input.authority_receipt.result_revision,
-    result_digest: input.authority_receipt.result_digest,
+    result_revision: "revision" in input.record ? input.record.revision : input.authority_receipt.result_revision,
+    result_digest: input.record.digest,
     artifacts: [{
       authority: input.adapter.authority,
       resource_kind: input.request.resource_kind,
-      target_id: input.authority_receipt.target_id,
+      target_id: input.record.target_id,
       exact_readback: true,
       inverse_absence: input.request.direction === "inverse",
     }],
@@ -1557,46 +1823,106 @@ async function executeExternalStep(input: {
   });
   if (receipt.outcome === "terminal_nonacceptance") {
     const adoption = input.adopt_existing;
-    const adoptionReason = receipt.reason === "preexisting_equivalent"
-      || receipt.reason === "preexisting_conflict";
-    const targetMatches = adoption?.expected_target_id === undefined
-      || adoption.expected_target_id === receipt.target_id;
-    const authorityAdoptionValidated = receipt.reason === "preexisting_equivalent"
-      || adoption?.expected_target_id !== undefined
-      || await input.adapter.validateExistingAdoption?.(request, receipt) === true;
+    let sourceReceipt: ProjectRegistrationAuthorityReceipt | undefined;
+    let record: ProjectRegistrationAuthorityRecord | undefined;
+    let adoptionValidated = false;
+    const receiptComplete = (
+      receipt.created_by_operation === false
+      && Boolean(receipt.target_id)
+      && Boolean(receipt.result_revision)
+      && Boolean(receipt.result_digest)
+    );
+    if (adoption?.evidence === "prior_registration_receipt") {
+      const terminalMatches = receipt.created_by_operation === false
+        && Boolean(receipt.target_id)
+        && adoption.expected_target_id === receipt.target_id
+        && adoption.allowed_terminal_reasons.includes(receipt.reason ?? "");
+      if (terminalMatches) {
+        try {
+          record = await input.adapter.readExact({
+            resource_kind: input.resource_kind,
+            target_id: receipt.target_id!,
+            target: adoption.readback_target ?? input.target,
+            ...input.bounds,
+          });
+          const terminalRecordAbsent = receipt.result_revision === null && receipt.result_digest === null;
+          const terminalRecordMatches = receipt.result_revision === record.revision
+            && receipt.result_digest === record.digest;
+          if (
+            record.target_id !== adoption.expected_target_id
+            || (!terminalRecordAbsent && !terminalRecordMatches)
+          ) {
+            throw new ProjectRegistrationStepError(
+              input.step_id,
+              "registration_reconciliation_receipt_unverified",
+            );
+          }
+          sourceReceipt = await lookupPriorRegistrationReceipt({
+            adapter: input.adapter,
+            capability: input.capability,
+            request,
+            current_record: record,
+            adoption,
+          });
+          adoptionValidated = true;
+        } catch (error) {
+          appendAuthorityTerminalReceipt({
+            adapter: input.adapter,
+            request,
+            receipt,
+            db: input.db,
+          });
+          throw error instanceof ProjectRegistrationStepError
+            ? error
+            : new ProjectRegistrationStepError(
+                input.step_id,
+                "registration_reconciliation_receipt_unverified",
+              );
+        }
+      }
+    } else if (adoption?.evidence === "project_integration" && receiptComplete) {
+      const adoptionReason = receipt.reason === "preexisting_equivalent"
+        || receipt.reason === "preexisting_conflict";
+      const targetMatches = adoption.expected_target_id === undefined
+        || adoption.expected_target_id === receipt.target_id;
+      const authorityAdoptionValidated = receipt.reason === "preexisting_equivalent"
+        || adoption.expected_target_id !== undefined
+        || await input.adapter.validateExistingAdoption?.(request, receipt) === true;
+      adoptionValidated = adoptionReason && targetMatches && authorityAdoptionValidated;
+    }
     if (
       adoption
-      && adoptionReason
-      && targetMatches
-      && authorityAdoptionValidated
-      && receipt.created_by_operation === false
-      && receipt.target_id
-      && receipt.result_revision
-      && receipt.result_digest
+      && adoptionValidated
+      && (record !== undefined || receiptComplete)
     ) {
-      const record = await input.adapter.readExact({
-        resource_kind: input.resource_kind,
-        target_id: receipt.target_id,
-        target: input.target,
-        ...input.bounds,
-      });
-      if (
-        record.target_id !== receipt.target_id
-        || record.revision !== receipt.result_revision
-        || record.digest !== receipt.result_digest
-      ) {
-        throw new ProjectRegistrationStepError(input.step_id, "authority_exact_readback_mismatch");
+      if (!record) {
+        record = await input.adapter.readExact({
+          resource_kind: input.resource_kind,
+          target_id: receipt.target_id!,
+          target: input.target,
+          ...input.bounds,
+        });
+        if (
+          record.target_id !== receipt.target_id
+          || record.revision !== receipt.result_revision
+          || record.digest !== receipt.result_digest
+        ) {
+          throw new ProjectRegistrationStepError(input.step_id, "authority_exact_readback_mismatch");
+        }
       }
       const accepted: AcceptedExternalStep = {
         adapter: input.adapter,
         capability: input.capability,
         receipt,
+        record,
         request,
         local_receipt: appendAdoptedAuthorityReceipt({
           adapter: input.adapter,
           request,
           authority_receipt: receipt,
+          record,
           adoption,
+          source_receipt: sourceReceipt,
           db: input.db,
         }),
       };
@@ -1625,6 +1951,11 @@ async function executeExternalStep(input: {
     adapter: input.adapter,
     capability: input.capability,
     receipt,
+    record: {
+      target_id: receipt.target_id!,
+      revision: receipt.result_revision!,
+      digest: receipt.result_digest!,
+    },
     request,
     local_receipt: null,
   };
@@ -1648,6 +1979,7 @@ async function executeExternalStep(input: {
   ) {
     throw new ProjectRegistrationStepError(input.step_id, "authority_exact_readback_mismatch");
   }
+  accepted.record = record;
   appendAuthorityReadbackReceipt({
     adapter: input.adapter,
     request,
@@ -2708,9 +3040,9 @@ function projectArtifacts(
     artifacts.push({
       kind: item.request.resource_kind,
       authority: item.adapter.authority,
-      target_id: item.receipt.target_id!,
-      revision: item.receipt.result_revision!,
-      digest: item.receipt.result_digest!,
+      target_id: item.record.target_id,
+      revision: item.record.revision,
+      digest: item.record.digest,
     });
   }
   for (const item of files) {
@@ -2975,6 +3307,7 @@ export async function registerFullProject(
     project_kind: input.project.kind ?? "generic",
     target_path_digest: input.target.digest,
     capabilities: capability.capabilities,
+    reconcile_existing: validated.reconcile_existing,
   });
   const operationRequestDigest = sha256(canonicalJson({
     input_request_digest: validated.request_digest,
@@ -3467,6 +3800,7 @@ export async function registerFullProject(
     failedStep = "conversations_channel";
     const channel = deriveProjectChannel(project).channel;
     const existingChannel = retrofitProject?.integrations.conversations_channel;
+    const channelReconciliation = validated.reconcile_existing?.conversations_channel;
     const conversations = await executeExternalStep({
       adapter: authorities.conversations,
       capability: capabilities.conversations,
@@ -3485,16 +3819,25 @@ export async function registerFullProject(
       bounds,
       db,
       accepted_steps: externalAccepted,
-      adopt_existing: typeof existingChannel === "string" && existingChannel === channel
+      adopt_existing: channelReconciliation
         ? {
+            evidence: "prior_registration_receipt",
+            source_operation_id: channelReconciliation.source_operation_id,
+            expected_target_id: channelReconciliation.target_id,
+            allowed_terminal_reasons: ["preexisting_equivalent"],
+          }
+        : typeof existingChannel === "string" && existingChannel === channel
+          ? {
+            evidence: "project_integration",
             integration_key: "conversations_channel",
             integration_value: existingChannel,
           }
-        : undefined,
+          : undefined,
     });
 
     failedStep = "todos_project";
     const existingTodosProjectId = retrofitProject?.integrations.todos_project_id;
+    const todosProjectReconciliation = validated.reconcile_existing?.todos_project;
     const todosProject = await executeExternalStep({
       adapter: authorities.todos,
       capability: capabilities.todos,
@@ -3512,26 +3855,35 @@ export async function registerFullProject(
       bounds,
       db,
       accepted_steps: externalAccepted,
-      adopt_existing: typeof existingTodosProjectId === "string" && existingTodosProjectId.trim()
+      adopt_existing: todosProjectReconciliation
         ? {
+            evidence: "prior_registration_receipt",
+            source_operation_id: todosProjectReconciliation.source_operation_id,
+            expected_target_id: todosProjectReconciliation.target_id,
+            allowed_terminal_reasons: ["target_already_exists", "target_already_registered"],
+          }
+        : typeof existingTodosProjectId === "string" && existingTodosProjectId.trim()
+          ? {
+            evidence: "project_integration",
             integration_key: "todos_project_id",
             integration_value: existingTodosProjectId,
             expected_target_id: existingTodosProjectId,
           }
-        : undefined,
+          : undefined,
     });
 
     failedStep = "todos_task_list";
     const existingTodosTaskListId = retrofitProject?.integrations.todos_task_list_id;
+    const todosTaskListReconciliation = validated.reconcile_existing?.todos_task_list;
     const todosTaskList = await executeExternalStep({
       adapter: authorities.todos,
       capability: capabilities.todos,
       operation_id: input.operation_id,
       step_id: failedStep,
       resource_kind: "task_list",
-      target_selector: `${todosProject.receipt.target_id}:default`,
+      target_selector: `${todosProject.record.target_id}:default`,
       desired: {
-        todos_project_id: todosProject.receipt.target_id,
+        todos_project_id: todosProject.record.target_id,
         source_project_id: project.id,
         name: project.name,
       },
@@ -3540,17 +3892,26 @@ export async function registerFullProject(
       bounds,
       db,
       accepted_steps: externalAccepted,
-      adopt_existing: typeof existingTodosTaskListId === "string" && existingTodosTaskListId.trim()
+      adopt_existing: todosTaskListReconciliation
         ? {
+            evidence: "prior_registration_receipt",
+            source_operation_id: todosTaskListReconciliation.source_operation_id,
+            expected_target_id: todosTaskListReconciliation.target_id,
+            allowed_terminal_reasons: ["target_already_exists", "target_already_registered"],
+          }
+        : typeof existingTodosTaskListId === "string" && existingTodosTaskListId.trim()
+          ? {
+            evidence: "project_integration",
             integration_key: "todos_task_list_id",
             integration_value: existingTodosTaskListId,
             expected_target_id: existingTodosTaskListId,
           }
-        : undefined,
+          : undefined,
     });
 
     failedStep = "mementos_project";
     const existingMementosProjectId = retrofitProject?.integrations.mementos_project_id;
+    const mementosProjectReconciliation = validated.reconcile_existing?.mementos_project;
     const mementosProject = await executeExternalStep({
       adapter: authorities.mementos,
       capability: capabilities.mementos,
@@ -3569,21 +3930,43 @@ export async function registerFullProject(
       bounds,
       db,
       accepted_steps: externalAccepted,
-      adopt_existing: typeof existingMementosProjectId === "string" && existingMementosProjectId.trim()
+      adopt_existing: mementosProjectReconciliation && validated.mementos_source_target
         ? {
+            evidence: "prior_registration_receipt",
+            source_operation_id: mementosProjectReconciliation.source_operation_id,
+            expected_target_id: mementosProjectReconciliation.target_id,
+            allowed_terminal_reasons: ["target_preexists"],
+            source_desired: {
+              source_project_id: project.id,
+              source_project_slug: project.slug,
+              name: project.name,
+              target_path_digest: mementosProjectReconciliation.source_target_path_digest,
+            },
+            readback_target: validated.mementos_source_target,
+            path_drift: mementosProjectReconciliation.source_target_path_digest !== input.target.digest
+              ? {
+                  source_target_path_digest: mementosProjectReconciliation.source_target_path_digest,
+                  requested_target_path_digest: input.target.digest,
+                  required_follow_up: "mementos_projects_update_path",
+                }
+              : undefined,
+          }
+        : typeof existingMementosProjectId === "string" && existingMementosProjectId.trim()
+          ? {
+            evidence: "project_integration",
             integration_key: "mementos_project_id",
             integration_value: existingMementosProjectId,
             expected_target_id: existingMementosProjectId,
           }
-        : undefined,
+          : undefined,
     });
 
     failedStep = "projects_integrations";
     const integrations: WorkspaceIntegrations = {
       conversations_channel: channel,
-      todos_project_id: todosProject.receipt.target_id!,
-      todos_task_list_id: todosTaskList.receipt.target_id!,
-      mementos_project_id: mementosProject.receipt.target_id!,
+      todos_project_id: todosProject.record.target_id,
+      todos_task_list_id: todosTaskList.record.target_id,
+      mementos_project_id: mementosProject.record.target_id,
     };
     const integrated = await updateProjectIntegrations({
       operation_id: input.operation_id,
@@ -3661,12 +4044,21 @@ export async function registerFullProject(
         { step_id: "projects_marker", action: "unlink_if_digest_matches" },
         { step_id: "projects_goals", action: "unlink_if_digest_matches" },
         { step_id: "projects_integrations", action: "restore_if_revision_matches" },
-        ...externalAccepted.slice().reverse().map((item) => ({
-          step_id: item.request.step_id,
-          authority: item.adapter.authority,
-          action: "receipt_scoped_conditional_inverse",
-          accepted_receipt_id: item.receipt.receipt_id,
-        })),
+        ...externalAccepted.slice().reverse().map((item) => (
+          item.receipt.outcome === "accepted" && item.receipt.created_by_operation
+            ? {
+                step_id: item.request.step_id,
+                authority: item.adapter.authority,
+                action: "receipt_scoped_conditional_inverse",
+                accepted_receipt_id: item.receipt.receipt_id,
+              }
+            : {
+                step_id: item.request.step_id,
+                authority: item.adapter.authority,
+                action: "preserve_non_operation_owned",
+                accepted_receipt_id: item.receipt.receipt_id,
+              }
+        )),
         ...(metadataReceipt
           ? [{ step_id: "projects_metadata", action: "restore_exact_project_metadata" }]
           : []),

@@ -34,6 +34,7 @@ import {
   ProjectRegistrationPathHandle,
   registerFullProject,
   type FullProjectRegistrationProjectInput,
+  type FullProjectRegistrationReconciliationInput,
 } from "../../lib/project-registration.js";
 import { productionProjectRegistrationAuthorities } from "../../lib/production-project-registration-authorities.js";
 import { doctorWorkspace } from "../../lib/workspace-doctor.js";
@@ -263,10 +264,74 @@ async function readBoundedStdinJson(maxBytes = FULL_REGISTRATION_STDIN_LIMIT): P
   return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
 }
 
+function parseFullRegistrationReconciliation(
+  value: unknown,
+): FullProjectRegistrationReconciliationInput | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("register-full reconcile_existing must be an object");
+  }
+  const root = value as Record<string, unknown>;
+  const supportedKeys = [
+    "conversations_channel",
+    "todos_project",
+    "todos_task_list",
+    "mementos_project",
+  ] as const;
+  const rootKeys = Object.keys(root).sort();
+  if (rootKeys.length === 0 || rootKeys.some((key) => !supportedKeys.includes(key as typeof supportedKeys[number]))) {
+    throw new Error(
+      "register-full reconcile_existing supports only conversations_channel, todos_project, todos_task_list, and mementos_project",
+    );
+  }
+  const parsed: FullProjectRegistrationReconciliationInput = {};
+  for (const key of supportedKeys) {
+    const entryValue = root[key];
+    if (entryValue === undefined) continue;
+    if (!entryValue || typeof entryValue !== "object" || Array.isArray(entryValue)) {
+      throw new Error(`register-full reconcile_existing.${key} must be an object`);
+    }
+    const entry = entryValue as Record<string, unknown>;
+    const expectedKeys = key === "mementos_project"
+      ? ["source_operation_id", "source_target_path", "target_id"]
+      : ["source_operation_id", "target_id"];
+    if (JSON.stringify(Object.keys(entry).sort()) !== JSON.stringify(expectedKeys)) {
+      throw new Error(
+        `register-full reconcile_existing.${key} requires only ${expectedKeys.join(" and ")}`,
+      );
+    }
+    if (typeof entry.source_operation_id !== "string") {
+      throw new Error(`register-full reconcile_existing.${key}.source_operation_id must be a string`);
+    }
+    if (typeof entry.target_id !== "string") {
+      throw new Error(`register-full reconcile_existing.${key}.target_id must be a string`);
+    }
+    if (key === "mementos_project") {
+      if (typeof entry.source_target_path !== "string") {
+        throw new Error(
+          "register-full reconcile_existing.mementos_project.source_target_path must be a string",
+        );
+      }
+      parsed.mementos_project = {
+        source_operation_id: entry.source_operation_id,
+        target_id: entry.target_id,
+        source_target: ProjectRegistrationPathHandle.fromPath(entry.source_target_path),
+      };
+    } else {
+      parsed[key] = {
+        source_operation_id: entry.source_operation_id,
+        target_id: entry.target_id,
+      };
+    }
+  }
+  return parsed;
+}
+
 function parseFullRegistrationPayload(value: unknown): {
   operation_id: string;
   mode?: "create" | "retrofit";
   expected_project_revision?: string;
+  reconcile_existing?: FullProjectRegistrationReconciliationInput;
   project: FullProjectRegistrationProjectInput;
   target_path: string;
   goals_markdown: string;
@@ -301,6 +366,7 @@ function parseFullRegistrationPayload(value: unknown): {
     operation_id: payload.operation_id,
     mode: payload.mode as "create" | "retrofit" | undefined,
     expected_project_revision: payload.expected_project_revision as string | undefined,
+    reconcile_existing: parseFullRegistrationReconciliation(payload.reconcile_existing),
     project: payload.project as FullProjectRegistrationProjectInput,
     target_path: payload.target_path,
     goals_markdown: payload.goals_markdown,
@@ -1647,6 +1713,7 @@ function registerProjectCommands(program: Command): void {
           operation_id: payload.operation_id,
           mode: payload.mode,
           expected_project_revision: payload.expected_project_revision,
+          reconcile_existing: payload.reconcile_existing,
           project: payload.project,
           target: ProjectRegistrationPathHandle.fromPath(payload.target_path),
           goals_markdown: payload.goals_markdown,

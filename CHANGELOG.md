@@ -6,6 +6,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.122]
+
+### Fixed
+
+- `projects register-full` can now explicitly reconcile orphaned Conversations,
+  Todos project/task-list, and Mementos project resources only when an exact
+  accepted or linked-duplicate source receipt and current full-ID readback
+  prove the immutable target. Adopted resources remain outside rollback
+  ownership, conflicts stay terminal, and Mementos path drift is reported as a
+  required receipt-backed path-update CAS without exposing either path.
+
 ## [0.1.121]
 
 ### Fixed

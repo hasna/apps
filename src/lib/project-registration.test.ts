@@ -126,23 +126,56 @@ function fakeAuthorityTargetId(
     : `${authorityPrefix(authority)}_${resourceKind}_${selectorDigest.slice(0, 12)}`;
 }
 
+function stableFakeUuid(seed: string): string {
+  const digest = sha256(seed);
+  return [
+    digest.slice(0, 8),
+    digest.slice(8, 12),
+    `4${digest.slice(13, 16)}`,
+    `8${digest.slice(17, 20)}`,
+    digest.slice(20, 32),
+  ].join("-");
+}
+
+function configureStableOrphanAuthorityIds(
+  fakes: ReturnType<typeof fakeAuthorities>,
+  projectId: string,
+): { todosProjectId: string; todosTaskListId: string; mementosProjectId: string } {
+  const todosProjectId = stableFakeUuid(`${projectId}:todos-project`);
+  const todosTaskListId = stableFakeUuid(`${projectId}:todos-task-list`);
+  const mementosProjectId = `mm_project_${sha256(`${projectId}:mementos-project`).slice(0, 40)}`;
+  fakes.todos.targetIdFactory = (request) => request.resource_kind === "project"
+    ? todosProjectId
+    : todosTaskListId;
+  fakes.mementos.targetIdFactory = () => mementosProjectId;
+  return { todosProjectId, todosTaskListId, mementosProjectId };
+}
+
 class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
   readonly records = new Map<string, ProjectRegistrationAuthorityRecord>();
   readonly receiptByKey = new Map<string, ProjectRegistrationAuthorityReceipt>();
   readonly acceptedReceiptByTarget = new Map<string, ProjectRegistrationAuthorityReceipt>();
   readonly requests: ProjectRegistrationAuthorityRequest[] = [];
+  readonly readbackRequests: Array<{
+    resource_kind: ProjectRegistrationResourceKind;
+    target_id: string;
+    target: ProjectRegistrationPathHandle;
+  }> = [];
   readonly compensated: string[] = [];
   readonly inverseSelectors: string[] = [];
   readonly inverseVerifications: string[] = [];
   readonly inverseRequests: ProjectRegistrationAuthorityRequest[] = [];
   readonly inverseDuplicateSteps = new Set<string>();
   readonly invalidInverseDuplicateSteps = new Set<string>();
-  readonly preexistingTerminalReasons = new Map<string, "preexisting_equivalent" | "preexisting_conflict">();
+  readonly preexistingTerminalReasons = new Map<string, string>();
+  readonly preexistingTerminalOmitsRecord = new Set<string>();
+  readonly requiredReadbackTargetDigests = new Map<string, string>();
   readonly validatedAdoptionTargets = new Set<string>();
   strictInverseDesired = false;
   allowExistingAdoption = false;
   beforeCreate: ((request: ProjectRegistrationAuthorityRequest) => void | Promise<void>) | null = null;
   channelTargetIdFactory: ((selectorDigest: string) => string) | null = null;
+  targetIdFactory: ((request: ProjectRegistrationAuthorityRequest, selectorDigest: string) => string) | null = null;
   packageVersion = "test-1.0.0";
   capabilityCalls = 0;
 
@@ -201,18 +234,19 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
     }
 
     const selectorDigest = sha256(canonicalJson(request.desired));
-    const targetId = this.authority === "conversations" && request.resource_kind === "channel"
-      ? this.channelTargetIdFactory?.(selectorDigest)
-        ?? fakeAuthorityTargetId(this.authority, request.resource_kind, request.desired)
-      : fakeAuthorityTargetId(this.authority, request.resource_kind, request.desired);
+    const targetId = this.targetIdFactory?.(request, selectorDigest)
+      ?? (this.authority === "conversations" && request.resource_kind === "channel"
+        ? this.channelTargetIdFactory?.(selectorDigest)
+          ?? fakeAuthorityTargetId(this.authority, request.resource_kind, request.desired)
+        : fakeAuthorityTargetId(this.authority, request.resource_kind, request.desired));
     const existingRecord = this.records.get(targetId);
     const preexistingReason = this.preexistingTerminalReasons.get(targetId);
     if (existingRecord && preexistingReason) {
       const rejected = this.makeReceipt(request, {
         outcome: "terminal_nonacceptance",
         target_id: targetId,
-        result_revision: existingRecord.revision,
-        result_digest: existingRecord.digest,
+        result_revision: this.preexistingTerminalOmitsRecord.has(targetId) ? null : existingRecord.revision,
+        result_digest: this.preexistingTerminalOmitsRecord.has(targetId) ? null : existingRecord.digest,
         reason: preexistingReason,
         created_by_operation: false,
       });
@@ -270,9 +304,15 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
   async readExact(request: {
     resource_kind: ProjectRegistrationResourceKind;
     target_id: string;
+    target: ProjectRegistrationPathHandle;
   }): Promise<ProjectRegistrationAuthorityRecord> {
+    this.readbackRequests.push(request);
     const record = this.records.get(request.target_id);
     if (!record) throw new Error("record not found");
+    const requiredTargetDigest = this.requiredReadbackTargetDigests.get(request.target_id);
+    if (requiredTargetDigest && request.target.digest !== requiredTargetDigest) {
+      throw new Error("exact readback target path mismatch");
+    }
     if (this.readbackMismatchKinds.has(request.resource_kind)) {
       return { ...record, digest: sha256(`${record.digest}:injected-mismatch`) };
     }
@@ -538,6 +578,7 @@ class FakeCloudProjectAuthority {
   creates = 0;
   deletes = 0;
   disconnectAfterCreate = false;
+  failResourceLinkMutation = false;
 
   async getProject(idOrSlug: string): Promise<Workspace | null> {
     return this.project && (this.project.id === idOrSlug || this.project.slug === idOrSlug)
@@ -618,6 +659,7 @@ class FakeCloudProjectAuthority {
   async mutateProjectResourceLinks(
     input: ProjectResourceLinkMutationRequest,
   ): Promise<ProjectResourceLinkMutationResult> {
+    if (this.failResourceLinkMutation) throw new Error("injected Projects integration failure");
     const project = await this.getProject(input.project_id);
     if (!project) throw new Error(`Project not found: ${input.project_id}`);
     if (project.updated_at !== input.expected_revision) throw new Error("stale fake hosted revision");
@@ -1279,6 +1321,589 @@ describe("full project registration transaction", () => {
       ).get(projectId)).toEqual({ n: 8 });
       expect(persistedUnrelatedLinkIds()).toEqual(unrelatedLinkIds);
     } finally {
+      db.close();
+    }
+  });
+
+  test("reconciles an exact orphan channel from a prior accepted registration receipt", async () => {
+    const sourceDb = makeDb();
+    const db = makeDb();
+    const sourceTarget = tempTarget("orphan-channel-source");
+    const target = tempTarget("orphan-channel-recovery");
+    const sourceFakes = fakeAuthorities();
+    const recoveryFakes = fakeAuthorities();
+    const sourceOperationId = "op-orphan-channel-source";
+    const projectId = "wks_orphanchannel0001";
+    try {
+      const source = await registerFullProject(
+        input(sourceOperationId, sourceTarget.target, { id: projectId }),
+        { db: sourceDb, authorities: sourceFakes.authorities },
+      );
+      expect(source).toMatchObject({ ok: true, outcome: "accepted" });
+      const sourceReceipt = source.receipts.find(
+        (receipt) => receipt.step_id === "conversations_channel" && receipt.direction === "forward",
+      );
+      expect(sourceReceipt?.authority_receipt).toMatchObject({
+        outcome: "accepted",
+        created_by_operation: true,
+      });
+      const channelId = sourceReceipt!.target_id!;
+      sourceFakes.conversations.preexistingTerminalReasons.set(channelId, "preexisting_equivalent");
+      const authorities: ProjectRegistrationAuthorities = {
+        todos: recoveryFakes.todos,
+        mementos: recoveryFakes.mementos,
+        conversations: sourceFakes.conversations,
+      };
+      const request: FullProjectRegistrationInput = {
+        ...input("op-orphan-channel-recovery", target.target, { id: projectId }),
+        reconcile_existing: {
+          conversations_channel: {
+            source_operation_id: sourceOperationId,
+            target_id: channelId,
+          },
+        },
+      };
+
+      const result = await registerFullProject(request, { db, authorities });
+
+      expect(result).toMatchObject({ ok: true, outcome: "accepted" });
+      expect(result.receipts.find((receipt) => receipt.step_id === "conversations_channel")).toMatchObject({
+        outcome: "accepted",
+        reason: "adopted_preexisting",
+        target_id: channelId,
+        rollback: [],
+        artifacts: [expect.objectContaining({
+          target_id: channelId,
+          adopted: true,
+          created_by_operation: false,
+        })],
+        preconditions: [expect.objectContaining({
+          predicate: "prior_registration_receipt",
+          source_operation_id: sourceOperationId,
+          source_receipt_id: sourceReceipt!.authority_receipt!.receipt_id,
+          expected_target_id: channelId,
+          exact_authority_lookup: true,
+          exact_readback: true,
+        })],
+      });
+      expect(
+        result.receipts.find((receipt) => receipt.step_id === "registration_terminal")?.rollback,
+      ).toContainEqual({
+        step_id: "conversations_channel",
+        authority: "conversations",
+        action: "preserve_non_operation_owned",
+        accepted_receipt_id: expect.stringMatching(/^cvr_/),
+      });
+      expect(sourceFakes.conversations.compensated).toEqual([]);
+      expect(sourceFakes.conversations.records.has(channelId)).toBe(true);
+      expect(getWorkspace(projectId, db)?.integrations.conversations_channel).toBe("fleet-resources");
+    } finally {
+      sourceDb.close();
+      db.close();
+    }
+  });
+
+  test("reconciles the exact orphan authority set from accepted and linked duplicate receipts", async () => {
+    const sourceDb = makeDb();
+    const db = makeDb();
+    const sourceTarget = tempTarget("orphan-authority-set-source");
+    const target = tempTarget("orphan-authority-set-recovery");
+    const fakes = fakeAuthorities();
+    const sourceOperationId = "op-orphan-authority-set-source";
+    const projectId = "wks_orphanauthorityset01";
+    const ids = configureStableOrphanAuthorityIds(fakes, projectId);
+    try {
+      const source = await registerFullProject(
+        input(sourceOperationId, sourceTarget.target, { id: projectId }),
+        { db: sourceDb, authorities: fakes.authorities },
+      );
+      expect(source).toMatchObject({ ok: true, outcome: "accepted" });
+      const sourceForward = (stepId: string) => source.receipts.find(
+        (receipt) => receipt.step_id === stepId && receipt.direction === "forward",
+      )!;
+      const channelReceipt = sourceForward("conversations_channel");
+      const todosProjectReceipt = sourceForward("todos_project");
+      const todosTaskListReceipt = sourceForward("todos_task_list");
+      const mementosProjectReceipt = sourceForward("mementos_project");
+      const channelId = channelReceipt.target_id!;
+
+      fakes.conversations.preexistingTerminalReasons.set(channelId, "preexisting_equivalent");
+      fakes.todos.preexistingTerminalReasons.set(ids.todosProjectId, "target_already_registered");
+      fakes.todos.preexistingTerminalReasons.set(ids.todosTaskListId, "target_already_registered");
+      fakes.todos.preexistingTerminalOmitsRecord.add(ids.todosProjectId);
+      fakes.todos.preexistingTerminalOmitsRecord.add(ids.todosTaskListId);
+      fakes.mementos.preexistingTerminalReasons.set(ids.mementosProjectId, "target_preexists");
+      fakes.mementos.preexistingTerminalOmitsRecord.add(ids.mementosProjectId);
+      fakes.mementos.requiredReadbackTargetDigests.set(ids.mementosProjectId, sourceTarget.target.digest);
+
+      const acceptedTaskListAuthorityReceipt = todosTaskListReceipt.authority_receipt!;
+      const linkedTaskListReceipt: ProjectRegistrationAuthorityReceipt = {
+        ...acceptedTaskListAuthorityReceipt,
+        receipt_id: `tdr_${sha256(`${acceptedTaskListAuthorityReceipt.receipt_id}:linked`).slice(0, 20)}`,
+        outcome: "duplicate_of_accepted",
+        duplicate_of_receipt_id: acceptedTaskListAuthorityReceipt.receipt_id,
+        created_by_operation: false,
+      };
+      fakes.todos.receiptByKey.set(
+        acceptedTaskListAuthorityReceipt.idempotency_key,
+        linkedTaskListReceipt,
+      );
+
+      const request = {
+        ...input("op-orphan-authority-set-recovery", target.target, { id: projectId }),
+        reconcile_existing: {
+          conversations_channel: {
+            source_operation_id: sourceOperationId,
+            target_id: channelId,
+          },
+          todos_project: {
+            source_operation_id: sourceOperationId,
+            target_id: ids.todosProjectId,
+          },
+          todos_task_list: {
+            source_operation_id: sourceOperationId,
+            target_id: ids.todosTaskListId,
+          },
+          mementos_project: {
+            source_operation_id: sourceOperationId,
+            target_id: ids.mementosProjectId,
+            source_target: sourceTarget.target,
+          },
+        },
+      } as unknown as FullProjectRegistrationInput;
+
+      const result = await registerFullProject(request, { db, authorities: fakes.authorities });
+
+      expect(result).toMatchObject({ ok: true, outcome: "accepted" });
+      const expectedTargets: Record<string, string> = {
+        conversations_channel: channelId,
+        todos_project: ids.todosProjectId,
+        todos_task_list: ids.todosTaskListId,
+        mementos_project: ids.mementosProjectId,
+      };
+      for (const [stepId, targetId] of Object.entries(expectedTargets)) {
+        expect(result.receipts.find((receipt) => receipt.step_id === stepId)).toMatchObject({
+          outcome: "accepted",
+          reason: "adopted_preexisting",
+          target_id: targetId,
+          rollback: [],
+          artifacts: [expect.objectContaining({
+            target_id: targetId,
+            adopted: true,
+            created_by_operation: false,
+          })],
+        });
+        expect(result.receipts.find((receipt) => receipt.step_id === "registration_terminal")?.rollback)
+          .toContainEqual(expect.objectContaining({
+            step_id: stepId,
+            authority: stepId === "conversations_channel"
+              ? "conversations"
+              : stepId === "mementos_project"
+                ? "mementos"
+                : "todos",
+            action: "preserve_non_operation_owned",
+          }));
+      }
+      expect(result.receipts.find((receipt) => receipt.step_id === "todos_task_list")).toMatchObject({
+        preconditions: [expect.objectContaining({
+          source_receipt_id: linkedTaskListReceipt.receipt_id,
+          source_receipt_outcome: "duplicate_of_accepted",
+          source_accepted_receipt_id: acceptedTaskListAuthorityReceipt.receipt_id,
+        })],
+      });
+      expect(result.receipts.find((receipt) => receipt.step_id === "mementos_project")).toMatchObject({
+        result_revision: mementosProjectReceipt.result_revision,
+        result_digest: mementosProjectReceipt.result_digest,
+        preconditions: [expect.objectContaining({
+          source_receipt_id: mementosProjectReceipt.authority_receipt!.receipt_id,
+          path_drift: expect.objectContaining({
+            detected: true,
+            source_target_path_digest: sourceTarget.target.digest,
+            requested_target_path_digest: target.target.digest,
+            required_follow_up: "mementos_projects_update_path",
+            expected_revision: mementosProjectReceipt.result_revision,
+            expected_digest: mementosProjectReceipt.result_digest,
+            requires_idempotency_key: true,
+            requires_receipt_cas: true,
+          }),
+        })],
+      });
+      expect(getWorkspace(projectId, db)?.integrations).toMatchObject({
+        todos_project_id: ids.todosProjectId,
+        todos_task_list_id: ids.todosTaskListId,
+        mementos_project_id: ids.mementosProjectId,
+      });
+      expect(fakes.todos.requests.find(
+        (item) => item.operation_id === request.operation_id && item.step_id === "todos_task_list",
+      )).toMatchObject({
+        target_selector: `${ids.todosProjectId}:default`,
+        desired: { todos_project_id: ids.todosProjectId },
+      });
+      expect(fakes.conversations.compensated).toEqual([]);
+      expect(fakes.todos.compensated).toEqual([]);
+      expect(fakes.mementos.compensated).toEqual([]);
+      expect(fakes.conversations.inverseRequests).toEqual([]);
+      expect(fakes.todos.inverseRequests).toEqual([]);
+      expect(fakes.mementos.inverseRequests).toEqual([]);
+      expect(fakes.conversations.records.has(channelId)).toBe(true);
+      expect(fakes.todos.records.has(ids.todosProjectId)).toBe(true);
+      expect(fakes.todos.records.has(ids.todosTaskListId)).toBe(true);
+      expect(fakes.mementos.records.has(ids.mementosProjectId)).toBe(true);
+      expect(fakes.todos.readbackRequests.filter(
+        (item) => item.resource_kind === "project" && item.target_id === ids.todosProjectId,
+      )).toHaveLength(2);
+      expect(fakes.todos.readbackRequests.filter(
+        (item) => item.resource_kind === "task_list" && item.target_id === ids.todosTaskListId,
+      )).toHaveLength(2);
+      expect(fakes.mementos.readbackRequests.filter(
+        (item) => item.target_id === ids.mementosProjectId
+          && item.target.digest === sourceTarget.target.digest,
+      )).toHaveLength(2);
+      expect(JSON.stringify(result)).not.toContain(sourceTarget.path);
+      expect(JSON.stringify(result)).not.toContain(target.path);
+    } finally {
+      sourceDb.close();
+      db.close();
+    }
+  });
+
+  test("preserves every receipt-reconciled orphan authority when Projects integration fails later", async () => {
+    const sourceDb = makeDb();
+    const db = makeDb();
+    const sourceTarget = tempTarget("orphan-authority-rollback-source");
+    const target = tempTarget("orphan-authority-rollback-recovery");
+    const fakes = fakeAuthoritiesWithTransports({
+      todos: "api",
+      mementos: "api",
+      conversations: "api",
+    });
+    const sourceProjects = new FakeCloudProjectAuthority();
+    const projects = new FakeCloudProjectAuthority();
+    projects.failResourceLinkMutation = true;
+    const sourceOperationId = "op-orphan-authority-rollback-source";
+    const projectId = "wks_orphanauthorityset02";
+    const ids = configureStableOrphanAuthorityIds(fakes, projectId);
+    try {
+      const source = await registerFullProject(
+        input(sourceOperationId, sourceTarget.target, { id: projectId }),
+        { db: sourceDb, authorities: fakes.authorities, projectStore: sourceProjects.asStore() },
+      );
+      const sourceForward = (stepId: string) => source.receipts.find(
+        (receipt) => receipt.step_id === stepId && receipt.direction === "forward",
+      )!;
+      const channelId = sourceForward("conversations_channel").target_id!;
+      fakes.conversations.preexistingTerminalReasons.set(channelId, "preexisting_equivalent");
+      fakes.todos.preexistingTerminalReasons.set(ids.todosProjectId, "target_already_registered");
+      fakes.todos.preexistingTerminalReasons.set(ids.todosTaskListId, "target_already_registered");
+      fakes.todos.preexistingTerminalOmitsRecord.add(ids.todosProjectId);
+      fakes.todos.preexistingTerminalOmitsRecord.add(ids.todosTaskListId);
+      fakes.mementos.preexistingTerminalReasons.set(ids.mementosProjectId, "target_preexists");
+      fakes.mementos.preexistingTerminalOmitsRecord.add(ids.mementosProjectId);
+      fakes.mementos.requiredReadbackTargetDigests.set(ids.mementosProjectId, sourceTarget.target.digest);
+      const request = {
+        ...input("op-orphan-authority-rollback-recovery", target.target, { id: projectId }),
+        reconcile_existing: {
+          conversations_channel: { source_operation_id: sourceOperationId, target_id: channelId },
+          todos_project: { source_operation_id: sourceOperationId, target_id: ids.todosProjectId },
+          todos_task_list: { source_operation_id: sourceOperationId, target_id: ids.todosTaskListId },
+          mementos_project: {
+            source_operation_id: sourceOperationId,
+            target_id: ids.mementosProjectId,
+            source_target: sourceTarget.target,
+          },
+        },
+      } as unknown as FullProjectRegistrationInput;
+
+      const result = await registerFullProject(
+        request,
+        { db, authorities: fakes.authorities, projectStore: projects.asStore() },
+      );
+
+      expect(result).toMatchObject({
+        ok: false,
+        outcome: "rolled_back",
+        failed_step: "projects_integrations",
+      });
+      for (const [stepId, targetId] of Object.entries({
+        conversations_channel: channelId,
+        todos_project: ids.todosProjectId,
+        todos_task_list: ids.todosTaskListId,
+        mementos_project: ids.mementosProjectId,
+      })) {
+        expect(result.rollback).toContainEqual(expect.objectContaining({
+          step_id: stepId,
+          status: "skipped",
+          reason_code: "not_attempt_created",
+          target_id: targetId,
+        }));
+      }
+      expect(fakes.conversations.compensated).toEqual([]);
+      expect(fakes.todos.compensated).toEqual([]);
+      expect(fakes.mementos.compensated).toEqual([]);
+      expect(fakes.conversations.inverseRequests).toEqual([]);
+      expect(fakes.todos.inverseRequests).toEqual([]);
+      expect(fakes.mementos.inverseRequests).toEqual([]);
+      expect(fakes.conversations.records.has(channelId)).toBe(true);
+      expect(fakes.todos.records.has(ids.todosProjectId)).toBe(true);
+      expect(fakes.todos.records.has(ids.todosTaskListId)).toBe(true);
+      expect(fakes.mementos.records.has(ids.mementosProjectId)).toBe(true);
+      expect(projects.project).toBeNull();
+    } finally {
+      sourceDb.close();
+      db.close();
+    }
+  });
+
+  test("keeps a receipt-linked Mementos selector conflict terminal", async () => {
+    const sourceDb = makeDb();
+    const db = makeDb();
+    const sourceTarget = tempTarget("orphan-mementos-conflict-source");
+    const target = tempTarget("orphan-mementos-conflict-recovery");
+    const fakes = fakeAuthorities();
+    const sourceOperationId = "op-orphan-mementos-conflict-source";
+    const projectId = "wks_orphanauthorityset03";
+    const ids = configureStableOrphanAuthorityIds(fakes, projectId);
+    try {
+      const source = await registerFullProject(
+        input(sourceOperationId, sourceTarget.target, { id: projectId }),
+        { db: sourceDb, authorities: fakes.authorities },
+      );
+      const sourceForward = (stepId: string) => source.receipts.find(
+        (receipt) => receipt.step_id === stepId && receipt.direction === "forward",
+      )!;
+      const channelId = sourceForward("conversations_channel").target_id!;
+      fakes.conversations.preexistingTerminalReasons.set(channelId, "preexisting_equivalent");
+      fakes.todos.preexistingTerminalReasons.set(ids.todosProjectId, "target_already_registered");
+      fakes.todos.preexistingTerminalReasons.set(ids.todosTaskListId, "target_already_registered");
+      fakes.todos.preexistingTerminalOmitsRecord.add(ids.todosProjectId);
+      fakes.todos.preexistingTerminalOmitsRecord.add(ids.todosTaskListId);
+      fakes.mementos.preexistingTerminalReasons.set(ids.mementosProjectId, "target_selector_preexists");
+      fakes.mementos.preexistingTerminalOmitsRecord.add(ids.mementosProjectId);
+      const request = {
+        ...input("op-orphan-mementos-conflict-recovery", target.target, { id: projectId }),
+        reconcile_existing: {
+          conversations_channel: { source_operation_id: sourceOperationId, target_id: channelId },
+          todos_project: { source_operation_id: sourceOperationId, target_id: ids.todosProjectId },
+          todos_task_list: { source_operation_id: sourceOperationId, target_id: ids.todosTaskListId },
+          mementos_project: {
+            source_operation_id: sourceOperationId,
+            target_id: ids.mementosProjectId,
+            source_target: sourceTarget.target,
+          },
+        },
+      } as unknown as FullProjectRegistrationInput;
+
+      const result = await registerFullProject(request, { db, authorities: fakes.authorities });
+
+      expect(result).toMatchObject({
+        ok: false,
+        outcome: "rolled_back",
+        failed_step: "mementos_project",
+        reason_code: "target_selector_preexists",
+      });
+      expect(fakes.mementos.records.has(ids.mementosProjectId)).toBe(true);
+      expect(fakes.mementos.compensated).toEqual([]);
+      expect(fakes.mementos.inverseRequests).toEqual([]);
+    } finally {
+      sourceDb.close();
+      db.close();
+    }
+  });
+
+  test("keeps a receipt-linked Todos registration-removal conflict terminal", async () => {
+    const sourceDb = makeDb();
+    const db = makeDb();
+    const sourceTarget = tempTarget("orphan-todos-conflict-source");
+    const target = tempTarget("orphan-todos-conflict-recovery");
+    const fakes = fakeAuthorities();
+    const sourceOperationId = "op-orphan-todos-conflict-source";
+    const projectId = "wks_orphanauthorityset04";
+    const ids = configureStableOrphanAuthorityIds(fakes, projectId);
+    try {
+      const source = await registerFullProject(
+        input(sourceOperationId, sourceTarget.target, { id: projectId }),
+        { db: sourceDb, authorities: fakes.authorities },
+      );
+      const channelId = source.receipts.find(
+        (receipt) => receipt.step_id === "conversations_channel" && receipt.direction === "forward",
+      )!.target_id!;
+      fakes.conversations.preexistingTerminalReasons.set(channelId, "preexisting_equivalent");
+      fakes.todos.preexistingTerminalReasons.set(ids.todosProjectId, "target_registration_was_removed");
+      const request = {
+        ...input("op-orphan-todos-conflict-recovery", target.target, { id: projectId }),
+        reconcile_existing: {
+          conversations_channel: { source_operation_id: sourceOperationId, target_id: channelId },
+          todos_project: { source_operation_id: sourceOperationId, target_id: ids.todosProjectId },
+        },
+      } as FullProjectRegistrationInput;
+
+      const result = await registerFullProject(request, { db, authorities: fakes.authorities });
+
+      expect(result).toMatchObject({
+        ok: false,
+        outcome: "rolled_back",
+        failed_step: "todos_project",
+        reason_code: "target_registration_was_removed",
+      });
+      expect(result.rollback).toContainEqual(expect.objectContaining({
+        step_id: "conversations_channel",
+        status: "skipped",
+        reason_code: "not_attempt_created",
+        target_id: channelId,
+      }));
+      expect(fakes.todos.records.has(ids.todosProjectId)).toBe(true);
+      expect(fakes.todos.compensated).toEqual([]);
+      expect(fakes.todos.inverseRequests).toEqual([]);
+    } finally {
+      sourceDb.close();
+      db.close();
+    }
+  });
+
+  test("preserves a receipt-reconciled orphan channel when a later registration step rolls back", async () => {
+    const sourceDb = makeDb();
+    const db = makeDb();
+    const sourceTarget = tempTarget("orphan-channel-rollback-source");
+    const target = tempTarget("orphan-channel-rollback-recovery");
+    const sourceFakes = fakeAuthorities();
+    const recoveryFakes = fakeAuthorities(["mementos_project"]);
+    const sourceOperationId = "op-orphan-channel-rollback-source";
+    const projectId = "wks_orphanchannel0002";
+    try {
+      const source = await registerFullProject(
+        input(sourceOperationId, sourceTarget.target, { id: projectId }),
+        { db: sourceDb, authorities: sourceFakes.authorities },
+      );
+      const channelId = source.receipts.find(
+        (receipt) => receipt.step_id === "conversations_channel" && receipt.direction === "forward",
+      )!.target_id!;
+      sourceFakes.conversations.preexistingTerminalReasons.set(channelId, "preexisting_equivalent");
+      const authorities: ProjectRegistrationAuthorities = {
+        todos: recoveryFakes.todos,
+        mementos: recoveryFakes.mementos,
+        conversations: sourceFakes.conversations,
+      };
+      const request: FullProjectRegistrationInput = {
+        ...input("op-orphan-channel-rollback-recovery", target.target, { id: projectId }),
+        reconcile_existing: {
+          conversations_channel: {
+            source_operation_id: sourceOperationId,
+            target_id: channelId,
+          },
+        },
+      };
+
+      const result = await registerFullProject(request, { db, authorities });
+
+      expect(result).toMatchObject({
+        ok: false,
+        outcome: "rolled_back",
+        failed_step: "mementos_project",
+      });
+      expect(result.rollback).toContainEqual(expect.objectContaining({
+        step_id: "conversations_channel",
+        status: "skipped",
+        reason_code: "not_attempt_created",
+        target_id: channelId,
+      }));
+      expect(sourceFakes.conversations.compensated).toEqual([]);
+      expect(sourceFakes.conversations.records.has(channelId)).toBe(true);
+      expect(getWorkspace(projectId, db)).toBeNull();
+      expect(existsSync(target.path)).toBe(false);
+    } finally {
+      sourceDb.close();
+      db.close();
+    }
+  });
+
+  test("refuses orphan channel reconciliation without the exact prior registration receipt", async () => {
+    const db = makeDb();
+    const target = tempTarget("orphan-channel-unverified");
+    const fakes = fakeAuthorities();
+    const projectId = "wks_orphanchannel0003";
+    const desired = {
+      channel: "fleet-resources",
+      project_id: projectId,
+      project_slug: "fleet-resources",
+      project_kind: "project",
+    };
+    const channelId = fakeAuthorityTargetId("conversations", "channel", desired);
+    fakes.conversations.records.set(channelId, {
+      target_id: channelId,
+      revision: "rev_unverified_orphan_channel",
+      digest: sha256(`unverified:${channelId}`),
+    });
+    fakes.conversations.preexistingTerminalReasons.set(channelId, "preexisting_equivalent");
+    const request: FullProjectRegistrationInput = {
+      ...input("op-orphan-channel-unverified", target.target, { id: projectId }),
+      reconcile_existing: {
+        conversations_channel: {
+          source_operation_id: "op-orphan-channel-missing-source",
+          target_id: channelId,
+        },
+      },
+    };
+    try {
+      const result = await registerFullProject(request, { db, authorities: fakes.authorities });
+
+      expect(result).toMatchObject({
+        ok: false,
+        outcome: "rolled_back",
+        failed_step: "conversations_channel",
+        reason_code: "registration_reconciliation_receipt_unverified",
+      });
+      expect(fakes.conversations.records.has(channelId)).toBe(true);
+      expect(fakes.conversations.compensated).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("keeps an explicitly identified conflicting orphan channel terminal", async () => {
+    const sourceDb = makeDb();
+    const db = makeDb();
+    const sourceTarget = tempTarget("orphan-channel-conflict-source");
+    const target = tempTarget("orphan-channel-conflict-recovery");
+    const sourceFakes = fakeAuthorities();
+    const recoveryFakes = fakeAuthorities();
+    const sourceOperationId = "op-orphan-channel-conflict-source";
+    const projectId = "wks_orphanchannel0004";
+    try {
+      const source = await registerFullProject(
+        input(sourceOperationId, sourceTarget.target, { id: projectId }),
+        { db: sourceDb, authorities: sourceFakes.authorities },
+      );
+      const channelId = source.receipts.find(
+        (receipt) => receipt.step_id === "conversations_channel" && receipt.direction === "forward",
+      )!.target_id!;
+      sourceFakes.conversations.preexistingTerminalReasons.set(channelId, "preexisting_conflict");
+      const authorities: ProjectRegistrationAuthorities = {
+        todos: recoveryFakes.todos,
+        mementos: recoveryFakes.mementos,
+        conversations: sourceFakes.conversations,
+      };
+      const request: FullProjectRegistrationInput = {
+        ...input("op-orphan-channel-conflict-recovery", target.target, { id: projectId }),
+        reconcile_existing: {
+          conversations_channel: {
+            source_operation_id: sourceOperationId,
+            target_id: channelId,
+          },
+        },
+      };
+
+      const result = await registerFullProject(request, { db, authorities });
+
+      expect(result).toMatchObject({
+        ok: false,
+        outcome: "rolled_back",
+        failed_step: "conversations_channel",
+        reason_code: "preexisting_conflict",
+      });
+      expect(sourceFakes.conversations.records.has(channelId)).toBe(true);
+      expect(sourceFakes.conversations.compensated).toEqual([]);
+    } finally {
+      sourceDb.close();
       db.close();
     }
   });
