@@ -9,6 +9,7 @@ import { isCloudStore } from "../lib/store/index.js";
 import { App } from "./components/App.js";
 import { registerBrainsCommand } from "./brains.js";
 import { registerMessagingCommands } from "./commands/messaging.js";
+import { registerAttachmentCommands } from "./commands/attachments.js";
 import { registerChannelCommands } from "./commands/channels.js";
 import { registerProjectCommands } from "./commands/projects.js";
 import { registerAgentCommands } from "./commands/agents.js";
@@ -29,6 +30,7 @@ program
 
 // ---- command groups ----
 registerMessagingCommands(program);
+registerAttachmentCommands(program);
 registerChannelCommands(program);
 registerProjectCommands(program);
 registerAgentCommands(program);

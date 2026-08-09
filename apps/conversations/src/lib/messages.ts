@@ -2,8 +2,18 @@ import { getDb, getDataDir } from "./db.js";
 import type { Message, Attachment, SendMessageOptions, ReadMessagesOptions, SearchMessagesOptions, SearchResult, SearchMessagesPage } from "../types.js";
 import { normalizeExactIsoTimestamp } from "./since.js";
 import { createHash, randomUUID } from "crypto";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, statSync } from "fs";
-import { join } from "path";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+} from "fs";
+import { dirname, join, resolve } from "path";
 import { fireWebhooks } from "./webhooks.js";
 import { normalizeChannelName, unknownChannelMessage } from "./channel-names.js";
 import { markChannelNotificationsRead } from "./channel-notifications.js";
@@ -14,6 +24,16 @@ import {
   prepareAttachmentSources,
   type PreparedAttachmentSource,
 } from "./attachments.js";
+import {
+  AttachmentRetrievalError,
+  attachmentContentMissingError,
+  attachmentIntegrityError,
+  attachmentNotFoundError,
+  attachmentPermissionError,
+  isPermissionError,
+  messageNotFoundError,
+  type RetrievedAttachment,
+} from "./attachment-retrieval.js";
 import {
   BLOCKERS_LIST_ORDER,
   PINNED_LIST_ORDER,
@@ -549,6 +569,52 @@ export function getMessageById(id: number): Message | null {
   const db = getDb();
   const row = db.prepare("SELECT * FROM messages WHERE id = ?").get(id) as Record<string, unknown> | null;
   return row ? parseMessage(row) : null;
+}
+
+export function getMessageAttachment(
+  messageId: number,
+  name: string,
+): RetrievedAttachment {
+  const message = getMessageById(messageId);
+  if (!message) throw messageNotFoundError(messageId);
+
+  const attachment = message.attachments?.find((candidate) => candidate.name === name);
+  if (!attachment) throw attachmentNotFoundError(messageId, name);
+
+  const messageDir = resolve(getAttachmentsDir(), String(messageId));
+  const recordedPath = resolve(attachment.path);
+  if (dirname(recordedPath) !== messageDir) {
+    throw attachmentIntegrityError(messageId, name);
+  }
+
+  try {
+    const realMessageDir = realpathSync(messageDir);
+    const realAttachmentPath = realpathSync(recordedPath);
+    if (dirname(realAttachmentPath) !== realMessageDir) {
+      throw attachmentIntegrityError(messageId, name);
+    }
+    if (!statSync(realAttachmentPath).isFile()) {
+      throw attachmentIntegrityError(messageId, name);
+    }
+    const content = readFileSync(realAttachmentPath);
+    if (content.length !== attachment.size) {
+      throw attachmentIntegrityError(messageId, name);
+    }
+    return {
+      message_id: messageId,
+      name: attachment.name,
+      mime_type: attachment.mime_type,
+      size: attachment.size,
+      content,
+    };
+  } catch (error) {
+    if (error instanceof AttachmentRetrievalError) throw error;
+    if (isPermissionError(error)) throw attachmentPermissionError(messageId, name);
+    if ((error as { code?: unknown } | null)?.code === "ENOENT") {
+      throw attachmentContentMissingError(messageId, name);
+    }
+    throw error;
+  }
 }
 
 export function getMessageByUuid(uuid: string): Message | null {

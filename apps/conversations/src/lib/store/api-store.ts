@@ -23,6 +23,13 @@ import { attachSendRedaction } from "../content-safety.js";
 import { normalizeMessageUuid } from "../message-reference.js";
 import { encodeAttachmentUploads, prepareAttachmentSources } from "../attachments.js";
 import {
+  AttachmentRetrievalError,
+  attachmentNotFoundError,
+  attachmentPermissionError,
+  decodeAttachmentResponse,
+  messageNotFoundError,
+} from "../attachment-retrieval.js";
+import {
   parseMessage,
   compactMessage,
   DEFAULT_SEARCH_LIMIT,
@@ -826,6 +833,35 @@ export class ApiStore implements ConversationsStore {
     } catch (e) {
       if (isHttpStatus(e, 404)) return null as never;
       throw e;
+    }
+  };
+  getMessageAttachment: ConversationsStore["getMessageAttachment"] = async (messageId, name) => {
+    try {
+      const message = await this.getMessageById(messageId);
+      if (!message) throw messageNotFoundError(messageId);
+      const attachment = message.attachments?.find((candidate) => candidate.name === name);
+      if (!attachment) throw attachmentNotFoundError(messageId, name);
+
+      let response: unknown;
+      try {
+        response = await this.get(
+          `/messages/${encodeURIComponent(String(messageId))}/attachments/${encodeURIComponent(name)}`,
+          { encoding: "base64" },
+        );
+      } catch (error) {
+        if (isHttpStatus(error, 401) || isHttpStatus(error, 403)) {
+          throw attachmentPermissionError(messageId, name);
+        }
+        if (isHttpStatus(error, 404)) throw attachmentNotFoundError(messageId, name);
+        throw error;
+      }
+      return decodeAttachmentResponse(response, messageId, attachment);
+    } catch (error) {
+      if (error instanceof AttachmentRetrievalError) throw error;
+      if (isHttpStatus(error, 401) || isHttpStatus(error, 403)) {
+        throw attachmentPermissionError(messageId, name);
+      }
+      throw error;
     }
   };
   deleteMessage: ConversationsStore["deleteMessage"] = async (id, agent) => {
