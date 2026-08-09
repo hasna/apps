@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Takumi MCP registration uses Takumi's first-class CLI.** Registering or
+  removing Todos now calls scoped `takumi mcp add/remove` commands instead of
+  the previously rejected generic path ([#233](https://github.com/hasna/todos/pull/233)).
+- **Remote task creation is single-attempt and authority-verified.** Every
+  create is read back by exact ID from the configured authority before success
+  is printed, preventing duplicate or reported-but-unreadable task success
+  ([#235](https://github.com/hasna/todos/pull/235)).
 - **P1: partial task-manifest outbox delivery is retry-safe.** When a client
   acknowledged row 1, crashed or lost the response, then resumed the two-row
   sequence, the repeated row-1 acknowledgement was rejected as a graph
@@ -21,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The unchanged `todos.task-manifest.v1` capability now advertises
   `idempotent_outbox_delivery: true`, with a runtime guard that distinguishes
   older authorities where the field is absent or false.
+- **Hosted exact task-list reads are complete or explicit.** Legacy unfiltered
+  pages use bounded, stable `total`/`offset` pagination with matching-only
+  output; incomplete or unsupported authority shapes fail closed instead of
+  silently omitting matches ([#238](https://github.com/hasna/todos/pull/238)).
 
 ## [0.15.12] - 2026-08-08
 
