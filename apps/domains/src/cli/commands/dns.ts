@@ -18,6 +18,7 @@ import { loadConfig } from "../../lib/config.js";
 import { createDnsPlan, getDnsApplyBlockReason, parseDesiredDnsState, planHasChanges, type DnsPlan } from "../../lib/dns-plan.js";
 import { compactHint, pageItemsOrExit, truncateText } from "../../lib/compact-output.js";
 
+import { printLine, printErrorLine } from "../../lib/stdout.js";
 /** Record types the store (local sqlite CHECK + cloud API) accepts on write. */
 export const SUPPORTED_DNS_TYPES = new Set(["A", "AAAA", "CNAME", "MX", "TXT", "NS", "SRV"]);
 
@@ -43,12 +44,12 @@ export function partitionPullableRecords<T extends { type: string }>(
 }
 
 function printDnsPlan(plan: DnsPlan): void {
-  console.log(`DNS plan for ${plan.domain}: ${plan.creates} create, ${plan.updates} update, ${plan.deletes} delete, ${plan.unchanged} unchanged`);
+  printLine(`DNS plan for ${plan.domain}: ${plan.creates} create, ${plan.updates} update, ${plan.deletes} delete, ${plan.unchanged} unchanged`);
   for (const op of plan.operations) {
     if (op.op === "unchanged") continue;
     const priority = op.record.priority == null ? "" : ` priority=${op.record.priority}`;
     const currentTtl = op.current && op.current.ttl !== op.record.ttl ? ` ttl ${op.current.ttl}->${op.record.ttl}` : "";
-    console.log(`  ${op.op.toUpperCase()} ${op.record.type} ${op.record.name} ${op.record.value} ttl=${op.record.ttl}${priority}${currentTtl}`);
+    printLine(`  ${op.op.toUpperCase()} ${op.record.type} ${op.record.name} ${op.record.value} ttl=${op.record.ttl}${priority}${currentTtl}`);
   }
 }
 
@@ -75,10 +76,10 @@ export function registerDnsCommands(program: Command): void {
       const providerName = opts.provider ?? loadConfig().default_dns ?? "route53";
       try {
         const plan = await loadDnsPlan(domain, providerName, opts.file);
-        if (opts.json) console.log(JSON.stringify(plan, null, 2));
+        if (opts.json) printLine(JSON.stringify(plan, null, 2));
         else printDnsPlan(plan);
       } catch (e) {
-        console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);
       }
     });
@@ -93,11 +94,11 @@ export function registerDnsCommands(program: Command): void {
       const providerName = opts.provider ?? loadConfig().default_dns ?? "route53";
       try {
         const plan = await loadDnsPlan(domain, providerName, opts.file);
-        if (opts.json) console.log(JSON.stringify(plan, null, 2));
+        if (opts.json) printLine(JSON.stringify(plan, null, 2));
         else printDnsPlan(plan);
         if (planHasChanges(plan)) process.exitCode = 2;
       } catch (e) {
-        console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);
       }
     });
@@ -119,38 +120,38 @@ export function registerDnsCommands(program: Command): void {
         const current = await provider.getDnsRecords(planDomain);
         const plan = createDnsPlan(planDomain, current, desired.records);
         if (!planHasChanges(plan)) {
-          if (opts.json) console.log(JSON.stringify({ applied: false, reason: "no-changes", plan }, null, 2));
+          if (opts.json) printLine(JSON.stringify({ applied: false, reason: "no-changes", plan }, null, 2));
           else printDnsPlan(plan);
           return;
         }
         const blockReason = getDnsApplyBlockReason(plan, { yes: opts.yes, allowDelete: opts.allowDelete });
         if (blockReason) {
-          if (opts.json) console.log(JSON.stringify({ applied: false, reason: blockReason, plan }, null, 2));
+          if (opts.json) printLine(JSON.stringify({ applied: false, reason: blockReason, plan }, null, 2));
           else {
             printDnsPlan(plan);
-            if (blockReason === "confirmation-required") console.error("Refusing to apply without --yes.");
-            if (blockReason === "delete-confirmation-required") console.error("Refusing to delete DNS records without --allow-delete.");
-            if (blockReason === "delete-apply-unsupported") console.error(`Refusing to apply delete plan on ${providerName}: this provider path cannot guarantee delete convergence without partial mutation yet.`);
+            if (blockReason === "confirmation-required") printErrorLine("Refusing to apply without --yes.");
+            if (blockReason === "delete-confirmation-required") printErrorLine("Refusing to delete DNS records without --allow-delete.");
+            if (blockReason === "delete-apply-unsupported") printErrorLine(`Refusing to apply delete plan on ${providerName}: this provider path cannot guarantee delete convergence without partial mutation yet.`);
           }
           process.exit(1);
         }
         await provider.setDnsRecords(planDomain, desired.records);
         const verified = createDnsPlan(planDomain, await provider.getDnsRecords(planDomain), desired.records);
         if (planHasChanges(verified)) {
-          if (opts.json) console.log(JSON.stringify({ applied: false, provider: providerName, reason: "verification-failed", plan, verification: verified }, null, 2));
+          if (opts.json) printLine(JSON.stringify({ applied: false, provider: providerName, reason: "verification-failed", plan, verification: verified }, null, 2));
           else {
             printDnsPlan(verified);
-            console.error(`Provider ${providerName} did not converge to the desired DNS state for ${planDomain}.`);
+            printErrorLine(`Provider ${providerName} did not converge to the desired DNS state for ${planDomain}.`);
           }
           process.exit(1);
         }
-        if (opts.json) console.log(JSON.stringify({ applied: true, provider: providerName, plan, verification: verified }, null, 2));
+        if (opts.json) printLine(JSON.stringify({ applied: true, provider: providerName, plan, verification: verified }, null, 2));
         else {
           printDnsPlan(plan);
-          console.log(`✓ Applied and verified desired DNS state on ${providerName} for ${planDomain}`);
+          printLine(`✓ Applied and verified desired DNS state on ${providerName} for ${planDomain}`);
         }
       } catch (e) {
-        console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);
       }
     });
@@ -167,18 +168,18 @@ export function registerDnsCommands(program: Command): void {
       const records = await listDnsRecords(domainId, opts.type);
 
       if (opts.json) {
-        console.log(JSON.stringify(records, null, 2));
+        printLine(JSON.stringify(records, null, 2));
       } else {
         const page = pageItemsOrExit(records, { limit: opts.limit, all: opts.all });
         if (page.items.length === 0) {
-          console.log("No DNS records found.");
+          printLine("No DNS records found.");
           return;
         }
         for (const r of page.items) {
           const priority = r.priority !== null ? ` (priority: ${r.priority})` : "";
-          console.log(`  ${r.type}\t${r.name}\t${truncateText(r.value, 80)}\tTTL:${r.ttl}${priority}`);
+          printLine(`  ${r.type}\t${r.name}\t${truncateText(r.value, 80)}\tTTL:${r.ttl}${priority}`);
         }
-        console.log(`\n${compactHint(page, "record(s)", "Use --all for every record or --json for full values.", { paging: "limit" })}`);
+        printLine(`\n${compactHint(page, "record(s)", "Use --all for every record or --json for full values.", { paging: "limit" })}`);
       }
     });
 
@@ -203,9 +204,9 @@ export function registerDnsCommands(program: Command): void {
       });
 
       if (opts.json) {
-        console.log(JSON.stringify(record, null, 2));
+        printLine(JSON.stringify(record, null, 2));
       } else {
-        console.log(`Created DNS record: ${record.type} ${record.name} -> ${record.value} (${record.id})`);
+        printLine(`Created DNS record: ${record.type} ${record.name} -> ${record.value} (${record.id})`);
       }
     });
 
@@ -229,14 +230,14 @@ export function registerDnsCommands(program: Command): void {
 
       const record = await updateDnsRecord(id, input);
       if (!record) {
-        console.error(`DNS record '${id}' not found.`);
+        printErrorLine(`DNS record '${id}' not found.`);
         process.exit(1);
       }
 
       if (opts.json) {
-        console.log(JSON.stringify(record, null, 2));
+        printLine(JSON.stringify(record, null, 2));
       } else {
-        console.log(`Updated DNS record: ${record.type} ${record.name} -> ${record.value}`);
+        printLine(`Updated DNS record: ${record.type} ${record.name} -> ${record.value}`);
       }
     });
 
@@ -247,9 +248,9 @@ export function registerDnsCommands(program: Command): void {
     .action(async (id) => {
       const deleted = await deleteDnsRecord(id);
       if (deleted) {
-        console.log(`Deleted DNS record ${id}`);
+        printLine(`Deleted DNS record ${id}`);
       } else {
-        console.error(`DNS record '${id}' not found.`);
+        printErrorLine(`DNS record '${id}' not found.`);
         process.exit(1);
       }
     });
@@ -264,18 +265,18 @@ export function registerDnsCommands(program: Command): void {
       try {
         const result = await checkDnsPropagation(domain, opts.record);
         if (opts.json) {
-          console.log(JSON.stringify(result, null, 2));
+          printLine(JSON.stringify(result, null, 2));
         } else {
-          console.log(`DNS Propagation for ${result.domain} (${result.record_type}):`);
-          console.log(`  Consistent: ${result.consistent ? "yes" : "NO"}`);
+          printLine(`DNS Propagation for ${result.domain} (${result.record_type}):`);
+          printLine(`  Consistent: ${result.consistent ? "yes" : "NO"}`);
           for (const s of result.servers) {
             const values = s.values.length > 0 ? s.values.join(", ") : "(empty)";
             const status = s.status === "error" ? ` [ERROR: ${s.error}]` : "";
-            console.log(`  ${s.name} (${s.server}): ${values}${status}`);
+            printLine(`  ${s.name} (${s.server}): ${values}${status}`);
           }
         }
       } catch (error: unknown) {
-        console.error(`DNS propagation check failed: ${error instanceof Error ? error.message : String(error)}`);
+        printErrorLine(`DNS propagation check failed: ${error instanceof Error ? error.message : String(error)}`);
         process.exit(1);
       }
     });
@@ -288,14 +289,14 @@ export function registerDnsCommands(program: Command): void {
     .action(async (domainId, opts) => {
       const zone = await exportZoneFile(domainId);
       if (!zone) {
-        console.error(`Domain '${domainId}' not found.`);
+        printErrorLine(`Domain '${domainId}' not found.`);
         process.exit(1);
       }
       if (opts.output) {
         writeFileSync(opts.output, zone, "utf-8");
-        console.log(`Exported zone file to ${opts.output}`);
+        printLine(`Exported zone file to ${opts.output}`);
       } else {
-        console.log(zone);
+        printLine(zone);
       }
     });
 
@@ -310,24 +311,24 @@ export function registerDnsCommands(program: Command): void {
       try {
         content = readFileSync(opts.file, "utf-8");
       } catch {
-        console.error(`Could not read file: ${opts.file}`);
+        printErrorLine(`Could not read file: ${opts.file}`);
         process.exit(1);
       }
 
       const result = await importZoneFile(domainId, content);
       if (!result) {
-        console.error(`Domain '${domainId}' not found.`);
+        printErrorLine(`Domain '${domainId}' not found.`);
         process.exit(1);
       }
 
       if (opts.json) {
-        console.log(JSON.stringify(result, null, 2));
+        printLine(JSON.stringify(result, null, 2));
       } else {
-        console.log(`Imported ${result.imported} record(s), skipped ${result.skipped}`);
+        printLine(`Imported ${result.imported} record(s), skipped ${result.skipped}`);
         if (result.errors.length > 0) {
-          console.log("Errors:");
+          printLine("Errors:");
           for (const e of result.errors) {
-            console.log(`  - ${e}`);
+            printLine(`  - ${e}`);
           }
         }
       }
@@ -343,22 +344,22 @@ export function registerDnsCommands(program: Command): void {
     .action(async (domain, opts) => {
       const result = await discoverSubdomains(domain);
       if (opts.json) {
-        console.log(JSON.stringify(result, null, 2));
+        printLine(JSON.stringify(result, null, 2));
       } else {
         if (result.error) {
-          console.error(`Discovery failed: ${result.error}`);
+          printErrorLine(`Discovery failed: ${result.error}`);
           process.exit(1);
         }
         if (result.subdomains.length === 0) {
-          console.log(`No subdomains found for ${domain}.`);
+          printLine(`No subdomains found for ${domain}.`);
           return;
         }
         const page = pageItemsOrExit(result.subdomains, { limit: opts.limit, all: opts.all });
-        console.log(`Subdomains for ${domain} (source: ${result.source}):`);
+        printLine(`Subdomains for ${domain} (source: ${result.source}):`);
         for (const s of page.items) {
-          console.log(`  ${s}`);
+          printLine(`  ${s}`);
         }
-        console.log(`\n${compactHint(page, "subdomain(s)", "Use --all for every discovered name or --json for the full result.", { paging: "limit" })}`);
+        printLine(`\n${compactHint(page, "subdomain(s)", "Use --all for every discovered name or --json for the full result.", { paging: "limit" })}`);
       }
     });
 
@@ -370,21 +371,21 @@ export function registerDnsCommands(program: Command): void {
     .action(async (domainId, opts) => {
       const result = await validateDns(domainId);
       if (!result) {
-        console.error(`Domain '${domainId}' not found.`);
+        printErrorLine(`Domain '${domainId}' not found.`);
         process.exit(1);
       }
 
       if (opts.json) {
-        console.log(JSON.stringify(result, null, 2));
+        printLine(JSON.stringify(result, null, 2));
       } else {
-        console.log(`DNS Validation for ${result.domain_name}:`);
-        console.log(`  Valid: ${result.valid ? "yes" : "NO"}`);
+        printLine(`DNS Validation for ${result.domain_name}:`);
+        printLine(`  Valid: ${result.valid ? "yes" : "NO"}`);
         if (result.issues.length === 0) {
-          console.log("  No issues found.");
+          printLine("  No issues found.");
         } else {
           for (const issue of result.issues) {
             const prefix = issue.type === "error" ? "ERROR" : "WARN";
-            console.log(`  [${prefix}] ${issue.message}`);
+            printLine(`  [${prefix}] ${issue.message}`);
           }
         }
       }
@@ -403,7 +404,7 @@ export function registerDnsCommands(program: Command): void {
         const records = await provider.getDnsRecords(domain);
         const dbDomain = await getDomainByName(domain);
         if (!dbDomain) {
-          console.error(`Domain '${domain}' not found in local DB. Add it first: domains domain add --name ${domain}`);
+          printErrorLine(`Domain '${domain}' not found in local DB. Add it first: domains domain add --name ${domain}`);
           process.exit(1);
         }
         // Skip provider-managed types (SOA/CAA/…) the store cannot persist.
@@ -413,13 +414,13 @@ export function registerDnsCommands(program: Command): void {
           await createDnsRecord({ domain_id: dbDomain.id, type: r.type as "A" | "AAAA" | "CNAME" | "MX" | "TXT" | "NS" | "SRV", name: r.name, value: r.value, ttl: r.ttl, priority: r.priority });
           count++;
         }
-        console.log(`✓ Pulled ${count} record(s) from ${providerName} into local DB for ${domain}`);
+        printLine(`✓ Pulled ${count} record(s) from ${providerName} into local DB for ${domain}`);
         if (skipped.size > 0) {
           const summary = Array.from(skipped.entries()).map(([t, n]) => `${n} ${t}`).join(", ");
-          console.log(`  Skipped ${summary} record(s) (unsupported/provider-managed type).`);
+          printLine(`  Skipped ${summary} record(s) (unsupported/provider-managed type).`);
         }
       } catch (e) {
-        console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);
       }
     });
@@ -434,15 +435,15 @@ export function registerDnsCommands(program: Command): void {
       const providerName = opts.provider ?? loadConfig().default_dns ?? "route53";
       try {
         const records = await listDnsRecords(domainId);
-        if (records.length === 0) { console.log("No local DNS records to push."); return; }
+        if (records.length === 0) { printLine("No local DNS records to push."); return; }
         const dbDomain = (await getDomain(domainId)) ?? (() => { throw new Error(`Domain '${domainId}' not found`); })();
         const provider = getDnsProvider(providerName);
         await provider.setDnsRecords(dbDomain.name, records.map((r) => ({
           type: r.type, name: r.name, value: r.value, ttl: r.ttl, priority: r.priority ?? undefined,
         })));
-        console.log(`✓ Pushed ${records.length} record(s) to ${providerName} for ${dbDomain.name}`);
+        printLine(`✓ Pushed ${records.length} record(s) to ${providerName} for ${dbDomain.name}`);
       } catch (e) {
-        console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);
       }
     });

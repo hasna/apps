@@ -10,6 +10,7 @@ import { createDomain, getDomainByName, recordDomainPurchase, updateDomain } fro
 import { createHistoryEntry } from "../../db/history.js";
 import { compactHint, pageItemsOrExit } from "../../lib/compact-output.js";
 
+import { printLine, printErrorLine } from "../../lib/stdout.js";
 export interface WalletCard {
   id: string;
   provider_id: string;
@@ -85,21 +86,21 @@ export function registerWalletCommand(program: Command): void {
       try {
         const cards = await getAvailableCards();
         if (opts.json) {
-          console.log(JSON.stringify(cards, null, 2));
+          printLine(JSON.stringify(cards, null, 2));
         } else {
           if (cards.length === 0) {
-            console.log("No active wallet cards found.");
+            printLine("No active wallet cards found.");
             return;
           }
           const page = pageItemsOrExit(cards, { limit: opts.limit, all: opts.all });
-          console.log("Available wallet cards:");
+          printLine("Available wallet cards:");
           for (const c of page.items) {
-            console.log(`  ${c.brand} •••• ${c.last_four} — ${c.name} (${c.balance} ${c.currency})`);
+            printLine(`  ${c.brand} •••• ${c.last_four} — ${c.name} (${c.balance} ${c.currency})`);
           }
-          console.log(`\n${compactHint(page, "card(s)", "Use --all for every card or --json for full card fields.", { paging: "limit" })}`);
+          printLine(`\n${compactHint(page, "card(s)", "Use --all for every card or --json for full card fields.", { paging: "limit" })}`);
         }
       } catch (error: unknown) {
-        console.error(`Failed to list cards: ${error instanceof Error ? error.message : String(error)}`);
+        printErrorLine(`Failed to list cards: ${error instanceof Error ? error.message : String(error)}`);
         process.exit(1);
       }
     });
@@ -123,15 +124,15 @@ export function registerWalletCommand(program: Command): void {
         if (!cardId) {
           const cards = await getAvailableCards();
           if (cards.length === 0) {
-            console.error("No active wallet cards found. Add a card first.");
+            printErrorLine("No active wallet cards found. Add a card first.");
             process.exit(1);
           }
           if (cards.length === 1) {
             cardId = cards[0]!.external_id;
           } else {
-            console.error("Multiple cards available. Specify --card-id:");
+            printErrorLine("Multiple cards available. Specify --card-id:");
             for (const c of cards) {
-              console.log(`  ${c.id}: ${c.brand} •••• ${c.last_four} (${c.balance} ${c.currency})`);
+              printLine(`  ${c.id}: ${c.brand} •••• ${c.last_four} (${c.balance} ${c.currency})`);
             }
             process.exit(1);
           }
@@ -140,19 +141,19 @@ export function registerWalletCommand(program: Command): void {
         const wallets = getWalletsModule();
         const card = wallets.getCard(cardId);
         if (!card) {
-          console.error(`Card '${cardId}' not found.`);
+          printErrorLine(`Card '${cardId}' not found.`);
           process.exit(1);
         }
 
         if (card.balance < price) {
-          console.error(`Insufficient funds: need ${price} ${currency}, have ${card.balance} ${card.currency}`);
+          printErrorLine(`Insufficient funds: need ${price} ${currency}, have ${card.balance} ${card.currency}`);
           process.exit(1);
         }
 
         // Check domain doesn't already exist
         const existing = await getDomainByName(name);
         if (existing) {
-          console.error(`Domain '${name}' already exists in portfolio.`);
+          printErrorLine(`Domain '${name}' already exists in portfolio.`);
           process.exit(1);
         }
 
@@ -181,13 +182,13 @@ export function registerWalletCommand(program: Command): void {
         });
 
         if (opts.json) {
-          console.log(JSON.stringify({ domain, card_id: cardId, price, currency }, null, 2));
+          printLine(JSON.stringify({ domain, card_id: cardId, price, currency }, null, 2));
         } else {
-          console.log(`Purchased ${name} for ${price} ${currency} via wallet card`);
-          console.log(`  Added to portfolio as ${domain.id}`);
+          printLine(`Purchased ${name} for ${price} ${currency} via wallet card`);
+          printLine(`  Added to portfolio as ${domain.id}`);
         }
       } catch (error: unknown) {
-        console.error(`Wallet purchase failed: ${error instanceof Error ? error.message : String(error)}`);
+        printErrorLine(`Wallet purchase failed: ${error instanceof Error ? error.message : String(error)}`);
         process.exit(1);
       }
     });
@@ -204,7 +205,7 @@ export function registerWalletCommand(program: Command): void {
       const price = parseFloat(opts.price);
       const domain = await getDomainByName(name);
       if (!domain) {
-        console.error(`Domain '${name}' not found in portfolio.`);
+        printErrorLine(`Domain '${name}' not found in portfolio.`);
         process.exit(1);
       }
 
@@ -214,7 +215,7 @@ export function registerWalletCommand(program: Command): void {
         if (!cardId) {
           const cards = await getAvailableCards();
           if (cards.length === 0) {
-            console.error("No active wallet cards found.");
+            printErrorLine("No active wallet cards found.");
             process.exit(1);
           }
           cardId = cards[0]!.external_id;
@@ -223,12 +224,12 @@ export function registerWalletCommand(program: Command): void {
         const wallets = getWalletsModule();
         const card = wallets.getCard(cardId);
         if (!card) {
-          console.error(`Card '${cardId}' not found.`);
+          printErrorLine(`Card '${cardId}' not found.`);
           process.exit(1);
         }
 
         if (card.balance < price) {
-          console.error(`Insufficient funds: need ${price} ${opts.currency}, have ${card.balance} ${card.currency}`);
+          printErrorLine(`Insufficient funds: need ${price} ${opts.currency}, have ${card.balance} ${card.currency}`);
           process.exit(1);
         }
 
@@ -249,13 +250,13 @@ export function registerWalletCommand(program: Command): void {
         });
 
         if (opts.json) {
-          console.log(JSON.stringify({ domain: name, card_id: cardId, price, new_expiry: expiryDate.toISOString() }, null, 2));
+          printLine(JSON.stringify({ domain: name, card_id: cardId, price, new_expiry: expiryDate.toISOString() }, null, 2));
         } else {
-          console.log(`Renewed ${name} for ${price} ${opts.currency} via wallet card`);
-          console.log(`  New expiry: ${expiryDate.toISOString().split("T")[0]}`);
+          printLine(`Renewed ${name} for ${price} ${opts.currency} via wallet card`);
+          printLine(`  New expiry: ${expiryDate.toISOString().split("T")[0]}`);
         }
       } catch (error: unknown) {
-        console.error(`Wallet renewal failed: ${error instanceof Error ? error.message : String(error)}`);
+        printErrorLine(`Wallet renewal failed: ${error instanceof Error ? error.message : String(error)}`);
         process.exit(1);
       }
     });

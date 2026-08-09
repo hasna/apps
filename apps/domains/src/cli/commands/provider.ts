@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { getAvailableProviders, getDnsProvider, getRegistrarProvider } from "../../lib/registrar.js";
 
+import { printLine, printErrorLine } from "../../lib/stdout.js";
 function isAwsAccessDenied(error: unknown): boolean {
   const msg = error instanceof Error ? error.message : String(error);
   return msg.includes("AccessDenied") || msg.includes("route53domains:ListDomains");
@@ -16,20 +17,20 @@ export function registerProviderCommand(program: Command): void {
     .action((opts: { json?: boolean }) => {
       const providers = getAvailableProviders();
       if (opts.json) {
-        console.log(JSON.stringify(providers, null, 2));
+        printLine(JSON.stringify(providers, null, 2));
         return;
       }
-      console.log("\nRegistrar / DNS Providers:");
+      printLine("\nRegistrar / DNS Providers:");
       for (const p of providers) {
         const status = p.configured ? "✓ configured" : "✗ not configured";
         const type = p.type === "full" ? "registrar + dns" : p.type;
         const capabilities = [type, p.inventory ? "inventory" : null].filter(Boolean).join(", ");
-        console.log(`  ${p.name.padEnd(12)} [${capabilities}]  ${status}`);
+        printLine(`  ${p.name.padEnd(12)} [${capabilities}]  ${status}`);
         if (!p.configured) {
-          console.log(`    Missing: ${p.envVars.join(", ")}`);
+          printLine(`    Missing: ${p.envVars.join(", ")}`);
         }
       }
-      console.log();
+      printLine();
     });
 
   provider
@@ -44,9 +45,9 @@ export function registerProviderCommand(program: Command): void {
       if (!info) {
         const error = `Unknown provider: ${name}`;
         if (opts.json) {
-          console.log(JSON.stringify({ provider: providerName, ok: false, error }, null, 2));
+          printLine(JSON.stringify({ provider: providerName, ok: false, error }, null, 2));
         } else {
-          console.error(error);
+          printErrorLine(error);
         }
         process.exit(1);
       }
@@ -54,7 +55,7 @@ export function registerProviderCommand(program: Command): void {
       if (!info.configured) {
         const error = `${providerName} is not configured. Set: ${info.envVars.join(", ")}`;
         if (opts.json) {
-          console.log(
+          printLine(
             JSON.stringify(
               {
                 provider: providerName,
@@ -68,13 +69,13 @@ export function registerProviderCommand(program: Command): void {
             )
           );
         } else {
-          console.error(`✗ ${error}`);
+          printErrorLine(`✗ ${error}`);
         }
         process.exit(1);
       }
 
       if (!opts.json) {
-        console.log(`Testing ${providerName}...`);
+        printLine(`Testing ${providerName}...`);
       }
 
       let registrarOk: boolean | null = null;
@@ -89,18 +90,18 @@ export function registerProviderCommand(program: Command): void {
               const { listRegisteredDomains } = await import("../../lib/route53.js");
               await listRegisteredDomains();
               registrarOk = true;
-              if (!opts.json) console.log("✓ Registrar connection OK");
+              if (!opts.json) printLine("✓ Registrar connection OK");
             } catch (error) {
               if (!isAwsAccessDenied(error)) throw error;
               registrarOk = false;
               notes.push("route53domains-listdomains-access-denied");
-              if (!opts.json) console.log("• Route53 Domains registrar API is not available for these AWS credentials");
+              if (!opts.json) printLine("• Route53 Domains registrar API is not available for these AWS credentials");
             }
           } else {
             const reg = getRegistrarProvider(providerName);
             await reg.listDomains();
             registrarOk = true;
-            if (!opts.json) console.log("✓ Registrar connection OK");
+            if (!opts.json) printLine("✓ Registrar connection OK");
           }
         }
 
@@ -108,12 +109,12 @@ export function registerProviderCommand(program: Command): void {
           if (providerName === "brandsight" && registrarOk) {
             dnsOk = null;
             notes.push("dns-not-probed-with-synthetic-invalid-domain");
-            if (!opts.json) console.log("• DNS not probed with synthetic invalid domain");
+            if (!opts.json) printLine("• DNS not probed with synthetic invalid domain");
           } else {
             const dns = getDnsProvider(providerName);
             await dns.getDnsRecords("__test_nonexistent_domain__.invalid");
             dnsOk = true;
-            if (!opts.json) console.log("✓ DNS connection OK");
+            if (!opts.json) printLine("✓ DNS connection OK");
           }
         }
 
@@ -122,11 +123,11 @@ export function registerProviderCommand(program: Command): void {
           const { listSedoPortfolio } = await import("../../lib/sedo.js");
           await listSedoPortfolio({ limit: 1 });
           marketplaceOk = true;
-          if (!opts.json) console.log("✓ Marketplace connection OK");
+          if (!opts.json) printLine("✓ Marketplace connection OK");
         }
 
         if (opts.json) {
-          console.log(
+          printLine(
             JSON.stringify(
               {
                 provider: providerName,
@@ -148,7 +149,7 @@ export function registerProviderCommand(program: Command): void {
         // Empty result is still a valid connection
         if (msg.includes("not found") || msg.includes("No hosted zone") || msg.includes("NXDOMAIN")) {
           if (opts.json) {
-            console.log(
+            printLine(
               JSON.stringify(
                 {
                   provider: providerName,
@@ -166,13 +167,13 @@ export function registerProviderCommand(program: Command): void {
               )
             );
           } else {
-            console.log("✓ Connection OK (no domains yet)");
+            printLine("✓ Connection OK (no domains yet)");
           }
           return;
         }
 
         if (opts.json) {
-          console.log(
+          printLine(
             JSON.stringify(
               {
                 provider: providerName,
@@ -189,7 +190,7 @@ export function registerProviderCommand(program: Command): void {
             )
           );
         } else {
-          console.error(`✗ ${providerName} test failed: ${msg}`);
+          printErrorLine(`✗ ${providerName} test failed: ${msg}`);
         }
         process.exit(1);
       }

@@ -3,6 +3,7 @@ import { deriveDomainState, domainHappyPath } from "../../lib/provision-state.js
 import { getDomainDetail } from "../../lib/route53.js";
 import { getZone } from "../../lib/cloudflare.js";
 
+import { printLine, printErrorLine } from "../../lib/stdout.js";
 const CF_NS_SUFFIX = ".ns.cloudflare.com";
 
 export function registerProvisionCommand(program: Command): void {
@@ -27,15 +28,15 @@ export function registerProvisionCommand(program: Command): void {
           signals["publicNsAreCloudflare"] = resolved.length > 0 && resolved.every((n) => n.includes(CF_NS_SUFFIX));
         } catch { signals["publicNsAreCloudflare"] = false; }
       } catch (e) {
-        console.error(`Error gathering signals: ${e instanceof Error ? e.message : String(e)}`);
+        printErrorLine(`Error gathering signals: ${e instanceof Error ? e.message : String(e)}`);
       }
       const state = deriveDomainState(signals);
-      console.log(`\nDomain: ${name}`);
-      console.log(`State:  ${state}`);
-      console.log(`Signals: ${JSON.stringify(signals)}`);
+      printLine(`\nDomain: ${name}`);
+      printLine(`State:  ${state}`);
+      printLine(`Signals: ${JSON.stringify(signals)}`);
       const path = domainHappyPath();
       const idx = path.indexOf(state as never);
-      console.log(`Progress: ${idx >= 0 ? idx + 1 : "?"}/${path.length}  [${path.join(" → ")}]`);
+      printLine(`Progress: ${idx >= 0 ? idx + 1 : "?"}/${path.length}  [${path.join(" → ")}]`);
     });
 
   provision
@@ -50,7 +51,7 @@ export function registerProvisionCommand(program: Command): void {
       applyPurchaseProfile();
       const { makeDomainDaemonDeps } = await import("../../lib/domain-daemon-deps.js");
       const { reconcileDomainTick, runDomainDaemon } = await import("../../lib/domain-daemon.js");
-      const deps = { ...makeDomainDaemonDeps(), log: (e: string, d: Record<string, unknown>) => console.log(`[${e}] ${JSON.stringify(d)}`) };
+      const deps = { ...makeDomainDaemonDeps(), log: (e: string, d: Record<string, unknown>) => printLine(`[${e}] ${JSON.stringify(d)}`) };
 
       const listDomains = async (): Promise<string[]> => {
         if (opts.domains) return opts.domains.split(",").map((d) => d.trim());
@@ -60,15 +61,15 @@ export function registerProvisionCommand(program: Command): void {
 
       if (opts.once) {
         const s = await reconcileDomainTick(await listDomains(), deps);
-        console.log(`✓ tick: ${s.advanced} advanced, ${s.ready} ready, ${s.errors} errors (${s.processed} processed)`);
+        printLine(`✓ tick: ${s.advanced} advanced, ${s.ready} ready, ${s.errors} errors (${s.processed} processed)`);
         return;
       }
-      console.log(`Domain provisioning daemon started (interval ${opts.interval}s). Ctrl-C to stop.`);
+      printLine(`Domain provisioning daemon started (interval ${opts.interval}s). Ctrl-C to stop.`);
       const total = await runDomainDaemon(listDomains, {
         ...deps,
         intervalSec: parseInt(opts.interval, 10),
         maxTicks: opts.maxTicks ? parseInt(opts.maxTicks, 10) : undefined,
       });
-      console.log(`daemon stopped: ${total.advanced} advanced, ${total.ready} ready, ${total.errors} errors`);
+      printLine(`daemon stopped: ${total.advanced} advanced, ${total.ready} ready, ${total.errors} errors`);
     });
 }

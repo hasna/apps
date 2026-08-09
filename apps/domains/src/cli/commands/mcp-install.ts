@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { execSync } from "node:child_process";
 
+import { printLine } from "../../lib/stdout.js";
 const MCP_SERVER_NAME = "domains";
 
 function getClaudeConfigPaths(): { global: string; project: string } {
@@ -56,10 +57,10 @@ export function registerMcpCommand(program: Command): void {
       config.mcpServers = mcpServers;
 
       writeFileSync(configPath, JSON.stringify(config, null, 2), "utf-8");
-      console.log(`✓ MCP server registered: ${MCP_SERVER_NAME}`);
-      console.log(`  Config: ${configPath}`);
-      console.log(`  Binary: ${binary}`);
-      console.log(`\n  Restart Claude Code to activate.`);
+      printLine(`✓ MCP server registered: ${MCP_SERVER_NAME}`);
+      printLine(`  Config: ${configPath}`);
+      printLine(`  Binary: ${binary}`);
+      printLine(`\n  Restart Claude Code to activate.`);
     });
 
   mcp
@@ -71,19 +72,19 @@ export function registerMcpCommand(program: Command): void {
       const configPath = opts.project ? paths.project : paths.global;
 
       if (!existsSync(configPath)) {
-        console.log("Config file not found — nothing to remove.");
+        printLine("Config file not found — nothing to remove.");
         return;
       }
 
       const config = readConfig(configPath);
       const mcpServers = config.mcpServers as Record<string, unknown> | undefined;
       if (!mcpServers?.[MCP_SERVER_NAME]) {
-        console.log(`MCP server '${MCP_SERVER_NAME}' is not registered.`);
+        printLine(`MCP server '${MCP_SERVER_NAME}' is not registered.`);
         return;
       }
       delete mcpServers[MCP_SERVER_NAME];
       writeFileSync(configPath, JSON.stringify(config, null, 2), "utf-8");
-      console.log(`✓ MCP server removed: ${MCP_SERVER_NAME}`);
+      printLine(`✓ MCP server removed: ${MCP_SERVER_NAME}`);
     });
 
   mcp
@@ -121,23 +122,23 @@ export function registerMcpCommand(program: Command): void {
       }
 
       if (opts.json) {
-        console.log(JSON.stringify({ server: MCP_SERVER_NAME, checks: status }, null, 2));
+        printLine(JSON.stringify({ server: MCP_SERVER_NAME, checks: status }, null, 2));
         return;
       }
 
       for (const item of status) {
         if (!item.exists) {
-          console.log(`  ${item.scope}: not found`);
+          printLine(`  ${item.scope}: not found`);
           continue;
         }
         if (item.error) {
-          console.log(`  ${item.scope}: error reading config`);
+          printLine(`  ${item.scope}: error reading config`);
           continue;
         }
         if (item.registered) {
-          console.log(`  ${item.scope}: ✓ registered`);
+          printLine(`  ${item.scope}: ✓ registered`);
         } else {
-          console.log(`  ${item.scope}: ✗ not registered`);
+          printLine(`  ${item.scope}: ✗ not registered`);
         }
       }
     });

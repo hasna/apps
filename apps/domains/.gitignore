@@ -10,3 +10,5 @@ dist/
 .env
 .env.*
 hasna-domains-*.tgz
+.pipe-e2e/
+.pipe-e2e-fixture/

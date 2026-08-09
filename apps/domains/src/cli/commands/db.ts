@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { runMigrations } from "../../server/migrations.js";
 
+import { printLine, printErrorLine } from "../../lib/stdout.js";
 /**
  * `domains db migrate` — apply cloud Postgres migrations against the owner DSN.
  * Used by the one-shot ECS migration task (migrate-before-service-update).
@@ -18,18 +19,18 @@ export function registerDbCommands(program: Command): void {
         const pending = result.plan.filter((p) => p.state === "pending").map((p) => p.migration.id);
         const applied = result.applied.map((a) => a.id);
         if (opts.json) {
-          console.log(JSON.stringify({ ok: true, dryRun: result.dryRun, pending, applied }, null, 2));
+          printLine(JSON.stringify({ ok: true, dryRun: result.dryRun, pending, applied }, null, 2));
         } else if (result.dryRun) {
-          console.log(`Dry run — ${pending.length} pending migration(s):`);
-          for (const id of pending) console.log(`  • ${id}`);
-          if (pending.length === 0) console.log("  (schema up to date)");
+          printLine(`Dry run — ${pending.length} pending migration(s):`);
+          for (const id of pending) printLine(`  • ${id}`);
+          if (pending.length === 0) printLine("  (schema up to date)");
         } else {
-          console.log(`✓ migrations applied — ${applied.length} total, ${pending.length} were pending`);
+          printLine(`✓ migrations applied — ${applied.length} total, ${pending.length} were pending`);
         }
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        if (opts.json) console.log(JSON.stringify({ ok: false, error: msg }, null, 2));
-        else console.error(`✗ migration failed: ${msg}`);
+        if (opts.json) printLine(JSON.stringify({ ok: false, error: msg }, null, 2));
+        else printErrorLine(`✗ migration failed: ${msg}`);
         process.exitCode = 1;
       }
     });
@@ -43,15 +44,15 @@ export function registerDbCommands(program: Command): void {
         const pending = result.plan.filter((p) => p.state === "pending").map((p) => p.migration.id);
         const applied = result.applied.map((a) => a.id);
         if (opts.json) {
-          console.log(JSON.stringify({ ok: true, pending, applied }, null, 2));
+          printLine(JSON.stringify({ ok: true, pending, applied }, null, 2));
         } else {
-          console.log(`Applied: ${applied.length}   Pending: ${pending.length}`);
-          for (const id of pending) console.log(`  pending: ${id}`);
+          printLine(`Applied: ${applied.length}   Pending: ${pending.length}`);
+          for (const id of pending) printLine(`  pending: ${id}`);
         }
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        if (opts.json) console.log(JSON.stringify({ ok: false, error: msg }, null, 2));
-        else console.error(`✗ ${msg}`);
+        if (opts.json) printLine(JSON.stringify({ ok: false, error: msg }, null, 2));
+        else printErrorLine(`✗ ${msg}`);
         process.exitCode = 1;
       }
     });

@@ -28,13 +28,15 @@ describe("domains interactive command", () => {
     const exitSpy = spyOn(process, "exit").mockImplementation((() => {
       throw new Error("process.exit");
     }) as typeof process.exit);
-    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    // The diagnostic goes to fd 2 through the completing writer rather than
+    // through `console.error`, so it is captured by injecting the sink instead
+    // of by spying on a global.
+    const emitted: string[] = [];
 
-    expect(() => assertInteractiveTty()).toThrow("process.exit");
+    expect(() => assertInteractiveTty((line) => emitted.push(line))).toThrow("process.exit");
     expect(exitSpy).toHaveBeenCalledWith(1);
-    expect(stripAnsi(errorSpy.mock.calls.flat().join(" "))).toContain("TTY");
+    expect(stripAnsi(emitted.join(" "))).toContain("TTY");
 
     exitSpy.mockRestore();
-    errorSpy.mockRestore();
   });
 });

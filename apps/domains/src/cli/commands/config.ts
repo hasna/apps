@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { loadConfig, saveConfig, setConfigKey } from "../../lib/config.js";
 
+import { printLine, printErrorLine } from "../../lib/stdout.js";
 const VALID_KEYS = [
   "default-registrar",
   "default-dns",
@@ -27,22 +28,22 @@ export function registerConfigCommands(program: Command): void {
     .action((opts: { json?: boolean }) => {
       const cfg = loadConfig();
       if (opts.json) {
-        console.log(JSON.stringify(cfg, null, 2));
+        printLine(JSON.stringify(cfg, null, 2));
         return;
       }
-      console.log("\nConfiguration:");
-      console.log(`  default-registrar:    ${cfg.default_registrar ?? "(not set)"}`);
-      console.log(`  default-dns:          ${cfg.default_dns ?? "(not set)"}`);
-      console.log(`  purchase-aws-profile: ${cfg.purchase_aws_profile ?? "(not set)"}`);
+      printLine("\nConfiguration:");
+      printLine(`  default-registrar:    ${cfg.default_registrar ?? "(not set)"}`);
+      printLine(`  default-dns:          ${cfg.default_dns ?? "(not set)"}`);
+      printLine(`  purchase-aws-profile: ${cfg.purchase_aws_profile ?? "(not set)"}`);
       if (cfg.contact && Object.keys(cfg.contact).length > 0) {
-        console.log("\n  contact:");
+        printLine("\n  contact:");
         for (const [k, v] of Object.entries(cfg.contact)) {
-          if (v) console.log(`    ${k}: ${v}`);
+          if (v) printLine(`    ${k}: ${v}`);
         }
       } else {
-        console.log("  contact:           (not set)");
+        printLine("  contact:           (not set)");
       }
-      console.log();
+      printLine();
     });
 
   config
@@ -53,9 +54,9 @@ export function registerConfigCommands(program: Command): void {
       const normalized = key.replace(/-/g, "_");
       try {
         setConfigKey(normalized, value);
-        console.log(`✓ Set ${key} = ${value}`);
+        printLine(`✓ Set ${key} = ${value}`);
       } catch (e) {
-        console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);
       }
     });
@@ -73,6 +74,6 @@ export function registerConfigCommands(program: Command): void {
         delete (cfg.contact as Record<string, unknown>)[parts[1]!];
       }
       saveConfig(cfg);
-      console.log(`✓ Unset ${key}`);
+      printLine(`✓ Unset ${key}`);
     });
 }

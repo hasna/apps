@@ -1,11 +1,12 @@
 import type { Command } from "commander";
 import { compactHint, pageItemsOrExit } from "../../lib/compact-output.js";
 
+import { printLine, printErrorLine } from "../../lib/stdout.js";
 function parseSedoLimit(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 0) {
-    console.error("--limit must be a non-negative integer");
+    printErrorLine("--limit must be a non-negative integer");
     process.exit(1);
   }
   return parsed;
@@ -37,21 +38,21 @@ export function registerSedoCommand(program: Command): void {
       });
 
       if (opts.json) {
-        console.log(JSON.stringify(result, null, 2));
+        printLine(JSON.stringify(result, null, 2));
       } else {
         if (result.domains.length === 0) {
-          console.log(`No domains found for "${keyword}".`);
+          printLine(`No domains found for "${keyword}".`);
           return;
         }
-        console.log(`Sedo marketplace — "${keyword}" (${result.total} total):`);
+        printLine(`Sedo marketplace — "${keyword}" (${result.total} total):`);
         for (const d of result.domains) {
           const price = d.price
             ? ` — ${d.price.toLocaleString()} ${d.currency || ""}`.trimEnd()
             : " — make offer";
           const premium = d.isPremium ? " [PREMIUM]" : "";
-          console.log(`  ${d.domain}${price}${premium}`);
+          printLine(`  ${d.domain}${price}${premium}`);
         }
-        console.log(`\nShowing ${result.domains.length}/${result.total} marketplace result(s). Use --limit <n> for more or --json for full fields.`);
+        printLine(`\nShowing ${result.domains.length}/${result.total} marketplace result(s). Use --limit <n> for more or --json for full fields.`);
       }
     });
 
@@ -66,12 +67,12 @@ export function registerSedoCommand(program: Command): void {
       const results = await checkSedoStatus(domains);
 
       if (opts.json) {
-        console.log(JSON.stringify(results, null, 2));
+        printLine(JSON.stringify(results, null, 2));
       } else {
         for (const r of results) {
           const listed = r.listed ? "listed" : "not listed";
           const sale = r.forSale ? ` for sale (${r.price || "?"} ${r.currency || ""})` : "";
-          console.log(`  ${r.domain}: ${listed}${sale}`);
+          printLine(`  ${r.domain}: ${listed}${sale}`);
         }
       }
     });
@@ -89,19 +90,19 @@ export function registerSedoCommand(program: Command): void {
       const domains = await listSedoPortfolio({ limit });
 
       if (opts.json) {
-        console.log(JSON.stringify(domains, null, 2));
+        printLine(JSON.stringify(domains, null, 2));
       } else {
         if (domains.length === 0) {
-          console.log("No domains in your Sedo portfolio.");
+          printLine("No domains in your Sedo portfolio.");
           return;
         }
         const page = pageItemsOrExit(domains, { limit: opts.limit, all: opts.all });
-        console.log(`Sedo Portfolio:`);
+        printLine(`Sedo Portfolio:`);
         for (const d of page.items) {
           const sale = d.forSale ? `[for sale ${d.price || "?"} ${d.currency || ""}]` : "";
-          console.log(`  ${d.domain} ${sale}`);
+          printLine(`  ${d.domain} ${sale}`);
         }
-        console.log(`\n${compactHint(page, "domain(s)", "Use --limit <n> for more or --json for full marketplace fields.", { paging: "limit" })}`);
+        printLine(`\n${compactHint(page, "domain(s)", "Use --limit <n> for more or --json for full marketplace fields.", { paging: "limit" })}`);
       }
     });
 
@@ -128,9 +129,9 @@ export function registerSedoCommand(program: Command): void {
       });
 
       if (opts.json) {
-        console.log(JSON.stringify(result, null, 2));
+        printLine(JSON.stringify(result, null, 2));
       } else {
-        console.log(`Added ${domain} to Sedo marketplace`);
+        printLine(`Added ${domain} to Sedo marketplace`);
       }
     });
 
@@ -153,9 +154,9 @@ export function registerSedoCommand(program: Command): void {
       });
 
       if (opts.json) {
-        console.log(JSON.stringify(result, null, 2));
+        printLine(JSON.stringify(result, null, 2));
       } else {
-        console.log(`Updated ${domain} on Sedo`);
+        printLine(`Updated ${domain} on Sedo`);
       }
     });
 
@@ -167,9 +168,9 @@ export function registerSedoCommand(program: Command): void {
       const { removeDomainFromSedo } = await import("../../lib/sedo.js");
       const removed = await removeDomainFromSedo(domain);
       if (removed) {
-        console.log(`Removed ${domain} from Sedo marketplace`);
+        printLine(`Removed ${domain} from Sedo marketplace`);
       } else {
-        console.error(`Failed to remove ${domain} from Sedo`);
+        printErrorLine(`Failed to remove ${domain} from Sedo`);
         process.exit(1);
       }
     });
@@ -184,10 +185,10 @@ export function registerSedoCommand(program: Command): void {
       const results = await checkSedoBlacklist(domains);
 
       if (opts.json) {
-        console.log(JSON.stringify(results, null, 2));
+        printLine(JSON.stringify(results, null, 2));
       } else {
         for (const r of results) {
-          console.log(`  ${r.domain}: ${r.blacklisted ? "BLACKLISTED" : "clean"}`);
+          printLine(`  ${r.domain}: ${r.blacklisted ? "BLACKLISTED" : "clean"}`);
         }
       }
     });
@@ -206,9 +207,9 @@ export function registerSedoCommand(program: Command): void {
       const created = recordSedoPurchase(domain, price, opts.orderId);
 
       if (opts.json) {
-        console.log(JSON.stringify(created, null, 2));
+        printLine(JSON.stringify(created, null, 2));
       } else {
-        console.log(`Recorded Sedo purchase: ${domain} for $${price}`);
+        printLine(`Recorded Sedo purchase: ${domain} for $${price}`);
       }
     });
 }

@@ -29,6 +29,7 @@ import { delegateDomainToCloudflare } from "../../lib/delegate.js";
 import { getCapability } from "../../lib/capability.js";
 import { compactHint, formatDate, pageItemsOrExit, parseLimit, parseOffset, truncateText } from "../../lib/compact-output.js";
 
+import { printLine, printErrorLine } from "../../lib/stdout.js";
 const DOMAIN_STATUS_HELP = DOMAIN_STATUSES.join("/");
 const DOMAIN_OFFER_STATUS_HELP = DOMAIN_OFFER_STATUSES.join("/");
 const DOMAIN_EMAIL_TYPE_HELP = DOMAIN_EMAIL_TYPES.join("/");
@@ -57,7 +58,7 @@ async function createDnsZoneForProvider(domain: string, provider: string): Promi
 async function requireDomain(identifier: string) {
   const details = await getDomainDetails(identifier);
   if (!details) {
-    console.error(`Domain '${identifier}' not found.`);
+    printErrorLine(`Domain '${identifier}' not found.`);
     process.exit(1);
   }
   return details;
@@ -90,7 +91,7 @@ export function registerDomainCommand(program: Command): void {
         jsonLimit = opts.limit === undefined ? undefined : parseLimit(opts.limit, undefined, Infinity);
         offset = parseOffset(opts.offset);
       } catch (error) {
-        console.error(error instanceof Error ? error.message : String(error));
+        printErrorLine(error instanceof Error ? error.message : String(error));
         process.exit(1);
       }
 
@@ -111,7 +112,7 @@ export function registerDomainCommand(program: Command): void {
           fallbackLimit: Infinity,
           maxLimit: Infinity,
         });
-        console.log(
+        printLine(
           JSON.stringify(
             {
               domains: jsonPage.items,
@@ -130,19 +131,19 @@ export function registerDomainCommand(program: Command): void {
         return;
       }
       const page = pageItemsOrExit(domains, { limit, offset, all: opts.all });
-      if (page.items.length === 0) { console.log("No domains found."); return; }
+      if (page.items.length === 0) { printLine("No domains found."); return; }
       for (const d of page.items) {
         const exp = d.expires_at ? ` exp:${formatDate(d.expires_at)}` : "";
         const premium = d.is_premium ? " premium" : "";
         if (opts.verbose) {
           const registrar = d.registrar ? ` reg:${truncateText(d.registrar, 24)}` : "";
           const notes = d.notes ? ` notes:${truncateText(d.notes, 60)}` : "";
-          console.log(`  ${d.name} [${d.status}]${registrar}${exp}${premium}${notes}`);
+          printLine(`  ${d.name} [${d.status}]${registrar}${exp}${premium}${notes}`);
         } else {
-          console.log(`  ${d.name} [${d.status}]${exp}${premium}`);
+          printLine(`  ${d.name} [${d.status}]${exp}${premium}`);
         }
       }
-      console.log(`\n${compactHint(page, "domain(s)", "Use --verbose for registrar/notes or domain get <id|name> for details.")}`);
+      printLine(`\n${compactHint(page, "domain(s)", "Use --verbose for registrar/notes or domain get <id|name> for details.")}`);
     });
   // ── get ─────────────────────────────────────────────────────────────────
 
@@ -152,23 +153,23 @@ export function registerDomainCommand(program: Command): void {
     .option("-j, --json", "Output JSON")
     .action(async (identifier: string, opts: { json?: boolean }) => {
       const details = await getDomainDetails(identifier);
-      if (!details) { console.error(`Domain '${identifier}' not found.`); process.exit(1); }
-      if (opts.json) { console.log(JSON.stringify(details, null, 2)); return; }
+      if (!details) { printErrorLine(`Domain '${identifier}' not found.`); process.exit(1); }
+      if (opts.json) { printLine(JSON.stringify(details, null, 2)); return; }
       const d = details.domain;
-      console.log(`\n${d.name} [${d.status}]`);
-      if (d.registrar) console.log(`  Registrar:      ${d.registrar}`);
-      if (d.expires_at) console.log(`  Expires:        ${formatDate(d.expires_at)}`);
-      if (d.purchase_date) console.log(`  Purchased:      ${formatDate(d.purchase_date)}`);
-      if (d.purchase_price !== null) console.log(`  Purchase price: ${d.purchase_price}`);
-      console.log(`  Auto-renew:     ${d.auto_renew ? "yes" : "no"}`);
+      printLine(`\n${d.name} [${d.status}]`);
+      if (d.registrar) printLine(`  Registrar:      ${d.registrar}`);
+      if (d.expires_at) printLine(`  Expires:        ${formatDate(d.expires_at)}`);
+      if (d.purchase_date) printLine(`  Purchased:      ${formatDate(d.purchase_date)}`);
+      if (d.purchase_price !== null) printLine(`  Purchase price: ${d.purchase_price}`);
+      printLine(`  Auto-renew:     ${d.auto_renew ? "yes" : "no"}`);
       if (d.is_premium) {
-        console.log(`  Premium:        yes`);
-        if (d.premium_price !== null) console.log(`  Premium ask:    ${d.premium_price}`);
+        printLine(`  Premium:        yes`);
+        if (d.premium_price !== null) printLine(`  Premium ask:    ${d.premium_price}`);
       }
-      if (d.standard_price !== null) console.log(`  Standard price: ${d.standard_price}`);
-      if (d.notes) console.log(`  Notes:          ${truncateText(d.notes, 160)}`);
+      if (d.standard_price !== null) printLine(`  Standard price: ${d.standard_price}`);
+      if (d.notes) printLine(`  Notes:          ${truncateText(d.notes, 160)}`);
       if (details.offers.length > 0) {
-        console.log("\nOffers:");
+        printLine("\nOffers:");
         const offerPage = pageItemsOrExit(details.offers, { fallbackLimit: 5 });
         for (const offer of offerPage.items) {
           const parts = [
@@ -178,20 +179,20 @@ export function registerDomainCommand(program: Command): void {
             offer.their_ask !== null ? `their=${offer.their_ask}` : null,
             offer.notes,
           ].filter(Boolean);
-          console.log(`  - ${parts.join(" | ")}`);
+          printLine(`  - ${parts.join(" | ")}`);
         }
-        if (offerPage.hasMore) console.log(`  ${compactHint(offerPage, "offer(s)", "Use --json for the full offer history.", { paging: "none" })}`);
+        if (offerPage.hasMore) printLine(`  ${compactHint(offerPage, "offer(s)", "Use --json for the full offer history.", { paging: "none" })}`);
       }
       if (details.emails.length > 0) {
-        console.log("\nEmails:");
+        printLine("\nEmails:");
         const emailPage = pageItemsOrExit(details.emails, { fallbackLimit: 5 });
         for (const email of emailPage.items) {
           const threadPart = email.thread_id ? ` thread=${email.thread_id}` : "";
-          console.log(`  - ${email.type}: ${email.email_id}${threadPart}`);
+          printLine(`  - ${email.type}: ${email.email_id}${threadPart}`);
         }
-        if (emailPage.hasMore) console.log(`  ${compactHint(emailPage, "email link(s)", "Use --json for the full email list.", { paging: "none" })}`);
+        if (emailPage.hasMore) printLine(`  ${compactHint(emailPage, "email link(s)", "Use --json for the full email list.", { paging: "none" })}`);
       }
-      console.log();
+      printLine();
     });
 
   // ── add ─────────────────────────────────────────────────────────────────
@@ -237,8 +238,8 @@ export function registerDomainCommand(program: Command): void {
         purchase_date: opts.purchaseDate,
         notes: opts.notes,
       });
-      if (opts.json) { console.log(JSON.stringify(d, null, 2)); return; }
-      console.log(`Created domain: ${d.name} (${d.id})`);
+      if (opts.json) { printLine(JSON.stringify(d, null, 2)); return; }
+      printLine(`Created domain: ${d.name} (${d.id})`);
     });
 
   // ── update ──────────────────────────────────────────────────────────────
@@ -282,9 +283,9 @@ export function registerDomainCommand(program: Command): void {
         purchase_date: opts.purchaseDate,
         notes: opts.notes,
       });
-      if (!d) { console.error(`Domain '${id}' not found.`); process.exit(1); }
-      if (opts.json) { console.log(JSON.stringify(d, null, 2)); return; }
-      console.log(`Updated: ${d.name}`);
+      if (!d) { printErrorLine(`Domain '${id}' not found.`); process.exit(1); }
+      if (opts.json) { printLine(JSON.stringify(d, null, 2)); return; }
+      printLine(`Updated: ${d.name}`);
     });
 
   // ── delete ──────────────────────────────────────────────────────────────
@@ -298,10 +299,10 @@ export function registerDomainCommand(program: Command): void {
       if (!opts.force) {
         const message = `Refusing to delete domain '${id}' without --force.`;
         if (opts.json) {
-          console.log(JSON.stringify({ deleted: false, id, error: message }, null, 2));
+          printLine(JSON.stringify({ deleted: false, id, error: message }, null, 2));
         } else {
-          console.error(message);
-          console.error("Re-run with --force to confirm deletion.");
+          printErrorLine(message);
+          printErrorLine("Re-run with --force to confirm deletion.");
         }
         process.exit(1);
       }
@@ -310,19 +311,19 @@ export function registerDomainCommand(program: Command): void {
       if (!deleted) {
         const message = `Domain '${id}' not found.`;
         if (opts.json) {
-          console.log(JSON.stringify({ deleted: false, id, error: message }, null, 2));
+          printLine(JSON.stringify({ deleted: false, id, error: message }, null, 2));
         } else {
-          console.error(message);
+          printErrorLine(message);
         }
         process.exit(1);
       }
 
       if (opts.json) {
-        console.log(JSON.stringify({ deleted: true, id }, null, 2));
+        printLine(JSON.stringify({ deleted: true, id }, null, 2));
         return;
       }
 
-      console.log(`Deleted domain ${id}`);
+      printLine(`Deleted domain ${id}`);
     });
 
   // ── search ──────────────────────────────────────────────────────────────
@@ -337,20 +338,20 @@ export function registerDomainCommand(program: Command): void {
     .option("-j, --json", "Output JSON")
     .action(async (query: string, opts: { limit?: string; offset?: string; all?: boolean; verbose?: boolean; json?: boolean }) => {
       const results = await searchDomains(query);
-      if (opts.json) { console.log(JSON.stringify({ results, count: results.length }, null, 2)); return; }
+      if (opts.json) { printLine(JSON.stringify({ results, count: results.length }, null, 2)); return; }
       let page;
       try {
         page = pageItemsOrExit(results, { limit: opts.limit, offset: opts.offset, all: opts.all });
       } catch (error) {
-        console.error(error instanceof Error ? error.message : String(error));
+        printErrorLine(error instanceof Error ? error.message : String(error));
         process.exit(1);
       }
       for (const d of page.items) {
         const notes = opts.verbose && d.notes ? ` — ${truncateText(d.notes, 80)}` : "";
-        console.log(`  ${d.name} [${d.status}]${notes}`);
+        printLine(`  ${d.name} [${d.status}]${notes}`);
       }
-      if (results.length === 0) console.log("No results.");
-      else console.log(`\n${compactHint(page, "result(s)", "Use --verbose for notes or domain get <id|name> for details.")}`);
+      if (results.length === 0) printLine("No results.");
+      else printLine(`\n${compactHint(page, "result(s)", "Use --verbose for notes or domain get <id|name> for details.")}`);
     });
 
   // ── expiring ────────────────────────────────────────────────────────────
@@ -364,12 +365,12 @@ export function registerDomainCommand(program: Command): void {
     .option("-j, --json", "Output JSON")
     .action(async (opts: { days: string; limit?: string; all?: boolean; json?: boolean }) => {
       const domains = await listExpiring(parseInt(opts.days));
-      if (opts.json) { console.log(JSON.stringify(domains, null, 2)); return; }
+      if (opts.json) { printLine(JSON.stringify(domains, null, 2)); return; }
       const page = pageItemsOrExit(domains, { limit: opts.limit, all: opts.all });
-      if (page.items.length === 0) { console.log(`No domains expiring within ${opts.days} days.`); return; }
-      console.log(`\nExpiring within ${opts.days} days:`);
-      for (const d of page.items) console.log(`  ${d.name.padEnd(40)} expires ${formatDate(d.expires_at)}`);
-      console.log(`\n${compactHint(page, "domain(s)", "Use --all to display every expiring domain.", { paging: "limit" })}`);
+      if (page.items.length === 0) { printLine(`No domains expiring within ${opts.days} days.`); return; }
+      printLine(`\nExpiring within ${opts.days} days:`);
+      for (const d of page.items) printLine(`  ${d.name.padEnd(40)} expires ${formatDate(d.expires_at)}`);
+      printLine(`\n${compactHint(page, "domain(s)", "Use --all to display every expiring domain.", { paging: "limit" })}`);
     });
 
   // ── stats ───────────────────────────────────────────────────────────────
@@ -380,10 +381,10 @@ export function registerDomainCommand(program: Command): void {
     .option("-j, --json", "Output JSON")
     .action(async (opts: { json?: boolean }) => {
       const stats = await getDomainStats();
-      if (opts.json) { console.log(JSON.stringify(stats, null, 2)); return; }
-      console.log("Domain Portfolio Stats:");
+      if (opts.json) { printLine(JSON.stringify(stats, null, 2)); return; }
+      printLine("Domain Portfolio Stats:");
       for (const [k, v] of Object.entries(stats)) {
-        console.log(`  ${k.replace(/_/g, " ")}: ${v}`);
+        printLine(`  ${k.replace(/_/g, " ")}: ${v}`);
       }
     });
 
@@ -396,22 +397,22 @@ export function registerDomainCommand(program: Command): void {
     .action(async (name: string, opts: { json?: boolean }) => {
       try {
         const result = await whoisLookup(name);
-        if (opts.json) { console.log(JSON.stringify(result, null, 2)); return; }
-        console.log(`\nWHOIS for ${result.domain} [${result.source}]:`);
-        console.log(`  Registrar: ${result.registrar ?? "unknown"}`);
-        console.log(`  Expires:   ${result.expires_at ?? "unknown"}`);
-        if (result.nameservers.length) { console.log(`  NS: ${result.nameservers.join(", ")}`); }
+        if (opts.json) { printLine(JSON.stringify(result, null, 2)); return; }
+        printLine(`\nWHOIS for ${result.domain} [${result.source}]:`);
+        printLine(`  Registrar: ${result.registrar ?? "unknown"}`);
+        printLine(`  Expires:   ${result.expires_at ?? "unknown"}`);
+        if (result.nameservers.length) { printLine(`  NS: ${result.nameservers.join(", ")}`); }
         const r = result.registrant;
         if (r?.name || r?.email || r?.organization) {
-          console.log(`  Registrant:`);
-          if (r.name) console.log(`    Name: ${r.name}`);
-          if (r.email) console.log(`    Email: ${r.email}`);
-          if (r.phone) console.log(`    Phone: ${r.phone}`);
-          if (r.organization) console.log(`    Org: ${r.organization}`);
+          printLine(`  Registrant:`);
+          if (r.name) printLine(`    Name: ${r.name}`);
+          if (r.email) printLine(`    Email: ${r.email}`);
+          if (r.phone) printLine(`    Phone: ${r.phone}`);
+          if (r.organization) printLine(`    Org: ${r.organization}`);
         }
-        console.log();
+        printLine();
       } catch (error: unknown) {
-        console.error(`WHOIS lookup failed: ${error instanceof Error ? error.message : String(error)}`);
+        printErrorLine(`WHOIS lookup failed: ${error instanceof Error ? error.message : String(error)}`);
         process.exit(1);
       }
     });
@@ -424,7 +425,7 @@ export function registerDomainCommand(program: Command): void {
     .option("--format <fmt>", "Format: csv or json", "json")
     .action(async (opts: { format: string }) => {
       const output = await exportPortfolio(opts.format as "csv" | "json");
-      console.log(output);
+      printLine(output);
     });
 
   // ── check ───────────────────────────────────────────────────────────────
@@ -462,20 +463,20 @@ export function registerDomainCommand(program: Command): void {
           const error = reason instanceof Error ? reason.message : String(reason);
           output.push({ domain: domains[i]!, error });
           if (!opts.json) {
-            console.error(`✗ ${domains[i]}: ${error}`);
+            printErrorLine(`✗ ${domains[i]}: ${error}`);
           }
           anyError = true;
         } else {
           const result = (r as PromiseFulfilledResult<{ domain: string; available: boolean }>).value;
           output.push({ domain: result.domain, available: result.available });
           if (!opts.json) {
-            console.log(`${result.available ? "✓" : "✗"} ${result.domain} is ${result.available ? "available" : "not available"}`);
+            printLine(`${result.available ? "✓" : "✗"} ${result.domain} is ${result.available ? "available" : "not available"}`);
           }
         }
       }
 
       if (opts.json) {
-        console.log(
+        printLine(
           JSON.stringify(
             {
               provider: providerName,
@@ -490,11 +491,11 @@ export function registerDomainCommand(program: Command): void {
       } else {
         for (const result of output) {
           if (result.available !== undefined && "is_premium" in result && result.is_premium) {
-            console.log(`  Premium ask: ${result.premium_price ?? "unknown"}`);
+            printLine(`  Premium ask: ${result.premium_price ?? "unknown"}`);
           }
           if ("standard_price" in result && result.standard_price !== undefined) {
             const currency = "currency" in result && result.currency ? ` ${result.currency}` : "";
-            console.log(`  Standard price: ${result.standard_price}${currency}`);
+            printLine(`  Standard price: ${result.standard_price}${currency}`);
           }
         }
       }
@@ -528,10 +529,10 @@ export function registerDomainCommand(program: Command): void {
         try {
           const provider = getDomainInventoryProvider(name);
           const result = await provider.syncToLocalDb({ getDomainByName, createDomain, updateDomain });
-          console.log(`✓ [${name}] Synced ${result.synced} (${result.created} new, ${result.updated} updated)`);
-          if (result.errors.length > 0) console.log(`  Errors: ${result.errors.join(", ")}`);
+          printLine(`✓ [${name}] Synced ${result.synced} (${result.created} new, ${result.updated} updated)`);
+          if (result.errors.length > 0) printLine(`  Errors: ${result.errors.join(", ")}`);
         } catch (e) {
-          console.error(`✗ [${name}] ${e instanceof Error ? e.message : String(e)}`);
+          printErrorLine(`✗ [${name}] ${e instanceof Error ? e.message : String(e)}`);
         }
       }
     });
@@ -548,9 +549,9 @@ export function registerDomainCommand(program: Command): void {
       const premiumPrice = parseOptionalNumber(opts.ask, "--ask");
       const standardPrice = parseOptionalNumber(opts.standard, "--standard");
       const updated = await markDomainPremium(identifier, premiumPrice!, standardPrice);
-      if (!updated) { console.error(`Domain '${identifier}' not found.`); process.exit(1); }
-      if (opts.json) { console.log(JSON.stringify(updated, null, 2)); return; }
-      console.log(`Marked ${updated.name} as premium at ${premiumPrice}`);
+      if (!updated) { printErrorLine(`Domain '${identifier}' not found.`); process.exit(1); }
+      if (opts.json) { printLine(JSON.stringify(updated, null, 2)); return; }
+      printLine(`Marked ${updated.name} as premium at ${premiumPrice}`);
     });
 
   domain
@@ -573,8 +574,8 @@ export function registerDomainCommand(program: Command): void {
       if (details.domain.status === "discovered" || details.domain.status === "researching" || details.domain.status === "offered") {
         await updateDomainLifecycleStatus(details.domain.id, opts.their || opts.our ? "negotiating" : "offered");
       }
-      if (opts.json) { console.log(JSON.stringify(offer, null, 2)); return; }
-      console.log(`Logged offer for ${details.domain.name}: ${offer.status}`);
+      if (opts.json) { printLine(JSON.stringify(offer, null, 2)); return; }
+      printLine(`Logged offer for ${details.domain.name}: ${offer.status}`);
     });
 
   domain
@@ -584,9 +585,9 @@ export function registerDomainCommand(program: Command): void {
     .option("-j, --json", "Output JSON")
     .action(async (identifier: string, status: string, opts: { notes?: string; json?: boolean }) => {
       const updated = await updateDomainLifecycleStatus(identifier, status as (typeof DOMAIN_STATUSES)[number], opts.notes);
-      if (!updated) { console.error(`Domain '${identifier}' not found.`); process.exit(1); }
-      if (opts.json) { console.log(JSON.stringify(updated, null, 2)); return; }
-      console.log(`Updated ${updated.name} to ${updated.status}`);
+      if (!updated) { printErrorLine(`Domain '${identifier}' not found.`); process.exit(1); }
+      if (opts.json) { printLine(JSON.stringify(updated, null, 2)); return; }
+      printLine(`Updated ${updated.name} to ${updated.status}`);
     });
 
   domain
@@ -597,16 +598,16 @@ export function registerDomainCommand(program: Command): void {
       const details = await requireDomain(identifier);
       const emails = await listDomainEmailLinks(details.domain.id);
       if (opts.json) {
-        console.log(JSON.stringify({ domain: details.domain.name, emails, count: emails.length }, null, 2));
+        printLine(JSON.stringify({ domain: details.domain.name, emails, count: emails.length }, null, 2));
         return;
       }
       if (emails.length === 0) {
-        console.log(`No linked emails for ${details.domain.name}.`);
+        printLine(`No linked emails for ${details.domain.name}.`);
         return;
       }
       for (const email of emails) {
         const threadPart = email.thread_id ? ` (${email.thread_id})` : "";
-        console.log(`  ${email.type}: ${email.email_id}${threadPart}`);
+        printLine(`  ${email.type}: ${email.email_id}${threadPart}`);
       }
     });
 
@@ -624,8 +625,8 @@ export function registerDomainCommand(program: Command): void {
         thread_id: opts.threadId,
         type: opts.type as (typeof DOMAIN_EMAIL_TYPES)[number],
       });
-      if (opts.json) { console.log(JSON.stringify(link, null, 2)); return; }
-      console.log(`Linked ${emailId} to ${details.domain.name}`);
+      if (opts.json) { printLine(JSON.stringify(link, null, 2)); return; }
+      printLine(`Linked ${emailId} to ${details.domain.name}`);
     });
 
   domain
@@ -635,14 +636,14 @@ export function registerDomainCommand(program: Command): void {
     .option("--years <n>", "Number of years to renew", "1")
     .action(async (name: string, opts: { provider?: string; years: string }) => {
       const providerName = opts.provider ?? (await autoDetectRegistrar(name, getDomainByName)) ?? loadConfig().default_registrar;
-      if (!providerName) { console.error("Could not detect provider. Use --provider."); process.exit(1); }
+      if (!providerName) { printErrorLine("Could not detect provider. Use --provider."); process.exit(1); }
       const provider = getRegistrarProvider(providerName);
       const result = await provider.renewDomain(name, parseInt(opts.years, 10));
       if (result.success) {
-        console.log(`✓ Renewed: ${name}`);
-        if (result.orderId) console.log(`  Order: ${result.orderId}`);
+        printLine(`✓ Renewed: ${name}`);
+        if (result.orderId) printLine(`  Order: ${result.orderId}`);
       } else {
-        console.error(`✗ Renewal failed or not supported for ${providerName}`);
+        printErrorLine(`✗ Renewal failed or not supported for ${providerName}`);
         process.exit(1);
       }
     });
@@ -689,11 +690,11 @@ export function registerDomainCommand(program: Command): void {
           expires_at: opts.expires,
           auto_renew: opts.autoRenew ? opts.autoRenew === "true" : domainRecord.auto_renew,
         });
-        if (!purchased) { console.error(`Domain '${name}' not found.`); process.exit(1); }
+        if (!purchased) { printErrorLine(`Domain '${name}' not found.`); process.exit(1); }
         if (opts.wait) {
           await updateDomainLifecycleStatus(purchased.id, "active");
         }
-        console.log(`Recorded purchase for ${purchased.name} at ${recordedPrice}`);
+        printLine(`Recorded purchase for ${purchased.name} at ${recordedPrice}`);
         return;
       }
 
@@ -704,40 +705,40 @@ export function registerDomainCommand(program: Command): void {
       // Use the configured purchase AWS profile unless explicit AWS
       // creds/profile are already set in the environment.
       const purchaseProfile = providerName === "route53" ? applyPurchaseProfile() : undefined;
-      if (purchaseProfile) console.log(`Using purchase AWS profile: ${purchaseProfile}`);
+      if (purchaseProfile) printLine(`Using purchase AWS profile: ${purchaseProfile}`);
 
       if (providerName !== "route53") {
         try {
           const capability = getCapability(providerName);
           if (!capability.canBuy) {
-            console.error(`Direct domain purchase is not supported for ${providerName}. ${capability.notes} Use route53 or record a marketplace/manual purchase with --price.`);
+            printErrorLine(`Direct domain purchase is not supported for ${providerName}. ${capability.notes} Use route53 or record a marketplace/manual purchase with --price.`);
             process.exit(1);
           }
           if (capability.gated && !opts.allowGated) {
-            console.error(`Registrar '${providerName}' is gated/enterprise-only. Pass --allow-gated only when this account is contract-approved. ${capability.notes}`);
+            printErrorLine(`Registrar '${providerName}' is gated/enterprise-only. Pass --allow-gated only when this account is contract-approved. ${capability.notes}`);
             process.exit(1);
           }
 
           const provider = getRegistrarProvider(providerName);
           if (!provider.registerDomain) {
-            console.error(`Direct domain purchase is not supported for ${providerName}. Use route53 or record a marketplace/manual purchase with --price.`);
+            printErrorLine(`Direct domain purchase is not supported for ${providerName}. Use route53 or record a marketplace/manual purchase with --price.`);
             process.exit(1);
           }
 
           const avail = await provider.checkAvailability(name);
-          if (!avail.available) { console.error(`✗ ${name} is not available`); process.exit(1); }
-          console.log(`✓ Available via ${providerName}`);
+          if (!avail.available) { printErrorLine(`✗ ${name} is not available`); process.exit(1); }
+          printLine(`✓ Available via ${providerName}`);
 
           let contact;
-          try { contact = resolveContact(opts); } catch (e) { console.error(`Error: ${e instanceof Error ? e.message : String(e)}`); process.exit(1); }
+          try { contact = resolveContact(opts); } catch (e) { printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`); process.exit(1); }
 
-          console.log(`Registering ${name} via ${providerName}...`);
+          printLine(`Registering ${name} via ${providerName}...`);
           const reg = await provider.registerDomain(name, contact, {
             years: parseInt(opts.years, 10),
             premiumPrice: avail.premium_price,
             autoRenew: opts.autoRenew ? opts.autoRenew === "true" : true,
           });
-          if (!reg.success) { console.error(`✗ Registration failed via ${providerName}`); process.exit(1); }
+          if (!reg.success) { printErrorLine(`✗ Registration failed via ${providerName}`); process.exit(1); }
 
           const existing = await getDomainByName(name);
           const dbInput = {
@@ -752,39 +753,39 @@ export function registerDomainCommand(program: Command): void {
           };
           if (existing) await updateDomain(existing.id, dbInput);
           else await createDomain({ name, ...dbInput });
-          console.log(`✓ Registered and added to portfolio`);
-          if (reg.orderId) console.log(`  Order: ${reg.orderId}`);
+          printLine(`✓ Registered and added to portfolio`);
+          if (reg.orderId) printLine(`  Order: ${reg.orderId}`);
 
           if (opts.delegate !== false) {
             if (!provider.updateNameservers) {
-              console.log(`  DNS: ${providerName} registration succeeded, but nameserver updates are not implemented for this provider.`);
+              printLine(`  DNS: ${providerName} registration succeeded, but nameserver updates are not implemented for this provider.`);
             } else {
               const zone = await createDnsZoneForProvider(name, dnsProvider);
               const nsUpdate = await provider.updateNameservers(name, zone.nameservers);
               const existing2 = await getDomainByName(name);
               if (existing2) await updateDomain(existing2.id, { nameservers: zone.nameservers });
-              console.log(`✓ ${dnsProvider} zone ${zone.zoneId}; nameservers updated${nsUpdate.operationId ? ` (op ${nsUpdate.operationId})` : ""}`);
+              printLine(`✓ ${dnsProvider} zone ${zone.zoneId}; nameservers updated${nsUpdate.operationId ? ` (op ${nsUpdate.operationId})` : ""}`);
             }
           }
           return;
         } catch (e) {
-          console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+          printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`);
           process.exit(1);
         }
       }
 
       try {
         const avail = await checkAvailability(name);
-        if (!avail.available) { console.error(`✗ ${name} is not available`); process.exit(1); }
+        if (!avail.available) { printErrorLine(`✗ ${name} is not available`); process.exit(1); }
         const price = avail.price ? ` (USD ${avail.price}/yr)` : "";
-        console.log(`✓ Available${price}`);
+        printLine(`✓ Available${price}`);
 
         let contact;
-        try { contact = resolveContact(opts); } catch (e) { console.error(`Error: ${e instanceof Error ? e.message : String(e)}`); process.exit(1); }
+        try { contact = resolveContact(opts); } catch (e) { printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`); process.exit(1); }
 
-        console.log(`Registering ${name}...`);
+        printLine(`Registering ${name}...`);
         const reg = await registerDomain(name, contact, parseInt(opts.years));
-        console.log(`✓ Submitted (operation: ${reg.operationId})`);
+        printLine(`✓ Submitted (operation: ${reg.operationId})`);
 
         if (opts.wait) {
           let status = "IN_PROGRESS";
@@ -794,9 +795,9 @@ export function registerDomainCommand(program: Command): void {
             status = s.status;
             process.stdout.write(`  Status: ${status}\r`);
           }
-          console.log();
-          if (status !== "SUCCESSFUL") { console.error(`✗ Registration ${status}`); process.exit(1); }
-          console.log(`✓ Registration complete`);
+          printLine();
+          if (status !== "SUCCESSFUL") { printErrorLine(`✗ Registration ${status}`); process.exit(1); }
+          printLine(`✓ Registration complete`);
         }
 
         const existing = await getDomainByName(name);
@@ -820,16 +821,16 @@ export function registerDomainCommand(program: Command): void {
             standard_price: avail.price ? Number(avail.price) : undefined,
           });
         }
-        console.log(`✓ Added to portfolio`);
+        printLine(`✓ Added to portfolio`);
 
         // Nameserver updates require registration to have completed, so only
         // delegate in this flow when --wait is set.
         if (opts.delegate !== false) {
           if (!opts.wait) {
-            console.log(`  DNS: run 'domains domain buy ${name} --wait' or delegate later — registration must finish before NS can change.`);
+            printLine(`  DNS: run 'domains domain buy ${name} --wait' or delegate later — registration must finish before NS can change.`);
           } else {
             try {
-              console.log(`Delegating DNS to ${dnsProvider}...`);
+              printLine(`Delegating DNS to ${dnsProvider}...`);
               const del = dnsProvider === "cloudflare"
                 ? await delegateDomainToCloudflare(name, {
                     createCloudflareZone: async (d) => {
@@ -845,16 +846,16 @@ export function registerDomainCommand(program: Command): void {
                   })();
               const existing2 = await getDomainByName(name);
               if (existing2) await updateDomain(existing2.id, { nameservers: del.nameservers });
-              console.log(`✓ ${dnsProvider} zone ${del.zoneId}; nameservers → ${del.nameservers.join(", ")} (op ${del.operationId})`);
+              printLine(`✓ ${dnsProvider} zone ${del.zoneId}; nameservers → ${del.nameservers.join(", ")} (op ${del.operationId})`);
             } catch (e) {
-              console.error(`⚠ DNS delegation failed (domain is registered): ${e instanceof Error ? e.message : String(e)}`);
-              console.error(`  Retry: create the DNS zone and point Route53 NS at it.`);
+              printErrorLine(`⚠ DNS delegation failed (domain is registered): ${e instanceof Error ? e.message : String(e)}`);
+              printErrorLine(`  Retry: create the DNS zone and point Route53 NS at it.`);
             }
           }
         }
-        if (!opts.wait) console.log(`  Check: domains r53 status ${reg.operationId}`);
+        if (!opts.wait) printLine(`  Check: domains r53 status ${reg.operationId}`);
       } catch (e) {
-        console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);
       }
     });
@@ -888,28 +889,28 @@ export function registerDomainCommand(program: Command): void {
       const registrarName = opts.registrar ?? cfg.default_registrar ?? "route53";
       const dnsName = opts.dns ?? cfg.default_dns ?? "cloudflare";
 
-      console.log(`\nSetting up ${name}`);
-      console.log(`  Registrar: ${registrarName}  |  DNS: ${dnsName}\n`);
+      printLine(`\nSetting up ${name}`);
+      printLine(`  Registrar: ${registrarName}  |  DNS: ${dnsName}\n`);
 
       try {
         // 1. Check availability
         process.stdout.write(opts.wait ? "[1/5] Checking availability... " : "[1/4] Checking availability... ");
         const avail = await checkAvailability(name);
-        if (!avail.available) { console.log("not available"); console.error(`✗ ${name} is not available`); process.exit(1); }
+        if (!avail.available) { printLine("not available"); printErrorLine(`✗ ${name} is not available`); process.exit(1); }
         const price = avail.price ? `(USD ${avail.price}/yr)` : "";
-        console.log(`available ${price}`);
+        printLine(`available ${price}`);
 
         // 2. Buy domain
         if (registrarName !== "route53") {
-          console.error("Direct domain purchase currently only supported via route53.");
+          printErrorLine("Direct domain purchase currently only supported via route53.");
           process.exit(1);
         }
         let contact;
-        try { contact = resolveContact(opts); } catch (e) { console.error(`Error: ${e instanceof Error ? e.message : String(e)}`); process.exit(1); }
+        try { contact = resolveContact(opts); } catch (e) { printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`); process.exit(1); }
 
         process.stdout.write(opts.wait ? "[2/5] Registering domain... " : "[2/4] Registering domain... ");
         const reg = await registerDomain(name, contact, parseInt(opts.years));
-        console.log(`submitted (${reg.operationId})`);
+        printLine(`submitted (${reg.operationId})`);
 
         if (opts.wait) {
           let status = "IN_PROGRESS";
@@ -919,9 +920,9 @@ export function registerDomainCommand(program: Command): void {
             status = s.status;
             process.stdout.write(`  Waiting: ${status}...\r`);
           }
-          console.log();
-          if (status !== "SUCCESSFUL") { console.error(`✗ Registration ${status}`); process.exit(1); }
-          console.log("  Registration confirmed");
+          printLine();
+          if (status !== "SUCCESSFUL") { printErrorLine(`✗ Registration ${status}`); process.exit(1); }
+          printLine("  Registration confirmed");
         }
 
         // 3. Create DNS zone
@@ -930,25 +931,25 @@ export function registerDomainCommand(program: Command): void {
         if (dnsName === "cloudflare") {
           const zone = await cfEnsureZone(name);
           nameservers = zone.nameservers ?? [];
-          console.log("ready (" + zone.id + ")");
+          printLine("ready (" + zone.id + ")");
         } else {
           const zone = await createHostedZone(name, "Managed by domains CLI");
           nameservers = zone.name_servers ?? [];
-          console.log(`created (${zone.id})`);
+          printLine(`created (${zone.id})`);
         }
 
         if (nameservers.length > 0) {
           if (opts.wait) {
             process.stdout.write("[4/5] Updating registrar nameservers... ");
             if (registrarName !== "route53") {
-              console.log("skipped");
-              console.error("Only Route53 nameserver delegation is currently implemented for setup.");
+              printLine("skipped");
+              printErrorLine("Only Route53 nameserver delegation is currently implemented for setup.");
               process.exit(1);
             }
             const nsUpdate = await updateNameservers(name, nameservers);
-            console.log("submitted (" + nsUpdate.operationId + ")");
+            printLine("submitted (" + nsUpdate.operationId + ")");
           } else {
-            console.log("  Nameserver delegation skipped until registration completes; re-run with --wait or use domains r53 domain-info/status first.");
+            printLine("  Nameserver delegation skipped until registration completes; re-run with --wait or use domains r53 domain-info/status first.");
           }
         }
 
@@ -958,20 +959,20 @@ export function registerDomainCommand(program: Command): void {
         const dbInput = { registrar: `AWS Route 53`, status: "active" as const, auto_renew: true, nameservers };
         if (existing) await updateDomain(existing.id, dbInput);
         else await createDomain({ name, ...dbInput });
-        console.log("done");
+        printLine("done");
 
-        console.log(`\n✓ Setup complete for ${name}`);
+        printLine(`\n✓ Setup complete for ${name}`);
         if (!opts.wait) {
-          console.log(`  ⚠ Registration pending — check: domains r53 status ${reg.operationId}`);
-          console.log(`  ⚠ If registration fails, clean up: domains zone delete <zoneId> --force`);
+          printLine(`  ⚠ Registration pending — check: domains r53 status ${reg.operationId}`);
+          printLine(`  ⚠ If registration fails, clean up: domains zone delete <zoneId> --force`);
         }
         if (nameservers.length > 0) {
-          console.log(`\n  Point your registrar to these name servers:`);
-          for (const ns of nameservers) console.log(`    ${ns}`);
+          printLine(`\n  Point your registrar to these name servers:`);
+          for (const ns of nameservers) printLine(`    ${ns}`);
         }
-        console.log();
+        printLine();
       } catch (e) {
-        console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);
       }
     });

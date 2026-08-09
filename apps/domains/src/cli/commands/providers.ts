@@ -10,6 +10,7 @@ import {
   providerHasInventory,
 } from "../../lib/registrar.js";
 import { loadConfig } from "../../lib/config.js";
+import { printLine, printErrorLine } from "../../lib/stdout.js";
 import {
   createDomain,
   updateDomain,
@@ -59,15 +60,15 @@ export function registerProviderCommands(program: Command): void {
       const providers = getAvailableProviders();
 
       if (opts.json) {
-        console.log(JSON.stringify(providers, null, 2));
+        printLine(JSON.stringify(providers, null, 2));
       } else {
-        console.log("Providers:");
+        printLine("Providers:");
         for (const p of providers) {
           const status = p.configured ? "CONFIGURED" : "not configured";
           const capabilities = [p.type, p.inventory ? "inventory" : null].filter(Boolean).join(", ");
-          console.log(`  ${p.name} [${capabilities}]: ${status}`);
+          printLine(`  ${p.name} [${capabilities}]: ${status}`);
           if (!p.configured) {
-            console.log(`    Accepted env: ${p.envVars.join(", ")}`);
+            printLine(`    Accepted env: ${p.envVars.join(", ")}`);
           }
         }
       }
@@ -89,21 +90,21 @@ export function registerProviderCommands(program: Command): void {
           });
 
           if (opts.json) {
-            console.log(JSON.stringify(result, null, 2));
+            printLine(JSON.stringify(result, null, 2));
           } else {
-            console.log(`Synced ${result.totalSynced} domain(s) from ${result.providers.length} provider(s)`);
+            printLine(`Synced ${result.totalSynced} domain(s) from ${result.providers.length} provider(s)`);
             for (const p of result.providers) {
-              console.log(`  ${p.name}: ${p.result.synced} synced (${p.result.created} new, ${p.result.updated} updated)`);
+              printLine(`  ${p.name}: ${p.result.synced} synced (${p.result.created} new, ${p.result.updated} updated)`);
             }
             if (result.totalErrors.length > 0) {
-              console.log("Errors:");
+              printLine("Errors:");
               for (const e of result.totalErrors) {
-                console.log(`  - ${e}`);
+                printLine(`  - ${e}`);
               }
             }
           }
         } catch (error: unknown) {
-          console.error(`Sync failed: ${error instanceof Error ? error.message : String(error)}`);
+          printErrorLine(`Sync failed: ${error instanceof Error ? error.message : String(error)}`);
           process.exit(1);
         }
         return;
@@ -111,7 +112,7 @@ export function registerProviderCommands(program: Command): void {
 
       const provider = (opts.provider || "").toLowerCase();
       if (!provider) {
-        console.error("Specify --provider <name> or --all");
+        printErrorLine("Specify --provider <name> or --all");
         process.exit(1);
       }
 
@@ -124,16 +125,16 @@ export function registerProviderCommands(program: Command): void {
         });
 
         if (opts.json) {
-          console.log(JSON.stringify({ provider, ...result }, null, 2));
+          printLine(JSON.stringify({ provider, ...result }, null, 2));
         } else {
-          console.log(`Synced ${result.synced} domain(s) from ${provider} (${result.created} new, ${result.updated} updated)`);
+          printLine(`Synced ${result.synced} domain(s) from ${provider} (${result.created} new, ${result.updated} updated)`);
           if (result.errors.length > 0) {
-            console.log("Errors:");
-            for (const e of result.errors) console.log(`  - ${e}`);
+            printLine("Errors:");
+            for (const e of result.errors) printLine(`  - ${e}`);
           }
         }
       } catch (error: unknown) {
-        console.error(`Sync failed: ${error instanceof Error ? error.message : String(error)}`);
+        printErrorLine(`Sync failed: ${error instanceof Error ? error.message : String(error)}`);
         process.exit(1);
       }
     });
@@ -151,11 +152,11 @@ export function registerProviderCommands(program: Command): void {
       if (!provider) {
         const detected = autoDetectRegistrar(name, getDomainByName);
         if (!detected) {
-          console.error(`Could not auto-detect registrar for '${name}'. Use --provider.`);
+          printErrorLine(`Could not auto-detect registrar for '${name}'. Use --provider.`);
           process.exit(1);
         }
         provider = detected;
-        if (!opts.json) console.log(`Auto-detected registrar: ${provider}`);
+        if (!opts.json) printLine(`Auto-detected registrar: ${provider}`);
       }
 
       try {
@@ -166,14 +167,14 @@ export function registerProviderCommands(program: Command): void {
         }
 
         if (opts.json) {
-          console.log(JSON.stringify({ provider, ...result }, null, 2));
+          printLine(JSON.stringify({ provider, ...result }, null, 2));
         } else {
-          console.log(`Renewed ${result.domain} successfully via ${provider}`);
-          if (result.chargedAmount) console.log(`  Charged: $${result.chargedAmount}`);
-          if (result.orderId) console.log(`  Order ID: ${result.orderId}`);
+          printLine(`Renewed ${result.domain} successfully via ${provider}`);
+          if (result.chargedAmount) printLine(`  Charged: $${result.chargedAmount}`);
+          if (result.orderId) printLine(`  Order ID: ${result.orderId}`);
         }
       } catch (error: unknown) {
-        console.error(`Renewal failed: ${error instanceof Error ? error.message : String(error)}`);
+        printErrorLine(`Renewal failed: ${error instanceof Error ? error.message : String(error)}`);
         process.exit(1);
       }
     });
@@ -191,17 +192,17 @@ export function registerProviderCommands(program: Command): void {
         const result = await getRegistrarProvider(providerName).checkAvailability(name);
 
         if (opts.json) {
-          console.log(JSON.stringify({ provider: providerName, ...result }, null, 2));
+          printLine(JSON.stringify({ provider: providerName, ...result }, null, 2));
         } else {
-          console.log(`${result.domain} is ${result.available ? "AVAILABLE" : "NOT available"} (via ${providerName})`);
-          if (result.is_premium) console.log(`  Premium ask: ${result.premium_price ?? "unknown"}`);
+          printLine(`${result.domain} is ${result.available ? "AVAILABLE" : "NOT available"} (via ${providerName})`);
+          if (result.is_premium) printLine(`  Premium ask: ${result.premium_price ?? "unknown"}`);
           if (result.standard_price !== undefined) {
             const currency = result.currency ? ` ${result.currency}` : "";
-            console.log(`  Standard price: ${result.standard_price}${currency}`);
+            printLine(`  Standard price: ${result.standard_price}${currency}`);
           }
         }
       } catch (error: unknown) {
-        console.error(`Availability check failed: ${error instanceof Error ? error.message : String(error)}`);
+        printErrorLine(`Availability check failed: ${error instanceof Error ? error.message : String(error)}`);
         process.exit(1);
       }
     });

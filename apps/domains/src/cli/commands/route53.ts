@@ -24,6 +24,7 @@ import { createDomain, getDomainByName, updateDomain } from "../../db/domains.js
 import { resolveContact } from "../../lib/config.js";
 import { compactHint, pageItemsOrExit, truncateText } from "../../lib/compact-output.js";
 
+import { printLine, printErrorLine } from "../../lib/stdout.js";
 export function registerRoute53Commands(program: Command): void {
   const r53 = program.command("r53").description("AWS Route 53 — domain purchase, hosted zones & DNS");
 
@@ -40,7 +41,7 @@ export function registerRoute53Commands(program: Command): void {
           const r = results[i]!;
           if (r.status === "rejected") {
             const reason = (r as PromiseRejectedResult).reason;
-            console.error(`✗ ${domains[i]}: ${reason instanceof Error ? reason.message : String(reason)}`);
+            printErrorLine(`✗ ${domains[i]}: ${reason instanceof Error ? reason.message : String(reason)}`);
             anyError = true;
             continue;
           }
@@ -51,14 +52,14 @@ export function registerRoute53Commands(program: Command): void {
             const ren = result.renewal_price ? `renew ${cur} ${result.renewal_price}` : "";
             const xfr = result.transfer_price ? `transfer ${cur} ${result.transfer_price}` : "";
             const pricing = [reg, ren, xfr].filter(Boolean).join("  /  ");
-            console.log(`✓ ${result.domain} is available${pricing ? `  (${pricing})` : ""}`);
+            printLine(`✓ ${result.domain} is available${pricing ? `  (${pricing})` : ""}`);
           } else {
-            console.log(`✗ ${result.domain} is not available`);
+            printLine(`✗ ${result.domain} is not available`);
           }
         }
         if (anyError) process.exit(1);
       } catch (e) {
-        console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);
       }
     });
@@ -88,7 +89,7 @@ export function registerRoute53Commands(program: Command): void {
       try {
         const avail = await checkAvailability(domain);
         if (!avail.available) {
-          console.error(`✗ ${domain} is not available for registration`);
+          printErrorLine(`✗ ${domain} is not available for registration`);
           process.exit(1);
         }
 
@@ -96,17 +97,17 @@ export function registerRoute53Commands(program: Command): void {
         try {
           contact = resolveContact(opts);
         } catch (e) {
-          console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+          printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`);
           process.exit(1);
         }
 
-        console.log(`Registering ${domain}...`);
+        printLine(`Registering ${domain}...`);
         const result = await registerDomain(domain, contact, parseInt(opts.years), opts.autoRenew);
-        console.log(`✓ Registration submitted: ${domain}`);
-        console.log(`  Operation ID: ${result.operationId}`);
-        console.log(`  Check status: domains r53 status ${result.operationId}`);
+        printLine(`✓ Registration submitted: ${domain}`);
+        printLine(`  Operation ID: ${result.operationId}`);
+        printLine(`  Check status: domains r53 status ${result.operationId}`);
       } catch (e) {
-        console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);
       }
     });
@@ -117,11 +118,11 @@ export function registerRoute53Commands(program: Command): void {
     .action(async (operationId: string) => {
       try {
         const result = await getRegistrationStatus(operationId);
-        console.log(`Status: ${result.status}`);
-        if (result.domain) console.log(`Domain: ${result.domain}`);
-        if (result.message) console.log(`Message: ${result.message}`);
+        printLine(`Status: ${result.status}`);
+        if (result.domain) printLine(`Domain: ${result.domain}`);
+        if (result.message) printLine(`Message: ${result.message}`);
       } catch (e) {
-        console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);
       }
     });
@@ -136,24 +137,24 @@ export function registerRoute53Commands(program: Command): void {
       try {
         const domains = await listRegisteredDomains();
         if (opts.json) {
-          console.log(JSON.stringify(domains, null, 2));
+          printLine(JSON.stringify(domains, null, 2));
           return;
         }
         const page = pageItemsOrExit(domains, { limit: opts.limit, all: opts.all });
         if (page.items.length === 0) {
-          console.log("No registered domains.");
+          printLine("No registered domains.");
           return;
         }
-        console.log("\nRegistered Domains:");
+        printLine("\nRegistered Domains:");
         for (const d of page.items) {
           const expiry = d.expiry ? ` (expires ${d.expiry.split("T")[0]})` : "";
           const renew = d.auto_renew ? " [auto-renew]" : "";
           const lock = d.transfer_lock ? " [locked]" : "";
-          console.log(`  ${d.domain}${expiry}${renew}${lock}`);
+          printLine(`  ${d.domain}${expiry}${renew}${lock}`);
         }
-        console.log(`\n${compactHint(page, "domain(s)", "Use --all for every Route53 domain or r53 domain-info <domain> for details.", { paging: "limit" })}`);
+        printLine(`\n${compactHint(page, "domain(s)", "Use --all for every Route53 domain or r53 domain-info <domain> for details.", { paging: "limit" })}`);
       } catch (e) {
-        console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);
       }
     });
@@ -166,21 +167,21 @@ export function registerRoute53Commands(program: Command): void {
       try {
         const detail = await getDomainDetail(domain);
         if (opts.json) {
-          console.log(JSON.stringify(detail, null, 2));
+          printLine(JSON.stringify(detail, null, 2));
           return;
         }
-        console.log(`\nDomain: ${detail.domain}`);
-        console.log(`  Created:       ${detail.created ? detail.created.split("T")[0] : "—"}`);
-        console.log(`  Expires:       ${detail.expiry ? detail.expiry.split("T")[0] : "—"}`);
-        console.log(`  Auto-renew:    ${detail.auto_renew ? "yes" : "no"}`);
-        console.log(`  Transfer lock: ${detail.transfer_lock ? "yes" : "no"}`);
+        printLine(`\nDomain: ${detail.domain}`);
+        printLine(`  Created:       ${detail.created ? detail.created.split("T")[0] : "—"}`);
+        printLine(`  Expires:       ${detail.expiry ? detail.expiry.split("T")[0] : "—"}`);
+        printLine(`  Auto-renew:    ${detail.auto_renew ? "yes" : "no"}`);
+        printLine(`  Transfer lock: ${detail.transfer_lock ? "yes" : "no"}`);
         if (detail.nameservers.length > 0) {
-          console.log(`  Name servers:`);
-          for (const ns of detail.nameservers) console.log(`    ${ns}`);
+          printLine(`  Name servers:`);
+          for (const ns of detail.nameservers) printLine(`    ${ns}`);
         }
-        console.log();
+        printLine();
       } catch (e) {
-        console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);
       }
     });
@@ -194,17 +195,17 @@ export function registerRoute53Commands(program: Command): void {
     .action(async (domain: string, opts: { comment?: string }) => {
       try {
         const zone = await createHostedZone(domain, opts.comment);
-        console.log(`✓ Hosted zone created: ${domain}`);
-        console.log(`  Zone ID: ${zone.id}`);
+        printLine(`✓ Hosted zone created: ${domain}`);
+        printLine(`  Zone ID: ${zone.id}`);
         if (zone.name_servers && zone.name_servers.length > 0) {
-          console.log(`\n  Name servers (set at your registrar):`);
+          printLine(`\n  Name servers (set at your registrar):`);
           for (const ns of zone.name_servers) {
-            console.log(`    ${ns}`);
+            printLine(`    ${ns}`);
           }
         }
-        console.log();
+        printLine();
       } catch (e) {
-        console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);
       }
     });
@@ -219,22 +220,22 @@ export function registerRoute53Commands(program: Command): void {
       try {
         const zones = await listHostedZones();
         if (opts.json) {
-          console.log(JSON.stringify(zones, null, 2));
+          printLine(JSON.stringify(zones, null, 2));
           return;
         }
         const page = pageItemsOrExit(zones, { limit: opts.limit, all: opts.all });
         if (page.items.length === 0) {
-          console.log("No hosted zones.");
+          printLine("No hosted zones.");
           return;
         }
-        console.log("\nHosted Zones:");
+        printLine("\nHosted Zones:");
         for (const z of page.items) {
           const comment = z.comment ? ` — ${truncateText(z.comment, 60)}` : "";
-          console.log(`  ${z.id}  ${z.name}  ${z.record_count} records${comment}`);
+          printLine(`  ${z.id}  ${z.name}  ${z.record_count} records${comment}`);
         }
-        console.log(`\n${compactHint(page, "zone(s)", "Use --all for every zone or r53 zone-info <zoneId> for details.", { paging: "limit" })}`);
+        printLine(`\n${compactHint(page, "zone(s)", "Use --all for every zone or r53 zone-info <zoneId> for details.", { paging: "limit" })}`);
       } catch (e) {
-        console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);
       }
     });
@@ -247,22 +248,22 @@ export function registerRoute53Commands(program: Command): void {
       try {
         const zone = await getHostedZone(zoneId);
         if (opts.json) {
-          console.log(JSON.stringify(zone, null, 2));
+          printLine(JSON.stringify(zone, null, 2));
           return;
         }
-        console.log(`\nHosted Zone: ${zone.name}`);
-        console.log(`  ID:      ${zone.id}`);
-        console.log(`  Records: ${zone.record_count}`);
-        if (zone.comment) console.log(`  Comment: ${zone.comment}`);
+        printLine(`\nHosted Zone: ${zone.name}`);
+        printLine(`  ID:      ${zone.id}`);
+        printLine(`  Records: ${zone.record_count}`);
+        if (zone.comment) printLine(`  Comment: ${zone.comment}`);
         if (zone.name_servers && zone.name_servers.length > 0) {
-          console.log(`  Name servers:`);
+          printLine(`  Name servers:`);
           for (const ns of zone.name_servers) {
-            console.log(`    ${ns}`);
+            printLine(`    ${ns}`);
           }
         }
-        console.log();
+        printLine();
       } catch (e) {
-        console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);
       }
     });
@@ -275,17 +276,17 @@ export function registerRoute53Commands(program: Command): void {
       try {
         const zone = await getHostedZone(zoneId);
         if (!opts.force) {
-          console.log(`Would delete hosted zone:`);
-          console.log(`  ID:      ${zone.id}`);
-          console.log(`  Domain:  ${zone.name}`);
-          console.log(`  Records: ${zone.record_count}`);
-          console.log(`\nThis is irreversible. Re-run with --force to confirm.`);
+          printLine(`Would delete hosted zone:`);
+          printLine(`  ID:      ${zone.id}`);
+          printLine(`  Domain:  ${zone.name}`);
+          printLine(`  Records: ${zone.record_count}`);
+          printLine(`\nThis is irreversible. Re-run with --force to confirm.`);
           process.exit(0);
         }
         await deleteHostedZone(zoneId);
-        console.log(`✓ Hosted zone deleted: ${zone.name} (${zone.id})`);
+        printLine(`✓ Hosted zone deleted: ${zone.name} (${zone.id})`);
       } catch (e) {
-        console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);
       }
     });
@@ -302,30 +303,30 @@ export function registerRoute53Commands(program: Command): void {
       try {
         const zone = await findHostedZoneByDomain(domain);
         if (!zone) {
-          console.error(`No hosted zone found for ${domain}`);
+          printErrorLine(`No hosted zone found for ${domain}`);
           process.exit(1);
         }
         const records = await listRecords(zone.id);
         if (opts.json) {
-          console.log(JSON.stringify(records, null, 2));
+          printLine(JSON.stringify(records, null, 2));
           return;
         }
         const page = pageItemsOrExit(records, { limit: opts.limit, all: opts.all });
         if (page.items.length === 0) {
-          console.log("No records.");
+          printLine("No records.");
           return;
         }
-        console.log(`\nDNS Records for ${domain}:`);
+        printLine(`\nDNS Records for ${domain}:`);
         for (const r of page.items) {
           const val = r.alias_target
             ? `ALIAS → ${r.alias_target.dns_name}`
             : truncateText(r.values.join(", "), 90);
           const ttl = r.alias_target ? "" : `  TTL:${r.ttl}`;
-          console.log(`  ${r.type.padEnd(6)} ${r.name.padEnd(40)}${ttl}  ${val}`);
+          printLine(`  ${r.type.padEnd(6)} ${r.name.padEnd(40)}${ttl}  ${val}`);
         }
-        console.log(`\n${compactHint(page, "record(s)", "Use --all for every record or --json for full values.", { paging: "limit" })}`);
+        printLine(`\n${compactHint(page, "record(s)", "Use --all for every record or --json for full values.", { paging: "limit" })}`);
       } catch (e) {
-        console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);
       }
     });
@@ -343,20 +344,20 @@ export function registerRoute53Commands(program: Command): void {
       try {
         const isAlias = !!(opts.aliasZone && opts.aliasDns);
         if (!isAlias && (!opts.value || opts.value.length === 0)) {
-          console.error("Error: provide --value (repeatable) or both --alias-zone and --alias-dns");
+          printErrorLine("Error: provide --value (repeatable) or both --alias-zone and --alias-dns");
           process.exit(1);
         }
         const zone = await findHostedZoneByDomain(domain);
         if (!zone) {
-          console.error(`No hosted zone found for ${domain}`);
+          printErrorLine(`No hosted zone found for ${domain}`);
           process.exit(1);
         }
         const aliasTarget = isAlias ? { hosted_zone_id: opts.aliasZone!, dns_name: opts.aliasDns! } : undefined;
         await upsertRecord(zone.id, { name: opts.name, type: opts.type, ttl: parseInt(opts.ttl), values: opts.value, alias_target: aliasTarget });
         const desc = isAlias ? `alias → ${opts.aliasDns}` : `${opts.value.length} value(s)`;
-        console.log(`✓ Record upserted: ${opts.type} ${opts.name} (${desc})`);
+        printLine(`✓ Record upserted: ${opts.type} ${opts.name} (${desc})`);
       } catch (e) {
-        console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);
       }
     });
@@ -370,7 +371,7 @@ export function registerRoute53Commands(program: Command): void {
       try {
         const zone = await findHostedZoneByDomain(domain);
         if (!zone) {
-          console.error(`No hosted zone found for ${domain}`);
+          printErrorLine(`No hosted zone found for ${domain}`);
           process.exit(1);
         }
         // Fetch the existing record set — DELETE requires exact match of all values
@@ -380,7 +381,7 @@ export function registerRoute53Commands(program: Command): void {
           (r) => r.type === opts.type.toUpperCase() && (r.name === opts.name || r.name === normName),
         );
         if (!existing) {
-          console.error(`✗ No ${opts.type} record found for ${opts.name} in zone ${domain}`);
+          printErrorLine(`✗ No ${opts.type} record found for ${opts.name} in zone ${domain}`);
           process.exit(1);
         }
         await deleteRecord(zone.id, {
@@ -390,9 +391,9 @@ export function registerRoute53Commands(program: Command): void {
           values: existing.values,
           alias_target: existing.alias_target,
         });
-        console.log(`✓ Record deleted: ${existing.type} ${existing.name}`);
+        printLine(`✓ Record deleted: ${existing.type} ${existing.name}`);
       } catch (e) {
-        console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);
       }
     });
@@ -407,23 +408,23 @@ export function registerRoute53Commands(program: Command): void {
         try {
           raw = readFileSync(opts.file, "utf-8");
         } catch {
-          console.error(`Could not read file: ${opts.file}`);
+          printErrorLine(`Could not read file: ${opts.file}`);
           process.exit(1);
         }
         const records = JSON.parse(raw) as Array<{ type: string; name: string; values: string[]; ttl?: number }>;
         if (!Array.isArray(records)) {
-          console.error("JSON file must be an array of record objects");
+          printErrorLine("JSON file must be an array of record objects");
           process.exit(1);
         }
         const zone = await findHostedZoneByDomain(domain);
         if (!zone) {
-          console.error(`No hosted zone found for ${domain}`);
+          printErrorLine(`No hosted zone found for ${domain}`);
           process.exit(1);
         }
         await upsertRecords(zone.id, records);
-        console.log(`✓ Upserted ${records.length} record(s) in ${domain}`);
+        printLine(`✓ Upserted ${records.length} record(s) in ${domain}`);
       } catch (e) {
-        console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);
       }
     });
@@ -441,12 +442,12 @@ export function registerRoute53Commands(program: Command): void {
           createDomain,
           updateDomain,
         });
-        console.log(`✓ Synced ${result.synced} domains (${result.created} new, ${result.updated} updated)`);
+        printLine(`✓ Synced ${result.synced} domains (${result.created} new, ${result.updated} updated)`);
         if (result.errors.length > 0) {
-          console.log(`  Errors: ${result.errors.join(", ")}`);
+          printLine(`  Errors: ${result.errors.join(", ")}`);
         }
       } catch (e) {
-        console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);
       }
     });
@@ -475,31 +476,31 @@ export function registerRoute53Commands(program: Command): void {
     }) => {
       try {
         // 1. Check
-        console.log(`[1/4] Checking availability...`);
+        printLine(`[1/4] Checking availability...`);
         const avail = await checkAvailability(domain);
         if (!avail.available) {
-          console.error(`✗ ${domain} is not available`);
+          printErrorLine(`✗ ${domain} is not available`);
           process.exit(1);
         }
         const price = avail.price ? ` (${avail.currency ?? "USD"} ${avail.price}/yr)` : "";
-        console.log(`  ✓ Available${price}`);
+        printLine(`  ✓ Available${price}`);
 
         // 2. Register
-        console.log(`[2/4] Registering domain...`);
+        printLine(`[2/4] Registering domain...`);
         let contact: DomainContactInfo;
         try {
           contact = resolveContact(opts);
         } catch (e) {
-          console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+          printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`);
           process.exit(1);
         }
         const reg = await registerDomain(domain, contact, parseInt(opts.years));
-        console.log(`  ✓ Submitted (operation: ${reg.operationId})`);
+        printLine(`  ✓ Submitted (operation: ${reg.operationId})`);
 
         // Route 53 auto-creates the hosted zone during registration, so we must
         // wait for registration to complete before touching zones — otherwise we
         // can't see (and would duplicate) the auto-created zone.
-        console.log(`  Waiting for registration to complete...`);
+        printLine(`  Waiting for registration to complete...`);
         let status = "IN_PROGRESS";
         while (status === "IN_PROGRESS" || status === "SUBMITTED") {
           await new Promise((r) => setTimeout(r, 10_000));
@@ -507,16 +508,16 @@ export function registerRoute53Commands(program: Command): void {
           status = s.status;
           process.stdout.write(`  Status: ${status}\r`);
         }
-        console.log();
+        printLine();
         if (status !== "SUCCESSFUL") {
-          console.error(`✗ Registration ${status}`);
+          printErrorLine(`✗ Registration ${status}`);
           process.exit(1);
         }
-        console.log(`  ✓ Registration complete`);
+        printLine(`  ✓ Registration complete`);
 
         // 3. Configure hosted zone — reuse the auto-created zone (don't duplicate
         // it) and align the registry delegation to the managed zone.
-        console.log(`[3/4] Configuring hosted zone...`);
+        printLine(`[3/4] Configuring hosted zone...`);
         const setup = await setupDomainZone(domain, {
           findExistingZone: async (d) => {
             const z = await findHostedZoneByDomain(d);
@@ -533,13 +534,13 @@ export function registerRoute53Commands(program: Command): void {
             await updateNameservers(d, ns);
           },
         });
-        console.log(
+        printLine(
           `  ✓ Zone ${setup.created ? "created" : "reused"} (${setup.zoneId})` +
             (setup.nsUpdated ? ` — registry NS repointed to this zone` : ``),
         );
 
         // 4. Add to local DB
-        console.log(`[4/4] Adding to local database...`);
+        printLine(`[4/4] Adding to local database...`);
         createDomain({
           name: domain,
           registrar: "AWS Route 53",
@@ -547,20 +548,20 @@ export function registerRoute53Commands(program: Command): void {
           auto_renew: true,
           nameservers: setup.nameServers,
         });
-        console.log(`  ✓ Added to portfolio`);
+        printLine(`  ✓ Added to portfolio`);
 
         // Summary
-        console.log(`\n✓ Full setup complete for ${domain}`);
-        console.log(`  Check: domains r53 status ${reg.operationId}`);
+        printLine(`\n✓ Full setup complete for ${domain}`);
+        printLine(`  Check: domains r53 status ${reg.operationId}`);
         if (setup.nameServers && setup.nameServers.length > 0) {
-          console.log(`\n  Name servers:`);
+          printLine(`\n  Name servers:`);
           for (const ns of setup.nameServers) {
-            console.log(`    ${ns}`);
+            printLine(`    ${ns}`);
           }
         }
-        console.log();
+        printLine();
       } catch (e) {
-        console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);
       }
     });

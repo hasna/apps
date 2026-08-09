@@ -4,6 +4,7 @@ import { loadConfig } from "../../lib/config.js";
 import { countDomains } from "../../db/domains.js";
 import { execSync } from "node:child_process";
 
+import { printLine } from "../../lib/stdout.js";
 export function registerDoctorCommand(program: Command): void {
   program
     .command("doctor")
@@ -18,21 +19,21 @@ export function registerDoctorCommand(program: Command): void {
       function section(name: string): void {
         currentSection = name;
         if (!opts.json) {
-          console.log(`\n── ${name} ─────────────────────────────────`);
+          printLine(`\n── ${name} ─────────────────────────────────`);
         }
       }
 
       function ok(msg: string) {
         checks.push({ section: currentSection, status: "pass", message: msg });
-        if (!opts.json) console.log(`  ✓ ${msg}`);
+        if (!opts.json) printLine(`  ✓ ${msg}`);
         passed++;
       }
 
       function fail(msg: string, fix?: string) {
         checks.push({ section: currentSection, status: "fail", message: msg, fix });
         if (!opts.json) {
-          console.log(`  ✗ ${msg}`);
-          if (fix) console.log(`    → ${fix}`);
+          printLine(`  ✗ ${msg}`);
+          if (fix) printLine(`    → ${fix}`);
         }
         failed++;
       }
@@ -124,7 +125,7 @@ export function registerDoctorCommand(program: Command): void {
       }
 
       if (opts.json) {
-        console.log(
+        printLine(
           JSON.stringify(
             {
               passed,
@@ -137,8 +138,8 @@ export function registerDoctorCommand(program: Command): void {
           )
         );
       } else {
-        console.log(`\n${"─".repeat(45)}`);
-        console.log(`  ${passed} passed  /  ${failed} failed\n`);
+        printLine(`\n${"─".repeat(45)}`);
+        printLine(`  ${passed} passed  /  ${failed} failed\n`);
       }
 
       if (failed > 0) process.exit(1);

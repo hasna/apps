@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { printLine, printErrorLine } from "../../lib/stdout.js";
 import {
   createAlert,
   listAlerts,
@@ -25,10 +26,10 @@ export function registerAlertCommands(program: Command): void {
       });
 
       if (opts.json) {
-        console.log(JSON.stringify(alert, null, 2));
+        printLine(JSON.stringify(alert, null, 2));
       } else {
         const daysBefore = alert.trigger_days_before ? ` (${alert.trigger_days_before} days before)` : "";
-        console.log(`Created alert: ${alert.type}${daysBefore} for domain ${alert.domain_id} (${alert.id})`);
+        printLine(`Created alert: ${alert.type}${daysBefore} for domain ${alert.domain_id} (${alert.id})`);
       }
     });
 
@@ -41,16 +42,16 @@ export function registerAlertCommands(program: Command): void {
       const alerts = await listAlerts(domainId);
 
       if (opts.json) {
-        console.log(JSON.stringify(alerts, null, 2));
+        printLine(JSON.stringify(alerts, null, 2));
       } else {
         if (alerts.length === 0) {
-          console.log("No alerts set.");
+          printLine("No alerts set.");
           return;
         }
         for (const a of alerts) {
           const daysBefore = a.trigger_days_before ? ` (${a.trigger_days_before} days before)` : "";
           const sent = a.sent_at ? ` — sent ${a.sent_at}` : "";
-          console.log(`  ${a.type}${daysBefore}${sent}`);
+          printLine(`  ${a.type}${daysBefore}${sent}`);
         }
       }
     });
@@ -62,9 +63,9 @@ export function registerAlertCommands(program: Command): void {
     .action(async (id) => {
       const deleted = await deleteAlert(id);
       if (deleted) {
-        console.log(`Deleted alert ${id}`);
+        printLine(`Deleted alert ${id}`);
       } else {
-        console.error(`Alert '${id}' not found.`);
+        printErrorLine(`Alert '${id}' not found.`);
         process.exit(1);
       }
     });

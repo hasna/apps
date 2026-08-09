@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { checkSsl, listSslExpiring } from "../../db/domains.js";
 import { compactHint, formatDate, pageItemsOrExit } from "../../lib/compact-output.js";
 
+import { printLine, printErrorLine } from "../../lib/stdout.js";
 export function registerSslCommand(program: Command): void {
   const ssl = program.command("ssl").description("SSL certificate management");
 
@@ -12,17 +13,17 @@ export function registerSslCommand(program: Command): void {
     .action(async (domain: string, opts: { json?: boolean }) => {
       try {
         const result = await checkSsl(domain);
-        if (opts.json) { console.log(JSON.stringify(result, null, 2)); return; }
-        console.log(`\nSSL Certificate for ${result.domain}:`);
+        if (opts.json) { printLine(JSON.stringify(result, null, 2)); return; }
+        printLine(`\nSSL Certificate for ${result.domain}:`);
         if (result.error) {
-          console.log(`  Error: ${result.error}`);
+          printLine(`  Error: ${result.error}`);
         } else {
-          console.log(`  Issuer:  ${result.issuer ?? "unknown"}`);
-          console.log(`  Expires: ${result.expires_at ? result.expires_at.split("T")[0] : "unknown"}`);
+          printLine(`  Issuer:  ${result.issuer ?? "unknown"}`);
+          printLine(`  Expires: ${result.expires_at ? result.expires_at.split("T")[0] : "unknown"}`);
         }
-        console.log();
+        printLine();
       } catch (error: unknown) {
-        console.error(`SSL check failed: ${error instanceof Error ? error.message : String(error)}`);
+        printErrorLine(`SSL check failed: ${error instanceof Error ? error.message : String(error)}`);
         process.exit(1);
       }
     });
@@ -36,17 +37,17 @@ export function registerSslCommand(program: Command): void {
     .option("--json", "Output JSON")
     .action(async (opts: { days: string; limit?: string; all?: boolean; json?: boolean }) => {
       const domains = await listSslExpiring(parseInt(opts.days));
-      if (opts.json) { console.log(JSON.stringify(domains, null, 2)); return; }
+      if (opts.json) { printLine(JSON.stringify(domains, null, 2)); return; }
       const page = pageItemsOrExit(domains, { limit: opts.limit, all: opts.all });
       if (page.items.length === 0) {
-        console.log(`No SSL certificates expiring within ${opts.days} days.`);
+        printLine(`No SSL certificates expiring within ${opts.days} days.`);
         return;
       }
-      console.log(`\nSSL expiring within ${opts.days} days:`);
+      printLine(`\nSSL expiring within ${opts.days} days:`);
       for (const d of page.items) {
         const exp = d.ssl_expires_at ? formatDate(d.ssl_expires_at) : "unknown";
-        console.log(`  ${d.name.padEnd(40)} expires ${exp}`);
+        printLine(`  ${d.name.padEnd(40)} expires ${exp}`);
       }
-      console.log(`\n${compactHint(page, "domain(s)", "Use --all to display every matching SSL certificate.", { paging: "limit" })}`);
+      printLine(`\n${compactHint(page, "domain(s)", "Use --all to display every matching SSL certificate.", { paging: "limit" })}`);
     });
 }

@@ -3,12 +3,13 @@ import { getDomainOwnerByDomainName } from "../../db/owners.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
+import { printLine, printErrorLine } from "../../lib/stdout.js";
 const execFileAsync = promisify(execFile);
 
 async function requireDomainOwner(identifier: string) {
   const owner = await getDomainOwnerByDomainName(identifier);
   if (!owner) {
-    console.error(`No owner info found for '${identifier}'.`);
+    printErrorLine(`No owner info found for '${identifier}'.`);
     process.exit(1);
   }
   return owner;
@@ -29,7 +30,7 @@ export function registerOutreachCommand(program: Command): void {
     .action(async (identifier: string, opts: { message: string; json?: boolean }) => {
       const owner = await requireDomainOwner(identifier);
       if (!owner.owner_phone) {
-        console.error(`No phone number for '${identifier}'.`);
+        printErrorLine(`No phone number for '${identifier}'.`);
         process.exit(1);
       }
 
@@ -44,13 +45,13 @@ export function registerOutreachCommand(program: Command): void {
 
         const result = JSON.parse(stdout) as Record<string, unknown>;
         if (opts.json) {
-          console.log(JSON.stringify({ domain: identifier, to: owner.owner_phone, result }, null, 2));
+          printLine(JSON.stringify({ domain: identifier, to: owner.owner_phone, result }, null, 2));
         } else {
-          console.log(`SMS sent to ${owner.owner_name ?? owner.owner_email} (${owner.owner_phone}): "${opts.message}"`);
+          printLine(`SMS sent to ${owner.owner_name ?? owner.owner_email} (${owner.owner_phone}): "${opts.message}"`);
         }
       } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : String(error);
-        console.error(`SMS send failed: ${msg}`);
+        printErrorLine(`SMS send failed: ${msg}`);
         process.exit(1);
       }
     });
@@ -65,7 +66,7 @@ export function registerOutreachCommand(program: Command): void {
     .action(async (identifier: string, opts: { message: string; json?: boolean }) => {
       const owner = await requireDomainOwner(identifier);
       if (!owner.owner_phone) {
-        console.error(`No phone number for '${identifier}'.`);
+        printErrorLine(`No phone number for '${identifier}'.`);
         process.exit(1);
       }
 
@@ -80,13 +81,13 @@ export function registerOutreachCommand(program: Command): void {
 
         const result = JSON.parse(stdout) as Record<string, unknown>;
         if (opts.json) {
-          console.log(JSON.stringify({ domain: identifier, to: owner.owner_phone, result }, null, 2));
+          printLine(JSON.stringify({ domain: identifier, to: owner.owner_phone, result }, null, 2));
         } else {
-          console.log(`WhatsApp sent to ${owner.owner_name ?? owner.owner_email} (${owner.owner_phone}): "${opts.message}"`);
+          printLine(`WhatsApp sent to ${owner.owner_name ?? owner.owner_email} (${owner.owner_phone}): "${opts.message}"`);
         }
       } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : String(error);
-        console.error(`WhatsApp send failed: ${msg}`);
+        printErrorLine(`WhatsApp send failed: ${msg}`);
         process.exit(1);
       }
     });
@@ -103,7 +104,7 @@ export function registerOutreachCommand(program: Command): void {
     .action(async (identifier: string, opts: { subject: string; body: string; template?: string; json?: boolean }) => {
       const owner = await requireDomainOwner(identifier);
       if (!owner.owner_email) {
-        console.error(`No email for '${identifier}'.`);
+        printErrorLine(`No email for '${identifier}'.`);
         process.exit(1);
       }
 
@@ -119,13 +120,13 @@ export function registerOutreachCommand(program: Command): void {
 
         const result = JSON.parse(stdout) as Record<string, unknown>;
         if (opts.json) {
-          console.log(JSON.stringify({ domain: identifier, to: owner.owner_email, result }, null, 2));
+          printLine(JSON.stringify({ domain: identifier, to: owner.owner_email, result }, null, 2));
         } else {
-          console.log(`Email sent to ${owner.owner_name ?? owner.owner_email} (${owner.owner_email}): "${opts.subject}"`);
+          printLine(`Email sent to ${owner.owner_name ?? owner.owner_email} (${owner.owner_email}): "${opts.subject}"`);
         }
       } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : String(error);
-        console.error(`Email send failed: ${msg}`);
+        printErrorLine(`Email send failed: ${msg}`);
         process.exit(1);
       }
     });

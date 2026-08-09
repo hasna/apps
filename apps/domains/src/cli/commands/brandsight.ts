@@ -6,6 +6,7 @@ import {
 } from "../../lib/brandsight.js";
 import { compactHint, pageItemsOrExit, truncateText } from "../../lib/compact-output.js";
 
+import { printLine, printErrorLine } from "../../lib/stdout.js";
 export function registerBrandsightCommands(program: Command): void {
   program
     .command("monitor")
@@ -18,22 +19,22 @@ export function registerBrandsightCommands(program: Command): void {
       try {
         const result = await monitorBrand(brand);
         if (opts.json) {
-          console.log(JSON.stringify(result, null, 2));
+          printLine(JSON.stringify(result, null, 2));
         } else {
           const page = pageItemsOrExit(result.alerts, { limit: opts.limit, all: opts.all });
-          if (result.stub) console.log("(stub data — Brandsight API unreachable)");
-          console.log(`Brand monitoring for "${result.brand}":`);
+          if (result.stub) printLine("(stub data — Brandsight API unreachable)");
+          printLine(`Brand monitoring for "${result.brand}":`);
           if (page.items.length === 0) {
-            console.log("  No alerts.");
+            printLine("  No alerts.");
           } else {
             for (const a of page.items) {
-              console.log(`  [${a.type}] ${a.domain} — registered ${a.registered_at}`);
+              printLine(`  [${a.type}] ${a.domain} — registered ${a.registered_at}`);
             }
           }
-          console.log(`\n${compactHint(page, "alert(s)", "Use --all for every alert or --json for full monitor details.", { paging: "limit" })}`);
+          printLine(`\n${compactHint(page, "alert(s)", "Use --all for every alert or --json for full monitor details.", { paging: "limit" })}`);
         }
       } catch (error: unknown) {
-        console.error(`Monitor failed: ${error instanceof Error ? error.message : String(error)}`);
+        printErrorLine(`Monitor failed: ${error instanceof Error ? error.message : String(error)}`);
         process.exit(1);
       }
     });
@@ -49,18 +50,18 @@ export function registerBrandsightCommands(program: Command): void {
       try {
         const result = await getSimilarDomains(domain);
         if (opts.json) {
-          console.log(JSON.stringify(result, null, 2));
+          printLine(JSON.stringify(result, null, 2));
         } else {
           const page = pageItemsOrExit(result.similar, { limit: opts.limit, all: opts.all });
-          if (result.stub) console.log("(stub data — Brandsight API unreachable)");
-          console.log(`Similar domains for ${result.domain}:`);
+          if (result.stub) printLine("(stub data — Brandsight API unreachable)");
+          printLine(`Similar domains for ${result.domain}:`);
           for (const d of page.items) {
-            console.log(`  ${d}`);
+            printLine(`  ${d}`);
           }
-          console.log(`\n${compactHint(page, "similar domain(s)", "Use --all for every result or --json for full response metadata.", { paging: "limit" })}`);
+          printLine(`\n${compactHint(page, "similar domain(s)", "Use --all for every result or --json for full response metadata.", { paging: "limit" })}`);
         }
       } catch (error: unknown) {
-        console.error(`Similar domains check failed: ${error instanceof Error ? error.message : String(error)}`);
+        printErrorLine(`Similar domains check failed: ${error instanceof Error ? error.message : String(error)}`);
         process.exit(1);
       }
     });
@@ -76,25 +77,25 @@ export function registerBrandsightCommands(program: Command): void {
       try {
         const result = await getThreatAssessment(domain);
         if (opts.json) {
-          console.log(JSON.stringify(result, null, 2));
+          printLine(JSON.stringify(result, null, 2));
         } else {
           const page = pageItemsOrExit(result.threats, { limit: opts.limit, all: opts.all });
-          if (result.stub) console.log("(stub data — Brandsight API unreachable)");
-          console.log(`Threat Assessment for ${result.domain}:`);
-          console.log(`  Risk Level: ${result.risk_level}`);
+          if (result.stub) printLine("(stub data — Brandsight API unreachable)");
+          printLine(`Threat Assessment for ${result.domain}:`);
+          printLine(`  Risk Level: ${result.risk_level}`);
           if (page.items.length > 0) {
-            console.log("  Threats:");
+            printLine("  Threats:");
             for (const t of page.items) {
-              console.log(`    - ${truncateText(t, 100)}`);
+              printLine(`    - ${truncateText(t, 100)}`);
             }
           } else {
-            console.log("  Threats: none detected");
+            printLine("  Threats: none detected");
           }
-          console.log(`  Recommendation: ${truncateText(result.recommendation, 140)}`);
-          console.log(`\n${compactHint(page, "threat(s)", "Use --all for every threat or --json for the full assessment.", { paging: "limit" })}`);
+          printLine(`  Recommendation: ${truncateText(result.recommendation, 140)}`);
+          printLine(`\n${compactHint(page, "threat(s)", "Use --all for every threat or --json for the full assessment.", { paging: "limit" })}`);
         }
       } catch (error: unknown) {
-        console.error(`Threat assessment failed: ${error instanceof Error ? error.message : String(error)}`);
+        printErrorLine(`Threat assessment failed: ${error instanceof Error ? error.message : String(error)}`);
         process.exit(1);
       }
     });

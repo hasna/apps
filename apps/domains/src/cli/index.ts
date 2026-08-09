@@ -17,6 +17,7 @@ import { registerRoute53Commands } from "./commands/route53.js";
 import { registerReconcileExpiryCommand } from "./commands/reconcile-expiry.js";
 import { getPackageVersion } from "../lib/version.js";
 
+import { printLine, printErrorLine } from "../lib/stdout.js";
 const OPTIONAL_GROUPS = [
   "brandsight",
   "events",
@@ -85,7 +86,7 @@ async function registerOptionalCommands(program: Command, groups: Set<OptionalGr
       const { registerEventsCommands } = await import("@hasna/events/commander");
       registerEventsCommands(program, { source: "domains" });
     } catch (error) {
-      console.error(`Events command group is enabled but @hasna/events could not be loaded: ${error instanceof Error ? error.message : String(error)}`);
+      printErrorLine(`Events command group is enabled but @hasna/events could not be loaded: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 }
@@ -104,13 +105,13 @@ function registerOptionalHelp(program: Command): void {
         enable_some: "DOMAINS_COMMAND_GROUPS=marketplace,owner domains <command>",
       };
       if (opts.json) {
-        console.log(JSON.stringify(body, null, 2));
+        printLine(JSON.stringify(body, null, 2));
         return;
       }
-      console.log("Optional command groups:");
-      for (const group of body.available) console.log(`  ${groups.has(group) ? "✓" : " "} ${group}`);
-      console.log("\nEnable all:  DOMAINS_ENABLE_EXTRAS=1 domains <command>");
-      console.log("Enable some: DOMAINS_COMMAND_GROUPS=marketplace,owner domains <command>");
+      printLine("Optional command groups:");
+      for (const group of body.available) printLine(`  ${groups.has(group) ? "✓" : " "} ${group}`);
+      printLine("\nEnable all:  DOMAINS_ENABLE_EXTRAS=1 domains <command>");
+      printLine("Enable some: DOMAINS_COMMAND_GROUPS=marketplace,owner domains <command>");
     });
 }
 

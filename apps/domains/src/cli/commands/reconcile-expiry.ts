@@ -8,6 +8,7 @@ import {
 } from "../../lib/expiry-reconcile.js";
 import { getRegistrarProvider, getAvailableProviders } from "../../lib/registrar.js";
 
+import { printLine, printErrorLine } from "../../lib/stdout.js";
 /**
  * READ-ONLY. This command issues WHOIS port-43 queries and HTTP GET only. It
  * never renews, never writes to the portfolio store, and must never grow a
@@ -118,16 +119,16 @@ export function registerReconcileExpiryCommand(program: Command): void {
       // refuses the run rather than reporting a clean one.
       const arm = prearm();
       if (!opts.json) {
-        console.log("=== PRE-ARM SELF-TEST (two-sided) ===");
-        for (const c of arm.cases) console.log(`  [${c.passed ? "PASS" : "FAIL"}] ${c.name.padEnd(58)} -> ${c.got}`);
-        console.log(`=== PRE-ARM ${arm.ok ? "PASS - instrument can fire AND can stay silent" : "FAIL - DO NOT TRUST ANY RESULT"} ===`);
+        printLine("=== PRE-ARM SELF-TEST (two-sided) ===");
+        for (const c of arm.cases) printLine(`  [${c.passed ? "PASS" : "FAIL"}] ${c.name.padEnd(58)} -> ${c.got}`);
+        printLine(`=== PRE-ARM ${arm.ok ? "PASS - instrument can fire AND can stay silent" : "FAIL - DO NOT TRUST ANY RESULT"} ===`);
       }
       if (!arm.ok) {
-        console.error("REFUSING TO RUN: pre-arm failed.");
+        printErrorLine("REFUSING TO RUN: pre-arm failed.");
         process.exit(3);
       }
       if (opts.selfTest) {
-        if (opts.json) console.log(JSON.stringify({ prearm: arm }, null, 2));
+        if (opts.json) printLine(JSON.stringify({ prearm: arm }, null, 2));
         process.exit(0);
       }
 
@@ -136,8 +137,8 @@ export function registerReconcileExpiryCommand(program: Command): void {
         rows = await loadRows(opts);
       } catch (e) {
         const configured = getAvailableProviders().filter((p) => p.configured).map((p) => p.name).join(", ") || "none";
-        console.error(`${e instanceof Error ? e.message : String(e)}`);
-        console.error(`configured providers: ${configured}`);
+        printErrorLine(`${e instanceof Error ? e.message : String(e)}`);
+        printErrorLine(`configured providers: ${configured}`);
         process.exit(2);
         return;
       }
@@ -175,8 +176,8 @@ export function registerReconcileExpiryCommand(program: Command): void {
       };
 
       if (!opts.json) {
-        console.log(`\nREGISTRAR rows=${rows.length} unique=${unique.length} dupes_removed=${dupesRemoved}`);
-        console.log(`SELECTED=${selected.length}`);
+        printLine(`\nREGISTRAR rows=${rows.length} unique=${unique.length} dupes_removed=${dupesRemoved}`);
+        printLine(`SELECTED=${selected.length}`);
       }
 
       const report = await reconcileExpiry(selected, deps);
@@ -189,37 +190,37 @@ export function registerReconcileExpiryCommand(program: Command): void {
       }
 
       if (opts.json) {
-        console.log(JSON.stringify({ ...report, coverageRegressions: regressed, queries }, null, 2));
+        printLine(JSON.stringify({ ...report, coverageRegressions: regressed, queries }, null, 2));
         process.exit(report.exitCode);
         return;
       }
 
       const order: Verdict[] = ["MATCH", "MISMATCH", "NOT_AT_REGISTRY", "UNVERIFIABLE_EXPECTED", "UNVERIFIABLE_UNEXPECTED"];
-      console.log(`\n=== VERDICT TALLY (n=${report.records.length}) ===`);
-      for (const k of order) console.log(`  ${k.padEnd(24)} ${String(report.tally[k]).padStart(5)}`);
+      printLine(`\n=== VERDICT TALLY (n=${report.records.length}) ===`);
+      for (const k of order) printLine(`  ${k.padEnd(24)} ${String(report.tally[k]).padStart(5)}`);
       const pct = report.records.length ? (100 * report.comparable / report.records.length).toFixed(1) : "0.0";
-      console.log(`COMPARABLE = ${report.comparable} of ${report.records.length} (${pct}%)`);
+      printLine(`COMPARABLE = ${report.comparable} of ${report.records.length} (${pct}%)`);
 
       const show = (title: string, rs: ReconcileRecord[]) => {
         if (rs.length === 0) return;
-        console.log(`\n=== ${title} ===`);
-        for (const r of rs) console.log(`  ${r.domain.padEnd(26)} ${r.why.slice(0, 120)}`);
+        printLine(`\n=== ${title} ===`);
+        for (const r of rs) printLine(`  ${r.domain.padEnd(26)} ${r.why.slice(0, 120)}`);
       };
       show("MISMATCHES", report.records.filter((r) => r.verdict === "MISMATCH"));
       show("NOT AT REGISTRY", report.records.filter((r) => r.verdict === "NOT_AT_REGISTRY"));
       show("UNVERIFIABLE / UNEXPECTED  (coverage loss - these are NOT clean)", report.records.filter((r) => r.verdict === "UNVERIFIABLE_UNEXPECTED"));
 
-      console.log(`\nREGISTRY EXPIRY WITHIN ${STALE_SOON_DAYS}d: ${report.expiringSoon.length}`);
+      printLine(`\nREGISTRY EXPIRY WITHIN ${STALE_SOON_DAYS}d: ${report.expiringSoon.length}`);
       for (const r of report.expiringSoon) {
-        console.log(`   ${r.domain.padEnd(26)} registry=${r.registry} in ${r.daysToRegistryExpiry}d  verdict=${r.verdict}`);
+        printLine(`   ${r.domain.padEnd(26)} registry=${r.registry} in ${r.daysToRegistryExpiry}d  verdict=${r.verdict}`);
       }
 
       if (opts.baseline) {
-        console.log(`\nCOVERAGE REGRESSION vs baseline: ${regressed.length}`);
-        for (const d of regressed.slice(0, 20)) console.log(`   ${d}  was comparable, now unverifiable`);
+        printLine(`\nCOVERAGE REGRESSION vs baseline: ${regressed.length}`);
+        for (const d of regressed.slice(0, 20)) printLine(`   ${d}  was comparable, now unverifiable`);
       }
 
-      console.log(`\nEXIT=${report.exitCode}`);
+      printLine(`\nEXIT=${report.exitCode}`);
       process.exit(report.exitCode);
     });
 }

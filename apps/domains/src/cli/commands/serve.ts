@@ -5,6 +5,7 @@ import {
 } from "../../db/domains.js";
 import { getPackageVersion } from "../../lib/version.js";
 
+import { printLine } from "../../lib/stdout.js";
 export function registerServeCommand(program: Command): void {
   const packageVersion = getPackageVersion();
 
@@ -94,16 +95,16 @@ export function registerServeCommand(program: Command): void {
         },
       });
 
-      console.log(`✓ domains API server running at http://${opts.host}:${port}`);
-      console.log(`  GET  /health`);
-      console.log(`  GET  /domains`);
-      console.log(`  POST /domains`);
-      console.log(`  GET  /domains/:id`);
-      console.log(`  PUT  /domains/:id`);
-      console.log(`  DELETE /domains/:id`);
-      console.log(`  GET  /domains/:id/dns`);
-      console.log(`  POST /domains/:id/dns`);
-      console.log(`\n  Press Ctrl+C to stop.`);
+      printLine(`✓ domains API server running at http://${opts.host}:${port}`);
+      printLine(`  GET  /health`);
+      printLine(`  GET  /domains`);
+      printLine(`  POST /domains`);
+      printLine(`  GET  /domains/:id`);
+      printLine(`  PUT  /domains/:id`);
+      printLine(`  DELETE /domains/:id`);
+      printLine(`  GET  /domains/:id/dns`);
+      printLine(`  POST /domains/:id/dns`);
+      printLine(`\n  Press Ctrl+C to stop.`);
 
       // Keep alive
       await new Promise(() => {});
