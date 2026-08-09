@@ -695,15 +695,47 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     expect(calls[0]!.url).toBe("https://todos.example.com/v1/tasks/t4/start");
   });
 
-  test("fail -> POST /v1/tasks/:id/fail, preserves reason and retry result", async () => {
-    const calls = installFetch(() => ({
-      body: {
-        result: {
-          task: { id: "t-fail", status: "failed", reason: "remote reason" },
-          retryTask: { id: "t-retry", status: "pending" },
+  test("retrying fail preflights advertised support, posts once, and preserves reason and retry result", async () => {
+    const calls = installFetch((call) => {
+      if (call.url.endsWith("/v1/openapi.json")) {
+        return {
+          body: {
+            openapi: "3.1.0",
+            paths: {
+              "/v1/tasks/{id}/fail": {
+                post: {
+                  requestBody: {
+                    content: {
+                      "application/json": { schema: { $ref: "#/components/schemas/FailTaskInput" } },
+                    },
+                  },
+                },
+              },
+            },
+            components: {
+              schemas: {
+                FailTaskInput: {
+                  type: "object",
+                  properties: {
+                    agent_id: { type: "string" },
+                    reason: { type: "string" },
+                    retry: { type: "boolean" },
+                  },
+                },
+              },
+            },
+          },
+        };
+      }
+      return {
+        body: {
+          result: {
+            task: { id: "t-fail", status: "failed", reason: "remote reason" },
+            retryTask: { id: "t-retry", status: "pending" },
+          },
         },
-      },
-    }));
+      };
+    });
     const client = getTodosCloudClient(CLOUD_ENV)!;
     const result = await cloudFailTask(client, "t-fail", {
       agent_id: "nausicaa",
@@ -713,11 +745,183 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
 
     expect(result.task).toMatchObject({ id: "t-fail", status: "failed", reason: "remote reason" });
     expect(result.retryTask).toMatchObject({ id: "t-retry", status: "pending" });
-    expect(calls[0]).toMatchObject({
+    expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
+      "GET https://todos.example.com/v1/openapi.json",
+      "POST https://todos.example.com/v1/tasks/t-fail/fail",
+    ]);
+    expect(calls[1]).toMatchObject({
       method: "POST",
       url: "https://todos.example.com/v1/tasks/t-fail/fail",
       body: { agent_id: "nausicaa", reason: "remote reason", retry: true },
     });
+  });
+
+  test("retry capability is cached per authority and reset clears the cached result", async () => {
+    const calls = installFetch((call) => {
+      if (call.url.endsWith("/v1/openapi.json")) {
+        return {
+          body: {
+            openapi: "3.1.0",
+            paths: {
+              "/v1/tasks/{id}/fail": {
+                post: {
+                  requestBody: {
+                    content: {
+                      "application/json": {
+                        schema: {
+                          type: "object",
+                          properties: { retry: { type: "boolean" } },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        };
+      }
+      return {
+        body: {
+          result: {
+            task: { id: "t-fail", status: "failed" },
+            retryTask: { id: "t-retry", status: "pending" },
+          },
+        },
+      };
+    });
+    const authorityA = getTodosCloudClient(CLOUD_ENV)!;
+    const authorityB = getTodosCloudClient({
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_URL: "https://authority-b.example",
+      HASNA_TODOS_API_KEY: "fixture-b",
+    })!;
+
+    await cloudFailTask(authorityA, "task-a-1", { retry: true });
+    await cloudFailTask(authorityA, "task-a-2", { retry: true });
+    await cloudFailTask(authorityB, "task-b-1", { retry: true });
+    expect(calls.filter((call) => call.url.endsWith("/v1/openapi.json"))).toHaveLength(2);
+
+    resetTodosCloudClient();
+    await cloudFailTask(authorityA, "task-a-3", { retry: true });
+    expect(calls.filter((call) => call.url.endsWith("/v1/openapi.json"))).toHaveLength(3);
+  });
+
+  test("retrying fail rejects a non-advertising authority before any fail mutation", async () => {
+    const calls = installFetch((call) => {
+      if (call.url.endsWith("/v1/openapi.json")) {
+        return {
+          body: {
+            openapi: "3.1.0",
+            paths: {
+              "/v1/tasks/{id}/fail": {
+                post: {
+                  requestBody: {
+                    content: {
+                      "application/json": {
+                        schema: {
+                          type: "object",
+                          properties: {
+                            agent_id: { type: "string" },
+                            reason: { type: "string" },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        };
+      }
+      throw new Error(`unexpected mutation: ${call.method} ${call.url}`);
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    const failure = cloudFailTask(client, "t-fail", {
+      agent_id: "nausicaa",
+      reason: "must remain pending",
+      retry: true,
+    });
+    await expect(failure).rejects.toThrow("REMOTE_RETRY_UNSUPPORTED");
+    await expect(failure).rejects.toThrow("POST /v1/tasks/{id}/fail");
+    await expect(failure).rejects.toThrow("https://todos.example.com");
+    await expect(failure).rejects.toThrow("no failure mutation was sent");
+    await expect(failure).rejects.toThrow("deploy a compatible @hasna/todos /v1 server");
+    expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
+      "GET https://todos.example.com/v1/openapi.json",
+    ]);
+  });
+
+  test.each([
+    ["missing", undefined],
+    ["malformed", "not-a-task"],
+    ["missing identity", { status: "pending" }],
+  ])("retrying fail rejects an advertised-support response with %s retryTask", async (_label, retryTask) => {
+    const calls = installFetch((call) => {
+      if (call.url.endsWith("/v1/openapi.json")) {
+        return {
+          body: {
+            openapi: "3.1.0",
+            paths: {
+              "/v1/tasks/{id}/fail": {
+                post: {
+                  requestBody: {
+                    content: {
+                      "application/json": {
+                        schema: {
+                          type: "object",
+                          properties: { retry: { type: "boolean" } },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        };
+      }
+      return {
+        body: {
+          result: {
+            task: { id: "t-fail", status: "failed" },
+            ...(retryTask !== undefined ? { retryTask } : {}),
+          },
+        },
+      };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudFailTask(client, "t-fail", { retry: true }))
+      .rejects.toThrow("REMOTE_API_INCOMPATIBLE");
+    expect(calls.filter((call) => call.url.endsWith("/fail"))).toHaveLength(1);
+  });
+
+  test("non-retry remote fail remains compatible and skips capability preflight", async () => {
+    const calls = installFetch((call) => {
+      if (call.url.endsWith("/v1/openapi.json")) throw new Error("preflight must not run");
+      return {
+        body: {
+          result: {
+            task: { id: "t-fail", status: "failed", reason: "remote reason" },
+          },
+        },
+      };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    const result = await cloudFailTask(client, "t-fail", {
+      agent_id: "nausicaa",
+      reason: "remote reason",
+    });
+
+    expect(result.task).toMatchObject({ id: "t-fail", status: "failed", reason: "remote reason" });
+    expect(result.retryTask).toBeUndefined();
+    expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
+      "POST https://todos.example.com/v1/tasks/t-fail/fail",
+    ]);
   });
 
   test("failed-task start preserves the remote transition error instead of reporting authority failure", async () => {
