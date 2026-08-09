@@ -198,6 +198,31 @@ export function markChannelNotificationsRead(agent: string, messageIds: number[]
   return count;
 }
 
+/**
+ * Atomically acknowledge the channel notifications visible for one identity at
+ * arm time.
+ *
+ * The INSERT ... SELECT is one database statement, so it reads one fixed
+ * snapshot. A message committed after that snapshot is not acknowledged and
+ * remains available to the live notification poll.
+ */
+export function baselineChannelNotifications(agent: string): number {
+  const db = getDb();
+  const selfSenderId = resolveSelfSenderId(agent, getPresence(agent));
+  const result = db.prepare(`
+    INSERT OR IGNORE INTO channel_notification_reads (agent, message_id)
+    SELECT ?, m.id
+    FROM messages m
+    INNER JOIN channel_subscriptions s
+      ON s.channel = m.channel
+    WHERE s.agent = ?
+      AND m.channel IS NOT NULL
+      AND m.from_agent != ?
+      AND m.id > s.since_message_id
+  `).run(agent, agent, selfSenderId);
+  return result.changes;
+}
+
 export function markAllChannelNotificationsRead(agent: string, channel?: string): number {
   const unread = readChannelNotifications({ agent, channel, unread_only: true, limit: 10000 });
   return markChannelNotificationsRead(agent, unread.map((row) => row.message_id));

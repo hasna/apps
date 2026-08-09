@@ -98,6 +98,34 @@ describe("ApiStore project normalization", () => {
 });
 
 describe("ApiStore channel notification cursor", () => {
+  test("arm-time baseline uses the atomic remote endpoint for one identity", async () => {
+    const posts: Array<{ path: string; body: unknown }> = [];
+    const transport = {
+      baseUrl: "https://conversations.hasna.xyz/v1",
+      get: async () => ({}),
+      post: async (path: string, body: unknown) => {
+        posts.push({ path, body });
+        return { marked: 7 };
+      },
+      patch: async () => ({}),
+      del: async () => undefined,
+    } as unknown as HasnaStorageClient["transport"];
+    const client = {
+      name: "conversations",
+      baseUrl: "https://conversations.hasna.xyz/v1",
+      transport,
+    } as unknown as HasnaStorageClient;
+    const store = new ApiStore(client);
+
+    expect(await store.baselineChannelNotifications("watcher")).toBe(7);
+    expect(posts).toEqual([
+      {
+        path: "/channel-notifications/baseline",
+        body: { agent: "watcher" },
+      },
+    ]);
+  });
+
   test("mark_read advances the remote notification inbox so consecutive watcher polls do not repeat ids", async () => {
     const notifications = [
       {

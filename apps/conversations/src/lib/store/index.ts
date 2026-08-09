@@ -430,6 +430,7 @@ export interface ConversationsStore {
   getSubscribedChannels: Async<typeof notificationsLib.getSubscribedChannels>;
   readChannelNotifications: Async<typeof notificationsLib.readChannelNotifications>;
   markChannelNotificationsRead: Async<typeof notificationsLib.markChannelNotificationsRead>;
+  baselineChannelNotifications: Async<typeof notificationsLib.baselineChannelNotifications>;
   markAllChannelNotificationsRead: Async<typeof notificationsLib.markAllChannelNotificationsRead>;
 
   // tasks
@@ -605,6 +606,7 @@ export class LocalStore implements ConversationsStore {
   getSubscribedChannels: ConversationsStore["getSubscribedChannels"] = async (...a) => notificationsLib.getSubscribedChannels(...a);
   readChannelNotifications: ConversationsStore["readChannelNotifications"] = async (...a) => notificationsLib.readChannelNotifications(...a);
   markChannelNotificationsRead: ConversationsStore["markChannelNotificationsRead"] = async (...a) => notificationsLib.markChannelNotificationsRead(...a);
+  baselineChannelNotifications: ConversationsStore["baselineChannelNotifications"] = async (...a) => notificationsLib.baselineChannelNotifications(...a);
   markAllChannelNotificationsRead: ConversationsStore["markAllChannelNotificationsRead"] = async (...a) => notificationsLib.markAllChannelNotificationsRead(...a);
 
   // tasks
