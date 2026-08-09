@@ -512,6 +512,78 @@ describe("PostgreSQL project channel registration authority", () => {
     });
   });
 
+  test("finds an exact historical PostgreSQL receipt after the advertised corpus identity changes", async () => {
+    const client = new FakeProjectRegistrationClient();
+    const request = await forwardRequest(client);
+    const accepted = await registerProjectChannelPg(client, request);
+    const lookupRequest = {
+      operation_id: request.operation_id,
+      step_id: request.step_id,
+      resource_kind: "channel" as const,
+      direction: "forward" as const,
+      authority: "conversations" as const,
+      authority_route: request.authority_route,
+      package_version: request.package_version,
+      authority_id: request.authority_id,
+      tenant_id: request.tenant_id,
+      corpus_id: request.corpus_id,
+      target_selector: request.target_selector,
+      idempotency_key: request.idempotency_key,
+      request_digest: request.request_digest,
+      precondition_digest: request.precondition_digest,
+      target_id: accepted.target_id!,
+      max_items: 1 as const,
+      response_byte_limit: 32_768,
+      time_budget_ms: 5_000,
+      call_limit: 1 as const,
+    };
+
+    client.state.corpusId = "cor_22222222222222222222222222222222";
+    expect((await projectChannelRegistrationPgCapability(client)).corpus_id)
+      .toBe(client.state.corpusId);
+
+    const historical = await lookupProjectChannelRegistrationReceiptPg(client, lookupRequest);
+    expect(historical.receipt).toEqual(accepted);
+    expect({
+      authority: historical.receipt.authority,
+      authority_route: historical.receipt.route,
+      package_version: historical.receipt.package_version,
+      authority_id: historical.receipt.authority_id,
+      tenant_id: historical.receipt.tenant_id,
+      corpus_id: historical.receipt.corpus_id,
+    }).toEqual({
+      authority: lookupRequest.authority,
+      authority_route: lookupRequest.authority_route,
+      package_version: lookupRequest.package_version,
+      authority_id: lookupRequest.authority_id,
+      tenant_id: lookupRequest.tenant_id,
+      corpus_id: lookupRequest.corpus_id,
+    });
+    expect(historical.response_control).toMatchObject({
+      call_limit: 1,
+      calls_used: 1,
+      max_items: 1,
+      items_returned: 1,
+      complete: true,
+      truncated: false,
+    });
+    expect(historical.response_control.response_bytes).toBeGreaterThan(0);
+    expect(historical.response_control.response_bytes).toBeLessThanOrEqual(32_768);
+    expect(historical.response_control.elapsed_ms).toBeLessThanOrEqual(5_000);
+    await expect(lookupProjectChannelRegistrationReceiptPg(client, {
+      ...lookupRequest,
+      tenant_id: "other-tenant",
+    })).rejects.toThrow("authority identity mismatch");
+    await expect(lookupProjectChannelRegistrationReceiptPg(client, {
+      ...lookupRequest,
+      corpus_id: client.state.corpusId,
+    })).rejects.toThrow("terminal receipt not found");
+    await expect(lookupProjectChannelRegistrationReceiptPg(client, {
+      ...lookupRequest,
+      target_id: "chn_33333333333333333333333333333333",
+    })).rejects.toThrow("terminal receipt not found");
+  });
+
   test("validates the inverse envelope before PostgreSQL persistence", async () => {
     const client = new FakeProjectRegistrationClient();
     const forward = await forwardRequest(client);
@@ -629,6 +701,8 @@ describe("PostgreSQL project channel registration authority", () => {
     });
     expect(receipt.target_id).toMatch(/^chn_[0-9a-f]{32}$/);
     expect(client.state.channels.get("iapp-sms")?.id).toBe(receipt.target_id!);
+    client.state.corpusId = "cor_33333333333333333333333333333333";
+    expect((await authority.capability()).corpus_id).toBe(client.state.corpusId);
     const lookupRequest = {
       operation_id: "api-operation",
       step_id: "conversations-channel",

@@ -9,6 +9,7 @@ import {
   projectChannelRegistrationDigest,
   registerProjectChannel,
   type ProjectChannelRegistrationRequest,
+  validateProjectChannelRegistrationLookup,
 } from "./project-channel-registration.js";
 import { pinStoreToDb, restoreStoreEnv } from "./store/isolated-test-env.js";
 
@@ -249,6 +250,97 @@ describe("project channel registration authority", () => {
       target_selector: "wrong-selector",
     })).rejects.toThrow("does not bind target_selector");
     expect(getDb().prepare("SELECT count(*) AS n FROM channels").get()).toEqual({ n: 1 });
+  });
+
+  test("finds an exact historical receipt after the advertised corpus identity changes", async () => {
+    const authority = createProjectChannelRegistrationAuthority();
+    const request = await forwardRequest();
+    const accepted = await authority.create(request);
+    const lookupRequest = {
+      operation_id: request.operation_id,
+      step_id: request.step_id,
+      resource_kind: "channel" as const,
+      direction: "forward" as const,
+      authority: "conversations" as const,
+      authority_route: request.authority_route,
+      package_version: request.package_version,
+      authority_id: request.authority_id,
+      tenant_id: request.tenant_id,
+      corpus_id: request.corpus_id,
+      target_selector: request.target_selector,
+      idempotency_key: request.idempotency_key,
+      request_digest: request.request_digest,
+      precondition_digest: request.precondition_digest,
+      target_id: accepted.target_id!,
+      max_items: 1 as const,
+      response_byte_limit: 32_768,
+      time_budget_ms: 5_000,
+      call_limit: 1 as const,
+    };
+
+    const nextCorpusId = "cor_22222222222222222222222222222222";
+    getDb().prepare(
+      "UPDATE project_channel_registration_identity SET corpus_id = ? WHERE singleton = 1",
+    ).run(nextCorpusId);
+    const upgradedCapability = {
+      ...await authority.capability(),
+      route: "/v2/project-registration/channels",
+      package_version: "0.6.0",
+      authority_id: "conversations-v2",
+    };
+    expect(upgradedCapability.corpus_id).toBe(nextCorpusId);
+    expect(validateProjectChannelRegistrationLookup(
+      lookupRequest,
+      upgradedCapability,
+    )).toBe(accepted.target_id!);
+
+    const historical = await authority.lookupReceipt(lookupRequest);
+    expect(historical.receipt).toEqual(accepted);
+    expect({
+      authority: historical.receipt.authority,
+      authority_route: historical.receipt.route,
+      package_version: historical.receipt.package_version,
+      authority_id: historical.receipt.authority_id,
+      tenant_id: historical.receipt.tenant_id,
+      corpus_id: historical.receipt.corpus_id,
+    }).toEqual({
+      authority: lookupRequest.authority,
+      authority_route: lookupRequest.authority_route,
+      package_version: lookupRequest.package_version,
+      authority_id: lookupRequest.authority_id,
+      tenant_id: lookupRequest.tenant_id,
+      corpus_id: lookupRequest.corpus_id,
+    });
+    expect(historical.response_control).toMatchObject({
+      call_limit: 1,
+      calls_used: 1,
+      max_items: 1,
+      items_returned: 1,
+      complete: true,
+      truncated: false,
+    });
+    expect(historical.response_control.response_bytes).toBeGreaterThan(0);
+    expect(historical.response_control.response_bytes).toBeLessThanOrEqual(32_768);
+    expect(historical.response_control.elapsed_ms).toBeLessThanOrEqual(5_000);
+
+    await expect(authority.lookupReceipt({
+      ...lookupRequest,
+      tenant_id: "other-tenant",
+    })).rejects.toThrow("authority identity mismatch");
+    for (const forged of [
+      { authority_route: "/v1/project-registration/forged" },
+      { package_version: "999.0.0" },
+      { authority_id: "forged-conversations" },
+      { corpus_id: nextCorpusId },
+      { operation_id: "other-operation" },
+      { target_id: "chn_33333333333333333333333333333333" },
+      { request_digest: "forged-request-digest" },
+    ]) {
+      await expect(authority.lookupReceipt({
+        ...lookupRequest,
+        ...forged,
+      })).rejects.toThrow("terminal receipt not found");
+    }
   });
 
   test("records nonacceptance for preexisting equivalent/conflicting channels and retired prefixes only", async () => {
