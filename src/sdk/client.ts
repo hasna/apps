@@ -1,7 +1,7 @@
 // @generated from the projects-serve OpenAPI document by scripts/generate-sdk.ts.
 // DO NOT EDIT BY HAND. Regenerate: bun run sdk:generate
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Projects API 0.1.110
+// Source: Projects API 0.1.117
 
 export interface Root { "id": string; "slug": string; "name": string; "base_path": string; "tags"?: Array<string>; "default_kind"?: string | null; "repo_visibility"?: string | null; "allowed_recipes"?: Array<string>; "allowed_agents"?: Array<string>; "metadata"?: Record<string, unknown>; "created_at"?: string; "updated_at"?: string }
 
@@ -17,7 +17,7 @@ export interface Recipe { "id": string; "slug": string; "name": string; "descrip
 
 export interface CreateRecipe { "name": string; "slug"?: string; "description"?: string; "kind"?: string; "version"?: number; "steps"?: Array<Record<string, unknown>>; "default_tags"?: Array<string>; "metadata"?: Record<string, unknown> }
 
-export interface Workspace { "id": string; "slug": string; "name": string; "description"?: string | null; "kind": string; "status": "active" | "archived" | "deleted"; "root_id"?: string | null; "recipe_id"?: string | null; "canonical_machine"?: string | null; "primary_path"?: string | null; "git_remote"?: string | null; "s3_bucket": string | null; "s3_prefix": string | null; "tags"?: Array<string>; "integrations"?: Record<string, unknown>; "metadata"?: Record<string, unknown>; "last_opened_at": string | null; "created_at"?: string; "updated_at"?: string; "synced_at": string | null }
+export interface Workspace { "id": string; "slug": string; "name": string; "description"?: string | null; "kind": string; "status": "active" | "archived" | "deleted"; "root_id"?: string | null; "recipe_id"?: string | null; "canonical_machine"?: string | null; "primary_path"?: string | null; "git_remote"?: string | null; "s3_bucket": string | null; "s3_prefix": string | null; "tags"?: Array<string>; "integrations"?: Record<string, string>; "metadata"?: Record<string, unknown>; "last_opened_at": string | null; "created_at"?: string; "updated_at"?: string; "synced_at": string | null }
 
 export interface CreateWorkspace { "name": string; "slug"?: string; "description"?: string; "kind"?: string; "root_id"?: string; "recipe_id"?: string; "primary_path"?: string; "git_remote"?: string; "tags"?: Array<string>; "integrations"?: Record<string, unknown>; "metadata"?: Record<string, unknown>; "agent_id"?: string }
 
@@ -49,7 +49,7 @@ export interface ProjectResourceLinkSnapshot { "project": Workspace; "links": Ar
 
 export interface ProjectResourceLinkRead { "ok": boolean; "project_id": string; "project": Workspace; "current_revision": string; "links": Array<ProjectResourceLink>; "link_count": number; "max_items": number; "collection_digest": string; "complete": boolean; "truncated": boolean; "response_control": GuardedResponseControl }
 
-export interface ProjectResourceLinkMutationRequest { "operation_id": string; "step_id": string; "mode"?: "add" | "reconcile"; "expected_revision": string; "links": Array<ProjectResourceLinkInput>; "max_items"?: number; "dry_run"?: boolean; "agent_id"?: string; "source"?: string; "command"?: string; "response_byte_limit": number; "time_budget_ms": number }
+export interface ProjectResourceLinkMutationRequest { "operation_id": string; "step_id": string; "mode"?: "add" | "reconcile"; "expected_revision": string; "links": Array<ProjectResourceLinkInput>; "integrations"?: Record<string, unknown>; "max_items"?: number; "dry_run"?: boolean; "agent_id"?: string; "source"?: string; "command"?: string; "response_byte_limit": number; "time_budget_ms": number }
 
 export interface ProjectResourceLinkMutationResult { "ok": boolean; "dry_run": boolean; "outcome": "accepted" | "duplicate_of_accepted" | "terminal_nonacceptance" | "planned"; "mode": "add" | "reconcile"; "idempotency_key": string; "request_digest": string; "precondition_digest": string; "project_id": string; "expected_revision": string; "current_revision": string; "before": ProjectResourceLinkSnapshot; "after": ProjectResourceLinkSnapshot | null; "receipt": GuardedProjectMutationReceipt | null; "response_control": GuardedResponseControl }
 

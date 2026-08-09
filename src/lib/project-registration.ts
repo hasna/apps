@@ -5,9 +5,11 @@ import {
   fstatSync,
   fsyncSync,
   lstatSync,
+  mkdirSync,
   openSync,
   readFileSync,
   readdirSync,
+  rmdirSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -25,6 +27,7 @@ import type {
   CreateWorkspaceInput,
   EventSource,
   JsonObject,
+  ProjectResourceLink,
   ProjectResourceLinkInput,
   Workspace,
   WorkspaceIntegrations,
@@ -36,7 +39,12 @@ import {
   sha256,
 } from "./guarded-project-mutation.js";
 import { deriveProjectChannel } from "./project-channel.js";
-import { projectResourceLinkConversationsChannelLocatorKind } from "./project-resource-links.js";
+import {
+  PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS,
+  normalizeProjectResourceLinks,
+  projectResourceLinkConversationsChannelLocatorKind,
+  projectResourceLinkId,
+} from "./project-resource-links.js";
 import { assertProjectWorkspaceId } from "./project-store-paths.js";
 import {
   cleanupWorkspaceCreation,
@@ -47,9 +55,11 @@ import {
   buildWorkspaceMarker,
   PROJECT_MARKER_FILENAME,
 } from "./workspace-runtime.js";
+import type { ProjectStore } from "../store/project-store.js";
 
 export const PROJECT_REGISTRATION_ROUTE = "projects.full-registration.v1";
 export const PROJECT_REGISTRATION_GOALS_FILENAME = "GOALS.md";
+const PROJECT_REGISTRATION_PROVENANCE_KEY = "_hasna_projects_full_registration";
 export const PROJECT_REGISTRATION_MAX_RECEIPTS = 32;
 
 export const PROJECT_REGISTRATION_DEPENDENCY_TASKS = {
@@ -275,6 +285,8 @@ export interface FullProjectRegistrationProjectInput {
 
 export interface FullProjectRegistrationInput extends ProjectRegistrationBounds {
   operation_id: string;
+  mode?: "create" | "retrofit";
+  expected_project_revision?: string;
   project: FullProjectRegistrationProjectInput;
   target: ProjectRegistrationPathHandle;
   goals_markdown: string;
@@ -407,6 +419,7 @@ interface AcceptedFileStep {
   filename: string;
   digest: string;
   local_receipt: ProjectRegistrationReceipt;
+  created_by_operation: boolean;
 }
 
 interface OwnedDirectoryIdentity {
@@ -715,6 +728,25 @@ function projectStateDigest(project: Workspace): string {
   }));
 }
 
+function registrationProvenance(operationId: string, inputRequestDigest: string): JsonObject {
+  return {
+    route: PROJECT_REGISTRATION_ROUTE,
+    operation_id: operationId,
+    input_request_digest: inputRequestDigest,
+  };
+}
+
+function hasRegistrationProvenance(
+  project: Workspace,
+  operationId: string,
+  inputRequestDigest: string,
+): boolean {
+  const value = project.metadata[PROJECT_REGISTRATION_PROVENANCE_KEY];
+  return canonicalJson(value ?? null) === canonicalJson(
+    registrationProvenance(operationId, inputRequestDigest),
+  );
+}
+
 function nextRevisionAfter(revision: string): string {
   const candidate = new Date().toISOString();
   if (candidate !== revision) return candidate;
@@ -745,7 +777,22 @@ function validateInput(input: FullProjectRegistrationInput): {
   request_digest: string;
 } {
   assertRegistrationOperationId(input.operation_id);
+  const mode = input.mode ?? "create";
+  if (mode !== "create" && mode !== "retrofit") {
+    throw new Error("project registration mode must be create or retrofit");
+  }
+  if (mode === "retrofit") {
+    if (!input.project.id) throw new Error("project retrofit requires project.id");
+    if (!input.expected_project_revision?.trim()) {
+      throw new Error("project retrofit requires expected_project_revision");
+    }
+  } else if (input.expected_project_revision !== undefined) {
+    throw new Error("expected_project_revision is valid only in retrofit mode");
+  }
   if (!input.project.name?.trim()) throw new Error("project registration requires a project name");
+  if (input.project.metadata && PROJECT_REGISTRATION_PROVENANCE_KEY in input.project.metadata) {
+    throw new Error(`${PROJECT_REGISTRATION_PROVENANCE_KEY} is reserved for registration provenance`);
+  }
   if (!input.goals_markdown?.trim()) throw new Error("project registration requires non-empty GOALS.md content");
   if (!Number.isInteger(input.response_byte_limit) || input.response_byte_limit < 64 * 1024) {
     throw new Error("response_byte_limit must be an integer of at least 65536");
@@ -761,6 +808,8 @@ function validateInput(input: FullProjectRegistrationInput): {
   const requestDigest = sha256(canonicalJson({
     route: PROJECT_REGISTRATION_ROUTE,
     operation_id: input.operation_id,
+    mode,
+    expected_project_revision: input.expected_project_revision ?? null,
     project: {
       id: projectId,
       slug: projectSlug,
@@ -779,6 +828,51 @@ function validateInput(input: FullProjectRegistrationInput): {
     },
   }));
   return { project_id: projectId, project_slug: projectSlug, request_digest: requestDigest };
+}
+
+async function readRegistrationProject(
+  projectId: string,
+  db: Database,
+  store?: ProjectStore,
+): Promise<Workspace | null> {
+  return store ? store.getProject(projectId) : getWorkspace(projectId, db);
+}
+
+async function validateRetrofitProject(
+  input: FullProjectRegistrationInput,
+  validated: { project_id: string; project_slug: string },
+  db: Database,
+  store: ProjectStore | undefined,
+  checkRevision: boolean,
+): Promise<Workspace | null> {
+  if ((input.mode ?? "create") !== "retrofit") return null;
+  const project = await readRegistrationProject(validated.project_id, db, store);
+  if (!project) throw new ProjectRegistrationStepError("projects_project", "retrofit_project_missing");
+  if (
+    project.id !== validated.project_id
+    || project.slug !== validated.project_slug
+    || project.name !== input.project.name
+    || project.kind !== (input.project.kind ?? "generic")
+  ) {
+    throw new ProjectRegistrationStepError("projects_project", "retrofit_project_identity_mismatch");
+  }
+  if (checkRevision && project.updated_at !== input.expected_project_revision) {
+    throw new ProjectRegistrationStepError("projects_project", "retrofit_project_revision_mismatch");
+  }
+  const ownsTarget = input.target.withOwnedPath((path) =>
+    project.primary_path !== null && resolve(project.primary_path) === path
+  );
+  if (!ownsTarget) {
+    throw new ProjectRegistrationStepError("projects_project", "retrofit_primary_path_unclaimed");
+  }
+  input.target.withOwnedPath((path) => {
+    if (!existsSync(path)) return;
+    const stat = lstatSync(path);
+    if (!stat.isDirectory()) {
+      throw new ProjectRegistrationStepError("projects_directory", "retrofit_target_is_not_directory");
+    }
+  });
+  return project;
 }
 
 const REQUIRED_CAPABILITIES = [
@@ -1573,7 +1667,7 @@ function atomicWriteOwnedFile(
           expected_digest: contentDigest,
         }],
       }, db);
-      return { filename: input.filename, digest: contentDigest, local_receipt: receipt };
+      return { filename: input.filename, digest: contentDigest, local_receipt: receipt, created_by_operation: true };
     } catch (err) {
       if (fd !== null) {
         try {
@@ -1593,6 +1687,101 @@ function atomicWriteOwnedFile(
       throw err;
     }
   });
+}
+
+function writeOrAdoptOwnedFile(
+  input: {
+    operation_id: string;
+    step_id: string;
+    filename: string;
+    content: string;
+    project: Workspace;
+    target: ProjectRegistrationPathHandle;
+    compatible_existing?: (existing: string, desired: string) => boolean;
+  },
+  db: Database,
+): AcceptedFileStep {
+  const desiredContentDigest = sha256(input.content);
+  const exists = input.target.withOwnedPath((path) => existsSync(join(path, input.filename)));
+  if (!exists) return atomicWriteOwnedFile(input, db);
+  const adopted = input.target.withOwnedPath((path) => {
+    const file = join(path, input.filename);
+    const stat = lstatSync(file);
+    if (!stat.isFile()) return null;
+    const existing = readFileSync(file, "utf8");
+    const exact = sha256(existing) === desiredContentDigest;
+    return exact || input.compatible_existing?.(existing, input.content)
+      ? { content: existing, digest: sha256(existing), exact }
+      : null;
+  });
+  if (!adopted) {
+    throw new ProjectRegistrationStepError(input.step_id, "retrofit_existing_file_conflict");
+  }
+  const requestDigest = sha256(canonicalJson({
+    filename: input.filename,
+    desired_content_digest: desiredContentDigest,
+    compatibility: input.compatible_existing ? "registered_compatibility_predicate" : "byte_exact",
+  }));
+  const preconditionDigest = sha256(canonicalJson({
+    filename: input.filename,
+    expected: adopted.exact ? "exact_existing_content" : "compatible_existing_content",
+    project_id: input.project.id,
+    desired_content_digest: desiredContentDigest,
+    accepted_content_digest: adopted.digest,
+  }));
+  const idempotencyKey = deriveProjectRegistrationIdempotencyKey({
+    operation_id: input.operation_id,
+    step_id: input.step_id,
+    direction: "forward",
+    target_selector: `${input.project.id}:${input.filename}`,
+    request_digest: requestDigest,
+    precondition_digest: preconditionDigest,
+  });
+  const receipt = appendRegistrationReceipt({
+    operation_id: input.operation_id,
+    step_id: input.step_id,
+    authority: "projects-files",
+    resource_kind: "file",
+    direction: "forward",
+    idempotency_key: idempotencyKey,
+    target_id: `${input.project.id}:${input.filename}`,
+    request_digest: requestDigest,
+    precondition_digest: preconditionDigest,
+    outcome: "accepted",
+    result_revision: adopted.digest,
+    result_digest: adopted.digest,
+    artifacts: [{
+      authority: "projects-files",
+      kind: input.filename === PROJECT_MARKER_FILENAME ? "project_marker" : "project_goals",
+      target_id: `${input.project.id}:${input.filename}`,
+      digest: adopted.digest,
+      adopted: true,
+    }],
+    preconditions: [{
+      predicate: adopted.exact ? "exact_existing_content" : "compatible_existing_content",
+      project_id: input.project.id,
+      filename: input.filename,
+      desired_digest: desiredContentDigest,
+      accepted_digest: adopted.digest,
+    }],
+    rollback: [],
+  }, db);
+  return { filename: input.filename, digest: adopted.digest, local_receipt: receipt, created_by_operation: false };
+}
+
+function compatibleWorkspaceMarkerContent(existing: string, desired: string): boolean {
+  try {
+    const existingMarker = JSON.parse(existing) as Record<string, unknown>;
+    const desiredMarker = JSON.parse(desired) as Record<string, unknown>;
+    if (typeof existingMarker.generated_at !== "string" || typeof desiredMarker.generated_at !== "string") {
+      return false;
+    }
+    const { generated_at: _existingGeneratedAt, ...existingStable } = existingMarker;
+    const { generated_at: _desiredGeneratedAt, ...desiredStable } = desiredMarker;
+    return canonicalJson(existingStable) === canonicalJson(desiredStable);
+  } catch {
+    return false;
+  }
 }
 
 function compensateOwnedFile(
@@ -1819,22 +2008,78 @@ function registrationResourceLink(input: {
   };
 }
 
-function updateProjectIntegrations(input: {
+async function updateProjectIntegrations(input: {
   operation_id: string;
   project: Workspace;
   integrations: WorkspaceIntegrations;
   resource_links: ProjectResourceLinkInput[];
   bounds: ProjectRegistrationBounds;
   db: Database;
-}): { project: Workspace; receipt: ProjectRegistrationReceipt } {
+  store?: ProjectStore;
+}): Promise<{ project: Workspace; receipt: ProjectRegistrationReceipt }> {
+  const before = input.store
+    ? await input.store.readProjectResourceLinks({
+      project_id: input.project.id,
+      max_items: PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS,
+      response_byte_limit: input.bounds.response_byte_limit,
+      time_budget_ms: input.bounds.time_budget_ms,
+    })
+    : readProjectResourceLinks({
+      project_id: input.project.id,
+      max_items: PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS,
+      response_byte_limit: input.bounds.response_byte_limit,
+      time_budget_ms: input.bounds.time_budget_ms,
+    }, input.db);
+  if (
+    !before.ok
+    || !before.complete
+    || before.truncated
+    || before.current_revision !== input.project.updated_at
+  ) {
+    throw new ProjectRegistrationStepError(
+      "projects_integrations",
+      "resource_link_exact_preimage_mismatch",
+    );
+  }
+  const isRegistrationOwnedLink = (link: ProjectResourceLinkInput): boolean =>
+    (link.authority === "conversations" && link.target_kind === "channel")
+    || (link.authority === "todos" && (link.target_kind === "project" || link.target_kind === "task_list"))
+    || (link.authority === "mementos" && link.target_kind === "project");
+  const storedInput = (link: ProjectResourceLink): ProjectResourceLinkInput => ({
+    authority: link.authority,
+    service_instance: link.service_instance,
+    source_package: link.source_package,
+    target_kind: link.target_kind,
+    locator: link.locator,
+    scope: link.scope,
+    labels: link.labels,
+  } as ProjectResourceLinkInput);
+  const linksById = new Map<string, ProjectResourceLinkInput>();
+  for (const link of before.links) {
+    const existing = storedInput(link);
+    if (!isRegistrationOwnedLink(existing)) {
+      linksById.set(projectResourceLinkId(input.project.id, existing), existing);
+    }
+  }
+  for (const link of input.resource_links) {
+    linksById.set(projectResourceLinkId(input.project.id, link), link);
+  }
+  const resourceLinks = [...linksById.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([, link]) => link);
+  const integrations: WorkspaceIntegrations = {
+    ...before.project.integrations,
+    ...input.integrations,
+  };
   const requestDigest = sha256(canonicalJson({
-    integrations: input.integrations,
-    resource_links: input.resource_links,
+    integrations,
+    resource_links: resourceLinks,
   }));
   const preconditionDigest = sha256(canonicalJson({
     project_id: input.project.id,
     expected_revision: input.project.updated_at,
-    expected_integrations_digest: sha256(canonicalJson(input.project.integrations)),
+    expected_integrations_digest: sha256(canonicalJson(before.project.integrations)),
+    expected_resource_link_collection_digest: before.collection_digest,
   }));
   const idempotencyKey = deriveProjectRegistrationIdempotencyKey({
     operation_id: input.operation_id,
@@ -1844,20 +2089,37 @@ function updateProjectIntegrations(input: {
     request_digest: requestDigest,
     precondition_digest: preconditionDigest,
   });
-  return input.db.transaction(() => {
-    const linked = mutateProjectResourceLinksForRegistration({
+  const mutate = async () => input.store
+    ? input.store.mutateProjectResourceLinks({
       project_id: input.project.id,
       operation_id: input.operation_id,
       step_id: "projects_resource_links",
       mode: "reconcile",
       expected_revision: input.project.updated_at,
-      links: input.resource_links,
-      max_items: PROJECT_REGISTRATION_MAX_RECEIPTS,
+      links: resourceLinks,
+      integrations,
+      max_items: PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS,
       response_byte_limit: input.bounds.response_byte_limit,
       time_budget_ms: input.bounds.time_budget_ms,
       source: "system",
       command: PROJECT_REGISTRATION_ROUTE,
-    }, input.integrations, input.db);
+    })
+    : mutateProjectResourceLinksForRegistration({
+      project_id: input.project.id,
+      operation_id: input.operation_id,
+      step_id: "projects_resource_links",
+      mode: "reconcile",
+      expected_revision: input.project.updated_at,
+      links: resourceLinks,
+      integrations,
+      max_items: PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS,
+      response_byte_limit: input.bounds.response_byte_limit,
+      time_budget_ms: input.bounds.time_budget_ms,
+      source: "system",
+      command: PROJECT_REGISTRATION_ROUTE,
+    }, integrations, input.db);
+  const run = async () => {
+    const linked = await mutate();
     if (!linked.ok || !linked.after || !linked.receipt || linked.receipt.outcome === "terminal_nonacceptance") {
       throw new ProjectRegistrationStepError(
         "projects_integrations",
@@ -1865,8 +2127,19 @@ function updateProjectIntegrations(input: {
       );
     }
     const after = linked.after.project;
-    if (canonicalJson(after.integrations) !== canonicalJson(input.integrations)) {
+    if (canonicalJson(after.integrations) !== canonicalJson(integrations)) {
       throw new ProjectRegistrationStepError("projects_integrations", "integration_exact_readback_mismatch");
+    }
+    const expectedLinks = normalizeProjectResourceLinks(resourceLinks).map((link) => ({
+      id: projectResourceLinkId(input.project.id, link),
+      input: link,
+    })).sort((left, right) => left.id.localeCompare(right.id));
+    const actualLinks = linked.after.links.map((link) => ({
+      id: link.id,
+      input: storedInput(link),
+    })).sort((left, right) => left.id.localeCompare(right.id));
+    if (canonicalJson(actualLinks) !== canonicalJson(expectedLinks)) {
+      throw new ProjectRegistrationStepError("projects_integrations", "resource_link_exact_readback_mismatch");
     }
     const resultDigest = sha256(canonicalJson({
       project_id: after.id,
@@ -1917,15 +2190,17 @@ function updateProjectIntegrations(input: {
       }],
     }, input.db);
     return { project: after, receipt };
-  })();
+  };
+  return run();
 }
 
-function rollbackProjectIntegrations(input: {
+async function rollbackProjectIntegrations(input: {
   operation_id: string;
   accepted: ProjectRegistrationReceipt;
   bounds: ProjectRegistrationBounds;
   db: Database;
-}): { project: Workspace; receipt: ProjectRegistrationReceipt } {
+  store?: ProjectStore;
+}): Promise<{ project: Workspace; receipt: ProjectRegistrationReceipt }> {
   const rollback = input.accepted.rollback[0] as {
     accepted_revision?: string;
     accepted_digest?: string;
@@ -1943,16 +2218,23 @@ function rollbackProjectIntegrations(input: {
     throw new ProjectRegistrationStepError("projects_integrations", "integration_rollback_contract_missing");
   }
   const guardedReceiptId = rollback.guarded_receipt_id;
-  const current = getWorkspace(rollback.project_id, input.db);
+  const current = await readRegistrationProject(rollback.project_id, input.db, input.store);
   if (!current || current.updated_at !== rollback.accepted_revision) {
     throw new ProjectRegistrationStepError("projects_integrations", "integration_drift_refuses_inverse");
   }
-  const currentLinks = readProjectResourceLinks({
+  const currentLinks = input.store
+    ? await input.store.readProjectResourceLinks({
+      project_id: current.id,
+      max_items: PROJECT_REGISTRATION_MAX_RECEIPTS,
+      response_byte_limit: input.bounds.response_byte_limit,
+      time_budget_ms: input.bounds.time_budget_ms,
+    })
+    : readProjectResourceLinks({
     project_id: current.id,
     max_items: PROJECT_REGISTRATION_MAX_RECEIPTS,
     response_byte_limit: input.bounds.response_byte_limit,
     time_budget_ms: input.bounds.time_budget_ms,
-  }, input.db);
+    }, input.db);
   const currentDigest = sha256(canonicalJson({
     project_id: current.id,
     revision: current.updated_at,
@@ -1978,8 +2260,21 @@ function rollbackProjectIntegrations(input: {
     request_digest: requestDigest,
     precondition_digest: preconditionDigest,
   });
-  return input.db.transaction(() => {
-    const restored = rollbackProjectResourceLinks({
+  const run = async () => {
+    const restored = input.store
+      ? await input.store.rollbackProjectResourceLinks({
+        project_id: current.id,
+        operation_id: input.operation_id,
+        step_id: "projects_resource_links:inverse",
+        accepted_receipt_id: guardedReceiptId,
+        expected_current_revision: current.updated_at,
+        max_items: PROJECT_REGISTRATION_MAX_RECEIPTS,
+        response_byte_limit: input.bounds.response_byte_limit,
+        time_budget_ms: input.bounds.time_budget_ms,
+        source: "system",
+        command: PROJECT_REGISTRATION_ROUTE,
+      })
+      : rollbackProjectResourceLinks({
       project_id: current.id,
       operation_id: input.operation_id,
       step_id: "projects_resource_links:inverse",
@@ -1990,7 +2285,7 @@ function rollbackProjectIntegrations(input: {
       time_budget_ms: input.bounds.time_budget_ms,
       source: "system",
       command: PROJECT_REGISTRATION_ROUTE,
-    }, input.db);
+      }, input.db);
     if (!restored.ok || !restored.after || !restored.receipt || restored.receipt.outcome === "terminal_nonacceptance") {
       throw new ProjectRegistrationStepError("projects_integrations", "integration_inverse_lost");
     }
@@ -2028,7 +2323,8 @@ function rollbackProjectIntegrations(input: {
       rollback: [],
     }, input.db);
     return { project: after, receipt };
-  })();
+  };
+  return run();
 }
 
 function projectArtifacts(
@@ -2110,6 +2406,7 @@ function completedRegistration(
   bounds: ProjectRegistrationBounds,
   startedAt: number,
   db: Database,
+  projectReadback?: Workspace | null,
 ): FullProjectRegistrationResult | null {
   const finalRows = db.query(
     `SELECT * FROM project_registration_receipts
@@ -2122,7 +2419,7 @@ function completedRegistration(
     throw new ProjectRegistrationStepError("registration_terminal", "ambiguous_terminal_receipts");
   }
   const accepted = rowToReceipt(finalRows[0]!);
-  const project = getWorkspace(projectId, db);
+  const project = projectReadback === undefined ? getWorkspace(projectId, db) : projectReadback;
   if (!project || project.slug !== projectSlug) {
     throw new ProjectRegistrationStepError("registration_terminal", "completed_project_readback_missing");
   }
@@ -2229,6 +2526,7 @@ export async function registerFullProject(
   options: {
     db?: Database;
     authorities?: ProjectRegistrationAuthorities;
+    projectStore?: ProjectStore;
   } = {},
 ): Promise<FullProjectRegistrationResult> {
   const startedAt = Date.now();
@@ -2238,6 +2536,10 @@ export async function registerFullProject(
     response_byte_limit: input.response_byte_limit,
     time_budget_ms: input.time_budget_ms,
   };
+  // A local Store is only a facade over this same SQLite authority. Keep the
+  // original transactional creation path in local mode; only the API Store is
+  // a distinct Projects authority that must replace local project mutations.
+  const authorityStore = options.projectStore?.mode === "api" ? options.projectStore : undefined;
   const capability = await preflightProjectRegistrationAuthorities(authorities);
   if (!capability.ok) {
     return buildNoGoResult({
@@ -2254,6 +2556,52 @@ export async function registerFullProject(
     mementos: capability.capabilities.find((item) => item.authority === "mementos")!,
     conversations: capability.capabilities.find((item) => item.authority === "conversations")!,
   };
+  // Keep the authority capability check ahead of opening the local Projects
+  // ledger. A failed preflight must not create even an empty SQLite file.
+  const db = options.db ?? getDatabase();
+  let retrofitProject: Workspace | null = null;
+  try {
+    retrofitProject = await validateRetrofitProject(
+      input,
+      validated,
+      db,
+      authorityStore,
+      true,
+    );
+  } catch (err) {
+    const existingOperation = err instanceof ProjectRegistrationStepError
+      && err.code === "retrofit_project_revision_mismatch"
+      ? db.query(
+        "SELECT 1 AS present FROM project_registration_manifests WHERE operation_id = ?",
+      ).get(input.operation_id) as { present: number } | null
+      : null;
+    // A completed exact retry necessarily presents the revision from before
+    // registration updated integrations. Let the immutable manifest and
+    // terminal receipt prove that retry later; a new stale request still fails
+    // before any manifest, external call, or filesystem mutation.
+    if (existingOperation?.present === 1) {
+      retrofitProject = await validateRetrofitProject(
+        input,
+        validated,
+        db,
+        authorityStore,
+        false,
+      );
+    } else if (err instanceof ProjectRegistrationStepError) {
+      return buildNoGoResult({
+        operation_id: input.operation_id,
+        project_id: validated.project_id,
+        project_slug: validated.project_slug,
+        blockers: [],
+        bounds,
+        startedAt,
+        failed_step: err.stepId,
+        reason_code: err.code,
+      });
+    } else {
+      throw err;
+    }
+  }
   const immutablePlan = manifestPlan({
     project_id: validated.project_id,
     project_slug: validated.project_slug,
@@ -2265,7 +2613,6 @@ export async function registerFullProject(
     input_request_digest: validated.request_digest,
     immutable_plan: immutablePlan,
   }));
-  const db = options.db ?? getDatabase();
 
   let manifestCreated = false;
   try {
@@ -2301,8 +2648,34 @@ export async function registerFullProject(
     bounds,
     startedAt,
     db,
+    await readRegistrationProject(validated.project_id, db, authorityStore),
   );
   if (completed) return completed;
+  if (retrofitProject) {
+    try {
+      retrofitProject = await validateRetrofitProject(
+        input,
+        validated,
+        db,
+        authorityStore,
+        true,
+      );
+    } catch (err) {
+      if (err instanceof ProjectRegistrationStepError) {
+        return buildNoGoResult({
+          operation_id: input.operation_id,
+          project_id: validated.project_id,
+          project_slug: validated.project_slug,
+          blockers: [],
+          bounds,
+          startedAt,
+          failed_step: err.stepId,
+          reason_code: err.code,
+        });
+      }
+      throw err;
+    }
+  }
   if (!manifestCreated && listProjectRegistrationReceipts(input.operation_id, db).length > 0) {
     return buildNoGoResult({
       operation_id: input.operation_id,
@@ -2336,14 +2709,28 @@ export async function registerFullProject(
     prompt: input.project.prompt,
     command: input.project.command,
   }));
-  let creationPlan: ReturnType<typeof planWorkspaceCreation>;
+  const authorityProjectInput: CreateWorkspaceInput = authorityStore
+    ? {
+        ...projectInput,
+        metadata: {
+          ...(projectInput.metadata ?? {}),
+          [PROJECT_REGISTRATION_PROVENANCE_KEY]: registrationProvenance(
+            input.operation_id,
+            validated.request_digest,
+          ),
+        },
+      }
+    : projectInput;
+  let creationPlan: ReturnType<typeof planWorkspaceCreation> | null = null;
   try {
-    creationPlan = planWorkspaceCreation({
-      ...projectInput,
-      createDirectory: true,
-      requireAbsentDirectory: true,
-      writeMarker: false,
-    }, { db });
+    if (!retrofitProject && !authorityStore) {
+      creationPlan = planWorkspaceCreation({
+        ...projectInput,
+        createDirectory: true,
+        requireAbsentDirectory: true,
+        writeMarker: false,
+      }, { db });
+    }
   } catch {
     terminalReceipt({
       operation_id: input.operation_id,
@@ -2376,6 +2763,7 @@ export async function registerFullProject(
   const rollback: JsonObject[] = [];
   let directoryReceipt: ProjectRegistrationReceipt | null = null;
   let directoryOwnership: OwnedDirectoryIdentity | null = null;
+  let directoryCreatedByOperation = false;
   let integrationReceipt: ProjectRegistrationReceipt | null = null;
   let project: Workspace | null = null;
   let createdProject: Workspace | null = null;
@@ -2384,7 +2772,179 @@ export async function registerFullProject(
   let terminalCommitted = false;
 
   try {
-    const execution = await executeWorkspaceCreation({
+    if (retrofitProject || authorityStore) {
+      const adopting = retrofitProject !== null;
+      if (retrofitProject) {
+        project = retrofitProject;
+      } else {
+        const existingById = await authorityStore!.getProject(validated.project_id);
+        const existingBySlug = await authorityStore!.getProject(validated.project_slug);
+        const existing = existingById ?? existingBySlug;
+        if (existing) {
+          if (
+            existing.id !== validated.project_id
+            || existing.slug !== validated.project_slug
+            || !hasRegistrationProvenance(existing, input.operation_id, validated.request_digest)
+          ) {
+            throw new ProjectRegistrationStepError("projects_project", "project_identity_exists");
+          }
+          project = existing;
+        } else {
+          try {
+            project = await authorityStore!.createProject(authorityProjectInput);
+          } catch {
+            const reconciled = await authorityStore!.getProject(validated.project_id);
+            if (
+              !reconciled
+              || reconciled.slug !== validated.project_slug
+              || !hasRegistrationProvenance(reconciled, input.operation_id, validated.request_digest)
+            ) {
+              throw new ProjectRegistrationStepError(
+                "projects_project",
+                "project_create_terminal_outcome_unresolved",
+                true,
+              );
+            }
+            project = reconciled;
+          }
+        }
+      }
+      if (!project || project.id !== validated.project_id || project.slug !== validated.project_slug) {
+        throw new ProjectRegistrationStepError("projects_project", "exact_project_readback_mismatch");
+      }
+      if (!adopting) {
+        createdProject = project;
+        expectedProjectStateDigest = projectStateDigest(project);
+      }
+      const projectRequestDigest = sha256(canonicalJson({
+        project_id: validated.project_id,
+        project_slug: validated.project_slug,
+        target_path_digest: input.target.digest,
+        project_metadata_digest: sha256(canonicalJson(project.metadata ?? {})),
+      }));
+      const projectPreconditionDigest = sha256(canonicalJson({
+        exact_project_id: validated.project_id,
+        exact_project_slug: validated.project_slug,
+        expected: adopting ? "exact_existing_revision" : "absent",
+        expected_revision: adopting ? input.expected_project_revision : null,
+        target_path_digest: input.target.digest,
+      }));
+      const projectKey = deriveProjectRegistrationIdempotencyKey({
+        operation_id: input.operation_id,
+        step_id: "projects_project",
+        direction: "forward",
+        target_selector: validated.project_id,
+        request_digest: projectRequestDigest,
+        precondition_digest: projectPreconditionDigest,
+      });
+      appendRegistrationReceipt({
+        operation_id: input.operation_id,
+        step_id: "projects_project",
+        authority: "projects",
+        resource_kind: "project",
+        direction: "forward",
+        idempotency_key: projectKey,
+        target_id: project.id,
+        request_digest: projectRequestDigest,
+        precondition_digest: projectPreconditionDigest,
+        outcome: "accepted",
+        result_revision: project.updated_at,
+        result_digest: projectStateDigest(project),
+        artifacts: [{
+          authority: "projects",
+          resource_kind: "project",
+          target_id: project.id,
+          revision: project.updated_at,
+          digest: projectStateDigest(project),
+          adopted: adopting,
+        }],
+        preconditions: [{
+          predicate: adopting ? "exact_existing_revision" : "expected_absent",
+          exact_project_id: project.id,
+          exact_project_slug: project.slug,
+          expected_revision: adopting ? input.expected_project_revision : null,
+          target_path_digest: input.target.digest,
+        }],
+        rollback: adopting ? [] : [{
+          action: "delete_store_project_if_state_digest_matches",
+          project_id: project.id,
+          project_slug: project.slug,
+          expected_state_digest: projectStateDigest(project),
+        }],
+      }, db);
+      failedStep = "projects_directory";
+      let directoryExisted = false;
+      input.target.withOwnedPath((path) => {
+        if (existsSync(path)) {
+          directoryExisted = true;
+          if (!adopting) {
+            throw new ProjectRegistrationStepError("projects_directory", "target_directory_exists");
+          }
+          const stat = lstatSync(path);
+          if (!stat.isDirectory()) {
+            throw new ProjectRegistrationStepError("projects_directory", "retrofit_target_is_not_directory");
+          }
+          return;
+        }
+        mkdirSync(path, { mode: 0o700 });
+      });
+      directoryCreatedByOperation = !directoryExisted;
+      directoryOwnership = captureOwnedDirectoryIdentity(input.target);
+      const directoryIdentityDigest = sha256(canonicalJson({
+        target_path_digest: input.target.digest,
+        ...directoryOwnership,
+      }));
+      const directoryRequestDigest = sha256(canonicalJson({
+        project_id: project.id,
+        target_path_digest: input.target.digest,
+      }));
+      const directoryPreconditionDigest = sha256(canonicalJson({
+        expected: directoryExisted ? "exact_existing_directory" : "absent",
+        target_path_digest: input.target.digest,
+      }));
+      const directoryKey = deriveProjectRegistrationIdempotencyKey({
+        operation_id: input.operation_id,
+        step_id: "projects_directory",
+        direction: "forward",
+        target_selector: project.id,
+        request_digest: directoryRequestDigest,
+        precondition_digest: directoryPreconditionDigest,
+      });
+      directoryReceipt = appendRegistrationReceipt({
+        operation_id: input.operation_id,
+        step_id: "projects_directory",
+        authority: "projects-files",
+        resource_kind: "directory",
+        direction: "forward",
+        idempotency_key: directoryKey,
+        target_id: project.id,
+        request_digest: directoryRequestDigest,
+        precondition_digest: directoryPreconditionDigest,
+        outcome: "accepted",
+        result_revision: `${directoryOwnership.dev}:${directoryOwnership.ino}`,
+        result_digest: directoryIdentityDigest,
+        artifacts: [{
+          authority: "projects-files",
+          kind: "project_directory",
+          project_id: project.id,
+          target_path_digest: input.target.digest,
+          directory_identity_digest: directoryIdentityDigest,
+          adopted: directoryExisted,
+        }],
+        preconditions: [{
+          predicate: directoryExisted ? "exact_existing_directory" : "expected_absent",
+          target_path_digest: input.target.digest,
+        }],
+        rollback: directoryExisted ? [] : [{
+          action: "remove_empty_directory",
+          project_id: project.id,
+          target_path_digest: input.target.digest,
+          expected_dev: directoryOwnership.dev,
+          expected_ino: directoryOwnership.ino,
+        }],
+      }, db);
+    } else {
+      const execution = await executeWorkspaceCreation({
       ...projectInput,
       createDirectory: true,
       requireAbsentDirectory: true,
@@ -2457,70 +3017,72 @@ export async function registerFullProject(
         return created;
       })(),
     });
-    project = execution.workspace;
-    if (!project || project.id !== validated.project_id || project.slug !== validated.project_slug) {
-      throw new ProjectRegistrationStepError("projects_project", "exact_project_readback_mismatch");
-    }
-    createdProject = project;
-    expectedProjectStateDigest = projectStateDigest(project);
-    failedStep = "projects_directory";
-    const directoryAction = execution.prepare.find((action) => action.type === "mkdir");
-    if (!directoryAction || directoryAction.status !== "completed") {
-      throw new ProjectRegistrationStepError("projects_directory", "directory_not_created_by_attempt");
-    }
-    directoryOwnership = captureOwnedDirectoryIdentity(input.target);
-    const directoryIdentityDigest = sha256(canonicalJson({
-      target_path_digest: input.target.digest,
-      ...directoryOwnership,
-    }));
-    const directoryRequestDigest = sha256(canonicalJson({
-      project_id: project.id,
-      target_path_digest: input.target.digest,
-    }));
-    const directoryPreconditionDigest = sha256(canonicalJson({
-      expected: "absent",
-      target_path_digest: input.target.digest,
-    }));
-    const directoryKey = deriveProjectRegistrationIdempotencyKey({
-      operation_id: input.operation_id,
-      step_id: "projects_directory",
-      direction: "forward",
-      target_selector: project.id,
-      request_digest: directoryRequestDigest,
-      precondition_digest: directoryPreconditionDigest,
-    });
-    directoryReceipt = appendRegistrationReceipt({
-      operation_id: input.operation_id,
-      step_id: "projects_directory",
-      authority: "projects-files",
-      resource_kind: "directory",
-      direction: "forward",
-      idempotency_key: directoryKey,
-      target_id: project.id,
-      request_digest: directoryRequestDigest,
-      precondition_digest: directoryPreconditionDigest,
-      outcome: "accepted",
-      result_revision: `${directoryOwnership.dev}:${directoryOwnership.ino}`,
-      result_digest: directoryIdentityDigest,
-      artifacts: [{
+      project = execution.workspace;
+      if (!project || project.id !== validated.project_id || project.slug !== validated.project_slug) {
+        throw new ProjectRegistrationStepError("projects_project", "exact_project_readback_mismatch");
+      }
+      createdProject = project;
+      expectedProjectStateDigest = projectStateDigest(project);
+      failedStep = "projects_directory";
+      const directoryAction = execution.prepare.find((action) => action.type === "mkdir");
+      if (!directoryAction || directoryAction.status !== "completed") {
+        throw new ProjectRegistrationStepError("projects_directory", "directory_not_created_by_attempt");
+      }
+      directoryOwnership = captureOwnedDirectoryIdentity(input.target);
+      const directoryIdentityDigest = sha256(canonicalJson({
+        target_path_digest: input.target.digest,
+        ...directoryOwnership,
+      }));
+      const directoryRequestDigest = sha256(canonicalJson({
+        project_id: project.id,
+        target_path_digest: input.target.digest,
+      }));
+      const directoryPreconditionDigest = sha256(canonicalJson({
+        expected: "absent",
+        target_path_digest: input.target.digest,
+      }));
+      const directoryKey = deriveProjectRegistrationIdempotencyKey({
+        operation_id: input.operation_id,
+        step_id: "projects_directory",
+        direction: "forward",
+        target_selector: project.id,
+        request_digest: directoryRequestDigest,
+        precondition_digest: directoryPreconditionDigest,
+      });
+      directoryReceipt = appendRegistrationReceipt({
+        operation_id: input.operation_id,
+        step_id: "projects_directory",
         authority: "projects-files",
-        kind: "project_directory",
-        project_id: project.id,
-        target_path_digest: input.target.digest,
-        directory_identity_digest: directoryIdentityDigest,
-      }],
-      preconditions: [{
-        predicate: "expected_absent",
-        target_path_digest: input.target.digest,
-      }],
-      rollback: [{
-        action: "remove_empty_directory",
-        project_id: project.id,
-        target_path_digest: input.target.digest,
-        expected_dev: directoryOwnership.dev,
-        expected_ino: directoryOwnership.ino,
-      }],
-    }, db);
+        resource_kind: "directory",
+        direction: "forward",
+        idempotency_key: directoryKey,
+        target_id: project.id,
+        request_digest: directoryRequestDigest,
+        precondition_digest: directoryPreconditionDigest,
+        outcome: "accepted",
+        result_revision: `${directoryOwnership.dev}:${directoryOwnership.ino}`,
+        result_digest: directoryIdentityDigest,
+        artifacts: [{
+          authority: "projects-files",
+          kind: "project_directory",
+          project_id: project.id,
+          target_path_digest: input.target.digest,
+          directory_identity_digest: directoryIdentityDigest,
+        }],
+        preconditions: [{
+          predicate: "expected_absent",
+          target_path_digest: input.target.digest,
+        }],
+        rollback: [{
+          action: "remove_empty_directory",
+          project_id: project.id,
+          target_path_digest: input.target.digest,
+          expected_dev: directoryOwnership.dev,
+          expected_ino: directoryOwnership.ino,
+        }],
+      }, db);
+      directoryCreatedByOperation = true;
+    }
 
     failedStep = "conversations_channel";
     const channel = deriveProjectChannel(project).channel;
@@ -2612,7 +3174,7 @@ export async function registerFullProject(
       todos_task_list_id: todosTaskList.receipt.target_id!,
       mementos_project_id: mementosProject.receipt.target_id!,
     };
-    const integrated = updateProjectIntegrations({
+    const integrated = await updateProjectIntegrations({
       operation_id: input.operation_id,
       project,
       integrations,
@@ -2648,12 +3210,13 @@ export async function registerFullProject(
       ],
       bounds,
       db,
+      store: authorityStore,
     });
     project = integrated.project;
     integrationReceipt = integrated.receipt;
 
     failedStep = "projects_goals";
-    fileAccepted.push(atomicWriteOwnedFile({
+    fileAccepted.push((retrofitProject ? writeOrAdoptOwnedFile : atomicWriteOwnedFile)({
       operation_id: input.operation_id,
       step_id: failedStep,
       filename: PROJECT_REGISTRATION_GOALS_FILENAME,
@@ -2664,13 +3227,14 @@ export async function registerFullProject(
 
     failedStep = "projects_marker";
     const marker = `${JSON.stringify(buildWorkspaceMarker(project), null, 2)}\n`;
-    fileAccepted.push(atomicWriteOwnedFile({
+    fileAccepted.push((retrofitProject ? writeOrAdoptOwnedFile : atomicWriteOwnedFile)({
       operation_id: input.operation_id,
       step_id: failedStep,
       filename: PROJECT_MARKER_FILENAME,
       content: marker,
       project,
       target: input.target,
+      compatible_existing: compatibleWorkspaceMarkerContent,
     }, db));
 
     const artifacts = projectArtifacts(project, externalAccepted, fileAccepted, directoryReceipt);
@@ -2728,6 +3292,15 @@ export async function registerFullProject(
     }
 
     for (const file of fileAccepted.slice().reverse()) {
+      if (!file.created_by_operation) {
+        residualFiles.delete(file);
+        rollback.push({
+          step_id: file.local_receipt.step_id,
+          status: "skipped",
+          reason_code: "adopted_existing_file",
+        });
+        continue;
+      }
       try {
         compensateOwnedFile({
           operation_id: input.operation_id,
@@ -2744,19 +3317,19 @@ export async function registerFullProject(
 
     if (integrationReceipt) {
       try {
-        const restored = rollbackProjectIntegrations({
+        const restored = await rollbackProjectIntegrations({
           operation_id: input.operation_id,
           accepted: integrationReceipt,
           bounds,
           db,
+          store: authorityStore,
         });
-        if (!createdProject) {
-          throw new ProjectRegistrationStepError("projects_project", "creation_state_missing", true);
+        if (createdProject) {
+          expectedProjectStateDigest = projectStateDigest({
+            ...createdProject,
+            updated_at: restored.project.updated_at,
+          });
         }
-        expectedProjectStateDigest = projectStateDigest({
-          ...createdProject,
-          updated_at: restored.project.updated_at,
-        });
         rollback.push({ step_id: "projects_integrations", status: "completed" });
       } catch {
         rollback.push({ step_id: "projects_integrations", status: "failed", reason_code: "integration_inverse_failed" });
@@ -2792,8 +3365,18 @@ export async function registerFullProject(
        ORDER BY sequence ASC LIMIT 1`,
     ).get(input.operation_id) as ProjectRegistrationReceiptRow | null;
     const createdProjectReceipt = createdProjectRow ? rowToReceipt(createdProjectRow) : null;
-    if (createdProjectReceipt) {
-      const current = getWorkspace(validated.project_id, db);
+    const projectCleanupContract = createdProjectReceipt?.rollback[0] as {
+      action?: string;
+      expected_state_digest?: string;
+    } | undefined;
+    if (
+      createdProjectReceipt
+      && (
+        projectCleanupContract?.action === "cleanup_creation_plan_if_state_digest_matches"
+        || projectCleanupContract?.action === "delete_store_project_if_state_digest_matches"
+      )
+    ) {
+      const current = await readRegistrationProject(validated.project_id, db, authorityStore);
       if (current && current.slug === validated.project_slug) {
         const expectedStateDigest = expectedProjectStateDigest
           ?? String(createdProjectReceipt.rollback[0]?.expected_state_digest ?? "");
@@ -2802,17 +3385,38 @@ export async function registerFullProject(
             if (directoryOwnership) {
               assertOwnedDirectorySafeToRemove(input.target, directoryOwnership);
             }
-            const cleanup = cleanupWorkspaceCreation(creationPlan, {
-              db,
-              agentId: input.project.agent_id,
-              source: input.project.source ?? "cli",
-              command: input.project.command,
-              recordDeletionEvent: false,
-              recordCleanupEvent: false,
-            });
-            const projectAbsent = getWorkspace(validated.project_id, db) === null;
+            let actionCount = 0;
+            let errorCount = 0;
+            if (authorityStore) {
+              if (directoryOwnership && directoryCreatedByOperation) {
+                assertOwnedDirectorySafeToRemove(input.target, directoryOwnership);
+                input.target.withOwnedPath((path) => rmdirSync(path));
+                actionCount += 1;
+              }
+              await authorityStore.deleteProject(current.id, { hard: true }, {
+                agentId: input.project.agent_id,
+                source: input.project.source ?? "cli",
+                command: input.project.command,
+              });
+              actionCount += 1;
+            } else {
+              if (!creationPlan) {
+                throw new ProjectRegistrationStepError("projects_project", "creation_plan_missing", true);
+              }
+              const cleanup = cleanupWorkspaceCreation(creationPlan, {
+                db,
+                agentId: input.project.agent_id,
+                source: input.project.source ?? "cli",
+                command: input.project.command,
+                recordDeletionEvent: false,
+                recordCleanupEvent: false,
+              });
+              actionCount = cleanup.actions.length;
+              errorCount = cleanup.errors.length;
+            }
+            const projectAbsent = await readRegistrationProject(validated.project_id, db, authorityStore) === null;
             const directoryAbsent = !directoryOwnership || input.target.withOwnedPath((path) => !existsSync(path));
-            if (!cleanup.success || !projectAbsent || !directoryAbsent) {
+            if (errorCount > 0 || !projectAbsent || !directoryAbsent) {
               throw new ProjectRegistrationStepError(
                 "projects_project",
                 "creation_cleanup_exact_readback_failed",
@@ -2874,8 +3478,8 @@ export async function registerFullProject(
             rollback.push({
               step_id: "projects_project",
               status: "completed",
-              action_count: cleanup.actions.length,
-              error_count: cleanup.errors.length,
+              action_count: actionCount,
+              error_count: errorCount,
               inverse_receipt_id: inverse.receipt_id,
             });
           } catch (cleanupError) {
@@ -2905,12 +3509,43 @@ export async function registerFullProject(
       } else {
         rollback.push({ step_id: "projects_project", status: "skipped", reason_code: "project_already_absent" });
       }
-    } else if (directoryReceipt) {
-      rollback.push({ step_id: "projects_directory", status: "failed", reason_code: "orphan_directory_receipt" });
+    } else if (!createdProjectReceipt && createdProject && authorityStore) {
+      try {
+        const current = await authorityStore.getProject(createdProject.id);
+        if (!current || projectStateDigest(current) !== expectedProjectStateDigest) {
+          throw new ProjectRegistrationStepError("projects_project", "orphan_store_project_drift", true);
+        }
+        if (directoryOwnership && directoryCreatedByOperation) {
+          assertOwnedDirectorySafeToRemove(input.target, directoryOwnership);
+          input.target.withOwnedPath((path) => rmdirSync(path));
+          residualDirectoryReceipt = null;
+        }
+        await authorityStore.deleteProject(current.id, { hard: true }, {
+          agentId: input.project.agent_id,
+          source: input.project.source ?? "cli",
+          command: input.project.command,
+        });
+        if (await authorityStore.getProject(current.id)) {
+          throw new ProjectRegistrationStepError("projects_project", "orphan_store_project_cleanup_failed", true);
+        }
+        rollback.push({ step_id: "projects_project", status: "completed", action_count: 1, error_count: 0 });
+      } catch {
+        rollback.push({ step_id: "projects_project", status: "failed", reason_code: "orphan_store_project_cleanup_failed" });
+      }
+    } else if (directoryReceipt && directoryCreatedByOperation) {
+      try {
+        if (!directoryOwnership) throw new Error("directory ownership missing");
+        assertOwnedDirectorySafeToRemove(input.target, directoryOwnership);
+        input.target.withOwnedPath((path) => rmdirSync(path));
+        residualDirectoryReceipt = null;
+        rollback.push({ step_id: "projects_directory", status: "completed" });
+      } catch {
+        rollback.push({ step_id: "projects_directory", status: "failed", reason_code: "orphan_directory_cleanup_failed" });
+      }
     }
 
     const rollbackFailed = rollback.some((item) => item.status === "failed");
-    const remainingProject = getWorkspace(validated.project_id, db);
+    const remainingProject = await readRegistrationProject(validated.project_id, db, authorityStore);
     const artifacts = projectArtifacts(
       remainingProject,
       [...residualExternal],

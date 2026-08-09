@@ -318,6 +318,21 @@ export function projectResourceLinkIntegrationProjection(
   return projected;
 }
 
+export function normalizeProjectResourceLinkIntegrations(value: unknown): WorkspaceIntegrations | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("resource link integrations must be an object");
+  }
+  const integrations: WorkspaceIntegrations = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (!key.trim() || typeof item !== "string" || !item.trim()) {
+      throw new Error("resource link integration keys and values must be non-empty strings");
+    }
+    integrations[key] = item;
+  }
+  return integrations;
+}
+
 export function projectResourceLinkSnapshot(project: Workspace, links: ProjectResourceLink[]): ProjectResourceLinkSnapshot {
   return {
     project,

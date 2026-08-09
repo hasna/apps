@@ -27,6 +27,7 @@ import {
 } from "../lib/guarded-project-mutation.js";
 import {
   normalizeProjectResourceLinks,
+  normalizeProjectResourceLinkIntegrations,
   PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS,
   projectResourceLinkId,
   projectResourceLinkIntegrationProjection,
@@ -911,7 +912,9 @@ export class ProjectsPgStore {
 
   async mutateProjectResourceLinks(input: ProjectResourceLinkMutationRequest): Promise<ProjectResourceLinkMutationResult> {
     return this.inTransaction("project resource link mutation", (store) =>
-      store.mutateProjectResourceLinksInCurrentTransaction(input));
+      store.mutateProjectResourceLinksInCurrentTransaction(input, {
+        forced_integrations: input.integrations,
+      }));
   }
 
   private async mutateProjectResourceLinksInCurrentTransaction(
@@ -934,8 +937,12 @@ export class ProjectsPgStore {
       throw new ValidationError("project resource link max_items must be a positive integer");
     }
     let normalized: ProjectResourceLinkInput[];
+    let forcedIntegrations: WorkspaceIntegrations | undefined;
     try {
       normalized = normalizeProjectResourceLinks(input.links);
+      forcedIntegrations = normalizeProjectResourceLinkIntegrations(
+        options.forced_integrations ?? input.integrations,
+      );
     } catch (err) {
       throw new ValidationError(err instanceof Error ? err.message : String(err));
     }
@@ -943,7 +950,11 @@ export class ProjectsPgStore {
       throw new ValidationError(`project resource link request exceeds max_items: ${normalized.length} > ${maxItems}`);
     }
     const direction = options.direction ?? "forward";
-    const reqDigest = sha256(canonicalJson({ mode: input.mode, links: normalized }));
+    const reqDigest = sha256(canonicalJson({
+      mode: input.mode,
+      links: normalized,
+      integrations: forcedIntegrations ?? null,
+    }));
     const preDigest = preconditionDigest({ project_id: input.project_id, expected_revision: input.expected_revision });
     const idempotencyKey = deriveGuardedIdempotencyKey({
       operation_id: input.operation_id,
@@ -1093,7 +1104,7 @@ export class ProjectsPgStore {
     if (desired.length > maxItems) {
       throw new ValidationError(`project resource link collection exceeds max_items: ${desired.length} > ${maxItems}`);
     }
-    const integrations = options.forced_integrations
+    const integrations = forcedIntegrations
       ?? projectResourceLinkIntegrationProjection(beforeProject.integrations, beforeLinks, desired);
     const preview = projectResourceLinkSnapshot({ ...beforeProject, integrations }, desired);
     if (input.dry_run) {
