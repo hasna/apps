@@ -24,6 +24,8 @@ export type {
   TaskComment as TodosV1TaskComment,
   CreateTaskInput as TodosV1CreateTaskInput,
   UpdateTaskInput as TodosV1UpdateTaskInput,
+  FailTaskInput as TodosV1FailTaskInput,
+  TaskFailureResult as TodosV1TaskFailureResult,
   CreateProjectInput as TodosV1CreateProjectInput,
   ProjectTaskListEnsureApplyInput as TodosV1ProjectTaskListEnsureApplyInput,
   ProjectTaskListRollbackInput as TodosV1ProjectTaskListRollbackInput,

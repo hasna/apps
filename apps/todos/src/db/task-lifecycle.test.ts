@@ -147,6 +147,8 @@ describe("completeTask/failTask — optimistic guard (M4)", () => {
     expect(task.version).toBe(fresh.version);
     expect(task.version).toBe(before.version + 1);
     expect(task.locked_by).toBeNull();
+    expect(task.reason).toBe("boom");
+    expect(fresh.reason).toBe("boom");
   });
 });
 

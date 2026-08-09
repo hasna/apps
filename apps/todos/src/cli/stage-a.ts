@@ -122,7 +122,7 @@ const REMOTE_COMMANDS = new Set([
   // on the /v1 route is refused outright — the state `dispatch` is in today.
   // Shipping the replacement for abandoned dispatch in that state would make it
   // dead on exactly the fleet it was built for. Covered by delegate-routing.test.ts.
-  "active", "add", "agent", "agents", "approve", "assign", "bulk", "claim", "comment", "count", "delegate", "delete", "deps",
+  "active", "add", "agent", "agents", "approve", "assign", "bulk", "claim", "comment", "count", "delegate", "delete", "deps", "fail",
   "doctor", "done", "find-commit", "find-ref", "health", "heartbeat", "history", "init", "inspect", "link-commit",
   "link-ref", "list", "lists", "lock", "log-progress", "move", "next", "plans", "project-rename", "projects", "recap",
   "record-verification", "release", "remove", "show", "standup", "start", "status", "tag", "task", "task-lists",

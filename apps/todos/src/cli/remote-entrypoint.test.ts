@@ -37,7 +37,7 @@ const REPO_ROOT = join(import.meta.dir, "../..");
  * An exact count fails loudly the moment a command is reclassified in either
  * direction, forcing a deliberate update here instead of silent erosion.
  */
-const EXPECTED_LOCAL_ONLY_COMMANDS = 116;
+const EXPECTED_LOCAL_ONLY_COMMANDS = 115;
 
 /**
  * Budget for the Stage-A sweep, derived from the matrix that drives its workload
@@ -189,6 +189,66 @@ describe("remote CLI entrypoint authority boundary", () => {
     expect([...matrix.keys()].sort()).toEqual(registered);
     expect([...matrix.values()].filter((owner) => owner === "local-only").length).toBe(EXPECTED_LOCAL_ONLY_COMMANDS);
     expect([...matrix.values()].every((owner) => ["diagnostic", "remote-http", "local-only"].includes(owner))).toBe(true);
+  });
+
+  test("built fail helper uses /v1 with reason and retry without opening SQLite", async () => {
+    const requests: Array<{ method: string; path: string; body: unknown }> = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        const body = await request.json().catch(() => ({}));
+        requests.push({ method: request.method, path: url.pathname, body });
+        if (url.pathname === `/v1/tasks/${TASK_FIXTURE_ID}/fail` && request.method === "POST") {
+          return Response.json({
+            result: {
+              task: { id: TASK_FIXTURE_ID, short_id: "T-FAIL", title: "Remote fail", status: "failed", reason: "remote reason" },
+              retryTask: { id: OTHER_TASK_FIXTURE_ID, short_id: "T-RETRY", title: "Remote retry", status: "pending" },
+            },
+          });
+        }
+        return Response.json({ error: "fixture route missing" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-fail-route-"));
+    tempRoots.push(root);
+    const cwd = join(root, "cwd");
+    const home = join(root, "home");
+    mkdirSync(cwd);
+    mkdirSync(home);
+    const localDbPath = join(root, "must-not-exist", "todos.db");
+    const env = {
+      PATH: process.env.PATH ?? "",
+      BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
+      HOME: home,
+      TMPDIR: root,
+      LANG: "C.UTF-8",
+      TODOS_DB_PATH: localDbPath,
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
+      HASNA_TODOS_API_KEY: "fixture-remote-key",
+    };
+    const before = recursiveInventory(cwd);
+    try {
+      const result = await runCli(executable, [
+        "--agent", "nausicaa", "--json", "fail", TASK_FIXTURE_ID, "--reason", "remote reason", "--retry",
+      ], env, cwd);
+      expect({ exitCode: result.exitCode, stderr: result.stderr }).toEqual({ exitCode: 0, stderr: "" });
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        task: { id: TASK_FIXTURE_ID, status: "failed", reason: "remote reason" },
+        retryTask: { id: OTHER_TASK_FIXTURE_ID, status: "pending" },
+      });
+      expect(requests).toEqual([{
+        method: "POST",
+        path: `/v1/tasks/${TASK_FIXTURE_ID}/fail`,
+        body: { agent_id: "nausicaa", reason: "remote reason", retry: true },
+      }]);
+      expect(recursiveInventory(cwd)).toEqual(before);
+      expectNoLocalDatabase(home, localDbPath);
+    } finally {
+      server.stop(true);
+    }
   });
 
   test("selects HTTP before local-capable command modules initialize", () => {

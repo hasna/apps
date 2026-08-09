@@ -83,6 +83,7 @@ import {
   cloudListProjects,
   cloudListPlans,
   cloudListTaskLists,
+  cloudFailTask,
 } from "../cloud-router.js";
 import {
   buildRemoteIntegrityReport,
@@ -586,10 +587,20 @@ export function registerQueryCommands(program: Command) {
     .action(async (id, opts) => {
       const globalOpts = program.opts();
       const json = opts.json || globalOpts.json;
-      const db = getDatabase();
-      const resolvedId = resolvePartialId(db, "tasks", id);
-      if (!resolvedId) { handleError(new Error(`Task not found: ${id}`)); }
-      const result = failTask(resolvedId, opts.agent, opts.reason, { retry: opts.retry }, db);
+      const agentId = opts.agent || globalOpts.agent;
+      const cloud = getTodosCloudClient();
+      const result = cloud
+        ? await cloudFailTask(cloud, await resolveTaskIdForCommand(id, cloud), {
+          ...(agentId ? { agent_id: agentId } : {}),
+          ...(opts.reason !== undefined ? { reason: opts.reason } : {}),
+          ...(opts.retry ? { retry: true } : {}),
+        })
+        : (() => {
+          const db = getDatabase();
+          const resolvedId = resolvePartialId(db, "tasks", id);
+          if (!resolvedId) { handleError(new Error(`Task not found: ${id}`)); }
+          return failTask(resolvedId, agentId, opts.reason, { retry: opts.retry }, db);
+        })();
       if (json) { console.log(JSON.stringify(result, null, 2)); return; }
       console.log(chalk.red(`Failed: ${result.task.short_id || result.task.id.slice(0, 8)} | ${result.task.title}`));
       if (opts.reason) console.log(chalk.dim(`Reason: ${opts.reason}`));

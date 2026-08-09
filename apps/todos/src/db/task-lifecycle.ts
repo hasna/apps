@@ -601,9 +601,9 @@ export function failTask(
   // metadata read-modify-write and the status write happen atomically.
   const failTx = d.transaction(() => {
     const res = d.run(
-      `UPDATE tasks SET status = 'failed', locked_by = NULL, locked_at = NULL, metadata = ?, version = version + 1, updated_at = ?
+      `UPDATE tasks SET status = 'failed', reason = ?, locked_by = NULL, locked_at = NULL, metadata = ?, version = version + 1, updated_at = ?
        WHERE id = ? AND version = ?`,
-      [JSON.stringify(safeMeta), timestamp, id, task.version],
+      [safeReason, JSON.stringify(safeMeta), timestamp, id, task.version],
     );
     if (res.changes === 0) {
       const current = getTask(id, d);
@@ -617,6 +617,7 @@ export function failTask(
     status: "failed" as const,
     locked_by: null,
     locked_at: null,
+    reason: safeReason,
     metadata: safeMeta,
     version: task.version + 1,
     updated_at: timestamp,

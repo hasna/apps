@@ -175,6 +175,42 @@ function validateTaskCompletion(value: unknown):
   };
 }
 
+function validateTaskFailure(value: unknown):
+  | { ok: true; agentId?: string; reason: string; retry: boolean }
+  | { ok: false; message: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, message: "failure body must be an object" };
+  const body = value as Record<string, unknown>;
+  const allowed = new Set(["agent_id", "reason", "retry"]);
+  const unknown = Object.keys(body).find((key) => !allowed.has(key));
+  if (unknown) return { ok: false, message: `unknown failure field: ${unknown}` };
+  if (body.agent_id !== undefined && (typeof body.agent_id !== "string" || !body.agent_id.trim())) {
+    return { ok: false, message: "agent_id must be a non-empty string" };
+  }
+  if (body.reason !== undefined && typeof body.reason !== "string") return { ok: false, message: "reason must be a string" };
+  if (body.retry !== undefined && typeof body.retry !== "boolean") return { ok: false, message: "retry must be a boolean" };
+  return {
+    ok: true,
+    ...(typeof body.agent_id === "string" ? { agentId: body.agent_id } : {}),
+    reason: typeof body.reason === "string" && body.reason ? body.reason : "Unknown failure",
+    retry: body.retry === true,
+  };
+}
+
+function validateTaskPatchVocabulary(value: unknown):
+  | { ok: true; patch: Partial<UpdateTaskInput> }
+  | { ok: false; message: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, message: "task patch must be an object" };
+  const body = value as Record<string, unknown>;
+  for (const [name, vocabulary] of [["status", TASK_STATUSES], ["priority", TASK_PRIORITIES]] as const) {
+    const raw = body[name];
+    if (raw === undefined) continue;
+    if (typeof raw !== "string") return { ok: false, message: `${name} must be a string. Allowed values: ${vocabulary.join(", ")}.` };
+    const parsed = resolveEnumVocabulary(raw, { name, vocabulary, allowList: false });
+    if (!parsed.ok) return { ok: false, message: parsed.message };
+  }
+  return { ok: true, patch: body as Partial<UpdateTaskInput> };
+}
+
 function validateProjectPatch(value: unknown):
   | { ok: true; patch: Partial<Pick<CreateProjectInput, "name" | "path" | "description">> }
   | { ok: false; message: string } {
@@ -983,7 +1019,17 @@ export async function handleV1Request(
           });
         }
         if (action === "fail" && method === "POST") {
-          return json({ result: await store.tasks.fail(id, agentId, typeof body.reason === "string" ? body.reason : "failed", {}) });
+          const parsed = validateTaskFailure(actionJson.value);
+          if (!parsed.ok) return error(400, parsed.message);
+          return json({
+            result: await store.tasks.fail(
+              id,
+              parsed.agentId || principal.agent || "todos-serve",
+              parsed.reason,
+              { retry: parsed.retry },
+              contextFromPrincipal(principal, body),
+            ),
+          });
         }
         if (action === "claim" && method === "POST") {
           return json({ task: await store.tasks.claimNext(agentId, {}) });
@@ -1015,8 +1061,11 @@ export async function handleV1Request(
         return task ? json({ task }) : error(404, "task not found");
       }
       if (method === "PATCH" || method === "PUT") {
-        const body = await readJson<UpdateTaskInput>(req);
-        if (!body) return error(400, "invalid JSON body");
+        const rawBody = await readJson<unknown>(req);
+        if (!rawBody) return error(400, "invalid JSON body");
+        const validated = validateTaskPatchVocabulary(rawBody);
+        if (!validated.ok) return error(400, validated.message);
+        const body = validated.patch;
         const current = await store.tasks.get(id);
         if (!current) return error(404, "task not found");
         // Optimistic concurrency: honor a client-supplied version, else default
