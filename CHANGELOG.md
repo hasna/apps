@@ -6,6 +6,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.115]
+
+### Fixed
+
+- Guarded project updates now accept `kind`, `primary_path`, and `git_remote`
+  through the CLI, return the final SQLite primary-location postimage and
+  revision, and preserve those identity fields through guarded rollback.
+
 ## [0.1.114]
 
 ### Fixed

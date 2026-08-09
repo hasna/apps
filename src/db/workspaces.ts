@@ -1013,7 +1013,7 @@ export function updateWorkspace(id: string, input: UpdateWorkspaceInput, db?: Da
     d.run(`UPDATE workspaces SET ${updates.join(", ")} WHERE id = ?`, params);
   }
 
-  const after = getWorkspace(id, d)!;
+  let after = getWorkspace(id, d)!;
   if (input.primary_path !== undefined && input.primary_path) {
     addWorkspaceLocation({
       workspace_id: id,
@@ -1023,6 +1023,7 @@ export function updateWorkspace(id: string, input: UpdateWorkspaceInput, db?: Da
       is_primary: true,
       metadata: {},
     }, d);
+    after = getWorkspace(id, d)!;
   }
 
   recordWorkspaceEvent({
@@ -2061,7 +2062,11 @@ export function addWorkspaceLocation(input: AddWorkspaceLocationInput, db?: Data
   );
 
   if (input.is_primary) {
-    d.run("UPDATE workspaces SET primary_path = ?, updated_at = ? WHERE id = ?", [path, now(), input.workspace_id]);
+    d.run("UPDATE workspaces SET primary_path = ?, updated_at = ? WHERE id = ?", [
+      path,
+      nextWorkspaceRevision(workspace.updated_at),
+      input.workspace_id,
+    ]);
   }
 
   const row = d

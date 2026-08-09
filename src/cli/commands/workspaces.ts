@@ -2655,6 +2655,10 @@ function registerProjectCommands(program: Command): void {
     .option("--name <name>", "Project name")
     .option("--slug <slug>", "Project slug")
     .option("--description <text>", "Description")
+    .option("--kind <kind>", `Project kind (${WORKSPACE_KINDS.join(", ")})`)
+    .option("--path <path>", "Primary path (alias for --primary-path)")
+    .option("--primary-path <path>", "Primary path (alias for --path)")
+    .option("--git-remote <url>", "Git remote URL")
     .option("--metadata-json <json>", "Replace metadata with a JSON object")
     .option("--integrations-json <json>", "Replace integrations with a JSON object")
     .requiredOption("--expected-revision <revision>", "Fresh project updated_at revision from an exact-id read")
@@ -2667,10 +2671,18 @@ function registerProjectCommands(program: Command): void {
     .option("-j, --json", "Output JSON")
     .action(async (projectId, opts) => {
       try {
+        const path = opts.path ? resolve(opts.path) : undefined;
+        const primaryPath = opts.primaryPath ? resolve(opts.primaryPath) : undefined;
+        if (path !== undefined && primaryPath !== undefined && path !== primaryPath) {
+          throw new Error("--path and --primary-path must resolve to the same path when both are provided");
+        }
         const patch = {
           name: opts.name,
           slug: opts.slug,
           description: opts.description,
+          kind: parseKind(opts.kind),
+          primary_path: primaryPath ?? path,
+          git_remote: opts.gitRemote,
           metadata: parseJsonObject(opts.metadataJson, "--metadata-json"),
           integrations: parseIntegrationsJson(opts.integrationsJson),
         };
