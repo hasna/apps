@@ -11,6 +11,7 @@ import {
   createSqliteTodosTaskManifestAuthority,
   parseTodosTaskManifest,
   parseTodosTaskManifestCompensation,
+  supportsIdempotentOutboxDelivery,
   type TodosTaskManifest,
 } from "./index.js";
 
@@ -138,6 +139,88 @@ describe("task-manifest SQLite authority", () => {
     expect(db.query("SELECT count(*) AS count FROM todos_task_manifest_outbox").get()).toEqual({ count: 2 });
     expect(() => db.run("UPDATE todos_task_manifest_receipts SET result_digest = 'changed'"))
       .toThrow(/immutable/);
+  });
+
+  test("advertises retry-safe outbox delivery without changing task-manifest schema v1", async () => {
+    const authority = createSqliteTodosTaskManifestAuthority({ database: db });
+    const capability = await authority.capability();
+    expect(capability).toMatchObject({
+      route: TODOS_TASK_MANIFEST_ROUTE,
+      schema_version: 1,
+      idempotent_outbox_delivery: true,
+    });
+    expect(supportsIdempotentOutboxDelivery(capability)).toBe(true);
+    expect(supportsIdempotentOutboxDelivery({
+      ...capability,
+      idempotent_outbox_delivery: false,
+    })).toBe(false);
+    const {
+      idempotent_outbox_delivery: _idempotentOutboxDelivery,
+      ...legacyCapability
+    } = capability;
+    expect(supportsIdempotentOutboxDelivery(legacyCapability)).toBe(false);
+  });
+
+  test("retries the first delivered row before acknowledging the second without weakening integrity", async () => {
+    const timestamps = [
+      "2026-08-07T00:00:00.000Z",
+      "2026-08-07T00:01:00.000Z",
+      "2026-08-07T00:02:00.000Z",
+      "2026-08-07T00:03:00.000Z",
+      "2026-08-07T00:04:00.000Z",
+      "2026-08-07T00:05:00.000Z",
+    ];
+    let timestampIndex = 0;
+    const authority = createSqliteTodosTaskManifestAuthority({
+      database: db,
+      tenantId: TENANT_ID,
+      now: () => timestamps[timestampIndex++] ?? "2026-08-07T00:06:00.000Z",
+    });
+    const applied = await authority.apply(manifest("partial-delivery-retry"));
+    const firstOutboxId = applied.outbox_ids[0]!;
+    const secondOutboxId = applied.outbox_ids[1]!;
+
+    await authority.markOutboxDelivered(firstOutboxId);
+    const firstDelivery = db.query(
+      "SELECT status, attempts, delivered_at FROM todos_task_manifest_outbox WHERE id = ?",
+    ).get(firstOutboxId);
+
+    await authority.markOutboxDelivered(firstOutboxId);
+    expect(db.query(
+      "SELECT status, attempts, delivered_at FROM todos_task_manifest_outbox WHERE id = ?",
+    ).get(firstOutboxId)).toEqual(firstDelivery);
+
+    await authority.markOutboxDelivered(secondOutboxId);
+    expect(db.query(
+      "SELECT status, attempts FROM todos_task_manifest_outbox WHERE id IN (?, ?) ORDER BY id",
+    ).all(firstOutboxId, secondOutboxId)).toEqual([
+      { status: "delivered", attempts: 1 },
+      { status: "delivered", attempts: 1 },
+    ]);
+
+    const wrongTenantAuthority = createSqliteTodosTaskManifestAuthority({
+      database: db,
+      tenantId: "another-tenant",
+    });
+    await expect(wrongTenantAuthority.markOutboxDelivered(firstOutboxId))
+      .rejects.toEqual(expect.objectContaining<TodosTaskManifestError>({
+        code: "TODOS_TASK_MANIFEST_GRAPH_CONFLICT",
+      }));
+    await expect(authority.markOutboxDelivered(crypto.randomUUID()))
+      .rejects.toEqual(expect.objectContaining<TodosTaskManifestError>({
+        code: "TODOS_TASK_MANIFEST_GRAPH_CONFLICT",
+      }));
+
+    const cancelled = await authority.apply(manifest("cancelled-delivery-retry"));
+    await authority.compensate({
+      receipt_id: cancelled.receipt.receipt_id,
+      idempotency_key: "cancelled-delivery-retry:compensate",
+      if_binding_version: cancelled.receipt.binding_version,
+    });
+    await expect(authority.markOutboxDelivered(cancelled.outbox_ids[0]!))
+      .rejects.toEqual(expect.objectContaining<TodosTaskManifestError>({
+        code: "TODOS_TASK_MANIFEST_GRAPH_CONFLICT",
+      }));
   });
 
   test("recovers one exact managed binding by plan id without returning manifest or request content", async () => {

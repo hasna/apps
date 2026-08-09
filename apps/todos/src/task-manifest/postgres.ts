@@ -310,9 +310,29 @@ export class PostgresTodosTaskManifestBackend implements TodosTaskManifestBacken
             SELECT 1 FROM todos_task_manifest_receipts r
             WHERE r.receipt_id = todos_task_manifest_outbox.apply_receipt_id
               AND r.tenant_id = $3
+              AND r.authority = 'todos'
+              AND r.route = 'todos.task-manifest.v1'
+              AND r.schema_version = 1
+              AND r.kind = 'apply'
           )
         RETURNING id`, [deliveredAt, outboxId, this.tenantId]);
-      if (!result.rows[0]) throw new TodosTaskManifestError("TODOS_TASK_MANIFEST_GRAPH_CONFLICT", `Pending outbox row not found: ${outboxId}`);
+      if (result.rows[0]) return;
+      const existing = await tx.query<{ status: unknown }>(
+        `SELECT o.status
+         FROM todos_task_manifest_outbox o
+         JOIN todos_task_manifest_receipts r
+           ON r.receipt_id = o.apply_receipt_id
+         WHERE r.tenant_id = $1
+           AND r.authority = 'todos'
+           AND r.route = 'todos.task-manifest.v1'
+           AND r.schema_version = 1
+           AND r.kind = 'apply'
+           AND o.id = $2
+         LIMIT 1`,
+        [this.tenantId, outboxId],
+      );
+      if (existing.rows[0]?.status === "delivered") return;
+      throw new TodosTaskManifestError("TODOS_TASK_MANIFEST_GRAPH_CONFLICT", `Pending outbox row not found: ${outboxId}`);
     });
   }
 

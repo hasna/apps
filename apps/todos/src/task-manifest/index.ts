@@ -22,5 +22,6 @@ export {
   TODOS_TASK_MANIFEST_ROUTE,
   TODOS_TASK_MANIFEST_SCHEMA_VERSION,
   TodosTaskManifestError,
+  supportsIdempotentOutboxDelivery,
 } from "./types.js";
 export type * from "./types.js";

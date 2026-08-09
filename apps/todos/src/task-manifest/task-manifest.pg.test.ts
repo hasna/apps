@@ -93,6 +93,18 @@ describe.skipIf(!PG_URL)("task-manifest PostgreSQL authority", () => {
     expect(first.readback).toEqual({ plans: 1, tasks: 2, dependencies: 1, comments: 1, verifications: 1, complete: true });
 
     await authority.markOutboxDelivered(first.outbox_ids[0]!);
+    await authority.markOutboxDelivered(first.outbox_ids[0]!);
+    await authority.markOutboxDelivered(first.outbox_ids[1]!);
+    const deliveredRows = await client!.query<{ id: string; status: string; attempts: number }>(
+      `SELECT id, status, attempts FROM todos_task_manifest_outbox
+       WHERE id IN ($1, $2)
+       ORDER BY id`,
+      [first.outbox_ids[0]!, first.outbox_ids[1]!],
+    );
+    expect(deliveredRows.rows).toEqual([
+      { id: [...first.outbox_ids].sort()[0]!, status: "delivered", attempts: 1 },
+      { id: [...first.outbox_ids].sort()[1]!, status: "delivered", attempts: 1 },
+    ]);
     await expect(authority.compensate({
       receipt_id: first.receipt.receipt_id,
       idempotency_key: `${first.receipt.operation_id}:compensate`,

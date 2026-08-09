@@ -181,6 +181,7 @@ export class PackageOwnedTodosTaskManifestAuthority implements TodosTaskManifest
       deterministic_ids: true,
       immutable_receipts: true,
       transactional_outbox: true,
+      idempotent_outbox_delivery: true,
       exact_bounded_readback: true,
       conditional_compensation: true,
       transcript_safe: false,

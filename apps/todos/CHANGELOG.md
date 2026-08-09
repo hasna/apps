@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.16] - 2026-08-09
+
+### Fixed
+
+- **P1: partial task-manifest outbox delivery is retry-safe.** When a client
+  acknowledged row 1, crashed or lost the response, then resumed the two-row
+  sequence, the repeated row-1 acknowledgement was rejected as a graph
+  conflict and row 2 could never be acknowledged. SQLite and PostgreSQL now
+  treat an exact tenant-scoped row already in `delivered` state as success
+  without changing its first delivery timestamp or attempt count; missing,
+  wrong-tenant, cancelled, or otherwise incompatible rows still fail closed.
+  The unchanged `todos.task-manifest.v1` capability now advertises
+  `idempotent_outbox_delivery: true`, with a runtime guard that distinguishes
+  older authorities where the field is absent or false.
+
 ## [0.15.12] - 2026-08-08
 
 ### Fixed

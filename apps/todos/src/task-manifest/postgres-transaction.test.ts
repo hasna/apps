@@ -49,6 +49,55 @@ describe("task-manifest PostgreSQL transaction contract", () => {
     } as TodosTaskManifestPostgresClient)).toThrow(/transaction\(callback\)/);
   });
 
+  test("treats an exact delivered outbox row as a retry-safe success", async () => {
+    const outboxId = "a0000000-0000-4000-8000-000000000077";
+    let status: "pending" | "delivered" = "pending";
+    let attempts = 0;
+    const transactionQueries: Array<{ sql: string; params?: unknown[] }> = [];
+    const client: TodosTaskManifestPostgresClient = {
+      async query() {
+        return { rows: [] };
+      },
+      async transaction(fn) {
+        return fn({
+          async query(sql, params) {
+            transactionQueries.push({ sql, params });
+            if (/^\s*UPDATE todos_task_manifest_outbox\b/i.test(sql)) {
+              if (params?.[1] === outboxId && params?.[2] === "tenant-postgres-delivery" && status === "pending") {
+                status = "delivered";
+                attempts += 1;
+                return { rows: [{ id: outboxId }] };
+              }
+              return { rows: [] };
+            }
+            if (/^\s*SELECT\b/i.test(sql) && sql.includes("todos_task_manifest_outbox")) {
+              return params?.[0] === "tenant-postgres-delivery" && params?.[1] === outboxId
+                ? { rows: [{ status }] }
+                : { rows: [] };
+            }
+            return { rows: [] };
+          },
+        });
+      },
+    };
+    const authority = createPostgresTodosTaskManifestAuthority(client, {
+      tenantId: "tenant-postgres-delivery",
+      now: () => "2026-08-07T00:00:00.000Z",
+    });
+
+    await authority.markOutboxDelivered(outboxId);
+    await authority.markOutboxDelivered(outboxId);
+
+    expect(status).toBe("delivered");
+    expect(attempts).toBe(1);
+    const retryRead = transactionQueries.find((entry) =>
+      /^\s*SELECT\b/i.test(entry.sql) && entry.sql.includes("todos_task_manifest_outbox")
+    );
+    expect(retryRead?.params).toEqual(["tenant-postgres-delivery", outboxId]);
+    expect(retryRead?.sql).toMatch(/\br\.tenant_id = \$1\b/);
+    expect(retryRead?.sql).toMatch(/\bo\.id = \$2\b/);
+  });
+
   test("uses one parameterized bounded read-only query for exact plan binding recovery", async () => {
     const planId = "a0000000-0000-4000-8000-000000000099";
     const receiptId = "b0000000-0000-4000-8000-000000000099";

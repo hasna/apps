@@ -130,6 +130,7 @@ export interface TodosTaskManifestCapability {
   deterministic_ids: true;
   immutable_receipts: true;
   transactional_outbox: true;
+  idempotent_outbox_delivery: true;
   exact_bounded_readback: true;
   conditional_compensation: true;
   transcript_safe: false;
@@ -144,6 +145,14 @@ export interface TodosTaskManifestCapability {
     request_bytes: number;
     response_bytes: number;
   };
+}
+
+export function supportsIdempotentOutboxDelivery(
+  capability: unknown,
+): boolean {
+  return capability !== null
+    && typeof capability === "object"
+    && (capability as Record<string, unknown>)["idempotent_outbox_delivery"] === true;
 }
 
 export interface TodosTaskManifestBindingLookupRequest {

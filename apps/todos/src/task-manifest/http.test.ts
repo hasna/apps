@@ -8,6 +8,7 @@ import {
   createSqliteTodosTaskManifestAuthority,
   createTodosTaskManifestHttpClient,
   handleTodosTaskManifestHttpRequest,
+  supportsIdempotentOutboxDelivery,
   type TodosTaskManifest,
 } from "./index.js";
 
@@ -22,6 +23,7 @@ function input(): TodosTaskManifest {
     project_id: PROJECT_ID,
     plan: { key: "http", name: "HTTP graph" },
     tasks: [{ key: "one", title: "One" }],
+    effects: [{ topic: "task-manifest.http-test", payload: { phase: "two-row" } }],
   };
 }
 
@@ -48,7 +50,14 @@ describe("task-manifest HTTP authority", () => {
         ?? new Response("not found", { status: 404 });
     };
     const client = createTodosTaskManifestHttpClient({ baseUrl: "https://todos.example.invalid", fetch });
-    expect(await client.capability()).toMatchObject({ backend: "sqlite", transcript_safe: false, exact_bounded_readback: true });
+    const capability = await client.capability();
+    expect(capability).toMatchObject({
+      backend: "sqlite",
+      transcript_safe: false,
+      exact_bounded_readback: true,
+      idempotent_outbox_delivery: true,
+    });
+    expect(supportsIdempotentOutboxDelivery(capability)).toBe(true);
     const applied = await client.apply(input());
     expect(await client.lookupBinding({
       authority: "todos",
@@ -69,6 +78,14 @@ describe("task-manifest HTTP authority", () => {
     });
     expect((await client.readExact(applied.receipt.receipt_id)).graph).toEqual(applied.graph);
     await client.markOutboxDelivered(applied.outbox_ids[0]!);
+    await client.markOutboxDelivered(applied.outbox_ids[0]!);
+    await client.markOutboxDelivered(applied.outbox_ids[1]!);
+    expect(db.query(
+      "SELECT status, attempts FROM todos_task_manifest_outbox WHERE id IN (?, ?) ORDER BY id",
+    ).all(applied.outbox_ids[0]!, applied.outbox_ids[1]!)).toEqual([
+      { status: "delivered", attempts: 1 },
+      { status: "delivered", attempts: 1 },
+    ]);
     await expect(client.compensate({
       receipt_id: applied.receipt.receipt_id,
       idempotency_key: "http-task-manifest-v1:compensate",
