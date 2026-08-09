@@ -6,6 +6,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.118]
+
+### Fixed
+
+- Existing-row retrofit now adopts only authority resources already named by
+  the Projects integration snapshot, proves their exact stable identity and
+  readback, preserves descriptive channel metadata, and never takes rollback
+  ownership of those pre-existing records. Unlinked resources, target-ID
+  mismatches, cross-project channel claims, and readback drift still fail
+  closed.
+
 ## [0.1.117]
 
 ### Fixed

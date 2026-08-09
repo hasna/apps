@@ -353,6 +353,99 @@ describe("production project registration authorities", () => {
     expect(options.conversations?.baseUrl).toBe("https://conversations.example.test");
   });
 
+  test("validates hosted Conversations adoption only for the exact channel and an unclaimed or matching project", async () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-authority-adoption-"));
+    const fakes = memorySet();
+    let channel: Record<string, unknown> | null = {
+      id: "chn_existing",
+      name: "authority-adoption",
+      project_id: null,
+      description: "Preserved project channel",
+      metadata: { class: "project" },
+    };
+    class ConversationsClientFixture {
+      async getProjectChannelRegistrationCapability() {
+        return fakes.conversations.capability();
+      }
+      async getChannel() {
+        return channel;
+      }
+    }
+    const authority = productionProjectRegistrationAuthorities({
+      env: {
+        HASNA_CONVERSATIONS_API_URL: "https://conversations.example.test/v1",
+        HASNA_CONVERSATIONS_API_KEY: "fixture-auth",
+      },
+      importModule: async (specifier) => {
+        if (specifier === "@hasna/conversations/sdk") {
+          return { ConversationsClient: ConversationsClientFixture };
+        }
+        throw new Error(`unexpected fixture import: ${specifier}`);
+      },
+    }).conversations;
+    const request: ProjectRegistrationAuthorityRequest = {
+      operation_id: "op-authority-adoption",
+      step_id: "conversations_channel",
+      resource_kind: "channel",
+      direction: "forward",
+      authority_route: "/v1/project-registration/channels",
+      package_version: "fixture-1.0.0",
+      authority_id: "conversations-fixture",
+      tenant_id: "tenant-fixture",
+      corpus_id: "conversations-corpus",
+      target_selector: "authority-adoption",
+      idempotency_key: "fixture-idempotency-key",
+      request_digest: digest("request"),
+      precondition_digest: digest("precondition"),
+      project_id: "wks_authorityadoption1",
+      project_slug: "authority-adoption",
+      project_name: "Authority Adoption",
+      desired: {
+        channel: "authority-adoption",
+        project_id: "wks_authorityadoption1",
+      },
+      target: ProjectRegistrationPathHandle.fromPath(join(root, "project")),
+      response_byte_limit: 65_536,
+      time_budget_ms: 5_000,
+    };
+    const receipt: ProjectRegistrationAuthorityReceipt = {
+      receipt_id: "receipt_existing",
+      authority: "conversations",
+      route: request.authority_route,
+      package_version: request.package_version,
+      authority_id: request.authority_id,
+      tenant_id: request.tenant_id,
+      corpus_id: request.corpus_id,
+      operation_id: request.operation_id,
+      step_id: request.step_id,
+      resource_kind: request.resource_kind,
+      direction: request.direction,
+      idempotency_key: request.idempotency_key,
+      request_digest: request.request_digest,
+      precondition_digest: request.precondition_digest,
+      outcome: "terminal_nonacceptance",
+      reason: "preexisting_conflict",
+      target_id: "chn_existing",
+      result_revision: digest("revision"),
+      result_digest: digest("record"),
+      duplicate_of_receipt_id: null,
+      accepted_receipt_id: null,
+      created_by_operation: false,
+      created_at: "2026-08-09T12:00:00.000Z",
+    };
+    try {
+      expect(await authority.validateExistingAdoption?.(request, receipt)).toBe(true);
+      channel = { ...channel!, project_id: request.project_id };
+      expect(await authority.validateExistingAdoption?.(request, receipt)).toBe(true);
+      channel = { ...channel!, project_id: "wks_otherproject00001" };
+      expect(await authority.validateExistingAdoption?.(request, receipt)).toBe(false);
+      channel = { ...channel!, project_id: null, id: "chn_other" };
+      expect(await authority.validateExistingAdoption?.(request, receipt)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("runs every shipped local authority and replays exact external IDs", async () => {
     const root = mkdtempSync(join(tmpdir(), "projects-authority-production-"));
     const db = projectDb();
