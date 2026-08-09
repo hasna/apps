@@ -29,6 +29,7 @@ interface AuthorityEndpointConfig {
 }
 
 interface ShippedConversationsClient {
+  getChannel(name: string): Promise<Record<string, unknown> | null>;
   getProjectChannelRegistrationCapability(): Promise<Record<string, unknown>>;
   registerProjectChannel(body: Record<string, unknown>): Promise<Record<string, unknown>>;
   readProjectChannelRegistrationExact(
@@ -222,6 +223,18 @@ class ConversationsSdkAuthority implements ProjectRegistrationAuthorityAdapter {
     );
   }
 
+  async validateExistingAdoption(
+    request: ProjectRegistrationAuthorityRequest,
+    receipt: ProjectRegistrationAuthorityReceipt,
+  ): Promise<boolean> {
+    if (request.resource_kind !== "channel" || typeof request.desired.channel !== "string") return false;
+    const channel = await this.client.getChannel(request.desired.channel);
+    if (!channel) return false;
+    return channel.id === receipt.target_id
+      && channel.name === request.desired.channel
+      && (channel.project_id === null || channel.project_id === request.project_id);
+  }
+
   async compensate(request: ProjectRegistrationAuthorityRequest): Promise<ProjectRegistrationAuthorityReceipt> {
     return selectedResponse(
       this.authority,
@@ -360,6 +373,14 @@ class LazyProjectRegistrationAuthority implements ProjectRegistrationAuthorityAd
     request: ProjectRegistrationAuthorityLookupRequest,
   ): Promise<ProjectRegistrationAuthorityLookupResult> {
     return (await this.resolve()).lookupReceipt(request);
+  }
+
+  async validateExistingAdoption(
+    request: ProjectRegistrationAuthorityRequest,
+    receipt: ProjectRegistrationAuthorityReceipt,
+  ): Promise<boolean> {
+    const delegate = await this.resolve();
+    return delegate.validateExistingAdoption?.(request, receipt) ?? false;
   }
 
   async compensate(request: ProjectRegistrationAuthorityRequest): Promise<ProjectRegistrationAuthorityReceipt> {
