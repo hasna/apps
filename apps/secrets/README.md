@@ -37,6 +37,19 @@ process's environment):
 secrets exec example/anthropic/test/api_key --as ANTHROPIC_API_KEY -- my-tool sync
 ```
 
+Consume an AWS Secrets Manager value from an account configured in the standard
+shared AWS profile files. The secret name and child variable are both selected
+by `--env`; the value is never printed or written into the local vault:
+
+```bash
+secrets exec --provider your-source-profile --account 123456789012 \
+  --env EXAMPLE_NPM_TOKEN -- my-tool sync
+```
+
+The account route must resolve to exactly one configured profile whose standard
+role, SSO, or account fields match the requested provider and account. Ambiguous
+or missing routes fail before the child process runs.
+
 Prove a secret exists or compare values without revealing them:
 
 ```bash

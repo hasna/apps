@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.19 — 2026-08-09
+
+- Add account-scoped `secrets exec --provider ... --account ... --env ...`
+  consumption through standard AWS profiles while preserving legacy key/`--as`
+  execution.
+
 ## 0.2.18 — 2026-08-08
 
 - Require a left boundary before OpenAI secret-key matches so task-first slugs

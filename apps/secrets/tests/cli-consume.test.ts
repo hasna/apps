@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -25,6 +25,7 @@ const FIXTURE_SHA256 = createHash("sha256").update(FIXTURE_VALUE).digest("hex");
 const STDIN_KEY = "example/consume-test/test/stdin_key";
 
 let vaultDir: string;
+let awsConfigPath: string;
 
 // Every spawn pins the vault + key dir to one shared temp directory: the
 // per-process throwaway vault from test-isolation is keyed by PID, so two spawned
@@ -35,6 +36,7 @@ function cliEnv(): Record<string, string | undefined> {
     ...process.env,
     HASNA_SECRETS_DB_PATH: join(vaultDir, "vault.db"),
     HASNA_SECRETS_KEY_DIR: join(vaultDir, "keys"),
+    AWS_CONFIG_FILE: awsConfigPath,
     NO_COLOR: "1",
   };
 }
@@ -60,6 +62,21 @@ async function runCli(args: string[], opts: { stdin?: string } = {}) {
 
 beforeAll(async () => {
   vaultDir = mkdtempSync(join(tmpdir(), "secrets-consume-test-"));
+  awsConfigPath = join(vaultDir, "aws-config");
+  writeFileSync(
+    awsConfigPath,
+    [
+      "[profile synthetic-provider]",
+      "region = us-east-1",
+      "",
+      "[profile synthetic-target]",
+      "role_arn = arn:aws:iam::123456789012:role/ExampleAccessRole",
+      "source_profile = synthetic-provider",
+      "region = eu-west-1",
+      "",
+    ].join("\n"),
+    { mode: 0o600 },
+  );
   const seeded = await runCli(["set", FIXTURE_KEY, FIXTURE_VALUE, "--type", "api_key"]);
   if (seeded.exitCode !== 0) {
     throw new Error(`fixture seed failed: ${seeded.stderr}`);
@@ -180,6 +197,36 @@ describe("CLI exec — consume via child environment", () => {
     ]);
     expect(exitCode).toBe(1);
     expect(stdout).not.toContain("ran-anyway");
+  });
+
+  it("accepts provider/account/env selectors before touching AWS", async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      "exec",
+      "--provider", "synthetic-provider",
+      "--account", "999999999999",
+      "--env", "EXAMPLE_NPM_TOKEN",
+      "--",
+      "echo", "ran-anyway",
+    ]);
+
+    expect(exitCode).toBe(1);
+    expect(stdout).not.toContain("ran-anyway");
+    expect(stderr).toContain("No AWS profile");
+    expect(stderr).not.toContain("Usage:");
+  });
+
+  it("requires the complete provider/account/env selector set", async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      "exec",
+      "--provider", "synthetic-provider",
+      "--env", "EXAMPLE_NPM_TOKEN",
+      "--",
+      "echo", "ran-anyway",
+    ]);
+
+    expect(exitCode).toBe(1);
+    expect(stdout).not.toContain("ran-anyway");
+    expect(stderr).toContain("Usage:");
   });
 });
 

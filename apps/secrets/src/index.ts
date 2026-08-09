@@ -24,7 +24,9 @@ Commands:
   docs                        show a practical usage guide
   set <key> [<value>] [--stdin] [--type <type>] [--label <label>] [--ttl <ttl>]
   get <key> [--show|--plaintext|--check]   redacted by default; --check prints length+sha256
-  exec <key> [--as <VAR>] -- <cmd> [args...]   run <cmd> with the value in its env only
+  exec <key> [--as <VAR>] -- <cmd> [args...]   run <cmd> with a local vault value in its env only
+  exec --provider <PROFILE> --account <ID> --env <VAR> -- <cmd> [args...]
+                              run <cmd> with an account-scoped AWS secret in <VAR>
   delete <key>               (aliases: remove, rm, uninstall)
   items list [kind] [--json]  list structured vault items
   items search <query> [--json]  search structured vault item metadata
@@ -558,35 +560,66 @@ switch (command) {
     //
     // Parse from the RAW arg list, not `flags`/`positional`: everything after the
     // first bare `--` belongs to the child verbatim.
-    const execUsage = "Usage: secrets exec <key> [--as <VAR>] -- <cmd> [args...]";
+    const execUsage =
+      "Usage: secrets exec (<key> [--as <VAR>] | --provider <PROFILE> --account <12-DIGIT-ID> --env <VAR>) -- <cmd> [args...]";
     const sepIndex = rest.indexOf("--");
     if (sepIndex === -1) { console.error(`Missing "--" separator. ${execUsage}`); process.exit(1); }
     const childCmd = rest.slice(sepIndex + 1);
     const { flags: execFlags, positional: execPositional } = parseArgs(rest.slice(0, sepIndex));
     const [execKey] = execPositional;
-    if (!execKey || childCmd.length === 0) { console.error(execUsage); process.exit(1); }
+    const scopedFields = [execFlags.provider, execFlags.account, execFlags.env];
+    const scopedExec = scopedFields.some(Boolean);
+    if (childCmd.length === 0 ||
+      (scopedExec && (scopedFields.some((value) => !value) || execPositional.length > 0 || Boolean(execFlags.as))) ||
+      (!scopedExec && !execKey)) {
+      console.error(execUsage);
+      process.exit(1);
+    }
 
     // Default env var name mirrors the vault path per the secrets naming standard:
     // example/anthropic/test/api_key → EXAMPLE_ANTHROPIC_TEST_API_KEY.
-    const envName = execFlags.as ?? execKey.toUpperCase().replace(/[^A-Z0-9]+/g, "_");
+    const envName = scopedExec
+      ? execFlags.env
+      : execFlags.as ?? execKey.toUpperCase().replace(/[^A-Z0-9]+/g, "_");
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(envName)) {
-      console.error(`Invalid env var name "${envName}". Use --as <VAR> with letters, digits, and underscores.`);
+      console.error(`Invalid env var name "${envName}". Use --as/--env with letters, digits, and underscores.`);
       process.exit(1);
     }
 
-    let execEntry;
-    try {
-      execEntry = await store().getSecret(execKey);
-    } catch (e: any) {
-      // Same clean one-line surface as `get`; the message is value-free.
-      console.error(`Unable to read secret "${execKey}": ${e?.message ?? String(e)}`);
-      process.exit(1);
+    let execValue: string;
+    if (scopedExec) {
+      try {
+        const { getAwsSecretValue, loadAwsProfiles, resolveAwsAccountProfile } = await import("./aws.js");
+        const target = resolveAwsAccountProfile(
+          execFlags.provider,
+          execFlags.account,
+          await loadAwsProfiles(),
+        );
+        execValue = await getAwsSecretValue(execFlags.env, {
+          credentialMode: "profile",
+          profile: target.profile,
+          ...(target.region ? { region: target.region } : {}),
+        });
+      } catch (e: any) {
+        console.error(`Unable to read account-scoped secret "${execFlags.env}": ${e?.message ?? String(e)}`);
+        process.exit(1);
+      }
+    } else {
+      let execEntry;
+      try {
+        execEntry = await store().getSecret(execKey);
+      } catch (e: any) {
+        // Same clean one-line surface as `get`; the message is value-free.
+        console.error(`Unable to read secret "${execKey}": ${e?.message ?? String(e)}`);
+        process.exit(1);
+      }
+      if (!execEntry) { console.error(`Not found: ${execKey}`); process.exit(1); }
+      execValue = execEntry.value;
     }
-    if (!execEntry) { console.error(`Not found: ${execKey}`); process.exit(1); }
 
     const child = Bun.spawn({
       cmd: childCmd,
-      env: { ...process.env, [envName]: execEntry.value },
+      env: { ...process.env, [envName]: execValue },
       stdin: "inherit",
       stdout: "inherit",
       stderr: "inherit",
