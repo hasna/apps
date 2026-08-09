@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.114]
+
+### Fixed
+
+- Project-context bundle hashes now remain stable across generation times by
+  excluding volatile `generated_at` and self-referential `hash` fields from the
+  digest input while preserving durable payload changes. Stable project-context
+  bundle hash: `sha256:7174664168026ee4f3210d10897b18e3677562f33f5de76e671cc98d86764b87`.
+
 ## [0.1.113]
 
 ### Added
