@@ -90,6 +90,7 @@ function migrate(db: Database): void {
     { version: 18, sql: migration_v18 },
     { version: 19, sql: migration_v19 },
     { version: 20, sql: migration_v20 },
+    { version: 21, sql: migration_v21 },
   ];
 
   for (const m of migrations) {
@@ -968,6 +969,22 @@ const migration_v20 = `
   BEGIN
     DELETE FROM file_search_documents_fts WHERE document_id = OLD.id;
   END;
+`;
+
+// v21: immutable evidence authority metadata and deterministic replay identity.
+const migration_v21 = `
+  ALTER TABLE file_assets ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE file_assets ADD COLUMN provenance_type TEXT NOT NULL DEFAULT 'legacy';
+  ALTER TABLE file_assets ADD COLUMN provenance_id TEXT;
+  ALTER TABLE file_assets ADD COLUMN provenance_ref TEXT;
+  ALTER TABLE file_assets ADD COLUMN external_references TEXT NOT NULL DEFAULT '[]';
+  ALTER TABLE file_assets ADD COLUMN idempotency_key TEXT;
+
+  CREATE INDEX IF NOT EXISTS idx_file_assets_provenance
+    ON file_assets(provenance_type, provenance_id, version);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_file_assets_idempotency_key
+    ON file_assets(org_id, app, idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
 `;
 
 function applyMigrationV15(db: Database): void {

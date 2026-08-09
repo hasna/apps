@@ -29,6 +29,7 @@ const {
   createEvidenceUploadIntent,
   linkEvidenceAsset,
   listFileAccessEvents,
+  listFileAssets,
   listFileLinks,
   signEvidenceDownload,
   uploadEvidenceFile,
@@ -149,6 +150,127 @@ describe("evidence vault", () => {
       source_id: "inv_1",
       kind: "supporting_document",
     })).rejects.toThrow("must be verified");
+  });
+
+  test("stores authority metadata and replays the same immutable evidence deterministically", async () => {
+    const fixture = join(fixtureRoot(), "synthetic-evidence.txt");
+    writeFileSync(fixture, "synthetic immutable evidence");
+    const input = {
+      path: fixture,
+      org_id: "org_synthetic",
+      company_id: "co_synthetic",
+      app: "iapp-monthly-filing",
+      kind: "supporting_document",
+      classification: "restricted",
+      retention_policy: "seven_year_records",
+      immutable: true,
+      provenance_type: "monthly_filing",
+      provenance_id: "filing_synthetic_1",
+      provenance_ref: "monthly-filing://filing/synthetic-1",
+      version: 3,
+      external_references: [
+        "accounting://journal/synthetic-42",
+        "invoices://invoice/synthetic-42",
+      ],
+      idempotency_key: "monthly-filing:synthetic-1:v3",
+    } as const;
+
+    const first = await uploadEvidenceFile(input, { provider: "local", localRoot: evidenceRoot() });
+    const replay = await uploadEvidenceFile(input, { provider: "local", localRoot: evidenceRoot() });
+    const otherScope = await uploadEvidenceFile(
+      { ...input, org_id: "org_synthetic_other" },
+      { provider: "local", localRoot: evidenceRoot() },
+    );
+
+    expect(first.replayed).toBe(false);
+    expect(replay.replayed).toBe(true);
+    expect(otherScope.replayed).toBe(false);
+    expect(otherScope.asset.id).not.toBe(first.asset.id);
+    expect(replay.asset.id).toBe(first.asset.id);
+    expect(replay.intent.id).toBe(first.intent.id);
+    expect(first.asset).toMatchObject({
+      version: 3,
+      provenance_type: "monthly_filing",
+      provenance_id: "filing_synthetic_1",
+      provenance_ref: "monthly-filing://filing/synthetic-1",
+      classification: "restricted",
+      retention_policy: "seven_year_records",
+      immutable: true,
+      idempotency_key: "monthly-filing:synthetic-1:v3",
+    });
+    expect(first.asset.canonical_ref).toBe(`open-files://evidence/${first.asset.id}/versions/3`);
+    expect(first.asset.external_references).toEqual([
+      "accounting://journal/synthetic-42",
+      "invoices://invoice/synthetic-42",
+    ]);
+    expect(JSON.stringify(first)).not.toContain("synthetic immutable evidence");
+
+    const filtered = listFileAssets({
+      org_id: "org_synthetic",
+      app: "iapp-monthly-filing",
+      provenance_type: "monthly_filing",
+      provenance_id: "filing_synthetic_1",
+      provenance_ref: "monthly-filing://filing/synthetic-1",
+      version: 3,
+      classification: "restricted",
+      retention_policy: "seven_year_records",
+      external_reference: "invoices://invoice/synthetic-42",
+    });
+    expect(filtered.map((asset) => asset.id)).toEqual([first.asset.id]);
+    expect(listFileAssets({ external_reference: "invoices://invoice/absent" })).toEqual([]);
+  });
+
+  test("rejects mutation attempts against an immutable replay key", async () => {
+    const fixture = join(fixtureRoot(), "synthetic-mutation.txt");
+    writeFileSync(fixture, "original synthetic bytes");
+    const base = {
+      path: fixture,
+      org_id: "org_synthetic",
+      app: "iapp-monthly-filing",
+      kind: "supporting_document",
+      provenance_type: "monthly_filing",
+      provenance_id: "filing_synthetic_2",
+      version: 1,
+      idempotency_key: "monthly-filing:synthetic-2:v1",
+    } as const;
+
+    const original = await uploadEvidenceFile(base, { provider: "local", localRoot: evidenceRoot() });
+    writeFileSync(fixture, "mutated synthetic bytes");
+
+    await expect(uploadEvidenceFile(base, { provider: "local", localRoot: evidenceRoot() }))
+      .rejects.toThrow(/immutable evidence replay conflict/i);
+    expect(listFileAssets({ idempotency_key: base.idempotency_key }).map((asset) => asset.id))
+      .toEqual([original.asset.id]);
+
+    await expect(uploadEvidenceFile(
+      { ...base, idempotency_key: "monthly-filing:synthetic-3:v1", immutable: false },
+      { provider: "local", localRoot: evidenceRoot() },
+    )).rejects.toThrow(/immutable/i);
+  });
+
+  test("concurrent identical idempotency requests converge on one asset and one intent", async () => {
+    const input = {
+      org_id: "org_concurrent_synthetic",
+      app: "iapp-monthly-filing",
+      kind: "supporting_document",
+      original_name: "synthetic-concurrent.txt",
+      content_type: "text/plain",
+      size: 9,
+      checksum: sha256("synthetic"),
+      provenance_type: "monthly_filing",
+      provenance_id: "filing_concurrent_synthetic",
+      idempotency_key: "monthly-filing:concurrent-synthetic:v1",
+    } as const;
+
+    const [first, second] = await Promise.all([
+      createEvidenceUploadIntent(input, { provider: "local", localRoot: evidenceRoot() }),
+      createEvidenceUploadIntent(input, { provider: "local", localRoot: evidenceRoot() }),
+    ]);
+
+    expect(first.asset.id).toBe(second.asset.id);
+    expect(first.intent.id).toBe(second.intent.id);
+    expect([first.replayed, second.replayed].sort()).toEqual([false, true]);
+    expect(listFileAssets({ idempotency_key: input.idempotency_key })).toHaveLength(1);
   });
 });
 

@@ -164,6 +164,13 @@ mode honors per-command storage overrides. In API mode evidence metadata and
 storage policy belong to the service; client bucket/local-root overrides are
 not used by the remote store.
 
+Evidence is write-once. Use `--provenance-type`, `--provenance-id`,
+`--provenance-ref`, `--evidence-version`, repeatable `--external-ref`, and
+`--idempotency-key` to create a stable authority record. Consumers retain the
+asset ID or `canonical_ref`; they do not retain or duplicate the file bytes.
+`files evidence list` accepts the same metadata filters, including an exact
+external-reference match.
+
 ## Organization Commands
 
 ```txt

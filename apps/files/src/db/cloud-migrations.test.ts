@@ -97,7 +97,7 @@ describe("cloud migration compatibility", () => {
   }));
   const completeHistoricalLedger = [...historicalFilesLedger, ...historicalBridgeLedger];
 
-  test("preserves the exact historical files-0001..0154 ledger and appends the scrub as files-0155", () => {
+  test("preserves the exact historical files-0001..0154 ledger and appends evidence authority after files-0155", () => {
     expect(historicalFilesLedger).toHaveLength(154);
     expect(
       `sha256:${createHash("sha256")
@@ -108,7 +108,8 @@ describe("cloud migration compatibility", () => {
     const scrub = CLOUD_MIGRATIONS.find(({ id }) => id === "files-0155");
     expect(scrub?.sql).toBe(FILES_0155_SQL);
     expect(scrub?.checksum).toBe(FILES_0155_CHECKSUM);
-    expect(CLOUD_MIGRATIONS.some(({ id }) => id === "files-0156")).toBe(false);
+    expect(CLOUD_MIGRATIONS.find(({ id }) => id === "files-0156")?.sql)
+      .toContain("idx_file_assets_idempotency_key");
   });
 
   test("preserves the exact authoritative tenancy bridge ids and checksums", () => {
@@ -197,11 +198,11 @@ describe("cloud migration compatibility", () => {
       ledgerWith([
         ...completeHistoricalLedger,
         {
-          id: "files-0156",
+          id: "files-0157",
           checksum: "sha256:not-the-applied-checksum",
           applied_at: "2026-07-10T17:08:18.000Z",
         },
       ]).migrate({ dryRun: true }),
-    ).rejects.toThrow("Applied migration 'files-0156' is not recognized by this build");
+    ).rejects.toThrow("Applied migration 'files-0157' is not recognized by this build");
   });
 });

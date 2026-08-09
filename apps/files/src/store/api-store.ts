@@ -136,7 +136,7 @@ export class ApiStore implements FilesStore {
   // ── files ────────────────────────────────────────────────────────────────
   async listFiles(opts: ListFilesOptions = {}): Promise<FileWithTags[]> {
     // The cloud /v1/files endpoint filters on this subset; richer local-only
-    // filters (tag/collection/date/size/sort) are not part of the API
+    // filters (collection/date/size/sort) are not part of the API
     // contract and are intentionally omitted rather than silently ignored.
     const listPage = async (limit: number | undefined, offset: number | undefined) => (
       await this.client.list<FileWithTags>("files", {
@@ -144,6 +144,7 @@ export class ApiStore implements FilesStore {
           source_id: opts.source_id,
           machine_id: opts.machine_id,
           project_id: opts.project_id,
+          tag: opts.tag,
           ext: opts.ext,
           status: opts.status,
           limit,
@@ -420,7 +421,7 @@ export class ApiStore implements FilesStore {
     if (!existsSync(input.path)) throw new Error(`File not found: ${input.path}`);
     const stat = statSync(input.path);
     const { path: _path, original_name, ...rest } = input;
-    const { intent } = await this.createEvidenceUploadIntent({
+    const created = await this.createEvidenceUploadIntent({
       ...rest,
       original_name: original_name ?? basename(input.path),
       content_type: (mimeLookup(input.path) || "application/octet-stream").toString(),
@@ -428,6 +429,10 @@ export class ApiStore implements FilesStore {
       checksum: sha256File(input.path),
       checksum_algorithm: "sha256",
     }, undefined, { includeUploadUrl: true });
+    if (created.replayed && created.asset.status === "verified") {
+      return redactEvidenceUploadCredentials(created);
+    }
+    const { intent } = created;
     if (!intent.upload_url) throw new Error("Server did not return an evidence upload URL");
     const uploadUrl = intent.upload_url;
     const res = await fetch(uploadUrl, {
@@ -437,7 +442,7 @@ export class ApiStore implements FilesStore {
     });
     if (!res.ok) throw new Error(`Evidence byte upload failed: ${res.status} ${res.statusText}`);
     const asset = await this.completeEvidenceUpload(intent.id);
-    return redactEvidenceUploadCredentials({ asset, intent });
+    return redactEvidenceUploadCredentials({ asset, intent, replayed: created.replayed });
   }
   async completeEvidenceUpload(intentId: string, _storage?: EvidenceStorageOptions): Promise<FileAsset> {
     return this.http.post<FileAsset>(`/evidence/upload-intents/${seg(intentId)}/complete`);
@@ -462,6 +467,14 @@ export class ApiStore implements FilesStore {
         kind: opts.kind,
         status: opts.status,
         checksum: opts.checksum,
+        provenance_type: opts.provenance_type,
+        provenance_id: opts.provenance_id,
+        provenance_ref: opts.provenance_ref,
+        version: opts.version,
+        classification: opts.classification,
+        retention_policy: opts.retention_policy,
+        external_reference: opts.external_reference,
+        idempotency_key: opts.idempotency_key,
         limit: opts.limit,
         offset: opts.offset,
       },

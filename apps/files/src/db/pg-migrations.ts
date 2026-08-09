@@ -765,4 +765,17 @@ export const PG_MIGRATIONS: string[] = [
   `UPDATE file_upload_intents
     SET required_headers = '{}'
     WHERE required_headers <> '{}'`,
+
+  // Migration 31: immutable evidence authority metadata and replay identity.
+  `ALTER TABLE file_assets ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
+   ALTER TABLE file_assets ADD COLUMN IF NOT EXISTS provenance_type TEXT NOT NULL DEFAULT 'legacy';
+   ALTER TABLE file_assets ADD COLUMN IF NOT EXISTS provenance_id TEXT;
+   ALTER TABLE file_assets ADD COLUMN IF NOT EXISTS provenance_ref TEXT;
+   ALTER TABLE file_assets ADD COLUMN IF NOT EXISTS external_references TEXT NOT NULL DEFAULT '[]';
+   ALTER TABLE file_assets ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+   CREATE INDEX IF NOT EXISTS idx_file_assets_provenance
+     ON file_assets(provenance_type, provenance_id, version);
+   CREATE UNIQUE INDEX IF NOT EXISTS idx_file_assets_idempotency_key
+     ON file_assets(org_id, app, idempotency_key)
+     WHERE idempotency_key IS NOT NULL`,
 ];

@@ -311,6 +311,7 @@ export interface ListFilesQuery {
   source_id?: string;
   machine_id?: string;
   project_id?: string;
+  tag?: string;
   ext?: string;
   status?: string;
   q?: string;
@@ -326,23 +327,31 @@ function normalizeExtensionFilter(ext: string): string {
 export async function listFiles(client: TypedQueryClient, opts: ListFilesQuery): Promise<FileWithTags[]> {
   const where: string[] = [];
   const params: unknown[] = [];
-  const filePrefix = opts.project_id ? "f." : "";
   const add = (clause: string, value: unknown) => { params.push(value); where.push(clause.replace("$?", `$${params.length}`)); };
-  add(`${filePrefix}status = $?`, opts.status ?? "active");
-  if (opts.source_id) add(`${filePrefix}source_id = $?`, opts.source_id);
-  if (opts.machine_id) add(`${filePrefix}machine_id = $?`, opts.machine_id);
-  if (opts.ext) add(`${filePrefix}ext = $?`, normalizeExtensionFilter(opts.ext));
-  if (opts.q) add(`(${filePrefix}name ILIKE $? OR ${filePrefix}path ILIKE $?)`.replace("$?", `$${params.length + 1}`).replace("$?", `$${params.length + 1}`), `%${opts.q}%`);
-  let join = "";
+  add("f.status = $?", opts.status ?? "active");
+  if (opts.source_id) add("f.source_id = $?", opts.source_id);
+  if (opts.machine_id) add("f.machine_id = $?", opts.machine_id);
+  if (opts.ext) add("f.ext = $?", normalizeExtensionFilter(opts.ext));
+  if (opts.q) {
+    params.push(`%${opts.q}%`);
+    where.push(`(f.name ILIKE $${params.length} OR f.path ILIKE $${params.length})`);
+  }
+  const joins: string[] = [];
+  if (opts.tag) {
+    params.push(opts.tag);
+    joins.push(
+      `JOIN file_tags ft_filter ON ft_filter.file_id = f.id
+       JOIN tags t_filter ON t_filter.id = ft_filter.tag_id AND t_filter.name = $${params.length}`,
+    );
+  }
   if (opts.project_id) {
     params.push(opts.project_id);
-    join = ` JOIN project_files pf ON pf.file_id = f.id AND pf.project_id = $${params.length}`;
+    joins.push(`JOIN project_files pf ON pf.file_id = f.id AND pf.project_id = $${params.length}`);
   }
   const limit = pageLimit(opts.limit, 50, MAX_PAGE_SIZE);
   const offset = pageOffset(opts.offset);
-  const from = opts.project_id ? `files f${join}` : "files";
-  const selected = opts.project_id ? "f.*" : "*";
-  const sql = `SELECT ${selected} FROM ${from} WHERE ${where.join(" AND ")} ORDER BY ${filePrefix}indexed_at DESC, ${filePrefix}id DESC LIMIT ${limit} OFFSET ${offset}`;
+  const selected = opts.tag ? "DISTINCT f.*" : "f.*";
+  const sql = `SELECT ${selected} FROM files f ${joins.join(" ")} WHERE ${where.join(" AND ")} ORDER BY f.indexed_at DESC, f.id DESC LIMIT ${limit} OFFSET ${offset}`;
   const rows = await client.many<Record<string, unknown>>(sql, params);
   const out: FileWithTags[] = [];
   for (const r of rows) out.push(toFile(r, await fileTags(client, String(r.id))));
@@ -945,11 +954,20 @@ export interface ListFileAssetsQuery {
   kind?: string;
   status?: FileAssetStatus;
   checksum?: string;
+  provenance_type?: string;
+  provenance_id?: string;
+  provenance_ref?: string;
+  version?: number;
+  classification?: string;
+  retention_policy?: string;
+  external_reference?: string;
+  idempotency_key?: string;
   limit?: number;
   offset?: number;
 }
 
 function toEvAsset(r: Record<string, unknown>): FileAsset {
+  const version = Number(r.version ?? 1);
   return {
     id: String(r.id),
     org_id: String(r.org_id),
@@ -957,6 +975,13 @@ function toEvAsset(r: Record<string, unknown>): FileAsset {
     app: String(r.app),
     kind: String(r.kind),
     classification: String(r.classification),
+    version,
+    canonical_ref: `open-files://evidence/${String(r.id)}/versions/${version}`,
+    provenance_type: String(r.provenance_type ?? "legacy"),
+    provenance_id: r.provenance_id == null ? String(r.checksum) : String(r.provenance_id),
+    provenance_ref: r.provenance_ref == null ? undefined : String(r.provenance_ref),
+    external_references: parseJson(r.external_references, [] as string[]),
+    idempotency_key: r.idempotency_key == null ? undefined : String(r.idempotency_key),
     original_name: String(r.original_name),
     content_type: String(r.content_type),
     size: Number(r.size),
@@ -1030,16 +1055,29 @@ function toEvEvent(r: Record<string, unknown>): FileAccessEvent {
 }
 
 export async function evCreateFileAsset(client: TypedQueryClient, input: CreateFileAssetInput): Promise<FileAsset> {
+  return (await evCreateFileAssetConvergent(client, input)).asset;
+}
+
+export async function evCreateFileAssetConvergent(
+  client: TypedQueryClient,
+  input: CreateFileAssetInput,
+): Promise<{ asset: FileAsset; created: boolean }> {
   const id = input.id ?? `asset_${nanoid(12)}`;
-  await client.execute(
+  const row = await client.get<Record<string, unknown>>(
     `INSERT INTO file_assets (
-      id, org_id, company_id, app, kind, classification, original_name, content_type,
+      id, org_id, company_id, app, kind, classification, version, provenance_type,
+      provenance_id, provenance_ref, external_references, idempotency_key, original_name, content_type,
       size, checksum, checksum_algorithm, storage_provider, bucket, region, object_key,
       quarantine_key, retention_until, retention_policy, storage_class, legal_hold, immutable, metadata
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
+    ${input.idempotency_key ? "ON CONFLICT DO NOTHING" : ""}
+    RETURNING *`,
     [
       id, input.org_id, input.company_id ?? null, input.app, input.kind,
-      input.classification ?? "general", input.original_name, input.content_type,
+      input.classification ?? "general", input.version ?? 1, input.provenance_type ?? "direct_upload",
+      input.provenance_id ?? input.checksum, input.provenance_ref ?? null,
+      JSON.stringify(input.external_references ?? []), input.idempotency_key ?? null,
+      input.original_name, input.content_type,
       input.size, input.checksum, input.checksum_algorithm ?? "sha256", input.storage_provider,
       input.bucket ?? null, input.region ?? null, input.object_key, input.quarantine_key ?? null,
       input.retention_until ?? null, input.retention_policy ?? null, input.storage_class ?? null,
@@ -1047,11 +1085,29 @@ export async function evCreateFileAsset(client: TypedQueryClient, input: CreateF
       JSON.stringify(input.metadata ?? {}),
     ],
   );
-  return (await evGetFileAsset(client, id))!;
+  if (row) return { asset: toEvAsset(row), created: true };
+  if (input.idempotency_key) {
+    const existing = await evGetFileAssetByIdempotencyKey(client, input.org_id, input.app, input.idempotency_key);
+    if (existing) return { asset: existing, created: false };
+  }
+  throw new Error(`Failed to create evidence asset: ${id}`);
 }
 
 export async function evGetFileAsset(client: TypedQueryClient, id: string): Promise<FileAsset | null> {
   const row = await client.get<Record<string, unknown>>("SELECT * FROM file_assets WHERE id = $1", [id]);
+  return row ? toEvAsset(row) : null;
+}
+
+export async function evGetFileAssetByIdempotencyKey(
+  client: TypedQueryClient,
+  orgId: string,
+  app: string,
+  idempotencyKey: string,
+): Promise<FileAsset | null> {
+  const row = await client.get<Record<string, unknown>>(
+    "SELECT * FROM file_assets WHERE org_id = $1 AND app = $2 AND idempotency_key = $3",
+    [orgId, app, idempotencyKey],
+  );
   return row ? toEvAsset(row) : null;
 }
 
@@ -1065,6 +1121,17 @@ export async function evListFileAssets(client: TypedQueryClient, opts: ListFileA
   if (opts.kind) push("kind", opts.kind);
   if (opts.status) push("status", opts.status);
   if (opts.checksum) push("checksum", opts.checksum);
+  if (opts.provenance_type) push("provenance_type", opts.provenance_type);
+  if (opts.provenance_id) push("provenance_id", opts.provenance_id);
+  if (opts.provenance_ref) push("provenance_ref", opts.provenance_ref);
+  if (opts.version !== undefined) push("version", opts.version);
+  if (opts.classification) push("classification", opts.classification);
+  if (opts.retention_policy) push("retention_policy", opts.retention_policy);
+  if (opts.idempotency_key) push("idempotency_key", opts.idempotency_key);
+  if (opts.external_reference) {
+    params.push(opts.external_reference);
+    conditions.push(`external_references::jsonb ? $${params.length}`);
+  }
   params.push(opts.limit ?? 50);
   const limitIdx = params.length;
   params.push(opts.offset ?? 0);
@@ -1077,23 +1144,37 @@ export async function evListFileAssets(client: TypedQueryClient, opts: ListFileA
 }
 
 export async function evCreateUploadIntent(client: TypedQueryClient, input: CreateUploadIntentInput): Promise<FileUploadIntent> {
-  const id = `upl_${nanoid(12)}`;
-  await client.execute(
+  const id = input.id ?? `upl_${nanoid(12)}`;
+  const row = await client.get<Record<string, unknown>>(
     `INSERT INTO file_upload_intents (
       id, asset_id, expires_at, expected_checksum, expected_checksum_algorithm,
       expected_size, required_headers, metadata
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+    ${input.id ? "ON CONFLICT (id) DO NOTHING" : ""}
+    RETURNING *`,
     [
       id, input.asset_id, input.expires_at, input.expected_checksum,
       input.expected_checksum_algorithm, input.expected_size,
       JSON.stringify(input.required_headers ?? {}), JSON.stringify(input.metadata ?? {}),
     ],
   );
-  return (await evGetUploadIntent(client, id))!;
+  const intent = row ? toEvIntent(row) : await evGetUploadIntent(client, id);
+  if (!intent || intent.asset_id !== input.asset_id) {
+    throw new Error(`Failed to create evidence upload intent for asset: ${input.asset_id}`);
+  }
+  return intent;
 }
 
 export async function evGetUploadIntent(client: TypedQueryClient, id: string): Promise<FileUploadIntent | null> {
   const row = await client.get<Record<string, unknown>>("SELECT * FROM file_upload_intents WHERE id = $1", [id]);
+  return row ? toEvIntent(row) : null;
+}
+
+export async function evGetUploadIntentForAsset(client: TypedQueryClient, assetId: string): Promise<FileUploadIntent | null> {
+  const row = await client.get<Record<string, unknown>>(
+    "SELECT * FROM file_upload_intents WHERE asset_id = $1 ORDER BY created_at ASC LIMIT 1",
+    [assetId],
+  );
   return row ? toEvIntent(row) : null;
 }
 
@@ -1175,10 +1256,13 @@ export async function evListAccessEvents(client: TypedQueryClient, assetId: stri
 /** Build an {@link EvidenceDb} bound to a cloud client for the shared orchestration. */
 export function evidenceDbFor(client: TypedQueryClient) {
   return {
-    createFileAsset: (i: CreateFileAssetInput) => evCreateFileAsset(client, i),
+    createFileAsset: (i: CreateFileAssetInput) => evCreateFileAssetConvergent(client, i),
     getFileAsset: (id: string) => evGetFileAsset(client, id),
+    getFileAssetByIdempotencyKey: (orgId: string, app: string, key: string) =>
+      evGetFileAssetByIdempotencyKey(client, orgId, app, key),
     createFileUploadIntent: (i: CreateUploadIntentInput) => evCreateUploadIntent(client, i),
     getFileUploadIntent: (id: string) => evGetUploadIntent(client, id),
+    getFileUploadIntentForAsset: (assetId: string) => evGetUploadIntentForAsset(client, assetId),
     markFileUploadIntentCompleted: (id: string) => evMarkUploadIntentCompleted(client, id),
     updateFileAssetStatus: (i: UpdateFileAssetStatusInput) => evUpdateFileAssetStatus(client, i),
     createFileLink: (i: CreateFileLinkInput) => evCreateFileLink(client, i),

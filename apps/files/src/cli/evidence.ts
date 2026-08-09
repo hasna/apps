@@ -44,7 +44,16 @@ export function registerEvidenceCommands(program: Command): void {
     .option("--company <companyId>", "Company ID")
     .option("--content-type <type>", "Content type")
     .option("--classification <value>", "Classification", "evidence")
+    .option("--retention-policy <value>", "Retention classification")
+    .option("--retention-until <iso>", "Retention deadline as an ISO timestamp")
     .option("--storage-class <value>", "Retention storage class metadata")
+    .option("--legal-hold", "Mark the immutable asset as under legal hold")
+    .option("--provenance-type <type>", "Source/provenance type")
+    .option("--provenance-id <id>", "Stable source/provenance identifier")
+    .option("--provenance-ref <ref>", "Stable source/provenance reference")
+    .option("--evidence-version <n>", "Evidence metadata version", "1")
+    .option("--external-ref <ref>", "Stable external reference; repeat for multiple values", collectStrings, [])
+    .option("--idempotency-key <key>", "Deterministic replay key")
     .option("--storage <provider>", "Storage provider: s3 or local")
     .option("--bucket <bucket>", "S3 bucket", DEFAULT_EVIDENCE_S3_BUCKET)
     .option("--region <region>", "S3 region")
@@ -66,7 +75,16 @@ export function registerEvidenceCommands(program: Command): void {
           size: parseInteger(opts.size, "size"),
           checksum: opts.checksum,
           classification: opts.classification,
+          retention_policy: opts.retentionPolicy,
+          retention_until: opts.retentionUntil,
           storage_class: opts.storageClass,
+          legal_hold: opts.legalHold,
+          provenance_type: opts.provenanceType,
+          provenance_id: opts.provenanceId,
+          provenance_ref: opts.provenanceRef,
+          version: parseInteger(opts.evidenceVersion, "evidence-version"),
+          external_references: opts.externalRef,
+          idempotency_key: opts.idempotencyKey,
           expires_in_seconds: parseInteger(opts.expires, "expires"),
         }, storageOptions(opts), { includeUploadUrl: opts.includeUploadUrl });
         printResult(
@@ -85,7 +103,16 @@ export function registerEvidenceCommands(program: Command): void {
     .requiredOption("--kind <kind>", "Evidence kind, e.g. receipt")
     .option("--company <companyId>", "Company ID")
     .option("--classification <value>", "Classification", "evidence")
+    .option("--retention-policy <value>", "Retention classification")
+    .option("--retention-until <iso>", "Retention deadline as an ISO timestamp")
     .option("--storage-class <value>", "Retention storage class metadata")
+    .option("--legal-hold", "Mark the immutable asset as under legal hold")
+    .option("--provenance-type <type>", "Source/provenance type")
+    .option("--provenance-id <id>", "Stable source/provenance identifier")
+    .option("--provenance-ref <ref>", "Stable source/provenance reference")
+    .option("--evidence-version <n>", "Evidence metadata version", "1")
+    .option("--external-ref <ref>", "Stable external reference; repeat for multiple values", collectStrings, [])
+    .option("--idempotency-key <key>", "Deterministic replay key")
     .option("--source-type <type>", "Domain source type to link after upload")
     .option("--source-id <id>", "Domain source id to link after upload")
     .option("--link-kind <kind>", "Link kind, defaults to --kind")
@@ -105,7 +132,16 @@ export function registerEvidenceCommands(program: Command): void {
           app: opts.app,
           kind: opts.kind,
           classification: opts.classification,
+          retention_policy: opts.retentionPolicy,
+          retention_until: opts.retentionUntil,
           storage_class: opts.storageClass,
+          legal_hold: opts.legalHold,
+          provenance_type: opts.provenanceType,
+          provenance_id: opts.provenanceId,
+          provenance_ref: opts.provenanceRef,
+          version: parseInteger(opts.evidenceVersion, "evidence-version"),
+          external_references: opts.externalRef,
+          idempotency_key: opts.idempotencyKey,
         }, storageOptions(opts));
         const link = opts.sourceType && opts.sourceId
           ? await store().linkEvidenceAsset({
@@ -215,6 +251,14 @@ export function registerEvidenceCommands(program: Command): void {
     .option("--app <app>", "App")
     .option("--kind <kind>", "Kind")
     .option("--status <status>", "Status")
+    .option("--classification <value>", "Access classification")
+    .option("--retention-policy <value>", "Retention classification")
+    .option("--provenance-type <type>", "Source/provenance type")
+    .option("--provenance-id <id>", "Stable source/provenance identifier")
+    .option("--provenance-ref <ref>", "Stable source/provenance reference")
+    .option("--evidence-version <n>", "Evidence metadata version")
+    .option("--external-ref <ref>", "Exact stable external reference")
+    .option("--idempotency-key <key>", "Deterministic replay key")
     .option("--limit <n>", "Limit", "50")
     .option("--json", "Output as JSON")
     .action(async (opts: EvidenceListOptions) => {
@@ -225,6 +269,16 @@ export function registerEvidenceCommands(program: Command): void {
           app: opts.app,
           kind: opts.kind,
           status: parseFileAssetStatus(opts.status),
+          classification: opts.classification,
+          retention_policy: opts.retentionPolicy,
+          provenance_type: opts.provenanceType,
+          provenance_id: opts.provenanceId,
+          provenance_ref: opts.provenanceRef,
+          version: opts.evidenceVersion === undefined
+            ? undefined
+            : parseInteger(opts.evidenceVersion, "evidence-version"),
+          external_reference: opts.externalRef,
+          idempotency_key: opts.idempotencyKey,
           limit: parseInteger(opts.limit, "limit"),
         });
         if (opts.json) {
@@ -281,7 +335,16 @@ interface EvidenceCreateUploadOptions extends EvidenceStorageCliOptions {
   checksum: string;
   contentType?: string;
   classification?: string;
+  retentionPolicy?: string;
+  retentionUntil?: string;
   storageClass?: string;
+  legalHold?: boolean;
+  provenanceType?: string;
+  provenanceId?: string;
+  provenanceRef?: string;
+  evidenceVersion: string;
+  externalRef: string[];
+  idempotencyKey?: string;
   expires: string;
   includeUploadUrl?: boolean;
 }
@@ -292,7 +355,16 @@ interface EvidenceUploadOptions extends EvidenceStorageCliOptions {
   app: string;
   kind: string;
   classification?: string;
+  retentionPolicy?: string;
+  retentionUntil?: string;
   storageClass?: string;
+  legalHold?: boolean;
+  provenanceType?: string;
+  provenanceId?: string;
+  provenanceRef?: string;
+  evidenceVersion: string;
+  externalRef: string[];
+  idempotencyKey?: string;
   sourceType?: string;
   sourceId?: string;
   linkKind?: string;
@@ -320,6 +392,14 @@ interface EvidenceListOptions {
   app?: string;
   kind?: string;
   status?: string;
+  classification?: string;
+  retentionPolicy?: string;
+  provenanceType?: string;
+  provenanceId?: string;
+  provenanceRef?: string;
+  evidenceVersion?: string;
+  externalRef?: string;
+  idempotencyKey?: string;
   limit: string;
   json?: boolean;
 }
@@ -342,6 +422,10 @@ function parseInteger(value: string, name: string): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 0) throw new Error(`Invalid --${name} value: ${value}`);
   return parsed;
+}
+
+function collectStrings(value: string, previous: string[]): string[] {
+  return [...previous, value];
 }
 
 function parseFileAssetStatus(value: string | undefined): FileAssetStatus | undefined {

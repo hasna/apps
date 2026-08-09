@@ -241,9 +241,9 @@ export interface FilesStore {
 
   // ── evidence (shared cross-app vault) ──────────────────────────────────────
   /**
-   * The shared evidence vault (used by iapp-* apps for compliance receipts,
-   * etc.). Both transports are first-class: LocalStore keeps metadata in on-box
-   * SQLite and bytes on local disk / S3; ApiStore routes metadata to the cloud
+   * The immutable evidence authority. Consumers store asset IDs and stable
+   * references, never bytes. Both transports are first-class: LocalStore keeps
+   * metadata in on-box SQLite and bytes on local disk / S3; ApiStore routes metadata to the cloud
    * `/v1/evidence` surface where the SERVER owns S3 storage (bytes go to the
    * shared bucket via a server-signed URL). The `storage` overrides are honored
    * only by the LocalStore; the ApiStore ignores them (server-owned storage).

@@ -20,6 +20,7 @@ import {
   getAgentActivity,
   getFileHistory,
   getSessionActivity,
+  evListFileAssets,
   listConflicts,
   listFiles,
   MAX_PAGE_SIZE,
@@ -48,7 +49,7 @@ function recordingClient(rowCount = 0) {
       params.push(values);
       // Tag lookups and every non-row-returning statement answer empty; only the
       // primary SELECT hands back the synthetic page.
-      if (/^SELECT \* FROM (files|agent_activity)/i.test(text.trim())) {
+      if (/^SELECT (?:DISTINCT f\.\*|f\.\*|\*) FROM (?:files f|files|agent_activity)/i.test(text.trim())) {
         return { rows: rows as never[], rowCount: rows.length };
       }
       return { rows: [] as never[], rowCount: 0 };
@@ -165,11 +166,55 @@ describe("pg-store page cap — a bounded read must never masquerade as a comple
     // is data-safe only if the query adds a unique tie-breaker after it.
     const { client, sql } = recordingClient(MAX_PAGE_SIZE + 1);
     await listFiles(client, { limit: MAX_PAGE_SIZE });
-    expect(sql.some((s) => /ORDER BY indexed_at DESC, id DESC LIMIT 500 OFFSET 0/.test(s))).toBe(true);
+    expect(sql.some((s) => /ORDER BY f\.indexed_at DESC, f\.id DESC LIMIT 500 OFFSET 0/.test(s))).toBe(true);
   });
 
   test("the cap is one named constant, not three magic numbers", () => {
     expect(MAX_PAGE_SIZE).toBe(500);
+  });
+});
+
+describe("pg-store evidence authority filters", () => {
+  test("composes provenance, retention, version, exact external reference, and replay identity", async () => {
+    const statements: Array<{ text: string; values: readonly unknown[] }> = [];
+    const executor: PgExecutor = {
+      async query(text: string, values: readonly unknown[] = []) {
+        statements.push({ text, values });
+        return { rows: [] as never[], rowCount: 0 };
+      },
+    };
+
+    await evListFileAssets(wrapExecutor(executor), {
+      provenance_type: "monthly_filing",
+      provenance_id: "filing_synthetic_pg",
+      provenance_ref: "monthly-filing://filing/synthetic-pg",
+      version: 6,
+      classification: "restricted",
+      retention_policy: "seven_year_records",
+      external_reference: "invoices://invoice/synthetic-pg",
+      idempotency_key: "monthly-filing:synthetic-pg:v6",
+    });
+
+    expect(statements[0]?.text).toContain("provenance_type = $1");
+    expect(statements[0]?.text).toContain("provenance_id = $2");
+    expect(statements[0]?.text).toContain("provenance_ref = $3");
+    expect(statements[0]?.text).toContain("version = $4");
+    expect(statements[0]?.text).toContain("classification = $5");
+    expect(statements[0]?.text).toContain("retention_policy = $6");
+    expect(statements[0]?.text).toContain("idempotency_key = $7");
+    expect(statements[0]?.text).toContain("external_references::jsonb ? $8");
+    expect(statements[0]?.values).toEqual([
+      "monthly_filing",
+      "filing_synthetic_pg",
+      "monthly-filing://filing/synthetic-pg",
+      6,
+      "restricted",
+      "seven_year_records",
+      "monthly-filing:synthetic-pg:v6",
+      "invoices://invoice/synthetic-pg",
+      50,
+      0,
+    ]);
   });
 });
 
