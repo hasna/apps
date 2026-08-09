@@ -119,6 +119,46 @@ describe("startPolling", () => {
     await new Promise((r) => setTimeout(r, 150));
     expect(callCount).toBe(0);
   });
+
+  test("a transient seed failure delays readiness and never replays pre-arm history", async () => {
+    const history = sendMessage({ from: "alice", to: "bob", content: "pre-arm" });
+    const baseStore = getStore();
+    const received: Message[] = [];
+    const errorLines: string[] = [];
+    let seedAvailable = false;
+
+    const store = {
+      readMessages: async (opts: Parameters<ConversationsStore["readMessages"]>[0]) => {
+        if (!seedAvailable) throw new Error("SEED_TRANSIENT_FAILURE");
+        return baseStore.readMessages(opts);
+      },
+    } as ConversationsStore;
+
+    const poll = startPolling({
+      store,
+      to_agent: "bob",
+      interval_ms: 20,
+      on_messages: (messages) => received.push(...messages),
+      on_poll_error: (line) => errorLines.push(line),
+    });
+
+    let readyResolved = false;
+    void poll.ready.then(() => { readyResolved = true; });
+    await new Promise((r) => setTimeout(r, 60));
+
+    expect(readyResolved).toBe(false);
+    expect(received).toEqual([]);
+    expect(errorLines.join("\n")).toContain("SEED_TRANSIENT_FAILURE");
+
+    seedAvailable = true;
+    await poll.ready;
+    const live = sendMessage({ from: "carol", to: "bob", content: "post-arm" });
+    await new Promise((r) => setTimeout(r, 80));
+    await poll.stop();
+
+    expect(received.map((message) => message.id)).toEqual([live.id]);
+    expect(received.map((message) => message.id)).not.toContain(history.id);
+  });
 });
 
 /**

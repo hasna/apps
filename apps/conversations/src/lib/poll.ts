@@ -30,17 +30,30 @@ export interface PollOptions {
   store?: ConversationsStore;
 }
 
+export interface PollHandle {
+  /**
+   * Resolves once the arm-time cursor seed has finished.
+   *
+   * A caller that prints a readiness signal must await this first, or a message
+   * sent after the signal can still be absorbed into the seed as history.
+   */
+  ready: Promise<void>;
+  stop: () => Promise<void>;
+}
+
 /**
- * Start polling for new messages. Returns a stop function. Reads flow through
- * the active {@link getStore} transport, so the same loop works in local and
- * cloud modes.
+ * Start polling for new messages. Returns readiness and stop handles. Reads
+ * flow through the active {@link getStore} transport, so the same loop works
+ * in local and cloud modes.
  */
-export function startPolling(opts: PollOptions): { stop: () => Promise<void> } {
+export function startPolling(opts: PollOptions): PollHandle {
   const interval = opts.interval_ms ?? 200;
   const store = opts.store ?? getStore();
   let stopped = false;
   let inFlight = false;
   let lastSeenId = 0;
+  let seeded = false;
+  let seedAttempt: Promise<void> | null = null;
   /** The read currently in flight, so `stop()` can wait for it to finish. */
   let current: Promise<void> | null = null;
 
@@ -51,30 +64,50 @@ export function startPolling(opts: PollOptions): { stop: () => Promise<void> } {
   // both modes.
   const health = createPollHealth({ label: "watch", report: opts.on_poll_error });
 
-  const seeded = store
-    .readMessages({
-      session_id: opts.session_id,
-      to: opts.to_agent,
-      channel: opts.channel,
-      order: "desc",
-      limit: 1,
-    })
-    .then((latest) => {
-      if (latest.length > 0 && latest[0].id > lastSeenId) lastSeenId = latest[0].id;
-    })
-    .catch((error: unknown) => {
-      // Still not fatal — the first poll simply starts from id 0 — but it is
-      // reported rather than swallowed. A failed seed means the store was
-      // already unreachable at startup, and starting from 0 will replay
-      // history once it returns; an operator seeing a flood needs this line to
-      // explain it.
-      health.recordFailure(error);
-    });
+  let resolveReady!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    resolveReady = resolve;
+  });
+
+  const ensureSeeded = (): Promise<void> => {
+    if (seeded) return Promise.resolve();
+    if (seedAttempt) return seedAttempt;
+
+    seedAttempt = store
+      .readMessages({
+        session_id: opts.session_id,
+        to: opts.to_agent,
+        channel: opts.channel,
+        order: "desc",
+        limit: 1,
+      })
+      .then((latest) => {
+        if (latest.length > 0 && latest[0].id > lastSeenId) lastSeenId = latest[0].id;
+        seeded = true;
+        health.recordSuccess();
+        resolveReady();
+      })
+      .catch((error: unknown) => {
+        // A failed arm-time read is reported and retried, but readiness stays
+        // pending. Starting live polling from id 0 would replay pre-arm history
+        // immediately after claiming that the watcher was ready.
+        health.recordFailure(error);
+      })
+      .finally(() => {
+        seedAttempt = null;
+      });
+
+    return seedAttempt;
+  };
+
+  // Issue the first seed read immediately. Timer ticks retry it after a
+  // transient failure, without allowing live delivery until one succeeds.
+  void ensureSeeded();
 
   const poll = async () => {
     try {
-      await seeded;
-      if (stopped) return;
+      await ensureSeeded();
+      if (stopped || !seeded) return;
 
       const messages = await store.readMessages({
         session_id: opts.session_id,
@@ -121,6 +154,7 @@ export function startPolling(opts: PollOptions): { stop: () => Promise<void> } {
   const timer = setInterval(tick, interval);
 
   return {
+    ready,
     /**
      * Stop the loop AND wait until it is quiescent.
      *
@@ -139,7 +173,7 @@ export function startPolling(opts: PollOptions): { stop: () => Promise<void> } {
     stop: async () => {
       stopped = true;
       clearInterval(timer);
-      await Promise.allSettled([seeded, current]);
+      await Promise.allSettled([seedAttempt, current]);
     },
   };
 }

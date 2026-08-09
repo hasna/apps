@@ -64,6 +64,33 @@ export interface UnionNotificationBatch {
 }
 
 /**
+ * Silently acknowledge every subscribed-channel notification that exists while
+ * a watcher is arming.
+ *
+ * Reads stay preview-only and acknowledgement stays per identity. Repeating
+ * bounded reads is required because each transport may cap a notification page;
+ * a single "mark all" shaped read can otherwise leave older pre-arm rows for
+ * the first live poll to replay.
+ */
+export async function baselineChannelNotifications(
+  store: NotificationPollStore,
+  agents: string[],
+  limit = DEFAULT_LIMIT,
+): Promise<void> {
+  while (true) {
+    const batch = await readChannelNotificationsUnion(store, {
+      agents,
+      unread_only: true,
+      limit,
+      mark_read: true,
+      include_content: false,
+    });
+    if (batch.notifications.length === 0) return;
+    await batch.markRead();
+  }
+}
+
+/**
  * Read channel notifications for several identities and return their union.
  *
  * A seat that answers to both an agent name and a seat slug has two disjoint
