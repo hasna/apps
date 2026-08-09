@@ -9,7 +9,7 @@
  * wrote themselves is never clobbered: ownership is tracked with a marker file, and a
  * directory without that marker is treated as the user's and skipped.
  */
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,7 +27,6 @@ export type SyncAgent = "claude" | "codewith" | "codex" | "opencode" | "cursor";
 export const SYNC_AGENTS: readonly SyncAgent[] = ["claude", "codewith", "codex", "opencode", "cursor"] as const;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const BUNDLED_SKILL_ROOTS = ["skills", "agent-skills"] as const;
 
 /**
  * Ownership marker written beside every SKILL.md this tool syncs. Its presence is how a
@@ -210,7 +209,6 @@ export function syncSkillsToAgents(options: SyncSkillsOptions = {}): SyncSkillsR
         agent,
         skillMd: adapted,
         source: skill.source,
-        resourceDir: skill.source === "bundled" ? skill.path : undefined,
         homeDir,
         dryRun: options.dryRun,
         force: options.force,
@@ -226,8 +224,6 @@ export interface WriteManagedAgentSkillParams {
   agent: SyncAgent;
   skillMd: string;
   source?: "bundled" | "corpus";
-  /** Bundled skill directory whose sibling resources must be installed with SKILL.md. */
-  resourceDir?: string;
   homeDir?: string;
   dryRun?: boolean;
   force?: boolean;
@@ -246,7 +242,6 @@ export function writeManagedAgentSkill(params: WriteManagedAgentSkillParams): Ag
   const result = writeManagedSkillDir(dir, params.skillMd, {
     skill: params.skill,
     source: params.source,
-    resourceDir: params.resourceDir,
     dryRun: params.dryRun,
     force: params.force,
   });
@@ -274,7 +269,7 @@ export interface ManagedDirWriteResult {
 export function writeManagedSkillDir(
   dir: string,
   skillMd: string,
-  options: { skill: string; source?: string; resourceDir?: string; dryRun?: boolean; force?: boolean },
+  options: { skill: string; source?: string; dryRun?: boolean; force?: boolean },
 ): ManagedDirWriteResult {
   const skillMdPath = join(dir, "SKILL.md");
   const markerPath = join(dir, SYNC_MARKER_FILE);
@@ -293,9 +288,6 @@ export function writeManagedSkillDir(
   if (options.dryRun) return { action, path: skillMdPath };
 
   mkdirSync(dir, { recursive: true });
-  if (options.resourceDir) {
-    cpSync(options.resourceDir, dir, { recursive: true, force: true });
-  }
   writeFileSync(skillMdPath, skillMd.endsWith("\n") ? skillMd : `${skillMd}\n`);
   const marker: SyncMarker = {
     managedBy: SYNC_MARKER_MANAGED_BY,
@@ -338,11 +330,9 @@ function sourceSkillMd(
 function findBundledSkillSource(name: string): SyncSource | null {
   let dir = __dirname;
   for (let i = 0; i < 5; i += 1) {
-    for (const root of BUNDLED_SKILL_ROOTS) {
-      const path = join(dir, root, name);
-      if (existsSync(path) && existsSync(join(path, "SKILL.md"))) {
-        return { name, path, source: "bundled" };
-      }
+    const path = join(dir, "skills", name);
+    if (existsSync(path) && existsSync(join(path, "SKILL.md"))) {
+      return { name, path, source: "bundled" };
     }
     dir = dirname(dir);
   }

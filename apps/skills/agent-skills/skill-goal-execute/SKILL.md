@@ -15,7 +15,7 @@ tasks), and **mementos** (learnings as you go).
 
 - **The goal** — what the user wants achieved (one or more sentences).
 - **The project** — the project this goal belongs to. If global / not tied to a
-  project, use the **machine-name** project returned by `hostname`.
+  project, use the **machine-name** project (`hostname`, e.g. `apple06`).
 
 ## Workflow
 

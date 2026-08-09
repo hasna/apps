@@ -55,6 +55,5 @@ describe("getPackedFiles", () => {
     expect(files.length).toBeGreaterThan(0);
     expect(files).toEqual([...files].sort());
     expect(files).toContain("package.json");
-    expect(files).toContain("agent-skills/fleet-package-rollout/SKILL.md");
   });
 });
