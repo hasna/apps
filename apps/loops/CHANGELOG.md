@@ -5,6 +5,18 @@ documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
 unless noted.
 
+## 0.4.41 (2026-08-09)
+
+### Fixed
+
+- **Terminal receipt recovery:** resumed workflows consume immutable failed,
+  timed-out, and policy-blocked terminal receipts exactly once, preserving
+  continuation policy without repeating the external effect.
+- **Hosted admitted-operation reconciliation:** legacy maintenance, per-run
+  recovery, and runner polling now return bounded reconciliation outcomes for
+  admitted external operations without mutating run, workflow, or loop state.
+  Public command projections also omit private command bodies and arguments.
+
 ## 0.4.40 (2026-08-09)
 
 ### Fixed
