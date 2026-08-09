@@ -6,6 +6,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.119]
+
+### Fixed
+
+- Hosted Conversations retrofit adoption now validates the shipped SDK's
+  wrapped `getChannel` response before applying the exact channel ID, name,
+  and project ownership checks.
+
 ## [0.1.118]
 
 ### Fixed
