@@ -117,8 +117,12 @@ export interface RegistrarProvider extends DomainInventoryProvider {
 }
 
 /** Handles DNS zone and record management */
+export type DnsWriteScope = "full-zone" | "changed-groups";
+
 export interface DnsProvider {
   name: string;
+  /** Omission is conservative: setDnsRecords receives the complete desired zone. */
+  dnsWriteScope?: DnsWriteScope;
   getDnsRecords(domain: string): Promise<ProviderDnsRecord[]>;
   setDnsRecords(domain: string, records: ProviderDnsRecord[]): Promise<boolean>;
 }

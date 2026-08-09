@@ -127,6 +127,21 @@ export function planHasChanges(plan: DnsPlan): boolean {
   return plan.creates + plan.updates + plan.deletes > 0;
 }
 
+function dnsRecordGroupKey(record: ProviderDnsRecord): string {
+  return `${record.type}\u0000${record.name}`;
+}
+
+export function selectChangedDnsRecords(plan: DnsPlan, desired: ProviderDnsRecord[]): ProviderDnsRecord[] {
+  const changedGroups = new Set(
+    plan.operations
+      .filter((operation) => operation.op !== "unchanged")
+      .map((operation) => dnsRecordGroupKey(operation.record)),
+  );
+  return desired.filter((record) =>
+    changedGroups.has(dnsRecordGroupKey(normalizeDnsRecord(record, plan.domain))),
+  );
+}
+
 export function getDnsApplyBlockReason(plan: DnsPlan, opts: { yes?: boolean; allowDelete?: boolean }): DnsApplyBlockReason | undefined {
   if (!planHasChanges(plan)) return undefined;
   if (!opts.yes) return "confirmation-required";

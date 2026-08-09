@@ -355,6 +355,7 @@ export function createCloudflareProvider(config?: CloudflareConfig): DnsProvider
 
   return {
     name: "cloudflare",
+    dnsWriteScope: "changed-groups",
 
     async listDomains(): Promise<ProviderDomainInfo[]> {
       const zones = await listZones(cfg);

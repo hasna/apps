@@ -20,6 +20,7 @@ import {
   getDnsApplyBlockReason,
   parseDesiredDnsState,
   planHasChanges,
+  selectChangedDnsRecords,
   type DnsPlan,
 } from "../../lib/dns-plan.js";
 import { compactHint, pageItemsOrExit, truncateText } from "../../lib/compact-output.js";
@@ -150,7 +151,10 @@ export function registerDnsCommands(
           }
           process.exit(1);
         }
-        await provider.setDnsRecords(planDomain, desired.records);
+        const recordsToApply = provider.dnsWriteScope === "changed-groups"
+          ? selectChangedDnsRecords(plan, desired.records)
+          : desired.records;
+        await provider.setDnsRecords(planDomain, recordsToApply);
         const verified = createDnsPlan(planDomain, await provider.getDnsRecords(planDomain), desired.records);
         if (planHasChanges(verified)) {
           if (opts.json) printLine(JSON.stringify({ applied: false, provider: providerName, reason: "verification-failed", plan, verification: verified }, null, 2));

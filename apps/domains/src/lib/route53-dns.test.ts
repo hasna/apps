@@ -53,6 +53,7 @@ mock.module("@aws-sdk/client-route-53", () => ({
 }));
 
 const {
+  createRoute53Provider,
   createHostedZone,
   deleteRecord,
   deleteHostedZone,
@@ -72,6 +73,10 @@ beforeEach(() => {
 });
 
 describe("Route53 DNS and hosted-zone helpers", () => {
+  test("declares changed-group writes because the adapter UPSERTs only supplied record sets", () => {
+    expect(createRoute53Provider(config).dnsWriteScope).toBe("changed-groups");
+  });
+
   test("creates hosted zones with caller reference and nameservers", async () => {
     queueRoute53("CreateHostedZoneCommand", {
       DelegationSet: { NameServers: ["ns-1.awsdns.test"] },
