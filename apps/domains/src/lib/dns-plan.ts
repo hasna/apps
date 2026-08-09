@@ -38,13 +38,15 @@ export function normalizeDnsRecord(record: ProviderDnsRecord, domain: string): P
   } else if (lowerName.endsWith(`.${normalizedDomain}`)) {
     name = name.replace(/\.$/, "").slice(0, -(normalizedDomain.length + 1));
   }
-  return {
+  const normalized: ProviderDnsRecord = {
     type,
     name,
     value: String(record.value).trim(),
     ttl: Number.isFinite(record.ttl) && record.ttl > 0 ? Math.trunc(record.ttl) : 300,
     priority: record.priority,
   };
+  if (record.proxied !== undefined) normalized.proxied = record.proxied;
+  return normalized;
 }
 
 export function parseDesiredDnsState(input: string, domainHint?: string): DesiredDnsState {
@@ -73,6 +75,7 @@ export function parseDesiredDnsState(input: string, domainHint?: string): Desire
         value: r["value"],
         ttl: typeof r["ttl"] === "number" ? r["ttl"] : Number(r["ttl"] ?? 300),
         priority: r["priority"] == null ? undefined : Number(r["priority"]),
+        proxied: typeof r["proxied"] === "boolean" ? r["proxied"] : undefined,
       }, domain);
     }),
   };
@@ -83,7 +86,7 @@ function identity(record: ProviderDnsRecord): string {
 }
 
 function sameMutableFields(a: ProviderDnsRecord, b: ProviderDnsRecord): boolean {
-  return a.ttl === b.ttl;
+  return a.ttl === b.ttl && (b.proxied === undefined || a.proxied === b.proxied);
 }
 
 export function createDnsPlan(domain: string, current: ProviderDnsRecord[], desired: ProviderDnsRecord[]): DnsPlan {

@@ -22,6 +22,7 @@ export interface ProviderDnsRecord {
   value: string;
   ttl: number;
   priority?: number;
+  proxied?: boolean;
 }
 
 export interface ProviderDomainInfo {

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import { createDnsPlan, getDnsApplyBlockReason, normalizeDnsRecord, parseDesiredDnsState, planHasChanges } from "./dns-plan.js";
+import {
+  createDnsPlan,
+  getDnsApplyBlockReason,
+  normalizeDnsRecord,
+  parseDesiredDnsState,
+  planHasChanges,
+} from "./dns-plan.js";
 
 describe("dns desired-state planning", () => {
   it("normalizes provider FQDN names to domain-relative names", () => {
@@ -20,12 +26,24 @@ describe("dns desired-state planning", () => {
   it("parses JSON desired state", () => {
     const state = parseDesiredDnsState(JSON.stringify({
       domain: "example.com",
-      records: [{ type: "TXT", name: "@", value: "hello", ttl: 600 }],
+      records: [{ type: "A", name: "@", value: "192.0.2.10", ttl: 600, proxied: true }],
     }));
     expect(state).toEqual({
       domain: "example.com",
-      records: [{ type: "TXT", name: "@", value: "hello", ttl: 600, priority: undefined }],
+      records: [{ type: "A", name: "@", value: "192.0.2.10", ttl: 600, priority: undefined, proxied: true }],
     });
+  });
+
+  it("detects proxied drift while treating omitted proxied as provider-agnostic", () => {
+    const current = [{ type: "A", name: "@", value: "192.0.2.10", ttl: 300, proxied: false }];
+    expect(createDnsPlan("example.com", current, [
+      { type: "A", name: "@", value: "192.0.2.10", ttl: 300, proxied: true },
+    ]).updates).toBe(1);
+    expect(createDnsPlan("example.com", [
+      { type: "A", name: "@", value: "192.0.2.10", ttl: 300, proxied: true },
+    ], [
+      { type: "A", name: "@", value: "192.0.2.10", ttl: 300 },
+    ]).unchanged).toBe(1);
   });
 
   it("creates create/update/delete/unchanged operations", () => {

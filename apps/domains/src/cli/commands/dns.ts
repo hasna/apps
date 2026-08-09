@@ -13,9 +13,15 @@ import {
   getDomainByName,
 } from "../../db/domains.js";
 import { readFileSync, writeFileSync } from "node:fs";
-import { getDnsProvider } from "../../lib/registrar.js";
+import { getDnsProvider, type DnsProvider } from "../../lib/registrar.js";
 import { loadConfig } from "../../lib/config.js";
-import { createDnsPlan, getDnsApplyBlockReason, parseDesiredDnsState, planHasChanges, type DnsPlan } from "../../lib/dns-plan.js";
+import {
+  createDnsPlan,
+  getDnsApplyBlockReason,
+  parseDesiredDnsState,
+  planHasChanges,
+  type DnsPlan,
+} from "../../lib/dns-plan.js";
 import { compactHint, pageItemsOrExit, truncateText } from "../../lib/compact-output.js";
 
 import { printLine, printErrorLine } from "../../lib/stdout.js";
@@ -53,15 +59,24 @@ function printDnsPlan(plan: DnsPlan): void {
   }
 }
 
-async function loadDnsPlan(domain: string, providerName: string, file: string): Promise<DnsPlan> {
+async function loadDnsPlan(
+  domain: string,
+  providerName: string,
+  file: string,
+  resolveDnsProvider: (name: string) => DnsProvider = getDnsProvider,
+): Promise<DnsPlan> {
   const desired = parseDesiredDnsState(readFileSync(file, "utf-8"), domain);
   const planDomain = desired.domain ?? domain;
-  const provider = getDnsProvider(providerName);
+  const provider = resolveDnsProvider(providerName);
   const current = await provider.getDnsRecords(planDomain);
   return createDnsPlan(planDomain, current, desired.records);
 }
 
-export function registerDnsCommands(program: Command): void {
+export function registerDnsCommands(
+  program: Command,
+  deps: { getDnsProvider?: (name: string) => DnsProvider } = {},
+): void {
+  const resolveDnsProvider = deps.getDnsProvider ?? getDnsProvider;
   const dnsCmd = program
     .command("dns")
     .description("DNS record management");
@@ -75,7 +90,7 @@ export function registerDnsCommands(program: Command): void {
     .action(async (domain: string, opts: { file: string; provider?: string; json?: boolean }) => {
       const providerName = opts.provider ?? loadConfig().default_dns ?? "route53";
       try {
-        const plan = await loadDnsPlan(domain, providerName, opts.file);
+        const plan = await loadDnsPlan(domain, providerName, opts.file, resolveDnsProvider);
         if (opts.json) printLine(JSON.stringify(plan, null, 2));
         else printDnsPlan(plan);
       } catch (e) {
@@ -93,7 +108,7 @@ export function registerDnsCommands(program: Command): void {
     .action(async (domain: string, opts: { file: string; provider?: string; json?: boolean }) => {
       const providerName = opts.provider ?? loadConfig().default_dns ?? "route53";
       try {
-        const plan = await loadDnsPlan(domain, providerName, opts.file);
+        const plan = await loadDnsPlan(domain, providerName, opts.file, resolveDnsProvider);
         if (opts.json) printLine(JSON.stringify(plan, null, 2));
         else printDnsPlan(plan);
         if (planHasChanges(plan)) process.exitCode = 2;
@@ -116,7 +131,7 @@ export function registerDnsCommands(program: Command): void {
       try {
         const desired = parseDesiredDnsState(readFileSync(opts.file, "utf-8"), domain);
         const planDomain = desired.domain ?? domain;
-        const provider = getDnsProvider(providerName);
+        const provider = resolveDnsProvider(providerName);
         const current = await provider.getDnsRecords(planDomain);
         const plan = createDnsPlan(planDomain, current, desired.records);
         if (!planHasChanges(plan)) {
@@ -400,7 +415,7 @@ export function registerDnsCommands(program: Command): void {
     .action(async (domain: string, opts: { provider?: string }) => {
       const providerName = opts.provider ?? loadConfig().default_dns ?? "route53";
       try {
-        const provider = getDnsProvider(providerName);
+        const provider = resolveDnsProvider(providerName);
         const records = await provider.getDnsRecords(domain);
         const dbDomain = await getDomainByName(domain);
         if (!dbDomain) {
@@ -437,7 +452,7 @@ export function registerDnsCommands(program: Command): void {
         const records = await listDnsRecords(domainId);
         if (records.length === 0) { printLine("No local DNS records to push."); return; }
         const dbDomain = (await getDomain(domainId)) ?? (() => { throw new Error(`Domain '${domainId}' not found`); })();
-        const provider = getDnsProvider(providerName);
+        const provider = resolveDnsProvider(providerName);
         await provider.setDnsRecords(dbDomain.name, records.map((r) => ({
           type: r.type, name: r.name, value: r.value, ttl: r.ttl, priority: r.priority ?? undefined,
         })));

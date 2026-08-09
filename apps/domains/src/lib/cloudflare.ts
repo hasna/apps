@@ -217,14 +217,84 @@ export async function upsertRecord(zoneId: string, record: CloudflareRecord, con
   }
 }
 
-async function replaceRecordsByNameType(zoneId: string, records: CloudflareRecord[], config?: CloudflareConfig): Promise<void> {
+interface CloudflareRecordReplacement {
+  existing: CloudflareRecord[];
+  desired: CloudflareRecord[];
+}
+
+function sameRecordIdentity(a: CloudflareRecord, b: CloudflareRecord): boolean {
+  return a.type === b.type
+    && a.name === b.name
+    && a.content === b.content
+    && (a.priority ?? undefined) === (b.priority ?? undefined);
+}
+
+function resolveDesiredProxied(records: CloudflareRecord[], existing: CloudflareRecord[]): CloudflareRecord[] {
+  const omitted = records.filter((record) => record.proxied === undefined);
+  if (omitted.length === 0) return records;
+
+  const { type, name } = records[0]!;
+  if (omitted.length === records.length) {
+    const proxyStates = new Set(existing.map((record) => record.proxied));
+    if (proxyStates.size > 1) {
+      throw new Error(
+        `Cannot safely preserve Cloudflare proxied state for ${type} ${name}: `
+        + "existing records have mixed proxied values while desired records omit proxied; "
+        + "set proxied explicitly on every desired record",
+      );
+    }
+    const inherited = existing[0]?.proxied;
+    return inherited === undefined
+      ? records
+      : records.map((record) => ({ ...record, proxied: inherited }));
+  }
+
+  const existingHasProxyState = existing.some((record) => record.proxied !== undefined);
+  return records.map((record) => {
+    if (record.proxied !== undefined) return record;
+    const matches = existing.filter((candidate) => sameRecordIdentity(candidate, record));
+    if (matches.length === 1 && matches[0]!.proxied !== undefined) {
+      return { ...record, proxied: matches[0]!.proxied };
+    }
+    if (!existingHasProxyState) return record;
+    throw new Error(
+      `Cannot safely preserve Cloudflare proxied state for ${type} ${name} record ${record.content}: `
+      + "omitted proxied does not resolve to exactly one existing value; "
+      + "set proxied explicitly on this desired record",
+    );
+  });
+}
+
+async function prepareRecordsByNameType(
+  zoneId: string,
+  records: CloudflareRecord[],
+  config?: CloudflareConfig,
+): Promise<CloudflareRecordReplacement | undefined> {
   if (records.length === 0) return;
   const { type, name } = records[0]!;
   const existing = await listRecordsByNameType(zoneId, type, name, config);
-  for (const record of existing) {
+  if (
+    existing.length === records.length
+    && records.every((record) => existing.some((candidate) =>
+      sameRecordIdentity(candidate, record)
+      && candidate.ttl === record.ttl
+      && (record.proxied === undefined || candidate.proxied === record.proxied)
+    ))
+  ) {
+    return;
+  }
+  return { existing, desired: resolveDesiredProxied(records, existing) };
+}
+
+async function replaceRecordsByNameType(
+  zoneId: string,
+  replacement: CloudflareRecordReplacement,
+  config?: CloudflareConfig,
+): Promise<void> {
+  for (const record of replacement.existing) {
     if (record.id) await deleteRecord(zoneId, record.id, config);
   }
-  for (const record of records) {
+  for (const record of replacement.desired) {
     await cfFetch(`/zones/${zoneId}/dns_records`, {
       method: "POST",
       body: {
@@ -233,7 +303,7 @@ async function replaceRecordsByNameType(zoneId: string, records: CloudflareRecor
         content: record.content,
         ttl: record.ttl ?? 1,
         priority: record.priority,
-        proxied: record.proxied ?? false,
+        ...(record.proxied === undefined ? {} : { proxied: record.proxied }),
       },
       config,
     });
@@ -340,6 +410,7 @@ export function createCloudflareProvider(config?: CloudflareConfig): DnsProvider
         value: r.content,
         ttl: r.ttl === 1 ? 0 : r.ttl, // 1 = automatic in CF
         priority: r.priority,
+        ...(r.proxied === undefined ? {} : { proxied: r.proxied }),
       }));
     },
 
@@ -350,11 +421,23 @@ export function createCloudflareProvider(config?: CloudflareConfig): DnsProvider
       for (const r of records) {
         const key = `${r.type}|${r.name}`;
         const existing = grouped.get(key) ?? [];
-        existing.push({ type: r.type, name: r.name, content: r.value, ttl: r.ttl || 1, priority: r.priority });
+        existing.push({
+          type: r.type,
+          name: r.name,
+          content: r.value,
+          ttl: r.ttl || 1,
+          priority: r.priority,
+          ...(r.proxied === undefined ? {} : { proxied: r.proxied }),
+        });
         grouped.set(key, existing);
       }
+      const replacements: CloudflareRecordReplacement[] = [];
       for (const group of grouped.values()) {
-        await replaceRecordsByNameType(zone.id, group, cfg);
+        const replacement = await prepareRecordsByNameType(zone.id, group, cfg);
+        if (replacement) replacements.push(replacement);
+      }
+      for (const replacement of replacements) {
+        await replaceRecordsByNameType(zone.id, replacement, cfg);
       }
       return true;
     },

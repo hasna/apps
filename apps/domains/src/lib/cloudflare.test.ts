@@ -85,7 +85,7 @@ describe("createCloudflareProvider domain inventory", () => {
     expect(created[0]).not.toHaveProperty("registrar");
   });
 
-  it("replaces all existing records for each type/name group", async () => {
+  it("mutates only changed groups when all desired proxied values are explicit", async () => {
     const calls: { method: string; url: string; body?: unknown }[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -104,9 +104,16 @@ describe("createCloudflareProvider domain inventory", () => {
         return Response.json({
           success: true,
           result: [
-            { id: "old-1", type: "A", name: "@", content: "192.0.2.1", ttl: 1 },
-            { id: "old-2", type: "A", name: "@", content: "192.0.2.2", ttl: 1 },
+            { id: "old-1", type: "A", name: "@", content: "192.0.2.1", ttl: 1, proxied: true },
+            { id: "old-2", type: "A", name: "@", content: "192.0.2.2", ttl: 1, proxied: false },
           ],
+          errors: [],
+        });
+      }
+      if (url.includes("/zones/zone-1/dns_records?type=CNAME&name=www")) {
+        return Response.json({
+          success: true,
+          result: [{ id: "www-1", type: "CNAME", name: "www", content: "example.com", ttl: 300, proxied: true }],
           errors: [],
         });
       }
@@ -115,8 +122,9 @@ describe("createCloudflareProvider domain inventory", () => {
 
     const provider = createCloudflareProvider({ apiToken: "token", accountId: "account" });
     await provider.setDnsRecords("example.com", [
-      { type: "A", name: "@", value: "192.0.2.10", ttl: 300 },
-      { type: "A", name: "@", value: "192.0.2.11", ttl: 300 },
+      { type: "CNAME", name: "www", value: "example.com", ttl: 300, proxied: true },
+      { type: "A", name: "@", value: "192.0.2.10", ttl: 300, proxied: false },
+      { type: "A", name: "@", value: "192.0.2.11", ttl: 300, proxied: true },
     ]);
 
     expect(calls.filter((c) => c.method === "DELETE").map((c) => c.url)).toEqual([
@@ -125,7 +133,214 @@ describe("createCloudflareProvider domain inventory", () => {
     ]);
     expect(calls.filter((c) => c.method === "POST").map((c) => c.body)).toEqual([
       { type: "A", name: "@", content: "192.0.2.10", ttl: 300, proxied: false },
-      { type: "A", name: "@", content: "192.0.2.11", ttl: 300, proxied: false },
+      { type: "A", name: "@", content: "192.0.2.11", ttl: 300, proxied: true },
+    ]);
+  });
+
+  it("returns proxied state and does not mutate an unchanged RRset", async () => {
+    const calls: { method: string; url: string; body?: unknown }[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      calls.push({ method, url, body });
+
+      if (url.includes("/zones?name=example.com")) {
+        return Response.json({
+          success: true,
+          result: [{ id: "zone-1", name: "example.com", status: "active", name_servers: ["cf1.example", "cf2.example"] }],
+          errors: [],
+        });
+      }
+      if (url.includes("/zones/zone-1/dns_records?per_page=100&page=1")) {
+        return Response.json({
+          success: true,
+          result: [{ id: "a-1", type: "A", name: "@", content: "192.0.2.10", ttl: 300, proxied: true }],
+          errors: [],
+        });
+      }
+      if (url.includes("/zones/zone-1/dns_records?type=A&name=%40")) {
+        return Response.json({
+          success: true,
+          result: [{ id: "a-1", type: "A", name: "@", content: "192.0.2.10", ttl: 300, proxied: true }],
+          errors: [],
+        });
+      }
+      return Response.json({ success: true, result: [], errors: [] });
+    }) as typeof fetch;
+
+    const provider = createCloudflareProvider({ apiToken: "token", accountId: "account" });
+    expect(await provider.getDnsRecords("example.com")).toEqual([
+      { type: "A", name: "@", value: "192.0.2.10", ttl: 300, priority: undefined, proxied: true },
+    ]);
+
+    calls.length = 0;
+    await provider.setDnsRecords("example.com", [
+      { type: "A", name: "@", value: "192.0.2.10", ttl: 300, proxied: true },
+    ]);
+
+    expect(calls.filter((c) => c.method === "DELETE" || c.method === "POST" || c.method === "PUT")).toEqual([]);
+  });
+
+  it("preserves a uniform proxied value when every changed sibling omits it", async () => {
+    const calls: { method: string; url: string; body?: unknown }[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      calls.push({ method, url, body });
+
+      if (url.includes("/zones?name=example.com")) {
+        return Response.json({
+          success: true,
+          result: [{ id: "zone-1", name: "example.com", status: "active", name_servers: ["cf1.example", "cf2.example"] }],
+          errors: [],
+        });
+      }
+      if (url.includes("/zones/zone-1/dns_records?type=A&name=%40")) {
+        return Response.json({
+          success: true,
+          result: [
+            { id: "a-1", type: "A", name: "@", content: "192.0.2.1", ttl: 300, proxied: true },
+            { id: "a-2", type: "A", name: "@", content: "192.0.2.2", ttl: 300, proxied: true },
+          ],
+          errors: [],
+        });
+      }
+      return Response.json({ success: true, result: [], errors: [] });
+    }) as typeof fetch;
+
+    const provider = createCloudflareProvider({ apiToken: "token", accountId: "account" });
+    await provider.setDnsRecords("example.com", [
+      { type: "A", name: "@", value: "192.0.2.1", ttl: 600 },
+      { type: "A", name: "@", value: "192.0.2.2", ttl: 600 },
+    ]);
+
+    expect(calls.filter((c) => c.method === "POST").map((c) => c.body)).toEqual([
+      { type: "A", name: "@", content: "192.0.2.1", ttl: 600, proxied: true },
+      { type: "A", name: "@", content: "192.0.2.2", ttl: 600, proxied: true },
+    ]);
+  });
+
+  it("fails before any mutation when existing proxied values are mixed and desired omits them", async () => {
+    const calls: { method: string; url: string; body?: unknown }[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      calls.push({ method, url, body });
+
+      if (url.includes("/zones?name=example.com")) {
+        return Response.json({
+          success: true,
+          result: [{ id: "zone-1", name: "example.com", status: "active", name_servers: ["cf1.example", "cf2.example"] }],
+          errors: [],
+        });
+      }
+      if (url.includes("/zones/zone-1/dns_records?type=CNAME&name=preview")) {
+        return Response.json({
+          success: true,
+          result: [{ id: "preview-1", type: "CNAME", name: "preview", content: "old.example.com", ttl: 300, proxied: false }],
+          errors: [],
+        });
+      }
+      if (url.includes("/zones/zone-1/dns_records?type=A&name=%40")) {
+        return Response.json({
+          success: true,
+          result: [
+            { id: "a-1", type: "A", name: "@", content: "192.0.2.1", ttl: 300, proxied: true },
+            { id: "a-2", type: "A", name: "@", content: "192.0.2.2", ttl: 300, proxied: false },
+          ],
+          errors: [],
+        });
+      }
+      return Response.json({ success: true, result: [], errors: [] });
+    }) as typeof fetch;
+
+    const provider = createCloudflareProvider({ apiToken: "token", accountId: "account" });
+    await expect(provider.setDnsRecords("example.com", [
+      { type: "CNAME", name: "preview", value: "new.example.com", ttl: 300, proxied: false },
+      { type: "A", name: "@", value: "192.0.2.1", ttl: 600 },
+      { type: "A", name: "@", value: "192.0.2.2", ttl: 600 },
+    ])).rejects.toThrow(/Cannot safely preserve Cloudflare proxied state for A @.*set proxied explicitly/);
+
+    expect(calls.filter((c) => c.method === "DELETE" || c.method === "POST" || c.method === "PUT")).toEqual([]);
+  });
+
+  it("fails before mutation when a mixed explicit and omitted desired sibling is ambiguous", async () => {
+    const calls: { method: string; url: string; body?: unknown }[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      calls.push({ method, url, body });
+
+      if (url.includes("/zones?name=example.com")) {
+        return Response.json({
+          success: true,
+          result: [{ id: "zone-1", name: "example.com", status: "active", name_servers: ["cf1.example", "cf2.example"] }],
+          errors: [],
+        });
+      }
+      if (url.includes("/zones/zone-1/dns_records?type=A&name=%40")) {
+        return Response.json({
+          success: true,
+          result: [
+            { id: "a-1", type: "A", name: "@", content: "192.0.2.1", ttl: 300, proxied: true },
+            { id: "a-2", type: "A", name: "@", content: "192.0.2.2", ttl: 300, proxied: true },
+          ],
+          errors: [],
+        });
+      }
+      return Response.json({ success: true, result: [], errors: [] });
+    }) as typeof fetch;
+
+    const provider = createCloudflareProvider({ apiToken: "token", accountId: "account" });
+    await expect(provider.setDnsRecords("example.com", [
+      { type: "A", name: "@", value: "192.0.2.1", ttl: 600, proxied: true },
+      { type: "A", name: "@", value: "192.0.2.3", ttl: 600 },
+    ])).rejects.toThrow(/Cannot safely preserve Cloudflare proxied state for A @.*192\.0\.2\.3.*set proxied explicitly/);
+
+    expect(calls.filter((c) => c.method === "DELETE" || c.method === "POST" || c.method === "PUT")).toEqual([]);
+  });
+
+  it("preserves an omitted proxied value by exact identity in a mixed desired RRset", async () => {
+    const calls: { method: string; url: string; body?: unknown }[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      calls.push({ method, url, body });
+
+      if (url.includes("/zones?name=example.com")) {
+        return Response.json({
+          success: true,
+          result: [{ id: "zone-1", name: "example.com", status: "active", name_servers: ["cf1.example", "cf2.example"] }],
+          errors: [],
+        });
+      }
+      if (url.includes("/zones/zone-1/dns_records?type=A&name=%40")) {
+        return Response.json({
+          success: true,
+          result: [
+            { id: "a-1", type: "A", name: "@", content: "192.0.2.1", ttl: 300, proxied: true },
+            { id: "a-2", type: "A", name: "@", content: "192.0.2.2", ttl: 300, proxied: true },
+          ],
+          errors: [],
+        });
+      }
+      return Response.json({ success: true, result: [], errors: [] });
+    }) as typeof fetch;
+
+    const provider = createCloudflareProvider({ apiToken: "token", accountId: "account" });
+    await provider.setDnsRecords("example.com", [
+      { type: "A", name: "@", value: "192.0.2.1", ttl: 600, proxied: true },
+      { type: "A", name: "@", value: "192.0.2.2", ttl: 600 },
+    ]);
+
+    expect(calls.filter((c) => c.method === "POST").map((c) => c.body)).toEqual([
+      { type: "A", name: "@", content: "192.0.2.1", ttl: 600, proxied: true },
+      { type: "A", name: "@", content: "192.0.2.2", ttl: 600, proxied: true },
     ]);
   });
 });
