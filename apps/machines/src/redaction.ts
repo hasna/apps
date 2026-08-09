@@ -96,6 +96,196 @@ export function redactErrorMessage(value: string): string {
     .replace(PRIVATE_HOST_PATTERN, REDACTED_VALUE);
 }
 
+export interface IncrementalCredentialRedactor {
+  push(value: string): string;
+  finish(): string;
+}
+
+export function createIncrementalCredentialRedactor(): IncrementalCredentialRedactor {
+  const redactedValue = "[redacted]";
+  const pendingTailChars = 64;
+  const patterns = [
+    {
+      start: /\bAWS_SECRET_ACCESS_KEY=/i,
+      value: /[^\s"'<>]/,
+      minimumValueChars: 1,
+      render: (prefix: string) => `${prefix}${redactedValue}`,
+    },
+    {
+      start: /\b(?:password|passwd|token|secret|api[_-]?key|credential)=/i,
+      value: /[^\s"'<>]/,
+      minimumValueChars: 1,
+      render: (prefix: string) => `${prefix}${redactedValue}`,
+    },
+    {
+      start: /\b(?:Bearer|Basic)\s+/i,
+      value: /[A-Za-z0-9._~+/-=]/,
+      minimumValueChars: 1,
+      render: () => redactedValue,
+    },
+    {
+      start: /\bsecret-token:/i,
+      value: /[^\s"'<>]/,
+      minimumValueChars: 1,
+      render: () => redactedValue,
+    },
+    {
+      start: /\b(?:postgres(?:ql)?|mysql|mariadb|redis|mongodb|s3):\/\//i,
+      value: /[^\s"'<>]/,
+      minimumValueChars: 1,
+      render: (prefix: string) => `${prefix}${redactedValue}`,
+    },
+    {
+      start: /\bgithub_pat_/i,
+      value: /[A-Za-z0-9_]/,
+      minimumValueChars: 20,
+      render: () => redactedValue,
+    },
+    {
+      start: /\bgh[pous]_/i,
+      value: /[A-Za-z0-9_]/,
+      minimumValueChars: 20,
+      render: () => redactedValue,
+    },
+    {
+      start: /\bxox[baprs]-/i,
+      value: /[A-Za-z0-9-]/,
+      minimumValueChars: 20,
+      render: () => redactedValue,
+    },
+    {
+      start: /\bAKIA/,
+      value: /[0-9A-Z]/,
+      minimumValueChars: 16,
+      render: () => redactedValue,
+    },
+    {
+      start: /\bsk-/,
+      value: /[A-Za-z0-9_-]/,
+      minimumValueChars: 20,
+      render: () => redactedValue,
+    },
+    {
+      start: /\bnpm_/i,
+      value: /[A-Za-z0-9_]/,
+      minimumValueChars: 8,
+      render: () => redactedValue,
+    },
+    {
+      start: /\b(?:ctx7sk|xai)-/i,
+      value: /[A-Za-z0-9_-]/,
+      minimumValueChars: 8,
+      render: () => redactedValue,
+    },
+    {
+      start: /\bAIza/,
+      value: /[A-Za-z0-9_-]/,
+      minimumValueChars: 20,
+      render: () => redactedValue,
+    },
+  ];
+  let pending = "";
+  let active: {
+    pattern: (typeof patterns)[number];
+    prefix: string;
+    rawValue: string;
+    emitted: boolean;
+  } | null = null;
+
+  const characterMatches = (pattern: RegExp, value: string): boolean => {
+    pattern.lastIndex = 0;
+    return pattern.test(value);
+  };
+
+  const findNext = (): {
+    index: number;
+    match: string;
+    pattern: (typeof patterns)[number];
+  } | null => {
+    let next: {
+      index: number;
+      match: string;
+      pattern: (typeof patterns)[number];
+    } | null = null;
+
+    for (const pattern of patterns) {
+      pattern.start.lastIndex = 0;
+      const match = pattern.start.exec(pending);
+      if (!match || (next && match.index >= next.index)) continue;
+      next = { index: match.index, match: match[0], pattern };
+    }
+    return next;
+  };
+
+  const drain = (final: boolean): string => {
+    let output = "";
+
+    while (true) {
+      if (active) {
+        let consumed = 0;
+        while (consumed < pending.length && characterMatches(active.pattern.value, pending[consumed]!)) {
+          if (!active.emitted) {
+            active.rawValue += pending[consumed]!;
+            if (active.rawValue.length >= active.pattern.minimumValueChars) {
+              output += active.pattern.render(active.prefix);
+              active.rawValue = "";
+              active.emitted = true;
+            }
+          }
+          consumed += 1;
+        }
+        pending = pending.slice(consumed);
+
+        if (pending.length === 0) {
+          if (final) {
+            if (!active.emitted) output += `${active.prefix}${active.rawValue}`;
+            active = null;
+          }
+          return output;
+        }
+
+        if (!active.emitted) output += `${active.prefix}${active.rawValue}`;
+        active = null;
+        continue;
+      }
+
+      const next = findNext();
+      if (next) {
+        output += pending.slice(0, next.index);
+        pending = pending.slice(next.index + next.match.length);
+        active = {
+          pattern: next.pattern,
+          prefix: next.match,
+          rawValue: "",
+          emitted: false,
+        };
+        continue;
+      }
+
+      if (final) {
+        output += pending;
+        pending = "";
+        return output;
+      }
+
+      if (pending.length <= pendingTailChars) return output;
+      output += pending.slice(0, -pendingTailChars);
+      pending = pending.slice(-pendingTailChars);
+      return output;
+    }
+  };
+
+  return {
+    push(value: string): string {
+      pending += value;
+      return drain(false);
+    },
+    finish(): string {
+      return drain(true);
+    },
+  };
+}
+
 export function redactPrivateRef(value: string): string {
   const trimmed = value.trim();
   const scheme = trimmed.match(/^([a-z][a-z0-9+.-]*:\/\/)/i);

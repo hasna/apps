@@ -4,6 +4,7 @@ import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { getLocalMachineId } from "./db.js";
 import { buildSshCommandPlan, validateSshTarget } from "./commands/ssh.js";
+import { createIncrementalCredentialRedactor } from "./redaction.js";
 
 export interface MachineCommandResult {
   machineId: string;
@@ -17,12 +18,15 @@ export interface MachineCommandResult {
   stderrTruncated?: boolean;
   stdoutChars?: number;
   stderrChars?: number;
+  stdoutRedacted?: boolean;
+  stderrRedacted?: boolean;
 }
 
 export interface MachineCommandOptions {
   timeoutMs?: number;
   killGraceMs?: number;
   maxOutputChars?: number;
+  redactOutput?: boolean;
 }
 
 export interface ResolvedMachineCommand {
@@ -131,6 +135,7 @@ function runMachineCommandWithProcessGroupTimeout(
       HASNA_MACHINES_COMMAND_KILL_GRACE_MS: String(killGraceMs),
       HASNA_MACHINES_COMMAND_PGID_FILE: pgidFile,
       HASNA_MACHINES_COMMAND_MAX_OUTPUT_CHARS: maxOutputChars === null ? "" : String(maxOutputChars),
+      HASNA_MACHINES_COMMAND_REDACT_OUTPUT: options.redactOutput === true ? "1" : "",
     },
     timeout: timeoutMs + killGraceMs + 2_000,
     killSignal: "SIGKILL",
@@ -154,6 +159,8 @@ function runMachineCommandWithProcessGroupTimeout(
         stderrTruncated: parsed.stderrTruncated,
         stdoutChars: parsed.stdoutChars,
         stderrChars: parsed.stderrChars,
+        stdoutRedacted: parsed.stdoutRedacted,
+        stderrRedacted: parsed.stderrRedacted,
       };
     }
 
@@ -173,6 +180,8 @@ function runMachineCommandWithProcessGroupTimeout(
       stderrTruncated: false,
       stdoutChars: 0,
       stderrChars: stderr.length,
+      stdoutRedacted: false,
+      stderrRedacted: false,
     };
   } finally {
     rmSync(helperDir, { recursive: true, force: true });
@@ -205,6 +214,8 @@ function parseHelperResult(stdout: string | null | undefined): MachineCommandRes
       stderrTruncated: parsed.stderrTruncated === true,
       stdoutChars: typeof parsed.stdoutChars === "number" ? parsed.stdoutChars : parsed.stdout.length,
       stderrChars: typeof parsed.stderrChars === "number" ? parsed.stderrChars : parsed.stderr.length,
+      stdoutRedacted: parsed.stdoutRedacted === true,
+      stderrRedacted: parsed.stderrRedacted === true,
     };
   } catch {
     return null;
@@ -214,6 +225,7 @@ function parseHelperResult(stdout: string | null | undefined): MachineCommandRes
 const PROCESS_GROUP_TIMEOUT_HELPER = `
 	const { spawn } = require("node:child_process");
 	const { readFileSync, writeFileSync } = require("node:fs");
+	${createIncrementalCredentialRedactor.toString()}
 
 	const plan = JSON.parse(readFileSync(0, "utf8"));
 	const command = String(plan.command || "");
@@ -222,7 +234,10 @@ const PROCESS_GROUP_TIMEOUT_HELPER = `
 	const killGraceMs = Math.max(1, Number.parseInt(process.env.HASNA_MACHINES_COMMAND_KILL_GRACE_MS || "1000", 10));
 	const parsedMaxOutputChars = Number.parseInt(process.env.HASNA_MACHINES_COMMAND_MAX_OUTPUT_CHARS || "", 10);
 	const maxOutputChars = Number.isFinite(parsedMaxOutputChars) && parsedMaxOutputChars > 0 ? parsedMaxOutputChars : null;
+	const redactOutput = process.env.HASNA_MACHINES_COMMAND_REDACT_OUTPUT === "1";
 	const pgidFile = process.env.HASNA_MACHINES_COMMAND_PGID_FILE || "";
+	const stdoutRedactor = redactOutput ? createIncrementalCredentialRedactor() : null;
+	const stderrRedactor = redactOutput ? createIncrementalCredentialRedactor() : null;
 	let stdout = "";
 	let stderr = "";
 	let stdoutChars = 0;
@@ -248,10 +263,7 @@ const child = spawn(command, args, {
 	  } catch {}
 	}
 
-function appendText(target, chunk, stream) {
-  const text = String(chunk);
-  if (stream === "stdout") stdoutChars += text.length;
-  else stderrChars += text.length;
+function appendCollectedText(target, text, stream) {
   if (maxOutputChars === null) return target + text;
 
   const keep = Math.max(0, maxOutputChars - target.length);
@@ -260,6 +272,20 @@ function appendText(target, chunk, stream) {
     else stderrTruncated = true;
   }
   return target + text.slice(0, keep);
+}
+
+function appendText(target, chunk, stream) {
+  const text = String(chunk);
+  if (stream === "stdout") stdoutChars += text.length;
+  else stderrChars += text.length;
+  const redactor = stream === "stdout" ? stdoutRedactor : stderrRedactor;
+  const safeText = redactor ? redactor.push(text) : text;
+  return appendCollectedText(target, safeText, stream);
+}
+
+function finishText(target, stream) {
+  const redactor = stream === "stdout" ? stdoutRedactor : stderrRedactor;
+  return appendCollectedText(target, redactor ? redactor.finish() : "", stream);
 }
 
 	function killTarget(signal) {
@@ -288,6 +314,8 @@ function appendText(target, chunk, stream) {
 	    if (stderr) stderr = appendText(stderr, "\\n", "stderr");
 	    stderr = appendText(stderr, "Command timed out after " + timeoutMs + "ms.", "stderr");
 	  }
+	  stdout = finishText(stdout, "stdout");
+	  stderr = finishText(stderr, "stderr");
 	  const exitCode = timedOut ? 124 : code ?? 1;
 	  process.stdout.write(JSON.stringify({
 	    stdout,
@@ -299,6 +327,8 @@ function appendText(target, chunk, stream) {
 	    stderrTruncated,
 	    stdoutChars,
 	    stderrChars,
+	    stdoutRedacted: redactOutput,
+	    stderrRedacted: redactOutput,
 	  }), () => process.exit(exitCode));
 	}
 
