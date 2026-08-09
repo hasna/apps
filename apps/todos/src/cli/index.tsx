@@ -1,7 +1,12 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
 import { getPackageVersion } from "../lib/package-version.js";
-import { applyTodosCliHelpVisibility, initializeTodosCliAuthority, type TodosCliAuthorityInitialization } from "./stage-a.js";
+import {
+  applyTodosCliAuthorityEnvironment,
+  applyTodosCliHelpVisibility,
+  initializeTodosCliAuthority,
+  type TodosCliAuthorityInitialization,
+} from "./stage-a.js";
 
 const program = new Command();
 
@@ -123,6 +128,7 @@ program
 let authority: TodosCliAuthorityInitialization;
 try {
   authority = initializeTodosCliAuthority();
+  applyTodosCliAuthorityEnvironment(authority);
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
@@ -229,9 +235,9 @@ registerPrGroupCommands(program);
 await registerOptionalEventsCommands(program);
 registerHelpCommands(program, authority.route);
 
-// In a remote authority route the CLI fails closed on local-only commands
-// (Stage A throws REMOTE_COMMAND_UNSUPPORTED). Hide those commands from the
-// `todos --help` catalog so the advertised surface matches what actually runs.
+// Remote metadata describes the authority-served catalog. Explicitly naming a
+// local-only command is a separate Stage-A route that pins the process to local
+// storage before the command modules above are imported.
 applyTodosCliHelpVisibility(program, authority.route);
 
 // Single top-level guard: any error thrown from an async action handler (e.g. a

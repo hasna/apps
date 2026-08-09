@@ -32,12 +32,12 @@ function initFailure(args: string[]): string {
  *
  * Three distinct conditions previously produced one identical string:
  *   1. the verb is not in the registry at all    (`complete`, `register`)
- *   2. the verb exists but is local-only         (`sprint`)
+ *   2. the verb exists but is local-only         (`sprint`, now routed locally)
  *   3. the verb is remote-capable, the flag is not (`list --recurring`)
  *
- * Only (2) is what the message asserted.
+ * Only (2) was what the message asserted.
  */
-describe("stage-a rejection messages distinguish why an invocation was refused", () => {
+describe("stage-a routing and rejection diagnosis distinguish invocation ownership", () => {
   test("`complete` and `register` are accepted as aliases of the real verbs", () => {
     // The fleet's MCP surface names these operations `complete_task` and
     // `register_agent`, and the rules corpus instructs agents to use them, so
@@ -84,14 +84,12 @@ describe("stage-a rejection messages distinguish why an invocation was refused",
     expect(initFailure(["lsit"])).toContain("list");
   });
 
-  test("a local-only verb says it is local-only and names the remedy", () => {
-    const message = initFailure(["sprint"]);
-
-    expect(message).toContain("REMOTE_COMMAND_UNSUPPORTED");
-    expect(message).toContain("sprint");
-    expect(message).toContain("local-only");
-    // Control: it must not be misfiled as an unknown verb.
-    expect(message).not.toContain("UNKNOWN_COMMAND");
+  test("a local-only verb selects the local route instead of being refused by hosted routing", () => {
+    expect(initializeTodosCliAuthority(["sprint"], REMOTE_ENV)).toEqual({
+      route: "local",
+      v1_base_url: null,
+      selected_by: "local-only-command",
+    });
   });
 
   test("an unsupported option on a supported verb blames the option, not the verb", () => {
@@ -104,9 +102,9 @@ describe("stage-a rejection messages distinguish why an invocation was refused",
     expect(message).not.toContain("UNKNOWN_COMMAND");
   });
 
-  test("a suggestion is always a verb the caller can actually run here", () => {
-    // Reviewer finding (P2): pointing a typo at a local-only verb buys the
-    // caller a second, different refusal instead of a way out.
+  test("a remote-route suggestion stays on the advertised authority surface", () => {
+    // Local-only verbs can be run explicitly, but remote help and typo recovery
+    // remain scoped to the shared authority catalog.
     const matrix = getTodosCliCommandCapabilityMatrix();
     const localOnly = new Set(
       [...matrix.entries()].filter(([, owner]) => owner === "local-only").map(([command]) => command),
@@ -128,7 +126,7 @@ describe("stage-a rejection messages distinguish why an invocation was refused",
     expect(message).not.toContain("re-run without it");
   });
 
-  test("every registered verb the remote gate refuses is refused as local-only, never as unknown", () => {
+  test("every registered local-only verb selects local authority, never unknown-command diagnosis", () => {
     // Guards the classifier against drift: a verb that is in the canonical
     // registry must never be reported as if it did not exist.
     const matrix = getTodosCliCommandCapabilityMatrix();
@@ -140,8 +138,11 @@ describe("stage-a rejection messages distinguish why an invocation was refused",
     expect(localOnly.length).toBeGreaterThan(0);
 
     for (const command of localOnly) {
-      const message = initFailure([command]);
-      expect(message).not.toContain("UNKNOWN_COMMAND");
+      expect(initializeTodosCliAuthority([command], REMOTE_ENV)).toEqual({
+        route: "local",
+        v1_base_url: null,
+        selected_by: "local-only-command",
+      });
     }
   });
 });

@@ -4,12 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import ts from "typescript";
 import {
+  applyTodosCliAuthorityEnvironment,
   getTodosCliCommandCapabilityMatrix,
   initializeTodosCliAuthority,
   type TodosCliAuthorityInitialization,
 } from "./stage-a.js";
-import { resetTodosCloudClient } from "./cloud-router.js";
-import { builtCliSpawnBudgetMs } from "../test/spawn-budget.js";
+import { getTodosCloudClient, resetTodosCloudClient } from "./cloud-router.js";
 
 /** `todos add` warns on stderr when a task ends up both unassigned and unattributed —
  *  that warning is the point of the fix, not incidental noise, so it is stripped here
@@ -28,26 +28,12 @@ const REPO_ROOT = join(import.meta.dir, "../..");
 /**
  * Exact number of local-only commands in the Stage-A capability matrix.
  *
- * This is deliberately an exact literal, not a `>=` floor. The floor it replaces
- * (`>= 97`, in two places) had drifted 25 commands behind reality, which is how
- * the Stage-A sweep's frozen 45_000ms timeout went unnoticed as it tightened: the
- * sweep invokes the built CLI once per local-only command, so at the ~310-352ms
- * per invocation measured on CI, two consecutive runs took 37,831ms and 42,972ms
- * — the second within 2.0s of failing, with about six commands of headroom left.
- * An exact count fails loudly the moment a command is reclassified in either
- * direction, forcing a deliberate update here instead of silent erosion.
+ * This is deliberately an exact literal, not a `>=` floor. Every local-only
+ * owner now selects the explicit local route under hosted configuration, so a
+ * reclassification in either direction must be reviewed deliberately rather
+ * than silently changing which authority a command can reach.
  */
 const EXPECTED_LOCAL_ONLY_COMMANDS = 114;
-
-/**
- * Budget for the Stage-A sweep, derived from the matrix that drives its workload
- * so it grows with the work rather than needing to be re-guessed. Read from the
- * live matrix rather than the constant above so the budget stays correct even
- * when the count assertion is the thing that is failing.
- */
-const LOCAL_ONLY_COMMAND_COUNT = [...getTodosCliCommandCapabilityMatrix()].filter(
-  ([, owner]) => owner === "local-only",
-).length;
 const TASK_FIXTURE_ID = "11111111-1111-4111-8111-111111111111";
 const OTHER_TASK_FIXTURE_ID = "22222222-2222-4222-8222-222222222222";
 const tempRoots: string[] = [];
@@ -581,7 +567,6 @@ describe("remote CLI entrypoint authority boundary", () => {
         ["bulk", "done", TASK_FIXTURE_ID, "--plan", "fixture-plan"],
         ["projects", "--path-prefix", "/tmp"],
         ["plans", "--write-artifacts"],
-        ["agents-normalize"],
       ]) {
         const requestCount = requests.length;
         const result = await runCli(executable, args, env, cwd);
@@ -698,53 +683,35 @@ describe("remote CLI entrypoint authority boundary", () => {
     }
   });
 
-  test("every local-only command family rejects in the built entrypoint before HTTP or filesystem access", async () => {
-    const requests: string[] = [];
-    const server = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      fetch(request) {
-        requests.push(`${request.method} ${new URL(request.url).pathname}`);
-        return Response.json({ error: "local-only command reached HTTP" }, { status: 500 });
-      },
-    });
-    const root = mkdtempSync(join(tmpdir(), "todos-stage-a-local-inventory-"));
-    tempRoots.push(root);
-    const cwd = join(root, "cwd");
-    const home = join(root, "home");
-    mkdirSync(cwd);
-    mkdirSync(home);
-    const localDbPath = join(root, "must-not-exist", "todos.db");
-    const env = {
-      PATH: process.env.PATH ?? "",
-      BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
-      HOME: home,
-      TMPDIR: root,
-      LANG: "C.UTF-8",
-      TODOS_DB_PATH: localDbPath,
+  test("every local-only command family selects the explicit local transport under hosted configuration", () => {
+    const hostedEnv = {
       HASNA_TODOS_STORAGE_MODE: "remote",
-      HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
+      HASNA_TODOS_API_URL: "https://authority.invalid",
       HASNA_TODOS_API_KEY: "fixture-remote-key",
     };
-    const before = recursiveInventory(cwd);
-    try {
-      const localOnly = [...getTodosCliCommandCapabilityMatrix()]
-        .filter(([, owner]) => owner === "local-only")
-        .map(([command]) => command)
-        .sort();
-      expect(localOnly.length).toBe(EXPECTED_LOCAL_ONLY_COMMANDS);
-      for (const command of localOnly) {
-        const result = await runCli(executable, [command], env, cwd);
-        expect({ command, exitCode: result.exitCode }).toEqual({ command, exitCode: 1 });
-        expect(result.stderr).toContain("REMOTE_COMMAND_UNSUPPORTED");
-        expect(requests).toHaveLength(0);
-        expect(recursiveInventory(cwd)).toEqual(before);
-        expectNoLocalDatabase(home, localDbPath);
-      }
-    } finally {
-      server.stop(true);
+    const localOnly = [...getTodosCliCommandCapabilityMatrix()]
+      .filter(([, owner]) => owner === "local-only")
+      .map(([command]) => command)
+      .sort();
+    expect(localOnly.length).toBe(EXPECTED_LOCAL_ONLY_COMMANDS);
+
+    for (const command of localOnly) {
+      const env = { ...hostedEnv };
+      const authority = initializeTodosCliAuthority([command], env);
+      expect({ command, authority }).toEqual({
+        command,
+        authority: {
+          route: "local",
+          v1_base_url: null,
+          selected_by: "local-only-command",
+        },
+      });
+      applyTodosCliAuthorityEnvironment(authority, env);
+      expect(env.HASNA_TODOS_STORAGE_MODE).toBe("sqlite");
+      expect(env.TODOS_STORAGE_MODE).toBe("sqlite");
+      expect(getTodosCloudClient(env)).toBeNull();
     }
-  }, builtCliSpawnBudgetMs(LOCAL_ONLY_COMMAND_COUNT));
+  });
 
   test("built help and manual advertise only remote-executable commands", async () => {
     const env = {

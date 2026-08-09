@@ -7,10 +7,10 @@ import {
   isTodosCliCommandVisibleForRoute,
 } from "./stage-a.js";
 
-// Regression coverage for the "help-runtime-command-gap" bug: in a remote
-// authority route the CLI fails closed on local-only commands
-// (REMOTE_COMMAND_UNSUPPORTED), so the advertised surface (`todos --help` and
-// `todos manual`) must not list commands it cannot execute.
+// Remote metadata intentionally describes the authority-served surface.
+// Explicitly named local-only commands select a separate local route, so they
+// stay out of `todos --help`, `todos manual`, and completions rendered for the
+// remote authority.
 
 const NAMED_REPRO_COMMANDS = [
   "ready", "blocked", "overdue", "sla", "priorities", "today", "yesterday",
@@ -32,7 +32,7 @@ function buildProgramFromMatrix(): Command {
 }
 
 describe("remote help/runtime command gap", () => {
-  test("remote manual advertises only remote-executable commands", () => {
+  test("remote manual advertises only authority-served commands", () => {
     const matrix = getTodosCliCommandCapabilityMatrix();
     const manual = createCliManual(buildProgramFromMatrix(), {
       isCommandVisible: (command) => isTodosCliCommandVisibleForRoute(command, "remote-http"),
@@ -40,7 +40,7 @@ describe("remote help/runtime command gap", () => {
     });
     const advertised = manual.commands.map((entry) => entry.path[0] ?? "");
 
-    // No advertised command may be one Stage A rejects in a remote route.
+    // No advertised command may be one Stage A routes to local state.
     const leaked = advertised.filter((name) => matrix.get(name) === "local-only");
     expect(leaked).toEqual([]);
 
@@ -57,7 +57,7 @@ describe("remote help/runtime command gap", () => {
     expect(manual.local_only).toBe(false);
   });
 
-  test("remote manual examples drop commands the CLI would reject", () => {
+  test("remote manual examples drop commands that select local state", () => {
     const manual = createCliManual(buildProgramFromMatrix(), {
       isCommandVisible: (command) => isTodosCliCommandVisibleForRoute(command, "remote-http"),
       localOnly: false,
@@ -92,7 +92,7 @@ describe("remote help/runtime command gap", () => {
     expect(localProgram.helpInformation()).toMatch(/\bburndown\b/);
   });
 
-  test("remote shell completions only suggest remote-executable commands", () => {
+  test("remote shell completions only suggest authority-served commands", () => {
     const program = buildProgramFromMatrix();
     const remote = generateCompletionScript(program, "bash", (command) =>
       isTodosCliCommandVisibleForRoute(command, "remote-http"),
@@ -105,7 +105,7 @@ describe("remote help/runtime command gap", () => {
     expect(local).toMatch(/\bburndown\b/);
   });
 
-  test("visibility predicate keeps diagnostic and remote owners while dropping local-only", () => {
+  test("visibility predicate keeps diagnostic and remote owners while omitting local-only", () => {
     expect(isTodosCliCommandVisibleForRoute("status", "remote-http")).toBe(true); // remote-http
     expect(isTodosCliCommandVisibleForRoute("manual", "remote-http")).toBe(true); // diagnostic
     expect(isTodosCliCommandVisibleForRoute("fail", "remote-http")).toBe(true); // remote-http

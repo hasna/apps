@@ -6,21 +6,15 @@ import { getTodosCliCommandCapabilityMatrix, isTodosCliCommandVisibleForRoute } 
  * one in this change.
  *
  * Stage A defaults EVERY canonical command to `local-only` and promotes only
- * the members of `REMOTE_COMMANDS` to `remote-http`. This fleet runs the cloud
- * `/v1` route, where a `local-only` verb is refused outright with
- * REMOTE_COMMAND_UNSUPPORTED and the local SQLite fallback is disabled.
+ * the members of `REMOTE_COMMANDS` to `remote-http`. Under hosted
+ * configuration an explicitly named `local-only` verb now runs against the
+ * local store, never the shared `/v1` authority.
  *
- * `dispatch` is the worked example and it is already dead here: it is a
- * registered canonical command, it is absent from REMOTE_COMMANDS, and running
- * it on this fleet returns
- *
- *   REMOTE_COMMAND_UNSUPPORTED: `dispatch` is a local-only command and the
- *   Todos /v1 authority does not serve it; local SQLite fallback is disabled.
- *
- * A `delegate` registered in only ONE of the two arrays would ship exactly that
- * way — refused on the very fleet whose abandoned-dispatch problem it exists to
- * fix — and nothing in `todos --help`, in the command's own tests, or in a
- * local-route run would reveal it. Hence a test against the matrix itself.
+ * `dispatch` is the worked example: it is registered, absent from
+ * REMOTE_COMMANDS, and therefore intentionally stays local. A `delegate`
+ * registered in only ONE of the two arrays would silently operate on local
+ * state instead of the shared fleet task. Nothing in the command's local tests
+ * would reveal that authority error, hence a test against the matrix itself.
  */
 
 describe("delegate is routable on the remote /v1 authority, not just registered", () => {
@@ -39,7 +33,7 @@ describe("delegate is routable on the remote /v1 authority, not just registered"
     expect(isTodosCliCommandVisibleForRoute("delegate", "local")).toBe(true);
   });
 
-  test("CONTROL: dispatch is registered but local-only, which is the failure mode being avoided", () => {
+  test("CONTROL: dispatch is registered but local-only, which is the authority mismatch being avoided", () => {
     // If this ever flips, either someone made `dispatch` remote-capable — a
     // change operating rule 12 forbids, since it types into a tmux pane — or
     // this test is reading a matrix that no longer means what it says.

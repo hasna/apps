@@ -8,11 +8,27 @@ import {
 type Env = Record<string, string | undefined>;
 
 export type TodosCliAuthorityInitialization =
-  | { route: "local"; v1_base_url: null }
+  | { route: "local"; v1_base_url: null; selected_by?: "local-only-command" }
   | { route: "remote-diagnostic"; v1_base_url: string | null }
   | { route: "remote-http"; v1_base_url: string };
 
 export type TodosCliCommandOwner = "diagnostic" | "remote-http" | "local-only";
+
+/**
+ * Stage A is intentionally pure: it decides the authority route without
+ * mutating the caller's environment. The executable applies that decision
+ * before importing command modules so any later `getTodosCloudClient()` call
+ * observes the same local-only route instead of reconstructing hosted routing
+ * from the ambient selector.
+ */
+export function applyTodosCliAuthorityEnvironment(
+  authority: TodosCliAuthorityInitialization,
+  env: Env = process.env as Env,
+): void {
+  if (authority.route !== "local" || authority.selected_by !== "local-only-command") return;
+  env.HASNA_TODOS_STORAGE_MODE = "sqlite";
+  env.TODOS_STORAGE_MODE = "sqlite";
+}
 
 const REGISTERED_CANONICAL_COMMANDS = [
   "active", "add", "agent", "agent-runs", "agent-update", "agents", "agents-normalize", "api-keys",
@@ -146,10 +162,10 @@ export function getTodosCliCommandCapabilityMatrix(): ReadonlyMap<string, TodosC
 
 /**
  * Whether a top-level command should be advertised (help/manual/completions) for
- * a resolved authority route. In a remote route the CLI fails closed on
- * `local-only` commands (Stage A throws REMOTE_COMMAND_UNSUPPORTED), so the help
- * surface must not advertise commands it will reject. Diagnostic and remote-http
- * owners stay visible. Commands with no capability owner (e.g. optional
+ * a resolved authority route. Remote help describes the authority-served
+ * surface, while an explicitly named `local-only` command can still select the
+ * local route before command modules load. Diagnostic and remote-http owners
+ * stay visible. Commands with no capability owner (e.g. optional
  * dynamically-registered families) self-gate at runtime and remain visible.
  */
 export function isTodosCliCommandVisibleForRoute(
@@ -163,10 +179,10 @@ export function isTodosCliCommandVisibleForRoute(
 }
 
 /**
- * Filter the commander help output so it only lists top-level commands the given
- * authority route can execute. This keeps `todos --help` honest without
- * unregistering commands, so Stage A remains the single source of truth for
- * execution gating and error messaging.
+ * Filter commander help to the authority-served catalog. Explicitly named
+ * local-only commands select their own local route, but are omitted from remote
+ * metadata so help/manual/completions continue to describe the shared /v1
+ * surface rather than mixing two authorities into one catalog.
  */
 export function applyTodosCliHelpVisibility(program: Command, route: TodosCliAuthorityInitialization["route"]): void {
   if (route === "local") return;
@@ -456,9 +472,9 @@ function editDistance(a: string, b: string): number {
  */
 function nearestCommands(command: string, limit = 3): string[] {
   const threshold = command.length <= 4 ? 1 : command.length <= 8 ? 2 : 3;
-  // Suggest only what this route can actually run. Pointing a typo at a
-  // local-only verb just buys the caller a second, different refusal — the
-  // suggestion has to be a way out, not another dead end.
+  // Keep suggestions on the selected remote authority surface. Local-only
+  // commands remain available when named explicitly, but are deliberately not
+  // advertised by remote help or typo recovery.
   return [...COMMAND_CAPABILITY_MATRIX.entries()]
     .filter(([, owner]) => owner !== "local-only")
     .map(([candidate]) => candidate)
@@ -480,7 +496,7 @@ function nearestCommands(command: string, limit = 3): string[] {
  * credentials instead of their command. Every branch below names a remedy in
  * its own text.
  */
-function assertRemoteCommandSupported(invocation: ParsedInvocation): void {
+function assertInvocationRoutable(invocation: ParsedInvocation): TodosCliCommandOwner | undefined {
   if (invocation.invalidGlobalOption) {
     throw new Error(
       `REMOTE_COMMAND_UNSUPPORTED: the global option ${invocation.invalidGlobalOption} was given without a value; ` +
@@ -514,10 +530,17 @@ function assertRemoteCommandSupported(invocation: ParsedInvocation): void {
     );
   }
 
+  return owner;
+}
+
+function assertRemoteCommandSupported(
+  invocation: ParsedInvocation,
+  owner: TodosCliCommandOwner | undefined,
+): void {
+  const command = invocation.command;
   if (command && owner === "local-only") {
     throw new Error(
-      `REMOTE_COMMAND_UNSUPPORTED: \`${command}\` is a local-only command and the Todos /v1 authority does not ` +
-        "serve it; local SQLite fallback is disabled. Run `todos --help` to see the commands this route supports.",
+      `LOCAL_COMMAND_ROUTING_INVARIANT: \`${command}\` must select the local command route before remote authority validation`,
     );
   }
 
@@ -538,8 +561,10 @@ function assertRemoteCommandSupported(invocation: ParsedInvocation): void {
 
 /**
  * Stage A runs before importing any command module that can reach SQLite or
- * native Postgres adapters. It validates the complete mode state, gates the
- * remote command surface, then constructs only the authenticated HTTP client.
+ * native Postgres adapters. It validates the complete mode state, routes an
+ * explicitly named local-only command back to the local transport, gates the
+ * remote command surface, then constructs only the authenticated HTTP client
+ * for remote-supported commands.
  */
 export function initializeTodosCliAuthority(
   args: string[] = process.argv.slice(2),
@@ -554,7 +579,12 @@ export function initializeTodosCliAuthority(
     return { route: "remote-diagnostic", v1_base_url: status.v1_base_url };
   }
 
-  assertRemoteCommandSupported(invocation);
+  const owner = assertInvocationRoutable(invocation);
+  if (owner === "local-only") {
+    return { route: "local", v1_base_url: null, selected_by: "local-only-command" };
+  }
+
+  assertRemoteCommandSupported(invocation, owner);
   const client = getTodosCloudClient(env);
   if (!client) {
     throw new Error("REMOTE_API_UNAVAILABLE: remote mode did not resolve an HTTP client; local SQLite fallback is disabled");
