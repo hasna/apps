@@ -51,6 +51,11 @@ All notable changes to `@hasna/emails` are documented here.
 - perf(cli): `emails domain warm-list` reads the sent-mail ledger **once per page** instead of once per row, via a new `getTodaySentCountsByDomain`. In self-hosted mode each read is a synchronous `curl` spawn over today's messages, so a default 20-row page cost 20 identical requests.
 - refactor(warming): ramp position (`current_day`, `total_days`, `progress_percent`, `today_limit`, `today_sent`) is computed once in `describeWarmingProgress` and shared by the CLI, the MCP tools, the local `GET /api/warming/:domain` route, and `formatWarmingStatus` — replacing four copies of the same date math, one of which had already drifted from the server. `formatWarmingStatus` and `describeWarmingProgress` accept precomputed inputs so a single command does not read the sent-mail ledger more than once.
 
+## 1.3.14 (2026-08-09)
+
+- **fix(send): raise the self-hosted send attachment limits to carry ordinary scanned documents.** The send route now accepts up to five attachments, 10 MiB per file and 20 MiB total, with its JSON body budget derived from those limits while every other route retains the 1 MiB default. The combined MIME/base64 upper bound remains below the SESv2 40 MB ceiling.
+- **fix(addresses): preserve explicitly requested self-hosted provider bindings.** Address creation now persists and returns `provider_id`; exact readback matches both provider and normalized email; migration 0025 replaces tenant/email uniqueness with provider-aware tenant uniqueness while retaining tenant isolation and compatibility for unbound addresses.
+
 ## 1.3.13 (2026-08-08)
 
 - **fix(cli): distinguish a missing attachment message from a non-exact message-id prefix.** An exact full message id absent from the active inbox store now reports `not_found`; a resolvable prefix still reports that attachment downloads require the exact full message id.
