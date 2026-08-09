@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -12,6 +21,7 @@ import {
   SYNC_MARKER_FILE,
   syncSkillsToAgents,
   writeManagedAgentSkill,
+  writeManagedSkillDir,
 } from "./agent-sync.js";
 
 import { useDefaultTestTimeout } from "../test-preload.js";
@@ -180,20 +190,66 @@ describe("syncSkillsToAgents", () => {
     }
   });
 
-  test("--force overwrites even an unmanaged skill", () => {
+  test("never adopts an unmanaged directory without SKILL.md, even with --force", () => {
+    for (const force of [false, true]) {
+      const corpus = tempDir("sync-corpus-");
+      const home = tempDir("sync-home-");
+      try {
+        const userDir = join(home, ".codewith", "skills", "inbox");
+        const helperPath = join(userDir, "scripts", "inbox");
+        mkdirSync(join(userDir, "scripts"), { recursive: true });
+        writeFileSync(helperPath, "USER_BYTES");
+
+        const { actions } = syncSkillsToAgents({
+          rootDir: corpus,
+          homeDir: home,
+          names: ["inbox"],
+          agents: ["codewith"],
+          force,
+        });
+
+        expect(actions).toEqual([{
+          skill: "inbox",
+          agent: "codewith",
+          path: join(userDir, "SKILL.md"),
+          action: "skip",
+          reason: "an unmanaged directory already exists here without SKILL.md; refusing to overwrite or adopt it",
+        }]);
+        expect(readFileSync(helperPath, "utf-8")).toBe("USER_BYTES");
+        expect(existsSync(join(userDir, "SKILL.md"))).toBe(false);
+        expect(existsSync(join(userDir, SYNC_MARKER_FILE))).toBe(false);
+      } finally {
+        rmSync(corpus, { recursive: true, force: true });
+        rmSync(home, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("--force adopts an unmanaged skill with SKILL.md as an exact managed mirror", () => {
     const corpus = tempDir("sync-corpus-");
     const home = tempDir("sync-home-");
     try {
-      seedCorpusSkill(corpus, "deploy-runbook", INSTRUCTION_MD, {
-        "skill.json": JSON.stringify({ standard: "hasna.skill.v1", name: "deploy-runbook", kind: "instruction" }),
-      });
-      const userDir = join(home, ".claude", "skills", "deploy-runbook");
-      mkdirSync(userDir, { recursive: true });
-      writeFileSync(join(userDir, "SKILL.md"), "---\nname: deploy-runbook\ndescription: mine\n---\n");
+      const userDir = join(home, ".codewith", "skills", "inbox");
+      const helperPath = join(userDir, "scripts", "inbox");
+      mkdirSync(join(userDir, "scripts"), { recursive: true });
+      writeFileSync(join(userDir, "SKILL.md"), "---\nname: inbox\ndescription: mine\n---\n");
+      writeFileSync(helperPath, "USER_BYTES");
+      writeFileSync(join(userDir, "obsolete.txt"), "remove me");
 
-      const { actions } = syncSkillsToAgents({ rootDir: corpus, homeDir: home, agents: ["claude"], force: true });
+      const { actions } = syncSkillsToAgents({
+        rootDir: corpus,
+        homeDir: home,
+        names: ["inbox"],
+        agents: ["codewith"],
+        force: true,
+      });
       expect(actions[0].action).toBe("update");
-      expect(readFileSync(join(userDir, "SKILL.md"), "utf-8")).toContain("Deploy Runbook");
+      expect(readFileSync(join(userDir, "SKILL.md"), "utf-8")).toContain("# inbox — Interactive Session Inbox");
+      expect(readFileSync(helperPath, "utf-8")).toBe(
+        readFileSync(join(process.cwd(), "agent-skills", "inbox", "scripts", "inbox"), "utf-8"),
+      );
+      expect(existsSync(join(userDir, "obsolete.txt"))).toBe(false);
+      expect(existsSync(join(userDir, SYNC_MARKER_FILE))).toBe(true);
     } finally {
       rmSync(corpus, { recursive: true, force: true });
       rmSync(home, { recursive: true, force: true });
@@ -220,29 +276,34 @@ describe("syncSkillsToAgents", () => {
     }
   });
 
-  test("a named repository-managed agent skill syncs from the bundled agent-skills tree", () => {
+  test("a named repository-managed agent skill syncs its complete bundled directory", () => {
     const corpus = tempDir("sync-corpus-");
     const home = tempDir("sync-home-");
     try {
       const { actions } = syncSkillsToAgents({
         rootDir: corpus,
         homeDir: home,
-        names: ["fleet-package-rollout"],
+        names: ["inbox"],
         agents: ["codewith"],
       });
-      const skillPath = join(home, ".codewith", "skills", "fleet-package-rollout", "SKILL.md");
+      const skillDir = join(home, ".codewith", "skills", "inbox");
+      const skillPath = join(skillDir, "SKILL.md");
+      const helperPath = join(skillDir, "scripts", "inbox");
 
       expect(actions).toEqual([{
-        skill: "fleet-package-rollout",
+        skill: "inbox",
         agent: "codewith",
         path: skillPath,
         action: "create",
       }]);
       expect(existsSync(skillPath)).toBe(true);
       const synced = existsSync(skillPath) ? readFileSync(skillPath, "utf-8") : "";
-      expect(synced).toContain("# Fleet Package Rollout");
-      expect(synced).toContain("Positive control (executable route)");
-      expect(synced).not.toContain("executable skill from the @hasna/skills catalog");
+      expect(synced).toContain("# inbox — Interactive Session Inbox");
+      expect(synced).not.toContain("user_invocable");
+      expect(existsSync(helperPath)).toBe(true);
+      expect(readFileSync(helperPath, "utf-8")).toBe(
+        readFileSync(join(process.cwd(), "agent-skills", "inbox", "scripts", "inbox"), "utf-8"),
+      );
     } finally {
       rmSync(corpus, { recursive: true, force: true });
       rmSync(home, { recursive: true, force: true });
@@ -314,6 +375,88 @@ describe("writeManagedAgentSkill", () => {
       expect(second.action).toBe("update");
     } finally {
       rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("writeManagedSkillDir", () => {
+  test("managed updates exactly mirror the current source and remove stale resources", () => {
+    const root = tempDir("sync-managed-dir-");
+    try {
+      const target = join(root, "target");
+      const sourceV1 = join(root, "source-v1");
+      const sourceV2 = join(root, "source-v2");
+      mkdirSync(join(sourceV1, "scripts"), { recursive: true });
+      mkdirSync(join(sourceV2, "scripts"), { recursive: true });
+      writeFileSync(join(sourceV1, "SKILL.md"), "source v1");
+      writeFileSync(join(sourceV1, "scripts", "obsolete"), "obsolete");
+      writeFileSync(join(sourceV1, "scripts", "current"), "current v1");
+      writeFileSync(join(sourceV2, "SKILL.md"), "source v2");
+      writeFileSync(join(sourceV2, "scripts", "current"), "current v2");
+
+      const first = writeManagedSkillDir(target, "adapted v1", {
+        skill: "managed",
+        source: "bundled",
+        resourceDir: sourceV1,
+      });
+      const second = writeManagedSkillDir(target, "adapted v2", {
+        skill: "managed",
+        source: "bundled",
+        resourceDir: sourceV2,
+      });
+
+      expect(first.action).toBe("create");
+      expect(second.action).toBe("update");
+      expect(readFileSync(join(target, "SKILL.md"), "utf-8")).toBe("adapted v2\n");
+      expect(readFileSync(join(target, "scripts", "current"), "utf-8")).toBe("current v2");
+      expect(existsSync(join(target, "scripts", "obsolete"))).toBe(false);
+      expect(existsSync(join(target, SYNC_MARKER_FILE))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("restores the original managed directory when the staged swap fails", () => {
+    const root = tempDir("sync-managed-dir-");
+    try {
+      const target = join(root, "target");
+      const sourceV1 = join(root, "source-v1");
+      const sourceV2 = join(root, "source-v2");
+      mkdirSync(sourceV1, { recursive: true });
+      mkdirSync(sourceV2, { recursive: true });
+      writeFileSync(join(sourceV1, "SKILL.md"), "source v1");
+      writeFileSync(join(sourceV1, "original-resource"), "ORIGINAL_BYTES");
+      writeFileSync(join(sourceV2, "SKILL.md"), "source v2");
+      writeFileSync(join(sourceV2, "replacement-resource"), "REPLACEMENT_BYTES");
+
+      writeManagedSkillDir(target, "adapted v1", {
+        skill: "managed",
+        source: "bundled",
+        resourceDir: sourceV1,
+      });
+      const originalSkillMd = readFileSync(join(target, "SKILL.md"), "utf-8");
+      const originalMarker = readFileSync(join(target, SYNC_MARKER_FILE), "utf-8");
+      let renameCount = 0;
+
+      expect(() => writeManagedSkillDir(target, "adapted v2", {
+        skill: "managed",
+        source: "bundled",
+        resourceDir: sourceV2,
+        renameDirectory: (from, to) => {
+          renameCount += 1;
+          if (renameCount === 2) throw new Error("synthetic swap failure");
+          renameSync(from, to);
+        },
+      })).toThrow("synthetic swap failure");
+
+      expect(readFileSync(join(target, "SKILL.md"), "utf-8")).toBe(originalSkillMd);
+      expect(readFileSync(join(target, SYNC_MARKER_FILE), "utf-8")).toBe(originalMarker);
+      expect(readFileSync(join(target, "original-resource"), "utf-8")).toBe("ORIGINAL_BYTES");
+      expect(existsSync(join(target, "replacement-resource"))).toBe(false);
+      expect(renameCount).toBe(3);
+      expect(readdirSync(root).filter((entry) => entry.startsWith(".hasna-skills-write-"))).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

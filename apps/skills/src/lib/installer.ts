@@ -350,8 +350,9 @@ export function getAgentSkillPath(name: string, agent: AgentTarget, scope: Agent
  *
  * This used to be a stub that refused every call ("pins, not installs"). The last-mile
  * work reverses that: agents load skills from these folders, so `skills sync` writes them
- * there. A skill the user hand-authored (a directory with no @hasna/skills marker) is
- * never overwritten unless `overwrite` is set — see writeManagedSkillDir.
+ * there. An unmanaged directory with SKILL.md can be explicitly adopted with
+ * `overwrite`; any other pre-existing unmarked directory is never touched. Managed
+ * writes replace the complete owned directory — see writeManagedSkillDir.
  */
 export function installSkillForAgent(
   name: string,

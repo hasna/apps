@@ -75,6 +75,7 @@ describe("todos-plan production contract", () => {
         join(installedDir, "SKILL.md"),
         "---\nname: todos-plan\ndescription: stale\n---\n\nHasna AWS authority is `self_hosted`.\n",
       );
+      writeFileSync(join(installedDir, "obsolete.txt"), "remove me");
 
       const { actions } = syncSkillsToAgents({
         rootDir: corpus,
@@ -93,6 +94,7 @@ describe("todos-plan production contract", () => {
         },
       ]);
       expect(existsSync(join(installedDir, SYNC_MARKER_FILE))).toBe(true);
+      expect(existsSync(join(installedDir, "obsolete.txt"))).toBe(false);
 
       const canonical = readFileSync(TODOS_PLAN_SOURCE, "utf-8");
       const installed = readFileSync(join(installedDir, "SKILL.md"), "utf-8");

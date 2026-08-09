@@ -5,13 +5,22 @@
  *
  * This is the deliberate reversal of the old "pins, not installs" stub: agent skill
  * folders used to be left entirely unmanaged and every write path returned success:false.
- * They are now written — but only the ones this tool owns. A hand-authored skill the user
- * wrote themselves is never clobbered: ownership is tracked with a marker file, and a
- * directory without that marker is treated as the user's and skipped.
+ * They are now written — but only the ones this tool owns. Ownership is tracked with a
+ * marker file. An unmarked directory is left alone by default; only one that already has
+ * SKILL.md can be explicitly adopted, while any other unmarked directory is never touched.
  */
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { listPortableSkills, normalizePortableSkillName, readPortableSkillManifest } from "./portable-skills.js";
@@ -133,7 +142,7 @@ export interface SyncSkillsOptions {
   agents?: SyncAgent[];
   /** Report intended actions without writing anything. */
   dryRun?: boolean;
-  /** Overwrite even a hand-authored (unmanaged) agent skill. Off by default. */
+  /** Adopt an unmanaged agent skill only when its directory already contains SKILL.md. */
   force?: boolean;
   /** Corpus root override. Tests only. */
   rootDir?: string;
@@ -210,6 +219,7 @@ export function syncSkillsToAgents(options: SyncSkillsOptions = {}): SyncSkillsR
         agent,
         skillMd: adapted,
         source: skill.source,
+        resourceDir: skill.source === "bundled" ? skill.path : undefined,
         homeDir,
         dryRun: options.dryRun,
         force: options.force,
@@ -225,6 +235,7 @@ export interface WriteManagedAgentSkillParams {
   agent: SyncAgent;
   skillMd: string;
   source?: "bundled" | "corpus";
+  resourceDir?: string;
   homeDir?: string;
   dryRun?: boolean;
   force?: boolean;
@@ -233,9 +244,10 @@ export interface WriteManagedAgentSkillParams {
 /**
  * Write one skill into one agent's global folder, non-clobbering.
  *
- * A directory this tool has written before carries the marker file and is updated in
- * place. A directory with a SKILL.md but no marker is the user's own skill and is skipped
- * unless `force` is set. A fresh directory is created.
+ * A directory this tool has written before carries the marker file and is replaced with
+ * an exact mirror. A directory with a SKILL.md but no marker is the user's own skill and
+ * is skipped unless `force` explicitly adopts it. Any other pre-existing unmarked
+ * directory is always left untouched. A fresh directory is created.
  */
 export function writeManagedAgentSkill(params: WriteManagedAgentSkillParams): AgentSyncAction {
   const homeDir = params.homeDir ?? homedir();
@@ -243,6 +255,7 @@ export function writeManagedAgentSkill(params: WriteManagedAgentSkillParams): Ag
   const result = writeManagedSkillDir(dir, params.skillMd, {
     skill: params.skill,
     source: params.source,
+    resourceDir: params.resourceDir,
     dryRun: params.dryRun,
     force: params.force,
   });
@@ -261,21 +274,40 @@ export interface ManagedDirWriteResult {
   reason?: string;
 }
 
+export interface ManagedDirWriteOptions {
+  skill: string;
+  source?: string;
+  resourceDir?: string;
+  dryRun?: boolean;
+  force?: boolean;
+  /** Test seam for exercising rollback after the original directory has moved. */
+  renameDirectory?: typeof renameSync;
+}
+
 /**
- * The primitive both the fan-out sync and the single-skill installer share: write one
- * SKILL.md into one skill directory, non-clobbering, and stamp it as ours. `dir` is the
- * skill's own directory (…/skills/<name>), so callers control scope (global vs project)
- * by choosing the directory.
+ * The primitive both the fan-out sync and the single-skill installer share: replace one
+ * owned skill directory with an exact staged mirror, non-clobbering, and stamp it as ours.
+ * `dir` is the skill's own directory (…/skills/<name>), so callers control scope (global
+ * vs project) by choosing the directory.
  */
 export function writeManagedSkillDir(
   dir: string,
   skillMd: string,
-  options: { skill: string; source?: string; dryRun?: boolean; force?: boolean },
+  options: ManagedDirWriteOptions,
 ): ManagedDirWriteResult {
   const skillMdPath = join(dir, "SKILL.md");
   const markerPath = join(dir, SYNC_MARKER_FILE);
+  const dirExists = existsSync(dir);
   const managed = existsSync(markerPath);
   const hasSkillMd = existsSync(skillMdPath);
+
+  if (dirExists && !managed && !hasSkillMd) {
+    return {
+      action: "skip",
+      path: skillMdPath,
+      reason: "an unmanaged directory already exists here without SKILL.md; refusing to overwrite or adopt it",
+    };
+  }
 
   if (hasSkillMd && !managed && !options.force) {
     return {
@@ -285,18 +317,65 @@ export function writeManagedSkillDir(
     };
   }
 
-  const action: SyncActionKind = hasSkillMd ? "update" : "create";
+  const action: SyncActionKind = dirExists ? "update" : "create";
   if (options.dryRun) return { action, path: skillMdPath };
 
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(skillMdPath, skillMd.endsWith("\n") ? skillMd : `${skillMd}\n`);
+  const parentDir = dirname(dir);
+  mkdirSync(parentDir, { recursive: true });
+  const transactionDir = mkdtempSync(join(parentDir, `.hasna-skills-write-${basename(dir)}-`));
+  const candidateDir = join(transactionDir, "candidate");
+  const backupDir = join(transactionDir, "backup");
+  const candidateSkillMdPath = join(candidateDir, "SKILL.md");
+  const candidateMarkerPath = join(candidateDir, SYNC_MARKER_FILE);
   const marker: SyncMarker = {
     managedBy: SYNC_MARKER_MANAGED_BY,
     skill: options.skill,
     source: options.source ?? "corpus",
     syncedAt: new Date().toISOString(),
   };
-  writeFileSync(markerPath, `${JSON.stringify(marker, null, 2)}\n`);
+
+  const renameDirectory = options.renameDirectory ?? renameSync;
+  let originalMoved = false;
+  let preserveTransaction = false;
+  try {
+    if (options.resourceDir) {
+      cpSync(options.resourceDir, candidateDir, { recursive: true, force: true });
+    } else {
+      mkdirSync(candidateDir, { recursive: true });
+    }
+    writeFileSync(candidateSkillMdPath, skillMd.endsWith("\n") ? skillMd : `${skillMd}\n`);
+    writeFileSync(candidateMarkerPath, `${JSON.stringify(marker, null, 2)}\n`);
+
+    if (dirExists) {
+      originalMoved = true;
+      renameDirectory(dir, backupDir);
+    }
+    renameDirectory(candidateDir, dir);
+  } catch (error) {
+    if (originalMoved && existsSync(backupDir)) {
+      try {
+        if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+        renameDirectory(backupDir, dir);
+        originalMoved = false;
+      } catch (rollbackError) {
+        preserveTransaction = true;
+        throw new AggregateError(
+          [error, rollbackError],
+          `failed to replace ${dir}; the original directory remains at ${backupDir}`,
+        );
+      }
+    }
+    throw error;
+  } finally {
+    if (!preserveTransaction) {
+      try {
+        rmSync(transactionDir, { recursive: true, force: true });
+      } catch {
+        // The target is already correct (or restored); a hidden staging directory
+        // left behind is safer than turning cleanup into a failed sync.
+      }
+    }
+  }
   return { action, path: skillMdPath };
 }
 
