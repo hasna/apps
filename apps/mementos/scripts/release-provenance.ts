@@ -53,6 +53,10 @@ const FETCH_TIMEOUT_MS = 15_000;
 const INSTALL_VISIBILITY_TIMEOUT_MS = 120_000;
 const INSTALL_VISIBILITY_POLL_MS = 2_000;
 const DSSE_IN_TOTO_PAYLOAD_TYPE = "application/vnd.in-toto+json";
+const SIGSTORE_BUNDLE_V02 =
+  "application/vnd.dev.sigstore.bundle+json;version=0.2";
+const SIGSTORE_BUNDLE_V03 =
+  "application/vnd.dev.sigstore.bundle.v0.3+json";
 const IN_TOTO_STATEMENT_V1 = "https://in-toto.io/Statement/v1";
 const IN_TOTO_STATEMENT_V01 = "https://in-toto.io/Statement/v0.1";
 const GITHUB_ACTIONS_BUILD_TYPE =
@@ -1318,6 +1322,46 @@ function positiveInteger(value: unknown, label: string): bigint {
   return BigInt(encoded);
 }
 
+function assertExpectedSigstoreBundleShape(
+  predicateType: string,
+  bundle: RecordValue,
+  material: RecordValue,
+): void {
+  if (predicateType === PUBLISH_PREDICATE) {
+    check(
+      bundle.mediaType === SIGSTORE_BUNDLE_V02,
+      `unsupported Sigstore bundle for npm publish attestation; expected ${SIGSTORE_BUNDLE_V02}`,
+    );
+    const publicKey = record(
+      material.publicKey,
+      "npm publish Sigstore publicKey",
+    );
+    text(publicKey.hint, "npm publish Sigstore publicKey hint");
+    check(
+      material.certificate === undefined,
+      "npm publish Sigstore bundle must not contain certificate material",
+    );
+    return;
+  }
+  if (predicateType === PROVENANCE_PREDICATE) {
+    check(
+      bundle.mediaType === SIGSTORE_BUNDLE_V03,
+      `unsupported Sigstore bundle for SLSA provenance attestation; expected ${SIGSTORE_BUNDLE_V03}`,
+    );
+    const certificate = record(
+      material.certificate,
+      "SLSA provenance Sigstore certificate",
+    );
+    text(certificate.rawBytes, "SLSA provenance Sigstore certificate bytes");
+    check(
+      material.publicKey === undefined,
+      "SLSA provenance Sigstore bundle must not contain publicKey material",
+    );
+    return;
+  }
+  throw new Error(`unrecognised attestation predicate type ${predicateType}`);
+}
+
 function auditedStatement(
   item: unknown,
   value: ReleaseCandidate,
@@ -1325,10 +1369,6 @@ function auditedStatement(
   const attestation = record(item, "cryptographically verified attestation");
   const predicateType = text(attestation.predicateType, "predicate type");
   const bundle = record(attestation.bundle, "Sigstore bundle");
-  check(
-    bundle.mediaType === "application/vnd.dev.sigstore.bundle.v0.3+json",
-    "attestation must use a Sigstore v0.3 bundle",
-  );
   const envelope = record(bundle.dsseEnvelope, "DSSE envelope");
   check(
     Array.isArray(envelope.signatures) && envelope.signatures.length > 0,
@@ -1342,6 +1382,7 @@ function auditedStatement(
     bundle.verificationMaterial,
     "Sigstore verification material",
   );
+  assertExpectedSigstoreBundleShape(predicateType, bundle, material);
   check(
     Array.isArray(material.tlogEntries) && material.tlogEntries.length === 1,
     "exactly one Sigstore transparency-log entry is required",
