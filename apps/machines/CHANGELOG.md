@@ -67,6 +67,18 @@ reported success about things it had not actually established.
   than reached by deleting a check. Physical classes are untouched: `dgx-spark`
   keeps `tailscale:join` and gets no absence item.
 
+## [0.2.15] - 2026-08-09
+
+### Fixed
+
+- Resolve registry-backed machines through the consumer-safe details surfaces,
+  while keeping registry lifecycle metadata separate from heartbeat-backed
+  liveness. Registry-only machines remain known with neutral live status,
+  heartbeat-backed machines retain their fresh status, and absent identifiers
+  remain explicit unknowns.
+
+Fixes OPE34-00015 via PR #75.
+
 ## [0.2.13] - 2026-08-08
 
 ### Fixed
