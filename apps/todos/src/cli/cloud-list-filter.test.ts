@@ -83,6 +83,24 @@ function project(id = PROJECT_ID, name = "Open Emails", path = PROJECT_PATH) {
   return { id, name, path, task_list_id: "emails-canonical" };
 }
 
+function createdTask(id: string, body: Record<string, unknown>): Record<string, unknown> {
+  return { ...body, id, status: "pending" };
+}
+
+function taskReadback(
+  url: URL,
+  method: string,
+  tasks: ReadonlyMap<string, Record<string, unknown>>,
+): Response | null {
+  if (method !== "GET") return null;
+  const match = url.pathname.match(/^\/v1\/tasks\/([^/]+)$/);
+  if (!match) return null;
+  const task = tasks.get(decodeURIComponent(match[1]!));
+  return task
+    ? Response.json({ task })
+    : Response.json({ error: "task not found" }, { status: 404 });
+}
+
 describe("cloud CLI task-list filtering", () => {
   test.each([PROJECT_SLUG, "Open Emails", PROJECT_PATH])(
     "resolves project ref %s before every cloud lists operation",
@@ -149,6 +167,7 @@ describe("cloud CLI task-list filtering", () => {
     ["add project option", ["--json", "add", "Cloud task", "--project", PROJECT_SLUG, "--list", "release"]],
   ])("resolves the project before cloud add scopes a task-list slug via %s", async (_label, args) => {
     const requests: Array<{ method: string; path: string; query: string; body?: unknown }> = [];
+    const tasks = new Map<string, Record<string, unknown>>();
     const server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -162,8 +181,12 @@ describe("cloud CLI task-list filtering", () => {
           return Response.json({ task_lists: [taskList(LIST_ID, "release")] });
         }
         if (url.pathname === "/v1/tasks" && request.method === "POST") {
-          return Response.json({ task: { id: TASK_ID, ...(body as object) } }, { status: 201 });
+          const task = createdTask(TASK_ID, body as Record<string, unknown>);
+          tasks.set(TASK_ID, task);
+          return Response.json({ task }, { status: 201 });
         }
+        const readback = taskReadback(url, request.method, tasks);
+        if (readback) return readback;
         return Response.json({ error: "not found" }, { status: 404 });
       },
     });
@@ -182,6 +205,7 @@ describe("cloud CLI task-list filtering", () => {
         "GET /v1/projects?",
         `GET /v1/task-lists?project_id=${PROJECT_ID}`,
         "POST /v1/tasks?",
+        `GET /v1/tasks/${TASK_ID}?`,
       ]);
       expect(requests[2]!.body).toMatchObject({ project_id: PROJECT_ID, task_list_id: LIST_ID });
     } finally {
@@ -629,6 +653,7 @@ describe("cloud CLI task-list filtering", () => {
   test("uses and deletes a reusable checklist through cloud HTTP without a local fallback", async () => {
     const requests: Array<{ method: string; path: string; body?: unknown }> = [];
     let taskNumber = 0;
+    const tasks = new Map<string, Record<string, unknown>>();
     const server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -648,10 +673,15 @@ describe("cloud CLI task-list filtering", () => {
         }
         if (url.pathname === "/v1/tasks" && request.method === "POST") {
           taskNumber += 1;
-          return Response.json({ task: { id: `task-${taskNumber}`, ...(body as object), status: "pending" } }, { status: 201 });
+          const id = `task-${taskNumber}`;
+          const task = createdTask(id, body as Record<string, unknown>);
+          tasks.set(id, task);
+          return Response.json({ task }, { status: 201 });
         }
         if (url.pathname === "/v1/tasks/task-2/dependencies" && request.method === "POST") return Response.json({ dependency: { task_id: "task-2", depends_on: "task-1" } }, { status: 201 });
         if (url.pathname === "/v1/templates/template-1" && request.method === "DELETE") return Response.json({ deleted: true });
+        const readback = taskReadback(url, request.method, tasks);
+        if (readback) return readback;
         return Response.json({ error: "not found" }, { status: 404 });
       },
     });
@@ -676,6 +706,7 @@ describe("cloud CLI task-list filtering", () => {
   test("applies remote template variable defaults, conditions, and composition without local storage", async () => {
     const requests: Array<{ method: string; path: string; body?: Record<string, unknown> }> = [];
     let taskNumber = 0;
+    const tasks = new Map<string, Record<string, unknown>>();
     const server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -710,9 +741,14 @@ describe("cloud CLI task-list filtering", () => {
         }
         if (url.pathname === "/v1/tasks" && request.method === "POST") {
           taskNumber += 1;
-          return Response.json({ task: { id: `task-${taskNumber}`, ...(body ?? {}), status: "pending" } }, { status: 201 });
+          const id = `task-${taskNumber}`;
+          const task = createdTask(id, body ?? {});
+          tasks.set(id, task);
+          return Response.json({ task }, { status: 201 });
         }
         if (url.pathname === "/v1/tasks/task-4/dependencies" && request.method === "POST") return Response.json({ dependency: body }, { status: 201 });
+        const readback = taskReadback(url, request.method, tasks);
+        if (readback) return readback;
         return Response.json({ error: "not found" }, { status: 404 });
       },
     });
@@ -754,6 +790,7 @@ describe("cloud CLI task-list filtering", () => {
 
   test("applies zero-step template defaults and CLI overrides through cloud HTTP", async () => {
     const requests: Array<{ method: string; path: string; body?: Record<string, unknown> }> = [];
+    const tasks = new Map<string, Record<string, unknown>>();
     const server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -768,8 +805,12 @@ describe("cloud CLI task-list filtering", () => {
           } });
         }
         if (url.pathname === "/v1/tasks" && request.method === "POST") {
-          return Response.json({ task: { id: "task-single", ...(body ?? {}), status: "pending" } }, { status: 201 });
+          const task = createdTask("task-single", body ?? {});
+          tasks.set("task-single", task);
+          return Response.json({ task }, { status: 201 });
         }
+        const readback = taskReadback(url, request.method, tasks);
+        if (readback) return readback;
         return Response.json({ error: "not found" }, { status: 404 });
       },
     });

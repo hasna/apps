@@ -40,7 +40,7 @@ import {
   cloudListTaskRefs,
 } from "../cloud-router.js";
 import type { CloudTaskGitRef, CloudTaskRelations } from "../cloud-router.js";
-import type { TaskPriority, TaskStatus } from "../../types/index.js";
+import type { Task, TaskPriority, TaskStatus } from "../../types/index.js";
 import { canonicalAgentRef, resolveCreatorIdentity, resolveWritableIdentity } from "../../lib/creator-identity.js";
 import { formatExpiredLock, lockDisplayState } from "../../lib/lock-display.js";
 import { parseTagList, resolveBulkTags, resolveTagArgument } from "../../lib/bulk-tags.js";
@@ -81,6 +81,11 @@ function formatHumanComment(comment: { agent_id?: string | null; created_at: str
     ? chalk.cyan(`[${escapeTerminalControls(comment.agent_id)}] `)
     : "";
   return `    ${agent}${chalk.dim(escapeTerminalControls(comment.created_at))}: ${escapeTerminalControls(comment.content)}`;
+}
+
+function printTaskCreatedReceipt(task: Task): void {
+  console.log(chalk.green(`Task created: ${escapeTerminalControls(task.id)}`));
+  console.log(formatTaskLine(task));
 }
 
 /**
@@ -671,8 +676,7 @@ export function registerTaskCommands(program: Command) {
         if (globalOpts.json) {
           output(task, true);
         } else {
-          console.log(chalk.green("Task created:"));
-          console.log(formatTaskLine(task));
+          printTaskCreatedReceipt(task);
         }
         return;
       }
@@ -730,8 +734,7 @@ export function registerTaskCommands(program: Command) {
       if (globalOpts.json) {
         output(task, true);
       } else {
-        console.log(chalk.green("Task created:"));
-        console.log(formatTaskLine(task));
+        printTaskCreatedReceipt(task);
       }
     });
 

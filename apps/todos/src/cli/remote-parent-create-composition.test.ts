@@ -1,12 +1,12 @@
 /**
- * Real composition regression for PLA-03362:
+ * Real composition regression for remote create persistence and receipts:
  *
  *   source CLI process -> @hasna/contracts HTTP client -> Bun HTTP server
  *   -> handleV1Request -> repository SQLite storage adapter -> independent show
  *
- * The faulted case removes the row after the real store accepted it while
+ * The faulted cases remove the row after the real store accepted it while
  * returning the store's original create result. That models the measured
- * hosted failure without replacing the HTTP or storage layers with an echo
+ * hosted failures without replacing the HTTP or storage layers with an echo
  * fixture: a POST response alone must never authorize a success row.
  */
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -42,6 +42,7 @@ const authorities: Array<ReturnType<typeof createAuthority>> = [];
 type CliResult = { stdout: string; stderr: string; exitCode: number };
 
 interface AuthorityOptions {
+  dropWriteAfterCreate?: boolean;
   dropParentedWriteAfterCreate?: boolean;
 }
 
@@ -56,7 +57,7 @@ function createAuthority(options: AuthorityOptions = {}) {
   store.tasks.create = async (input, context) => {
     createCalls += 1;
     const task = await originalCreate(input, context);
-    if (options.dropParentedWriteAfterCreate && input.parent_id) {
+    if (options.dropWriteAfterCreate || (options.dropParentedWriteAfterCreate && input.parent_id)) {
       await originalDelete(task.id, context);
     }
     return task;
@@ -193,7 +194,25 @@ afterEach(() => {
   }
 });
 
-describe("remote parent create persistence composition", () => {
+describe("remote create persistence composition", () => {
+  test("REGRESSION: a parentless create cannot print a ghost success row", async () => {
+    const authority = createAuthority({ dropWriteAfterCreate: true });
+    authorities.push(authority);
+
+    const result = await runRemote([
+      "add",
+      "Dropped parentless task",
+      "--no-project",
+    ], authority.server.port, tempRoot("todos-create-ghost-"));
+
+    expect(authority.createCalls(), "the CLI must issue exactly one create").toBe(1);
+    expect(result.exitCode, "a missing authoritative readback must fail closed").not.toBe(0);
+    expect(result.stdout).not.toContain("Task created:");
+    expect(result.stdout.trim()).toBe("");
+    expect(result.stderr).toContain("TASK_CREATE_PERSISTENCE_UNVERIFIED");
+    expect(await authority.store.tasks.count({ include_subtasks: true })).toBe(0);
+  });
+
   test("REGRESSION: a valid parented create cannot print a ghost success row", async () => {
     const authority = createAuthority({ dropParentedWriteAfterCreate: true });
     authorities.push(authority);
@@ -318,5 +337,70 @@ describe("remote parent create persistence composition", () => {
       parent_id: null,
     });
     expect(authority.createCalls()).toBe(1);
+  });
+
+  test("human add receipt exposes the full stable UUID and the same authority lists and shows it immediately", async () => {
+    const authority = createAuthority();
+    authorities.push(authority);
+    const project = await authority.store.projects.create({
+      name: "Company Taxes",
+      path: "/tmp/company-taxes",
+    });
+    const registered = await authority.store.agents.register({ name: "cassius" });
+    expect(registered).not.toHaveProperty("conflict");
+    const root = tempRoot("todos-create-receipt-");
+
+    const createdResult = await runRemote([
+      "add",
+      "Authority receipt task",
+      "--project",
+      project.id,
+      "--assign",
+      "cassius",
+    ], authority.server.port, root);
+
+    expect({ exitCode: createdResult.exitCode, stderr: createdResult.stderr }).toEqual({
+      exitCode: 0,
+      stderr: "",
+    });
+    const stored = (await authority.store.tasks.list({
+      project_id: project.id,
+      assigned_to: "cassius",
+      include_subtasks: true,
+    }))[0];
+    expect(stored).toBeDefined();
+    expect(stored!.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+    expect(createdResult.stdout).toContain(`Task created: ${stored!.id}`);
+
+    const shownResult = await runRemote(
+      ["--json", "show", stored!.id],
+      authority.server.port,
+      root,
+    );
+    expect({ exitCode: shownResult.exitCode, stderr: shownResult.stderr }).toEqual({
+      exitCode: 0,
+      stderr: "",
+    });
+    expect(JSON.parse(shownResult.stdout)).toMatchObject({
+      id: stored!.id,
+      project_id: project.id,
+      assigned_to: "cassius",
+    });
+
+    for (const args of [
+      ["--json", "list", "--project", project.id, "--all"],
+      ["--json", "list", "--assigned", "cassius", "--all"],
+    ]) {
+      const listedResult = await runRemote(args, authority.server.port, root);
+      expect({ exitCode: listedResult.exitCode, stderr: listedResult.stderr }).toEqual({
+        exitCode: 0,
+        stderr: "",
+      });
+      expect(JSON.parse(listedResult.stdout)).toContainEqual(expect.objectContaining({
+        id: stored!.id,
+        project_id: project.id,
+        assigned_to: "cassius",
+      }));
+    }
   });
 });

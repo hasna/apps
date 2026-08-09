@@ -202,6 +202,7 @@ describe("cloud task detail comments", () => {
       // /v1/stats snapshot, no full /v1/tasks page) — see cloud-router resolveRef.
       expect(requests.map((request) => `${request.method} ${request.path}`)).toEqual([
         "POST /v1/tasks",
+        `GET /v1/tasks/${TASK_ID}`,
         `GET /v1/tasks/${shortId}`,
         `POST /v1/tasks/${TASK_ID}/start`,
         `GET /v1/tasks/${shortId}`,

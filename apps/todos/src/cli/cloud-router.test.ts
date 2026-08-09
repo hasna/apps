@@ -601,16 +601,18 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     expect(gone).toBeNull();
   });
 
-  test("parentless create preserves the established one-POST response path", async () => {
+  test("parentless create uses one POST plus authoritative GET readback", async () => {
     const calls = installFetch(() => ({ status: 201, body: { task: { id: "new1", title: "made" } } }));
     const client = getTodosCloudClient(CLOUD_ENV)!;
     const task = await cloudCreateTask(client, { title: "made" });
     expect(task.id).toBe("new1");
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(2);
     expect(calls[0]!.method).toBe("POST");
     expect(calls[0]!.url).toBe("https://todos.example.com/v1/tasks");
     expect(calls[0]!.body).toEqual({ title: "made" });
     expect(calls[0]!.headers["idempotency-key"]).toBeTruthy();
+    expect(calls[1]!.method).toBe("GET");
+    expect(calls[1]!.url).toBe("https://todos.example.com/v1/tasks/new1");
   });
 
   test("parented create -> one POST plus authoritative GET readback, returning the stored task", async () => {
@@ -654,7 +656,7 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     }));
     const client = getTodosCloudClient(CLOUD_ENV)!;
 
-    await expect(cloudCreateTask(client, { title: "single attempt", parent_id: "parent1" }))
+    await expect(cloudCreateTask(client, { title: "single attempt" }))
       .rejects.toThrow("REMOTE_API_UNAVAILABLE");
     expect(calls).toHaveLength(1);
     expect(calls[0]!.method).toBe("POST");

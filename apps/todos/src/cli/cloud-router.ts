@@ -796,13 +796,9 @@ export async function cloudCreateTask(client: HasnaStorageClient, input: Record<
     client,
     "/v1/tasks",
     // The /v1 task route does not yet implement Idempotency-Key replay
-    // deduplication. A transient/error response after a parented store write can
-    // therefore replay the exact failure under investigation into multiple
-    // subtasks. Keep parented creates single-attempt; leave the established
-    // parentless transport behavior unchanged.
-    () => expectedParentId === null
-      ? client.create<unknown>("tasks", input)
-      : client.create<unknown>("tasks", input, { retry: false }),
+    // deduplication. Any transient/error response after a store write can
+    // therefore replay one logical create into multiple tasks.
+    () => client.create<unknown>("tasks", input, { retry: false }),
     ["PARENT_TASK_NOT_FOUND"],
   ));
   if (!created || typeof created.id !== "string" || !created.id.trim()) {
@@ -812,14 +808,9 @@ export async function cloudCreateTask(client: HasnaStorageClient, input: Record<
     );
   }
 
-  // Preserve the existing parentless CLI path. Current source still performs an
-  // authoritative server-side readback for every create, while this additional
-  // client guard is specifically for stale authorities exhibiting PLA-03362.
-  if (expectedParentId === null) return created;
-
-  // A parented POST response is an acknowledgement, not proof that the authority
-  // made the subtask readable. The hosted PLA-03362 failure returned two
-  // complete-looking task objects here, then GET-by-id returned 404 for both.
+  // A POST response is an acknowledgement, not proof that the configured
+  // authority made the task readable. Current servers verify this before 201;
+  // the client readback preserves that contract against older authorities too.
   // Read the exact id back before any CLI/MCP caller is allowed to print success,
   // and return that stored row rather than the optimistic POST body.
   const persisted = await cloudGetTask(client, created.id);

@@ -45,6 +45,7 @@ afterEach(() => {
 });
 
 const PROJECT_ID = "11111111-2222-4333-8444-555555555555";
+const CREATED_TASK_ID = "99999999-2222-4333-8444-555555555555";
 
 /**
  * A fixture /v1 server that RECORDS the create payload. The assertions below read
@@ -54,6 +55,7 @@ const PROJECT_ID = "11111111-2222-4333-8444-555555555555";
  */
 function startServer() {
   const creates: Array<Record<string, unknown>> = [];
+  let persistedTask: Record<string, unknown> | null = null;
   const server = Bun.serve({
     port: 0,
     async fetch(req) {
@@ -67,25 +69,28 @@ function startServer() {
       if (url.pathname === "/v1/tasks" && req.method === "POST") {
         const body = (await req.json()) as Record<string, unknown>;
         creates.push(body);
+        persistedTask = {
+          id: CREATED_TASK_ID,
+          short_id: "FIX-00001",
+          title: body["title"] ?? "untitled",
+          status: "pending",
+          priority: "medium",
+          project_id: body["project_id"] ?? null,
+          parent_id: body["parent_id"] ?? null,
+          working_dir: body["working_dir"] ?? null,
+          tags: [],
+          metadata: {},
+          version: 1,
+          created_at: "2026-08-03T00:00:00.000Z",
+          updated_at: "2026-08-03T00:00:00.000Z",
+        };
         return Response.json(
-          {
-            task: {
-              id: "99999999-2222-4333-8444-555555555555",
-              short_id: "FIX-00001",
-              title: body["title"] ?? "untitled",
-              status: "pending",
-              priority: "medium",
-              project_id: body["project_id"] ?? null,
-              working_dir: body["working_dir"] ?? null,
-              tags: [],
-              metadata: {},
-              version: 1,
-              created_at: "2026-08-03T00:00:00.000Z",
-              updated_at: "2026-08-03T00:00:00.000Z",
-            },
-          },
+          { task: persistedTask },
           { status: 201 },
         );
+      }
+      if (url.pathname === `/v1/tasks/${CREATED_TASK_ID}` && req.method === "GET" && persistedTask) {
+        return Response.json({ task: persistedTask });
       }
       return Response.json({ error: "not found" }, { status: 404 });
     },
