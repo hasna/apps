@@ -78,6 +78,7 @@ export const RETIRED_PROJECT_REGISTRATION_PREFIXES = [
 ] as const;
 
 export type ProjectRegistrationAuthorityName = keyof typeof PROJECT_REGISTRATION_DEPENDENCY_TASKS;
+export type ProjectRegistrationAuthorityTransport = "local" | "api";
 export type ProjectRegistrationResourceKind =
   | "project"
   | "task_list"
@@ -230,6 +231,7 @@ export interface ProjectRegistrationAuthorityInverseVerification {
 
 export interface ProjectRegistrationAuthorityAdapter {
   readonly authority: ProjectRegistrationAuthorityName;
+  readonly transport?: ProjectRegistrationAuthorityTransport;
   capability(): Promise<ProjectRegistrationAuthorityCapability>;
   create(request: ProjectRegistrationAuthorityRequest): Promise<ProjectRegistrationAuthorityReceipt>;
   readExact(request: {
@@ -954,6 +956,27 @@ export async function preflightProjectRegistrationAuthorities(
     }
   }
   return { ok: blockers.length === 0, capabilities, blockers };
+}
+
+function projectRegistrationAuthorityTransportBlockers(
+  authorities: ProjectRegistrationAuthorities,
+  projectsTransport: ProjectRegistrationAuthorityTransport,
+): ProjectRegistrationCapabilityBlocker[] {
+  const entries = (["todos", "mementos", "conversations"] as const)
+    .map((authority) => ({ authority, transport: authorities[authority].transport }));
+  const declaresTransport = entries.some((entry) => entry.transport !== undefined);
+  if (!declaresTransport) return [];
+  return entries
+    .filter((entry) => entry.transport !== projectsTransport)
+    .map((entry) => ({
+      authority: entry.authority,
+      dependency_task_id: PROJECT_REGISTRATION_DEPENDENCY_TASKS[entry.authority],
+      route: "unavailable",
+      package_version: "unavailable",
+      missing: [
+        `authority_transport:projects=${projectsTransport}:external=${entry.transport ?? "undeclared"}`,
+      ],
+    }));
 }
 
 function unavailableAuthority(
@@ -2149,10 +2172,6 @@ async function updateProjectIntegrations(input: {
       "resource_link_exact_preimage_mismatch",
     );
   }
-  const isRegistrationOwnedLink = (link: ProjectResourceLinkInput): boolean =>
-    (link.authority === "conversations" && link.target_kind === "channel")
-    || (link.authority === "todos" && (link.target_kind === "project" || link.target_kind === "task_list"))
-    || (link.authority === "mementos" && link.target_kind === "project");
   const storedInput = (link: ProjectResourceLink): ProjectResourceLinkInput => ({
     authority: link.authority,
     service_instance: link.service_instance,
@@ -2165,10 +2184,11 @@ async function updateProjectIntegrations(input: {
   const linksById = new Map<string, ProjectResourceLinkInput>();
   for (const link of before.links) {
     const existing = storedInput(link);
-    if (!isRegistrationOwnedLink(existing)) {
-      linksById.set(projectResourceLinkId(input.project.id, existing), existing);
-    }
+    linksById.set(projectResourceLinkId(input.project.id, existing), existing);
   }
+  // This registration owns only the exact resource identities derived from
+  // its accepted authority receipts. Overwrite those exact IDs while leaving
+  // unrelated same-authority/same-kind links intact.
   for (const link of input.resource_links) {
     linksById.set(projectResourceLinkId(input.project.id, link), link);
   }
@@ -2648,6 +2668,21 @@ export async function registerFullProject(
   // original transactional creation path in local mode; only the API Store is
   // a distinct Projects authority that must replace local project mutations.
   const authorityStore = options.projectStore?.mode === "api" ? options.projectStore : undefined;
+  const transportBlockers = projectRegistrationAuthorityTransportBlockers(
+    authorities,
+    authorityStore ? "api" : "local",
+  );
+  if (transportBlockers.length > 0) {
+    return buildNoGoResult({
+      operation_id: input.operation_id,
+      project_id: validated.project_id,
+      project_slug: validated.project_slug,
+      blockers: transportBlockers,
+      bounds,
+      startedAt,
+      reason_code: "authority_transport_mismatch",
+    });
+  }
   const capability = await preflightProjectRegistrationAuthorities(authorities);
   if (!capability.ok) {
     return buildNoGoResult({

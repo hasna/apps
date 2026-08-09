@@ -16,6 +16,7 @@ import {
   getWorkspace,
   getWorkspaceBySlug,
   mutateProjectResourceLinks,
+  mutateProjectResourceLinksForRegistration,
 } from "../db/workspaces.js";
 import { canonicalJson, sha256 } from "./guarded-project-mutation.js";
 import {
@@ -897,6 +898,67 @@ describe("full project registration transaction", () => {
     seed(fakes.todos, todosProjectId, "todos_project");
     seed(fakes.todos, todosTaskListId, "todos_task_list");
     seed(fakes.mementos, mementosProjectId, "mementos_project");
+    const unrelatedLinks = [
+      {
+        authority: "conversations" as const,
+        service_instance: "urn:hasna:conversations:service:unrelated",
+        source_package: "@hasna/conversations" as const,
+        target_kind: "channel" as const,
+        locator: {
+          kind: "external_uuid" as const,
+          value: "33333333-3333-4333-8333-333333333333",
+        },
+        scope: "collection" as const,
+        labels: { channel_name: "unrelated-project-channel" },
+      },
+      {
+        authority: "todos" as const,
+        service_instance: "urn:hasna:todos:service:unrelated",
+        source_package: "@hasna/todos" as const,
+        target_kind: "project" as const,
+        locator: {
+          kind: "canonical_uri" as const,
+          value: "urn:hasna:todos:project:unrelated-project",
+        },
+        scope: "collection" as const,
+        labels: { name: "Unrelated Todos project" },
+      },
+      {
+        authority: "todos" as const,
+        service_instance: "urn:hasna:todos:service:unrelated",
+        source_package: "@hasna/todos" as const,
+        target_kind: "task_list" as const,
+        locator: {
+          kind: "canonical_uri" as const,
+          value: "urn:hasna:todos:task_list:unrelated-list",
+        },
+        scope: "collection" as const,
+        labels: { name: "Unrelated Todos task list" },
+      },
+      {
+        authority: "mementos" as const,
+        service_instance: "urn:hasna:mementos:service:unrelated",
+        source_package: "@hasna/mementos" as const,
+        target_kind: "project" as const,
+        locator: {
+          kind: "canonical_uri" as const,
+          value: "urn:hasna:mementos:project:unrelated-project",
+        },
+        scope: "collection" as const,
+        labels: { name: "Unrelated Mementos project" },
+      },
+    ];
+    const unrelatedLinkIds = unrelatedLinks
+      .map((link) => projectResourceLinkId(projectId, link))
+      .sort();
+    const persistedUnrelatedLinkIds = (): string[] => (
+      db.query(
+        `SELECT id
+         FROM project_resource_links
+         WHERE project_id = ? AND id IN (?, ?, ?, ?)
+         ORDER BY id`,
+      ).all(projectId, ...unrelatedLinkIds) as Array<{ id: string }>
+    ).map((row) => row.id);
     try {
       const existing = createWorkspace({
         id: projectId,
@@ -913,10 +975,24 @@ describe("full project registration transaction", () => {
         },
         require_exact_identity: true,
       }, db);
+      const seededLinks = mutateProjectResourceLinksForRegistration({
+        project_id: projectId,
+        operation_id: "op-retrofit-linked-authorities-extra-links",
+        step_id: "seed-unrelated-same-kind-links",
+        mode: "add",
+        expected_revision: existing.updated_at,
+        links: unrelatedLinks,
+        max_items: 32,
+        response_byte_limit: 1_000_000,
+        time_budget_ms: 10_000,
+        source: "system",
+        command: "seed unrelated same-kind links",
+      }, existing.integrations, db);
+      expect(seededLinks.ok).toBe(true);
       const request: FullProjectRegistrationInput = {
         ...input("op-retrofit-linked-authorities", target.target, { id: projectId }),
         mode: "retrofit",
-        expected_project_revision: existing.updated_at,
+        expected_project_revision: getWorkspace(projectId, db)!.updated_at,
       };
 
       const first = await registerFullProject(request, { db, authorities: fakes.authorities });
@@ -952,7 +1028,8 @@ describe("full project registration transaction", () => {
       });
       expect(db.query(
         "SELECT COUNT(*) AS n FROM project_resource_links WHERE project_id = ?",
-      ).get(projectId)).toEqual({ n: 4 });
+      ).get(projectId)).toEqual({ n: 8 });
+      expect(persistedUnrelatedLinkIds()).toEqual(unrelatedLinkIds);
       expect(existsSync(target.path)).toBe(true);
 
       const requestCount = fakes.conversations.requests.length
@@ -963,6 +1040,10 @@ describe("full project registration transaction", () => {
       expect(
         fakes.conversations.requests.length + fakes.todos.requests.length + fakes.mementos.requests.length,
       ).toBe(requestCount);
+      expect(db.query(
+        "SELECT COUNT(*) AS n FROM project_resource_links WHERE project_id = ?",
+      ).get(projectId)).toEqual({ n: 8 });
+      expect(persistedUnrelatedLinkIds()).toEqual(unrelatedLinkIds);
 
       writeFileSync(join(target.path, PROJECT_REGISTRATION_GOALS_FILENAME), "# Foreign goals\n");
       const rollbackProbe = await registerFullProject({
@@ -983,6 +1064,10 @@ describe("full project registration transaction", () => {
       expect(fakes.todos.records.has(todosProjectId)).toBe(true);
       expect(fakes.todos.records.has(todosTaskListId)).toBe(true);
       expect(fakes.mementos.records.has(mementosProjectId)).toBe(true);
+      expect(db.query(
+        "SELECT COUNT(*) AS n FROM project_resource_links WHERE project_id = ?",
+      ).get(projectId)).toEqual({ n: 8 });
+      expect(persistedUnrelatedLinkIds()).toEqual(unrelatedLinkIds);
     } finally {
       db.close();
     }

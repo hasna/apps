@@ -6,6 +6,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.121]
+
+### Fixed
+
+- Full-project retrofit reconciliation now replaces only the exact typed links
+  derived from the registration's accepted authority receipts, preserving
+  unrelated Conversations channel, Todos project and task-list, and Mementos
+  project links through success, exact retry, and rollback.
+- Production full-project registration now fails closed before authority
+  imports or mutation when hosted Projects is paired with local external
+  authorities, or local Projects is paired with hosted external authorities.
+
 ## [0.1.120]
 
 ### Fixed
