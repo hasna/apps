@@ -115,7 +115,11 @@ function assertReleaseScripts(): void {
   assertMachinesOwnedBinBoundary(packageJson.bin ?? {});
   const scripts = packageJson.scripts ?? {};
   assert(
-    scripts["verify:release"] === "bun run typecheck && bun test && bun run build && bun run smoke:consumer-conformance && bun run scripts/verify-release.ts",
+    scripts.test === "bun test --timeout 10000",
+    "test must keep a finite 10-second per-test budget for process and network-simulation paths",
+  );
+  assert(
+    scripts["verify:release"] === "bun run typecheck && bun run test && bun run build && bun run smoke:consumer-conformance && bun run scripts/verify-release.ts",
     "verify:release must run the exact release gate chain",
   );
   assert(scripts.prepublishOnly === "bun run verify:release", "prepublishOnly must run verify:release");
