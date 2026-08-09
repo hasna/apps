@@ -42,7 +42,17 @@ export interface UncheckedItem {
 export interface HostedHealthResult {
   backend: HostedBackend;
   report: LoopsHealthReport;
+  executionTruth: HostedExecutionTruth[];
   unchecked: UncheckedItem[];
+}
+
+export interface HostedExecutionTruth {
+  loopId: string;
+  state: "healthy" | "dead_cadence" | "unproven";
+  finishedRuns: number;
+  acceptedRuns: number;
+  failedRuns: number;
+  windowLimit: number;
 }
 
 export interface HostedDoctorResult {
@@ -54,6 +64,8 @@ export interface HostedDoctorResult {
 /** Bounded fetch window for the global run counts the hosted store cannot count server-side. */
 const RUN_SCAN_LIMIT = 500;
 const DEFAULT_LOOP_LIMIT = 200;
+const EXECUTION_TRUTH_RUN_LIMIT = 10;
+const MIN_EXECUTION_TRUTH_FINISHED_RUNS = 3;
 
 export function hostedBackend(store: LoopStore): HostedBackend {
   return { transport: "cloud-http", apiUrl: store instanceof ApiStore ? store.baseUrl : undefined };
@@ -100,12 +112,94 @@ async function latestRunsFor(store: LoopStore, loopIds: string[], into: Map<stri
   const failed: string[] = [];
   for (const loopId of loopIds) {
     try {
-      into.set(loopId, await store.listRuns({ loopId, limit: 1 }));
+      into.set(loopId, await store.listRuns({ loopId, limit: EXECUTION_TRUTH_RUN_LIMIT }));
     } catch {
       failed.push(loopId);
     }
   }
   return failed;
+}
+
+function executionTruthFor(loop: Loop, runs: LoopRun[]): HostedExecutionTruth {
+  // Only producer-terminal outcomes prove an execution attempt completed.
+  // `abandoned` means the scheduler gave up ownership without observing an
+  // outcome, so counting it as finished would turn unreclaimed leases and
+  // similarly interrupted attempts into false evidence about execution.
+  const finished = runs.filter((run) =>
+    run.status === "succeeded"
+    || run.status === "failed"
+    || run.status === "timed_out"
+    || run.status === "skipped"
+  );
+  // Run status is the producer-owned truth. A provider contract may accept a
+  // non-zero exit (measured exit 1); when it does, the stored run status is
+  // `succeeded`, so re-deriving success from exitCode would manufacture a
+  // failure. The policy-backed overlap skip (75) is accepted for the same
+  // reason existing health treats it as a warning rather than a failed run.
+  const accepted = finished.filter((run) =>
+    run.status === "succeeded" || (run.status === "skipped" && run.exitCode === 75)
+  );
+  const state = finished.length < MIN_EXECUTION_TRUTH_FINISHED_RUNS
+    ? "unproven"
+    : accepted.length === 0
+      ? "dead_cadence"
+      : "healthy";
+  return {
+    loopId: loop.id,
+    state,
+    finishedRuns: finished.length,
+    acceptedRuns: accepted.length,
+    failedRuns: finished.length - accepted.length,
+    windowLimit: EXECUTION_TRUTH_RUN_LIMIT,
+  };
+}
+
+function applyExecutionTruth(
+  report: LoopsHealthReport,
+  executionTruth: HostedExecutionTruth[],
+): LoopsHealthReport {
+  const truthByLoop = new Map(executionTruth.map((entry) => [entry.loopId, entry]));
+  const expectations = report.expectations.map((expectation) => {
+    const truth = truthByLoop.get(expectation.loop.id);
+    if (!truth || truth.state === "healthy") return expectation;
+    if (truth.state === "dead_cadence") {
+      return {
+        ...expectation,
+        ok: false,
+        check: {
+          id: "latest-run-succeeded" as const,
+          status: "fail" as const,
+          message:
+            `${truth.finishedRuns} terminal run(s) in the bounded history window and zero accepted outcomes; ` +
+            "advancing nextRunAt is not execution success",
+        },
+      };
+    }
+    return {
+      ...expectation,
+      ok: false,
+      check: {
+        id: "latest-run-succeeded" as const,
+        status: "warn" as const,
+        message:
+          `execution health UNPROVEN: ${truth.finishedRuns}/${MIN_EXECUTION_TRUTH_FINISHED_RUNS} required ` +
+          "terminal runs are available",
+      },
+    };
+  });
+  const unhealthy = expectations.filter((expectation) => !expectation.ok).length;
+  const warnings = expectations.filter((expectation) => expectation.check.status === "warn").length;
+  return {
+    ...report,
+    ok: unhealthy === 0,
+    summary: {
+      ...report.summary,
+      healthy: expectations.length - unhealthy,
+      unhealthy,
+      warnings,
+    },
+    expectations,
+  };
 }
 
 /**
@@ -139,6 +233,8 @@ export async function buildHostedHealthReport(
     unreachable.push(...(await latestRunsFor(store, pending, runs)));
     report = buildHealthReport(snapshot, reportOptions);
   }
+  const executionTruth = loops.map((loop) => executionTruthFor(loop, runs.get(loop.id) ?? []));
+  report = applyExecutionTruth(report, executionTruth);
 
   const unchecked: UncheckedItem[] = [
     {
@@ -157,7 +253,9 @@ export async function buildHostedHealthReport(
     },
     {
       id: "run-history-depth",
-      reason: `only the latest run of each loop was fetched (limit 1 per loop, ${loops.length} loop(s) at limit ${limit}); older failures in the same loop are not classified.`,
+      reason:
+        `execution truth uses at most ${EXECUTION_TRUTH_RUN_LIMIT} recent runs per loop and requires ` +
+        `${MIN_EXECUTION_TRUTH_FINISHED_RUNS} terminal runs; a full-history failure rate beyond that window is not claimed.`,
     },
   ];
   for (const loopId of new Set([...unreachable, ...snapshot.misses])) {
@@ -167,7 +265,7 @@ export async function buildHostedHealthReport(
     });
   }
 
-  return { backend: hostedBackend(store), report, unchecked };
+  return { backend: hostedBackend(store), report, executionTruth, unchecked };
 }
 
 /** Bounded count of runs in a status, with the cap made visible rather than implied. */

@@ -13,6 +13,12 @@ import {
   type PublicValidationDetails,
 } from "../lib/errors.js";
 import { packageVersion } from "../lib/version.js";
+import {
+  operationAdmissionReceipt,
+  operationTerminalReceipt,
+  type OperationReceiptState,
+  type PrivateOperationDescriptor,
+} from "../lib/operation-contract.js";
 import { LoopsClient as HttpLoopsClient } from "../sdk/http.js";
 import type { LoopsApiServerOptions } from "./index.js";
 import type { Loop, LoopRun, WorkflowSpec } from "../types.js";
@@ -124,10 +130,14 @@ describe("loops-api foundation", () => {
         get?: { responses?: Record<string, { content?: { "application/json"?: { schema?: { $ref?: string } } } }> };
         post?: {
           responses?: Record<string, { content?: { "application/json"?: { schema?: { $ref?: string } } } }>;
+          deprecated?: boolean;
           requestBody?: {
             content?: {
               "application/json"?: {
-                schema?: { properties?: { status?: { enum?: string[] } } };
+                schema?: {
+                  $ref?: string;
+                  properties?: { status?: { enum?: string[] } };
+                };
               };
             };
           };
@@ -187,6 +197,13 @@ describe("loops-api foundation", () => {
     ).toEqual(["succeeded", "failed", "timed_out", "skipped"]);
     expect(document.paths["/v1/runs/{id}/recover"]?.post?.responses?.["409"]).toBeUndefined();
     expect(document.paths["/v1/leases/recover"]?.post?.responses?.["409"]).toBeUndefined();
+    expect(document.paths["/v1/leases/recover"]?.post?.deprecated).toBe(true);
+    expect(document.paths["/v1/leases/stuck"]?.get?.responses?.["200"]?.content?.["application/json"]?.schema?.$ref)
+      .toBe("#/components/schemas/StuckRunReportResponse");
+    expect(document.paths["/v1/leases/reconcile"]?.post?.requestBody?.content?.["application/json"]?.schema?.$ref)
+      .toBe("#/components/schemas/StuckRunReconciliationInput");
+    expect(document.paths["/v1/leases/reconcile"]?.post?.responses?.["200"]?.content?.["application/json"]?.schema?.$ref)
+      .toBe("#/components/schemas/StuckRunReconciliationResponse");
     expect(document.paths["/status"]?.get?.responses?.["409"]).toBeUndefined();
     expect(document.paths["/v1/status"]?.get?.responses?.["409"]).toBeUndefined();
     expect(document.components.schemas.RunFinalizeConflictResponse).toMatchObject({
@@ -994,7 +1011,9 @@ describe("loops-api foundation", () => {
       };
       expect(created).toMatchObject({ ok: true, loop: { name: "api-storage-loop" } });
       expect(created.loop.labels).toEqual(["browserplan", "nightly"]);
-      expect(created.loop.target.env).toBe("[redacted]");
+      expect(created.loop.target.env).toBeUndefined();
+      expect(JSON.stringify(created.loop.target)).not.toContain("PRIVATE_TOKEN");
+      expect(JSON.stringify(created.loop.target)).toContain("operationTemplateId");
 
       const listResponse = await fetch(apiUrl(server, "/v1/loops?limit=10&labels=browserplan%2Cnightly"));
       const listed = (await listResponse.json()) as { loops: { id: string; labels: string[] }[] };
@@ -1527,8 +1546,11 @@ describe("loops-api foundation", () => {
         }),
       });
       expect(workItemResponse.status).toBe(201);
-      expect(await workItemResponse.json()).toMatchObject({ ok: true, workItem: { id: "wi-import-1", routeKey: "todos-task" } });
-      expect((await storage.getWorkflowWorkItem("wi-import-1"))?.id).toBe("wi-import-1");
+      expect(await workItemResponse.json()).toMatchObject({ ok: true, workItem: { id: "wi-import-1" } });
+      expect((await storage.getWorkflowWorkItem("wi-import-1"))).toMatchObject({
+        id: "wi-import-1",
+        routeKey: "todos-task",
+      });
 
       const listedInvocations = await fetch(apiUrl(server, "/v1/invocations?limit=10"));
       expect(listedInvocations.status).toBe(200);
@@ -1541,7 +1563,7 @@ describe("loops-api foundation", () => {
       expect(listedWorkItems.status).toBe(200);
       expect(await listedWorkItems.json()).toMatchObject({
         ok: true,
-        workItems: [expect.objectContaining({ id: "wi-import-1", routeKey: "todos-task" })],
+        workItems: [expect.objectContaining({ id: "wi-import-1" })],
       });
     } finally {
       server.stop(true);
@@ -2084,15 +2106,16 @@ describe("loops-api foundation", () => {
         }),
       });
       expect(writeResponse.status).toBe(201);
-      const written = (await writeResponse.json()) as { receipt: { run_id: string; summary: { stdout_bytes: number; stdout_excerpt: string } } };
+      const written = (await writeResponse.json()) as { receipt: { run_id: string; summary: { stdout_bytes: number; stdout_excerpt?: string } } };
       expect(written.receipt.run_id).toBe("run-api");
       expect(written.receipt.summary.stdout_bytes).toBe(50_000);
-      expect(written.receipt.summary.stdout_excerpt).toContain("chars omitted");
+      expect(written.receipt.summary.stdout_excerpt).toBeUndefined();
+      expect((await storage.getRunReceipt("run-api"))?.summary.stdout_excerpt).toContain("chars omitted");
 
       const readResponse = await fetch(apiUrl(server, "/v1/receipts/run-api"));
       expect(readResponse.status).toBe(200);
-      const read = (await readResponse.json()) as { receipt: { summary: { text: string } } };
-      expect(read.receipt.summary.text).toBe("api receipt");
+      const read = (await readResponse.json()) as { receipt: { summary: { text?: string } } };
+      expect(read.receipt.summary.text).toBeUndefined();
 
       const listResponse = await fetch(apiUrl(server, "/v1/receipts?taskId=task-api"));
       expect(listResponse.status).toBe(200);
@@ -2283,10 +2306,10 @@ describe("loops-api foundation", () => {
       expect(claimed.claims[0]!.loop.target.prompt).toBe(prompt);
       expect(claimed.claims[0]!.loop.target.prompt).not.toMatch(/^\[redacted/);
 
-      // ...while the operator-facing read stays redacted.
+      // ...while the operator-facing read omits the private prompt entirely.
       const read = await fetch(apiUrl(server, `/v1/loops/${loop.id}`), { headers: jsonHeaders });
       const body = (await read.json()) as { loop: { target: { prompt?: string } } };
-      expect(body.loop.target.prompt).toBe(`[redacted ${prompt.length} chars]`);
+      expect(body.loop.target.prompt).toBeUndefined();
     } finally {
       server.stop(true);
       await storage.close();
@@ -2467,6 +2490,320 @@ describe("loops-api foundation", () => {
     }
   });
 
+  test("hosted stuck-run detection and reconciliation distinguish stale, healthy, unauthorized, conflict, and replay", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const now = new Date("2026-01-01T00:20:00.000Z");
+    const staleClaimedAt = new Date("2026-01-01T00:00:00.000Z");
+    const healthyClaimedAt = new Date("2026-01-01T00:19:30.000Z");
+    const staleLoop = await storage.createLoop({
+      name: "hosted-stuck-known-stale",
+      schedule: { type: "interval", everyMs: 60_000 },
+      target: { type: "command", command: "true" },
+      leaseMs: 1_000,
+    }, staleClaimedAt);
+    const healthyLoop = await storage.createLoop({
+      name: "hosted-stuck-known-healthy",
+      schedule: { type: "interval", everyMs: 60_000 },
+      target: { type: "command", command: "true" },
+      leaseMs: 60_000,
+    }, healthyClaimedAt);
+    const stale = await storage.claimRun(staleLoop, staleClaimedAt.toISOString(), "runner-stale", staleClaimedAt);
+    const healthy = await storage.claimRun(healthyLoop, healthyClaimedAt.toISOString(), "runner-healthy", healthyClaimedAt);
+    expect(stale).toBeTruthy();
+    expect(healthy).toBeTruthy();
+
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage, now: () => now });
+    const wrongScopeServer = mod.createLoopsApiServer({
+      host: "127.0.0.1",
+      port: 0,
+      storage,
+      now: () => now,
+      authenticator: {
+        authenticate: async (_headers, context) => context.policy.operationId === "leases.stuck"
+          ? {
+              ok: false as const,
+              status: 403 as const,
+              reason: "insufficient_scope",
+              message: "loops:read required",
+              requestId: "wrong-scope-request",
+            }
+          : { ok: true as const, status: 200 as const, principal: testPrincipal },
+      },
+      withTenantStorage: (_principal, fn) => fn(storage),
+    });
+    try {
+      const denied = await fetch(apiUrl(wrongScopeServer, "/v1/leases/stuck"));
+      expect(denied.status).toBe(403);
+      const deniedBody = await denied.json() as Record<string, unknown>;
+      expect(deniedBody).toMatchObject({ ok: false });
+      expect(deniedBody.report).toBeUndefined();
+
+      const detected = await fetch(apiUrl(server, "/v1/leases/stuck?limit=10"));
+      expect(detected.status).toBe(200);
+      const detectedText = await detected.text();
+      expect(detectedText).toContain("snapshotId");
+      const detectedBody = JSON.parse(detectedText) as {
+        report: {
+          state: string;
+          candidates: Array<{ runId: string; loopId: string; snapshotId: string }>;
+          truncated: boolean;
+        };
+      };
+      expect(detectedBody.report.state).toBe("stuck");
+      expect(detectedBody.report.truncated).toBe(false);
+      expect(detectedBody.report.candidates).toHaveLength(1);
+      expect(detectedBody.report.candidates.some((candidate) => candidate.runId === healthy!.run.id)).toBe(false);
+
+      const candidate = detectedBody.report.candidates[0]!;
+      expect(candidate.runId).toBe(stale!.run.id);
+      expect(candidate.loopId).toBe(staleLoop.id);
+      expect(candidate.snapshotId).toMatch(/^stuck_[a-f0-9]{64}$/);
+      const conflicted = await fetch(apiUrl(server, "/v1/leases/reconcile"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ candidates: [{ ...candidate, loopId: `${candidate.loopId}-wrong` }] }),
+      });
+      const conflictedBody = await conflicted.json();
+      expect({ status: conflicted.status, body: conflictedBody }).toMatchObject({
+        status: 200,
+        body: {
+        reconciliation: {
+          outcomes: [{ runId: stale!.run.id, outcome: "conflict", reason: "candidate_snapshot_changed" }],
+        },
+        },
+      });
+      expect(await storage.getRun(stale!.run.id)).toMatchObject({ status: "running" });
+
+      const reconciled = await fetch(apiUrl(server, "/v1/leases/reconcile"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ candidates: [candidate] }),
+      });
+      expect(reconciled.status).toBe(200);
+      expect(await reconciled.json()).toMatchObject({
+        reconciliation: { outcomes: [{ runId: stale!.run.id, outcome: "recovered" }] },
+      });
+      expect(await storage.getRun(stale!.run.id)).toMatchObject({ status: "abandoned" });
+      expect(await storage.getRun(healthy!.run.id)).toMatchObject({ status: "running" });
+
+      const replay = await fetch(apiUrl(server, "/v1/leases/reconcile"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ candidates: [candidate] }),
+      });
+      expect(replay.status).toBe(200);
+      expect(await replay.json()).toMatchObject({
+        reconciliation: { outcomes: [{ runId: stale!.run.id, outcome: "already_recovered" }] },
+      });
+
+      const clear = await fetch(apiUrl(server, "/v1/leases/stuck?limit=10"));
+      expect(clear.status).toBe(200);
+      expect(await clear.json()).toMatchObject({
+        report: { state: "clear", candidates: [], truncated: false },
+      });
+    } finally {
+      wrongScopeServer.stop(true);
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("hosted stuck-run reconciliation refuses to repeat an admitted external operation blindly", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const claimedAt = new Date("2026-01-01T00:00:00.000Z");
+    const now = new Date("2026-01-01T00:20:00.000Z");
+    const workflow = await storage.createWorkflow({
+      name: "hosted-stuck-operation-fence",
+      steps: [{ id: "effect", target: { type: "command", command: "printf", args: ["effect"] } }],
+    });
+    const loop = await storage.createLoop({
+      name: "hosted-stuck-operation-loop",
+      schedule: { type: "interval", everyMs: 60_000 },
+      target: { type: "workflow", workflowId: workflow.id },
+      leaseMs: 1_000,
+    }, claimedAt);
+    const claim = await storage.claimRun(loop, claimedAt.toISOString(), "runner-stuck-effect", claimedAt);
+    expect(claim).toBeTruthy();
+    const workflowRun = await storage.createWorkflowRun({
+      workflow,
+      loop,
+      loopRun: claim!.run,
+      operationAuthority: {
+        authorityId: "loops-control-plane",
+        tenantId: testPrincipal.tenantId,
+      },
+    });
+    const descriptorEvent = (await storage.listWorkflowEvents(workflowRun.id)).find((event) =>
+      event.eventType === "private_operation_descriptor" && event.stepId === "effect"
+    )!;
+    const descriptor = descriptorEvent.payload as unknown as PrivateOperationDescriptor;
+    await storage.appendWorkflowEvent(
+      workflowRun.id,
+      "private_operation_admitted",
+      "effect",
+      operationAdmissionReceipt(descriptor) as unknown as Record<string, unknown>,
+    );
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage, now: () => now });
+    try {
+      const detected = await fetch(apiUrl(server, "/v1/leases/stuck"));
+      expect(detected.status).toBe(200);
+      const body = await detected.json() as {
+        report: { candidates: Array<{ runId: string; loopId: string; snapshotId: string }> };
+      };
+      const candidate = body.report.candidates.find((entry) => entry.runId === claim!.run.id)!;
+      expect(candidate).toBeDefined();
+      const reconcile = await fetch(apiUrl(server, "/v1/leases/reconcile"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ candidates: [candidate] }),
+      });
+      expect(reconcile.status).toBe(200);
+      expect(await reconcile.json()).toMatchObject({
+        reconciliation: {
+          outcomes: [{
+            runId: claim!.run.id,
+            outcome: "operation_reconciliation_required",
+            reason: "admitted_external_operation_will_not_be_repeated_blindly",
+          }],
+        },
+      });
+      expect(await storage.getRun(claim!.run.id)).toMatchObject({ status: "running" });
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("legacy maintenance recovery cannot mutate or advance an admitted private operation", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const claimedAt = new Date("2026-01-01T00:00:00.000Z");
+    const recoveredAt = new Date("2026-01-01T00:20:00.000Z");
+    const workflow = await storage.createWorkflow({
+      name: "legacy-recovery-operation-fence",
+      steps: [{ id: "effect", target: { type: "command", command: "printf", args: ["effect"] } }],
+    });
+    const loop = await storage.createLoop({
+      name: "legacy-recovery-operation-loop",
+      schedule: { type: "interval", everyMs: 60_000 },
+      target: { type: "workflow", workflowId: workflow.id },
+      maxAttempts: 2,
+      retryDelayMs: 1_000,
+      leaseMs: 1_000,
+    }, claimedAt);
+    await storage.updateLoop(loop.id, { nextRunAt: claimedAt.toISOString() });
+    const claim = await storage.claimRun(loop, claimedAt.toISOString(), "runner-legacy-effect", claimedAt);
+    expect(claim).toBeTruthy();
+    const workflowRun = await storage.createWorkflowRun({
+      workflow,
+      loop,
+      loopRun: claim!.run,
+      operationAuthority: {
+        authorityId: "loops-control-plane",
+        tenantId: testPrincipal.tenantId,
+      },
+    });
+    const descriptorEvent = (await storage.listWorkflowEvents(workflowRun.id)).find((event) =>
+      event.eventType === "private_operation_descriptor" && event.stepId === "effect"
+    )!;
+    const descriptor = descriptorEvent.payload as unknown as PrivateOperationDescriptor;
+    await storage.appendWorkflowEvent(
+      workflowRun.id,
+      "private_operation_admitted",
+      "effect",
+      operationAdmissionReceipt(descriptor) as unknown as Record<string, unknown>,
+    );
+    const beforeRun = await storage.getRun(claim!.run.id);
+    const beforeWorkflowRun = await storage.getWorkflowRun(workflowRun.id);
+    const beforeLoop = await storage.getLoop(loop.id);
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage, now: () => recoveredAt });
+    try {
+      const response = await fetch(apiUrl(server, "/v1/leases/recover"), { method: "POST" });
+      const body = await response.json();
+      const afterRun = await storage.getRun(claim!.run.id);
+      const afterWorkflowRun = await storage.getWorkflowRun(workflowRun.id);
+      const afterLoop = await storage.getLoop(loop.id);
+
+      expect({
+        response: { status: response.status, body },
+        run: {
+          status: afterRun?.status,
+          finishedAt: afterRun?.finishedAt,
+          error: afterRun?.error,
+        },
+        workflowRun: {
+          status: afterWorkflowRun?.status,
+          finishedAt: afterWorkflowRun?.finishedAt,
+          error: afterWorkflowRun?.error,
+        },
+        loop: {
+          nextRunAt: afterLoop?.nextRunAt,
+          retryScheduledFor: afterLoop?.retryScheduledFor,
+        },
+      }).toEqual({
+        response: {
+          status: 200,
+          body: { ok: true, abandoned: [], deferred: [], advancementDeferred: [] },
+        },
+        run: {
+          status: beforeRun?.status,
+          finishedAt: beforeRun?.finishedAt,
+          error: beforeRun?.error,
+        },
+        workflowRun: {
+          status: beforeWorkflowRun?.status,
+          finishedAt: beforeWorkflowRun?.finishedAt,
+          error: beforeWorkflowRun?.error,
+        },
+        loop: {
+          nextRunAt: beforeLoop?.nextRunAt,
+          retryScheduledFor: beforeLoop?.retryScheduledFor,
+        },
+      });
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("legacy maintenance recovery preserves safe non-admitted recovery", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const claimedAt = new Date("2026-01-01T00:00:00.000Z");
+    const recoveredAt = new Date("2026-01-01T00:00:02.000Z");
+    const loop = await storage.createLoop({
+      name: "legacy-recovery-safe",
+      schedule: { type: "interval", everyMs: 60_000 },
+      target: { type: "command", command: "false" },
+      maxAttempts: 1,
+      leaseMs: 1_000,
+    }, claimedAt);
+    await storage.updateLoop(loop.id, { nextRunAt: claimedAt.toISOString() });
+    const claim = await storage.claimRun(loop, claimedAt.toISOString(), "runner-legacy-safe", claimedAt);
+    expect(claim).toBeTruthy();
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage, now: () => recoveredAt });
+    try {
+      const response = await fetch(apiUrl(server, "/v1/leases/recover"), { method: "POST" });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        abandoned: [{ id: claim!.run.id, status: "abandoned" }],
+        deferred: [],
+        advancementDeferred: [],
+      });
+      expect(await storage.getRun(claim!.run.id)).toMatchObject({ status: "abandoned" });
+      expect(await storage.getLoop(loop.id)).toMatchObject({
+        status: "active",
+        nextRunAt: "2026-01-01T00:01:00.000Z",
+        retryScheduledFor: undefined,
+      });
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
   test("runner finalization uses server time for stale-claim fencing", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
@@ -2580,6 +2917,10 @@ describe("loops-api foundation", () => {
         loop,
         loopRun: claimed.claims[0]!.run,
         idempotencyKey,
+        operationAuthority: {
+          authorityId: "loops-control-plane",
+          tenantId: testPrincipal.tenantId,
+        },
       });
       expect((await storage.listWorkflowEvents(preChangeWorkflowRun.id)).filter((event) =>
         event.eventType === "agent_session_contract"
@@ -2594,9 +2935,130 @@ describe("loops-api foundation", () => {
         }),
       });
       expect(createWorkflowRun.status).toBe(200);
-      const created = (await createWorkflowRun.json()) as { workflowRun: { id: string; loopRunId: string; workflowId: string; status: string } };
+      const created = (await createWorkflowRun.json()) as {
+        workflowRun: { id: string; loopRunId: string; workflowId: string; status: string };
+        operationDescriptors: PrivateOperationDescriptor[];
+        operationStates: OperationReceiptState[];
+      };
       expect(created.workflowRun).toMatchObject({ loopRunId: claimed.claims[0]!.run.id, workflowId: workflow.id, status: "running" });
       expect(created.workflowRun.id).toBe(preChangeWorkflowRun.id);
+      expect(created.operationDescriptors).toHaveLength(workflow.steps.length);
+      expect(created.operationStates).toHaveLength(workflow.steps.length);
+      expect(created.operationStates.every((state) => !state.admission && !state.terminal)).toBe(true);
+      const privateAgentDescriptor = created.operationDescriptors.find((descriptor) => descriptor.stepId === "contract-agent")!;
+      expect(privateAgentDescriptor.target).toMatchObject({
+        type: "agent",
+        provider: "codewith",
+        prompt: "perform scoped work",
+      });
+      expect(privateAgentDescriptor.authority).toEqual({
+        authorityId: "loops-control-plane",
+        tenantId: testPrincipal.tenantId,
+      });
+      const publicEvents = await fetch(apiUrl(server, `/v1/workflow-runs/${created.workflowRun.id}/events`));
+      expect(publicEvents.status).toBe(200);
+      const publicEventsText = JSON.stringify(await publicEvents.json());
+      expect(publicEventsText).not.toContain("private_operation");
+      expect(publicEventsText).not.toContain("perform scoped work");
+      expect(publicEventsText).not.toContain("loops-control-plane");
+
+      const commandDescriptor = created.operationDescriptors.find((descriptor) => descriptor.stepId === "command")!;
+      const eventPath = `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs/${created.workflowRun.id}/events`;
+      const admission = operationAdmissionReceipt(commandDescriptor);
+      const wrongAuthorityAdmission = await fetch(apiUrl(server, eventPath), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken: claimed.claims[0]!.claimToken,
+          eventType: "private_operation_admitted",
+          stepId: "command",
+          payload: { ...admission, authority: { ...admission.authority, tenantId: "wrong-tenant" } },
+        }),
+      });
+      expect(wrongAuthorityAdmission.status).toBe(409);
+      expect(await wrongAuthorityAdmission.json()).toMatchObject({ error: "private_operation_admission_mismatch" });
+
+      const admitted = await fetch(apiUrl(server, eventPath), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken: claimed.claims[0]!.claimToken,
+          eventType: "private_operation_admitted",
+          stepId: "command",
+          payload: admission,
+        }),
+      });
+      expect(admitted.status).toBe(200);
+      expect(await admitted.json()).toMatchObject({ duplicate: false });
+      const admittedReplay = await fetch(apiUrl(server, eventPath), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken: claimed.claims[0]!.claimToken,
+          eventType: "private_operation_admitted",
+          stepId: "command",
+          payload: admission,
+        }),
+      });
+      expect(admittedReplay.status).toBe(200);
+      expect(await admittedReplay.json()).toMatchObject({ duplicate: true });
+
+      const missingResult = await fetch(apiUrl(server, eventPath), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken: claimed.claims[0]!.claimToken,
+          eventType: "private_operation_terminal",
+          stepId: "command",
+          payload: {
+            ...operationTerminalReceipt(commandDescriptor, {
+              status: "succeeded",
+              exitCode: 0,
+              durationMs: 1,
+              stdout: "NON_SENSITIVE_RESULT",
+              stderr: "",
+            }),
+            resultRef: "",
+          },
+        }),
+      });
+      expect(missingResult.status).toBe(422);
+      expect(await missingResult.json()).toMatchObject({ ok: false, error: "validation_failed" });
+
+      const terminal = operationTerminalReceipt(commandDescriptor, {
+        status: "succeeded",
+        exitCode: 0,
+        durationMs: 1,
+        stdout: "NON_SENSITIVE_RESULT",
+        stderr: "",
+      });
+      const terminalResponse = await fetch(apiUrl(server, eventPath), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken: claimed.claims[0]!.claimToken,
+          eventType: "private_operation_terminal",
+          stepId: "command",
+          payload: terminal,
+        }),
+      });
+      expect(terminalResponse.status).toBe(200);
+      expect(await terminalResponse.json()).toMatchObject({ duplicate: false });
+      const terminalReplay = await fetch(apiUrl(server, eventPath), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken: claimed.claims[0]!.claimToken,
+          eventType: "private_operation_terminal",
+          stepId: "command",
+          payload: terminal,
+        }),
+      });
+      expect(terminalReplay.status).toBe(200);
+      expect(await terminalReplay.json()).toMatchObject({ duplicate: true });
+      expect((await storage.listWorkflowEvents(created.workflowRun.id)).filter((event) =>
+        event.eventType === "private_operation_terminal" && event.stepId === "command"
+      )).toHaveLength(1);
 
       const internal = storage.store as unknown as { db: Database };
       const eventsBeforeProvenanceFailures = await storage.listWorkflowEvents(created.workflowRun.id);
@@ -2748,6 +3210,10 @@ describe("loops-api foundation", () => {
           loop,
           loopRun: claimed.claims[0]!.run,
           idempotencyKey: corruptKey,
+          operationAuthority: {
+            authorityId: "loops-control-plane",
+            tenantId: testPrincipal.tenantId,
+          },
         });
         await storage.appendWorkflowEvent(
           corruptRun.id,
@@ -2773,6 +3239,10 @@ describe("loops-api foundation", () => {
         loop,
         loopRun: claimed.claims[0]!.run,
         idempotencyKey: concurrentKey,
+        operationAuthority: {
+          authorityId: "loops-control-plane",
+          tenantId: testPrincipal.tenantId,
+        },
       });
       const concurrentCreate = () => fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs`), {
         method: "POST",

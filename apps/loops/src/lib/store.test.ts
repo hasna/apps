@@ -3310,9 +3310,9 @@ exit 0
       const run = store.createWorkflowRun({ workflow });
       const second = store.appendWorkflowEvent(run.id, "custom_one");
       const third = store.appendWorkflowEvent(run.id, "custom_two");
-      expect(second.sequence).toBe(2);
-      expect(third.sequence).toBe(3);
-      expect(store.listWorkflowEvents(run.id).map((event) => event.sequence)).toEqual([1, 2, 3]);
+      expect(second.sequence).toBe(3);
+      expect(third.sequence).toBe(4);
+      expect(store.listWorkflowEvents(run.id).map((event) => event.sequence)).toEqual([1, 2, 3, 4]);
     } finally {
       store.close();
     }

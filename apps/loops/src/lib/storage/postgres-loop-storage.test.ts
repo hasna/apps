@@ -29,6 +29,7 @@ import { waitUntil } from "../../test-helpers.js";
 import { planLoopAdvancement } from "../advancement.js";
 import { createLoopsApiServer } from "../../api/index.js";
 import type { TenantAuthContext } from "../auth/tenant-auth.js";
+import { operationAdmissionReceipt, parsePrivateOperationDescriptor } from "../operation-contract.js";
 
 const j = (...parts: string[]): string => parts.join("");
 const GH_PAT = j("ghp", "_AbCdEf0123456789AbCdEf0123456789");
@@ -1391,10 +1392,67 @@ suite("PostgresLoopStorage (live)", () => {
     const past = new Date(Date.now() - 60_000);
     const claim = await storage.claimRun(loop, slot, "runner-x", past);
     expect(claim).toBeTruthy();
-    const result = await storage.recoverExpiredRunLeasesDetailed(new Date());
+    const result = await storage.recoverExpiredRunLeasesDetailed(new Date(), {
+      refuseAdmittedPrivateOperations: true,
+    });
     expect(result.abandoned.length).toBe(1);
     expect(result.abandoned[0]!.status).toBe("abandoned");
     expect(result.deferred.length).toBe(0);
+  });
+
+  test("recoverExpiredRunLeasesDetailed applies exact timestamp fences as timestamptz", async () => {
+    const loop = await storage.createLoop(loopInput("recover-exact-timestamp-fences", { leaseMs: 1 }));
+    const past = new Date(Date.now() - 60_000);
+    const claim = await storage.claimRun(loop, "2026-07-06T12:01:00.000Z", "runner-exact-fences", past);
+    expect(claim).toBeTruthy();
+    expect(claim!.run.leaseExpiresAt).toBeDefined();
+
+    const result = await storage.recoverExpiredRunLeasesDetailed(new Date(), {
+      runId: claim!.run.id,
+      expectedLeaseExpiresAt: claim!.run.leaseExpiresAt,
+      expectedUpdatedAt: claim!.run.updatedAt,
+    });
+
+    expect(result.abandoned.map((run) => run.id)).toEqual([claim!.run.id]);
+    expect((await storage.getRun(claim!.run.id))?.status).toBe("abandoned");
+  });
+
+  test("recoverExpiredRunLeasesDetailed refuses admitted private operations", async () => {
+    const workflow = await storage.createWorkflow({
+      name: "recover-admitted-private-operation",
+      steps: [{ id: "effect", target: { type: "command", command: "printf", args: ["effect"] } }],
+    });
+    const loop = await storage.createLoop(loopInput("recover-admitted-private-operation", {
+      leaseMs: 1,
+      target: { type: "workflow", workflowId: workflow.id },
+    }));
+    const past = new Date(Date.now() - 60_000);
+    const claim = await storage.claimRun(loop, "2026-07-06T12:02:00.000Z", "runner-admitted-effect", past);
+    expect(claim).toBeTruthy();
+    const workflowRun = await storage.createWorkflowRun({
+      workflow,
+      loop,
+      loopRun: claim!.run,
+      operationAuthority: { authorityId: "loops-control-plane", tenantId: "tenant-test" },
+    });
+    const descriptor = parsePrivateOperationDescriptor(
+      (await storage.listWorkflowEvents(workflowRun.id)).find((event) =>
+        event.eventType === "private_operation_descriptor" && event.stepId === "effect"
+      )?.payload,
+    );
+    await storage.appendWorkflowEvent(
+      workflowRun.id,
+      "private_operation_admitted",
+      "effect",
+      operationAdmissionReceipt(descriptor) as unknown as Record<string, unknown>,
+    );
+
+    const result = await storage.recoverExpiredRunLeasesDetailed(new Date(), {
+      refuseAdmittedPrivateOperations: true,
+    });
+
+    expect(result.abandoned.some((run) => run.id === claim!.run.id)).toBe(false);
+    expect((await storage.getRun(claim!.run.id))?.status).toBe("running");
   });
 
   test("recoverExpiredRunLeasesDetailed honours protectClaimedByInLoops", async () => {
@@ -2255,6 +2313,8 @@ suite("PostgresLoopStorage (live)", () => {
     const events = await storage.listWorkflowEvents(workflowRun.id);
     expect(events.map((event) => event.eventType)).toEqual([
       "created",
+      "private_operation_descriptor",
+      "private_operation_descriptor",
       "step_started",
       "step_succeeded",
       "step_started",
@@ -2754,7 +2814,12 @@ suite("PostgresLoopStorage (live)", () => {
       error: "parent loop run lease expired before completion",
     });
     const events = await storage.listWorkflowEvents(workflowRun.id);
-    expect(events.map((event) => event.eventType)).toEqual(["created", "step_started", "failed"]);
+    expect(events.map((event) => event.eventType)).toEqual([
+      "created",
+      "private_operation_descriptor",
+      "step_started",
+      "failed",
+    ]);
     expect(events.at(-1)?.payload).toMatchObject({
       error: "parent loop run lease expired before completion",
       loopRunId: claim!.run.id,

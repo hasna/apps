@@ -91,6 +91,8 @@ export const ROUTE_POLICIES: readonly RoutePolicy[] = Object.freeze([
   policy("history.prune", "POST", "/v1/history/prune", /^\/v1\/history\/prune$/, ["loops:delete"], ADMIN_ROLES, ["api_key", "service"], "destructive"),
   policy("runners.poll", "POST", "/v1/runners/poll", /^\/v1\/runners\/poll$/, ["loops:runner"], ["worker", "service"], ["machine", "service"], "runner"),
   policy("runners.claim", "POST", "/v1/runners/claim", /^\/v1\/runners\/claim$/, ["loops:runner"], ["worker", "service"], ["machine", "service"], "runner"),
+  policy("leases.stuck", "GET", "/v1/leases/stuck", /^\/v1\/leases\/stuck$/, ["loops:read"], READ_ROLES, ["api_key", "service"], "read"),
+  policy("leases.reconcile", "POST", "/v1/leases/reconcile", /^\/v1\/leases\/reconcile$/, ["loops:delete"], ["admin", "service"], ["api_key", "service"], "destructive"),
   policy("leases.recover", "POST", "/v1/leases/recover", /^\/v1\/leases\/recover$/, ["loops:delete"], ["admin", "service"], ["api_key", "service"], "destructive"),
 ]);
 

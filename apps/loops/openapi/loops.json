@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Loops",
-    "version": "0.4.29",
+    "version": "0.4.40",
     "description": "Loops self-hosted multi-tenant control-plane HTTP API. All non-probe operations require a tenant-bound API key with the declared scope, role, and token kind."
   },
   "servers": [
@@ -2894,10 +2894,107 @@
         }
       }
     },
+    "/v1/leases/stuck": {
+      "get": {
+        "operationId": "leasesStuck",
+        "summary": "Detect hosted runs whose leases are safely past the recovery grace period",
+        "parameters": [
+          {
+            "name": "expiredBefore",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Bounded stuck-run report with opaque reconciliation snapshots",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StuckRunReportResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "leases.stuck",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
+      }
+    },
+    "/v1/leases/reconcile": {
+      "post": {
+        "operationId": "leasesReconcile",
+        "summary": "Reconcile exact hosted stuck-run snapshots without blind effect replay",
+        "responses": {
+          "200": {
+            "description": "Per-candidate reconciliation outcomes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StuckRunReconciliationResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "leases.reconcile",
+        "x-required-scopes": [
+          "loops:delete"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "destructive",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StuckRunReconciliationInput"
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/leases/recover": {
       "post": {
         "operationId": "leasesRecover",
-        "summary": "leases.recover",
+        "summary": "Legacy server-selected lease recovery",
+        "deprecated": true,
         "responses": {
           "200": {
             "description": "Successful response",
@@ -3697,6 +3794,149 @@
         "required": [
           "ok",
           "error"
+        ]
+      },
+      "StuckRunCandidate": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "runId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "loopId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "snapshotId": {
+            "type": "string",
+            "pattern": "^stuck_[a-f0-9]{64}$"
+          }
+        },
+        "required": [
+          "runId",
+          "loopId",
+          "snapshotId"
+        ]
+      },
+      "StuckRunReportResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true
+          },
+          "report": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "type": "string",
+                "enum": [
+                  "clear",
+                  "stuck"
+                ]
+              },
+              "expiredBefore": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "candidates": {
+                "type": "array",
+                "maxItems": 100,
+                "items": {
+                  "$ref": "#/components/schemas/StuckRunCandidate"
+                }
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "state",
+              "expiredBefore",
+              "candidates",
+              "truncated"
+            ]
+          }
+        },
+        "required": [
+          "ok",
+          "report"
+        ]
+      },
+      "StuckRunReconciliationInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "candidates": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/StuckRunCandidate"
+            }
+          }
+        },
+        "required": [
+          "candidates"
+        ]
+      },
+      "StuckRunReconciliationOutcome": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "runId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "recovered",
+              "already_recovered",
+              "conflict",
+              "operation_reconciliation_required"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "runId",
+          "outcome"
+        ]
+      },
+      "StuckRunReconciliationResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true
+          },
+          "reconciliation": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "outcomes": {
+                "type": "array",
+                "maxItems": 100,
+                "items": {
+                  "$ref": "#/components/schemas/StuckRunReconciliationOutcome"
+                }
+              }
+            },
+            "required": [
+              "outcomes"
+            ]
+          }
+        },
+        "required": [
+          "ok",
+          "reconciliation"
         ]
       },
       "Foundation": {

@@ -316,9 +316,15 @@ describe("routeTodosTaskEvent dedupe re-admission", () => {
       });
       expect(result.kind).toBe("created");
       expect(result.value.idempotencyKey).toBe(`todos-task:/tmp/source-todos:${TASK_ID}`);
-      expect((result.value.workItem as { subjectRef?: string }).subjectRef).toBe(TASK_ID);
+      expect((result.value.workItem as { subjectRef?: string }).subjectRef).toBeUndefined();
       expect((result.value.invocation as { subjectRef?: { id?: string } }).subjectRef?.id).toBe(TASK_ID);
       expect((result.value.loop as { description?: string }).description).toContain(`task ${TASK_ID}`);
+      const store = new Store(dbPath());
+      try {
+        expect(store.getWorkflowWorkItem((result.value.workItem as { id: string }).id)?.subjectRef).toBe(TASK_ID);
+      } finally {
+        store.close();
+      }
     } finally {
       fakeTodos.restore();
     }
@@ -345,7 +351,13 @@ describe("routeTodosTaskEvent dedupe re-admission", () => {
       expect(firstWorkflow.description).toContain(`workflow for ${TASK_ID}`);
       expect(firstWorkflow.description).toContain(`idempotency=todos-task:/tmp/source-todos:${TASK_ID}`);
       expect(firstLoop.description).toContain(`task ${TASK_ID}`);
-      expect(JSON.stringify(firstWorkflow.steps)).toContain(TASK_ID);
+      expect(JSON.stringify(firstWorkflow.steps)).not.toContain(TASK_ID);
+      const store = new Store(dbPath());
+      try {
+        expect(JSON.stringify(store.getWorkflow((firstWorkflow as { id: string }).id)?.steps)).toContain(TASK_ID);
+      } finally {
+        store.close();
+      }
     } finally {
       fakeTodos.restore();
     }
@@ -805,10 +817,16 @@ describe("routeTodosTaskEvent operator-authoritative project-group admission", (
     const firstValue = first.value as Record<string, any>;
     expect(first.kind).toBe("created");
     expect(firstValue.workItem.projectGroup).toBe("operator-group");
-    expect(firstValue.invocation.scope.routeThrottle).toMatchObject({
-      projectGroup: "operator-group",
-      limits: { maxActivePerProjectGroup: 1 },
-    });
+    expect(firstValue.invocation.scope.routeThrottle).toBeUndefined();
+    const store = new Store(dbPath());
+    try {
+      expect(store.getWorkflowInvocation(firstValue.invocation.id)?.scope?.routeThrottle).toMatchObject({
+        projectGroup: "operator-group",
+        limits: { maxActivePerProjectGroup: 1 },
+      });
+    } finally {
+      store.close();
+    }
 
     const omitted = routeTodosTaskEvent(
       groupTaskEvent("mixed-omitted", { project_group: "different-metadata-group" }),

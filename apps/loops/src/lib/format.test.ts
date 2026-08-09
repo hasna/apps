@@ -60,10 +60,11 @@ describe("textOutputBlocks", () => {
       updatedAt: "2026-01-01T00:00:00Z",
     });
     expect(JSON.stringify(value)).not.toContain("SECRET_PROMPT_VALUE");
-    expect(JSON.stringify(value)).toContain("[redacted");
+    expect(JSON.stringify(value)).not.toContain("prompt");
+    expect(JSON.stringify(value)).toContain("operationTemplateId");
   });
 
-  test("keeps prompt source metadata while redacting prompt bodies", () => {
+  test("omits prompt source paths and prompt bodies from public loop metadata", () => {
     const value = publicLoop({
       id: "loop",
       name: "agent",
@@ -86,7 +87,8 @@ describe("textOutputBlocks", () => {
     });
     const json = JSON.stringify(value);
     expect(json).not.toContain("SECRET_PROMPT_FILE_CONTENT");
-    expect(json).toContain("/home/hasna/.hasna/loops/prompts/example.md");
+    expect(json).not.toContain("/home/hasna/.hasna/loops/prompts/example.md");
+    expect(json).toContain("operationTemplateId");
   });
 
   test("redacts workflow step prompts without leaking a prefix", () => {
@@ -105,7 +107,39 @@ describe("textOutputBlocks", () => {
       updatedAt: "2026-01-01T00:00:00Z",
     });
     expect(JSON.stringify(value)).not.toContain("SECRET_WORKFLOW_PROMPT");
-    expect(JSON.stringify(value)).toContain("[redacted");
+    expect(JSON.stringify(value)).not.toContain("prompt");
+    expect(JSON.stringify(value)).toContain("operationTemplateId");
+  });
+
+  test("public workflow projections omit private paths, profiles, recipients, capability URLs, and receipt evidence", () => {
+    const publicValue = publicWorkflow({
+      id: "workflow-private-fields",
+      name: "workflow",
+      version: 1,
+      status: "active",
+      steps: [{
+        id: "agent",
+        account: { profile: "private-account", tool: "codewith" },
+        target: {
+          type: "agent",
+          provider: "codewith",
+          prompt: "private prompt",
+          cwd: "/private/worktree",
+          authProfile: "private-auth-profile",
+          routing: { projectPath: "/private/project" },
+          env: { CAPABILITY_URL: "https://private.example/capability?token=private" },
+        },
+      }],
+      createdAt: "2026-08-09T00:00:00.000Z",
+      updatedAt: "2026-08-09T00:00:00.000Z",
+    }) as { steps: Array<{ target: Record<string, unknown> }> };
+    const workflowJson = JSON.stringify(publicValue);
+    expect(workflowJson).not.toContain("private prompt");
+    expect(workflowJson).not.toContain("/private/");
+    expect(workflowJson).not.toContain("private-account");
+    expect(workflowJson).not.toContain("private-auth-profile");
+    expect(workflowJson).not.toContain("private.example");
+    expect(Object.keys(publicValue.steps[0]!.target).sort()).toEqual(["operationTemplateId", "type"]);
   });
 
   test("redacts workflow run, step, and event sensitive fields by default", () => {
@@ -271,12 +305,26 @@ describe("redact", () => {
     expect(redact(value)).toBe(`[redacted ${value.length} chars]`);
   });
 
-  test("publicLoop on an already-public agent loop keeps the original length", () => {
-    const prompt = "y".repeat(137);
-    const loop = { id: "l1", target: { type: "agent", provider: "claude", prompt } } as never;
-    const once = publicLoop(loop) as { target: { prompt: string } };
-    expect(once.target.prompt).toBe("[redacted 137 chars]");
-    const twice = publicLoop(once as never) as { target: { prompt: string } };
-    expect(twice.target.prompt).toBe("[redacted 137 chars]");
+  test("publicLoop replaces a private target with an idempotent opaque descriptor", () => {
+    const loop = {
+      id: "l1",
+      name: "private-loop",
+      status: "active",
+      schedule: { type: "once", at: "2026-08-09T00:00:00.000Z" },
+      target: { type: "agent", provider: "claude", prompt: "y".repeat(137) },
+      catchUp: "latest",
+      catchUpLimit: 1,
+      overlap: "skip",
+      maxAttempts: 1,
+      retryDelayMs: 60_000,
+      leaseMs: 60_000,
+      createdAt: "2026-08-09T00:00:00.000Z",
+      updatedAt: "2026-08-09T00:00:00.000Z",
+    } as const;
+    const once = publicLoop(loop) as { target: { operationTemplateId: string } };
+    expect(JSON.stringify(once)).not.toContain("prompt");
+    expect(once.target.operationTemplateId).toStartWith("op-template:sha256:");
+    const twice = publicLoop({ ...loop, target: once.target } as never) as { target: { operationTemplateId: string } };
+    expect(twice.target.operationTemplateId).toBe(once.target.operationTemplateId);
   });
 });

@@ -70,6 +70,11 @@ import { normalizeLoopLabels } from "./labels.js";
 import { assertLoopStatus, assertMaxAttempts } from "./loop-status.js";
 import { normalizeRunCompletion } from "./run-completion.js";
 import { runLocalCommand, todosCliArgs, todosMutationSummary } from "./route/todos-cli.js";
+import {
+  isPrivateOperationEventType,
+  privateOperationEventsForWorkflowRun,
+  type OperationAuthorityBinding,
+} from "./operation-contract.js";
 
 interface DaemonLeaseFence {
   daemonLeaseId?: string;
@@ -761,6 +766,7 @@ export interface CreateWorkflowRunInput {
   invocationId?: string;
   workItemId?: string;
   daemonLeaseId?: string;
+  operationAuthority?: OperationAuthorityBinding;
   /** Internal deterministic fault-injection seam used to verify atomic initial event persistence. */
   beforeInitialWorkflowEventPersist?: (event: InitialAgentSessionContractEvent) => void;
 }
@@ -798,6 +804,18 @@ export interface RecoverExpiredRunLeasesResult {
   abandoned: LoopRun[];
   /** Runs whose lease expired while their process (group) is still alive; lease deferred. */
   deferred: LoopRun[];
+}
+
+export interface ExpiredRunLeaseCandidate {
+  runId: string;
+  loopId: string;
+  leaseExpiresAt: string;
+  updatedAt: string;
+}
+
+export interface ExpiredRunLeaseCandidatePage {
+  candidates: ExpiredRunLeaseCandidate[];
+  truncated: boolean;
 }
 
 export interface RecoveredLeaseRunPage {
@@ -3629,6 +3647,13 @@ export class Store {
     }
 
     const runId = genId();
+    const operationEvents = privateOperationEventsForWorkflowRun({
+      workflow: input.workflow,
+      workflowRunId: runId,
+      attempt: input.loopRun?.attempt ?? 1,
+      idempotencyKey: input.idempotencyKey ?? `${runId}:${definitionHash}`,
+      authority: input.operationAuthority ?? { authorityId: "local", tenantId: "local" },
+    });
     const workItem = workItemId ? this.getWorkflowWorkItem(workItemId) : undefined;
     const invocation = invocationId ? this.getWorkflowInvocation(invocationId) : undefined;
     // The manifest is staged as manifest.json.tmp before BEGIN so no
@@ -3782,6 +3807,23 @@ export class Store {
             $id: genId(),
             $workflowRunId: runId,
             $sequence: index + 2,
+            $eventType: event.eventType,
+            $stepId: event.stepId,
+            $payload: persistedWorkflowEventPayload(event.payload),
+            $created: now,
+          });
+      });
+
+      operationEvents.forEach((event, index) => {
+        this.db
+          .query(
+            `INSERT INTO workflow_events (id, workflow_run_id, sequence, event_type, step_id, payload_json, created_at)
+             VALUES ($id, $workflowRunId, $sequence, $eventType, $stepId, $payload, $created)`,
+          )
+          .run({
+            $id: genId(),
+            $workflowRunId: runId,
+            $sequence: initialContractEvents.length + index + 2,
             $eventType: event.eventType,
             $stepId: event.stepId,
             $payload: persistedWorkflowEventPayload(event.payload),
@@ -4250,7 +4292,7 @@ export class Store {
     // a write transaction when the caller has not already opened one.
     return this.transact(() => {
       const now = nowIso();
-      if (eventType === "agent_session_contract") {
+      if (eventType === "agent_session_contract" || isPrivateOperationEventType(eventType)) {
         const duplicate = stepId === undefined
           ? this.db.query<{ id: string }, [string, string]>(
               "SELECT id FROM workflow_events WHERE workflow_run_id = ? AND event_type = ? AND step_id IS NULL LIMIT 1",
@@ -4935,8 +4977,41 @@ export class Store {
       });
   }
 
-  recoverExpiredRunLeases(now: Date = new Date(), opts: DaemonLeaseFence & { limit?: number; scanLimit?: number; runId?: string } = {}): LoopRun[] {
+  recoverExpiredRunLeases(
+    now: Date = new Date(),
+    opts: DaemonLeaseFence & {
+      limit?: number;
+      scanLimit?: number;
+      runId?: string;
+      expectedLeaseExpiresAt?: string;
+      expectedUpdatedAt?: string;
+    } = {},
+  ): LoopRun[] {
     return this.recoverExpiredRunLeasesDetailed(now, opts).abandoned;
+  }
+
+  listExpiredRunLeaseCandidates(
+    expiredBefore: Date = new Date(),
+    opts: { limit?: number } = {},
+  ): ExpiredRunLeaseCandidatePage {
+    const limit = Math.max(1, Math.min(1_000, Math.floor(opts.limit ?? DEFAULT_RECOVERY_BATCH_LIMIT)));
+    const rows = this.db
+      .query<RunRow, [string, number]>(
+        `SELECT * FROM loop_runs
+         WHERE status = 'running' AND lease_expires_at <= ?
+         ORDER BY lease_expires_at ASC, id ASC
+         LIMIT ?`,
+      )
+      .all(expiredBefore.toISOString(), limit + 1);
+    return {
+      candidates: rows.slice(0, limit).map((row) => ({
+        runId: row.id,
+        loopId: row.loop_id,
+        leaseExpiresAt: row.lease_expires_at!,
+        updatedAt: row.updated_at,
+      })),
+      truncated: rows.length > limit,
+    };
   }
 
   /**
@@ -5008,6 +5083,9 @@ export class Store {
       limit?: number;
       scanLimit?: number;
       runId?: string;
+      expectedLeaseExpiresAt?: string;
+      expectedUpdatedAt?: string;
+      refuseAdmittedPrivateOperations?: boolean;
       excludeClaimedBy?: string;
       /**
        * Leave one runner's runs untouched, but only within an explicit set of
@@ -5049,7 +5127,17 @@ export class Store {
         `SELECT * FROM loop_runs
          WHERE status = 'running' AND lease_expires_at <= ?
            AND (? IS NULL OR id = ?)
-           AND (? IS NULL OR claimed_by IS NULL OR claimed_by <> ?)${protectClause}
+           AND (? IS NULL OR lease_expires_at = ?)
+           AND (? IS NULL OR updated_at = ?)
+           AND (? IS NULL OR claimed_by IS NULL OR claimed_by <> ?)
+           AND (? = 0 OR NOT EXISTS (
+             SELECT 1
+             FROM workflow_runs AS operation_workflow
+             JOIN workflow_events AS operation_event
+               ON operation_event.workflow_run_id = operation_workflow.id
+             WHERE operation_workflow.loop_run_id = loop_runs.id
+               AND operation_event.event_type = 'private_operation_admitted'
+           ))${protectClause}
          ORDER BY lease_expires_at ASC
          LIMIT ?`,
       )
@@ -5057,8 +5145,13 @@ export class Store {
         now.toISOString(),
         opts.runId ?? null,
         opts.runId ?? null,
+        opts.expectedLeaseExpiresAt ?? null,
+        opts.expectedLeaseExpiresAt ?? null,
+        opts.expectedUpdatedAt ?? null,
+        opts.expectedUpdatedAt ?? null,
         opts.excludeClaimedBy ?? null,
         opts.excludeClaimedBy ?? null,
+        opts.refuseAdmittedPrivateOperations ? 1 : 0,
         ...(protectLoopIds.length > 0 ? [protect!.claimedBy, ...protectLoopIds] : []),
         scanLimit,
       );
@@ -5095,8 +5188,18 @@ export class Store {
             `UPDATE loop_runs SET status='abandoned', finished_at=$finished, lease_expires_at=NULL,
              error=$abandonError, updated_at=$updated
              WHERE id=$id AND status='running' AND lease_expires_at <= $now
+               AND ($expectedLeaseExpiresAt IS NULL OR lease_expires_at=$expectedLeaseExpiresAt)
+               AND ($expectedUpdatedAt IS NULL OR updated_at=$expectedUpdatedAt)
                AND ($daemonLeaseId IS NULL OR EXISTS (
                  SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
+               ))
+               AND ($refuseAdmittedPrivateOperations = 0 OR NOT EXISTS (
+                 SELECT 1
+                 FROM workflow_runs AS operation_workflow
+                 JOIN workflow_events AS operation_event
+                   ON operation_event.workflow_run_id = operation_workflow.id
+                 WHERE operation_workflow.loop_run_id = loop_runs.id
+                   AND operation_event.event_type = 'private_operation_admitted'
                ))`,
           )
           .run({
@@ -5105,7 +5208,10 @@ export class Store {
             $updated: finished,
             $now: finished,
             $abandonError: abandonError,
+            $expectedLeaseExpiresAt: opts.expectedLeaseExpiresAt ?? null,
+            $expectedUpdatedAt: opts.expectedUpdatedAt ?? null,
             $daemonLeaseId: opts.daemonLeaseId ?? null,
+            $refuseAdmittedPrivateOperations: opts.refuseAdmittedPrivateOperations ? 1 : 0,
           });
         if (res.changes !== 1) {
           this.db.exec("COMMIT");

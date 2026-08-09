@@ -25,6 +25,7 @@ import type {
   CreateGoalPlanNodeInput,
   CreateWorkflowRunInput,
   DaemonLease,
+  ExpiredRunLeaseCandidatePage,
   PruneHistorySummary,
   RecordGoalEventInput,
   RecoverExpiredRunLeasesResult,
@@ -112,6 +113,10 @@ import { assertLoopStatus, assertMaxAttempts } from "../loop-status.js";
 import { normalizeRunCompletion } from "../run-completion.js";
 import type { PoolQueryClient, TypedQueryClient } from "../../generated/storage-kit/query.js";
 import type { LoopStorageContract, LoopStorageMethodName } from "./contract.js";
+import {
+  isPrivateOperationEventType,
+  privateOperationEventsForWorkflowRun,
+} from "../operation-contract.js";
 
 // --- pg type parsers: keep row shapes byte-compatible with the sqlite mappers.
 // jsonb (3802) + json (114): return the raw JSON text so `JSON.parse` in the
@@ -1578,6 +1583,31 @@ export class PostgresLoopStorage implements LoopStorageContract {
     return detailed.abandoned;
   }
 
+  async listExpiredRunLeaseCandidates(
+    expiredBefore: Date = new Date(),
+    opts: { limit?: number } = {},
+  ): Promise<ExpiredRunLeaseCandidatePage> {
+    const limit = Math.max(1, Math.min(1_000, Math.floor(opts.limit ?? DEFAULT_RECOVERY_BATCH_LIMIT)));
+    const rows = await this.client.many<RunRow>(
+      `SELECT * FROM loop_runs
+       WHERE tenant_id = open_loops_current_tenant_id()
+         AND status = 'running'
+         AND lease_expires_at <= $1
+       ORDER BY lease_expires_at ASC, id ASC
+       LIMIT $2`,
+      [expiredBefore.toISOString(), limit + 1],
+    );
+    return {
+      candidates: rows.slice(0, limit).map((row) => ({
+        runId: row.id,
+        loopId: row.loop_id,
+        leaseExpiresAt: row.lease_expires_at!,
+        updatedAt: row.updated_at,
+      })),
+      truncated: rows.length > limit,
+    };
+  }
+
   /**
    * Recover expired run leases. Divergence from sqlite (documented): the remote
    * backend cannot inspect local process liveness, so an expired lease is always
@@ -1604,10 +1634,32 @@ export class PostgresLoopStorage implements LoopStorageContract {
       `SELECT * FROM loop_runs
        WHERE tenant_id = open_loops_current_tenant_id() AND status='running' AND lease_expires_at <= $1
          AND ($2::text IS NULL OR id = $2)
-         AND ($3::text IS NULL OR claimed_by IS DISTINCT FROM $3)
-         AND ($4::text IS NULL OR claimed_by IS NULL OR claimed_by <> $4 OR NOT (loop_id = ANY($5::text[])))
-       ORDER BY lease_expires_at ASC LIMIT $6`,
-      [finished, opts.runId ?? null, opts.excludeClaimedBy ?? null, protectClaimedBy, protectLoopIds, scanLimit],
+         AND ($3::timestamptz IS NULL OR lease_expires_at = $3::timestamptz)
+         AND ($4::timestamptz IS NULL OR updated_at = $4::timestamptz)
+         AND ($5::text IS NULL OR claimed_by IS DISTINCT FROM $5)
+         AND ($6::text IS NULL OR claimed_by IS NULL OR claimed_by <> $6 OR NOT (loop_id = ANY($7::text[])))
+         AND ($8::boolean = FALSE OR NOT EXISTS (
+           SELECT 1
+           FROM workflow_runs AS operation_workflow
+           JOIN workflow_events AS operation_event
+             ON operation_event.workflow_run_id = operation_workflow.id
+            AND operation_event.tenant_id = open_loops_current_tenant_id()
+           WHERE operation_workflow.tenant_id = open_loops_current_tenant_id()
+             AND operation_workflow.loop_run_id = loop_runs.id
+             AND operation_event.event_type = 'private_operation_admitted'
+         ))
+       ORDER BY lease_expires_at ASC LIMIT $9`,
+      [
+        finished,
+        opts.runId ?? null,
+        opts.expectedLeaseExpiresAt ?? null,
+        opts.expectedUpdatedAt ?? null,
+        opts.excludeClaimedBy ?? null,
+        protectClaimedBy,
+        protectLoopIds,
+        opts.refuseAdmittedPrivateOperations ?? false,
+        scanLimit,
+      ],
     );
     const recovered: LoopRun[] = [];
     for (const row of rows) {
@@ -1617,8 +1669,28 @@ export class PostgresLoopStorage implements LoopStorageContract {
           `UPDATE loop_runs SET status='abandoned', finished_at=$2, lease_expires_at=NULL,
            error='run lease expired before completion', updated_at=$2
            WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 AND status='running' AND lease_expires_at <= $3
-             AND ($4::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$4 AND expires_at > $3))`,
-          [row.id, finished, finished, opts.daemonLeaseId ?? null],
+             AND ($4::timestamptz IS NULL OR lease_expires_at=$4::timestamptz)
+             AND ($5::timestamptz IS NULL OR updated_at=$5::timestamptz)
+             AND ($6::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$6 AND expires_at > $3))
+             AND ($7::boolean = FALSE OR NOT EXISTS (
+               SELECT 1
+               FROM workflow_runs AS operation_workflow
+               JOIN workflow_events AS operation_event
+                 ON operation_event.workflow_run_id = operation_workflow.id
+                AND operation_event.tenant_id = open_loops_current_tenant_id()
+               WHERE operation_workflow.tenant_id = open_loops_current_tenant_id()
+                 AND operation_workflow.loop_run_id = loop_runs.id
+                 AND operation_event.event_type = 'private_operation_admitted'
+             ))`,
+          [
+            row.id,
+            finished,
+            finished,
+            opts.expectedLeaseExpiresAt ?? null,
+            opts.expectedUpdatedAt ?? null,
+            opts.daemonLeaseId ?? null,
+            opts.refuseAdmittedPrivateOperations ?? false,
+          ],
         );
         if (res.rowCount !== 1) return undefined;
         const workflowRows = await c.many<WorkflowRunRow>(
@@ -2526,6 +2598,16 @@ export class PostgresLoopStorage implements LoopStorageContract {
     return this.client.transaction(async (c) => {
       await this.assertDaemonLeaseFence(c, input, now);
       const runId = genId();
+      const operationEvents = privateOperationEventsForWorkflowRun({
+        workflow: input.workflow,
+        workflowRunId: runId,
+        attempt: input.loopRun?.attempt ?? 1,
+        idempotencyKey: input.idempotencyKey ?? `${runId}:${definitionHash}`,
+        authority: input.operationAuthority ?? {
+          authorityId: "loops-control-plane",
+          tenantId: this.tenantId,
+        },
+      });
       const insertSql =
         `INSERT INTO workflow_runs (id, workflow_id, workflow_name, loop_id, loop_run_id, invocation_id, work_item_id,
           scheduled_for, idempotency_key, workflow_definition_hash, manifest_path, status, started_at, finished_at, duration_ms, error,
@@ -2609,6 +2691,9 @@ export class PostgresLoopStorage implements LoopStorageContract {
       });
       for (const event of initialContractEvents) {
         input.beforeInitialWorkflowEventPersist?.(event);
+        await this.appendWorkflowEventWithClient(c, runId, event.eventType, event.stepId, event.payload);
+      }
+      for (const event of operationEvents) {
         await this.appendWorkflowEventWithClient(c, runId, event.eventType, event.stepId, event.payload);
       }
       const run = await c.get<WorkflowRunRow>(
@@ -3005,7 +3090,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
       "SELECT id FROM workflow_runs WHERE tenant_id = open_loops_current_tenant_id() AND id = $1 FOR UPDATE",
       [workflowRunId],
     );
-    if (eventType === "agent_session_contract") {
+    if (eventType === "agent_session_contract" || isPrivateOperationEventType(eventType)) {
       const duplicate = await c.get<{ id: string }>(
         `SELECT id FROM workflow_events
          WHERE tenant_id = open_loops_current_tenant_id()

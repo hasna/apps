@@ -2493,6 +2493,56 @@ describe("agent run integrity (incident 607176)", () => {
     }
   });
 
+  test("the exact stored prompt reaches the supported provider invocation", async () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-agent-stored-prompt-"));
+    const bin = join(root, "bin");
+    const capture = join(root, "provider-stdin.txt");
+    const codewith = join(bin, "codewith");
+    const sentinel = "NON_SENSITIVE_STORED_PROMPT_SENTINEL_607176";
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(
+      codewith,
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        "cat > \"${CAPTURE_FILE:?}\"",
+        "printf 'PROVIDER_OUTPUT_SENTINEL\\n'",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(codewith, 0o755);
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "stored-prompt-provider-proof",
+        schedule: { type: "once", at: "2026-08-09T00:00:00.000Z" },
+        target: {
+          type: "agent",
+          provider: "codewith",
+          prompt: sentinel,
+          cwd: root,
+          configIsolation: "safe",
+        },
+      });
+      const claim = store.claimRun(loop, "2026-08-09T00:00:00.000Z", "truthfulness-test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, {
+        env: {
+          ...process.env,
+          HOME: root,
+          PATH: `${bin}:/usr/bin:/bin`,
+          CAPTURE_FILE: capture,
+        },
+      });
+      expect(result.status).toBe("succeeded");
+      expect(result.stdout).toContain("PROVIDER_OUTPUT_SENTINEL");
+      expect(readFileSync(capture, "utf8")).toBe(sentinel);
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("a prompt that merely mentions redaction is not mistaken for a placeholder", async () => {
     const root = mkdtempSync(join(tmpdir(), "loops-agent-prompt-mentions-"));
     const bin = fakeClaude(root, echoingClaude);

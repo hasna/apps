@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
 import { isDeepStrictEqual } from "node:util";
+import { createHash } from "node:crypto";
 import type {
   CreateLoopInput,
   CreateWorkflowInvocationInput,
@@ -71,6 +72,15 @@ import type { LoopStorageContract } from "../lib/storage/contract.js";
 import { routePolicy, type RoutePolicy } from "../lib/auth/route-policy.js";
 import type { TenantAuthContext, TenantAuthDecision } from "../lib/auth/tenant-auth.js";
 import { packageVersion } from "../lib/version.js";
+import {
+  DEFAULT_OPERATION_LOOKUP_CAPS,
+  isPrivateOperationEventType,
+  lookupOperationReceiptState,
+  operationAdmissionReceipt,
+  parseOperationTerminalReceipt,
+  parsePrivateOperationDescriptor,
+  type PrivateOperationDescriptor,
+} from "../lib/operation-contract.js";
 import openApiSpec from "../../openapi/loops.json" with { type: "json" };
 
 /** The serve OpenAPI document (source of the generated SDK), version-synced. */
@@ -310,6 +320,10 @@ interface V1RequestContext {
 type RunnerGoalInput = Parameters<LoopStorageContract["createGoal"]>[0];
 type RunnerGoalPlanNodeInput = Parameters<LoopStorageContract["createGoalPlanNodes"]>[1][number];
 type RunnerGoalEventInput = Parameters<LoopStorageContract["recordGoalEvent"]>[0];
+const HOSTED_STUCK_RUN_GRACE_MS = 10 * 60_000;
+const HOSTED_STUCK_RUN_LIMIT = 100;
+const HOSTED_STUCK_WORKFLOW_LIMIT = 100;
+const HOSTED_STUCK_EVENT_LIMIT = 512;
 
 async function handleV1Request(ctx: V1RequestContext): Promise<Response> {
   const segments = ctx.url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
@@ -328,12 +342,136 @@ async function handleV1Request(ctx: V1RequestContext): Promise<Response> {
   if (segments[1] === "goal-runs") return await handleGoalRunsRequest(ctx, segments.slice(2));
   if (segments[1] === "history") return await handleHistoryRequest(ctx, segments.slice(2));
   if (segments[1] === "runners") return await handleRunnerRequest(ctx, segments.slice(2));
+  if (segments[1] === "leases" && segments[2] === "stuck" && ctx.request.method === "GET") {
+    const storage = requireStorage(ctx.storage);
+    const now = ctx.now();
+    const latestSafeCutoff = new Date(now.getTime() - HOSTED_STUCK_RUN_GRACE_MS);
+    const requestedCutoffRaw = ctx.url.searchParams.get("expiredBefore");
+    const requestedCutoff = requestedCutoffRaw ? new Date(requestedCutoffRaw) : latestSafeCutoff;
+    if (Number.isNaN(requestedCutoff.getTime())) throw apiError("invalid_expired_before", 422);
+    const expiredBefore = requestedCutoff < latestSafeCutoff ? requestedCutoff : latestSafeCutoff;
+    const page = await storage.listExpiredRunLeaseCandidates(expiredBefore, {
+      limit: Math.min(optionalLimit(ctx.url.searchParams.get("limit")) ?? HOSTED_STUCK_RUN_LIMIT, HOSTED_STUCK_RUN_LIMIT),
+    });
+    return ok({
+      report: {
+        state: page.candidates.length > 0 ? "stuck" : "clear",
+        expiredBefore: expiredBefore.toISOString(),
+        candidates: page.candidates.map(publicStuckRunCandidate),
+        truncated: page.truncated,
+      },
+    });
+  }
+  if (segments[1] === "leases" && segments[2] === "reconcile" && ctx.request.method === "POST") {
+    if (ctx.auth.tokenKind === "machine" || !ctx.auth.roles.some((role) => role === "admin" || role === "service")) {
+      return fail("maintenance_principal_required", 403);
+    }
+    const storage = requireStorage(ctx.storage);
+    const body = await readJsonBody<{ candidates?: unknown }>(ctx.request, ctx.bodyLimitBytes);
+    if (!Array.isArray(body.candidates) || body.candidates.length === 0 || body.candidates.length > HOSTED_STUCK_RUN_LIMIT) {
+      throw apiError("invalid_stuck_run_candidates", 422);
+    }
+    const candidates = body.candidates.map(parseExpiredRunLeaseCandidate);
+    const outcomes = [];
+    const now = ctx.now();
+    const latestSafeCutoff = new Date(now.getTime() - HOSTED_STUCK_RUN_GRACE_MS).toISOString();
+    for (const candidate of candidates) {
+      const current = await storage.getRun(candidate.runId);
+      if (!current) {
+        outcomes.push({ runId: candidate.runId, outcome: "conflict", reason: "run_not_found_in_scope" });
+        continue;
+      }
+      if (current.status !== "running") {
+        outcomes.push({
+          runId: candidate.runId,
+          outcome: current.status === "abandoned" && current.error?.includes("lease expired")
+            ? "already_recovered"
+            : "conflict",
+          reason: current.status === "abandoned" ? undefined : `run_is_${current.status}`,
+        });
+        continue;
+      }
+      if (!current.leaseExpiresAt || current.leaseExpiresAt > latestSafeCutoff) {
+        outcomes.push({
+          runId: candidate.runId,
+          outcome: "conflict",
+          reason: "lease_not_past_recovery_grace",
+        });
+        continue;
+      }
+      if (
+        current.loopId !== candidate.loopId ||
+        stuckRunSnapshotId({
+          runId: current.id,
+          loopId: current.loopId,
+          leaseExpiresAt: current.leaseExpiresAt,
+          updatedAt: current.updatedAt,
+        }) !== candidate.snapshotId
+      ) {
+        outcomes.push({ runId: candidate.runId, outcome: "conflict", reason: "candidate_snapshot_changed" });
+        continue;
+      }
+      const workflowRuns = await storage.listWorkflowRuns({
+        loopRunId: candidate.runId,
+        limit: HOSTED_STUCK_WORKFLOW_LIMIT + 1,
+      });
+      if (workflowRuns.length > HOSTED_STUCK_WORKFLOW_LIMIT) {
+        outcomes.push({ runId: candidate.runId, outcome: "conflict", reason: "workflow_lookup_cap_exceeded" });
+        continue;
+      }
+      let operationWasAdmitted = false;
+      let lookupCapExceeded = false;
+      for (const workflowRun of workflowRuns) {
+        const events = await storage.listWorkflowEvents(workflowRun.id, HOSTED_STUCK_EVENT_LIMIT + 1);
+        if (events.length > HOSTED_STUCK_EVENT_LIMIT) {
+          lookupCapExceeded = true;
+          break;
+        }
+        if (events.some((event) => event.eventType === "private_operation_admitted")) {
+          operationWasAdmitted = true;
+          break;
+        }
+      }
+      if (lookupCapExceeded) {
+        outcomes.push({ runId: candidate.runId, outcome: "conflict", reason: "operation_lookup_cap_exceeded" });
+        continue;
+      }
+      if (operationWasAdmitted) {
+        outcomes.push({
+          runId: candidate.runId,
+          outcome: "operation_reconciliation_required",
+          reason: "admitted_external_operation_will_not_be_repeated_blindly",
+        });
+        continue;
+      }
+      const recovered = await storage.recoverExpiredRunLeasesDetailed(now, {
+        runId: candidate.runId,
+        limit: 1,
+        scanLimit: 1,
+        expectedLeaseExpiresAt: current.leaseExpiresAt,
+        expectedUpdatedAt: current.updatedAt,
+        refuseAdmittedPrivateOperations: true,
+      });
+      if (recovered.abandoned.length !== 1) {
+        outcomes.push({ runId: candidate.runId, outcome: "conflict", reason: "candidate_changed_during_recovery" });
+        continue;
+      }
+      await advanceRecoveredRuns(storage, recovered.abandoned, {
+        random: ctx.random,
+        circuitBreakerThreshold: ctx.circuitBreakerThreshold,
+      });
+      outcomes.push({ runId: candidate.runId, outcome: "recovered" });
+    }
+    return ok({ reconciliation: { outcomes } });
+  }
   if (segments[1] === "leases" && segments[2] === "recover" && ctx.request.method === "POST") {
     if (ctx.auth.tokenKind === "machine" || !ctx.auth.roles.some((role) => role === "admin" || role === "service")) {
       return fail("maintenance_principal_required", 403);
     }
     const storage = requireStorage(ctx.storage);
-    const recovered = await storage.recoverExpiredRunLeasesDetailed(ctx.now());
+    const recovered = await storage.recoverExpiredRunLeasesDetailed(ctx.now(), {
+      refuseAdmittedPrivateOperations: true,
+    });
     const advancementDeferred = await advanceRecoveredLeaseRunPages(storage, {
       random: ctx.random,
       circuitBreakerThreshold: ctx.circuitBreakerThreshold,
@@ -345,6 +483,56 @@ async function handleV1Request(ctx: V1RequestContext): Promise<Response> {
     });
   }
   return fail("not_found", 404);
+}
+
+interface PublicStuckRunCandidate {
+  runId: string;
+  loopId: string;
+  snapshotId: string;
+}
+
+interface StuckRunSnapshotSource {
+  runId: string;
+  loopId: string;
+  leaseExpiresAt: string;
+  updatedAt: string;
+}
+
+function stuckRunSnapshotId(candidate: StuckRunSnapshotSource): string {
+  return `stuck_${createHash("sha256")
+    .update(JSON.stringify([
+      candidate.runId,
+      candidate.loopId,
+      candidate.leaseExpiresAt,
+      candidate.updatedAt,
+    ]))
+    .digest("hex")}`;
+}
+
+function publicStuckRunCandidate(candidate: StuckRunSnapshotSource): PublicStuckRunCandidate {
+  return {
+    runId: candidate.runId,
+    loopId: candidate.loopId,
+    snapshotId: stuckRunSnapshotId(candidate),
+  };
+}
+
+function parseExpiredRunLeaseCandidate(value: unknown): PublicStuckRunCandidate {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw apiError("invalid_stuck_run_candidate", 422);
+  }
+  const candidate = value as Record<string, unknown>;
+  const runId = typeof candidate.runId === "string" ? candidate.runId.trim() : "";
+  const loopId = typeof candidate.loopId === "string" ? candidate.loopId.trim() : "";
+  const snapshotId = typeof candidate.snapshotId === "string" ? candidate.snapshotId.trim() : "";
+  if (
+    !runId ||
+    !loopId ||
+    !/^stuck_[a-f0-9]{64}$/.test(snapshotId)
+  ) {
+    throw apiError("invalid_stuck_run_candidate", 422);
+  }
+  return { runId, loopId, snapshotId };
 }
 
 interface ImportRequestBody {
@@ -596,7 +784,11 @@ async function handleWorkflowRunsRequest(ctx: V1RequestContext, segments: string
   }
   if (segments.length === 2 && segments[1] === "events" && ctx.request.method === "GET") {
     const events = await storage.listWorkflowEvents(id, optionalLimit(ctx.url.searchParams.get("limit")) ?? 200);
-    return ok({ events: events.map(publicWorkflowEvent) });
+    return ok({
+      events: events
+        .filter((event) => !isPrivateOperationEventType(event.eventType))
+        .map(publicWorkflowEvent),
+    });
   }
   return fail("not_found", 404);
 }
@@ -731,7 +923,12 @@ async function handleRunsRequest(ctx: V1RequestContext, segments: string[]): Pro
     if ((ctx.auth.tokenKind === "machine" || ctx.auth.roles.includes("worker")) && target.claimedBy !== ctx.auth.principalId) {
       return fail("run_claim_owner_mismatch", 403);
     }
-    const recovered = await storage.recoverExpiredRunLeasesDetailed(now, { runId: id, limit: 1, scanLimit: 1 });
+    const recovered = await storage.recoverExpiredRunLeasesDetailed(now, {
+      runId: id,
+      limit: 1,
+      scanLimit: 1,
+      refuseAdmittedPrivateOperations: true,
+    });
     const abandoned = recovered.abandoned.length > 0
       ? recovered.abandoned
       : isRecoveredLeaseRun(target)
@@ -833,7 +1030,31 @@ function validateStoredWorkflowAgentContracts(workflow: WorkflowSpec): void {
   }
 }
 
-const WORKFLOW_EVENT_SCAN_LIMIT = 2_147_483_647;
+const WORKFLOW_EVENT_SCAN_LIMIT = DEFAULT_OPERATION_LOOKUP_CAPS.maxRecords + 1;
+
+function privateOperationDescriptors(
+  events: StoredWorkflowEvent[],
+  tenantId: string,
+): PrivateOperationDescriptor[] {
+  if (events.length > DEFAULT_OPERATION_LOOKUP_CAPS.maxRecords) {
+    throw apiError("private_operation_lookup_cap_exceeded", 409);
+  }
+  const descriptors = events
+    .filter((event) => event.eventType === "private_operation_descriptor")
+    .map((event) => parsePrivateOperationDescriptor(event.payload));
+  const stepIds = new Set<string>();
+  for (const descriptor of descriptors) {
+    if (
+      descriptor.authority.authorityId !== "loops-control-plane" ||
+      descriptor.authority.tenantId !== tenantId
+    ) {
+      throw apiError("private_operation_authority_mismatch", 409);
+    }
+    if (stepIds.has(descriptor.stepId)) throw apiError("private_operation_descriptor_duplicate", 409);
+    stepIds.add(descriptor.stepId);
+  }
+  return descriptors;
+}
 
 function validateExistingAgentSessionContractEvents(
   workflow: WorkflowSpec,
@@ -887,12 +1108,29 @@ async function handleRunWorkflowExecutionRequest(ctx: V1RequestContext, runId: s
       loopRun: authorized.run,
       scheduledFor,
       idempotencyKey,
+      operationAuthority: {
+        authorityId: "loops-control-plane",
+        tenantId: ctx.auth.tenantId,
+      },
     });
+    const workflowEvents = await storage.listWorkflowEvents(workflowRun.id, WORKFLOW_EVENT_SCAN_LIMIT);
     validateExistingAgentSessionContractEvents(
       workflow,
-      await storage.listWorkflowEvents(workflowRun.id, WORKFLOW_EVENT_SCAN_LIMIT),
+      workflowEvents,
     );
-    return ok({ workflowRun });
+    const operationDescriptors = privateOperationDescriptors(workflowEvents, ctx.auth.tenantId);
+    return ok({
+      workflowRun,
+      operationDescriptors,
+      operationStates: operationDescriptors.map((descriptor) =>
+        lookupOperationReceiptState(workflowEvents, {
+          workflowRunId: workflowRun.id,
+          stepId: descriptor.stepId,
+          authority: descriptor.authority,
+          operationId: descriptor.operationId,
+        })
+      ),
+    });
   }
 
   const workflowRunId = segments[0];
@@ -922,7 +1160,6 @@ async function handleRunWorkflowExecutionRequest(ctx: V1RequestContext, runId: s
   }
   if (segments.length === 2 && segments[1] === "events") {
     const eventType = requiredString(body.eventType, "eventType");
-    if (eventType !== "agent_session_contract") throw apiError("event_type_not_allowed", 422);
     const stepId = requiredString(body.stepId, "stepId");
     const step = await storage.getWorkflowStepRun(workflowRunId, stepId);
     if (!step) return fail("workflow_step_not_found", 404);
@@ -930,6 +1167,61 @@ async function handleRunWorkflowExecutionRequest(ctx: V1RequestContext, runId: s
     if (!workflow) return fail("workflow_not_found", 404);
     const workflowStep = workflow.steps.find((candidate) => candidate.id === stepId);
     if (!workflowStep) return fail("workflow_step_not_found", 404);
+    if (eventType === "private_operation_admitted" || eventType === "private_operation_terminal") {
+      const workflowEvents = await storage.listWorkflowEvents(workflowRunId, WORKFLOW_EVENT_SCAN_LIMIT);
+      const descriptor = privateOperationDescriptors(workflowEvents, ctx.auth.tenantId)
+        .find((candidate) => candidate.stepId === stepId);
+      if (!descriptor) throw apiError("private_operation_descriptor_missing", 409);
+      const supplied = objectRecord(body.payload);
+      const expectedPayload = eventType === "private_operation_admitted"
+        ? operationAdmissionReceipt(descriptor)
+        : parseOperationTerminalReceipt(supplied);
+      if (
+        expectedPayload.operationId !== descriptor.operationId ||
+        expectedPayload.workflowRunId !== descriptor.workflowRunId ||
+        expectedPayload.stepId !== descriptor.stepId ||
+        expectedPayload.authority.authorityId !== descriptor.authority.authorityId ||
+        expectedPayload.authority.tenantId !== descriptor.authority.tenantId
+      ) {
+        throw apiError("private_operation_receipt_binding_mismatch", 409);
+      }
+      if (eventType === "private_operation_admitted" && !isDeepStrictEqual(supplied, expectedPayload)) {
+        throw apiError("private_operation_admission_mismatch", 409);
+      }
+      const existing = workflowEvents.find((event) => event.eventType === eventType && event.stepId === stepId);
+      if (existing) {
+        if (!isDeepStrictEqual(existing.payload, expectedPayload)) {
+          throw apiError("private_operation_receipt_conflict", 409);
+        }
+        return ok({ event: existing, duplicate: true });
+      }
+      try {
+        return ok({
+          event: await storage.appendWorkflowEvent(
+            workflowRunId,
+            eventType,
+            stepId,
+            expectedPayload as unknown as Record<string, unknown>,
+          ),
+          duplicate: false,
+        });
+      } catch (error) {
+        if (!(error instanceof DuplicateWorkflowEventError)) throw error;
+        const after = await storage.listWorkflowEvents(workflowRunId, WORKFLOW_EVENT_SCAN_LIMIT);
+        const state = lookupOperationReceiptState(after, {
+          workflowRunId,
+          stepId,
+          authority: descriptor.authority,
+          operationId: descriptor.operationId,
+        });
+        const duplicate = eventType === "private_operation_admitted" ? state.admission : state.terminal;
+        if (!isDeepStrictEqual(duplicate, expectedPayload)) {
+          throw apiError("private_operation_receipt_conflict", 409);
+        }
+        return ok({ event: duplicate, duplicate: true });
+      }
+    }
+    if (eventType !== "agent_session_contract") throw apiError("event_type_not_allowed", 422);
     if (workflowStep.target.type !== "agent") throw apiError("agent_session_contract_non_agent_step", 422);
     const expected = deriveWorkflowStepAgentSessionContract(workflowStep);
     if (!expected) throw apiError("agent_session_contract_not_required", 422);
@@ -1382,6 +1674,7 @@ async function claimRuns(
   // costs one query per unexamined loop on the scheduler's hottest path and
   // silently truncates at one `listRuns` page.
   const recovered = await storage.recoverExpiredRunLeasesDetailed(opts.now, {
+    refuseAdmittedPrivateOperations: true,
     protectClaimedByInLoops: {
       claimedBy: runner.id,
       loopIds: unexaminedLoops.map((loop) => loop.id),

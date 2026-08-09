@@ -18,6 +18,13 @@ import { classifyLoopExecutionResult } from "../lib/loop-result.js";
 import { executeLoopTarget, type WorkflowExecutionStore } from "../lib/workflow-runner.js";
 import { buildDeploymentStatus, deploymentStatusLine } from "../lib/mode.js";
 import { packageVersion } from "../lib/version.js";
+import {
+  parseOperationAdmissionReceipt,
+  parseOperationTerminalReceipt,
+  parsePrivateOperationDescriptor,
+  type OperationReceiptState,
+  type PrivateOperationDescriptor,
+} from "../lib/operation-contract.js";
 
 const program = new Command();
 const DEFAULT_RUNNER_ID = `runner:${process.pid}`;
@@ -139,6 +146,8 @@ async function postJson(fetchImpl: typeof fetch, config: { apiUrl: string; token
 
 class RunnerWorkflowApiStore implements WorkflowExecutionStore {
   readonly serverDerivedAgentSessionContracts = true;
+  private readonly operationDescriptors = new Map<string, PrivateOperationDescriptor>();
+  private readonly operationStates = new Map<string, OperationReceiptState>();
 
   constructor(
     private readonly fetchImpl: typeof fetch,
@@ -172,7 +181,40 @@ class RunnerWorkflowApiStore implements WorkflowExecutionStore {
       scheduledFor: input.scheduledFor,
       idempotencyKey: input.idempotencyKey,
     });
+    for (const candidate of Array.isArray(raw.operationDescriptors) ? raw.operationDescriptors : []) {
+      const descriptor = parsePrivateOperationDescriptor(candidate);
+      this.operationDescriptors.set(`${descriptor.workflowRunId}:${descriptor.stepId}`, descriptor);
+    }
+    for (const candidate of Array.isArray(raw.operationStates) ? raw.operationStates : []) {
+      if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+        throw new Error("invalid private operation state from control plane");
+      }
+      const value = candidate as Record<string, unknown>;
+      const descriptor = parsePrivateOperationDescriptor(value.descriptor);
+      const state: OperationReceiptState = {
+        descriptor,
+        ...(value.admission === undefined ? {} : { admission: parseOperationAdmissionReceipt(value.admission) }),
+        ...(value.terminal === undefined ? {} : { terminal: parseOperationTerminalReceipt(value.terminal) }),
+      };
+      this.operationStates.set(`${descriptor.workflowRunId}:${descriptor.stepId}`, state);
+    }
     return raw.workflowRun as WorkflowRun;
+  }
+
+  async getPrivateOperationDescriptor(workflowRunId: string, stepId: string): Promise<PrivateOperationDescriptor> {
+    const descriptor = this.operationDescriptors.get(`${workflowRunId}:${stepId}`);
+    if (!descriptor) {
+      throw new Error(`private operation descriptor not included for workflow step: ${workflowRunId}/${stepId}`);
+    }
+    return descriptor;
+  }
+
+  async getPrivateOperationState(workflowRunId: string, stepId: string): Promise<OperationReceiptState> {
+    const state = this.operationStates.get(`${workflowRunId}:${stepId}`);
+    if (!state) {
+      throw new Error(`private operation state not included for workflow step: ${workflowRunId}/${stepId}`);
+    }
+    return state;
   }
 
   async getWorkflowRun(id: string): Promise<WorkflowRun | undefined> {

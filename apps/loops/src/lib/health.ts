@@ -636,14 +636,18 @@ function latestRunFinding(expectation: LoopExpectationResult): HealthScanFinding
   };
 }
 
-function staleRunningFinding(loop: Loop, expectation: LoopExpectationResult, now: Date, staleRunningMs: number): HealthScanFinding | undefined {
+function staleRunningFinding(loop: Loop, expectation: LoopExpectationResult, now: Date, _staleRunningMs: number): HealthScanFinding | undefined {
   const run = expectation.latestRun;
   if (loop.status !== "active" || run?.status !== "running") return undefined;
-  const threshold = Math.max(loop.leaseMs, staleRunningMs, MIN_STALE_RUNNING_MS);
-  const age = ageMs(run, now);
-  if (age <= threshold) return undefined;
+  const leaseExpiryMs = run.leaseExpiresAt ? Date.parse(run.leaseExpiresAt) : Number.NaN;
+  if (Number.isFinite(leaseExpiryMs) && leaseExpiryMs > now.getTime()) return undefined;
+  const age = Number.isFinite(leaseExpiryMs)
+    ? Math.max(0, now.getTime() - leaseExpiryMs)
+    : ageMs(run, now);
   const fingerprint = `openloops:health-scan:stale-running:${loop.id}:${run.id}`;
-  const message = `active loop latest run is still running after ${age}ms (threshold ${threshold}ms)`;
+  const message = Number.isFinite(leaseExpiryMs)
+    ? `active loop latest run still reports running ${age}ms after its lease expired`
+    : "active loop latest run reports running without a valid lease expiry";
   const finding: Omit<HealthScanFinding, "recommendedTask"> = {
     kind: "stale-running",
     severity: "critical",
@@ -654,7 +658,7 @@ function staleRunningFinding(loop: Loop, expectation: LoopExpectationResult, now
     run,
     route: expectation.route,
     ageMs: age,
-    staleThresholdMs: threshold,
+    staleThresholdMs: 0,
   };
   return {
     ...finding,

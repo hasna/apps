@@ -86,6 +86,50 @@ function runCli(dataDir: string, args: string[], input?: string, env: Record<str
   return result;
 }
 
+function storedLoop(dataDir: string, id: string) {
+  const store = new Store(join(dataDir, "loops.db"));
+  try {
+    return store.getLoop(id);
+  } finally {
+    store.close();
+  }
+}
+
+function storedWorkflow(dataDir: string, id: string) {
+  const store = new Store(join(dataDir, "loops.db"));
+  try {
+    return store.getWorkflow(id);
+  } finally {
+    store.close();
+  }
+}
+
+function storedWorkItem(dataDir: string, id: string) {
+  const store = new Store(join(dataDir, "loops.db"));
+  try {
+    return store.getWorkflowWorkItem(id);
+  } finally {
+    store.close();
+  }
+}
+
+function storedInvocation(dataDir: string, id: string) {
+  const store = new Store(join(dataDir, "loops.db"));
+  try {
+    return store.getWorkflowInvocation(id);
+  } finally {
+    store.close();
+  }
+}
+
+function privateCommandArgs(dataDir: string, publicLoop: { id: string; target: Record<string, unknown> }): string[] {
+  expect(publicLoop.target.args).toBeUndefined();
+  expect(publicLoop.target.operationTemplateId).toEqual(expect.stringMatching(/^op-template:sha256:/));
+  const loop = storedLoop(dataDir, publicLoop.id);
+  if (loop?.target.type !== "command") throw new Error(`expected private command target for ${publicLoop.id}`);
+  return loop.target.args ?? [];
+}
+
 function isolatedRouteEnv(dataDir: string, env: Record<string, string> = {}): Record<string, string> {
   const eventsDir = join(dataDir, "events");
   const todosDbPath = join(dataDir, "todos", "todos.db");
@@ -325,15 +369,32 @@ describe("loops CLI", () => {
 
     const write = runCli(dataDir, ["--json", "receipts", "write", "--file", "-"], JSON.stringify(input));
     expect(write.status).toBe(0);
-    const written = JSON.parse(write.stdout) as { run_id: string; digest_id: string; summary: { stdout_bytes: number; stdout_excerpt: string } };
+    const written = JSON.parse(write.stdout) as {
+      run_id: string;
+      digest_id: string;
+      result_ref: string;
+      summary: { stdout_bytes: number; stderr_bytes: number };
+    };
     expect(written.run_id).toBe("run-cli");
     expect(written.digest_id).toMatch(/^sha256:/);
+    expect(written.result_ref).toBe(written.digest_id);
     expect(written.summary.stdout_bytes).toBe(50_000);
-    expect(written.summary.stdout_excerpt).toContain("chars omitted");
+    expect(written.summary.stderr_bytes).toBe(0);
+    expect(written.summary).not.toHaveProperty("stdout_excerpt");
+    expect(written).not.toHaveProperty("machine");
+    expect(written).not.toHaveProperty("evidence_paths");
 
     const read = runCli(dataDir, ["--json", "receipts", "read", "run-cli"]);
     expect(read.status).toBe(0);
-    expect(JSON.parse(read.stdout)).toMatchObject({ run_id: "run-cli", summary: { text: "cli receipt" } });
+    const readValue = JSON.parse(read.stdout);
+    expect(readValue).toMatchObject({
+      run_id: "run-cli",
+      result_ref: written.digest_id,
+      summary: { stdout_bytes: 50_000, stderr_bytes: 0 },
+    });
+    expect(readValue.summary).not.toHaveProperty("text");
+    expect(readValue).not.toHaveProperty("machine");
+    expect(readValue).not.toHaveProperty("evidence_paths");
 
     const list = runCli(dataDir, ["--json", "receipts", "list", "--task-id", "task-cli"]);
     expect(list.status).toBe(0);
@@ -737,18 +798,23 @@ describe("loops CLI", () => {
     expect(create.status).toBe(0);
     expect(create.stdout).not.toContain("SECRET_PROMPT_FILE_VALUE");
     const value = JSON.parse(create.stdout);
-    expect(value.target.prompt).toContain("[redacted");
-    expect(value.target.promptSource).toEqual({ type: "file", path: promptFile });
+    expect(value.target.prompt).toBeUndefined();
+    expect(value.target.promptSource).toBeUndefined();
+    expect(value.target.operationTemplateId).toMatch(/^op-template:sha256:/);
 
     const show = runCli(dataDir, ["--json", "show", "prompt-file-agent"]);
     expect(show.status).toBe(0);
     expect(show.stdout).not.toContain("SECRET_PROMPT_FILE_VALUE");
-    expect(JSON.parse(show.stdout).target.promptSource.path).toBe(promptFile);
+    expect(JSON.parse(show.stdout).target.promptSource).toBeUndefined();
 
     const list = runCli(dataDir, ["--json", "list"]);
     expect(list.status).toBe(0);
     expect(list.stdout).not.toContain("SECRET_PROMPT_FILE_VALUE");
-    expect(JSON.parse(list.stdout)[0].target.promptSource.path).toBe(promptFile);
+    expect(storedLoop(dataDir, value.id)?.target).toMatchObject({
+      type: "agent",
+      promptSource: { type: "file", path: promptFile },
+    });
+    expect(JSON.parse(list.stdout)[0].target.promptSource).toBeUndefined();
 
     const humanShow = runCli(dataDir, ["show", "prompt-file-agent"]);
     expect(humanShow.status).toBe(0);
@@ -1469,7 +1535,11 @@ describe("loops CLI", () => {
       tools: ["functions.exec_command"],
       commands: ["git", "bun"],
       enforcement: "metadata_only",
-      safetyReason: "isolated repository status inspection",
+    });
+    expect(value.target.allowlist).not.toHaveProperty("safetyReason");
+    expect(storedLoop(dataDir, value.id)?.target).toMatchObject({
+      type: "agent",
+      allowlist: { safetyReason: "isolated repository status inspection" },
     });
 
     const relaxed = runCli(dataDir, [
@@ -1512,10 +1582,9 @@ describe("loops CLI", () => {
     ]);
     expect(create.status).toBe(0);
     const value = JSON.parse(create.stdout);
-    // Every CLI-facing view (create/show/list) redacts env the same way it
-    // already redacts command-target env, so a credential passed via --env
-    // never appears verbatim in agent output either.
-    expect(value.target.env).toBe("[redacted]");
+    // Every CLI-facing view omits env entirely, so a credential passed via
+    // --env never appears verbatim or as a shape-revealing placeholder.
+    expect(value.target.env).toBeUndefined();
     expect(create.stdout).not.toContain("agent-chief-marketing");
 
     const malformed = runCli(dataDir, [
@@ -1537,7 +1606,7 @@ describe("loops CLI", () => {
 
     const show = runCli(dataDir, ["--json", "show", value.id]);
     expect(show.status).toBe(0);
-    expect(JSON.parse(show.stdout).target.env).toBe("[redacted]");
+    expect(JSON.parse(show.stdout).target.env).toBeUndefined();
     expect(show.stdout).not.toContain("agent-chief-marketing");
 
     // Confirm what actually landed in storage (bypassing CLI-side redaction),
@@ -1662,8 +1731,13 @@ describe("loops CLI", () => {
     expect(shownWorkflow.status).toBe(0);
     const migratedWorkflow = JSON.parse(shownWorkflow.stdout);
     expect(migratedWorkflow.steps[0].timeoutMs).toBeNull();
-    expect(migratedWorkflow.steps[0].target.timeoutMs).toBeNull();
+    expect(migratedWorkflow.steps[0].target.timeoutMs).toBeUndefined();
     expect(migratedWorkflow.steps[0].target.idleTimeoutMs).toBeUndefined();
+    expect(migratedWorkflow.steps[0].target.operationTemplateId).toMatch(/^op-template:sha256:/);
+    expect(storedWorkflow(dataDir, nextWorkflowId)?.steps[0]?.target).toMatchObject({
+      type: "agent",
+      timeoutMs: null,
+    });
 
     const oldWorkflow = runCli(dataDir, ["--json", "workflows", "show", workflow.id]);
     expect(oldWorkflow.status).toBe(0);
@@ -1730,20 +1804,31 @@ describe("loops CLI", () => {
     expect(shownValue.target).toMatchObject({
       type: "agent",
       provider: "codewith",
+      model: "gpt-test",
+      timeoutMs: null,
+      permissionMode: "default",
+      sandbox: "workspace-write",
+      allowlist: { commands: ["todos"], enforcement: "metadata_only" },
+      preflight: { beforeRun: true },
+      operationTemplateId: expect.stringMatching(/^op-template:sha256:/),
+    });
+    expect(shownValue.target.cwd).toBeUndefined();
+    expect(shownValue.target.authProfile).toBeUndefined();
+    expect(shownValue.target.addDirs).toBeUndefined();
+    expect(shownValue.target.allowlist.safetyReason).toBeUndefined();
+    expect(shownValue.target.idleTimeoutMs).toBeUndefined();
+    expect(shownValue.overlap).toBe("skip");
+    expect(shownValue.maxAttempts).toBe(3);
+    expect(shownValue.leaseMs).toBe(1_800_000);
+    expect(storedLoop(dataDir, loopId)?.target).toMatchObject({
+      type: "agent",
       cwd: "/tmp/direct-agent-repo",
       model: "gpt-test",
       authProfile: "account007",
       addDirs: ["/tmp/direct-agent-extra"],
       timeoutMs: null,
-      permissionMode: "default",
-      sandbox: "workspace-write",
       allowlist: { commands: ["todos"], safetyReason: "direct timeout migration fixture" },
-      preflight: { beforeRun: true },
     });
-    expect(shownValue.target.idleTimeoutMs).toBeUndefined();
-    expect(shownValue.overlap).toBe("skip");
-    expect(shownValue.maxAttempts).toBe(3);
-    expect(shownValue.leaseMs).toBe(1_800_000);
   });
 
   test("workflows migrate-agent-timeouts skips non-agent loops and blocks running direct agent loops", () => {
@@ -1856,14 +1941,21 @@ describe("loops CLI", () => {
     const shownLoop = runCli(dataDir, ["--json", "show", loopValue.id]);
     expect(shownLoop.status).toBe(0);
     const shownLoopValue = JSON.parse(shownLoop.stdout);
-    expect(shownLoopValue.goal.objective).toBe("Outer loop goal");
+    expect(shownLoopValue.goal).toBeUndefined();
     expect(shownLoopValue.target.workflowId).toBe(appliedValue.rows[0].workflow.id);
+    const shownGoal = runCli(dataDir, ["--json", "goal", "show", loopValue.id]);
+    expect(shownGoal.status).toBe(0);
+    expect(JSON.parse(shownGoal.stdout).config.objective).toBe("Outer loop goal");
 
     const shownWorkflow = runCli(dataDir, ["--json", "workflows", "show", appliedValue.rows[0].workflow.id]);
     expect(shownWorkflow.status).toBe(0);
     const shownWorkflowValue = JSON.parse(shownWorkflow.stdout);
     expect(shownWorkflowValue.goal).toBeUndefined();
-    expect(shownWorkflowValue.steps[1].target.promptSource).toEqual({ type: "file", path: promptFile });
+    expect(shownWorkflowValue.steps[1].target.promptSource).toBeUndefined();
+    expect(storedWorkflow(dataDir, appliedValue.rows[0].workflow.id)?.steps[1]?.target).toMatchObject({
+      type: "agent",
+      promptSource: { type: "file", path: promptFile },
+    });
   });
 
   test("workflows migrate-goal-wrappers skips workflow-goal-only loops", () => {
@@ -2282,8 +2374,9 @@ describe("loops CLI", () => {
     expect(validate.status).toBe(0);
     expect(validate.stdout).not.toContain("SECRET_WORKFLOW_PROMPT_FILE");
     const validated = JSON.parse(validate.stdout);
-    expect(validated.workflow.steps[0].target.prompt).toContain("[redacted");
-    expect(validated.workflow.steps[0].target.promptSource.path).toBe(join(dataDir, "agent-prompt.md"));
+    expect(validated.workflow.steps[0].target.prompt).toBeUndefined();
+    expect(validated.workflow.steps[0].target.promptSource).toBeUndefined();
+    expect(validated.workflow.steps[0].target.operationTemplateId).toMatch(/^op-template:sha256:/);
 
     const create = runCli(dataDir, ["--json", "workflows", "create", file]);
     expect(create.status).toBe(0);
@@ -2292,12 +2385,17 @@ describe("loops CLI", () => {
     const show = runCli(dataDir, ["--json", "workflows", "show", "workflow-prompt-file"]);
     expect(show.status).toBe(0);
     expect(show.stdout).not.toContain("SECRET_WORKFLOW_PROMPT_FILE");
-    expect(JSON.parse(show.stdout).steps[0].target.promptSource.path).toBe(join(dataDir, "agent-prompt.md"));
+    const shown = JSON.parse(show.stdout);
+    expect(shown.steps[0].target.promptSource).toBeUndefined();
+    expect(storedWorkflow(dataDir, shown.id)?.steps[0]?.target).toMatchObject({
+      type: "agent",
+      promptSource: { type: "file", path: join(dataDir, "agent-prompt.md") },
+    });
 
     const list = runCli(dataDir, ["--json", "workflows", "list"]);
     expect(list.status).toBe(0);
     expect(list.stdout).not.toContain("SECRET_WORKFLOW_PROMPT_FILE");
-    expect(JSON.parse(list.stdout)[0].steps[0].target.promptSource.path).toBe(join(dataDir, "agent-prompt.md"));
+    expect(JSON.parse(list.stdout)[0].steps[0].target.promptSource).toBeUndefined();
   });
 
   test("workflows validate and create report promptFile failures as structured redacted JSON", () => {
@@ -3085,8 +3183,7 @@ describe("loops CLI", () => {
     ]);
     expect(create.status).toBe(0);
     const value = JSON.parse(create.stdout);
-    expect(value.goal.objective).toBe("verify the command result");
-    expect(value.goal.tokenBudget).toBe(50);
+    expect(value.goal).toBeUndefined();
 
     const show = runCli(dataDir, ["--json", "goal", "show", "goal-loop"]);
     expect(show.status).toBe(0);
@@ -4215,12 +4312,16 @@ describe("loops CLI", () => {
     expect(firstValue.loop.name).toContain("event:todos-task:task-cre:");
     expect(firstValue.loop.name).not.toContain("evt-task");
     expect(firstValue.loop.target.workflowId).toBe(firstValue.workflow.id);
-    const routedProfiles = firstValue.workflow.steps
-      .map((step: { target: { authProfile?: string } }) => step.target.authProfile)
+    const privateWorkflow = storedWorkflow(dataDir, firstValue.workflow.id)!;
+    const routedProfiles = privateWorkflow.steps
+      .map((step) => (step.target.type === "agent" ? step.target.authProfile : undefined))
       .filter((profile: string | undefined): profile is string => Boolean(profile));
     expect(new Set(routedProfiles).size).toBe(2);
-    const agentSteps = firstValue.workflow.steps.filter((step: { target: { type?: string } }) => step.target.type === "agent");
+    const agentSteps = privateWorkflow.steps.filter((step) => step.target.type === "agent");
     for (const step of agentSteps) {
+      if (step.target.type !== "agent") {
+        throw new Error("expected private agent target");
+      }
       expect(step.target).toMatchObject({
         type: "agent",
         provider: "codewith",
@@ -4231,10 +4332,13 @@ describe("loops CLI", () => {
       });
       expect(step.timeoutMs).toBe(600_000);
       expect(step.target.timeoutMs).toBe(600_000);
-      expect(["account004", "account005", "account006"]).toContain(step.target.authProfile);
+      expect(step.target.authProfile).toBeDefined();
+      expect(["account004", "account005", "account006"]).toContain(step.target.authProfile!);
     }
     const verifierStep = firstValue.workflow.steps.find((step: { id: string }) => step.id === "verifier");
-    expect(verifierStep.target.idleTimeoutMs).toBe(120_000);
+    expect(verifierStep.target.idleTimeoutMs).toBeUndefined();
+    const privateVerifierStep = privateWorkflow.steps.find((step) => step.id === "verifier");
+    expect(privateVerifierStep?.target).toMatchObject({ idleTimeoutMs: 120_000 });
 
     const second = runCli(dataDir, args, JSON.stringify(replayedEvent));
     expect(second.status).toBe(0);
@@ -5275,7 +5379,8 @@ describe("loops CLI", () => {
     expect(routed.status).toBe(0);
     const routedValue = JSON.parse(routed.stdout);
     expect(routedValue.workflow.id).not.toBe(staleValue.id);
-    expect(agentStepsOf(routedValue.workflow)[0].target.allowlist.commands).toContain("manual-break-glass");
+    expect(agentStepsOf(storedWorkflow(dataDir, routedValue.workflow.id)!)[0].target.allowlist.commands)
+      .toContain("manual-break-glass");
 
     const staleAfter = runCli(dataDir, ["--json", "workflows", "show", staleValue.id]);
     expect(staleAfter.status).toBe(0);
@@ -5367,7 +5472,11 @@ describe("loops CLI", () => {
     expect(created.status).toBe(0);
     const createdValue = JSON.parse(created.stdout);
     expect(createdValue.workItem.status).toBe("admitted");
-    expect(createdValue.loop.target.input.workflowWorkItemId).toBe(createdValue.workItem.id);
+    expect(createdValue.loop.target.input).toBeUndefined();
+    expect(storedLoop(dataDir, createdValue.loop.id)?.target).toMatchObject({
+      type: "workflow",
+      input: { workflowWorkItemId: createdValue.workItem.id },
+    });
 
     const scheduled = runCli(dataDir, [
       "--json",
@@ -5390,7 +5499,17 @@ describe("loops CLI", () => {
     const loop = JSON.parse(scheduled.stdout);
     expect(loop.name).toBe("route-drain-test");
     expect(loop.target.command).toBe("loops");
-    expect(loop.target.args).toEqual(expect.arrayContaining(["routes", "drain", "todos-task", "--task-list", "oss", "--max-dispatch", "2", "--timeout", "10m"]));
+    expect(privateCommandArgs(dataDir, loop)).toEqual(expect.arrayContaining([
+      "routes",
+      "drain",
+      "todos-task",
+      "--task-list",
+      "oss",
+      "--max-dispatch",
+      "2",
+      "--timeout",
+      "10m",
+    ]));
   });
 
   test("routes create persists the resolved Todos project separately from the routed repository", () => {
@@ -5417,8 +5536,12 @@ describe("loops CLI", () => {
     );
     expect(inherited.status).toBe(0);
     const inheritedValue = JSON.parse(inherited.stdout);
-    expect(inheritedValue.invocation.scope.projectPath).toBe(testPath(repo));
-    expect(inheritedValue.invocation.scope.todosProjectPath).toBe("/tmp/todos-env-default");
+    expect(inheritedValue.invocation.scope.projectPath).toBeUndefined();
+    expect(inheritedValue.invocation.scope.todosProjectPath).toBeUndefined();
+    expect(storedInvocation(dataDir, inheritedValue.invocation.id)?.scope).toMatchObject({
+      projectPath: testPath(repo),
+      todosProjectPath: "/tmp/todos-env-default",
+    });
 
     const explicit = runCli(
       dataDir,
@@ -5438,7 +5561,12 @@ describe("loops CLI", () => {
       { LOOPS_TASK_PROJECT: "/tmp/todos-env-default" },
     );
     expect(explicit.status).toBe(0);
-    expect(JSON.parse(explicit.stdout).invocation.scope.todosProjectPath).toBe("/tmp/todos-explicit");
+    const explicitValue = JSON.parse(explicit.stdout);
+    expect(explicitValue.invocation.scope.todosProjectPath).toBeUndefined();
+    expect(storedInvocation(dataDir, explicitValue.invocation.id)?.scope).toMatchObject({
+      projectPath: testPath(repo),
+      todosProjectPath: "/tmp/todos-explicit",
+    });
 
     const omitted = runCli(
       dataDir,
@@ -5658,7 +5786,8 @@ describe("loops CLI", () => {
     expect(created.status).toBe(0);
     const createdValue = JSON.parse(created.stdout);
     expect(createdValue.invocation.templateId).toBe("task-lifecycle");
-    expect(createdValue.invocation.scope.prReviewRouting).toMatchObject({
+    expect(createdValue.invocation.scope.prReviewRouting).toBeUndefined();
+    expect(storedInvocation(dataDir, createdValue.invocation.id)?.scope?.prReviewRouting).toMatchObject({
       author: "andrei-hasna",
       reviewers: ["andrei-hasna", "kriptoburak"],
       selectedReviewer: "kriptoburak",
@@ -5913,17 +6042,18 @@ describe("loops CLI", () => {
     ]);
     expect(scheduled.status).toBe(0);
     const loop = JSON.parse(scheduled.stdout);
-    expect(loop.target.args).toEqual(expect.arrayContaining(["--template", "task-lifecycle"]));
-    expect(loop.target.args).toEqual(expect.arrayContaining(["--provider-rule", "area=backend:codewith:account004,account005"]));
-    expect(loop.target.args).toEqual(expect.arrayContaining(["--triage-auth-profile", "account004", "--planner-auth-profile", "account005"]));
-    expect(loop.target.args).toEqual(expect.arrayContaining(["--max-dispatch", "2"]));
-    expect(loop.target.args).toEqual(expect.arrayContaining(["--provider-active-cap", "6"]));
-    expect(loop.target.args).toEqual(expect.arrayContaining(["--allow-tool", "functions.exec_command"]));
-    expect(loop.target.args).toEqual(expect.arrayContaining(["--allow-tool", "functions.view_image"]));
-    expect(loop.target.args).toEqual(expect.arrayContaining(["--allow-command", "git"]));
-    expect(loop.target.args).toEqual(expect.arrayContaining(["--allow-command", "bun"]));
-    expect(loop.target.args).toEqual(expect.arrayContaining(["--safety-reason", "bounded route worker repository access"]));
-    expect(loop.target.args).toContain("--provider-admission-check");
+    const args = privateCommandArgs(dataDir, loop);
+    expect(args).toEqual(expect.arrayContaining(["--template", "task-lifecycle"]));
+    expect(args).toEqual(expect.arrayContaining(["--provider-rule", "area=backend:codewith:account004,account005"]));
+    expect(args).toEqual(expect.arrayContaining(["--triage-auth-profile", "account004", "--planner-auth-profile", "account005"]));
+    expect(args).toEqual(expect.arrayContaining(["--max-dispatch", "2"]));
+    expect(args).toEqual(expect.arrayContaining(["--provider-active-cap", "6"]));
+    expect(args).toEqual(expect.arrayContaining(["--allow-tool", "functions.exec_command"]));
+    expect(args).toEqual(expect.arrayContaining(["--allow-tool", "functions.view_image"]));
+    expect(args).toEqual(expect.arrayContaining(["--allow-command", "git"]));
+    expect(args).toEqual(expect.arrayContaining(["--allow-command", "bun"]));
+    expect(args).toEqual(expect.arrayContaining(["--safety-reason", "bounded route worker repository access"]));
+    expect(args).toContain("--provider-admission-check");
   });
 
   test("routes schedule rejects advisory allowlists without a safety reason before storing the drain loop", () => {
@@ -6052,12 +6182,13 @@ describe("loops CLI", () => {
     ]);
     expect(scheduled.status).toBe(0);
     const loop = JSON.parse(scheduled.stdout);
-    expect(loop.target.args).toEqual(expect.arrayContaining(["--todos-projects-from-registry"]));
-    expect(loop.target.args).toEqual(expect.arrayContaining(["--project-path-prefix", "/tmp/todos-registry-prefix"]));
-    expect(loop.target.args).toEqual(expect.arrayContaining(["--todos-project-include", "/tmp/registry/include-one"]));
-    expect(loop.target.args).toEqual(expect.arrayContaining(["--todos-project-include", "/tmp/registry/include-two"]));
-    expect(loop.target.args).toEqual(expect.arrayContaining(["--todos-project-include", "/tmp/registry/include-three"]));
-    expect(loop.target.args).toEqual(expect.arrayContaining(["--max-dispatch", "3"]));
+    const args = privateCommandArgs(dataDir, loop);
+    expect(args).toEqual(expect.arrayContaining(["--todos-projects-from-registry"]));
+    expect(args).toEqual(expect.arrayContaining(["--project-path-prefix", "/tmp/todos-registry-prefix"]));
+    expect(args).toEqual(expect.arrayContaining(["--todos-project-include", "/tmp/registry/include-one"]));
+    expect(args).toEqual(expect.arrayContaining(["--todos-project-include", "/tmp/registry/include-two"]));
+    expect(args).toEqual(expect.arrayContaining(["--todos-project-include", "/tmp/registry/include-three"]));
+    expect(args).toEqual(expect.arrayContaining(["--max-dispatch", "3"]));
   });
 
   test("routes schedule serializes only Todos-owned or explicit project defaults", () => {
@@ -6071,8 +6202,9 @@ describe("loops CLI", () => {
     );
     expect(omitted.status).toBe(0);
     const omittedLoop = JSON.parse(omitted.stdout);
-    expect(omittedLoop.target.args).not.toContain("--todos-project");
-    expect(omittedLoop.target.args).not.toContain(dataDir);
+    const omittedArgs = privateCommandArgs(dataDir, omittedLoop);
+    expect(omittedArgs).not.toContain("--todos-project");
+    expect(omittedArgs).not.toContain(dataDir);
 
     const inherited = runCli(
       dataDir,
@@ -6082,7 +6214,9 @@ describe("loops CLI", () => {
     );
     expect(inherited.status).toBe(0);
     const inheritedLoop = JSON.parse(inherited.stdout);
-    expect(inheritedLoop.target.args).toEqual(expect.arrayContaining(["--todos-project", "/tmp/todos-owned-default"]));
+    expect(privateCommandArgs(dataDir, inheritedLoop)).toEqual(
+      expect.arrayContaining(["--todos-project", "/tmp/todos-owned-default"]),
+    );
 
     const explicit = runCli(
       dataDir,
@@ -6102,8 +6236,9 @@ describe("loops CLI", () => {
     );
     expect(explicit.status).toBe(0);
     const explicitLoop = JSON.parse(explicit.stdout);
-    expect(explicitLoop.target.args).toEqual(expect.arrayContaining(["--todos-project", "/tmp/todos-explicit"]));
-    expect(explicitLoop.target.args).not.toContain("/tmp/todos-owned-default");
+    const explicitArgs = privateCommandArgs(dataDir, explicitLoop);
+    expect(explicitArgs).toEqual(expect.arrayContaining(["--todos-project", "/tmp/todos-explicit"]));
+    expect(explicitArgs).not.toContain("/tmp/todos-owned-default");
   });
 
   test("routes schedule preserves launch gate blocker options", () => {
@@ -6128,11 +6263,12 @@ describe("loops CLI", () => {
     ]);
     expect(scheduled.status).toBe(0);
     const loop = JSON.parse(scheduled.stdout);
-    expect(loop.target.args).toEqual(expect.arrayContaining(["--launch-gate", "pa19-controlled-launch"]));
-    expect(loop.target.args).toEqual(expect.arrayContaining(["--launch-gate-blocker", "/tmp/open-codewith::2d9d931b"]));
-    expect(loop.target.args).toEqual(expect.arrayContaining(["--launch-gate-blocker", "/tmp/open-loops::816e99db"]));
-    expect(loop.target.args).toEqual(expect.arrayContaining(["--launch-gate-blocker", "/tmp/open-loops::f30153fd"]));
-    expect(loop.target.args).toEqual(expect.arrayContaining(["--max-dispatch", "3"]));
+    const args = privateCommandArgs(dataDir, loop);
+    expect(args).toEqual(expect.arrayContaining(["--launch-gate", "pa19-controlled-launch"]));
+    expect(args).toEqual(expect.arrayContaining(["--launch-gate-blocker", "/tmp/open-codewith::2d9d931b"]));
+    expect(args).toEqual(expect.arrayContaining(["--launch-gate-blocker", "/tmp/open-loops::816e99db"]));
+    expect(args).toEqual(expect.arrayContaining(["--launch-gate-blocker", "/tmp/open-loops::f30153fd"]));
+    expect(args).toEqual(expect.arrayContaining(["--max-dispatch", "3"]));
   });
 
   test("routes policies inspect, validate, and render replayable explicit args", () => {
@@ -6190,10 +6326,11 @@ describe("loops CLI", () => {
     expect(loop.schedule.everyMs).toBe(120_000);
     expect(loop.maxAttempts).toBe(2);
     expect(loop.leaseMs).toBe(20 * 60_000);
-    expect(loop.target.args).not.toContain("--policy");
-    expect(loop.target.args).not.toContain("--todos-project");
-    expect(loop.target.args).not.toContain(dataDir);
-    expect(loop.target.args).toEqual(expect.arrayContaining([
+    const args = privateCommandArgs(dataDir, loop);
+    expect(args).not.toContain("--policy");
+    expect(args).not.toContain("--todos-project");
+    expect(args).not.toContain(dataDir);
+    expect(args).toEqual(expect.arrayContaining([
       "--route-policy-evidence",
       "oss",
       "--project-path-prefix",
@@ -6501,7 +6638,7 @@ describe("loops CLI", () => {
     expect(result.status).toBe(0);
     const value = JSON.parse(result.stdout);
     expect(value.workflow.id).not.toBe(staleWorkflowId);
-    expect(agentStepsOf(value.workflow)[0].target.sandbox).toBe("workspace-write");
+    expect(agentStepsOf(storedWorkflow(dataDir, value.workflow.id)!)[0].target.sandbox).toBe("workspace-write");
 
     const staleAfter = runCli(dataDir, ["--json", "workflows", "show", staleWorkflowId]);
     expect(staleAfter.status).toBe(0);
@@ -6676,10 +6813,11 @@ describe("loops CLI", () => {
     expect(admittedValue.invocation.id).toBe(deferredValue.invocation.id);
     expect(admittedValue.invocation.templateId).toBe("task-lifecycle");
     expect(admittedValue.invocation.sourceRef.id).toBe("evt-reroute-template-deferred-again");
-    expect(admittedValue.invocation.scope.accountPolicy).toBe("pool");
+    expect(admittedValue.invocation.scope.accountPolicy).toBeUndefined();
     expect(admittedValue.invocation.scope.worktreePolicy).toBe("required");
     expect(admittedValue.invocation.outputPolicy.createTask).toBe("on_failure");
     expect(admittedValue.workflow.steps.map((step: { id: string }) => step.id)).toContain("triage");
+    expect(storedInvocation(dataDir, admittedValue.invocation.id)?.scope?.accountPolicy).toBe("pool");
 
     const shown = runCli(dataDir, ["--json", "routes", "show", admittedValue.workItem.id]);
     expect(shown.status).toBe(0);
@@ -6945,7 +7083,10 @@ describe("loops CLI", () => {
     const loops = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);
     expect(loops).toHaveLength(1);
     const worker = value.results[0].workflow.steps.find((step: { id: string }) => step.id === "worker");
-    expect(worker.target.addDirs).toEqual([join(dataDir, "todos-store")]);
+    expect(worker.target.addDirs).toBeUndefined();
+    expect(worker.target.operationTemplateId).toBeDefined();
+    const privateWorker = storedWorkflow(dataDir, value.results[0].workflow.id)?.steps.find((step) => step.id === "worker");
+    expect(privateWorker?.target).toMatchObject({ addDirs: [join(dataDir, "todos-store")] });
   });
 
   test("todos task drain omits --project when no todos project is configured", () => {
@@ -7104,7 +7245,14 @@ describe("loops CLI", () => {
     expect(value.created).toBe(1);
     expect(value.results[0].idempotencyKey).toBe("todos-task:task-drain-single-idempotency");
     expect(value.results[0].event.data.source_project_path).toBeUndefined();
-    const sourceGateArgs = value.results[0].workflow.steps[0].target.args.join("\n");
+    expect(value.results[0].workflow.steps[0].target.args).toBeUndefined();
+    expect(value.results[0].workflow.steps[0].target.operationTemplateId).toBeDefined();
+    const sourceGate = storedWorkflow(dataDir, value.results[0].workflow.id)?.steps[0];
+    expect(sourceGate?.target.type).toBe("command");
+    if (!sourceGate || sourceGate.target.type !== "command") {
+      throw new Error("expected private command source gate");
+    }
+    const sourceGateArgs = (sourceGate.target.args ?? []).join("\n");
     expect(sourceGateArgs).toContain(todosProject);
     expect(sourceGateArgs).not.toContain(spoofedSourceProject);
     const calls = readFileSync(callsFile, "utf8").trim().split("\n").filter(Boolean);
@@ -7219,11 +7367,23 @@ describe("loops CLI", () => {
     expect(value.results[0].event.data.working_dir).toBe(canonicalSourceA);
     expect(value.results[0].event.metadata.route_project_path).toBe(canonicalSourceA);
     expect(value.results[0].event.metadata.routeProjectPath).toBe(canonicalSourceA);
-    expect(value.results[0].invocation.subjectRef.path).toBe(canonicalSourceA);
-    expect(value.results[0].invocation.scope.projectPath).toBe(canonicalSourceA);
-    expect(value.results[0].workItem.projectKey).toBe(canonicalSourceA);
-    expect(value.results[0].workflow.steps[0].target.cwd).toBe(canonicalSourceA);
-    const sourceGateArgs = value.results[0].workflow.steps[0].target.args.join("\n");
+    expect(value.results[0].invocation.subjectRef.path).toBeUndefined();
+    expect(value.results[0].invocation.scope.projectPath).toBeUndefined();
+    expect(value.results[0].workItem.projectKey).toBeUndefined();
+    expect(value.results[0].workflow.steps[0].target.cwd).toBeUndefined();
+    expect(value.results[0].workflow.steps[0].target.args).toBeUndefined();
+    const privateInvocation = storedInvocation(dataDir, value.results[0].invocation.id);
+    const privateWorkItem = storedWorkItem(dataDir, value.results[0].workItem.id);
+    const sourceGate = storedWorkflow(dataDir, value.results[0].workflow.id)?.steps[0];
+    expect(privateInvocation?.subjectRef.path).toBe(canonicalSourceA);
+    expect(privateInvocation?.scope?.projectPath).toBe(canonicalSourceA);
+    expect(privateWorkItem?.projectKey).toBe(canonicalSourceA);
+    expect(sourceGate?.target.type).toBe("command");
+    if (!sourceGate || sourceGate.target.type !== "command") {
+      throw new Error("expected private command source gate");
+    }
+    expect(sourceGate.target.cwd).toBe(canonicalSourceA);
+    const sourceGateArgs = (sourceGate.target.args ?? []).join("\n");
     expect(sourceGateArgs).toContain(sourceA);
     expect(sourceGateArgs).not.toContain(sourceB);
     const calls = readFileSync(callsFile, "utf8").trim().split("\n").filter(Boolean);
@@ -9078,7 +9238,8 @@ describe("loops CLI", () => {
     expect(requeued.id).toBe(created.workItem.id);
     expect(requeued.status).toBe("queued");
     expect(requeued.loopId).toBeUndefined();
-    expect(requeued.lastReason).toBe("fixed project path");
+    expect(requeued.lastReason).toBeUndefined();
+    expect(storedWorkItem(dataDir, created.workItem.id)?.lastReason).toBe("fixed project path");
 
     const afterRequeueReplay = runCli(
       dataDir,
@@ -9190,7 +9351,8 @@ describe("loops CLI", () => {
     const requeued = JSON.parse(requeue.stdout);
     expect(requeued.id).toBe(created.workItem.id);
     expect(requeued.status).toBe("queued");
-    expect(requeued.lastReason).toBe("dependency resolved");
+    expect(requeued.lastReason).toBeUndefined();
+    expect(storedWorkItem(dataDir, created.workItem.id)?.lastReason).toBe("dependency resolved");
 
     const store = new Store(join(dataDir, "loops.db"));
     try {
@@ -9237,7 +9399,8 @@ describe("loops CLI", () => {
     expect(throttled.queuedAtSource).toBe(true);
     expect(throttled.workItem.id).toBe(created.workItem.id);
     expect(throttled.workItem.status).toBe("deferred");
-    expect(throttled.workItem.lastReason).toContain("dependency resolved");
+    expect(throttled.workItem.lastReason).toBeUndefined();
+    expect(storedWorkItem(dataDir, created.workItem.id)?.lastReason).toContain("dependency resolved");
 
     const throttleDb = new Database(join(dataDir, "loops.db"));
     try {
@@ -9256,8 +9419,9 @@ describe("loops CLI", () => {
     expect(recreated.deduped).toBe(false);
     expect(recreated.workItem.id).toBe(created.workItem.id);
     expect(recreated.workItem.attempts).toBe(created.workItem.attempts + 1);
-    expect(recreated.workItem.lastReason).toContain("dependency resolved");
-    expect(recreated.workItem.lastReason).toContain("admitted by todos-task route");
+    expect(recreated.workItem.lastReason).toBeUndefined();
+    expect(storedWorkItem(dataDir, created.workItem.id)?.lastReason).toContain("dependency resolved");
+    expect(storedWorkItem(dataDir, created.workItem.id)?.lastReason).toContain("admitted by todos-task route");
     expect(recreated.loop.id).not.toBe(created.loop.id);
     expect(recreated.workflow.id).not.toBe(created.workflow.id);
     expect(recreated.requeue).toMatchObject({
@@ -9354,11 +9518,15 @@ describe("loops CLI", () => {
     expect(result.status).toBe(0);
     const value = JSON.parse(result.stdout);
     expect(value.deduped).toBe(false);
-    expect(value.workflow.steps[0].target.cwd).toBe("/tmp/from-metadata");
-    expect(value.workflow.steps[1].target.cwd).toBe("/tmp/from-metadata");
-    expect(value.workflow.steps[2].target.cwd).toBe("/tmp/from-metadata");
-    expect(value.workflow.steps[1].target.authProfile).toBe("account004");
-    expect(value.workflow.steps[2].target.authProfile).toBe("account006");
+    for (const step of value.workflow.steps) {
+      expect(step.target.cwd).toBeUndefined();
+      expect(step.target.authProfile).toBeUndefined();
+      expect(step.target.operationTemplateId).toBeDefined();
+    }
+    const privateWorkflow = storedWorkflow(dataDir, value.workflow.id);
+    expect(privateWorkflow?.steps[0]?.target).toMatchObject({ cwd: "/tmp/from-metadata" });
+    expect(privateWorkflow?.steps[1]?.target).toMatchObject({ cwd: "/tmp/from-metadata", authProfile: "account004" });
+    expect(privateWorkflow?.steps[2]?.target).toMatchObject({ cwd: "/tmp/from-metadata", authProfile: "account006" });
   });
 
   test("todos task event handler does not let metadata override task cwd", () => {
@@ -9382,9 +9550,14 @@ describe("loops CLI", () => {
 
     expect(result.status).toBe(0);
     const value = JSON.parse(result.stdout);
-    expect(value.workflow.steps[0].target.cwd).toBe("/tmp/from-data");
-    expect(value.workflow.steps[1].target.cwd).toBe("/tmp/from-data");
-    expect(value.workflow.steps[2].target.cwd).toBe("/tmp/from-data");
+    for (const step of value.workflow.steps) {
+      expect(step.target.cwd).toBeUndefined();
+      expect(step.target.operationTemplateId).toBeDefined();
+    }
+    const privateWorkflow = storedWorkflow(dataDir, value.workflow.id);
+    expect(privateWorkflow?.steps[0]?.target).toMatchObject({ cwd: "/tmp/from-data" });
+    expect(privateWorkflow?.steps[1]?.target).toMatchObject({ cwd: "/tmp/from-data" });
+    expect(privateWorkflow?.steps[2]?.target).toMatchObject({ cwd: "/tmp/from-data" });
   });
 
   test("todos task event handler skips tasks without explicit route opt-in", () => {
@@ -9530,20 +9703,41 @@ describe("loops CLI", () => {
     expect(firstValue.workItem.routeKey).toBe("generic-event");
     expect(firstValue.invocation.sourceRef.kind).toBe("event");
     expect(firstValue.workflow.name).toContain("event:generic:knowledge:knowledge.record.created");
-    expect(firstValue.workflow.steps[0].target.cwd).toBe("/tmp/open-knowledge");
-    expect(firstValue.workflow.steps[0].target.addDirs).toEqual(["/tmp/knowledge-store", "/tmp/loops-store"]);
-    expect(firstValue.workflow.steps[1].target.addDirs).toEqual(["/tmp/knowledge-store", "/tmp/loops-store"]);
     for (const step of firstValue.workflow.steps) {
-      expect(step.target.allowlist).toEqual({
-        enforcement: "metadata_only",
-        tools: ["functions.exec_command", "functions.view_image"],
-        commands: ["git", "bun"],
-        safetyReason: "bounded generic event repository access",
+      expect(step.target.cwd).toBeUndefined();
+      expect(step.target.addDirs).toBeUndefined();
+      expect(step.target.allowlist).toBeUndefined();
+      expect(step.target.authProfile).toBeUndefined();
+      expect(step.target.operationTemplateId).toBeDefined();
+    }
+    const privateWorkflow = storedWorkflow(dataDir, firstValue.workflow.id);
+    expect(privateWorkflow?.steps[0]?.target).toMatchObject({
+      cwd: "/tmp/open-knowledge",
+      addDirs: ["/tmp/knowledge-store", "/tmp/loops-store"],
+    });
+    expect(privateWorkflow?.steps[1]?.target).toMatchObject({
+      addDirs: ["/tmp/knowledge-store", "/tmp/loops-store"],
+    });
+    for (const step of privateWorkflow?.steps ?? []) {
+      expect(step.target).toMatchObject({
+        allowlist: {
+          enforcement: "metadata_only",
+          tools: ["functions.exec_command", "functions.view_image"],
+          commands: ["git", "bun"],
+          safetyReason: "bounded generic event repository access",
+        },
       });
     }
-    expect(firstValue.loop.target.input.workflowInvocationId).toBe(firstValue.invocation.id);
-    expect(firstValue.loop.target.input.workflowWorkItemId).toBe(firstValue.workItem.id);
-    const profiles = firstValue.workflow.steps.map((step: { target: { authProfile?: string } }) => step.target.authProfile);
+    expect(firstValue.loop.target.input).toBeUndefined();
+    expect(storedLoop(dataDir, firstValue.loop.id)?.target).toMatchObject({
+      input: {
+        workflowInvocationId: firstValue.invocation.id,
+        workflowWorkItemId: firstValue.workItem.id,
+      },
+    });
+    const profiles = (privateWorkflow?.steps ?? []).map((step) =>
+      step.target.type === "agent" ? step.target.authProfile : undefined,
+    );
     expect(new Set(profiles).size).toBe(2);
 
     const second = runCli(dataDir, args, JSON.stringify(event));
@@ -9650,8 +9844,9 @@ describe("loops CLI", () => {
     const value = JSON.parse(replay.stdout);
     expect(value.deduped).toBe(false);
     expect(value.workItem.id).toBe(created.workItem.id);
-    expect(value.workItem.lastReason).toContain("generic dependency resolved");
-    expect(value.workItem.lastReason).toContain("admitted by generic-event route");
+    expect(value.workItem.lastReason).toBeUndefined();
+    expect(storedWorkItem(dataDir, created.workItem.id)?.lastReason).toContain("generic dependency resolved");
+    expect(storedWorkItem(dataDir, created.workItem.id)?.lastReason).toContain("admitted by generic-event route");
     expect(value.loop.id).not.toBe(created.loop.id);
     expect(value.workflow.id).toBeDefined();
     expect(value.requeue).toMatchObject({
