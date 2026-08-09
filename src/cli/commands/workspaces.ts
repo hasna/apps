@@ -272,41 +272,59 @@ function parseFullRegistrationReconciliation(
     throw new Error("register-full reconcile_existing must be an object");
   }
   const root = value as Record<string, unknown>;
-  const rootKeys = Object.keys(root);
-  if (rootKeys.length !== 1 || rootKeys[0] !== "conversations_channel") {
-    throw new Error("register-full reconcile_existing supports only conversations_channel");
-  }
-  const channelValue = root.conversations_channel;
-  if (!channelValue || typeof channelValue !== "object" || Array.isArray(channelValue)) {
-    throw new Error("register-full reconcile_existing.conversations_channel must be an object");
-  }
-  const channel = channelValue as Record<string, unknown>;
-  const channelKeys = Object.keys(channel).sort();
-  if (
-    channelKeys.length !== 2
-    || channelKeys[0] !== "source_operation_id"
-    || channelKeys[1] !== "target_id"
-  ) {
+  const supportedKeys = [
+    "conversations_channel",
+    "todos_project",
+    "todos_task_list",
+    "mementos_project",
+  ] as const;
+  const rootKeys = Object.keys(root).sort();
+  if (rootKeys.length === 0 || rootKeys.some((key) => !supportedKeys.includes(key as typeof supportedKeys[number]))) {
     throw new Error(
-      "register-full reconcile_existing.conversations_channel requires only source_operation_id and target_id",
+      "register-full reconcile_existing supports only conversations_channel, todos_project, todos_task_list, and mementos_project",
     );
   }
-  if (typeof channel.source_operation_id !== "string") {
-    throw new Error(
-      "register-full reconcile_existing.conversations_channel.source_operation_id must be a string",
-    );
+  const parsed: FullProjectRegistrationReconciliationInput = {};
+  for (const key of supportedKeys) {
+    const entryValue = root[key];
+    if (entryValue === undefined) continue;
+    if (!entryValue || typeof entryValue !== "object" || Array.isArray(entryValue)) {
+      throw new Error(`register-full reconcile_existing.${key} must be an object`);
+    }
+    const entry = entryValue as Record<string, unknown>;
+    const expectedKeys = key === "mementos_project"
+      ? ["source_operation_id", "source_target_path", "target_id"]
+      : ["source_operation_id", "target_id"];
+    if (JSON.stringify(Object.keys(entry).sort()) !== JSON.stringify(expectedKeys)) {
+      throw new Error(
+        `register-full reconcile_existing.${key} requires only ${expectedKeys.join(" and ")}`,
+      );
+    }
+    if (typeof entry.source_operation_id !== "string") {
+      throw new Error(`register-full reconcile_existing.${key}.source_operation_id must be a string`);
+    }
+    if (typeof entry.target_id !== "string") {
+      throw new Error(`register-full reconcile_existing.${key}.target_id must be a string`);
+    }
+    if (key === "mementos_project") {
+      if (typeof entry.source_target_path !== "string") {
+        throw new Error(
+          "register-full reconcile_existing.mementos_project.source_target_path must be a string",
+        );
+      }
+      parsed.mementos_project = {
+        source_operation_id: entry.source_operation_id,
+        target_id: entry.target_id,
+        source_target: ProjectRegistrationPathHandle.fromPath(entry.source_target_path),
+      };
+    } else {
+      parsed[key] = {
+        source_operation_id: entry.source_operation_id,
+        target_id: entry.target_id,
+      };
+    }
   }
-  if (typeof channel.target_id !== "string") {
-    throw new Error(
-      "register-full reconcile_existing.conversations_channel.target_id must be a string",
-    );
-  }
-  return {
-    conversations_channel: {
-      source_operation_id: channel.source_operation_id,
-      target_id: channel.target_id,
-    },
-  };
+  return parsed;
 }
 
 function parseFullRegistrationPayload(value: unknown): {

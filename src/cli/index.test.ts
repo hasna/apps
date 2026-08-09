@@ -341,6 +341,70 @@ describe("project-first CLI surface", () => {
     }
   });
 
+  test("register-full accepts the closed orphan-authority reconciliation schema without serializing either path", async () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-register-full-authority-reconcile-"));
+    const dbPath = join(root, "projects.db");
+    const targetPath = join(root, "fleet-resources");
+    const sourceTargetPath = join(root, "deleted-source", "fleet-resources");
+    const payload = JSON.stringify({
+      operation_id: "op-cli-register-full-authority-recovery",
+      project: {
+        id: "wks_005285827590a93b70e5",
+        name: "Fleet Resources",
+        slug: "fleet-resources",
+        kind: "project",
+      },
+      target_path: targetPath,
+      goals_markdown: "# Goals\n\n- Reconcile every authority safely.\n",
+      reconcile_existing: {
+        conversations_channel: {
+          source_operation_id: "op-cli-register-full",
+          target_id: "2bc0bf57-c08c-4c97-8d7b-631baf54c30a",
+        },
+        todos_project: {
+          source_operation_id: "op-cli-register-full",
+          target_id: "d736e48e-8267-4d91-b76d-9ab1d4015db8",
+        },
+        todos_task_list: {
+          source_operation_id: "op-cli-register-full",
+          target_id: "98a4f2df-1f4f-45d7-a85e-8c670f70daac",
+        },
+        mementos_project: {
+          source_operation_id: "op-cli-register-full",
+          target_id: "mm_project_f75606ef14e51fb577a15882ba0ab8ed333b2c29",
+          source_target_path: sourceTargetPath,
+        },
+      },
+      response_byte_limit: 512_000,
+      time_budget_ms: 10_000,
+    });
+    try {
+      const result = await runProjectsWithStdin(
+        ["register-full", "--json"],
+        payload,
+        { HASNA_PROJECTS_DB_PATH: dbPath },
+      );
+      expect(result.exitCode).toBe(1);
+      expect(text(result.stderr)).toBe("");
+      const body = JSON.parse(text(result.stdout)) as {
+        ok: boolean;
+        outcome: string;
+        dependencies: Array<{ dependency_task_id: string }>;
+      };
+      expect(body.ok).toBe(false);
+      expect(body.outcome).toBe("no_go");
+      expect(body.dependencies.map((item) => item.dependency_task_id).sort()).toEqual(
+        Object.values(PROJECT_REGISTRATION_DEPENDENCY_TASKS).sort(),
+      );
+      expect(existsSync(dbPath)).toBe(false);
+      expect(existsSync(targetPath)).toBe(false);
+      expect(text(result.stdout)).not.toContain(targetPath);
+      expect(text(result.stdout)).not.toContain(sourceTargetPath);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("register-full rejects malformed orphan-channel reconciliation before authority preflight", async () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-register-full-reconcile-"));
     const dbPath = join(root, "projects.db");
