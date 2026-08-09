@@ -29,7 +29,14 @@ export interface FreezeEntry {
 export interface ManifestAppSpec {
   name: string;
   manager?: "brew" | "cask" | "apt" | "winget" | "custom";
+  /** Package or executable identity. For legacy custom entries, this is also the install command and command-v probe target. */
   packageName?: string;
+  /** Exact shell command executed for a custom app install. Requires probeCommand. */
+  installCommand?: string;
+  /** Exact shell command used to probe a custom app. Requires installCommand and structured installed/version output. */
+  probeCommand?: string;
+  /** Exact version required for a custom probe to report installed=true. */
+  expectedVersion?: string;
 }
 
 export interface ManifestFileSyncSpec {
@@ -104,6 +111,10 @@ export interface SetupStep {
   command: string;
   manager: "shell" | "bun" | "brew" | "apt" | "custom";
   privileged?: boolean;
+  /** Exact custom status probe bound into the reviewed mutation plan. */
+  probeCommand?: string;
+  /** Expected custom probe version bound into the reviewed mutation plan. */
+  expectedVersion?: string;
 }
 
 export interface SyncResult {

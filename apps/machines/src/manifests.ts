@@ -43,6 +43,37 @@ const appSchema = z.object({
   name: z.string(),
   manager: z.enum(["brew", "cask", "apt", "winget", "custom"]).optional(),
   packageName: z.string().optional(),
+  installCommand: z.string().refine((value) => value.trim().length > 0, "installCommand must not be blank").optional(),
+  probeCommand: z.string().refine((value) => value.trim().length > 0, "probeCommand must not be blank").optional(),
+  expectedVersion: z.string().refine((value) => value.trim().length > 0, "expectedVersion must not be blank").optional(),
+}).superRefine((app, context) => {
+  const hasExactCustomContract =
+    app.installCommand !== undefined
+    || app.probeCommand !== undefined
+    || app.expectedVersion !== undefined;
+  if (!hasExactCustomContract) return;
+
+  if (app.manager !== "custom") {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "installCommand, probeCommand, and expectedVersion are only valid when manager is custom",
+    });
+    return;
+  }
+  if (!app.installCommand) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["installCommand"],
+      message: "installCommand is required when a custom probe contract is declared",
+    });
+  }
+  if (!app.probeCommand) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["probeCommand"],
+      message: "probeCommand is required when a custom install contract is declared",
+    });
+  }
 });
 
 const fileSchema = z.object({

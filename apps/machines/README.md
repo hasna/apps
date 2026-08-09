@@ -818,6 +818,29 @@ machines install-claude apply --machine linux-dev-01 --tool claude codex --yes
 machines install-tailscale --machine mac-lab-01 --json
 ```
 
+Custom apps can declare separate exact install and probe commands through the
+typed manifest JSON accepted by `machines manifest add --from-stdin`. The
+probe must exit successfully and emit either `installed=0` or both
+`installed=1` and a non-empty `version=<value>` line:
+
+```json
+{
+  "name": "skills",
+  "manager": "custom",
+  "packageName": "@hasna/skills",
+  "installCommand": "bun install -g @hasna/skills@0.1.61",
+  "probeCommand": "if version=$(skills --version 2>/dev/null); then printf 'installed=1\\nversion=%s\\n' \"$version\"; else printf 'installed=0\\n'; fi",
+  "expectedVersion": "0.1.61"
+}
+```
+
+`installCommand` and `probeCommand` must be declared together and are included
+in the mutation plan digest. When `expectedVersion` is present, another version
+is reported but does not count as installed. Legacy custom entries without
+these fields retain their existing `packageName` install plus `command -v`
+probe behavior. To roll back, replace the install command and expected version
+with the exact earlier version; the changed plan requires fresh approval.
+
 ## Notifications
 
 ```bash

@@ -13,6 +13,13 @@ originally announced was never published (npm latest is 0.2.10).
 Three defects, all in the drift check, all with the same shape: the check
 reported success about things it had not actually established.
 
+### Fixed
+
+- Custom app manifests can now declare separate exact install and probe
+  commands, with optional expected-version matching. Incomplete or malformed
+  probe contracts fail closed, while existing custom `packageName` entries and
+  apt, brew, cask, and winget behavior remain compatible.
+
 ### Changed
 
 - **BREAKING — `setup --check` exit codes: `0` clean / `1` findings / `2`
