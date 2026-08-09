@@ -429,50 +429,6 @@ describe("ApiStore.sendMessage wire body", () => {
     expect(channel.metadata).toEqual(metadata);
   });
 
-  test("forwards message context fields exactly and omits them when not supplied", async () => {
-    const { client, sent } = capturingClient();
-    const store = new ApiStore(client);
-    const context = {
-      working_dir: "/synthetic/context-positive",
-      repository: "hasna/conversations-context-positive",
-      branch: "fix/context-positive",
-    };
-
-    const positive = await store.sendMessage({
-      from: "alice",
-      to: "bob",
-      content: "context positive",
-      ...context,
-    });
-    const negative = await store.sendMessage({
-      from: "alice",
-      to: "bob",
-      content: "context omitted",
-    });
-
-    expect(sent).toHaveLength(2);
-    expect(sent[0]).toMatchObject(context);
-    expect(positive).toMatchObject(context);
-    expect({
-      working_dir: sent[1].working_dir,
-      repository: sent[1].repository,
-      branch: sent[1].branch,
-    }).toEqual({
-      working_dir: undefined,
-      repository: undefined,
-      branch: undefined,
-    });
-    expect({
-      working_dir: negative.working_dir ?? null,
-      repository: negative.repository ?? null,
-      branch: negative.branch ?? null,
-    }).toEqual({
-      working_dir: null,
-      repository: null,
-      branch: null,
-    });
-  });
-
   test("omits reply_to for a non-reply send (must not thread everything)", async () => {
     const { client, sent } = capturingClient();
     const store = new ApiStore(client);

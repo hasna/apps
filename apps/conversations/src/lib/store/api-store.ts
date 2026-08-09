@@ -760,9 +760,6 @@ export class ApiStore implements ConversationsStore {
       uuid: messageUuid,
       from: opts.from, to: opts.to, content: opts.content, channel: opts.channel,
       project_id: opts.project_id, session_id: opts.session_id, priority: opts.priority,
-      working_dir: opts.working_dir,
-      repository: opts.repository,
-      branch: opts.branch,
       metadata: opts.metadata,
       blocking: opts.blocking === true,
       // This is an explicit field whitelist, so anything missing here is

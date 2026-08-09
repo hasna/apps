@@ -414,40 +414,8 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
         // Destructured positionally, so this must track the column list in the
         // INSERT. metadata and reply_to are positional; a column missing from
         // the statement is exactly how cloud-only fields were dropped.
-        const [
-          uuid,
-          session_id,
-          from_agent,
-          to_agent,
-          channel,
-          project_id,
-          content,
-          priority,
-          working_dir,
-          repository,
-          branch,
-          metadata,
-          blocking,
-          reply_to,
-        ] = p as any[];
-        const row = {
-          id: nextId++,
-          uuid,
-          session_id,
-          from_agent,
-          to_agent,
-          channel,
-          project_id,
-          content,
-          priority,
-          working_dir,
-          repository,
-          branch,
-          metadata,
-          blocking,
-          reply_to: reply_to ?? null,
-          created_at: new Date().toISOString(),
-        };
+        const [uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, metadata, blocking, reply_to] = p as any[];
+        const row = { id: nextId++, uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, metadata, blocking, reply_to: reply_to ?? null, created_at: new Date().toISOString() };
         messages.push(row);
         return row;
       }
@@ -1221,54 +1189,6 @@ describe("conversations-serve", () => {
       const stored = (await readback.json()).message;
       expect(JSON.parse(stored.metadata)).toEqual(metadata);
     }
-  });
-
-  test("POST /v1/messages persists context fields and preserves omission as null", async () => {
-    const positiveContext = {
-      working_dir: "/synthetic/server-context-positive",
-      repository: "hasna/conversations-server-context-positive",
-      branch: "fix/server-context-positive",
-    };
-    const positive = await fetch(`${base}/v1/messages`, {
-      method: "POST",
-      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
-      body: JSON.stringify({
-        from: "alice",
-        to: "bob",
-        content: "server context positive",
-        ...positiveContext,
-      }),
-    });
-    expect(positive.status).toBe(201);
-    const positiveSent = (await positive.json()).message;
-    expect(positiveSent).toMatchObject(positiveContext);
-
-    const positiveReadback = await fetch(`${base}/v1/messages/by-uuid/${positiveSent.uuid}`, {
-      headers: { "x-api-key": rwKey },
-    });
-    expect(positiveReadback.status).toBe(200);
-    expect((await positiveReadback.json()).message).toMatchObject(positiveContext);
-
-    const negative = await fetch(`${base}/v1/messages`, {
-      method: "POST",
-      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
-      body: JSON.stringify({
-        from: "alice",
-        to: "bob",
-        content: "server context omitted",
-      }),
-    });
-    expect(negative.status).toBe(201);
-    const negativeSent = (await negative.json()).message;
-    expect({
-      working_dir: negativeSent.working_dir,
-      repository: negativeSent.repository,
-      branch: negativeSent.branch,
-    }).toEqual({
-      working_dir: null,
-      repository: null,
-      branch: null,
-    });
   });
 
   test("project-linked channel sends inherit the channel project and reject explicit conflicts", async () => {
@@ -2490,9 +2410,6 @@ describe("conversations-serve", () => {
     const sendProperties = b.paths["/v1/messages"].post.requestBody
       .content["application/json"].schema.properties;
     expect(sendProperties.uuid).toEqual({ type: "string" });
-    expect(sendProperties.working_dir).toEqual({ type: "string" });
-    expect(sendProperties.repository).toEqual({ type: "string" });
-    expect(sendProperties.branch).toEqual({ type: "string" });
     expect(sendProperties.reply_to).toEqual({ type: "integer" });
     expect(sendProperties.reply_to_uuid).toEqual({ type: "string" });
     expect(sendProperties.attachments).toMatchObject({

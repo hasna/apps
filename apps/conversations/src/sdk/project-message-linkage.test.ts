@@ -1,17 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "fs";
-import { fileURLToPath } from "url";
 import { ConversationsClient } from "./index.js";
 
 describe("generated SDK project-message linkage contract", () => {
-  test("sendMessage exposes the persisted context provenance fields", () => {
-    const source = readFileSync(fileURLToPath(new URL("./index.ts", import.meta.url)), "utf8");
-    const signature = source.split("\n").find((line) => line.includes("async sendMessage("));
-    expect(signature).toContain('"working_dir"?: string;');
-    expect(signature).toContain('"repository"?: string;');
-    expect(signature).toContain('"branch"?: string;');
-  });
-
   test("sends exact guarded apply and rollback bodies to the stable routes", async () => {
     const calls: Array<{ url: string; method: string; body: unknown }> = [];
     const client = new ConversationsClient({
