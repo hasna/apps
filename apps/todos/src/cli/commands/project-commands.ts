@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import chalk from "chalk";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { basename, resolve, sep } from "node:path";
 import { getDatabase, resolvePartialId } from "../../db/database.js";
 import {
@@ -337,8 +337,18 @@ export function registerProjectCommands(program: Command) {
 
       let content: string;
       if (opts.file !== undefined) {
+        const commentFilePath = resolve(opts.file);
+        let isRegularFile = false;
         try {
-          content = readFileSync(opts.file, "utf8");
+          isRegularFile = statSync(commentFilePath).isFile();
+        } catch (error) {
+          handleError(new Error(`Unable to read comment file "${opts.file}".`, { cause: error }));
+        }
+        if (!isRegularFile) {
+          handleError(new Error(`Comment file "${opts.file}" must be a regular file.`));
+        }
+        try {
+          content = readFileSync(commentFilePath, "utf8");
         } catch (error) {
           handleError(new Error(`Unable to read comment file "${opts.file}".`, { cause: error }));
         }

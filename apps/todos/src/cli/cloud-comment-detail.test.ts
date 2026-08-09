@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -186,6 +186,38 @@ describe("cloud task detail comments", () => {
       });
       expect(comments).toHaveLength(1);
       expect(comments[0]).toMatchObject({ content, agent_id: "remote-writer", session_id: "remote-comment-file-session" });
+      expect(existsSync(join(root, "todos.db"))).toBe(false);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("comment --file rejects a non-regular path before any remote request or local mutation", async () => {
+    const requests: Array<{ method: string; path: string }> = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        requests.push({ method: request.method, path: url.pathname });
+        return Response.json({ error: "unexpected request" }, { status: 500 });
+      },
+    });
+
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-comment-non-file-"));
+    tempRoots.push(root);
+    const directoryPath = join(root, "not-a-comment-file");
+    mkdirSync(directoryPath);
+    try {
+      const result = await runCli(
+        ["--json", "comment", TASK_ID, "--file", directoryPath],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+
+      expect(result.exitCode).toBe(1);
+      expect(`${result.stdout}\n${result.stderr}`).toMatch(/regular file/i);
+      expect(requests).toHaveLength(0);
       expect(existsSync(join(root, "todos.db"))).toBe(false);
     } finally {
       server.stop(true);

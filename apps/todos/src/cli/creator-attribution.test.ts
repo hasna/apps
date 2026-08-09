@@ -114,7 +114,7 @@ describe("todos comment — records who wrote it", () => {
     });
   });
 
-  it("rejects ambiguous, missing, unreadable, and empty file input without adding a comment", async () => {
+  it("rejects ambiguous, missing, non-file, and empty file input without adding a comment", async () => {
     const task = await addJson(["a task to protect from invalid comments"]);
     const contentPath = join(testRoot, "comment.txt");
     const emptyPath = join(testRoot, "empty-comment.txt");
@@ -134,7 +134,7 @@ describe("todos comment — records who wrote it", () => {
       },
       {
         args: ["comment", task.id, "--file", directoryPath],
-        expected: /unable to read comment file/i,
+        expected: /regular file/i,
       },
       {
         args: ["comment", task.id, "--file", emptyPath],
