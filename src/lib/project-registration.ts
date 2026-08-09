@@ -964,8 +964,6 @@ function projectRegistrationAuthorityTransportBlockers(
 ): ProjectRegistrationCapabilityBlocker[] {
   const entries = (["todos", "mementos", "conversations"] as const)
     .map((authority) => ({ authority, transport: authorities[authority].transport }));
-  const declaresTransport = entries.some((entry) => entry.transport !== undefined);
-  if (!declaresTransport) return [];
   return entries
     .filter((entry) => entry.transport !== projectsTransport)
     .map((entry) => ({

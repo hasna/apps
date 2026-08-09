@@ -44,6 +44,7 @@ import {
   type ProjectRegistrationAuthorityReceipt,
   type ProjectRegistrationAuthorityRecord,
   type ProjectRegistrationAuthorityRequest,
+  type ProjectRegistrationAuthorityTransport,
   type ProjectRegistrationResourceKind,
 } from "./project-registration.js";
 import { PROJECT_MARKER_FILENAME } from "./workspace-runtime.js";
@@ -142,10 +143,12 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
   beforeCreate: ((request: ProjectRegistrationAuthorityRequest) => void | Promise<void>) | null = null;
   channelTargetIdFactory: ((selectorDigest: string) => string) | null = null;
   packageVersion = "test-1.0.0";
+  capabilityCalls = 0;
 
   constructor(
     readonly authority: ProjectRegistrationAuthorityName,
     readonly resources: ProjectRegistrationResourceKind[],
+    readonly transport: ProjectRegistrationAuthorityTransport | undefined,
     readonly failSteps: Set<string> = new Set(),
     readonly readbackMismatchKinds: Set<ProjectRegistrationResourceKind> = new Set(),
     readonly disconnectAfterCreateSteps: Set<string> = new Set(),
@@ -154,6 +157,7 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
   ) {}
 
   async capability(): Promise<ProjectRegistrationAuthorityCapability> {
+    this.capabilityCalls += 1;
     return {
       authority: this.authority,
       route: `${this.authority}.project-registration.v1`,
@@ -443,18 +447,21 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
   }
 }
 
-function fakeAuthorities(
+type FakeAuthoritySet = {
+  authorities: ProjectRegistrationAuthorities;
+  todos: FakeAuthority;
+  mementos: FakeAuthority;
+  conversations: FakeAuthority;
+};
+
+function buildFakeAuthorities(
+  transports: Record<ProjectRegistrationAuthorityName, ProjectRegistrationAuthorityTransport | undefined>,
   failSteps: string[] = [],
   readbackMismatchKinds: Partial<Record<ProjectRegistrationAuthorityName, ProjectRegistrationResourceKind[]>> = {},
   disconnectAfterCreateSteps: string[] = [],
   failLookupSteps: string[] = [],
   driftDirectoryOnFailSteps: string[] = [],
-): {
-  authorities: ProjectRegistrationAuthorities;
-  todos: FakeAuthority;
-  mementos: FakeAuthority;
-  conversations: FakeAuthority;
-} {
+): FakeAuthoritySet {
   const failures = new Set(failSteps);
   const disconnects = new Set(disconnectAfterCreateSteps);
   const lookupFailures = new Set(failLookupSteps);
@@ -462,6 +469,7 @@ function fakeAuthorities(
   const todos = new FakeAuthority(
     "todos",
     ["project", "task_list"],
+    transports.todos,
     failures,
     new Set(readbackMismatchKinds.todos ?? []),
     disconnects,
@@ -471,6 +479,7 @@ function fakeAuthorities(
   const mementos = new FakeAuthority(
     "mementos",
     ["project"],
+    transports.mementos,
     failures,
     new Set(readbackMismatchKinds.mementos ?? []),
     disconnects,
@@ -480,6 +489,7 @@ function fakeAuthorities(
   const conversations = new FakeAuthority(
     "conversations",
     ["channel"],
+    transports.conversations,
     failures,
     new Set(readbackMismatchKinds.conversations ?? []),
     disconnects,
@@ -492,6 +502,30 @@ function fakeAuthorities(
     mementos,
     conversations,
   };
+}
+
+function fakeAuthorities(
+  failSteps: string[] = [],
+  readbackMismatchKinds: Partial<Record<ProjectRegistrationAuthorityName, ProjectRegistrationResourceKind[]>> = {},
+  disconnectAfterCreateSteps: string[] = [],
+  failLookupSteps: string[] = [],
+  driftDirectoryOnFailSteps: string[] = [],
+): FakeAuthoritySet {
+  return buildFakeAuthorities(
+    { todos: "local", mementos: "local", conversations: "local" },
+    failSteps,
+    readbackMismatchKinds,
+    disconnectAfterCreateSteps,
+    failLookupSteps,
+    driftDirectoryOnFailSteps,
+  );
+}
+
+function fakeAuthoritiesWithTransports(
+  transports: Record<ProjectRegistrationAuthorityName, ProjectRegistrationAuthorityTransport | undefined>,
+  failSteps: string[] = [],
+): FakeAuthoritySet {
+  return buildFakeAuthorities(transports, failSteps);
 }
 
 class FakeCloudProjectAuthority {
@@ -700,13 +734,123 @@ describe("full project registration capability gate", () => {
       db.close();
     }
   });
+
+  test("rejects all undeclared authority transports before local Projects can probe or mutate", async () => {
+    const db = makeDb();
+    const target = tempTarget("undeclared-local-authorities");
+    const fakes = fakeAuthoritiesWithTransports({
+      todos: undefined,
+      mementos: undefined,
+      conversations: undefined,
+    });
+    try {
+      const result = await registerFullProject(
+        input("op-undeclared-local-authorities", target.target),
+        { db, authorities: fakes.authorities },
+      );
+
+      expect(result).toMatchObject({
+        ok: false,
+        outcome: "no_go",
+        failed_step: "authority_preflight",
+        reason_code: "authority_transport_mismatch",
+      });
+      expect(result.dependencies.map((blocker) => blocker.authority).sort()).toEqual([
+        "conversations",
+        "mementos",
+        "todos",
+      ]);
+      expect(fakes.todos.capabilityCalls + fakes.mementos.capabilityCalls + fakes.conversations.capabilityCalls).toBe(0);
+      expect(fakes.todos.requests.length + fakes.mementos.requests.length + fakes.conversations.requests.length).toBe(0);
+      expect(db.query("SELECT COUNT(*) AS n FROM workspaces").get()).toEqual({ n: 0 });
+      expect(db.query("SELECT COUNT(*) AS n FROM project_registration_manifests").get()).toEqual({ n: 0 });
+      expect(db.query("SELECT COUNT(*) AS n FROM project_registration_receipts").get()).toEqual({ n: 0 });
+      expect(existsSync(target.path)).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("rejects all undeclared authority transports before hosted Projects can probe or mutate", async () => {
+    const db = makeDb();
+    const target = tempTarget("undeclared-hosted-authorities");
+    const fakes = fakeAuthoritiesWithTransports({
+      todos: undefined,
+      mementos: undefined,
+      conversations: undefined,
+    });
+    const projects = new FakeCloudProjectAuthority();
+    try {
+      const result = await registerFullProject(
+        input("op-undeclared-hosted-authorities", target.target, { id: "wks_undeclaredhosted01" }),
+        { db, authorities: fakes.authorities, projectStore: projects.asStore() },
+      );
+
+      expect(result).toMatchObject({
+        ok: false,
+        outcome: "no_go",
+        failed_step: "authority_preflight",
+        reason_code: "authority_transport_mismatch",
+      });
+      expect(result.dependencies.map((blocker) => blocker.authority).sort()).toEqual([
+        "conversations",
+        "mementos",
+        "todos",
+      ]);
+      expect(fakes.todos.capabilityCalls + fakes.mementos.capabilityCalls + fakes.conversations.capabilityCalls).toBe(0);
+      expect(fakes.todos.requests.length + fakes.mementos.requests.length + fakes.conversations.requests.length).toBe(0);
+      expect(projects.creates).toBe(0);
+      expect(projects.project).toBeNull();
+      expect(db.query("SELECT COUNT(*) AS n FROM workspaces").get()).toEqual({ n: 0 });
+      expect(db.query("SELECT COUNT(*) AS n FROM project_registration_manifests").get()).toEqual({ n: 0 });
+      expect(db.query("SELECT COUNT(*) AS n FROM project_registration_receipts").get()).toEqual({ n: 0 });
+      expect(existsSync(target.path)).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("rejects a partially undeclared authority set before any adapter is probed", async () => {
+    const db = makeDb();
+    const target = tempTarget("partially-undeclared-authorities");
+    const fakes = fakeAuthoritiesWithTransports({
+      todos: "local",
+      mementos: undefined,
+      conversations: "local",
+    });
+    try {
+      const result = await registerFullProject(
+        input("op-partially-undeclared-authorities", target.target),
+        { db, authorities: fakes.authorities },
+      );
+
+      expect(result).toMatchObject({
+        ok: false,
+        outcome: "no_go",
+        failed_step: "authority_preflight",
+        reason_code: "authority_transport_mismatch",
+      });
+      expect(result.dependencies.map((blocker) => blocker.authority)).toEqual(["mementos"]);
+      expect(fakes.todos.capabilityCalls + fakes.mementos.capabilityCalls + fakes.conversations.capabilityCalls).toBe(0);
+      expect(fakes.todos.requests.length + fakes.mementos.requests.length + fakes.conversations.requests.length).toBe(0);
+      expect(db.query("SELECT COUNT(*) AS n FROM workspaces").get()).toEqual({ n: 0 });
+      expect(db.query("SELECT COUNT(*) AS n FROM project_registration_manifests").get()).toEqual({ n: 0 });
+      expect(db.query("SELECT COUNT(*) AS n FROM project_registration_receipts").get()).toEqual({ n: 0 });
+      expect(existsSync(target.path)).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
 });
 
 describe("full project registration transaction", () => {
   test("hosted Projects authority never creates a local shadow row and rolls its exact row back on failure", async () => {
     const db = makeDb();
     const target = tempTarget("hosted-no-shadow");
-    const fakes = fakeAuthorities(["conversations_channel"]);
+    const fakes = fakeAuthoritiesWithTransports(
+      { todos: "api", mementos: "api", conversations: "api" },
+      ["conversations_channel"],
+    );
     const projects = new FakeCloudProjectAuthority();
     projects.disconnectAfterCreate = true;
     try {
@@ -731,7 +875,9 @@ describe("full project registration transaction", () => {
   test("removes a hosted project when its local immutable receipt cannot persist", async () => {
     const db = makeDb();
     const target = tempTarget("hosted-receipt-failure");
-    const fakes = fakeAuthorities();
+    const fakes = fakeAuthoritiesWithTransports(
+      { todos: "api", mementos: "api", conversations: "api" },
+    );
     const projects = new FakeCloudProjectAuthority();
     db.run(`
       CREATE TRIGGER fail_hosted_project_receipt
@@ -767,6 +913,9 @@ describe("full project registration transaction", () => {
     const fakes = fakeAuthorities();
     const projectId = "wks_retrofitexisting01";
     try {
+      expect(fakes.todos.transport).toBe("local");
+      expect(fakes.mementos.transport).toBe("local");
+      expect(fakes.conversations.transport).toBe("local");
       const existing = createWorkspace({
         id: projectId,
         name: "Fleet Resources",
@@ -1124,7 +1273,9 @@ describe("full project registration transaction", () => {
   test("preserves unrelated hosted integrations and typed links during accepted retrofit", async () => {
     const db = makeDb();
     const target = tempTarget("retrofit-hosted-preserves-unrelated");
-    const fakes = fakeAuthorities();
+    const fakes = fakeAuthoritiesWithTransports(
+      { todos: "api", mementos: "api", conversations: "api" },
+    );
     const projects = new FakeCloudProjectAuthority();
     const projectId = "wks_retrofithosted001";
     const revision = "2026-08-09T00:00:00.000Z";
@@ -1170,6 +1321,9 @@ describe("full project registration transaction", () => {
       updated_at: revision,
     }];
     try {
+      expect(fakes.todos.transport).toBe("api");
+      expect(fakes.mementos.transport).toBe("api");
+      expect(fakes.conversations.transport).toBe("api");
       const result = await registerFullProject({
         ...input("op-retrofit-hosted-preserve", target.target, { id: projectId }),
         mode: "retrofit",

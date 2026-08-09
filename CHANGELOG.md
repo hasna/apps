@@ -15,8 +15,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unrelated Conversations channel, Todos project and task-list, and Mementos
   project links through success, exact retry, and rollback.
 - Production full-project registration now fails closed before authority
-  imports or mutation when hosted Projects is paired with local external
-  authorities, or local Projects is paired with hosted external authorities.
+  imports or mutation when an external authority omits transport provenance,
+  hosted Projects is paired with a local authority, or local Projects is paired
+  with a hosted authority.
 
 ## [0.1.120]
 
