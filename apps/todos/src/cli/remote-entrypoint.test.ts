@@ -1385,7 +1385,7 @@ describe("remote CLI entrypoint authority boundary", () => {
           const created = !task;
           if (!task) {
             const id = TASK_IDS[nextTaskId++]!;
-            task = { id, short_id: `REMOTE-${nextTaskId}`, title: body.title, description: body.description ?? null, status: body.status ?? "pending", priority: body.priority ?? "medium", project_id: body.project_id ?? null, task_list_id: body.task_list_id ?? null, plan_id: null, parent_id: null, assigned_to: body.assigned_to ?? null, tags: body.tags ?? [], metadata: { ...(body.metadata as object ?? {}), fingerprint: body.fingerprint }, version: 1, created_at: now, updated_at: now };
+            task = { id, short_id: `REMOTE-${nextTaskId}`, title: body.title, description: body.description ?? null, status: body.status ?? "pending", priority: body.priority ?? "medium", project_id: body.project_id ?? null, task_list_id: body.task_list_id ?? null, plan_id: body.plan_id ?? null, parent_id: null, assigned_to: body.assigned_to ?? null, tags: body.tags ?? [], metadata: { ...(body.metadata as object ?? {}), fingerprint: body.fingerprint }, version: 1, created_at: now, updated_at: now };
             tasks.push(task);
           } else {
             Object.assign(task, body, { updated_at: now, version: Number(task.version) + 1 });
@@ -1515,7 +1515,6 @@ describe("remote CLI entrypoint authority boundary", () => {
         // `doctor` is asserted separately below: it is the one read-only command
         // whose exit code is a VERDICT, not just "the call succeeded".
         ["--json", "add", "Remote task", "--project", PROJECT_ID, "--list", LIST_ID, "--plan", PLAN_ID],
-        ["--json", "task", "upsert", "--fingerprint", "incident-593127", "--title", "Upserted task", "--project", PROJECT_ID, "--list", LIST_ID],
         ["--project", PROJECT_ID, "--json", "list", "--list", LIST_ID],
         ["--json", "show", "REMOTE-1"],
         ["--json", "inspect", "REMOTE-1"],
@@ -1558,6 +1557,19 @@ describe("remote CLI entrypoint authority boundary", () => {
       for (const invocation of invocations) {
         await runRemoteOk(invocation);
       }
+
+      const upserted = JSON.parse(await runRemoteOk([
+        "--json", "task", "upsert",
+        "--fingerprint", "incident-593127",
+        "--title", "Upserted task",
+        "--project", PROJECT_ID,
+        "--list", LIST_ID,
+        "--plan", PLAN_ID,
+      ]));
+      expect(upserted).toMatchObject({
+        created: true,
+        task: { plan_id: PLAN_ID, project_id: PROJECT_ID, task_list_id: LIST_ID },
+      });
 
       // `doctor` must NOT report a clean bill of health it did not establish.
       // This fixture authority exposes no GET /v1/integrity aggregate, so the four

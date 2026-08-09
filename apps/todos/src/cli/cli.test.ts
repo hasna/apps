@@ -273,6 +273,10 @@ describe("CLI integration", () => {
     try { unlinkSync(dbPath); } catch {}
 
     try {
+      const plan = await runCli(["--json", "plans", "--add", "CLI upsert plan"], dbPath);
+      expect(plan.exitCode).toBe(0);
+      const planId = JSON.parse(plan.stdout).id as string;
+
       const first = await runCli([
         "--json",
         "task",
@@ -291,12 +295,15 @@ describe("CLI integration", () => {
         "{\"status\":\"ok\"}",
         "--working-dir",
         ".",
+        "--plan",
+        planId,
       ], dbPath);
       expect(first.exitCode).toBe(0);
       const firstPayload = JSON.parse(first.stdout);
       expect(firstPayload.created).toBe(true);
       expect(firstPayload.task.metadata.fingerprint).toBe("loop:cli:1");
       expect(firstPayload.task.metadata.expected).toEqual({ status: "ok" });
+      expect(firstPayload.task.plan_id).toBe(planId);
 
       const second = await runCli([
         "--json",
@@ -318,6 +325,7 @@ describe("CLI integration", () => {
       expect(secondPayload.task.metadata.expectation_id).toBe("exp-cli");
       expect(secondPayload.task.metadata.observed).toBe("failed");
       expect(secondPayload.task.metadata.evidence_paths).toEqual(["logs/a.txt", "logs/b.txt"]);
+      expect(secondPayload.task.plan_id).toBe(planId);
     } finally {
       try { unlinkSync(dbPath); } catch {}
     }

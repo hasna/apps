@@ -664,6 +664,58 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     expect(calls[0]!.method).toBe("POST");
   });
 
+  test("create and update use the raw v1 transport instead of generic resource writes", async () => {
+    const calls: Array<{ method: string; path: string; body: unknown }> = [];
+    const taskWriteClient = {
+      baseUrl: "https://todos.example.com/v1",
+      transport: {
+        post: async (path: string, body?: unknown) => {
+          calls.push({ method: "POST", path, body });
+          return { task: { id: "created-task", title: "created" } };
+        },
+        patch: async (path: string, body?: unknown) => {
+          calls.push({ method: "PATCH", path, body });
+          return { task: { id: "updated-task", title: "updated" } };
+        },
+      },
+      get: async () => ({ task: { id: "created-task", title: "created" } }),
+      create: async () => {
+        throw new Error("generic task create must not be used");
+      },
+      update: async () => {
+        throw new Error("generic task update must not be used");
+      },
+    } as unknown as Parameters<typeof cloudCreateTask>[0];
+
+    await expect(
+      cloudCreateTask(taskWriteClient, {
+        title: "created",
+        plan_id: "plan-1",
+      }),
+    )
+      .resolves.toMatchObject({ id: "created-task" });
+    await expect(
+      cloudUpdateTask(taskWriteClient, "updated-task", {
+        title: "updated",
+        plan_id: "plan-1",
+      }),
+    )
+      .resolves.toMatchObject({ id: "updated-task" });
+
+    expect(calls).toEqual([
+      {
+        method: "POST",
+        path: "/tasks",
+        body: { title: "created", plan_id: "plan-1" },
+      },
+      {
+        method: "PATCH",
+        path: "/tasks/updated-task",
+        body: { title: "updated", plan_id: "plan-1" },
+      },
+    ]);
+  });
+
   test("update -> PATCH /v1/tasks/:id, unwraps { task }", async () => {
     const calls = installFetch(() => ({ body: { task: { id: "t2", title: "patched" } } }));
     const client = getTodosCloudClient(CLOUD_ENV)!;

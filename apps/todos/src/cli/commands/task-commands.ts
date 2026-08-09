@@ -756,6 +756,7 @@ export function registerTaskCommands(program: Command) {
     .option("-s, --status <status>", "Task status")
     .option("--list <id>", "Task list ID")
     .option("--task-list <id>", "Task list ID (alias for --list)")
+    .option("--plan <id>", "Assign to a plan")
     .option("-t, --tags <tags>", "Comma-separated tags")
     .option("--tag <tags>", "Comma-separated tags (alias for --tags)")
     .option("--metadata-json <json>", "JSON object merged into task metadata")
@@ -800,6 +801,12 @@ export function registerTaskCommands(program: Command) {
           const taskListId = opts.list
             ? await cloudResolveTaskListRef(cloud, opts.list, projectId)
             : undefined;
+          const plan = opts.plan
+            ? await cloudResolvePlan(cloud, opts.plan, projectId)
+            : null;
+          if (opts.plan && !plan) {
+            throw new Error(`Could not resolve plan ID or slug: ${opts.plan}`);
+          }
           cloudResult = await cloudUpsertTaskByFingerprint(cloud, {
             fingerprint: opts.fingerprint,
             title: opts.title,
@@ -812,6 +819,7 @@ export function registerTaskCommands(program: Command) {
             working_dir: opts.workingDir ? resolve(opts.workingDir) : process.cwd(),
             project_id: projectId,
             assigned_to: opts.assign,
+            plan_id: plan?.id,
           });
         } catch (e) {
           handleError(e);
@@ -835,6 +843,7 @@ export function registerTaskCommands(program: Command) {
         }
         return id;
       })() : undefined;
+      const planId = opts.plan ? resolvePlanId(opts.plan) : undefined;
       let result;
       try {
         result = upsertTaskByFingerprint({
@@ -849,6 +858,7 @@ export function registerTaskCommands(program: Command) {
           working_dir: opts.workingDir ? resolve(opts.workingDir) : process.cwd(),
           project_id: projectId,
           assigned_to: opts.assign,
+          plan_id: planId,
           agent_id: globalOpts.agent,
           session_id: globalOpts.session,
         });

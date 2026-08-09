@@ -10,6 +10,7 @@
  */
 import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
 import { normalizeStorageMode } from "@hasna/contracts/mode";
+import { randomUUID } from "node:crypto";
 import { resolve as resolvePath } from "node:path";
 import type { Agent, CreatePlanInput, CreateTaskListInput, CreateTemplateInput, Plan, PlanProjectLinkResult, PlanProjectLinkRollbackResult, Project, ProjectTaskListEnsureResult, ProjectTaskListRollbackResult, RegisterAgentInput, StaleLockHandoffReceipt, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList, TaskTemplate, TemplateWithTasks, UpdatePlanInput, UpdateTaskListInput } from "../types/index.js";
 import { isBlockingDependencyStatus } from "../types/index.js";
@@ -987,7 +988,12 @@ export async function cloudCreateTask(client: HasnaStorageClient, input: Record<
     // The /v1 task route does not yet implement Idempotency-Key replay
     // deduplication. Any transient/error response after a store write can
     // therefore replay one logical create into multiple tasks.
-    () => client.create<unknown>("tasks", input, { retry: false }),
+    () => client.transport.post<unknown>("/tasks", input, {
+      // Keep the generic storage client's create semantics while using the same
+      // /v1-relative transport as the known-good hosted fingerprint upsert.
+      idempotencyKey: randomUUID(),
+      retry: false,
+    }),
     ["PARENT_TASK_NOT_FOUND"],
   ));
   if (!created || typeof created.id !== "string" || !created.id.trim()) {
@@ -1019,7 +1025,7 @@ export async function cloudCreateTask(client: HasnaStorageClient, input: Record<
 
 /** Update a task (`PATCH /v1/tasks/:id`). */
 export async function cloudUpdateTask(client: HasnaStorageClient, id: string, patch: Record<string, unknown>): Promise<Task> {
-  return unwrapTask(await client.update<unknown>("tasks", id, patch));
+  return unwrapTask(await client.transport.patch<unknown>(`/tasks/${encodeURIComponent(id)}`, patch));
 }
 
 /** Delete a task (`DELETE /v1/tasks/:id`); resolves for 2xx and 404. */
