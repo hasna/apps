@@ -51,6 +51,7 @@ describe("task-manifest PostgreSQL transaction contract", () => {
 
   test("treats an exact delivered outbox row as a retry-safe success", async () => {
     const outboxId = "a0000000-0000-4000-8000-000000000077";
+    const operationId = "postgres-delivery-operation";
     let status: "pending" | "delivered" = "pending";
     let attempts = 0;
     const transactionQueries: Array<{ sql: string; params?: unknown[] }> = [];
@@ -62,6 +63,12 @@ describe("task-manifest PostgreSQL transaction contract", () => {
         return fn({
           async query(sql, params) {
             transactionQueries.push({ sql, params });
+            if (/^\s*SELECT\b/i.test(sql) && sql.includes("r.operation_id")) {
+              return params?.[0] === "tenant-postgres-delivery" && params?.[1] === outboxId
+                ? { rows: [{ operation_id: operationId }] }
+                : { rows: [] };
+            }
+            if (sql.includes("pg_advisory_xact_lock")) return { rows: [] };
             if (/^\s*UPDATE todos_task_manifest_outbox\b/i.test(sql)) {
               if (params?.[1] === outboxId && params?.[2] === "tenant-postgres-delivery" && status === "pending") {
                 status = "delivered";
@@ -81,6 +88,7 @@ describe("task-manifest PostgreSQL transaction contract", () => {
       },
     };
     const authority = createPostgresTodosTaskManifestAuthority(client, {
+      service: "manifest-delivery-test",
       tenantId: "tenant-postgres-delivery",
       now: () => "2026-08-07T00:00:00.000Z",
     });
@@ -90,12 +98,33 @@ describe("task-manifest PostgreSQL transaction contract", () => {
 
     expect(status).toBe("delivered");
     expect(attempts).toBe(1);
-    const retryRead = transactionQueries.find((entry) =>
-      /^\s*SELECT\b/i.test(entry.sql) && entry.sql.includes("todos_task_manifest_outbox")
+    const operationReads = transactionQueries.filter((entry) =>
+      /^\s*SELECT\b/i.test(entry.sql) && entry.sql.includes("r.operation_id")
     );
-    expect(retryRead?.params).toEqual(["tenant-postgres-delivery", outboxId]);
-    expect(retryRead?.sql).toMatch(/\br\.tenant_id = \$1\b/);
-    expect(retryRead?.sql).toMatch(/\bo\.id = \$2\b/);
+    expect(operationReads).toHaveLength(2);
+    expect(operationReads.every((entry) =>
+      entry.params?.[0] === "tenant-postgres-delivery" && entry.params?.[1] === outboxId
+    )).toBe(true);
+    expect(operationReads[0]?.sql).toMatch(/\br\.tenant_id = \$1\b/);
+    expect(operationReads[0]?.sql).toMatch(/\bo\.id = \$2\b/);
+    const operationLocks = transactionQueries.filter((entry) =>
+      entry.sql.includes("pg_advisory_xact_lock")
+    );
+    expect(operationLocks).toHaveLength(2);
+    expect(operationLocks.every((entry) =>
+      entry.params?.[0] === `manifest-delivery-test\u001f${operationId}`
+    )).toBe(true);
+    const firstOperationRead = transactionQueries.findIndex((entry) =>
+      /^\s*SELECT\b/i.test(entry.sql) && entry.sql.includes("r.operation_id")
+    );
+    const firstOperationLock = transactionQueries.findIndex((entry) =>
+      entry.sql.includes("pg_advisory_xact_lock")
+    );
+    const firstDeliveryUpdate = transactionQueries.findIndex((entry) =>
+      /^\s*UPDATE todos_task_manifest_outbox\b/i.test(entry.sql)
+    );
+    expect(firstOperationRead).toBeLessThan(firstOperationLock);
+    expect(firstOperationLock).toBeLessThan(firstDeliveryUpdate);
   });
 
   test("uses one parameterized bounded read-only query for exact plan binding recovery", async () => {
