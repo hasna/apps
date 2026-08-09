@@ -1456,6 +1456,22 @@ describe("no-cloud gate: this package's inlined declaration is attributed, not e
     );
   });
 
+  test("packed scans skip an oversized source member and still inspect bounded members", () => {
+    const oversizedSource = `export const padding = ${JSON.stringify("x".repeat(5 * 1024 * 1024))};\n`;
+    withTarball(
+      {
+        "package.json": JSON.stringify({ name: "iapp-large", version: "1.0.0", files: ["dist"] }),
+        "dist/oversized.js": oversizedSource,
+        "dist/bounded.js": `export const runtime = "${RETIRED}";\n`,
+      },
+      (report) => {
+        expect(report.scanMode).toBe("packed_artifact");
+        expect(patterns(report)).toEqual([`dist/bounded.js:${RETIRED}`]);
+        expect(report.verdict).toBe("failed");
+      },
+    );
+  });
+
   test("PROOF: a credential sitting NEXT TO the inlined declaration is still reported", () => {
     // Per-occurrence, not per-file. Both previous attempts returned early for
     // the whole file, which is what took the credential detectors with them.

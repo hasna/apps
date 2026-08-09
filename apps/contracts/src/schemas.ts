@@ -1,8 +1,12 @@
 import { createHash } from "node:crypto";
+import {
+  createDeploymentSchemas,
+  DEPLOYMENT_SCHEMA_IDS,
+} from "./deployment";
 import { z } from "zod";
 
 export const CONTRACTS_PACKAGE_NAME = "@hasna/contracts";
-export const CONTRACTS_PACKAGE_VERSION = "0.10.2";
+export const CONTRACTS_PACKAGE_VERSION = "0.10.3";
 
 export const SCHEMA_IDS = {
   actorRef: "hasna.actor_ref.v1",
@@ -5661,9 +5665,21 @@ export const ALLOWED_BIN_SUFFIXES = [
   "-doctor"
 ] as const;
 
+/**
+ * Canonical Hasna operator entrypoints whose public name intentionally differs
+ * from the package/app name. Keep this registry exact: it is not permission
+ * for arbitrary `hasna-*` binaries.
+ */
+const CANONICAL_HASNA_BIN_ALIASES: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  deployment: Object.freeze(["hasna-deploy"])
+});
+
 /** All bin names an app named `name` may declare by default. */
 export function allowedBinsForName(name: string): string[] {
-  return ALLOWED_BIN_SUFFIXES.map((suffix) => `${name}${suffix}`);
+  return [
+    ...ALLOWED_BIN_SUFFIXES.map((suffix) => `${name}${suffix}`),
+    ...(CANONICAL_HASNA_BIN_ALIASES[name] ?? [])
+  ];
 }
 
 /**
@@ -6639,7 +6655,69 @@ export function validateCommsTaggedMessage(input: {
   return { success: true, tag, metadata: parsed.data };
 }
 
-export const ContractSchemaRegistry = {
+const DEPLOYMENT_SCHEMAS = createDeploymentSchemas({
+  actorPointer: ActorPointerSchema,
+  costEstimate: CostEstimateSchema,
+  decisionEnvelope: DecisionEnvelopeSchema,
+  evidencePointer: EvidencePointerSchema,
+  providerCapabilityCard: ProviderCapabilityCardSchema,
+  resourcePointer: ResourcePointerSchema,
+  validationPlan: ValidationPlanSchema,
+  workRun: WorkRunSchema,
+  schemaId: SchemaIdSchema,
+  timestamp: TimestampSchema,
+  uri: UriSchema,
+  sha256Digest: Sha256DigestSchema,
+  relativeProjectPath: RelativeProjectPathSchema,
+  providerSideEffectClass: ProviderSideEffectClassSchema,
+});
+
+export const {
+  ProductProjectionRefSchema,
+  IntentSnapshotRefSchema,
+  VerifiedSourceCandidateRefSchema,
+  BuildArtifactRefSchema,
+  ArtifactAttestationRefSchema,
+  EnvironmentBindingRefSchema,
+  DeploymentRequestRefSchema,
+  DeploymentPlanRefSchema,
+  DeploymentApprovalDecisionRefSchema,
+  DeploymentAttemptRefSchema,
+  ProviderReceiptRefSchema,
+  DeploymentReceiptRefSchema,
+  ProductProjectionSchema,
+  IntentSnapshotSchema,
+  VerifiedSourceCandidateSchema,
+  BuildArtifactSchema,
+  ArtifactAttestationSchema,
+  EnvironmentBindingSchema,
+  DeploymentRequestSchema,
+  DeploymentActionSchema,
+  DeploymentPlanSchema,
+  DeploymentApprovalDecisionSchema,
+  DeploymentAttemptSchema,
+  ProviderReceiptSchema,
+  DeploymentReceiptSchema,
+  LaunchEvidenceSchema,
+  DeploymentSchemaRegistry,
+} = DEPLOYMENT_SCHEMAS;
+
+export type ProductProjection = z.output<typeof ProductProjectionSchema>;
+export type IntentSnapshot = z.output<typeof IntentSnapshotSchema>;
+export type VerifiedSourceCandidate = z.output<typeof VerifiedSourceCandidateSchema>;
+export type BuildArtifact = z.output<typeof BuildArtifactSchema>;
+export type ArtifactAttestation = z.output<typeof ArtifactAttestationSchema>;
+export type EnvironmentBinding = z.output<typeof EnvironmentBindingSchema>;
+export type DeploymentRequest = z.output<typeof DeploymentRequestSchema>;
+export type DeploymentAction = z.output<typeof DeploymentActionSchema>;
+export type DeploymentPlan = z.output<typeof DeploymentPlanSchema>;
+export type DeploymentApprovalDecision = z.output<typeof DeploymentApprovalDecisionSchema>;
+export type DeploymentAttempt = z.output<typeof DeploymentAttemptSchema>;
+export type ProviderReceipt = z.output<typeof ProviderReceiptSchema>;
+export type DeploymentReceipt = z.output<typeof DeploymentReceiptSchema>;
+export type LaunchEvidence = z.output<typeof LaunchEvidenceSchema>;
+
+const CoreContractSchemaRegistry = {
   [SCHEMA_IDS.actorRef]: ActorRefSchema,
   [SCHEMA_IDS.resourceRef]: ResourceRefSchema,
   [SCHEMA_IDS.evidenceRef]: EvidenceRefSchema,
@@ -6676,8 +6754,14 @@ export const ContractSchemaRegistry = {
   [SCHEMA_IDS.release]: ReleaseSchema,
   [SCHEMA_IDS.rolloutRecord]: RolloutRecordSchema,
   [SCHEMA_IDS.announcement]: AnnouncementSchema,
-  [SCHEMA_IDS.audience]: AudienceSchema
+  [SCHEMA_IDS.audience]: AudienceSchema,
 } as const;
+
+export const ContractSchemaRegistry:
+  typeof CoreContractSchemaRegistry & typeof DeploymentSchemaRegistry = {
+  ...CoreContractSchemaRegistry,
+  ...DeploymentSchemaRegistry,
+};
 
 export type KnownSchemaId = keyof typeof ContractSchemaRegistry;
 
@@ -6715,6 +6799,19 @@ export type ContractBySchemaId = {
   [SCHEMA_IDS.rolloutRecord]: RolloutRecord;
   [SCHEMA_IDS.announcement]: Announcement;
   [SCHEMA_IDS.audience]: Audience;
+  [DEPLOYMENT_SCHEMA_IDS.productProjection]: ProductProjection;
+  [DEPLOYMENT_SCHEMA_IDS.intentSnapshot]: IntentSnapshot;
+  [DEPLOYMENT_SCHEMA_IDS.verifiedSourceCandidate]: VerifiedSourceCandidate;
+  [DEPLOYMENT_SCHEMA_IDS.buildArtifact]: BuildArtifact;
+  [DEPLOYMENT_SCHEMA_IDS.artifactAttestation]: ArtifactAttestation;
+  [DEPLOYMENT_SCHEMA_IDS.environmentBinding]: EnvironmentBinding;
+  [DEPLOYMENT_SCHEMA_IDS.deploymentRequest]: DeploymentRequest;
+  [DEPLOYMENT_SCHEMA_IDS.deploymentPlan]: DeploymentPlan;
+  [DEPLOYMENT_SCHEMA_IDS.deploymentApprovalDecision]: DeploymentApprovalDecision;
+  [DEPLOYMENT_SCHEMA_IDS.deploymentAttempt]: DeploymentAttempt;
+  [DEPLOYMENT_SCHEMA_IDS.providerReceipt]: ProviderReceipt;
+  [DEPLOYMENT_SCHEMA_IDS.deploymentReceipt]: DeploymentReceipt;
+  [DEPLOYMENT_SCHEMA_IDS.launchEvidence]: LaunchEvidence;
 };
 
 export type ActorRefInput = z.input<typeof ActorRefSchema>;
@@ -6753,6 +6850,20 @@ export type AudienceInput = z.input<typeof AudienceSchema>;
 export type ActorPointerInput = z.input<typeof ActorPointerSchema>;
 export type ResourcePointerInput = z.input<typeof ResourcePointerSchema>;
 export type EvidencePointerInput = z.input<typeof EvidencePointerSchema>;
+export type ProductProjectionInput = z.input<typeof ProductProjectionSchema>;
+export type IntentSnapshotInput = z.input<typeof IntentSnapshotSchema>;
+export type VerifiedSourceCandidateInput = z.input<typeof VerifiedSourceCandidateSchema>;
+export type BuildArtifactInput = z.input<typeof BuildArtifactSchema>;
+export type ArtifactAttestationInput = z.input<typeof ArtifactAttestationSchema>;
+export type EnvironmentBindingInput = z.input<typeof EnvironmentBindingSchema>;
+export type DeploymentRequestInput = z.input<typeof DeploymentRequestSchema>;
+export type DeploymentActionInput = z.input<typeof DeploymentActionSchema>;
+export type DeploymentPlanInput = z.input<typeof DeploymentPlanSchema>;
+export type DeploymentApprovalDecisionInput = z.input<typeof DeploymentApprovalDecisionSchema>;
+export type DeploymentAttemptInput = z.input<typeof DeploymentAttemptSchema>;
+export type ProviderReceiptInput = z.input<typeof ProviderReceiptSchema>;
+export type DeploymentReceiptInput = z.input<typeof DeploymentReceiptSchema>;
+export type LaunchEvidenceInput = z.input<typeof LaunchEvidenceSchema>;
 
 export type ContractInputBySchemaId = {
   [SCHEMA_IDS.actorRef]: ActorRefInput;
@@ -6788,4 +6899,17 @@ export type ContractInputBySchemaId = {
   [SCHEMA_IDS.rolloutRecord]: RolloutRecordInput;
   [SCHEMA_IDS.announcement]: AnnouncementInput;
   [SCHEMA_IDS.audience]: AudienceInput;
+  [DEPLOYMENT_SCHEMA_IDS.productProjection]: ProductProjectionInput;
+  [DEPLOYMENT_SCHEMA_IDS.intentSnapshot]: IntentSnapshotInput;
+  [DEPLOYMENT_SCHEMA_IDS.verifiedSourceCandidate]: VerifiedSourceCandidateInput;
+  [DEPLOYMENT_SCHEMA_IDS.buildArtifact]: BuildArtifactInput;
+  [DEPLOYMENT_SCHEMA_IDS.artifactAttestation]: ArtifactAttestationInput;
+  [DEPLOYMENT_SCHEMA_IDS.environmentBinding]: EnvironmentBindingInput;
+  [DEPLOYMENT_SCHEMA_IDS.deploymentRequest]: DeploymentRequestInput;
+  [DEPLOYMENT_SCHEMA_IDS.deploymentPlan]: DeploymentPlanInput;
+  [DEPLOYMENT_SCHEMA_IDS.deploymentApprovalDecision]: DeploymentApprovalDecisionInput;
+  [DEPLOYMENT_SCHEMA_IDS.deploymentAttempt]: DeploymentAttemptInput;
+  [DEPLOYMENT_SCHEMA_IDS.providerReceipt]: ProviderReceiptInput;
+  [DEPLOYMENT_SCHEMA_IDS.deploymentReceipt]: DeploymentReceiptInput;
+  [DEPLOYMENT_SCHEMA_IDS.launchEvidence]: LaunchEvidenceInput;
 };

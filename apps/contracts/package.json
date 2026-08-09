@@ -1,6 +1,6 @@
 {
   "name": "@hasna/contracts",
-  "version": "0.10.2",
+  "version": "0.10.3",
   "description": "Shared schemas and validators for Hasna open-source agent infrastructure contracts.",
   "type": "module",
   "license": "Apache-2.0",
@@ -29,6 +29,15 @@
       "types": "./dist/schemas.d.ts",
       "import": "./dist/schemas.js"
     },
+    "./deployment": {
+      "types": "./dist/deployment/index.d.ts",
+      "import": "./dist/deployment/index.js"
+    },
+    "./deployment/artifacts": {
+      "types": "./dist/deployment-artifacts.d.ts",
+      "import": "./dist/deployment-artifacts.js"
+    },
+    "./deployment/artifacts/*": "./generated/deployment/v1/*",
     "./validators": {
       "types": "./dist/validators.d.ts",
       "import": "./dist/validators.js"
@@ -92,6 +101,7 @@
     "examples",
     "templates/adopter",
     "generated/todos/v1",
+    "generated/deployment/v1",
     "CONTRACT.md",
     "docker-compose.yml",
     "hasna.contract.json",
@@ -99,7 +109,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "bun run todos:check && rm -rf dist && bun build src/index.ts src/schemas.ts src/validators.ts src/no-cloud.ts src/server-backend.ts src/service-contract.ts src/secure-local-store.ts src/conformance.ts src/artifact-scan.ts src/kit/generate.ts src/auth/index.ts src/sdk/generate.ts src/client/transport.ts src/client/storage.ts --root src --outdir dist --target bun && bun build src/todos/index.ts --root src --outdir dist --target bun --packages external && bun build src/cli/index.ts --outdir dist/cli --target bun && cp src/cli/contracts-cli.ts dist/cli/contracts-cli.js && cp src/hasna.contract.schema.json dist/hasna.contract.schema.json && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
+    "build": "bun run deployment:check && bun run todos:check && rm -rf dist && bun build src/index.ts src/schemas.ts src/validators.ts src/deployment.ts src/deployment/index.ts src/deployment-artifacts.ts src/no-cloud.ts src/server-backend.ts src/service-contract.ts src/secure-local-store.ts src/conformance.ts src/artifact-scan.ts src/kit/generate.ts src/auth/index.ts src/sdk/generate.ts src/client/transport.ts src/client/storage.ts --root src --outdir dist --target bun && bun build src/todos/index.ts --root src --outdir dist --target bun --packages external && bun build src/cli/index.ts --outdir dist/cli --target bun && cp src/cli/contracts-cli.ts dist/cli/contracts-cli.js && cp src/hasna.contract.schema.json dist/hasna.contract.schema.json && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test --timeout 120000",
     "lint": "tsc --noEmit",
@@ -110,6 +120,8 @@
     "pack:check": "bun pm pack --dry-run --ignore-scripts",
     "todos:generate": "bun scripts/generate-todos-contract.ts",
     "todos:check": "bun scripts/generate-todos-contract.ts --check",
+    "deployment:generate": "bun scripts/generate-deployment-contract.ts",
+    "deployment:check": "bun scripts/generate-deployment-contract.ts --check",
     "todos:hygiene": "bun scripts/check-todos-text-hygiene.ts",
     "dev:cli": "bun run src/cli/index.ts",
     "prepack": "bun run verify:release",
@@ -129,7 +141,8 @@
   },
   "dependencies": {
     "commander": "^13.1.0",
-    "zod": "^3.25.76"
+    "zod": "^3.25.76",
+    "zod-to-json-schema": "^3.24.6"
   },
   "devDependencies": {
     "@types/bun": "^1.2.4",

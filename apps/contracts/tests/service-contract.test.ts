@@ -39,6 +39,9 @@ describe("service contract helpers", () => {
     expect(allowedBinsForName("todos")).toContain("todos");
     expect(allowedBinsForName("todos")).toContain("todos-serve");
     expect(allowedBinsForName("todos")).not.toContain("todos-sync");
+    expect(allowedBinsForName("deployment")).toContain("hasna-deploy");
+    expect(allowedBinsForName("deployment")).not.toContain("hasna-deployment");
+    expect(allowedBinsForName("todos")).not.toContain("hasna-deploy");
     expect(databaseUrlSecretRefFor("todos")).toBe("hasna/oss/todos/database-url");
     expect(defaultSqlitePathFor("todos")).toBe("~/.hasna/todos/todos.db");
   });
@@ -70,6 +73,36 @@ describe("service contract manifest validation", () => {
     const bad = { ...baseCliWithStore, bins: ["todos", "todos-sync"] };
     const r = validateServiceContractManifest(bad);
     expect(r.success).toBe(false);
+  });
+
+  test("accepts only the registered hasna-deploy alias for the deployment app", () => {
+    const deployment = {
+      ...baseCliWithStore,
+      name: "deployment",
+      bins: ["deployment", "hasna-deploy"],
+      storage: {
+        backend: "sqlite",
+        sqlitePath: "~/.hasna/deployment/deployment.db"
+      }
+    } as const;
+    expect(validateServiceContractManifest(deployment).success).toBe(true);
+
+    const wrongApp = validateServiceContractManifest({
+      ...baseCliWithStore,
+      bins: ["todos", "hasna-deploy"]
+    });
+    expect(wrongApp.success).toBe(false);
+    if (!wrongApp.success) {
+      expect(wrongApp.error.issues).toContainEqual(expect.objectContaining({
+        path: ["bins", 1],
+        message: expect.stringContaining('Bin "hasna-deploy" is not allowlisted for app "todos"')
+      }));
+    }
+
+    expect(validateServiceContractManifest({
+      ...deployment,
+      bins: ["deployment", "hasna-deployment"]
+    }).success).toBe(false);
   });
 
   test("rejects deprecated backend aliases in the manifest (strict enum)", () => {

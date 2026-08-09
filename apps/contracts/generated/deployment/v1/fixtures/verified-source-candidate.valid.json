@@ -1,0 +1,144 @@
+{
+  "branchRef": {
+    "id": "branch-release",
+    "kind": "artifact",
+    "tags": [
+      "deployment-fixture"
+    ],
+    "uri": "artifact://deployment-fixture/branch-release"
+  },
+  "commitSha": "0123456789abcdef0123456789abcdef01234567",
+  "createdAt": "2026-08-09T09:00:00.000Z",
+  "digest": "ae0668664ad166aec5e57a7990ce41b611cfa74f478a7e56a95a1a93f4bd70f0",
+  "evidenceRefs": [
+    {
+      "id": "verified-source-evidence",
+      "kind": "test_result",
+      "sha256": "6a23b335f15d09227dd883fe55efdea5febf6fb1ad360ab9d0af5e5a209ea3ec",
+      "summary": "Bounded evidence for verified-source-evidence",
+      "uri": "artifact://deployment-fixture/verified-source-evidence"
+    }
+  ],
+  "id": "source-candidate-example-app",
+  "intent": {
+    "digest": "6bc75f992f681a5cf96083897b0bfffdd3bb9304b4ec32891c944ecb3af522b9",
+    "id": "intent-example-app",
+    "schema": "hasna.intent_snapshot.v1"
+  },
+  "producer": {
+    "id": "agent-builder",
+    "kind": "agent",
+    "name": "Deployment Builder"
+  },
+  "pullRequestRef": {
+    "id": "pull-request-42",
+    "kind": "artifact",
+    "tags": [
+      "deployment-fixture"
+    ],
+    "uri": "artifact://deployment-fixture/pull-request-42"
+  },
+  "repositoryRef": {
+    "id": "repo-contract-fixture",
+    "kind": "repo",
+    "tags": [
+      "deployment-fixture"
+    ],
+    "uri": "repo://hasna/example-app"
+  },
+  "results": [
+    {
+      "evidenceRefs": [
+        {
+          "id": "source-integrity-result",
+          "kind": "test_result",
+          "sha256": "2d547e433715c3c6462aad9ea126032b600a244626cd38a8f2f65f829fd5e069",
+          "summary": "Bounded evidence for source-integrity-result",
+          "uri": "artifact://deployment-fixture/source-integrity-result"
+        }
+      ],
+      "id": "source-integrity",
+      "kind": "source_integrity",
+      "status": "passed"
+    },
+    {
+      "evidenceRefs": [
+        {
+          "id": "source-review-result",
+          "kind": "test_result",
+          "sha256": "5858811c63f859f6062e26d72d4969afa6a24e1278e8247d832186a1bd6e9263",
+          "summary": "Bounded evidence for source-review-result",
+          "uri": "artifact://deployment-fixture/source-review-result"
+        }
+      ],
+      "id": "independent-review",
+      "kind": "review",
+      "status": "passed"
+    }
+  ],
+  "schema": "hasna.verified_source_candidate.v1",
+  "status": "verified",
+  "treeSha": "89abcdef0123456789abcdef0123456789abcdef",
+  "validationPlan": {
+    "checks": [
+      {
+        "expected": "Immutable evidence reviewed",
+        "id": "evidence-review",
+        "kind": "manual",
+        "required": true,
+        "resourceRefs": []
+      }
+    ],
+    "createdAt": "2026-08-09T09:00:00.000Z",
+    "id": "validation-source",
+    "objective": "Verify immutable deployment inputs and observable outcomes",
+    "requiredEvidenceKinds": [
+      "test_result"
+    ],
+    "schema": "hasna.validation_plan.v1",
+    "verifier": {
+      "id": "agent-verifier",
+      "kind": "agent",
+      "name": "Independent Verifier"
+    }
+  },
+  "verificationRun": {
+    "actor": {
+      "id": "agent-verifier",
+      "kind": "agent",
+      "name": "Independent Verifier"
+    },
+    "constraints": [
+      "credential-zero execution"
+    ],
+    "costEstimates": [],
+    "createdAt": "2026-08-09T09:00:00.000Z",
+    "decisions": [],
+    "evidenceRefs": [
+      {
+        "id": "verification-run-evidence",
+        "kind": "test_result",
+        "sha256": "8f1d2268bd8998f5c15af7b1de37de301238114e3f69d85de0f7f712ddcdeb25",
+        "summary": "Bounded evidence for verification-run-evidence",
+        "uri": "artifact://deployment-fixture/verification-run-evidence"
+      }
+    ],
+    "finishedAt": "2026-08-09T09:05:00.000Z",
+    "id": "verification-run",
+    "objective": "Produce verified deployment evidence",
+    "proofBundleRefs": [],
+    "resourceRefs": [],
+    "schema": "hasna.work_run.v1",
+    "startedAt": "2026-08-09T09:00:00.000Z",
+    "status": "succeeded",
+    "validationPlanRefs": []
+  },
+  "verifiedAt": "2026-08-09T09:10:00.000Z",
+  "verifiers": [
+    {
+      "id": "agent-verifier",
+      "kind": "agent",
+      "name": "Independent Verifier"
+    }
+  ]
+}
