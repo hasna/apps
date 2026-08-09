@@ -1118,8 +1118,10 @@ async function fetchRetryCapability(client: HasnaStorageClient): Promise<boolean
     : undefined;
   const resolved = resolveOpenApiSchema(document, schema);
   const properties = resolved?.["properties"];
-  return !!properties && typeof properties === "object" && !Array.isArray(properties) &&
-    Object.prototype.hasOwnProperty.call(properties, "retry");
+  if (!properties || typeof properties !== "object" || Array.isArray(properties)) return false;
+  const retry = (properties as Record<string, unknown>)["retry"];
+  return !!retry && typeof retry === "object" && !Array.isArray(retry) &&
+    (retry as Record<string, unknown>)["type"] === "boolean";
 }
 
 async function requireRetryCapability(client: HasnaStorageClient): Promise<void> {

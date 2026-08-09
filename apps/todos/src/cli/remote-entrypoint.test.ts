@@ -284,6 +284,92 @@ describe("remote CLI entrypoint authority boundary", () => {
     }
   });
 
+  test("built fail helper rejects a non-boolean retry schema before mutation", async () => {
+    const requests: Array<{ method: string; path: string; body: unknown }> = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        const body = await request.json().catch(() => ({}));
+        requests.push({ method: request.method, path: url.pathname, body });
+        if (url.pathname === "/v1/openapi.json" && request.method === "GET") {
+          return Response.json({
+            openapi: "3.1.0",
+            paths: {
+              "/v1/tasks/{id}/fail": {
+                post: {
+                  requestBody: {
+                    content: {
+                      "application/json": {
+                        schema: { $ref: "#/components/schemas/FailTaskInput" },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            components: {
+              schemas: {
+                FailTaskInput: {
+                  type: "object",
+                  properties: {
+                    agent_id: { type: "string" },
+                    reason: { type: "string" },
+                    retry: { type: "string" },
+                  },
+                },
+              },
+            },
+          });
+        }
+        if (url.pathname === `/v1/tasks/${TASK_FIXTURE_ID}/fail` && request.method === "POST") {
+          return Response.json({
+            result: {
+              task: { id: TASK_FIXTURE_ID, status: "failed" },
+              retryTask: { id: OTHER_TASK_FIXTURE_ID, status: "pending" },
+            },
+          });
+        }
+        return Response.json({ error: "fixture route missing" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-fail-route-incompatible-"));
+    tempRoots.push(root);
+    const cwd = join(root, "cwd");
+    const home = join(root, "home");
+    mkdirSync(cwd);
+    mkdirSync(home);
+    const localDbPath = join(root, "must-not-exist", "todos.db");
+    const env = {
+      PATH: process.env.PATH ?? "",
+      BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
+      HOME: home,
+      TMPDIR: root,
+      LANG: "C.UTF-8",
+      TODOS_DB_PATH: localDbPath,
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
+      HASNA_TODOS_API_KEY: "fixture-remote-key",
+    };
+    const before = recursiveInventory(cwd);
+    try {
+      const result = await runCli(executable, [
+        "--agent", "nausicaa", "--json", "fail", TASK_FIXTURE_ID, "--reason", "remote reason", "--retry",
+      ], env, cwd);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("REMOTE_RETRY_UNSUPPORTED");
+      expect(result.stderr).toContain("no failure mutation was sent");
+      expect(requests).toEqual([
+        { method: "GET", path: "/v1/openapi.json", body: {} },
+      ]);
+      expect(recursiveInventory(cwd)).toEqual(before);
+      expectNoLocalDatabase(home, localDbPath);
+    } finally {
+      server.stop(true);
+    }
+  });
+
   test("selects HTTP before local-capable command modules initialize", () => {
     const result: TodosCliAuthorityInitialization = initializeTodosCliAuthority(
       ["--json", "status"],
