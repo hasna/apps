@@ -380,6 +380,160 @@ export function resolveAwsAccountProfile(
   };
 }
 
+function normalizeAwsEnvPart(value: string): string {
+  return value
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+/**
+ * Resolve one environment selector to a remote secret name without touching AWS.
+ *
+ * Canonical provider secrets use `<provider>/oss/<workload>/<key>`, exposed as
+ * `<PROVIDER>_<WORKLOAD>_<KEY>`. Every remaining path segment participates in
+ * normalization, so aliases that collapse to the same environment name are
+ * rejected rather than selected by list order. A literal remote name remains a
+ * supported selector and takes precedence over canonical-name derivation.
+ */
+export function resolveAwsEnvSecretName(
+  provider: string,
+  envName: string,
+  remoteNames: readonly string[],
+): string {
+  const normalizedProvider = provider.trim().toLowerCase();
+  const normalizedEnvName = envName.trim();
+  if (!normalizedProvider) throw new Error("AWS provider must not be empty");
+  if (!normalizedEnvName) throw new Error("AWS environment selector must not be empty");
+
+  const names = [...new Set(remoteNames.map((name) => name.trim()).filter(Boolean))];
+  if (names.includes(normalizedEnvName)) return normalizedEnvName;
+
+  const matches = names.filter((name) => {
+    const segments = name.split("/");
+    if (segments.length < 4 || segments[0] !== normalizedProvider || segments[1] !== "oss") {
+      return false;
+    }
+    const envSegments = [normalizedProvider, ...segments.slice(2)].map(normalizeAwsEnvPart);
+    return envSegments.every(Boolean) && envSegments.join("_") === normalizedEnvName;
+  });
+
+  if (matches.length === 0) {
+    throw new Error(
+      `No AWS secret maps to environment variable "${normalizedEnvName}" for provider "${normalizedProvider}"`,
+    );
+  }
+  if (matches.length > 1) {
+    throw new Error(
+      `Multiple AWS secrets map to environment variable "${normalizedEnvName}" for provider ` +
+      `"${normalizedProvider}"; refusing an ambiguous selection`,
+    );
+  }
+  return matches[0];
+}
+
+async function readAwsStringSecretValue(
+  client: AwsClient,
+  secretId: string,
+  envName: string,
+  versionId?: string,
+): Promise<string> {
+  const result = await client.send(new GetSecretValueCommand({
+    SecretId: secretId,
+    VersionStage: "AWSCURRENT",
+    ...(versionId ? { VersionId: versionId } : {}),
+  }));
+  if (typeof result.SecretString !== "string") {
+    throw new Error(
+      `AWS secret selected for environment variable "${envName}" has no string AWSCURRENT value`,
+    );
+  }
+  return result.SecretString;
+}
+
+/** Resolve a provider-scoped environment selector and read one AWSCURRENT string. */
+export async function getAwsSecretValueForEnv(
+  provider: string,
+  envName: string,
+  options: AwsCommandOptions = {},
+): Promise<string> {
+  const normalizedEnvName = envName.trim();
+  if (!normalizedEnvName) throw new Error("AWS environment selector must not be empty");
+  const config = resolveAwsConfig(options);
+  const client = clientFactory(config);
+
+  // Preserve the 0.2.19 direct-name contract without requiring ListSecrets.
+  // Only a definite not-found result falls back to canonical metadata lookup;
+  // access, transport, decoding, and non-string failures remain fatal.
+  try {
+    return await readAwsStringSecretValue(client, normalizedEnvName, normalizedEnvName);
+  } catch (error) {
+    if (!isResourceNotFound(error)) throw error;
+  }
+
+  const remote: RemoteSecretMetadata[] = [];
+  const seenTokens = new Set<string>();
+  let nextToken: string | undefined;
+  do {
+    let result;
+    try {
+      result = await client.send(new ListSecretsCommand({ NextToken: nextToken, MaxResults: 100 }));
+    } catch (error) {
+      throw new Error(
+        `Unable to list AWS secret metadata for environment variable "${normalizedEnvName}"`,
+        { cause: error },
+      );
+    }
+    for (const secret of result.SecretList ?? []) {
+      if (!secret.Name) continue;
+      const versionId = currentVersionId(secret.SecretVersionsToStages);
+      remote.push({
+        name: secret.Name,
+        ...(secret.ARN ? { arn: secret.ARN } : {}),
+        ...(versionId ? { versionId } : {}),
+      });
+    }
+    nextToken = result.NextToken;
+    if (nextToken) {
+      if (seenTokens.has(nextToken)) {
+        throw new Error(
+          `AWS secret metadata pagination repeated for environment variable "${normalizedEnvName}"`,
+        );
+      }
+      seenTokens.add(nextToken);
+    }
+  } while (nextToken);
+
+  const secretName = resolveAwsEnvSecretName(
+    provider,
+    normalizedEnvName,
+    remote.map(({ name }) => name),
+  );
+  const selected = remote.find(({ name }) => name === secretName)!;
+  if (!selected.versionId) {
+    throw new Error(
+      `AWS secret selected for environment variable "${normalizedEnvName}" has no AWSCURRENT version`,
+    );
+  }
+  try {
+    return await readAwsStringSecretValue(
+      client,
+      selected.arn ?? selected.name,
+      normalizedEnvName,
+      selected.versionId,
+    );
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("has no string AWSCURRENT value")) {
+      throw error;
+    }
+    throw new Error(
+      `Unable to read AWS secret selected for environment variable "${normalizedEnvName}"`,
+      { cause: error },
+    );
+  }
+}
+
 /** Read one exact AWSCURRENT string value without mutating the local vault. */
 export async function getAwsSecretValue(
   secretId: string,

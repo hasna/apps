@@ -4,10 +4,12 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { getDb, resetDb } from "../src/db.js";
 import {
+  getAwsSecretValueForEnv,
   getAwsSecretValue,
   pushSecret,
   resolveAwsAccountProfile,
   resolveAwsConfig,
+  resolveAwsEnvSecretName,
   setAwsClientFactoryForTests,
   syncAll,
 } from "../src/aws.js";
@@ -166,6 +168,276 @@ describe("AWS account-scoped exec selection", () => {
       },
     ]);
     expect(await _store.getSecret("EXAMPLE_NPM_TOKEN")).toBeUndefined();
+  });
+
+  it("maps one canonical provider path to its normalized environment name", () => {
+    expect(resolveAwsEnvSecretName(
+      "hasna",
+      "HASNA_TODOS_API_KEY",
+      ["unrelated/oss/todos/api-key", "hasna/oss/todos/api-key"],
+    )).toBe("hasna/oss/todos/api-key");
+  });
+
+  it("preserves an exact remote-name selector", () => {
+    expect(resolveAwsEnvSecretName(
+      "hasna",
+      "HASNA_LEGACY_TOKEN",
+      ["hasna/oss/legacy/token", "HASNA_LEGACY_TOKEN"],
+    )).toBe("HASNA_LEGACY_TOKEN");
+  });
+
+  it("refuses canonical names that collide after environment normalization", () => {
+    expect(() => resolveAwsEnvSecretName(
+      "hasna",
+      "HASNA_TODOS_API_KEY",
+      ["hasna/oss/todos/api-key", "hasna/oss/todos/api_key"],
+    )).toThrow("Multiple AWS secrets map to environment variable");
+  });
+
+  it("resolves a canonical env selector through every metadata page before one value read", async () => {
+    const sent: Array<{ name: string; input: Record<string, unknown> }> = [];
+    setAwsClientFactoryForTests(() => ({
+      send: async (command: any) => {
+        sent.push({ name: command.constructor.name, input: command.input });
+        if (command.constructor.name === "ListSecretsCommand") {
+          if (!command.input.NextToken) {
+            return {
+              SecretList: [{
+                Name: "hasna/oss/other/token",
+                SecretVersionsToStages: { "fixture-other-version": ["AWSCURRENT"] },
+              }],
+              NextToken: "fixture-page-2",
+            };
+          }
+          return {
+            SecretList: [{
+              Name: "hasna/oss/todos/api-key",
+              SecretVersionsToStages: { "fixture-current-version": ["AWSCURRENT"] },
+            }],
+          };
+        }
+        if (command.constructor.name === "GetSecretValueCommand") {
+          if (command.input.SecretId === "HASNA_TODOS_API_KEY") {
+            throw { name: "ResourceNotFoundException" };
+          }
+          return { SecretString: "fixture-account-value", VersionId: "fixture-current-version" };
+        }
+        throw new Error("unexpected command");
+      },
+    }));
+
+    const value = await getAwsSecretValueForEnv("hasna", "HASNA_TODOS_API_KEY", {
+      credentialMode: "profile",
+      profile: "hasna-example-infra",
+      region: "eu-west-1",
+    });
+
+    expect(value).toBe("fixture-account-value");
+    expect(sent.map(({ name }) => name)).toEqual([
+      "GetSecretValueCommand",
+      "ListSecretsCommand",
+      "ListSecretsCommand",
+      "GetSecretValueCommand",
+    ]);
+    expect(sent[3]?.input).toEqual({
+      SecretId: "hasna/oss/todos/api-key",
+      VersionStage: "AWSCURRENT",
+      VersionId: "fixture-current-version",
+    });
+  });
+
+  it("uses an exact remote name without requiring list permission", async () => {
+    const sent: string[] = [];
+    setAwsClientFactoryForTests(() => ({
+      send: async (command: any) => {
+        const name = command.constructor.name;
+        sent.push(name);
+        if (name === "GetSecretValueCommand") {
+          return { SecretString: "fixture-legacy-value", VersionId: "fixture-current-version" };
+        }
+        throw new Error("list permission refused");
+      },
+    }));
+
+    expect(await getAwsSecretValueForEnv("hasna", "HASNA_LEGACY_TOKEN", {
+      credentialMode: "profile",
+      profile: "hasna-example-infra",
+    })).toBe("fixture-legacy-value");
+    expect(sent).toEqual(["GetSecretValueCommand"]);
+  });
+
+  it("fails closed before a value read on zero or ambiguous normalized matches", async () => {
+    for (const secretNames of [
+      ["hasna/oss/other/token"],
+      ["hasna/oss/todos/api-key", "hasna/oss/todos/api_key"],
+    ]) {
+      const sent: string[] = [];
+      setAwsClientFactoryForTests(() => ({
+        send: async (command: any) => {
+          const name = command.constructor.name;
+          sent.push(name);
+          if (name === "GetSecretValueCommand") throw { name: "ResourceNotFoundException" };
+          if (name === "ListSecretsCommand") {
+            return {
+              SecretList: secretNames.map((Name) => ({
+                Name,
+                SecretVersionsToStages: { "fixture-current-version": ["AWSCURRENT"] },
+              })),
+            };
+          }
+          throw new Error("value read must not run");
+        },
+      }));
+
+      let message = "";
+      try {
+        await getAwsSecretValueForEnv("hasna", "HASNA_TODOS_API_KEY", {
+          credentialMode: "profile",
+          profile: "hasna-example-infra",
+        });
+      } catch (error: any) {
+        message = error.message;
+      }
+      expect(message).toMatch(/No AWS secret maps|Multiple AWS secrets map/);
+      expect(message).not.toContain("hasna/oss/");
+      expect(sent).toEqual(["GetSecretValueCommand", "ListSecretsCommand"]);
+    }
+  });
+
+  it("detects a normalized collision introduced on a later metadata page", async () => {
+    const sent: string[] = [];
+    setAwsClientFactoryForTests(() => ({
+      send: async (command: any) => {
+        const name = command.constructor.name;
+        sent.push(name);
+        if (name === "GetSecretValueCommand") throw { name: "ResourceNotFoundException" };
+        if (name === "ListSecretsCommand" && !command.input.NextToken) {
+          return {
+            SecretList: [{
+              Name: "hasna/oss/todos/api-key",
+              SecretVersionsToStages: { "fixture-version-a": ["AWSCURRENT"] },
+            }],
+            NextToken: "fixture-page-2",
+          };
+        }
+        if (name === "ListSecretsCommand") {
+          return {
+            SecretList: [{
+              Name: "hasna/oss/todos/api_key",
+              SecretVersionsToStages: { "fixture-version-b": ["AWSCURRENT"] },
+            }],
+          };
+        }
+        throw new Error("value read must not run");
+      },
+    }));
+
+    await expect(getAwsSecretValueForEnv("hasna", "HASNA_TODOS_API_KEY", {
+      credentialMode: "profile",
+      profile: "hasna-example-infra",
+    })).rejects.toThrow("Multiple AWS secrets map");
+    expect(sent).toEqual([
+      "GetSecretValueCommand",
+      "ListSecretsCommand",
+      "ListSecretsCommand",
+    ]);
+  });
+
+  it("fails closed on list errors and missing AWSCURRENT metadata", async () => {
+    for (const listResult of [new Error("fixture list refused"), {
+      SecretList: [{ Name: "hasna/oss/todos/api-key", SecretVersionsToStages: {} }],
+    }]) {
+      const sent: string[] = [];
+      setAwsClientFactoryForTests(() => ({
+        send: async (command: any) => {
+          const name = command.constructor.name;
+          sent.push(name);
+          if (name === "GetSecretValueCommand") throw { name: "ResourceNotFoundException" };
+          if (name === "ListSecretsCommand") {
+            if (listResult instanceof Error) throw listResult;
+            return listResult;
+          }
+          throw new Error("value read must not run");
+        },
+      }));
+
+      await expect(getAwsSecretValueForEnv("hasna", "HASNA_TODOS_API_KEY", {
+        credentialMode: "profile",
+        profile: "hasna-example-infra",
+      })).rejects.toThrow();
+      expect(sent).toEqual(["GetSecretValueCommand", "ListSecretsCommand"]);
+    }
+  });
+
+  it("fails closed on read errors and non-string values without exposing the value", async () => {
+    for (const readResult of [new Error("fixture read refused"), {
+      SecretBinary: new Uint8Array([1, 2, 3]),
+      VersionId: "fixture-current-version",
+    }]) {
+      setAwsClientFactoryForTests(() => ({
+        send: async (command: any) => {
+          const name = command.constructor.name;
+          if (name === "GetSecretValueCommand") {
+            if (readResult instanceof Error) throw readResult;
+            return readResult;
+          }
+          throw new Error("unexpected command");
+        },
+      }));
+
+      let message = "";
+      try {
+        await getAwsSecretValueForEnv("hasna", "HASNA_LEGACY_TOKEN", {
+          credentialMode: "profile",
+          profile: "hasna-example-infra",
+        });
+      } catch (error: any) {
+        message = error.message;
+      }
+      expect(message).not.toBe("");
+      expect(message).not.toContain("fixture-legacy-value");
+    }
+  });
+
+  it("redacts the selected canonical name when its value read fails", async () => {
+    const remoteName = "hasna/oss/todos/api-key";
+    setAwsClientFactoryForTests(() => ({
+      send: async (command: any) => {
+        if (command.constructor.name === "GetSecretValueCommand" &&
+          command.input.SecretId === "HASNA_TODOS_API_KEY") {
+          throw { name: "ResourceNotFoundException" };
+        }
+        if (command.constructor.name === "ListSecretsCommand") {
+          return {
+            SecretList: [{
+              Name: remoteName,
+              SecretVersionsToStages: { "fixture-current-version": ["AWSCURRENT"] },
+            }],
+          };
+        }
+        throw new Error(`fixture read refused for ${remoteName}`);
+      },
+    }));
+
+    let message = "";
+    try {
+      await getAwsSecretValueForEnv("hasna", "HASNA_TODOS_API_KEY", {
+        credentialMode: "profile",
+        profile: "hasna-example-infra",
+      });
+    } catch (error: any) {
+      message = error.message;
+    }
+    expect(message).toContain("Unable to read AWS secret selected");
+    expect(message).not.toContain(remoteName);
+  });
+
+  it("uses the refusing client when no fake AWS client is installed", async () => {
+    setAwsClientFactoryForTests();
+    await expect(getAwsSecretValueForEnv("hasna", "HASNA_TODOS_API_KEY", {
+      credentialMode: "profile",
+      profile: "hasna-example-infra",
+    })).rejects.toThrow("Test isolation");
   });
 });
 
