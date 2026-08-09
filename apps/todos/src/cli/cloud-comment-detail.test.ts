@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -130,6 +130,68 @@ function currentGitRefDetailResponse(request: Request): Response | null {
 }
 
 describe("cloud task detail comments", () => {
+  test("comment --file routes UTF-8 content through the supported remote command surface", async () => {
+    const comments: Array<Record<string, unknown>> = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        if (url.pathname === `/v1/tasks/${TASK_ID}` && request.method === "GET") {
+          return Response.json({ task: taskFixture({ status: "in_progress" }) });
+        }
+        if (url.pathname === `/v1/tasks/${TASK_ID}/comments` && request.method === "POST") {
+          const body = await request.json() as Record<string, unknown>;
+          const comment = {
+            id: `comment-${comments.length + 1}`,
+            task_id: TASK_ID,
+            agent_id: body.agent_id ?? null,
+            session_id: body.session_id ?? null,
+            content: body.content,
+            type: body.type ?? "comment",
+            progress_pct: body.progress_pct ?? null,
+            created_at: "2026-07-10T00:01:00.000Z",
+          };
+          comments.push(comment);
+          return Response.json({ comment }, { status: 201 });
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-comment-file-"));
+    tempRoots.push(root);
+    const commentPath = join(root, "comment-utf8.txt");
+    const content = "Fișier remote — verificare ✓\n";
+    writeFileSync(commentPath, content, "utf8");
+    try {
+      const result = await runCli(
+        [
+          "--agent", "remote-writer",
+          "--session", "remote-comment-file-session",
+          "--json",
+          "comment", TASK_ID,
+          "--file", commentPath,
+        ],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+
+      expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        task_id: TASK_ID,
+        agent_id: "remote-writer",
+        session_id: "remote-comment-file-session",
+        content,
+      });
+      expect(comments).toHaveLength(1);
+      expect(comments[0]).toMatchObject({ content, agent_id: "remote-writer", session_id: "remote-comment-file-session" });
+      expect(existsSync(join(root, "todos.db"))).toBe(false);
+    } finally {
+      server.stop(true);
+    }
+  });
+
   test("cloud add resolves its printed short prefix over HTTP without seeding a local id index", async () => {
     const requests: Array<{ method: string; path: string; body?: Record<string, unknown> }> = [];
     const comments: Record<string, unknown>[] = [];

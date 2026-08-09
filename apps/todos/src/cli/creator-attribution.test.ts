@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
@@ -91,6 +91,73 @@ describe("todos add — records who FILED the task", () => {
 // "Comment added.", no warning: the comment landed and read back fine, so nothing
 // signalled that provenance had been dropped.
 describe("todos comment — records who wrote it", () => {
+  it("reads UTF-8 comment content from --file while preserving agent, session, and JSON output", async () => {
+    const task = await addJson(["a task to comment on"]);
+    const commentPath = join(testRoot, "comment-utf8.txt");
+    const content = "În lucru — verificare ✓\n";
+    writeFileSync(commentPath, content, "utf8");
+
+    const result = await runCli([
+      "--agent", "brutus",
+      "--session", "comment-file-session",
+      "--json",
+      "comment", "--file", commentPath,
+      task.id,
+    ]);
+
+    expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      task_id: task.id,
+      agent_id: "brutus",
+      session_id: "comment-file-session",
+      content,
+    });
+  });
+
+  it("rejects ambiguous, missing, unreadable, and empty file input without adding a comment", async () => {
+    const task = await addJson(["a task to protect from invalid comments"]);
+    const contentPath = join(testRoot, "comment.txt");
+    const emptyPath = join(testRoot, "empty-comment.txt");
+    const directoryPath = join(testRoot, "not-a-comment-file");
+    writeFileSync(contentPath, "file content", "utf8");
+    writeFileSync(emptyPath, " \n\t", "utf8");
+    mkdirSync(directoryPath);
+
+    const invalidCases: Array<{ args: string[]; expected: RegExp }> = [
+      {
+        args: ["comment", task.id, "positional content", "--file", contentPath],
+        expected: /exactly one.*content source|not both/i,
+      },
+      {
+        args: ["comment", task.id, "--file", join(testRoot, "missing-comment.txt")],
+        expected: /unable to read comment file/i,
+      },
+      {
+        args: ["comment", task.id, "--file", directoryPath],
+        expected: /unable to read comment file/i,
+      },
+      {
+        args: ["comment", task.id, "--file", emptyPath],
+        expected: /comment content.*empty/i,
+      },
+      {
+        args: ["comment", task.id],
+        expected: /exactly one.*content source/i,
+      },
+    ];
+
+    for (const invalidCase of invalidCases) {
+      const result = await runCli(["--json", ...invalidCase.args]);
+      expect(result.exitCode).toBe(1);
+      expect(`${result.stdout}\n${result.stderr}`).toMatch(invalidCase.expected);
+      expect(`${result.stdout}\n${result.stderr}`).not.toContain("unknown option '--file'");
+    }
+
+    const shown = await runCli(["--json", "show", task.id]);
+    expect(shown).toMatchObject({ exitCode: 0, stderr: "" });
+    expect(JSON.parse(shown.stdout).comments).toHaveLength(0);
+  });
+
   it("attributes to the ambient identity from the environment, matching `add`", async () => {
     const task = await addJson(["a task to comment on"]);
     const comment = await commentJson(task.id, "progress note from the environment", { TODOS_AGENT_ID: "cassius" });
