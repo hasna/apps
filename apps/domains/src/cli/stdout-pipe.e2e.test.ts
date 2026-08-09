@@ -328,10 +328,37 @@ describe("domains --json over a pipe", () => {
  * The ban covers plain text as well as JSON, because `domain list --verbose` is
  * an unbounded plain-text surface and overflows a pipe buffer exactly as
  * readily.
+ *
+ * ── Why the ban covers `process.stdout.write` too ──
+ *
+ * The first version of this guard banned `console.log` and `console.error` and
+ * nothing else, because those were the 742 sites the fix had just converted.
+ * THAT CALIBRATES THE GUARD TO THE LAST RECURRENCE RATHER THAN TO THE CLASS.
+ * Eight `process.stdout.write` calls survived that conversion — seven progress
+ * prefixes in `commands/domain.ts` and one in `commands/route53.ts` — and the
+ * guard was green with all eight in place.
+ *
+ * They were harmless, and harmless is not the same as safe. Every one was a
+ * short fixed string well under a pipe buffer, so none of them could truncate.
+ * But `process.stdout.write` is the SAME unchecked-write shape as `console.log`
+ * on a non-blocking fd 1: one `write(2)`, remainder discarded, rc=0. The next
+ * unbounded payload written that way — a `--json` surface added by someone who
+ * reached for the obvious API — reintroduces exactly the defect this file
+ * exists to catch, with the guard still passing.
+ *
+ * `writeStdout` (no trailing newline) and `writeStdoutBytes` already existed for
+ * precisely these call sites and were unused at all eight. `process.stderr.write`
+ * is banned on the same reasoning even though it has no offenders today: fd 2 is
+ * a pipe under `2>&1 |` or `2>file`, `printErrorLine` covers it, and a guard
+ * written only against the descriptor that happened to fail is the same
+ * calibration error one fd over.
+ *
+ * Other `process.stdout` properties — `columns`, `isTTY` — are reads, not
+ * writes, and are deliberately not matched.
  */
 describe("no CLI surface bypasses the completing writer", () => {
   const CLI_ROOT = import.meta.dir;
-  const BYPASS = /\bconsole\.(log|error)\s*\(/;
+  const BYPASS = /\bconsole\.(log|error)\s*\(|\bprocess\.(stdout|stderr)\.write\s*\(/;
 
   function sourceFiles(dir: string, found: string[] = []): string[] {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -346,7 +373,39 @@ describe("no CLI surface bypasses the completing writer", () => {
     return found;
   }
 
-  test("no console.log or console.error remains anywhere under src/cli/", () => {
+  /**
+   * The offender list is an ABSENCE claim, and an absence claim is worth
+   * exactly as much as the probe behind it. A typo in `BYPASS` — or a later
+   * edit that narrows it — produces an empty offender list that is
+   * indistinguishable from a clean tree. So assert the pattern can fire on each
+   * banned form, and stay silent on the sanctioned replacements, before
+   * believing the zero it returns below.
+   */
+  test("the bypass pattern matches every banned form and no sanctioned one", () => {
+    const mustMatch = [
+      'console.log("x")',
+      "console.log()",
+      'console.error("x")',
+      "console.error (x)",
+      'process.stdout.write("x")',
+      "process.stdout.write (x)",
+      'process.stderr.write("x")',
+      '  if (x) process.stdout.write(`  Status: ${s}\\r`);',
+    ];
+    const mustNotMatch = [
+      'printLine("x")',
+      'printErrorLine("x")',
+      "printJson(value)",
+      'writeStdout("x")',
+      "writeStdoutBytes(bytes)",
+      "const width = process.stdout.columns ?? 80;",
+      "if (process.stdout.isTTY) {",
+    ];
+    expect(mustMatch.filter((line) => !BYPASS.test(line))).toEqual([]);
+    expect(mustNotMatch.filter((line) => BYPASS.test(line))).toEqual([]);
+  });
+
+  test("no console.log, console.error or process.std{out,err}.write remains anywhere under src/cli/", () => {
     const files = sourceFiles(CLI_ROOT);
     // Guard the guard: if the walk found nothing, an empty offender list would
     // pass vacuously.
@@ -360,7 +419,8 @@ describe("no CLI surface bypasses the completing writer", () => {
         });
     }
     // Named in the failure so the fix is obvious: replace with printLine /
-    // printErrorLine / printJson from src/lib/stdout.ts.
+    // printErrorLine / printJson / writeStdout / writeStdoutBytes from
+    // src/lib/stdout.ts.
     expect(offenders).toEqual([]);
   });
 });

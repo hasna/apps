@@ -29,7 +29,7 @@ import { delegateDomainToCloudflare } from "../../lib/delegate.js";
 import { getCapability } from "../../lib/capability.js";
 import { compactHint, formatDate, pageItemsOrExit, parseLimit, parseOffset, truncateText } from "../../lib/compact-output.js";
 
-import { printLine, printErrorLine } from "../../lib/stdout.js";
+import { printLine, printErrorLine, writeStdout } from "../../lib/stdout.js";
 const DOMAIN_STATUS_HELP = DOMAIN_STATUSES.join("/");
 const DOMAIN_OFFER_STATUS_HELP = DOMAIN_OFFER_STATUSES.join("/");
 const DOMAIN_EMAIL_TYPE_HELP = DOMAIN_EMAIL_TYPES.join("/");
@@ -793,7 +793,7 @@ export function registerDomainCommand(program: Command): void {
             await new Promise((r) => setTimeout(r, 10_000));
             const s = await getRegistrationStatus(reg.operationId);
             status = s.status;
-            process.stdout.write(`  Status: ${status}\r`);
+            writeStdout(`  Status: ${status}\r`);
           }
           printLine();
           if (status !== "SUCCESSFUL") { printErrorLine(`✗ Registration ${status}`); process.exit(1); }
@@ -894,7 +894,7 @@ export function registerDomainCommand(program: Command): void {
 
       try {
         // 1. Check availability
-        process.stdout.write(opts.wait ? "[1/5] Checking availability... " : "[1/4] Checking availability... ");
+        writeStdout(opts.wait ? "[1/5] Checking availability... " : "[1/4] Checking availability... ");
         const avail = await checkAvailability(name);
         if (!avail.available) { printLine("not available"); printErrorLine(`✗ ${name} is not available`); process.exit(1); }
         const price = avail.price ? `(USD ${avail.price}/yr)` : "";
@@ -908,7 +908,7 @@ export function registerDomainCommand(program: Command): void {
         let contact;
         try { contact = resolveContact(opts); } catch (e) { printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`); process.exit(1); }
 
-        process.stdout.write(opts.wait ? "[2/5] Registering domain... " : "[2/4] Registering domain... ");
+        writeStdout(opts.wait ? "[2/5] Registering domain... " : "[2/4] Registering domain... ");
         const reg = await registerDomain(name, contact, parseInt(opts.years));
         printLine(`submitted (${reg.operationId})`);
 
@@ -918,7 +918,7 @@ export function registerDomainCommand(program: Command): void {
             await new Promise((r) => setTimeout(r, 10_000));
             const s = await getRegistrationStatus(reg.operationId);
             status = s.status;
-            process.stdout.write(`  Waiting: ${status}...\r`);
+            writeStdout(`  Waiting: ${status}...\r`);
           }
           printLine();
           if (status !== "SUCCESSFUL") { printErrorLine(`✗ Registration ${status}`); process.exit(1); }
@@ -926,7 +926,7 @@ export function registerDomainCommand(program: Command): void {
         }
 
         // 3. Create DNS zone
-        process.stdout.write(opts.wait ? "[3/5] Creating DNS zone... " : "[3/4] Creating DNS zone... ");
+        writeStdout(opts.wait ? "[3/5] Creating DNS zone... " : "[3/4] Creating DNS zone... ");
         let nameservers: string[] = [];
         if (dnsName === "cloudflare") {
           const zone = await cfEnsureZone(name);
@@ -940,7 +940,7 @@ export function registerDomainCommand(program: Command): void {
 
         if (nameservers.length > 0) {
           if (opts.wait) {
-            process.stdout.write("[4/5] Updating registrar nameservers... ");
+            writeStdout("[4/5] Updating registrar nameservers... ");
             if (registrarName !== "route53") {
               printLine("skipped");
               printErrorLine("Only Route53 nameserver delegation is currently implemented for setup.");
@@ -954,7 +954,7 @@ export function registerDomainCommand(program: Command): void {
         }
 
         // 5. Sync to local DB
-        process.stdout.write(opts.wait ? "[5/5] Adding to portfolio... " : "[4/4] Adding to portfolio... ");
+        writeStdout(opts.wait ? "[5/5] Adding to portfolio... " : "[4/4] Adding to portfolio... ");
         const existing = await getDomainByName(name);
         const dbInput = { registrar: `AWS Route 53`, status: "active" as const, auto_renew: true, nameservers };
         if (existing) await updateDomain(existing.id, dbInput);

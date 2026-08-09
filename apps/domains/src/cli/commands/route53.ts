@@ -24,7 +24,7 @@ import { createDomain, getDomainByName, updateDomain } from "../../db/domains.js
 import { resolveContact } from "../../lib/config.js";
 import { compactHint, pageItemsOrExit, truncateText } from "../../lib/compact-output.js";
 
-import { printLine, printErrorLine } from "../../lib/stdout.js";
+import { printLine, printErrorLine, writeStdout } from "../../lib/stdout.js";
 export function registerRoute53Commands(program: Command): void {
   const r53 = program.command("r53").description("AWS Route 53 — domain purchase, hosted zones & DNS");
 
@@ -506,7 +506,7 @@ export function registerRoute53Commands(program: Command): void {
           await new Promise((r) => setTimeout(r, 10_000));
           const s = await getRegistrationStatus(reg.operationId);
           status = s.status;
-          process.stdout.write(`  Status: ${status}\r`);
+          writeStdout(`  Status: ${status}\r`);
         }
         printLine();
         if (status !== "SUCCESSFUL") {
