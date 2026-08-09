@@ -22,6 +22,8 @@ const PROJECT_SLUG = "open-emails";
 const PROJECT_PATH = "/workspace/hasna/opensource/open-emails";
 const LIST_ID = "12345678-1111-4111-8111-111111111111";
 const TASK_ID = "22222222-2222-4222-8222-222222222222";
+const OTHER_LIST_ID = "33333333-3333-4333-8333-333333333333";
+const OTHER_TASK_ID = "44444444-4444-4444-8444-444444444444";
 const tempRoots: string[] = [];
 
 /**
@@ -367,6 +369,152 @@ describe("cloud CLI task-list filtering", () => {
       expect(seenTaskRequests.map(({ status }) => status).sort()).toEqual(["in_progress", "pending"]);
       expect(seenTaskRequests.every(({ taskListId }) => taskListId === LIST_ID)).toBe(true);
       expect(taskListRequests).toBe(ref === LIST_ID ? 0 : 1);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("does not surface a hosted response row from another exact task list", async () => {
+    const taskRequests: URL[] = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        if (url.pathname === "/v1/tasks") {
+          taskRequests.push(url);
+          return Response.json({
+            tasks: [
+              { id: TASK_ID, task_list_id: LIST_ID, title: "Cloud list task", status: "pending", priority: "medium" },
+              { id: OTHER_TASK_ID, task_list_id: OTHER_LIST_ID, title: "Foreign list task", status: "pending", priority: "medium" },
+            ],
+            count: 2,
+            total: 2,
+          });
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-list-filter-response-"));
+    tempRoots.push(root);
+    try {
+      const result = await runCli(
+        ["--json", "list", "--all", "--list", LIST_ID, "--format", "json", "--limit", "1000"],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+      expect(taskRequests).toHaveLength(1);
+      expect(taskRequests[0]!.searchParams.get("task_list_id")).toBe(LIST_ID);
+      expect(JSON.parse(result.stdout)).toEqual([
+        expect.objectContaining({ id: TASK_ID, task_list_id: LIST_ID }),
+      ]);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test.each(["json", "table", "compact", "csv"])(
+    "paginates a foreign-first capped hosted response before rendering %s",
+    async (format) => {
+      const taskRequests: URL[] = [];
+      const server = Bun.serve({
+        hostname: "127.0.0.1",
+        port: 0,
+        fetch(request) {
+          const url = new URL(request.url);
+          if (url.pathname === "/v1/tasks") {
+            taskRequests.push(url);
+            const offset = Number(url.searchParams.get("offset") ?? "0");
+            if (offset === 0) {
+              return Response.json({
+                tasks: [
+                  { id: OTHER_TASK_ID, task_list_id: OTHER_LIST_ID, title: "Foreign list task", status: "pending", priority: "medium", tags: [] },
+                ],
+                count: 1,
+                total: 2,
+              });
+            }
+            if (offset === 1) {
+              return Response.json({
+                tasks: [
+                  { id: TASK_ID, task_list_id: LIST_ID, title: "Cloud list task", status: "pending", priority: "medium", tags: [] },
+                ],
+                count: 1,
+                total: 2,
+              });
+            }
+            return Response.json({ tasks: [], count: 0, total: 2 });
+          }
+          return Response.json({ error: "not found" }, { status: 404 });
+        },
+      });
+      const root = mkdtempSync(join(tmpdir(), "todos-cloud-list-filter-pagination-"));
+      tempRoots.push(root);
+      try {
+        const result = await runCli(
+          ["list", "--all", "--list", LIST_ID, "--format", format],
+          root,
+          `http://127.0.0.1:${server.port}`,
+          { TODOS_LIST_SCAN_LIMIT: "2" },
+        );
+        expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+        expect(result.stdout).toContain("Cloud list task");
+        expect(result.stdout).not.toContain("Foreign list task");
+        expect(taskRequests).toHaveLength(2);
+        expect(taskRequests.every((url) => url.searchParams.get("task_list_id") === LIST_ID)).toBe(true);
+        expect(taskRequests.map((url) => url.searchParams.get("offset"))).toEqual([null, "1"]);
+        expect(taskRequests.map((url) => url.searchParams.get("limit"))).toEqual(["2", "1"]);
+      } finally {
+        server.stop(true);
+      }
+    },
+  );
+
+  test.each([
+    [
+      "missing pagination metadata",
+      { tasks: [{ id: OTHER_TASK_ID, task_list_id: OTHER_LIST_ID, title: "Foreign list task", status: "pending", priority: "medium" }] },
+      "REMOTE_TASK_LIST_FILTER_UNSUPPORTED",
+    ],
+    [
+      "reported total exceeds the bounded scan",
+      {
+        tasks: [{ id: OTHER_TASK_ID, task_list_id: OTHER_LIST_ID, title: "Foreign list task", status: "pending", priority: "medium" }],
+        count: 1,
+        total: 3,
+      },
+      "REMOTE_TASK_LIST_FILTER_INCOMPLETE",
+    ],
+  ])("fails closed when a foreign hosted page has %s", async (_label, response, expectedCode) => {
+    const taskRequests: URL[] = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        if (url.pathname === "/v1/tasks") {
+          taskRequests.push(url);
+          return Response.json(response);
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-list-filter-incomplete-"));
+    tempRoots.push(root);
+    try {
+      const result = await runCli(
+        ["list", "--all", "--list", LIST_ID, "--format", "json"],
+        root,
+        `http://127.0.0.1:${server.port}`,
+        { TODOS_LIST_SCAN_LIMIT: "2" },
+      );
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(expectedCode);
+      expect(taskRequests).toHaveLength(1);
+      expect(taskRequests[0]!.searchParams.get("task_list_id")).toBe(LIST_ID);
+      expect(taskRequests[0]!.searchParams.get("limit")).toBe("2");
     } finally {
       server.stop(true);
     }

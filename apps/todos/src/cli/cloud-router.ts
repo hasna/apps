@@ -665,11 +665,134 @@ async function requireTagsFilterCapability(client: HasnaStorageClient): Promise<
   }
 }
 
-async function requestCloudTaskPage(client: HasnaStorageClient, filter: TaskFilter): Promise<Task[]> {
+interface CloudTaskPage {
+  tasks: Task[];
+  total?: number;
+}
+
+function parseCloudTaskTotal(raw: unknown): number | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const total = (raw as { total?: unknown }).total;
+  return typeof total === "number" && Number.isSafeInteger(total) && total >= 0
+    ? total
+    : undefined;
+}
+
+async function requestRawCloudTaskPage(
+  client: HasnaStorageClient,
+  filter: TaskFilter,
+): Promise<CloudTaskPage> {
   const res = await requiredRemoteRoute(client, "/v1/tasks", () =>
     client.list<Task>("tasks", { query: toListQuery(filter) }));
   const envelope = res.raw as { tasks?: Task[] } | undefined;
-  return Array.isArray(envelope?.tasks) ? envelope!.tasks : res.items;
+  return {
+    tasks: Array.isArray(envelope?.tasks) ? envelope!.tasks : res.items,
+    total: parseCloudTaskTotal(res.raw),
+  };
+}
+
+function cloudTaskListFilterError(
+  code:
+    | "REMOTE_TASK_LIST_FILTER_UNSUPPORTED"
+    | "REMOTE_TASK_LIST_FILTER_INCOMPLETE",
+  taskListId: string,
+  detail: string,
+): Error {
+  return new Error(
+    `${code}: hosted authority returned rows outside requested task_list_id ${taskListId}; ${detail}; refusing an incomplete exact-list result`,
+  );
+}
+
+async function requestCloudTaskPage(client: HasnaStorageClient, filter: TaskFilter): Promise<Task[]> {
+  const firstPage = await requestRawCloudTaskPage(client, filter);
+  const tasks = firstPage.tasks;
+  // Older hosted authorities can accept task_list_id in the query while still
+  // returning an unfiltered page. Enforce the exact UUID locally so a successful
+  // HTTP response can never widen a task-list-scoped read.
+  if (filter.task_list_id === undefined) return tasks;
+
+  const taskListId = filter.task_list_id;
+  if (tasks.every((task) => task.task_list_id === taskListId)) return tasks;
+
+  const scanLimit = filter.limit;
+  const startOffset = filter.offset ?? 0;
+  if (
+    startOffset !== 0 ||
+    scanLimit === undefined ||
+    !Number.isSafeInteger(scanLimit) ||
+    scanLimit <= 0 ||
+    firstPage.total === undefined
+  ) {
+    throw cloudTaskListFilterError(
+      "REMOTE_TASK_LIST_FILTER_UNSUPPORTED",
+      taskListId,
+      "the response does not provide complete bounded total/offset pagination evidence",
+    );
+  }
+
+  const total = firstPage.total;
+  if (total > scanLimit) {
+    throw cloudTaskListFilterError(
+      "REMOTE_TASK_LIST_FILTER_INCOMPLETE",
+      taskListId,
+      `reported total ${total} exceeds bounded scan limit ${scanLimit}`,
+    );
+  }
+  if (tasks.length > total) {
+    throw cloudTaskListFilterError(
+      "REMOTE_TASK_LIST_FILTER_UNSUPPORTED",
+      taskListId,
+      `the first page contains ${tasks.length} rows but reports total ${total}`,
+    );
+  }
+
+  const seenTaskIds = new Set<string>();
+  for (const task of tasks) {
+    if (seenTaskIds.has(task.id)) {
+      throw cloudTaskListFilterError(
+        "REMOTE_TASK_LIST_FILTER_UNSUPPORTED",
+        taskListId,
+        `the first page repeats task id ${task.id}`,
+      );
+    }
+    seenTaskIds.add(task.id);
+  }
+
+  while (tasks.length < total) {
+    const remaining = total - tasks.length;
+    const page = await requestRawCloudTaskPage(client, {
+      ...filter,
+      offset: tasks.length,
+      limit: Math.min(scanLimit - tasks.length, remaining),
+    });
+    if (page.total !== total) {
+      throw cloudTaskListFilterError(
+        "REMOTE_TASK_LIST_FILTER_UNSUPPORTED",
+        taskListId,
+        `pagination total changed from ${total} to ${String(page.total)}`,
+      );
+    }
+    if (page.tasks.length === 0 || tasks.length + page.tasks.length > total) {
+      throw cloudTaskListFilterError(
+        "REMOTE_TASK_LIST_FILTER_UNSUPPORTED",
+        taskListId,
+        "pagination did not make bounded progress toward the reported total",
+      );
+    }
+    for (const task of page.tasks) {
+      if (seenTaskIds.has(task.id)) {
+        throw cloudTaskListFilterError(
+          "REMOTE_TASK_LIST_FILTER_UNSUPPORTED",
+          taskListId,
+          `pagination repeats task id ${task.id}`,
+        );
+      }
+      seenTaskIds.add(task.id);
+    }
+    tasks.push(...page.tasks);
+  }
+
+  return tasks.filter((task) => task.task_list_id === taskListId);
 }
 
 /** List tasks from the cloud (`GET /v1/tasks`). Returns the `tasks` array. */
