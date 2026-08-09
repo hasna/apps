@@ -889,6 +889,7 @@ export function createRoute53Provider(config?: Route53Config): FullProvider {
 
   return {
     name: "route53",
+    dnsWriteScope: "changed-groups",
 
     async listDomains(): Promise<ProviderDomainInfo[]> {
       return listDomainInventory();
