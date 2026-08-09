@@ -151,6 +151,7 @@ interface SyncSource {
 }
 
 export function syncSkillsToAgents(options: SyncSkillsOptions = {}): SyncSkillsResult {
+  const requested = normalizeRequested(options.names);
   const agents = options.agents?.length ? options.agents : [...SYNC_AGENTS];
   const homeDir = options.homeDir ?? homedir();
   const corpusOptions = corpusLocation(options);
@@ -158,7 +159,6 @@ export function syncSkillsToAgents(options: SyncSkillsOptions = {}): SyncSkillsR
   const byName = new Map(corpus.map((skill) => [skill.name, skill]));
 
   const actions: AgentSyncAction[] = [];
-  const requested = normalizeRequested(options.names);
 
   let targets: SyncSource[] = corpus.map((skill) => ({
     name: skill.name,
@@ -351,12 +351,6 @@ function normalizeRequested(names: string[] | undefined): string[] | null {
   const normalized = names
     .map((name) => name.trim())
     .filter(Boolean)
-    .map((name) => {
-      try {
-        return normalizePortableSkillName(name);
-      } catch {
-        return name;
-      }
-    });
+    .map((name) => normalizePortableSkillName(name));
   return [...new Set(normalized)];
 }

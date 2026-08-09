@@ -234,6 +234,29 @@ describe("syncSkillsToAgents", () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
+
+  test("rejects an invalid named skill before corpus migration or agent writes", () => {
+    const home = tempDir("sync-home-");
+    try {
+      seedCorpusSkill(
+        join(home, ".hasna", "skills"),
+        "legacy-skill",
+        "---\nname: legacy-skill\ndescription: Legacy skill\n---\n",
+      );
+
+      expect(() => syncSkillsToAgents({
+        homeDir: home,
+        names: ["../../skills/todos-plan"],
+        agents: ["codewith"],
+      })).toThrow("Invalid skill name");
+
+      expect(existsSync(join(home, ".hasna", "skills", "installed", "legacy-skill", "SKILL.md"))).toBe(false);
+      expect(existsSync(join(home, "skills", "todos-plan", "SKILL.md"))).toBe(false);
+      expect(existsSync(join(home, ".codewith", "skills", "todos-plan", "SKILL.md"))).toBe(false);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("writeManagedAgentSkill", () => {
