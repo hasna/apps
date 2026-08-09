@@ -620,27 +620,54 @@ describe("pg-store typed resource-link transaction model", () => {
 });
 
 describe("pg-store guarded workspace mutation", () => {
-  test("previews, writes, and rolls back last_opened_at", async () => {
+  test("previews, writes, and rolls back identity fields and last_opened_at", async () => {
     const harness = resourceLinkMutationClient();
     const store = new ProjectsPgStore(harness.client);
     const openedAt = "2026-08-08T11:00:00.000Z";
+    const forwardPath = "/srv/projects/pg-resource-next";
+    const forwardRemote = "https://example.invalid/hasna/pg-resource-next.git";
     const request = {
       project_id: harness.workspace().id,
       operation_id: "pg-open-timestamp",
       step_id: "record-open",
       expected_revision: harness.workspace().updated_at,
-      patch: { last_opened_at: openedAt },
+      patch: {
+        kind: "open-source" as const,
+        primary_path: forwardPath,
+        git_remote: forwardRemote,
+        last_opened_at: openedAt,
+      },
       response_byte_limit: 100_000,
       time_budget_ms: 5_000,
     };
 
     const dryRun = await store.guardedUpdateWorkspace({ ...request, dry_run: true });
-    expect(dryRun.after?.last_opened_at).toBe(openedAt);
-    expect(harness.workspace().last_opened_at).toBeNull();
+    expect(dryRun.after).toMatchObject({
+      kind: "open-source",
+      primary_path: forwardPath,
+      git_remote: forwardRemote,
+      last_opened_at: openedAt,
+    });
+    expect(harness.workspace()).toMatchObject({
+      kind: "project",
+      primary_path: "/srv/projects/pg-resource",
+      git_remote: null,
+      last_opened_at: null,
+    });
 
     const accepted = await store.guardedUpdateWorkspace(request);
-    expect(accepted.after?.last_opened_at).toBe(openedAt);
-    expect(harness.workspace().last_opened_at).toBe(openedAt);
+    expect(accepted.after).toMatchObject({
+      kind: "open-source",
+      primary_path: forwardPath,
+      git_remote: forwardRemote,
+      last_opened_at: openedAt,
+    });
+    expect(harness.workspace()).toMatchObject({
+      kind: "open-source",
+      primary_path: forwardPath,
+      git_remote: forwardRemote,
+      last_opened_at: openedAt,
+    });
 
     const rolledBack = await store.rollbackGuardedWorkspaceMutation({
       project_id: request.project_id,
@@ -651,8 +678,18 @@ describe("pg-store guarded workspace mutation", () => {
       response_byte_limit: 100_000,
       time_budget_ms: 5_000,
     });
-    expect(rolledBack.after?.last_opened_at).toBeNull();
-    expect(harness.workspace().last_opened_at).toBeNull();
+    expect(rolledBack.after).toMatchObject({
+      kind: "project",
+      primary_path: "/srv/projects/pg-resource",
+      git_remote: null,
+      last_opened_at: null,
+    });
+    expect(harness.workspace()).toMatchObject({
+      kind: "project",
+      primary_path: "/srv/projects/pg-resource",
+      git_remote: null,
+      last_opened_at: null,
+    });
   });
 });
 

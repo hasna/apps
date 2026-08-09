@@ -1262,6 +1262,240 @@ describe("project-first CLI surface", () => {
     }
   });
 
+  for (const { pathFlag, label } of [
+    { pathFlag: "--path", label: "path" },
+    { pathFlag: "--primary-path", label: "primary-path" },
+  ] as const) {
+    test(`guarded-update accepts ${pathFlag} with kind and git remote`, () => {
+      const root = mkdtempSync(join(tmpdir(), `projects-cli-guarded-${label}-`));
+      const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
+      const originalPath = join(root, "before");
+      const forwardPath = join(root, "after");
+      const forwardRemote = `https://example.invalid/hasna/guarded-${label}.git`;
+      try {
+        const create = runProjects([
+          "create",
+          "--name",
+          `Guarded ${label}`,
+          "--path",
+          originalPath,
+          "--json",
+        ], env);
+        expect(create.exitCode).toBe(0);
+        const created = JSON.parse(text(create.stdout)) as {
+          project: { id: string; updated_at: string };
+        };
+
+        const update = runProjects([
+          "guarded-update",
+          created.project.id,
+          "--expected-revision",
+          created.project.updated_at,
+          "--operation-id",
+          `guarded-${label}-operation`,
+          "--step-id",
+          "identity",
+          "--kind",
+          "open-source",
+          pathFlag,
+          forwardPath,
+          "--git-remote",
+          forwardRemote,
+          "--response-byte-limit",
+          "40000",
+          "--time-budget-ms",
+          "5000",
+          "--json",
+        ], env);
+        expect(update.exitCode).toBe(0);
+        const payload = JSON.parse(text(update.stdout)) as {
+          outcome: string;
+          after: { kind: string; primary_path: string; git_remote: string; updated_at: string };
+          receipt: { post_revision: string };
+        };
+        expect(payload.outcome).toBe("accepted");
+        expect(payload.after).toMatchObject({
+          kind: "open-source",
+          primary_path: forwardPath,
+          git_remote: forwardRemote,
+        });
+        expect(payload.receipt.post_revision).toBe(payload.after.updated_at);
+
+        const read = runProjects([
+          "guarded-read",
+          created.project.id,
+          "--response-byte-limit",
+          "40000",
+          "--time-budget-ms",
+          "5000",
+          "--json",
+        ], env);
+        expect(read.exitCode).toBe(0);
+        expect((JSON.parse(text(read.stdout)) as { project: Record<string, unknown> }).project).toMatchObject({
+          kind: "open-source",
+          primary_path: forwardPath,
+          git_remote: forwardRemote,
+          updated_at: payload.after.updated_at,
+        });
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  for (const { firstFlag, secondFlag } of [
+    { firstFlag: "--path", secondFlag: "--primary-path" },
+    { firstFlag: "--primary-path", secondFlag: "--path" },
+  ] as const) {
+    test(`guarded-update rejects conflicting ${firstFlag} and ${secondFlag} aliases`, () => {
+      const root = mkdtempSync(join(tmpdir(), "projects-cli-guarded-path-conflict-"));
+      const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
+      try {
+        const create = runProjects(["create", "--name", "Guarded Conflict", "--json"], env);
+        expect(create.exitCode).toBe(0);
+        const created = JSON.parse(text(create.stdout)) as {
+          project: { id: string; updated_at: string };
+        };
+        const conflict = runProjects([
+          "guarded-update",
+          created.project.id,
+          "--expected-revision",
+          created.project.updated_at,
+          "--operation-id",
+          `guarded-conflict-${firstFlag}`,
+          "--step-id",
+          "identity",
+          firstFlag,
+          join(root, "one"),
+          secondFlag,
+          join(root, "two"),
+          "--response-byte-limit",
+          "40000",
+          "--time-budget-ms",
+          "5000",
+          "--json",
+        ], env);
+        expect(conflict.exitCode).toBe(1);
+        expect(text(conflict.stderr)).toContain("--path and --primary-path must resolve to the same path when both are provided");
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  test("guarded rollback restores a remote-only project and leaves its forward path non-primary", () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-guarded-remote-only-"));
+    const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
+    const forwardPath = join(root, "forward");
+    try {
+      const create = runProjects([
+        "create",
+        "--name",
+        "Guarded Remote Only",
+        "--kind",
+        "remote-only",
+        "--git-remote",
+        "https://example.invalid/hasna/guarded-remote-only.git",
+        "--json",
+      ], env);
+      expect(create.exitCode).toBe(0);
+      const created = JSON.parse(text(create.stdout)) as {
+        project: { id: string; primary_path: string | null; updated_at: string };
+      };
+      expect(created.project.primary_path).toBeNull();
+
+      const beforeLocations = runProjects(["locations", "list", created.project.id, "--json"], env);
+      expect(beforeLocations.exitCode).toBe(0);
+      expect((JSON.parse(text(beforeLocations.stdout)) as { locations: unknown[] }).locations).toEqual([]);
+
+      const update = runProjects([
+        "guarded-update",
+        created.project.id,
+        "--expected-revision",
+        created.project.updated_at,
+        "--operation-id",
+        "guarded-remote-only-forward",
+        "--step-id",
+        "set-primary-path",
+        "--path",
+        forwardPath,
+        "--response-byte-limit",
+        "40000",
+        "--time-budget-ms",
+        "5000",
+        "--json",
+      ], env);
+      expect(update.exitCode).toBe(0);
+      const accepted = JSON.parse(text(update.stdout)) as {
+        outcome: string;
+        after: { primary_path: string; updated_at: string };
+        receipt: { receipt_id: string; post_revision: string };
+      };
+      expect(accepted.outcome).toBe("accepted");
+      expect(accepted.after.primary_path).toBe(forwardPath);
+      expect(accepted.receipt.post_revision).toBe(accepted.after.updated_at);
+
+      const forwardLocations = runProjects(["locations", "list", created.project.id, "--json"], env);
+      expect(forwardLocations.exitCode).toBe(0);
+      expect((JSON.parse(text(forwardLocations.stdout)) as {
+        locations: Array<{ path: string; is_primary: boolean }>;
+      }).locations).toEqual([expect.objectContaining({ path: forwardPath, is_primary: true })]);
+
+      const rollback = runProjects([
+        "guarded-rollback",
+        created.project.id,
+        "--accepted-receipt-id",
+        accepted.receipt.receipt_id,
+        "--expected-current-revision",
+        accepted.receipt.post_revision,
+        "--operation-id",
+        "guarded-remote-only-rollback",
+        "--step-id",
+        "clear-primary-path",
+        "--response-byte-limit",
+        "40000",
+        "--time-budget-ms",
+        "5000",
+        "--json",
+      ], env);
+      expect(rollback.exitCode).toBe(0);
+      const rolledBack = JSON.parse(text(rollback.stdout)) as {
+        outcome: string;
+        after: { primary_path: string | null; updated_at: string };
+        receipt: { post_revision: string };
+      };
+      expect(rolledBack.outcome).toBe("accepted");
+      expect(rolledBack.after.primary_path).toBeNull();
+      expect(rolledBack.receipt.post_revision).toBe(rolledBack.after.updated_at);
+
+      const read = runProjects([
+        "guarded-read",
+        created.project.id,
+        "--response-byte-limit",
+        "40000",
+        "--time-budget-ms",
+        "5000",
+        "--json",
+      ], env);
+      expect(read.exitCode).toBe(0);
+      const readBack = JSON.parse(text(read.stdout)) as {
+        current_revision: string;
+        project: { primary_path: string | null; updated_at: string };
+      };
+      expect(readBack.project.primary_path).toBeNull();
+      expect(readBack.current_revision).toBe(rolledBack.receipt.post_revision);
+      expect(readBack.project.updated_at).toBe(rolledBack.receipt.post_revision);
+
+      const rollbackLocations = runProjects(["locations", "list", created.project.id, "--json"], env);
+      expect(rollbackLocations.exitCode).toBe(0);
+      expect((JSON.parse(text(rollbackLocations.stdout)) as {
+        locations: Array<{ path: string; is_primary: boolean }>;
+      }).locations).toEqual([expect.objectContaining({ path: forwardPath, is_primary: false })]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("workspace store, app store, loops, and labels use temp home", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-store-"));
     const env = {

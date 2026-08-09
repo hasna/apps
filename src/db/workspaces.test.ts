@@ -55,6 +55,7 @@ import { cleanupWorkspaceCreation, executeWorkspaceCreation, planWorkspaceCreati
 import { applyWorkspaceTmuxProfile, prepareWorkspaceDirectory, tmuxProfileToSpec, workspaceMarkerPath } from "../lib/workspace-runtime.js";
 import { inspectProjectStore, migrateProjectToStore, planProjectStoreMigration } from "../lib/project-store.js";
 import { projectWorkspaceStorePath } from "../lib/project-store-paths.js";
+import type { JsonObject } from "../types/workspace.js";
 
 function makeDb(): Database {
   const db = new Database(":memory:");
@@ -670,6 +671,156 @@ describe("workspace domain services", () => {
       expect(getWorkspace(workspace.id, db)?.name).toBe("Guarded Demo");
       expect(getWorkspace(workspace.id, db)?.last_opened_at).toBeNull();
     } finally {
+      db.close();
+    }
+  });
+
+  test("guarded identity mutation receipts use the final primary-location revision and roll back every identity field", () => {
+    const db = makeDb();
+    const originalPath = tmpDir();
+    const forwardPath = tmpDir();
+    const frozen = new Date("2026-08-09T12:00:00.000Z");
+    try {
+      setSystemTime(frozen);
+      const workspace = createWorkspace({
+        name: "Guarded Identity Demo",
+        kind: "generic",
+        primary_path: originalPath,
+        git_remote: "https://example.invalid/hasna/guarded-before.git",
+      }, db);
+
+      const accepted = guardedUpdateWorkspace({
+        project_id: workspace.id,
+        operation_id: "op-identity-forward",
+        step_id: "identity",
+        expected_revision: workspace.updated_at,
+        patch: {
+          kind: "open-source",
+          primary_path: forwardPath,
+          git_remote: "https://example.invalid/hasna/guarded-after.git",
+        },
+        response_byte_limit: 80_000,
+        time_budget_ms: 2_000,
+        source: "cli",
+        command: "projects guarded-update",
+      }, db);
+
+      const storedForward = getWorkspace(workspace.id, db)!;
+      expect(accepted.outcome).toBe("accepted");
+      expect(accepted.after).toEqual(storedForward);
+      expect(accepted.receipt?.after).toEqual(storedForward as unknown as JsonObject);
+      expect(accepted.receipt?.post_revision).toBe(storedForward.updated_at);
+      expect(listWorkspaceEvents(workspace.id, db)
+        .find((event) => event.event_type === "updated")?.after_json).toEqual(storedForward as unknown as JsonObject);
+      expect(storedForward).toMatchObject({
+        kind: "open-source",
+        primary_path: forwardPath,
+        git_remote: "https://example.invalid/hasna/guarded-after.git",
+      });
+      expect(listWorkspaceLocations(workspace.id, db).map((location) => ({
+        path: location.path,
+        is_primary: location.is_primary,
+      }))).toEqual(expect.arrayContaining([
+        { path: originalPath, is_primary: false },
+        { path: forwardPath, is_primary: true },
+      ]));
+
+      const rolledBack = rollbackGuardedWorkspaceMutation({
+        project_id: workspace.id,
+        operation_id: "op-identity-rollback",
+        step_id: "restore-identity",
+        accepted_receipt_id: accepted.receipt!.receipt_id,
+        expected_current_revision: accepted.receipt!.post_revision!,
+        response_byte_limit: 80_000,
+        time_budget_ms: 2_000,
+        source: "cli",
+        command: "projects guarded-rollback",
+      }, db);
+
+      const storedRollback = getWorkspace(workspace.id, db)!;
+      expect(rolledBack.outcome).toBe("accepted");
+      expect(rolledBack.after).toEqual(storedRollback);
+      expect(storedRollback).toMatchObject({
+        kind: "generic",
+        primary_path: originalPath,
+        git_remote: "https://example.invalid/hasna/guarded-before.git",
+      });
+      expect(listWorkspaceLocations(workspace.id, db).map((location) => ({
+        path: location.path,
+        is_primary: location.is_primary,
+      }))).toEqual(expect.arrayContaining([
+        { path: originalPath, is_primary: true },
+        { path: forwardPath, is_primary: false },
+      ]));
+    } finally {
+      setSystemTime();
+      rmSync(originalPath, { recursive: true, force: true });
+      rmSync(forwardPath, { recursive: true, force: true });
+      db.close();
+    }
+  });
+
+  test("guarded rollback to a remote-only project clears primary location semantics", () => {
+    const db = makeDb();
+    const forwardPath = tmpDir();
+    const frozen = new Date("2026-08-09T13:00:00.000Z");
+    try {
+      setSystemTime(frozen);
+      const workspace = createWorkspace({
+        name: "Guarded Remote Only",
+        kind: "remote-only",
+        git_remote: "https://example.invalid/hasna/guarded-remote-only.git",
+      }, db);
+      expect(workspace.primary_path).toBeNull();
+      expect(listWorkspaceLocations(workspace.id, db)).toEqual([]);
+
+      const accepted = guardedUpdateWorkspace({
+        project_id: workspace.id,
+        operation_id: "op-remote-only-forward",
+        step_id: "set-primary-path",
+        expected_revision: workspace.updated_at,
+        patch: { primary_path: forwardPath },
+        response_byte_limit: 80_000,
+        time_budget_ms: 2_000,
+        source: "cli",
+        command: "projects guarded-update",
+      }, db);
+
+      const storedForward = getWorkspace(workspace.id, db)!;
+      expect(accepted.outcome).toBe("accepted");
+      expect(accepted.after).toEqual(storedForward);
+      expect(accepted.receipt?.after).toEqual(storedForward as unknown as JsonObject);
+      expect(accepted.receipt?.post_revision).toBe(storedForward.updated_at);
+      expect(listWorkspaceLocations(workspace.id, db).map((location) => ({
+        path: location.path,
+        is_primary: location.is_primary,
+      }))).toEqual([{ path: forwardPath, is_primary: true }]);
+
+      const rolledBack = rollbackGuardedWorkspaceMutation({
+        project_id: workspace.id,
+        operation_id: "op-remote-only-rollback",
+        step_id: "clear-primary-path",
+        accepted_receipt_id: accepted.receipt!.receipt_id,
+        expected_current_revision: accepted.receipt!.post_revision!,
+        response_byte_limit: 80_000,
+        time_budget_ms: 2_000,
+        source: "cli",
+        command: "projects guarded-rollback",
+      }, db);
+
+      const storedRollback = getWorkspace(workspace.id, db)!;
+      expect(rolledBack.outcome).toBe("accepted");
+      expect(rolledBack.after).toEqual(storedRollback);
+      expect(rolledBack.receipt?.after).toEqual(storedRollback as unknown as JsonObject);
+      expect(rolledBack.receipt?.post_revision).toBe(storedRollback.updated_at);
+      expect(storedRollback.primary_path).toBeNull();
+      expect(listWorkspaceLocations(workspace.id, db).map((location) => ({
+        path: location.path,
+        is_primary: location.is_primary,
+      }))).toEqual([{ path: forwardPath, is_primary: false }]);
+    } finally {
+      setSystemTime();
+      rmSync(forwardPath, { recursive: true, force: true });
       db.close();
     }
   });
