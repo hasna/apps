@@ -1,6 +1,6 @@
 {
   "name": "@hasna/capacity",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Fail-closed provider account capacity metadata for local and self-hosted Hasna deployments",
   "type": "module",
   "license": "Apache-2.0",
