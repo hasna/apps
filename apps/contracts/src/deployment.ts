@@ -1585,6 +1585,7 @@ export function validateDeploymentContractSet(
       : undefined;
     const linkedApprovalActorKeys = new Set<string>();
     let linkedApprovalCount = 0;
+    let linkedApprovalActorCount = 0;
     attempt.approvals.forEach((
       approval: {
         decision: LinkedRecord;
@@ -1599,7 +1600,7 @@ export function validateDeploymentContractSet(
       requireLinkedRecord(approval.decision, approvalMap, approvalPath, issues);
       const linkedApproval = approvalMap.get(approval.decision.id) as
         | (LinkedRecord & {
-          decision: { status: string; actor: ActorPointer };
+          decision: { status: string; actor?: ActorPointer };
           scope: string;
           actionId: string | null;
           phaseId: string | null;
@@ -1613,9 +1614,16 @@ export function validateDeploymentContractSet(
         return;
       }
       linkedApprovalCount += 1;
-      linkedApprovalActorKeys.add(
-        `${linkedApproval.decision.actor.kind}:${linkedApproval.decision.actor.id}`,
-      );
+      if (linkedApproval.decision.actor) {
+        linkedApprovalActorCount += 1;
+        linkedApprovalActorKeys.add(
+          `${linkedApproval.decision.actor.kind}:${linkedApproval.decision.actor.id}`,
+        );
+      } else {
+        issues.push(
+          `${approvalPath}.decision: linked approval decision is missing an actor`,
+        );
+      }
       if (linkedApproval.decision.status !== "allowed") {
         issues.push(
           `${approvalPath}.decision: linked approval decision is not allowed`,
@@ -1659,7 +1667,10 @@ export function validateDeploymentContractSet(
         );
       }
     });
-    if (linkedApprovalCount === attempt.approvals.length) {
+    if (
+      linkedApprovalCount === attempt.approvals.length
+      && linkedApprovalActorCount === attempt.approvals.length
+    ) {
       const attemptDecisionActorKeys = new Set<string>(
         attempt.decisionActors.map(
           (actor: ActorPointer) => `${actor.kind}:${actor.id}`,

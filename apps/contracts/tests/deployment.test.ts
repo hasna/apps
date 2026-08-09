@@ -618,6 +618,34 @@ describe("deployment contract records", () => {
     });
   });
 
+  test("linked approval decisions without actors fail closed", () => {
+    const fixtures = createDeploymentFixtureSet();
+    const contractSet = deploymentFixtureSetToContractSet(fixtures);
+    const approvalDraft = clone(fixtures.deploymentApprovalDecision);
+    delete approvalDraft.decision.actor;
+    const downstream = recomputePlanDownstream(
+      fixtures,
+      fixtures.deploymentPlan,
+      approvalDraft,
+    );
+
+    contractSet.deploymentApprovalDecisions = [
+      downstream.deploymentApprovalDecision,
+    ];
+    contractSet.deploymentAttempts = [downstream.deploymentAttempt];
+    contractSet.providerReceipts = [downstream.providerReceipt];
+    contractSet.deploymentReceipts = [downstream.deploymentReceipt];
+    contractSet.launchEvidence = [downstream.launchEvidence];
+
+    const result = validateDeploymentContractSet(runtimeSchemas, contractSet);
+    expect(result).toEqual({
+      success: false,
+      issues: [
+        `deploymentAttempts.${downstream.deploymentAttempt.id}.approvals.0.decision: linked approval decision is missing an actor`,
+      ],
+    });
+  });
+
   test("action inputs must resolve to a linked deployment record", () => {
     const fixtures = createDeploymentFixtureSet();
     const contractSet = deploymentFixtureSetToContractSet(fixtures);
