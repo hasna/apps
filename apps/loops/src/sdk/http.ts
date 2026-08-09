@@ -1,7 +1,7 @@
 // @generated from openapi/loops.json by scripts/gen-sdk.ts — DO NOT EDIT.
 // Regenerate: bun run scripts/gen-sdk.ts
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Loops 0.4.29
+// Source: Loops 0.4.40
 
 export interface PublicValidationDetails { "code": string; "reason": "not_array" | "invalid_array" | "invalid_item" | "option_not_allowed"; "path": string; "index"?: number; "option"?: string }
 
@@ -22,6 +22,16 @@ export interface WorkflowRecoveryConflictResponse { "ok": boolean; "error": "wor
 export interface RunFinalizeConflictResponse { "ok": boolean; "error": "stale_claim" | "run_not_running" | "loop_advancement_conflict" }
 
 export interface RunFinalizeValidationResponse { "ok": boolean; "error": "status_required" | "skip_status_requires_overlap_skip_exit_75" }
+
+export interface StuckRunCandidate { "runId": string; "loopId": string; "snapshotId": string }
+
+export interface StuckRunReportResponse { "ok": boolean; "report": { "state": "clear" | "stuck"; "expiredBefore": string; "candidates": Array<StuckRunCandidate>; "truncated": boolean } }
+
+export interface StuckRunReconciliationInput { "candidates": Array<StuckRunCandidate> }
+
+export interface StuckRunReconciliationOutcome { "runId": string; "outcome": "recovered" | "already_recovered" | "conflict" | "operation_reconciliation_required"; "reason"?: string }
+
+export interface StuckRunReconciliationResponse { "ok": boolean; "reconciliation": { "outcomes": Array<StuckRunReconciliationOutcome> } }
 
 export interface Foundation { "status": string; "version": string; "mode": string; "service"?: string; "detail"?: string }
 
@@ -297,11 +307,29 @@ export class LoopsClient {
       });
     }
 
-    /** leases.recover */
+    /** Reconcile exact hosted stuck-run snapshots without blind effect replay */
+    async leasesReconcile(body: StuckRunReconciliationInput, init?: RequestInit): Promise<StuckRunReconciliationResponse> {
+      return this.request("POST", `/v1/leases/reconcile`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Legacy server-selected lease recovery */
     async leasesRecover(init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("POST", `/v1/leases/recover`, {
         body: undefined,
         query: undefined,
+        init,
+      });
+    }
+
+    /** Detect hosted runs whose leases are safely past the recovery grace period */
+    async leasesStuck(query?: { "expiredBefore"?: string; "limit"?: number }, init?: RequestInit): Promise<StuckRunReportResponse> {
+      return this.request("GET", `/v1/leases/stuck`, {
+        body: undefined,
+        query,
         init,
       });
     }

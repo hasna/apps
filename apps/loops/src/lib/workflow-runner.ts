@@ -8,6 +8,17 @@ import { BLOCKED_STEP_ERROR_PREFIX, isBlockedStepRun, workflowRunEnvelope } from
 import type { CreateWorkflowRunInput, WorkflowRecoveryContext } from "./store.js";
 import { workflowExecutionOrder } from "./workflow-spec.js";
 import type { GoalRunnerStore } from "./goal/runner.js";
+import {
+  DEFAULT_OPERATION_LOOKUP_CAPS,
+  lookupOperationReceiptState,
+  operationAdmissionReceipt,
+  operationTerminalReceipt,
+  parsePrivateOperationDescriptor,
+  type OperationReceiptState,
+  type PrivateOperationDescriptor,
+} from "./operation-contract.js";
+import { DuplicateWorkflowEventError, ValidationError } from "./errors.js";
+import { workflowDefinitionHash } from "./workflow-provenance.js";
 
 export interface ExecuteWorkflowOptions extends ExecuteOptions {
   loop?: Loop;
@@ -60,7 +71,72 @@ export interface WorkflowExecutionStore extends GoalRunnerStore {
   ): MaybePromise<WorkflowStepRun>;
   appendWorkflowEvent(workflowRunId: string, eventType: string, stepId?: string, payload?: Record<string, unknown>): MaybePromise<unknown>;
   listWorkflowEvents?(workflowRunId: string, limit?: number): MaybePromise<StoredWorkflowEvent[]>;
+  getPrivateOperationDescriptor?(workflowRunId: string, stepId: string): MaybePromise<PrivateOperationDescriptor>;
+  getPrivateOperationState?(workflowRunId: string, stepId: string): MaybePromise<OperationReceiptState>;
   skipWorkflowStepRun(workflowRunId: string, stepId: string, reason: string, opts?: { daemonLeaseId?: string; now?: Date }): MaybePromise<WorkflowStepRun>;
+}
+
+async function operationDescriptorForStep(
+  store: WorkflowExecutionStore,
+  workflow: WorkflowSpec,
+  workflowRunId: string,
+  step: WorkflowStep,
+): Promise<PrivateOperationDescriptor> {
+  const descriptor = store.getPrivateOperationDescriptor
+    ? await store.getPrivateOperationDescriptor(workflowRunId, step.id)
+    : parsePrivateOperationDescriptor(
+        (await store.listWorkflowEvents?.(workflowRunId, DEFAULT_OPERATION_LOOKUP_CAPS.maxRecords + 1))
+          ?.find((event) => event.eventType === "private_operation_descriptor" && event.stepId === step.id)
+          ?.payload,
+      );
+  if (
+    descriptor.workflowRunId !== workflowRunId ||
+    descriptor.workflowId !== workflow.id ||
+    descriptor.workflowDefinitionHash !== workflowDefinitionHash(workflow) ||
+    descriptor.entityRevision !== workflow.updatedAt ||
+    descriptor.stepId !== step.id
+  ) {
+    throw new ValidationError(`private operation descriptor binding mismatch for step ${step.id}`);
+  }
+  return descriptor;
+}
+
+async function operationStateForStep(
+  store: WorkflowExecutionStore,
+  descriptor: PrivateOperationDescriptor,
+): Promise<ReturnType<typeof lookupOperationReceiptState>> {
+  if (store.getPrivateOperationState) {
+    return await store.getPrivateOperationState(descriptor.workflowRunId, descriptor.stepId);
+  }
+  if (!store.listWorkflowEvents) {
+    return { descriptor };
+  }
+  const events = await store.listWorkflowEvents(
+    descriptor.workflowRunId,
+    DEFAULT_OPERATION_LOOKUP_CAPS.maxRecords + 1,
+  );
+  return lookupOperationReceiptState(events, {
+    workflowRunId: descriptor.workflowRunId,
+    stepId: descriptor.stepId,
+    authority: descriptor.authority,
+    operationId: descriptor.operationId,
+  });
+}
+
+async function appendImmutableOperationEvent(
+  store: WorkflowExecutionStore,
+  descriptor: PrivateOperationDescriptor,
+  eventType: "private_operation_admitted" | "private_operation_terminal",
+  payload: Record<string, unknown>,
+): Promise<void> {
+  try {
+    await store.appendWorkflowEvent(descriptor.workflowRunId, eventType, descriptor.stepId, payload);
+  } catch (error) {
+    if (!(error instanceof DuplicateWorkflowEventError) || !store.listWorkflowEvents) throw error;
+    const state = await operationStateForStep(store, descriptor);
+    const existing = eventType === "private_operation_admitted" ? state.admission : state.terminal;
+    if (JSON.stringify(existing) !== JSON.stringify(payload)) throw error;
+  }
 }
 
 /** Exit codes that mark a step as blocked (policy control flow) instead of failed. */
@@ -164,7 +240,44 @@ export async function executeWorkflow(
   // skip (no pid, or a live process), startWorkflowStepRun refuses the double
   // claim and the try/catch below finalizes the run instead of stranding it.
   const resumedRunningSteps = (await store.listWorkflowStepRuns(run.id)).filter((step) => step.status === "running");
-  if (resumedRunningSteps.length > 0 && resumedRunningSteps.every((step) => step.pid !== undefined)) {
+  for (const resumedStep of resumedRunningSteps) {
+    const workflowStep = workflow.steps.find((step) => step.id === resumedStep.stepId);
+    if (!workflowStep) throw new ValidationError(`workflow step missing during resume: ${resumedStep.stepId}`);
+    const descriptor = await operationDescriptorForStep(store, workflow, run.id, workflowStep);
+    const operation = await operationStateForStep(store, descriptor);
+    if (operation.terminal) {
+      await store.finalizeWorkflowStepRun(run.id, resumedStep.stepId, {
+        status: operation.terminal.state,
+        finishedAt: nowIso(),
+        durationMs: operation.terminal.durationMs ?? 0,
+        stdout: "",
+        stderr: "",
+        exitCode: operation.terminal.exitCode,
+        error: operation.terminal.state === "succeeded"
+          ? undefined
+          : `reconciled from immutable operation receipt ${operation.terminal.receiptId}`,
+      }, { daemonLeaseId: opts.daemonLeaseId });
+      continue;
+    }
+    if (operation.admission) {
+      const error = `operation outcome uncertain after admission receipt ${operation.admission.receiptId}; reconciliation required`;
+      await store.finalizeWorkflowStepRun(run.id, resumedStep.stepId, {
+        status: "failed",
+        finishedAt: nowIso(),
+        durationMs: 0,
+        stdout: "",
+        stderr: "",
+        error,
+      }, { daemonLeaseId: opts.daemonLeaseId });
+      const finalRun = await store.finalizeWorkflowRun(run.id, "failed", {
+        finishedAt: nowIso(),
+        error,
+      }, { daemonLeaseId: opts.daemonLeaseId });
+      return workflowResult(finalRun, "failed", startedAt, finalRun.finishedAt ?? nowIso(), await store.listWorkflowStepRuns(run.id), error);
+    }
+  }
+  const unreconciledRunningSteps = (await store.listWorkflowStepRuns(run.id)).filter((step) => step.status === "running");
+  if (unreconciledRunningSteps.length > 0 && unreconciledRunningSteps.every((step) => step.pid !== undefined)) {
     try {
       await store.recoverWorkflowRun(run.id, "workflow run resumed after lease takeover");
     } catch {
@@ -232,6 +345,13 @@ export async function executeWorkflow(
         workflowRunId: run.id,
         workflowStepId: step.id,
       });
+      const operationDescriptor = await operationDescriptorForStep(store, workflow, run.id, step);
+      await appendImmutableOperationEvent(
+        store,
+        operationDescriptor,
+        "private_operation_admitted",
+        operationAdmissionReceipt(operationDescriptor) as unknown as Record<string, unknown>,
+      );
       let result: ExecutorResult;
       const controller = new AbortController();
       const externalAbort = (): void => controller.abort();
@@ -248,7 +368,10 @@ export async function executeWorkflow(
       }, opts.cancelPollMs ?? 500);
       cancelTimer.unref();
       try {
-        const executionTarget = targetWithStepAccount(step, step.goal ? undefined : opts.goalNodePrompt);
+        const executionTarget = targetWithStepAccount(
+          { ...step, target: operationDescriptor.target },
+          step.goal ? undefined : opts.goalNodePrompt,
+        );
         if (step.goal) {
           result = await runGoal(store, step.goal, {
             ...opts,
@@ -300,6 +423,12 @@ export async function executeWorkflow(
       if (timeoutMessage && result.status === "failed") {
         result = { ...result, status: "timed_out", error: timeoutMessage };
       }
+      await appendImmutableOperationEvent(
+        store,
+        operationDescriptor,
+        "private_operation_terminal",
+        operationTerminalReceipt(operationDescriptor, result) as unknown as Record<string, unknown>,
+      );
       if (await store.isWorkflowRunTerminal(run.id)) {
         terminalStatus = (await store.requireWorkflowRun(run.id)).status;
         blockingError = "workflow run was cancelled";

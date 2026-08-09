@@ -22,6 +22,7 @@
 // SAFETY: the API key never leaves the transport; it is never logged, returned,
 // or embedded in any value produced here. Only the HTTP transport ever holds it.
 
+import { createHash } from "node:crypto";
 import type {
   CreateLoopInput,
   CreateWorkflowInput,
@@ -42,16 +43,54 @@ import type {
 } from "../../types.js";
 import type { Goal, GoalPlanNode, GoalRun, GoalStatus } from "../goal/types.js";
 import { AmbiguousNameError, LoopNotFoundError } from "../errors.js";
-import { publicWorkflowEvent } from "../workflow-events.js";
+import { publicWorkflowEvents } from "../workflow-events.js";
 import { resolveCloudStorage } from "../cloud/resolve.js";
 import type { HasnaStorageClient } from "../cloud/storage.js";
 import { HasnaHttpError } from "../cloud/transport.js";
 import type { Env } from "../cloud/mode.js";
 import { Store } from "../store.js";
-import type { PruneHistoryOptions, PruneHistorySummary } from "../store.js";
+import type {
+  ExpiredRunLeaseCandidate,
+  PruneHistoryOptions,
+  PruneHistorySummary,
+} from "../store.js";
 
 /** Which transport backs a resolved store (for banners/diagnostics only). */
 export type StoreTransport = "local" | "cloud-http";
+
+export interface StuckRunCandidate {
+  runId: string;
+  loopId: string;
+  snapshotId: string;
+}
+
+export interface StuckRunCandidateReport {
+  state: "clear" | "stuck";
+  expiredBefore: string;
+  candidates: StuckRunCandidate[];
+  truncated: boolean;
+}
+
+export interface StuckRunReconciliationOutcome {
+  runId: string;
+  outcome: "recovered" | "already_recovered" | "conflict" | "operation_reconciliation_required";
+  reason?: string;
+}
+
+export interface StuckRunReconciliationReport {
+  outcomes: StuckRunReconciliationOutcome[];
+}
+
+function stuckRunSnapshotId(candidate: ExpiredRunLeaseCandidate): string {
+  return `stuck_${createHash("sha256")
+    .update(JSON.stringify([
+      candidate.runId,
+      candidate.loopId,
+      candidate.leaseExpiresAt,
+      candidate.updatedAt,
+    ]))
+    .digest("hex")}`;
+}
 
 /**
  * Thrown when a command routed through the cloud ApiStore hits an operation that
@@ -147,6 +186,8 @@ export interface LoopStore {
     status?: string;
     limit?: number;
   }): Promise<RunReceipt[]>;
+  listStuckRunCandidates(opts?: { expiredBefore?: string; limit?: number }): Promise<StuckRunCandidateReport>;
+  reconcileStuckRunCandidates(candidates: StuckRunCandidate[]): Promise<StuckRunReconciliationReport>;
 
   // ── History ──────────────────────────────────────────────────────────────────
   pruneHistory(opts: PruneHistoryOptions): Promise<PruneHistorySummary>;
@@ -260,7 +301,7 @@ export class LocalStore implements LoopStore {
     const events = limit === undefined
       ? this.store.listWorkflowEvents(workflowRunId)
       : this.store.listWorkflowEvents(workflowRunId, limit);
-    return events.map(publicWorkflowEvent);
+    return publicWorkflowEvents(events);
   }
   async recoverWorkflowRun(workflowRunId: string, reason?: string): Promise<{ run: WorkflowRun; recoveredSteps: WorkflowStepRun[] }> {
     return reason === undefined ? this.store.recoverWorkflowRun(workflowRunId) : this.store.recoverWorkflowRun(workflowRunId, reason);
@@ -318,6 +359,62 @@ export class LocalStore implements LoopStore {
   }
   async listRunReceipts(opts: Parameters<Store["listRunReceipts"]>[0] = {}): Promise<RunReceipt[]> {
     return this.store.listRunReceipts(opts);
+  }
+  async listStuckRunCandidates(
+    opts: { expiredBefore?: string; limit?: number } = {},
+  ): Promise<StuckRunCandidateReport> {
+    const expiredBefore = opts.expiredBefore ?? new Date().toISOString();
+    const report = this.store.listExpiredRunLeaseCandidates(new Date(expiredBefore), { limit: opts.limit });
+    return {
+      state: report.candidates.length > 0 ? "stuck" : "clear",
+      expiredBefore,
+      candidates: report.candidates.map((candidate) => ({
+        runId: candidate.runId,
+        loopId: candidate.loopId,
+        snapshotId: stuckRunSnapshotId(candidate),
+      })),
+      truncated: report.truncated,
+    };
+  }
+  async reconcileStuckRunCandidates(
+    candidates: StuckRunCandidate[],
+  ): Promise<StuckRunReconciliationReport> {
+    const outcomes: StuckRunReconciliationOutcome[] = [];
+    for (const candidate of candidates) {
+      const current = this.store.getRun(candidate.runId);
+      if (
+        !current?.leaseExpiresAt ||
+        current.loopId !== candidate.loopId ||
+        stuckRunSnapshotId({
+          runId: current.id,
+          loopId: current.loopId,
+          leaseExpiresAt: current.leaseExpiresAt,
+          updatedAt: current.updatedAt,
+        }) !== candidate.snapshotId
+      ) {
+        outcomes.push({
+          runId: candidate.runId,
+          outcome: current?.status === "abandoned" && current.error?.includes("lease expired")
+            ? "already_recovered"
+            : "conflict",
+          reason: "candidate_snapshot_changed",
+        });
+        continue;
+      }
+      const result = this.store.recoverExpiredRunLeasesDetailed(new Date(), {
+        runId: candidate.runId,
+        limit: 1,
+        scanLimit: 1,
+        expectedLeaseExpiresAt: current.leaseExpiresAt,
+        expectedUpdatedAt: current.updatedAt,
+      });
+      outcomes.push({
+        runId: candidate.runId,
+        outcome: result.abandoned.length === 1 ? "recovered" : "conflict",
+        reason: result.abandoned.length === 1 ? undefined : "candidate_changed_or_no_longer_expired",
+      });
+    }
+    return { outcomes };
   }
 
   async pruneHistory(opts: PruneHistoryOptions): Promise<PruneHistorySummary> {
@@ -537,7 +634,7 @@ export class ApiStore implements LoopStore {
   }
   async listWorkflowEvents(workflowRunId: string, limit?: number): Promise<PublicWorkflowEvent[]> {
     const raw = await this.t.get(`/workflow-runs/${encodeURIComponent(workflowRunId)}/events`, { query: clean({ limit }) });
-    return pickArray<StoredWorkflowEvent>(raw, "events").map(publicWorkflowEvent);
+    return publicWorkflowEvents(pickArray<StoredWorkflowEvent>(raw, "events"));
   }
   async recoverWorkflowRun(workflowRunId: string, reason?: string): Promise<{ run: WorkflowRun; recoveredSteps: WorkflowStepRun[] }> {
     const raw = await this.t.post(`/workflow-runs/${encodeURIComponent(workflowRunId)}/recover`, { reason });
@@ -642,6 +739,22 @@ export class ApiStore implements LoopStore {
   async listRunReceipts(opts: Parameters<LoopStore["listRunReceipts"]>[0] = {}): Promise<RunReceipt[]> {
     const raw = await this.t.get("/receipts", { query: clean({ ...opts }) });
     return pickArray<RunReceipt>(raw, "receipts");
+  }
+  async listStuckRunCandidates(
+    opts: { expiredBefore?: string; limit?: number } = {},
+  ): Promise<StuckRunCandidateReport> {
+    return pickObject<StuckRunCandidateReport>(
+      await this.t.get("/leases/stuck", { query: clean(opts) }),
+      "report",
+    )!;
+  }
+  async reconcileStuckRunCandidates(
+    candidates: StuckRunCandidate[],
+  ): Promise<StuckRunReconciliationReport> {
+    return pickObject<StuckRunReconciliationReport>(
+      await this.t.post("/leases/reconcile", { candidates }),
+      "reconciliation",
+    )!;
   }
 
   // ── History ──────────────────────────────────────────────────────────────────

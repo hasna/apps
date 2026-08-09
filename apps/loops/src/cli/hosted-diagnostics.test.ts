@@ -125,8 +125,16 @@ describe("hosted-mode diagnostics (e3b6f1d4)", () => {
     const healthy = hostedLoop({ id: "loop-ok", name: "loop-ok" });
     const broken = hostedLoop({ id: "loop-bad", name: "loop-bad" });
     const { server, paths } = serveHosted([healthy, broken], {
-      "loop-ok": [hostedRun(healthy)],
-      "loop-bad": [hostedRun(broken, { id: "run-bad", status: "failed", error: "boom", exitCode: 1 })],
+      "loop-ok": [
+        hostedRun(healthy, { id: "run-ok-3", exitCode: 1 }),
+        hostedRun(healthy, { id: "run-ok-2", exitCode: 0 }),
+        hostedRun(healthy, { id: "run-ok-1", exitCode: 0 }),
+      ],
+      "loop-bad": [
+        hostedRun(broken, { id: "run-bad-3", status: "failed", error: "boom", exitCode: 1 }),
+        hostedRun(broken, { id: "run-bad-2", status: "failed", error: "boom", exitCode: 1 }),
+        hostedRun(broken, { id: "run-bad-1", status: "failed", error: "boom", exitCode: 1 }),
+      ],
     });
 
     try {
@@ -138,16 +146,276 @@ describe("hosted-mode diagnostics (e3b6f1d4)", () => {
       const report = JSON.parse(result.stdout) as {
         backend?: { transport?: string; apiUrl?: string };
         report?: { summary?: { loops?: number; healthy?: number; unhealthy?: number } };
+        executionTruth?: Array<{
+          loopId: string;
+          state: string;
+          finishedRuns: number;
+          acceptedRuns: number;
+          failedRuns: number;
+          windowLimit: number;
+        }>;
         unchecked?: Array<{ id: string }>;
       };
       expect(report.backend?.transport).toBe("cloud-http");
       expect(report.report?.summary?.loops).toBe(2);
       expect(report.report?.summary?.healthy).toBe(1);
       expect(report.report?.summary?.unhealthy).toBe(1);
+      expect(report.executionTruth).toContainEqual({
+        loopId: healthy.id,
+        state: "healthy",
+        finishedRuns: 3,
+        acceptedRuns: 3,
+        failedRuns: 0,
+        windowLimit: 10,
+      });
+      expect(report.executionTruth).toContainEqual({
+        loopId: broken.id,
+        state: "dead_cadence",
+        finishedRuns: 3,
+        acceptedRuns: 0,
+        failedRuns: 3,
+        windowLimit: 10,
+      });
       // It really read the hosted API rather than a local sqlite island.
       expect(paths).toContain("GET /v1/loops");
       expect(paths.filter((path) => path === "GET /v1/runs").length).toBeGreaterThanOrEqual(2);
       expect(result.stdout).not.toContain("test-hosted-key");
+    } finally {
+      server.stop(true);
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("hosted health reports insufficient terminal history as UNPROVEN instead of healthy", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-hosted-health-unproven-"));
+    const loop = hostedLoop({ id: "loop-unproven", name: "loop-unproven" });
+    const { server } = serveHosted([loop], {
+      "loop-unproven": [hostedRun(loop, { id: "run-only", status: "succeeded", exitCode: 0 })],
+    });
+
+    try {
+      const result = await runCli(dataDir, ["--json", "health"], hostedEnv(server.port));
+      const report = JSON.parse(result.stdout) as {
+        report?: {
+          ok?: boolean;
+          summary?: { healthy?: number; unhealthy?: number };
+          expectations?: Array<{ ok?: boolean; check?: { message?: string } }>;
+        };
+        executionTruth?: Array<{
+          loopId: string;
+          state: string;
+          finishedRuns: number;
+          acceptedRuns: number;
+          failedRuns: number;
+          windowLimit: number;
+        }>;
+      };
+      expect(report.executionTruth).toContainEqual({
+        loopId: loop.id,
+        state: "unproven",
+        finishedRuns: 1,
+        acceptedRuns: 1,
+        failedRuns: 0,
+        windowLimit: 10,
+      });
+      expect(report.report?.ok).toBe(false);
+      expect(report.report?.summary).toMatchObject({ healthy: 0, unhealthy: 1 });
+      expect(report.report?.expectations?.[0]?.check?.message).toContain("UNPROVEN");
+    } finally {
+      server.stop(true);
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("incident 691568 classes execution truth independently of schedule freshness or failure mechanism", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-hosted-health-691568-"));
+    const dead = Array.from({ length: 5 }, (_, index) =>
+      hostedLoop({ id: `dead-${index + 1}`, name: `dead-${index + 1}`, nextRunAt: FUTURE })
+    );
+    const neverRun = Array.from({ length: 9 }, (_, index) =>
+      hostedLoop({ id: `never-${index + 1}`, name: `never-${index + 1}`, nextRunAt: FUTURE })
+    );
+    const nonterminal = Array.from({ length: 2 }, (_, index) =>
+      hostedLoop({ id: `nonterminal-${index + 1}`, name: `nonterminal-${index + 1}`, nextRunAt: FUTURE })
+    );
+    const belowFloor = hostedLoop({ id: "below-floor", name: "below-floor", nextRunAt: FUTURE });
+    const contractExcused = hostedLoop({ id: "contract-excused", name: "contract-excused", nextRunAt: FUTURE });
+    const loops = [...dead, ...neverRun, ...nonterminal, belowFloor, contractExcused];
+    const runsByLoop: Record<string, LoopRun[]> = {};
+
+    dead.forEach((loop, index) => {
+      runsByLoop[loop.id] = Array.from({ length: index + 3 }, (_, runIndex) =>
+        hostedRun(loop, {
+          id: `${loop.id}-failed-${runIndex + 1}`,
+          status: "failed",
+          exitCode: 1,
+          error: "mechanism intentionally unspecified",
+        })
+      );
+    });
+    neverRun.forEach((loop) => {
+      runsByLoop[loop.id] = [];
+    });
+    nonterminal.forEach((loop, index) => {
+      runsByLoop[loop.id] = [
+        hostedRun(loop, {
+          id: `${loop.id}-running`,
+          status: "running",
+          finishedAt: undefined,
+          exitCode: undefined,
+        }),
+        hostedRun(loop, {
+          id: `${loop.id}-abandoned`,
+          status: "abandoned",
+          exitCode: undefined,
+        }),
+      ].slice(index, index + 1);
+    });
+    runsByLoop[belowFloor.id] = [
+      hostedRun(belowFloor, { id: "below-floor-failed", status: "failed", exitCode: 1 }),
+    ];
+    runsByLoop[contractExcused.id] = Array.from({ length: 3 }, (_, index) =>
+      hostedRun(contractExcused, {
+        id: `contract-excused-${index + 1}`,
+        status: "succeeded",
+        exitCode: 1,
+      })
+    );
+
+    const { server } = serveHosted(loops, runsByLoop);
+    try {
+      const result = await runCli(dataDir, ["--json", "health"], hostedEnv(server.port));
+      const report = JSON.parse(result.stdout) as {
+        executionTruth: Array<{
+          loopId: string;
+          state: "healthy" | "dead_cadence" | "unproven";
+          finishedRuns: number;
+          acceptedRuns: number;
+          failedRuns: number;
+        }>;
+      };
+      const byState = (state: "healthy" | "dead_cadence" | "unproven") =>
+        report.executionTruth.filter((entry) => entry.state === state);
+
+      expect(byState("dead_cadence")).toHaveLength(5);
+      expect(byState("dead_cadence").every((entry) =>
+        entry.finishedRuns >= 3 && entry.acceptedRuns === 0
+      )).toBe(true);
+      expect(byState("unproven")).toHaveLength(12);
+      expect(neverRun.every((loop) =>
+        report.executionTruth.some((entry) =>
+          entry.loopId === loop.id && entry.state === "unproven" && entry.finishedRuns === 0
+        )
+      )).toBe(true);
+      expect(nonterminal.every((loop) =>
+        report.executionTruth.some((entry) =>
+          entry.loopId === loop.id && entry.state === "unproven" && entry.finishedRuns === 0
+        )
+      )).toBe(true);
+      expect(report.executionTruth).toContainEqual(expect.objectContaining({
+        loopId: belowFloor.id,
+        state: "unproven",
+        finishedRuns: 1,
+        acceptedRuns: 0,
+        failedRuns: 1,
+      }));
+      expect(report.executionTruth).toContainEqual(expect.objectContaining({
+        loopId: contractExcused.id,
+        state: "healthy",
+        finishedRuns: 3,
+        acceptedRuns: 3,
+        failedRuns: 0,
+      }));
+    } finally {
+      server.stop(true);
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("hosted hygiene stuck previews and reconciles the exact API-issued candidate without local fallback", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-hosted-stuck-"));
+    const candidate = {
+      runId: "run-known-stuck",
+      loopId: "loop-known-stuck",
+      snapshotId: `stuck_${"a".repeat(64)}`,
+    };
+    const requests: Array<{ method: string; path: string; body?: unknown }> = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        const body = request.method === "POST" ? await request.json() : undefined;
+        requests.push({ method: request.method, path: url.pathname, body });
+        if (request.method === "GET" && url.pathname === "/v1/leases/stuck") {
+          return Response.json({
+            ok: true,
+            report: {
+              state: "stuck",
+              expiredBefore: "2026-08-09T00:00:00.000Z",
+              candidates: [candidate],
+              truncated: false,
+            },
+          });
+        }
+        if (request.method === "POST" && url.pathname === "/v1/leases/reconcile") {
+          return Response.json({
+            ok: true,
+            reconciliation: {
+              outcomes: [{ runId: candidate.runId, outcome: "recovered" }],
+            },
+          });
+        }
+        return Response.json({ ok: false, error: "not_found" }, { status: 404 });
+      },
+    });
+
+    try {
+      const preview = await runCli(dataDir, ["--json", "hygiene", "stuck"], hostedEnv(server.port));
+      expect(preview.status).toBe(1);
+      expect(JSON.parse(preview.stdout)).toMatchObject({
+        state: "stuck",
+        candidates: [candidate],
+        applied: false,
+      });
+      expect(requests).toEqual([{ method: "GET", path: "/v1/leases/stuck", body: undefined }]);
+
+      requests.length = 0;
+      const applied = await runCli(dataDir, ["--json", "hygiene", "stuck", "--apply"], hostedEnv(server.port));
+      expect(applied.status).toBe(0);
+      expect(JSON.parse(applied.stdout)).toMatchObject({
+        state: "stuck",
+        candidates: [candidate],
+        applied: true,
+        reconciliation: {
+          outcomes: [{ runId: candidate.runId, outcome: "recovered" }],
+        },
+      });
+      expect(requests).toEqual([
+        { method: "GET", path: "/v1/leases/stuck", body: undefined },
+        { method: "POST", path: "/v1/leases/reconcile", body: { candidates: [candidate] } },
+      ]);
+    } finally {
+      server.stop(true);
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("hosted hygiene stuck surfaces API refusal as an error rather than zero findings", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-hosted-stuck-refusal-"));
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch() {
+        return Response.json({ ok: false, error: "insufficient_scope" }, { status: 403 });
+      },
+    });
+
+    try {
+      const result = await runCli(dataDir, ["--json", "hygiene", "stuck"], hostedEnv(server.port));
+      expect(result.status).toBe(1);
+      expect(result.stdout).not.toContain('"candidates": []');
+      expect(`${result.stdout}\n${result.stderr}`).toContain("-> 403");
     } finally {
       server.stop(true);
       rmSync(dataDir, { recursive: true, force: true });

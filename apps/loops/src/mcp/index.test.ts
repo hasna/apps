@@ -153,8 +153,15 @@ describe("Loops MCP server", () => {
 
       const receiptRead = textPayload(
         await client.callTool({ name: "loops_receipt_read", arguments: { run_id: seeded.receiptRunId } }),
-      ) as { receipt: { run_id: string; summary: { text: string } } };
-      expect(receiptRead.receipt).toMatchObject({ run_id: "mcp-run-receipt", summary: { text: "mcp receipt" } });
+      ) as { receipt: { run_id: string; result_ref: string; summary: { stdout_bytes: number; stderr_bytes: number } } };
+      expect(receiptRead.receipt).toMatchObject({
+        run_id: "mcp-run-receipt",
+        result_ref: expect.stringMatching(/^sha256:/),
+        summary: { stdout_bytes: 0, stderr_bytes: 0 },
+      });
+      expect(receiptRead.receipt).not.toHaveProperty("machine");
+      expect(receiptRead.receipt.summary).not.toHaveProperty("text");
+      expect(receiptRead.receipt).not.toHaveProperty("evidence_paths");
 
       const receiptList = textPayload(
         await client.callTool({ name: "loops_receipts_list", arguments: { task_id: "task-mcp" } }),
@@ -576,8 +583,15 @@ describe("Loops MCP server", () => {
             evidence_paths: ["/tmp/mcp-written.json"],
           },
         }),
-      ) as { receipt: { run_id: string; summary: { text: string } } };
-      expect(receiptWrite.receipt).toMatchObject({ run_id: "mcp-written-receipt", summary: { text: "written over MCP" } });
+      ) as { receipt: { run_id: string; result_ref: string; summary: { stdout_bytes: number; stderr_bytes: number } } };
+      expect(receiptWrite.receipt).toMatchObject({
+        run_id: "mcp-written-receipt",
+        result_ref: expect.stringMatching(/^sha256:/),
+        summary: { stdout_bytes: 0, stderr_bytes: 0 },
+      });
+      expect(receiptWrite.receipt).not.toHaveProperty("machine");
+      expect(receiptWrite.receipt.summary).not.toHaveProperty("text");
+      expect(receiptWrite.receipt).not.toHaveProperty("evidence_paths");
 
       const scheduled = textPayload(
         await client.callTool({ name: "loops_run_now", arguments: { idOrName: seeded.loopId } }),
@@ -693,13 +707,47 @@ describe("Loops MCP server", () => {
         const url = new URL(req.url);
         requests.push({ method: req.method, path: url.pathname });
         if (url.pathname === "/v1/receipts" && req.method === "POST") {
+          const now = new Date().toISOString();
           return Response.json(
-            { receipt: { run_id: "cloud-receipt", loop_id: "cloud-loop", status: "succeeded", createdAt: new Date().toISOString() } },
+            {
+              receipt: {
+                run_id: "cloud-receipt",
+                loop_id: "cloud-loop",
+                repo: "",
+                task_ids: [],
+                knowledge_ids: [],
+                digest_id: `sha256:${"a".repeat(64)}`,
+                started_at: null,
+                finished_at: null,
+                status: "succeeded",
+                exit_code: null,
+                summary: { stdout_bytes: 0, stderr_bytes: 0 },
+                created_at: now,
+                updated_at: now,
+              },
+            },
             { status: 201 },
           );
         }
         if (url.pathname === "/v1/receipts" && req.method === "GET") {
-          return Response.json({ receipts: [{ run_id: "cloud-receipt", loop_id: "cloud-loop", status: "succeeded" }] });
+          const now = new Date().toISOString();
+          return Response.json({
+            receipts: [{
+              run_id: "cloud-receipt",
+              loop_id: "cloud-loop",
+              repo: "",
+              task_ids: [],
+              knowledge_ids: [],
+              digest_id: `sha256:${"a".repeat(64)}`,
+              started_at: null,
+              finished_at: null,
+              status: "succeeded",
+              exit_code: null,
+              summary: { stdout_bytes: 0, stderr_bytes: 0 },
+              created_at: now,
+              updated_at: now,
+            }],
+          });
         }
         return Response.json({ error: { code: "not_found", message: url.pathname } }, { status: 404 });
       },

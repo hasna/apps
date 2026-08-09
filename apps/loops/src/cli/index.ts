@@ -49,6 +49,7 @@ import { normalizeGoalSpec } from "../lib/workflow-spec.js";
 import { runDoctor } from "../lib/doctor.js";
 import { buildHealthReport, buildHealthScan, expectationForLoop, writeHealthScanReports } from "../lib/health.js";
 import { buildHostedDoctorReport, buildHostedHealthReport } from "../lib/hosted-diagnostics.js";
+import { isPrivateOperationEventType } from "../lib/operation-contract.js";
 import { runLoopsUiApp } from "./ui.js";
 import {
   applyImportMigrationBundle,
@@ -322,8 +323,12 @@ async function hostedHealth(): Promise<void> {
     else {
       console.log(`backend  hosted control plane ${hosted.backend.apiUrl ?? "(url unavailable)"} (transport=${hosted.backend.transport})`);
       const summary = hosted.report.summary;
+      const executionHealthy = hosted.executionTruth.filter((entry) => entry.state === "healthy").length;
+      const deadCadence = hosted.executionTruth.filter((entry) => entry.state === "dead_cadence").length;
+      const unproven = hosted.executionTruth.filter((entry) => entry.state === "unproven").length;
       console.log(
-        `loops=${summary.loops} healthy=${summary.healthy} unhealthy=${summary.unhealthy} warnings=${summary.warnings} overdue=${summary.overdue}`,
+        `loops=${summary.loops} healthy=${summary.healthy} unhealthy=${summary.unhealthy} warnings=${summary.warnings} ` +
+          `overdue=${summary.overdue} execution_healthy=${executionHealthy} dead_cadence=${deadCadence} unproven=${unproven}`,
       );
       for (const expectation of hosted.report.expectations.filter((entry) => !entry.ok || entry.check.status === "warn")) {
         const status = expectation.ok ? "warn" : "fail";
@@ -386,9 +391,20 @@ function printCreatedLoop(loop: ReturnType<Store["createLoop"]>, human: string, 
 }
 
 function publicWorkflowBody(body: CreateWorkflowInput): Record<string, unknown> {
-  const value = publicWorkflow(workflowSpecForPreflight(body, "render"));
-  const { id: _id, status: _status, createdAt: _createdAt, updatedAt: _updatedAt, ...bodyOnly } = value;
-  return bodyOnly;
+  const workflow = workflowSpecForPreflight(body, "render");
+  return {
+    name: workflow.name,
+    description: workflow.description,
+    steps: workflow.steps.map((step) => ({
+      ...step,
+      target: {
+        ...step.target,
+        ...("prompt" in step.target ? { prompt: redact(step.target.prompt) } : {}),
+        ...("env" in step.target && step.target.env ? { env: "[redacted]" } : {}),
+      },
+    })),
+    goal: workflow.goal,
+  };
 }
 
 function workflowWithAgentTimeouts(
@@ -1618,10 +1634,11 @@ workflows.command("inspect <runId>").description("show a workflow run with steps
   const run = await store.requireWorkflowRun(runId);
   const steps = await store.listWorkflowStepRuns(run.id);
   const runEvents = await store.listWorkflowEvents(run.id);
+  const publicEvents = runEvents.filter((event) => !isPrivateOperationEventType(event.eventType));
   const value = {
     workflowRun: publicWorkflowRun(run),
     steps: steps.map((step) => publicWorkflowStepRun(step)),
-    events: runEvents.map(publicWorkflowEvent),
+    events: publicEvents.map(publicWorkflowEvent),
   };
   if (isJson()) print(value);
   else {
@@ -1630,7 +1647,7 @@ workflows.command("inspect <runId>").description("show a workflow run with steps
       const publicStep = publicWorkflowStepRun(step);
       console.log(`  ${String(step.sequence).padStart(2, "0")}  ${step.status.padEnd(10)}  ${step.stepId}  ${publicStep.error ?? ""}`);
     }
-    console.log(`  events=${runEvents.length}`);
+    console.log(`  events=${publicEvents.length}`);
   }
 })));
 
@@ -1687,9 +1704,10 @@ workflows
   .option("--limit <n>", "limit", "200")
   .action(runAction((runId, opts) => withStore(async (store) => {
     const runEvents = await store.listWorkflowEvents(runId, positiveInteger(opts.limit, "--limit") ?? 200);
-    if (isJson()) print(runEvents.map(publicWorkflowEvent));
+    const publicEvents = runEvents.filter((event) => !isPrivateOperationEventType(event.eventType));
+    if (isJson()) print(publicEvents.map(publicWorkflowEvent));
     else {
-      for (const event of runEvents) {
+      for (const event of publicEvents) {
         console.log(`${String(event.sequence).padStart(3, "0")}  ${event.eventType.padEnd(14)}  ${event.stepId ?? "-"}  ${event.createdAt}`);
       }
     }
@@ -2572,11 +2590,38 @@ hygiene
   )
   .option("--apply", "abandon reclaimable runs and immediately advance their loop's nextRunAt")
   .option("--limit <n>", "maximum runs to reclaim in one pass", "100")
-  .action(runAction((opts) => {
-    assertLocalOnlyCommand("hygiene stuck");
+  .action(runAction(async (opts) => {
+    const limit = positiveInteger(opts.limit, "--limit") ?? 100;
+    if (isCloudStore()) {
+      await withStore(async (store) => {
+        const report = await store.listStuckRunCandidates({ limit });
+        const reconciliation = opts.apply && report.candidates.length > 0
+          ? await store.reconcileStuckRunCandidates(report.candidates)
+          : undefined;
+        const output = { ...report, applied: Boolean(opts.apply), reconciliation };
+        if (isJson()) console.log(JSON.stringify(output, null, 2));
+        else {
+          console.log(
+            `hygiene_stuck backend=hosted state=${report.state} candidates=${report.candidates.length} ` +
+              `truncated=${report.truncated} applied=${Boolean(opts.apply)}`,
+          );
+          for (const candidate of report.candidates) {
+            const outcome = reconciliation?.outcomes.find((entry) => entry.runId === candidate.runId);
+            console.log(
+              `${outcome?.outcome ?? "would-reconcile"} run=${candidate.runId} loop=${candidate.loopId} ` +
+                `snapshot=${candidate.snapshotId}${outcome?.reason ? ` reason=${outcome.reason}` : ""}`,
+            );
+          }
+        }
+        if (!opts.apply && report.state === "stuck") process.exitCode = 1;
+        if (reconciliation?.outcomes.some((outcome) =>
+          outcome.outcome === "conflict" || outcome.outcome === "operation_reconciliation_required"
+        )) process.exitCode = 1;
+      });
+      return;
+    }
     const store = new Store();
     try {
-      const limit = positiveInteger(opts.limit, "--limit") ?? 100;
       const preview = buildStuckRunReport(store, { apply: false, limit });
       // A live-looking-but-deferred run still gets mutated on apply (its
       // lease_expires_at and defer_count both advance toward the grace

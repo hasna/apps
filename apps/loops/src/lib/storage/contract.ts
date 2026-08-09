@@ -74,6 +74,7 @@ export type LoopStorageMethodName =
   | "writeRunReceipt"
   | "getRunReceipt"
   | "listRunReceipts"
+  | "listExpiredRunLeaseCandidates"
   | "recoverExpiredRunLeases"
   | "recoverExpiredRunLeasesDetailed"
   | "countLoops"
@@ -164,6 +165,7 @@ export interface LoopStorageContract extends Record<LoopStorageMethodName, (...a
   writeRunReceipt: AsyncStoreMethod<"writeRunReceipt">;
   getRunReceipt: AsyncStoreMethod<"getRunReceipt">;
   listRunReceipts: AsyncStoreMethod<"listRunReceipts">;
+  listExpiredRunLeaseCandidates: AsyncStoreMethod<"listExpiredRunLeaseCandidates">;
   recoverExpiredRunLeases: AsyncStoreMethod<"recoverExpiredRunLeases">;
   recoverExpiredRunLeasesDetailed: AsyncStoreMethod<"recoverExpiredRunLeasesDetailed">;
   countLoops: AsyncStoreMethod<"countLoops">;

@@ -5,6 +5,26 @@ documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
 unless noted.
 
+## 0.4.40 (2026-08-09)
+
+### Fixed
+
+- **Truthful agent execution:** stored agent prompts are validated before
+  execution and delivered unchanged to the supported provider invocation.
+  Missing, blank, redacted, and agent-produced-no-output runs fail explicitly
+  instead of producing successful receipts.
+- **Hosted stuck-run diagnosis and recovery:** authenticated API and CLI
+  controls detect safely expired leases, reconcile exact opaque snapshots, and
+  refuse blind replay after an external operation was admitted. Hosted health
+  now treats terminal run status as truth, accepts policy-backed nonzero exits,
+  reports repeated terminal failures as dead cadence, and labels insufficient
+  finished history as unproven.
+- **Private operation provenance:** workflow execution persists tenant-bound
+  private descriptors plus immutable admission and terminal receipts with
+  stable identifiers, finite lookup bounds, duplicate proof, and result
+  references. Public loop, workflow, list, and event surfaces omit private
+  prompt, path, profile, recipient, and capability payloads.
+
 ## 0.4.39 (2026-08-07)
 
 ### Fixed

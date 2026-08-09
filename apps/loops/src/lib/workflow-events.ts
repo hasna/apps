@@ -7,6 +7,7 @@ import type {
   WorkflowLifecycleEventType,
 } from "../types.js";
 import { ValidationError } from "./errors.js";
+import { isPrivateOperationEventType } from "./operation-contract.js";
 import { isRedactionPlaceholder, scrubSecrets } from "./redact.js";
 
 export const WORKFLOW_LIFECYCLE_EVENT_TYPES = [
@@ -191,6 +192,9 @@ export function publicWorkflowEvent(
   event: StoredWorkflowEvent | PublicWorkflowEvent,
 ): PublicWorkflowEvent {
   assertStoredWorkflowEvent(event);
+  if (isPrivateOperationEventType(event.eventType)) {
+    throw new ValidationError("private workflow event cannot be exposed");
+  }
   if (event.eventType === "agent_session_contract") {
     if (event.eventKind !== undefined || !event.stepId || !isAgentSessionContract(event.payload)) {
       throw new ValidationError("invalid agent_session_contract workflow event");
@@ -232,4 +236,12 @@ export function publicWorkflowEvent(
     payload: sanitizeCustomEventPayload(event.payload),
     createdAt: event.createdAt,
   };
+}
+
+export function publicWorkflowEvents(
+  events: readonly StoredWorkflowEvent[],
+): PublicWorkflowEvent[] {
+  return events
+    .filter((event) => !isPrivateOperationEventType(event.eventType))
+    .map((event) => publicWorkflowEvent(event));
 }
