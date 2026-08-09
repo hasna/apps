@@ -105,6 +105,23 @@ function authorityPrefix(authority: ProjectRegistrationAuthorityName): string {
   return "cv";
 }
 
+function fakeAuthorityTargetId(
+  authority: ProjectRegistrationAuthorityName,
+  resourceKind: ProjectRegistrationResourceKind,
+  desired: Record<string, unknown>,
+): string {
+  const selectorDigest = sha256(canonicalJson(desired));
+  return authority === "conversations" && resourceKind === "channel"
+    ? [
+      selectorDigest.slice(0, 8),
+      selectorDigest.slice(8, 12),
+      `4${selectorDigest.slice(13, 16)}`,
+      `8${selectorDigest.slice(17, 20)}`,
+      selectorDigest.slice(20, 32),
+    ].join("-")
+    : `${authorityPrefix(authority)}_${resourceKind}_${selectorDigest.slice(0, 12)}`;
+}
+
 class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
   readonly records = new Map<string, ProjectRegistrationAuthorityRecord>();
   readonly receiptByKey = new Map<string, ProjectRegistrationAuthorityReceipt>();
@@ -116,6 +133,8 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
   readonly inverseRequests: ProjectRegistrationAuthorityRequest[] = [];
   readonly inverseDuplicateSteps = new Set<string>();
   readonly invalidInverseDuplicateSteps = new Set<string>();
+  readonly preexistingTerminalReasons = new Map<string, "preexisting_equivalent" | "preexisting_conflict">();
+  readonly validatedAdoptionTargets = new Set<string>();
   strictInverseDesired = false;
   allowExistingAdoption = false;
   beforeCreate: ((request: ProjectRegistrationAuthorityRequest) => void | Promise<void>) | null = null;
@@ -174,18 +193,25 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
       throw new Error("injected authority failure");
     }
 
-    const selector = canonicalJson(request.desired);
-    const selectorDigest = sha256(selector);
+    const selectorDigest = sha256(canonicalJson(request.desired));
     const targetId = this.authority === "conversations" && request.resource_kind === "channel"
-      ? this.channelTargetIdFactory?.(selectorDigest) ?? [
-        selectorDigest.slice(0, 8),
-        selectorDigest.slice(8, 12),
-        `4${selectorDigest.slice(13, 16)}`,
-        `8${selectorDigest.slice(17, 20)}`,
-        selectorDigest.slice(20, 32),
-      ].join("-")
-      : `${authorityPrefix(this.authority)}_${request.resource_kind}_${selectorDigest.slice(0, 12)}`;
+      ? this.channelTargetIdFactory?.(selectorDigest)
+        ?? fakeAuthorityTargetId(this.authority, request.resource_kind, request.desired)
+      : fakeAuthorityTargetId(this.authority, request.resource_kind, request.desired);
     const existingRecord = this.records.get(targetId);
+    const preexistingReason = this.preexistingTerminalReasons.get(targetId);
+    if (existingRecord && preexistingReason) {
+      const rejected = this.makeReceipt(request, {
+        outcome: "terminal_nonacceptance",
+        target_id: targetId,
+        result_revision: existingRecord.revision,
+        result_digest: existingRecord.digest,
+        reason: preexistingReason,
+        created_by_operation: false,
+      });
+      this.receiptByKey.set(request.idempotency_key, rejected);
+      return rejected;
+    }
     if (existingRecord && this.allowExistingAdoption) {
       const original = this.acceptedReceiptByTarget.get(targetId);
       if (!original) throw new Error("existing record lacks its accepted receipt");
@@ -275,6 +301,13 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
         truncated: false,
       },
     };
+  }
+
+  async validateExistingAdoption(
+    _request: ProjectRegistrationAuthorityRequest,
+    receipt: ProjectRegistrationAuthorityReceipt,
+  ): Promise<boolean> {
+    return receipt.target_id !== null && this.validatedAdoptionTargets.has(receipt.target_id);
   }
 
   async compensate(request: ProjectRegistrationAuthorityRequest): Promise<ProjectRegistrationAuthorityReceipt> {
@@ -801,6 +834,196 @@ describe("full project registration transaction", () => {
       expect(db.query(
         "SELECT COUNT(*) AS n FROM project_resource_links WHERE project_id = ? AND authority = 'contacts'",
       ).get(projectId)).toEqual({ n: 1 });
+    } finally {
+      db.close();
+    }
+  });
+
+  test("adopts explicitly linked pre-existing authority resources during retrofit without owning rollback", async () => {
+    const db = makeDb();
+    const target = tempTarget("retrofit-linked-authorities");
+    const fakes = fakeAuthorities();
+    const projectId = "wks_retrofitlinked001";
+    const projectSlug = "fleet-resources";
+    const projectName = "Fleet Resources";
+    const conversationsDesired = {
+      channel: projectSlug,
+      project_id: projectId,
+      project_slug: projectSlug,
+      project_kind: "project",
+    };
+    const todosProjectDesired = {
+      source_project_id: projectId,
+      source_project_slug: projectSlug,
+      name: projectName,
+    };
+    const conversationsId = fakeAuthorityTargetId("conversations", "channel", conversationsDesired);
+    const todosProjectId = fakeAuthorityTargetId("todos", "project", todosProjectDesired);
+    const todosTaskListDesired = {
+      todos_project_id: todosProjectId,
+      source_project_id: projectId,
+      name: projectName,
+    };
+    const todosTaskListId = fakeAuthorityTargetId("todos", "task_list", todosTaskListDesired);
+    const mementosDesired = {
+      source_project_id: projectId,
+      source_project_slug: projectSlug,
+      name: projectName,
+      target_path_digest: target.target.digest,
+    };
+    const mementosProjectId = fakeAuthorityTargetId("mementos", "project", mementosDesired);
+    const seed = (
+      authority: FakeAuthority,
+      targetId: string,
+      label: string,
+    ) => {
+      const record = {
+        target_id: targetId,
+        revision: `rev_preexisting_${label}`,
+        digest: sha256(`preexisting:${label}:${targetId}`),
+      };
+      authority.records.set(targetId, record);
+      authority.preexistingTerminalReasons.set(targetId, "preexisting_conflict");
+      authority.validatedAdoptionTargets.add(targetId);
+    };
+    seed(fakes.conversations, conversationsId, "conversations");
+    seed(fakes.todos, todosProjectId, "todos_project");
+    seed(fakes.todos, todosTaskListId, "todos_task_list");
+    seed(fakes.mementos, mementosProjectId, "mementos_project");
+    try {
+      const existing = createWorkspace({
+        id: projectId,
+        name: projectName,
+        slug: projectSlug,
+        kind: "project",
+        primary_path: target.path,
+        integrations: {
+          conversations_channel: projectSlug,
+          todos_project_id: todosProjectId,
+          todos_task_list_id: todosTaskListId,
+          mementos_project_id: mementosProjectId,
+          github_repo: "hasna/projects",
+        },
+        require_exact_identity: true,
+      }, db);
+      const request: FullProjectRegistrationInput = {
+        ...input("op-retrofit-linked-authorities", target.target, { id: projectId }),
+        mode: "retrofit",
+        expected_project_revision: existing.updated_at,
+      };
+
+      const first = await registerFullProject(request, { db, authorities: fakes.authorities });
+
+      expect(first).toMatchObject({ ok: true, outcome: "accepted" });
+      for (const stepId of [
+        "conversations_channel",
+        "todos_project",
+        "todos_task_list",
+        "mementos_project",
+      ]) {
+        expect(first.receipts.find((receipt) => receipt.step_id === stepId)).toMatchObject({
+          outcome: "accepted",
+          reason: "adopted_preexisting",
+          rollback: [],
+          artifacts: [expect.objectContaining({ adopted: true, created_by_operation: false })],
+          authority_receipt: expect.objectContaining({
+            outcome: "terminal_nonacceptance",
+            reason: "preexisting_conflict",
+            created_by_operation: false,
+          }),
+        });
+      }
+      expect(fakes.conversations.compensated).toEqual([]);
+      expect(fakes.todos.compensated).toEqual([]);
+      expect(fakes.mementos.compensated).toEqual([]);
+      expect(getWorkspace(projectId, db)?.integrations).toEqual({
+        conversations_channel: projectSlug,
+        todos_project_id: todosProjectId,
+        todos_task_list_id: todosTaskListId,
+        mementos_project_id: mementosProjectId,
+        github_repo: "hasna/projects",
+      });
+      expect(db.query(
+        "SELECT COUNT(*) AS n FROM project_resource_links WHERE project_id = ?",
+      ).get(projectId)).toEqual({ n: 4 });
+      expect(existsSync(target.path)).toBe(true);
+
+      const requestCount = fakes.conversations.requests.length
+        + fakes.todos.requests.length
+        + fakes.mementos.requests.length;
+      const retry = await registerFullProject(request, { db, authorities: fakes.authorities });
+      expect(retry).toMatchObject({ ok: true, outcome: "duplicate_of_accepted" });
+      expect(
+        fakes.conversations.requests.length + fakes.todos.requests.length + fakes.mementos.requests.length,
+      ).toBe(requestCount);
+
+      writeFileSync(join(target.path, PROJECT_REGISTRATION_GOALS_FILENAME), "# Foreign goals\n");
+      const rollbackProbe = await registerFullProject({
+        ...input("op-retrofit-linked-authorities-rollback", target.target, { id: projectId }),
+        mode: "retrofit",
+        expected_project_revision: getWorkspace(projectId, db)!.updated_at,
+      }, { db, authorities: fakes.authorities });
+      expect(rollbackProbe).toMatchObject({
+        ok: false,
+        outcome: "rolled_back",
+        failed_step: "projects_goals",
+        reason_code: "retrofit_existing_file_conflict",
+      });
+      expect(fakes.conversations.compensated).toEqual([]);
+      expect(fakes.todos.compensated).toEqual([]);
+      expect(fakes.mementos.compensated).toEqual([]);
+      expect(fakes.conversations.records.has(conversationsId)).toBe(true);
+      expect(fakes.todos.records.has(todosProjectId)).toBe(true);
+      expect(fakes.todos.records.has(todosTaskListId)).toBe(true);
+      expect(fakes.mementos.records.has(mementosProjectId)).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("does not adopt an unlinked pre-existing authority conflict during retrofit", async () => {
+    const db = makeDb();
+    const target = tempTarget("retrofit-unlinked-authority");
+    const fakes = fakeAuthorities();
+    const projectId = "wks_retrofitunlinked1";
+    const desired = {
+      channel: "fleet-resources",
+      project_id: projectId,
+      project_slug: "fleet-resources",
+      project_kind: "project",
+    };
+    const targetId = fakeAuthorityTargetId("conversations", "channel", desired);
+    fakes.conversations.records.set(targetId, {
+      target_id: targetId,
+      revision: "rev_preexisting_unlinked",
+      digest: sha256(`preexisting:unlinked:${targetId}`),
+    });
+    fakes.conversations.preexistingTerminalReasons.set(targetId, "preexisting_equivalent");
+    try {
+      const existing = createWorkspace({
+        id: projectId,
+        name: "Fleet Resources",
+        slug: "fleet-resources",
+        kind: "project",
+        primary_path: target.path,
+        integrations: {},
+        require_exact_identity: true,
+      }, db);
+
+      const result = await registerFullProject({
+        ...input("op-retrofit-unlinked-authority", target.target, { id: projectId }),
+        mode: "retrofit",
+        expected_project_revision: existing.updated_at,
+      }, { db, authorities: fakes.authorities });
+
+      expect(result).toMatchObject({
+        ok: false,
+        outcome: "rolled_back",
+        failed_step: "conversations_channel",
+        reason_code: "preexisting_equivalent",
+      });
+      expect(existsSync(target.path)).toBe(false);
+      expect(getWorkspace(projectId, db)?.integrations).toEqual({});
     } finally {
       db.close();
     }

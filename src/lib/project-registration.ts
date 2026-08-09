@@ -240,6 +240,10 @@ export interface ProjectRegistrationAuthorityAdapter {
     time_budget_ms: number;
   }): Promise<ProjectRegistrationAuthorityRecord>;
   lookupReceipt(request: ProjectRegistrationAuthorityLookupRequest): Promise<ProjectRegistrationAuthorityLookupResult>;
+  validateExistingAdoption?(
+    request: ProjectRegistrationAuthorityRequest,
+    receipt: ProjectRegistrationAuthorityReceipt,
+  ): Promise<boolean>;
   compensate(request: ProjectRegistrationAuthorityRequest): Promise<ProjectRegistrationAuthorityReceipt>;
   verifyInverse(request: ProjectRegistrationAuthorityRequest): Promise<ProjectRegistrationAuthorityInverseVerification>;
 }
@@ -413,6 +417,12 @@ interface AcceptedExternalStep {
   receipt: ProjectRegistrationAuthorityReceipt;
   request: ProjectRegistrationAuthorityRequest;
   local_receipt: ProjectRegistrationReceipt | null;
+}
+
+interface ExistingAuthorityAdoption {
+  integration_key: keyof WorkspaceIntegrations;
+  integration_value: string;
+  expected_target_id?: string;
 }
 
 interface AcceptedFileStep {
@@ -1364,6 +1374,49 @@ function appendAuthorityTerminalReceipt(input: {
   }, input.db);
 }
 
+function appendAdoptedAuthorityReceipt(input: {
+  adapter: ProjectRegistrationAuthorityAdapter;
+  request: ProjectRegistrationAuthorityRequest;
+  authority_receipt: ProjectRegistrationAuthorityReceipt;
+  adoption: ExistingAuthorityAdoption;
+  db: Database;
+}): ProjectRegistrationReceipt {
+  return appendRegistrationReceipt({
+    operation_id: input.request.operation_id,
+    step_id: input.request.step_id,
+    authority: input.adapter.authority,
+    resource_kind: input.request.resource_kind,
+    direction: input.request.direction,
+    idempotency_key: input.request.idempotency_key,
+    target_id: input.authority_receipt.target_id,
+    request_digest: input.request.request_digest,
+    precondition_digest: input.request.precondition_digest,
+    outcome: "accepted",
+    reason: "adopted_preexisting",
+    result_revision: input.authority_receipt.result_revision,
+    result_digest: input.authority_receipt.result_digest,
+    authority_receipt: input.authority_receipt,
+    artifacts: [{
+      authority: input.adapter.authority,
+      resource_kind: input.request.resource_kind,
+      target_id: input.authority_receipt.target_id,
+      revision: input.authority_receipt.result_revision,
+      digest: input.authority_receipt.result_digest,
+      adopted: true,
+      created_by_operation: false,
+    }],
+    preconditions: [{
+      predicate: "explicit_project_integration",
+      integration_key: input.adoption.integration_key,
+      integration_value_digest: sha256(input.adoption.integration_value),
+      expected_target_id: input.adoption.expected_target_id ?? null,
+      authority_receipt_id: input.authority_receipt.receipt_id,
+      exact_readback: true,
+    }],
+    rollback: [],
+  }, input.db);
+}
+
 function appendAuthorityReadbackReceipt(input: {
   adapter: ProjectRegistrationAuthorityAdapter;
   request: ProjectRegistrationAuthorityRequest;
@@ -1430,6 +1483,7 @@ async function executeExternalStep(input: {
   bounds: ProjectRegistrationBounds;
   db: Database;
   accepted_steps: AcceptedExternalStep[];
+  adopt_existing?: ExistingAuthorityAdoption;
 }): Promise<AcceptedExternalStep> {
   const requestDigest = sha256(canonicalJson(input.desired));
   const preconditionDigest = sha256(canonicalJson({
@@ -1472,6 +1526,60 @@ async function executeExternalStep(input: {
     mutate: () => input.adapter.create(request),
   });
   if (receipt.outcome === "terminal_nonacceptance") {
+    const adoption = input.adopt_existing;
+    const adoptionReason = receipt.reason === "preexisting_equivalent"
+      || receipt.reason === "preexisting_conflict";
+    const targetMatches = adoption?.expected_target_id === undefined
+      || adoption.expected_target_id === receipt.target_id;
+    const authorityAdoptionValidated = receipt.reason === "preexisting_equivalent"
+      || adoption?.expected_target_id !== undefined
+      || await input.adapter.validateExistingAdoption?.(request, receipt) === true;
+    if (
+      adoption
+      && adoptionReason
+      && targetMatches
+      && authorityAdoptionValidated
+      && receipt.created_by_operation === false
+      && receipt.target_id
+      && receipt.result_revision
+      && receipt.result_digest
+    ) {
+      const record = await input.adapter.readExact({
+        resource_kind: input.resource_kind,
+        target_id: receipt.target_id,
+        target: input.target,
+        ...input.bounds,
+      });
+      if (
+        record.target_id !== receipt.target_id
+        || record.revision !== receipt.result_revision
+        || record.digest !== receipt.result_digest
+      ) {
+        throw new ProjectRegistrationStepError(input.step_id, "authority_exact_readback_mismatch");
+      }
+      const accepted: AcceptedExternalStep = {
+        adapter: input.adapter,
+        capability: input.capability,
+        receipt,
+        request,
+        local_receipt: appendAdoptedAuthorityReceipt({
+          adapter: input.adapter,
+          request,
+          authority_receipt: receipt,
+          adoption,
+          db: input.db,
+        }),
+      };
+      input.accepted_steps.push(accepted);
+      appendAuthorityReadbackReceipt({
+        adapter: input.adapter,
+        request,
+        authority_receipt: receipt,
+        record,
+        db: input.db,
+      });
+      return accepted;
+    }
     appendAuthorityTerminalReceipt({
       adapter: input.adapter,
       request,
@@ -3086,6 +3194,7 @@ export async function registerFullProject(
 
     failedStep = "conversations_channel";
     const channel = deriveProjectChannel(project).channel;
+    const existingChannel = retrofitProject?.integrations.conversations_channel;
     const conversations = await executeExternalStep({
       adapter: authorities.conversations,
       capability: capabilities.conversations,
@@ -3104,9 +3213,16 @@ export async function registerFullProject(
       bounds,
       db,
       accepted_steps: externalAccepted,
+      adopt_existing: typeof existingChannel === "string" && existingChannel === channel
+        ? {
+            integration_key: "conversations_channel",
+            integration_value: existingChannel,
+          }
+        : undefined,
     });
 
     failedStep = "todos_project";
+    const existingTodosProjectId = retrofitProject?.integrations.todos_project_id;
     const todosProject = await executeExternalStep({
       adapter: authorities.todos,
       capability: capabilities.todos,
@@ -3124,9 +3240,17 @@ export async function registerFullProject(
       bounds,
       db,
       accepted_steps: externalAccepted,
+      adopt_existing: typeof existingTodosProjectId === "string" && existingTodosProjectId.trim()
+        ? {
+            integration_key: "todos_project_id",
+            integration_value: existingTodosProjectId,
+            expected_target_id: existingTodosProjectId,
+          }
+        : undefined,
     });
 
     failedStep = "todos_task_list";
+    const existingTodosTaskListId = retrofitProject?.integrations.todos_task_list_id;
     const todosTaskList = await executeExternalStep({
       adapter: authorities.todos,
       capability: capabilities.todos,
@@ -3144,9 +3268,17 @@ export async function registerFullProject(
       bounds,
       db,
       accepted_steps: externalAccepted,
+      adopt_existing: typeof existingTodosTaskListId === "string" && existingTodosTaskListId.trim()
+        ? {
+            integration_key: "todos_task_list_id",
+            integration_value: existingTodosTaskListId,
+            expected_target_id: existingTodosTaskListId,
+          }
+        : undefined,
     });
 
     failedStep = "mementos_project";
+    const existingMementosProjectId = retrofitProject?.integrations.mementos_project_id;
     const mementosProject = await executeExternalStep({
       adapter: authorities.mementos,
       capability: capabilities.mementos,
@@ -3165,6 +3297,13 @@ export async function registerFullProject(
       bounds,
       db,
       accepted_steps: externalAccepted,
+      adopt_existing: typeof existingMementosProjectId === "string" && existingMementosProjectId.trim()
+        ? {
+            integration_key: "mementos_project_id",
+            integration_value: existingMementosProjectId,
+            expected_target_id: existingMementosProjectId,
+          }
+        : undefined,
     });
 
     failedStep = "projects_integrations";
